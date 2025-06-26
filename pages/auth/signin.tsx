@@ -1,7 +1,7 @@
 import { getCsrfToken, signIn } from "next-auth/react";
 import { useState } from "react";
 
-export default function SignIn({ csrfToken }) {
+export default function SignIn({ csrfToken }: { csrfToken: string }) {
   const [error, setError] = useState(null);
   return (
     <form
