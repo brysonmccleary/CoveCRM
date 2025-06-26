@@ -14,14 +14,26 @@ export default NextAuth({
         password: { label: "Password", type: "password" }
       },
       async authorize(credentials) {
+        if (!credentials) {
+          throw new Error("No credentials provided");
+        }
+        const { email, password } = credentials;
+
         const db = await clientPromise;
         const user = await db
           .db()
           .collection("users")
-          .findOne({ email: credentials.email });
-        if (!user) throw new Error("No user found");
-        const isValid = await bcrypt.compare(credentials.password, user.password);
-        if (!isValid) throw new Error("Invalid password");
+          .findOne({ email });
+
+        if (!user) {
+          throw new Error("No user found");
+        }
+
+        const isValid = await bcrypt.compare(password, user.password);
+        if (!isValid) {
+          throw new Error("Invalid password");
+        }
+
         return { id: user._id.toString(), email: user.email };
       }
     })
