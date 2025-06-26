@@ -1,5 +1,5 @@
 import React, { useState, FormEvent } from "react";
-import { GetServerSideProps, GetServerSidePropsContext } from "next";
+import { GetServerSideProps } from "next";
 import { getCsrfToken, signIn } from "next-auth/react";
 
 interface SignInProps {
@@ -52,11 +52,14 @@ export default function SignIn({ csrfToken }: SignInProps) {
   );
 }
 
-export const getServerSideProps: GetServerSideProps<SignInProps> =
-  async (context: GetServerSidePropsContext) => {
-    const csrfToken = await getCsrfToken(context);
-    return {
-      props: { csrfToken },
-    };
+export const getServerSideProps: GetServerSideProps<SignInProps> = async (
+  context
+) => {
+  const token = await getCsrfToken(context);
+  return {
+    props: {
+      csrfToken: token ?? "",
+    },
   };
+};
 
