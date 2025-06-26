@@ -1,11 +1,10 @@
-import { getCsrfToken, signIn } from "next-auth/react";
 import React, { useState, FormEvent } from "react";
+import { getCsrfToken, signIn } from "next-auth/react";
 
 export default function SignIn({ csrfToken }: { csrfToken: string }) {
-  const [error, setError] = useState(null);
-  return (
-    <form
-  onSubmit={async (e: React.FormEvent<HTMLFormElement>) => {
+  const [error, setError] = useState<string | null>(null);
+
+  const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const form = e.currentTarget;
     const email = (form.elements.namedItem("email") as HTMLInputElement).value;
@@ -16,28 +15,26 @@ export default function SignIn({ csrfToken }: { csrfToken: string }) {
       email,
       password
     });
-    if (res?.error) {
-      setError(res.error);
-    }
-  }}
-  ...
->
-      className="max-w-md mx-auto p-4"
-    >
+    if (res?.error) setError(res.error);
+  };
+
+  return (
+    <form onSubmit={handleSubmit} className="max-w-md mx-auto p-4">
       <h1 className="text-2xl mb-4">Sign In</h1>
       <input name="csrfToken" type="hidden" defaultValue={csrfToken} />
       <input
         name="email"
+        type="email"
         placeholder="Email"
-        className="w-full mb-2 p-2 border"
+        className="w-full mb-2 p-2 border rounded"
       />
       <input
         name="password"
         type="password"
         placeholder="Password"
-        className="w-full mb-4 p-2 border"
+        className="w-full mb-4 p-2 border rounded"
       />
-      <button type="submit" className="px-4 py-2 bg-green-600 text-white">
+      <button type="submit" className="px-4 py-2 bg-green-600 text-white rounded">
         Sign In
       </button>
       {error && <p className="text-red-500 mt-2">{error}</p>}
@@ -45,7 +42,9 @@ export default function SignIn({ csrfToken }: { csrfToken: string }) {
   );
 }
 
-export async function getServerSideProps(context) {
-  return { props: { csrfToken: await getCsrfToken(context) } };
+export async function getServerSideProps(context: any) {
+  return {
+    props: { csrfToken: await getCsrfToken(context) }
+  };
 }
 
