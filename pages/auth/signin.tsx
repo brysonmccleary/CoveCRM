@@ -1,7 +1,12 @@
 import React, { useState, FormEvent } from "react";
+import { GetServerSideProps, GetServerSidePropsContext } from "next";
 import { getCsrfToken, signIn } from "next-auth/react";
 
-export default function SignIn({ csrfToken }: { csrfToken: string }) {
+interface SignInProps {
+  csrfToken: string;
+}
+
+export default function SignIn({ csrfToken }: SignInProps) {
   const [error, setError] = useState<string | null>(null);
 
   const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
@@ -13,9 +18,11 @@ export default function SignIn({ csrfToken }: { csrfToken: string }) {
     const res = await signIn("credentials", {
       redirect: false,
       email,
-      password
+      password,
     });
-    if (res?.error) setError(res.error);
+    if (res?.error) {
+      setError(res.error);
+    }
   };
 
   return (
@@ -34,7 +41,10 @@ export default function SignIn({ csrfToken }: { csrfToken: string }) {
         placeholder="Password"
         className="w-full mb-4 p-2 border rounded"
       />
-      <button type="submit" className="px-4 py-2 bg-green-600 text-white rounded">
+      <button
+        type="submit"
+        className="px-4 py-2 bg-green-600 text-white rounded"
+      >
         Sign In
       </button>
       {error && <p className="text-red-500 mt-2">{error}</p>}
@@ -42,9 +52,11 @@ export default function SignIn({ csrfToken }: { csrfToken: string }) {
   );
 }
 
-export async function getServerSideProps(context: any) {
-  return {
-    props: { csrfToken: await getCsrfToken(context) }
+export const getServerSideProps: GetServerSideProps<SignInProps> =
+  async (context: GetServerSidePropsContext) => {
+    const csrfToken = await getCsrfToken(context);
+    return {
+      props: { csrfToken },
+    };
   };
-}
 
