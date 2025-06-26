@@ -1,19 +1,27 @@
 import { getCsrfToken, signIn } from "next-auth/react";
-import { useState } from "react";
+import React, { useState, FormEvent } from "react";
 
 export default function SignIn({ csrfToken }: { csrfToken: string }) {
   const [error, setError] = useState(null);
   return (
     <form
-      onSubmit={async e => {
-        e.preventDefault();
-        const res = await signIn("credentials", {
-          redirect: false,
-          email: e.target.email.value,
-          password: e.target.password.value
-        });
-        if (res.error) setError(res.error);
-      }}
+  onSubmit={async (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const form = e.currentTarget;
+    const email = (form.elements.namedItem("email") as HTMLInputElement).value;
+    const password = (form.elements.namedItem("password") as HTMLInputElement).value;
+
+    const res = await signIn("credentials", {
+      redirect: false,
+      email,
+      password
+    });
+    if (res?.error) {
+      setError(res.error);
+    }
+  }}
+  ...
+>
       className="max-w-md mx-auto p-4"
     >
       <h1 className="text-2xl mb-4">Sign In</h1>
