@@ -5,7 +5,7 @@ export default function SignIn({ csrfToken }: { csrfToken: string }) {
   const [error, setError] = useState(null);
   return (
     <form
-  onSubmit={async (e: FormEvent<HTMLFormElement>) => {
+  onSubmit={async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const form = e.currentTarget;
     const email = (form.elements.namedItem("email") as HTMLInputElement).value;
