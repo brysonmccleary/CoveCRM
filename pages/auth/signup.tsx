@@ -10,6 +10,7 @@ export default function SignUp() {
   return (
     <form onSubmit={handleSubmit(onSubmit)} className="max-w-md mx-auto p-4">
       <h1 className="text-2xl mb-4">Sign Up</h1>
+<p className="text-sm text-gray-500">🚧 Signup page loaded 🚧</p>
       <input
         {...register("email")}
         placeholder="Email"
