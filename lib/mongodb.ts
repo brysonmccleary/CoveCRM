@@ -12,7 +12,7 @@ const options = {};
 
 if (process.env.NODE_ENV === "development") {
   // Use a global variable in dev so we don’t open new connections on every reload
-  let globalWithMongo = global as typeof globalThis & {
+  const globalWithMongo = global as typeof globalThis & {
     _mongoClientPromise?: Promise<MongoClient>;
   };
   if (!globalWithMongo._mongoClientPromise) {
