@@ -1,55 +1,65 @@
-import React, { useState, FormEvent } from "react";
-import { GetServerSideProps, GetServerSidePropsContext } from "next";
-import { getCsrfToken, signIn } from "next-auth/react";
+// pages/auth/signin.tsx
+import React from "react";
+import { getCsrfToken } from "next-auth/react";
 
 interface SignInProps {
   csrfToken: string;
 }
 
 export default function SignIn({ csrfToken }: SignInProps) {
-  const [error, setError] = useState<string | null>(null);
-
-  const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    const form = e.currentTarget;
-    const email = (form.elements.namedItem("email") as HTMLInputElement).value;
-    const password = (form.elements.namedItem("password") as HTMLInputElement).value;
-
-    const res = await signIn("credentials", { redirect: false, email, password });
-    if (res?.error) setError(res.error);
-  };
-
   return (
-    <form onSubmit={handleSubmit} className="max-w-md mx-auto p-4">
-      <h1 className="text-2xl mb-4">Sign In</h1>
-      <input name="csrfToken" type="hidden" defaultValue={csrfToken} />
-      <input
-        name="email"
-        type="email"
-        placeholder="Email"
-        className="w-full mb-2 p-2 border rounded"
-      />
-      <input
-        name="password"
-        type="password"
-        placeholder="Password"
-        className="w-full mb-4 p-2 border rounded"
-      />
-      <button type="submit" className="px-4 py-2 bg-green-600 text-white rounded">
-        Sign In
-      </button>
-      {error && <p className="text-red-500 mt-2">{error}</p>}
-    </form>
+    <div className="min-h-screen flex items-center justify-center bg-gray-50">
+      <form
+        method="post"
+        action="/api/auth/callback/credentials"
+        className="max-w-md w-full bg-white p-6 rounded shadow space-y-4"
+      >
+        <h1 className="text-2xl font-bold text-center">Sign In</h1>
+        <input name="csrfToken" type="hidden" defaultValue={csrfToken} />
+
+        <div>
+          <label htmlFor="email" className="block mb-1">
+            Email
+          </label>
+          <input
+            id="email"
+            name="email"
+            type="email"
+            required
+            className="w-full p-2 border rounded"
+            placeholder="you@example.com"
+          />
+        </div>
+
+        <div>
+          <label htmlFor="password" className="block mb-1">
+            Password
+          </label>
+          <input
+            id="password"
+            name="password"
+            type="password"
+            required
+            className="w-full p-2 border rounded"
+            placeholder="••••••••"
+          />
+        </div>
+
+        <button
+          type="submit"
+          className="w-full bg-green-600 text-white py-2 rounded hover:bg-green-700 transition"
+        >
+          Sign In
+        </button>
+      </form>
+    </div>
   );
 }
 
-export const getServerSideProps: GetServerSideProps<SignInProps> =
-  async (context: GetServerSidePropsContext) => {
-    const csrfToken = await getCsrfToken(context);
-    return {
-      props: {
-        csrfToken: csrfToken ?? "",
-      },
-    };
+export async function getServerSideProps(context: any) {
+  const csrfToken = (await getCsrfToken(context)) || "";
+  return {
+    props: { csrfToken },
   };
+}
 
