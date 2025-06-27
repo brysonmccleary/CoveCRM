@@ -15,8 +15,12 @@ export default function SignUp() {
       await axios.post("/api/auth/signup", data);
       alert("✅ Registered—please sign in.");
       window.location.href = "/auth/signin";
-    } catch (err: any) {
-      alert("❌ Signup failed: " + (err.response?.data?.error || err.message));
+    } catch (error: unknown) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : (error as any)?.response?.data?.error || String(error);
+      alert("❌ Signup failed: " + message);
     }
   };
 
