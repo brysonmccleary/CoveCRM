@@ -11,6 +11,7 @@ interface SignUpForm {
 export default function SignUp() {
   const { register, handleSubmit } = useForm<SignUpForm>();
   const onSubmit = async (data: SignUpForm) => {
+    console.log("▶️️ onSubmit fired with:", data);
     try {
       await axios.post("/api/auth/signup", data);
       alert("✅ Registered—please sign in.");
