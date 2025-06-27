@@ -6,7 +6,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (req.method !== "POST") return res.status(405).end();
 
   const session = await getSession({ req });
-  if (!session) return res.status(401).json({ error: "Unauthorized" });
+  if (!session || !session.user?.email) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
 
   const { name, email, phone } = req.body;
   const db = await clientPromise;
