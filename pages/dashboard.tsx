@@ -2,6 +2,12 @@
 import { GetServerSideProps } from "next";
 import { getSession } from "next-auth/react";
 import clientPromise from "../lib/mongodb";
+import { useState } from "react";
+import PowerDialerPanel from "../components/PowerDialerPanel";
+import DripCampaignsPanel from "../components/DripCampaignsPanel";
+import ConversationsPanel from "../components/ConversationsPanel";
+import ChatAssistantWidget from "../components/ChatAssistantWidget";
+import SettingsPanel from "../components/SettingsPanel";
 
 interface Lead {
   _id: string;
@@ -15,26 +21,87 @@ interface DashboardProps {
 }
 
 export default function Dashboard({ leads }: DashboardProps) {
+  const [activeTab, setActiveTab] = useState<
+    "leads" | "powerDialer" | "drip" | "conversations" | "chat" | "settings"
+  >("leads");
+
+  const renderContent = () => {
+    switch (activeTab) {
+      case "leads":
+        return (
+          <div>
+            <h2 className="text-2xl font-semibold mb-4">Recent Leads</h2>
+            <table className="w-full table-auto mb-6">
+              <thead>
+                <tr className="bg-gray-100">
+                  {['Name', 'Email', 'Phone'].map((header) => (
+                    <th key={header} className="px-4 py-2 text-left text-gray-700">
+                      {header}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {leads.map((lead) => (
+                  <tr key={lead._id} className="hover:bg-gray-50">
+                    <td className="px-4 py-2">{lead.name}</td>
+                    <td className="px-4 py-2">{lead.email}</td>
+                    <td className="px-4 py-2">{lead.phone}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <button className="px-6 py-3 bg-primary text-white rounded shadow hover:bg-primary-dark transition">
+              Add New Lead
+            </button>
+          </div>
+        );
+      case "powerDialer":
+        return <PowerDialerPanel leads={leads} />;
+      case "drip":
+        return <DripCampaignsPanel userEmail={leads[0]?.email || ""} />;
+      case "conversations":
+        return <ConversationsPanel userEmail={leads[0]?.email || ""} />;
+      case "chat":
+        return <ChatAssistantWidget />;
+      case "settings":
+        return <SettingsPanel />;
+      default:
+        return null;
+    }
+  };
+
   return (
     <div className="min-h-screen flex bg-gray-100">
-      {/* Sidebar */}
       <aside className="w-64 bg-white shadow flex flex-col">
         <div className="p-6 flex items-center space-x-2">
           <img src="/logo.png" alt="CoveCRM" className="h-10 w-10" />
           <span className="text-2xl font-bold text-primary">CoveCRM</span>
         </div>
         <nav className="flex-1 px-4 space-y-2">
-          <a href="/dashboard" className="block px-4 py-2 rounded hover:bg-gray-50 text-gray-800">Leads</a>
-          <a href="/power-dialer" className="block px-4 py-2 rounded hover:bg-gray-50 text-gray-800">Power Dialer</a>
-          <a href="/settings" className="block px-4 py-2 rounded hover:bg-gray-50 text-gray-800">Settings</a>
+          {[
+            ["leads", "Leads"],
+            ["powerDialer", "Power Dialer"],
+            ["drip", "Drip Campaigns"],
+            ["conversations", "Conversations"],
+            ["chat", "Chat Assistant"],
+            ["settings", "Settings"],
+          ].map(([key, label]) => (
+            <button
+              key={key}
+              onClick={() => setActiveTab(key as any)}
+              className={`w-full text-left px-4 py-2 rounded hover:bg-gray-50 ${
+                activeTab === key ? "bg-gray-200" : ""
+              }`}
+            >
+              {label}
+            </button>
+          ))}
         </nav>
       </aside>
 
-      {/* Main Content */}
       <main className="flex-1 p-8">
         <h1 className="text-4xl font-semibold mb-6 text-gray-900">Dashboard</h1>
-
-        {/* Metrics */}
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-6 mb-8">
           <div className="bg-white p-6 rounded shadow flex flex-col">
             <span className="text-sm text-gray-600">Total Calls</span>
@@ -49,36 +116,7 @@ export default function Dashboard({ leads }: DashboardProps) {
             <span className="text-4xl font-bold text-accent">{leads.length}</span>
           </div>
         </div>
-
-        {/* Recent Leads Table */}
-        <div className="bg-white p-6 rounded shadow">
-          <h2 className="text-2xl font-semibold mb-4 text-gray-800">Recent Leads</h2>
-          <table className="w-full table-auto">
-            <thead>
-              <tr className="bg-gray-100">
-                {['Name','Email','Phone'].map(header => (
-                  <th key={header} className="px-4 py-2 text-left text-gray-700">{header}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {leads.map(lead => (
-                <tr key={lead._id} className="hover:bg-gray-50">
-                  <td className="px-4 py-2">{lead.name}</td>
-                  <td className="px-4 py-2">{lead.email}</td>
-                  <td className="px-4 py-2">{lead.phone}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-
-        {/* CTA or Additional Widgets */}
-        <div className="mt-8">
-          <button className="px-6 py-3 bg-primary text-white rounded shadow hover:bg-primary-dark transition">
-            Add New Lead
-          </button>
-        </div>
+        {renderContent()}
       </main>
     </div>
   );
