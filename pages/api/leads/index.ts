@@ -4,7 +4,9 @@ import clientPromise from "../../../lib/mongodb";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const session = await getSession({ req });
-  if (!session) return res.status(401).json({ error: "Unauthorized" });
+  if (!session || !session.user?.email) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
 
   const db = await clientPromise;
   const leads = await db
