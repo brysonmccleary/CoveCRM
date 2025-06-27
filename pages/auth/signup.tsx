@@ -1,7 +1,7 @@
 // pages/auth/signup.tsx
 import React from "react";
 import { useForm } from "react-hook-form";
-import axios from "axios";
+import axios, { AxiosError } from "axios";
 
 interface SignUpForm {
   email: string;
@@ -16,10 +16,15 @@ export default function SignUp() {
       alert("✅ Registered—please sign in.");
       window.location.href = "/auth/signin";
     } catch (error: unknown) {
-      const message =
-        error instanceof Error
-          ? error.message
-          : (error as any)?.response?.data?.error || String(error);
+      let message: string;
+      if (axios.isAxiosError(error)) {
+        const axiosError = error as AxiosError<{ error?: string }>;
+        message = axiosError.response?.data.error ?? axiosError.message;
+      } else if (error instanceof Error) {
+        message = error.message;
+      } else {
+        message = String(error);
+      }
       alert("❌ Signup failed: " + message);
     }
   };
