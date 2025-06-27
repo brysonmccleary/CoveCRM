@@ -11,12 +11,9 @@ interface SignUpForm {
 export default function SignUp() {
   const { register, handleSubmit } = useForm<SignUpForm>();
   const onSubmit = async (data: SignUpForm) => {
-    alert("Debug: onSubmit fired with data: " + JSON.stringify(data));
-    alert("Calling /api/auth/signup...");
     try {
-      const response = await axios.post("/api/auth/signup", data);
-      alert("✅ API response status: " + response.status);
-      alert("Registered—redirecting to sign in...");
+      await axios.post("/api/auth/signup", data);
+      alert("✅ Registered—please sign in.");
       window.location.href = "/auth/signin";
     } catch (error: unknown) {
       let message: string;
