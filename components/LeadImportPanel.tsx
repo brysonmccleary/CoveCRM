@@ -1,4 +1,6 @@
-import { matchColumnToField, STANDARD_FIELDS, saveMappingToLocal, getSavedMappings } from "../utils";
+import { useState } from "react";
+import { matchColumnToField, STANDARD_FIELDS } from "../utils/fieldMappings";
+import { saveMappingToLocal, getSavedMappings } from "../utils/mappingStorage";
 
 const LeadImportPanel = ({ csvData }) => {
   const [columnMappings, setColumnMappings] = useState(() =>
@@ -35,7 +37,7 @@ const LeadImportPanel = ({ csvData }) => {
   const handleImport = () => {
     const importableColumns = columnMappings.filter((col) => !col.doNotImport && col.mappedTo !== "");
     console.log("Importing columns:", importableColumns);
-    // Add actual import logic here
+    // 🔥 Add actual import logic here
   };
 
   const handleSaveMapping = () => {
@@ -99,41 +101,52 @@ const LeadImportPanel = ({ csvData }) => {
           </tr>
         </thead>
         <tbody>
-          {columnMappings
-            .filter((col, idx) => csvData.rows.every((row) => row[idx]?.trim() === "") === false)
-            .map((col, index) => (
-              <tr key={index} className={col.doNotImport ? "bg-red-100" : "bg-green-100"}>
-                <td className="border p-2">{col.original}</td>
-                <td className="border p-2">
-                  <input
-                    className="border p-1 w-full"
-                    type="text"
-                    value={col.mappedTo}
-                    onChange={(e) => handleMappingChange(index, e.target.value)}
-                    placeholder="Enter custom field or choose"
-                    list={`field-options-${index}`}
-                  />
-                  <datalist id={`field-options-${index}`}>
-                    {STANDARD_FIELDS.map((field, i) => (
-                      <option key={i} value={field} />
-                    ))}
-                  </datalist>
-                </td>
-                <td className="border p-2 text-center">
-                  <input
-                    type="checkbox"
-                    checked={col.doNotImport}
-                    onChange={() => toggleDoNotImport(index)}
-                  />
-                </td>
-              </tr>
-            ))}
+          {columnMappings.map((col, index) => (
+            <tr
+              key={index}
+              className={col.doNotImport ? "bg-red-100" : "bg-green-100"}
+            >
+              <td className="border p-2">{col.original}</td>
+              <td className="border p-2">
+                <input
+                  className="border p-1 w-full"
+                  type="text"
+                  value={col.mappedTo}
+                  onChange={(e) => handleMappingChange(index, e.target.value)}
+                  placeholder="Enter custom field or choose"
+                  list={`field-options-${index}`}
+                />
+                <datalist id={`field-options-${index}`}>
+                  {STANDARD_FIELDS.map((field, i) => (
+                    <option key={i} value={field} />
+                  ))}
+                </datalist>
+              </td>
+              <td className="border p-2 text-center">
+                <input
+                  type="checkbox"
+                  checked={col.doNotImport}
+                  onChange={() => toggleDoNotImport(index)}
+                />
+              </td>
+            </tr>
+          ))}
         </tbody>
       </table>
 
       <div className="mt-4 flex gap-4">
-        <button className="bg-blue-600 text-white px-4 py-2 rounded" onClick={handleImport}>Import Leads</button>
-        <button className="bg-green-600 text-white px-4 py-2 rounded" onClick={handleSaveMapping}>Save Mapping</button>
+        <button
+          className="bg-blue-600 text-white px-4 py-2 rounded"
+          onClick={handleImport}
+        >
+          Import Leads
+        </button>
+        <button
+          className="bg-green-600 text-white px-4 py-2 rounded"
+          onClick={handleSaveMapping}
+        >
+          Save Mapping
+        </button>
       </div>
     </div>
   );
