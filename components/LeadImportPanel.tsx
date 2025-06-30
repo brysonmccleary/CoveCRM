@@ -1,93 +1,50 @@
 import { useState } from "react";
-import { matchColumnToField, STANDARD_FIELDS } from "../utils/fieldMappings";
+import { matchColumnToField, STANDARD_FIELDS, saveMappingToLocal, getSavedMappings } from "../utils";
 
 const LeadImportPanel = ({ csvData }) => {
-  const [columnMappings, setColumnMappings] = useState(() =>
-    csvData.headers.map((header) => {
-      const matched = matchColumnToField(header);
-      return {
-        original: header,
-        mappedTo: matched || "",
-        doNotImport: false,
-        isCustom: !matched,
-      };
-    })
-  );
+  const [mapping, setMapping] = useState(() => getSavedMappings() || {});
 
-  const handleMappingChange = (index, value) => {
-    setColumnMappings((prev) =>
-      prev.map((col, i) =>
-        i === index ? { ...col, mappedTo: value, isCustom: !STANDARD_FIELDS.includes(value) } : col
-      )
-    );
-  };
-
-  const toggleDoNotImport = (index) => {
-    setColumnMappings((prev) =>
-      prev.map((col, i) =>
-        i === index ? { ...col, doNotImport: !col.doNotImport } : col
-      )
-    );
-  };
-
-  const handleImport = () => {
-    const importableColumns = columnMappings.filter((col) => !col.doNotImport && col.mappedTo !== "");
-    console.log("Importing columns:", importableColumns);
-    // 🔥 Add actual import logic here (e.g., send to your backend API)
+  const handleMappingChange = (column: string, field: string) => {
+    const updated = { ...mapping, [column]: field };
+    setMapping(updated);
+    saveMappingToLocal(updated);
   };
 
   return (
-    <div className="p-4">
-      <h2 className="text-xl font-bold mb-4">Map Your CSV Columns</h2>
-      <table className="w-full text-sm border">
-        <thead>
-          <tr>
-            <th className="border p-2">Original Header</th>
-            <th className="border p-2">Map To Field</th>
-            <th className="border p-2">Do Not Import</th>
-          </tr>
-        </thead>
-        <tbody>
-          {columnMappings
-            .filter((col, idx) => csvData.rows.every((row) => row[idx]?.trim() === "") === false)
-            .map((col, index) => (
-              <tr
-                key={index}
-                className={col.doNotImport ? "bg-red-100" : "bg-green-100"}
-              >
-                <td className="border p-2">{col.original}</td>
+    <div>
+      <h2>Lead Import Mapping</h2>
+      {csvData && csvData.length > 0 ? (
+        <table className="w-full border my-2">
+          <thead>
+            <tr>
+              <th className="border p-2">CSV Column</th>
+              <th className="border p-2">Map To Field</th>
+            </tr>
+          </thead>
+          <tbody>
+            {Object.keys(csvData[0]).map((column) => (
+              <tr key={column}>
+                <td className="border p-2">{column}</td>
                 <td className="border p-2">
-                  <input
-                    className="border p-1 w-full"
-                    type="text"
-                    value={col.mappedTo}
-                    onChange={(e) => handleMappingChange(index, e.target.value)}
-                    placeholder="Enter custom field or choose"
-                    list={`field-options-${index}`}
-                  />
-                  <datalist id={`field-options-${index}`}>
-                    {STANDARD_FIELDS.map((field, i) => (
-                      <option key={i} value={field} />
+                  <select
+                    value={mapping[column] || matchColumnToField(column)}
+                    onChange={(e) => handleMappingChange(column, e.target.value)}
+                    className="border p-1"
+                  >
+                    {STANDARD_FIELDS.map((field) => (
+                      <option key={field} value={field}>
+                        {field}
+                      </option>
                     ))}
-                  </datalist>
-                </td>
-                <td className="border p-2 text-center">
-                  <input
-                    type="checkbox"
-                    checked={col.doNotImport}
-                    onChange={() => toggleDoNotImport(index)}
-                  />
+                  </select>
                 </td>
               </tr>
             ))}
-        </tbody>
-      </table>
-      <button
-        className="mt-4 bg-blue-600 text-white px-4 py-2 rounded"
-        onClick={handleImport}
-      >
-        Import Leads
-      </button>
+          </tbody>
+        </table>
+      ) : (
+        <p>No CSV data loaded yet.</p>
+      )}
     </div>
   );
 };
