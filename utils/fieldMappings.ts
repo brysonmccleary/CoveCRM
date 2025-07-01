@@ -1,24 +1,18 @@
 export const STANDARD_FIELDS = [
-  "First Name",
-  "Last Name",
-  "Age",
-  "Date of Birth",
-  "Phone",
-  "Email",
-  "Street Address",
-  "City",
-  "State",
-  "Zip Code",
-  "Notes",
+  "firstName",
+  "lastName",
+  "phone",
+  "email",
+  "address",
+  "city",
+  "state",
+  "zip",
+  "dob",
+  "age",
 ];
 
 export const matchColumnToField = (header: string): string | null => {
-  const normalized = header.trim().toLowerCase();
-  for (let field of STANDARD_FIELDS) {
-    if (normalized.includes(field.toLowerCase())) {
-      return field;
-    }
-  }
-  return null;
+  const lowerHeader = header.toLowerCase();
+  return STANDARD_FIELDS.find((field) => lowerHeader.includes(field.toLowerCase())) || null;
 };
 

@@ -1,10 +1,14 @@
-export const saveMappingToLocal = (name: string, mappings: any[]) => {
-  const savedMappings = JSON.parse(localStorage.getItem("lead_mappings") || "[]");
-  savedMappings.push({ name, fields: mappings });
-  localStorage.setItem("lead_mappings", JSON.stringify(savedMappings));
+const LOCAL_STORAGE_KEY = "lead_mappings";
+
+export const saveMappingToLocal = (name: string, fields: any[]) => {
+  const existing = getSavedMappings();
+  const newMappings = [...existing, { name, fields }];
+  localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(newMappings));
 };
 
-export const getSavedMappings = (): { name: string; fields: any[] }[] => {
-  return JSON.parse(localStorage.getItem("lead_mappings") || "[]");
+export const getSavedMappings = () => {
+  if (typeof window === "undefined") return [];
+  const data = localStorage.getItem(LOCAL_STORAGE_KEY);
+  return data ? JSON.parse(data) : [];
 };
 
