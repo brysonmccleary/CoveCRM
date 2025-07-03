@@ -11,8 +11,20 @@ export const STANDARD_FIELDS = [
   "age",
 ];
 
-export const matchColumnToField = (header: string): string | null => {
-  const lowerHeader = header.toLowerCase();
-  return STANDARD_FIELDS.find((field) => lowerHeader.includes(field.toLowerCase())) || null;
-};
+export function matchColumnToField(header: string): string | null {
+  const normalized = header.toLowerCase();
+
+  if (normalized.includes("first")) return "firstName";
+  if (normalized.includes("last")) return "lastName";
+  if (normalized.includes("phone") || normalized.includes("mobile")) return "phone";
+  if (normalized.includes("email")) return "email";
+  if (normalized.includes("address")) return "address";
+  if (normalized.includes("city")) return "city";
+  if (normalized.includes("state")) return "state";
+  if (normalized.includes("zip") || normalized.includes("postal")) return "zip";
+  if (normalized.includes("birth") || normalized.includes("dob")) return "dob";
+  if (normalized.includes("age")) return "age";
+
+  return null;
+}
 

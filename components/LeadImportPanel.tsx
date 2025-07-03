@@ -1,158 +1,220 @@
-import { useState } from "react";
-import { matchColumnToField, STANDARD_FIELDS } from "../utils/fieldMappings";
-import { saveMappingToLocal, getSavedMappings } from "../utils/mappingStorage";
+import React, { useState, useRef, useEffect } from "react";
+import Papa from "papaparse";
 
-const LeadImportPanel = ({ csvData }) => {
-  const [columnMappings, setColumnMappings] = useState(() =>
-    csvData.headers.map((header) => {
-      const matched = matchColumnToField(header);
-      return {
-        original: header,
-        mappedTo: matched || "",
-        doNotImport: false,
-        isCustom: !matched,
-      };
-    })
-  );
+const systemFields = [
+  "First Name",
+  "Last Name",
+  "Phone",
+  "Email",
+  "Address",
+  "City",
+  "State",
+  "Zip",
+  "DOB",
+  "Age",
+  "Coverage Amount",
+  "Notes",
+  "Add Custom Field",
+];
 
-  const [savedMappings, setSavedMappings] = useState(getSavedMappings());
-  const [selectedMapping, setSelectedMapping] = useState("");
+export default function LeadImportPanel() {
+  const [csvHeaders, setCsvHeaders] = useState<string[]>([]);
+  const [mapping, setMapping] = useState<{ [key: string]: string }>({});
+  const [customFieldNames, setCustomFieldNames] = useState<{ [key: string]: string }>({});
+  const [skipFields, setSkipFields] = useState<{ [key: string]: boolean }>({});
+  const [csvData, setCsvData] = useState<any[]>([]);
+  const [folderName, setFolderName] = useState("");
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const handleMappingChange = (index, value) => {
-    setColumnMappings((prev) =>
-      prev.map((col, i) =>
-        i === index ? { ...col, mappedTo: value, isCustom: !STANDARD_FIELDS.includes(value) } : col
-      )
+  useEffect(() => {
+    if (fileInputRef.current) {
+      fileInputRef.current.click();
+    }
+  }, []);
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      Papa.parse(file, {
+        header: true,
+        skipEmptyLines: true,
+        complete: (results) => {
+          const headers = results.meta.fields || [];
+          const validHeaders = headers.filter((header) =>
+            results.data.some((row: any) => row[header] && row[header].trim() !== "")
+          );
+          setCsvHeaders(validHeaders);
+          setCsvData(results.data);
+          setMapping({});
+          setSkipFields({});
+          setCustomFieldNames({});
+        },
+      });
+    }
+  };
+
+  const handleMappingChange = (header: string, value: string) => {
+    setMapping({ ...mapping, [header]: value });
+    if (value !== "Add Custom Field") {
+      setCustomFieldNames({ ...customFieldNames, [header]: "" });
+    }
+  };
+
+  const handleCustomFieldNameChange = (header: string, value: string) => {
+    setCustomFieldNames({ ...customFieldNames, [header]: value });
+  };
+
+  const handleSkipChange = (header: string, checked: boolean) => {
+    setSkipFields({ ...skipFields, [header]: checked });
+    if (checked) {
+      setMapping({ ...mapping, [header]: "" });
+      setCustomFieldNames({ ...customFieldNames, [header]: "" });
+    }
+  };
+
+  const getAvailableFields = (currentHeader: string) => {
+    const selectedFields = Object.values(mapping).filter(
+      (field) => field !== "" && field !== mapping[currentHeader] && field !== "Add Custom Field"
+    );
+    return systemFields.filter(
+      (field) => !selectedFields.includes(field) || field === mapping[currentHeader]
     );
   };
 
-  const toggleDoNotImport = (index) => {
-    setColumnMappings((prev) =>
-      prev.map((col, i) =>
-        i === index ? { ...col, doNotImport: !col.doNotImport } : col
-      )
-    );
-  };
+  const handleImport = async () => {
+    if (!folderName.trim()) {
+      alert("Please enter a folder name");
+      return;
+    }
 
-  const handleImport = () => {
-    const importableColumns = columnMappings.filter((col) => !col.doNotImport && col.mappedTo !== "");
-    console.log("Importing columns:", importableColumns);
-    alert("Leads imported! (Simulation)");
-  };
-
-  const handleSaveMapping = () => {
-    const mappingName = prompt("Enter a name for this mapping:");
-    if (!mappingName) return;
-    saveMappingToLocal(mappingName, columnMappings);
-    setSavedMappings(getSavedMappings());
-    alert("Mapping saved!");
-  };
-
-  const handleLoadMapping = (e) => {
-    const name = e.target.value;
-    setSelectedMapping(name);
-    const mapping = savedMappings.find((m) => m.name === name);
-    if (!mapping) return;
-
-    const newMappings = csvData.headers.map((header) => {
-      const savedField = mapping.fields.find((f) => f.original.toLowerCase() === header.toLowerCase());
-      if (savedField) {
-        return {
-          original: header,
-          mappedTo: savedField.mappedTo,
-          doNotImport: savedField.doNotImport,
-          isCustom: !STANDARD_FIELDS.includes(savedField.mappedTo),
-        };
-      } else {
-        const matched = matchColumnToField(header);
-        return {
-          original: header,
-          mappedTo: matched || "",
-          doNotImport: false,
-          isCustom: !matched,
-        };
-      }
+    const leadsToImport = csvData.map((row) => {
+      const mappedLead: { [key: string]: any } = {};
+      Object.keys(mapping).forEach((header) => {
+        if (!skipFields[header]) {
+          let field = mapping[header];
+          if (field === "Add Custom Field") {
+            field = customFieldNames[header];
+          }
+          const value = row[header];
+          if (field && value && value.trim() !== "") {
+            mappedLead[field] = value;
+          }
+        }
+      });
+      return mappedLead;
     });
-    setColumnMappings(newMappings);
+
+    const res = await fetch("/api/import-leads", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ folderName, leads: leadsToImport }),
+    });
+
+    if (res.ok) {
+      alert("Leads imported successfully!");
+      setCsvHeaders([]);
+      setCsvData([]);
+      setMapping({});
+      setSkipFields({});
+      setCustomFieldNames({});
+      setFolderName("");
+    } else {
+      alert("Failed to import leads");
+    }
+  };
+
+  const handleTriggerFilePicker = () => {
+    fileInputRef.current?.click();
   };
 
   return (
-    <div className="p-4">
-      <h2 className="text-xl font-bold mb-4">Map Your CSV Columns</h2>
+    <div className="border border-black dark:border-white p-4 mt-4 rounded space-y-4">
+      <h2 className="text-xl font-bold">Import Leads</h2>
 
-      {savedMappings.length > 0 && (
-        <div className="mb-4">
-          <label className="mr-2">Load Saved Mapping:</label>
-          <select value={selectedMapping} onChange={handleLoadMapping} className="border p-1">
-            <option value="">-- Select --</option>
-            {savedMappings.map((m, idx) => (
-              <option key={idx} value={m.name}>{m.name}</option>
-            ))}
-          </select>
-        </div>
-      )}
+      <button
+        onClick={handleTriggerFilePicker}
+        className="bg-[#6b5b95] text-white px-4 py-2 rounded hover:opacity-90"
+      >
+        Choose CSV File
+      </button>
+      <input
+        type="file"
+        accept=".csv"
+        onChange={handleFileUpload}
+        ref={fileInputRef}
+        className="hidden"
+      />
 
-      <table className="w-full text-sm border">
-        <thead>
-          <tr>
-            <th className="border p-2">Original Header</th>
-            <th className="border p-2">Map To Field</th>
-            <th className="border p-2">Do Not Import</th>
-          </tr>
-        </thead>
-        <tbody>
-          {columnMappings
-            .filter((col, idx) => csvData.rows.every((row) => row[idx]?.trim() === "") === false)
-            .map((col, index) => (
-              <tr
-                key={index}
-                className={col.doNotImport ? "bg-red-100" : "bg-green-100"}
+      {csvHeaders.length > 0 && (
+        <>
+          <div>
+            <label className="block font-semibold mb-1">Folder Name</label>
+            <input
+              type="text"
+              value={folderName}
+              onChange={(e) => setFolderName(e.target.value)}
+              placeholder="e.g., Mortgage Leads 7/1"
+              className="border p-1 rounded w-full"
+            />
+          </div>
+
+          <div className="space-y-2 mt-4">
+            {csvHeaders.map((header) => (
+              <div
+                key={header}
+                className="flex flex-col md:flex-row md:items-center md:space-x-4 border border-black dark:border-white p-2 rounded"
               >
-                <td className="border p-2">{col.original}</td>
-                <td className="border p-2">
+                <div className="font-semibold w-48">
+                  {header}
+                  <div className="text-gray-500 text-sm mt-1">
+                    ({csvData[0]?.[header] || "No sample"})
+                  </div>
+                </div>
+                <select
+                  value={mapping[header] || ""}
+                  onChange={(e) => handleMappingChange(header, e.target.value)}
+                  className="border p-1 rounded flex-1"
+                  disabled={skipFields[header]}
+                >
+                  <option value="">Select Field</option>
+                  {getAvailableFields(header).map((field) => (
+                    <option key={field} value={field}>
+                      {field}
+                    </option>
+                  ))}
+                </select>
+
+                {mapping[header] === "Add Custom Field" && (
                   <input
-                    className="border p-1 w-full"
                     type="text"
-                    value={col.mappedTo}
-                    onChange={(e) => handleMappingChange(index, e.target.value)}
-                    placeholder="Enter custom field or choose"
-                    list={`field-options-${index}`}
+                    value={customFieldNames[header] || ""}
+                    onChange={(e) => handleCustomFieldNameChange(header, e.target.value)}
+                    placeholder="Custom field name"
+                    className="border p-1 rounded flex-1 mt-2 md:mt-0"
                   />
-                  <datalist id={`field-options-${index}`}>
-                    {STANDARD_FIELDS.map((field, i) => (
-                      <option key={i} value={field} />
-                    ))}
-                  </datalist>
-                </td>
-                <td className="border p-2 text-center">
+                )}
+
+                <div className="flex items-center space-x-1 mt-2 md:mt-0">
                   <input
                     type="checkbox"
-                    checked={col.doNotImport}
-                    onChange={() => toggleDoNotImport(index)}
+                    checked={skipFields[header] || false}
+                    onChange={(e) => handleSkipChange(header, e.target.checked)}
                   />
-                </td>
-              </tr>
+                  <label>Do Not Import</label>
+                </div>
+              </div>
             ))}
-        </tbody>
-      </table>
 
-      <div className="mt-4 flex gap-4">
-        <button
-          className="bg-blue-600 text-white px-4 py-2 rounded"
-          onClick={handleImport}
-        >
-          Import Leads
-        </button>
-        <button
-          className="bg-green-600 text-white px-4 py-2 rounded"
-          onClick={handleSaveMapping}
-        >
-          Save Mapping
-        </button>
-      </div>
+            <button
+              onClick={handleImport}
+              className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded mt-2"
+            >
+              Save & Import
+            </button>
+          </div>
+        </>
+      )}
     </div>
   );
-};
-
-export default LeadImportPanel;
+}
 

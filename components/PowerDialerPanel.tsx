@@ -1,66 +1,74 @@
-import { useState } from "react";
+import React, { useState } from "react";
+import { useCallStore } from "../store/useCallStore";
 
-const PowerDialerPanel = () => {
-  const [currentLead, setCurrentLead] = useState<any>(null);
-  const [callStatus, setCallStatus] = useState("");
+export default function PowerDialerPanel() {
+  const { activeLeads, currentIndex, nextLead } = useCallStore();
+  const currentLead = activeLeads[currentIndex] || {};
 
-  const leads = [
-    { name: "John Doe", phone: "555-123-4567" },
-    { name: "Jane Smith", phone: "555-987-6543" },
-  ];
+  const [notes, setNotes] = useState(currentLead["Notes"] || "");
+  const [doubleDialNumber, setDoubleDialNumber] = useState(currentLead["Phone"] || "");
 
-  const startCall = (lead: any) => {
-    setCurrentLead(lead);
-    setCallStatus("Calling...");
-    setTimeout(() => {
-      setCallStatus("Connected");
-    }, 2000);
+  const handleSaveNotes = () => {
+    alert("Notes saved (would update in DB in real app).");
   };
 
-  const endCall = () => {
-    setCallStatus("Call Ended");
-    setTimeout(() => {
-      setCurrentLead(null);
-      setCallStatus("");
-    }, 1500);
-  };
+  if (!currentLead || Object.keys(currentLead).length === 0) {
+    return <div>No active lead selected. Start a dial session from leads screen.</div>;
+  }
 
   return (
-    <div className="p-4">
-      <h2 className="text-xl font-bold mb-4">Power Dialer</h2>
-      {currentLead ? (
-        <div className="border p-4 rounded bg-gray-100">
-          <p><strong>Current Lead:</strong> {currentLead.name}</p>
-          <p><strong>Phone:</strong> {currentLead.phone}</p>
-          <p><strong>Status:</strong> {callStatus}</p>
-          <button
-            className="mt-2 bg-red-600 text-white px-4 py-2 rounded"
-            onClick={endCall}
-          >
-            End Call
-          </button>
+    <div className="flex flex-col md:flex-row border border-black dark:border-white rounded p-4 space-y-4 md:space-y-0 md:space-x-4">
+      {/* Lead details */}
+      <div className="flex-1 space-y-2 border border-black dark:border-white p-3 rounded overflow-y-auto">
+        <h2 className="text-xl font-bold mb-2">Lead Information</h2>
+
+        <div className="flex items-center space-x-2 mb-2">
+          <span className="text-lg font-bold">{currentLead["Phone"]}</span>
+          <input
+            type="text"
+            value={doubleDialNumber}
+            onChange={(e) => setDoubleDialNumber(e.target.value)}
+            className="border p-1 rounded w-48"
+            placeholder="Paste again to double dial"
+          />
         </div>
-      ) : (
-        <ul>
-          {leads.map((lead, index) => (
-            <li key={index} className="mb-2 flex justify-between items-center border p-2 rounded">
-              <div>
-                <p><strong>{lead.name}</strong></p>
-                <p className="text-sm text-gray-600">{lead.phone}</p>
-              </div>
-              <button
-                className="bg-blue-600 text-white px-3 py-1 rounded"
-                onClick={() => startCall(lead)}
-              >
-                Start Call
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
+
+        {Object.entries(currentLead).map(([key, value]) => (
+          key !== "Notes" && key !== "Phone" && (
+            <div key={key}>
+              <strong>{key}:</strong> {value}
+            </div>
+          )
+        ))}
+      </div>
+
+      {/* Notes panel */}
+      <div className="w-full md:w-1/3 flex flex-col space-y-2 border border-black dark:border-white p-3 rounded">
+        <h2 className="text-lg font-bold">Notes</h2>
+        <textarea
+          value={notes}
+          onChange={(e) => setNotes(e.target.value)}
+          className="border p-2 rounded flex-1 min-h-[150px]"
+        />
+        <button
+          onClick={handleSaveNotes}
+          className="bg-accent text-white px-4 py-2 rounded"
+        >
+          Save Notes
+        </button>
+
+        <button
+          onClick={nextLead}
+          className="bg-accent text-white px-4 py-2 rounded mt-2"
+        >
+          Next Lead
+        </button>
+
+        <div className="mt-4 p-2 border border-black dark:border-white rounded bg-gray-50 dark:bg-gray-800">
+          <strong>Call Summary AI (coming soon)</strong>
+        </div>
+      </div>
     </div>
   );
-};
-
-export default PowerDialerPanel;
+}
 
