@@ -7,7 +7,7 @@ if (!MONGODB_URI) {
 }
 
 declare global {
-  // allow global `mongoose` cache
+  // Allow global `mongoose` cache
   // eslint-disable-next-line no-var
   var mongoose: {
     conn: typeof mongoose | null;
@@ -15,11 +15,11 @@ declare global {
   } | undefined;
 }
 
-let cached = global.mongoose;
-
-if (!cached) {
-  cached = global.mongoose = { conn: null, promise: null };
+if (!global.mongoose) {
+  global.mongoose = { conn: null, promise: null };
 }
+
+const cached = global.mongoose;
 
 async function dbConnect() {
   if (cached.conn) {
