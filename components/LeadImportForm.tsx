@@ -35,7 +35,7 @@ export default function LeadImportForm() {
       complete: (result) => {
         if (!result.meta.fields) return;
         const headers = result.meta.fields.filter((header) =>
-          result.data.some((row) => row[header]?.trim() !== "")
+          result.data.some((row: Record<string, any>) => row[header]?.trim() !== "")
         );
         setCsvHeaders(headers);
         if (result.data && result.data.length > 0) {
@@ -181,4 +181,3 @@ export default function LeadImportForm() {
     </div>
   );
 }
-
