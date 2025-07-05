@@ -33,13 +33,17 @@ export default function PowerDialerPanel() {
           />
         </div>
 
-        {Object.entries(currentLead).map(([key, value]) => (
-          key !== "Notes" && key !== "Phone" && (
+        {Object.entries(currentLead).map(([key, value]) => {
+          if (key === "Notes" || key === "Phone") return null;
+
+          const displayValue = typeof value === "string" ? value : JSON.stringify(value);
+
+          return (
             <div key={key}>
-              <strong>{key}:</strong> {value}
+              <strong>{key}:</strong> {displayValue || "-"}
             </div>
-          )
-        ))}
+          );
+        })}
       </div>
 
       {/* Notes panel */}
