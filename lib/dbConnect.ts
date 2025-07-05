@@ -7,21 +7,16 @@ if (!MONGODB_URI) {
 }
 
 declare global {
-  // Allow global `mongoose` cache
-  // eslint-disable-next-line no-var
-  var mongoose: {
-    conn: typeof mongoose | null;
-    promise: Promise<typeof mongoose> | null;
-  } | undefined;
+  var mongooseCache: { conn: typeof mongoose | null; promise: Promise<typeof mongoose> | null } | undefined;
 }
 
-if (!global.mongoose) {
-  global.mongoose = { conn: null, promise: null };
+let cached = global.mongooseCache;
+
+if (!cached) {
+  cached = global.mongooseCache = { conn: null, promise: null };
 }
 
-const cached = global.mongoose;
-
-async function dbConnect() {
+async function dbConnect(): Promise<typeof mongoose> {
   if (cached.conn) {
     return cached.conn;
   }
@@ -31,6 +26,7 @@ async function dbConnect() {
       bufferCommands: false,
     });
   }
+
   cached.conn = await cached.promise;
   return cached.conn;
 }
