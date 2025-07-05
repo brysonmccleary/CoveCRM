@@ -23,7 +23,7 @@ const defaultFields: FieldOption[] = [
 
 export default function LeadImportForm() {
   const [csvHeaders, setCsvHeaders] = useState<string[]>([]);
-  const [sampleRow, setSampleRow] = useState<any>({});
+  const [sampleRow, setSampleRow] = useState<Record<string, any>>({});
   const [fieldMapping, setFieldMapping] = useState<{ [key: string]: string }>({});
   const [skipFields, setSkipFields] = useState<{ [key: string]: boolean }>({});
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -34,12 +34,16 @@ export default function LeadImportForm() {
       skipEmptyLines: true,
       complete: (result) => {
         if (!result.meta.fields) return;
+
+        const data = result.data as Record<string, any>[];
+
         const headers = result.meta.fields.filter((header) =>
-          result.data.some((row: Record<string, any>) => row[header]?.trim() !== "")
+          data.some((row) => row[header]?.trim() !== "")
         );
+
         setCsvHeaders(headers);
-        if (result.data && result.data.length > 0) {
-          setSampleRow(result.data[0]);
+        if (data && data.length > 0) {
+          setSampleRow(data[0]);
         }
       },
     });
