@@ -30,9 +30,12 @@ export default function LeadPreviewPanel({ lead, onClose, onSaveNotes }: LeadPre
         {Object.entries(lead).map(([key, value]) => {
           if (["_id", "folderId", "createdAt", "__v"].includes(key)) return null;
           if (key === "Notes") return null;
+
+          const displayValue = typeof value === "string" ? value : JSON.stringify(value);
+
           return (
             <div key={key} className="text-base">
-              <strong>{key}:</strong> {value || "-"}
+              <strong>{key}:</strong> {displayValue || "-"}
             </div>
           );
         })}
@@ -56,4 +59,3 @@ export default function LeadPreviewPanel({ lead, onClose, onSaveNotes }: LeadPre
     </div>
   );
 }
-
