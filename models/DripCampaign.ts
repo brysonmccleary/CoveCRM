@@ -11,7 +11,9 @@ const DripCampaignSchema = new mongoose.Schema(
         text: { type: String, required: true },
         day: { type: String, required: true },
         time: { type: String, default: "9:00 AM" },
-        calendarLink: { type: String, default: "" }
+        calendarLink: { type: String, default: "" },
+        views: { type: Number, default: 0 },
+        responses: { type: Number, default: 0 }
       }
     ],
     analytics: {
