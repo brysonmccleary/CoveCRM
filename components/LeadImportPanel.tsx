@@ -40,11 +40,15 @@ export default function LeadImportPanel() {
         skipEmptyLines: true,
         complete: (results) => {
           const headers = results.meta.fields || [];
+          // ✅ Type fix here
+          const typedData = results.data as Record<string, any>[];
+
           const validHeaders = headers.filter((header) =>
-            results.data.some((row: any) => row[header] && row[header].trim() !== "")
+            typedData.some((row) => row[header] && row[header].trim() !== "")
           );
+
           setCsvHeaders(validHeaders);
-          setCsvData(results.data);
+          setCsvData(typedData);
           setMapping({});
           setSkipFields({});
           setCustomFieldNames({});

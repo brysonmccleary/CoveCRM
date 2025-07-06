@@ -11,11 +11,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     const session = await getServerSession(req, res, authOptions);
 
-    if (!session) {
+    if (!session || !session.user || !session.user.email) {
       return res.status(401).json({ message: "Not authenticated" });
     }
 
-    const userId = session.user.id;
+    const userId = session.user.email; // Use email as unique ID
 
     const leads = req.body.leads;
 
@@ -23,7 +23,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ message: "Invalid leads data" });
     }
 
-    // Attach ownerId to each lead
     const updatedLeads = leads.map((lead) => ({
       ...lead,
       ownerId: userId,
@@ -41,4 +40,3 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     res.status(500).json({ message: "Server error" });
   }
 }
-
