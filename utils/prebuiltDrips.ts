@@ -1,18 +1,11 @@
-import React, { useState } from "react";
-
-interface MessageStep {
-  text: string;
-  day: string;
-}
-
-interface Drip {
+export interface Drip {
   id: string;
   name: string;
   type: "sms" | "email";
   messages: { text: string; day: string }[];
 }
 
-const prebuiltDrips: Drip[] = [
+export const prebuiltDrips: Drip[] = [
   {
     id: "mortgage_protection",
     name: "Mortgage Protection Drip",
@@ -69,9 +62,7 @@ const prebuiltDrips: Drip[] = [
       { text: "Hi {{ contact.first_name }}, hope all is well! Do you have a few minutes today to chat about your retirement options? Best, {{ agent.name }}", day: "Day 37" },
       { text: "Hi {{ contact.first_name }}, I received your info from your IUL request. Are you still interested? Let me know where you're at. Best, {{ agent.name }}", day: "Day 41" }
     ]
-  }
-];
-prebuiltDrips.push(
+  },
   {
     id: "final_expense_leads",
     name: "Final Expense Leads Drip",
@@ -165,136 +156,4 @@ prebuiltDrips.push(
       { text: "🇺🇸 Happy 4th of July, {{ contact.first_name }}! Hope you're enjoying some fun and relaxation today.", day: "July 3" }
     ]
   }
-);
-
-// Export default panel
-export default function DripCampaignsPanel() {
-  const [campaignName, setCampaignName] = useState("");
-  const [messageSteps, setMessageSteps] = useState<MessageStep[]>([]);
-  const [currentText, setCurrentText] = useState("");
-  const [currentDay, setCurrentDay] = useState("immediately");
-  const [savedCampaigns, setSavedCampaigns] = useState<any[]>([]);
-
-  const addStep = () => {
-    if (!currentText) return;
-    setMessageSteps([...messageSteps, { text: currentText, day: currentDay }]);
-    setCurrentText("");
-    setCurrentDay("immediately");
-  };
-
-  const saveCampaign = () => {
-    if (!campaignName || messageSteps.length === 0) {
-      alert("Please enter a campaign name and at least one message.");
-      return;
-    }
-    const newCampaign = { name: campaignName, steps: messageSteps };
-    setSavedCampaigns([...savedCampaigns, newCampaign]);
-    setCampaignName("");
-    setMessageSteps([]);
-    alert("Custom drip campaign saved!");
-  };
-
-  const handleAssignDrip = (dripId: string) => {
-    alert(`Assigning drip campaign ID: ${dripId} — connect to folders/leads modal here.`);
-  };
-
-  return (
-    <div className="p-4 space-y-6">
-      {/* Top create custom drip panel */}
-      <div className="border border-black dark:border-white p-4 rounded">
-        <h2 className="text-xl font-bold mb-2">Create Custom Drip Campaign</h2>
-        <input
-          value={campaignName}
-          onChange={(e) => setCampaignName(e.target.value)}
-          placeholder="Campaign Name"
-          className="border border-black dark:border-white p-2 w-full rounded mb-2"
-        />
-        <div className="flex flex-col md:flex-row space-y-2 md:space-y-0 md:space-x-2">
-          <input
-            value={currentText}
-            onChange={(e) => setCurrentText(e.target.value)}
-            placeholder="Message text"
-            className="border border-black dark:border-white p-2 flex-1 rounded"
-          />
-          <select
-            value={currentDay}
-            onChange={(e) => setCurrentDay(e.target.value)}
-            className="border border-black dark:border-white p-2 rounded"
-          >
-            <option value="immediately">Immediately</option>
-            {[...Array(365)].map((_, i) => (
-              <option key={i + 1} value={`Day ${i + 1}`}>
-                Day {i + 1}
-              </option>
-            ))}
-          </select>
-          <button
-            onClick={addStep}
-            className="border border-black dark:border-white px-4 rounded"
-          >
-            Add
-          </button>
-        </div>
-
-        {messageSteps.length > 0 && (
-          <div className="space-y-2 mt-2">
-            <h3 className="font-semibold">Messages in Campaign:</h3>
-            {messageSteps.map((step, idx) => (
-              <div key={idx} className="border border-black dark:border-white p-2 rounded">
-                <p><strong>When:</strong> {step.day}</p>
-                <p><strong>Message:</strong> {step.text}</p>
-              </div>
-            ))}
-          </div>
-        )}
-
-        <button
-          onClick={saveCampaign}
-          className="mt-2 border border-black dark:border-white px-4 py-2 rounded"
-        >
-          Save Campaign
-        </button>
-      </div>
-
-      <h2 className="text-xl font-bold mt-8">Prebuilt Drip Campaigns</h2>
-      {prebuiltDrips.map((drip) => (
-        <div key={drip.id} className="border border-black dark:border-white p-3 rounded mb-4">
-          <h3 className="font-semibold">{drip.name}</h3>
-          <p className="text-xs italic">Type: {drip.type.toUpperCase()}</p>
-          <p className="text-xs italic">Steps: {drip.messages.length}</p>
-          <ul className="list-disc pl-5 text-sm">
-            {drip.messages.map((msg, idx) => (
-              <li key={idx}>
-                <strong>{msg.day}:</strong> {msg.text}
-              </li>
-            ))}
-          </ul>
-          <button
-            onClick={() => handleAssignDrip(drip.id)}
-            className="mt-2 bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded"
-          >
-            Assign to Folder/Leads
-          </button>
-        </div>
-      ))}
-
-      {savedCampaigns.length > 0 && (
-        <div>
-          <h2 className="text-xl font-bold mt-8">Your Custom Campaigns</h2>
-          {savedCampaigns.map((camp, idx) => (
-            <div key={idx} className="border border-black dark:border-white p-3 rounded mb-4">
-              <h3 className="font-semibold">{camp.name}</h3>
-              <ul className="list-disc pl-5 text-sm">
-                {camp.steps.map((msg: MessageStep, stepIdx: number) => (
-                  <li key={stepIdx}>
-                    <strong>{msg.day}:</strong> {msg.text}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
+];

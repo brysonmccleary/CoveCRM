@@ -45,7 +45,7 @@ export default function ChatAssistantWidget() {
       </button>
 
       {isOpen && (
-        <div className="fixed bottom-20 right-6 bg-gray-800 text-white w-80 h-96 p-4 rounded shadow-xl z-50 flex flex-col">
+        <div className="fixed bottom-20 right-6 bg-[#1e293b] text-white w-80 h-96 p-4 rounded shadow-xl z-50 flex flex-col">
           <h3 className="font-bold mb-2">CoveCRM Assistant</h3>
 
           <div className="flex-1 overflow-y-auto mb-2 space-y-2">
@@ -83,4 +83,3 @@ export default function ChatAssistantWidget() {
     </>
   );
 }
-

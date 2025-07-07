@@ -3,7 +3,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     { name: "Home", path: "/dashboard?tab=home" },
     { name: "Leads", path: "/dashboard?tab=leads" },
     { name: "Workflows", path: "/dashboard?tab=workflows" },
-    { name: "Drip Campaigns", path: "/dashboard?tab=drip-campaigns" },
+    { name: "Drip Campaigns", path: "/drip-campaigns" },
     { name: "Conversations", path: "/dashboard?tab=conversations" },
     { name: "Team Activity", path: "/dashboard?tab=team-activity" },
     { name: "Numbers", path: "/dashboard?tab=numbers" },
@@ -25,8 +25,11 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           <a href="/api/logout" className="block text-red-500 hover:underline">Log Out</a>
         </div>
       </div>
-      <main className="flex-1">{children}</main>
+      <main className="flex-1 bg-[#0f172a] text-white p-6">
+        <div className="bg-[#1e293b] rounded-xl p-6 shadow">
+          {children}
+        </div>
+      </main>
     </div>
   );
 }
-

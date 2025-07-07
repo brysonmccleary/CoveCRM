@@ -2,9 +2,9 @@ import { useRouter } from "next/router";
 import DripCampaignsPanel from "../components/DripCampaignsPanel";
 import DashboardLayout from "@/components/DashboardLayout";
 import DashboardOverview from "@/components/DashboardOverview";
+import LeadsPanel from "@/components/LeadsPanel"; // ✅ Use the real LeadsPanel component
 
-// Placeholder example components (replace later if needed)
-const LeadsPanel = () => <div className="p-4">Leads Panel (Coming soon)</div>;
+// You can keep these placeholders or build them out later
 const WorkflowsPanel = () => <div className="p-4">Workflows Panel (Coming soon)</div>;
 const ConversationsPanel = () => <div className="p-4">Conversations Panel (Coming soon)</div>;
 const TeamActivityPanel = () => <div className="p-4">Team Activity Panel (Coming soon)</div>;
@@ -17,7 +17,6 @@ export default function DashboardPage() {
 
   return (
     <DashboardLayout>
-      {tab === "drip-campaigns" && <DripCampaignsPanel />}
       {!tab || tab === "home" ? (
         <DashboardOverview />
       ) : null}
@@ -30,4 +29,3 @@ export default function DashboardPage() {
     </DashboardLayout>
   );
 }
-

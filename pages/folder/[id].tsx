@@ -1,169 +1,61 @@
-import React, { useState, useEffect } from "react";
 import { useRouter } from "next/router";
-import LeadPreviewPanel from "../../components/LeadPreviewPanel";
+import { useState } from "react";
+import { prebuiltDrips } from "@/utils/prebuiltDrips";
 
-export default function FolderPage() {
+export default function DripCampaignDetail() {
   const router = useRouter();
   const { id } = router.query;
 
-  const [leads, setLeads] = useState<any[]>([]);
-  const [filteredLeads, setFilteredLeads] = useState<any[]>([]);
-  const [selectedLeads, setSelectedLeads] = useState<string[]>([]);
-  const [selectAll, setSelectAll] = useState(false);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [previewLead, setPreviewLead] = useState<any | null>(null);
+  const drip = prebuiltDrips.find((d) => d.id === id);
+  const [steps, setSteps] = useState(drip?.messages || []);
 
-  useEffect(() => {
-    const fetchLeads = async () => {
-      if (!id) return;
-      const res = await fetch(`/api/get-leads-by-folder?folderId=${id}`);
-      const data = await res.json();
-      setLeads(data);
-      setFilteredLeads(data);
-    };
-    fetchLeads();
-  }, [id]);
+  if (!drip) return <p>Drip not found</p>;
 
-  useEffect(() => {
-    if (!searchQuery) {
-      setFilteredLeads(leads);
-      return;
-    }
-    const lower = searchQuery.toLowerCase();
-    const filtered = leads.filter(
-      (lead) =>
-        (lead["First Name"] && lead["First Name"].toLowerCase().includes(lower)) ||
-        (lead["Last Name"] && lead["Last Name"].toLowerCase().includes(lower)) ||
-        (lead["Phone"] && lead["Phone"].toLowerCase().includes(lower))
-    );
-    setFilteredLeads(filtered);
-  }, [searchQuery, leads]);
-
-  const toggleLeadSelection = (id: string) => {
-    if (selectedLeads.includes(id)) {
-      setSelectedLeads(selectedLeads.filter((leadId) => leadId !== id));
-    } else {
-      setSelectedLeads([...selectedLeads, id]);
-    }
-  };
-
-  const handleSelectAll = () => {
-    if (selectAll) {
-      setSelectedLeads([]);
-    } else {
-      setSelectedLeads(filteredLeads.map((lead) => lead._id));
-    }
-    setSelectAll(!selectAll);
-  };
-
-  const startDialSession = () => {
-    if (selectedLeads.length === 0) {
-      alert("No leads selected");
-      return;
-    }
-    alert("Starting dial session with leads: " + selectedLeads.join(", "));
-  };
-
-  const handleSaveNotes = async (notes: string) => {
-    if (!previewLead) return;
-
-    const res = await fetch(`/api/update-lead-notes`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ leadId: previewLead._id, notes }),
-    });
-
-    if (res.ok) {
-      alert("Notes saved!");
-      setPreviewLead({ ...previewLead, Notes: notes });
-
-      const updatedLeads = leads.map((l) => (l._id === previewLead._id ? { ...l, Notes: notes } : l));
-      setLeads(updatedLeads);
-      setFilteredLeads(updatedLeads);
-    } else {
-      alert("Failed to save notes");
-    }
+  const handleStepChange = (idx: number, field: string, value: string) => {
+    const updated = [...steps];
+    updated[idx] = { ...updated[idx], [field]: value };
+    setSteps(updated);
   };
 
   return (
-    <div className="space-y-4 p-4 relative bg-[#0f172a] text-white min-h-screen">
-      <button
-        onClick={() => router.back()}
-        className="bg-gray-300 hover:bg-gray-400 text-black px-4 py-2 rounded"
-      >
-        ← Back to Folders
-      </button>
+    <div className="p-6">
+      <h1 className="text-2xl font-bold mb-4">{drip.name}</h1>
+      <p>Type: {drip.type.toUpperCase()}</p>
 
-      <input
-        type="text"
-        placeholder="Search by name or number..."
-        value={searchQuery}
-        onChange={(e) => setSearchQuery(e.target.value)}
-        className="border p-2 rounded w-full text-black"
-      />
+      <h2 className="text-xl font-semibold mb-4 mt-6">Steps / Messages</h2>
 
-      <div className="border border-white p-4 rounded mt-4 overflow-auto">
-        <div className="flex justify-between items-center mb-2">
-          <button
-            onClick={handleSelectAll}
-            className="border border-white px-3 py-1 rounded hover:bg-[#6b5b95] hover:text-white"
-          >
-            {selectAll ? "Deselect All" : "Select All"}
-          </button>
-          <button
-            onClick={startDialSession}
-            className={`${
-              selectedLeads.length > 0 ? "bg-green-600" : "bg-accent"
-            } text-white px-4 py-2 rounded`}
-          >
-            Start Dial Session
-          </button>
-        </div>
-        <table className="min-w-full text-base">
-          <thead>
-            <tr>
-              <th></th>
-              <th>First Name</th>
-              <th>Last Name</th>
-              <th>Phone</th>
-              <th>Email</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filteredLeads.map((lead) => (
-              <tr
-                key={lead._id}
-                className="border-t border-white cursor-pointer hover:bg-[#6b5b95] hover:text-white"
-                onClick={() => setPreviewLead(lead)}
-              >
-                <td>
-                  <input
-                    type="checkbox"
-                    checked={selectedLeads.includes(lead._id)}
-                    onChange={(e) => {
-                      e.stopPropagation();
-                      toggleLeadSelection(lead._id);
-                    }}
-                  />
-                </td>
-                <td>{lead["First Name"] || "-"}</td>
-                <td>{lead["Last Name"] || "-"}</td>
-                <td>{lead["Phone"] || "-"}</td>
-                <td>{lead["Email"] || "-"}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      <div className="space-y-4">
+        {steps.map((step, idx) => (
+          <div key={idx} className="border p-4 rounded bg-white shadow">
+            <textarea
+              value={step.text}
+              onChange={(e) => handleStepChange(idx, "text", e.target.value)}
+              className="w-full p-2 border rounded mb-2"
+              rows={3}
+            />
+            <input
+              value={step.day}
+              onChange={(e) => handleStepChange(idx, "day", e.target.value)}
+              className="w-full p-2 border rounded mb-2"
+              placeholder="Day"
+            />
+          </div>
+        ))}
       </div>
 
-      {previewLead && (
-        <LeadPreviewPanel
-          lead={previewLead}
-          onClose={() => setPreviewLead(null)}
-          onSaveNotes={handleSaveNotes}
-        />
-      )}
+      <button
+        onClick={() => alert("Changes saved locally (implement DB save if needed)")}
+        className="mt-4 bg-blue-600 text-white px-6 py-2 rounded"
+      >
+        Save Changes
+      </button>
+
+      <button
+        onClick={() => router.push("/drip-campaigns")}
+        className="mt-4 ml-4 bg-gray-700 text-white px-4 py-2 rounded"
+      >
+        Back to Campaigns
+      </button>
     </div>
   );
 }
-

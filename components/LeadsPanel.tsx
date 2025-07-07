@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import LeadImportPanel from "./LeadImportPanel";
+import LeadPreviewPanel from "./LeadPreviewPanel";
 import { useRouter } from "next/router";
 
 export default function LeadsPanel() {
@@ -10,15 +11,13 @@ export default function LeadsPanel() {
   const [selectedLeads, setSelectedLeads] = useState<string[]>([]);
   const [selectAll, setSelectAll] = useState(false);
   const [showResumeOptions, setShowResumeOptions] = useState(false);
+  const [previewLead, setPreviewLead] = useState<any | null>(null);
   const router = useRouter();
 
-  // Fetch folders and counts
   useEffect(() => {
     const fetchFolders = async () => {
       const res = await fetch("/api/get-folders");
       const data = await res.json();
-
-      // Fetch counts
       const foldersWithCounts = await Promise.all(
         data.folders.map(async (folder: any) => {
           const leadsRes = await fetch(`/api/get-leads-by-folder?folderId=${folder._id}`);
@@ -26,14 +25,11 @@ export default function LeadsPanel() {
           return { ...folder, leadCount: Array.isArray(leadsData.leads) ? leadsData.leads.length : 0 };
         })
       );
-
       setFolders(foldersWithCounts);
     };
-
     fetchFolders();
   }, []);
 
-  // Fetch leads
   useEffect(() => {
     if (!expandedFolder) return;
     const fetchLeads = async () => {
@@ -46,7 +42,6 @@ export default function LeadsPanel() {
     fetchLeads();
   }, [expandedFolder]);
 
-  // Save selections
   useEffect(() => {
     if (expandedFolder) {
       localStorage.setItem(`selectedLeads_${expandedFolder}`, JSON.stringify(selectedLeads));
@@ -205,7 +200,7 @@ export default function LeadsPanel() {
                         <td>{index + 1}</td>
                         <td>
                           <button
-                            onClick={() => router.push(`/lead/${lead._id}`)}
+                            onClick={() => setPreviewLead(lead)}
                             className="text-blue-500 underline cursor-pointer"
                           >
                             {lead["First Name"]}
@@ -223,7 +218,20 @@ export default function LeadsPanel() {
           </div>
         ))}
       </div>
+
+      {previewLead && (
+        <LeadPreviewPanel
+          lead={previewLead}
+          onClose={() => setPreviewLead(null)}
+          onSaveNotes={(notes: string) => {
+            const updatedLeads = leads.map((l) =>
+              l._id === previewLead._id ? { ...l, Notes: notes } : l
+            );
+            setLeads(updatedLeads);
+            setPreviewLead({ ...previewLead, Notes: notes });
+          }}
+        />
+      )}
     </div>
   );
 }
-

@@ -9,7 +9,7 @@ export default function Sidebar() {
           <Link href='/dashboard?tab=home' className='block hover:underline'>Home</Link>
           <Link href='/dashboard?tab=leads' className='block hover:underline'>Leads</Link>
           <Link href='/dashboard?tab=workflows' className='block hover:underline'>Workflows</Link>
-          <Link href='/dashboard?tab=drip-campaigns' className='block hover:underline'>Drip Campaigns</Link>
+          <Link href='/drip-campaigns' className='block hover:underline'>Drip Campaigns</Link>
           <Link href='/dashboard?tab=conversations' className='block hover:underline'>Conversations</Link>
           <Link href='/dashboard?tab=team-activity' className='block hover:underline'>Team Activity</Link>
           <Link href='/dashboard?tab=numbers' className='block hover:underline'>Numbers</Link>
