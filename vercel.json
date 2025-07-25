@@ -1,5 +1,5 @@
 {
-  "cron": [
+  "crons": [
     {
       "path": "/api/poll-new-lead",
       "schedule": "*/1 * * * *"
@@ -15,6 +15,10 @@
     {
       "path": "/api/affiliate/payout-all",
       "schedule": "0 17 * * 5"
+    },
+    {
+      "path": "/api/cron",
+      "schedule": "0 10 * * *"
     }
   ]
 }
