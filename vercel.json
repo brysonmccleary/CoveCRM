@@ -1,0 +1,20 @@
+{
+  "cron": [
+    {
+      "path": "/api/poll-new-lead",
+      "schedule": "*/1 * * * *"
+    },
+    {
+      "path": "/api/cron/schedule-sms-reminders",
+      "schedule": "*/15 * * * *"
+    },
+    {
+      "path": "/api/cron/affiliate-payouts",
+      "schedule": "0 12 * * 5"
+    },
+    {
+      "path": "/api/affiliate/payout-all",
+      "schedule": "0 17 * * 5"
+    }
+  ]
+}
