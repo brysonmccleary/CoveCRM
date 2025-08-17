@@ -165,7 +165,8 @@ Booking link (if needed): ${bookingUrl}
     aiReply += `\n\nSchedule here: ${bookingUrl}`;
   }
 
-  await sendSMS(lead.Phone, aiReply); // Includes balance freeze logic
+  // ✅ pass user as 3rd arg to satisfy sendSMS(to, body, userIdOrUser)
+  await sendSMS(lead.Phone, aiReply, user); // Includes balance freeze logic
 
   // Persist convo
   interactionHistory.push({
