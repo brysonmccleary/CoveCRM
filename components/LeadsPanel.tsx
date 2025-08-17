@@ -136,6 +136,9 @@ function LeadSearchInline() {
 }
 // -----------------------------------------------------------------
 
+// Minimal type just for sorting by createdAt
+type LeadRow = { _id: string; createdAt?: string | number | Date };
+
 export default function LeadsPanel() {
   const [showImport, setShowImport] = useState(false);
   const [folders, setFolders] = useState<any[]>([]);
@@ -203,9 +206,10 @@ export default function LeadsPanel() {
       try {
         const res = await fetch(`/api/get-leads-by-folder?folderId=${expandedFolder}`);
         const data = await res.json();
-        const sortedLeads = (Array.isArray(data.leads) ? data.leads : []).sort(
-          (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-        );
+        const sortedLeads = (Array.isArray(data.leads) ? (data.leads as LeadRow[]) : []).sort(
+          (a: LeadRow, b: LeadRow) =>
+            new Date(b.createdAt ?? 0).getTime() - new Date(a.createdAt ?? 0).getTime()
+        ) as any[];
         setLeads(sortedLeads);
         setSelectedLeads([]);
         setSelectAll(false);
