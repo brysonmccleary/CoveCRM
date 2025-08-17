@@ -15,6 +15,15 @@ function formatPhoneNumber(number: string) {
 interface TwilioNumber {
   sid: string;
   phoneNumber: string;
+  subscriptionStatus: string;
+  nextBillingDate: string | null;
+  usage: {
+    callsMade: number;
+    callsReceived: number;
+    textsSent: number;
+    textsReceived: number;
+    cost: number;
+  };
 }
 
 interface AvailableNumber {
@@ -91,13 +100,16 @@ export default function BuyNumberPanel() {
   const handleDeleteNumber = async () => {
     if (!numberToDelete) return;
     try {
-      await axios.delete("/api/deleteNumber", { data: { sid: numberToDelete.sid } });
+      await axios.delete("/api/twilio/release-number", {
+        data: { phoneNumber: numberToDelete.phoneNumber },
+      });
       await fetchOwnedNumbers();
       alert(`Deleted ${numberToDelete.phoneNumber}`);
       setDeleteConfirming(false);
       setNumberToDelete(null);
     } catch (err) {
       console.error("Error deleting number", err);
+      alert("Failed to delete number");
     }
   };
 
@@ -141,14 +153,24 @@ export default function BuyNumberPanel() {
       <h3 className="text-lg font-semibold mt-6">Your Numbers</h3>
       <ul className="space-y-2">
         {ownedNumbers.map((num) => (
-          <li key={num.sid} className="flex justify-between items-center border p-2 rounded">
-            <span>{formatPhoneNumber(num.phoneNumber)}</span>
-            <button
-              onClick={() => handleSelectDelete(num)}
-              className="bg-red-600 hover:bg-red-700 text-white px-2 py-1 rounded cursor-pointer"
-            >
-              Delete
-            </button>
+          <li key={num.sid} className="border p-3 rounded">
+            <div className="flex justify-between items-center">
+              <span className="font-medium">{formatPhoneNumber(num.phoneNumber)}</span>
+              <button
+                onClick={() => handleSelectDelete(num)}
+                className="bg-red-600 hover:bg-red-700 text-white px-2 py-1 rounded cursor-pointer"
+              >
+                Delete
+              </button>
+            </div>
+            <div className="text-sm text-gray-600 mt-1">
+              <p>Status: <span className="capitalize">{num.subscriptionStatus}</span></p>
+              {num.nextBillingDate && (
+                <p>Next Billing: {new Date(num.nextBillingDate).toLocaleDateString()}</p>
+              )}
+              <p>Calls: {num.usage.callsMade} made / {num.usage.callsReceived} received</p>
+              <p>Texts: {num.usage.textsSent} sent / {num.usage.textsReceived} received</p>
+            </div>
           </li>
         ))}
       </ul>

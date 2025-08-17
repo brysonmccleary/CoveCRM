@@ -1,0 +1,146 @@
+// pages/api/twilio/buy-number.ts
+
+import type { NextApiRequest, NextApiResponse } from "next";
+import { getServerSession } from "next-auth/next";
+import { authOptions } from "../auth/[...nextauth]";
+import twilioClient from "@/lib/twilioClient";
+import dbConnect from "@/lib/mongooseConnect";
+import A2PProfile from "@/models/A2PProfile";
+import PhoneNumber from "@/models/PhoneNumber";
+import User from "@/models/user";
+import Stripe from "stripe";
+
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
+  apiVersion: "2024-04-10",
+});
+
+const PHONE_PRICE_ID = "price_1RpvR9DF9aEsjVyJk9GiJkpe"; // $2/month
+
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed" });
+
+  const session = await getServerSession(req, res, authOptions);
+  if (!session?.user?.email) return res.status(401).json({ message: "Unauthorized" });
+
+  const { number } = req.body as { number?: string };
+  if (!number) return res.status(400).json({ message: "Missing phone number" });
+
+  try {
+    await dbConnect();
+
+    const user = await User.findOne({ email: session.user.email });
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    // ✅ A2P profile required
+    const a2p = await A2PProfile.findOne({ userId: user._id });
+    if (!a2p || !a2p.profileSid) {
+      return res.status(400).json({ message: "A2P profile not registered yet." });
+    }
+
+    // ✅ Ensure Messaging Service (update without running validators)
+    if (!a2p.messagingServiceSid) {
+      const newService = await twilioClient.messaging.services.create({
+        friendlyName: `CRM Cove – ${user.name || "User"}`,
+        useInboundWebhookOnNumber: true,
+        statusCallback: `${process.env.NEXT_PUBLIC_BASE_URL}/api/twilio/status`,
+      });
+
+      await A2PProfile.updateOne(
+        { _id: a2p._id },
+        { $set: { messagingServiceSid: newService.sid } },
+        { runValidators: false }
+      );
+      a2p.messagingServiceSid = newService.sid;
+    }
+
+    // ✅ Ensure Stripe customer exists
+    if (!user.stripeCustomerId) {
+      const customer = await stripe.customers.create({
+        email: user.email,
+        name: user.name || undefined,
+      });
+      user.stripeCustomerId = customer.id;
+      await user.save();
+    }
+
+    // 🔒 LAUNCH MODE: require a default payment method before proceeding
+    const customer = await stripe.customers.retrieve(user.stripeCustomerId) as Stripe.Customer;
+    // Check both invoice_settings.default_payment_method and legacy default_source
+    const hasDefaultPM =
+      Boolean((customer.invoice_settings && customer.invoice_settings.default_payment_method) || customer.default_source);
+
+    if (!hasDefaultPM) {
+      // 402 Payment Required (stripe-style). The UI should prompt to add a card.
+      return res.status(402).json({
+        code: "no_payment_method",
+        message: "Please add a payment method to your account before purchasing a phone number.",
+        stripeCustomerId: user.stripeCustomerId,
+      });
+    }
+
+    // ✅ Create subscription (will attempt to charge the default payment method)
+    const subscription = await stripe.subscriptions.create({
+      customer: user.stripeCustomerId,
+      items: [{ price: PHONE_PRICE_ID }],
+      metadata: { phoneNumber: number, userEmail: user.email },
+      // Optional: enforce that a successful first invoice is required
+      // payment_behavior: "default_incomplete",
+      // expand: ["latest_invoice.payment_intent"],
+    });
+
+    if (!subscription?.id) throw new Error("Stripe subscription failed");
+
+    // ✅ Purchase number on Twilio
+    const purchased = await twilioClient.incomingPhoneNumbers.create({
+      phoneNumber: number,
+      // If you have inbound handlers, uncomment:
+      // smsUrl: `${process.env.NEXT_PUBLIC_BASE_URL}/api/twilio/inbound-sms`,
+      // voiceUrl: `${process.env.NEXT_PUBLIC_BASE_URL}/api/twilio/inbound-call`,
+    });
+
+    // ✅ Attach number to the user's Messaging Service
+    await twilioClient
+      .messaging
+      .services(a2p.messagingServiceSid)
+      .phoneNumbers
+      .create({ phoneNumberSid: purchased.sid });
+
+    // ✅ Track in user.numbers
+    user.numbers = user.numbers || [];
+    user.numbers.push({
+      sid: purchased.sid,
+      phoneNumber: purchased.phoneNumber,
+      subscriptionId: subscription.id,
+      usage: {
+        callsMade: 0,
+        callsReceived: 0,
+        textsSent: 0,
+        textsReceived: 0,
+        cost: 0,
+      },
+    });
+    await user.save();
+
+    // ✅ Persist ownership in PhoneNumber collection
+    await PhoneNumber.create({
+      userId: user._id,
+      phoneNumber: purchased.phoneNumber,
+      messagingServiceSid: a2p.messagingServiceSid,
+      profileSid: a2p.profileSid,
+      a2pApproved: true,
+      datePurchased: new Date(),
+      twilioSid: purchased.sid,
+    });
+
+    return res.status(200).json({
+      message: "Number purchased and registered",
+      number: purchased.phoneNumber,
+      sid: purchased.sid,
+      subscriptionId: subscription.id,
+    });
+  } catch (err: any) {
+    console.error("Buy number error:", err);
+    const msg = err?.message || (typeof err === "string" ? err : "Failed to purchase number");
+    return res.status(500).json({ message: msg });
+  }
+}

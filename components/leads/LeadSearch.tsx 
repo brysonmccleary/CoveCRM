@@ -1,0 +1,203 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/router";
+import debounce from "lodash.debounce";
+
+type Result = {
+  _id: string;
+  firstName: string;
+  lastName: string;
+  phone: string;
+  email: string;
+  state: string;
+  status: string;
+  displayName: string;
+};
+
+const MIN_CHARS = 2;
+
+export default function LeadSearch() {
+  const [q, setQ] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [results, setResults] = useState<Result[]>([]);
+  const [activeIndex, setActiveIndex] = useState<number>(-1);
+  const [open, setOpen] = useState(false);
+
+  const abortRef = useRef<AbortController | null>(null);
+  const mounted = useRef(true);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const listRef = useRef<HTMLDivElement | null>(null);
+  const router = useRouter();
+
+  useEffect(() => () => { mounted.current = false; }, []);
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    const onClick = (e: MouseEvent) => {
+      if (!containerRef.current) return;
+      if (!containerRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onClick);
+    return () => document.removeEventListener("mousedown", onClick);
+  }, []);
+
+  const runSearch = async (term: string) => {
+    const trimmed = term.trim();
+    if (trimmed.length < MIN_CHARS) {
+      setResults([]);
+      setOpen(false);
+      setActiveIndex(-1);
+      return;
+    }
+
+    if (abortRef.current) abortRef.current.abort();
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
+
+    setLoading(true);
+    try {
+      const r = await fetch(`/api/leads/search?q=${encodeURIComponent(trimmed)}`, {
+        signal: ctrl.signal,
+      });
+      const data = await r.json();
+      if (!mounted.current) return;
+
+      const next = Array.isArray(data?.results) ? (data.results as Result[]) : [];
+      setResults(next);
+      setOpen(true);
+      setActiveIndex(next.length ? 0 : -1);
+    } catch (err) {
+      if ((err as any)?.name !== "AbortError") {
+        if (mounted.current) {
+          setResults([]);
+          setOpen(false);
+          setActiveIndex(-1);
+        }
+      }
+    } finally {
+      if (mounted.current) setLoading(false);
+    }
+  };
+
+  const debounced = useMemo(() => debounce(runSearch, 250), []);
+  useEffect(() => {
+    debounced(q);
+    return () => debounced.cancel();
+  }, [q, debounced]);
+
+  // ✅ Always open the dark /lead/[id] page (not /dial)
+  const goTo = (id: string) => {
+    const path = `/lead/${encodeURIComponent(id)}`;
+    setOpen(false);
+    setResults([]);
+    setActiveIndex(-1);
+
+    // Use a hard navigation to avoid any stale route/preview logic interfering
+    if (typeof window !== "undefined") {
+      window.location.assign(path);
+    } else {
+      router.push(path);
+    }
+  };
+
+  const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (!open || !results.length) return;
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setActiveIndex((i) => Math.min(i + 1, results.length - 1));
+      scrollActiveIntoView();
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setActiveIndex((i) => Math.max(i - 1, 0));
+      scrollActiveIntoView();
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      const item = results[activeIndex];
+      if (item) goTo(item._id);
+    } else if (e.key === "Escape") {
+      setOpen(false);
+      setActiveIndex(-1);
+    }
+  };
+
+  const scrollActiveIntoView = () => {
+    if (!listRef.current) return;
+    const el = listRef.current.querySelector<HTMLButtonElement>(`[data-idx="${activeIndex}"]`);
+    if (el) el.scrollIntoView({ block: "nearest" });
+  };
+
+  const clear = () => {
+    setQ("");
+    setResults([]);
+    setOpen(false);
+    setActiveIndex(-1);
+  };
+
+  return (
+    <div ref={containerRef} className="mb-4">
+      <div className="relative flex items-center gap-2">
+        <input
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          onKeyDown={onKeyDown}
+          placeholder="Search leads (name, phone, email)…"
+          className="border border-white/10 bg-[#0f172a] text-white p-2 rounded w-full pr-10"
+          aria-autocomplete="list"
+          aria-expanded={open}
+          aria-controls="lead-search-listbox"
+        />
+        {q && (
+          <button
+            onClick={clear}
+            className="absolute right-2 text-gray-400 hover:text-gray-200"
+            aria-label="Clear search"
+          >
+            ×
+          </button>
+        )}
+        {loading && <span className="text-sm text-gray-400 ml-2">Searching…</span>}
+      </div>
+
+      {open && (
+        <div
+          id="lead-search-listbox"
+          ref={listRef}
+          role="listbox"
+          className="mt-2 border border-white/10 rounded divide-y divide-white/10 max-h-96 overflow-auto bg-[#0b1220] text-white"
+        >
+          {results.length > 0 ? (
+            results.map((r, idx) => {
+              const isActive = idx === activeIndex;
+              const path = `/lead/${encodeURIComponent(r._id)}`;
+              return (
+                <button
+                  key={r._id}
+                  data-idx={idx}
+                  role="option"
+                  aria-selected={isActive}
+                  className={`w-full text-left p-2 hover:bg-[#1e293b] ${isActive ? "bg-[#1e293b]" : ""}`}
+                  onMouseEnter={() => setActiveIndex(idx)}
+                  onClick={() => goTo(r._id)}
+                  title="Open lead"
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="font-medium">
+                      {r.displayName || "(No name)"}{" "}
+                      <span className="text-xs text-gray-400">• {r.status}</span>
+                    </div>
+                    <div className="text-sm text-gray-300">
+                      {r.phone || r.email || "—"} {r.state ? `• ${r.state}` : ""}
+                    </div>
+                  </div>
+                </button>
+              );
+            })
+          ) : (
+            <div className="p-2 text-sm text-gray-400">
+              {q.trim().length >= MIN_CHARS && !loading ? "No results." : "Type to search…"}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}

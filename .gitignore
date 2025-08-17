@@ -10,10 +10,13 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+*.log
 
 # Local environment variables
+.env
 .env.local
 .env.*.local
+*.env
 
 # Vercel
 .vercel
@@ -21,20 +24,16 @@ pnpm-debug.log*
 # Mac system files
 .DS_Store
 
-# Optional: VSCode settings
+# VSCode settings
 .vscode
 
-# Ignore build coverage
+# Build coverage
 coverage
 
-# Ignore TypeScript build output
+# TypeScript build output
 dist
 
-# Ignore any log files
-*.log
-
-# Ignore optional lock files
+# Lock files (optional)
 package-lock.json
 yarn.lock
 pnpm-lock.yaml
-

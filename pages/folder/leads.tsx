@@ -1,7 +1,11 @@
+// pages/leads/index.tsx
 import React, { useState, useEffect } from "react";
+import { useRouter } from "next/router";
 import LeadPreviewPanel from "../../components/LeadPreviewPanel";
 
 export default function LeadsPage() {
+  const router = useRouter();
+
   const [folders, setFolders] = useState<any[]>([]);
   const [activeFolder, setActiveFolder] = useState<any | null>(null);
   const [leads, setLeads] = useState<any[]>([]);
@@ -39,6 +43,7 @@ export default function LeadsPage() {
     fetchLeads();
   }, [activeFolder]);
 
+  // Search filter
   useEffect(() => {
     if (!searchQuery) {
       setFilteredLeads(leads);
@@ -47,56 +52,60 @@ export default function LeadsPage() {
     const lower = searchQuery.toLowerCase();
     const filtered = leads.filter(
       (lead) =>
-        (lead["First Name"] && lead["First Name"].toLowerCase().includes(lower)) ||
-        (lead["Last Name"] && lead["Last Name"].toLowerCase().includes(lower)) ||
-        (lead["Phone"] && lead["Phone"].toLowerCase().includes(lower))
+        (lead["First Name"] && String(lead["First Name"]).toLowerCase().includes(lower)) ||
+        (lead["Last Name"] && String(lead["Last Name"]).toLowerCase().includes(lower)) ||
+        (lead["Phone"] && String(lead["Phone"]).toLowerCase().includes(lower))
     );
     setFilteredLeads(filtered);
   }, [searchQuery, leads]);
 
   const toggleLeadSelection = (id: string) => {
-    if (selectedLeads.includes(id)) {
-      setSelectedLeads(selectedLeads.filter((leadId) => leadId !== id));
-    } else {
-      setSelectedLeads([...selectedLeads, id]);
-    }
+    setSelectedLeads((prev) =>
+      prev.includes(id) ? prev.filter((leadId) => leadId !== id) : [...prev, id]
+    );
   };
 
   const handleSelectAll = () => {
     if (selectAll) {
       setSelectedLeads([]);
     } else {
-      setSelectedLeads(filteredLeads.map((lead) => lead._id));
+      setSelectedLeads(filteredLeads.map((lead) => String(lead._id)));
     }
     setSelectAll(!selectAll);
   };
 
+  // ✅ Start the actual dial session page with selected lead IDs
   const startDialSession = () => {
     if (selectedLeads.length === 0) {
       alert("No leads selected");
       return;
     }
-    alert("Starting dial session with leads: " + selectedLeads.join(", "));
+    const qs = new URLSearchParams({ leads: selectedLeads.join(",") }).toString();
+    router.push(`/dial-session?${qs}`);
   };
 
+  // ✅ Persist notes using the canonical notes endpoint (also mirrors into history)
   const handleSaveNotes = async (notes: string) => {
     if (!previewLead) return;
 
-    const res = await fetch(`/api/update-lead-notes`, {
+    const res = await fetch(`/api/leads/add-note`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ leadId: previewLead._id, notes }),
+      body: JSON.stringify({ leadId: String(previewLead._id), text: notes }),
     });
 
     if (res.ok) {
-      alert("Notes saved!");
-      setPreviewLead({ ...previewLead, Notes: notes });
-
-      const updatedLeads = leads.map((l) => (l._id === previewLead._id ? { ...l, Notes: notes } : l));
+      // Update preview + table rows
+      setPreviewLead({ ...previewLead, Notes: notes, notes });
+      const updatedLeads = leads.map((l) =>
+        String(l._id) === String(previewLead._id) ? { ...l, Notes: notes, notes } : l
+      );
       setLeads(updatedLeads);
       setFilteredLeads(updatedLeads);
+      alert("Notes saved!");
     } else {
-      alert("Failed to save notes");
+      const j = await res.json().catch(() => ({}));
+      alert(j?.message || "Failed to save notes");
     }
   };
 
@@ -122,7 +131,13 @@ export default function LeadsPage() {
       <div className="flex-1 bg-[#1f2937] text-white p-4 overflow-auto">
         {activeFolder ? (
           <>
-            <h2 className="text-xl font-bold mb-2">{activeFolder.name} Leads</h2>
+            <div className="flex items-center justify-between mb-2">
+              <h2 className="text-xl font-bold">{activeFolder.name} Leads</h2>
+              <div className="text-sm text-gray-300">
+                Selected: {selectedLeads.length}/{filteredLeads.length}
+              </div>
+            </div>
+
             <input
               type="text"
               placeholder="Search by name or number..."
@@ -141,13 +156,15 @@ export default function LeadsPage() {
                 </button>
                 <button
                   onClick={startDialSession}
+                  disabled={selectedLeads.length === 0}
                   className={`${
-                    selectedLeads.length > 0 ? "bg-green-600" : "bg-accent"
-                  } text-white px-4 py-2 rounded`}
+                    selectedLeads.length > 0 ? "bg-green-600 hover:bg-green-700" : "bg-gray-600"
+                  } text-white px-4 py-2 rounded disabled:opacity-60`}
                 >
                   Start Dial Session
                 </button>
               </div>
+
               <table className="min-w-full text-base">
                 <thead>
                   <tr>
@@ -168,10 +185,10 @@ export default function LeadsPage() {
                       <td>
                         <input
                           type="checkbox"
-                          checked={selectedLeads.includes(lead._id)}
+                          checked={selectedLeads.includes(String(lead._id))}
                           onChange={(e) => {
                             e.stopPropagation();
-                            toggleLeadSelection(lead._id);
+                            toggleLeadSelection(String(lead._id));
                           }}
                         />
                       </td>
@@ -200,4 +217,3 @@ export default function LeadsPage() {
     </div>
   );
 }
-

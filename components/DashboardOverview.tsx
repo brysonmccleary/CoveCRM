@@ -1,55 +1,128 @@
-import React from "react";
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
+import React, { useEffect, useState } from "react";
+import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  Tooltip,
+  Legend,
+  ResponsiveContainer,
+} from "recharts";
+import toast from "react-hot-toast";
+import { FaPhoneAlt } from "react-icons/fa";
 
-const data = [
-  { date: "Jun 21", dials: 50, talks: 30 },
-  { date: "Jun 22", dials: 60, talks: 35 },
-  { date: "Jun 23", dials: 55, talks: 25 },
-  { date: "Jun 24", dials: 70, talks: 40 },
-  { date: "Jun 25", dials: 65, talks: 38 },
-  { date: "Jun 26", dials: 80, talks: 45 },
-  { date: "Jun 27", dials: 90, talks: 50 },
-  { date: "Jun 28", dials: 85, talks: 48 },
-  { date: "Jun 29", dials: 95, talks: 52 },
-  { date: "Jun 30", dials: 100, talks: 55 },
-];
+interface StatEntry {
+  date: string;
+  dials: number;
+  talks: number;
+}
 
 export default function DashboardOverview() {
-  const dailyCalls = data[data.length - 1].dials;
-  const dailyTalks = data[data.length - 1].talks;
-  const dailySales = Math.floor(dailyTalks * 0.2);
+  const [data, setData] = useState<StatEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchStats = async () => {
+      try {
+        const res = await fetch("/api/dashboard/stats");
+        const result = await res.json();
+        if (!res.ok) throw new Error(result.error || "Failed to load stats");
+
+        const raw: { date: string; dials: number; talks: number }[] = result.data;
+
+        // Get last 10 days
+        const today = new Date();
+        const last10 = [...Array(10)].map((_, i) => {
+          const d = new Date(today);
+          d.setDate(d.getDate() - (9 - i));
+          const key = d.toISOString().split("T")[0];
+          return {
+            key,
+            label: d.toLocaleDateString("default", { month: "short", day: "numeric" }),
+          };
+        });
+
+        // Fill in zeros for missing days
+        const mapped = last10.map(({ key, label }) => {
+          const found = raw.find((r) => r.date.startsWith(key));
+          return {
+            date: label,
+            dials: found?.dials || 0,
+            talks: found?.talks || 0,
+          };
+        });
+
+        setData(mapped);
+      } catch (err: any) {
+        toast.error(err.message || "Error fetching dashboard data.");
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchStats();
+  }, []);
+
+  const lastEntry = data[data.length - 1];
+  const dailyCalls = lastEntry?.dials || 0;
+  const dailyTalks = lastEntry?.talks || 0;
 
   return (
-    <div className="w-full space-y-6">
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="border border-black dark:border-white rounded p-4">
-          <h2 className="text-lg font-semibold">Daily Calls</h2>
-          <p className="text-2xl font-bold">{dailyCalls}</p>
+    <div className="p-6 space-y-6">
+      {/* Top Metrics */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div className="bg-[#1F2937] text-white rounded-lg p-4 shadow flex flex-col items-center justify-center">
+          <div className="text-sm uppercase text-gray-400">Daily Calls</div>
+          <div className="text-2xl font-bold">{dailyCalls}</div>
         </div>
-        <div className="border border-black dark:border-white rounded p-4">
-          <h2 className="text-lg font-semibold">Daily Talks</h2>
-          <p className="text-2xl font-bold">{dailyTalks}</p>
-        </div>
-        <div className="border border-black dark:border-white rounded p-4">
-          <h2 className="text-lg font-semibold">Daily Sales</h2>
-          <p className="text-2xl font-bold">{dailySales}</p>
+        <div className="bg-[#1F2937] text-white rounded-lg p-4 shadow flex flex-col items-center justify-center">
+          <div className="text-sm uppercase text-gray-400">Daily Talks</div>
+          <div className="text-2xl font-bold">{dailyTalks}</div>
         </div>
       </div>
 
-      <div className="w-full h-80 border border-black dark:border-white rounded">
-        <ResponsiveContainer>
-          <LineChart data={data}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-            <XAxis dataKey="date" stroke="currentColor" />
-            <YAxis stroke="currentColor" />
-            <Tooltip />
-            <Legend />
-            <Line type="monotone" dataKey="dials" stroke="#1e3a8a" />
-            <Line type="monotone" dataKey="talks" stroke="#f97316" />
-          </LineChart>
-        </ResponsiveContainer>
+      {/* Chart Section */}
+      <div className="bg-[#1F2937] text-white p-6 rounded-lg shadow">
+        <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
+          <FaPhoneAlt className="text-pink-400" />
+          Call Performance (Last 10 Days)
+        </h2>
+
+        <div className="h-80">
+          {loading ? (
+            <p className="text-gray-400">Loading chart...</p>
+          ) : (
+            <>
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={data}>
+                  {/* NO grid lines */}
+                  <XAxis dataKey="date" stroke="#9CA3AF" />
+                  <YAxis stroke="#9CA3AF" domain={[0, "auto"]} />
+                  <Tooltip
+                    formatter={(value: number) => `${value} calls`}
+                    labelStyle={{ color: "#fff" }}
+                    contentStyle={{ backgroundColor: "#111827", borderColor: "#4B5563" }}
+                  />
+                  <Line type="monotone" dataKey="dials" stroke="#60A5FA" strokeWidth={2} name="Total Dials" />
+                  <Line type="monotone" dataKey="talks" stroke="#34D399" strokeWidth={2} name="Talks Connected" />
+                </LineChart>
+              </ResponsiveContainer>
+
+              {/* Legend BELOW the chart */}
+              <div className="flex justify-center gap-6 mt-4 text-sm">
+                <div className="flex items-center gap-2 text-green-400">
+                  <span className="inline-block w-3 h-1 bg-green-400" />
+                  Talks Connected
+                </div>
+                <div className="flex items-center gap-2 text-blue-400">
+                  <span className="inline-block w-3 h-1 bg-blue-400" />
+                  Total Dials
+                </div>
+              </div>
+            </>
+          )}
+        </div>
       </div>
     </div>
   );
 }
-

@@ -1,34 +1,44 @@
 import dbConnect from "@/lib/dbConnect";
 import DripCampaign from "@/models/DripCampaign";
+import { prebuiltDrips } from "@/utils/prebuiltDrips";
 
 export default async function handler(req, res) {
   await dbConnect();
 
-  const prebuilt = new DripCampaign({
-    name: "Mortgage Protection Drip",
-    type: "sms",
-    isActive: true,
-    steps: [
-      {
-        text: "Hey there {{ contact.first_name }}! This is {{ agent.name }}. I was assigned to go over your mortgage protection options. Let me know when to give you a call or feel free to book your own appointment. (insert calendar link)",
-        day: "1",
-        time: "9:00 AM",
-        calendarLink: "",
-        analytics: { views: 0, responses: 0 },
-      },
-      {
-        text: "Hey {{ contact.first_name }}, it's {{ agent.name }}. Did you get my text the other day about the mortgage protection?",
-        day: "4",
-        time: "9:00 AM",
-        calendarLink: "",
-        analytics: { views: 0, responses: 0 },
-      },
-      // Add more steps as needed
-    ],
-  });
+  try {
+    // Clear existing drips to avoid duplicates
+    await DripCampaign.deleteMany({});
 
-  await prebuilt.save();
+    // Transform each drip
+    const formattedDrips = prebuiltDrips.map((drip) => ({
+      name: drip.name,
+      type: drip.type,
+      isActive: true,
+      assignedFolders: [],
+      steps: drip.messages.map((msg) => ({
+        text: msg.text,
+        day: msg.day,
+        time: "9:00 AM",       // Default
+        calendarLink: "",      // Default
+        views: 0,              // Default
+        responses: 0           // Default
+      })),
+      analytics: {
+        views: 0,
+        clicks: 0,
+        replies: 0,
+        unsubscribes: 0
+      },
+      createdBy: "admin",
+      comments: []
+    }));
 
-  res.status(200).json({ message: "Seeded successfully" });
+    // Insert all drips
+    await DripCampaign.insertMany(formattedDrips);
+
+    res.status(200).json({ message: "Seeded successfully" });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Seeding failed" });
+  }
 }
-

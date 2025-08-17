@@ -1,0 +1,82 @@
+// /pages/api/affiliate/apply.ts
+
+import type { NextApiRequest, NextApiResponse } from "next";
+import { getServerSession } from "next-auth";
+import { authOptions } from "../auth/[...nextauth]";
+import dbConnect from "@/lib/mongooseConnect";
+import User from "@/models/user";
+import Affiliate from "@/models/Affiliate";
+import Stripe from "stripe";
+
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
+  apiVersion: "2024-04-10",
+});
+
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  if (req.method !== "POST") return res.status(405).end("Method Not Allowed");
+
+  const session = await getServerSession(req, res, authOptions);
+  if (!session || !session.user?.email) return res.status(401).json({ error: "Unauthorized" });
+
+  const { name, email, teamSize, code } = req.body;
+  if (!name || !email || !teamSize || !code) {
+    return res.status(400).json({ error: "Missing required fields" });
+  }
+
+  const promoCode = code.trim().toUpperCase();
+
+  await dbConnect();
+
+  // Check if code is already taken
+  const existing = await Affiliate.findOne({ promoCode });
+  if (existing) {
+    return res.status(400).json({ error: "Promo code already taken" });
+  }
+
+  // Get the user
+  const user = await User.findOne({ email: session.user.email });
+  if (!user) return res.status(404).json({ error: "User not found" });
+
+  // Create Stripe Connect account
+  const account = await stripe.accounts.create({
+    type: "express",
+    email,
+    capabilities: {
+      transfers: { requested: true },
+    },
+    metadata: {
+      userId: user._id.toString(),
+      affiliateCode: promoCode,
+    },
+  });
+
+  const affiliate = await Affiliate.create({
+    userId: user._id,
+    name,
+    email,
+    teamSize,
+    promoCode,
+    stripeConnectId: account.id,
+    referredBy: null,
+    totalReferrals: 0,
+    payoutDue: 0,
+    totalPayoutsSent: 0,
+    payoutHistory: [],
+    referrals: [],
+    onboardingCompleted: false,
+  });
+
+  // Update user record
+  user.referralCode = promoCode;
+  await user.save();
+
+  // Create Stripe Connect onboarding link
+  const accountLink = await stripe.accountLinks.create({
+    account: account.id,
+    refresh_url: `${process.env.NEXTAUTH_URL}/settings/affiliate`,
+    return_url: `${process.env.NEXTAUTH_URL}/settings/affiliate`,
+    type: "account_onboarding",
+  });
+
+  return res.status(200).json({ stripeUrl: accountLink.url });
+}

@@ -1,5 +1,8 @@
 import { NextApiRequest, NextApiResponse } from "next";
-import clientPromise from "../../lib/mongodb";
+import { getServerSession } from "next-auth/next";
+import { authOptions } from "./auth/[...nextauth]";
+import dbConnect from "@/lib/mongooseConnect";
+import Conversation from "@/models/Conversation";
 import { ObjectId } from "mongodb";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -8,20 +11,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    const client = await clientPromise;
-    const db = client.db("covecrm");
+    const session = await getServerSession(req, res, authOptions);
 
+    if (!session?.user?.email) {
+      return res.status(401).json({ message: "Not authenticated" });
+    }
+
+    const userEmail = session.user.email;
     const { leadId } = req.query;
 
-    const conversations = await db
-      .collection("conversations")
-      .find({ leadId: new ObjectId(leadId as string) })
-      .toArray();
+    if (!leadId) {
+      return res.status(400).json({ message: "Missing leadId" });
+    }
+
+    await dbConnect();
+    const conversations = await Conversation.find({
+      leadId: new ObjectId(leadId as string),
+      user: userEmail,
+    }).sort({ createdAt: 1 }); // optional: order oldest → newest
 
     res.status(200).json(conversations);
   } catch (error) {
-    console.error(error);
+    console.error("Get conversations error:", error);
     res.status(500).json({ message: "Failed to fetch conversations" });
   }
 }
-

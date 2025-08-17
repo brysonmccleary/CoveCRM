@@ -9,16 +9,24 @@
       "schedule": "*/15 * * * *"
     },
     {
-      "path": "/api/cron/affiliate-payouts",
-      "schedule": "0 12 * * 5"
-    },
-    {
-      "path": "/api/affiliate/payout-all",
-      "schedule": "0 17 * * 5"
+      "path": "/api/cron/affiliate-payouts?token=45567812345678910123456789",
+      "schedule": "0 9 * * 5",
+      "timezone": "America/Phoenix"
     },
     {
       "path": "/api/cron",
-      "schedule": "0 10 * * *"
+      "schedule": "0 10 * * *",
+      "timezone": "America/Phoenix"
+    },
+    {
+      "path": "/api/cron/twilio-daily-sync",
+      "schedule": "0 9 * * *",
+      "timezone": "America/Phoenix"
+    },
+    {
+      "path": "/api/cron/run-drips",
+      "schedule": "0 9 * * *",
+      "timezone": "America/Los_Angeles"
     }
   ]
 }

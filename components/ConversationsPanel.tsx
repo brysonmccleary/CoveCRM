@@ -1,66 +1,197 @@
-import React, { useState } from "react";
+import { useEffect, useState, useRef } from "react";
+import axios from "axios";
+import { format } from "date-fns";
 
-interface Conversation {
-  id: number;
-  name: string;
-  lastMessage: string;
+interface Lead {
+  _id: string;
+  "First Name": string;
+  Phone: string;
+  updatedAt: string;
+  interactionHistory: {
+    type: "inbound" | "outbound" | "ai" | "system";
+    text: string;
+    date: string;
+  }[];
 }
 
 export default function ConversationsPanel() {
-  const [conversations, setConversations] = useState<Conversation[]>([
-    { id: 1, name: "John Doe", lastMessage: "Interested in policy options." },
-    { id: 2, name: "Jane Smith", lastMessage: "Asked for a call back tomorrow." },
-    { id: 3, name: "Bob Johnson", lastMessage: "Sent additional documents." },
-  ]);
-
-  const [selectedConv, setSelectedConv] = useState<Conversation | null>(null);
+  const [leads, setLeads] = useState<Lead[]>([]);
+  const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
   const [reply, setReply] = useState("");
+  const [bookingTime, setBookingTime] = useState("");
+  const [bookingForMessageIndex, setBookingForMessageIndex] = useState<number | null>(null);
+  const chatRef = useRef<HTMLDivElement>(null);
 
-  const handleReply = () => {
-    alert(`Reply sent to ${selectedConv?.name}: ${reply}`);
-    setReply("");
+  useEffect(() => {
+    loadLeads();
+  }, []);
+
+  const loadLeads = async () => {
+    const res = await axios.get("/api/leads/messages");
+    setLeads(res.data.leads || []);
   };
 
+  const handleReply = async () => {
+    if (!selectedLead || !reply) return;
+
+    await axios.post("/api/twilio/send-sms", {
+      to: selectedLead.Phone,
+      from: selectedLead.Phone, // keep existing routing; backend decides actual sender
+      body: reply,
+      leadId: selectedLead._id,
+    });
+
+    setReply("");
+    await loadLeads();
+    setSelectedLead((prev) => (prev ? leads.find((l) => l._id === prev._id) || prev : null));
+  };
+
+  const handleBookClick = (idx: number) => setBookingForMessageIndex(idx);
+
+  const handleConfirmBooking = async () => {
+    if (!selectedLead || !bookingTime || bookingForMessageIndex === null) return;
+
+    try {
+      await axios.post("/api/google/calendar/book-appointment", {
+        leadId: selectedLead._id,
+        time: bookingTime,
+        phone: selectedLead.Phone,
+        name: selectedLead["First Name"],
+      });
+
+      alert("✅ Appointment booked");
+      setBookingTime("");
+      setBookingForMessageIndex(null);
+    } catch (err) {
+      console.error("❌ Booking failed", err);
+      alert("❌ Booking failed");
+    }
+  };
+
+  // keep auto-scroll to bottom when thread changes
+  useEffect(() => {
+    if (chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight;
+  }, [selectedLead?.interactionHistory?.length]);
+
   return (
-    <div className="border p-4 mt-4 flex flex-col md:flex-row space-y-4 md:space-y-0 md:space-x-4">
-      {/* Left: List */}
-      <div className="w-full md:w-1/3 border p-2 rounded">
-        <h3 className="text-lg font-semibold mb-2">Conversations</h3>
-        {conversations.map((conv) => (
-          <div
-            key={conv.id}
-            className={`border p-2 mb-2 rounded cursor-pointer ${selectedConv?.id === conv.id ? "bg-gray-200" : ""}`}
-            onClick={() => setSelectedConv(conv)}
-          >
-            <p className="font-bold">{conv.name}</p>
-            <p className="text-sm text-gray-600">{conv.lastMessage}</p>
-          </div>
-        ))}
+    <div className="flex flex-col md:flex-row gap-4 p-4">
+      {/* Sidebar */}
+      <div className="w-full md:w-1/3 border rounded p-3 h-[80vh] overflow-y-auto">
+        <h3 className="font-semibold text-lg mb-3">Conversations</h3>
+        {leads.map((lead) => {
+          const lastMsg = lead.interactionHistory?.slice(-1)[0];
+          return (
+            <div
+              key={lead._id}
+              className={`border p-2 rounded mb-2 cursor-pointer ${
+                selectedLead?._id === lead._id ? "bg-blue-100" : ""
+              }`}
+              onClick={() => setSelectedLead(lead)}
+            >
+              <p className="font-bold">{lead["First Name"]}</p>
+              <p className="text-sm text-gray-600 truncate">{lastMsg?.text}</p>
+              <p className="text-xs text-gray-400">
+                {format(new Date(lead.updatedAt), "MM/dd @ h:mma")}
+              </p>
+            </div>
+          );
+        })}
       </div>
 
-      {/* Right: Reply */}
-      <div className="w-full md:w-2/3 border p-2 rounded">
-        {selectedConv ? (
+      {/* Chat Window */}
+      <div className="w-full md:w-2/3 border rounded p-3 flex flex-col h-[80vh]">
+        {selectedLead ? (
           <>
-            <h3 className="text-lg font-semibold mb-2">Reply to {selectedConv.name}</h3>
+            <h3 className="font-semibold text-lg mb-2">
+              {selectedLead["First Name"]} ({selectedLead.Phone})
+            </h3>
+
+            <div
+              ref={chatRef}
+              className="flex-1 overflow-y-auto border rounded p-3 bg-gray-50 space-y-2"
+            >
+              {selectedLead.interactionHistory.map((msg, idx) => {
+                const isSystem = msg.type === "system";
+                const isSent = msg.type === "outbound" || msg.type === "ai"; // ✅ treat AI as sent
+                const isReceived = msg.type === "inbound";
+                const showBooking = bookingForMessageIndex === idx;
+
+                // bubble alignment + colors:
+                // - Sent (outbound/ai): RIGHT in GREEN
+                // - Received (inbound): LEFT neutral
+                // - System: centered gray
+                const containerAlign = isSystem
+                  ? "items-center"
+                  : isSent
+                  ? "items-end"
+                  : "items-start";
+
+                const bubbleClasses = isSystem
+                  ? "bg-gray-300 text-xs text-black text-center self-center"
+                  : isSent
+                  ? "bg-green-500 text-white self-end"
+                  : "bg-white text-black self-start";
+
+                return (
+                  <div key={idx} className={`flex flex-col gap-1 ${containerAlign}`}>
+                    <div className={`p-2 rounded-2xl max-w-[75%] ${bubbleClasses}`}>
+                      <p className="text-sm whitespace-pre-line">{msg.text}</p>
+                      <p className="text-[10px] mt-1 text-right">
+                        {format(new Date(msg.date), "MM/dd h:mma")}
+                      </p>
+                    </div>
+
+                    {(isReceived || msg.type === "ai") && (
+                      <>
+                        <button
+                          onClick={() => handleBookClick(idx)}
+                          className={`text-xs underline ml-2 ${
+                            isReceived ? "self-start text-blue-600" : "self-end text-blue-100"
+                          }`}
+                        >
+                          📅 Book
+                        </button>
+
+                        {showBooking && (
+                          <div className={`flex flex-col gap-2 mt-1 ${isReceived ? "ml-2" : "mr-2"}`}>
+                            <input
+                              type="datetime-local"
+                              value={bookingTime}
+                              onChange={(e) => setBookingTime(e.target.value)}
+                              className="text-sm border rounded px-2 py-1"
+                            />
+                            <button
+                              onClick={handleConfirmBooking}
+                              className="bg-green-600 text-white text-xs px-3 py-1 rounded w-fit"
+                            >
+                              Confirm Booking
+                            </button>
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
             <textarea
+              className="border rounded mt-3 p-2 h-24 resize-none"
+              placeholder="Type your message..."
               value={reply}
               onChange={(e) => setReply(e.target.value)}
-              placeholder="Type your reply..."
-              className="border p-2 w-full h-32 rounded"
             />
             <button
               onClick={handleReply}
-              className="mt-2 border px-4 py-2 bg-blue-500 text-white rounded"
+              className="mt-2 self-end bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded"
             >
               Send Reply
             </button>
           </>
         ) : (
-          <p>Select a conversation to reply.</p>
+          <p>Select a conversation to view messages.</p>
         )}
       </div>
     </div>
   );
 }
-

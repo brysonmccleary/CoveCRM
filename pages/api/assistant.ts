@@ -18,7 +18,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       messages: [
         {
           role: "system",
-          content: "You are CoveCRM's AI assistant. Always provide step-by-step, clear, actionable answers tailored to CoveCRM features only. Never mention generic CRMs.",
+          content:
+            "You are CRM Cove’s AI assistant. Always provide step-by-step, clear, actionable answers tailored to CRM Cove features only. Never mention generic CRMs.",
         },
         ...messages,
       ],
@@ -31,4 +32,3 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     res.status(500).json({ message: "Something went wrong" });
   }
 }
-

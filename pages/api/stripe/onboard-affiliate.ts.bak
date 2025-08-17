@@ -1,0 +1,39 @@
+// /pages/api/stripe/onboard-affiliate.ts
+
+import type { NextApiRequest, NextApiResponse } from "next";
+import { getServerSession } from "next-auth";
+import { authOptions } from "../auth/[...nextauth]";
+import dbConnect from "@/lib/mongooseConnect";
+import Affiliate from "@/models/Affiliate";
+import User from "@/models/user";
+import Stripe from "stripe";
+
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
+  apiVersion: "2024-04-10",
+});
+
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  if (req.method !== "POST") return res.status(405).end("Method Not Allowed");
+
+  const session = await getServerSession(req, res, authOptions);
+  if (!session?.user?.email) return res.status(401).json({ error: "Unauthorized" });
+
+  await dbConnect();
+
+  const user = await User.findOne({ email: session.user.email });
+  if (!user) return res.status(404).json({ error: "User not found" });
+
+  const affiliate = await Affiliate.findOne({ userId: user._id });
+  if (!affiliate || !affiliate.stripeConnectId) {
+    return res.status(400).json({ error: "No affiliate record or Stripe account found" });
+  }
+
+  const accountLink = await stripe.accountLinks.create({
+    account: affiliate.stripeConnectId,
+    refresh_url: `${process.env.NEXTAUTH_URL}/settings/affiliate`,
+    return_url: `${process.env.NEXTAUTH_URL}/settings/affiliate`,
+    type: "account_onboarding",
+  });
+
+  return res.status(200).json({ url: accountLink.url });
+}

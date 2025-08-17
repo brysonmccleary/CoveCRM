@@ -1,0 +1,51 @@
+// File: pages/api/start-conference.ts
+
+import type { NextApiRequest, NextApiResponse } from "next";
+import Twilio from "twilio";
+
+const accountSid = process.env.TWILIO_ACCOUNT_SID!;
+const authToken = process.env.TWILIO_AUTH_TOKEN!;
+const callerId = process.env.TWILIO_CALLER_ID!;
+
+const client = Twilio(accountSid, authToken);
+
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  if (req.method !== "POST") {
+    return res.status(405).json({ message: "Method not allowed" });
+  }
+
+  const { leadNumber, agentNumber, leadId } = req.body;
+
+  if (!leadNumber || !agentNumber) {
+    return res.status(400).json({ message: "Missing leadNumber or agentNumber" });
+  }
+
+  try {
+    const conferenceName = `Conf_${Date.now()}`;
+
+    // 1️⃣ Create conference
+    await client.conferences.create({ friendlyName: conferenceName });
+
+    // 2️⃣ Add agent (browser) to conference first, muted
+    await client.calls.create({
+      to: agentNumber,
+      from: callerId,
+      url: `${process.env.NEXT_PUBLIC_BASE_URL}/api/voice/agent-join?conferenceName=${conferenceName}`
+    });
+
+    // 3️⃣ Dial lead into conference with recording enabled
+    await client.calls.create({
+      to: leadNumber,
+      from: callerId,
+      url: `${process.env.NEXT_PUBLIC_BASE_URL}/api/voice/lead-join?conferenceName=${conferenceName}`,
+      record: 'record-from-answer',
+      recordingStatusCallback: `${process.env.NEXTAUTH_URL}/api/twilio-recording`,
+      recordingStatusCallbackEvent: ['completed'],
+    });
+
+    return res.status(200).json({ success: true, conferenceName });
+  } catch (error) {
+    console.error("Twilio conference error:", error);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+}

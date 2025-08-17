@@ -1,0 +1,63 @@
+import User from "@/models/user";
+import Stripe from "stripe";
+
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
+  apiVersion: "2024-04-10",
+});
+
+const USAGE_TOPUP_PRICE_ID = "price_1RpuwfDF9aEsjVyJekvxV1eh"; // Stripe price for $10 top-up
+
+/**
+ * Tracks Twilio/OpenAI usage for a user and auto-charges $10 when their usageBalance < $1.
+ */
+export async function trackUsage({
+  user,
+  amount,
+  source = "twilio",
+}: {
+  user: any;
+  amount: number;
+  source?: "twilio" | "openai";
+}) {
+  if (!user || !user.stripeCustomerId) throw new Error("User missing or not linked to Stripe");
+
+  // ⛔ Block usage if balance is too far negative
+  if ((user.usageBalance || 0) < -20) {
+    console.warn(`⛔ Usage frozen for ${user.email} — balance too negative.`);
+    throw new Error("Usage suspended. Please update your payment method.");
+  }
+
+  // 🔻 Subtract usage from balance
+  user.usageBalance = (user.usageBalance || 0) - amount;
+
+  // 🔁 Track AI usage by source
+  user.aiUsage = {
+    ...user.aiUsage,
+    twilioCost: (user.aiUsage?.twilioCost || 0) + (source === "twilio" ? amount : 0),
+    openAiCost: (user.aiUsage?.openAiCost || 0) + (source === "openai" ? amount : 0),
+    totalCost: (user.aiUsage?.totalCost || 0) + amount,
+  };
+
+  // 💳 Auto top-up if balance < $1
+  if (user.usageBalance < 1) {
+    try {
+      await stripe.invoiceItems.create({
+        customer: user.stripeCustomerId,
+        price: USAGE_TOPUP_PRICE_ID,
+      });
+
+      await stripe.invoices.create({
+        customer: user.stripeCustomerId,
+        collection_method: "charge_automatically",
+        auto_advance: true,
+      });
+
+      user.usageBalance += 10; // Must match Stripe top-up amount
+      console.log(`💰 Auto-topup: $10 charged to ${user.email}`);
+    } catch (err) {
+      console.error("❌ Stripe auto top-up failed:", err);
+    }
+  }
+
+  await user.save();
+}

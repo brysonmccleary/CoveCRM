@@ -1,0 +1,74 @@
+import type { NextApiRequest, NextApiResponse } from "next";
+import { getToken } from "next-auth/jwt";
+import dbConnect from "@/lib/dbConnect";
+import Message from "@/models/Message";
+import Lead from "@/models/Lead";
+import { sendSMS } from "@/lib/twilio/sendSMS"; // ✅ Real Twilio + cost tracking
+import User from "@/models/user";
+
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  if (req.method !== "POST") {
+    return res.status(405).json({ error: "Method not allowed" });
+  }
+
+  const token = await getToken({ req });
+  if (!token?.email) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  const { leadId, text, direction = "outbound" } = req.body;
+
+  if (!leadId || !text?.trim()) {
+    return res.status(400).json({ error: "Missing required fields" });
+  }
+
+  await dbConnect();
+
+  const lead = await Lead.findById(leadId);
+  if (!lead) {
+    return res.status(404).json({ error: "Lead not found" });
+  }
+
+  if (!lead.phone) {
+    return res.status(400).json({ error: "Lead has no phone number" });
+  }
+
+  // ✅ Send SMS only if it's outbound
+  if (direction === "outbound") {
+    const user = await User.findOne({ email: token.email });
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    try {
+      await sendSMS(lead.phone, text.trim(), user._id);
+    } catch (err: any) {
+      console.error("Twilio send error:", err);
+      return res.status(500).json({ error: "Failed to send SMS" });
+    }
+  }
+
+  // ✅ Save to DB
+  const message = await Message.create({
+    userEmail: token.email,
+    leadId,
+    text: text.trim(),
+    direction,
+    read: direction === "inbound" ? false : true,
+  });
+
+  // ✅ Emit via socket
+  try {
+    res.socket?.server?.io?.emit("newMessage", {
+      _id: message._id,
+      leadId,
+      text: message.text,
+      direction: message.direction,
+      date: message.createdAt,
+    });
+  } catch (err) {
+    console.error("Socket emit failed:", err);
+  }
+
+  res.status(200).json({ success: true, message });
+}

@@ -1,224 +1,442 @@
-import React, { useState, useRef, useEffect } from "react";
+// /components/leads/LeadImportPanel.tsx
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import Papa from "papaparse";
+import toast from "react-hot-toast";
 
-const systemFields = [
+type Folder = { _id: string; name: string };
+
+const LOCAL_KEY_MAPPING = "leadImport:mapping:v1";
+const LOCAL_KEY_FOLDER = "leadImport:lastFolderId";
+const LOCAL_KEY_SKIP = "leadImport:skipExisting";
+
+const CANONICAL_FIELDS = [
   "First Name",
   "Last Name",
   "Phone",
   "Email",
+  "State",
+  "Notes",
+  "Source",
+] as const;
+type Canonical = typeof CANONICAL_FIELDS[number];
+
+/** Dropdown options shown (kept superset for compatibility with your old UI) */
+const systemFields = [
+  ...CANONICAL_FIELDS,
   "Address",
   "City",
-  "State",
   "Zip",
   "DOB",
   "Age",
   "Coverage Amount",
-  "Notes",
   "Add Custom Field",
 ];
 
-export default function LeadImportPanel() {
+function lc(s?: string) {
+  return (s || "").toLowerCase();
+}
+
+function bestGuessField(header: string): Canonical | "" {
+  const h = lc(header).replace(/\s|_|-/g, "");
+  if (/^first$|^firstname$|^fname$|^givenname$/.test(h)) return "First Name";
+  if (/^last$|^lastname$|^lname$|^surname$|^familyname$/.test(h)) return "Last Name";
+  if (/^phone$|^mobile$|^cell$|^telephone$|^tel$|^phonenumber$/.test(h)) return "Phone";
+  if (/^email$|^e?mailaddress$|^emailid$/.test(h)) return "Email";
+  if (/^state$|^st$|^region$/.test(h)) return "State";
+  if (/^notes?$|^comments?$|^memo$/.test(h)) return "Notes";
+  if (/^source$|^leadsource$|^utm(source)?$/.test(h)) return "Source";
+  return "";
+}
+
+const fieldKeyForApi: Record<Canonical, string> = {
+  "First Name": "firstName",
+  "Last Name": "lastName",
+  Phone: "phone",
+  Email: "email",
+  State: "state",
+  Notes: "notes",
+  Source: "source",
+};
+
+export default function LeadImportPanel({ onImportSuccess }: { onImportSuccess?: () => void }) {
+  // CSV
   const [csvHeaders, setCsvHeaders] = useState<string[]>([]);
-  const [mapping, setMapping] = useState<{ [key: string]: string }>({});
-  const [customFieldNames, setCustomFieldNames] = useState<{ [key: string]: string }>({});
-  const [skipFields, setSkipFields] = useState<{ [key: string]: boolean }>({});
-  const [csvData, setCsvData] = useState<any[]>([]);
-  const [folderName, setFolderName] = useState("");
+  const [csvData, setCsvData] = useState<Record<string, any>[]>([]);
+  const [uploadedFile, setUploadedFile] = useState<File | null>(null);
+
+  // Mapping state: header -> chosen field label
+  const [mapping, setMapping] = useState<Record<string, string>>({});
+  const [skipHeader, setSkipHeader] = useState<Record<string, boolean>>({});
+  const [customFieldNames, setCustomFieldNames] = useState<Record<string, string>>({});
+
+  // Folder choose/create
+  const [folders, setFolders] = useState<Folder[]>([]);
+  const [useExisting, setUseExisting] = useState(true);
+  const [targetFolderId, setTargetFolderId] = useState<string>("");
+  const [newFolderName, setNewFolderName] = useState("");
+
+  // Options
+  const [skipExisting, setSkipExisting] = useState<boolean>(true);
+
+  // UI
+  const [isUploading, setIsUploading] = useState(false);
+  const [resultCounts, setResultCounts] = useState<{ inserted?: number; updated?: number; skipped?: number } | null>(null);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Load folders + local prefs
   useEffect(() => {
-    if (fileInputRef.current) {
-      fileInputRef.current.click();
-    }
+    (async () => {
+      try {
+        const r = await fetch("/api/get-folders");
+        if (r.ok) {
+          const data = await r.json();
+          if (Array.isArray(data?.folders)) {
+            setFolders(data.folders);
+          } else if (Array.isArray(data)) {
+            setFolders(data as Folder[]);
+          }
+        }
+      } catch {
+        // no-op
+      }
+      try {
+        const saved = localStorage.getItem(LOCAL_KEY_MAPPING);
+        if (saved) setMapping(JSON.parse(saved));
+        const savedFolder = localStorage.getItem(LOCAL_KEY_FOLDER);
+        if (savedFolder) {
+          setTargetFolderId(savedFolder);
+          setUseExisting(true);
+        }
+        const savedSkip = localStorage.getItem(LOCAL_KEY_SKIP);
+        if (savedSkip != null) setSkipExisting(savedSkip === "true");
+      } catch {
+        // ignore
+      }
+    })();
+  }, []);
+
+  // Auto-open file picker on mount (kept from your original)
+  useEffect(() => {
+    fileInputRef.current?.click();
   }, []);
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      Papa.parse(file, {
-        header: true,
-        skipEmptyLines: true,
-        complete: (results) => {
-          const headers = results.meta.fields || [];
-          // ✅ Type fix here
-          const typedData = results.data as Record<string, any>[];
-
-          const validHeaders = headers.filter((header) =>
-            typedData.some((row) => row[header] && row[header].trim() !== "")
-          );
-
-          setCsvHeaders(validHeaders);
-          setCsvData(typedData);
-          setMapping({});
-          setSkipFields({});
-          setCustomFieldNames({});
-        },
-      });
+    if (!file) {
+      toast.error("❌ No file selected");
+      return;
     }
-  };
+    setUploadedFile(file);
 
-  const handleMappingChange = (header: string, value: string) => {
-    setMapping({ ...mapping, [header]: value });
-    if (value !== "Add Custom Field") {
-      setCustomFieldNames({ ...customFieldNames, [header]: "" });
-    }
-  };
+    Papa.parse(file, {
+      header: true,
+      skipEmptyLines: true,
+      complete: (results) => {
+        const headers = results.meta.fields || [];
+        const typedData = (results.data as Record<string, any>[]).filter(Boolean);
+        // Keep headers that have at least one non-empty value in data
+        const validHeaders = headers.filter((h) =>
+          typedData.some((row) => row[h] && String(row[h]).trim() !== "")
+        );
 
-  const handleCustomFieldNameChange = (header: string, value: string) => {
-    setCustomFieldNames({ ...customFieldNames, [header]: value });
-  };
+        // Initialize mapping with best-guess (but don’t override saved choices if present)
+        const nextMap: Record<string, string> = { ...(mapping || {}) };
+        validHeaders.forEach((h) => {
+          if (!nextMap[h]) {
+            const guess = bestGuessField(h);
+            if (guess) nextMap[h] = guess;
+          }
+        });
 
-  const handleSkipChange = (header: string, checked: boolean) => {
-    setSkipFields({ ...skipFields, [header]: checked });
-    if (checked) {
-      setMapping({ ...mapping, [header]: "" });
-      setCustomFieldNames({ ...customFieldNames, [header]: "" });
-    }
+        setCsvHeaders(validHeaders);
+        setCsvData(typedData);
+        setMapping(nextMap);
+        setSkipHeader({});
+        setCustomFieldNames({});
+        setResultCounts(null);
+      },
+    });
   };
 
   const getAvailableFields = (currentHeader: string) => {
-    const selectedFields = Object.values(mapping).filter(
-      (field) => field !== "" && field !== mapping[currentHeader] && field !== "Add Custom Field"
-    );
-    return systemFields.filter(
-      (field) => !selectedFields.includes(field) || field === mapping[currentHeader]
-    );
+    const selected = Object.entries(mapping)
+      .filter(([h]) => h !== currentHeader)
+      .map(([, val]) => val)
+      .filter((v) => v && v !== "Add Custom Field");
+
+    return systemFields.filter((f) => !selected.includes(f) || f === mapping[currentHeader]);
+  };
+
+  const atLeastOneIdFieldChosen = useMemo(() => {
+    const chosen = new Set(Object.values(mapping));
+    return chosen.has("Phone") || chosen.has("Email");
+  }, [mapping]);
+
+  const buildApiMappingObject = () => {
+    // Invert: canonicalKey -> csvHeader
+    const result: Record<string, string> = {};
+    for (const [header, fieldLabel] of Object.entries(mapping)) {
+      if (!fieldLabel || skipHeader[header] || fieldLabel === "Add Custom Field") continue;
+      if ((CANONICAL_FIELDS as readonly string[]).includes(fieldLabel)) {
+        const apiKey = fieldKeyForApi[fieldLabel as Canonical];
+        if (!result[apiKey]) result[apiKey] = header; // first wins
+      }
+    }
+    return result;
   };
 
   const handleImport = async () => {
-    if (!folderName.trim()) {
-      alert("Please enter a folder name");
-      return;
-    }
+    try {
+      if (!uploadedFile) {
+        toast.error("❌ No CSV file uploaded");
+        return;
+      }
 
-    const leadsToImport = csvData.map((row) => {
-      const mappedLead: { [key: string]: any } = {};
-      Object.keys(mapping).forEach((header) => {
-        if (!skipFields[header]) {
-          let field = mapping[header];
-          if (field === "Add Custom Field") {
-            field = customFieldNames[header];
-          }
-          const value = row[header];
-          if (field && value && value.trim() !== "") {
-            mappedLead[field] = value;
-          }
+      // Folder validation
+      if (useExisting) {
+        if (!targetFolderId) {
+          toast.error("❌ Choose a folder to import into");
+          return;
         }
-      });
-      return mappedLead;
-    });
+      } else {
+        if (!newFolderName.trim()) {
+          toast.error("❌ Enter a new folder name");
+          return;
+        }
+      }
 
-    const res = await fetch("/api/import-leads", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ folderName, leads: leadsToImport }),
-    });
+      // Mapping validation
+      if (!atLeastOneIdFieldChosen) {
+        toast.error("❌ Map at least Phone or Email so we can de-dupe");
+        return;
+      }
 
-    if (res.ok) {
-      alert("Leads imported successfully!");
+      const mappingForApi = buildApiMappingObject();
+      if (!Object.keys(mappingForApi).length) {
+        toast.error("❌ No usable mappings selected");
+        return;
+      }
+
+      // Persist preferences
+      localStorage.setItem(LOCAL_KEY_MAPPING, JSON.stringify(mapping));
+      localStorage.setItem(LOCAL_KEY_SKIP, String(skipExisting));
+      if (useExisting && targetFolderId) localStorage.setItem(LOCAL_KEY_FOLDER, targetFolderId);
+
+      const form = new FormData();
+      form.append("file", uploadedFile);
+      if (useExisting) form.append("targetFolderId", targetFolderId);
+      else form.append("folderName", newFolderName.trim());
+      form.append("mapping", JSON.stringify(mappingForApi));
+      form.append("skipExisting", String(skipExisting));
+
+      setIsUploading(true);
+      setResultCounts(null);
+
+      const res = await fetch("/api/import-leads", { method: "POST", body: form });
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data?.message || "Import failed");
+      }
+
+      // Prefer new counts shape; fallback to legacy `count`
+      const inserted = data?.counts?.inserted ?? 0;
+      const updated = data?.counts?.updated ?? 0;
+      const skipped = data?.counts?.skipped ?? 0;
+
+      if (data?.counts) {
+        setResultCounts({ inserted, updated, skipped });
+        toast.success(`✅ Import: ${inserted} new • ${updated} updated • ${skipped} skipped`);
+      } else {
+        toast.success(`✅ Imported ${data?.count ?? "leads"}`);
+      }
+
+      // Reset file & preview, keep mapping preference
+      setUploadedFile(null);
       setCsvHeaders([]);
       setCsvData([]);
-      setMapping({});
-      setSkipFields({});
+      setSkipHeader({});
       setCustomFieldNames({});
-      setFolderName("");
-    } else {
-      alert("Failed to import leads");
-    }
-  };
 
-  const handleTriggerFilePicker = () => {
-    fileInputRef.current?.click();
+      if (onImportSuccess) onImportSuccess();
+    } catch (e: any) {
+      console.error("❌ Import error:", e);
+      toast.error(`❌ ${e?.message || "An unexpected error occurred"}`);
+    } finally {
+      setIsUploading(false);
+    }
   };
 
   return (
     <div className="border border-black dark:border-white p-4 mt-4 rounded space-y-4">
       <h2 className="text-xl font-bold">Import Leads</h2>
 
-      <button
-        onClick={handleTriggerFilePicker}
-        className="bg-[#6b5b95] text-white px-4 py-2 rounded hover:opacity-90"
-      >
-        Choose CSV File
-      </button>
-      <input
-        type="file"
-        accept=".csv"
-        onChange={handleFileUpload}
-        ref={fileInputRef}
-        className="hidden"
-      />
+      {/* Folder selection */}
+      <div className="space-y-2">
+        <div className="flex items-center gap-4">
+          <label className="flex items-center gap-2">
+            <input
+              type="radio"
+              checked={useExisting}
+              onChange={() => setUseExisting(true)}
+            />
+            <span>Import into existing folder</span>
+          </label>
+          <label className="flex items-center gap-2">
+            <input
+              type="radio"
+              checked={!useExisting}
+              onChange={() => setUseExisting(false)}
+            />
+            <span>Create new folder</span>
+          </label>
+        </div>
 
-      {csvHeaders.length > 0 && (
-        <>
+        {useExisting ? (
           <div>
-            <label className="block font-semibold mb-1">Folder Name</label>
+            <label className="block font-semibold mb-1">Add to Folder</label>
+            <select
+              value={targetFolderId}
+              onChange={(e) => setTargetFolderId(e.target.value)}
+              className="border p-2 rounded w-full"
+            >
+              <option value="">— Select a folder —</option>
+              {folders.map((f) => (
+                <option key={f._id} value={f._id}>
+                  {f.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        ) : (
+          <div>
+            <label className="block font-semibold mb-1">New Folder Name</label>
             <input
               type="text"
-              value={folderName}
-              onChange={(e) => setFolderName(e.target.value)}
+              value={newFolderName}
+              onChange={(e) => setNewFolderName(e.target.value)}
               placeholder="e.g., Mortgage Leads 7/1"
-              className="border p-1 rounded w-full"
+              className="border p-2 rounded w-full"
             />
           </div>
+        )}
+      </div>
 
-          <div className="space-y-2 mt-4">
-            {csvHeaders.map((header) => (
-              <div
-                key={header}
-                className="flex flex-col md:flex-row md:items-center md:space-x-4 border border-black dark:border-white p-2 rounded"
-              >
-                <div className="font-semibold w-48">
-                  {header}
-                  <div className="text-gray-500 text-sm mt-1">
-                    ({csvData[0]?.[header] || "No sample"})
-                  </div>
-                </div>
-                <select
-                  value={mapping[header] || ""}
-                  onChange={(e) => handleMappingChange(header, e.target.value)}
-                  className="border p-1 rounded flex-1"
-                  disabled={skipFields[header]}
-                >
-                  <option value="">Select Field</option>
-                  {getAvailableFields(header).map((field) => (
-                    <option key={field} value={field}>
-                      {field}
-                    </option>
-                  ))}
-                </select>
+      {/* Options */}
+      <div className="flex items-center gap-3">
+        <input
+          id="skipExisting"
+          type="checkbox"
+          checked={skipExisting}
+          onChange={(e) => setSkipExisting(e.target.checked)}
+        />
+        <label htmlFor="skipExisting" className="cursor-pointer">
+          Skip existing leads (dedupe by phone/email)
+        </label>
+      </div>
 
-                {mapping[header] === "Add Custom Field" && (
-                  <input
-                    type="text"
-                    value={customFieldNames[header] || ""}
-                    onChange={(e) => handleCustomFieldNameChange(header, e.target.value)}
-                    placeholder="Custom field name"
-                    className="border p-1 rounded flex-1 mt-2 md:mt-0"
-                  />
-                )}
+      {/* File choose */}
+      <div className="flex items-center gap-3">
+        <button
+          onClick={() => fileInputRef.current?.click()}
+          className="bg-[#6b5b95] text-white px-4 py-2 rounded hover:opacity-90 disabled:opacity-60"
+          disabled={isUploading}
+        >
+          Choose CSV File
+        </button>
+        <input
+          type="file"
+          accept=".csv"
+          onChange={handleFileUpload}
+          ref={fileInputRef}
+          className="hidden"
+        />
+        {uploadedFile && <span className="text-sm text-gray-600">{uploadedFile.name}</span>}
+      </div>
 
-                <div className="flex items-center space-x-1 mt-2 md:mt-0">
-                  <input
-                    type="checkbox"
-                    checked={skipFields[header] || false}
-                    onChange={(e) => handleSkipChange(header, e.target.checked)}
-                  />
-                  <label>Do Not Import</label>
+      {/* Mapping UI */}
+      {csvHeaders.length > 0 && (
+        <div className="space-y-2">
+          <div className="text-sm text-gray-600">
+            Map your CSV columns to fields. We’ll remember your choices.
+          </div>
+
+          {csvHeaders.map((header) => (
+            <div
+              key={header}
+              className="flex flex-col md:flex-row md:items-center md:space-x-4 border border-black dark:border-white p-2 rounded"
+            >
+              <div className="font-semibold w-56">
+                {header}
+                <div className="text-gray-500 text-xs mt-1">
+                  ({csvData[0]?.[header] ?? "No sample"})
                 </div>
               </div>
-            ))}
 
+              <select
+                value={mapping[header] || ""}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setMapping((prev) => ({ ...prev, [header]: val }));
+                  if (val !== "Add Custom Field") {
+                    setCustomFieldNames((prev) => ({ ...prev, [header]: "" }));
+                  }
+                }}
+                className="border p-2 rounded flex-1"
+                disabled={!!skipHeader[header]}
+              >
+                <option value="">Select Field</option>
+                {getAvailableFields(header).map((field) => (
+                  <option key={field} value={field}>
+                    {field}
+                  </option>
+                ))}
+              </select>
+
+              {mapping[header] === "Add Custom Field" && (
+                <input
+                  type="text"
+                  value={customFieldNames[header] || ""}
+                  onChange={(e) =>
+                    setCustomFieldNames((prev) => ({ ...prev, [header]: e.target.value }))
+                  }
+                  placeholder="Custom field name"
+                  className="border p-2 rounded flex-1 mt-2 md:mt-0"
+                />
+              )}
+
+              <label className="flex items-center gap-2 mt-2 md:mt-0">
+                <input
+                  type="checkbox"
+                  checked={!!skipHeader[header]}
+                  onChange={(e) =>
+                    setSkipHeader((prev) => ({ ...prev, [header]: e.target.checked }))
+                  }
+                />
+                <span>Do Not Import</span>
+              </label>
+            </div>
+          ))}
+
+          <div className="pt-2">
             <button
               onClick={handleImport}
-              className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded mt-2"
+              className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded disabled:opacity-60"
+              disabled={isUploading}
             >
-              Save & Import
+              {isUploading ? "Importing..." : "Save & Import"}
             </button>
           </div>
-        </>
+
+          {resultCounts && (
+            <div className="text-sm text-gray-700 mt-2">
+              Inserted: <b>{resultCounts.inserted ?? 0}</b> • Updated:{" "}
+              <b>{resultCounts.updated ?? 0}</b> • Skipped: <b>{resultCounts.skipped ?? 0}</b>
+            </div>
+          )}
+        </div>
       )}
     </div>
   );
 }
-

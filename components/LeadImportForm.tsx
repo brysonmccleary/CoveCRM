@@ -89,6 +89,21 @@ export default function LeadImportForm() {
     alert("Leads imported! (Simulation)");
   };
 
+  const handleGoogleAuth = async () => {
+    try {
+      const response = await fetch("/api/google/auth");
+      const { url } = await response.json();
+      if (url) {
+        window.location.href = url;
+      } else {
+        alert("Google auth URL not returned.");
+      }
+    } catch (error) {
+      console.error("Google Auth error:", error);
+      alert("Failed to connect Google Sheets.");
+    }
+  };
+
   return (
     <div
       className="bg-white dark:bg-gray-800 p-6 rounded shadow"
@@ -105,7 +120,7 @@ export default function LeadImportForm() {
           Upload CSV
         </button>
         <button
-          onClick={() => alert("Google Sheets connection coming soon!")}
+          onClick={handleGoogleAuth}
           className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700"
         >
           Connect Google Sheet

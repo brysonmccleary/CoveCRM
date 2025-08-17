@@ -1,30 +1,31 @@
-import { NextApiRequest, NextApiResponse } from "next";
-import clientPromise from "@/lib/mongodb";
+// /pages/api/get-lead-by-id.ts
+import type { NextApiRequest, NextApiResponse } from "next";
+import dbConnect from "@/lib/mongooseConnect";
+import Lead from "@/models/Lead";
+import { Types } from "mongoose";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "POST") {
+  if (req.method !== "GET") {
     return res.status(405).json({ message: "Method not allowed" });
   }
 
-  const { ids } = req.body;
+  const { id } = req.query;
 
-  if (!ids || !Array.isArray(ids)) {
-    return res.status(400).json({ message: "Invalid IDs" });
+  if (!id || typeof id !== "string" || !Types.ObjectId.isValid(id)) {
+    return res.status(400).json({ message: "Missing or invalid lead ID" });
   }
 
   try {
-    const client = await clientPromise;
-    const db = client.db("covecrm");
-    const collection = db.collection("leads");
+    await dbConnect();
+    const lead = await Lead.findById(id);
 
-    const objectIds = ids.map((id) => new (require("mongodb").ObjectId)(id));
+    if (!lead) {
+      return res.status(404).json({ message: "Lead not found" });
+    }
 
-    const leads = await collection.find({ _id: { $in: objectIds } }).toArray();
-
-    res.status(200).json(leads);
+    res.status(200).json({ lead });
   } catch (error) {
-    console.error("Error fetching leads by IDs:", error);
+    console.error("Error fetching lead by ID:", error);
     res.status(500).json({ message: "Server error" });
   }
 }
-

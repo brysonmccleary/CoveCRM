@@ -1,3 +1,4 @@
+/* /styles/globals.css */
 @import "tailwindcss";
 
 :root {
@@ -23,4 +24,71 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
+}
+
+/* ✅ Highlight today with green border only (no fill) */
+.rbc-today {
+  background-color: inherit !important;
+  border: 2px solid #22c55e !important; /* green-500 */
+  border-radius: 6px !important;
+  box-shadow: none !important;
+}
+
+/* ✅ Make the number (e.g., "04") green */
+.rbc-today .rbc-button-link {
+  color: #22c55e !important; /* green-500 */
+  font-weight: bold !important;
+  font-size: 1.05rem;
+}
+
+/* ✅ Dim the days from other months (outside current view) */
+.rbc-off-range-bg {
+  background-color: #000000 !important;
+  color: #4b5563 !important; /* gray-600 */
+}
+
+/* ✅ Pointer for assistant widget */
+.ask-assistant-button {
+  cursor: pointer;
+}
+
+/* —————————————————————————————————————————————
+   Global pointer cursor for interactive elements
+   (avoids disabled controls)
+   ————————————————————————————————————————————— */
+button:not(:disabled):not([aria-disabled="true"]),
+input[type="button"]:not(:disabled):not([aria-disabled="true"]),
+input[type="submit"]:not(:disabled):not([aria-disabled="true"]),
+input[type="reset"]:not(:disabled):not([aria-disabled="true"]),
+input[type="checkbox"]:not(:disabled):not([aria-disabled="true"]),
+input[type="radio"]:not(:disabled):not([aria-disabled="true"]),
+input[type="file"]:not(:disabled):not([aria-disabled="true"]),
+select:not(:disabled):not([aria-disabled="true"]),
+option,
+a[href],
+label[for],
+summary,
+[role="button"],
+[role="link"],
+[role="tab"],
+[role="menuitem"],
+[role="option"],
+[role="checkbox"],
+[role="radio"],
+[role="switch"],
+[tabindex]:not([tabindex="-1"]),
+/* convenience hooks you can add in markup */
+[data-clickable],
+.clickable {
+  cursor: pointer;
+}
+
+/* Ensure text inputs keep text-cursor */
+input[type="text"],
+input[type="email"],
+input[type="tel"],
+input[type="search"],
+input[type="password"],
+textarea {
+  cursor: text;
 }

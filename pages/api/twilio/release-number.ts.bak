@@ -1,0 +1,49 @@
+import type { NextApiRequest, NextApiResponse } from "next";
+import { getServerSession } from "next-auth/next";
+import { authOptions } from "../auth/[...nextauth]";
+import twilioClient from "@/lib/twilioClient";
+import dbConnect from "@/lib/mongooseConnect";
+import User from "@/models/user";
+import Stripe from "stripe";
+
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
+  apiVersion: "2024-04-10",
+});
+
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  if (req.method !== "DELETE") return res.status(405).json({ message: "Method not allowed" });
+
+  const session = await getServerSession(req, res, authOptions);
+  if (!session?.user?.email) return res.status(401).json({ message: "Unauthorized" });
+
+  const { phoneNumber } = req.body;
+  if (!phoneNumber) return res.status(400).json({ message: "Missing phone number" });
+
+  try {
+    await dbConnect();
+    const user = await User.findOne({ email: session.user.email });
+    if (!user || !user.numbers) return res.status(404).json({ message: "User or number not found" });
+
+    const target = user.numbers.find((n: any) => n.phoneNumber === phoneNumber);
+    if (!target) return res.status(404).json({ message: "Number not found in user's account" });
+
+    // ✅ 1. Cancel Stripe subscription
+    if (target.subscriptionId) {
+      await stripe.subscriptions.del(target.subscriptionId);
+    }
+
+    // ✅ 2. Release number in Twilio
+    if (target.sid) {
+      await twilioClient.incomingPhoneNumbers(target.sid).remove();
+    }
+
+    // ✅ 3. Remove from user.numbers[]
+    user.numbers = user.numbers.filter((n: any) => n.phoneNumber !== phoneNumber);
+    await user.save();
+
+    return res.status(200).json({ message: "Number released and billing cancelled" });
+  } catch (err: any) {
+    console.error("Release number error:", err);
+    return res.status(500).json({ message: err.message || "Server error" });
+  }
+}

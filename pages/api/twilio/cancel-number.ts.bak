@@ -1,0 +1,59 @@
+// pages/api/twilio/cancel-number.ts
+
+import type { NextApiRequest, NextApiResponse } from "next";
+import { getServerSession } from "next-auth/next";
+import { authOptions } from "../auth/[...nextauth]";
+import dbConnect from "@/lib/mongooseConnect";
+import User from "@/models/user";
+import twilioClient from "@/lib/twilioClient";
+import Stripe from "stripe";
+
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
+  apiVersion: "2024-04-10",
+});
+
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  if (req.method !== "DELETE") return res.status(405).json({ message: "Method not allowed" });
+
+  const session = await getServerSession(req, res, authOptions);
+  if (!session?.user?.email) return res.status(401).json({ message: "Unauthorized" });
+
+  const { sid } = req.body;
+  if (!sid) return res.status(400).json({ message: "Missing Twilio SID" });
+
+  try {
+    await dbConnect();
+    const user = await User.findOne({ email: session.user.email });
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    const numberToDelete = user.numbers?.find((n) => n.sid === sid);
+    if (!numberToDelete) return res.status(404).json({ message: "Number not found" });
+
+    const { subscriptionId, phoneNumber } = numberToDelete;
+
+    // 1. Cancel the Stripe subscription
+    if (subscriptionId) {
+      try {
+        await stripe.subscriptions.del(subscriptionId);
+      } catch (err) {
+        console.warn("Stripe subscription cancellation failed:", err);
+      }
+    }
+
+    // 2. Release the Twilio number
+    try {
+      await twilioClient.incomingPhoneNumbers(sid).remove();
+    } catch (err) {
+      console.warn("Twilio number release failed:", err);
+    }
+
+    // 3. Remove from user's Mongo array
+    user.numbers = user.numbers?.filter((n) => n.sid !== sid);
+    await user.save();
+
+    return res.status(200).json({ message: `Number ${phoneNumber} cancelled and removed` });
+  } catch (err: any) {
+    console.error("Cancel number error:", err);
+    return res.status(500).json({ message: err.message || "Failed to cancel number" });
+  }
+}
