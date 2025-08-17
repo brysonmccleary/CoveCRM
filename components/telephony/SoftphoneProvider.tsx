@@ -92,7 +92,9 @@ export default function SoftphoneProvider({ children }: Props) {
           // Keep logs quiet in prod
           logLevel: process.env.NODE_ENV === "production" ? "error" : "warn",
           // Prefer Opus in modern browsers; fallback PCMU
-          codecPreferences: ["opus", "pcmu"],
+          // TS note: DOM's WebCodecs defines a `Codec` type that can collide with the SDK's.
+          // Casting avoids the name clash during type-checking.
+          codecPreferences: ["opus", "pcmu"] as unknown as any,
           // Allow incoming events to reach this client
           allowIncomingWhileBusy: false,
         });
