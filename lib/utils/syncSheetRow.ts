@@ -39,13 +39,13 @@ export async function syncSheetRow(row: SheetRow) {
     Beneficiary: (row.additionalFields?.Beneficiary as string) || "",
     "Coverage Amount": (row.additionalFields?.["Coverage Amount"] as string) || "",
     userEmail: row.userEmail,
-    folderId: (folder._id as unknown) as Types.ObjectId,
+    folderId: folder._id as Types.ObjectId,
     status: "New",
   };
 
   const newLead = await Lead.create(leadData);
 
-  // ✅ Use toObject() instead of private _doc
+  // ✅ Use toObject() instead of private `_doc`
   const leadObj = (typeof newLead.toObject === "function"
     ? newLead.toObject()
     : JSON.parse(JSON.stringify(newLead))) as ILead & { _id: Types.ObjectId };
