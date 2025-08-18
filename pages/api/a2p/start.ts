@@ -41,8 +41,7 @@ function required<T>(v: T, name: string): T {
   return v;
 }
 
-// Twilio's TS typings for TrustHub are inconsistent across SDK versions.
-// Use tiny helpers with a local `any` cast at the boundary (runtime-safe).
+// Twilio's TS typings for TrustHub vary across SDK versions; cast at the boundary.
 async function assignEntityToCustomerProfile(customerProfileSid: string, objectSid: string) {
   await (client.trusthub.v1.customerProfiles(customerProfileSid) as any).entityAssignments.create({
     objectSid,
@@ -116,11 +115,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       contactTitle,
       contactFirstName,
       contactLastName,
-      sampleMessages, // string | string[]
-      optInDetails, // string
-      volume, // string
+      sampleMessages,   // string | string[]
+      optInDetails,     // string
+      volume,           // string
       optInScreenshotUrl, // string
-      usecaseCode, // string | undefined
+      usecaseCode,      // string | undefined
     } = (req.body || {}) as Record<string, unknown>;
 
     // Validate basics
@@ -146,7 +145,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       throw new Error("Provide at least 2 sample messages (20–1024 chars each).");
     }
 
-    // Upsert local A2PProfile (no self-reference in initializer)
+    // Upsert local A2PProfile
     const userId = String(user._id);
     const existing = await A2PProfile.findOne({ userId }).lean<IA2PProfile | null>();
     const now = new Date();
@@ -169,6 +168,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
     };
+
+    // Use a narrowed local for fields needed as strict strings later
+    const messageFlowText: string = setPayload.optInDetails!;
 
     const a2p = await A2PProfile.findOneAndUpdate<IA2PProfile>(
       { userId },
@@ -283,7 +285,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         attributes: {
           description: `A2P messaging for ${setPayload.businessName}`,
           message_samples: samples,
-          message_flow: setPayload.optInDetails,
+          message_flow: messageFlowText,
           message_volume: setPayload.volume || "Low",
           has_embedded_links: true,
           has_embedded_phone: false,
@@ -329,7 +331,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           brandRegistrationSid: brandSid!,
           usAppToPersonUsecase: code,
           description: `Campaign for ${setPayload.businessName} (${code})`,
-          messageFlow: setPayload.optInDetails,
+          messageFlow: messageFlowText, // <- narrowed to string
           messageSamples: samples,
           hasEmbeddedLinks: true,
           hasEmbeddedPhone: false,
