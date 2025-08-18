@@ -1,5 +1,7 @@
 // /lib/email.ts
-import nodemailer from "nodemailer";
+// Use CommonJS require for Nodemailer to avoid TS type requirement on @types/nodemailer
+// (works fine at runtime and side-steps the "Could not find a declaration file" error)
+const nodemailer = require("nodemailer") as any;
 import { Resend } from "resend";
 
 const {
