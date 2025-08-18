@@ -1,17 +1,18 @@
-// lib/billing/trackUsage.ts
+// /lib/billing/trackUsage.ts
 import mongoose from "mongoose";
 import User from "@/models/User";
 import Stripe from "stripe";
 
 const STRIPE_KEY = process.env.STRIPE_SECRET_KEY;
-// Use account default API version to avoid TS literal version mismatches
+// Use the account's default API version to avoid TS literal mismatches
 const stripe = STRIPE_KEY ? new Stripe(STRIPE_KEY) : null;
-
-// Stripe price for $10 top-up
-const USAGE_TOPUP_PRICE_ID = "price_1RpuwfDF9aEsjVyJekvxV1eh";
 
 const isProd = process.env.NODE_ENV === "production";
 const DEV_SKIP_BILLING = process.env.DEV_SKIP_BILLING === "1";
+
+// Top-up settings
+const TOPUP_AMOUNT_USD = 10; // $10 top-up when balance < $1
+const TOPUP_AMOUNT_CENTS = TOPUP_AMOUNT_USD * 100;
 
 /**
  * Ensures we have a real Mongoose document for the user
@@ -84,7 +85,6 @@ export async function trackUsage({
 
   const canBill =
     !!stripe &&
-    !!USAGE_TOPUP_PRICE_ID &&
     !!userDoc.stripeCustomerId &&
     !(DEV_SKIP_BILLING && isProd);
 
@@ -100,19 +100,23 @@ export async function trackUsage({
   // Auto-topup if needed
   if (userDoc.usageBalance < 1 && canBill) {
     try {
+      // Create an invoice item for a fixed $10 (no Price object)
       await stripe!.invoiceItems.create({
         customer: userDoc.stripeCustomerId,
-        price: USAGE_TOPUP_PRICE_ID,
+        amount: TOPUP_AMOUNT_CENTS,
+        currency: "usd",
+        description: `Cove CRM usage top-up ($${TOPUP_AMOUNT_USD})`,
       });
 
+      // Create and auto-charge the invoice
       await stripe!.invoices.create({
         customer: userDoc.stripeCustomerId,
         collection_method: "charge_automatically",
         auto_advance: true,
       });
 
-      userDoc.usageBalance += 10;
-      console.log(`💰 Auto-topup: $10 charged to ${userDoc.email}`);
+      userDoc.usageBalance += TOPUP_AMOUNT_USD;
+      console.log(`💰 Auto-topup: $${TOPUP_AMOUNT_USD} charged to ${userDoc.email}`);
     } catch (err) {
       console.error("❌ Stripe auto top-up failed:", err);
     }
