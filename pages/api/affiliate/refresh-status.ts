@@ -1,12 +1,11 @@
+// /pages/api/affiliate/refresh-status.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth";
 import { authOptions } from "../auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import Affiliate from "@/models/Affiliate";
 import User from "@/models/User";
-import Stripe from "stripe";
-
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, { apiVersion: "2024-04-10" });
+import { stripe } from "@/lib/stripe";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") return res.status(405).end("Method Not Allowed");
@@ -26,12 +25,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     const acct = await stripe.accounts.retrieve(affiliate.stripeConnectId);
-    const detailsSubmitted = !!acct.details_submitted;
-    const payoutsEnabled = !!acct.payouts_enabled;
-    const chargesEnabled = !!acct.charges_enabled;
+    const detailsSubmitted = Boolean((acct as any).details_submitted);
+    const payoutsEnabled = Boolean((acct as any).payouts_enabled);
+    const chargesEnabled = Boolean((acct as any).charges_enabled);
 
     affiliate.onboardingCompleted = detailsSubmitted;
-    affiliate.connectedAccountStatus = payoutsEnabled || chargesEnabled ? "verified" : detailsSubmitted ? "pending" : "incomplete";
+    affiliate.connectedAccountStatus =
+      payoutsEnabled || chargesEnabled ? "verified" : detailsSubmitted ? "pending" : "incomplete";
     await affiliate.save();
 
     return res.status(200).json({
@@ -41,7 +41,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       chargesEnabled,
     });
   } catch (err: any) {
-    const devMsg = process.env.NODE_ENV !== "production" && (err?.message || err?.error?.message);
+    const devMsg =
+      process.env.NODE_ENV !== "production" && (err?.message || err?.error?.message);
     return res.status(500).json({ error: devMsg || "Failed to refresh status" });
   }
 }
