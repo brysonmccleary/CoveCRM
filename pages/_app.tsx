@@ -28,15 +28,15 @@ const PUBLIC_ROUTES = new Set<string>([
   "/legal/acceptance",
 ]);
 
-function AppWrapper({ Component, pageProps }: AppProps) {
+export default function App({ Component, pageProps }: AppProps) {
   return (
     <SessionProvider session={pageProps.session}>
-      <App Component={Component} pageProps={pageProps} />
+      <InnerApp Component={Component} pageProps={pageProps} />
     </SessionProvider>
   );
 }
 
-function App({ Component, pageProps }: AppProps) {
+function InnerApp({ Component, pageProps }: Pick<AppProps, "Component" | "pageProps">) {
   const { data: session, status } = useSession();
   const authed = status === "authenticated" && !!session?.user?.email;
 
@@ -150,5 +150,3 @@ function App({ Component, pageProps }: AppProps) {
   }
   return pageContent;
 }
-
-export default AppWrapper;
