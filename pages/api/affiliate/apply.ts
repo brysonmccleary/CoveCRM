@@ -6,12 +6,8 @@ import { authOptions } from "../auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import Affiliate from "@/models/Affiliate";
-import Stripe from "stripe";
+import { stripe } from "@/lib/stripe";
 import { sendAffiliateApplicationAdminEmail } from "@/lib/email";
-
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: "2024-04-10",
-});
 
 // Where to return after Stripe onboarding
 const BASE_URL =
@@ -68,21 +64,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     // Guard: if a promotion code with same text exists in Stripe, reuse it
-    const existingPromo = await stripe.promotionCodes.list({
-      code: promoCode,
-      limit: 1,
-    });
+    const listResp = await stripe.promotionCodes.list({ code: promoCode, limit: 1 });
+    const apiList: any = (listResp as any)?.data ?? listResp; // handle SDK Response<T> wrapper
+    const existingPromo = Array.isArray(apiList?.data) ? apiList.data : apiList;
 
-    if (existingPromo.data.length) {
-      const p = existingPromo.data[0];
-      promotionCodeId = p.id;
-      couponId = typeof p.coupon === "string" ? p.coupon : p.coupon.id;
+    if (existingPromo?.length) {
+      const p: any = existingPromo[0];
+      promotionCodeId = p.id as string;
+      couponId = typeof p.coupon === "string" ? (p.coupon as string) : (p.coupon?.id as string);
       // ensure it's active
       if (!p.active) {
-        await stripe.promotionCodes.update(p.id, { active: true });
+        await stripe.promotionCodes.update(p.id as string, { active: true });
       }
     } else {
-      const coupon = await stripe.coupons.create({
+      const coupon: any = await stripe.coupons.create({
         duration: "forever",
         percent_off: DEFAULT_DISCOUNT_PERCENT,
         name: promoCode,
@@ -91,9 +86,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           affiliateUserId: user._id.toString(),
         },
       });
-      couponId = coupon.id;
+      couponId = coupon.id as string;
 
-      const promo = await stripe.promotionCodes.create({
+      const promo: any = await stripe.promotionCodes.create({
         coupon: couponId,
         code: promoCode,
         active: true,
@@ -102,7 +97,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           affiliateUserId: user._id.toString(),
         },
       });
-      promotionCodeId = promo.id;
+      promotionCodeId = promo.id as string;
     }
   } catch (err: any) {
     const devMsg =
@@ -116,7 +111,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   let accountId: string;
   if (!SKIP_CONNECT) {
     try {
-      const account = await stripe.accounts.create({
+      const account: any = await stripe.accounts.create({
         type: "express",
         email,
         capabilities: { transfers: { requested: true } },
@@ -125,7 +120,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           affiliateCode: promoCode,
         },
       });
-      accountId = account.id;
+      accountId = String(account.id);
     } catch (err: any) {
       const devMsg =
         process.env.NODE_ENV !== "production" && (err?.message || err?.error?.message);
@@ -145,7 +140,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       userId: user._id,
       name,
       email,
-      teamSize,
+      teamSize: String(teamSize),
       promoCode,
       stripeConnectId: accountId,
       flatPayoutAmount: DEFAULT_PAYOUT_FLAT,
@@ -160,16 +155,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       payoutHistory: [],
       approved: true,
       approvedAt: new Date(),
+      // If your Affiliate schema includes these, they will be saved; otherwise Mongoose will ignore.
       couponId,
       promotionCodeId,
-    });
+    } as any);
   } catch {
     return res.status(500).json({ error: "Could not create affiliate" });
   }
 
   // 4) Update user with referral code (non-critical)
   try {
-    user.referralCode = promoCode;
+    (user as any).referralCode = promoCode;
     await user.save();
   } catch {}
 
@@ -177,13 +173,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   let accountLinkUrl: string;
   if (!SKIP_CONNECT) {
     try {
-      const accountLink = await stripe.accountLinks.create({
+      const accountLink: any = await stripe.accountLinks.create({
         account: accountId,
         refresh_url: `${BASE_URL}${AFFILIATE_RETURN_PATH}`,
         return_url: `${BASE_URL}${AFFILIATE_RETURN_PATH}`,
         type: "account_onboarding",
       });
-      accountLinkUrl = accountLink.url;
+      accountLinkUrl = String(accountLink.url);
     } catch (err: any) {
       const devMsg =
         process.env.NODE_ENV !== "production" && (err?.message || err?.error?.message);
