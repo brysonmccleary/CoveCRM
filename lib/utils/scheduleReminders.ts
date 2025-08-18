@@ -1,11 +1,11 @@
+// lib/utils/scheduleReminders.ts
 import dbConnect from "@/lib/mongooseConnect";
 import Booking from "@/models/Booking";
-import { sendSMS } from "@/utils/sendSMS";
+import { sendSMS } from "@/lib/twilio/sendSMS";
 import { DateTime } from "luxon";
 
 // Format: "2:30 PM"
-const formatTime = (dt: DateTime) =>
-  dt.toLocaleString(DateTime.TIME_SIMPLE);
+const formatTime = (dt: DateTime) => dt.toLocaleString(DateTime.TIME_SIMPLE);
 
 // Format: "August 5, 2025"
 const formatDate = (dt: DateTime) =>
@@ -24,7 +24,25 @@ export async function checkAndSendReminders() {
   });
 
   for (const booking of upcoming) {
-    const { date, leadPhone, agentPhone, agentEmail, reminderSent, timezone } = booking;
+    const {
+      date,
+      leadPhone,
+      agentPhone,
+      agentEmail,
+      reminderSent,
+      timezone,
+    } = booking as any;
+
+    // We must know which tenant/user is sending the SMS (used for billing/A2P/etc.)
+    if (!agentEmail) {
+      console.warn("⚠️ Skipping reminder: booking has no agentEmail.");
+      continue;
+    }
+
+    // Ensure reminder flags object exists to prevent runtime errors
+    if (!booking.reminderSent) {
+      booking.reminderSent = { confirm: false, morning: false, hour: false, fifteen: false };
+    }
 
     const tz = timezone || "America/New_York";
     const bookingTime = DateTime.fromJSDate(date, { zone: tz });
@@ -34,12 +52,13 @@ export async function checkAndSendReminders() {
     const dateStr = formatDate(bookingTime);
     const timeStr = formatTime(bookingTime);
 
-    // ✅ 1. Confirmation
-    if (!reminderSent.confirm && timeDiffMs > 60 * 1000) {
+    // ✅ 1. Confirmation (send once, any time > 1 minute before)
+    if (!booking.reminderSent.confirm && timeDiffMs > 60 * 1000) {
       console.log(`📨 Sending confirmation to ${leadPhone}`);
       await sendSMS(
         leadPhone,
-        `We’re all set! Quick details:\n\n📅 ${dateStr}\n⏰ ${timeStr}\n📞 Call from ${agentPhone || "your agent"}`
+        `We’re all set! Quick details:\n\n📅 ${dateStr}\n⏰ ${timeStr}\n📞 Call from ${agentPhone || "your agent"}`,
+        agentEmail // identify tenant/user for A2P, usage, etc.
       );
       booking.reminderSent.confirm = true;
     }
@@ -51,31 +70,34 @@ export async function checkAndSendReminders() {
       nowLocal.hour <= 9 &&
       timeDiffMs > 60 * 60 * 1000;
 
-    if (!reminderSent.morning && isMorningOf) {
+    if (!booking.reminderSent.morning && isMorningOf) {
       console.log(`🌅 Sending morning-of reminder to ${leadPhone}`);
       await sendSMS(
         leadPhone,
-        `Good morning! Just a quick reminder of your appointment with ${agentEmail} today at ${timeStr}.`
+        `Good morning! Just a quick reminder of your appointment with ${agentEmail} today at ${timeStr}.`,
+        agentEmail
       );
       booking.reminderSent.morning = true;
     }
 
     // ✅ 3. 1 hour before
-    if (!reminderSent.hour && timeDiffMs <= 60 * 60 * 1000 && timeDiffMs > 30 * 60 * 1000) {
+    if (!booking.reminderSent.hour && timeDiffMs <= 60 * 60 * 1000 && timeDiffMs > 30 * 60 * 1000) {
       console.log(`⏰ Sending 1-hour reminder to ${leadPhone}`);
       await sendSMS(
         leadPhone,
-        `Heads up! ${agentEmail} will be calling in about an hour.`
+        `Heads up! ${agentEmail} will be calling in about an hour.`,
+        agentEmail
       );
       booking.reminderSent.hour = true;
     }
 
     // ✅ 4. 15 minutes before
-    if (!reminderSent.fifteen && timeDiffMs <= 15 * 60 * 1000 && timeDiffMs > 0) {
+    if (!booking.reminderSent.fifteen && timeDiffMs <= 15 * 60 * 1000 && timeDiffMs > 0) {
       console.log(`⚠️ Sending 15-min reminder to ${leadPhone}`);
       await sendSMS(
         leadPhone,
-        `Just another heads up — your appointment is in 15 minutes. Talk soon!`
+        `Just another heads up — your appointment is in 15 minutes. Talk soon!`,
+        agentEmail
       );
       booking.reminderSent.fifteen = true;
     }
