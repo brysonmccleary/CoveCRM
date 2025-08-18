@@ -1,16 +1,12 @@
 // /pages/api/affiliate/stats.ts
 
 import type { NextApiRequest, NextApiResponse } from "next";
-import { getServerSession } from "next-auth";
+import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import Affiliate from "@/models/Affiliate";
-import Stripe from "stripe";
-
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: "2024-04-10",
-});
+import { stripe } from "@/lib/stripe";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "GET") return res.status(405).end("Method Not Allowed");
@@ -26,7 +22,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   // Find affiliate record (prefer userId, then email, then stored referralCode)
   let affiliate =
-    (await Affiliate.findOne({ userId: user._id })) ||
+    (await Affiliate.findOne({ userId: String(user._id) })) ||
     (await Affiliate.findOne({ email: user.email })) ||
     (user.referralCode
       ? await Affiliate.findOne({ promoCode: String(user.referralCode).toUpperCase() })
@@ -115,7 +111,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   res.setHeader("Cache-Control", "no-store");
   return res.status(200).json({
-    code: affiliate.promoCode,                    // what your panel shows as “Your Referral Code”
+    code: affiliate.promoCode, // what your panel shows as “Your Referral Code”
     signups,
     referrals,
     totalCommission,
@@ -125,7 +121,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     stripeConnectId: affiliate.stripeConnectId || null,
     onboardingCompleted,
     connectedAccountStatus,
-    approved: !!affiliate.approved,               // “Program Approval” in UI
+    approved: !!affiliate.approved, // “Program Approval” in UI
     approvedAt: affiliate.approvedAt || null,
   });
 }
