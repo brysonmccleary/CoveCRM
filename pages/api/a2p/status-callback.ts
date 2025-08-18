@@ -11,7 +11,7 @@ const BASE_URL = process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "";
 const APPROVED = new Set(["approved", "verified", "active", "in_use", "registered"]);
 
 /** Ensure tenant Messaging Service exists & is webhook-configured. Returns SID. */
-async function ensureTenantMessagingService(userId: string, friendlyNameHint?: string) {
+async function ensureTenantMessagingService(userId: string, friendlyNameHint?: string): Promise<string> {
   let a2p = await A2PProfile.findOne({ userId });
 
   if (a2p?.messagingServiceSid) {
@@ -112,19 +112,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const user = await User.findById(a2p.userId);
       if (user) {
         // Ensure/create tenant Messaging Service and attach ALL owned numbers
-        const msSid = await ensureTenantMessagingService(String(user._id), user.name || user.email);
+        const msSid: string = await ensureTenantMessagingService(String(user._id), user.name || user.email);
 
         // Fetch all numbers owned by this user and attach them to the tenant MS
         const owned = await PhoneNumber.find({ userId: user._id });
         for (const num of owned) {
+          // Narrow possible undefined 'twilioSid'
+          const numSid = typeof (num as any).twilioSid === "string" ? (num as any).twilioSid as string : "";
+          if (!numSid) {
+            console.warn("Skipping attach: number has no twilioSid", (num as any)._id || (num as any).phoneNumber);
+            continue;
+          }
           try {
-            await addNumberToMessagingService(msSid, num.twilioSid);
-            if (num.messagingServiceSid !== msSid) {
-              num.messagingServiceSid = msSid;
-              await num.save();
+            await addNumberToMessagingService(msSid, numSid);
+            if ((num as any).messagingServiceSid !== msSid) {
+              (num as any).messagingServiceSid = msSid;
+              await (num as any).save();
             }
           } catch (e) {
-            console.warn(`Failed to attach ${num.phoneNumber} to ${msSid}:`, e);
+            console.warn(`Failed to attach ${(num as any).phoneNumber} to ${msSid}:`, e);
           }
         }
       }
