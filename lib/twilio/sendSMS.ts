@@ -1,4 +1,4 @@
-// lib/twilio/sendSMS.ts
+// /lib/twilio/sendSMS.ts
 import twilio from "twilio";
 import mongoose from "mongoose";
 import dbConnect from "@/lib/mongooseConnect";
@@ -9,6 +9,9 @@ import Lead from "@/models/Lead";
 import Message from "@/models/Message";
 import { DateTime } from "luxon";
 import { getTimezoneFromState } from "@/utils/timezone";
+
+// ✅ Import the proper options type for messages.create
+import type { MessageListInstanceCreateOptions } from "twilio/lib/rest/api/v2010/account/message";
 
 const accountSid = process.env.TWILIO_ACCOUNT_SID!;
 const authToken = process.env.TWILIO_AUTH_TOKEN!;
@@ -201,8 +204,8 @@ export async function sendSMS(
   const zone = pickLeadZone(lead);
   const { isQuiet, scheduledAt } = computeQuietHoursScheduling(zone);
 
-  // Build Twilio send params
-  const params: twilio.Twilio.Api.V2010.AccountContext.MessageListInstanceCreateOptions = {
+  // Build Twilio send params with the correct type
+  const params: MessageListInstanceCreateOptions = {
     to: toNorm,
     body,
     messagingServiceSid,
@@ -211,8 +214,9 @@ export async function sendSMS(
 
   // If within quiet hours, schedule for next 8:00 AM in the lead's local time (≥ 15 min ahead)
   if (isQuiet && scheduledAt) {
+    // Twilio SDK accepts Date for sendAt
     (params as any).scheduleType = "fixed";
-    (params as any).sendAt = scheduledAt.toISOString(); // must be ISO-8601 UTC string
+    (params as any).sendAt = scheduledAt; // Date object
   }
 
   try {
