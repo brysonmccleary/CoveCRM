@@ -3,11 +3,7 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import dbConnect from "@/lib/mongooseConnect";
 import Affiliate from "@/models/Affiliate";
-import Stripe from "stripe";
-
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: "2024-04-10",
-});
+import { stripe } from "@/lib/stripe";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
@@ -34,7 +30,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       await stripe.transfers.create({
         amount: amountInCents,
         currency: "usd",
-        destination: affiliate.stripeConnectId!,
+        destination: affiliate.stripeConnectId!, // ensured by query; non-null assertion for TS
         metadata: {
           affiliateEmail: affiliate.email,
           promoCode: affiliate.promoCode,
@@ -59,12 +55,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         message: "Transfer successful",
       });
     } catch (err: any) {
-      console.error(`❌ Payout failed for ${affiliate.email}:`, err.message);
+      console.error(`❌ Payout failed for ${affiliate.email}:`, err?.message || err);
       results.push({
         email: affiliate.email,
         amount: amountInCents / 100,
         success: false,
-        message: err.message || "Transfer failed",
+        message: err?.message || "Transfer failed",
       });
     }
   }
