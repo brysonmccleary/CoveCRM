@@ -58,6 +58,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const user = await User.findOne({ email: session.user.email });
   if (!user) return res.status(404).json({ error: "User not found" });
 
+  // Mongoose 8 types _id as unknown; normalize once and reuse
+  const userIdStr = String((user as any)._id ?? (user as any).id);
+
   // 1) Create (or reuse) Stripe Coupon + Promotion Code so the code is live immediately
   let couponId: string | undefined;
   let promotionCodeId: string | undefined;
@@ -65,16 +68,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     // Guard: if a promotion code with same text exists in Stripe, reuse it
     const listResp = await stripe.promotionCodes.list({ code: promoCode, limit: 1 });
-    const apiList: any = (listResp as any)?.data ?? listResp; // handle SDK Response<T> wrapper
-    const existingPromo = Array.isArray(apiList?.data) ? apiList.data : apiList;
+    // Handle both Stripe.Response<List<T>> and older shapes
+    const listObj: any = (listResp as any)?.data ?? listResp;
+    const promos: any[] = Array.isArray(listObj?.data) ? listObj.data : listObj;
 
-    if (existingPromo?.length) {
-      const p: any = existingPromo[0];
-      promotionCodeId = p.id as string;
-      couponId = typeof p.coupon === "string" ? (p.coupon as string) : (p.coupon?.id as string);
+    if (Array.isArray(promos) && promos.length) {
+      const p: any = promos[0];
+      promotionCodeId = String(p.id);
+      couponId = typeof p.coupon === "string" ? String(p.coupon) : String(p.coupon?.id);
       // ensure it's active
       if (!p.active) {
-        await stripe.promotionCodes.update(p.id as string, { active: true });
+        await stripe.promotionCodes.update(String(p.id), { active: true });
       }
     } else {
       const coupon: any = await stripe.coupons.create({
@@ -83,10 +87,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         name: promoCode,
         metadata: {
           promoCode,
-          affiliateUserId: user._id.toString(),
+          affiliateUserId: userIdStr,
         },
       });
-      couponId = coupon.id as string;
+      couponId = String(coupon.id);
 
       const promo: any = await stripe.promotionCodes.create({
         coupon: couponId,
@@ -94,10 +98,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         active: true,
         metadata: {
           promoCode,
-          affiliateUserId: user._id.toString(),
+          affiliateUserId: userIdStr,
         },
       });
-      promotionCodeId = promo.id as string;
+      promotionCodeId = String(promo.id);
     }
   } catch (err: any) {
     const devMsg =
@@ -116,7 +120,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         email,
         capabilities: { transfers: { requested: true } },
         metadata: {
-          userId: user._id.toString(),
+          userId: userIdStr,
           affiliateCode: promoCode,
         },
       });
@@ -137,7 +141,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // 3) Create Affiliate record (mark approved since promo is active)
   try {
     await Affiliate.create({
-      userId: user._id,
+      userId: (user as any)._id,
       name,
       email,
       teamSize: String(teamSize),
