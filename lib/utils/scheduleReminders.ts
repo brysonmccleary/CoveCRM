@@ -4,11 +4,14 @@ import Booking from "@/models/Booking";
 import { sendSMS } from "@/lib/twilio/sendSMS";
 import { DateTime } from "luxon";
 
+// Use a type-only reference to avoid "namespace as type" issues under CJS configs
+type LxDateTime = import("luxon").DateTime;
+
 // Format: "2:30 PM"
-const formatTime = (dt: DateTime) => dt.toLocaleString(DateTime.TIME_SIMPLE);
+const formatTime = (dt: LxDateTime) => dt.toLocaleString(DateTime.TIME_SIMPLE);
 
 // Format: "August 5, 2025"
-const formatDate = (dt: DateTime) =>
+const formatDate = (dt: LxDateTime) =>
   dt.toLocaleString({ month: "long", day: "numeric", year: "numeric" });
 
 export async function checkAndSendReminders() {
@@ -33,15 +36,19 @@ export async function checkAndSendReminders() {
       timezone,
     } = booking as any;
 
-    // We must know which tenant/user is sending the SMS (used for billing/A2P/etc.)
     if (!agentEmail) {
       console.warn("⚠️ Skipping reminder: booking has no agentEmail.");
       continue;
     }
 
-    // Ensure reminder flags object exists to prevent runtime errors
+    // Ensure reminder flags object exists
     if (!booking.reminderSent) {
-      booking.reminderSent = { confirm: false, morning: false, hour: false, fifteen: false };
+      booking.reminderSent = {
+        confirm: false,
+        morning: false,
+        hour: false,
+        fifteen: false,
+      };
     }
 
     const tz = timezone || "America/New_York";
@@ -52,13 +59,13 @@ export async function checkAndSendReminders() {
     const dateStr = formatDate(bookingTime);
     const timeStr = formatTime(bookingTime);
 
-    // ✅ 1. Confirmation (send once, any time > 1 minute before)
+    // ✅ 1. Confirmation
     if (!booking.reminderSent.confirm && timeDiffMs > 60 * 1000) {
       console.log(`📨 Sending confirmation to ${leadPhone}`);
       await sendSMS(
         leadPhone,
         `We’re all set! Quick details:\n\n📅 ${dateStr}\n⏰ ${timeStr}\n📞 Call from ${agentPhone || "your agent"}`,
-        agentEmail // identify tenant/user for A2P, usage, etc.
+        agentEmail
       );
       booking.reminderSent.confirm = true;
     }
@@ -81,7 +88,11 @@ export async function checkAndSendReminders() {
     }
 
     // ✅ 3. 1 hour before
-    if (!booking.reminderSent.hour && timeDiffMs <= 60 * 60 * 1000 && timeDiffMs > 30 * 60 * 1000) {
+    if (
+      !booking.reminderSent.hour &&
+      timeDiffMs <= 60 * 60 * 1000 &&
+      timeDiffMs > 30 * 60 * 1000
+    ) {
       console.log(`⏰ Sending 1-hour reminder to ${leadPhone}`);
       await sendSMS(
         leadPhone,
