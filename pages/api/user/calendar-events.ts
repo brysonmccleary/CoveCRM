@@ -5,7 +5,10 @@ import dbConnect from "@/lib/mongooseConnect";
 import { getUserByEmail } from "@/models/User";
 import axios from "axios";
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   await dbConnect();
   const session = await getServerSession(req, res, authOptions);
 
@@ -16,7 +19,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     const user = await getUserByEmail(session.user.email);
     if (!user?.googleCalendar?.accessToken) {
-      return res.status(400).json({ error: "No Google Calendar access token found" });
+      return res
+        .status(400)
+        .json({ error: "No Google Calendar access token found" });
     }
 
     const accessToken = user.googleCalendar.accessToken;
@@ -36,13 +41,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           orderBy: "startTime",
           maxResults: 10,
         },
-      }
+      },
     );
 
     const events = googleRes.data.items || [];
     return res.status(200).json(events);
   } catch (err: any) {
-    console.error("❌ Error fetching calendar events:", err?.response?.data || err.message);
+    console.error(
+      "❌ Error fetching calendar events:",
+      err?.response?.data || err.message,
+    );
     return res.status(500).json({ error: "Failed to fetch calendar events" });
   }
 }

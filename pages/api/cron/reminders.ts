@@ -5,7 +5,10 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "../auth/[...nextauth]";
 
 // Optional: allow GET from CRON or CLI ping
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   const session = await getServerSession(req, res, authOptions);
 
   if (!session || !session.user?.email) {

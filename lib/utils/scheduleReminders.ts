@@ -8,7 +8,8 @@ import { DateTime } from "luxon";
 type LuxonDateTime = ReturnType<typeof DateTime.fromJSDate>;
 
 // Format: "2:30 PM"
-const formatTime = (dt: LuxonDateTime) => dt.toLocaleString(DateTime.TIME_SIMPLE);
+const formatTime = (dt: LuxonDateTime) =>
+  dt.toLocaleString(DateTime.TIME_SIMPLE);
 
 // Format: "August 5, 2025"
 const formatDate = (dt: LuxonDateTime) =>
@@ -27,13 +28,8 @@ export async function checkAndSendReminders() {
   });
 
   for (const booking of upcoming) {
-    const {
-      date,
-      leadPhone,
-      agentPhone,
-      agentEmail,
-      timezone,
-    } = booking as any;
+    const { date, leadPhone, agentPhone, agentEmail, timezone } =
+      booking as any;
 
     if (!agentEmail) {
       console.warn("⚠️ Skipping reminder: booking has no agentEmail.");
@@ -64,7 +60,7 @@ export async function checkAndSendReminders() {
       await sendSMS(
         leadPhone,
         `We’re all set! Quick details:\n\n📅 ${dateStr}\n⏰ ${timeStr}\n📞 Call from ${agentPhone || "your agent"}`,
-        agentEmail
+        agentEmail,
       );
       booking.reminderSent.confirm = true;
     }
@@ -81,7 +77,7 @@ export async function checkAndSendReminders() {
       await sendSMS(
         leadPhone,
         `Good morning! Just a quick reminder of your appointment with ${agentEmail} today at ${timeStr}.`,
-        agentEmail
+        agentEmail,
       );
       booking.reminderSent.morning = true;
     }
@@ -96,18 +92,22 @@ export async function checkAndSendReminders() {
       await sendSMS(
         leadPhone,
         `Heads up! ${agentEmail} will be calling in about an hour.`,
-        agentEmail
+        agentEmail,
       );
       booking.reminderSent.hour = true;
     }
 
     // ✅ 4. 15 minutes before
-    if (!booking.reminderSent.fifteen && timeDiffMs <= 15 * 60 * 1000 && timeDiffMs > 0) {
+    if (
+      !booking.reminderSent.fifteen &&
+      timeDiffMs <= 15 * 60 * 1000 &&
+      timeDiffMs > 0
+    ) {
       console.log(`⚠️ Sending 15-min reminder to ${leadPhone}`);
       await sendSMS(
         leadPhone,
         `Just another heads up — your appointment is in 15 minutes. Talk soon!`,
-        agentEmail
+        agentEmail,
       );
       booking.reminderSent.fifteen = true;
     }

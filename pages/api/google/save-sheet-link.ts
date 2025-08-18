@@ -4,7 +4,10 @@ import { authOptions } from "../auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   const session = await getServerSession(req, res, authOptions);
   if (!session?.user?.email) {
     return res.status(401).json({ message: "Unauthorized" });
@@ -33,7 +36,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       user.googleSheets.syncedSheets = user.googleSheets.syncedSheets || [];
 
       const existingIndex = user.googleSheets.syncedSheets.findIndex(
-        (s: any) => s.sheetId === sheetId
+        (s: any) => s.sheetId === sheetId,
       );
 
       const newSheetLink = { sheetId, sheetName, folderId };

@@ -21,7 +21,10 @@ function bufferToStream(buffer: Buffer): Readable {
   return stream;
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   if (req.method !== "POST") {
     return res.status(405).json({ message: "Method not allowed" });
   }
@@ -54,10 +57,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       bufferToStream(buffer)
         .pipe(csvParser())
         .on("data", (row) => {
-          const clean = Object.entries(row).reduce((acc, [key, value]) => {
-            acc[key.trim()] = typeof value === "string" ? value.trim() : value;
-            return acc;
-          }, {} as Record<string, string>);
+          const clean = Object.entries(row).reduce(
+            (acc, [key, value]) => {
+              acc[key.trim()] =
+                typeof value === "string" ? value.trim() : value;
+              return acc;
+            },
+            {} as Record<string, string>,
+          );
           rows.push(clean);
         })
         .on("end", async () => {
@@ -69,10 +76,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             }));
 
             await Folder.insertMany(folders);
-            return res.status(200).json({ message: "Folders imported", count: folders.length });
+            return res
+              .status(200)
+              .json({ message: "Folders imported", count: folders.length });
           } catch (insertError) {
             console.error("❌ DB insert failed:", insertError);
-            return res.status(500).json({ message: "Failed to insert folders" });
+            return res
+              .status(500)
+              .json({ message: "Failed to insert folders" });
           }
         })
         .on("error", (csvErr) => {

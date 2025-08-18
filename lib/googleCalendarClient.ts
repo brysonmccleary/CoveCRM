@@ -19,7 +19,8 @@ function extractStore(user: any): {
       store: {
         refreshToken: String(gc.refreshToken),
         accessToken: gc.accessToken ? String(gc.accessToken) : undefined,
-        expiryDate: typeof gc.expiryDate === "number" ? gc.expiryDate : undefined,
+        expiryDate:
+          typeof gc.expiryDate === "number" ? gc.expiryDate : undefined,
       },
       path: "googleCalendar",
     };
@@ -30,7 +31,8 @@ function extractStore(user: any): {
       store: {
         refreshToken: String(gc.refreshToken),
         accessToken: gc.accessToken ? String(gc.accessToken) : undefined,
-        expiryDate: typeof gc.expiryDate === "number" ? gc.expiryDate : undefined,
+        expiryDate:
+          typeof gc.expiryDate === "number" ? gc.expiryDate : undefined,
       },
       path: "integrations.googleCalendar",
     };
@@ -50,17 +52,18 @@ export async function getFreshGoogleOAuthClient(userEmail: string) {
     throw new Error("No Google Calendar credentials found");
   }
 
-  const { GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI } = process.env;
+  const { GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI } =
+    process.env;
   if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET || !GOOGLE_REDIRECT_URI) {
     throw new Error(
-      "Missing Google OAuth env vars (GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI)"
+      "Missing Google OAuth env vars (GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI)",
     );
   }
 
   const oauth2Client = new google.auth.OAuth2(
     GOOGLE_CLIENT_ID,
     GOOGLE_CLIENT_SECRET,
-    GOOGLE_REDIRECT_URI
+    GOOGLE_REDIRECT_URI,
   );
 
   oauth2Client.setCredentials({
@@ -70,7 +73,8 @@ export async function getFreshGoogleOAuthClient(userEmail: string) {
   });
 
   // Refresh if missing/near expiry (2-min buffer), then persist
-  const needsRefresh = !store.expiryDate || Date.now() >= store.expiryDate - 120_000;
+  const needsRefresh =
+    !store.expiryDate || Date.now() >= store.expiryDate - 120_000;
   if (needsRefresh) {
     // Cast to any to satisfy TS across googleapis versions
     const { credentials } = await (oauth2Client as any).refreshAccessToken();
@@ -83,7 +87,7 @@ export async function getFreshGoogleOAuthClient(userEmail: string) {
           [`${path}.accessToken`]: credentials.access_token,
           [`${path}.expiryDate`]: credentials.expiry_date,
         },
-      }
+      },
     );
   }
 

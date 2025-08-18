@@ -147,13 +147,17 @@ export default function GoogleSheetsSyncPage() {
                     <p className="text-sm text-gray-500">ID: {sheet.id}</p>
 
                     <div className="mt-3">
-                      <label className="text-sm block mb-1">Assign to Folder:</label>
+                      <label className="text-sm block mb-1">
+                        Assign to Folder:
+                      </label>
                       <select
                         className="w-full border px-2 py-1 rounded text-black"
                         value={sheet.folderId || ""}
                         onChange={(e) => {
                           const updated = sheets.map((s) =>
-                            s.id === sheet.id ? { ...s, folderId: e.target.value } : s
+                            s.id === sheet.id
+                              ? { ...s, folderId: e.target.value }
+                              : s,
                           );
                           setSheets(updated);
                         }}

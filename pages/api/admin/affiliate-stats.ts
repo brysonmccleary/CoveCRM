@@ -5,7 +5,10 @@ import { authOptions } from "../auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   const session = await getServerSession(req, res, authOptions);
   if (!session || session.user.role !== "admin") {
     return res.status(403).json({ message: "Unauthorized" });
@@ -14,7 +17,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   await dbConnect();
 
   try {
-    const users = await User.find({ subscriptionStatus: "active", referredBy: { $ne: null } });
+    const users = await User.find({
+      subscriptionStatus: "active",
+      referredBy: { $ne: null },
+    });
 
     const codeCounts: Record<string, number> = {};
     users.forEach((user) => {
@@ -22,7 +28,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       codeCounts[code] = (codeCounts[code] || 0) + 1;
     });
 
-    const data = Object.entries(codeCounts).map(([code, count]) => ({ code, count }));
+    const data = Object.entries(codeCounts).map(([code, count]) => ({
+      code,
+      count,
+    }));
     res.status(200).json({ data });
   } catch (error) {
     console.error("Error fetching affiliate stats:", error);

@@ -2,14 +2,17 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
 import User from "@/models/User";
-import Stripe from "stripe";
+import { stripe } from "@/lib/stripe";
 import dbConnect from "@/lib/dbConnect";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY as string, {
   apiVersion: "2024-04-10",
 });
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   await dbConnect();
 
   const session = await getServerSession(req, res, authOptions);
@@ -34,7 +37,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       date: new Date(invoice.created * 1000).toISOString(),
       hostedInvoiceUrl: invoice.hosted_invoice_url,
       receiptUrl: invoice.charge ? invoice.charge.receipt_url : null,
-      description: invoice.lines.data.map((line) => line.description).join(", "),
+      description: invoice.lines.data
+        .map((line) => line.description)
+        .join(", "),
       status: invoice.status,
     }));
 

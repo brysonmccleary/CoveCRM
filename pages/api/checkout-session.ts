@@ -1,12 +1,16 @@
 import type { NextApiRequest, NextApiResponse } from "next";
-import Stripe from "stripe";
+import { stripe } from "@/lib/stripe";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY as string, {
   apiVersion: "2024-04-10",
 });
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed" });
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
+  if (req.method !== "POST")
+    return res.status(405).json({ message: "Method not allowed" });
 
   const { email, price } = req.body;
 

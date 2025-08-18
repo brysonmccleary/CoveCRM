@@ -14,13 +14,17 @@ import { getTimezoneFromState } from "@/utils/timezone";
 import { DateTime } from "luxon";
 
 // NEW: email utilities
-import { sendEmail, renderLeadBookingEmail, renderAgentBookingEmail } from "@/lib/email";
+import {
+  sendEmail,
+  renderLeadBookingEmail,
+  renderAgentBookingEmail,
+} from "@/lib/email";
 
 type Body = {
   leadId: string;
   title?: string;
   startISO: string; // ISO datetime (may include offset)
-  endISO: string;   // ISO datetime (may include offset)
+  endISO: string; // ISO datetime (may include offset)
   description?: string;
 };
 
@@ -36,16 +40,23 @@ function withStopFooter(s: string) {
   return /reply stop to opt out/i.test(s) ? s : `${s} Reply STOP to opt out.`;
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed" });
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
+  if (req.method !== "POST")
+    return res.status(405).json({ message: "Method not allowed" });
 
   const session = await getServerSession(req, res, authOptions);
   const userEmail = session?.user?.email;
   if (!userEmail) return res.status(401).json({ message: "Unauthorized" });
 
-  const { leadId, title, startISO, endISO, description } = (req.body || {}) as Body;
+  const { leadId, title, startISO, endISO, description } = (req.body ||
+    {}) as Body;
   if (!leadId || !startISO || !endISO) {
-    return res.status(400).json({ message: "Missing required fields (leadId, startISO, endISO)" });
+    return res
+      .status(400)
+      .json({ message: "Missing required fields (leadId, startISO, endISO)" });
   }
 
   try {
@@ -58,7 +69,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       user?.googleTokens?.refresh_token ||
       user?.googleSheets?.refreshToken;
     if (!refreshToken) {
-      return res.status(400).json({ message: "Google Calendar not connected for this user" });
+      return res
+        .status(400)
+        .json({ message: "Google Calendar not connected for this user" });
     }
 
     // Agent display name
@@ -71,7 +84,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const oauth2 = new google.auth.OAuth2(
       process.env.GOOGLE_CLIENT_ID,
       process.env.GOOGLE_CLIENT_SECRET,
-      process.env.GOOGLE_REDIRECT_URI
+      process.env.GOOGLE_REDIRECT_URI,
     );
     oauth2.setCredentials({
       refresh_token: refreshToken,
@@ -84,7 +97,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     let agentTz: string = user?.bookingSettings?.timezone || "";
     if (!agentTz) {
       try {
-        const cal = await calendar.calendars.get({ calendarId: user?.calendarId || "primary" });
+        const cal = await calendar.calendars.get({
+          calendarId: user?.calendarId || "primary",
+        });
         agentTz = cal.data.timeZone || "";
       } catch {
         // ignore
@@ -98,28 +113,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // Normalize lead fields
     const firstName = lead.firstName || lead["First Name"] || lead.First || "";
-    const lastName  = lead.lastName  || lead["Last Name"]  || lead.Last  || "";
+    const lastName = lead.lastName || lead["Last Name"] || lead.Last || "";
     const leadPhone = normalizeUSPhone(lead.phone || lead.Phone || "");
     const leadEmail = lead.email || lead.Email || "";
-    const state     = lead.state || lead.State || "";
+    const state = lead.state || lead.State || "";
 
     // Prefer client-provided header tz if present; else state→TZ; else ET
     const headerTz = (req.headers["x-app-tz"] as string) || "";
-    const clientTz = headerTz || getTimezoneFromState(state || "") || "America/New_York";
+    const clientTz =
+      headerTz || getTimezoneFromState(state || "") || "America/New_York";
 
     // Parse provided datetimes, preserving any included offset; then convert to desired zones
     const startParsed = DateTime.fromISO(startISO, { setZone: true });
-    const endParsed   = DateTime.fromISO(endISO,   { setZone: true });
+    const endParsed = DateTime.fromISO(endISO, { setZone: true });
     if (!startParsed.isValid || !endParsed.isValid) {
       return res.status(400).json({ message: "Invalid startISO/endISO" });
     }
-    const startAgent  = startParsed.setZone(agentTz);
-    const endAgent    = endParsed.setZone(agentTz);
+    const startAgent = startParsed.setZone(agentTz);
+    const endAgent = endParsed.setZone(agentTz);
     const startClient = startParsed.setZone(clientTz);
 
     // Build event payload — book in AGENT timezone
     const summary =
-      title || `Call with ${[firstName, lastName].filter(Boolean).join(" ") || "Lead"}`;
+      title ||
+      `Call with ${[firstName, lastName].filter(Boolean).join(" ") || "Lead"}`;
     const desc =
       (description && description.trim()) ||
       [
@@ -137,7 +154,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         summary,
         description: desc,
         start: { dateTime: startAgent.toISO(), timeZone: agentTz },
-        end:   { dateTime: endAgent.toISO(),   timeZone: agentTz },
+        end: { dateTime: endAgent.toISO(), timeZone: agentTz },
         attendees,
         reminders: { useDefault: true },
       },
@@ -147,27 +164,43 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const eventId = event.data.id || "";
     const eventUrl =
       event.data.htmlLink ||
-      (eventId ? `https://calendar.google.com/calendar/u/0/r/eventedit/${eventId}` : undefined);
+      (eventId
+        ? `https://calendar.google.com/calendar/u/0/r/eventedit/${eventId}`
+        : undefined);
 
     // SMS confirmation — show CLIENT timezone + agent NAME
     try {
-      const numbers: Array<{ phoneNumber?: string; messagingServiceSid?: string }> = Array.isArray(user?.numbers)
-        ? user.numbers
-        : [];
-      const msSid = numbers.find((n) => n.messagingServiceSid)?.messagingServiceSid;
-      const fromNumber = numbers.find((n) => n.phoneNumber)?.phoneNumber || process.env.TWILIO_CALLER_ID;
+      const numbers: Array<{
+        phoneNumber?: string;
+        messagingServiceSid?: string;
+      }> = Array.isArray(user?.numbers) ? user.numbers : [];
+      const msSid = numbers.find(
+        (n) => n.messagingServiceSid,
+      )?.messagingServiceSid;
+      const fromNumber =
+        numbers.find((n) => n.phoneNumber)?.phoneNumber ||
+        process.env.TWILIO_CALLER_ID;
 
       if (leadPhone) {
-        const tzShort = (startClient as any).offsetNameShort || startClient.toFormat("ZZZZ");
+        const tzShort =
+          (startClient as any).offsetNameShort || startClient.toFormat("ZZZZ");
         const whenStr = `${startClient.toFormat("ccc, MMM d 'at' h:mm a")} ${tzShort}`;
         const body = withStopFooter(
-          `You're booked with ${agentName} on ${whenStr}. If you need to reschedule, reply here.`
+          `You're booked with ${agentName} on ${whenStr}. If you need to reschedule, reply here.`,
         );
 
         if (msSid) {
-          await twilioClient.messages.create({ to: leadPhone, body, messagingServiceSid: msSid });
+          await twilioClient.messages.create({
+            to: leadPhone,
+            body,
+            messagingServiceSid: msSid,
+          });
         } else if (fromNumber) {
-          await twilioClient.messages.create({ to: leadPhone, body, from: fromNumber });
+          await twilioClient.messages.create({
+            to: leadPhone,
+            body,
+            from: fromNumber,
+          });
         }
       }
     } catch (e) {
@@ -179,7 +212,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       // Lead email (if present)
       if (leadEmail) {
         const html = renderLeadBookingEmail({
-          leadName: [firstName, lastName].filter(Boolean).join(" ") || undefined,
+          leadName:
+            [firstName, lastName].filter(Boolean).join(" ") || undefined,
           agentName,
           startISO: startAgent.toISO(),
           endISO: endAgent.toISO(),
@@ -195,7 +229,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const leadUrl = `${process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || ""}/lead/${lead._id}`;
         const html = renderAgentBookingEmail({
           agentName,
-          leadName: [firstName, lastName].filter(Boolean).join(" ") || undefined,
+          leadName:
+            [firstName, lastName].filter(Boolean).join(" ") || undefined,
           leadPhone,
           leadEmail,
           startISO: startAgent.toISO(),
@@ -212,8 +247,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     // Move to "Booked Appointment" + set status
-    let folder = await Folder.findOne({ userEmail, name: "Booked Appointment" });
-    if (!folder) folder = await Folder.create({ userEmail, name: "Booked Appointment" });
+    let folder = await Folder.findOne({
+      userEmail,
+      name: "Booked Appointment",
+    });
+    if (!folder)
+      folder = await Folder.create({ userEmail, name: "Booked Appointment" });
 
     lead.folderId = folder._id;
     lead.status = "Booked Appointment";
@@ -242,7 +281,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     return res.status(200).json({ success: true, eventId, eventUrl });
   } catch (err: any) {
-    console.error("book-appointment error:", err?.response?.data || err?.message || err);
+    console.error(
+      "book-appointment error:",
+      err?.response?.data || err?.message || err,
+    );
     return res.status(500).json({ message: "Internal server error" });
   }
 }

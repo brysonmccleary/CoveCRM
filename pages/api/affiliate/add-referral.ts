@@ -3,8 +3,12 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import dbConnect from "@/lib/mongooseConnect";
 import Affiliate from "@/models/Affiliate";
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed" });
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
+  if (req.method !== "POST")
+    return res.status(405).json({ message: "Method not allowed" });
 
   const { promoCode, referredEmail, amountPaid = 0 } = req.body;
   if (!promoCode || !referredEmail) {
@@ -13,8 +17,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     await dbConnect();
-    const affiliate = await Affiliate.findOne({ promoCode: promoCode.toUpperCase() });
-    if (!affiliate) return res.status(404).json({ message: "Affiliate not found" });
+    const affiliate = await Affiliate.findOne({
+      promoCode: promoCode.toUpperCase(),
+    });
+    if (!affiliate)
+      return res.status(404).json({ message: "Affiliate not found" });
 
     // Update tracking data
     affiliate.totalRedemptions += 1;

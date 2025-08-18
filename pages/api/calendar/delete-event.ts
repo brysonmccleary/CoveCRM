@@ -7,7 +7,10 @@ import Lead from "@/models/Lead";
 import User from "@/models/User";
 import { google } from "googleapis";
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   if (req.method !== "DELETE") {
     return res.status(405).json({ message: "Method not allowed" });
   }
@@ -28,7 +31,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     const lead = await Lead.findById(leadId);
     if (!lead || !lead.calendarEventId) {
-      return res.status(404).json({ message: "Lead or calendar event not found" });
+      return res
+        .status(404)
+        .json({ message: "Lead or calendar event not found" });
     }
 
     const user = await User.findOne({ email: lead.userEmail });
@@ -37,10 +42,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const tokens =
-      user.googleCalendar ||
-      user.googleSheets ||
-      user.googleTokens ||
-      null;
+      user.googleCalendar || user.googleSheets || user.googleTokens || null;
 
     if (
       !tokens ||
@@ -54,7 +56,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const oauth2Client = new google.auth.OAuth2(
       process.env.GOOGLE_CLIENT_ID!,
       process.env.GOOGLE_CLIENT_SECRET!,
-      `${process.env.NEXTAUTH_URL}/api/google/callback`
+      `${process.env.NEXTAUTH_URL}/api/google/callback`,
     );
 
     oauth2Client.setCredentials({

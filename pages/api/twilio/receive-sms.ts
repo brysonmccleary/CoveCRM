@@ -5,7 +5,10 @@ import User from "@/models/User";
 
 const SMS_COST = 0.03;
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   if (req.method !== "POST") return res.status(405).end("Method Not Allowed");
 
   const { To, From, Body } = req.body;
@@ -19,11 +22,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const user = await getUserByPhoneNumber(To);
     if (!user) {
-      return res.status(404).json({ message: "User not found for number: " + To });
+      return res
+        .status(404)
+        .json({ message: "User not found for number: " + To });
     }
 
     // ✅ Find matching number entry
-    const numberEntry = user.numbers?.find(n => n.phoneNumber === To);
+    const numberEntry = user.numbers?.find((n) => n.phoneNumber === To);
     if (!numberEntry) {
       return res.status(404).json({ message: "Number not registered to user" });
     }
@@ -43,7 +48,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     // ✅ Update user-level Twilio + total cost
-    user.aiUsage = user.aiUsage || { openAiCost: 0, twilioCost: 0, totalCost: 0 };
+    user.aiUsage = user.aiUsage || {
+      openAiCost: 0,
+      twilioCost: 0,
+      totalCost: 0,
+    };
     user.aiUsage.twilioCost += SMS_COST;
     user.aiUsage.totalCost += SMS_COST;
 

@@ -6,13 +6,14 @@ import { authOptions } from "../auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import Affiliate from "@/models/Affiliate"; // keep casing consistent everywhere
 import User from "@/models/User";
-import Stripe from "stripe";
+import { stripe } from "@/lib/stripe";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: "2024-04-10",
 });
 
-const RETURN_PATH = process.env.AFFILIATE_RETURN_PATH || "/dashboard?tab=settings";
+const RETURN_PATH =
+  process.env.AFFILIATE_RETURN_PATH || "/dashboard?tab=settings";
 const DEV_SKIP = process.env.DEV_SKIP_BILLING === "1";
 
 /** Build absolute base URL from forwarded headers (works on Vercel/ngrok/localhost) */
@@ -23,7 +24,8 @@ function getBaseUrl(req: NextApiRequest): string {
     (req.headers["host"] as string) ||
     "";
   if (xfHost) {
-    const proto = xfProto || (xfHost.startsWith("localhost") ? "http" : "https");
+    const proto =
+      xfProto || (xfHost.startsWith("localhost") ? "http" : "https");
     return `${proto}://${xfHost}`;
   }
   return (
@@ -52,7 +54,10 @@ async function createConnectAccount(params: {
 }
 
 /** Ensure the affiliate has a valid (non-mock) Connect account in THIS Stripe mode */
-async function ensureConnectAccountId(affiliate: any, userId: string): Promise<string> {
+async function ensureConnectAccountId(
+  affiliate: any,
+  userId: string,
+): Promise<string> {
   let id: string | undefined = affiliate.stripeConnectId;
 
   // If missing or obviously mocked, create fresh
@@ -91,11 +96,15 @@ async function ensureConnectAccountId(affiliate: any, userId: string): Promise<s
   }
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   if (req.method !== "POST") return res.status(405).end("Method Not Allowed");
 
   const session = await getServerSession(req, res, authOptions);
-  if (!session?.user?.email) return res.status(401).json({ error: "Unauthorized" });
+  if (!session?.user?.email)
+    return res.status(401).json({ error: "Unauthorized" });
 
   try {
     await dbConnect();
@@ -109,9 +118,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       (await Affiliate.findOne({ email: user.email }));
 
     if (!affiliate) {
-      const name = `${user.firstName || ""} ${user.lastName || ""}`.trim() || "Affiliate";
-      const promo =
-        (user.referralCode || `AUTO${user._id.toString().slice(-6)}`).toUpperCase();
+      const name =
+        `${user.firstName || ""} ${user.lastName || ""}`.trim() || "Affiliate";
+      const promo = (
+        user.referralCode || `AUTO${user._id.toString().slice(-6)}`
+      ).toUpperCase();
 
       affiliate = await Affiliate.create({
         userId: user._id,

@@ -16,8 +16,9 @@ const NumberSchema = new Schema<INumber>(
     sid: { type: String, required: true },
     userEmail: { type: String, required: true },
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
-const Number = mongoose.models.Number || mongoose.model<INumber>("Number", NumberSchema);
+const Number =
+  mongoose.models.Number || mongoose.model<INumber>("Number", NumberSchema);
 export default Number;

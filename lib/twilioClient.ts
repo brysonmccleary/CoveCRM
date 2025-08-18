@@ -6,13 +6,7 @@ const authToken = process.env.TWILIO_AUTH_TOKEN!;
 
 const twilioClient = twilio(accountSid, authToken);
 
-export const sendSMS = async ({
-  to,
-  body,
-}: {
-  to: string;
-  body: string;
-}) => {
+export const sendSMS = async ({ to, body }: { to: string; body: string }) => {
   try {
     await twilioClient.messages.create({
       to,

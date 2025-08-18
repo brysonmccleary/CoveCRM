@@ -35,39 +35,43 @@ export interface IA2PProfile extends Document {
   useCaseSid?: string;
 
   // ---- Campaign content & consent (kept from your schema) ----
-  sampleMessages: string;           // keep for backward compatibility
+  sampleMessages: string; // keep for backward compatibility
   optInDetails: string;
   volume: string;
   optInScreenshotUrl: string;
 
   // -------------------- ISV automation fields --------------------
   // A2P artifacts
-  brandSid?: string;                // BNxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-  campaignSid?: string;             // CMxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-  messagingServiceSid?: string;     // MGxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+  brandSid?: string; // BNxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+  campaignSid?: string; // CMxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+  messagingServiceSid?: string; // MGxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 
   // Registration lifecycle + health (detailed)
   registrationStatus?: A2PRegistrationStatus;
-  messagingReady?: boolean;         // true once campaign_approved and wired
+  messagingReady?: boolean; // true once campaign_approved and wired
   lastError?: string;
 
   // NEW: high-level status + notification bookkeeping
   applicationStatus?: A2PApplicationStatus; // 'pending' | 'approved' | 'declined'
-  approvalNotifiedAt?: Date;                // set once when we email the agent
-  declinedReason?: string;                  // optional text reason if declined
+  approvalNotifiedAt?: Date; // set once when we email the agent
+  declinedReason?: string; // optional text reason if declined
 
   // Optional richer compliance content
   compliance?: {
-    help?: string;                  // e.g., "Reply HELP for help"
-    stop?: string;                  // e.g., "Reply STOP to opt out"
-    optOutKeywords?: string[];      // e.g., ["STOP","STOPALL","UNSUBSCRIBE","CANCEL","END","QUIT"]
+    help?: string; // e.g., "Reply HELP for help"
+    stop?: string; // e.g., "Reply STOP to opt out"
+    optOutKeywords?: string[]; // e.g., ["STOP","STOPALL","UNSUBSCRIBE","CANCEL","END","QUIT"]
   };
 
   // Optional modernized sample messages (array) while keeping your string
   sampleMessagesArr?: string[];
 
   // Audit trail (optional)
-  approvalHistory?: { stage: A2PRegistrationStatus | string; at: Date; note?: string }[];
+  approvalHistory?: {
+    stage: A2PRegistrationStatus | string;
+    at: Date;
+    note?: string;
+  }[];
 
   // bookkeeping
   createdAt: Date;

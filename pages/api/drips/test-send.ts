@@ -5,7 +5,10 @@ import twilio from "twilio";
 
 const client = twilio(process.env.TWILIO_SID!, process.env.TWILIO_AUTH_TOKEN!);
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   await dbConnect();
 
   if (req.method !== "POST") {

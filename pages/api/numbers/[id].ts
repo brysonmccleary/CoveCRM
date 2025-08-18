@@ -5,7 +5,10 @@ import dbConnect from "@/lib/mongodb";
 import Number from "@/models/Number";
 import twilioClient from "@/lib/twilioClient";
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   const session = await getServerSession(req, res, authOptions);
   if (!session?.user?.email) {
     return res.status(401).json({ message: "Unauthorized" });
@@ -19,7 +22,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const number = await Number.findOne({ _id: id, user: userEmail });
 
     if (!number) {
-      return res.status(404).json({ message: "Number not found or access denied" });
+      return res
+        .status(404)
+        .json({ message: "Number not found or access denied" });
     }
 
     if (req.method === "DELETE") {

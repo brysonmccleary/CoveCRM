@@ -30,7 +30,7 @@ export type SendEmailResult = { ok: boolean; id?: string; error?: string };
 function ensureSmtpConfig() {
   if (!SMTP_HOST || !SMTP_PORT || !SMTP_USER || !SMTP_PASS || !SMTP_FROM) {
     throw new Error(
-      "Missing SMTP config. Set SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM."
+      "Missing SMTP config. Set SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM.",
     );
   }
 }
@@ -39,7 +39,7 @@ function ensureSmtpConfig() {
 export async function sendEmail(
   to: string | string[],
   subject: string,
-  html: string
+  html: string,
 ): Promise<SendEmailResult> {
   try {
     ensureSmtpConfig();
@@ -49,7 +49,12 @@ export async function sendEmail(
       secure: String(SMTP_SECURE || "true").toLowerCase() === "true",
       auth: { user: SMTP_USER, pass: SMTP_PASS },
     });
-    const info = await transporter.sendMail({ from: SMTP_FROM, to, subject, html });
+    const info = await transporter.sendMail({
+      from: SMTP_FROM,
+      to,
+      subject,
+      html,
+    });
     return { ok: true, id: info.messageId };
   } catch (err: any) {
     if (process.env.NODE_ENV !== "production") {
@@ -73,7 +78,12 @@ async function sendViaResend({
 }): Promise<SendEmailResult> {
   try {
     if (!resend || !EMAIL_FROM) return await sendEmail(to, subject, html);
-    const result = await resend.emails.send({ from: EMAIL_FROM, to, subject, html });
+    const result = await resend.emails.send({
+      from: EMAIL_FROM,
+      to,
+      subject,
+      html,
+    });
     if ((result as any)?.error)
       throw new Error((result as any).error?.message || "Resend send failed");
     return { ok: true, id: (result as any)?.data?.id };
@@ -98,7 +108,15 @@ export function renderLeadBookingEmail(opts: {
   description?: string;
   eventUrl?: string;
 }) {
-  const { leadName, agentName, startISO, endISO, title, description, eventUrl } = opts;
+  const {
+    leadName,
+    agentName,
+    startISO,
+    endISO,
+    title,
+    description,
+    eventUrl,
+  } = opts;
   const start = new Date(startISO).toLocaleString();
   const end = new Date(endISO).toLocaleString();
   return `
@@ -130,7 +148,18 @@ export function renderAgentBookingEmail(opts: {
   leadUrl?: string;
   eventUrl?: string;
 }) {
-  const { agentName, leadName, leadPhone, leadEmail, startISO, endISO, title, description, leadUrl, eventUrl } = opts;
+  const {
+    agentName,
+    leadName,
+    leadPhone,
+    leadEmail,
+    startISO,
+    endISO,
+    title,
+    description,
+    leadUrl,
+    eventUrl,
+  } = opts;
   const start = new Date(startISO).toLocaleString();
   const end = new Date(endISO).toLocaleString();
   return `
@@ -183,7 +212,7 @@ export function renderAgentAppointmentNotice(opts: {
   phone: string;
   state?: string;
   timeISO: string;
-  timezone?: string;     // e.g. "CST" or "CDT"
+  timezone?: string; // e.g. "CST" or "CDT"
   source?: "AI" | "Dialer" | "Manual";
   eventUrl?: string;
 }) {
@@ -216,13 +245,13 @@ export function renderAgentAppointmentNotice(opts: {
  * Uses Resend if configured; falls back to SMTP.
  */
 export async function sendAppointmentBookedEmail(opts: {
-  to: string;                // agent email
+  to: string; // agent email
   agentName?: string;
   leadName: string;
   phone: string;
   state?: string;
-  timeISO: string;           // event start in ISO
-  timezone?: string;         // e.g. "CST"/"CDT"
+  timeISO: string; // event start in ISO
+  timezone?: string; // e.g. "CST"/"CDT"
   source?: "AI" | "Dialer" | "Manual";
   eventUrl?: string;
 }): Promise<SendEmailResult> {
@@ -311,7 +340,7 @@ function renderAffiliateApplicationAdminEmail(opts: {
           <tr><td style="padding:4px 8px"><b>Email</b></td><td style="padding:4px 8px">${opts.email}</td></tr>
           <tr><td style="padding:4px 8px"><b>Company</b></td><td style="padding:4px 8px">${opts.company}</td></tr>
           <tr><td style="padding:4px 8px"><b># Agents</b></td><td style="padding:4px 8px">${String(
-            opts.agents
+            opts.agents,
           )}</td></tr>
           <tr><td style="padding:4px 8px"><b>Requested Code</b></td><td style="padding:4px 8px">${
             opts.promoCode
@@ -336,7 +365,7 @@ export async function sendAffiliateApplicationAdminEmail(opts: {
   const recipient = opts.to || AFFILIATE_APPS_EMAIL || ADMIN_EMAIL;
   if (!recipient) {
     console.warn(
-      "Affiliate admin email not sent: no AFFILIATE_APPS_EMAIL / ADMIN_EMAIL configured."
+      "Affiliate admin email not sent: no AFFILIATE_APPS_EMAIL / ADMIN_EMAIL configured.",
     );
     return { ok: false, error: "No admin recipient configured" };
   }
@@ -349,7 +378,7 @@ export async function sendAffiliateApplicationAdminEmail(opts: {
 
 function renderAffiliateApprovedEmail(opts: {
   name?: string;
-  promoCode: string;     // final normalized code to show
+  promoCode: string; // final normalized code to show
   dashboardUrl?: string; // optional link back into app
 }) {
   return `
@@ -374,8 +403,8 @@ function renderAffiliateApprovedEmail(opts: {
 export async function sendAffiliateApprovedEmail(opts: {
   to: string;
   name?: string;
-  promoCode?: string;     // accept either promoCode…
-  code?: string;          // …or code (from Stripe event)
+  promoCode?: string; // accept either promoCode…
+  code?: string; // …or code (from Stripe event)
   dashboardUrl?: string;
 }): Promise<SendEmailResult> {
   const codeStr = (opts.promoCode || opts.code || "").toString().toUpperCase();
@@ -430,7 +459,7 @@ export function renderAffiliatePayoutEmail(opts: {
   const period =
     opts.periodStart && opts.periodEnd
       ? `${new Date(opts.periodStart).toLocaleDateString()} — ${new Date(
-          opts.periodEnd
+          opts.periodEnd,
         ).toLocaleDateString()}`
       : "recent activity";
 
@@ -442,7 +471,7 @@ export function renderAffiliatePayoutEmail(opts: {
       ${
         typeof opts.balanceAfter === "number"
           ? `<p style="margin:0 0 8px 0">Remaining balance: <b>$${opts.balanceAfter.toFixed(
-              2
+              2,
             )}</b></p>`
           : ""
       }
@@ -500,7 +529,10 @@ export async function sendA2PApprovedEmail(opts: {
   dashboardUrl?: string;
 }): Promise<SendEmailResult> {
   const subject = "🎉 A2P Approved — You can now text from CoveCRM";
-  const html = renderA2PApprovedEmail({ name: opts.name, dashboardUrl: opts.dashboardUrl });
+  const html = renderA2PApprovedEmail({
+    name: opts.name,
+    dashboardUrl: opts.dashboardUrl,
+  });
   return sendViaResend({ to: opts.to, subject, html });
 }
 
@@ -537,6 +569,10 @@ export async function sendA2PDeclinedEmail(opts: {
   helpUrl?: string;
 }): Promise<SendEmailResult> {
   const subject = "A2P Registration Declined — Action Needed";
-  const html = renderA2PDeclinedEmail({ name: opts.name, reason: opts.reason, helpUrl: opts.helpUrl });
+  const html = renderA2PDeclinedEmail({
+    name: opts.name,
+    reason: opts.reason,
+    helpUrl: opts.helpUrl,
+  });
   return sendViaResend({ to: opts.to, subject, html });
 }

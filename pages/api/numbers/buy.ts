@@ -5,7 +5,10 @@ import dbConnect from "@/lib/mongodb";
 import Number from "@/models/Number";
 import twilioClient from "@/lib/twilioClient";
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   const session = await getServerSession(req, res, authOptions);
   if (!session?.user?.email) {
     return res.status(401).json({ message: "Unauthorized" });
@@ -18,13 +21,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     try {
       const { areaCode } = req.body;
 
-      const availableNumbers = await twilioClient.availablePhoneNumbers("US").local.list({
-        areaCode,
-        limit: 1,
-      });
+      const availableNumbers = await twilioClient
+        .availablePhoneNumbers("US")
+        .local.list({
+          areaCode,
+          limit: 1,
+        });
 
       if (availableNumbers.length === 0) {
-        return res.status(404).json({ message: "No numbers available for this area code" });
+        return res
+          .status(404)
+          .json({ message: "No numbers available for this area code" });
       }
 
       const purchasedNumber = await twilioClient.incomingPhoneNumbers.create({

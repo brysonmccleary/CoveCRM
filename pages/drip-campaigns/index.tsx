@@ -59,7 +59,7 @@ export default function DripCampaignsPanel() {
     const res = await fetch("/api/drips", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, type: "sms", steps })
+      body: JSON.stringify({ name, type: "sms", steps }),
     });
 
     if (res.ok) {
@@ -103,7 +103,9 @@ export default function DripCampaignsPanel() {
 
         {/* Create custom drip */}
         <div className="border border-gray-600 p-4 rounded mb-8">
-          <h2 className="text-lg font-semibold mb-2">Create Custom Drip Campaign</h2>
+          <h2 className="text-lg font-semibold mb-2">
+            Create Custom Drip Campaign
+          </h2>
           <input
             value={name}
             onChange={(e) => setName(e.target.value)}
@@ -142,8 +144,12 @@ export default function DripCampaignsPanel() {
               <h3 className="font-semibold">Messages:</h3>
               {steps.map((step, idx) => (
                 <div key={idx} className="border border-gray-600 p-2 rounded">
-                  <p><strong>When:</strong> {step.day}</p>
-                  <p><strong>Message:</strong> {step.text}</p>
+                  <p>
+                    <strong>When:</strong> {step.day}
+                  </p>
+                  <p>
+                    <strong>Message:</strong> {step.text}
+                  </p>
                 </div>
               ))}
             </div>
@@ -160,12 +166,20 @@ export default function DripCampaignsPanel() {
         {/* List all drips */}
         <div className="grid grid-cols-1 gap-4">
           {drips.map((drip) => (
-            <div key={drip._id} className="border border-gray-700 p-4 rounded bg-[#1e293b] shadow">
+            <div
+              key={drip._id}
+              className="border border-gray-700 p-4 rounded bg-[#1e293b] shadow"
+            >
               <h2 className="font-semibold text-lg">{drip.name}</h2>
               <p>Type: {drip.type.toUpperCase()}</p>
               <p>Steps: {drip.steps.length}</p>
               <div className="mt-2 flex space-x-2">
-                <Link href={`/drip-campaigns/${drip._id}`} className="underline text-blue-400">View & Edit</Link>
+                <Link
+                  href={`/drip-campaigns/${drip._id}`}
+                  className="underline text-blue-400"
+                >
+                  View & Edit
+                </Link>
                 <button
                   onClick={() => handleAssign(drip._id)}
                   className="bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded"

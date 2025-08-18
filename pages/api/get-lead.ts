@@ -10,7 +10,8 @@ import { Types } from "mongoose";
 function pick(obj: any, keys: string[]) {
   for (const k of keys) {
     const v = obj?.[k];
-    if (v !== undefined && v !== null && String(v).trim() !== "") return String(v).trim();
+    if (v !== undefined && v !== null && String(v).trim() !== "")
+      return String(v).trim();
   }
   return "";
 }
@@ -38,8 +39,12 @@ function escRe(s: string) {
 }
 /* -------------------------------- */
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "GET") return res.status(405).json({ message: "Method not allowed" });
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
+  if (req.method !== "GET")
+    return res.status(405).json({ message: "Method not allowed" });
 
   const session = await getServerSession(req, res, authOptions);
   const userEmail = session?.user?.email?.toLowerCase();
@@ -85,7 +90,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // 4) Explicit email
     if (emailParam) {
       const e = emailParam.toLowerCase();
-      or.push({ Email: new RegExp(`^${escRe(e)}$`, "i") }, { email: new RegExp(`^${escRe(e)}$`, "i") });
+      or.push(
+        { Email: new RegExp(`^${escRe(e)}$`, "i") },
+        { email: new RegExp(`^${escRe(e)}$`, "i") },
+      );
     }
 
     if (or.length === 0) {
@@ -97,18 +105,43 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     /* ------- present normalized fields ------- */
     const firstName =
-      leadDoc.firstName ?? pick(leadDoc, ["First Name", "First_Name", "First", "Given Name", "FName"]);
+      leadDoc.firstName ??
+      pick(leadDoc, [
+        "First Name",
+        "First_Name",
+        "First",
+        "Given Name",
+        "FName",
+      ]);
     const lastName =
-      leadDoc.lastName ?? pick(leadDoc, ["Last Name", "Last_Name", "Last", "Surname", "LName"]);
+      leadDoc.lastName ??
+      pick(leadDoc, ["Last Name", "Last_Name", "Last", "Surname", "LName"]);
     const phone =
       leadDoc.phone ??
-      normalizeUSPhone(pick(leadDoc, ["phone", "Phone", "Phone Number", "Primary Phone", "Mobile", "Cell"]));
-    const email = leadDoc.email ?? pick(leadDoc, ["email", "Email", "Email Address"]);
+      normalizeUSPhone(
+        pick(leadDoc, [
+          "phone",
+          "Phone",
+          "Phone Number",
+          "Primary Phone",
+          "Mobile",
+          "Cell",
+        ]),
+      );
+    const email =
+      leadDoc.email ?? pick(leadDoc, ["email", "Email", "Email Address"]);
     const state = leadDoc.state ?? pick(leadDoc, ["State", "ST"]);
     const age = leadDoc.age ?? toNumber(pick(leadDoc, ["Age", "Client Age"]));
     const coverageAmount =
       leadDoc.coverageAmount ??
-      toNumber(pick(leadDoc, ["Coverage Amount", "Coverage", "Policy Amount", "Face Amount"]));
+      toNumber(
+        pick(leadDoc, [
+          "Coverage Amount",
+          "Coverage",
+          "Policy Amount",
+          "Face Amount",
+        ]),
+      );
     const notes =
       typeof leadDoc.notes === "string"
         ? leadDoc.notes
@@ -119,7 +152,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // History newest-first (limit 50)
     const rawHistory = Array.isArray(leadDoc.history) ? leadDoc.history : [];
     const history = [...rawHistory]
-      .sort((a: any, b: any) => new Date(b?.timestamp || 0).getTime() - new Date(a?.timestamp || 0).getTime())
+      .sort(
+        (a: any, b: any) =>
+          new Date(b?.timestamp || 0).getTime() -
+          new Date(a?.timestamp || 0).getTime(),
+      )
       .slice(0, 50)
       .map((h: any) => ({
         type: h?.type || "system",
@@ -129,9 +166,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         meta: h?.meta || {},
       }));
 
-    const rawInteractions = Array.isArray(leadDoc.interactionHistory) ? leadDoc.interactionHistory : [];
+    const rawInteractions = Array.isArray(leadDoc.interactionHistory)
+      ? leadDoc.interactionHistory
+      : [];
     const interactionHistory = [...rawInteractions]
-      .sort((a: any, b: any) => new Date(b?.date || 0).getTime() - new Date(a?.date || 0).getTime())
+      .sort(
+        (a: any, b: any) =>
+          new Date(b?.date || 0).getTime() - new Date(a?.date || 0).getTime(),
+      )
       .slice(0, 50);
 
     res.setHeader("Cache-Control", "no-store");

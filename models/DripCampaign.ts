@@ -35,7 +35,8 @@ const DripCampaignSchema = new mongoose.Schema(
     user: { type: String }, // Tie to logged-in user (optional for global)
     isGlobal: { type: Boolean, default: false }, // <-- NEW field
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
-export default mongoose.models.DripCampaign || mongoose.model("DripCampaign", DripCampaignSchema);
+export default mongoose.models.DripCampaign ||
+  mongoose.model("DripCampaign", DripCampaignSchema);

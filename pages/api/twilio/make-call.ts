@@ -10,7 +10,10 @@ import User from "@/models/User";
 const ESTIMATED_MINUTES = 1;
 const CALL_COST_PER_MIN = 0.02;
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   if (req.method !== "POST") {
     return res.status(405).json({ message: "Method not allowed" });
   }
@@ -34,14 +37,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // ❌ Block if user is frozen for unpaid usage
     if (user.usageBalance < -20) {
-      return res.status(403).json({ message: "Usage balance too low. Please update payment." });
+      return res
+        .status(403)
+        .json({ message: "Usage balance too low. Please update payment." });
     }
 
     const estimatedCost = CALL_COST_PER_MIN * ESTIMATED_MINUTES;
 
-    const numberEntry = user.numbers?.find(n => n.phoneNumber === fromNumber);
+    const numberEntry = user.numbers?.find((n) => n.phoneNumber === fromNumber);
     if (!numberEntry) {
-      return res.status(404).json({ message: "Caller number not found on user account" });
+      return res
+        .status(404)
+        .json({ message: "Caller number not found on user account" });
     }
 
     if (!numberEntry.usage) {

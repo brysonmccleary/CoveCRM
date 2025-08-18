@@ -5,17 +5,22 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from "./auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
-import Stripe from "stripe";
+import { stripe } from "@/lib/stripe";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: "2024-04-10",
 });
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "GET") return res.status(405).json({ message: "Method not allowed" });
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
+  if (req.method !== "GET")
+    return res.status(405).json({ message: "Method not allowed" });
 
   const session = await getServerSession(req, res, authOptions);
-  if (!session?.user?.email) return res.status(401).json({ message: "Unauthorized" });
+  if (!session?.user?.email)
+    return res.status(401).json({ message: "Unauthorized" });
 
   try {
     await dbConnect();
@@ -38,7 +43,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               ? new Date(sub.current_period_end * 1000).toISOString()
               : null;
           } catch (err) {
-            console.warn(`❗ Failed to fetch Stripe subscription for ${num.phoneNumber}`, err);
+            console.warn(
+              `❗ Failed to fetch Stripe subscription for ${num.phoneNumber}`,
+              err,
+            );
           }
         }
 
@@ -55,7 +63,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             cost: 0,
           },
         };
-      })
+      }),
     );
 
     return res.status(200).json({ numbers: enrichedNumbers });

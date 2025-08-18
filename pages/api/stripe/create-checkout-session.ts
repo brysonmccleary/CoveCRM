@@ -1,7 +1,7 @@
 // /pages/api/stripe/create-checkout-session.ts
 
 import { NextApiRequest, NextApiResponse } from "next";
-import Stripe from "stripe";
+import { stripe } from "@/lib/stripe";
 import { getServerSession } from "next-auth";
 import { authOptions } from "../auth/[...nextauth]";
 import { getUserByEmail } from "@/models/User";
@@ -11,7 +11,10 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: "2024-04-10",
 });
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   if (req.method !== "POST") return res.status(405).end("Method not allowed");
 
   const session = await getServerSession(req, res, authOptions);

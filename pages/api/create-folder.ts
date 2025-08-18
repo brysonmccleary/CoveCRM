@@ -4,7 +4,10 @@ import { authOptions } from "../auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import Folder from "@/models/Folder";
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   const session = await getServerSession(req, res, authOptions);
 
   if (!session?.user?.email) {
@@ -29,7 +32,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       createdAt: new Date(),
     });
 
-    res.status(201).json({ message: "Folder created successfully", folderId: newFolder._id });
+    res
+      .status(201)
+      .json({
+        message: "Folder created successfully",
+        folderId: newFolder._id,
+      });
   } catch (error) {
     console.error("Error creating folder:", error);
     res.status(500).json({ message: "Failed to create folder" });

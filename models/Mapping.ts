@@ -7,8 +7,8 @@ const MappingSchema = new mongoose.Schema(
     fields: { type: Object, required: true },
     createdAt: { type: Date, default: Date.now },
   },
-  { collection: "mappings" }
+  { collection: "mappings" },
 );
 
-export default mongoose.models.Mapping || mongoose.model("Mapping", MappingSchema);
-
+export default mongoose.models.Mapping ||
+  mongoose.model("Mapping", MappingSchema);

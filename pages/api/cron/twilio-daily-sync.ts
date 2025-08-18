@@ -10,14 +10,21 @@ import { syncA2PForAllUsers } from "@/lib/twilio/syncA2P";
  *  - Preferred: set header Authorization: Bearer <VERCEL_CRON_SECRET>
  *  - Fallback: allow if X-Vercel-Cron header is present (Vercel adds this automatically)
  */
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
+  if (req.method !== "POST")
+    return res.status(405).json({ error: "Method not allowed" });
 
   const cronHeader = req.headers["x-vercel-cron"];
   const authHeader = req.headers.authorization || "";
 
   const secret = process.env.VERCEL_CRON_SECRET;
-  const hasBearer = authHeader.startsWith("Bearer ") && secret && authHeader === `Bearer ${secret}`;
+  const hasBearer =
+    authHeader.startsWith("Bearer ") &&
+    secret &&
+    authHeader === `Bearer ${secret}`;
 
   if (!hasBearer && !cronHeader) {
     return res.status(401).json({ error: "Unauthorized" });
@@ -25,7 +32,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     const results = await syncA2PForAllUsers(1000);
-    const ok = results.filter(r => r.ok).length;
+    const ok = results.filter((r) => r.ok).length;
     const bad = results.length - ok;
 
     return res.status(200).json({

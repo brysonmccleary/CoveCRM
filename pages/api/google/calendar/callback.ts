@@ -6,7 +6,10 @@ import { authOptions } from "../../auth/[...nextauth]";
 import User from "@/models/User";
 import { google } from "googleapis";
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   const session = await getServerSession(req, res, authOptions);
 
   if (!session?.user?.email) {
@@ -31,7 +34,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const decoded =
       tokens.id_token && tokens.id_token.split(".")[1]
-        ? JSON.parse(Buffer.from(tokens.id_token.split(".")[1], "base64").toString())
+        ? JSON.parse(
+            Buffer.from(tokens.id_token.split(".")[1], "base64").toString(),
+          )
         : null;
 
     const googleEmail = decoded?.email || session.user.email;
@@ -49,7 +54,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           calendarId: primaryCalendar?.id || null,
         },
       },
-      { new: true, upsert: false }
+      { new: true, upsert: false },
     );
 
     return res.redirect("/calendar");

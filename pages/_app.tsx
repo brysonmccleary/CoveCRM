@@ -36,18 +36,26 @@ export default function App({ Component, pageProps }: AppProps) {
   );
 }
 
-function InnerApp({ Component, pageProps }: Pick<AppProps, "Component" | "pageProps">) {
+function InnerApp({
+  Component,
+  pageProps,
+}: Pick<AppProps, "Component" | "pageProps">) {
   const { data: session, status } = useSession();
   const authed = status === "authenticated" && !!session?.user?.email;
 
   const router = useRouter();
-  const isPublic = useMemo(() => PUBLIC_ROUTES.has(router.pathname), [router.pathname]);
+  const isPublic = useMemo(
+    () => PUBLIC_ROUTES.has(router.pathname),
+    [router.pathname],
+  );
 
   const [leads, setLeads] = useState<any[]>([]);
   const isDialing =
-    typeof window !== "undefined" && window.location.href.includes("dial-session");
+    typeof window !== "undefined" &&
+    window.location.href.includes("dial-session");
 
-  const hideAssistant = isPublic || router.pathname === "/" || router.pathname === "/billing";
+  const hideAssistant =
+    isPublic || router.pathname === "/" || router.pathname === "/billing";
 
   /** Load leads for reminders (only when logged in on internal pages) */
   useEffect(() => {

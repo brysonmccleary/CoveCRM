@@ -4,7 +4,10 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
 import type { NextApiRequest, NextApiResponse } from "next";
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   const session = await getServerSession(req, res, authOptions);
   if (!session?.user?.email) {
     return res.status(401).json({ message: "Unauthorized" });
@@ -17,10 +20,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     const drip = await DripCampaign.findOne({
       _id: id,
-      $or: [
-        { user: userEmail },
-        { isGlobal: true }
-      ]
+      $or: [{ user: userEmail }, { isGlobal: true }],
     });
 
     if (!drip) {
@@ -32,7 +32,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     if (req.method === "PUT") {
-      const { name, type, steps, assignedFolders, isActive, analytics, comments } = req.body;
+      const {
+        name,
+        type,
+        steps,
+        assignedFolders,
+        isActive,
+        analytics,
+        comments,
+      } = req.body;
 
       drip.name = name ?? drip.name;
       drip.type = type ?? drip.type;

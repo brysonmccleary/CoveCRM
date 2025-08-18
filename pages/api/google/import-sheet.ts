@@ -9,11 +9,16 @@ import { google } from "googleapis";
 
 const SCOPES = ["https://www.googleapis.com/auth/spreadsheets.readonly"];
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed" });
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
+  if (req.method !== "POST")
+    return res.status(405).json({ message: "Method not allowed" });
 
   const session = await getServerSession(req, res, authOptions);
-  if (!session?.user?.email) return res.status(401).json({ message: "Unauthorized" });
+  if (!session?.user?.email)
+    return res.status(401).json({ message: "Unauthorized" });
 
   try {
     await dbConnect();
@@ -23,8 +28,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const { sheetId } = req.body;
-    const sheetEntry = user.googleSheets.syncedSheets.find((s: any) => s.sheetId === sheetId);
-    if (!sheetEntry) return res.status(404).json({ message: "Sheet not found for user." });
+    const sheetEntry = user.googleSheets.syncedSheets.find(
+      (s: any) => s.sheetId === sheetId,
+    );
+    if (!sheetEntry)
+      return res.status(404).json({ message: "Sheet not found for user." });
 
     const { folderId } = sheetEntry;
     const folder = await Folder.findById(folderId);
@@ -45,10 +53,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const rows = response.data.values;
     if (!rows || rows.length < 2) {
-      return res.status(400).json({ message: "Sheet is empty or missing header row." });
+      return res
+        .status(400)
+        .json({ message: "Sheet is empty or missing header row." });
     }
 
-    const headers = rows[0].map((h) => h.toLowerCase().replace(/[^a-z0-9]/g, ""));
+    const headers = rows[0].map((h) =>
+      h.toLowerCase().replace(/[^a-z0-9]/g, ""),
+    );
     const dataRows = rows.slice(1);
 
     // Smart column detection
@@ -97,7 +109,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       inserted++;
     }
 
-    return res.status(200).json({ message: `${inserted} leads imported successfully.` });
+    return res
+      .status(200)
+      .json({ message: `${inserted} leads imported successfully.` });
   } catch (err) {
     console.error("Google sheet import error:", err);
     return res.status(500).json({ message: "Internal server error." });

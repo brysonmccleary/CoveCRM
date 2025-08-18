@@ -8,9 +8,14 @@ import Call from "@/models/Call";
 export const config = { api: { bodyParser: false } };
 
 const AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN || "";
-const BASE_URL = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "").replace(/\/$/, "");
+const BASE_URL = (
+  process.env.NEXT_PUBLIC_BASE_URL ||
+  process.env.BASE_URL ||
+  ""
+).replace(/\/$/, "");
 const ALLOW_DEV_TWILIO_TEST =
-  process.env.ALLOW_LOCAL_TWILIO_TEST === "1" && process.env.NODE_ENV !== "production";
+  process.env.ALLOW_LOCAL_TWILIO_TEST === "1" &&
+  process.env.NODE_ENV !== "production";
 
 function validateTwilio(req: NextApiRequest, rawBody: Buffer) {
   const signature = (req.headers["x-twilio-signature"] || "") as string;
@@ -20,7 +25,7 @@ function validateTwilio(req: NextApiRequest, rawBody: Buffer) {
       AUTH_TOKEN,
       signature,
       fullUrl,
-      Object.fromEntries(new URLSearchParams(rawBody.toString()) as any)
+      Object.fromEntries(new URLSearchParams(rawBody.toString()) as any),
     );
     return ok;
   } catch {
@@ -28,7 +33,10 @@ function validateTwilio(req: NextApiRequest, rawBody: Buffer) {
   }
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   if (req.method !== "POST") {
     res.status(405).end("Method Not Allowed");
     return;
@@ -42,7 +50,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return;
   }
   if (!valid && ALLOW_DEV_TWILIO_TEST) {
-    console.warn("⚠️ Dev bypass: Twilio signature validation skipped (recording).");
+    console.warn(
+      "⚠️ Dev bypass: Twilio signature validation skipped (recording).",
+    );
   }
 
   const params = Object.fromEntries(new URLSearchParams(raw.toString()));
@@ -93,7 +103,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           ...(RecordingStatus ? { completedAt: new Date() } : {}),
         },
       },
-      { upsert: true }
+      { upsert: true },
     );
 
     // Only trigger AI worker when the recording is ready

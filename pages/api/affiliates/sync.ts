@@ -4,13 +4,16 @@ import { authOptions } from "../auth/[...nextauth]";
 import mongooseConnect from "@/lib/mongooseConnect";
 import Affiliate from "@/models/Affiliate";
 import User from "@/models/User"; // If you're using user linkage
-import Stripe from "stripe";
+import { stripe } from "@/lib/stripe";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY as string, {
   apiVersion: "2024-04-10",
 });
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   const session = await getServerSession(req, res, authOptions);
   if (!session || session.user.role !== "admin") {
     return res.status(401).json({ error: "Unauthorized" });

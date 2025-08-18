@@ -6,7 +6,10 @@ import { authOptions } from "@/pages/api/auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import { getUserByEmail } from "@/models/User";
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   // Only allow POST
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
@@ -36,18 +39,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       dripAlerts:
         typeof dripAlerts === "boolean"
           ? dripAlerts
-          : user.notifications?.dripAlerts ?? true,
+          : (user.notifications?.dripAlerts ?? true),
       bookingConfirmations:
         typeof bookingConfirmations === "boolean"
           ? bookingConfirmations
-          : user.notifications?.bookingConfirmations ?? true,
+          : (user.notifications?.bookingConfirmations ?? true),
     };
 
     // Save the changes
     await user.save();
 
     // Success response
-    return res.status(200).json({ message: "Notification preferences updated." });
+    return res
+      .status(200)
+      .json({ message: "Notification preferences updated." });
   } catch (error) {
     console.error("Error updating notifications:", error);
     return res.status(500).json({ error: "Failed to update notifications." });

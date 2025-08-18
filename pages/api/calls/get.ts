@@ -15,8 +15,12 @@ function serialize<T extends Record<string, any>>(doc: T | null) {
   return x;
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "GET") return res.status(405).json({ message: "Method not allowed" });
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
+  if (req.method !== "GET")
+    return res.status(405).json({ message: "Method not allowed" });
 
   const session = await getServerSession(req, res, authOptions);
   const requesterEmail = session?.user?.email?.toLowerCase();
@@ -27,13 +31,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     callSid?: string;
     includeLead?: string;
   };
-  if (!id && !callSid) return res.status(400).json({ message: "Provide id or callSid" });
+  if (!id && !callSid)
+    return res.status(400).json({ message: "Provide id or callSid" });
 
   try {
     await dbConnect();
 
     const requester = await getUserByEmail(requesterEmail);
-    const isAdmin = !!requester && ((requester as any).role === "admin");
+    const isAdmin = !!requester && (requester as any).role === "admin";
 
     const call =
       (id && (await Call.findById(id).lean())) ||
@@ -50,7 +55,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // Light denormalization for Close-like detail UI
     payload.hasRecording = !!payload.recordingUrl;
     payload.hasAI = !!payload.aiSummary;
-    payload.durationSeconds = payload.duration ?? payload.recordingDuration ?? undefined;
+    payload.durationSeconds =
+      payload.duration ?? payload.recordingDuration ?? undefined;
 
     // Optional lead join
     if (includeLead === "1" && call.leadId) {
@@ -58,7 +64,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (lead) {
         payload.lead = {
           id: String(lead._id),
-          name: lead.name || lead.fullName || [lead.firstName, lead.lastName].filter(Boolean).join(" ") || "",
+          name:
+            lead.name ||
+            lead.fullName ||
+            [lead.firstName, lead.lastName].filter(Boolean).join(" ") ||
+            "",
           phone: lead.Phone || lead.phone || "",
           email: lead.Email || lead.email || "",
           status: lead.status || "",

@@ -3,10 +3,13 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
-import Lead from "@/models/Lead";        // canonical casing
-import Message from "@/models/Message";  // assuming this is already canonical
+import Lead from "@/models/Lead"; // canonical casing
+import Message from "@/models/Message"; // assuming this is already canonical
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   if (req.method !== "GET") {
     return res.status(405).json({ error: "Method not allowed" });
   }
@@ -37,7 +40,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const lead = leads.find((l) => l._id.toString() === leadIdStr);
         if (!lead) continue;
 
-        const fullName = `${lead["First Name"] || ""} ${lead["Last Name"] || ""}`.trim();
+        const fullName =
+          `${lead["First Name"] || ""} ${lead["Last Name"] || ""}`.trim();
         const displayName = fullName || lead.Phone || "Unknown";
 
         const isUnread = msg.direction === "inbound" && !msg.read;
@@ -54,7 +58,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const conversations = Array.from(conversationsMap.values()).sort(
-      (a, b) => new Date(b.lastMessageTime).getTime() - new Date(a.lastMessageTime).getTime()
+      (a, b) =>
+        new Date(b.lastMessageTime).getTime() -
+        new Date(a.lastMessageTime).getTime(),
     );
 
     return res.status(200).json(conversations);

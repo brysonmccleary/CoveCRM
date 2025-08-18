@@ -4,7 +4,10 @@ import { getCalendarIdByEmail } from "@/models/User";
 
 const SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"];
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   const { email } = req.query;
 
   if (!email || typeof email !== "string") {
@@ -13,7 +16,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const calendarId = await getCalendarIdByEmail(email);
   if (!calendarId) {
-    return res.status(404).json({ message: "No calendar linked to this email" });
+    return res
+      .status(404)
+      .json({ message: "No calendar linked to this email" });
   }
 
   try {
@@ -21,7 +26,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       process.env.GOOGLE_CLIENT_EMAIL,
       undefined,
       (process.env.GOOGLE_PRIVATE_KEY || "").replace(/\\n/g, "\n"),
-      SCOPES
+      SCOPES,
     );
 
     const calendar = google.calendar({ version: "v3", auth });
@@ -48,8 +53,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const busy = new Set(
       (events.data.items || []).map((e) =>
-        new Date(e.start?.dateTime || "").toISOString()
-      )
+        new Date(e.start?.dateTime || "").toISOString(),
+      ),
     );
 
     const available = simulatedSlots.filter((slot) => !busy.has(slot));

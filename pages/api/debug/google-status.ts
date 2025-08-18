@@ -9,7 +9,10 @@ const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET!;
 const GOOGLE_REDIRECT_URI = process.env.GOOGLE_REDIRECT_URI!;
 const INTERNAL_API_TOKEN = process.env.INTERNAL_API_TOKEN || "";
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   if (req.method !== "GET") return res.status(405).end();
 
   const bearer = (req.headers.authorization || "").replace(/^Bearer\s+/i, "");
@@ -35,7 +38,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   if (!refreshToken) {
     return res.status(400).json({
-      message: "No Google refresh token found — connect Google in Settings first",
+      message:
+        "No Google refresh token found — connect Google in Settings first",
     });
   }
 
@@ -43,7 +47,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const oauth2Client = new google.auth.OAuth2(
       GOOGLE_CLIENT_ID,
       GOOGLE_CLIENT_SECRET,
-      GOOGLE_REDIRECT_URI
+      GOOGLE_REDIRECT_URI,
     );
     oauth2Client.setCredentials({ refresh_token: refreshToken });
 

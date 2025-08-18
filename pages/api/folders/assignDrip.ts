@@ -2,7 +2,10 @@ import dbConnect from "../../../dbConnect";
 import Folder from "../../../models/Folder";
 import type { NextApiRequest, NextApiResponse } from "next";
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   await dbConnect();
 
   if (req.method === "POST") {
@@ -31,4 +34,3 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     res.status(405).json({ message: "Method not allowed" });
   }
 }
-

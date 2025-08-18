@@ -24,13 +24,17 @@ function getCookie(req: NextApiRequest, name: string): string | undefined {
  *  4) Cookie: tz=America/Chicago
  *  5) Fallback: 'UTC'
  */
-export function resolveTimezoneFromRequest(req: NextApiRequest, fallback = "UTC"): string {
+export function resolveTimezoneFromRequest(
+  req: NextApiRequest,
+  fallback = "UTC",
+): string {
   // 1) explicit query override
   const qtz = typeof req.query.tz === "string" ? req.query.tz : undefined;
   if (qtz && qtz.length > 2) return qtz;
 
   // 2) optional header your app can send from browser
-  const appTz = (req.headers["x-app-tz"] as string) || (req.headers["x-user-tz"] as string);
+  const appTz =
+    (req.headers["x-app-tz"] as string) || (req.headers["x-user-tz"] as string);
   if (appTz && appTz.length > 2) return appTz;
 
   // 3) Vercel provides this automatically at the edge

@@ -12,7 +12,10 @@ export const config = {
   },
 };
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   if (req.method !== "POST") return res.status(405).end("Method Not Allowed");
 
   try {
@@ -40,10 +43,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     // ✅ 2. Find the lead calling in (From) under this user
-    const lead = await Lead.findOne({ Phone: fromNumber, userEmail: user.email });
+    const lead = await Lead.findOne({
+      Phone: fromNumber,
+      userEmail: user.email,
+    });
 
     if (!lead) {
-      console.warn(`⚠️ No matching lead found for inbound number ${fromNumber}`);
+      console.warn(
+        `⚠️ No matching lead found for inbound number ${fromNumber}`,
+      );
       return res.status(200).end(); // Still acknowledge Twilio
     }
 
@@ -52,7 +60,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     lead.callbackNotified = false;
     await lead.save();
 
-    console.log(`📞 Inbound call from ${fromNumber} flagged for user ${user.email}`);
+    console.log(
+      `📞 Inbound call from ${fromNumber} flagged for user ${user.email}`,
+    );
     return res.status(200).end();
   } catch (err) {
     console.error("❌ Error in inbound callback handler:", err);

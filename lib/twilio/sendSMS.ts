@@ -17,11 +17,11 @@ const accountSid = process.env.TWILIO_ACCOUNT_SID!;
 const authToken = process.env.TWILIO_AUTH_TOKEN!;
 
 // ✅ Dev-safe base URL (ngrok or prod first, then localhost fallback)
-const BASE_URL =
-  (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "http://localhost:3000").replace(
-    /\/$/,
-    ""
-  );
+const BASE_URL = (
+  process.env.NEXT_PUBLIC_BASE_URL ||
+  process.env.BASE_URL ||
+  "http://localhost:3000"
+).replace(/\/$/, "");
 
 const STATUS_CALLBACK =
   process.env.A2P_STATUS_CALLBACK_URL ||
@@ -63,7 +63,10 @@ function pickLeadZone(lead: any): string {
  * - isQuiet: boolean if we're in [21:00, 08:00) local
  * - scheduledAt: Date if we should schedule (next 08:00 local, ≥ 15 minutes from now UTC)
  */
-function computeQuietHoursScheduling(zone: string): { isQuiet: boolean; scheduledAt?: Date } {
+function computeQuietHoursScheduling(zone: string): {
+  isQuiet: boolean;
+  scheduledAt?: Date;
+} {
   const nowLocal = DateTime.now().setZone(zone);
   const hour = nowLocal.hour;
   const inQuiet = hour >= QUIET_START_HOUR || hour < QUIET_END_HOUR;
@@ -72,9 +75,16 @@ function computeQuietHoursScheduling(zone: string): { isQuiet: boolean; schedule
 
   let target = nowLocal;
   if (hour < QUIET_END_HOUR) {
-    target = nowLocal.set({ hour: QUIET_END_HOUR, minute: 0, second: 0, millisecond: 0 });
+    target = nowLocal.set({
+      hour: QUIET_END_HOUR,
+      minute: 0,
+      second: 0,
+      millisecond: 0,
+    });
   } else {
-    target = nowLocal.plus({ days: 1 }).set({ hour: QUIET_END_HOUR, minute: 0, second: 0, millisecond: 0 });
+    target = nowLocal
+      .plus({ days: 1 })
+      .set({ hour: QUIET_END_HOUR, minute: 0, second: 0, millisecond: 0 });
   }
 
   // Twilio requires ≥ 15 minutes ahead (UTC)
@@ -106,7 +116,9 @@ async function ensureUserDoc(userOrId: string | any) {
     if (doc) return doc;
   }
   if (userOrId.email) {
-    const doc = await User.findOne({ email: String(userOrId.email).toLowerCase() });
+    const doc = await User.findOne({
+      email: String(userOrId.email).toLowerCase(),
+    });
     if (doc) return doc;
   }
 
@@ -117,7 +129,10 @@ async function ensureUserDoc(userOrId: string | any) {
  * Ensure (or create) a per-tenant Messaging Service with correct webhooks.
  * Only used if you do NOT supply TWILIO_MESSAGING_SERVICE_SID.
  */
-async function ensureTenantMessagingService(userId: string, friendlyNameHint?: string) {
+async function ensureTenantMessagingService(
+  userId: string,
+  friendlyNameHint?: string,
+) {
   let a2p = await A2PProfile.findOne({ userId });
 
   if (a2p?.messagingServiceSid) {
@@ -153,7 +168,7 @@ async function ensureTenantMessagingService(userId: string, friendlyNameHint?: s
 export async function sendSMS(
   to: string,
   body: string,
-  userIdOrUser: string | any
+  userIdOrUser: string | any,
 ): Promise<{ sid: string; serviceSid: string; scheduledAt?: string }> {
   await dbConnect();
 
@@ -162,7 +177,9 @@ export async function sendSMS(
 
   // Freeze check (read-only; trackUsage enforces too)
   if ((user.usageBalance || 0) < -20) {
-    throw new Error("Usage frozen due to negative balance. Please update your payment method.");
+    throw new Error(
+      "Usage frozen due to negative balance. Please update your payment method.",
+    );
   }
 
   const toNorm = normalize(to);
@@ -179,27 +196,54 @@ export async function sendSMS(
   const messagingServiceSid =
     SHARED_MESSAGING_SERVICE_SID ||
     a2p?.messagingServiceSid ||
-    (await ensureTenantMessagingService(String(user._id), user.name || user.email));
+    (await ensureTenantMessagingService(
+      String(user._id),
+      user.name || user.email,
+    ));
 
   // Compliance gate
   const approvedViaShared = Boolean(SHARED_MESSAGING_SERVICE_SID);
   const approvedViaTenant = Boolean(a2p?.messagingReady);
-  if (isUSDest && !(approvedViaShared || approvedViaTenant || DEV_ALLOW_UNAPPROVED)) {
-    throw new Error("Texting is not enabled yet. Your A2P 10DLC registration is pending approval.");
+  if (
+    isUSDest &&
+    !(approvedViaShared || approvedViaTenant || DEV_ALLOW_UNAPPROVED)
+  ) {
+    throw new Error(
+      "Texting is not enabled yet. Your A2P 10DLC registration is pending approval.",
+    );
   }
-  if (DEV_ALLOW_UNAPPROVED && isUSDest && !approvedViaShared && !approvedViaTenant) {
-    console.warn("[DEV] A2P not approved — sending anyway because DEV_ALLOW_UNAPPROVED=1");
+  if (
+    DEV_ALLOW_UNAPPROVED &&
+    isUSDest &&
+    !approvedViaShared &&
+    !approvedViaTenant
+  ) {
+    console.warn(
+      "[DEV] A2P not approved — sending anyway because DEV_ALLOW_UNAPPROVED=1",
+    );
   }
 
   // ---------- Quiet hours logic (lead-local) ----------
   // Find lead early to determine their local zone from State
   const lead =
     (await Lead.findOne({ userEmail: user.email, Phone: toNorm })) ||
-    (await Lead.findOne({ userEmail: user.email, Phone: toNorm.replace(/^\+1/, "") })) ||
-    (await Lead.findOne({ userEmail: user.email, Phone: toNorm.replace(/^\+/, "") })) ||
+    (await Lead.findOne({
+      userEmail: user.email,
+      Phone: toNorm.replace(/^\+1/, ""),
+    })) ||
+    (await Lead.findOne({
+      userEmail: user.email,
+      Phone: toNorm.replace(/^\+/, ""),
+    })) ||
     (await Lead.findOne({ ownerEmail: user.email, Phone: toNorm })) ||
-    (await Lead.findOne({ ownerEmail: user.email, Phone: toNorm.replace(/^\+1/, "") })) ||
-    (await Lead.findOne({ ownerEmail: user.email, Phone: toNorm.replace(/^\+/, "") }));
+    (await Lead.findOne({
+      ownerEmail: user.email,
+      Phone: toNorm.replace(/^\+1/, ""),
+    })) ||
+    (await Lead.findOne({
+      ownerEmail: user.email,
+      Phone: toNorm.replace(/^\+/, ""),
+    }));
 
   const zone = pickLeadZone(lead);
   const { isQuiet, scheduledAt } = computeQuietHoursScheduling(zone);
@@ -250,14 +294,21 @@ export async function sendSMS(
         });
       }
     } else {
-      console.warn("⚠️ Outbound SMS saved, but no matching lead found for:", toNorm);
+      console.warn(
+        "⚠️ Outbound SMS saved, but no matching lead found for:",
+        toNorm,
+      );
     }
 
     if (isQuiet && scheduledAt) {
       console.log(
-        `🕘 Quiet hours: scheduled SMS to ${toNorm} at ${scheduledAt.toISOString()} (${zone}) | SID: ${message.sid}`
+        `🕘 Quiet hours: scheduled SMS to ${toNorm} at ${scheduledAt.toISOString()} (${zone}) | SID: ${message.sid}`,
       );
-      return { sid: message.sid, serviceSid: messagingServiceSid, scheduledAt: scheduledAt.toISOString() };
+      return {
+        sid: message.sid,
+        serviceSid: messagingServiceSid,
+        scheduledAt: scheduledAt.toISOString(),
+      };
     } else {
       console.log(`✅ SMS sent to ${toNorm} | SID: ${message.sid}`);
       return { sid: message.sid, serviceSid: messagingServiceSid };
@@ -265,12 +316,12 @@ export async function sendSMS(
   } catch (err: any) {
     if (err?.code === 30034) {
       throw new Error(
-        "Carrier blocked message (30034). This tenant’s A2P brand/campaign isn’t fully approved yet."
+        "Carrier blocked message (30034). This tenant’s A2P brand/campaign isn’t fully approved yet.",
       );
     }
     if (err?.code === 30007) {
       throw new Error(
-        "Carrier filtered the message (30007). Check content, opt-in, links, and links/shorteners."
+        "Carrier filtered the message (30007). Check content, opt-in, links, and links/shorteners.",
       );
     }
 

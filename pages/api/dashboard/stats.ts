@@ -5,7 +5,10 @@ import { authOptions } from "../auth/[...nextauth]";
 import dbConnect from "@/lib/dbConnect";
 import CallLog from "@/models/CallLog";
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   await dbConnect();
 
   const session = await getServerSession(req, res, authOptions);
@@ -17,7 +20,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   // Show stats for last 10 days
   const now = new Date();
-  const startDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 9));
+  const startDate = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 9),
+  );
 
   try {
     const results = await CallLog.aggregate([

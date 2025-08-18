@@ -1,4 +1,4 @@
-import Stripe from "stripe";
+import { stripe } from "@/lib/stripe";
 import dbConnect from "@/lib/mongooseConnect";
 import Affiliate from "@/models/Affiliate";
 

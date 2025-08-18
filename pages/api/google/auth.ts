@@ -15,7 +15,8 @@ const SCOPES = [
 
 function getOrigin(req: NextApiRequest): string {
   const xfProto = (req.headers["x-forwarded-proto"] as string) || "https";
-  const xfHost = (req.headers["x-forwarded-host"] as string) || req.headers.host || "";
+  const xfHost =
+    (req.headers["x-forwarded-host"] as string) || req.headers.host || "";
   if (xfHost) return `${xfProto}://${xfHost}`;
   const base =
     process.env.NEXT_PUBLIC_BASE_URL ||
@@ -26,16 +27,28 @@ function getOrigin(req: NextApiRequest): string {
 }
 
 function isHostAllowed(host: string): boolean {
-  const allow = (process.env.OAUTH_ALLOWED_HOSTS || "covecrm.com,localhost:3000,ngrok.app")
+  const allow = (
+    process.env.OAUTH_ALLOWED_HOSTS || "covecrm.com,localhost:3000,ngrok.app"
+  )
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean);
   // exact or suffix match (for *.ngrok.app)
-  return allow.some((rule) => host === rule || (rule.startsWith("*.") ? host.endsWith(rule.slice(1)) : host.endsWith(rule)));
+  return allow.some(
+    (rule) =>
+      host === rule ||
+      (rule.startsWith("*.")
+        ? host.endsWith(rule.slice(1))
+        : host.endsWith(rule)),
+  );
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "GET") return res.status(405).json({ message: "Method not allowed" });
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
+  if (req.method !== "GET")
+    return res.status(405).json({ message: "Method not allowed" });
 
   const origin = getOrigin(req);
   try {
@@ -60,12 +73,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const oauth2Client = new google.auth.OAuth2(
     process.env.GOOGLE_CLIENT_ID!,
     process.env.GOOGLE_CLIENT_SECRET!,
-    redirectUri
+    redirectUri,
   );
 
   // Optional: allow frontend to pass the CRM user email so we can link tokens even
   // if Google account email differs. (We’ll validate on callback.)
-  const userEmail = (req.query.userEmail ? String(req.query.userEmail) : "").toLowerCase();
+  const userEmail = (
+    req.query.userEmail ? String(req.query.userEmail) : ""
+  ).toLowerCase();
   const state = userEmail
     ? Buffer.from(JSON.stringify({ userEmail }), "utf8").toString("base64url")
     : undefined;

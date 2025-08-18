@@ -23,4 +23,5 @@ const CallLogSchema = new Schema<ICallLog>({
   timestamp: { type: Date, default: Date.now },
 });
 
-export default models.CallLog || mongoose.model<ICallLog>("CallLog", CallLogSchema);
+export default models.CallLog ||
+  mongoose.model<ICallLog>("CallLog", CallLogSchema);

@@ -4,8 +4,12 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed" });
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
+  if (req.method !== "POST")
+    return res.status(405).json({ message: "Method not allowed" });
 
   const session = await getServerSession(req, res, authOptions);
   if (!session) return res.status(401).json({ message: "Unauthorized" });
@@ -33,6 +37,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(200).json({ message: "Email updated" });
   } catch (err) {
     console.error("Update email error:", err);
-    return res.status(500).json({ message: "Server error while updating email" });
+    return res
+      .status(500)
+      .json({ message: "Server error while updating email" });
   }
 }

@@ -4,7 +4,10 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "../auth/[...nextauth]";
 import { updateUserGoogleSheets } from "@/models/User";
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   try {
     const session = await getServerSession(req, res, authOptions);
 
@@ -20,7 +23,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const oauth2Client = new google.auth.OAuth2(
       process.env.GOOGLE_CLIENT_ID!,
       process.env.GOOGLE_CLIENT_SECRET!,
-      process.env.GOOGLE_REDIRECT_URI! // Should match /api/google/callback
+      process.env.GOOGLE_REDIRECT_URI!, // Should match /api/google/callback
     );
 
     const { tokens } = await oauth2Client.getToken(code);

@@ -4,15 +4,20 @@ import mongooseConnect from "@/lib/mongooseConnect";
 import Affiliate from "@/models/Affiliate";
 import { stripe } from "@/lib/stripe"; // use shared Stripe client (no apiVersion literal)
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   // Keep behavior simple: accept GET (same as before)
   const { email } = req.query;
-  if (!email || typeof email !== "string") return res.status(400).end("Missing email");
+  if (!email || typeof email !== "string")
+    return res.status(400).end("Missing email");
 
   await mongooseConnect();
 
   const affiliate = await Affiliate.findOne({ email: email.toLowerCase() });
-  if (!affiliate || !affiliate.stripeConnectId) return res.status(404).end("Affiliate not found");
+  if (!affiliate || !affiliate.stripeConnectId)
+    return res.status(404).end("Affiliate not found");
 
   // Retrieve the connected account and update local flags
   try {

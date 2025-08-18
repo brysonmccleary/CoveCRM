@@ -5,8 +5,12 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "GET") return res.status(405).json({ message: "Method not allowed" });
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
+  if (req.method !== "GET")
+    return res.status(405).json({ message: "Method not allowed" });
 
   const session = await getServerSession(req, res, authOptions);
   if (!session) return res.status(401).json({ message: "Unauthorized" });
@@ -37,6 +41,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   } catch (error) {
     console.error("Fetch profile error:", error);
-    res.status(500).json({ message: "Something went wrong while fetching profile" });
+    res
+      .status(500)
+      .json({ message: "Something went wrong while fetching profile" });
   }
 }

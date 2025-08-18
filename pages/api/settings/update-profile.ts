@@ -15,11 +15,16 @@ function normalizeUSPhone(raw?: string) {
   return raw.trim();
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed" });
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
+  if (req.method !== "POST")
+    return res.status(405).json({ message: "Method not allowed" });
 
   const session = await getServerSession(req, res, authOptions);
-  if (!session?.user?.email) return res.status(401).json({ message: "Unauthorized" });
+  if (!session?.user?.email)
+    return res.status(401).json({ message: "Unauthorized" });
 
   await dbConnect();
 
@@ -35,10 +40,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // Basic type validation
     if (
-      !firstName || typeof firstName !== "string" ||
-      !lastName || typeof lastName !== "string" ||
-      !email || typeof email !== "string" ||
-      !country || typeof country !== "string"
+      !firstName ||
+      typeof firstName !== "string" ||
+      !lastName ||
+      typeof lastName !== "string" ||
+      !email ||
+      typeof email !== "string" ||
+      !country ||
+      typeof country !== "string"
     ) {
       return res.status(400).json({ message: "Invalid input data" });
     }
@@ -72,6 +81,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   } catch (error) {
     console.error("Update profile error:", error);
-    return res.status(500).json({ message: "Something went wrong while updating profile" });
+    return res
+      .status(500)
+      .json({ message: "Something went wrong while updating profile" });
   }
 }

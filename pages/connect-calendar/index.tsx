@@ -17,9 +17,12 @@ export default function ConnectCalendarPage() {
   return (
     <div className="min-h-screen flex flex-col items-center justify-center bg-slate-900 text-white px-4">
       <div className="bg-slate-800 p-6 rounded shadow-lg max-w-md w-full text-center">
-        <h1 className="text-2xl font-bold mb-4">🔗 Connect Your Google Calendar</h1>
+        <h1 className="text-2xl font-bold mb-4">
+          🔗 Connect Your Google Calendar
+        </h1>
         <p className="mb-6">
-          We need access to your calendar to let others book appointments with you.
+          We need access to your calendar to let others book appointments with
+          you.
         </p>
 
         <a

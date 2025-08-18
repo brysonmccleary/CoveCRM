@@ -6,10 +6,22 @@ const VoiceGrant = AccessToken.VoiceGrant;
 
 export default function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
-    const { TWILIO_ACCOUNT_SID, TWILIO_API_KEY_SID, TWILIO_API_KEY_SECRET, TWILIO_APP_SID } = process.env;
+    const {
+      TWILIO_ACCOUNT_SID,
+      TWILIO_API_KEY_SID,
+      TWILIO_API_KEY_SECRET,
+      TWILIO_APP_SID,
+    } = process.env;
 
-    if (!TWILIO_ACCOUNT_SID || !TWILIO_API_KEY_SID || !TWILIO_API_KEY_SECRET || !TWILIO_APP_SID) {
-      return res.status(500).json({ error: "Twilio environment variables missing" });
+    if (
+      !TWILIO_ACCOUNT_SID ||
+      !TWILIO_API_KEY_SID ||
+      !TWILIO_API_KEY_SECRET ||
+      !TWILIO_APP_SID
+    ) {
+      return res
+        .status(500)
+        .json({ error: "Twilio environment variables missing" });
     }
 
     const identity = `user_${Math.floor(Math.random() * 1000000)}`;
@@ -23,7 +35,7 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
       TWILIO_ACCOUNT_SID,
       TWILIO_API_KEY_SID,
       TWILIO_API_KEY_SECRET,
-      { identity }
+      { identity },
     );
 
     token.addGrant(voiceGrant);

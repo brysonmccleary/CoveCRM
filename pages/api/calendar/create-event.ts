@@ -15,7 +15,10 @@ function last10(raw?: string): string | undefined {
   return d.slice(-10) || undefined;
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   if (req.method !== "POST") {
     return res.status(405).json({ message: "Method not allowed" });
   }
@@ -29,7 +32,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     start,
     end,
     startISO, // tolerate legacy payloads
-    endISO,   // tolerate legacy payloads
+    endISO, // tolerate legacy payloads
     description,
     location,
     attendee,
@@ -39,7 +42,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const startStr = start || startISO;
   const endStr = end || endISO;
   if (!startStr || !endStr) {
-    return res.status(400).json({ message: "Missing required event data (start/end)" });
+    return res
+      .status(400)
+      .json({ message: "Missing required event data (start/end)" });
   }
 
   await dbConnect();
@@ -54,7 +59,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const oauth2Client = new google.auth.OAuth2(
     process.env.GOOGLE_CLIENT_ID!,
     process.env.GOOGLE_CLIENT_SECRET!,
-    process.env.GOOGLE_REDIRECT_URI || `${process.env.NEXTAUTH_URL}/api/google/callback`
+    process.env.GOOGLE_REDIRECT_URI ||
+      `${process.env.NEXTAUTH_URL}/api/google/callback`,
   );
 
   const accessToken = (user as any).googleTokens?.accessToken || undefined;
@@ -62,7 +68,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const expiryDate = (user as any).googleTokens?.expiryDate || undefined;
 
   if (!refreshToken) {
-    return res.status(400).json({ message: "Calendar not connected (no refresh token). Reconnect Google." });
+    return res
+      .status(400)
+      .json({
+        message: "Calendar not connected (no refresh token). Reconnect Google.",
+      });
   }
 
   oauth2Client.setCredentials({
@@ -80,7 +90,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     let finalLocation = location || "";
     const attendees: Array<{ email: string }> = [];
 
-    const baseUrl = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "http://localhost:3000").replace(/\/$/, "");
+    const baseUrl = (
+      process.env.NEXT_PUBLIC_BASE_URL ||
+      process.env.BASE_URL ||
+      "http://localhost:3000"
+    ).replace(/\/$/, "");
     const privateProps: Record<string, string> = {};
 
     let leadEmail = attendee || "";
@@ -96,23 +110,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           leadDoc["Phone"] ||
           leadDoc.phone ||
           leadDoc["Phone Number"] ||
-          Object.entries(leadDoc).find(([k]) => k.toLowerCase().includes("phone"))?.[1] ||
+          Object.entries(leadDoc).find(([k]) =>
+            k.toLowerCase().includes("phone"),
+          )?.[1] ||
           "";
         const email =
           leadDoc.Email ||
           leadDoc.email ||
-          Object.entries(leadDoc).find(([k]) => k.toLowerCase().includes("email"))?.[1] ||
+          Object.entries(leadDoc).find(([k]) =>
+            k.toLowerCase().includes("email"),
+          )?.[1] ||
           "";
 
         finalTitle = title || `📞 Call with ${full}`;
         const noteBlock =
-          (description && description.trim().length > 0)
+          description && description.trim().length > 0
             ? description.trim()
-            : (leadDoc.Notes || leadDoc.notes || "");
+            : leadDoc.Notes || leadDoc.notes || "";
         const crmLink = `${baseUrl}/lead/${leadDoc._id}`;
 
         finalDescription =
-          (finalDescription && finalDescription.trim().length > 0)
+          finalDescription && finalDescription.trim().length > 0
             ? finalDescription
             : [
                 phone ? `Phone: ${phone}` : null,
@@ -141,7 +159,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // Attendees: owner + (optional) lead email
     attendees.push({ email: userEmail });
-    if (leadEmail && typeof leadEmail === "string") attendees.push({ email: String(leadEmail) });
+    if (leadEmail && typeof leadEmail === "string")
+      attendees.push({ email: String(leadEmail) });
 
     // RFC3339 timestamps + explicit tz for Calendar UI
     const startIso = new Date(startStr).toISOString();
@@ -152,7 +171,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       description: finalDescription || "",
       location: finalLocation || "",
       start: { dateTime: startIso, timeZone: tz },
-      end:   { dateTime: endIso,   timeZone: tz },
+      end: { dateTime: endIso, timeZone: tz },
       attendees,
       extendedProperties: { private: privateProps },
     };
@@ -172,7 +191,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (leadDoc && String(leadDoc.userEmail).toLowerCase() === userEmail) {
       const startDate = new Date(startStr);
       const endDate = new Date(endStr);
-      const durationMin = Math.max(1, Math.round((endDate.getTime() - startDate.getTime()) / 60000));
+      const durationMin = Math.max(
+        1,
+        Math.round((endDate.getTime() - startDate.getTime()) / 60000),
+      );
       const nice = startDate.toLocaleString("en-US", {
         dateStyle: "medium",
         timeStyle: "short",
@@ -203,7 +225,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               },
             },
           },
-        }
+        },
       );
     }
     // ================================================
@@ -212,13 +234,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     try {
       const startDate = new Date(startStr);
       const tzLabel =
-        new Intl.DateTimeFormat(undefined, { timeZone: tz, timeZoneName: "short" })
+        new Intl.DateTimeFormat(undefined, {
+          timeZone: tz,
+          timeZoneName: "short",
+        })
           .formatToParts(startDate)
           .find((p) => p.type === "timeZoneName")?.value || tz;
 
       const leadFirst = leadDoc?.["First Name"] || leadDoc?.firstName || "";
-      const leadLast  = leadDoc?.["Last Name"] || leadDoc?.lastName || "";
-      const leadName  = `${leadFirst} ${leadLast}`.trim() || "Client";
+      const leadLast = leadDoc?.["Last Name"] || leadDoc?.lastName || "";
+      const leadName = `${leadFirst} ${leadLast}`.trim() || "Client";
       const leadPhone = (leadDoc?.Phone || leadDoc?.phone || "").toString();
       const leadState = (leadDoc?.State || leadDoc?.state || "") as string;
 
@@ -234,13 +259,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         eventUrl: created.data.htmlLink || undefined,
       });
     } catch (e) {
-      console.warn("Agent email (Dialer) failed (non-blocking):", (e as any)?.message || e);
+      console.warn(
+        "Agent email (Dialer) failed (non-blocking):",
+        (e as any)?.message || e,
+      );
     }
 
     res.setHeader("Cache-Control", "no-store");
     return res.status(200).json({ success: true, eventId, tz });
   } catch (error: any) {
-    console.error("❌ Failed to create Google Calendar event:", error?.response?.data || error?.message || error);
+    console.error(
+      "❌ Failed to create Google Calendar event:",
+      error?.response?.data || error?.message || error,
+    );
     return res.status(500).json({ message: "Failed to create event" });
   }
 }

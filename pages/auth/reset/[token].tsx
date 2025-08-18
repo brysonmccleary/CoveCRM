@@ -19,7 +19,8 @@ export default function ResetPasswordPage() {
     setMsg(null);
 
     if (!token) return setErr("Missing token");
-    if (!password || password.length < 8) return setErr("Password must be at least 8 characters");
+    if (!password || password.length < 8)
+      return setErr("Password must be at least 8 characters");
     if (password !== confirm) return setErr("Passwords do not match");
 
     setLoading(true);
@@ -43,9 +44,14 @@ export default function ResetPasswordPage() {
 
   return (
     <>
-      <Head><title>Reset Password — CRM Cove</title></Head>
+      <Head>
+        <title>Reset Password — CRM Cove</title>
+      </Head>
       <div className="min-h-screen flex items-center justify-center bg-neutral-950 text-white">
-        <form onSubmit={onSubmit} className="w-full max-w-md space-y-4 bg-neutral-900 p-6 rounded-xl border border-neutral-800">
+        <form
+          onSubmit={onSubmit}
+          className="w-full max-w-md space-y-4 bg-neutral-900 p-6 rounded-xl border border-neutral-800"
+        >
           <h1 className="text-2xl font-semibold">Set a new password</h1>
           <div className="space-y-2">
             <label className="block text-sm opacity-80">New password</label>

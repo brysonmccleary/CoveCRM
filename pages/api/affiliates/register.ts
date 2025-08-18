@@ -3,14 +3,17 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import dbConnect from "@/lib/mongooseConnect";
 import Affiliate from "@/models/Affiliate";
-import Stripe from "stripe";
+import { stripe } from "@/lib/stripe";
 import { sendAffiliateApplicationAdminEmail } from "@/lib/email";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: "2024-04-10",
 });
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   if (req.method !== "POST") return res.status(405).end("Method Not Allowed");
 
   await dbConnect();
@@ -74,13 +77,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       agents,
       promoCode: upperCode,
       approved: false,
-      totalRedemptions: 0,            // ignored if not in schema
-      totalRevenueGenerated: 0,       // ignored if not in schema
+      totalRedemptions: 0, // ignored if not in schema
+      totalRevenueGenerated: 0, // ignored if not in schema
       payoutDue: 0,
       onboardingCompleted: false,
       connectedAccountStatus: "pending", // normalized to lowercase; ignored if not in schema
-      stripeId: account.id,           // some schemas use `stripeId`
-      stripeConnectId: account.id,    // others use `stripeConnectId`
+      stripeId: account.id, // some schemas use `stripeId`
+      stripeConnectId: account.id, // others use `stripeConnectId`
     });
   } catch (e: any) {
     // Don’t log PII; return a concise validation message

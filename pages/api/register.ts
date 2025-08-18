@@ -14,10 +14,15 @@ type RegisterBody = {
   affiliateEmail?: string;
 };
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed" });
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
+  if (req.method !== "POST")
+    return res.status(405).json({ message: "Method not allowed" });
 
-  const { name, email, password, usedCode, affiliateEmail } = req.body as RegisterBody;
+  const { name, email, password, usedCode, affiliateEmail } =
+    req.body as RegisterBody;
   if (!name || !email || !password) {
     return res.status(400).json({ message: "Missing required fields" });
   }
@@ -30,7 +35,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const normalizedAffiliate = affiliateEmail?.trim().toLowerCase() || null;
 
     const existing = await User.findOne({ email: normalizedEmail });
-    if (existing) return res.status(409).json({ message: "Email already in use" });
+    if (existing)
+      return res.status(409).json({ message: "Email already in use" });
 
     const hashed = await bcrypt.hash(password, 10);
 
@@ -51,7 +57,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           $addToSet: { users: normalizedEmail },
           $set: { lastUsed: new Date() },
         },
-        { upsert: true }
+        { upsert: true },
       );
     }
 
@@ -64,7 +70,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       console.warn("[signup] welcome email error:", e?.message || e);
     }
 
-    return res.status(200).json({ message: "User created", userId: newUser._id });
+    return res
+      .status(200)
+      .json({ message: "User created", userId: newUser._id });
   } catch (err) {
     console.error("Registration error:", err);
     return res.status(500).json({ message: "Server error" });

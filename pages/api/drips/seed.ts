@@ -18,19 +18,19 @@ export default async function handler(req, res) {
       steps: drip.messages.map((msg) => ({
         text: msg.text,
         day: msg.day,
-        time: "9:00 AM",       // Default
-        calendarLink: "",      // Default
-        views: 0,              // Default
-        responses: 0           // Default
+        time: "9:00 AM", // Default
+        calendarLink: "", // Default
+        views: 0, // Default
+        responses: 0, // Default
       })),
       analytics: {
         views: 0,
         clicks: 0,
         replies: 0,
-        unsubscribes: 0
+        unsubscribes: 0,
       },
       createdBy: "admin",
-      comments: []
+      comments: [],
     }));
 
     // Insert all drips

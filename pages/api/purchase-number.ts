@@ -9,7 +9,10 @@ import { configureTwilioWebhook } from "@/lib/twilio/configureWebhook";
 
 const STRIPE_PRICE_ID = "price_1RpvR9DF9aEsjVyJk9GiJkpe"; // $2/month
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   if (req.method !== "POST") {
     return res.status(405).json({ message: "Method not allowed" });
   }
@@ -29,7 +32,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const user = await User.findOne({ email: session.user.email });
     if (!user || !user.stripeCustomerId) {
-      return res.status(404).json({ message: "User or Stripe customer not found" });
+      return res
+        .status(404)
+        .json({ message: "User or Stripe customer not found" });
     }
 
     // 1. Search for number
@@ -39,7 +44,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
 
     if (numbers.length === 0) {
-      return res.status(404).json({ message: "No numbers available in this area code" });
+      return res
+        .status(404)
+        .json({ message: "No numbers available in this area code" });
     }
 
     // 2. Purchase the number

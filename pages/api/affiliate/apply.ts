@@ -19,13 +19,16 @@ const AFFILIATE_RETURN_PATH =
 
 // Tunables (env-overridable)
 const DEFAULT_DISCOUNT_PERCENT = Number(
-  process.env.AFFILIATE_DEFAULT_DISCOUNT_PERCENT || "20" // 20% off forever
+  process.env.AFFILIATE_DEFAULT_DISCOUNT_PERCENT || "20", // 20% off forever
 );
 const DEFAULT_PAYOUT_FLAT = Number(
-  process.env.AFFILIATE_DEFAULT_PAYOUT || "25" // $25 to affiliate on first paid invoice
+  process.env.AFFILIATE_DEFAULT_PAYOUT || "25", // $25 to affiliate on first paid invoice
 );
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   if (req.method !== "POST") return res.status(405).end("Method Not Allowed");
 
   const session = await getServerSession(req, res, authOptions);
@@ -67,7 +70,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     // Guard: if a promotion code with same text exists in Stripe, reuse it
-    const listResp = await stripe.promotionCodes.list({ code: promoCode, limit: 1 });
+    const listResp = await stripe.promotionCodes.list({
+      code: promoCode,
+      limit: 1,
+    });
     // Handle both Stripe.Response<List<T>> and older shapes
     const listObj: any = (listResp as any)?.data ?? listResp;
     const promos: any[] = Array.isArray(listObj?.data) ? listObj.data : listObj;
@@ -75,7 +81,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (Array.isArray(promos) && promos.length) {
       const p: any = promos[0];
       promotionCodeId = String(p.id);
-      couponId = typeof p.coupon === "string" ? String(p.coupon) : String(p.coupon?.id);
+      couponId =
+        typeof p.coupon === "string" ? String(p.coupon) : String(p.coupon?.id);
       // ensure it's active
       if (!p.active) {
         await stripe.promotionCodes.update(String(p.id), { active: true });
@@ -105,7 +112,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
   } catch (err: any) {
     const devMsg =
-      process.env.NODE_ENV !== "production" && (err?.message || err?.error?.message);
+      process.env.NODE_ENV !== "production" &&
+      (err?.message || err?.error?.message);
     return res
       .status(500)
       .json({ error: devMsg || "Failed to create promotion code" });
@@ -127,7 +135,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       accountId = String(account.id);
     } catch (err: any) {
       const devMsg =
-        process.env.NODE_ENV !== "production" && (err?.message || err?.error?.message);
+        process.env.NODE_ENV !== "production" &&
+        (err?.message || err?.error?.message);
       return res.status(500).json({
         error: devMsg || "Stripe account creation failed",
         code: err?.code,
@@ -186,7 +195,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       accountLinkUrl = String(accountLink.url);
     } catch (err: any) {
       const devMsg =
-        process.env.NODE_ENV !== "production" && (err?.message || err?.error?.message);
+        process.env.NODE_ENV !== "production" &&
+        (err?.message || err?.error?.message);
       return res.status(500).json({
         error: devMsg || "Stripe onboarding link creation failed",
         code: err?.code,

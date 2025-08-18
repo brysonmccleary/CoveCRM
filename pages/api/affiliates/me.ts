@@ -2,7 +2,10 @@ import { NextApiRequest, NextApiResponse } from "next";
 import mongooseConnect from "@/lib/mongooseConnect";
 import Affiliate from "@/models/Affiliate";
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   const { email } = req.query;
   if (!email || typeof email !== "string") return res.status(400).end();
 

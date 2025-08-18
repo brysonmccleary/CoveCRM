@@ -5,8 +5,12 @@ import { authOptions } from "../auth/[...nextauth]";
 import mongooseConnect from "@/lib/mongooseConnect";
 import Lead from "@/models/Lead";
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "GET") return res.status(405).json({ error: "Method not allowed" });
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
+  if (req.method !== "GET")
+    return res.status(405).json({ error: "Method not allowed" });
 
   try {
     // ✅ Auth
@@ -31,7 +35,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       limit?: string;
     };
 
-    const ownerFilter = { $or: [{ ownerEmail: email }, { userEmail: email }] } as const;
+    const ownerFilter = {
+      $or: [{ ownerEmail: email }, { userEmail: email }],
+    } as const;
 
     const query: any = { ...ownerFilter };
     if (folderId) query.folderId = folderId;
@@ -44,7 +50,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const cap = Math.min(Number(limit || 500), 2000);
 
     const leads = await Lead.find(query)
-      .sort(appointments === "recent" ? { appointmentTime: 1 } : { updatedAt: -1 })
+      .sort(
+        appointments === "recent" ? { appointmentTime: 1 } : { updatedAt: -1 },
+      )
       .limit(cap)
       .lean();
 

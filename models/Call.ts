@@ -10,13 +10,13 @@ export interface ICall extends Document {
 
   startedAt?: Date;
   completedAt?: Date;
-  duration?: number;  // total sec
-  talkTime?: number;  // sec with speech (optional if you compute)
+  duration?: number; // total sec
+  talkTime?: number; // sec with speech (optional if you compute)
 
   recordingSid?: string;
-  recordingUrl?: string;       // final mp3 streamable URL
-  recordingDuration?: number;  // sec
-  recordingStatus?: string;    // completed | processing | failed | ...
+  recordingUrl?: string; // final mp3 streamable URL
+  recordingDuration?: number; // sec
+  recordingStatus?: string; // completed | processing | failed | ...
 
   aiEnabledAtCallTime?: boolean;
   transcript?: string;
@@ -30,7 +30,11 @@ const CallSchema = new Schema<ICall>(
   {
     userEmail: { type: String, required: true, index: true },
     leadId: { type: Schema.Types.Mixed }, // keep flexible (ObjectId|string), matches your usage
-    direction: { type: String, enum: ["outbound", "inbound"], default: "outbound" },
+    direction: {
+      type: String,
+      enum: ["outbound", "inbound"],
+      default: "outbound",
+    },
     callSid: { type: String, required: true, unique: true },
 
     startedAt: { type: Date },
@@ -48,9 +52,13 @@ const CallSchema = new Schema<ICall>(
     aiSummary: { type: String },
     aiActionItems: { type: [String], default: [] },
     aiSentiment: { type: String, enum: ["positive", "neutral", "negative"] },
-    aiProcessing: { type: String, enum: ["pending", "done", "error"], default: undefined },
+    aiProcessing: {
+      type: String,
+      enum: ["pending", "done", "error"],
+      default: undefined,
+    },
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
 // ===== Helpful indexes (added, non-breaking) =====
@@ -59,13 +67,22 @@ CallSchema.index({ userEmail: 1, startedAt: -1 });
 CallSchema.index({ userEmail: 1, completedAt: -1 });
 
 // New: fast by-lead queries (e.g., /api/calls/by-lead)
-CallSchema.index({ leadId: 1, completedAt: -1 }, { name: "call_by_lead_completed_desc" });
+CallSchema.index(
+  { leadId: 1, completedAt: -1 },
+  { name: "call_by_lead_completed_desc" },
+);
 
 // New: direction scans + recents
-CallSchema.index({ userEmail: 1, direction: 1, startedAt: -1 }, { name: "call_user_dir_started_desc" });
+CallSchema.index(
+  { userEmail: 1, direction: 1, startedAt: -1 },
+  { name: "call_user_dir_started_desc" },
+);
 
 // New: “has recording” lookups in feeds
-CallSchema.index({ userEmail: 1, recordingUrl: 1 }, { name: "call_user_has_recording" });
+CallSchema.index(
+  { userEmail: 1, recordingUrl: 1 },
+  { name: "call_user_has_recording" },
+);
 
 // Keep model export
 export default models.Call || mongoose.model<ICall>("Call", CallSchema);

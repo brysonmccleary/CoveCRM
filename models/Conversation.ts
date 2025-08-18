@@ -15,10 +15,11 @@ const ConversationSchema = new Schema<IConversation>(
     message: { type: String, required: true },
     timestamp: { type: Date, default: Date.now },
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
 const Conversation =
-  mongoose.models.Conversation || mongoose.model<IConversation>("Conversation", ConversationSchema);
+  mongoose.models.Conversation ||
+  mongoose.model<IConversation>("Conversation", ConversationSchema);
 
 export default Conversation;

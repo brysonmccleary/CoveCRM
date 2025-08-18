@@ -54,7 +54,7 @@ const LeadSchema = new Schema(
       default: "Final Expense",
     },
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
 // -----------------------------
@@ -88,7 +88,11 @@ export const deleteLeadById = async (leadId: string) => {
   return await Lead.findByIdAndDelete(leadId);
 };
 
-export const createLeadsFromCSV = async (leads: any[], userEmail: string, folderId: string) => {
+export const createLeadsFromCSV = async (
+  leads: any[],
+  userEmail: string,
+  folderId: string,
+) => {
   const mapped = leads.map((lead) => ({
     ...lead,
     userEmail,
@@ -100,7 +104,11 @@ export const createLeadsFromCSV = async (leads: any[], userEmail: string, folder
   return await Lead.insertMany(mapped);
 };
 
-export const createLeadsFromGoogleSheet = async (sheetLeads: any[], userEmail: string, folderId: string) => {
+export const createLeadsFromGoogleSheet = async (
+  sheetLeads: any[],
+  userEmail: string,
+  folderId: string,
+) => {
   const parsed = sheetLeads.map((lead) => ({
     ...lead,
     userEmail,

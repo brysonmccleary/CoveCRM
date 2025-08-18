@@ -5,17 +5,22 @@ import { Twilio } from "twilio";
 
 const twilioClient = new Twilio(
   process.env.TWILIO_ACCOUNT_SID!,
-  process.env.TWILIO_AUTH_TOKEN!
+  process.env.TWILIO_AUTH_TOKEN!,
 );
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   if (req.method !== "GET") {
     return res.status(405).json({ message: "Method not allowed" });
   }
 
   try {
     await dbConnect();
-    const pendingVerifications = await A2PVerification.find({ status: "pending" });
+    const pendingVerifications = await A2PVerification.find({
+      status: "pending",
+    });
 
     for (const verification of pendingVerifications) {
       const brandSid = verification.brandSid;
@@ -23,7 +28,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       let brandStatus = "unknown";
       try {
-        const brand = await twilioClient.trusthub.v1.customerProfiles(brandSid).fetch();
+        const brand = await twilioClient.trusthub.v1
+          .customerProfiles(brandSid)
+          .fetch();
         brandStatus = brand.status || "unknown";
       } catch (error) {
         console.error(`Error fetching brand ${brandSid}:`, error);
@@ -31,7 +38,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       let campaignStatus = "unknown";
       try {
-        const campaign = await twilioClient.messaging.v1.a2p.services(campaignSid).fetch();
+        const campaign = await twilioClient.messaging.v1.a2p
+          .services(campaignSid)
+          .fetch();
         campaignStatus = campaign.status || "unknown";
       } catch (error) {
         console.error(`Error fetching campaign ${campaignSid}:`, error);

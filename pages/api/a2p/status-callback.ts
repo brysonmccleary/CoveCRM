@@ -8,10 +8,19 @@ import twilioClient from "@/lib/twilioClient";
 
 const BASE_URL = process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "";
 
-const APPROVED = new Set(["approved", "verified", "active", "in_use", "registered"]);
+const APPROVED = new Set([
+  "approved",
+  "verified",
+  "active",
+  "in_use",
+  "registered",
+]);
 
 /** Ensure tenant Messaging Service exists & is webhook-configured. Returns SID. */
-async function ensureTenantMessagingService(userId: string, friendlyNameHint?: string): Promise<string> {
+async function ensureTenantMessagingService(
+  userId: string,
+  friendlyNameHint?: string,
+): Promise<string> {
   let a2p = await A2PProfile.findOne({ userId });
 
   if (a2p?.messagingServiceSid) {
@@ -40,17 +49,25 @@ async function ensureTenantMessagingService(userId: string, friendlyNameHint?: s
 }
 
 /** Add a number to a Messaging Service sender pool. Handles 21712 (unlink/reattach). */
-async function addNumberToMessagingService(serviceSid: string, numberSid: string) {
+async function addNumberToMessagingService(
+  serviceSid: string,
+  numberSid: string,
+) {
   try {
     await twilioClient.messaging.v1.services(serviceSid).phoneNumbers.create({
       phoneNumberSid: numberSid,
     });
   } catch (err: any) {
     if (err?.code === 21712) {
-      const services = await twilioClient.messaging.v1.services.list({ limit: 100 });
+      const services = await twilioClient.messaging.v1.services.list({
+        limit: 100,
+      });
       for (const svc of services) {
         try {
-          await twilioClient.messaging.v1.services(svc.sid).phoneNumbers(numberSid).remove();
+          await twilioClient.messaging.v1
+            .services(svc.sid)
+            .phoneNumbers(numberSid)
+            .remove();
         } catch {
           // not linked here, ignore
         }
@@ -64,7 +81,10 @@ async function addNumberToMessagingService(serviceSid: string, numberSid: string
   }
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   if (req.method !== "POST") return res.status(405).send("Method not allowed");
   try {
     await mongooseConnect();
@@ -112,15 +132,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const user = await User.findById(a2p.userId);
       if (user) {
         // Ensure/create tenant Messaging Service and attach ALL owned numbers
-        const msSid: string = await ensureTenantMessagingService(String(user._id), user.name || user.email);
+        const msSid: string = await ensureTenantMessagingService(
+          String(user._id),
+          user.name || user.email,
+        );
 
         // Fetch all numbers owned by this user and attach them to the tenant MS
         const owned = await PhoneNumber.find({ userId: user._id });
         for (const num of owned) {
           // Narrow possible undefined 'twilioSid'
-          const numSid = typeof (num as any).twilioSid === "string" ? (num as any).twilioSid as string : "";
+          const numSid =
+            typeof (num as any).twilioSid === "string"
+              ? ((num as any).twilioSid as string)
+              : "";
           if (!numSid) {
-            console.warn("Skipping attach: number has no twilioSid", (num as any)._id || (num as any).phoneNumber);
+            console.warn(
+              "Skipping attach: number has no twilioSid",
+              (num as any)._id || (num as any).phoneNumber,
+            );
             continue;
           }
           try {
@@ -130,7 +159,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               await (num as any).save();
             }
           } catch (e) {
-            console.warn(`Failed to attach ${(num as any).phoneNumber} to ${msSid}:`, e);
+            console.warn(
+              `Failed to attach ${(num as any).phoneNumber} to ${msSid}:`,
+              e,
+            );
           }
         }
       }
@@ -138,15 +170,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       // Flip flags so sending is unblocked
       a2p.messagingReady = true;
       // Track coarse registration status
-      if (a2p.registrationStatus === "brand_submitted") a2p.registrationStatus = "brand_approved";
-      if (a2p.registrationStatus === "campaign_submitted") a2p.registrationStatus = "campaign_approved";
+      if (a2p.registrationStatus === "brand_submitted")
+        a2p.registrationStatus = "brand_approved";
+      if (a2p.registrationStatus === "campaign_submitted")
+        a2p.registrationStatus = "campaign_approved";
       await a2p.save();
 
       return res.status(200).json({ ok: true, messagingReady: true });
     }
 
     // If this looks like a rejection/failed state, record it
-    if (statusRaw.includes("reject") || statusRaw.includes("failed") || statusRaw.includes("denied")) {
+    if (
+      statusRaw.includes("reject") ||
+      statusRaw.includes("failed") ||
+      statusRaw.includes("denied")
+    ) {
       a2p.messagingReady = false;
       a2p.registrationStatus = "rejected";
       (a2p as any).lastError = reason || "Rejected by reviewers";

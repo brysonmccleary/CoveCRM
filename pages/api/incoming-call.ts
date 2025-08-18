@@ -1,5 +1,5 @@
-import type { NextApiRequest, NextApiResponse } from 'next';
-import { buffer } from 'micro';
+import type { NextApiRequest, NextApiResponse } from "next";
+import { buffer } from "micro";
 
 export const config = {
   api: {
@@ -13,7 +13,10 @@ const leads = [
   { name: "Jane Smith", phoneNumber: "5559876543" },
 ];
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   // Parse raw buffer
   const buf = await buffer(req);
   const bodyStr = buf.toString();
@@ -40,4 +43,3 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(404).json({ message: "Lead not found" });
 }
-

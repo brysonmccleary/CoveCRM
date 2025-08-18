@@ -26,14 +26,19 @@ const authToken = process.env.TWILIO_AUTH_TOKEN!;
 const client = twilio(accountSid, authToken);
 
 const SECONDARY_PROFILE_POLICY_SID =
-  process.env.SECONDARY_PROFILE_POLICY_SID || "RNdfbf3fae0e1107f8aded0e7cead80bf5";
+  process.env.SECONDARY_PROFILE_POLICY_SID ||
+  "RNdfbf3fae0e1107f8aded0e7cead80bf5";
 const A2P_TRUST_PRODUCT_POLICY_SID =
-  process.env.A2P_TRUST_PRODUCT_POLICY_SID || "RNb0d4771c2c98518d916a3d4cd70a8f8b";
+  process.env.A2P_TRUST_PRODUCT_POLICY_SID ||
+  "RNb0d4771c2c98518d916a3d4cd70a8f8b";
 const PRIMARY_PROFILE_SID = process.env.A2P_PRIMARY_PROFILE_SID!; // BU... (ISV)
 
 const baseUrl =
-  process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "http://localhost:3000";
-const STATUS_CB = process.env.A2P_STATUS_CALLBACK_URL || `${baseUrl}/api/a2p/status-callback`;
+  process.env.NEXT_PUBLIC_BASE_URL ||
+  process.env.BASE_URL ||
+  "http://localhost:3000";
+const STATUS_CB =
+  process.env.A2P_STATUS_CALLBACK_URL || `${baseUrl}/api/a2p/status-callback`;
 
 // ---------------- helpers ----------------
 function required<T>(v: T, name: string): T {
@@ -42,19 +47,31 @@ function required<T>(v: T, name: string): T {
 }
 
 // Twilio's TS typings for TrustHub vary across SDK versions; cast at the boundary.
-async function assignEntityToCustomerProfile(customerProfileSid: string, objectSid: string) {
-  await (client.trusthub.v1.customerProfiles(customerProfileSid) as any).entityAssignments.create({
+async function assignEntityToCustomerProfile(
+  customerProfileSid: string,
+  objectSid: string,
+) {
+  await (
+    client.trusthub.v1.customerProfiles(customerProfileSid) as any
+  ).entityAssignments.create({
     objectSid,
   });
 }
-async function assignEntityToTrustProduct(trustProductSid: string, objectSid: string) {
-  await (client.trusthub.v1.trustProducts(trustProductSid) as any).entityAssignments.create({
+async function assignEntityToTrustProduct(
+  trustProductSid: string,
+  objectSid: string,
+) {
+  await (
+    client.trusthub.v1.trustProducts(trustProductSid) as any
+  ).entityAssignments.create({
     objectSid,
   });
 }
 async function evaluateAndSubmitCustomerProfile(customerProfileSid: string) {
   try {
-    await (client.trusthub.v1.customerProfiles(customerProfileSid) as any).evaluations.create({});
+    await (
+      client.trusthub.v1.customerProfiles(customerProfileSid) as any
+    ).evaluations.create({});
   } catch {}
   try {
     await client.trusthub.v1.customerProfiles(customerProfileSid).update({
@@ -64,7 +81,9 @@ async function evaluateAndSubmitCustomerProfile(customerProfileSid: string) {
 }
 async function evaluateAndSubmitTrustProduct(trustProductSid: string) {
   try {
-    await (client.trusthub.v1.trustProducts(trustProductSid) as any).evaluations.create({});
+    await (
+      client.trusthub.v1.trustProducts(trustProductSid) as any
+    ).evaluations.create({});
   } catch {}
   try {
     await client.trusthub.v1.trustProducts(trustProductSid).update({
@@ -73,7 +92,10 @@ async function evaluateAndSubmitTrustProduct(trustProductSid: string) {
   } catch {}
 }
 
-async function ensureMessagingServiceForUser(userId: string, userEmail: string): Promise<string> {
+async function ensureMessagingServiceForUser(
+  userId: string,
+  userEmail: string,
+): Promise<string> {
   const a2p = await A2PProfile.findOne({ userId }).lean<IA2PProfile | null>();
   if (a2p?.messagingServiceSid) return a2p.messagingServiceSid;
 
@@ -86,19 +108,24 @@ async function ensureMessagingServiceForUser(userId: string, userEmail: string):
   await A2PProfile.updateOne(
     { userId },
     { $set: { messagingServiceSid: ms.sid } },
-    { upsert: true }
+    { upsert: true },
   );
 
   return ms.sid;
 }
 
 // ---------------- handler ----------------
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed" });
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
+  if (req.method !== "POST")
+    return res.status(405).json({ message: "Method not allowed" });
 
   try {
     const session = await getServerSession(req, res, authOptions);
-    if (!session?.user?.email) return res.status(401).json({ message: "Unauthorized" });
+    if (!session?.user?.email)
+      return res.status(401).json({ message: "Unauthorized" });
 
     await mongooseConnect();
 
@@ -115,11 +142,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       contactTitle,
       contactFirstName,
       contactLastName,
-      sampleMessages,   // string | string[]
-      optInDetails,     // string
-      volume,           // string
+      sampleMessages, // string | string[]
+      optInDetails, // string
+      volume, // string
       optInScreenshotUrl, // string
-      usecaseCode,      // string | undefined
+      usecaseCode, // string | undefined
     } = (req.body || {}) as Record<string, unknown>;
 
     // Validate basics
@@ -138,16 +165,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const samples: string[] = Array.isArray(sampleMessages)
       ? (sampleMessages as string[]).map((s) => s.trim()).filter(Boolean)
       : typeof sampleMessages === "string"
-      ? (sampleMessages as string).split("\n").map((s) => s.trim()).filter(Boolean)
-      : [];
+        ? (sampleMessages as string)
+            .split("\n")
+            .map((s) => s.trim())
+            .filter(Boolean)
+        : [];
 
     if (samples.length < 2) {
-      throw new Error("Provide at least 2 sample messages (20–1024 chars each).");
+      throw new Error(
+        "Provide at least 2 sample messages (20–1024 chars each).",
+      );
     }
 
     // Upsert local A2PProfile
     const userId = String(user._id);
-    const existing = await A2PProfile.findOne({ userId }).lean<IA2PProfile | null>();
+    const existing = await A2PProfile.findOne({
+      userId,
+    }).lean<IA2PProfile | null>();
     const now = new Date();
 
     const setPayload: Partial<IA2PProfile> & { userId: string } = {
@@ -175,12 +209,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const a2p = await A2PProfile.findOneAndUpdate<IA2PProfile>(
       { userId },
       { $set: setPayload },
-      { upsert: true, returnDocument: "after" }
+      { upsert: true, returnDocument: "after" },
     );
     if (!a2p) throw new Error("Failed to upsert A2P profile");
 
     // Ensure per-user Messaging Service
-    const messagingServiceSid = await ensureMessagingServiceForUser(userId, user.email);
+    const messagingServiceSid = await ensureMessagingServiceForUser(
+      userId,
+      user.email,
+    );
 
     // Idempotent short-circuit
     if ((a2p as any).brandSid && (a2p as any).usa2pSid) {
@@ -203,7 +240,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
       secondaryProfileSid = created.sid;
 
-      await A2PProfile.updateOne({ _id: a2p._id }, { $set: { profileSid: secondaryProfileSid } });
+      await A2PProfile.updateOne(
+        { _id: a2p._id },
+        { $set: { profileSid: secondaryProfileSid } },
+      );
     }
 
     // 1.2) EndUser: business information + attach
@@ -228,7 +268,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       await A2PProfile.updateOne(
         { _id: a2p._id },
-        { $set: { businessEndUserSid: businessEU.sid } }
+        { $set: { businessEndUserSid: businessEU.sid } },
       );
     }
 
@@ -250,14 +290,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       await A2PProfile.updateOne(
         { _id: a2p._id },
-        { $set: { authorizedRepEndUserSid: repEU.sid } }
+        { $set: { authorizedRepEndUserSid: repEU.sid } },
       );
     }
 
     // 1.9) Assign Secondary to Primary (ISV)
     if (!(a2p as any).assignedToPrimary) {
-      await assignEntityToCustomerProfile(PRIMARY_PROFILE_SID, secondaryProfileSid!);
-      await A2PProfile.updateOne({ _id: a2p._id }, { $set: { assignedToPrimary: true } });
+      await assignEntityToCustomerProfile(
+        PRIMARY_PROFILE_SID,
+        secondaryProfileSid!,
+      );
+      await A2PProfile.updateOne(
+        { _id: a2p._id },
+        { $set: { assignedToPrimary: true } },
+      );
     }
 
     // Evaluate + submit Secondary
@@ -274,7 +320,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
       trustProductSid = tp.sid;
 
-      await A2PProfile.updateOne({ _id: a2p._id }, { $set: { trustProductSid } });
+      await A2PProfile.updateOne(
+        { _id: a2p._id },
+        { $set: { trustProductSid } },
+      );
     }
 
     // 2.2) EndUser: us_a2p_messaging_profile_information + attach to TrustProduct (+ attach Secondary)
@@ -298,7 +347,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       await A2PProfile.updateOne(
         { _id: a2p._id },
-        { $set: { a2pProfileEndUserSid: a2pEU.sid } }
+        { $set: { a2pProfileEndUserSid: a2pEU.sid } },
       );
     }
 
@@ -344,12 +393,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       await A2PProfile.updateOne(
         { _id: a2p._id },
-        { $set: { usa2pSid, messagingServiceSid } }
+        { $set: { usa2pSid, messagingServiceSid } },
       );
     }
 
     // Done
-    const updated = await A2PProfile.findById(a2p._id).lean<IA2PProfile | null>();
+    const updated = await A2PProfile.findById(
+      a2p._id,
+    ).lean<IA2PProfile | null>();
     return res.status(200).json({
       message:
         "A2P registration started/submitted. We'll move to VERIFIED automatically when TCR approves.",

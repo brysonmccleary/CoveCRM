@@ -2,13 +2,20 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import twilio from "twilio";
 import dbConnect from "@/lib/mongooseConnect";
-import A2PProfile, { IA2PProfile, A2PRegistrationStatus } from "@/models/A2PProfile";
+import A2PProfile, {
+  IA2PProfile,
+  A2PRegistrationStatus,
+} from "@/models/A2PProfile";
 import User from "@/models/User";
-import { sendA2PApprovedEmail /* optional: sendA2PStatusEmail */ } from "@/lib/email";
+import {
+  sendA2PApprovedEmail /* optional: sendA2PStatusEmail */,
+} from "@/lib/email";
 
 const { TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, CRON_SECRET } = process.env;
 const client =
-  TWILIO_ACCOUNT_SID && TWILIO_AUTH_TOKEN ? twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN) : null;
+  TWILIO_ACCOUNT_SID && TWILIO_AUTH_TOKEN
+    ? twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+    : null;
 
 type Json = Record<string, unknown>;
 
@@ -28,7 +35,10 @@ function mapBrandStatus(s?: string): A2PRegistrationStatus | undefined {
   }
 }
 
-function mapCampaignStatus(s?: string): { stage?: A2PRegistrationStatus; ready: boolean } {
+function mapCampaignStatus(s?: string): {
+  stage?: A2PRegistrationStatus;
+  ready: boolean;
+} {
   switch ((s || "").toUpperCase()) {
     case "VERIFIED":
       return { stage: "campaign_approved", ready: true };
@@ -42,7 +52,9 @@ function mapCampaignStatus(s?: string): { stage?: A2PRegistrationStatus; ready: 
   }
 }
 
-async function checkOne(profile: IA2PProfile): Promise<{ changed: boolean; approvedNow: boolean; details: Json }> {
+async function checkOne(
+  profile: IA2PProfile,
+): Promise<{ changed: boolean; approvedNow: boolean; details: Json }> {
   let changed = false;
   let approvedNow = false;
   const details: Json = {};
@@ -59,7 +71,11 @@ async function checkOne(profile: IA2PProfile): Promise<{ changed: boolean; appro
 
       if (newStage && newStage !== profile.registrationStatus) {
         profile.approvalHistory = profile.approvalHistory || [];
-        profile.approvalHistory.push({ stage: newStage, at: new Date(), note: "Brand status update" });
+        profile.approvalHistory.push({
+          stage: newStage,
+          at: new Date(),
+          note: "Brand status update",
+        });
         profile.registrationStatus = newStage;
         changed = true;
       }
@@ -80,7 +96,8 @@ async function checkOne(profile: IA2PProfile): Promise<{ changed: boolean; appro
 
       // Pick the one that matches our stored campaignSid, or fall back to first
       const row =
-        (profile.campaignSid && list.find((r: any) => r?.campaignSid === profile.campaignSid)) ||
+        (profile.campaignSid &&
+          list.find((r: any) => r?.campaignSid === profile.campaignSid)) ||
         list[0];
 
       if (row) {
@@ -94,7 +111,11 @@ async function checkOne(profile: IA2PProfile): Promise<{ changed: boolean; appro
         const mapped = mapCampaignStatus(row.campaignStatus);
         if (mapped.stage && mapped.stage !== profile.registrationStatus) {
           profile.approvalHistory = profile.approvalHistory || [];
-          profile.approvalHistory.push({ stage: mapped.stage, at: new Date(), note: "Campaign status update" });
+          profile.approvalHistory.push({
+            stage: mapped.stage,
+            at: new Date(),
+            note: "Campaign status update",
+          });
           profile.registrationStatus = mapped.stage;
           changed = true;
         }
@@ -105,7 +126,11 @@ async function checkOne(profile: IA2PProfile): Promise<{ changed: boolean; appro
           // We also consider the lifecycle fully "ready"
           if (profile.registrationStatus !== "ready") {
             profile.approvalHistory = profile.approvalHistory || [];
-            profile.approvalHistory.push({ stage: "ready", at: new Date(), note: "A2P verified & wired" });
+            profile.approvalHistory.push({
+              stage: "ready",
+              at: new Date(),
+              note: "A2P verified & wired",
+            });
             profile.registrationStatus = "ready";
           }
           changed = true;
@@ -121,23 +146,35 @@ async function checkOne(profile: IA2PProfile): Promise<{ changed: boolean; appro
   return { changed, approvedNow, details };
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   try {
     // Optional secret check to prevent abuse
     if (CRON_SECRET) {
-      const token = (req.query.token || req.headers["x-cron-token"]) as string | undefined;
-      if (token !== CRON_SECRET) return res.status(401).json({ ok: false, error: "Unauthorized" });
+      const token = (req.query.token || req.headers["x-cron-token"]) as
+        | string
+        | undefined;
+      if (token !== CRON_SECRET)
+        return res.status(401).json({ ok: false, error: "Unauthorized" });
     }
 
     if (!client) {
-      return res.status(500).json({ ok: false, error: "Twilio credentials not configured" });
+      return res
+        .status(500)
+        .json({ ok: false, error: "Twilio credentials not configured" });
     }
 
     await dbConnect();
 
     // Only profiles not fully ready (or with recent errors)
     const profiles = await A2PProfile.find({
-      $or: [{ registrationStatus: { $ne: "ready" } }, { messagingReady: { $ne: true } }, { lastError: { $exists: true, $ne: "" } }],
+      $or: [
+        { registrationStatus: { $ne: "ready" } },
+        { messagingReady: { $ne: true } },
+        { lastError: { $exists: true, $ne: "" } },
+      ],
     });
 
     let updated = 0;
@@ -146,7 +183,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     for (const profile of profiles) {
       const beforeReady = !!profile.messagingReady;
-      const { changed, approvedNow, details } = await checkOne(profile as IA2PProfile);
+      const { changed, approvedNow, details } = await checkOne(
+        profile as IA2PProfile,
+      );
 
       if (changed) {
         await profile.save();
@@ -189,6 +228,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       results,
     });
   } catch (err: any) {
-    return res.status(500).json({ ok: false, error: err?.message || "check-a2p failed" });
+    return res
+      .status(500)
+      .json({ ok: false, error: err?.message || "check-a2p failed" });
   }
 }

@@ -16,8 +16,9 @@ const FolderSchema = new Schema<IFolder>(
     assignedDrips: { type: [String], default: [] },
     leadIds: { type: [String], default: [] },
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
-const Folder = mongoose.models.Folder || mongoose.model<IFolder>("Folder", FolderSchema);
+const Folder =
+  mongoose.models.Folder || mongoose.model<IFolder>("Folder", FolderSchema);
 export default Folder;

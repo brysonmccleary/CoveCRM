@@ -4,11 +4,15 @@ import Lead from "@/models/Lead";
 import { handleAIResponse } from "@/lib/ai/handleairesponse";
 import mongoose from "mongoose";
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   if (req.method !== "POST") return res.status(405).end("Method not allowed");
 
   const { Body, From } = req.body;
-  if (!Body || !From) return res.status(400).json({ message: "Missing message or sender." });
+  if (!Body || !From)
+    return res.status(400).json({ message: "Missing message or sender." });
 
   try {
     if (!mongoose.connection.readyState) {
@@ -16,7 +20,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const sanitizedPhone = From.replace(/\D/g, "").slice(-10); // Extract last 10 digits
-    const lead = await Lead.findOne({ phone: { $regex: sanitizedPhone + "$" } });
+    const lead = await Lead.findOne({
+      phone: { $regex: sanitizedPhone + "$" },
+    });
 
     if (!lead) {
       console.warn(`No lead found for incoming SMS from ${From}`);

@@ -12,7 +12,10 @@ const messagingServiceSid = process.env.TWILIO_MESSAGING_SERVICE_SID!;
 
 const twilioClient = twilio(accountSid, authToken);
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   if (req.method !== "POST") return res.status(405).end("Method Not Allowed");
 
   const session = await getServerSession(req, res, authOptions);
@@ -72,7 +75,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const name = p.friendlyName?.toLowerCase() || "";
       return (
         name.includes("a2p") &&
-        (name.includes("10dlc") || name.includes("messaging") || name.includes("local"))
+        (name.includes("10dlc") ||
+          name.includes("messaging") ||
+          name.includes("local"))
       );
     });
 

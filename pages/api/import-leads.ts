@@ -29,57 +29,119 @@ function toLast10(phone?: string | null): string | undefined {
 }
 
 const STATE_MAP: Record<string, string> = {
-  AL: "AL", ALABAMA: "AL",
-  AK: "AK", ALASKA: "AK",
-  AZ: "AZ", ARIZONA: "AZ",
-  AR: "AR", ARKANSAS: "AR",
-  CA: "CA", CALIFORNIA: "CA",
-  CO: "CO", COLORADO: "CO",
-  CT: "CT", CONNECTICUT: "CT",
-  DE: "DE", DELAWARE: "DE",
-  FL: "FL", FLORIDA: "FL",
-  GA: "GA", GEORGIA: "GA",
-  HI: "HI", HAWAII: "HI",
-  ID: "ID", IDAHO: "ID",
-  IL: "IL", ILLINOIS: "IL",
-  IN: "IN", INDIANA: "IN",
-  IA: "IA", IOWA: "IA",
-  KS: "KS", KANSAS: "KS",
-  KY: "KY", KENTUCKY: "KY",
-  LA: "LA", LOUISIANA: "LA",
-  ME: "ME", MAINE: "ME",
-  MD: "MD", MARYLAND: "MD",
-  MA: "MA", MASSACHUSETTS: "MA",
-  MI: "MI", MICHIGAN: "MI",
-  MN: "MN", MINNESOTA: "MN",
-  MS: "MS", MISSISSIPPI: "MS",
-  MO: "MO", MISSOURI: "MO",
-  MT: "MT", MONTANA: "MT",
-  NE: "NE", NEBRASKA: "NE",
-  NV: "NV", NEVADA: "NV",
-  NH: "NH", NEW_HAMPSHIRE: "NH", "NEW HAMPSHIRE": "NH",
-  NJ: "NJ", NEW_JERSEY: "NJ", "NEW JERSEY": "NJ",
-  NM: "NM", NEW_MEXICO: "NM", "NEW MEXICO": "NM",
-  NY: "NY", NEW_YORK: "NY", "NEW YORK": "NY",
-  NC: "NC", NORTH_CAROLINA: "NC", "NORTH CAROLINA": "NC",
-  ND: "ND", NORTH_DAKOTA: "ND", "NORTH DAKOTA": "ND",
-  OH: "OH", OHIO: "OH",
-  OK: "OK", OKLAHOMA: "OK",
-  OR: "OR", OREGON: "OR",
-  PA: "PA", PENNSYLVANIA: "PA",
-  RI: "RI", RHODE_ISLAND: "RI", "RHODE ISLAND": "RI",
-  SC: "SC", SOUTH_CAROLINA: "SC", "SOUTH CAROLINA": "SC",
-  SD: "SD", SOUTH_DAKOTA: "SD", "SOUTH DAKOTA": "SD",
-  TN: "TN", TENNESSEE: "TN",
-  TX: "TX", TEXAS: "TX",
-  UT: "UT", UTAH: "UT",
-  VT: "VT", VERMONT: "VT",
-  VA: "VA", VIRGINIA: "VA",
-  WA: "WA", WASHINGTON: "WA",
-  WV: "WV", WEST_VIRGINIA: "WV", "WEST VIRGINIA": "WV",
-  WI: "WI", WISCONSIN: "WI",
-  WY: "WY", WYOMING: "WY",
-  DC: "DC", "DISTRICT OF COLUMBIA": "DC", "DISTRICT_OF_COLUMBIA": "DC"
+  AL: "AL",
+  ALABAMA: "AL",
+  AK: "AK",
+  ALASKA: "AK",
+  AZ: "AZ",
+  ARIZONA: "AZ",
+  AR: "AR",
+  ARKANSAS: "AR",
+  CA: "CA",
+  CALIFORNIA: "CA",
+  CO: "CO",
+  COLORADO: "CO",
+  CT: "CT",
+  CONNECTICUT: "CT",
+  DE: "DE",
+  DELAWARE: "DE",
+  FL: "FL",
+  FLORIDA: "FL",
+  GA: "GA",
+  GEORGIA: "GA",
+  HI: "HI",
+  HAWAII: "HI",
+  ID: "ID",
+  IDAHO: "ID",
+  IL: "IL",
+  ILLINOIS: "IL",
+  IN: "IN",
+  INDIANA: "IN",
+  IA: "IA",
+  IOWA: "IA",
+  KS: "KS",
+  KANSAS: "KS",
+  KY: "KY",
+  KENTUCKY: "KY",
+  LA: "LA",
+  LOUISIANA: "LA",
+  ME: "ME",
+  MAINE: "ME",
+  MD: "MD",
+  MARYLAND: "MD",
+  MA: "MA",
+  MASSACHUSETTS: "MA",
+  MI: "MI",
+  MICHIGAN: "MI",
+  MN: "MN",
+  MINNESOTA: "MN",
+  MS: "MS",
+  MISSISSIPPI: "MS",
+  MO: "MO",
+  MISSOURI: "MO",
+  MT: "MT",
+  MONTANA: "MT",
+  NE: "NE",
+  NEBRASKA: "NE",
+  NV: "NV",
+  NEVADA: "NV",
+  NH: "NH",
+  NEW_HAMPSHIRE: "NH",
+  "NEW HAMPSHIRE": "NH",
+  NJ: "NJ",
+  NEW_JERSEY: "NJ",
+  "NEW JERSEY": "NJ",
+  NM: "NM",
+  NEW_MEXICO: "NM",
+  "NEW MEXICO": "NM",
+  NY: "NY",
+  NEW_YORK: "NY",
+  "NEW YORK": "NY",
+  NC: "NC",
+  NORTH_CAROLINA: "NC",
+  "NORTH CAROLINA": "NC",
+  ND: "ND",
+  NORTH_DAKOTA: "ND",
+  "NORTH DAKOTA": "ND",
+  OH: "OH",
+  OHIO: "OH",
+  OK: "OK",
+  OKLAHOMA: "OK",
+  OR: "OR",
+  OREGON: "OR",
+  PA: "PA",
+  PENNSYLVANIA: "PA",
+  RI: "RI",
+  RHODE_ISLAND: "RI",
+  "RHODE ISLAND": "RI",
+  SC: "SC",
+  SOUTH_CAROLINA: "SC",
+  "SOUTH CAROLINA": "SC",
+  SD: "SD",
+  SOUTH_DAKOTA: "SD",
+  "SOUTH DAKOTA": "SD",
+  TN: "TN",
+  TENNESSEE: "TN",
+  TX: "TX",
+  TEXAS: "TX",
+  UT: "UT",
+  UTAH: "UT",
+  VT: "VT",
+  VERMONT: "VT",
+  VA: "VA",
+  VIRGINIA: "VA",
+  WA: "WA",
+  WASHINGTON: "WA",
+  WV: "WV",
+  WEST_VIRGINIA: "WV",
+  "WEST VIRGINIA": "WV",
+  WI: "WI",
+  WISCONSIN: "WI",
+  WY: "WY",
+  WYOMING: "WY",
+  DC: "DC",
+  "DISTRICT OF COLUMBIA": "DC",
+  DISTRICT_OF_COLUMBIA: "DC",
 };
 
 function normalizeState(input?: string | null): string | undefined {
@@ -120,7 +182,7 @@ async function readJsonBody(req: NextApiRequest): Promise<JsonPayload | null> {
 async function ensureFolder({
   userEmail,
   targetFolderId,
-  folderName
+  folderName,
 }: {
   userEmail: string;
   targetFolderId?: string;
@@ -157,9 +219,11 @@ function mapRow(row: Record<string, any>, mapping: Record<string, string>) {
 
   // store source into Notes if provided (schema doesn't have a dedicated field)
   const mergedNotes =
-    source && notes ? `${notes} | Source: ${source}` :
-    source && !notes ? `Source: ${source}` :
-    notes;
+    source && notes
+      ? `${notes} | Source: ${source}`
+      : source && !notes
+        ? `Source: ${source}`
+        : notes;
 
   const normalizedState = normalizeState(stateRaw);
   const emailLc = lc(email);
@@ -168,20 +232,25 @@ function mapRow(row: Record<string, any>, mapping: Record<string, string>) {
   return {
     "First Name": first,
     "Last Name": last,
-    Email: emailLc,         // store lowercased for dedupe
+    Email: emailLc, // store lowercased for dedupe
     Phone: phone,
-    phoneLast10,            // used for dedupe + stored in schema
+    phoneLast10, // used for dedupe + stored in schema
     State: normalizedState,
     Notes: mergedNotes,
     leadType: sanitizeLeadType(leadTypeRaw || ""),
   };
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed" });
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
+  if (req.method !== "POST")
+    return res.status(405).json({ message: "Method not allowed" });
 
   const session = await getServerSession(req, res, authOptions);
-  if (!session?.user?.email) return res.status(401).json({ message: "Unauthorized" });
+  if (!session?.user?.email)
+    return res.status(401).json({ message: "Unauthorized" });
 
   const userEmail = lc(session.user.email)!;
   await dbConnect();
@@ -190,12 +259,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const json = await readJsonBody(req);
   if (json) {
     try {
-      const { targetFolderId, folderName, mapping, rows, skipExisting = true } = json;
+      const {
+        targetFolderId,
+        folderName,
+        mapping,
+        rows,
+        skipExisting = true,
+      } = json;
       if (!mapping || !rows || !Array.isArray(rows)) {
         return res.status(400).json({ message: "Missing mapping or rows[]" });
       }
 
-      const folder = await ensureFolder({ userEmail, targetFolderId, folderName });
+      const folder = await ensureFolder({
+        userEmail,
+        targetFolderId,
+        folderName,
+      });
 
       // Map rows → leads
       const mapped = rows.map((r) => ({
@@ -207,17 +286,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       // Build dedupe lookup sets
       const phoneKeys = Array.from(
-        new Set(mapped.map((m) => m.phoneLast10).filter(Boolean) as string[])
+        new Set(mapped.map((m) => m.phoneLast10).filter(Boolean) as string[]),
       );
       const emailKeys = Array.from(
-        new Set(mapped.map((m) => m.Email).filter(Boolean) as string[])
+        new Set(mapped.map((m) => m.Email).filter(Boolean) as string[]),
       );
 
       // Preload existing leads for this user by phone or email
       const existing = await Lead.find({
         userEmail,
         $or: [
-          phoneKeys.length ? { phoneLast10: { $in: phoneKeys } } : { _id: null },
+          phoneKeys.length
+            ? { phoneLast10: { $in: phoneKeys } }
+            : { _id: null },
           emailKeys.length ? { Email: { $in: emailKeys } } : { _id: null },
         ],
       }).select("_id phoneLast10 Email folderId");
@@ -230,7 +311,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
 
       const ops: any[] = [];
-      const processedFilters: Array<{ phoneLast10?: string; Email?: string }> = [];
+      const processedFilters: Array<{ phoneLast10?: string; Email?: string }> =
+        [];
       let skipped = 0;
 
       for (const m of mapped) {
@@ -244,17 +326,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             continue;
           }
           // update existing + move to folder
-          const filter =
-            m.phoneLast10 ? { userEmail, phoneLast10: m.phoneLast10 } :
-            m.Email ? { userEmail, Email: m.Email } :
-            null;
-          if (!filter) { skipped++; continue; }
+          const filter = m.phoneLast10
+            ? { userEmail, phoneLast10: m.phoneLast10 }
+            : m.Email
+              ? { userEmail, Email: m.Email }
+              : null;
+          if (!filter) {
+            skipped++;
+            continue;
+          }
 
           const set: any = {
             ownerEmail: userEmail,
             folderId: folder._id,
           };
-          if (m["First Name"] !== undefined) set["First Name"] = m["First Name"];
+          if (m["First Name"] !== undefined)
+            set["First Name"] = m["First Name"];
           if (m["Last Name"] !== undefined) set["Last Name"] = m["Last Name"];
           if (m.Email !== undefined) set["Email"] = m.Email;
           if (m.Phone !== undefined) set["Phone"] = m.Phone;
@@ -273,11 +360,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           processedFilters.push(filter);
         } else {
           // upsert new
-          const filter =
-            m.phoneLast10 ? { userEmail, phoneLast10: m.phoneLast10 } :
-            m.Email ? { userEmail, Email: m.Email } :
-            null;
-          if (!filter) { skipped++; continue; }
+          const filter = m.phoneLast10
+            ? { userEmail, phoneLast10: m.phoneLast10 }
+            : m.Email
+              ? { userEmail, Email: m.Email }
+              : null;
+          if (!filter) {
+            skipped++;
+            continue;
+          }
 
           const setOnInsert: any = {
             userEmail,
@@ -287,7 +378,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           const set: any = {
             folderId: folder._id,
           };
-          if (m["First Name"] !== undefined) set["First Name"] = m["First Name"];
+          if (m["First Name"] !== undefined)
+            set["First Name"] = m["First Name"];
           if (m["Last Name"] !== undefined) set["Last Name"] = m["Last Name"];
           if (m.Email !== undefined) set["Email"] = m.Email;
           if (m.Phone !== undefined) set["Phone"] = m.Phone;
@@ -328,7 +420,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           if (ids.length) {
             await Folder.updateOne(
               { _id: folder._id, userEmail },
-              { $addToSet: { leadIds: { $each: ids } } }
+              { $addToSet: { leadIds: { $each: ids } } },
             );
           }
         }
@@ -343,7 +435,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     } catch (e: any) {
       console.error("❌ JSON import error:", e);
-      return res.status(500).json({ message: "Import failed", error: e?.message || String(e) });
+      return res
+        .status(500)
+        .json({ message: "Import failed", error: e?.message || String(e) });
     }
   }
 
@@ -360,16 +454,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const targetFolderId = fields.targetFolderId?.toString();
     const folderNameField = fields.folderName?.toString()?.trim();
     const mappingStr = fields.mapping?.toString();
-    const skipExisting = fields.skipExisting?.toString() === "false" ? false : true; // default true
+    const skipExisting =
+      fields.skipExisting?.toString() === "false" ? false : true; // default true
 
     const file = Array.isArray(files.file) ? files.file[0] : files.file;
-    if (!file || !file.filepath) return res.status(400).json({ message: "Missing file" });
+    if (!file || !file.filepath)
+      return res.status(400).json({ message: "Missing file" });
 
     // If mapping provided, use the new logic on CSV rows
     if (mappingStr) {
       try {
         const mapping = JSON.parse(mappingStr) as Record<string, string>;
-        const folder = await ensureFolder({ userEmail, targetFolderId, folderName: folderNameField });
+        const folder = await ensureFolder({
+          userEmail,
+          targetFolderId,
+          folderName: folderNameField,
+        });
 
         const buffer = await fs.promises.readFile(file.filepath);
         const rawRows: any[] = [];
@@ -378,10 +478,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           bufferToStream(buffer)
             .pipe(csvParser())
             .on("data", (row) => {
-              const cleaned = Object.entries(row).reduce((acc, [key, val]) => {
-                acc[String(key).trim()] = typeof val === "string" ? val.trim() : val;
-                return acc;
-              }, {} as Record<string, any>);
+              const cleaned = Object.entries(row).reduce(
+                (acc, [key, val]) => {
+                  acc[String(key).trim()] =
+                    typeof val === "string" ? val.trim() : val;
+                  return acc;
+                },
+                {} as Record<string, any>,
+              );
               rawRows.push(cleaned);
             })
             .on("end", () => resolve())
@@ -397,16 +501,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }));
 
         const phoneKeys = Array.from(
-          new Set(rowsMapped.map((m) => m.phoneLast10).filter(Boolean) as string[])
+          new Set(
+            rowsMapped.map((m) => m.phoneLast10).filter(Boolean) as string[],
+          ),
         );
         const emailKeys = Array.from(
-          new Set(rowsMapped.map((m) => m.Email).filter(Boolean) as string[])
+          new Set(rowsMapped.map((m) => m.Email).filter(Boolean) as string[]),
         );
 
         const existing = await Lead.find({
           userEmail,
           $or: [
-            phoneKeys.length ? { phoneLast10: { $in: phoneKeys } } : { _id: null },
+            phoneKeys.length
+              ? { phoneLast10: { $in: phoneKeys } }
+              : { _id: null },
             emailKeys.length ? { Email: { $in: emailKeys } } : { _id: null },
           ],
         }).select("_id phoneLast10 Email folderId");
@@ -419,7 +527,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
 
         const ops: any[] = [];
-        const processedFilters: Array<{ phoneLast10?: string; Email?: string }> = [];
+        const processedFilters: Array<{
+          phoneLast10?: string;
+          Email?: string;
+        }> = [];
         let skipped = 0;
 
         for (const m of rowsMapped) {
@@ -432,17 +543,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               skipped++;
               continue;
             }
-            const filter =
-              m.phoneLast10 ? { userEmail, phoneLast10: m.phoneLast10 } :
-              m.Email ? { userEmail, Email: m.Email } :
-              null;
-            if (!filter) { skipped++; continue; }
+            const filter = m.phoneLast10
+              ? { userEmail, phoneLast10: m.phoneLast10 }
+              : m.Email
+                ? { userEmail, Email: m.Email }
+                : null;
+            if (!filter) {
+              skipped++;
+              continue;
+            }
 
             const set: any = {
               ownerEmail: userEmail,
               folderId: folder._id,
             };
-            if (m["First Name"] !== undefined) set["First Name"] = m["First Name"];
+            if (m["First Name"] !== undefined)
+              set["First Name"] = m["First Name"];
             if (m["Last Name"] !== undefined) set["Last Name"] = m["Last Name"];
             if (m.Email !== undefined) set["Email"] = m.Email;
             if (m.Phone !== undefined) set["Phone"] = m.Phone;
@@ -451,14 +567,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             if (m.Notes !== undefined) set["Notes"] = m.Notes;
             if (m.leadType) set["leadType"] = m.leadType;
 
-            ops.push({ updateOne: { filter, update: { $set: set }, upsert: false } });
+            ops.push({
+              updateOne: { filter, update: { $set: set }, upsert: false },
+            });
             processedFilters.push(filter);
           } else {
-            const filter =
-              m.phoneLast10 ? { userEmail, phoneLast10: m.phoneLast10 } :
-              m.Email ? { userEmail, Email: m.Email } :
-              null;
-            if (!filter) { skipped++; continue; }
+            const filter = m.phoneLast10
+              ? { userEmail, phoneLast10: m.phoneLast10 }
+              : m.Email
+                ? { userEmail, Email: m.Email }
+                : null;
+            if (!filter) {
+              skipped++;
+              continue;
+            }
 
             const setOnInsert: any = {
               userEmail,
@@ -468,7 +590,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             const set: any = {
               folderId: folder._id,
             };
-            if (m["First Name"] !== undefined) set["First Name"] = m["First Name"];
+            if (m["First Name"] !== undefined)
+              set["First Name"] = m["First Name"];
             if (m["Last Name"] !== undefined) set["Last Name"] = m["Last Name"];
             if (m.Email !== undefined) set["Email"] = m.Email;
             if (m.Phone !== undefined) set["Phone"] = m.Phone;
@@ -477,7 +600,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             if (m.Notes !== undefined) set["Notes"] = m.Notes;
             if (m.leadType) set["leadType"] = m.leadType;
 
-            ops.push({ updateOne: { filter, update: { $set: set, $setOnInsert: setOnInsert }, upsert: true } });
+            ops.push({
+              updateOne: {
+                filter,
+                update: { $set: set, $setOnInsert: setOnInsert },
+                upsert: true,
+              },
+            });
             processedFilters.push(filter);
           }
         }
@@ -500,7 +629,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           if (ids.length) {
             await Folder.updateOne(
               { _id: folder._id, userEmail },
-              { $addToSet: { leadIds: { $each: ids } } }
+              { $addToSet: { leadIds: { $each: ids } } },
             );
           }
         }
@@ -514,13 +643,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         });
       } catch (e: any) {
         console.error("❌ Multipart mapping import error:", e);
-        return res.status(500).json({ message: "Import failed", error: e?.message || String(e) });
+        return res
+          .status(500)
+          .json({ message: "Import failed", error: e?.message || String(e) });
       }
     }
 
     // Legacy path: folderName + CSV file (no mapping provided) → keep your original behavior
     const folderName = folderNameField;
-    if (!folderName) return res.status(400).json({ message: "Missing folder name" });
+    if (!folderName)
+      return res.status(400).json({ message: "Missing folder name" });
 
     try {
       const buffer = await fs.promises.readFile(file.filepath);
@@ -530,10 +662,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         bufferToStream(buffer)
           .pipe(csvParser())
           .on("data", (row) => {
-            const cleaned = Object.entries(row).reduce((acc, [key, val]) => {
-              acc[String(key).trim()] = typeof val === "string" ? val.trim() : val;
-              return acc;
-            }, {} as Record<string, any>);
+            const cleaned = Object.entries(row).reduce(
+              (acc, [key, val]) => {
+                acc[String(key).trim()] =
+                  typeof val === "string" ? val.trim() : val;
+                return acc;
+              },
+              {} as Record<string, any>,
+            );
             rawLeads.push(cleaned);
           })
           .on("end", () => resolve())
@@ -542,7 +678,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       // Find or create folder (legacy)
       let folder = await Folder.findOne({ name: folderName, userEmail });
-      if (!folder) folder = await Folder.create({ name: folderName, userEmail });
+      if (!folder)
+        folder = await Folder.create({ name: folderName, userEmail });
 
       const leadsToInsert = rawLeads.map((lead) => ({
         ...lead,
@@ -563,7 +700,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     } catch (e: any) {
       console.error("❌ Legacy import error:", e);
-      return res.status(500).json({ message: "Insert failed", error: e?.message || String(e) });
+      return res
+        .status(500)
+        .json({ message: "Insert failed", error: e?.message || String(e) });
     }
   });
 }

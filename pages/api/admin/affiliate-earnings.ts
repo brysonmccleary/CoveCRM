@@ -4,7 +4,10 @@ import { authOptions } from "../auth/[...nextauth]";
 import dbConnect from "@/lib/dbConnect";
 import User from "@/models/User";
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   await dbConnect();
 
   const session = await getServerSession(req, res, authOptions);
@@ -37,6 +40,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(200).json({ rows, months: allMonths });
   } catch (err) {
     console.error("[ADMIN_AFFILIATE_EARNINGS_FETCH_ERROR]", err);
-    return res.status(500).json({ error: "Failed to fetch affiliate earnings" });
+    return res
+      .status(500)
+      .json({ error: "Failed to fetch affiliate earnings" });
   }
 }

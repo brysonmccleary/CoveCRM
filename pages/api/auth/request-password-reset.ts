@@ -16,11 +16,16 @@ const getBaseUrl = () => {
   );
 };
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "POST") return res.status(405).json({ ok: false, error: "Method not allowed" });
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
+  if (req.method !== "POST")
+    return res.status(405).json({ ok: false, error: "Method not allowed" });
 
   const { email } = (req.body || {}) as { email?: string };
-  if (!email) return res.status(400).json({ ok: false, error: "Email required" });
+  if (!email)
+    return res.status(400).json({ ok: false, error: "Email required" });
 
   await mongooseConnect();
 
@@ -33,7 +38,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // Create a new token
     const rawToken = crypto.randomBytes(32).toString("hex");
-    const tokenHash = crypto.createHash("sha256").update(rawToken).digest("hex");
+    const tokenHash = crypto
+      .createHash("sha256")
+      .update(rawToken)
+      .digest("hex");
     const expiresAt = new Date(Date.now() + 1000 * 60 * 60); // 1 hour
 
     await PasswordResetToken.create({

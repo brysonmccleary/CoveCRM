@@ -12,7 +12,10 @@ export const config = {
 
 const buffer = require("micro").buffer;
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   if (req.method !== "POST") {
     return res.status(405).send("Method Not Allowed");
   }

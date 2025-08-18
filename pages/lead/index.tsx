@@ -48,7 +48,10 @@ export default function LeadsPage() {
             await fetch("/api/disposition-lead", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ leadId: previewLead._id, newFolderName: dispo }),
+              body: JSON.stringify({
+                leadId: previewLead._id,
+                newFolderName: dispo,
+              }),
             }).catch(() => {});
           }}
         />

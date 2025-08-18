@@ -15,18 +15,35 @@ export const config = { api: { bodyParser: false } };
 const CALL_COST_PER_SECOND = 0.000333;
 
 const AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN!;
-const BASE_URL = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "").replace(/\/$/, "");
+const BASE_URL = (
+  process.env.NEXT_PUBLIC_BASE_URL ||
+  process.env.BASE_URL ||
+  ""
+).replace(/\/$/, "");
 const ALLOW_DEV_TWILIO_TEST =
-  process.env.ALLOW_LOCAL_TWILIO_TEST === "1" && process.env.NODE_ENV !== "production";
+  process.env.ALLOW_LOCAL_TWILIO_TEST === "1" &&
+  process.env.NODE_ENV !== "production";
 
 // Final SMS states we care about
-const TERMINAL_SMS_STATES = new Set(["delivered", "failed", "undelivered", "sent"]);
+const TERMINAL_SMS_STATES = new Set([
+  "delivered",
+  "failed",
+  "undelivered",
+  "sent",
+]);
 
 // Voice terminal statuses (Twilio may end with any of these)
-const TERMINAL_VOICE_STATES = new Set(["completed", "busy", "failed", "no-answer"]);
+const TERMINAL_VOICE_STATES = new Set([
+  "completed",
+  "busy",
+  "failed",
+  "no-answer",
+]);
 
 // Helper: resolve which user owns a Twilio number (for direction + ownership)
-async function resolveOwnerEmailByOwnedNumber(num: string): Promise<string | null> {
+async function resolveOwnerEmailByOwnedNumber(
+  num: string,
+): Promise<string | null> {
   if (!num) return null;
   const owner =
     (await User.findOne({ "numbers.phoneNumber": num })) ||
@@ -34,7 +51,10 @@ async function resolveOwnerEmailByOwnedNumber(num: string): Promise<string | nul
   return owner?.email?.toLowerCase?.() || null;
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   if (req.method !== "POST") {
     res.status(405).end("Method Not Allowed");
     return;
@@ -51,7 +71,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     AUTH_TOKEN,
     signature,
     requestUrl,
-    Object.fromEntries(params as any)
+    Object.fromEntries(params as any),
   );
   if (!valid && !ALLOW_DEV_TWILIO_TEST) {
     console.warn("❌ Invalid Twilio signature on status-callback");
@@ -59,7 +79,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return;
   }
   if (!valid && ALLOW_DEV_TWILIO_TEST) {
-    console.warn("⚠️ Dev bypass: Twilio signature validation skipped (status-callback).");
+    console.warn(
+      "⚠️ Dev bypass: Twilio signature validation skipped (status-callback).",
+    );
   }
 
   try {
@@ -72,7 +94,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // ---- SMS fields
     const MessageSid = params.get("MessageSid") || params.get("SmsSid") || "";
-    const rawStatus = (params.get("MessageStatus") || params.get("SmsStatus") || "").toLowerCase();
+    const rawStatus = (
+      params.get("MessageStatus") ||
+      params.get("SmsStatus") ||
+      ""
+    ).toLowerCase();
     const MessageStatus = rawStatus || "";
     const ErrorCode = params.get("ErrorCode") || undefined;
 
@@ -95,7 +121,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const msg = await Message.findOneAndUpdate(
         { sid: MessageSid },
         { $set: updates },
-        { new: true }
+        { new: true },
       );
 
       // Figure out which user to notify
@@ -105,7 +131,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (!userEmail) {
         const userByFrom =
           (await User.findOne({ "numbers.phoneNumber": From })) ||
-          (await User.findOne({ "numbers.messagingServiceSid": MessagingServiceSid }));
+          (await User.findOne({
+            "numbers.messagingServiceSid": MessagingServiceSid,
+          }));
         if (userByFrom) userEmail = userByFrom.email?.toLowerCase?.() || null;
       }
 
@@ -130,16 +158,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           });
         }
       } catch (e) {
-        console.warn("ℹ️ Socket emit (message:status) failed:", (e as any)?.message || e);
+        console.warn(
+          "ℹ️ Socket emit (message:status) failed:",
+          (e as any)?.message || e,
+        );
       }
 
       // Per-number usage rollup when we hit a terminal status
       if (TERMINAL_SMS_STATES.has(MessageStatus)) {
         const ownerUser =
           (await User.findOne({ "numbers.phoneNumber": From })) ||
-          (await User.findOne({ "numbers.messagingServiceSid": MessagingServiceSid }));
+          (await User.findOne({
+            "numbers.messagingServiceSid": MessagingServiceSid,
+          }));
         if (ownerUser) {
-          const numberEntry = (ownerUser as any).numbers?.find((n: any) => n.phoneNumber === From);
+          const numberEntry = (ownerUser as any).numbers?.find(
+            (n: any) => n.phoneNumber === From,
+          );
           if (numberEntry) {
             numberEntry.usage = numberEntry.usage || {
               callsMade: 0,
@@ -148,7 +183,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               textsReceived: 0,
               cost: 0,
             };
-            numberEntry.usage.textsSent = (numberEntry.usage.textsSent || 0) + 1;
+            numberEntry.usage.textsSent =
+              (numberEntry.usage.textsSent || 0) + 1;
             await (ownerUser as any).save();
           }
         }
@@ -156,10 +192,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       if (ErrorCode) {
         console.warn(
-          `⚠️ SMS error for ${From} -> ${To}: status=${MessageStatus} code=${ErrorCode} sid=${MessageSid}`
+          `⚠️ SMS error for ${From} -> ${To}: status=${MessageStatus} code=${ErrorCode} sid=${MessageSid}`,
         );
       } else {
-        console.log(`📬 SMS status ${MessageStatus} for ${From} -> ${To} (sid ${MessageSid})`);
+        console.log(
+          `📬 SMS status ${MessageStatus} for ${From} -> ${To} (sid ${MessageSid})`,
+        );
       }
 
       res.status(200).end();
@@ -191,11 +229,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       const ownerUser = direction === "inbound" ? inboundOwner : outboundOwner;
       const userEmail =
-        ownerUser?.email?.toLowerCase?.() || (await resolveOwnerEmailByOwnedNumber(ownerNumber));
+        ownerUser?.email?.toLowerCase?.() ||
+        (await resolveOwnerEmailByOwnedNumber(ownerNumber));
 
       // Build updates based on status
       const now = Timestamp ? new Date(Timestamp) : new Date();
-      const durationSec = CallDurationStr ? parseInt(CallDurationStr, 10) || 0 : undefined;
+      const durationSec = CallDurationStr
+        ? parseInt(CallDurationStr, 10) || 0
+        : undefined;
 
       const setOnInsert: any = {
         callSid: CallSid,
@@ -206,7 +247,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       const set: any = {};
       // Keep a best-effort startedAt
-      if (CallStatus === "answered" || CallStatus === "ringing" || CallStatus === "initiated") {
+      if (
+        CallStatus === "answered" ||
+        CallStatus === "ringing" ||
+        CallStatus === "initiated"
+      ) {
         set.startedAt = now;
       }
 
@@ -232,7 +277,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           $setOnInsert: setOnInsert,
           $set: set,
         },
-        { upsert: true }
+        { upsert: true },
       );
 
       // ------- Usage/Billing for completed calls (existing behavior preserved)
@@ -240,7 +285,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const user = await getUserByPhoneNumber(ownerNumber);
         if (user) {
           const userDoc = await User.findById(user._id);
-          const numberEntry = (userDoc as any)?.numbers?.find((n: any) => n.phoneNumber === ownerNumber);
+          const numberEntry = (userDoc as any)?.numbers?.find(
+            (n: any) => n.phoneNumber === ownerNumber,
+          );
           if (numberEntry) {
             numberEntry.usage = numberEntry.usage || {
               callsMade: 0,
@@ -253,14 +300,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             if (direction === "outbound") numberEntry.usage.callsMade += 1;
 
             const sec = durationSec || 0;
-            const usageCost = parseFloat((sec * CALL_COST_PER_SECOND).toFixed(6));
+            const usageCost = parseFloat(
+              (sec * CALL_COST_PER_SECOND).toFixed(6),
+            );
             numberEntry.usage.cost += usageCost;
             await (userDoc as any).save();
 
             // Only track cost when we have a real duration (completed answered calls)
-            await trackUsage({ user: userDoc, amount: usageCost, source: "twilio" });
+            await trackUsage({
+              user: userDoc,
+              amount: usageCost,
+              source: "twilio",
+            });
             console.log(
-              `📞 Tracked ${sec}s ${direction} call on ${ownerNumber} (cost $${usageCost}) [CallSid=${CallSid}, status=${CallStatus}]`
+              `📞 Tracked ${sec}s ${direction} call on ${ownerNumber} (cost $${usageCost}) [CallSid=${CallSid}, status=${CallStatus}]`,
             );
           }
         }

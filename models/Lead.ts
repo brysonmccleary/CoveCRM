@@ -10,15 +10,15 @@ export interface IInteraction {
   date?: Date;
 
   // Twilio delivery & traceability (used by status-callback + auditing)
-  sid?: string;               // Twilio SM... SID if applicable
-  status?: string;            // queued | sent | delivered | failed | undelivered | etc.
-  errorCode?: string;         // e.g. 30034, 30007
+  sid?: string; // Twilio SM... SID if applicable
+  status?: string; // queued | sent | delivered | failed | undelivered | etc.
+  errorCode?: string; // e.g. 30034, 30007
 
   // Routing info for outbound entries
-  to?: string;                // E.164 destination for that message
-  from?: string;              // specific number used, if any
-  fromServiceSid?: string;    // Messaging Service SID (MG...)
-  sentAt?: Date;              // when we attempted to send
+  to?: string; // E.164 destination for that message
+  from?: string; // specific number used, if any
+  fromServiceSid?: string; // Messaging Service SID (MG...)
+  sentAt?: Date; // when we attempted to send
 }
 
 export interface ITranscript {
@@ -28,8 +28,8 @@ export interface ITranscript {
 
 /** Tracks where a lead is inside a given drip */
 export interface IDripProgress {
-  dripId: string;        // DripCampaign _id (string) or slug used at assignment
-  startedAt: Date;       // When Day 1 was sent/initialized
+  dripId: string; // DripCampaign _id (string) or slug used at assignment
+  startedAt: Date; // When Day 1 was sent/initialized
   lastSentIndex: number; // Index into steps[] that has been sent (0-based). -1 = none yet
 }
 
@@ -42,11 +42,11 @@ export type HistoryType =
   | "system";
 
 export interface IHistoryEntry {
-  type: HistoryType | string;   // keep flexible for backward compat
-  message: string;              // human-readable text
-  timestamp?: Date;             // when it happened (compat with older code)
-  userEmail?: string;           // who performed the action
-  meta?: Record<string, any>;   // optional extra context (duration, callSid, etc.)
+  type: HistoryType | string; // keep flexible for backward compat
+  message: string; // human-readable text
+  timestamp?: Date; // when it happened (compat with older code)
+  userEmail?: string; // who performed the action
+  meta?: Record<string, any>; // optional extra context (duration, callSid, etc.)
 }
 
 export interface ILead {
@@ -64,9 +64,9 @@ export interface ILead {
   "Coverage Amount"?: string;
 
   // Ownership & organization
-  userEmail: string;                // existing field your app already uses
-  ownerEmail?: string;              // alias (mirrors userEmail)
-  ownerId?: Types.ObjectId;         // user._id for precise ownership
+  userEmail: string; // existing field your app already uses
+  ownerEmail?: string; // alias (mirrors userEmail)
+  ownerId?: Types.ObjectId; // user._id for precise ownership
   folderId?: Types.ObjectId;
 
   assignedDrips?: string[];
@@ -136,7 +136,7 @@ const InteractionSchema = new Schema<IInteraction>(
     fromServiceSid: { type: String },
     sentAt: { type: Date },
   },
-  { _id: false }
+  { _id: false },
 );
 
 const TranscriptSchema = new Schema<ITranscript>(
@@ -144,19 +144,19 @@ const TranscriptSchema = new Schema<ITranscript>(
     text: { type: String, required: true },
     createdAt: { type: Date, default: Date.now },
   },
-  { _id: false }
+  { _id: false },
 );
 
 /** 🔥 NEW: History entry schema (backward-compatible with existing uses in your code) */
 const HistoryEntrySchema = new Schema<IHistoryEntry>(
   {
-    type: { type: String, required: true },                 // note | disposition | call | transcript | system | ...
-    message: { type: String, required: true },              // e.g., "Disposition: Sold", "Note: call back Monday"
-    timestamp: { type: Date, default: Date.now },           // keep 'timestamp' name because some existing code uses it
-    userEmail: { type: String },                            // author (lowercased)
-    meta: { type: Schema.Types.Mixed },                     // arbitrary payload (duration, callSid, etc.)
+    type: { type: String, required: true }, // note | disposition | call | transcript | system | ...
+    message: { type: String, required: true }, // e.g., "Disposition: Sold", "Note: call back Monday"
+    timestamp: { type: Date, default: Date.now }, // keep 'timestamp' name because some existing code uses it
+    userEmail: { type: String }, // author (lowercased)
+    meta: { type: Schema.Types.Mixed }, // arbitrary payload (duration, callSid, etc.)
   },
-  { _id: false }
+  { _id: false },
 );
 
 const DripProgressSchema = new Schema<IDripProgress>(
@@ -165,7 +165,7 @@ const DripProgressSchema = new Schema<IDripProgress>(
     startedAt: { type: Date, required: true },
     lastSentIndex: { type: Number, required: true, default: -1 },
   },
-  { _id: false }
+  { _id: false },
 );
 
 // Helper: extract normalized last 10 digits from any phone-ish string
@@ -191,9 +191,9 @@ const LeadSchema = new Schema<ILead>(
     "Coverage Amount": { type: String },
 
     // 🔐 Ownership
-    userEmail: { type: String, required: true, index: true },           // existing
-    ownerEmail: { type: String, index: true },                           // mirrors userEmail
-    ownerId: { type: Schema.Types.ObjectId, ref: "User", index: true },  // precise owner id
+    userEmail: { type: String, required: true, index: true }, // existing
+    ownerEmail: { type: String, index: true }, // mirrors userEmail
+    ownerId: { type: Schema.Types.ObjectId, ref: "User", index: true }, // precise owner id
     folderId: { type: Schema.Types.ObjectId, ref: "Folder", index: true },
 
     assignedDrips: { type: [String], default: [] },
@@ -239,7 +239,11 @@ const LeadSchema = new Schema<ILead>(
     unsubscribed: { type: Boolean, default: false },
     optOutAt: { type: Date },
     consent: {
-      status: { type: String, enum: ["opted_in", "opted_out", "unknown"], default: "unknown" },
+      status: {
+        type: String,
+        enum: ["opted_in", "opted_out", "unknown"],
+        default: "unknown",
+      },
       method: { type: String },
       timestamp: { type: Date },
       sourceUrl: { type: String },
@@ -247,15 +251,17 @@ const LeadSchema = new Schema<ILead>(
       userAgent: { type: String },
     },
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
 /* 🔁 Compatibility guard:
    Ensure ownerEmail mirrors userEmail (and vice-versa if ownerEmail provided). */
 LeadSchema.pre("save", function (next) {
   const doc = this as any;
-  if (!doc.ownerEmail && doc.userEmail) doc.ownerEmail = doc.userEmail.toLowerCase();
-  if (!doc.userEmail && doc.ownerEmail) doc.userEmail = doc.ownerEmail.toLowerCase();
+  if (!doc.ownerEmail && doc.userEmail)
+    doc.ownerEmail = doc.userEmail.toLowerCase();
+  if (!doc.userEmail && doc.ownerEmail)
+    doc.userEmail = doc.ownerEmail.toLowerCase();
   if (doc.ownerEmail) doc.ownerEmail = String(doc.ownerEmail).toLowerCase();
   if (doc.userEmail) doc.userEmail = String(doc.userEmail).toLowerCase();
 
@@ -285,12 +291,24 @@ LeadSchema.pre("findOneAndUpdate", function (next) {
 });
 
 /* 🔍 Useful indexes for performance */
-LeadSchema.index({ userEmail: 1, Phone: 1 });            // fast lookups by owner + phone (legacy)
-LeadSchema.index({ userEmail: 1, phoneLast10: 1 }, { name: "lead_user_phoneLast10_idx", sparse: true });
-LeadSchema.index({ userEmail: 1, Email: 1 }, { name: "lead_user_email_idx", sparse: true });
-LeadSchema.index({ userEmail: 1, updatedAt: -1 });       // dashboard lists
-LeadSchema.index({ ownerEmail: 1, updatedAt: -1 }, { name: "lead_ownerEmail_idx" }); // owner scans
-LeadSchema.index({ "dripProgress.dripId": 1 }, { name: "lead_drip_progress_drip_idx" }); // scheduler scans
+LeadSchema.index({ userEmail: 1, Phone: 1 }); // fast lookups by owner + phone (legacy)
+LeadSchema.index(
+  { userEmail: 1, phoneLast10: 1 },
+  { name: "lead_user_phoneLast10_idx", sparse: true },
+);
+LeadSchema.index(
+  { userEmail: 1, Email: 1 },
+  { name: "lead_user_email_idx", sparse: true },
+);
+LeadSchema.index({ userEmail: 1, updatedAt: -1 }); // dashboard lists
+LeadSchema.index(
+  { ownerEmail: 1, updatedAt: -1 },
+  { name: "lead_ownerEmail_idx" },
+); // owner scans
+LeadSchema.index(
+  { "dripProgress.dripId": 1 },
+  { name: "lead_drip_progress_drip_idx" },
+); // scheduler scans
 LeadSchema.index({ "history.timestamp": -1 }, { name: "lead_history_ts_idx" }); // quick history reads
 
 export type LeadModel = mongoose.Model<ILead>;

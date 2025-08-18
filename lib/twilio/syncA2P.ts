@@ -22,10 +22,13 @@ function computeRegistrationStatus(opts: {
   const campaignRejected = c === "rejected";
 
   if (brandRejected || campaignRejected) return "rejected" as const;
-  if (brandApproved && campaignApproved && opts.hasServiceWithNumbers) return "ready" as const;
+  if (brandApproved && campaignApproved && opts.hasServiceWithNumbers)
+    return "ready" as const;
   if (brandApproved && !campaignApproved) return "brand_approved" as const;
-  if (!brandApproved && (b === "pending" || b === "submitted")) return "brand_submitted" as const;
-  if (brandApproved && (c === "pending" || c === "submitted")) return "campaign_submitted" as const;
+  if (!brandApproved && (b === "pending" || b === "submitted"))
+    return "brand_submitted" as const;
+  if (brandApproved && (c === "pending" || c === "submitted"))
+    return "campaign_submitted" as const;
   return "not_started" as const;
 }
 
@@ -84,15 +87,20 @@ export async function syncA2PForUser(passedUser: IUser) {
   let brandStatus: string | undefined;
   try {
     if (brandSid) {
-      const br = await ((client.messaging.v1 as any).brandRegistrations(brandSid).fetch());
+      const br = await (client.messaging.v1 as any)
+        .brandRegistrations(brandSid)
+        .fetch();
       brandStatus = br?.status;
     } else {
       // Best-effort discovery; cast as any to avoid SDK typing gaps
-      const brands = await ((client.messaging.v1 as any).brandRegistrations.list?.({ limit: 50 }) ?? []);
+      const brands = await ((
+        client.messaging.v1 as any
+      ).brandRegistrations.list?.({ limit: 50 }) ?? []);
       if (brands.length) {
         const approved =
-          brands.find((b: any) => ["approved", "active"].includes(String(b?.status).toLowerCase())) ||
-          brands[0];
+          brands.find((b: any) =>
+            ["approved", "active"].includes(String(b?.status).toLowerCase()),
+          ) || brands[0];
         brandSid = approved?.brandSid || approved?.sid || approved?.id;
         brandStatus = approved?.status;
       }
@@ -117,8 +125,9 @@ export async function syncA2PForUser(passedUser: IUser) {
       const list = await campaignsApi.list({ limit: 100 });
       if (list?.length) {
         const approved =
-          list.find((c: any) => ["approved", "active"].includes(String(c?.status).toLowerCase())) ||
-          list[0];
+          list.find((c: any) =>
+            ["approved", "active"].includes(String(c?.status).toLowerCase()),
+          ) || list[0];
         campaignSid = approved?.sid || campaignSid;
         campaignStatus = approved?.status;
       }
@@ -128,7 +137,9 @@ export async function syncA2PForUser(passedUser: IUser) {
   }
 
   // --- Pick a Messaging Service (prefer stored/env; else first with numbers) ---
-  const forceMsSid = process.env.FORCE_MESSAGING_SERVICE_SID || process.env.TWILIO_MESSAGING_SERVICE_SID;
+  const forceMsSid =
+    process.env.FORCE_MESSAGING_SERVICE_SID ||
+    process.env.TWILIO_MESSAGING_SERVICE_SID;
   let messagingService: any | undefined;
 
   async function fetchService(sid: string) {
@@ -140,7 +151,8 @@ export async function syncA2PForUser(passedUser: IUser) {
   }
 
   if (forceMsSid) messagingService = await fetchService(forceMsSid);
-  if (!messagingService && messagingServiceSid) messagingService = await fetchService(messagingServiceSid);
+  if (!messagingService && messagingServiceSid)
+    messagingService = await fetchService(messagingServiceSid);
 
   if (!messagingService) {
     try {
@@ -148,7 +160,9 @@ export async function syncA2PForUser(passedUser: IUser) {
       // Choose the first service that has at least one attached number
       for (const s of services) {
         try {
-          const nums = await client.messaging.v1.services(s.sid).phoneNumbers.list({ limit: 1 });
+          const nums = await client.messaging.v1
+            .services(s.sid)
+            .phoneNumbers.list({ limit: 1 });
           if (nums.length > 0) {
             messagingService = s;
             break;
@@ -184,12 +198,21 @@ export async function syncA2PForUser(passedUser: IUser) {
       mms: Boolean(num.capabilities?.MMS),
     },
     purchasedAt: num.dateCreated,
-    messagingServiceSid: num.messagingServiceSid || messagingServiceSid || undefined,
+    messagingServiceSid:
+      num.messagingServiceSid || messagingServiceSid || undefined,
     friendlyName: num.friendlyName,
-    usage: { callsMade: 0, callsReceived: 0, textsSent: 0, textsReceived: 0, cost: 0 },
+    usage: {
+      callsMade: 0,
+      callsReceived: 0,
+      textsSent: 0,
+      textsReceived: 0,
+      cost: 0,
+    },
   }));
 
-  const hasServiceWithNumbers = Boolean(messagingServiceSid && mappedNumbers.length > 0);
+  const hasServiceWithNumbers = Boolean(
+    messagingServiceSid && mappedNumbers.length > 0,
+  );
 
   // --- Compute readiness + new registrationStatus
   const registrationStatus = computeRegistrationStatus({
@@ -204,13 +227,15 @@ export async function syncA2PForUser(passedUser: IUser) {
   const prevReady = Boolean(profile.messagingReady);
 
   const justApproved = !prevReady && messagingReady;
-  const justRejected = prevStatus !== "rejected" && registrationStatus === "rejected";
+  const justRejected =
+    prevStatus !== "rejected" && registrationStatus === "rejected";
 
   // --- Persist A2PProfile changes
   const now = new Date();
   profile.brandSid = brandSid || profile.brandSid;
   profile.campaignSid = campaignSid || profile.campaignSid;
-  profile.messagingServiceSid = messagingServiceSid || profile.messagingServiceSid;
+  profile.messagingServiceSid =
+    messagingServiceSid || profile.messagingServiceSid;
   profile.registrationStatus = registrationStatus as any;
   profile.messagingReady = messagingReady;
   profile.updatedAt = now;
@@ -244,7 +269,7 @@ export async function syncA2PForUser(passedUser: IUser) {
         "a2p.lastSyncedAt": now,
       },
     },
-    { new: true, upsert: false }
+    { new: true, upsert: false },
   ).exec();
 
   // --- Notify on transitions (best-effort; ignore failures)
@@ -286,7 +311,11 @@ export async function syncA2PForAllUsers(limit = 500) {
       await syncA2PForUser(u as any);
       results.push({ email: u.email, ok: true });
     } catch (e: any) {
-      results.push({ email: u.email, ok: false, error: e?.message || "unknown" });
+      results.push({
+        email: u.email,
+        ok: false,
+        error: e?.message || "unknown",
+      });
     }
   }
 

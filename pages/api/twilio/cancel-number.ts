@@ -6,7 +6,7 @@ import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import PhoneNumber from "@/models/PhoneNumber";
 import twilioClient from "@/lib/twilioClient";
-import Stripe from "stripe";
+import { stripe } from "@/lib/stripe";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: "2024-04-10",
@@ -20,16 +20,26 @@ function normalizeE164(p: string) {
   return p.startsWith("+") ? p : `+${digits}`;
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "DELETE") return res.status(405).json({ message: "Method not allowed" });
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
+  if (req.method !== "DELETE")
+    return res.status(405).json({ message: "Method not allowed" });
 
   const session = await getServerSession(req, res, authOptions);
-  if (!session?.user?.email) return res.status(401).json({ message: "Unauthorized" });
+  if (!session?.user?.email)
+    return res.status(401).json({ message: "Unauthorized" });
 
   // We accept either a Twilio number SID or a phoneNumber (E.164) for flexibility
-  const { sid, phoneNumber } = req.body as { sid?: string; phoneNumber?: string };
+  const { sid, phoneNumber } = req.body as {
+    sid?: string;
+    phoneNumber?: string;
+  };
   if (!sid && !phoneNumber) {
-    return res.status(400).json({ message: "Missing Twilio SID or phone number" });
+    return res
+      .status(400)
+      .json({ message: "Missing Twilio SID or phone number" });
   }
 
   try {
@@ -39,15 +49,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!user) return res.status(404).json({ message: "User not found" });
 
     // Find the target number on the user by SID or phoneNumber
-    const normalizedPhone = phoneNumber ? normalizeE164(phoneNumber) : undefined;
+    const normalizedPhone = phoneNumber
+      ? normalizeE164(phoneNumber)
+      : undefined;
     const target =
       user.numbers?.find(
         (n: any) =>
           (sid && n.sid === sid) ||
-          (normalizedPhone && (n.phoneNumber === normalizedPhone || n.phoneNumber === phoneNumber))
+          (normalizedPhone &&
+            (n.phoneNumber === normalizedPhone ||
+              n.phoneNumber === phoneNumber)),
       ) || null;
 
-    if (!target) return res.status(404).json({ message: "Number not found in user's account" });
+    if (!target)
+      return res
+        .status(404)
+        .json({ message: "Number not found in user's account" });
 
     const twilioSid = target.sid || sid;
     const phone = target.phoneNumber || normalizedPhone || phoneNumber;
@@ -64,10 +81,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // 2) Unlink from ANY Messaging Service sender pool so it can be reused later
     try {
       if (twilioSid) {
-        const services = await twilioClient.messaging.v1.services.list({ limit: 100 });
+        const services = await twilioClient.messaging.v1.services.list({
+          limit: 100,
+        });
         for (const svc of services) {
           try {
-            await twilioClient.messaging.v1.services(svc.sid).phoneNumbers(twilioSid).remove();
+            await twilioClient.messaging.v1
+              .services(svc.sid)
+              .phoneNumbers(twilioSid)
+              .remove();
           } catch {
             // ignore if not linked to this service
           }
@@ -80,10 +102,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         });
         if (matches && matches.length > 0) {
           const foundSid = matches[0].sid;
-          const services = await twilioClient.messaging.v1.services.list({ limit: 100 });
+          const services = await twilioClient.messaging.v1.services.list({
+            limit: 100,
+          });
           for (const svc of services) {
             try {
-              await twilioClient.messaging.v1.services(svc.sid).phoneNumbers(foundSid).remove();
+              await twilioClient.messaging.v1
+                .services(svc.sid)
+                .phoneNumbers(foundSid)
+                .remove();
             } catch {}
           }
         }
@@ -113,14 +140,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     user.numbers = user.numbers?.filter(
       (n: any) =>
         (twilioSid ? n.sid !== twilioSid : true) &&
-        (phone ? n.phoneNumber !== normalizeE164(phone) && n.phoneNumber !== phone : true)
+        (phone
+          ? n.phoneNumber !== normalizeE164(phone) && n.phoneNumber !== phone
+          : true),
     );
     await user.save();
 
     // 5) Delete PhoneNumber doc(s) (tidy)
     try {
       if (phone) {
-        await PhoneNumber.deleteOne({ userId: user._id, phoneNumber: normalizeE164(phone) });
+        await PhoneNumber.deleteOne({
+          userId: user._id,
+          phoneNumber: normalizeE164(phone),
+        });
         await PhoneNumber.deleteOne({ userId: user._id, phoneNumber: phone }); // in case stored un-normalized
       } else if (twilioSid) {
         await PhoneNumber.deleteOne({ userId: user._id, twilioSid });
@@ -131,9 +163,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     return res
       .status(200)
-      .json({ message: `Number ${phone || twilioSid} cancelled, unlinked, released, and removed` });
+      .json({
+        message: `Number ${phone || twilioSid} cancelled, unlinked, released, and removed`,
+      });
   } catch (err: any) {
     console.error("Cancel number error:", err);
-    return res.status(500).json({ message: err?.message || "Failed to cancel number" });
+    return res
+      .status(500)
+      .json({ message: err?.message || "Failed to cancel number" });
   }
 }

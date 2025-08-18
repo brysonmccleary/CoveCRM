@@ -7,14 +7,20 @@ import CalendarConnectBanner from "@/components/CalendarConnectBanner";
 import { io, Socket } from "socket.io-client";
 
 // Load CalendarView dynamically to avoid SSR issues
-const CalendarView = dynamic(() => import("@/components/CalendarView"), { ssr: false });
+const CalendarView = dynamic(() => import("@/components/CalendarView"), {
+  ssr: false,
+});
 
 export default function CalendarPage() {
   const { data: session, status: sessionStatus } = useSession();
   const [calendarId, setCalendarId] = useState<string | null>(null);
-  const [calendarConnected, setCalendarConnected] = useState<boolean | null>(null);
+  const [calendarConnected, setCalendarConnected] = useState<boolean | null>(
+    null,
+  );
   const [loading, setLoading] = useState(true);
-  const [statusMessage, setStatusMessage] = useState("Checking calendar connection...");
+  const [statusMessage, setStatusMessage] = useState(
+    "Checking calendar connection...",
+  );
   const [eventCount, setEventCount] = useState<number | null>(null);
   const socketRef = useRef<Socket | null>(null);
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -29,7 +35,9 @@ export default function CalendarPage() {
         !!res.data.googleCalendar?.accessToken;
 
       setCalendarConnected(connected);
-      setStatusMessage(connected ? "✅ Google Calendar Connected" : "⚠️ Not Connected");
+      setStatusMessage(
+        connected ? "✅ Google Calendar Connected" : "⚠️ Not Connected",
+      );
 
       if (res.data?.calendarId) {
         setCalendarId(res.data.calendarId);
@@ -57,7 +65,11 @@ export default function CalendarPage() {
 
   // 🔁 Listen for socket-based calendar updates
   useEffect(() => {
-    if (session?.user?.email && calendarConnected && typeof window !== "undefined") {
+    if (
+      session?.user?.email &&
+      calendarConnected &&
+      typeof window !== "undefined"
+    ) {
       if (!socketRef.current) {
         socketRef.current = io();
       }
@@ -90,12 +102,18 @@ export default function CalendarPage() {
 
         {/* Connection status */}
         <div className="mb-4">
-          <p>Status: <strong>{loading ? "Loading..." : statusMessage}</strong></p>
+          <p>
+            Status: <strong>{loading ? "Loading..." : statusMessage}</strong>
+          </p>
           {calendarId && (
-            <p className="text-sm text-gray-400 mt-1">Calendar ID: {calendarId}</p>
+            <p className="text-sm text-gray-400 mt-1">
+              Calendar ID: {calendarId}
+            </p>
           )}
           {eventCount !== null && (
-            <p className="text-sm text-green-400 mt-1">Upcoming events: {eventCount}</p>
+            <p className="text-sm text-green-400 mt-1">
+              Upcoming events: {eventCount}
+            </p>
           )}
         </div>
 

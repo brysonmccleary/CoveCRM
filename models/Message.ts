@@ -16,17 +16,17 @@ export interface IMessage {
   read?: boolean;
 
   // Twilio delivery + traceability
-  sid?: string;             // Twilio Message SID (SM...)
-  status?: string;          // queued | sent | delivered | failed | undelivered | etc.
-  errorCode?: string;       // e.g. 30034, 30007
+  sid?: string; // Twilio Message SID (SM...)
+  status?: string; // queued | sent | delivered | failed | undelivered | etc.
+  errorCode?: string; // e.g. 30034, 30007
 
   // Routing info
-  to?: string;              // E.164 destination
-  from?: string;            // Specific number if used (rare)
-  fromServiceSid?: string;  // Messaging Service SID (MG...)
+  to?: string; // E.164 destination
+  from?: string; // Specific number if used (rare)
+  fromServiceSid?: string; // Messaging Service SID (MG...)
 
   // Timestamps
-  sentAt?: Date;            // when we attempted to send
+  sentAt?: Date; // when we attempted to send
 
   // Added by { timestamps: true }
   createdAt?: Date;
@@ -35,10 +35,19 @@ export interface IMessage {
 
 const MessageSchema = new Schema<IMessage>(
   {
-    leadId: { type: Schema.Types.ObjectId, ref: "Lead", required: true, index: true },
+    leadId: {
+      type: Schema.Types.ObjectId,
+      ref: "Lead",
+      required: true,
+      index: true,
+    },
     userEmail: { type: String, required: true, index: true },
 
-    direction: { type: String, enum: ["inbound", "outbound", "ai"], required: true },
+    direction: {
+      type: String,
+      enum: ["inbound", "outbound", "ai"],
+      required: true,
+    },
 
     text: { type: String, required: true },
     read: { type: Boolean, default: false },
@@ -54,19 +63,19 @@ const MessageSchema = new Schema<IMessage>(
 
     sentAt: { type: Date },
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
 // Conversation fetch (most recent first)
 MessageSchema.index(
   { userEmail: 1, leadId: 1, createdAt: -1 },
-  { name: "conv_by_user_lead_createdAt" }
+  { name: "conv_by_user_lead_createdAt" },
 );
 
 // Fast unread lookups within a lead's thread
 MessageSchema.index(
   { userEmail: 1, leadId: 1, read: 1, createdAt: -1 },
-  { name: "unread_by_user_lead" }
+  { name: "unread_by_user_lead" },
 );
 
 // Single, authoritative index for Twilio SIDs
@@ -77,7 +86,7 @@ MessageSchema.index(
     name: "sid_unique_partial",
     unique: true,
     partialFilterExpression: { sid: { $exists: true, $type: "string" } },
-  }
+  },
 );
 
 export type MessageModel = mongoose.Model<IMessage>;

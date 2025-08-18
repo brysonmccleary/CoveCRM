@@ -6,8 +6,12 @@ import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import { google } from "googleapis";
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "GET") return res.status(405).json({ error: "Method not allowed" });
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
+  if (req.method !== "GET")
+    return res.status(405).json({ error: "Method not allowed" });
 
   // Require a logged-in user
   const session = await getServerSession(req, res, authOptions);
@@ -23,9 +27,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   // Prefer googleTokens; fallback to googleSheets (older storage)
   const tokens: any =
-    (user as any).googleTokens ||
-    (user as any).googleSheets ||
-    null;
+    (user as any).googleTokens || (user as any).googleSheets || null;
 
   const calendarId = (user as any).calendarId || "primary";
 
@@ -41,14 +43,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       calendarNeedsReconnect: true,
     };
     await user.save();
-    return res.status(401).json({ error: "Google not connected (no refresh token)", needsReconnect: true });
+    return res
+      .status(401)
+      .json({
+        error: "Google not connected (no refresh token)",
+        needsReconnect: true,
+      });
   }
 
   // Build OAuth client (redirect URI not used here, but required for client config)
   const oauth2Client = new google.auth.OAuth2(
     process.env.GOOGLE_CLIENT_ID!,
     process.env.GOOGLE_CLIENT_SECRET!,
-    process.env.GOOGLE_REDIRECT_URI!
+    process.env.GOOGLE_REDIRECT_URI!,
   );
   // Only set the refresh_token; Google will mint access tokens as needed
   oauth2Client.setCredentials({ refresh_token: refreshToken });
@@ -101,10 +108,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         calendarNeedsReconnect: true,
       };
       await user.save();
-      return res.status(401).json({ error: "invalid_grant", needsReconnect: true });
+      return res
+        .status(401)
+        .json({ error: "invalid_grant", needsReconnect: true });
     }
 
-    console.error("❌ Error fetching Google Calendar events:", error?.response?.data || msg);
+    console.error(
+      "❌ Error fetching Google Calendar events:",
+      error?.response?.data || msg,
+    );
     return res.status(500).json({ error: "Failed to fetch calendar events" });
   }
 }

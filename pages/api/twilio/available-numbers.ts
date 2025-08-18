@@ -102,11 +102,14 @@ const areaCodeCityMap: Record<string, string> = {
   "971": "Portland",
   "980": "Charlotte",
   "984": "Raleigh",
-  "985": "Houma"
+  "985": "Houma",
   // Add more if you'd like
 };
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   if (req.method !== "GET") {
     return res.status(405).json({ message: "Method not allowed" });
   }
@@ -118,18 +121,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    const numbers = await twilioClient.availablePhoneNumbers(country as string).local.list({
-      areaCode: areaCode as string,
-      smsEnabled: true,
-      voiceEnabled: true,
-      limit: 10,
-    });
+    const numbers = await twilioClient
+      .availablePhoneNumbers(country as string)
+      .local.list({
+        areaCode: areaCode as string,
+        smsEnabled: true,
+        voiceEnabled: true,
+        limit: 10,
+      });
 
     const formatted = numbers.map((num) => {
       const match = num.phoneNumber.match(/\+1(\d{3})/);
       const extractedAreaCode = match ? match[1] : "";
 
-      const city = num.locality || areaCodeCityMap[extractedAreaCode] || "Available city";
+      const city =
+        num.locality || areaCodeCityMap[extractedAreaCode] || "Available city";
       const state = num.region || "US";
 
       return {

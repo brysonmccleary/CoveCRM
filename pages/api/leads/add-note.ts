@@ -15,7 +15,10 @@ import Lead from "@/models/Lead";
  *    1) lead.interactionHistory (type: "outbound")
  *    2) lead.callTranscripts (so it appears in /api/leads/history as a "note")
  */
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   if (req.method !== "POST") {
     res.status(405).json({ message: "Method not allowed" });
     return;
@@ -28,7 +31,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return;
   }
 
-  const { leadId, text } = (req.body || {}) as { leadId?: string; text?: string };
+  const { leadId, text } = (req.body || {}) as {
+    leadId?: string;
+    text?: string;
+  };
   if (!leadId || typeof text !== "string" || !text.trim()) {
     res.status(400).json({ message: "Missing leadId or text" });
     return;

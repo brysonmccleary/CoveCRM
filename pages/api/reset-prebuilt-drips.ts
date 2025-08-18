@@ -3,7 +3,10 @@ import dbConnect from "@/lib/mongooseConnect";
 import Drip from "@/models/Drip"; // Create this if it doesn’t exist
 import { prebuiltDrips } from "@/utils/prebuiltDrips";
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   if (req.method !== "POST") {
     return res.status(405).json({ message: "Method not allowed" });
   }

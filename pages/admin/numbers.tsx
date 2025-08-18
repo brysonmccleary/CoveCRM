@@ -36,7 +36,8 @@ export default function AdminNumbersPage() {
           <p>Loading numbers...</p>
         ) : data.length === 0 ? (
           <div className="text-gray-500 mt-6">
-            No numbers found. Users may not have purchased any phone numbers yet.
+            No numbers found. Users may not have purchased any phone numbers
+            yet.
           </div>
         ) : (
           <div className="overflow-x-auto">
@@ -62,7 +63,8 @@ export default function AdminNumbersPage() {
                         : "-"}
                     </td>
                     <td className="p-2 text-sm">
-                      Calls: {num.usage.callsMade}/{num.usage.callsReceived} <br />
+                      Calls: {num.usage.callsMade}/{num.usage.callsReceived}{" "}
+                      <br />
                       Texts: {num.usage.textsSent}/{num.usage.textsReceived}
                     </td>
                   </tr>

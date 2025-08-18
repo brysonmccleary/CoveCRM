@@ -8,11 +8,15 @@ import { sendEmail } from "@/lib/email/sendEmail";
 
 function deriveStatus(doc: IA2PProfile): A2PStatus {
   if (doc.messagingReady) return "approved";
-  if (doc.declinedReason && doc.declinedReason.trim().length > 0) return "declined";
+  if (doc.declinedReason && doc.declinedReason.trim().length > 0)
+    return "declined";
   return "pending";
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   if (req.method !== "GET") {
     return res.status(405).json({ error: "Method not allowed" });
   }
@@ -34,17 +38,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (currentStatus !== nextStatus) {
         await A2PProfile.updateOne(
           { _id: p._id },
-          { $set: { applicationStatus: nextStatus } }
+          { $set: { applicationStatus: nextStatus } },
         );
         updated++;
       }
 
       // Fire one-time approved email
-      if (
-        nextStatus === "approved" &&
-        !p.approvalNotifiedAt &&
-        p.userId
-      ) {
+      if (nextStatus === "approved" && !p.approvalNotifiedAt && p.userId) {
         const user = await User.findById(p.userId);
         if (user?.email) {
           try {
@@ -59,12 +59,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                   <p style="color:#666;font-size:12px;margin-top:24px">This is an automated message from CoveCRM.</p>
                 </div>
               `,
-              text:
-                "Congratulations! Your A2P 10DLC registration has been approved. You can now start sending texts in CoveCRM.",
+              text: "Congratulations! Your A2P 10DLC registration has been approved. You can now start sending texts in CoveCRM.",
             });
             await A2PProfile.updateOne(
               { _id: p._id },
-              { $set: { approvalNotifiedAt: new Date(), applicationStatus: "approved" } }
+              {
+                $set: {
+                  approvalNotifiedAt: new Date(),
+                  applicationStatus: "approved",
+                },
+              },
             );
             emailed++;
           } catch (e) {
@@ -74,7 +78,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
-    return res.status(200).json({ ok: true, profiles: profiles.length, updated, emailed });
+    return res
+      .status(200)
+      .json({ ok: true, profiles: profiles.length, updated, emailed });
   } catch (e: any) {
     console.error("[a2p-sync] error:", e);
     return res.status(500).json({ error: e?.message || "Unknown error" });

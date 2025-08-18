@@ -21,7 +21,10 @@ type Row = {
   usage: Usage;
 };
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   if (req.method !== "GET") return res.status(405).end("Method Not Allowed");
 
   try {
@@ -38,7 +41,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           if (num?.subscriptionId) {
             try {
               // stripe-node v16 returns Stripe.Response<T> (with .data); older returns T
-              const resp = await stripe.subscriptions.retrieve(String(num.subscriptionId));
+              const resp = await stripe.subscriptions.retrieve(
+                String(num.subscriptionId),
+              );
               const sub: any = (resp as any)?.data ?? resp;
 
               status = String(sub?.status ?? "unknown");
@@ -46,7 +51,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 ? new Date(sub.current_period_end * 1000).toISOString()
                 : null;
             } catch (err) {
-              console.warn(`⚠️ Stripe sub fetch failed for ${num.subscriptionId}`);
+              console.warn(
+                `⚠️ Stripe sub fetch failed for ${num.subscriptionId}`,
+              );
             }
           }
 
@@ -66,7 +73,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             usage,
           };
         });
-      })
+      }),
     );
 
     rows.sort((a, b) => a.userEmail.localeCompare(b.userEmail));

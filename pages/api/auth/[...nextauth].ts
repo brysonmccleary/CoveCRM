@@ -55,8 +55,9 @@ async function safeSyncA2PByEmail(email: string, awaitIt = true) {
   }
 }
 
-const cookieDomain =
-  process.env.NEXTAUTH_URL?.includes("ngrok.app") ? ".ngrok.app" : undefined;
+const cookieDomain = process.env.NEXTAUTH_URL?.includes("ngrok.app")
+  ? ".ngrok.app"
+  : undefined;
 
 export const authOptions: NextAuthOptions = {
   debug: true,
@@ -219,7 +220,9 @@ export const authOptions: NextAuthOptions = {
       (session.user as any).email = token.email as string;
       (session.user as any).name = token.name as string;
       (session.user as any).role = token.role as string;
-      (session.user as any).affiliateCode = token.affiliateCode as string | null;
+      (session.user as any).affiliateCode = token.affiliateCode as
+        | string
+        | null;
 
       if ((token as any).accessToken)
         (session.user as any).googleAccessToken = (token as any).accessToken;

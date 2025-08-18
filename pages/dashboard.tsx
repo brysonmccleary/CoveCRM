@@ -44,7 +44,10 @@ const CalendarPanel = ({ showBanner }: { showBanner: boolean }) => (
     {showBanner && (
       <div className="bg-yellow-100 text-yellow-800 p-4 mb-4 rounded-md">
         ⏰ You haven’t connected your Google Calendar yet.{" "}
-        <a href="/api/connect/google-calendar" className="underline font-semibold">
+        <a
+          href="/api/connect/google-calendar"
+          className="underline font-semibold"
+        >
           Connect Now
         </a>
       </div>
@@ -61,7 +64,9 @@ const CalendarPanel = ({ showBanner }: { showBanner: boolean }) => (
 );
 
 function DashboardOverview() {
-  const [data, setData] = useState<{ date: string; dials: number; talks: number }[]>([]);
+  const [data, setData] = useState<
+    { date: string; dials: number; talks: number }[]
+  >([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -71,7 +76,8 @@ function DashboardOverview() {
         const result = await res.json();
         if (!res.ok) throw new Error(result.error || "Failed to load stats");
 
-        const raw: { date: string; dials: number; talks: number }[] = result.data;
+        const raw: { date: string; dials: number; talks: number }[] =
+          result.data;
 
         const today = new Date();
         const last10 = [...Array(10)].map((_, i) => {
@@ -80,7 +86,10 @@ function DashboardOverview() {
           const key = d.toISOString().split("T")[0];
           return {
             key,
-            label: d.toLocaleDateString("default", { month: "short", day: "numeric" }),
+            label: d.toLocaleDateString("default", {
+              month: "short",
+              day: "numeric",
+            }),
           };
         });
 
@@ -138,7 +147,10 @@ function DashboardOverview() {
                 <Tooltip
                   formatter={(value: number) => `${value} calls`}
                   labelStyle={{ color: "#E5E7EB" }}
-                  contentStyle={{ backgroundColor: "#1A2B45", borderColor: "#4B5563" }}
+                  contentStyle={{
+                    backgroundColor: "#1A2B45",
+                    borderColor: "#4B5563",
+                  }}
                 />
                 <Legend
                   verticalAlign="bottom"
@@ -170,7 +182,11 @@ function DashboardOverview() {
   );
 }
 
-export default function DashboardPage({ userNeedsCalendarConnect }: { userNeedsCalendarConnect?: boolean }) {
+export default function DashboardPage({
+  userNeedsCalendarConnect,
+}: {
+  userNeedsCalendarConnect?: boolean;
+}) {
   const { data: session, status } = useSession();
   const router = useRouter();
   const { tab } = router.query;
@@ -195,7 +211,9 @@ export default function DashboardPage({ userNeedsCalendarConnect }: { userNeedsC
         {tab === "numbers" && <NumbersPanel />}
         {tab === "settings" && <SettingsPanel />}
         {tab === "drip-campaigns" && <DripCampaignsPanel />}
-        {tab === "calendar" && <CalendarPanel showBanner={!!userNeedsCalendarConnect} />}
+        {tab === "calendar" && (
+          <CalendarPanel showBanner={!!userNeedsCalendarConnect} />
+        )}
       </DashboardLayout>
     </RequireAuth>
   );
@@ -215,7 +233,8 @@ export const getServerSideProps: GetServerSideProps = async (context) => {
 
   await dbConnect();
   const user = await User.findOne({ email: session.user.email });
-  const hasCalendarConnected = user?.googleSheets?.accessToken && user?.calendarId;
+  const hasCalendarConnected =
+    user?.googleSheets?.accessToken && user?.calendarId;
 
   return {
     props: {

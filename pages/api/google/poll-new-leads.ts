@@ -7,14 +7,19 @@ import Lead from "@/models/Lead";
 import { google } from "googleapis";
 import { sendInitialDrip } from "@/utils/sendInitialDrip";
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   if (req.method !== "POST") {
     return res.status(405).json({ message: "Method not allowed" });
   }
 
   await dbConnect();
 
-  const users = await User.find({ "googleSheets.syncedSheets": { $exists: true, $ne: [] } });
+  const users = await User.find({
+    "googleSheets.syncedSheets": { $exists: true, $ne: [] },
+  });
 
   for (const user of users) {
     if (!user.googleSheets?.refreshToken) continue;
@@ -22,9 +27,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const oauth2Client = new google.auth.OAuth2(
       process.env.GOOGLE_CLIENT_ID!,
       process.env.GOOGLE_CLIENT_SECRET!,
-      process.env.GOOGLE_REDIRECT_URI!
+      process.env.GOOGLE_REDIRECT_URI!,
     );
-    oauth2Client.setCredentials({ refresh_token: user.googleSheets.refreshToken });
+    oauth2Client.setCredentials({
+      refresh_token: user.googleSheets.refreshToken,
+    });
 
     const sheetsAPI = google.sheets({ version: "v4", auth: oauth2Client });
 
@@ -38,8 +45,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         });
 
         const rows = response.data.values || [];
-        const existingLeads = await Lead.find({ folderId }).select("externalId");
-        const existingIds = new Set(existingLeads.map((l: any) => l.externalId));
+        const existingLeads = await Lead.find({ folderId }).select(
+          "externalId",
+        );
+        const existingIds = new Set(
+          existingLeads.map((l: any) => l.externalId),
+        );
 
         const folder = await Folder.findById(folderId);
         if (!folder) continue;

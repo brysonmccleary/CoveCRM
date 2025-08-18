@@ -19,7 +19,9 @@ export default function PublicBookingPage() {
 
     const fetchSlots = async () => {
       try {
-        const res = await fetch(`/api/get-available-slots?email=${encodeURIComponent(email)}`);
+        const res = await fetch(
+          `/api/get-available-slots?email=${encodeURIComponent(email)}`,
+        );
         const data = await res.json();
         if (!res.ok) throw new Error(data.message || "Failed to fetch slots");
         setAvailableSlots(data.slots || []);
@@ -63,8 +65,12 @@ export default function PublicBookingPage() {
   if (success) {
     return (
       <div className="p-6 text-center max-w-xl mx-auto">
-        <h1 className="text-2xl font-bold text-green-600 mb-4">✅ Booking Confirmed</h1>
-        <p className="text-gray-700">You’ll receive an email or SMS reminder shortly.</p>
+        <h1 className="text-2xl font-bold text-green-600 mb-4">
+          ✅ Booking Confirmed
+        </h1>
+        <p className="text-gray-700">
+          You’ll receive an email or SMS reminder shortly.
+        </p>
       </div>
     );
   }
@@ -119,14 +125,18 @@ export default function PublicBookingPage() {
             type="email"
             placeholder="Your Email"
             value={formData.email}
-            onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+            onChange={(e) =>
+              setFormData({ ...formData, email: e.target.value })
+            }
             className="w-full border p-2 rounded mb-2"
           />
           <input
             type="tel"
             placeholder="Your Phone"
             value={formData.phone}
-            onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+            onChange={(e) =>
+              setFormData({ ...formData, phone: e.target.value })
+            }
             className="w-full border p-2 rounded mb-4"
           />
 

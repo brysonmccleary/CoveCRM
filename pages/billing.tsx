@@ -12,7 +12,7 @@ if (typeof window !== "undefined") {
     // Safer text match (no :has-text selector in browsers)
     const btns = Array.from(document.querySelectorAll("button"));
     const toRemove = btns.find((b) =>
-      (b.textContent || "").toLowerCase().includes("ask assistant")
+      (b.textContent || "").toLowerCase().includes("ask assistant"),
     );
     if (toRemove) toRemove.remove();
   });
@@ -49,14 +49,19 @@ export default function BillingPage() {
     return v === "1" || v === "true";
   }, [ai]);
 
-  const emailStr = useMemo(() => (Array.isArray(email) ? email[0] : email) || "", [email]);
+  const emailStr = useMemo(
+    () => (Array.isArray(email) ? email[0] : email) || "",
+    [email],
+  );
   const affiliateEmailStr = useMemo(
-    () => (Array.isArray(affiliateEmail) ? affiliateEmail[0] : affiliateEmail) || "",
-    [affiliateEmail]
+    () =>
+      (Array.isArray(affiliateEmail) ? affiliateEmail[0] : affiliateEmail) ||
+      "",
+    [affiliateEmail],
   );
   const promoCodeStr = useMemo(
     () => (Array.isArray(promoCode) ? promoCode[0] : promoCode) || "",
-    [promoCode]
+    [promoCode],
   );
 
   useEffect(() => {
@@ -81,7 +86,9 @@ export default function BillingPage() {
         const data = await res.json();
 
         if (!res.ok) {
-          throw new Error(data?.error || data?.message || "Subscription failed");
+          throw new Error(
+            data?.error || data?.message || "Subscription failed",
+          );
         }
 
         if (cancelled) return;
@@ -100,7 +107,8 @@ export default function BillingPage() {
         if (!data.clientSecret) {
           toast.success("Subscription started! Redirecting…");
           setTimeout(() => {
-            if (typeof window !== "undefined") window.location.href = RETURN_PATH;
+            if (typeof window !== "undefined")
+              window.location.href = RETURN_PATH;
           }, 900);
         }
       } catch (err: any) {
@@ -117,8 +125,11 @@ export default function BillingPage() {
   }, [emailStr, aiUpgrade, affiliateEmailStr, promoCodeStr]);
 
   const elementsOptions = useMemo(
-    () => (clientSecret ? { clientSecret, appearance: { labels: "floating" } } : undefined),
-    [clientSecret]
+    () =>
+      clientSecret
+        ? { clientSecret, appearance: { labels: "floating" } }
+        : undefined,
+    [clientSecret],
   );
 
   // Render
@@ -140,7 +151,8 @@ export default function BillingPage() {
             <div className="mb-4 text-center">
               {promoCodeStr && (
                 <p className="text-green-600 dark:text-green-400 font-semibold">
-                  Promo Code <span className="underline">{promoCodeStr}</span> applied!
+                  Promo Code <span className="underline">{promoCodeStr}</span>{" "}
+                  applied!
                 </p>
               )}
               {discount && (
@@ -175,16 +187,20 @@ export default function BillingPage() {
           <div className="text-center space-y-2">
             {promoCodeStr && (
               <p className="text-green-600 dark:text-green-400 font-semibold">
-                Promo Code <span className="underline">{promoCodeStr}</span> applied!
+                Promo Code <span className="underline">{promoCodeStr}</span>{" "}
+                applied!
               </p>
             )}
-            {typeof totalBefore === "number" && typeof totalAfter === "number" ? (
+            {typeof totalBefore === "number" &&
+            typeof totalAfter === "number" ? (
               <p className="text-sm text-gray-700 dark:text-gray-300">
                 Total:{" "}
                 {totalAfter === 0 && totalBefore > 0 ? (
                   <>
                     <del>${totalBefore.toFixed(2)}</del> →{" "}
-                    <span className="text-green-600 dark:text-green-400 font-bold">$0.00</span>
+                    <span className="text-green-600 dark:text-green-400 font-bold">
+                      $0.00
+                    </span>
                   </>
                 ) : (
                   <>
@@ -197,7 +213,9 @@ export default function BillingPage() {
               </p>
             ) : null}
             {subscriptionId && (
-              <p className="text-xs text-gray-500">Subscription: {subscriptionId}</p>
+              <p className="text-xs text-gray-500">
+                Subscription: {subscriptionId}
+              </p>
             )}
             <p className="text-gray-700 dark:text-gray-300">
               Subscription started. Redirecting to your dashboard…

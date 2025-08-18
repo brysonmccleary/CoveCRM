@@ -6,10 +6,12 @@ import mongooseConnect from "@/lib/mongooseConnect";
 import Affiliate from "@/models/Affiliate";
 import AffiliatePayout from "@/models/AffiliatePayout";
 import { sendAffiliatePayoutEmail } from "@/lib/email";
-import Stripe from "stripe";
+import { stripe } from "@/lib/stripe";
 import crypto from "crypto";
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, { apiVersion: "2024-04-10" });
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
+  apiVersion: "2024-04-10",
+});
 
 // Minimum payout threshold (USD)
 const MIN_PAYOUT = Number(process.env.AFFILIATE_MIN_PAYOUT || 5);
@@ -25,8 +27,12 @@ function getCurrentPeriod() {
   return { periodStart: start, periodEnd: end };
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed" });
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
+  if (req.method !== "POST")
+    return res.status(405).json({ message: "Method not allowed" });
 
   const session = await getServerSession(req, res, authOptions);
   if (!session?.user?.email || (session.user as any).role !== "admin") {
@@ -35,9 +41,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   await mongooseConnect();
 
-  const { periodStart: defaultStart, periodEnd: defaultEnd } = getCurrentPeriod();
+  const { periodStart: defaultStart, periodEnd: defaultEnd } =
+    getCurrentPeriod();
   const { periodStart, periodEnd } = {
-    periodStart: req.body?.periodStart ? new Date(req.body.periodStart) : defaultStart,
+    periodStart: req.body?.periodStart
+      ? new Date(req.body.periodStart)
+      : defaultStart,
     periodEnd: req.body?.periodEnd ? new Date(req.body.periodEnd) : defaultEnd,
   };
 
@@ -65,12 +74,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // Idempotency (affiliate + period + amount)
     const idemKey = crypto
       .createHash("sha256")
-      .update(`${a._id.toString()}|${periodStart.toISOString()}|${periodEnd.toISOString()}|${amount.toFixed(2)}`)
+      .update(
+        `${a._id.toString()}|${periodStart.toISOString()}|${periodEnd.toISOString()}|${amount.toFixed(2)}`,
+      )
       .digest("hex");
 
     try {
       // Have we already created a payout with this idem key?
-      const existing = await AffiliatePayout.findOne({ idempotencyKey: idemKey });
+      const existing = await AffiliatePayout.findOne({
+        idempotencyKey: idemKey,
+      });
       if (existing) {
         results.push({
           affiliateId: a._id.toString(),
@@ -90,7 +103,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           destination: a.stripeConnectId!,
           description: `CoveCRM Affiliate Payout — ${periodStart.toLocaleDateString()}–${periodEnd.toLocaleDateString()}`,
         },
-        { idempotencyKey: idemKey }
+        { idempotencyKey: idemKey },
       );
 
       // Record payout (status queued -> will flip via webhooks; we mark 'sent' optimistically)
@@ -146,5 +159,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
   }
 
-  return res.status(200).json({ ok: true, periodStart, periodEnd, count: results.length, results });
+  return res
+    .status(200)
+    .json({ ok: true, periodStart, periodEnd, count: results.length, results });
 }

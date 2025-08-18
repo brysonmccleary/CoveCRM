@@ -36,7 +36,10 @@ function coerceDateISO(d?: any): string {
   return isNaN(dt.getTime()) ? new Date().toISOString() : dt.toISOString();
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   if (req.method !== "GET") {
     res.status(405).json({ message: "Method not allowed" });
     return;
@@ -100,7 +103,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   // ---------- Calls (Call collection) ----------
   try {
-    const idObj = Types.ObjectId.isValid(leadId) ? new Types.ObjectId(leadId) : null;
+    const idObj = Types.ObjectId.isValid(leadId)
+      ? new Types.ObjectId(leadId)
+      : null;
     const callQuery: any = {
       userEmail,
       $or: [{ leadId }, ...(idObj ? [{ leadId: idObj }] : [])],
@@ -169,7 +174,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   });
 
   // Sort DESC by date and paginate
-  events.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  events.sort(
+    (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime(),
+  );
   const sliced = events.slice(0, limit);
 
   res.setHeader("Cache-Control", "no-store");

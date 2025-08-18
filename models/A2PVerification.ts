@@ -24,7 +24,7 @@ const A2PVerificationSchema = new Schema<IA2PVerification>(
     lastChecked: { type: Date },
     optInScreenshotUrl: { type: String }, // ✅ NEW FIELD
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
 const A2PVerification =

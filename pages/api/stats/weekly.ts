@@ -11,8 +11,12 @@ import { resolveTimezoneFromRequest } from "@/lib/resolveTimezone";
  * Returns the last 7 calendar days (including today) in the user's timezone.
  * Each day contains: { date: 'YYYY-MM-DD', calls: number, talks: number }
  */
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "GET") return res.status(405).json({ message: "Method not allowed" });
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
+  if (req.method !== "GET")
+    return res.status(405).json({ message: "Method not allowed" });
 
   const session = await getServerSession(req, res, authOptions);
   const userEmail = session?.user?.email?.toLowerCase();
@@ -52,7 +56,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const e = c.completedAt ? new Date(c.completedAt).getTime() : undefined;
       const a = startJS.getTime();
       const b = endJS.getTime();
-      return (s !== undefined && s >= a && s < b) || (e !== undefined && e >= a && e < b);
+      return (
+        (s !== undefined && s >= a && s < b) ||
+        (e !== undefined && e >= a && e < b)
+      );
     };
 
     const result = buckets.map(({ start, end, key }) => {

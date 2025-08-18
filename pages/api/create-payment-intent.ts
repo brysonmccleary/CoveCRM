@@ -1,11 +1,14 @@
 import { NextApiRequest, NextApiResponse } from "next";
-import Stripe from "stripe";
+import { stripe } from "@/lib/stripe";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: "2024-04-10",
 });
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   try {
     const paymentIntent = await stripe.paymentIntents.create({
       amount: 5000, // $50.00 — update as needed
