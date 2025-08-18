@@ -3,29 +3,42 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
-import Stripe from "stripe";
+import { stripe } from "@/lib/stripe"; // Use shared Stripe client (no hard-coded apiVersion)
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: "2024-04-10",
-});
+type Usage = {
+  callsMade: number;
+  callsReceived: number;
+  textsSent: number;
+  textsReceived: number;
+  cost: number;
+};
+
+type Row = {
+  userEmail: string;
+  phoneNumber: string;
+  status: string;
+  nextBillingDate: string | null;
+  usage: Usage;
+};
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "GET") return res.status(405).end("Method Not Allowed");
 
   try {
     await dbConnect();
-    const users = await User.find();
+    const users = await User.find().lean();
 
-    const results = await Promise.all(
-      users.flatMap((user) =>
-        user.numbers?.map(async (num) => {
-          let status = "unknown";
-          let nextBillingDate = null;
+    const rows = await Promise.all<Row>(
+      (users || []).flatMap((user: any) => {
+        const numbers: any[] = Array.isArray(user?.numbers) ? user.numbers : [];
+        return numbers.map(async (num: any) => {
+          let status: string = "unknown";
+          let nextBillingDate: string | null = null;
 
-          if (num.subscriptionId) {
+          if (num?.subscriptionId) {
             try {
-              const sub = await stripe.subscriptions.retrieve(num.subscriptionId);
-              status = sub.status;
+              const sub = await stripe.subscriptions.retrieve(String(num.subscriptionId));
+              status = String(sub.status);
               nextBillingDate = sub.current_period_end
                 ? new Date(sub.current_period_end * 1000).toISOString()
                 : null;
@@ -34,27 +47,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             }
           }
 
+          const usage: Usage = {
+            callsMade: Number(num?.usage?.callsMade || 0),
+            callsReceived: Number(num?.usage?.callsReceived || 0),
+            textsSent: Number(num?.usage?.textsSent || 0),
+            textsReceived: Number(num?.usage?.textsReceived || 0),
+            cost: Number(num?.usage?.cost || 0),
+          };
+
           return {
-            userEmail: user.email.toLowerCase(),
-            phoneNumber: num.phoneNumber,
+            userEmail: String(user?.email || "").toLowerCase(),
+            phoneNumber: String(num?.phoneNumber || ""),
             status,
             nextBillingDate,
-            usage: num.usage || {
-              callsMade: 0,
-              callsReceived: 0,
-              textsSent: 0,
-              textsReceived: 0,
-              cost: 0,
-            },
+            usage,
           };
-        }) || []
-      )
+        });
+      })
     );
 
-    // Sort alphabetically by user email
-    results.sort((a, b) => a.userEmail.localeCompare(b.userEmail));
-
-    res.status(200).json({ numbers: results });
+    rows.sort((a, b) => a.userEmail.localeCompare(b.userEmail));
+    res.status(200).json({ numbers: rows });
   } catch (err) {
     console.error("❌ Admin numbers error:", err);
     res.status(500).end("Server error");
