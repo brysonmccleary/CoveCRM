@@ -3,7 +3,7 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
-import { stripe } from "@/lib/stripe"; // Use shared Stripe client (no hard-coded apiVersion)
+import { stripe } from "@/lib/stripe";
 
 type Usage = {
   callsMade: number;
@@ -37,9 +37,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
           if (num?.subscriptionId) {
             try {
-              const sub = await stripe.subscriptions.retrieve(String(num.subscriptionId));
-              status = String(sub.status);
-              nextBillingDate = sub.current_period_end
+              // stripe-node v16 returns Stripe.Response<T> (with .data); older returns T
+              const resp = await stripe.subscriptions.retrieve(String(num.subscriptionId));
+              const sub: any = (resp as any)?.data ?? resp;
+
+              status = String(sub?.status ?? "unknown");
+              nextBillingDate = sub?.current_period_end
                 ? new Date(sub.current_period_end * 1000).toISOString()
                 : null;
             } catch (err) {
