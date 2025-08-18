@@ -9,15 +9,15 @@ import type { IA2PProfile } from "@/models/A2PProfile";
 import User from "@/models/User";
 
 /**
- * Required ENV (ISV/parent account):
+ * Required ENV:
  * - TWILIO_ACCOUNT_SID
  * - TWILIO_AUTH_TOKEN
  * - NEXT_PUBLIC_BASE_URL (or BASE_URL)
- * - A2P_PRIMARY_PROFILE_SID (BU... - approved ISV Primary Customer Profile)
+ * - A2P_PRIMARY_PROFILE_SID  // BU... of the ISV primary, already approved
  *
  * Optional:
- * - SECONDARY_PROFILE_POLICY_SID (defaults to Standard/LVS)
- * - A2P_TRUST_PRODUCT_POLICY_SID (defaults to A2P Messaging Profile)
+ * - SECONDARY_PROFILE_POLICY_SID
+ * - A2P_TRUST_PRODUCT_POLICY_SID
  * - A2P_STATUS_CALLBACK_URL
  */
 
@@ -29,16 +29,49 @@ const SECONDARY_PROFILE_POLICY_SID =
   process.env.SECONDARY_PROFILE_POLICY_SID || "RNdfbf3fae0e1107f8aded0e7cead80bf5";
 const A2P_TRUST_PRODUCT_POLICY_SID =
   process.env.A2P_TRUST_PRODUCT_POLICY_SID || "RNb0d4771c2c98518d916a3d4cd70a8f8b";
-const PRIMARY_PROFILE_SID = process.env.A2P_PRIMARY_PROFILE_SID!; // BU... (ISV parent, approved)
+const PRIMARY_PROFILE_SID = process.env.A2P_PRIMARY_PROFILE_SID!; // BU... (ISV)
 
 const baseUrl =
   process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "http://localhost:3000";
 const STATUS_CB = process.env.A2P_STATUS_CALLBACK_URL || `${baseUrl}/api/a2p/status-callback`;
 
-// Helpers
+// ---------------- helpers ----------------
 function required<T>(v: T, name: string): T {
   if (!v) throw new Error(`Missing required field: ${name}`);
   return v;
+}
+
+// Twilio's TS typings for TrustHub are inconsistent across SDK versions.
+// Use tiny helpers with a local `any` cast at the boundary (runtime-safe).
+async function assignEntityToCustomerProfile(customerProfileSid: string, objectSid: string) {
+  await (client.trusthub.v1.customerProfiles(customerProfileSid) as any).entityAssignments.create({
+    objectSid,
+  });
+}
+async function assignEntityToTrustProduct(trustProductSid: string, objectSid: string) {
+  await (client.trusthub.v1.trustProducts(trustProductSid) as any).entityAssignments.create({
+    objectSid,
+  });
+}
+async function evaluateAndSubmitCustomerProfile(customerProfileSid: string) {
+  try {
+    await (client.trusthub.v1.customerProfiles(customerProfileSid) as any).evaluations.create({});
+  } catch {}
+  try {
+    await client.trusthub.v1.customerProfiles(customerProfileSid).update({
+      status: "pending-review",
+    } as any);
+  } catch {}
+}
+async function evaluateAndSubmitTrustProduct(trustProductSid: string) {
+  try {
+    await (client.trusthub.v1.trustProducts(trustProductSid) as any).evaluations.create({});
+  } catch {}
+  try {
+    await client.trusthub.v1.trustProducts(trustProductSid).update({
+      status: "pending-review",
+    } as any);
+  } catch {}
 }
 
 async function ensureMessagingServiceForUser(userId: string, userEmail: string): Promise<string> {
@@ -60,8 +93,10 @@ async function ensureMessagingServiceForUser(userId: string, userEmail: string):
   return ms.sid;
 }
 
+// ---------------- handler ----------------
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed" });
+
   try {
     const session = await getServerSession(req, res, authOptions);
     if (!session?.user?.email) return res.status(401).json({ message: "Unauthorized" });
@@ -71,7 +106,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const user = await User.findOne({ email: session.user.email });
     if (!user) return res.status(404).json({ message: "User not found" });
 
-    // User-submitted business info (from your onboarding form)
     const {
       businessName,
       ein,
@@ -83,10 +117,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       contactFirstName,
       contactLastName,
       sampleMessages, // string | string[]
-      optInDetails,   // string
-      volume,         // string (approx monthly volume)
-      optInScreenshotUrl, // string (optional)
-      usecaseCode,    // optional; default LOW_VOLUME
+      optInDetails, // string
+      volume, // string
+      optInScreenshotUrl, // string
+      usecaseCode, // string | undefined
     } = (req.body || {}) as Record<string, unknown>;
 
     // Validate basics
@@ -112,11 +146,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       throw new Error("Provide at least 2 sample messages (20–1024 chars each).");
     }
 
-    // ⛑️ Upsert our local A2PProfile first (no self-reference in initializer)
-    const now = new Date();
+    // Upsert local A2PProfile (no self-reference in initializer)
     const userId = String(user._id);
-
     const existing = await A2PProfile.findOne({ userId }).lean<IA2PProfile | null>();
+    const now = new Date();
 
     const setPayload: Partial<IA2PProfile> & { userId: string } = {
       userId,
@@ -134,6 +167,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       volume: (volume as string) || "Low",
       optInScreenshotUrl: (optInScreenshotUrl as string) || "",
       createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
     };
 
     const a2p = await A2PProfile.findOneAndUpdate<IA2PProfile>(
@@ -141,15 +175,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       { $set: setPayload },
       { upsert: true, returnDocument: "after" }
     );
+    if (!a2p) throw new Error("Failed to upsert A2P profile");
 
-    if (!a2p) {
-      throw new Error("Failed to upsert A2P profile");
-    }
-
-    // 0) Ensure per-user Messaging Service (MG...) exists now
+    // Ensure per-user Messaging Service
     const messagingServiceSid = await ensureMessagingServiceForUser(userId, user.email);
 
-    // SHORT-CIRCUIT / IDEMPOTENCE:
+    // Idempotent short-circuit
     if ((a2p as any).brandSid && (a2p as any).usa2pSid) {
       return res.status(200).json({
         message: "A2P already created for this user.",
@@ -159,7 +190,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    // 1) Create Secondary Customer Profile (BU...) if missing
+    // 1) Secondary Customer Profile (BU...) if missing
     let secondaryProfileSid: string | undefined = (a2p as any).profileSid;
     if (!secondaryProfileSid) {
       const created = await client.trusthub.v1.customerProfiles.create({
@@ -173,7 +204,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       await A2PProfile.updateOne({ _id: a2p._id }, { $set: { profileSid: secondaryProfileSid } });
     }
 
-    // 1.2) EndUser: customer_profile_business_information (IT...) + attach
+    // 1.2) EndUser: business information + attach
     if (!(a2p as any).businessEndUserSid) {
       const businessEU = await client.trusthub.v1.endUsers.create({
         type: "customer_profile_business_information",
@@ -185,15 +216,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           business_regions_of_operation: ["US"],
           business_registration_identifier: "EIN",
           business_registration_number: setPayload.ein,
-          business_type: "LLC", // consider capturing in form
+          business_type: "LLC",
           website_url: setPayload.website,
           social_media_profile_urls: [],
         } as any,
       });
 
-      await client.trusthub.v1
-        .customerProfiles(secondaryProfileSid!)
-        .entityAssignments.create({ objectSid: businessEU.sid });
+      await assignEntityToCustomerProfile(secondaryProfileSid!, businessEU.sid);
 
       await A2PProfile.updateOne(
         { _id: a2p._id },
@@ -201,7 +230,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       );
     }
 
-    // 1.4) Authorized representative (IT...) + attach
+    // 1.4) Authorized representative + attach
     if (!(a2p as any).authorizedRepEndUserSid) {
       const repEU = await client.trusthub.v1.endUsers.create({
         type: "authorized_representative_1",
@@ -215,9 +244,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         } as any,
       });
 
-      await client.trusthub.v1
-        .customerProfiles(secondaryProfileSid!)
-        .entityAssignments.create({ objectSid: repEU.sid });
+      await assignEntityToCustomerProfile(secondaryProfileSid!, repEU.sid);
 
       await A2PProfile.updateOne(
         { _id: a2p._id },
@@ -225,27 +252,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       );
     }
 
-    // 1.9) Assign Secondary to Primary (your ISV Primary profile)
+    // 1.9) Assign Secondary to Primary (ISV)
     if (!(a2p as any).assignedToPrimary) {
-      await client.trusthub.v1
-        .customerProfiles(PRIMARY_PROFILE_SID)
-        .entityAssignments.create({ objectSid: secondaryProfileSid! });
-
+      await assignEntityToCustomerProfile(PRIMARY_PROFILE_SID, secondaryProfileSid!);
       await A2PProfile.updateOne({ _id: a2p._id }, { $set: { assignedToPrimary: true } });
     }
 
-    // 1.10 & 1.11) Evaluate + Submit Secondary Profile
-    async function evaluateAndSubmitCustomerProfile(buSid: string) {
-      try {
-        await client.trusthub.v1.customerProfiles(buSid).evaluations.create({});
-      } catch {}
-      try {
-        await client.trusthub.v1.customerProfiles(buSid).update({ status: "pending-review" });
-      } catch {}
-    }
+    // Evaluate + submit Secondary
     await evaluateAndSubmitCustomerProfile(secondaryProfileSid!);
 
-    // 2) Create TrustProduct for A2P profile (BU...) if missing
+    // 2) TrustProduct (A2P) if missing
     let trustProductSid: string | undefined = (a2p as any).trustProductSid;
     if (!trustProductSid) {
       const tp = await client.trusthub.v1.trustProducts.create({
@@ -259,7 +275,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       await A2PProfile.updateOne({ _id: a2p._id }, { $set: { trustProductSid } });
     }
 
-    // 2.2) EndUser: us_a2p_messaging_profile_information + attach to TrustProduct
+    // 2.2) EndUser: us_a2p_messaging_profile_information + attach to TrustProduct (+ attach Secondary)
     if (!(a2p as any).a2pProfileEndUserSid) {
       const a2pEU = await client.trusthub.v1.endUsers.create({
         type: "us_a2p_messaging_profile_information",
@@ -275,30 +291,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         } as any,
       });
 
-      await client.trusthub.v1
-        .trustProducts(trustProductSid!)
-        .entityAssignments.create({ objectSid: a2pEU.sid });
-
-      // Also attach the Secondary Customer Profile to the TrustProduct
-      await client.trusthub.v1
-        .trustProducts(trustProductSid!)
-        .entityAssignments.create({ objectSid: secondaryProfileSid! });
+      await assignEntityToTrustProduct(trustProductSid!, a2pEU.sid);
+      await assignEntityToTrustProduct(trustProductSid!, secondaryProfileSid!);
 
       await A2PProfile.updateOne(
         { _id: a2p._id },
-        { $set: { a2pProfileEndUserSid: a2pEU.sid) } } as any // keep TS calm across SDK versions
+        { $set: { a2pProfileEndUserSid: a2pEU.sid } }
       );
     }
 
-    // 2.5 & 2.6) Evaluate + Submit TrustProduct
-    async function evaluateAndSubmitTrustProduct(tpSid: string) {
-      try {
-        await client.trusthub.v1.trustProducts(tpSid).evaluations.create({});
-      } catch {}
-      try {
-        await client.trusthub.v1.trustProducts(tpSid).update({ status: "pending-review" });
-      } catch {}
-    }
+    // Evaluate + submit TrustProduct
     await evaluateAndSubmitTrustProduct(trustProductSid!);
 
     // 3) BrandRegistration (BN...) if missing
@@ -314,9 +316,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       await A2PProfile.updateOne({ _id: a2p._id }, { $set: { brandSid } });
     }
 
-    // 4) Messaging Service already ensured earlier
+    // 4) Messaging Service already ensured
 
-    // 5) Create A2P Campaign (Usa2p QE...) if missing
+    // 5) Campaign (Usa2p QE...) if missing
     let usa2pSid: string | undefined = (a2p as any).usa2pSid;
     if (!usa2pSid) {
       const code = (usecaseCode as string) || "LOW_VOLUME";
