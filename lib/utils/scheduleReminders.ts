@@ -4,14 +4,14 @@ import Booking from "@/models/Booking";
 import { sendSMS } from "@/lib/twilio/sendSMS";
 import { DateTime } from "luxon";
 
-// Use a type-only reference to avoid "namespace as type" issues under CJS configs
-type LxDateTime = import("luxon").DateTime;
+// Derive the DateTime instance type without importing Luxon types directly
+type LuxonDateTime = ReturnType<typeof DateTime.fromJSDate>;
 
 // Format: "2:30 PM"
-const formatTime = (dt: LxDateTime) => dt.toLocaleString(DateTime.TIME_SIMPLE);
+const formatTime = (dt: LuxonDateTime) => dt.toLocaleString(DateTime.TIME_SIMPLE);
 
 // Format: "August 5, 2025"
-const formatDate = (dt: LxDateTime) =>
+const formatDate = (dt: LuxonDateTime) =>
   dt.toLocaleString({ month: "long", day: "numeric", year: "numeric" });
 
 export async function checkAndSendReminders() {
@@ -32,7 +32,6 @@ export async function checkAndSendReminders() {
       leadPhone,
       agentPhone,
       agentEmail,
-      reminderSent,
       timezone,
     } = booking as any;
 
@@ -59,7 +58,7 @@ export async function checkAndSendReminders() {
     const dateStr = formatDate(bookingTime);
     const timeStr = formatTime(bookingTime);
 
-    // ✅ 1. Confirmation
+    // ✅ 1. Confirmation (send once, any time > 1 minute before)
     if (!booking.reminderSent.confirm && timeDiffMs > 60 * 1000) {
       console.log(`📨 Sending confirmation to ${leadPhone}`);
       await sendSMS(
