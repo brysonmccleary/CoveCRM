@@ -4,7 +4,8 @@ import User from "@/models/User";
 import Stripe from "stripe";
 
 const STRIPE_KEY = process.env.STRIPE_SECRET_KEY;
-const stripe = STRIPE_KEY ? new Stripe(STRIPE_KEY, { apiVersion: "2024-04-10" }) : null;
+// Use account default API version to avoid TS literal version mismatches
+const stripe = STRIPE_KEY ? new Stripe(STRIPE_KEY) : null;
 
 // Stripe price for $10 top-up
 const USAGE_TOPUP_PRICE_ID = "price_1RpuwfDF9aEsjVyJekvxV1eh";

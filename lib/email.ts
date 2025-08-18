@@ -467,3 +467,74 @@ export async function sendAffiliatePayoutEmail(opts: {
   const html = renderAffiliatePayoutEmail(opts);
   return sendViaResend({ to: opts.to, subject, html });
 }
+
+/* ========== NEW: A2P registration status emails (approved / declined) ========== */
+
+function renderA2PApprovedEmail(opts: {
+  name?: string;
+  dashboardUrl?: string;
+}) {
+  return `
+    <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; color:#0f172a">
+      <h2 style="margin:0 0 12px 0">Your A2P registration is approved 🎉</h2>
+      <p style="margin:0 0 12px 0">
+        ${opts.name ? `Hi ${escapeHtml(opts.name)}, ` : ""}great news — your A2P 10DLC registration has been <b>approved</b>.
+        You can now send and receive texts in CoveCRM.
+      </p>
+      ${
+        opts.dashboardUrl
+          ? `<p style="margin:0 0 12px 0"><a href="${opts.dashboardUrl}">Open your messaging dashboard</a></p>`
+          : ""
+      }
+      <p style="margin:0 0 12px 0">If you have any questions, reply to this email and we’ll help.</p>
+      <p style="margin:16px 0 0 0">— The Cove CRM Team</p>
+    </div>
+  `;
+}
+
+export async function sendA2PApprovedEmail(opts: {
+  to: string;
+  name?: string;
+  dashboardUrl?: string;
+}): Promise<SendEmailResult> {
+  const subject = "🎉 A2P Approved — You can now text from CoveCRM";
+  const html = renderA2PApprovedEmail({ name: opts.name, dashboardUrl: opts.dashboardUrl });
+  return sendViaResend({ to: opts.to, subject, html });
+}
+
+function renderA2PDeclinedEmail(opts: {
+  name?: string;
+  reason?: string;
+  helpUrl?: string;
+}) {
+  return `
+    <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; color:#0f172a">
+      <h2 style="margin:0 0 12px 0">A2P registration needs attention</h2>
+      <p style="margin:0 0 12px 0">
+        ${opts.name ? `Hi ${escapeHtml(opts.name)}, ` : ""}your A2P 10DLC application was <b>declined</b>.
+        ${opts.reason ? `Reason: <i>${escapeHtml(opts.reason)}</i>.` : ""}
+      </p>
+      <p style="margin:0 0 12px 0">
+        Please update your business details and messaging samples, then resubmit.
+        ${
+          opts.helpUrl
+            ? `See our <a href="${opts.helpUrl}">A2P checklist</a> for quick fixes.`
+            : ""
+        }
+      </p>
+      <p style="margin:16px 0 0 0">Need help? Reply to this email — we’ll walk you through it.</p>
+      <p style="margin:16px 0 0 0">— The Cove CRM Team</p>
+    </div>
+  `;
+}
+
+export async function sendA2PDeclinedEmail(opts: {
+  to: string;
+  name?: string;
+  reason?: string;
+  helpUrl?: string;
+}): Promise<SendEmailResult> {
+  const subject = "A2P Registration Declined — Action Needed";
+  const html = renderA2PDeclinedEmail({ name: opts.name, reason: opts.reason, helpUrl: opts.helpUrl });
+  return sendViaResend({ to: opts.to, subject, html });
+}

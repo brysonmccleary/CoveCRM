@@ -10,6 +10,9 @@ export type A2PRegistrationStatus =
   | "ready"
   | "rejected";
 
+// High-level rollup used for dashboard + notifications
+export type A2PApplicationStatus = "pending" | "approved" | "declined";
+
 export interface IA2PProfile extends Document {
   // linkage
   userId: string;
@@ -37,16 +40,21 @@ export interface IA2PProfile extends Document {
   volume: string;
   optInScreenshotUrl: string;
 
-  // -------------------- NEW: ISV automation fields --------------------
+  // -------------------- ISV automation fields --------------------
   // A2P artifacts
   brandSid?: string;                // BNxxxxxxxxxxxxxxxxxxxxxxxxxxxx
   campaignSid?: string;             // CMxxxxxxxxxxxxxxxxxxxxxxxxxxxx
   messagingServiceSid?: string;     // MGxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 
-  // Registration lifecycle + health
+  // Registration lifecycle + health (detailed)
   registrationStatus?: A2PRegistrationStatus;
   messagingReady?: boolean;         // true once campaign_approved and wired
   lastError?: string;
+
+  // NEW: high-level status + notification bookkeeping
+  applicationStatus?: A2PApplicationStatus; // 'pending' | 'approved' | 'declined'
+  approvalNotifiedAt?: Date;                // set once when we email the agent
+  declinedReason?: string;                  // optional text reason if declined
 
   // Optional richer compliance content
   compliance?: {
@@ -92,12 +100,12 @@ const A2PProfileSchema = new Schema<IA2PProfile>({
   volume: { type: String, required: true },
   optInScreenshotUrl: { type: String, required: true },
 
-  // NEW: ISV artifacts
+  // ISV artifacts
   brandSid: { type: String },
   campaignSid: { type: String },
   messagingServiceSid: { type: String },
 
-  // NEW: Lifecycle
+  // Detailed lifecycle
   registrationStatus: {
     type: String,
     enum: [
@@ -113,6 +121,16 @@ const A2PProfileSchema = new Schema<IA2PProfile>({
   },
   messagingReady: { type: Boolean, default: false },
   lastError: { type: String },
+
+  // NEW: high-level rollup + notification + decline reason
+  applicationStatus: {
+    type: String,
+    enum: ["pending", "approved", "declined"],
+    default: "pending",
+    index: true,
+  },
+  approvalNotifiedAt: { type: Date },
+  declinedReason: { type: String },
 
   // Optional richer compliance fields
   compliance: {
