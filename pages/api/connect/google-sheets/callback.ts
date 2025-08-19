@@ -53,5 +53,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
   );
 
-  return res.redirect("/dashboard?tab=leads");
+  // 👇 Add this flag so the client knows to fetch files immediately
+  return res.redirect("/dashboard?tab=leads&connected=google-sheets");
 }
