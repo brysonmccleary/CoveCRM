@@ -51,6 +51,14 @@ export default function LeadImportForm() {
   const [loadingTabs, setLoadingTabs] = useState(false);
   const [tabErr, setTabErr] = useState<string | null>(null);
 
+  const [selectedTabTitle, setSelectedTabTitle] = useState<string>("");
+  const [selectedSheetId, setSelectedSheetId] = useState<number | null>(null);
+  const [headerRow, setHeaderRow] = useState<number>(1);
+
+  const [previewing, setPreviewing] = useState(false);
+  const [previewErr, setPreviewErr] = useState<string | null>(null);
+
+  // ===== CSV handlers =====
   const handleFileUpload = (file: File) => {
     Papa.parse(file, {
       header: true,
@@ -119,6 +127,15 @@ export default function LeadImportForm() {
       const j = await r.json();
       if (!r.ok) throw new Error(j?.error || "Failed to list spreadsheets");
       setFiles(j.files || []);
+      // Reset downstream state
+      setSelectedSpreadsheet(null);
+      setTabs(null);
+      setSelectedTabTitle("");
+      setSelectedSheetId(null);
+      setCsvHeaders([]);
+      setSampleRow({});
+      setFieldMapping({});
+      setSkipFields({});
     } catch (e: any) {
       setFileErr(e.message || "Failed to list spreadsheets");
       setFiles(null);
@@ -132,6 +149,8 @@ export default function LeadImportForm() {
     setTabs(null);
     setTabErr(null);
     setLoadingTabs(true);
+    setSelectedTabTitle("");
+    setSelectedSheetId(null);
     try {
       const r = await fetch(`/api/google/sheets/list-tabs?spreadsheetId=${encodeURIComponent(f.id)}`);
       const j = await r.json();
@@ -142,6 +161,42 @@ export default function LeadImportForm() {
       setTabs(null);
     } finally {
       setLoadingTabs(false);
+    }
+  };
+
+  const previewColumns = async () => {
+    if (!selectedSpreadsheet) return;
+    if (!selectedTabTitle && selectedSheetId == null) {
+      setPreviewErr("Choose a tab first");
+      return;
+    }
+    setPreviewErr(null);
+    setPreviewing(true);
+    try {
+      const r = await fetch("/api/google/sheets/preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          spreadsheetId: selectedSpreadsheet.id,
+          title: selectedTabTitle || undefined,
+          sheetId: selectedSheetId ?? undefined,
+          headerRow: headerRow || 1,
+        }),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j?.error || "Preview failed");
+      // Reuse your CSV mapping UI
+      setCsvHeaders(j.headers || []);
+      setSampleRow(j.sampleRow || {});
+      // Reset any previous mapping/skip state
+      setFieldMapping({});
+      setSkipFields({});
+    } catch (e: any) {
+      setPreviewErr(e.message || "Preview failed");
+      setCsvHeaders([]);
+      setSampleRow({});
+    } finally {
+      setPreviewing(false);
     }
   };
 
@@ -177,7 +232,7 @@ export default function LeadImportForm() {
       </div>
 
       {/* Google Sheets picker */}
-      <div className="mb-6">
+      <div className="mb-6 space-y-4">
         {loadingFiles && <div className="text-sm text-gray-500">Loading spreadsheets…</div>}
         {fileErr && <div className="text-sm text-red-600">{fileErr}</div>}
 
@@ -204,17 +259,50 @@ export default function LeadImportForm() {
         )}
 
         {selectedSpreadsheet && (
-          <div className="mt-4">
+          <div className="mt-4 space-y-3">
             <div className="font-semibold">Tabs in: {selectedSpreadsheet.name}</div>
             {loadingTabs && <div className="text-sm text-gray-500">Loading tabs…</div>}
             {tabErr && <div className="text-sm text-red-600">{tabErr}</div>}
 
             {tabs && tabs.length > 0 && (
-              <ul className="list-disc pl-5">
-                {tabs.map((t, i) => (
-                  <li key={`${t.sheetId}-${i}`}>{t.title}</li>
-                ))}
-              </ul>
+              <div className="flex flex-wrap items-center gap-3">
+                <label className="text-sm text-gray-600">Choose tab</label>
+                <select
+                  className="border p-2 rounded"
+                  value={selectedTabTitle}
+                  onChange={(e) => {
+                    setSelectedTabTitle(e.target.value);
+                    const t = tabs.find((x) => x.title === e.target.value);
+                    setSelectedSheetId((t?.sheetId as number) ?? null);
+                  }}
+                >
+                  <option value="">-- Select a tab --</option>
+                  {tabs.map((t) => (
+                    <option key={`${t.sheetId}-${t.title}`} value={t.title || ""}>
+                      {t.title}
+                    </option>
+                  ))}
+                </select>
+
+                <label className="text-sm text-gray-600">Header row</label>
+                <input
+                  type="number"
+                  min={1}
+                  value={headerRow}
+                  onChange={(e) => setHeaderRow(Math.max(1, Number(e.target.value || "1")))}
+                  className="border p-2 w-24 rounded"
+                />
+
+                <button
+                  onClick={previewColumns}
+                  disabled={previewing || (!selectedTabTitle && selectedSheetId == null)}
+                  className="bg-indigo-600 text-white px-4 py-2 rounded hover:bg-indigo-700 disabled:opacity-60"
+                >
+                  {previewing ? "Previewing…" : "Preview Columns"}
+                </button>
+
+                {previewErr && <div className="text-sm text-red-600">{previewErr}</div>}
+              </div>
             )}
           </div>
         )}
@@ -237,11 +325,12 @@ export default function LeadImportForm() {
         }}
       />
 
+      {/* Mapping UI — reused for Sheets preview or CSV */}
       {csvHeaders.length > 0 && (
         <div className="mt-6 border-t pt-4">
           <h3 className="text-lg font-semibold mb-2">Map your fields</h3>
           <div className="grid grid-cols-3 gap-4 font-medium text-gray-700 dark:text-gray-300">
-            <div>CSV Column</div>
+            <div>Source Column</div>
             <div>Mapped To</div>
             <div>Do Not Import</div>
           </div>
@@ -283,11 +372,13 @@ export default function LeadImportForm() {
               </div>
             );
           })}
+
+          {/* This button will call the real import in the next step */}
           <button
-            onClick={handleSubmit}
+            onClick={() => alert("Ready to import — paste Lead.ts & Folder.ts so I can wire DB upserts cleanly.")}
             className="mt-4 bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
           >
-            Import Leads
+            Continue: Import to Folder
           </button>
         </div>
       )}

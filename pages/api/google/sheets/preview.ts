@@ -1,0 +1,118 @@
+// /pages/api/google/sheets/preview.ts
+import type { NextApiRequest, NextApiResponse } from "next";
+import { getServerSession } from "next-auth/next";
+import { authOptions } from "../../auth/[...nextauth]";
+import dbConnect from "@/lib/mongooseConnect";
+import User from "@/models/User";
+import { google } from "googleapis";
+
+type PreviewBody = {
+  spreadsheetId: string;
+  title?: string;       // sheet/tab title
+  sheetId?: number;     // optional if you prefer using sheetId
+  headerRow?: number;   // 1-based, default 1
+  sampleOffset?: number;// default 1 (first row after header)
+};
+
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
+
+  const session = await getServerSession(req, res, authOptions);
+  if (!session?.user?.email) return res.status(401).json({ error: "Unauthorized" });
+
+  const { spreadsheetId, title, sheetId, headerRow = 1, sampleOffset = 1 } =
+    (req.body || {}) as PreviewBody;
+
+  if (!spreadsheetId) return res.status(400).json({ error: "Missing spreadsheetId" });
+  if (!title && typeof sheetId !== "number")
+    return res.status(400).json({ error: "Provide title or sheetId" });
+
+  await dbConnect();
+  const user = await User.findOne({ email: session.user.email.toLowerCase() }).lean();
+  const gs = (user as any)?.googleSheets;
+  if (!gs?.refreshToken) return res.status(400).json({ error: "Google not connected" });
+
+  // Build OAuth client
+  const base =
+    process.env.NEXTAUTH_URL ||
+    process.env.NEXT_PUBLIC_BASE_URL ||
+    `https://${req.headers["x-forwarded-host"] || req.headers.host}`;
+
+  const redirectUri =
+    process.env.GOOGLE_REDIRECT_URI_SHEETS ||
+    `${base}/api/connect/google-sheets/callback`;
+
+  const oauth2 = new google.auth.OAuth2(
+    process.env.GOOGLE_CLIENT_ID!,
+    process.env.GOOGLE_CLIENT_SECRET!,
+    redirectUri
+  );
+  oauth2.setCredentials({
+    access_token: gs.accessToken,
+    refresh_token: gs.refreshToken,
+    expiry_date: gs.expiryDate,
+  });
+
+  const sheets = google.sheets({ version: "v4", auth: oauth2 });
+
+  try {
+    let tabTitle = title;
+
+    // If only sheetId was provided, resolve the tab title
+    if (!tabTitle && typeof sheetId === "number") {
+      const meta = await sheets.spreadsheets.get({
+        spreadsheetId,
+        fields: "sheets(properties(sheetId,title))",
+      });
+      const found = (meta.data.sheets || []).find(
+        (s) => s.properties?.sheetId === sheetId
+      );
+      tabTitle = found?.properties?.title || undefined;
+      if (!tabTitle) return res.status(400).json({ error: "sheetId not found" });
+    }
+
+    // Pull values (A1:ZZ to be safe)
+    const range = `'${tabTitle}'!A1:ZZ`;
+    const valueResp = await sheets.spreadsheets.values.get({
+      spreadsheetId,
+      range,
+      majorDimension: "ROWS",
+    });
+
+    const values = (valueResp.data.values || []) as string[][];
+    if (!values.length) {
+      return res.status(200).json({ headers: [], sampleRow: {}, rowCount: 0, title: tabTitle });
+    }
+
+    // headerRow is 1-based in UI; convert to 0-based index here
+    const headerIdx = Math.max(0, headerRow - 1);
+    const headers = (values[headerIdx] || []).map((h) => String(h || "").trim());
+
+    // pick the first non-empty row after headerIdx
+    let sampleRowIndex = headerIdx + sampleOffset;
+    while (sampleRowIndex < values.length) {
+      const row = values[sampleRowIndex];
+      const hasAny = row?.some((cell) => String(cell || "").trim() !== "");
+      if (hasAny) break;
+      sampleRowIndex++;
+    }
+
+    const row = values[sampleRowIndex] || [];
+    const sampleRow: Record<string, any> = {};
+    headers.forEach((h, i) => {
+      if (!h) return;
+      sampleRow[h] = row[i] ?? "";
+    });
+
+    return res.status(200).json({
+      headers,
+      sampleRow,
+      rowCount: values.length,
+      headerRow,
+      title: tabTitle,
+    });
+  } catch (err: any) {
+    const message = err?.errors?.[0]?.message || err?.message || "Sheets preview failed";
+    return res.status(500).json({ error: message });
+  }
+}
