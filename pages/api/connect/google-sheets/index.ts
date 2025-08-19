@@ -4,11 +4,11 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from "../../auth/[...nextauth]";
 import { google } from "googleapis";
 
-const SCOPES = [
+const SCOPES: string[] = [
   "https://www.googleapis.com/auth/spreadsheets.readonly",
   "https://www.googleapis.com/auth/drive.metadata.readonly",
   "https://www.googleapis.com/auth/userinfo.email",
-] as const;
+];
 
 const VERSION_TAG = "oauth-start-v2-2025-08-19";
 
@@ -46,11 +46,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     access_type: "offline",
     prompt: "consent",
     include_granted_scopes: true,
-    scope: SCOPES, // ✅ includes drive.metadata.readonly + spreadsheets.readonly
+    scope: SCOPES, // ✅ now mutable string[]
     state: encodeURIComponent(session.user.email),
   });
 
-  // Debug payload shows EXACT scopes the route is using
   if (req.query.debug === "1") {
     res.setHeader("Cache-Control", "no-store");
     return res.status(200).json({
