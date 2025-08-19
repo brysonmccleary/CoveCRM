@@ -15,6 +15,18 @@ const nextConfig = {
     ignoreDuringBuilds: true,
   },
 
+  // Force apex -> www so OAuth redirect_uri is consistent
+  async redirects() {
+    return [
+      {
+        source: "/:path*",
+        has: [{ type: "host", value: "covecrm.com" }],
+        destination: "https://www.covecrm.com/:path*",
+        permanent: true,
+      },
+    ];
+  },
+
   // Safety net to avoid bundling Node core polyfills in client builds
   webpack: (config, { isServer }) => {
     if (!isServer) {
