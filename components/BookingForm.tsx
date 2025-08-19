@@ -1,3 +1,4 @@
+// /components/BookingForm.tsx
 import { useState, useEffect } from "react";
 import { useSession } from "next-auth/react";
 import toast from "react-hot-toast";
@@ -27,41 +28,52 @@ export default function BookingForm() {
 
     const fullDateTime = new Date(`${date}T${time}:00`);
 
-    // ✅ Step 1: Check for conflicts
-    const conflictRes = await fetch("/api/calendar/check-conflict", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        agentEmail,
-        time: fullDateTime.toISOString(),
-      }),
-    });
+    try {
+      // ✅ Step 1: (light) conflict check – your API currently always allows
+      const conflictRes = await fetch("/api/calendar/check-conflict", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          agentEmail,
+          time: fullDateTime.toISOString(),
+        }),
+      });
 
-    const conflictData = await conflictRes.json();
-    if (!conflictRes.ok || conflictData.conflict) {
-      toast.error(conflictData.message || "That time is already booked.");
-      return;
-    }
+      const conflictData = await conflictRes.json();
+      if (!conflictRes.ok || conflictData.conflict) {
+        toast.error(conflictData.message || "That time is already booked.");
+        return;
+      }
 
-    // ✅ Step 2: Proceed with booking
-    const res = await fetch("/api/google/calendar/book-appointment", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        agentEmail,
-        name,
-        phone,
-        email,
-        time: fullDateTime.toISOString(),
-      }),
-    });
+      // ✅ Step 2: Create the calendar event (overlaps allowed by API)
+      const res = await fetch("/api/calendar/create-event", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          agentEmail,
+          name,
+          phone,
+          email,
+          start: fullDateTime.toISOString(),
+          // default 30 min duration; adjust if you pass explicit end
+          end: new Date(fullDateTime.getTime() + 30 * 60000).toISOString(),
+        }),
+      });
 
-    const data = await res.json();
-    if (res.ok) {
-      toast.success("Appointment booked!");
-      setName(""); setPhone(""); setEmail(""); setDate(""); setTime("");
-    } else {
-      toast.error(data.message || "Booking failed.");
+      const data = await res.json();
+      if (res.ok) {
+        toast.success("Appointment booked!");
+        setName("");
+        setPhone("");
+        setEmail("");
+        setDate("");
+        setTime("");
+      } else {
+        toast.error(data.message || "Booking failed.");
+      }
+    } catch (err: any) {
+      console.error("Booking error:", err);
+      toast.error("Booking failed. Please try again.");
     }
   };
 

@@ -313,18 +313,9 @@ export default function LeadsPanel() {
     }
   };
 
-  const handleConnectGoogleSheet = async () => {
-    try {
-      const res = await fetch("/api/google/auth");
-      const data = await res.json();
-      if (data.url) {
-        window.location.href = data.url;
-      } else {
-        console.error("No auth URL returned");
-      }
-    } catch (err) {
-      console.error("Google OAuth error:", err);
-    }
+  // 🔄 Updated: hard-redirect to your OAuth start endpoint
+  const handleConnectGoogleSheet = () => {
+    window.location.href = "/api/connect/google-sheets";
   };
 
   const handleDisposition = async (leadId: string, disposition: string) => {

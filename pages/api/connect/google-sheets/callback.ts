@@ -1,84 +1,67 @@
 // /pages/api/connect/google-sheets/callback.ts
 import type { NextApiRequest, NextApiResponse } from "next";
-import { google } from "googleapis";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../../auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
+import { google } from "googleapis";
 
-function getBaseUrl(req: NextApiRequest) {
-  const proto =
-    (req.headers["x-forwarded-proto"] as string) ||
-    (process.env.NODE_ENV === "production" ? "https" : "http");
-  const host =
-    (req.headers["x-forwarded-host"] as string) ||
-    req.headers.host ||
-    "localhost:3000";
-  return `${proto}://${host}`.replace(/\/$/, "");
+function baseUrl(req: NextApiRequest) {
+  const host = (req.headers["x-forwarded-host"] as string) || req.headers.host || "";
+  const proto = (req.headers["x-forwarded-proto"] as string) || "https";
+  return process.env.NEXTAUTH_URL || process.env.NEXT_PUBLIC_BASE_URL || `${proto}://${host}`;
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  const session = await getServerSession(req, res, authOptions);
+  if (!session?.user?.email) return res.status(401).send("Unauthorized");
+
+  const code = req.query.code as string;
+  if (!code) return res.status(400).send("Missing code");
+
+  const redirectUri = `${baseUrl(req)}/api/connect/google-sheets/callback`;
+  const oauth2 = new google.auth.OAuth2(
+    process.env.GOOGLE_CLIENT_ID!,
+    process.env.GOOGLE_CLIENT_SECRET!,
+    redirectUri
+  );
+
+  const { tokens } = await oauth2.getToken(code);
+  oauth2.setCredentials(tokens);
+
+  // Try to fetch the Google account email (optional but nice for debugging)
+  let googleEmail = "";
   try {
-    const session = await getServerSession(req, res, authOptions);
-    const stateEmail = req.query.state ? decodeURIComponent(String(req.query.state)) : "";
-    const authedEmail = session?.user?.email || stateEmail;
-    if (!authedEMailValid(authedEmail)) {
-      return res.status(401).send("Unauthorized (no session and no state email)");
-    }
-
-    const base =
-      process.env.NEXTAUTH_URL ||
-      process.env.NEXT_PUBLIC_BASE_URL ||
-      getBaseUrl(req);
-
-    const redirectUri =
-      process.env.GOOGLE_REDIRECT_URI_SHEETS ||
-      `${base}/api/connect/google-sheets/callback`;
-
-    const oauth2Client = new google.auth.OAuth2(
-      process.env.GOOGLE_CLIENT_ID!,
-      process.env.GOOGLE_CLIENT_SECRET!,
-      redirectUri
-    );
-
-    const code = req.query.code as string;
-    if (!code) return res.status(400).send("Missing ?code");
-
-    // Exchange code → tokens
-    const { tokens } = await oauth2Client.getToken(code);
-
-    // (Optional) Fetch Google account email for display
-    oauth2Client.setCredentials(tokens);
-    const oauth2 = google.oauth2({ version: "v2", auth: oauth2Client });
-    const me = await oauth2.userinfo.get();
-    const googleEmail = me.data.email || "";
-
-    await dbConnect();
-    const user = await User.findOne({ email: authedEmail.toLowerCase() });
-    if (!user) return res.status(404).send("User not found");
-
-    // Persist under user.googleSheets; preserve existing refresh token if Google doesn’t send a new one
-    user.googleSheets = {
-      ...(user.googleSheets || {}),
-      accessToken: tokens.access_token || "",
-      refreshToken: tokens.refresh_token || user.googleSheets?.refreshToken || "",
-      expiryDate:
-        typeof tokens.expiry_date === "number"
-          ? tokens.expiry_date
-          : Date.now() + 45 * 60 * 1000,
-      googleEmail: googleEmail || user.googleSheets?.googleEmail || "",
-      sheets: user.googleSheets?.sheets || [],
-    };
-
-    await user.save();
-
-    return res.redirect("/dashboard?tab=settings&sheet=connected");
-  } catch (err: any) {
-    console.error("[sheets/callback] error:", err?.response?.data || err);
-    return res.status(500).send("Google Sheets OAuth callback failed");
+    const oauth2Api = google.oauth2({ version: "v2", auth: oauth2 });
+    const me = await oauth2Api.userinfo.get();
+    googleEmail = me.data.email || "";
+  } catch {
+    // ignore
   }
-}
 
-function authedEMailValid(email?: string | null): email is string {
-  return !!email && typeof email === "string" && email.includes("@");
+  await dbConnect();
+  const user = await User.findOne({ email: session.user.email.toLowerCase() }).lean();
+
+  // Preserve previous refresh token if Google doesn't return it on re-consent
+  const existingRefresh = (user as any)?.googleSheets?.refreshToken || "";
+
+  await User.updateOne(
+    { email: session.user.email.toLowerCase() },
+    {
+      $set: {
+        googleSheets: {
+          accessToken: tokens.access_token || (user as any)?.googleSheets?.accessToken || "",
+          refreshToken: tokens.refresh_token || existingRefresh,
+          expiryDate: tokens.expiry_date ?? (user as any)?.googleSheets?.expiryDate ?? null,
+          scope: tokens.scope || (user as any)?.googleSheets?.scope || "",
+          googleEmail,
+          // Keep any existing sync metadata if present
+          syncedSheets: (user as any)?.googleSheets?.syncedSheets || [],
+        },
+      },
+    },
+    { upsert: false }
+  );
+
+  return res.redirect("/dashboard?tab=leads");
 }

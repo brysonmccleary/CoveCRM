@@ -1,9 +1,21 @@
+// /components/LeadImportForm.tsx
 import { useState, useRef } from "react";
 import Papa from "papaparse";
 
 interface FieldOption {
   label: string;
   value: string;
+}
+interface DriveFile {
+  id: string;
+  name: string;
+  modifiedTime?: string;
+  owners?: { emailAddress?: string }[];
+}
+interface Tab {
+  sheetId?: number | null;
+  title?: string | null;
+  index?: number | null;
 }
 
 const defaultFields: FieldOption[] = [
@@ -22,11 +34,22 @@ const defaultFields: FieldOption[] = [
 ];
 
 export default function LeadImportForm() {
+  // CSV flow (unchanged)
   const [csvHeaders, setCsvHeaders] = useState<string[]>([]);
   const [sampleRow, setSampleRow] = useState<Record<string, any>>({});
   const [fieldMapping, setFieldMapping] = useState<{ [key: string]: string }>({});
   const [skipFields, setSkipFields] = useState<{ [key: string]: boolean }>({});
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Google Sheets listing
+  const [files, setFiles] = useState<DriveFile[] | null>(null);
+  const [loadingFiles, setLoadingFiles] = useState(false);
+  const [fileErr, setFileErr] = useState<string | null>(null);
+
+  const [selectedSpreadsheet, setSelectedSpreadsheet] = useState<DriveFile | null>(null);
+  const [tabs, setTabs] = useState<Tab[] | null>(null);
+  const [loadingTabs, setLoadingTabs] = useState(false);
+  const [tabErr, setTabErr] = useState<string | null>(null);
 
   const handleFileUpload = (file: File) => {
     Papa.parse(file, {
@@ -34,17 +57,12 @@ export default function LeadImportForm() {
       skipEmptyLines: true,
       complete: (result) => {
         if (!result.meta.fields) return;
-
         const data = result.data as Record<string, any>[];
-
         const headers = result.meta.fields.filter((header) =>
-          data.some((row) => row[header]?.trim() !== "")
+          data.some((row) => String(row[header] ?? "").trim() !== "")
         );
-
         setCsvHeaders(headers);
-        if (data && data.length > 0) {
-          setSampleRow(data[0]);
-        }
+        if (data && data.length > 0) setSampleRow(data[0]);
       },
     });
   };
@@ -71,9 +89,7 @@ export default function LeadImportForm() {
     });
   };
 
-  const handleClickUpload = () => {
-    fileInputRef.current?.click();
-  };
+  const handleClickUpload = () => fileInputRef.current?.click();
 
   const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
@@ -89,18 +105,43 @@ export default function LeadImportForm() {
     alert("Leads imported! (Simulation)");
   };
 
-  const handleGoogleAuth = async () => {
+  // 🔄 OAuth start for Google Sheets
+  const handleGoogleAuth = () => {
+    window.location.href = "/api/connect/google-sheets";
+  };
+
+  // 🔎 Load spreadsheets after OAuth success
+  const loadMySheets = async () => {
+    setLoadingFiles(true);
+    setFileErr(null);
     try {
-      const response = await fetch("/api/google/auth");
-      const { url } = await response.json();
-      if (url) {
-        window.location.href = url;
-      } else {
-        alert("Google auth URL not returned.");
-      }
-    } catch (error) {
-      console.error("Google Auth error:", error);
-      alert("Failed to connect Google Sheets.");
+      const r = await fetch("/api/sheets/list");
+      const j = await r.json();
+      if (!r.ok) throw new Error(j?.error || "Failed to list spreadsheets");
+      setFiles(j.files || []);
+    } catch (e: any) {
+      setFileErr(e.message || "Failed to list spreadsheets");
+      setFiles(null);
+    } finally {
+      setLoadingFiles(false);
+    }
+  };
+
+  const onSelectSpreadsheet = async (f: DriveFile) => {
+    setSelectedSpreadsheet(f);
+    setTabs(null);
+    setTabErr(null);
+    setLoadingTabs(true);
+    try {
+      const r = await fetch(`/api/google/sheets/list-tabs?spreadsheetId=${encodeURIComponent(f.id)}`);
+      const j = await r.json();
+      if (!r.ok) throw new Error(j?.error || "Failed to list tabs");
+      setTabs(j.tabs || []);
+    } catch (e: any) {
+      setTabErr(e.message || "Failed to list tabs");
+      setTabs(null);
+    } finally {
+      setLoadingTabs(false);
     }
   };
 
@@ -112,21 +153,74 @@ export default function LeadImportForm() {
     >
       <h2 className="text-xl font-bold mb-4">Import Leads</h2>
 
-      <div className="flex space-x-4 mb-4">
+      <div className="flex flex-wrap gap-3 mb-4">
         <button
           onClick={handleClickUpload}
           className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
         >
           Upload CSV
         </button>
+
         <button
           onClick={handleGoogleAuth}
           className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700"
         >
           Connect Google Sheet
         </button>
+
+        <button
+          onClick={loadMySheets}
+          className="bg-gray-700 text-white px-4 py-2 rounded hover:bg-gray-800"
+        >
+          Load My Spreadsheets
+        </button>
       </div>
 
+      {/* Google Sheets picker */}
+      <div className="mb-6">
+        {loadingFiles && <div className="text-sm text-gray-500">Loading spreadsheets…</div>}
+        {fileErr && <div className="text-sm text-red-600">{fileErr}</div>}
+
+        {files && files.length > 0 && (
+          <div className="space-y-2">
+            <div className="font-semibold">Your Google Sheets:</div>
+            <ul className="divide-y rounded border">
+              {files.map((f) => (
+                <li
+                  key={f.id}
+                  className={`p-3 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700 ${
+                    selectedSpreadsheet?.id === f.id ? "bg-gray-50 dark:bg-gray-700" : ""
+                  }`}
+                  onClick={() => onSelectSpreadsheet(f)}
+                >
+                  <div className="font-medium">{f.name}</div>
+                  <div className="text-xs text-gray-500">
+                    {f.owners?.[0]?.emailAddress} • {f.modifiedTime}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {selectedSpreadsheet && (
+          <div className="mt-4">
+            <div className="font-semibold">Tabs in: {selectedSpreadsheet.name}</div>
+            {loadingTabs && <div className="text-sm text-gray-500">Loading tabs…</div>}
+            {tabErr && <div className="text-sm text-red-600">{tabErr}</div>}
+
+            {tabs && tabs.length > 0 && (
+              <ul className="list-disc pl-5">
+                {tabs.map((t, i) => (
+                  <li key={`${t.sheetId}-${i}`}>{t.title}</li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* CSV uploader UI (unchanged) */}
       <div className="border-2 border-dashed border-gray-400 rounded p-6 text-center mb-4">
         Drag and drop CSV file here
       </div>
@@ -164,7 +258,7 @@ export default function LeadImportForm() {
                 <div>
                   <div className="font-medium">{header}</div>
                   {sampleRow[header] && (
-                    <div className="text-sm text-gray-500">Preview: {sampleRow[header]}</div>
+                    <div className="text-sm text-gray-500">Preview: {String(sampleRow[header])}</div>
                   )}
                 </div>
                 <select

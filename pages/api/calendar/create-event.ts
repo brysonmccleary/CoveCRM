@@ -7,12 +7,24 @@ import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import Lead from "@/models/Lead";
 import { resolveTimezoneFromRequest } from "@/lib/resolveTimezone";
-import { sendAppointmentBookedEmail } from "@/lib/email"; // ✅ NEW
+import { sendAppointmentBookedEmail } from "@/lib/email";
 
+/** Utility: take last 10 digits for phone matching */
 function last10(raw?: string): string | undefined {
   const d = String(raw || "").replace(/\D+/g, "");
   if (!d) return undefined;
   return d.slice(-10) || undefined;
+}
+
+function getBaseUrl(req: NextApiRequest) {
+  const proto =
+    (req.headers["x-forwarded-proto"] as string) ||
+    (process.env.NODE_ENV === "production" ? "https" : "http");
+  const host =
+    (req.headers["x-forwarded-host"] as string) ||
+    req.headers.host ||
+    "localhost:3000";
+  return `${proto}://${host}`.replace(/\/$/, "");
 }
 
 export default async function handler(
@@ -32,10 +44,10 @@ export default async function handler(
     start,
     end,
     startISO, // tolerate legacy payloads
-    endISO, // tolerate legacy payloads
+    endISO,   // tolerate legacy payloads
     description,
     location,
-    attendee,
+    attendee, // optional lead email
     leadId,
   } = req.body || {};
 
@@ -55,24 +67,38 @@ export default async function handler(
   // Resolve timezone for correct calendar rendering
   const tz = resolveTimezoneFromRequest(req, "UTC");
 
-  // Google client (will auto-refresh with refresh token)
+  // ---- OAuth client (calendar)
+  const base =
+    process.env.NEXTAUTH_URL ||
+    process.env.NEXT_PUBLIC_BASE_URL ||
+    getBaseUrl(req);
+
+  const redirectUri =
+    process.env.GOOGLE_REDIRECT_URI_CALENDAR ||
+    `${base}/api/connect/google-calendar/callback`;
+
   const oauth2Client = new google.auth.OAuth2(
     process.env.GOOGLE_CLIENT_ID!,
     process.env.GOOGLE_CLIENT_SECRET!,
-    process.env.GOOGLE_REDIRECT_URI ||
-      `${process.env.NEXTAUTH_URL}/api/google/callback`,
+    redirectUri,
   );
 
-  const accessToken = (user as any).googleTokens?.accessToken || undefined;
-  const refreshToken = (user as any).googleTokens?.refreshToken || undefined;
-  const expiryDate = (user as any).googleTokens?.expiryDate || undefined;
+  // Prefer calendar token store; fall back to Sheets store if present
+  const tokenStore: any =
+    (user as any).googleTokens ||
+    (user as any).googleSheets ||
+    null;
+
+  const accessToken = tokenStore?.accessToken || undefined;
+  const refreshToken = tokenStore?.refreshToken || undefined;
+  const expiryDate =
+    tokenStore?.expiryDate ?? tokenStore?.expiry_date ?? undefined;
 
   if (!refreshToken) {
-    return res
-      .status(400)
-      .json({
-        message: "Calendar not connected (no refresh token). Reconnect Google.",
-      });
+    return res.status(400).json({
+      message:
+        "Calendar not connected (no refresh token). Please connect Google Calendar.",
+    });
   }
 
   oauth2Client.setCredentials({
@@ -84,17 +110,17 @@ export default async function handler(
   try {
     const calendar = google.calendar({ version: "v3", auth: oauth2Client });
 
-    // ---- Enrich from Lead
+    // ---- Enrich from Lead (optional)
     let finalTitle = title || "Sales Call";
     let finalDescription = description || "";
     let finalLocation = location || "";
     const attendees: Array<{ email: string }> = [];
 
-    const baseUrl = (
-      process.env.NEXT_PUBLIC_BASE_URL ||
+    const baseUrl = (process.env.NEXT_PUBLIC_BASE_URL ||
       process.env.BASE_URL ||
-      "http://localhost:3000"
+      base
     ).replace(/\/$/, "");
+
     const privateProps: Record<string, string> = {};
 
     let leadEmail = attendee || "";
@@ -166,6 +192,7 @@ export default async function handler(
     const startIso = new Date(startStr).toISOString();
     const endIso = new Date(endStr).toISOString();
 
+    // ✅ No conflict checking here — overlapping events are allowed
     const requestBody: any = {
       summary: finalTitle,
       description: finalDescription || "",
@@ -174,6 +201,7 @@ export default async function handler(
       end: { dateTime: endIso, timeZone: tz },
       attendees,
       extendedProperties: { private: privateProps },
+      transparency: "opaque", // blocks time (default); remove if you want it to appear as "free"
     };
 
     const created = await calendar.events.insert({
@@ -230,7 +258,7 @@ export default async function handler(
     }
     // ================================================
 
-    // ✅ NEW: Email the agent (Dialer flow)
+    // ✅ Email the agent (non-blocking)
     try {
       const startDate = new Date(startStr);
       const tzLabel =

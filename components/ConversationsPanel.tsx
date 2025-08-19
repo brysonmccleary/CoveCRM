@@ -52,19 +52,25 @@ export default function ConversationsPanel() {
     if (!selectedLead || !bookingTime || bookingForMessageIndex === null) return;
 
     try {
-      await axios.post("/api/google/calendar/book-appointment", {
+      // ⬇️ Updated endpoint
+      const res = await axios.post("/api/calendar/create-event", {
         leadId: selectedLead._id,
-        time: bookingTime,
+        time: bookingTime, // datetime-local string; API will convert & default to 30m duration
         phone: selectedLead.Phone,
         name: selectedLead["First Name"],
       });
 
-      alert("✅ Appointment booked");
-      setBookingTime("");
-      setBookingForMessageIndex(null);
-    } catch (err) {
+      if (res.status === 200) {
+        alert("✅ Appointment booked");
+        setBookingTime("");
+        setBookingForMessageIndex(null);
+      } else {
+        alert("❌ Booking failed");
+      }
+    } catch (err: any) {
       console.error("❌ Booking failed", err);
-      alert("❌ Booking failed");
+      const msg = err?.response?.data?.message || "❌ Booking failed";
+      alert(msg);
     }
   };
 
