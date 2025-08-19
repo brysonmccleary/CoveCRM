@@ -1,5 +1,3 @@
-// /pages/signup.tsx
-
 import { useEffect, useState } from "react";
 import axios from "axios";
 import toast from "react-hot-toast";
@@ -32,14 +30,10 @@ export default function SignUp() {
 
   const handleCodeBlur = async () => {
     if (!promoCode.trim()) return;
-
     setCheckingCode(true);
     try {
-      const res = await axios.post("/api/apply-code", {
-        code: promoCode.trim(),
-      });
+      const res = await axios.post("/api/apply-code", { code: promoCode.trim() });
       const { price, ownerEmail } = res.data;
-
       setFinalPrice(price);
       setAffiliateEmail(ownerEmail || "");
       setDiscountApplied(true);
@@ -49,16 +43,14 @@ export default function SignUp() {
       setDiscountApplied(false);
       setFinalPrice(basePrice);
       setAffiliateEmail("");
+    } finally {
+      setCheckingCode(false);
     }
-    setCheckingCode(false);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name || !email || !password) {
-      toast.error("Please fill out all fields.");
-      return;
-    }
+    if (!name || !email || !password) return toast.error("Please fill out all fields.");
 
     setIsSubmitting(true);
     try {
@@ -70,112 +62,62 @@ export default function SignUp() {
         affiliateEmail,
       });
 
-      if (res.status === 200) {
-        toast.success("✅ Account created! Redirecting to billing...");
+      // New: server tells us if this email is admin (skip billing)
+      const isAdmin = !!res.data?.admin;
 
-        const total = finalPrice + (aiUpgrade ? aiAddOnPrice : 0);
-
-        router.push(
-          `/billing?email=${encodeURIComponent(email)}&price=${total}&ai=${aiUpgrade ? 1 : 0}&affiliateEmail=${affiliateEmail}&trial=1`,
-        );
+      if (isAdmin) {
+        toast.success("Account created! You’re all set (admin — no billing).");
+        return router.push("/"); // or your dashboard route
       }
-    } catch (err) {
-      toast.error("Signup failed. Try again.");
+
+      toast.success("Account created! Redirecting to billing...");
+      const total = finalPrice + (aiUpgrade ? aiAddOnPrice : 0);
+      router.push(
+        `/billing?email=${encodeURIComponent(email)}&price=${total}&ai=${aiUpgrade ? 1 : 0}&trial=1`
+      );
+    } catch (err: any) {
+      const msg = err?.response?.data?.message || "Signup failed. Try again.";
+      toast.error(msg);
       console.error(err);
+    } finally {
+      setIsSubmitting(false);
     }
-    setIsSubmitting(false);
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-100 dark:bg-black px-4">
-      <div className="max-w-md w-full p-6 bg-white dark:bg-gray-900 text-black dark:text-white rounded-xl shadow-lg">
-        <h1 className="text-3xl font-bold mb-6 text-center">
-          Create Your CRM Cove Account
-        </h1>{" "}
-        {/* ✅ updated */}
-        <form onSubmit={handleSubmit} className="space-y-5">
-          <input
-            type="text"
-            placeholder="Full Name"
-            className="w-full p-3 border border-gray-300 dark:border-gray-700 rounded bg-white dark:bg-gray-800"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-          />
+    <div className="max-w-md mx-auto mt-10 p-6 bg-white rounded-xl shadow">
+      <h1 className="text-3xl font-bold mb-6 text-center">Create Your CRM Cove Account</h1>
+      <form onSubmit={handleSubmit} className="space-y-5">
+        <input type="text" placeholder="Full Name" className="w-full p-3 border border-gray-300 rounded"
+          value={name} onChange={(e) => setName(e.target.value)} />
+        <input type="email" placeholder="Email" className="w-full p-3 border border-gray-300 rounded"
+          value={email} onChange={(e) => setEmail(e.target.value)} />
+        <input type="password" placeholder="Password" className="w-full p-3 border border-gray-300 rounded"
+          value={password} onChange={(e) => setPassword(e.target.value)} />
 
-          <input
-            type="email"
-            placeholder="Email"
-            className="w-full p-3 border border-gray-300 dark:border-gray-700 rounded bg-white dark:bg-gray-800"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-          />
+        <label className="block text-sm font-medium text-gray-700">Referral / Promo Code (optional)</label>
+        <input type="text" placeholder="Enter a code"
+          className="w-full p-3 border border-gray-300 rounded"
+          value={promoCode} onChange={(e) => setPromoCode(e.target.value)} onBlur={handleCodeBlur} />
+        {checkingCode && <p className="text-sm text-blue-600 mt-1">Checking code...</p>}
+        {discountApplied && (
+          <p className="text-green-600 text-sm mt-1">✅ Code applied! Your new base price is ${finalPrice}/month.</p>
+        )}
 
-          <input
-            type="password"
-            placeholder="Password"
-            className="w-full p-3 border border-gray-300 dark:border-gray-700 rounded bg-white dark:bg-gray-800"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-          />
+        <div className="flex items-center space-x-2">
+          <input type="checkbox" id="aiUpgrade" checked={aiUpgrade}
+            onChange={() => setAiUpgrade(!aiUpgrade)} className="w-5 h-5 text-blue-600" />
+          <label htmlFor="aiUpgrade" className="text-sm text-gray-700">Add AI Upgrade (+$50/mo)</label>
+        </div>
 
-          <div>
-            <label
-              htmlFor="promoCode"
-              className="block text-sm font-medium text-gray-700 dark:text-gray-300"
-            >
-              Referral / Promo Code (optional)
-            </label>
-            <input
-              type="text"
-              name="promoCode"
-              id="promoCode"
-              placeholder="Enter a code"
-              className="mt-1 w-full p-3 border border-gray-300 dark:border-gray-700 rounded bg-white dark:bg-gray-800"
-              value={promoCode}
-              onChange={(e) => setPromoCode(e.target.value)}
-              onBlur={handleCodeBlur}
-            />
-            {checkingCode && (
-              <p className="text-sm text-blue-600 mt-1">Checking code...</p>
-            )}
-            {discountApplied && (
-              <p className="text-green-600 text-sm mt-1">
-                ✅ Code applied! Your new base price is ${finalPrice}/month.
-              </p>
-            )}
-          </div>
-
-          <div className="flex items-center space-x-2">
-            <input
-              type="checkbox"
-              id="aiUpgrade"
-              checked={aiUpgrade}
-              onChange={() => setAiUpgrade(!aiUpgrade)}
-              className="w-5 h-5 text-blue-600"
-            />
-            <label
-              htmlFor="aiUpgrade"
-              className="text-sm text-gray-700 dark:text-gray-300"
-            >
-              Add AI Upgrade (+$50/mo)
-            </label>
-          </div>
-
-          <button
-            type="submit"
-            disabled={isSubmitting}
-            className={`w-full py-3 rounded text-white font-semibold ${
-              isSubmitting ? "bg-gray-400" : "bg-blue-600 hover:bg-blue-700"
-            }`}
-          >
-            {isSubmitting ? "Creating Account..." : "Start Free Trial"}
-          </button>
-
-          <p className="text-xs text-center text-gray-500 mt-3">
-            7-day free trial • CRM access is free, phone usage may still bill
-          </p>
-        </form>
-      </div>
+        <button type="submit" disabled={isSubmitting}
+          className={`w-full py-3 rounded text-white font-semibold ${isSubmitting ? "bg-gray-400" : "bg-blue-600 hover:bg-blue-700"}`}>
+          {isSubmitting ? "Creating Account..." : "Start Free Trial"}
+        </button>
+        <p className="text-xs text-center text-gray-500 mt-3">
+          7-day free trial • CRM access is free, phone usage may still bill
+        </p>
+      </form>
     </div>
   );
 }

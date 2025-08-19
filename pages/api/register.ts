@@ -1,80 +1,76 @@
 // /pages/api/register.ts
 import type { NextApiRequest, NextApiResponse } from "next";
-import bcrypt from "bcrypt"; // ✅ use bcrypt (already used in NextAuth)
+import mongoose from "mongoose";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
-import PromoUsage from "@/models/PromoUsage";
-import { sendWelcomeEmail } from "@/lib/email";
+import bcrypt from "bcryptjs";
 
-type RegisterBody = {
-  name: string;
-  email: string;
-  password: string;
-  usedCode?: string;
-  affiliateEmail?: string;
-};
+/** Admin allow-list (comma-separated emails in Vercel env) */
+function isAdminEmail(email?: string | null) {
+  if (!email) return false;
+  const list = (process.env.ADMIN_EMAILS || "")
+    .split(",")
+    .map(s => s.trim().toLowerCase())
+    .filter(Boolean);
+  return list.includes(email.toLowerCase());
+}
 
-export default async function handler(
-  req: NextApiRequest,
-  res: NextApiResponse,
-) {
-  if (req.method !== "POST")
-    return res.status(405).json({ message: "Method not allowed" });
-
-  const { name, email, password, usedCode, affiliateEmail } =
-    req.body as RegisterBody;
-  if (!name || !email || !password) {
-    return res.status(400).json({ message: "Missing required fields" });
-  }
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed" });
 
   try {
-    await dbConnect();
+    if (mongoose.connection.readyState === 0) {
+      await dbConnect();
+    }
 
-    const normalizedEmail = String(email).toLowerCase().trim();
-    const normalizedCode = usedCode?.trim().toLowerCase() || null;
-    const normalizedAffiliate = affiliateEmail?.trim().toLowerCase() || null;
+    const { name, email, password, usedCode, affiliateEmail } = (req.body || {}) as {
+      name?: string;
+      email?: string;
+      password?: string;
+      usedCode?: string;
+      affiliateEmail?: string;
+    };
 
-    const existing = await User.findOne({ email: normalizedEmail });
-    if (existing)
-      return res.status(409).json({ message: "Email already in use" });
+    const cleanEmail = String(email || "").trim().toLowerCase();
+    const cleanName = String(name || "").trim();
+    const pw = String(password || "");
 
-    const hashed = await bcrypt.hash(password, 10);
+    if (!cleanName || !cleanEmail || !pw) {
+      return res.status(400).json({ message: "Missing name, email, or password" });
+    }
 
-    const newUser = await User.create({
-      name,
-      email: normalizedEmail,
+    // Ensure not already registered
+    const existing = await User.findOne({ email: cleanEmail }).lean();
+    if (existing) {
+      return res.status(409).json({ message: "Email already registered" });
+    }
+
+    // Hash password
+    const hashed = await bcrypt.hash(pw, 10);
+
+    // Admins get role=admin and skip billing everywhere (handled by trackUsage/shouldBill)
+    const admin = isAdminEmail(cleanEmail);
+
+    const user = await User.create({
+      name: cleanName,
+      email: cleanEmail,
       password: hashed,
-      referredBy: normalizedCode,
-      affiliateCode: normalizedAffiliate,
-      // other defaults come from the model
+      role: admin ? "admin" : "user",
+      // sensible defaults already exist in your schema; set a couple explicitly:
+      plan: admin ? "Pro" : "Free",        // label only; no charges for admins
+      subscriptionStatus: "active",
+      referredBy: affiliateEmail || undefined,
     });
 
-    // Track referral usage if a code was used
-    if (normalizedCode) {
-      await PromoUsage.updateOne(
-        { code: normalizedCode },
-        {
-          $addToSet: { users: normalizedEmail },
-          $set: { lastUsed: new Date() },
-        },
-        { upsert: true },
-      );
+    // Optional: record promo code used (display/analytics only)
+    if (usedCode) {
+      await User.updateOne({ _id: user._id }, { $set: { referralCode: (usedCode || "").toUpperCase() } });
     }
 
-    // Fire-and-log welcome email; don’t block signup on failure
-    try {
-      const r = await sendWelcomeEmail({ to: normalizedEmail, name });
-      if (!r.ok) console.warn("[signup] welcome email failed:", r.error);
-      else console.log("[signup] welcome email sent id:", r.id);
-    } catch (e: any) {
-      console.warn("[signup] welcome email error:", e?.message || e);
-    }
-
-    return res
-      .status(200)
-      .json({ message: "User created", userId: newUser._id });
-  } catch (err) {
-    console.error("Registration error:", err);
-    return res.status(500).json({ message: "Server error" });
+    // Done — client decides whether to go to billing. For admins we recommend skipping billing UI.
+    return res.status(200).json({ ok: true, admin });
+  } catch (err: any) {
+    console.error("[/api/register] error:", err);
+    return res.status(500).json({ message: err?.message || "Server error" });
   }
 }
