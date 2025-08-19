@@ -1,12 +1,9 @@
 // /lib/billing/trackUsage.ts
 import mongoose from "mongoose";
 import User from "@/models/User";
-import Stripe from "stripe";
+import { stripe } from "@/lib/stripe";
 
-const STRIPE_KEY = process.env.STRIPE_SECRET_KEY;
-// Use the account's default API version to avoid TS literal mismatches
-const stripe = STRIPE_KEY ? new Stripe(STRIPE_KEY) : null;
-
+// Environment flags
 const isProd = process.env.NODE_ENV === "production";
 const DEV_SKIP_BILLING = process.env.DEV_SKIP_BILLING === "1";
 
@@ -69,8 +66,11 @@ export async function trackUsage({
 
   // Hard freeze if balance too negative
   if ((userDoc.usageBalance || 0) < -20) {
-    console.warn(`⛔ Usage frozen for ${userDoc.email} — balance too negative.`);
-    if (isProd) throw new Error("Usage suspended. Please update your payment method.");
+    console.warn(
+      `⛔ Usage frozen for ${userDoc.email} — balance too negative.`,
+    );
+    if (isProd)
+      throw new Error("Usage suspended. Please update your payment method.");
     return;
   }
 
@@ -78,22 +78,23 @@ export async function trackUsage({
   userDoc.usageBalance = (userDoc.usageBalance || 0) - amount;
   userDoc.aiUsage = {
     ...userDoc.aiUsage,
-    twilioCost: (userDoc.aiUsage?.twilioCost || 0) + (source === "twilio" ? amount : 0),
-    openAiCost: (userDoc.aiUsage?.openAiCost || 0) + (source === "openai" ? amount : 0),
+    twilioCost:
+      (userDoc.aiUsage?.twilioCost || 0) + (source === "twilio" ? amount : 0),
+    openAiCost:
+      (userDoc.aiUsage?.openAiCost || 0) + (source === "openai" ? amount : 0),
     totalCost: (userDoc.aiUsage?.totalCost || 0) + amount,
   };
 
-  const canBill =
-    !!stripe &&
-    !!userDoc.stripeCustomerId &&
-    !(DEV_SKIP_BILLING && isProd);
+  const canBill = !!userDoc.stripeCustomerId && !(DEV_SKIP_BILLING && isProd);
 
   // Missing Stripe linkage
   if (!userDoc.stripeCustomerId) {
     if (isProd) {
       throw new Error("User missing or not linked to Stripe");
     } else {
-      console.warn("[DEV billing] User not linked to Stripe. Skipping auto-topup/charges.");
+      console.warn(
+        "[DEV billing] User not linked to Stripe. Skipping auto-topup/charges.",
+      );
     }
   }
 
@@ -101,7 +102,7 @@ export async function trackUsage({
   if (userDoc.usageBalance < 1 && canBill) {
     try {
       // Create an invoice item for a fixed $10 (no Price object)
-      await stripe!.invoiceItems.create({
+      await stripe.invoiceItems.create({
         customer: userDoc.stripeCustomerId,
         amount: TOPUP_AMOUNT_CENTS,
         currency: "usd",
@@ -109,19 +110,23 @@ export async function trackUsage({
       });
 
       // Create and auto-charge the invoice
-      await stripe!.invoices.create({
+      await stripe.invoices.create({
         customer: userDoc.stripeCustomerId,
         collection_method: "charge_automatically",
         auto_advance: true,
       });
 
       userDoc.usageBalance += TOPUP_AMOUNT_USD;
-      console.log(`💰 Auto-topup: $${TOPUP_AMOUNT_USD} charged to ${userDoc.email}`);
+      console.log(
+        `💰 Auto-topup: $${TOPUP_AMOUNT_USD} charged to ${userDoc.email}`,
+      );
     } catch (err) {
       console.error("❌ Stripe auto top-up failed:", err);
     }
   } else if (userDoc.usageBalance < 1 && !canBill && !isProd) {
-    console.warn("[DEV billing] Balance < $1 but billing disabled/unavailable; continuing for testing.");
+    console.warn(
+      "[DEV billing] Balance < $1 but billing disabled/unavailable; continuing for testing.",
+    );
   }
 
   await userDoc.save();

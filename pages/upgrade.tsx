@@ -40,8 +40,12 @@ export default function UpgradePage() {
   if (!session) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center">
-        <Head><title>Login Required</title></Head>
-        <h2 className="text-xl font-semibold mb-4">Please sign in to upgrade</h2>
+        <Head>
+          <title>Login Required</title>
+        </Head>
+        <h2 className="text-xl font-semibold mb-4">
+          Please sign in to upgrade
+        </h2>
         <button
           className="px-4 py-2 bg-black text-white rounded"
           onClick={() => signIn()}
@@ -54,14 +58,19 @@ export default function UpgradePage() {
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center text-center px-4">
-      <Head><title>Upgrade</title></Head>
+      <Head>
+        <title>Upgrade</title>
+      </Head>
       <h1 className="text-3xl font-bold mb-2">Upgrade to Pro</h1>
       <p className="mb-6 text-gray-600 max-w-xl">
-        Unlock premium features like AI Call Summaries, Smart SMS Assistant, Auto Appointment Booking, and more.
+        Unlock premium features like AI Call Summaries, Smart SMS Assistant,
+        Auto Appointment Booking, and more.
       </p>
 
       {hasPro ? (
-        <div className="text-green-600 font-semibold text-lg">🎉 You're already upgraded to Pro!</div>
+        <div className="text-green-600 font-semibold text-lg">
+          🎉 You're already upgraded to Pro!
+        </div>
       ) : (
         <button
           className="px-6 py-3 bg-indigo-600 text-white rounded hover:bg-indigo-700 disabled:opacity-50"

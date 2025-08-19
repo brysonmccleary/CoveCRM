@@ -8,12 +8,17 @@ import Lead from "@/models/Lead";
 // ⬇️ use the Twilio helper we updated earlier
 import { sendSMS } from "@/lib/twilio/sendSMS";
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed." });
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
+  if (req.method !== "POST")
+    return res.status(405).json({ message: "Method not allowed." });
 
   try {
     const session = await getServerSession(req, res, authOptions);
-    if (!session?.user?.email) return res.status(401).json({ message: "Unauthorized" });
+    if (!session?.user?.email)
+      return res.status(401).json({ message: "Unauthorized" });
 
     await dbConnect();
 
@@ -27,7 +32,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       leadId?: string;
     };
     if (!to || !body?.trim() || !leadId) {
-      return res.status(400).json({ message: "Missing required fields (to, body, leadId)." });
+      return res
+        .status(400)
+        .json({ message: "Missing required fields (to, body, leadId)." });
     }
 
     // ✅ Find lead & verify ownership (ownerEmail OR userEmail)
@@ -35,13 +42,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       _id: leadId,
       $or: [{ ownerEmail: email }, { userEmail: email }],
     });
-    if (!lead) return res.status(404).json({ message: "Lead not found or not yours." });
+    if (!lead)
+      return res.status(404).json({ message: "Lead not found or not yours." });
 
     // ✅ Block sending of explicit opt-out keywords
     const lowerBody = body.trim().toLowerCase();
     const optOutKeywords = ["stop", "unsubscribe", "end", "quit", "cancel"];
     if (optOutKeywords.includes(lowerBody)) {
-      return res.status(400).json({ message: "Cannot send opt-out keyword as an outbound SMS." });
+      return res
+        .status(400)
+        .json({ message: "Cannot send opt-out keyword as an outbound SMS." });
     }
 
     // ✅ A2P gating (relaxed if using approved shared service or DEV override)
@@ -49,7 +59,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const devOverride = process.env.DEV_ALLOW_UNAPPROVED === "1";
     if (!usingSharedMG && !devOverride) {
       // legacy/tenant-based flow: require user.a2pStatus or your own a2p flag
-      const approved = (user as any).a2pStatus === "approved" || (user as any)?.a2p?.messagingReady;
+      const approved =
+        (user as any).a2pStatus === "approved" ||
+        (user as any)?.a2p?.messagingReady;
       if (!approved) {
         return res.status(403).json({
           message:
@@ -96,6 +108,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(200).json({ message: "SMS sent", sid });
   } catch (error: any) {
     console.error("❌ Outbound SMS error:", error);
-    return res.status(500).json({ message: "Internal server error", error: error?.message || String(error) });
+    return res
+      .status(500)
+      .json({
+        message: "Internal server error",
+        error: error?.message || String(error),
+      });
   }
 }

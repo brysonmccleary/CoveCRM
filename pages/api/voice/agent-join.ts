@@ -5,10 +5,13 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
   const { conferenceName } = req.query;
   const twiml = new twilio.twiml.VoiceResponse();
 
-  twiml.dial().conference({
-    startConferenceOnEnter: false, // agent muted initially
-    endConferenceOnExit: true
-  }, conferenceName as string);
+  twiml.dial().conference(
+    {
+      startConferenceOnEnter: false, // agent muted initially
+      endConferenceOnExit: true,
+    },
+    conferenceName as string,
+  );
 
   res.setHeader("Content-Type", "text/xml");
   res.status(200).send(twiml.toString());

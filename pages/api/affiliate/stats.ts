@@ -8,11 +8,15 @@ import User from "@/models/User";
 import Affiliate from "@/models/Affiliate";
 import { stripe } from "@/lib/stripe";
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   if (req.method !== "GET") return res.status(405).end("Method Not Allowed");
 
   const session = await getServerSession(req, res, authOptions);
-  if (!session?.user?.email) return res.status(401).json({ error: "Unauthorized" });
+  if (!session?.user?.email)
+    return res.status(401).json({ error: "Unauthorized" });
 
   await dbConnect();
 
@@ -25,7 +29,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     (await Affiliate.findOne({ userId: String(user._id) })) ||
     (await Affiliate.findOne({ email: user.email })) ||
     (user.referralCode
-      ? await Affiliate.findOne({ promoCode: String(user.referralCode).toUpperCase() })
+      ? await Affiliate.findOne({
+          promoCode: String(user.referralCode).toUpperCase(),
+        })
       : null);
 
   // If no affiliate yet → tell UI to show the application form
@@ -62,7 +68,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       // Derive UI status
       const freshComplete =
-        !!acct.details_submitted && !!acct.charges_enabled && !!acct.payouts_enabled;
+        !!acct.details_submitted &&
+        !!acct.charges_enabled &&
+        !!acct.payouts_enabled;
 
       let uiStatus = "pending";
       if (acct.requirements?.currently_due?.length) uiStatus = "incomplete";

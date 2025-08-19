@@ -11,23 +11,40 @@ const accountSid = process.env.TWILIO_ACCOUNT_SID!;
 const authToken = process.env.TWILIO_AUTH_TOKEN!;
 const client = twilio(accountSid, authToken);
 
-const APPROVED = new Set(["approved", "verified", "active", "in_use", "registered"]);
-const PENDING = new Set(["pending", "submitted", "under_review", "pending-review", "in_progress"]);
+const APPROVED = new Set([
+  "approved",
+  "verified",
+  "active",
+  "in_use",
+  "registered",
+]);
+const PENDING = new Set([
+  "pending",
+  "submitted",
+  "under_review",
+  "pending-review",
+  "in_progress",
+]);
 
 type NextAction =
-  | "start_profile"            // user hasn't started A2P flow
-  | "submit_brand"             // we have secondary profile, need brand
-  | "brand_pending"            // brand submitted, waiting
-  | "submit_campaign"          // brand approved, need campaign
-  | "campaign_pending"         // campaign submitted, waiting
+  | "start_profile" // user hasn't started A2P flow
+  | "submit_brand" // we have secondary profile, need brand
+  | "brand_pending" // brand submitted, waiting
+  | "submit_campaign" // brand approved, need campaign
+  | "campaign_pending" // campaign submitted, waiting
   | "create_messaging_service" // approved but no MS yet (edge)
-  | "ready";                   // fully ready to send SMS
+  | "ready"; // fully ready to send SMS
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "GET") return res.status(405).json({ message: "Method not allowed" });
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
+  if (req.method !== "GET")
+    return res.status(405).json({ message: "Method not allowed" });
 
   const session = await getServerSession(req, res, authOptions);
-  if (!session?.user?.email) return res.status(401).json({ message: "Unauthorized" });
+  if (!session?.user?.email)
+    return res.status(401).json({ message: "Unauthorized" });
 
   try {
     await mongooseConnect();
@@ -53,7 +70,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     let brandStatus = "unknown";
     if (a2p.brandSid) {
       try {
-        const brand = await client.messaging.v1.brandRegistrations(a2p.brandSid).fetch();
+        const brand = await client.messaging.v1
+          .brandRegistrations(a2p.brandSid)
+          .fetch();
         brandStatus = (brand as any).status || brandStatus;
         if (APPROVED.has(brandStatus.toLowerCase())) {
           a2p.registrationStatus = "brand_approved";
@@ -73,7 +92,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           .services(a2p.messagingServiceSid)
           .usAppToPerson(campaignSid)
           .fetch();
-        campaignStatus = (camp as any).status || (camp as any).state || campaignStatus;
+        campaignStatus =
+          (camp as any).status || (camp as any).state || campaignStatus;
 
         if (APPROVED.has(String(campaignStatus).toLowerCase())) {
           a2p.registrationStatus = "campaign_approved";
@@ -99,7 +119,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       nextAction = "brand_pending";
     } else if (!campaignSid) {
       nextAction = "submit_campaign";
-    } else if (campaignSid && !APPROVED.has(String(campaignStatus).toLowerCase())) {
+    } else if (
+      campaignSid &&
+      !APPROVED.has(String(campaignStatus).toLowerCase())
+    ) {
       nextAction = "campaign_pending";
     } else if (!a2p.messagingServiceSid) {
       nextAction = "create_messaging_service";
@@ -127,6 +150,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   } catch (err: any) {
     console.error("A2P status error:", err);
-    return res.status(500).json({ message: err?.message || "Failed to fetch A2P status" });
+    return res
+      .status(500)
+      .json({ message: err?.message || "Failed to fetch A2P status" });
   }
 }

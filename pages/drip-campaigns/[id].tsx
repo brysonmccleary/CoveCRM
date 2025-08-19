@@ -54,7 +54,9 @@ export default function DripCampaignDetail() {
   };
 
   const handleAssign = () => {
-    alert(`Assigning drip campaign ID: ${id} — connect to folders/leads modal here.`);
+    alert(
+      `Assigning drip campaign ID: ${id} — connect to folders/leads modal here.`,
+    );
   };
 
   if (loading) return <div className="text-white p-4">Loading...</div>;
@@ -71,7 +73,10 @@ export default function DripCampaignDetail() {
 
         <div className="space-y-4">
           {steps.map((step: any, idx: number) => (
-            <div key={idx} className="border border-gray-700 p-4 rounded bg-[#1e293b] shadow">
+            <div
+              key={idx}
+              className="border border-gray-700 p-4 rounded bg-[#1e293b] shadow"
+            >
               <label className="block mb-1">Day:</label>
               <input
                 value={step.day}

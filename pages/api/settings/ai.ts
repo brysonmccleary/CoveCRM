@@ -16,7 +16,7 @@ type PostResp =
 
 export default async function handler(
   req: NextApiRequest,
-  res: NextApiResponse<GetResp | PostResp>
+  res: NextApiResponse<GetResp | PostResp>,
 ) {
   const session = await getServerSession(req, res, authOptions);
   const email = session?.user?.email;
@@ -26,7 +26,8 @@ export default async function handler(
 
   if (req.method === "GET") {
     const user = await User.findOne({ email }).lean();
-    if (!user) return res.status(404).json({ ok: false, error: "User not found" });
+    if (!user)
+      return res.status(404).json({ ok: false, error: "User not found" });
     return res.status(200).json({
       ok: true,
       aiAssistantName: user.aiAssistantName || "Taylor",
@@ -38,7 +39,8 @@ export default async function handler(
   if (req.method === "POST") {
     const { aiAssistantName } = (req.body || {}) as PostBody;
     const name = String(aiAssistantName || "").trim();
-    if (!name) return res.status(400).json({ ok: false, error: "Name is required" });
+    if (!name)
+      return res.status(400).json({ ok: false, error: "Name is required" });
     if (name.length > 40) {
       return res
         .status(400)
@@ -48,11 +50,14 @@ export default async function handler(
     const user = await User.findOneAndUpdate(
       { email },
       { $set: { aiAssistantName: name } },
-      { new: true }
+      { new: true },
     ).lean();
-    if (!user) return res.status(404).json({ ok: false, error: "User not found" });
+    if (!user)
+      return res.status(404).json({ ok: false, error: "User not found" });
 
-    return res.status(200).json({ ok: true, aiAssistantName: user.aiAssistantName || "Taylor" });
+    return res
+      .status(200)
+      .json({ ok: true, aiAssistantName: user.aiAssistantName || "Taylor" });
   }
 
   res.setHeader("Allow", "GET, POST");

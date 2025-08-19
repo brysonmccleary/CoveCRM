@@ -14,18 +14,15 @@ function last10(raw?: string): string | undefined {
 /** Build some common string variants to try (exact match or endsWith) */
 function variantsFromLast10(l10: string) {
   const dashed = `${l10.slice(0, 3)}-${l10.slice(3, 6)}-${l10.slice(6)}`;
-  return [
-    l10,
-    `1${l10}`,
-    `+1${l10}`,
-    dashed,
-    `1-${dashed}`,
-    `+1-${dashed}`,
-  ];
+  return [l10, `1${l10}`, `+1${l10}`, dashed, `1-${dashed}`, `+1-${dashed}`];
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "GET") return res.status(405).json({ message: "Method not allowed" });
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
+  if (req.method !== "GET")
+    return res.status(405).json({ message: "Method not allowed" });
 
   const session = await getServerSession(req, res, authOptions);
   const headerEmail = String(req.headers["x-user-email"] || "").toLowerCase();

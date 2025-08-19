@@ -7,11 +7,15 @@ import Affiliate from "@/models/Affiliate";
 import User from "@/models/User";
 import { stripe } from "@/lib/stripe";
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   if (req.method !== "POST") return res.status(405).end("Method Not Allowed");
 
   const session = await getServerSession(req, res, authOptions);
-  if (!session?.user?.email) return res.status(401).json({ error: "Unauthorized" });
+  if (!session?.user?.email)
+    return res.status(401).json({ error: "Unauthorized" });
 
   await dbConnect();
 
@@ -20,7 +24,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const affiliate = await Affiliate.findOne({ userId: user._id });
   if (!affiliate || !affiliate.stripeConnectId) {
-    return res.status(400).json({ error: "No affiliate record or Stripe account" });
+    return res
+      .status(400)
+      .json({ error: "No affiliate record or Stripe account" });
   }
 
   try {
@@ -31,7 +37,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     affiliate.onboardingCompleted = detailsSubmitted;
     affiliate.connectedAccountStatus =
-      payoutsEnabled || chargesEnabled ? "verified" : detailsSubmitted ? "pending" : "incomplete";
+      payoutsEnabled || chargesEnabled
+        ? "verified"
+        : detailsSubmitted
+          ? "pending"
+          : "incomplete";
     await affiliate.save();
 
     return res.status(200).json({
@@ -42,7 +52,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   } catch (err: any) {
     const devMsg =
-      process.env.NODE_ENV !== "production" && (err?.message || err?.error?.message);
-    return res.status(500).json({ error: devMsg || "Failed to refresh status" });
+      process.env.NODE_ENV !== "production" &&
+      (err?.message || err?.error?.message);
+    return res
+      .status(500)
+      .json({ error: devMsg || "Failed to refresh status" });
   }
 }

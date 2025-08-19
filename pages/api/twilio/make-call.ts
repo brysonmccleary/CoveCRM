@@ -1,3 +1,4 @@
+// /pages/api/twilio/make-call.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import twilioClient from "@/lib/twilioClient";
 import dbConnect from "@/lib/mongooseConnect";
@@ -5,12 +6,14 @@ import { getUserByEmail } from "@/models/User";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
 import { trackUsage } from "@/lib/billing/trackUsage";
-import User from "@/models/User";
 
 const ESTIMATED_MINUTES = 1;
 const CALL_COST_PER_MIN = 0.02;
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   if (req.method !== "POST") {
     return res.status(405).json({ message: "Method not allowed" });
   }
@@ -20,7 +23,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(401).json({ message: "Unauthorized" });
   }
 
-  const { toNumber, fromNumber } = req.body;
+  const { toNumber, fromNumber } = req.body || {};
   if (!toNumber || !fromNumber) {
     return res.status(400).json({ message: "Missing parameters" });
   }
@@ -33,15 +36,31 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     // ❌ Block if user is frozen for unpaid usage
-    if (user.usageBalance < -20) {
-      return res.status(403).json({ message: "Usage balance too low. Please update payment." });
+    const usageBalance = Number((user as any).usageBalance ?? 0);
+    if (usageBalance < -20) {
+      return res
+        .status(403)
+        .json({ message: "Usage balance too low. Please update payment." });
     }
 
     const estimatedCost = CALL_COST_PER_MIN * ESTIMATED_MINUTES;
 
-    const numberEntry = user.numbers?.find(n => n.phoneNumber === fromNumber);
+    const numbers = ((user as any).numbers || []) as Array<{
+      phoneNumber: string;
+      usage?: {
+        callsMade: number;
+        callsReceived: number;
+        textsSent: number;
+        textsReceived: number;
+        cost: number;
+      };
+    }>;
+
+    const numberEntry = numbers.find((n) => n.phoneNumber === fromNumber);
     if (!numberEntry) {
-      return res.status(404).json({ message: "Caller number not found on user account" });
+      return res
+        .status(404)
+        .json({ message: "Caller number not found on user account" });
     }
 
     if (!numberEntry.usage) {
@@ -73,9 +92,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       statusCallbackMethod: "POST",
     });
 
-    res.status(200).json({ message: "Call initiated", call });
+    return res.status(200).json({ message: "Call initiated", call });
   } catch (error) {
     console.error("Error making call:", error);
-    res.status(500).json({ message: "Failed to initiate call" });
+    return res.status(500).json({ message: "Failed to initiate call" });
   }
 }

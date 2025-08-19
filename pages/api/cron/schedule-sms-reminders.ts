@@ -12,7 +12,10 @@ function isWithinMinutes(target: Date, minutes: number): boolean {
   return diff <= minutes * 60 * 1000;
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   if (req.method !== "GET" && req.method !== "POST") {
     return res.status(405).json({ message: "Method not allowed" });
   }
@@ -44,11 +47,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     // Morning-of (sent before 9am)
-    if (
-      dateToday &&
-      now.getHours() < 9 &&
-      !lead.remindersSent.morning
-    ) {
+    if (dateToday && now.getHours() < 9 && !lead.remindersSent.morning) {
       await sendSMS({
         to: lead.phone,
         body: `Good morning! Just a reminder that you have a call today with ${agentName}.`,
@@ -85,5 +84,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     await lead.save();
   }
 
-  return res.status(200).json({ message: "SMS reminders processed successfully" });
+  return res
+    .status(200)
+    .json({ message: "SMS reminders processed successfully" });
 }

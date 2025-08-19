@@ -1,4 +1,3 @@
-// /pages/api/twilio/voice/answer.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import twilio from "twilio";
 import dbConnect from "@/lib/mongooseConnect";
@@ -6,9 +5,13 @@ import User from "@/models/User";
 
 const VoiceResponse = twilio.twiml.VoiceResponse;
 
-const BASE_URL = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "").replace(/\/$/, "");
-const STATUS_CB_URL = `${BASE_URL}/api/twilio/status-callback`; // existing
-const RECORDING_CB_BASE = `${BASE_URL}/api/twilio-recording`;   // we'll add query params per-call
+const BASE_URL = (
+  process.env.NEXT_PUBLIC_BASE_URL ||
+  process.env.BASE_URL ||
+  ""
+).replace(/\/$/, "");
+const STATUS_CB_URL = `${BASE_URL}/api/twilio/status-callback`;
+const RECORDING_CB_BASE = `${BASE_URL}/api/twilio-recording`;
 
 function sanitizeIdentity(email: string) {
   return String(email || "")
@@ -27,15 +30,16 @@ function normalizeE164(raw?: string) {
   return raw.trim();
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   const p = { ...(req.query as any), ...(req.body as any) };
 
-  // Outbound bridge (browser -> PSTN) passes To (lead) and From (your Twilio number)
   const toParam: string | undefined = p.To || p.to;
   const fromParam: string | undefined = p.From || p.from;
   const leadIdParam: string | undefined = p.leadId || p.LeadId || p.leadID;
 
-  // Inbound (PSTN -> your Twilio number) includes Called/To = your Twilio #
   const calledNumber: string | undefined = p.Called || p.To;
 
   const twiml = new VoiceResponse();
@@ -44,23 +48,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // ---- Outbound bridge (browser → PSTN)
     if (toParam && /^\+?\d{7,15}$/.test(String(toParam))) {
       const leadNumber = normalizeE164(String(toParam));
-      const callerId = normalizeE164(String(fromParam || process.env.TWILIO_CALLER_ID || ""));
+      const callerId = normalizeE164(
+        String(fromParam || process.env.TWILIO_CALLER_ID || ""),
+      );
 
       if (!callerId) {
         twiml.say("No caller ID configured.");
       } else if (!leadNumber) {
         twiml.say("Invalid destination number.");
       } else {
-        // We’ll try to infer userEmail from the callerId ownership for richer callbacks.
         let userEmailForCb = "";
         try {
           await dbConnect();
-          const owner = await User.findOne({ "numbers.phoneNumber": callerId }).lean();
+          const owner = await User.findOne({
+            "numbers.phoneNumber": callerId,
+          }).lean();
           if (owner?.email) userEmailForCb = String(owner.email).toLowerCase();
         } catch {}
 
         const recordingCbUrl = `${RECORDING_CB_BASE}?userEmail=${encodeURIComponent(
-          userEmailForCb
+          userEmailForCb,
         )}${leadIdParam ? `&leadId=${encodeURIComponent(leadIdParam)}` : ""}`;
 
         const dial = twiml.dial({
@@ -69,16 +76,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           record: "record-from-answer-dual",
           recordingStatusCallback: recordingCbUrl,
           recordingStatusCallbackMethod: "POST",
-          recordingStatusCallbackEvent: "completed",
+          recordingStatusCallbackEvent: ["completed"] as any,
         });
 
         dial.number(
           {
             statusCallback: STATUS_CB_URL,
-            statusCallbackEvent: "initiated ringing answered completed",
             statusCallbackMethod: "POST",
-          },
-          leadNumber
+            statusCallbackEvent: [
+              "initiated",
+              "ringing",
+              "answered",
+              "completed",
+            ],
+          } as any,
+          leadNumber,
         );
       }
 
@@ -90,7 +102,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     await dbConnect();
     const owner =
       (calledNumber &&
-        (await User.findOne({ "numbers.phoneNumber": normalizeE164(calledNumber) }))) ||
+        (await User.findOne({
+          "numbers.phoneNumber": normalizeE164(calledNumber),
+        }))) ||
       null;
 
     if (!owner) {
@@ -100,10 +114,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const identity = sanitizeIdentity(owner.email);
-    const callerId = normalizeE164(String(calledNumber || process.env.TWILIO_CALLER_ID || ""));
+    const callerId = normalizeE164(
+      String(calledNumber || process.env.TWILIO_CALLER_ID || ""),
+    );
 
     const recordingCbUrl = `${RECORDING_CB_BASE}?userEmail=${encodeURIComponent(
-      String(owner.email).toLowerCase()
+      String(owner.email).toLowerCase(),
     )}`;
 
     const dial = twiml.dial({
@@ -112,16 +128,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       record: "record-from-answer-dual",
       recordingStatusCallback: recordingCbUrl,
       recordingStatusCallbackMethod: "POST",
-      recordingStatusCallbackEvent: "completed",
+      recordingStatusCallbackEvent: ["completed"] as any,
     });
 
     dial.client(
       {
         statusCallback: STATUS_CB_URL,
-        statusCallbackEvent: "initiated ringing answered completed",
         statusCallbackMethod: "POST",
-      },
-      identity
+        statusCallbackEvent: [
+          "initiated",
+          "ringing",
+          "answered",
+          "completed",
+        ],
+      } as any,
+      identity,
     );
 
     res.setHeader("Content-Type", "text/xml");

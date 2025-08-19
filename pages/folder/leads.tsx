@@ -33,7 +33,9 @@ export default function LeadsPage() {
         setFilteredLeads([]);
         return;
       }
-      const res = await fetch(`/api/get-leads-by-folder?folderId=${activeFolder._id}`);
+      const res = await fetch(
+        `/api/get-leads-by-folder?folderId=${activeFolder._id}`,
+      );
       const data = await res.json();
       setLeads(data);
       setFilteredLeads(data);
@@ -52,16 +54,20 @@ export default function LeadsPage() {
     const lower = searchQuery.toLowerCase();
     const filtered = leads.filter(
       (lead) =>
-        (lead["First Name"] && String(lead["First Name"]).toLowerCase().includes(lower)) ||
-        (lead["Last Name"] && String(lead["Last Name"]).toLowerCase().includes(lower)) ||
-        (lead["Phone"] && String(lead["Phone"]).toLowerCase().includes(lower))
+        (lead["First Name"] &&
+          String(lead["First Name"]).toLowerCase().includes(lower)) ||
+        (lead["Last Name"] &&
+          String(lead["Last Name"]).toLowerCase().includes(lower)) ||
+        (lead["Phone"] && String(lead["Phone"]).toLowerCase().includes(lower)),
     );
     setFilteredLeads(filtered);
   }, [searchQuery, leads]);
 
   const toggleLeadSelection = (id: string) => {
     setSelectedLeads((prev) =>
-      prev.includes(id) ? prev.filter((leadId) => leadId !== id) : [...prev, id]
+      prev.includes(id)
+        ? prev.filter((leadId) => leadId !== id)
+        : [...prev, id],
     );
   };
 
@@ -80,7 +86,9 @@ export default function LeadsPage() {
       alert("No leads selected");
       return;
     }
-    const qs = new URLSearchParams({ leads: selectedLeads.join(",") }).toString();
+    const qs = new URLSearchParams({
+      leads: selectedLeads.join(","),
+    }).toString();
     router.push(`/dial-session?${qs}`);
   };
 
@@ -98,7 +106,9 @@ export default function LeadsPage() {
       // Update preview + table rows
       setPreviewLead({ ...previewLead, Notes: notes, notes });
       const updatedLeads = leads.map((l) =>
-        String(l._id) === String(previewLead._id) ? { ...l, Notes: notes, notes } : l
+        String(l._id) === String(previewLead._id)
+          ? { ...l, Notes: notes, notes }
+          : l,
       );
       setLeads(updatedLeads);
       setFilteredLeads(updatedLeads);
@@ -119,7 +129,9 @@ export default function LeadsPage() {
             key={folder._id}
             onClick={() => setActiveFolder(folder)}
             className={`block w-full text-left p-2 rounded mb-2 ${
-              activeFolder?._id === folder._id ? "bg-[#6b5b95] text-white" : "hover:bg-gray-700"
+              activeFolder?._id === folder._id
+                ? "bg-[#6b5b95] text-white"
+                : "hover:bg-gray-700"
             }`}
           >
             {folder.name}
@@ -158,7 +170,9 @@ export default function LeadsPage() {
                   onClick={startDialSession}
                   disabled={selectedLeads.length === 0}
                   className={`${
-                    selectedLeads.length > 0 ? "bg-green-600 hover:bg-green-700" : "bg-gray-600"
+                    selectedLeads.length > 0
+                      ? "bg-green-600 hover:bg-green-700"
+                      : "bg-gray-600"
                   } text-white px-4 py-2 rounded disabled:opacity-60`}
                 >
                   Start Dial Session

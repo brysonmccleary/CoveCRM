@@ -5,8 +5,12 @@ import dbConnect from "@/lib/mongooseConnect";
 import Affiliate from "@/models/Affiliate";
 import { stripe } from "@/lib/stripe";
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
+  if (req.method !== "POST")
+    return res.status(405).json({ error: "Method not allowed" });
 
   const authHeader = req.headers.authorization;
   if (authHeader !== `Bearer ${process.env.ADMIN_PAYOUT_SECRET}`) {
@@ -21,7 +25,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     stripeConnectId: { $exists: true },
   });
 
-  const results: { email: string; amount: number; success: boolean; message: string }[] = [];
+  const results: {
+    email: string;
+    amount: number;
+    success: boolean;
+    message: string;
+  }[] = [];
 
   for (const affiliate of affiliates) {
     const amountInCents = Math.round(affiliate.payoutDue * 100);
@@ -55,7 +64,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         message: "Transfer successful",
       });
     } catch (err: any) {
-      console.error(`❌ Payout failed for ${affiliate.email}:`, err?.message || err);
+      console.error(
+        `❌ Payout failed for ${affiliate.email}:`,
+        err?.message || err,
+      );
       results.push({
         email: affiliate.email,
         amount: amountInCents / 100,

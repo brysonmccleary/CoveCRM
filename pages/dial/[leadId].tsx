@@ -9,8 +9,9 @@ import { useRouter } from "next/router";
  */
 export const getServerSideProps: GetServerSideProps = async (ctx) => {
   const leadIdParam = ctx.params?.leadId;
-  const leadId =
-    Array.isArray(leadIdParam) ? leadIdParam[0] : (leadIdParam as string) || "";
+  const leadId = Array.isArray(leadIdParam)
+    ? leadIdParam[0]
+    : (leadIdParam as string) || "";
 
   return {
     redirect: {

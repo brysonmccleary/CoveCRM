@@ -35,7 +35,9 @@ export default function SignUp() {
 
     setCheckingCode(true);
     try {
-      const res = await axios.post("/api/apply-code", { code: promoCode.trim() });
+      const res = await axios.post("/api/apply-code", {
+        code: promoCode.trim(),
+      });
       const { price, ownerEmail } = res.data;
 
       setFinalPrice(price);
@@ -74,7 +76,7 @@ export default function SignUp() {
         const total = finalPrice + (aiUpgrade ? aiAddOnPrice : 0);
 
         router.push(
-          `/billing?email=${encodeURIComponent(email)}&price=${total}&ai=${aiUpgrade ? 1 : 0}&affiliateEmail=${affiliateEmail}&trial=1`
+          `/billing?email=${encodeURIComponent(email)}&price=${total}&ai=${aiUpgrade ? 1 : 0}&affiliateEmail=${affiliateEmail}&trial=1`,
         );
       }
     } catch (err) {
@@ -87,8 +89,10 @@ export default function SignUp() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-100 dark:bg-black px-4">
       <div className="max-w-md w-full p-6 bg-white dark:bg-gray-900 text-black dark:text-white rounded-xl shadow-lg">
-        <h1 className="text-3xl font-bold mb-6 text-center">Create Your CRM Cove Account</h1> {/* ✅ updated */}
-
+        <h1 className="text-3xl font-bold mb-6 text-center">
+          Create Your CRM Cove Account
+        </h1>{" "}
+        {/* ✅ updated */}
         <form onSubmit={handleSubmit} className="space-y-5">
           <input
             type="text"
@@ -115,7 +119,10 @@ export default function SignUp() {
           />
 
           <div>
-            <label htmlFor="promoCode" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+            <label
+              htmlFor="promoCode"
+              className="block text-sm font-medium text-gray-700 dark:text-gray-300"
+            >
               Referral / Promo Code (optional)
             </label>
             <input
@@ -128,7 +135,9 @@ export default function SignUp() {
               onChange={(e) => setPromoCode(e.target.value)}
               onBlur={handleCodeBlur}
             />
-            {checkingCode && <p className="text-sm text-blue-600 mt-1">Checking code...</p>}
+            {checkingCode && (
+              <p className="text-sm text-blue-600 mt-1">Checking code...</p>
+            )}
             {discountApplied && (
               <p className="text-green-600 text-sm mt-1">
                 ✅ Code applied! Your new base price is ${finalPrice}/month.
@@ -144,7 +153,10 @@ export default function SignUp() {
               onChange={() => setAiUpgrade(!aiUpgrade)}
               className="w-5 h-5 text-blue-600"
             />
-            <label htmlFor="aiUpgrade" className="text-sm text-gray-700 dark:text-gray-300">
+            <label
+              htmlFor="aiUpgrade"
+              className="text-sm text-gray-700 dark:text-gray-300"
+            >
               Add AI Upgrade (+$50/mo)
             </label>
           </div>

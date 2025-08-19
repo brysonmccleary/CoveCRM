@@ -32,7 +32,10 @@ export default function AffiliateCodesPage() {
     const res = await fetch("/api/admin/create-affiliate-code", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ referralCode: newCode.trim(), email: assignEmail.trim() }),
+      body: JSON.stringify({
+        referralCode: newCode.trim(),
+        email: assignEmail.trim(),
+      }),
     });
 
     if (res.ok) {
@@ -116,7 +119,10 @@ export default function AffiliateCodesPage() {
                     <td>{code.referralCode}</td>
                     <td>{code.referredCount}</td>
                     <td>
-                      <button className="btn btn-sm btn-error" onClick={() => deleteCode(code._id)}>
+                      <button
+                        className="btn btn-sm btn-error"
+                        onClick={() => deleteCode(code._id)}
+                      >
                         Delete
                       </button>
                     </td>

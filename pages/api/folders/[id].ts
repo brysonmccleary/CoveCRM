@@ -4,7 +4,10 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
 import type { NextApiRequest, NextApiResponse } from "next";
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   const session = await getServerSession(req, res, authOptions);
   if (!session?.user?.email) {
     return res.status(401).json({ message: "Unauthorized" });
@@ -18,7 +21,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const folder = await Folder.findOne({ _id: id, user: userEmail });
 
     if (!folder) {
-      return res.status(404).json({ message: "Folder not found or access denied" });
+      return res
+        .status(404)
+        .json({ message: "Folder not found or access denied" });
     }
 
     if (req.method === "PUT") {

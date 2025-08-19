@@ -1,15 +1,10 @@
-// pages/api/getNumbers.ts
-
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "./auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
-import Stripe from "stripe";
-
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: "2024-04-10",
-});
+import { stripe } from "@/lib/stripe";
+import type Stripe from "stripe";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "GET") return res.status(405).json({ message: "Method not allowed" });
@@ -26,13 +21,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const enrichedNumbers = await Promise.all(
-      user.numbers.map(async (num) => {
+      user.numbers.map(async (num: any) => {
         let status = "unknown";
-        let nextBillingDate = null;
+        let nextBillingDate: string | null = null;
 
         if (num.subscriptionId) {
           try {
-            const sub = await stripe.subscriptions.retrieve(num.subscriptionId);
+            const subResp = await stripe.subscriptions.retrieve(num.subscriptionId);
+            const sub = subResp as unknown as Stripe.Subscription;
             status = sub.status;
             nextBillingDate = sub.current_period_end
               ? new Date(sub.current_period_end * 1000).toISOString()
@@ -55,7 +51,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             cost: 0,
           },
         };
-      })
+      }),
     );
 
     return res.status(200).json({ numbers: enrichedNumbers });

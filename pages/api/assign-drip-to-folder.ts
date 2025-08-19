@@ -1,4 +1,3 @@
-// /pages/api/assign-drip-to-folder.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "./auth/[...nextauth]";
@@ -10,7 +9,11 @@ import User from "@/models/User";
 import { sendSMS } from "@/lib/twilio/sendSMS";
 import { ObjectId } from "mongodb";
 import { prebuiltDrips } from "@/utils/prebuiltDrips";
-import { renderTemplate, ensureOptOut, splitName } from "@/utils/renderTemplate";
+import {
+  renderTemplate,
+  ensureOptOut,
+  splitName,
+} from "@/utils/renderTemplate";
 
 // ----- helpers -----
 function isValidObjectId(id: string) {
@@ -40,7 +43,7 @@ function normalizeToE164Maybe(phone?: string): string | null {
 async function runBatched<T>(
   items: T[],
   batchSize: number,
-  worker: (item: T, index: number) => Promise<void>
+  worker: (item: T, index: number) => Promise<void>,
 ) {
   let i = 0;
   while (i < items.length) {
@@ -51,14 +54,23 @@ async function runBatched<T>(
 }
 
 // ----- handler -----
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed" });
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
+  if (req.method !== "POST")
+    return res.status(405).json({ message: "Method not allowed" });
 
   const session = await getServerSession(req, res, authOptions);
-  if (!session?.user?.email) return res.status(401).json({ message: "Unauthorized" });
+  if (!session?.user?.email)
+    return res.status(401).json({ message: "Unauthorized" });
 
-  const { dripId, folderId } = req.body as { dripId?: string; folderId?: string };
-  if (!dripId || !folderId) return res.status(400).json({ message: "Missing dripId or folderId" });
+  const { dripId, folderId } = req.body as {
+    dripId?: string;
+    folderId?: string;
+  };
+  if (!dripId || !folderId)
+    return res.status(400).json({ message: "Missing dripId or folderId" });
 
   try {
     await dbConnect();
@@ -70,7 +82,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!user?._id) return res.status(404).json({ message: "User not found" });
 
     // 1) Validate folder belongs to this user
-    const folder = await Folder.findOne({ _id: new ObjectId(folderId), userEmail });
+    const folder = await Folder.findOne({
+      _id: new ObjectId(folderId),
+      userEmail,
+    });
     if (!folder) return res.status(404).json({ message: "Folder not found" });
 
     // 2) Save assignment on folder (idempotent)
@@ -84,12 +99,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // 3) Enroll existing leads (idempotent)
     await Lead.updateMany(
       { userEmail, folderId: new ObjectId(folderId) },
-      { $addToSet: { assignedDrips: dripId } }
+      { $addToSet: { assignedDrips: dripId } },
     );
 
     // 4) Send first step immediately (only for SMS drips)
-    const drip = await resolveDrip(dripId);
-    if (!drip || drip.type !== "sms" || !Array.isArray(drip.steps) || drip.steps.length === 0) {
+    const raw = await resolveDrip(dripId);
+    const drip: any = Array.isArray(raw) ? raw[0] : raw;
+    if (
+      !drip ||
+      drip?.type !== "sms" ||
+      !Array.isArray(drip?.steps) ||
+      drip?.steps.length === 0
+    ) {
       return res.status(200).json({
         message: "Drip assigned. No immediate SMS sent (non-SMS or no steps).",
         modifiedLeads: 0,
@@ -98,9 +119,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    const stepsSorted = [...drip.steps].sort(
+    const stepsSorted = [...(drip.steps as any[])].sort(
       (a: any, b: any) =>
-        (parseInt(a?.day ?? "0", 10) || 0) - (parseInt(b?.day ?? "0", 10) || 0)
+        (parseInt(a?.day ?? "0", 10) || 0) - (parseInt(b?.day ?? "0", 10) || 0),
     );
     const firstTextRaw: string = stepsSorted[0]?.text?.trim?.() || "";
     if (!firstTextRaw) {
@@ -116,7 +137,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const lower = firstTextRaw.toLowerCase();
     const optOutKeywords = ["stop", "unsubscribe", "end", "quit", "cancel"];
     if (optOutKeywords.includes(lower)) {
-      return res.status(400).json({ message: "First step is an opt-out keyword. Not sending." });
+      return res
+        .status(400)
+        .json({ message: "First step is an opt-out keyword. Not sending." });
     }
 
     // Prepare agent context once
@@ -131,8 +154,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const canonicalDripId = String((drip as any)?._id || dripId);
     const now = new Date();
 
-    const leads = await Lead.find({ userEmail, folderId: new ObjectId(folderId) })
-      .select({ _id: 1, Phone: 1, "First Name": 1, "Last Name": 1, unsubscribed: 1 })
+    const leads = await Lead.find({
+      userEmail,
+      folderId: new ObjectId(folderId),
+    })
+      .select({
+        _id: 1,
+        Phone: 1,
+        "First Name": 1,
+        "Last Name": 1,
+        unsubscribed: 1,
+      })
       .lean();
 
     let sent = 0;
@@ -149,7 +181,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const firstName = (lead as any)["First Name"] || null;
         const lastName = (lead as any)["Last Name"] || null;
         const fullName =
-          [firstName, lastName].filter((x) => x && String(x).trim().length > 0).join(" ") || null;
+          [firstName, lastName]
+            .filter((x) => x && String(x).trim().length > 0)
+            .join(" ") || null;
 
         const rendered = renderTemplate(firstTextRaw, {
           contact: {
@@ -169,13 +203,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         // ✅ Initialize/Update dripProgress for this lead (Day 1 has been sent -> index 0)
         const matched = await Lead.updateOne(
           { _id: (lead as any)._id, "dripProgress.dripId": canonicalDripId },
-          { $set: { "dripProgress.$.startedAt": now, "dripProgress.$.lastSentIndex": 0 } }
+          {
+            $set: {
+              "dripProgress.$.startedAt": now,
+              "dripProgress.$.lastSentIndex": 0,
+            },
+          },
         );
 
         if (matched.matchedCount === 0) {
           await Lead.updateOne(
             { _id: (lead as any)._id },
-            { $push: { dripProgress: { dripId: canonicalDripId, startedAt: now, lastSentIndex: 0 } } }
+            {
+              $push: {
+                dripProgress: {
+                  dripId: canonicalDripId,
+                  startedAt: now,
+                  lastSentIndex: 0,
+                },
+              },
+            },
           );
         }
 

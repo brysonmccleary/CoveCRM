@@ -54,7 +54,7 @@ const ReferralSchema = new Schema<IReferral>(
     email: { type: String, required: true },
     joinedAt: { type: Date, default: Date.now },
   },
-  { _id: false }
+  { _id: false },
 );
 
 const PayoutSchema = new Schema<IPayout>(
@@ -63,7 +63,7 @@ const PayoutSchema = new Schema<IPayout>(
     userEmail: { type: String, required: true },
     date: { type: Date, required: true },
   },
-  { _id: false }
+  { _id: false },
 );
 
 const AffiliateSchema = new Schema<IAffiliate>(
@@ -126,7 +126,8 @@ const AffiliateSchema = new Schema<IAffiliate>(
       default: [],
     },
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
-export default models.Affiliate || mongoose.model<IAffiliate>("Affiliate", AffiliateSchema);
+export default models.Affiliate ||
+  mongoose.model<IAffiliate>("Affiliate", AffiliateSchema);

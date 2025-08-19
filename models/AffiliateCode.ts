@@ -32,7 +32,7 @@ const AffiliateCodeSchema = new Schema<IAffiliateCode>(
     uses: { type: Number, default: 0 },
     lastUsedAt: { type: Date },
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
 // Ensure unique index exists even if collection pre-exists

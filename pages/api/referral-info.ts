@@ -6,11 +6,15 @@ import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import Affiliate from "@/models/Affiliate";
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   if (req.method !== "GET") return res.status(405).end("Method not allowed");
 
   const session = await getServerSession(req, res, authOptions);
-  if (!session?.user?.email) return res.status(401).json({ error: "Unauthorized" });
+  if (!session?.user?.email)
+    return res.status(401).json({ error: "Unauthorized" });
 
   await dbConnect();
 

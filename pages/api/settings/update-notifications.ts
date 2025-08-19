@@ -6,7 +6,10 @@ import { authOptions } from "@/pages/api/auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import { getUserByEmail } from "@/models/User";
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
   }
@@ -31,11 +34,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       dripAlerts:
         typeof dripAlerts === "boolean"
           ? dripAlerts
-          : user.notifications?.dripAlerts ?? true,
+          : (user.notifications?.dripAlerts ?? true),
       bookingConfirmations:
         typeof bookingConfirmations === "boolean"
           ? bookingConfirmations
-          : user.notifications?.bookingConfirmations ?? true,
+          : (user.notifications?.bookingConfirmations ?? true),
     };
 
     user.notifications = {
@@ -45,9 +48,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     await user.save();
 
-    return res.status(200).json({ success: true, message: "Notification settings updated." });
+    return res
+      .status(200)
+      .json({ success: true, message: "Notification settings updated." });
   } catch (error) {
     console.error("Error updating notification settings:", error);
-    return res.status(500).json({ error: "Failed to update notification settings." });
+    return res
+      .status(500)
+      .json({ error: "Failed to update notification settings." });
   }
 }

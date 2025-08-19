@@ -4,7 +4,7 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import twilioClient from "@/lib/twilioClient";
-import User from "@/models/user";
+import User from "@/models/User";
 import PhoneNumber from "@/models/PhoneNumber";
 
 /**

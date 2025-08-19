@@ -14,7 +14,7 @@ function onlyDigits10(raw?: string) {
 export async function openLeadByPhone(
   phoneLike: string | undefined,
   sessionEmail: string | undefined,
-  push: (url: string) => void
+  push: (url: string) => void,
 ): Promise<void> {
   const l10 = onlyDigits10(phoneLike);
   if (!l10) return; // silently bail on bad/short input
@@ -33,21 +33,21 @@ export async function openLeadByPhone(
 
 /** Optional parser for calendar events */
 export function extractPhoneFromEventLike(e: {
-  title?: string; description?: string; location?: string; extendedProps?: any;
+  title?: string;
+  description?: string;
+  location?: string;
+  extendedProps?: any;
 }): string | undefined {
   // Prefer explicit props if you set them when creating the event
   const xp = e.extendedProps || {};
   const direct =
-    xp.leadPhone ||
-    xp.phone ||
-    e.location ||
-    e.description ||
-    e.title ||
-    "";
+    xp.leadPhone || xp.phone || e.location || e.description || e.title || "";
 
   if (!direct) return undefined;
 
   // Grab first 10+ digit sequence
-  const match = String(direct).match(/(\+?1?[\D]*\d[\D]*\d[\D]*\d[\D]*\d[\D]*\d[\D]*\d[\D]*\d[\D]*\d[\D]*\d[\D]*\d+)/);
+  const match = String(direct).match(
+    /(\+?1?[\D]*\d[\D]*\d[\D]*\d[\D]*\d[\D]*\d[\D]*\d[\D]*\d[\D]*\d[\D]*\d[\D]*\d+)/,
+  );
   return match?.[1];
 }

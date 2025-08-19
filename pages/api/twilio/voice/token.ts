@@ -8,7 +8,10 @@ import twilio from "twilio";
 const { AccessToken } = twilio.jwt;
 const { VoiceGrant } = AccessToken as any;
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   if (req.method !== "GET") {
     return res.status(405).json({ message: "Method not allowed" });
   }
@@ -21,9 +24,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   const ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID!;
-  const API_KEY_SID = process.env.TWILIO_API_KEY_SID || process.env.TWILIO_API_KEY!;
+  const API_KEY_SID =
+    process.env.TWILIO_API_KEY_SID || process.env.TWILIO_API_KEY!;
   const API_KEY_SECRET = process.env.TWILIO_API_KEY_SECRET!;
-  const OUTGOING_APP_SID = process.env.TWILIO_APP_SID || process.env.TWILIO_TWIML_APP_SID || "";
+  const OUTGOING_APP_SID =
+    process.env.TWILIO_APP_SID || process.env.TWILIO_TWIML_APP_SID || "";
 
   if (!ACCOUNT_SID || !API_KEY_SID || !API_KEY_SECRET) {
     console.error("❌ Missing Twilio env vars for voice token");

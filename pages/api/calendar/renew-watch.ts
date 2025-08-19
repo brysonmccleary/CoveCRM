@@ -1,12 +1,14 @@
 // /pages/api/calendar/renew-watch.ts
-
 import type { NextApiRequest, NextApiResponse } from "next";
 import { google } from "googleapis";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import crypto from "crypto";
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   if (req.method !== "POST") {
     return res.status(405).json({ message: "Method not allowed" });
   }
@@ -22,18 +24,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const renewedUsers: string[] = [];
 
     for (const user of users) {
-      const expires = parseInt(user.googleWatch?.expiration || "0", 10);
+      // 👇 Ensure parseInt always receives a string
+      const expires = parseInt(String(user.googleWatch?.expiration ?? "0"), 10);
       if (!expires || now < expires - 60 * 1000) continue; // skip if not close to expiring
 
-      const tokens = user.googleTokens || user.googleCalendar || user.googleSheets;
+      const tokens =
+        (user as any).googleTokens ||
+        (user as any).googleCalendar ||
+        (user as any).googleSheets;
       if (!tokens) continue;
 
-      const calendarId = user.calendarId || "primary";
+      const calendarId = (user as any).calendarId || "primary";
 
       const oauth2Client = new google.auth.OAuth2(
         process.env.GOOGLE_CLIENT_ID!,
         process.env.GOOGLE_CLIENT_SECRET!,
-        `${process.env.NEXTAUTH_URL}/api/google/callback`
+        `${process.env.NEXTAUTH_URL}/api/google/callback`,
       );
 
       oauth2Client.setCredentials({
@@ -57,7 +63,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
 
       await User.updateOne(
-        { email: user.email },
+        { email: (user as any).email },
         {
           $set: {
             googleWatch: {
@@ -66,10 +72,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               expiration: watchResponse.data.expiration,
             },
           },
-        }
+        },
       );
 
-      renewedUsers.push(user.email);
+      renewedUsers.push((user as any).email);
     }
 
     return res.status(200).json({

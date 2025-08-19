@@ -1,18 +1,14 @@
-// /pages/api/stripe/onboard-affiliate.ts
-
 import type { NextApiRequest, NextApiResponse } from "next";
-import { getServerSession } from "next-auth";
-import { authOptions } from "../auth/[...nextauth]";
+import { getServerSession } from "next-auth/next";
+import type { Session } from "next-auth";
+import { authOptions } from "@/pages/api/auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
-import Affiliate from "@/models/Affiliate"; // keep casing consistent everywhere
+import Affiliate from "@/models/Affiliate";
 import User from "@/models/User";
-import Stripe from "stripe";
+import { stripe } from "@/lib/stripe";
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: "2024-04-10",
-});
-
-const RETURN_PATH = process.env.AFFILIATE_RETURN_PATH || "/dashboard?tab=settings";
+const RETURN_PATH =
+  process.env.AFFILIATE_RETURN_PATH || "/dashboard?tab=settings";
 const DEV_SKIP = process.env.DEV_SKIP_BILLING === "1";
 
 /** Build absolute base URL from forwarded headers (works on Vercel/ngrok/localhost) */
@@ -23,7 +19,8 @@ function getBaseUrl(req: NextApiRequest): string {
     (req.headers["host"] as string) ||
     "";
   if (xfHost) {
-    const proto = xfProto || (xfHost.startsWith("localhost") ? "http" : "https");
+    const proto =
+      xfProto || (xfHost.startsWith("localhost") ? "http" : "https");
     return `${proto}://${xfHost}`;
   }
   return (
@@ -52,8 +49,14 @@ async function createConnectAccount(params: {
 }
 
 /** Ensure the affiliate has a valid (non-mock) Connect account in THIS Stripe mode */
-async function ensureConnectAccountId(affiliate: any, userId: string): Promise<string> {
-  let id: string | undefined = affiliate.stripeConnectId;
+async function ensureConnectAccountId(
+  affiliate: any,
+  userId: string,
+): Promise<string> {
+  let id: string =
+    typeof affiliate.stripeConnectId === "string"
+      ? affiliate.stripeConnectId
+      : "";
 
   // If missing or obviously mocked, create fresh
   if (!id || id.startsWith("acct_mock_")) {
@@ -67,7 +70,7 @@ async function ensureConnectAccountId(affiliate: any, userId: string): Promise<s
     return id;
   }
 
-  // Try retrieving; if it's from the wrong environment ("No such account"), recreate
+  // Try retrieving; if it's from the wrong environment, recreate
   try {
     await stripe.accounts.retrieve(id);
     return id;
@@ -91,16 +94,28 @@ async function ensureConnectAccountId(affiliate: any, userId: string): Promise<s
   }
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   if (req.method !== "POST") return res.status(405).end("Method Not Allowed");
 
-  const session = await getServerSession(req, res, authOptions);
-  if (!session?.user?.email) return res.status(401).json({ error: "Unauthorized" });
+  const session = (await getServerSession(
+    req,
+    res,
+    authOptions as any,
+  )) as Session | null;
+
+  const email =
+    typeof session?.user?.email === "string"
+      ? session.user.email.toLowerCase()
+      : "";
+  if (!email) return res.status(401).json({ error: "Unauthorized" });
 
   try {
     await dbConnect();
 
-    const user = await User.findOne({ email: session.user.email });
+    const user = await User.findOne({ email });
     if (!user) return res.status(404).json({ error: "User not found" });
 
     // Find or create affiliate row for the current user
@@ -109,9 +124,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       (await Affiliate.findOne({ email: user.email }));
 
     if (!affiliate) {
-      const name = `${user.firstName || ""} ${user.lastName || ""}`.trim() || "Affiliate";
-      const promo =
-        (user.referralCode || `AUTO${user._id.toString().slice(-6)}`).toUpperCase();
+      const name =
+        `${(user as any).firstName || ""} ${(user as any).lastName || ""}`.trim() ||
+        "Affiliate";
+      const promo = (
+        (user as any).referralCode || `AUTO${user._id.toString().slice(-6)}`
+      ).toUpperCase();
 
       affiliate = await Affiliate.create({
         userId: user._id,

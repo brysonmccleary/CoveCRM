@@ -27,11 +27,14 @@ type ChatMsg = { role: "system" | "user" | "assistant"; content: string };
 
 function hasBookingLanguage(s: string) {
   return /\b(mon|tue|wed|thu|fri|sat|sun|today|tomorrow|tmrw|morning|afternoon|evening|\d{1,2}(:\d{2})?\s?(am|pm))\b/i.test(
-    s || ""
+    s || "",
   );
 }
 
-export async function handleAIResponse(leadId: string, incomingMessage: string): Promise<void> {
+export async function handleAIResponse(
+  leadId: string,
+  incomingMessage: string,
+): Promise<void> {
   if (!mongoose.connection.readyState) {
     await mongoose.connect(process.env.MONGODB_URI!);
   }
@@ -51,7 +54,8 @@ export async function handleAIResponse(leadId: string, incomingMessage: string):
   const aiName = user?.aiAssistantName || "Taylor";
 
   const normalizedMsg = (incomingMessage || "").toLowerCase();
-  const interactionHistory: IInteraction[] = (lead.interactionHistory || []) as IInteraction[];
+  const interactionHistory: IInteraction[] = (lead.interactionHistory ||
+    []) as IInteraction[];
   const leadType: string = lead.leadType || "Final Expense";
 
   if (OPT_OUT_WORDS.some((word) => normalizedMsg.includes(word))) {
@@ -71,7 +75,10 @@ export async function handleAIResponse(leadId: string, incomingMessage: string):
 
   const bookingUrl = `${BASE_URL}/book/${encodeURIComponent(lead.userEmail)}`;
   const linkAlreadySent = interactionHistory.some(
-    (i: IInteraction) => i.type === "ai" && typeof i.text === "string" && i.text.includes(bookingUrl)
+    (i: IInteraction) =>
+      i.type === "ai" &&
+      typeof i.text === "string" &&
+      i.text.includes(bookingUrl),
   );
 
   // Build conversation memory (last 10 turns, lead↔AI only)
@@ -121,7 +128,7 @@ Booking link (if needed): ${bookingUrl}
     messages.push(
       h.type === "inbound"
         ? { role: "user", content: h.text }
-        : { role: "assistant", content: h.text }
+        : { role: "assistant", content: h.text },
     );
   }
   messages.push({ role: "user", content: incomingMessage });
@@ -147,7 +154,9 @@ Booking link (if needed): ${bookingUrl}
       frequency_penalty: 0.8,
     });
 
-    const raw = (completion.choices?.[0]?.message?.content || "").toString().trim();
+    const raw = (completion.choices?.[0]?.message?.content || "")
+      .toString()
+      .trim();
     if (raw.length > 2) aiReply = raw;
 
     // ✅ Charge for OpenAI usage ($0.01 per AI response)

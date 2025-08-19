@@ -1,20 +1,19 @@
-// pages/api/twilio/buy-number.ts
 import type { NextApiRequest, NextApiResponse } from "next";
+import type Stripe from "stripe";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import A2PProfile from "@/models/A2PProfile";
 import PhoneNumber from "@/models/PhoneNumber";
 import User from "@/models/User";
-import Stripe from "stripe";
+import { stripe } from "@/lib/stripe";
 import twilioClient from "@/lib/twilioClient";
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, { apiVersion: "2024-04-10" });
-
-// $/mo price for a phone number
+// $/mo price for a phone number (env is better, but keeping your constant)
 const PHONE_PRICE_ID = "price_1RpvR9DF9aEsjVyJk9GiJkpe";
 
-const BASE_URL = process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "";
+const BASE_URL =
+  process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "";
 
 /** Normalize to E.164 (+1XXXXXXXXXX) */
 function normalizeE164(p: string) {
@@ -26,7 +25,10 @@ function normalizeE164(p: string) {
 }
 
 /** Ensure tenant Messaging Service exists & has webhooks. Returns SID. */
-async function ensureTenantMessagingService(userId: string, friendlyNameHint?: string) {
+async function ensureTenantMessagingService(
+  userId: string,
+  friendlyNameHint?: string,
+) {
   let a2p = await A2PProfile.findOne({ userId });
 
   if (a2p?.messagingServiceSid) {
@@ -55,17 +57,25 @@ async function ensureTenantMessagingService(userId: string, friendlyNameHint?: s
 }
 
 /** Add a number to a Messaging Service sender pool. Handles 21712 (unlink/reattach). */
-async function addNumberToMessagingService(serviceSid: string, numberSid: string) {
+async function addNumberToMessagingService(
+  serviceSid: string,
+  numberSid: string,
+) {
   try {
     await twilioClient.messaging.v1.services(serviceSid).phoneNumbers.create({
       phoneNumberSid: numberSid,
     });
   } catch (err: any) {
     if (err?.code === 21712) {
-      const services = await twilioClient.messaging.v1.services.list({ limit: 100 });
+      const services = await twilioClient.messaging.v1.services.list({
+        limit: 100,
+      });
       for (const svc of services) {
         try {
-          await twilioClient.messaging.v1.services(svc.sid).phoneNumbers(numberSid).remove();
+          await twilioClient.messaging.v1
+            .services(svc.sid)
+            .phoneNumbers(numberSid)
+            .remove();
         } catch {
           // ignore if not linked
         }
@@ -79,11 +89,16 @@ async function addNumberToMessagingService(serviceSid: string, numberSid: string
   }
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed" });
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
+  if (req.method !== "POST")
+    return res.status(405).json({ message: "Method not allowed" });
 
   const session = await getServerSession(req, res, authOptions);
-  if (!session?.user?.email) return res.status(401).json({ message: "Unauthorized" });
+  if (!session?.user?.email)
+    return res.status(401).json({ message: "Unauthorized" });
 
   const { number } = req.body as { number?: string };
   if (!number) return res.status(400).json({ message: "Missing phone number" });
@@ -103,25 +118,48 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // Idempotency: prevent dup purchase
     if (user.numbers?.some((n: any) => n.phoneNumber === requestedNumber)) {
-      return res.status(409).json({ message: "You already own this phone number." });
+      return res
+        .status(409)
+        .json({ message: "You already own this phone number." });
     }
-    const existingPhoneDoc = await PhoneNumber.findOne({ userId: user._id, phoneNumber: requestedNumber });
+    const existingPhoneDoc = await PhoneNumber.findOne({
+      userId: user._id,
+      phoneNumber: requestedNumber,
+    });
     if (existingPhoneDoc) {
-      return res.status(409).json({ message: "You already own this phone number (db)." });
+      return res
+        .status(409)
+        .json({ message: "You already own this phone number (db)." });
     }
 
     // Ensure Stripe customer & default payment method
     if (!user.stripeCustomerId) {
-      const customer = await stripe.customers.create({ email: user.email, name: user.name || undefined });
+      const customer = await stripe.customers.create({
+        email: user.email,
+        name: user.name || undefined,
+      });
       user.stripeCustomerId = customer.id;
       await user.save();
     }
-    const customer = (await stripe.customers.retrieve(user.stripeCustomerId)) as Stripe.Customer;
-    const hasDefaultPM = Boolean(customer.invoice_settings?.default_payment_method) || Boolean(customer.default_source);
+
+    const customer =
+      (await stripe.customers.retrieve(
+        user.stripeCustomerId,
+      )) as Stripe.Customer | Stripe.DeletedCustomer;
+
+    const hasDefaultPM =
+      "deleted" in customer
+        ? false
+        : Boolean(
+            customer.invoice_settings?.default_payment_method ||
+              (customer as Stripe.Customer).default_source,
+          );
+
     if (!hasDefaultPM) {
       return res.status(402).json({
         code: "no_payment_method",
-        message: "Please add a payment method to your account before purchasing a phone number.",
+        message:
+          "Please add a payment method to your account before purchasing a phone number.",
         stripeCustomerId: user.stripeCustomerId,
       });
     }
@@ -138,9 +176,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // Buy number
     const purchased = await twilioClient.incomingPhoneNumbers.create({
       phoneNumber: requestedNumber,
-      // (Optional) number-level webhooks; we rely on MS-level:
-      // smsUrl: `${BASE_URL}/api/twilio/inbound-sms`,
-      // statusCallback: `${BASE_URL}/api/twilio/status-callback`,
+      // number-level webhooks not needed when using messaging service webhooks
     });
     purchasedSid = purchased.sid;
 
@@ -156,9 +192,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
       await addNumberToMessagingService(messagingServiceSid, purchased.sid);
     } else {
-      console.log(
-        "ℹ️ Number bought but A2P not started yet; skipping sender-pool attach. Will attach on A2P approval."
-      );
+      // no-op, will attach when A2P is completed
     }
 
     // Save on user doc
@@ -167,7 +201,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       sid: purchased.sid,
       phoneNumber: purchased.phoneNumber,
       subscriptionId: subscription.id,
-      usage: { callsMade: 0, callsReceived: 0, textsSent: 0, textsReceived: 0, cost: 0 },
+      usage: {
+        callsMade: 0,
+        callsReceived: 0,
+        textsSent: 0,
+        textsReceived: 0,
+        cost: 0,
+      },
     });
     await user.save();
 
@@ -175,7 +215,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     await PhoneNumber.create({
       userId: user._id,
       phoneNumber: purchased.phoneNumber,
-      messagingServiceSid, // may be undefined until A2P started → we’ll backfill on approval
+      messagingServiceSid, // may be undefined until A2P started → backfill later
       profileSid: a2p?.profileSid,
       a2pApproved: Boolean(a2p?.messagingReady),
       datePurchased: new Date(),
@@ -183,10 +223,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
 
     return res.status(200).json({
-      message:
-        messagingServiceSid
-          ? "Number purchased and added to your messaging service."
-          : "Number purchased. Start A2P registration to enable texting; calls work now.",
+      message: messagingServiceSid
+        ? "Number purchased and added to your messaging service."
+        : "Number purchased. Start A2P registration to enable texting; calls work now.",
       number: purchased.phoneNumber,
       sid: purchased.sid,
       subscriptionId: subscription.id,
@@ -196,10 +235,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     console.error("Buy number error:", err);
 
     // Best-effort rollback
-    try { if (purchasedSid) await twilioClient.incomingPhoneNumbers(purchasedSid).remove(); } catch {}
-    try { if (createdSubscriptionId) await stripe.subscriptions.del(createdSubscriptionId); } catch {}
+    try {
+      if (purchasedSid)
+        await twilioClient.incomingPhoneNumbers(purchasedSid).remove();
+    } catch {}
+    try {
+      if (createdSubscriptionId)
+        await stripe.subscriptions.cancel(createdSubscriptionId);
+    } catch {}
 
-    const msg = err?.message || (typeof err === "string" ? err : "Failed to purchase number");
+    const msg =
+      err?.message ||
+      (typeof err === "string" ? err : "Failed to purchase number");
     return res.status(500).json({ message: msg });
   }
 }

@@ -1,6 +1,7 @@
 // /pages/api/leads/history.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
+import type { Session } from "next-auth";
 import { authOptions } from "../auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import Lead from "@/models/Lead";
@@ -36,14 +37,26 @@ function coerceDateISO(d?: any): string {
   return isNaN(dt.getTime()) ? new Date().toISOString() : dt.toISOString();
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   if (req.method !== "GET") {
     res.status(405).json({ message: "Method not allowed" });
     return;
   }
 
-  const session = await getServerSession(req, res, authOptions as any);
-  const userEmail = session?.user?.email?.toLowerCase();
+  const session = (await getServerSession(
+    req,
+    res,
+    authOptions as any,
+  )) as Session | null;
+
+  const userEmail =
+    typeof session?.user?.email === "string"
+      ? session.user.email.toLowerCase()
+      : "";
+
   if (!userEmail) {
     res.status(401).json({ message: "Unauthorized" });
     return;
@@ -60,7 +73,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   await dbConnect();
 
-  const leadDoc: any = await Lead.findOne({ _id: leadId, userEmail }).lean();
+  const leadDoc = (await Lead.findOne({ _id: leadId, userEmail })
+    .lean<any>()
+    .exec()) as any;
   if (!leadDoc) {
     res.status(404).json({ message: "Lead not found" });
     return;
@@ -93,32 +108,36 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         status: m.status,
       });
     }
-  } catch (e) {
+  } catch {
     // If Message model/collection isn't present, silently skip
-    // console.warn("history: Message lookup skipped:", e);
   }
 
   // ---------- Calls (Call collection) ----------
   try {
-    const idObj = Types.ObjectId.isValid(leadId) ? new Types.ObjectId(leadId) : null;
-    const callQuery: any = {
+    const idObj = Types.ObjectId.isValid(leadId)
+      ? new Types.ObjectId(leadId)
+      : null;
+
+    const timeOr = [
+      { startedAt: { $lte: cutoff } },
+      { completedAt: { $lte: cutoff } },
+      { createdAt: { $lte: cutoff } },
+    ];
+
+    const finalQuery: any = {
       userEmail,
       $or: [{ leadId }, ...(idObj ? [{ leadId: idObj }] : [])],
-      $orTime: [
-        { startedAt: { $lte: cutoff } },
-        { completedAt: { $lte: cutoff } },
-        { createdAt: { $lte: cutoff } },
-      ],
+      $orTime: timeOr,
     };
 
     // Mongo doesn't allow custom key $orTime, so expand inline:
-    const { $orTime, ...base } = callQuery;
-    const finalQuery = {
+    const { $orTime, ...base } = finalQuery;
+    const query = {
       ...base,
       $or: $orTime,
     };
 
-    const calls: any[] = await Call.find(finalQuery)
+    const calls: any[] = await Call.find(query)
       .sort({ createdAt: -1 })
       .limit(limit)
       .lean();
@@ -153,9 +172,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     for (const t of leadDoc.callTranscripts) {
       events.push({
         type: "note",
-        id: `${leadDoc._id}-tx-${(t.createdAt && new Date(t.createdAt).getTime()) || Math.random()}`,
-        date: coerceDateISO(t.createdAt),
-        text: t.text || "",
+        id: `${leadDoc._id}-tx-${(t?.createdAt && new Date(t.createdAt).getTime()) || Math.random()}`,
+        date: coerceDateISO(t?.createdAt),
+        text: t?.text || "",
       });
     }
   }
@@ -169,18 +188,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   });
 
   // Sort DESC by date and paginate
-  events.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  events.sort(
+    (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime(),
+  );
   const sliced = events.slice(0, limit);
 
   res.setHeader("Cache-Control", "no-store");
   res.status(200).json({
     lead: {
       _id: String(leadDoc._id),
-      firstName: leadDoc["First Name"] || "",
-      lastName: leadDoc["Last Name"] || "",
-      phone: leadDoc.Phone || "",
-      email: leadDoc.Email || "",
-      state: leadDoc.State || "",
+      firstName:
+        leadDoc.firstName || leadDoc["First Name"] || leadDoc.FIRST_NAME || "",
+      lastName:
+        leadDoc.lastName || leadDoc["Last Name"] || leadDoc.LAST_NAME || "",
+      phone: leadDoc.phone || leadDoc.Phone || leadDoc.PHONE || "",
+      email: leadDoc.email || leadDoc.Email || leadDoc.EMAIL || "",
+      state: leadDoc.state || leadDoc.State || leadDoc.STATE || "",
       status: leadDoc.status || "New",
       folderId: leadDoc.folderId ? String(leadDoc.folderId) : null,
     },

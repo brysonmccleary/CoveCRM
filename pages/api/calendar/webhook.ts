@@ -20,7 +20,10 @@ function extractPhone(text?: string): string | null {
   return match ? match[0].replace(/[^\d]/g, "") : null;
 }
 
-function parseNameFromSummary(summary: string): { firstName: string; lastName: string } {
+function parseNameFromSummary(summary: string): {
+  firstName: string;
+  lastName: string;
+} {
   const nameParts = summary.trim().split(" ");
   const firstName = nameParts[0] || "Calendar";
   const lastName = nameParts.slice(1, 3).join(" ") || "Event";
@@ -29,7 +32,7 @@ function parseNameFromSummary(summary: string): { firstName: string; lastName: s
 
 export default async function handler(
   req: NextApiRequest,
-  res: NextApiResponse & { socket: { server: HTTPServer & { io?: IOServer } } }
+  res: NextApiResponse & { socket: { server: HTTPServer & { io?: IOServer } } },
 ) {
   if (req.method === "HEAD") {
     return res.status(200).end(); // Google webhook verification
@@ -56,10 +59,7 @@ export default async function handler(
     }
 
     const tokens =
-      user.googleCalendar ||
-      user.googleSheets ||
-      user.googleTokens ||
-      null;
+      user.googleCalendar || user.googleSheets || user.googleTokens || null;
 
     if (
       !tokens ||
@@ -73,7 +73,7 @@ export default async function handler(
     const oauth2Client = new google.auth.OAuth2(
       process.env.GOOGLE_CLIENT_ID!,
       process.env.GOOGLE_CLIENT_SECRET!,
-      `${process.env.NEXTAUTH_URL}/api/google/callback`
+      `${process.env.NEXTAUTH_URL}/api/google/callback`,
     );
 
     oauth2Client.setCredentials({
@@ -148,7 +148,10 @@ export default async function handler(
         await newLead.save();
         console.log(`✅ Lead created from event: ${firstName} ${lastName}`);
       } catch (eventErr: any) {
-        console.warn(`⚠️ Skipped problematic event:`, eventErr?.message || eventErr);
+        console.warn(
+          `⚠️ Skipped problematic event:`,
+          eventErr?.message || eventErr,
+        );
         continue;
       }
     }

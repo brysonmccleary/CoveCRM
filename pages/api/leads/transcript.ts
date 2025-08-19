@@ -2,13 +2,18 @@
 
 import type { NextApiRequest, NextApiResponse } from "next";
 import dbConnect from "@/lib/mongooseConnect";
-import Lead from "@/models/lead";
+import Lead from "@/models/Lead";
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed" });
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
+  if (req.method !== "POST")
+    return res.status(405).json({ message: "Method not allowed" });
 
   const { leadId, entry } = req.body;
-  if (!leadId || !entry?.text) return res.status(400).json({ message: "Missing parameters" });
+  if (!leadId || !entry?.text)
+    return res.status(400).json({ message: "Missing parameters" });
 
   try {
     await dbConnect();

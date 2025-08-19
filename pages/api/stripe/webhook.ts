@@ -1,7 +1,8 @@
-// /pages/api/stripe/webhook.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { buffer } from "micro";
-import Stripe from "stripe";
+import { stripe } from "@/lib/stripe";
+import type Stripe from "stripe";
+
 import dbConnect from "@/lib/mongooseConnect";
 import Affiliate from "@/models/Affiliate";
 import User from "@/models/User";
@@ -11,10 +12,6 @@ import { sendAffiliateApprovedEmail } from "@/lib/email";
 
 export const config = { api: { bodyParser: false } };
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: "2024-04-10",
-});
-
 /* -------------------------- small helpers -------------------------- */
 const envBool = (name: string, def = false) => {
   const v = process.env[name];
@@ -22,23 +19,23 @@ const envBool = (name: string, def = false) => {
   return v === "1" || v.toLowerCase() === "true";
 };
 
-const asUSD = (cents?: number | null) => (Math.max(0, cents || 0) / 100).toFixed(2);
+const asUSD = (cents?: number | null) =>
+  (Math.max(0, cents || 0) / 100).toFixed(2);
 
 const safeUpper = (s?: string | null) => (s || "").trim().toUpperCase();
 
 async function findAffiliateByPromoCode(code: string) {
   const q = safeUpper(code);
   if (!q) return null;
-  // Exact match first
   let a = await Affiliate.findOne({ promoCode: q });
   if (a) return a;
-  // Case-insensitive fallback
-  a = await Affiliate.findOne({ promoCode: { $regex: `^${q}$`, $options: "i" } });
+  a = await Affiliate.findOne({
+    promoCode: { $regex: `^${q}$`, $options: "i" },
+  });
   return a;
 }
 
-/** idempotent credit: refuses to re-credit same invoice or same user on first invoice */
-async function creditAffiliateOnce(opts: {
+interface CreditOnceOpts {
   affiliate: any;
   invoiceId: string;
   subscriptionId?: string | null;
@@ -47,7 +44,10 @@ async function creditAffiliateOnce(opts: {
   amountUSD: number;
   isFirstInvoice: boolean;
   note?: string;
-}) {
+}
+
+/** idempotent credit: refuses to re-credit same invoice or same user on first invoice */
+async function creditAffiliateOnce(opts: CreditOnceOpts) {
   const {
     affiliate,
     invoiceId,
@@ -61,23 +61,24 @@ async function creditAffiliateOnce(opts: {
 
   affiliate.payoutHistory = affiliate.payoutHistory || [];
 
-  // New idempotency: by invoiceId
   const alreadyByInvoice = affiliate.payoutHistory.some(
-    (p: any) => p?.invoiceId && p.invoiceId === invoiceId
+    (p: any) => p?.invoiceId && p.invoiceId === invoiceId,
   );
   if (alreadyByInvoice) {
-    console.log(`[webhook] invoice ${invoiceId} already credited for ${affiliate.promoCode}`);
+    console.log(
+      `[webhook] invoice ${invoiceId} already credited for ${affiliate.promoCode}`,
+    );
     return false;
   }
 
-  // Legacy guard: old entries may only have userEmail (for first invoice)
   if (isFirstInvoice && userEmail) {
     const alreadyByEmail = affiliate.payoutHistory.some(
-      (p: any) => p?.userEmail && p.userEmail.toLowerCase() === userEmail.toLowerCase()
+      (p: any) =>
+        p?.userEmail && p.userEmail.toLowerCase() === userEmail.toLowerCase(),
     );
     if (alreadyByEmail) {
       console.log(
-        `[webhook] first-invoice for ${userEmail} already credited for ${affiliate.promoCode}`
+        `[webhook] first-invoice for ${userEmail} already credited for ${affiliate.promoCode}`,
       );
       return false;
     }
@@ -87,8 +88,7 @@ async function creditAffiliateOnce(opts: {
     invoiceId,
     subscriptionId: subscriptionId || null,
     customerId: customerId || null,
-    amount: amountUSD, // keep your existing naming
-    amountUSD,         // store explicit USD for clarity (won’t break schema)
+    amount: amountUSD,
     userEmail: userEmail || null,
     date: new Date(),
     note: note || "invoice.paid",
@@ -98,13 +98,16 @@ async function creditAffiliateOnce(opts: {
 
   await affiliate.save();
   console.log(
-    `💰 credited $${amountUSD.toFixed(2)} to affiliate ${affiliate.promoCode} (invoice ${invoiceId})`
+    `💰 credited $${amountUSD.toFixed(2)} to affiliate ${affiliate.promoCode} (invoice ${invoiceId})`,
   );
   return true;
 }
 
 /* ------------------------------ handler ----------------------------- */
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   if (req.method !== "POST") return res.status(405).send("Method Not Allowed");
 
   const sig = req.headers["stripe-signature"] as string | undefined;
@@ -121,12 +124,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(400).send("Invalid signature");
   }
 
-  // DB up
   try {
     await dbConnect();
   } catch (e) {
     console.error("dbConnect failed:", e);
-    // we continue; specific handlers can fail gracefully
   }
 
   const type = event.type;
@@ -134,58 +135,59 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     switch (type) {
-      /* ------------------- Connect: onboarding/account status ------------------- */
       case "account.updated": {
         const account = event.data.object as Stripe.Account;
 
         let connectedAccountStatus: string = "pending";
-        if (account.requirements?.currently_due?.length) connectedAccountStatus = "incomplete";
-        if (account.requirements?.disabled_reason) connectedAccountStatus = "restricted";
-        if (account.charges_enabled && account.payouts_enabled && account.details_submitted) {
+        if (account.requirements?.currently_due?.length)
+          connectedAccountStatus = "incomplete";
+        if (account.requirements?.disabled_reason)
+          connectedAccountStatus = "restricted";
+        if (
+          account.charges_enabled &&
+          account.payouts_enabled &&
+          account.details_submitted
+        ) {
           connectedAccountStatus = "verified";
         }
 
         const onboardingCompleted =
-          !!account.details_submitted && !!account.charges_enabled && !!account.payouts_enabled;
+          !!account.details_submitted &&
+          !!account.charges_enabled &&
+          !!account.payouts_enabled;
 
         await Affiliate.findOneAndUpdate(
           { stripeConnectId: account.id },
           { connectedAccountStatus, onboardingCompleted },
-          { new: true }
+          { new: true },
         );
 
-        console.log(`🔔 account.updated → ${account.id} status=${connectedAccountStatus}`);
+        console.log(
+          `🔔 account.updated → ${account.id} status=${connectedAccountStatus}`,
+        );
         break;
       }
 
-      /* ----------------- Auto-approve affiliate when Promotion Code goes live ---------------- */
       case "promotion_code.created":
       case "promotion_code.updated": {
         const promo = event.data.object as Stripe.PromotionCode;
         const code = safeUpper(promo.code);
-        if (!code) {
-          console.log("⚠️ promotion_code.* without code; ignoring");
-          break;
-        }
+        if (!code) break;
 
         const aff = await findAffiliateByPromoCode(code);
-        if (!aff) {
-          console.log(`ℹ️ promotion_code ${code} did not match any affiliate`);
-          break;
-        }
+        if (!aff) break;
 
         const wasApproved = !!(aff as any).approved;
         const nowApproved = !!promo.active;
 
         (aff as any).promotionCodeId = promo.id;
-        (aff as any).couponId = typeof promo.coupon === "string" ? promo.coupon : promo.coupon?.id;
+        (aff as any).couponId =
+          typeof promo.coupon === "string" ? promo.coupon : promo.coupon?.id;
 
         (aff as any).approved = nowApproved;
         if (nowApproved && !wasApproved) (aff as any).approvedAt = new Date();
 
         await aff.save();
-
-        console.log(`✅ promotion_code.${type.split(".")[1]} → ${code} approved=${nowApproved}`);
 
         if (nowApproved && !wasApproved) {
           try {
@@ -196,40 +198,38 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               to: aff.email,
               name: aff.name,
               code,
-              promoCode: code, // support templates expecting either field
+              promoCode: code,
               dashboardUrl: dashboardUrl || undefined,
             });
           } catch (e: any) {
-            console.warn("⚠️ sendAffiliateApprovedEmail failed:", e?.message || e);
+            console.warn(
+              "⚠️ sendAffiliateApprovedEmail failed:",
+              e?.message || e,
+            );
           }
         }
         break;
       }
 
-      /* --------------- Checkout success (keep for any Checkout flows you use) --------------- */
       case "checkout.session.completed": {
         const session = event.data.object as Stripe.Checkout.Session;
 
         const email =
-          session.customer_email || (session.customer_details?.email as string | undefined);
+          session.customer_email ||
+          (session.customer_details?.email as string | undefined);
         const userId = session.metadata?.userId;
         const referralCodeUsed = session.metadata?.referralCodeUsed || null;
 
-        if (!email || !userId) {
-          console.error("❌ Missing metadata (email/userId) on checkout.session.completed");
-          break;
-        }
+        if (!email || !userId) break;
 
         const user = await User.findById(userId);
-        if (!user) {
-          console.warn("⚠️ checkout.session.completed: user not found", userId);
-          break;
-        }
+        if (!user) break;
 
         (user as any).isProUser = true;
         user.hasAI = true;
         user.plan = "Pro";
-        user.stripeCustomerId = (session.customer as string) || user.stripeCustomerId || "";
+        user.stripeCustomerId =
+          (session.customer as string) || user.stripeCustomerId || "";
         (user as any).subscribedAt = new Date();
         user.subscriptionStatus = "active";
         if (referralCodeUsed && referralCodeUsed !== "none") {
@@ -241,15 +241,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           const affiliate = await findAffiliateByPromoCode(referralCodeUsed);
           if (affiliate) {
             const alreadyCredited = (affiliate as any).payoutHistory?.some(
-              (p: any) => p.userEmail && p.userEmail.toLowerCase() === email.toLowerCase()
+              (p: any) =>
+                p.userEmail &&
+                p.userEmail.toLowerCase() === email.toLowerCase(),
             );
             if (!alreadyCredited) {
               const earned = Number(process.env.AFFILIATE_DEFAULT_PAYOUT || 25);
-              (affiliate as any).totalReferrals = Number(affiliate.totalReferrals || 0) + 1;
-              (affiliate as any).payoutDue = Number(affiliate.payoutDue || 0) + earned;
+              (affiliate as any).totalReferrals =
+                Number(affiliate.totalReferrals || 0) + 1;
+              (affiliate as any).payoutDue =
+                Number(affiliate.payoutDue || 0) + earned;
               (affiliate as any).referrals = (affiliate as any).referrals || [];
-              (affiliate as any).referrals.push({ email, joinedAt: new Date() });
-              (affiliate as any).payoutHistory = (affiliate as any).payoutHistory || [];
+              (affiliate as any).referrals.push({
+                email,
+                joinedAt: new Date(),
+              });
+              (affiliate as any).payoutHistory =
+                (affiliate as any).payoutHistory || [];
               (affiliate as any).payoutHistory.push({
                 amount: earned,
                 userEmail: email,
@@ -257,46 +265,37 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 note: "checkout.session.completed",
               });
               await affiliate.save();
-              console.log(`💰 Affiliate credited $${earned} from ${email} using code ${referralCodeUsed}`);
             }
           }
         }
         break;
       }
 
-      /* ------------------------- Subscription invoices (credit commission) ------------------------- */
       case "invoice.paid":
       case "invoice.payment_succeeded": {
         const invoice = event.data.object as Stripe.Invoice;
         const customerId = invoice.customer as string | undefined;
 
-        // Respect recurring flag (default false => first invoice only)
         const recurring = envBool("AFFILIATE_PAYOUT_RECURRING", false);
         const isFirstInvoice =
           invoice.billing_reason === "subscription_create" ||
-          // Heuristic fallback: first attempt on a new sub
           (!!invoice.subscription && invoice.attempt_count === 1);
 
-        if (!recurring && !isFirstInvoice) {
-          console.log(`[webhook] skipping recurring invoice ${invoice.id} (first-invoice only)`);
-          break;
-        }
+        if (!recurring && !isFirstInvoice) break;
 
-        // Determine affiliate code:
-        // (A) invoice.discount.promotion_code -> code
         let promoCodeText: string | null = null;
-        const promoId = (invoice.discount as any)?.promotion_code as string | undefined;
+        const promoId = (invoice.discount as any)?.promotion_code as
+          | string
+          | undefined;
         if (promoId) {
           try {
             const pc = await stripe.promotionCodes.retrieve(promoId);
             promoCodeText = pc.code || null;
-          } catch (e) {
-            console.warn("⚠️ failed to retrieve promotion_code", promoId, e);
-          }
+          } catch {}
         }
 
-        // (B) fallback: subscription.metadata.referralCodeUsed / appliedPromoCode
-        let subscriptionId: string | null = (invoice.subscription as string) || null;
+        let subscriptionId: string | null =
+          (invoice.subscription as string) || null;
         if (!promoCodeText && subscriptionId) {
           try {
             const sub = await stripe.subscriptions.retrieve(subscriptionId);
@@ -304,12 +303,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               safeUpper(sub.metadata?.referralCodeUsed) ||
               safeUpper(sub.metadata?.appliedPromoCode) ||
               null;
-          } catch (e) {
-            console.warn("⚠️ failed to retrieve subscription for invoice", invoice.id, e);
-          }
+          } catch {}
         }
 
-        // (C) final fallback: user.referredBy if we can resolve the user
         let userEmail: string | null = null;
         if (customerId) {
           const user = await User.findOne({ stripeCustomerId: customerId });
@@ -317,109 +313,101 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             user.subscriptionStatus = "active";
             await user.save();
             userEmail = user.email;
-            if (!promoCodeText) promoCodeText = safeUpper((user as any).referredBy);
+            if (!promoCodeText)
+              promoCodeText = safeUpper((user as any).referredBy);
           }
         }
 
-        if (!promoCodeText) {
-          console.log(`[webhook] no affiliate promo found for invoice ${invoice.id}`);
-          break;
-        }
+        if (!promoCodeText) break;
 
         const affiliate = await findAffiliateByPromoCode(promoCodeText);
-        if (!affiliate) {
-          console.log(`[webhook] affiliate not found for promo ${promoCodeText}`);
-          break;
-        }
+        if (!affiliate) break;
 
         const payoutUSD =
           Number(affiliate.flatPayoutAmount || 0) ||
           Number(process.env.AFFILIATE_DEFAULT_PAYOUT || 25);
 
-        // Idempotent credit (guards invoice & legacy-by-email)
+        const invoiceIdSafe: string = String(invoice.id || "");
+
         await creditAffiliateOnce({
           affiliate,
-          invoiceId: invoice.id,
+          invoiceId: invoiceIdSafe,
           subscriptionId,
           customerId: customerId || null,
           userEmail,
           amountUSD: payoutUSD,
           isFirstInvoice,
-          note: promoCodeText ? `commission for ${promoCodeText}` : "invoice.paid",
+          note: promoCodeText
+            ? `commission for ${promoCodeText}`
+            : "invoice.paid",
         });
 
-        // Track total revenue (paid) for analytics
         const paidCents = Number(invoice.amount_paid || 0);
         (affiliate as any).totalRevenueGenerated =
           Number(affiliate.totalRevenueGenerated || 0) + paidCents / 100;
 
-        // Count referral on first invoice
         if (isFirstInvoice && userEmail) {
-          (affiliate as any).totalReferrals = Number(affiliate.totalReferrals || 0) + 1;
+          (affiliate as any).totalReferrals =
+            Number(affiliate.totalReferrals || 0) + 1;
           (affiliate as any).referrals = (affiliate as any).referrals || [];
           const already = (affiliate as any).referrals.some(
-            (r: any) => r?.email?.toLowerCase() === userEmail!.toLowerCase()
+            (r: any) => r?.email?.toLowerCase() === userEmail!.toLowerCase(),
           );
           if (!already) {
-            (affiliate as any).referrals.push({ email: userEmail, joinedAt: new Date() });
+            (affiliate as any).referrals.push({
+              email: userEmail,
+              joinedAt: new Date(),
+            });
           }
         }
 
         await affiliate.save();
-        console.log(
-          `✅ invoice ${invoice.id} paid $${asUSD(invoice.amount_paid)} (promo=${promoCodeText}); affiliate ${affiliate.promoCode} updated`
-        );
         break;
       }
 
-      /* ------------------------- Subscription status sync ------------------------- */
       case "customer.subscription.updated": {
         const sub = event.data.object as Stripe.Subscription;
         const customerId = sub.customer as string;
         const user = await User.findOne({ stripeCustomerId: customerId });
         if (user) {
           const status =
-            sub.status === "active" || sub.status === "trialing" ? "active" : "canceled";
+            sub.status === "active" || sub.status === "trialing"
+              ? "active"
+              : "canceled";
           user.subscriptionStatus = status;
           await user.save();
-          console.log(
-            `🔄 customer.subscription.updated → ${status} for ${user.email} (stripe: ${sub.status})`
-          );
         }
         break;
       }
 
-      /* -------- Invoice failed → cancel number subscription & release Twilio number -------- */
       case "invoice.payment_failed": {
         const invoice = event.data.object as Stripe.Invoice;
         const subscriptionId = invoice.subscription as string;
 
         try {
-          const users = await User.find({ "numbers.subscriptionId": subscriptionId });
+          const users = await User.find({
+            "numbers.subscriptionId": subscriptionId,
+          });
           for (const user of users) {
             const number: any = (user as any).numbers?.find(
-              (n: any) => n.subscriptionId === subscriptionId
+              (n: any) => n.subscriptionId === subscriptionId,
             );
             if (!number) continue;
 
             try {
               await stripe.subscriptions.cancel(subscriptionId);
-            } catch (err) {
-              console.warn("⚠️ Stripe cancellation failed:", err);
-            }
+            } catch {}
 
             try {
-              await (twilioClient as any).incomingPhoneNumbers(number.sid).remove();
-            } catch (err) {
-              console.warn("⚠️ Twilio number release failed:", err);
-            }
+              await (twilioClient as any)
+                .incomingPhoneNumbers(number.sid)
+                .remove();
+            } catch {}
 
             (user as any).numbers = (user as any).numbers.filter(
-              (n: any) => n.subscriptionId !== subscriptionId
+              (n: any) => n.subscriptionId !== subscriptionId,
             );
             await user.save();
-
-            console.log(`⚡️ Auto-canceled number ${number.phoneNumber} for ${user.email}`);
           }
         } catch (err) {
           console.error("❌ Error handling invoice.payment_failed:", err);
@@ -427,12 +415,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         break;
       }
 
-      /* -------------------- Affiliate payout transfer status updates -------------------- */
       case "transfer.created": {
         const transfer = event.data.object as Stripe.Transfer;
         await AffiliatePayout.updateOne(
           { stripeTransferId: transfer.id },
-          { $set: { status: "sent" } }
+          { $set: { status: "sent" } },
         );
         break;
       }
@@ -440,13 +427,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const transfer = event.data.object as Stripe.Transfer;
         await AffiliatePayout.updateOne(
           { stripeTransferId: transfer.id },
-          { $set: { status: "failed" } }
+          { $set: { status: "failed" } },
         );
         break;
       }
 
       default:
-        // No-op for other events to keep logs clean
         break;
     }
 

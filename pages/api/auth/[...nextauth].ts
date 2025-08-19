@@ -1,8 +1,8 @@
 // /pages/api/auth/[...nextauth].ts
-import NextAuth, { NextAuthOptions } from "next-auth";
+import NextAuth, { type NextAuthOptions } from "next-auth";
 import CredentialsProvider from "next-auth/providers/credentials";
 import GoogleProvider from "next-auth/providers/google";
-import bcrypt from "bcrypt";
+import bcrypt from "bcryptjs"; // ✅ use bcryptjs to match your install
 import mongooseConnect from "@/lib/mongooseConnect";
 import { getUserByEmail } from "@/models/User";
 import twilio from "twilio";
@@ -55,12 +55,27 @@ async function safeSyncA2PByEmail(email: string, awaitIt = true) {
   }
 }
 
-const cookieDomain =
-  process.env.NEXTAUTH_URL?.includes("ngrok.app") ? ".ngrok.app" : undefined;
+const cookieDomain = process.env.NEXTAUTH_URL?.includes("ngrok.app")
+  ? ".ngrok.app"
+  : undefined;
+
+function getCookieValue(cookieHeader: string | undefined, name: string) {
+  if (!cookieHeader) return undefined;
+  const found = cookieHeader
+    .split(";")
+    .map((s) => s.trim())
+    .find((c) => c.startsWith(`${name}=`));
+  if (!found) return undefined;
+  try {
+    return decodeURIComponent(found.split("=").slice(1).join("="));
+  } catch {
+    return found.split("=").slice(1).join("=");
+  }
+}
 
 export const authOptions: NextAuthOptions = {
   debug: true,
-  trustHost: true,
+  // trustHost: true, // removed to satisfy stricter typings
   useSecureCookies: !isDev,
 
   providers: [
@@ -69,7 +84,7 @@ export const authOptions: NextAuthOptions = {
       credentials: {
         email: { label: "Email", type: "email" },
         password: { label: "Password", type: "password" },
-        code: { label: "Affiliate Code", type: "text" }, // kept for compatibility; UI won’t send it
+        code: { label: "Affiliate Code", type: "text" },
       },
       async authorize(credentials: any, req) {
         if (!credentials?.email || !credentials?.password) return null;
@@ -82,7 +97,10 @@ export const authOptions: NextAuthOptions = {
 
         if (!user) {
           const hashedPassword = await bcrypt.hash(password, 10);
-          const affiliateCode = code || req.cookies?.affiliate_code || null;
+          const cookieHeader =
+            (req as any)?.headers?.cookie as string | undefined;
+          const cookieAffiliate = getCookieValue(cookieHeader, "affiliate_code");
+          const affiliateCode = code || cookieAffiliate || null;
           const UserModel = (await import("@/models/User")).default;
 
           user = await UserModel.create({
@@ -103,11 +121,14 @@ export const authOptions: NextAuthOptions = {
           }
         }
 
-        const isValid = await bcrypt.compare(password, user.password);
+        const userPassword = ((user as any).password ?? "") as string;
+        const isValid = userPassword
+          ? await bcrypt.compare(password, String(userPassword))
+          : false;
         if (!isValid) return null;
 
         if (isNewUser) {
-          await ensureMessagingService(user._id.toString(), user.email);
+          await ensureMessagingService(String((user as any)._id), user.email);
         }
 
         await safeSyncA2PByEmail(user.email, true);
@@ -118,7 +139,7 @@ export const authOptions: NextAuthOptions = {
           name: user.name || user.email,
           role: user.role || "user",
           affiliateCode: user.affiliateCode || null,
-        };
+        } as any;
       },
     }),
 
@@ -160,7 +181,7 @@ export const authOptions: NextAuthOptions = {
         }
 
         if (isNewUser) {
-          await ensureMessagingService(user._id.toString(), user.email);
+          await ensureMessagingService(String((user as any)._id), user.email);
         }
 
         await safeSyncA2PByEmail(user.email, true);
@@ -171,12 +192,11 @@ export const authOptions: NextAuthOptions = {
           name: user.name || user.email,
           role: user.role || "user",
           affiliateCode: user.affiliateCode || null,
-        };
+        } as any;
       },
     }),
   ],
 
-  // 🔹 Use the custom blue page
   pages: {
     signIn: "/auth/signin",
   },
@@ -193,7 +213,7 @@ export const authOptions: NextAuthOptions = {
         sameSite: "lax",
         path: "/",
         secure: !isDev,
-        domain: cookieDomain, // only for ngrok
+        domain: cookieDomain,
       },
     },
   },
@@ -201,25 +221,26 @@ export const authOptions: NextAuthOptions = {
   callbacks: {
     async jwt({ token, user, account }) {
       if (user) {
-        token.id = (user as any).id;
-        token.email = (user as any).email;
-        token.name = (user as any).name;
-        token.role = (user as any).role;
-        token.affiliateCode = (user as any).affiliateCode;
+        (token as any).id = (user as any).id;
+        (token as any).email = (user as any).email;
+        (token as any).name = (user as any).name;
+        (token as any).role = (user as any).role ?? "user";
+        (token as any).affiliateCode = (user as any).affiliateCode ?? null;
       }
       if (account?.provider === "google") {
-        token.accessToken = (account as any).access_token;
-        token.refreshToken = (account as any).refresh_token;
+        (token as any).accessToken = (account as any).access_token;
+        (token as any).refreshToken = (account as any).refresh_token;
       }
       return token;
     },
 
     async session({ session, token }) {
-      (session.user as any).id = token.id as string;
-      (session.user as any).email = token.email as string;
-      (session.user as any).name = token.name as string;
-      (session.user as any).role = token.role as string;
-      (session.user as any).affiliateCode = token.affiliateCode as string | null;
+      (session.user as any).id = (token as any).id as string;
+      (session.user as any).email = (token as any).email as string;
+      (session.user as any).name = (token as any).name as string;
+      (session.user as any).role = ((token as any).role as string) || "user";
+      (session.user as any).affiliateCode =
+        ((token as any).affiliateCode as string) || null;
 
       if ((token as any).accessToken)
         (session.user as any).googleAccessToken = (token as any).accessToken;

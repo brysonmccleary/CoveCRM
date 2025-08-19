@@ -13,10 +13,7 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
 
   // Use env first; otherwise default to the exact scopes we need
   const scopes =
-    (process.env.GOOGLE_SCOPES || "")
-      .split(/\s+/)
-      .filter(Boolean)
-      .join(" ") ||
+    (process.env.GOOGLE_SCOPES || "").split(/\s+/).filter(Boolean).join(" ") ||
     [
       "https://www.googleapis.com/auth/calendar",
       "https://www.googleapis.com/auth/calendar.events",
@@ -30,8 +27,8 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
     redirect_uri: redirectUri,
     response_type: "code",
     scope: scopes,
-    access_type: "offline",          // <-- ensures refresh_token (with prompt=consent)
-    prompt: "consent",               // <-- forces the consent screen so refresh_token is returned
+    access_type: "offline", // <-- ensures refresh_token (with prompt=consent)
+    prompt: "consent", // <-- forces the consent screen so refresh_token is returned
     include_granted_scopes: "true",
   });
 

@@ -1,10 +1,11 @@
-// /lib/stripe.ts
+// lib/stripe.ts
 import Stripe from "stripe";
 
-const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY;
-if (!STRIPE_SECRET_KEY) {
-  throw new Error("Missing STRIPE_SECRET_KEY");
+if (!process.env.STRIPE_SECRET_KEY) {
+  throw new Error("STRIPE_SECRET_KEY is not set");
 }
 
-// Do NOT pass apiVersion — let the SDK use the account default to avoid TS literal mismatches
-export const stripe = new Stripe(STRIPE_SECRET_KEY);
+// Use the account default API version to avoid literal-type mismatches
+export const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+
+export type { Stripe };

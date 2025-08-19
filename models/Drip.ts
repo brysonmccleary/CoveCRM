@@ -12,7 +12,7 @@ const DripSchema = new mongoose.Schema(
     ],
     type: { type: String, default: "prebuilt" }, // "prebuilt" or "custom"
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
 export default mongoose.models.Drip || mongoose.model("Drip", DripSchema);

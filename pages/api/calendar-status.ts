@@ -4,7 +4,10 @@ import { authOptions } from "@/pages/api/auth/[...nextauth]";
 import { getUserByEmail } from "@/models/User";
 import dbConnect from "@/lib/mongooseConnect";
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   await dbConnect();
   const session = await getServerSession(req, res, authOptions);
 
@@ -23,7 +26,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const calendarId = user.calendarId || null;
 
     return res.status(200).json({
-      calendarConnected: !!(googleCalendar?.accessToken || googleSheets?.accessToken),
+      calendarConnected: !!(
+        googleCalendar?.accessToken || googleSheets?.accessToken
+      ),
       calendarId,
       googleCalendar, // optional – stays for future compatibility
     });

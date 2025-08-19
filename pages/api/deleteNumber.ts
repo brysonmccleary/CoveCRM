@@ -1,7 +1,10 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import twilioClient from "../../lib/twilioClient";
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   if (req.method !== "DELETE") {
     return res.status(405).json({ message: "Method not allowed" });
   }
@@ -20,4 +23,3 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     res.status(500).json({ message: "Error deleting number" });
   }
 }
-

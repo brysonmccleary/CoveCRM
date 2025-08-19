@@ -1,42 +1,25 @@
 import mongoose from "mongoose";
-import dotenv from "dotenv";
 
-// Load environment variables from .env.local
-dotenv.config({ path: ".env.local" });
+type Cached = {
+  conn: typeof mongoose | null;
+  promise: Promise<typeof mongoose> | null;
+};
 
-const MONGODB_URI = process.env.MONGODB_URI;
-
-if (!MONGODB_URI) {
-  throw new Error("❌ Please define the MONGODB_URI environment variable inside .env.local");
+declare global {
+  // eslint-disable-next-line no-var
+  var __mongooseCache: Cached | undefined;
 }
 
-let cached = (global as any).mongoose;
+const cached: Cached = global.__mongooseCache || { conn: null, promise: null };
+if (!global.__mongooseCache) global.__mongooseCache = cached;
 
-if (!cached) {
-  cached = (global as any).mongoose = { conn: null, promise: null };
-}
-
-async function dbConnect() {
+export default async function mongooseConnect() {
   if (cached.conn) return cached.conn;
-
   if (!cached.promise) {
-    cached.promise = mongoose
-      .connect(MONGODB_URI!, {
-        bufferCommands: false,
-        dbName: "covecrm", // ✅ Correct DB name
-      })
-      .then((mongooseInstance) => {
-        console.log("✅ Connected to MongoDB (covecrm)");
-        return mongooseInstance;
-      })
-      .catch((err) => {
-        console.error("❌ MongoDB connection failed:", err);
-        throw err;
-      });
+    const uri = process.env.MONGODB_URI || process.env.MONGODB_URL || "";
+    if (!uri) throw new Error("Missing MONGODB_URI");
+    cached.promise = mongoose.connect(uri).then((m) => m);
   }
-
   cached.conn = await cached.promise;
   return cached.conn;
 }
-
-export default dbConnect;

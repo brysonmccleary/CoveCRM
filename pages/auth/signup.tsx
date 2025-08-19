@@ -33,7 +33,9 @@ export default function SignUp() {
 
     setCheckingCode(true);
     try {
-      const res = await axios.post("/api/apply-code", { code: promoCode.trim() });
+      const res = await axios.post("/api/apply-code", {
+        code: promoCode.trim(),
+      });
       const { price, ownerEmail } = res.data;
 
       setFinalPrice(price);
@@ -70,7 +72,7 @@ export default function SignUp() {
         toast.success("Account created! Redirecting to billing...");
         const total = finalPrice + (aiUpgrade ? aiAddOnPrice : 0);
         router.push(
-          `/billing?email=${encodeURIComponent(email)}&price=${total}&ai=${aiUpgrade ? 1 : 0}&trial=1`
+          `/billing?email=${encodeURIComponent(email)}&price=${total}&ai=${aiUpgrade ? 1 : 0}&trial=1`,
         );
       }
     } catch (err) {
@@ -82,7 +84,9 @@ export default function SignUp() {
 
   return (
     <div className="max-w-md mx-auto mt-10 p-6 bg-white rounded-xl shadow">
-      <h1 className="text-3xl font-bold mb-6 text-center">Create Your CRM Cove Account</h1>
+      <h1 className="text-3xl font-bold mb-6 text-center">
+        Create Your CRM Cove Account
+      </h1>
 
       <form onSubmit={handleSubmit} className="space-y-5">
         <input
@@ -110,7 +114,10 @@ export default function SignUp() {
         />
 
         <div>
-          <label htmlFor="promoCode" className="block text-sm font-medium text-gray-700">
+          <label
+            htmlFor="promoCode"
+            className="block text-sm font-medium text-gray-700"
+          >
             Referral / Promo Code (optional)
           </label>
           <input
@@ -123,7 +130,9 @@ export default function SignUp() {
             onChange={(e) => setPromoCode(e.target.value)}
             onBlur={handleCodeBlur}
           />
-          {checkingCode && <p className="text-sm text-blue-600 mt-1">Checking code...</p>}
+          {checkingCode && (
+            <p className="text-sm text-blue-600 mt-1">Checking code...</p>
+          )}
           {discountApplied && (
             <p className="text-green-600 text-sm mt-1">
               ✅ Code applied! Your new base price is ${finalPrice}/month.

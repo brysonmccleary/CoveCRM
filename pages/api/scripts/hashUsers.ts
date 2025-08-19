@@ -17,7 +17,7 @@ async function hashAllUsers() {
       const hashed = await bcrypt.hash(user.password, 10);
       await usersCollection.updateOne(
         { _id: user._id },
-        { $set: { password: hashed } }
+        { $set: { password: hashed } },
       );
       console.log(`✅ Updated user: ${user.email}`);
     }

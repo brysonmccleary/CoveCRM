@@ -8,4 +8,5 @@ const PromoUsageSchema = new mongoose.Schema({
   lastUsed: { type: Date },
 });
 
-export default mongoose.models.PromoUsage || mongoose.model("PromoUsage", PromoUsageSchema);
+export default mongoose.models.PromoUsage ||
+  mongoose.model("PromoUsage", PromoUsageSchema);

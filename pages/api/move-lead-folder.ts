@@ -5,7 +5,10 @@ import Folder from "@/models/Folder";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "./auth/[...nextauth]";
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   if (req.method !== "POST") {
     return res.status(405).json({ message: "Method not allowed" });
   }
@@ -13,7 +16,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const { leadId, newFolderName } = req.body;
 
   if (!leadId || !newFolderName) {
-    return res.status(400).json({ message: "leadId and newFolderName are required" });
+    return res
+      .status(400)
+      .json({ message: "leadId and newFolderName are required" });
   }
 
   try {
@@ -43,14 +48,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const lead = await Lead.findOneAndUpdate(
       { _id: leadId, userEmail },
       { folderId: folder._id },
-      { new: true }
+      { new: true },
     );
 
     if (!lead) {
-      return res.status(404).json({ message: "Lead not found or does not belong to this user" });
+      return res
+        .status(404)
+        .json({ message: "Lead not found or does not belong to this user" });
     }
 
-    console.log(`✅ Lead ${leadId} moved to '${newFolderName}' for ${userEmail}`);
+    console.log(
+      `✅ Lead ${leadId} moved to '${newFolderName}' for ${userEmail}`,
+    );
     res.status(200).json({ message: "Lead moved successfully" });
   } catch (error) {
     console.error("Move lead error:", error);

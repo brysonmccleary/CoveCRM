@@ -30,18 +30,22 @@ export default function ForgotPassword() {
 
   return (
     <>
-      <Head><title>Forgot Password — CRM Cove</title></Head>
+      <Head>
+        <title>Forgot Password — CRM Cove</title>
+      </Head>
       <div className="flex items-center justify-center min-h-screen bg-[#0f172a]">
         <div className="bg-[#1e293b] p-8 rounded shadow-md w-full max-w-md text-white">
-          <h1 className="text-2xl font-bold mb-2 text-center">Forgot Password</h1>
+          <h1 className="text-2xl font-bold mb-2 text-center">
+            Forgot Password
+          </h1>
           <p className="text-gray-300 text-center mb-6">
             Enter your account email and we’ll send you a reset link.
           </p>
 
           {sent ? (
             <div className="rounded-md border border-green-400/40 bg-green-400/10 p-4 text-green-300">
-              If an account exists for <b>{email}</b>, a reset link has been sent.
-              Check your inbox (and spam) for the email.
+              If an account exists for <b>{email}</b>, a reset link has been
+              sent. Check your inbox (and spam) for the email.
             </div>
           ) : (
             <form onSubmit={onSubmit} className="space-y-4">
@@ -67,7 +71,10 @@ export default function ForgotPassword() {
           )}
 
           <div className="mt-4 text-center">
-            <a href="/auth/signin" className="text-blue-400 hover:underline text-sm">
+            <a
+              href="/auth/signin"
+              className="text-blue-400 hover:underline text-sm"
+            >
               Back to sign in
             </a>
           </div>

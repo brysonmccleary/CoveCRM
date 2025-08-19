@@ -4,7 +4,10 @@ import { authOptions } from "../auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import Lead from "@/models/Lead";
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   const session = await getServerSession(req, res, authOptions);
   if (!session?.user?.email) {
     return res.status(401).json({ message: "Unauthorized" });
@@ -15,7 +18,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   if (req.method === "GET") {
     try {
-      const leads = await Lead.find({ user: userEmail }).sort({ createdAt: -1 });
+      const leads = await Lead.find({ user: userEmail }).sort({
+        createdAt: -1,
+      });
       res.status(200).json(leads);
     } catch (error) {
       console.error("Get leads error:", error);
@@ -32,7 +37,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         Notes,
         Age,
         Beneficiary,
-        "Coverage Amount": CoverageAmount
+        "Coverage Amount": CoverageAmount,
       } = req.body;
 
       const newLead = new Lead({

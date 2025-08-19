@@ -7,8 +7,12 @@ import { Resend } from "resend"; // ✅ Correct package name
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed" });
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
+  if (req.method !== "POST")
+    return res.status(405).json({ message: "Method not allowed" });
 
   const session = await getServerSession(req, res, authOptions);
   const isAdmin = session?.user?.email === process.env.ADMIN_EMAIL;
@@ -23,14 +27,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     await dbConnect();
 
-    const affiliate = await Affiliate.findOne({ promoCode: promoCode.toUpperCase() });
+    const affiliate = await Affiliate.findOne({
+      promoCode: promoCode.toUpperCase(),
+    });
 
     if (!affiliate) {
       return res.status(404).json({ message: "Affiliate not found." });
     }
 
     if (affiliate.payoutDue < amount) {
-      return res.status(400).json({ message: "Payout amount exceeds payout due." });
+      return res
+        .status(400)
+        .json({ message: "Payout amount exceeds payout due." });
     }
 
     affiliate.payoutDue -= amount;

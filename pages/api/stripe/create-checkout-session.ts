@@ -1,27 +1,26 @@
-// /pages/api/stripe/create-checkout-session.ts
-
-import { NextApiRequest, NextApiResponse } from "next";
-import Stripe from "stripe";
-import { getServerSession } from "next-auth";
+import type { NextApiRequest, NextApiResponse } from "next";
+import type Stripe from "stripe";
+import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
-import { getUserByEmail } from "@/models/User";
 import dbConnect from "@/lib/mongooseConnect";
+import User from "@/models/User";
+import { stripe } from "@/lib/stripe";
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: "2024-04-10",
-});
-
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   if (req.method !== "POST") return res.status(405).end("Method not allowed");
 
   const session = await getServerSession(req, res, authOptions);
   if (!session?.user?.email) return res.status(401).end("Unauthorized");
 
   await dbConnect();
-  const user = await getUserByEmail(session.user.email);
+
+  const user = await User.findOne({ email: session.user.email });
   if (!user) return res.status(404).end("User not found");
 
-  const { wantsUpgrade } = req.body;
+  const { wantsUpgrade } = (req.body || {}) as { wantsUpgrade?: boolean };
 
   const line_items: Stripe.Checkout.SessionCreateParams.LineItem[] = [
     {
@@ -37,26 +36,34 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 
+  const BASE_URL =
+    process.env.NEXT_PUBLIC_BASE_URL ||
+    process.env.BASE_URL ||
+    process.env.NEXTAUTH_URL ||
+    "http://localhost:3000";
+
   try {
     const checkoutSession = await stripe.checkout.sessions.create({
-      payment_method_types: ["card"],
       mode: "subscription",
-      customer_email: user.email,
+      // Use an existing customer when possible to avoid dupes
+      customer: user.stripeCustomerId || undefined,
+      customer_email: user.stripeCustomerId ? undefined : user.email,
       line_items,
       allow_promotion_codes: true,
+      payment_method_types: ["card"],
       metadata: {
-        userId: user._id.toString(),
+        userId: (user as any)?._id?.toString?.() || "",
         email: user.email,
         upgradeIncluded: wantsUpgrade ? "true" : "false",
-        referralCodeUsed: user.referredBy || "none",
+        referralCodeUsed: (user as any)?.referredBy || "none",
       },
-      success_url: `${process.env.NEXTAUTH_URL}/success?paid=true`,
-      cancel_url: `${process.env.NEXTAUTH_URL}/upgrade`,
+      success_url: `${BASE_URL}/success?paid=true`,
+      cancel_url: `${BASE_URL}/upgrade`,
     });
 
     return res.status(200).json({ url: checkoutSession.url });
   } catch (err: any) {
     console.error("❌ Stripe checkout error:", err);
-    return res.status(500).json({ error: err.message });
+    return res.status(500).json({ error: err?.message || "Checkout failed" });
   }
 }

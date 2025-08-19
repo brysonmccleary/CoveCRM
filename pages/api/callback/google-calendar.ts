@@ -12,7 +12,10 @@ const GOOGLE_REDIRECT_URI = process.env.GOOGLE_REDIRECT_URI!;
 // e.g. CALENDAR_SUCCESS_PATH=/settings?calendar=connected
 const CALENDAR_SUCCESS_PATH = process.env.CALENDAR_SUCCESS_PATH || "/";
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   if (req.method !== "GET") return res.status(405).end("Method Not Allowed");
 
   const { code, next } = req.query as { code?: string; next?: string };
@@ -21,7 +24,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const oauth2Client = new google.auth.OAuth2(
     GOOGLE_CLIENT_ID,
     GOOGLE_CLIENT_SECRET,
-    GOOGLE_REDIRECT_URI
+    GOOGLE_REDIRECT_URI,
   );
 
   try {
@@ -30,11 +33,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const { refresh_token, access_token } = tokens;
 
     // 2) Identify which Google account authorized
-    oauth2Client.setCredentials({ access_token, refresh_token: refresh_token || undefined });
+    oauth2Client.setCredentials({
+      access_token,
+      refresh_token: refresh_token || undefined,
+    });
     const oauth2 = google.oauth2({ version: "v2", auth: oauth2Client });
     const me = await oauth2.userinfo.get();
     const googleEmail = String(me.data.email || "").toLowerCase();
-    if (!googleEmail) return res.status(400).send("Could not read Google account email");
+    if (!googleEmail)
+      return res.status(400).send("Could not read Google account email");
 
     // 3) Lookup CRM user
     await dbConnect();
@@ -42,7 +49,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!user) {
       return res
         .status(404)
-        .send(`No CRM user found with email ${googleEmail}. Use the same email in CRM and Google.`);
+        .send(
+          `No CRM user found with email ${googleEmail}. Use the same email in CRM and Google.`,
+        );
     }
 
     // 4) Ensure we have a long-lived refresh token
@@ -53,7 +62,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!finalRefreshToken) {
       return res
         .status(400)
-        .send("No refresh_token available. Please reconnect with access_type=offline&prompt=consent.");
+        .send(
+          "No refresh_token available. Please reconnect with access_type=offline&prompt=consent.",
+        );
     }
 
     // 5) Save tokens + automation flags
@@ -71,18 +82,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     await user.save();
 
     // 6) Safe redirect (prevent open redirects). Allow only relative paths.
-    const base =
-      (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "http://localhost:3000").replace(
-        /\/$/,
-        ""
-      );
+    const base = (
+      process.env.NEXT_PUBLIC_BASE_URL ||
+      process.env.BASE_URL ||
+      "http://localhost:3000"
+    ).replace(/\/$/, "");
     const safeNext =
-      typeof next === "string" && next.startsWith("/") ? next : CALENDAR_SUCCESS_PATH;
+      typeof next === "string" && next.startsWith("/")
+        ? next
+        : CALENDAR_SUCCESS_PATH;
     const successUrl = `${base}${safeNext}`;
 
     return res.redirect(successUrl);
   } catch (err: any) {
-    console.error("❌ OAuth callback error:", err?.response?.data || err?.message || err);
+    console.error(
+      "❌ OAuth callback error:",
+      err?.response?.data || err?.message || err,
+    );
     return res.status(500).send("OAuth error. See server logs.");
   }
 }

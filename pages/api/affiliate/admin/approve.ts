@@ -3,7 +3,10 @@ import dbConnect from "@/lib/mongooseConnect";
 import Affiliate from "@/models/Affiliate";
 import { sendAffiliateApprovedEmail } from "@/lib/email";
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   if (req.method !== "POST") return res.status(405).end("Method Not Allowed");
 
   // Simple shared-secret guard
@@ -12,14 +15,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(401).json({ error: "Unauthorized" });
   }
 
-  const { promoCode, email } = req.body as { promoCode?: string; email?: string };
+  const { promoCode, email } = req.body as {
+    promoCode?: string;
+    email?: string;
+  };
   if (!promoCode && !email) {
     return res.status(400).json({ error: "Provide promoCode or email" });
   }
 
   await dbConnect();
 
-  const query = promoCode ? { promoCode: String(promoCode).toUpperCase() } : { email: String(email).toLowerCase() };
+  const query = promoCode
+    ? { promoCode: String(promoCode).toUpperCase() }
+    : { email: String(email).toLowerCase() };
   const affiliate = await Affiliate.findOne(query);
   if (!affiliate) return res.status(404).json({ error: "Affiliate not found" });
 
@@ -40,5 +48,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     console.warn("sendAffiliateApprovedEmail failed");
   }
 
-  return res.status(200).json({ ok: true, approved: true, promoCode: affiliate.promoCode });
+  return res
+    .status(200)
+    .json({ ok: true, approved: true, promoCode: affiliate.promoCode });
 }

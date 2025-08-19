@@ -5,7 +5,10 @@ import { authOptions } from "./auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import Lead from "@/models/Lead";
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   if (req.method !== "GET") {
     return res.status(405).json({ message: "Method not allowed" });
   }
@@ -18,7 +21,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     await dbConnect();
 
-    const leads = await Lead.find({ userEmail: session.user.email }).sort({ createdAt: -1 });
+    const leads = await Lead.find({ userEmail: session.user.email }).sort({
+      createdAt: -1,
+    });
 
     const formattedLeads = leads.map((lead) => ({
       id: lead._id.toString(),

@@ -11,14 +11,20 @@ import { google } from "googleapis";
  * Uses the signed-in user's Google refresh token to fetch events
  * from user.calendarId || "primary" within [start, end].
  */
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "GET") return res.status(405).json({ error: "Method not allowed" });
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
+  if (req.method !== "GET")
+    return res.status(405).json({ error: "Method not allowed" });
 
   const session = await getServerSession(req, res, authOptions);
-  if (!session?.user?.email) return res.status(401).json({ error: "Not authenticated" });
+  if (!session?.user?.email)
+    return res.status(401).json({ error: "Not authenticated" });
 
   const { start, end } = req.query as { start?: string; end?: string };
-  if (!start || !end) return res.status(400).json({ error: "Missing start/end ISO params" });
+  if (!start || !end)
+    return res.status(400).json({ error: "Missing start/end ISO params" });
 
   // Basic ISO validation
   const startDate = new Date(start);
@@ -49,7 +55,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       calendarNeedsReconnect: true,
     };
     await user.save();
-    return res.status(401).json({ error: "Google not connected (no refresh token)", needsReconnect: true });
+    return res
+      .status(401)
+      .json({
+        error: "Google not connected (no refresh token)",
+        needsReconnect: true,
+      });
   }
 
   const calendarId = (user as any).calendarId || "primary";
@@ -57,7 +68,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const oauth2Client = new google.auth.OAuth2(
     process.env.GOOGLE_CLIENT_ID!,
     process.env.GOOGLE_CLIENT_SECRET!,
-    process.env.GOOGLE_REDIRECT_URI!
+    process.env.GOOGLE_REDIRECT_URI!,
   );
   oauth2Client.setCredentials({ refresh_token: refreshToken });
 
@@ -82,7 +93,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         description: event.description || "",
         location: event.location || "",
         colorId: event.colorId || null,
-        attendees: (event.attendees || []).map((a) => a.email || "").filter(Boolean),
+        attendees: (event.attendees || [])
+          .map((a) => a.email || "")
+          .filter(Boolean),
       })) || [];
 
     (user as any).flags = {
@@ -102,10 +115,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         calendarNeedsReconnect: true,
       };
       await user.save();
-      return res.status(401).json({ error: "invalid_grant", needsReconnect: true });
+      return res
+        .status(401)
+        .json({ error: "invalid_grant", needsReconnect: true });
     }
 
-    console.error("❌ Google Calendar events error:", err?.response?.data || msg);
+    console.error(
+      "❌ Google Calendar events error:",
+      err?.response?.data || msg,
+    );
     return res.status(500).json({ error: "Failed to fetch events" });
   }
 }

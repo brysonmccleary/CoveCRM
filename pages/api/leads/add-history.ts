@@ -10,8 +10,12 @@ import Lead from "@/models/Lead";
  * body: { leadId: string, type: "note" | "disposition" | string, message: string, meta?: object }
  * Writes a history entry into Lead.history with user + timestamp.
  */
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed" });
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
+  if (req.method !== "POST")
+    return res.status(405).json({ message: "Method not allowed" });
 
   const session = await getServerSession(req, res, authOptions);
   const requesterEmail = session?.user?.email?.toLowerCase();
@@ -25,7 +29,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   };
 
   if (!leadId || !type || !message) {
-    return res.status(400).json({ message: "Missing leadId, type, or message" });
+    return res
+      .status(400)
+      .json({ message: "Missing leadId, type, or message" });
   }
 
   try {

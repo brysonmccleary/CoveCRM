@@ -8,7 +8,10 @@ import { stripe } from "@/lib/stripe";
 // ✅ Real Stripe Price ID for AI Upgrade ($50/month)
 const AI_PRICE_ID = "price_1RoAK4DF9aEsjVyJeoR3w3RL";
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   if (req.method !== "POST") return res.status(405).end();
 
   const session = await getServerSession(req, res, authOptions);
@@ -31,13 +34,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!subscription) return res.status(404).end();
 
     const currentItems = subscription.items.data;
-    const aiItem = currentItems.find(item => item.price.id === AI_PRICE_ID);
+    const aiItem = currentItems.find((item) => item.price.id === AI_PRICE_ID);
 
     let updatedSub;
     if (enable && !aiItem) {
       updatedSub = await stripe.subscriptions.update(subscription.id, {
         items: [
-          ...currentItems.map(item => ({ id: item.id })),
+          ...currentItems.map((item) => ({ id: item.id })),
           { price: AI_PRICE_ID },
         ],
       });
@@ -45,8 +48,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       updatedSub = await stripe.subscriptions.update(subscription.id, {
         items: [
           ...currentItems
-            .filter(item => item.price.id !== AI_PRICE_ID)
-            .map(item => ({ id: item.id })),
+            .filter((item) => item.price.id !== AI_PRICE_ID)
+            .map((item) => ({ id: item.id })),
         ],
       });
     }

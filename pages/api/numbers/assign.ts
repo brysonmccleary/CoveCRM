@@ -19,11 +19,16 @@ import PhoneNumber from "@/models/PhoneNumber";
  *
  * This is safe for multi-tenant. No cross-user leakage.
  */
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed" });
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
+  if (req.method !== "POST")
+    return res.status(405).json({ message: "Method not allowed" });
 
   const session = await getServerSession(req, res, authOptions);
-  if (!session?.user?.email) return res.status(401).json({ message: "Unauthorized" });
+  if (!session?.user?.email)
+    return res.status(401).json({ message: "Unauthorized" });
 
   const { phoneNumbers } = req.body as { phoneNumbers?: string[] };
   if (!Array.isArray(phoneNumbers) || phoneNumbers.length === 0) {
@@ -37,9 +42,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!user) return res.status(404).json({ message: "User not found" });
 
     // Pull Twilio numbers to validate ownership (index by E.164)
-    const twilioList = await twilioClient.incomingPhoneNumbers.list({ limit: 200 });
+    const twilioList = await twilioClient.incomingPhoneNumbers.list({
+      limit: 200,
+    });
     const twilioByE164 = new Map<string, (typeof twilioList)[number]>();
-    for (const t of twilioList) if (t.phoneNumber) twilioByE164.set(t.phoneNumber, t);
+    for (const t of twilioList)
+      if (t.phoneNumber) twilioByE164.set(t.phoneNumber, t);
 
     const created: string[] = [];
     const alreadyOwned: string[] = [];
@@ -71,7 +79,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           alreadyOwned.push(phone);
         } else {
           // owned by someone else — do not steal
-          conflicts.push({ phoneNumber: phone, ownerUserId: existing.userId.toString() });
+          conflicts.push({
+            phoneNumber: phone,
+            ownerUserId: existing.userId.toString(),
+          });
         }
         continue;
       }

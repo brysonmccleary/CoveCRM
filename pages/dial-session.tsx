@@ -1,9 +1,12 @@
-// pages/dial-session.tsx
 import { useState, useEffect } from "react";
 import { useRouter } from "next/router";
 import Sidebar from "@/components/Sidebar";
 import { isCallAllowed } from "@/utils/checkCallTime";
-import { playRingback, stopRingback, primeAudioContext } from "@/utils/ringAudio";
+import {
+  playRingback,
+  stopRingback,
+  primeAudioContext,
+} from "@/utils/ringAudio";
 import CallSummary from "@/components/CallSummary";
 import BookAppointmentModal from "@/components/BookAppointmentModal";
 import toast from "react-hot-toast";
@@ -31,11 +34,24 @@ export default function DialSession() {
   const [showBookModal, setShowBookModal] = useState(false);
 
   const router = useRouter();
-  const { leads: leadIdsParam, fromNumber: fromNumberParam, leadId: singleLeadIdParam } = router.query;
+  const {
+    leads: leadIdsParam,
+    fromNumber: fromNumberParam,
+    leadId: singleLeadIdParam,
+  } = router.query;
 
   // Prime audio context once for autoplay restrictions (iOS/Safari)
   useEffect(() => {
-    primeAudioContext().catch(() => {});
+    try {
+      // primeAudioContext previously returned void; calling inside try/catch avoids `.catch()` on void.
+      const maybe = primeAudioContext() as unknown;
+      // If it *does* return a promise in some environments, make best-effort to silence errors.
+      if (maybe && typeof (maybe as any).catch === "function") {
+        (maybe as Promise<void>).catch(() => {});
+      }
+    } catch {
+      // ignore
+    }
   }, []);
 
   useEffect(() => {
@@ -70,7 +86,7 @@ export default function DialSession() {
           if (!res.ok) return null;
           const data = await res.json();
           return { id: data.lead._id, ...data.lead };
-        })
+        }),
       );
       const validLeads = fetched.filter((lead): lead is Lead => lead !== null);
       setLeadQueue(validLeads);
@@ -95,7 +111,9 @@ export default function DialSession() {
       lead?.phone ||
       lead?.["Phone Number"] ||
       lead?.["phone number"] ||
-      Object.entries(lead).find(([key]) => key.toLowerCase().includes("phone"))?.[1] ||
+      Object.entries(lead).find(([key]) =>
+        key.toLowerCase().includes("phone"),
+      )?.[1] ||
       ""
     );
   };
@@ -150,7 +168,10 @@ export default function DialSession() {
       }).catch(() => {});
 
       // Local echo
-      setHistory((prev) => [`📞 Call started (${new Date().toLocaleTimeString()})`, ...prev]);
+      setHistory((prev) => [
+        `📞 Call started (${new Date().toLocaleTimeString()})`,
+        ...prev,
+      ]);
     } catch (err) {
       console.error("Call failed:", err);
       setStatus("Call failed");
@@ -240,7 +261,8 @@ export default function DialSession() {
   const handleDisposition = async (status: string) => {
     let newFolderName = "";
     if (status === "Not Interested") newFolderName = "Not Interested";
-    else if (status === "Booked Appointment") newFolderName = "Booked Appointment";
+    else if (status === "Booked Appointment")
+      newFolderName = "Booked Appointment";
     else if (status === "Sold") newFolderName = "Sold";
     else if (status === "No Answer") newFolderName = "No Answer";
 
@@ -256,7 +278,10 @@ export default function DialSession() {
             message: newFolderName || status,
           }),
         }).catch(() => {});
-        setHistory((prev) => [`✅ Disposition: ${newFolderName || status}`, ...prev]);
+        setHistory((prev) => [
+          `✅ Disposition: ${newFolderName || status}`,
+          ...prev,
+        ]);
       }
 
       if (newFolderName && newFolderName !== "No Answer") {
@@ -277,7 +302,9 @@ export default function DialSession() {
           if (updatedQueue.length === 0) return showSessionSummary();
 
           const nextIndex =
-            currentLeadIndex >= updatedQueue.length ? updatedQueue.length - 1 : currentLeadIndex;
+            currentLeadIndex >= updatedQueue.length
+              ? updatedQueue.length - 1
+              : currentLeadIndex;
           setLeadQueue(updatedQueue);
           setCurrentLeadIndex(nextIndex);
           setLead(updatedQueue[nextIndex]);
@@ -296,7 +323,7 @@ export default function DialSession() {
 
   const handleEndSession = () => {
     const confirmEnd = window.confirm(
-      `Are you sure you want to end this dial session? You have called ${sessionStartedCount} of ${leadQueue.length} leads.`
+      `Are you sure you want to end this dial session? You have called ${sessionStartedCount} of ${leadQueue.length} leads.`,
     );
     if (!confirmEnd) return;
     stopRingback();
@@ -305,13 +332,16 @@ export default function DialSession() {
   };
 
   const showSessionSummary = () => {
-    alert(`✅ Session Complete!\nYou called ${sessionStartedCount} out of ${leadQueue.length} leads.`);
+    alert(
+      `✅ Session Complete!\nYou called ${sessionStartedCount} out of ${leadQueue.length} leads.`,
+    );
     router.push("/leads");
   };
 
   const formatPhone = (phone: string) => {
     const clean = phone.replace(/\D/g, "");
-    if (clean.length === 10) return `${clean.slice(0, 3)}-${clean.slice(3, 6)}-${clean.slice(6)}`;
+    if (clean.length === 10)
+      return `${clean.slice(0, 3)}-${clean.slice(3, 6)}-${clean.slice(6)}`;
     if (clean.length === 11 && clean.startsWith("1"))
       return `${clean.slice(0, 1)}-${clean.slice(1, 4)}-${clean.slice(4, 7)}-${clean.slice(7)}`;
     return phone;
@@ -322,7 +352,7 @@ export default function DialSession() {
       <div className="bg-[#1e293b] p-4 border-b border-gray-700 flex justify-between items-center">
         <h1 className="text-xl font-bold">Dial Session</h1>
         <button
-          onClick={handleToggleSummary}
+          onClick={() => setSummaryCollapsed((s) => !s)}
           className="text-sm px-3 py-1 rounded bg-gray-700 hover:bg-gray-600"
         >
           {summaryCollapsed ? "Show Summary" : "Hide Summary"}
@@ -342,7 +372,8 @@ export default function DialSession() {
             {`${lead?.["First Name"] || ""} ${lead?.["Last Name"] || ""}`.trim()}
           </h2>
           <p className="text-sm text-green-400 mb-2">
-            Calling from: {fromNumber ? formatPhone(fromNumber) : "Not selected"}
+            Calling from:{" "}
+            {fromNumber ? formatPhone(fromNumber) : "Not selected"}
           </p>
           <p className="text-sm text-yellow-400 mb-2">Status: {status}</p>
           <p className="text-sm text-gray-400 mb-2">
@@ -352,16 +383,26 @@ export default function DialSession() {
           {lead &&
             Object.entries(lead).map(([key, value]) => {
               if (
-                ["_id", "id", "Notes", "First Name", "Last Name", "folderId", "createdAt", "ownerId", "userEmail"].includes(
-                  key
-                )
+                [
+                  "_id",
+                  "id",
+                  "Notes",
+                  "First Name",
+                  "Last Name",
+                  "folderId",
+                  "createdAt",
+                  "ownerId",
+                  "userEmail",
+                ].includes(key)
               )
                 return null;
-              if (key.toLowerCase().includes("phone")) value = formatPhone(value as string);
+              if (key.toLowerCase().includes("phone"))
+                value = formatPhone(value as string);
               return (
                 <div key={key}>
                   <p>
-                    <strong>{key.replace(/_/g, " ")}:</strong> {String(value) || "-"}
+                    <strong>{key.replace(/_/g, " ")}:</strong>{" "}
+                    {String(value) || "-"}
                   </p>
                   <hr className="border-gray-700 my-1" />
                 </div>
@@ -378,7 +419,9 @@ export default function DialSession() {
             <button
               onClick={handleHangUp}
               className={`px-3 py-2 rounded cursor-pointer ${
-                callActive ? "bg-red-600 hover:bg-red-700" : "bg-gray-600 hover:bg-gray-700"
+                callActive
+                  ? "bg-red-600 hover:bg-red-700"
+                  : "bg-gray-600 hover:bg-gray-700"
               }`}
             >
               Hang Up
@@ -455,7 +498,7 @@ export default function DialSession() {
 
             <div className="flex space-x-2 mt-2">
               <button
-                onClick={togglePause}
+                onClick={() => setIsPaused((p) => !p)}
                 className="bg-yellow-400 hover:bg-yellow-500 text-black px-4 py-2 rounded cursor-pointer"
               >
                 {isPaused ? "Resume Dial Session" : "Pause Dial Session"}

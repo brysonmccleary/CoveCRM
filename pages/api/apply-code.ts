@@ -1,10 +1,6 @@
-// /pages/api/apply-code.ts
 import type { NextApiRequest, NextApiResponse } from "next";
-import Stripe from "stripe";
-
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: "2024-04-10",
-});
+import { stripe } from "@/lib/stripe";
+import type Stripe from "stripe";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method Not Allowed" });
@@ -16,10 +12,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
     const raw = code.trim();
 
-    // Exact, active match first (Stripe treats code as case-sensitive)
-    let pc = (await stripe.promotionCodes.list({ code: raw, active: true, limit: 1 })).data[0];
+    // Try exact, active first
+    let pc: Stripe.PromotionCode | undefined = (
+      await stripe.promotionCodes.list({ code: raw, active: true, limit: 1 })
+    ).data[0];
 
-    // Fallback: case-insensitive search across first 100 active (keeps your previous UX)
+    // Case-insensitive fallback among a window of active codes
     if (!pc) {
       const list = await stripe.promotionCodes.list({ active: true, limit: 100 });
       pc = list.data.find((p) => p.code.toLowerCase() === raw.toLowerCase());
@@ -27,8 +25,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (!pc) return res.status(404).json({ error: "Invalid or expired promo code." });
 
-    const coupon =
-      typeof pc.coupon === "string" ? await stripe.coupons.retrieve(pc.coupon) : pc.coupon;
+    const coupon = typeof pc.coupon === "string" ? await stripe.coupons.retrieve(pc.coupon) : pc.coupon;
 
     let discount: string | null = null;
     if ((coupon as any).amount_off) discount = `$${((coupon as any).amount_off / 100).toFixed(2)} off`;

@@ -4,9 +4,12 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "./auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import Lead from "@/models/Lead";
-import Folder from "@/models/folder"; // keep your existing import path/casing
+import Folder from "@/models/Folder"; // keep your existing import path/casing
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   if (req.method !== "POST") {
     res.status(405).json({ message: "Method not allowed" });
     return;
@@ -19,7 +22,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return;
   }
 
-  const { leadId, newFolderName } = req.body as { leadId?: string; newFolderName?: string };
+  const { leadId, newFolderName } = req.body as {
+    leadId?: string;
+    newFolderName?: string;
+  };
   if (!leadId || !newFolderName) {
     res.status(400).json({ message: "Missing required fields." });
     return;
@@ -57,7 +63,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             date: new Date(),
           },
         },
-      }
+      },
     );
 
     res.status(200).json({

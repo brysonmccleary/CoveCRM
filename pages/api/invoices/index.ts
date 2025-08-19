@@ -1,19 +1,19 @@
 import type { NextApiRequest, NextApiResponse } from "next";
+import type Stripe from "stripe";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
 import User from "@/models/User";
-import Stripe from "stripe";
-import dbConnect from "@/lib/dbConnect";
+import { stripe } from "@/lib/stripe";
+import dbConnect from "@/lib/mongooseConnect";
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY as string, {
-  apiVersion: "2024-04-10",
-});
-
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   await dbConnect();
 
   const session = await getServerSession(req, res, authOptions);
-  if (!session || !session.user?.email) {
+  if (!session?.user?.email) {
     return res.status(401).json({ error: "Unauthorized" });
   }
 
@@ -28,15 +28,40 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       limit: 50,
     });
 
-    const formatted = invoices.data.map((invoice) => ({
-      id: invoice.id,
-      amountPaid: invoice.amount_paid / 100,
-      date: new Date(invoice.created * 1000).toISOString(),
-      hostedInvoiceUrl: invoice.hosted_invoice_url,
-      receiptUrl: invoice.charge ? invoice.charge.receipt_url : null,
-      description: invoice.lines.data.map((line) => line.description).join(", "),
-      status: invoice.status,
-    }));
+    const formatted = await Promise.all(
+      invoices.data.map(async (invoice: Stripe.Invoice) => {
+        // Resolve a receipt URL if possible. Stripe's Invoice typings vary across versions,
+        // so we probe defensively and cast to any where needed.
+        let receiptUrl: string | null = null;
+        const invAny = invoice as any;
+
+        if (typeof invAny?.charge === "string") {
+          try {
+            const charge = await stripe.charges.retrieve(invAny.charge);
+            receiptUrl = (charge as any)?.receipt_url || null;
+          } catch {
+            receiptUrl = null;
+          }
+        } else if (invAny?.charge?.receipt_url) {
+          receiptUrl = invAny.charge.receipt_url || null;
+        }
+
+        const descriptions = invoice.lines.data
+          .map((line: Stripe.InvoiceLineItem) => line.description)
+          .filter(Boolean)
+          .join(", ");
+
+        return {
+          id: invoice.id,
+          amountPaid: (invoice.amount_paid || 0) / 100,
+          date: new Date((invoice.created || 0) * 1000).toISOString(),
+          hostedInvoiceUrl: invoice.hosted_invoice_url,
+          receiptUrl,
+          description: descriptions,
+          status: invoice.status,
+        };
+      }),
+    );
 
     return res.status(200).json({ invoices: formatted });
   } catch (error) {

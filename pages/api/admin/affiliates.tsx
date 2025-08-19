@@ -1,5 +1,3 @@
-// /pages/admin/affiliates.tsx
-
 import { useEffect, useState } from "react";
 import axios from "axios";
 import { getSession, useSession } from "next-auth/react";
@@ -21,7 +19,15 @@ export default function AdminAffiliateList() {
   useEffect(() => {
     async function fetchStats() {
       const currentSession = await getSession();
-      if (!currentSession || currentSession.user.email !== "bryson.mccleary1@gmail.com") return;
+
+      // If not admin, stop loading so we can show "Access Denied"
+      if (
+        !currentSession?.user ||
+        currentSession.user.email !== "bryson.mccleary1@gmail.com"
+      ) {
+        setLoading(false);
+        return;
+      }
 
       try {
         const res = await axios.get("/api/admin/get-affiliate-codes");
@@ -57,11 +63,15 @@ export default function AdminAffiliateList() {
         <title>Affiliate Dashboard | Admin</title>
       </Head>
       <div className="max-w-5xl mx-auto p-6 bg-white dark:bg-gray-900 rounded shadow">
-        <h1 className="text-3xl font-bold mb-6">Affiliate Dashboard (Admin Only)</h1>
+        <h1 className="text-3xl font-bold mb-6">
+          Affiliate Dashboard (Admin Only)
+        </h1>
 
-        {/* Your original table */}
+        {/* Basic table */}
         <div className="mb-10">
-          <h2 className="text-xl font-semibold mb-4">Basic Signups by Referral Code</h2>
+          <h2 className="text-xl font-semibold mb-4">
+            Basic Signups by Referral Code
+          </h2>
           <table className="w-full text-sm">
             <thead>
               <tr className="text-left border-b border-gray-300 dark:border-gray-600">
@@ -72,7 +82,10 @@ export default function AdminAffiliateList() {
             </thead>
             <tbody>
               {codes.map((code) => (
-                <tr key={code._id} className="border-b border-gray-200 dark:border-gray-700">
+                <tr
+                  key={code._id}
+                  className="border-b border-gray-200 dark:border-gray-700"
+                >
                   <td className="py-2">{code.email}</td>
                   <td className="py-2">{code.referralCode}</td>
                   <td className="py-2">{code.referredCount}</td>
@@ -82,9 +95,11 @@ export default function AdminAffiliateList() {
           </table>
         </div>
 
-        {/* New full leaderboard */}
+        {/* Full leaderboard */}
         <div>
-          <h2 className="text-xl font-semibold mb-4">Full Revenue + Payout Leaderboard</h2>
+          <h2 className="text-xl font-semibold mb-4">
+            Full Revenue + Payout Leaderboard
+          </h2>
           <AffiliatesDashboard />
         </div>
       </div>

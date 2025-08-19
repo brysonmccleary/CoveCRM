@@ -22,7 +22,10 @@ import LegacyNumber from "@/models/number";
  * - Does not touch Stripe or create subscriptions.
  * - Does not attach to Messaging Service here. (We can add later once you confirm per-user service.)
  */
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   if (req.method !== "POST") {
     return res.status(405).json({ message: "Method not allowed" });
   }
@@ -49,7 +52,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (legacy && legacy.length > 0) {
         // Migrate each legacy doc into PhoneNumber (idempotent)
         for (const l of legacy) {
-          const exists = await PhoneNumber.findOne({ phoneNumber: l.phoneNumber });
+          const exists = await PhoneNumber.findOne({
+            phoneNumber: l.phoneNumber,
+          });
           if (!exists) {
             await PhoneNumber.create({
               userId: user._id,
@@ -71,7 +76,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     // 3) Fetch Twilio IncomingPhoneNumbers (your account)
-    const twilioList = await twilioClient.incomingPhoneNumbers.list({ limit: 100 });
+    const twilioList = await twilioClient.incomingPhoneNumbers.list({
+      limit: 100,
+    });
 
     // Index for quick lookup
     const byE164 = new Map<string, (typeof twilioList)[number]>();
@@ -96,14 +103,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // 4) Reconcile each owned number that still exists in Twilio
     for (const doc of owned) {
       const phone = doc.phoneNumber;
-      const t = byE164.get(phone) || (doc.twilioSid ? bySid.get(doc.twilioSid) : undefined);
+      const t =
+        byE164.get(phone) ||
+        (doc.twilioSid ? bySid.get(doc.twilioSid) : undefined);
 
       // If the number isn't in Twilio anymore, skip it (likely released)
       if (!t) continue;
 
       // Backfill PhoneNumber.twilioSid if missing or changed
       if (!doc.twilioSid || doc.twilioSid !== t.sid) {
-        await PhoneNumber.updateOne({ _id: doc._id }, { $set: { twilioSid: t.sid } });
+        await PhoneNumber.updateOne(
+          { _id: doc._id },
+          { $set: { twilioSid: t.sid } },
+        );
       }
 
       // Upsert into user.numbers[]

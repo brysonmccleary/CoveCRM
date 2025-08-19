@@ -5,7 +5,10 @@ import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import { google } from "googleapis";
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   const session = await getServerSession(req, res, authOptions);
   if (!session?.user?.email) {
     return res.status(401).json({ error: "Unauthorized" });
@@ -22,7 +25,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const oauth2Client = new google.auth.OAuth2(
       process.env.GOOGLE_CLIENT_ID!,
       process.env.GOOGLE_CLIENT_SECRET!,
-      `${process.env.NEXTAUTH_URL}/api/google/callback` // use same redirect used in auth.ts and callback.ts
+      `${process.env.NEXTAUTH_URL}/api/google/callback`, // use same redirect used in auth.ts and callback.ts
     );
 
     oauth2Client.setCredentials({
@@ -35,10 +38,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       fields: "files(id, name)",
     });
 
-    const sheets = response.data.files?.map(file => ({
-      id: file.id,
-      name: file.name,
-    })) || [];
+    const sheets =
+      response.data.files?.map((file) => ({
+        id: file.id,
+        name: file.name,
+      })) || [];
 
     return res.status(200).json({ sheets });
   } catch (error) {

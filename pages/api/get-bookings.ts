@@ -6,7 +6,10 @@ import { authOptions } from "./auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   const session = await getServerSession(req, res, authOptions);
   if (!session?.user?.email) {
     return res.status(401).json({ message: "Unauthorized" });
@@ -36,13 +39,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       orderBy: "startTime",
     });
 
-    const upcoming = events.data.items?.map(event => ({
-      id: event.id,
-      summary: event.summary,
-      start: event.start?.dateTime || event.start?.date,
-      end: event.end?.dateTime || event.end?.date,
-      attendees: event.attendees || [],
-    })) || [];
+    const upcoming =
+      events.data.items?.map((event) => ({
+        id: event.id,
+        summary: event.summary,
+        start: event.start?.dateTime || event.start?.date,
+        end: event.end?.dateTime || event.end?.date,
+        attendees: event.attendees || [],
+      })) || [];
 
     return res.status(200).json({ events: upcoming });
   } catch (error) {

@@ -7,7 +7,10 @@ import Lead from "@/models/Lead";
 
 const defaultFolders = ["Sold", "Not Interested", "Booked Appointment"];
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   try {
     const session = await getServerSession(req, res, authOptions);
     if (!session?.user?.email) {
@@ -22,14 +25,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     for (const folderName of defaultFolders) {
       const exists = await Folder.findOne({ name: folderName, userEmail });
       if (!exists) {
-        await new Folder({ name: folderName, userEmail, assignedDrips: [] }).save();
-        console.log(`✅ Created default folder '${folderName}' for ${userEmail}`);
+        await new Folder({
+          name: folderName,
+          userEmail,
+          assignedDrips: [],
+        }).save();
+        console.log(
+          `✅ Created default folder '${folderName}' for ${userEmail}`,
+        );
       }
     }
 
     // Fetch all folders that are either user-specific or global
-    const userFolders = await Folder.find({ userEmail }).sort({ createdAt: -1 });
-    const globalFolders = await Folder.find({ userEmail: { $exists: false } }).sort({ createdAt: -1 });
+    const userFolders = await Folder.find({ userEmail }).sort({
+      createdAt: -1,
+    });
+    const globalFolders = await Folder.find({
+      userEmail: { $exists: false },
+    }).sort({ createdAt: -1 });
 
     const allFolders = [...userFolders, ...globalFolders];
 
@@ -45,7 +58,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           _id: folder._id.toString(),
           leadCount,
         };
-      })
+      }),
     );
 
     return res.status(200).json({ folders: foldersWithCounts });

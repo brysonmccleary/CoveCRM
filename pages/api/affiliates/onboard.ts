@@ -1,51 +1,57 @@
-import { NextApiRequest, NextApiResponse } from "next";
-import Stripe from "stripe";
+// pages/api/affiliates/onboard.ts
+import type { NextApiRequest, NextApiResponse } from "next";
 import mongooseConnect from "@/lib/mongooseConnect";
 import Affiliate from "@/models/Affiliate";
+import { stripe } from "@/lib/stripe"; // ✅ use shared client (no apiVersion literal)
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: "2024-04-10",
-});
+const BASE_URL =
+  process.env.NEXTAUTH_URL ||
+  process.env.NEXT_PUBLIC_BASE_URL ||
+  "http://localhost:3000";
+const RETURN_PATH =
+  process.env.AFFILIATE_RETURN_PATH || "/dashboard?tab=settings";
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "POST") return res.status(405).end("Method Not Allowed");
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
+  // accept both GET ?email= and POST { email } to be backwards-friendly
+  const email =
+    (req.method === "POST"
+      ? (req.body?.email as string | undefined)
+      : undefined) ??
+    (typeof req.query.email === "string" ? req.query.email : undefined);
 
-  try {
-    const { email } = req.body;
-    if (!email) return res.status(400).json({ error: "Missing email." });
+  if (!email) return res.status(400).json({ error: "Missing email" });
 
-    await mongooseConnect();
-    const affiliate = await Affiliate.findOne({ email });
-    if (!affiliate) return res.status(404).json({ error: "Affiliate not found." });
+  await mongooseConnect();
 
-    // 1. Create Stripe Express Account
-    const account = await stripe.accounts.create({
+  const affiliate = await Affiliate.findOne({ email: email.toLowerCase() });
+  if (!affiliate) return res.status(404).json({ error: "Affiliate not found" });
+
+  // If they somehow don’t have a Connect account yet, create one now
+  if (!affiliate.stripeConnectId) {
+    const acct = await stripe.accounts.create({
       type: "express",
-      email: affiliate.email,
-      capabilities: {
-        transfers: { requested: true },
-      },
+      email: email.toLowerCase(),
+      capabilities: { transfers: { requested: true } },
+      metadata: { affiliateEmail: email.toLowerCase() },
     });
-
-    // 2. Save account ID to affiliate
-    affiliate.stripeConnectId = account.id;
-    affiliate.stripeId = account.id; // ✅ Added for schema
-    affiliate.connectedAccountStatus = "pending";
+    affiliate.stripeConnectId = acct.id;
     await affiliate.save();
+  }
 
-    const origin = req.headers.origin || process.env.NEXTAUTH_URL || "http://localhost:3000";
-
-    // 3. Create onboarding link
-    const accountLink = await stripe.accountLinks.create({
-      account: account.id,
-      refresh_url: `${origin}/settings?stripe=refresh`,
-      return_url: `${origin}/api/affiliates/confirm?email=${affiliate.email}`,
+  // Create onboarding link
+  try {
+    const link = await stripe.accountLinks.create({
+      account: String(affiliate.stripeConnectId),
+      refresh_url: `${BASE_URL}${RETURN_PATH}`,
+      return_url: `${BASE_URL}${RETURN_PATH}`,
       type: "account_onboarding",
     });
-
-    return res.status(200).json({ url: accountLink.url });
-  } catch (err) {
-    console.error("Stripe onboarding error:", err);
-    return res.status(500).json({ error: "Server error during onboarding." });
+    return res.status(200).json({ url: link.url });
+  } catch (err: any) {
+    console.error("Stripe onboarding link error:", err?.message || err);
+    return res.status(500).json({ error: "Failed to create onboarding link" });
   }
 }

@@ -37,7 +37,8 @@ export async function syncSheetRow(row: SheetRow) {
     State: (row.additionalFields?.State as string) || "",
     Age: (row.additionalFields?.Age as string) || "",
     Beneficiary: (row.additionalFields?.Beneficiary as string) || "",
-    "Coverage Amount": (row.additionalFields?.["Coverage Amount"] as string) || "",
+    "Coverage Amount":
+      (row.additionalFields?.["Coverage Amount"] as string) || "",
     userEmail: row.userEmail,
     folderId: folder._id as Types.ObjectId,
     status: "New",
@@ -46,9 +47,11 @@ export async function syncSheetRow(row: SheetRow) {
   const newLead = await Lead.create(leadData);
 
   // ✅ Use toObject() instead of private `_doc`
-  const leadObj = (typeof newLead.toObject === "function"
-    ? newLead.toObject()
-    : JSON.parse(JSON.stringify(newLead))) as ILead & { _id: Types.ObjectId };
+  const leadObj = (
+    typeof newLead.toObject === "function"
+      ? newLead.toObject()
+      : JSON.parse(JSON.stringify(newLead))
+  ) as ILead & { _id: Types.ObjectId };
 
   const dripReadyLead = {
     ...leadObj,

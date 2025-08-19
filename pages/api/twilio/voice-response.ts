@@ -3,7 +3,11 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import twilio from "twilio";
 
 const VoiceResponse = twilio.twiml.VoiceResponse;
-const BASE_URL = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "").replace(/\/$/, "");
+const BASE_URL = (
+  process.env.NEXT_PUBLIC_BASE_URL ||
+  process.env.BASE_URL ||
+  ""
+).replace(/\/$/, "");
 
 export default function handler(req: NextApiRequest, res: NextApiResponse) {
   const twiml = new VoiceResponse();

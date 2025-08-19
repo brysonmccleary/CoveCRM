@@ -1,4 +1,4 @@
-// pages/api/google/callback.ts
+// /pages/api/google/callback.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { google } from "googleapis";
 import mongooseConnect from "@/lib/mongooseConnect";
@@ -6,7 +6,8 @@ import User from "@/models/User";
 
 function getOrigin(req: NextApiRequest): string {
   const xfProto = (req.headers["x-forwarded-proto"] as string) || "https";
-  const xfHost = (req.headers["x-forwarded-host"] as string) || req.headers.host || "";
+  const xfHost =
+    (req.headers["x-forwarded-host"] as string) || req.headers.host || "";
   if (xfHost) return `${xfProto}://${xfHost}`;
   const base =
     process.env.NEXT_PUBLIC_BASE_URL ||
@@ -16,10 +17,15 @@ function getOrigin(req: NextApiRequest): string {
   return base.replace(/\/$/, "");
 }
 
-function decodeEmailFromIdToken(idToken?: string): string | null {
+// ✅ Accept null | undefined safely
+function decodeEmailFromIdToken(
+  idToken: string | null | undefined,
+): string | null {
   try {
     if (!idToken) return null;
-    const payload = JSON.parse(Buffer.from((idToken.split(".")[1] || ""), "base64").toString("utf8"));
+    const payload = JSON.parse(
+      Buffer.from(idToken.split(".")[1] || "", "base64").toString("utf8"),
+    );
     const email = String(payload?.email || "").toLowerCase();
     return email || null;
   } catch {
@@ -32,14 +38,18 @@ function decodeState(state?: string): { userEmail?: string } | null {
     if (!state) return null;
     const json = Buffer.from(state, "base64url").toString("utf8");
     const obj = JSON.parse(json);
-    if (obj && typeof obj.userEmail === "string") return { userEmail: obj.userEmail.toLowerCase() };
+    if (obj && typeof obj.userEmail === "string")
+      return { userEmail: obj.userEmail.toLowerCase() };
     return null;
   } catch {
     return null;
   }
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   if (req.method !== "GET") return res.status(405).end("Method Not Allowed");
 
   const code = String(req.query.code || "");
@@ -51,25 +61,31 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const oauth2Client = new google.auth.OAuth2(
     process.env.GOOGLE_CLIENT_ID!,
     process.env.GOOGLE_CLIENT_SECRET!,
-    redirectUri // must match the URI used to generate the auth URL
+    redirectUri, // must match the URI used to generate the auth URL
   );
 
   try {
     // 1) Exchange code -> tokens
     const { tokens } = await oauth2Client.getToken(code);
-    const { access_token, refresh_token, expiry_date, id_token, scope, token_type } = tokens;
+    const {
+      access_token,
+      refresh_token,
+      expiry_date,
+      id_token,
+      scope,
+      token_type,
+    } = tokens;
 
     if (!refresh_token) {
-      // Without a refresh_token we can’t do long-term automation.
       const base = origin;
       return res.redirect(`${base}/settings?calendar=needs_reconnect`);
     }
 
     oauth2Client.setCredentials({ access_token, refresh_token });
 
-    // 2) Determine which CRM user to attach to:
-    //    Prefer state.userEmail (from /api/google/auth), else fallback to Google account email.
-    let targetEmail = decodeState(String(req.query.state || ""))?.userEmail || "";
+    // 2) Which CRM user to attach? Prefer state.userEmail, else Google acct email.
+    let targetEmail =
+      decodeState(String(req.query.state || ""))?.userEmail || "";
 
     // Resolve Google account email (userinfo first; fallback to id_token)
     const oauth2 = google.oauth2({ version: "v2", auth: oauth2Client });
@@ -81,16 +97,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       googleEmail = decodeEmailFromIdToken(id_token) || "";
     }
 
-    // If no state, use google email as the CRM key
     if (!targetEmail) targetEmail = googleEmail;
-
-    if (!targetEmail) return res.status(400).send("Could not resolve account email");
+    if (!targetEmail)
+      return res.status(400).send("Could not resolve account email");
 
     // 3) Connect DB and find the CRM user
     await mongooseConnect();
     const user = await User.findOne({ email: targetEmail });
     if (!user) {
-      // If state email wasn't found, but googleEmail differs and exists, try fallback:
       if (googleEmail && googleEmail !== targetEmail) {
         const fallbackUser = await User.findOne({ email: googleEmail });
         if (!fallbackUser) {
@@ -98,10 +112,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           return res
             .status(404)
             .send(
-              `No CRM user found for ${targetEmail} or ${googleEmail}. Make sure your CRM email matches, or start auth from your signed-in session.`
+              `No CRM user found for ${targetEmail} or ${googleEmail}. Make sure your CRM email matches, or start auth from your signed-in session.`,
             );
         }
-        // attach to fallback user
+
         (fallbackUser as any).googleTokens = {
           ...(fallbackUser as any).googleTokens,
           accessToken: access_token || "",
@@ -117,7 +131,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         let primaryCalendarId = "primary";
         try {
           const list = await calendar.calendarList.list();
-          primaryCalendarId = list.data.items?.find((c: any) => c.primary)?.id || "primary";
+          primaryCalendarId =
+            list.data.items?.find((c: any) => c.primary)?.id || "primary";
         } catch {
           /* ignore */
         }
@@ -130,7 +145,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           googleEmail,
           calendarId: primaryCalendarId,
         };
-        // Keep backward-compat path some code reads:
         (fallbackUser as any).integrations = {
           ...(fallbackUser as any).integrations,
           googleCalendar: {
@@ -151,10 +165,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return res.redirect(`${base}/settings?calendar=connected`);
       }
 
-      // no user at all
       return res
         .status(404)
-        .send(`No CRM user found with email ${targetEmail}. Use the same email in CRM and Google.`);
+        .send(
+          `No CRM user found with email ${targetEmail}. Use the same email in CRM and Google.`,
+        );
     }
 
     // 4) Get primary calendar id (fallback to "primary")
@@ -162,12 +177,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     let primaryCalendarId = "primary";
     try {
       const list = await calendar.calendarList.list();
-      primaryCalendarId = list.data.items?.find((c: any) => c.primary)?.id || "primary";
+      primaryCalendarId =
+        list.data.items?.find((c: any) => c.primary)?.id || "primary";
     } catch {
-      /* ignore; default "primary" */
+      /* ignore */
     }
 
-    // 5) Persist tokens + calendar metadata (compat with multiple code paths)
+    // 5) Persist tokens + calendar metadata
     (user as any).googleTokens = {
       ...(user as any).googleTokens,
       accessToken: access_token || "",
@@ -192,7 +208,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       calendarId: primaryCalendarId,
     };
 
-    // Back-compat alternative path used elsewhere
     (user as any).integrations = {
       ...(user as any).integrations,
       googleCalendar: {
@@ -215,7 +230,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const base = origin;
     return res.redirect(`${base}/settings?calendar=connected`);
   } catch (err: any) {
-    console.error("❌ Google OAuth callback error:", err?.response?.data || err?.message || err);
+    console.error(
+      "❌ Google OAuth callback error:",
+      err?.response?.data || err?.message || err,
+    );
     const base = origin;
     return res.redirect(`${base}/settings?calendar=error`);
   }

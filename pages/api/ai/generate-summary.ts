@@ -11,7 +11,11 @@ import { OpenAI } from "openai";
 import { trackUsage } from "@/lib/billing/trackUsage";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-const BASE_URL = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "").replace(/\/$/, "");
+const BASE_URL = (
+  process.env.NEXT_PUBLIC_BASE_URL ||
+  process.env.BASE_URL ||
+  ""
+).replace(/\/$/, "");
 const WORKER_SECRET = process.env.AI_WORKER_SECRET || "";
 
 /**
@@ -28,7 +32,7 @@ async function generateLeadSummary(leadId: string): Promise<void> {
   const aiEntitled =
     !!user &&
     (user as any) &&
-    (((user as any).aiEnabled === true) ||
+    ((user as any).aiEnabled === true ||
       (user as any).hasAI === true ||
       (user as any)?.plan?.ai === true ||
       (user as any)?.plan === "Pro");
@@ -88,11 +92,16 @@ Use 5–8 bullets max. Be specific. Use clean, professional language like Close.
   console.log(`✅ Lead AI summary saved for lead ${lead._id}`);
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed" });
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
+  if (req.method !== "POST")
+    return res.status(405).json({ message: "Method not allowed" });
 
   const session = await getServerSession(req, res, authOptions);
-  if (!session?.user?.email) return res.status(401).json({ message: "Unauthorized" });
+  if (!session?.user?.email)
+    return res.status(401).json({ message: "Unauthorized" });
 
   const { callId, callSid, leadId } = (req.body || {}) as {
     callId?: string;
@@ -112,16 +121,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (!call) return res.status(404).json({ message: "Call not found" });
 
       // Entitlement check mirrors the worker’s gate
-      const user = await getUserByEmail(String(call.userEmail || "").toLowerCase());
+      const user = await getUserByEmail(
+        String(call.userEmail || "").toLowerCase(),
+      );
       const aiEntitled =
         !!user &&
-        (((user as any).aiEnabled === true) ||
+        ((user as any).aiEnabled === true ||
           (user as any).hasAI === true ||
           (user as any)?.plan?.ai === true ||
           (user as any)?.plan === "Pro");
 
       if (!aiEntitled) {
-        return res.status(200).json({ message: "AI not enabled for this user. Skipping." });
+        return res
+          .status(200)
+          .json({ message: "AI not enabled for this user. Skipping." });
       }
 
       // Fire-and-forget trigger to the same worker used by the recording webhook
@@ -145,7 +158,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(200).json({ message: "Lead summary generated." });
     }
 
-    return res.status(400).json({ message: "Provide callId/callSid (preferred) or leadId." });
+    return res
+      .status(400)
+      .json({ message: "Provide callId/callSid (preferred) or leadId." });
   } catch (err) {
     console.error("AI generate-summary error:", err);
     return res.status(500).json({ message: "Internal Server Error" });

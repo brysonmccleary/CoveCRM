@@ -4,7 +4,10 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
 import type { NextApiRequest, NextApiResponse } from "next";
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   const session = await getServerSession(req, res, authOptions);
   if (!session?.user?.email) {
     return res.status(401).json({ message: "Unauthorized" });
@@ -16,10 +19,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (req.method === "GET") {
     try {
       const drips = await DripCampaign.find({
-        $or: [
-          { user: userEmail },
-          { isGlobal: true }
-        ]
+        $or: [{ user: userEmail }, { isGlobal: true }],
       });
       return res.status(200).json(drips);
     } catch (error) {
@@ -31,12 +31,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (req.method === "POST") {
     try {
       const optOut = " Reply STOP to opt out.";
-      const steps = (req.body.steps || []).map((step: { text: string; day: string }) => {
-        const enforcedText = step.text.trim().endsWith(optOut)
-          ? step.text.trim()
-          : `${step.text.trim()}${optOut}`;
-        return { ...step, text: enforcedText };
-      });
+      const steps = (req.body.steps || []).map(
+        (step: { text: string; day: string }) => {
+          const enforcedText = step.text.trim().endsWith(optOut)
+            ? step.text.trim()
+            : `${step.text.trim()}${optOut}`;
+          return { ...step, text: enforcedText };
+        },
+      );
 
       const drip = new DripCampaign({
         ...req.body,

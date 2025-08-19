@@ -64,9 +64,13 @@ export default function SettingsPage() {
     const calendar = query.get("calendar"); // "connected" | "needs_reconnect"
 
     if (calendar === "connected") {
-      setMessage("✅ Google Calendar connected. Bookings will be created automatically.");
+      setMessage(
+        "✅ Google Calendar connected. Bookings will be created automatically.",
+      );
     } else if (calendar === "needs_reconnect") {
-      setMessage("⚠️ Google connected without a refresh token. Please reconnect to enable automation.");
+      setMessage(
+        "⚠️ Google connected without a refresh token. Please reconnect to enable automation.",
+      );
     } else if (connected === "google") {
       setMessage("✅ Google Account connected successfully!");
     } else if (error === "google") {
@@ -128,8 +132,9 @@ export default function SettingsPage() {
     <div className="max-w-xl space-y-4">
       <h2 className="text-2xl font-bold">AI Assistant</h2>
       <p className="text-sm text-gray-300">
-        Choose how your texting assistant introduces themself. This name is used in lead
-        conversations (e.g., “You’re chatting with <b>{aiName}</b> from our team.”)
+        Choose how your texting assistant introduces themself. This name is used
+        in lead conversations (e.g., “You’re chatting with <b>{aiName}</b> from
+        our team.”)
       </p>
 
       <label className="block text-sm mb-2">Assistant Name</label>
@@ -174,7 +179,9 @@ export default function SettingsPage() {
       case "referral":
         return <ReferralPanel />;
       case "settings":
-        return session?.user?.email ? <AffiliatePanel userEmail={session.user.email} /> : null;
+        return session?.user?.email ? (
+          <AffiliatePanel userEmail={session.user.email} />
+        ) : null;
       case "dashboard":
         return isAdmin ? <AffiliatesDashboard /> : <p>Not authorized.</p>;
       case "codes":

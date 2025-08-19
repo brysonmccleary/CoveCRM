@@ -95,7 +95,9 @@ export default function AffiliateDashboard() {
 
         <div>
           <p className="font-semibold">Status:</p>
-          <p>{data.affiliateApproved ? "✅ Approved" : "⏳ Pending Approval"}</p>
+          <p>
+            {data.affiliateApproved ? "✅ Approved" : "⏳ Pending Approval"}
+          </p>
         </div>
       </div>
     </div>

@@ -13,7 +13,12 @@ interface BookingPageProps {
   bookingSettings: any;
 }
 
-export default function BookingPage({ email, googleEmail, calendarId, bookingSettings }: BookingPageProps) {
+export default function BookingPage({
+  email,
+  googleEmail,
+  calendarId,
+  bookingSettings,
+}: BookingPageProps) {
   const [loading, setLoading] = useState(true);
   const [availableSlots, setAvailableSlots] = useState<string[]>([]);
   const [selectedSlot, setSelectedSlot] = useState<string | null>(null);
@@ -78,7 +83,11 @@ export default function BookingPage({ email, googleEmail, calendarId, bookingSet
   };
 
   if (!googleEmail || !calendarId) {
-    return <div className="p-8 text-center">This user has not connected their calendar yet.</div>;
+    return (
+      <div className="p-8 text-center">
+        This user has not connected their calendar yet.
+      </div>
+    );
   }
 
   return (
@@ -87,7 +96,9 @@ export default function BookingPage({ email, googleEmail, calendarId, bookingSet
       <p className="mb-4 text-sm text-gray-500">Connected via {googleEmail}</p>
 
       {successMessage && (
-        <div className="mb-6 text-green-600 font-semibold text-center">{successMessage}</div>
+        <div className="mb-6 text-green-600 font-semibold text-center">
+          {successMessage}
+        </div>
       )}
 
       {loading ? (
@@ -96,7 +107,9 @@ export default function BookingPage({ email, googleEmail, calendarId, bookingSet
         <>
           <div className="grid grid-cols-2 gap-3 mb-6">
             {availableSlots.length === 0 ? (
-              <div className="col-span-2 text-center text-gray-400">No available slots</div>
+              <div className="col-span-2 text-center text-gray-400">
+                No available slots
+              </div>
             ) : (
               availableSlots.map((slot, index) => {
                 const time = format(parseISO(slot), "h:mm a");
@@ -152,7 +165,9 @@ export default function BookingPage({ email, googleEmail, calendarId, bookingSet
                   submitting ? "bg-gray-400" : "bg-green-600 hover:bg-green-700"
                 } text-white`}
               >
-                {submitting ? "Booking..." : `Confirm Booking at ${format(parseISO(selectedSlot), "h:mm a")}`}
+                {submitting
+                  ? "Booking..."
+                  : `Confirm Booking at ${format(parseISO(selectedSlot), "h:mm a")}`}
               </button>
             </div>
           )}

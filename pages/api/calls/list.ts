@@ -15,8 +15,12 @@ function toDateOrUndefined(v?: string) {
   return d && !isNaN(d.getTime()) ? d : undefined;
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "GET") return res.status(405).json({ message: "Method not allowed" });
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
+  if (req.method !== "GET")
+    return res.status(405).json({ message: "Method not allowed" });
 
   const session = await getServerSession(req, res, authOptions);
   const requesterEmail = session?.user?.email?.toLowerCase();
@@ -25,12 +29,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const {
     page = "1",
     pageSize = "25",
-    from,           // ISO date (start)
-    to,             // ISO date (end)
-    hasRecording,   // "1" | "0"
-    hasAI,          // "1" | "0"
-    includeLead,    // "1" to join lead name/phone
-    direction,      // "inbound" | "outbound"
+    from, // ISO date (start)
+    to, // ISO date (end)
+    hasRecording, // "1" | "0"
+    hasAI, // "1" | "0"
+    includeLead, // "1" to join lead name/phone
+    direction, // "inbound" | "outbound"
   } = req.query as Record<string, string>;
 
   const pageNum = Math.max(1, parseInt(page, 10) || 1);
@@ -41,7 +45,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     await dbConnect();
 
     const requester = await getUserByEmail(requesterEmail);
-    const isAdmin = !!requester && ((requester as any).role === "admin");
+    const isAdmin = !!requester && (requester as any).role === "admin";
 
     const q: any = {};
     if (!isAdmin) q.userEmail = requesterEmail;
@@ -71,34 +75,49 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     if (hasRecording !== undefined) {
-      q.recordingUrl = parseBool(hasRecording) ? { $exists: true, $ne: "" } : { $in: [null, ""] };
+      q.recordingUrl = parseBool(hasRecording)
+        ? { $exists: true, $ne: "" }
+        : { $in: [null, ""] };
     }
 
     if (hasAI !== undefined) {
-      q.aiSummary = parseBool(hasAI) ? { $exists: true, $ne: "" } : { $in: [null, ""] };
+      q.aiSummary = parseBool(hasAI)
+        ? { $exists: true, $ne: "" }
+        : { $in: [null, ""] };
     }
 
     const [items, total] = await Promise.all([
-      Call.find(q).sort({ startedAt: -1, createdAt: -1 }).skip(skip).limit(sizeNum).lean(),
+      Call.find(q)
+        .sort({ startedAt: -1, createdAt: -1 })
+        .skip(skip)
+        .limit(sizeNum)
+        .lean(),
       Call.countDocuments(q),
     ]);
 
     // Optionally attach light lead info for each
     let leadMap: Record<string, any> = {};
     if (includeLead === "1") {
-      const leadIds = Array.from(new Set(items.map(i => String(i.leadId || "")).filter(Boolean)));
+      const leadIds = Array.from(
+        new Set(items.map((i) => String(i.leadId || "")).filter(Boolean)),
+      );
       if (leadIds.length) {
-        const leads = await Lead.find({ _id: { $in: leadIds } }).select("_id name firstName lastName Phone phone Email email").lean();
+        const leads = await Lead.find({ _id: { $in: leadIds } })
+          .select("_id name firstName lastName Phone phone Email email")
+          .lean();
         leadMap = Object.fromEntries(
           leads.map((l: any) => [
             String(l._id),
             {
               id: String(l._id),
-              name: l.name || [l.firstName, l.lastName].filter(Boolean).join(" ") || "",
+              name:
+                l.name ||
+                [l.firstName, l.lastName].filter(Boolean).join(" ") ||
+                "",
               phone: l.Phone || l.phone || "",
               email: l.Email || l.email || "",
             },
-          ])
+          ]),
         );
       }
     }

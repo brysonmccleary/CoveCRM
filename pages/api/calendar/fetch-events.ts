@@ -5,7 +5,10 @@ import { authOptions } from "../auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   if (req.method !== "GET") {
     return res.status(405).json({ message: "Method not allowed" });
   }
@@ -19,13 +22,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const user = await User.findOne({ email: session.user.email });
   if (!user || !user.googleTokens?.accessToken || !user.calendarId) {
-    return res.status(400).json({ message: "Missing Google calendar credentials" });
+    return res
+      .status(400)
+      .json({ message: "Missing Google calendar credentials" });
   }
 
   const oauth2Client = new google.auth.OAuth2(
     process.env.GOOGLE_CLIENT_ID!,
     process.env.GOOGLE_CLIENT_SECRET!,
-    `${process.env.NEXTAUTH_URL}/api/google/callback`
+    `${process.env.NEXTAUTH_URL}/api/google/callback`,
   );
 
   oauth2Client.setCredentials({

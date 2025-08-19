@@ -1,7 +1,7 @@
 // /models/User.ts
-import mongoose, { Schema, Document } from "mongoose";
+import mongoose, { Schema } from "mongoose";
 
-export interface IUser extends Document {
+export interface IUser {
   email: string;
   password?: string;
   name?: string;
@@ -197,11 +197,11 @@ const UserSchema = new Schema<IUser>({
 
   // ✅ Defaults added here so every user has a usable setup out of the box
   bookingSettings: {
-    timezone: { type: String, default: "America/Los_Angeles" }, // agent/local tz (AZ handled in util as America/Phoenix)
-    slotLength: { type: Number, default: 30 },                  // minutes
-    bufferTime: { type: Number, default: 0 },                   // minutes between slots
-    workingHours: { type: Schema.Types.Mixed, default: {} },    // you can seed per-day hours later
-    maxPerDay: { type: Number, default: 0 },                    // 0 = unlimited
+    timezone: { type: String, default: "America/Los_Angeles" },
+    slotLength: { type: Number, default: 30 },
+    bufferTime: { type: Number, default: 0 },
+    workingHours: { type: Schema.Types.Mixed, default: {} },
+    maxPerDay: { type: Number, default: 0 },
     autoConfirm: { type: Boolean, default: true },
   },
 
@@ -228,7 +228,11 @@ const UserSchema = new Schema<IUser>({
   plan: { type: String, enum: ["Free", "Pro"], default: "Free" },
 
   // ✅ Billing status
-  subscriptionStatus: { type: String, enum: ["active", "canceled"], default: "active" },
+  subscriptionStatus: {
+    type: String,
+    enum: ["active", "canceled"],
+    default: "active",
+  },
 
   // ✅ AI usage tracking
   aiUsage: {
@@ -267,7 +271,10 @@ const UserSchema = new Schema<IUser>({
 
 /* 🔹 Indexes for speed + compliance checks */
 UserSchema.index({ email: 1 }, { name: "user_email_idx" });
-UserSchema.index({ "numbers.phoneNumber": 1 }, { name: "user_numbers_phone_idx" });
+UserSchema.index(
+  { "numbers.phoneNumber": 1 },
+  { name: "user_numbers_phone_idx" },
+);
 
 const User =
   (mongoose.models.User as mongoose.Model<IUser>) ||

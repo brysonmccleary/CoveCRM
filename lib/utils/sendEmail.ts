@@ -1,4 +1,4 @@
-import { Resend } from 'resend';
+import { Resend } from "resend";
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 
@@ -9,10 +9,15 @@ interface SendEmailOptions {
   from?: string;
 }
 
-export const sendEmail = async ({ to, subject, html, from }: SendEmailOptions) => {
+export const sendEmail = async ({
+  to,
+  subject,
+  html,
+  from,
+}: SendEmailOptions) => {
   try {
     const response = await resend.emails.send({
-      from: from || process.env.EMAIL_FROM || 'noreply@covecrm.com',
+      from: from || process.env.EMAIL_FROM || "noreply@covecrm.com",
       to,
       subject,
       html,

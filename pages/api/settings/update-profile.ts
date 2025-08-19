@@ -1,7 +1,8 @@
 // /pages/api/settings/update-profile.ts
-import { getServerSession } from "next-auth";
-import { authOptions } from "../auth/[...nextauth]";
-import { NextApiRequest, NextApiResponse } from "next";
+import type { NextApiRequest, NextApiResponse } from "next";
+import { getServerSession } from "next-auth/next";
+import type { Session } from "next-auth";
+import { authOptions } from "@/pages/api/auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 
@@ -15,11 +16,27 @@ function normalizeUSPhone(raw?: string) {
   return raw.trim();
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed" });
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
+  if (req.method !== "POST") {
+    return res.status(405).json({ message: "Method not allowed" });
+  }
 
-  const session = await getServerSession(req, res, authOptions);
-  if (!session?.user?.email) return res.status(401).json({ message: "Unauthorized" });
+  const session = (await getServerSession(
+    req,
+    res,
+    authOptions as any,
+  )) as Session | null;
+
+  const authedEmail =
+    typeof session?.user?.email === "string"
+      ? session.user.email.toLowerCase()
+      : "";
+  if (!authedEmail) {
+    return res.status(401).json({ message: "Unauthorized" });
+  }
 
   await dbConnect();
 
@@ -30,48 +47,60 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       email,
       country,
       workingHours,
-      agentPhone, // NEW
-    } = req.body || {};
+      agentPhone,
+    } = (req.body || {}) as {
+      firstName?: string;
+      lastName?: string;
+      email?: string;
+      country?: string;
+      workingHours?: any;
+      agentPhone?: string;
+    };
 
     // Basic type validation
     if (
-      !firstName || typeof firstName !== "string" ||
-      !lastName || typeof lastName !== "string" ||
-      !email || typeof email !== "string" ||
-      !country || typeof country !== "string"
+      !firstName ||
+      typeof firstName !== "string" ||
+      !lastName ||
+      typeof lastName !== "string" ||
+      !email ||
+      typeof email !== "string" ||
+      !country ||
+      typeof country !== "string"
     ) {
       return res.status(400).json({ message: "Invalid input data" });
     }
 
-    const user = await User.findOne({ email: session.user.email });
+    const user = await User.findOne({ email: authedEmail });
     if (!user) return res.status(404).json({ message: "User not found" });
 
     // Update core profile fields
     const fullName = `${firstName.trim()} ${lastName.trim()}`.trim();
     user.name = fullName;
-    user.email = email;
-    user.country = country;
+    user.email = email.trim();
+    user.country = country.trim();
 
-    // NEW: persist agentPhone (normalized)
+    // Persist agentPhone (normalized)
     if (typeof agentPhone === "string") {
       user.agentPhone = normalizeUSPhone(agentPhone);
     }
 
-    // Optional: update working hours
+    // Optional: update working hours (ensure bookingSettings exists)
     if (workingHours && typeof workingHours === "object") {
-      if (!user.bookingSettings) user.bookingSettings = {} as any;
-      user.bookingSettings.workingHours = workingHours;
+      (user as any).bookingSettings = (user as any).bookingSettings || {};
+      (user as any).bookingSettings.workingHours = workingHours;
     }
 
     await user.save();
 
-    // Respond with a minimal payload; client can refetch session/profile as needed
     return res.status(200).json({
       message: "Profile updated",
       agentPhone: user.agentPhone || "",
     });
   } catch (error) {
     console.error("Update profile error:", error);
-    return res.status(500).json({ message: "Something went wrong while updating profile" });
+    return res
+      .status(500)
+      .json({ message: "Something went wrong while updating profile" });
   }
 }

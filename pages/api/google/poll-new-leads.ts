@@ -1,4 +1,4 @@
-// pages/api/poll-new-lead.ts
+// /pages/api/google/poll-new-leads.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import dbConnect from "@/lib/dbConnect";
 import User from "@/models/User";
@@ -7,39 +7,62 @@ import Lead from "@/models/Lead";
 import { google } from "googleapis";
 import { sendInitialDrip } from "@/utils/sendInitialDrip";
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   if (req.method !== "POST") {
     return res.status(405).json({ message: "Method not allowed" });
   }
 
   await dbConnect();
 
-  const users = await User.find({ "googleSheets.syncedSheets": { $exists: true, $ne: [] } });
+  const users = await User.find({
+    $or: [
+      { "googleSheets.syncedSheets": { $exists: true, $ne: [] } },
+      { "googleSheets.sheets": { $exists: true, $ne: [] } },
+    ],
+  });
 
   for (const user of users) {
-    if (!user.googleSheets?.refreshToken) continue;
+    const refreshToken =
+      (user as any).googleSheets?.refreshToken ||
+      (user as any).googleTokens?.refreshToken;
+    if (!refreshToken) continue;
 
     const oauth2Client = new google.auth.OAuth2(
       process.env.GOOGLE_CLIENT_ID!,
       process.env.GOOGLE_CLIENT_SECRET!,
-      process.env.GOOGLE_REDIRECT_URI!
+      process.env.GOOGLE_REDIRECT_URI!,
     );
-    oauth2Client.setCredentials({ refresh_token: user.googleSheets.refreshToken });
+    oauth2Client.setCredentials({ refresh_token: refreshToken });
 
     const sheetsAPI = google.sheets({ version: "v4", auth: oauth2Client });
 
-    for (const sync of user.googleSheets.syncedSheets) {
-      const { sheetId, folderId } = sync;
+    // ✅ Support both shapes
+    const configs =
+      (user as any).googleSheets?.syncedSheets ||
+      (user as any).googleSheets?.sheets ||
+      [];
+    if (!Array.isArray(configs)) continue;
+
+    for (const sync of configs) {
+      const { sheetId, folderId } = sync || {};
+      if (!sheetId || !folderId) continue;
 
       try {
         const response = await sheetsAPI.spreadsheets.values.get({
           spreadsheetId: sheetId,
-          range: "A2:Z1000", // adjust if needed
+          range: "A2:Z1000",
         });
 
         const rows = response.data.values || [];
-        const existingLeads = await Lead.find({ folderId }).select("externalId");
-        const existingIds = new Set(existingLeads.map((l: any) => l.externalId));
+        const existingLeads = await Lead.find({ folderId }).select(
+          "externalId",
+        );
+        const existingIds = new Set(
+          existingLeads.map((l: any) => l.externalId),
+        );
 
         const folder = await Folder.findById(folderId);
         if (!folder) continue;
@@ -84,11 +107,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             name: fullName,
             phone,
             folderName: folder.name,
-            agentName: folder.agentName || user.name || "your licensed agent",
-            agentPhone: folder.agentPhone || "N/A",
+            agentName: (folder as any).agentName || user.name || "your agent",
+            agentPhone: (folder as any).agentPhone || "N/A",
           };
 
-          if (folder.assignedDrip) {
+          if ((folder as any).assignedDrip) {
             await sendInitialDrip(dripReadyLead);
           }
         }

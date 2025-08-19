@@ -6,7 +6,10 @@ import { authOptions } from "../auth/[...nextauth]"; // ← correct relative pat
 import dbConnect from "@/lib/mongooseConnect";
 import Lead from "@/models/Lead";
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   if (req.method !== "POST") {
     return res.status(405).json({ message: "Method not allowed" });
   }
@@ -30,7 +33,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const rows = await Lead.find(
       { userEmail, calendarEventId: { $in: eventIds } },
-      { _id: 1, calendarEventId: 1 }
+      { _id: 1, calendarEventId: 1 },
     ).lean();
 
     const map: Record<string, string> = {};

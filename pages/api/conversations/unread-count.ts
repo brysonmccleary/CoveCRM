@@ -4,10 +4,14 @@ import { authOptions } from "../auth/[...nextauth]";
 import dbConnect from "@/lib/dbConnect";
 import Lead from "@/models/Lead";
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   try {
     const session = await getServerSession(req, res, authOptions);
-    if (!session?.user?.email) return res.status(401).json({ error: "Unauthorized" });
+    if (!session?.user?.email)
+      return res.status(401).json({ error: "Unauthorized" });
 
     await dbConnect();
 

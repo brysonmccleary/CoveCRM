@@ -5,11 +5,16 @@ import mongooseConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import { syncA2PForUser } from "@/lib/twilio/syncA2P";
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
+  if (req.method !== "POST")
+    return res.status(405).json({ error: "Method not allowed" });
 
   const session = await getServerSession(req, res, authOptions);
-  if (!session?.user?.email) return res.status(401).json({ error: "Unauthorized" });
+  if (!session?.user?.email)
+    return res.status(401).json({ error: "Unauthorized" });
 
   try {
     await mongooseConnect();
@@ -24,7 +29,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       success: true,
       messagingReady: Boolean(updated.a2p?.messagingReady),
       a2p: updated.a2p,
-      numbers: updated.numbers?.map(n => ({
+      numbers: updated.numbers?.map((n) => ({
         sid: n.sid,
         phoneNumber: n.phoneNumber,
         messagingServiceSid: n.messagingServiceSid,
@@ -35,6 +40,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   } catch (e: any) {
     console.error("sync-a2p failed:", e);
-    return res.status(500).json({ error: e?.message || "Failed to sync A2P status" });
+    return res
+      .status(500)
+      .json({ error: e?.message || "Failed to sync A2P status" });
   }
 }

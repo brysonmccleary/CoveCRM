@@ -12,7 +12,8 @@ const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN || "";
 const WORKER_SECRET = process.env.AI_WORKER_SECRET || "";
 
 // Optional env to override default models without code change
-const OPENAI_TRANSCRIBE_MODEL = process.env.OPENAI_TRANSCRIBE_MODEL || "whisper-1";
+const OPENAI_TRANSCRIBE_MODEL =
+  process.env.OPENAI_TRANSCRIBE_MODEL || "whisper-1";
 const OPENAI_SUMMARY_MODEL = process.env.OPENAI_SUMMARY_MODEL || "gpt-4o-mini";
 
 type Sentiment = "positive" | "neutral" | "negative";
@@ -45,13 +46,17 @@ async function transcribeMp3Buffer(buf: Buffer): Promise<string> {
   fd.append("file", buf, { filename: "audio.mp3", contentType: "audio/mpeg" });
   fd.append("model", OPENAI_TRANSCRIBE_MODEL);
 
-  const resp = await axios.post("https://api.openai.com/v1/audio/transcriptions", fd, {
-    headers: {
-      Authorization: `Bearer ${OPENAI_API_KEY}`,
-      ...fd.getHeaders(),
+  const resp = await axios.post(
+    "https://api.openai.com/v1/audio/transcriptions",
+    fd,
+    {
+      headers: {
+        Authorization: `Bearer ${OPENAI_API_KEY}`,
+        ...fd.getHeaders(),
+      },
+      maxBodyLength: Infinity,
     },
-    maxBodyLength: Infinity,
-  });
+  );
   return String(resp.data?.text ?? "").trim();
 }
 
@@ -75,7 +80,7 @@ async function summarizeTranscript(transcript: string): Promise<{
       ],
       response_format: { type: "json_object" },
     },
-    { headers: { Authorization: `Bearer ${OPENAI_API_KEY}` }, timeout: 120000 }
+    { headers: { Authorization: `Bearer ${OPENAI_API_KEY}` }, timeout: 120000 },
   );
 
   const raw = String(resp.data?.choices?.[0]?.message?.content || "{}");
@@ -85,7 +90,9 @@ async function summarizeTranscript(transcript: string): Promise<{
   let actionItems: string[] = [];
 
   if (Array.isArray(parsed.actionItems)) {
-    actionItems = parsed.actionItems.map((s: any) => String(s).trim()).filter(Boolean);
+    actionItems = parsed.actionItems
+      .map((s: any) => String(s).trim())
+      .filter(Boolean);
   } else if (typeof parsed.actionItems === "string") {
     // tolerate newline/bullet-delimited strings
     actionItems = parsed.actionItems
@@ -94,14 +101,19 @@ async function summarizeTranscript(transcript: string): Promise<{
       .filter(Boolean);
   }
 
-  const sentiment: Sentiment = (["positive", "neutral", "negative"].includes(parsed.sentiment)
-    ? parsed.sentiment
-    : "neutral") as Sentiment;
+  const sentiment: Sentiment = (
+    ["positive", "neutral", "negative"].includes(parsed.sentiment)
+      ? parsed.sentiment
+      : "neutral"
+  ) as Sentiment;
 
   return { summary, actionItems, sentiment };
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   if (req.method !== "POST") return errJson(res, "Method not allowed", 405);
 
   // Worker auth
@@ -109,7 +121,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return errJson(res, "Unauthorized", 401);
   }
 
-  const { callSid, force } = (req.body || {}) as { callSid?: string; force?: boolean };
+  const { callSid, force } = (req.body || {}) as {
+    callSid?: string;
+    force?: boolean;
+  };
   if (!callSid) return errJson(res, "Missing callSid", 400);
 
   try {
@@ -120,8 +135,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // Entitlement check (align with your earlier gates: aiEnabled or plan.ai === true)
     const user = await getUserByEmail(call.userEmail);
-    const aiEnabled =
-      !!(user && ((user as any).aiEnabled === true || (user as any)?.plan?.ai === true));
+    const aiEnabled = !!(
+      user &&
+      ((user as any).aiEnabled === true || (user as any)?.plan?.ai === true)
+    );
     call.aiEnabledAtCallTime = aiEnabled;
 
     if (!aiEnabled) {
@@ -131,13 +148,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // Idempotency:
     // - If already processed and not forcing, skip.
-    if (!force && call.aiProcessing === "done" && call.aiSummary && call.transcript) {
+    if (
+      !force &&
+      call.aiProcessing === "done" &&
+      call.aiSummary &&
+      call.transcript
+    ) {
       return okJson(res, { skipped: "already-processed" });
     }
 
     // If another worker set pending within last few minutes, skip to avoid double work
     if (!force && call.aiProcessing === "pending") {
-      const pendingAgeMs = Date.now() - new Date(call.updatedAt as any).getTime();
+      const pendingAgeMs =
+        Date.now() - new Date(call.updatedAt as any).getTime();
       if (pendingAgeMs < 5 * 60 * 1000) {
         return okJson(res, { skipped: "already-pending" });
       }
@@ -174,14 +197,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     // Summarize
-    const { summary, actionItems, sentiment } = await summarizeTranscript(transcript);
+    const { summary, actionItems, sentiment } =
+      await summarizeTranscript(transcript);
 
     // Save (don’t clobber if something already present and not forcing)
     call.transcript = force || !call.transcript ? transcript : call.transcript;
     call.aiSummary = force || !call.aiSummary ? summary : call.aiSummary;
-    call.aiActionItems = force || !(call.aiActionItems && call.aiActionItems.length)
-      ? actionItems
-      : call.aiActionItems;
+    call.aiActionItems =
+      force || !(call.aiActionItems && call.aiActionItems.length)
+        ? actionItems
+        : call.aiActionItems;
     call.aiSentiment = (sentiment as any) || call.aiSentiment;
     call.aiProcessing = "done";
     await call.save();

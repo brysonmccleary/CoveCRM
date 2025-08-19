@@ -44,7 +44,9 @@ export default function DripCampaignDetail() {
       </div>
 
       <button
-        onClick={() => alert("Changes saved locally (implement DB save if needed)")}
+        onClick={() =>
+          alert("Changes saved locally (implement DB save if needed)")
+        }
         className="mt-4 bg-blue-600 text-white px-6 py-2 rounded"
       >
         Save Changes

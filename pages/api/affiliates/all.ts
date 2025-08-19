@@ -7,11 +7,16 @@ import User from "@/models/User";
 const PLAN_PRICE = 199.99;
 const COMMISSION_PER_USER = 25;
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   try {
     await mongooseConnect();
 
-    const allUsers = await User.find({ referredBy: { $exists: true, $ne: null } });
+    const allUsers = await User.find({
+      referredBy: { $exists: true, $ne: null },
+    });
 
     const grouped: {
       [code: string]: {
@@ -41,7 +46,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           totalRevenueGenerated: data.activeCount * PLAN_PRICE,
           payoutDue: data.activeCount * COMMISSION_PER_USER,
         };
-      })
+      }),
     );
 
     // ✅ Sort by total redemptions, descending

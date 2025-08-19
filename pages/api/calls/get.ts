@@ -15,8 +15,12 @@ function serialize<T extends Record<string, any>>(doc: T | null) {
   return x;
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "GET") return res.status(405).json({ message: "Method not allowed" });
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
+  if (req.method !== "GET")
+    return res.status(405).json({ message: "Method not allowed" });
 
   const session = await getServerSession(req, res, authOptions);
   const requesterEmail = session?.user?.email?.toLowerCase();
@@ -27,21 +31,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     callSid?: string;
     includeLead?: string;
   };
-  if (!id && !callSid) return res.status(400).json({ message: "Provide id or callSid" });
+  if (!id && !callSid)
+    return res.status(400).json({ message: "Provide id or callSid" });
 
   try {
     await dbConnect();
 
     const requester = await getUserByEmail(requesterEmail);
-    const isAdmin = !!requester && ((requester as any).role === "admin");
+    const isAdmin = !!requester && (requester as any).role === "admin";
 
-    const call =
-      (id && (await Call.findById(id).lean())) ||
-      (callSid && (await Call.findOne({ callSid }).lean())) ||
+    const callRaw =
+      (id && ((await (Call as any).findById(id).lean()) as any)) ||
+      (callSid &&
+        ((await (Call as any).findOne({ callSid }).lean()) as any)) ||
       null;
 
-    if (!call) return res.status(404).json({ message: "Call not found" });
-    if (!isAdmin && call.userEmail?.toLowerCase() !== requesterEmail) {
+    if (!callRaw) return res.status(404).json({ message: "Call not found" });
+
+    const call: any = callRaw; // 👈 relax types to avoid mongoose union issues
+
+    if (!isAdmin && (call.userEmail as string | undefined)?.toLowerCase() !== requesterEmail) {
       return res.status(403).json({ message: "Forbidden" });
     }
 
@@ -50,15 +59,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // Light denormalization for Close-like detail UI
     payload.hasRecording = !!payload.recordingUrl;
     payload.hasAI = !!payload.aiSummary;
-    payload.durationSeconds = payload.duration ?? payload.recordingDuration ?? undefined;
+    payload.durationSeconds =
+      payload.duration ?? payload.recordingDuration ?? undefined;
 
     // Optional lead join
     if (includeLead === "1" && call.leadId) {
-      const lead = await Lead.findOne({ _id: call.leadId }).lean();
+      const lead: any = await (Lead as any).findOne({ _id: call.leadId }).lean();
       if (lead) {
         payload.lead = {
           id: String(lead._id),
-          name: lead.name || lead.fullName || [lead.firstName, lead.lastName].filter(Boolean).join(" ") || "",
+          name:
+            lead.name ||
+            lead.fullName ||
+            [lead.firstName, lead.lastName].filter(Boolean).join(" ") ||
+            "",
           phone: lead.Phone || lead.phone || "",
           email: lead.Email || lead.email || "",
           status: lead.status || "",

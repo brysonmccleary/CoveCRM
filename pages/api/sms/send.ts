@@ -14,11 +14,16 @@ import { sendSMS } from "@/lib/twilio/sendSMS";
  * - Sends via the user's Messaging Service SID if available (A2P path),
  *   otherwise falls back to TWILIO_PHONE_NUMBER (as implemented in sendSMS()).
  */
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed" });
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
+  if (req.method !== "POST")
+    return res.status(405).json({ message: "Method not allowed" });
 
   const session = await getServerSession(req, res, authOptions);
-  if (!session?.user?.email) return res.status(401).json({ message: "Unauthorized" });
+  if (!session?.user?.email)
+    return res.status(401).json({ message: "Unauthorized" });
 
   const { to, body } = (req.body || {}) as { to?: string; body?: string };
 
@@ -28,7 +33,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!to.startsWith("+")) {
     return res
       .status(400)
-      .json({ message: "Recipient phone must be in E.164 format, e.g. +15551234567." });
+      .json({
+        message: "Recipient phone must be in E.164 format, e.g. +15551234567.",
+      });
   }
 
   try {

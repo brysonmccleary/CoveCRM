@@ -19,7 +19,10 @@ interface LeadType {
   [key: string]: any;
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   if (req.method !== "GET") {
     return res.status(405).json({ message: "Method not allowed" });
   }
@@ -27,7 +30,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const { folderId } = req.query;
 
   if (!folderId || typeof folderId !== "string") {
-    return res.status(400).json({ message: "folderId is required and must be a string" });
+    return res
+      .status(400)
+      .json({ message: "folderId is required and must be a string" });
   }
 
   try {
@@ -47,10 +52,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     } else {
       const folderDoc = await Folder.findOne({ name: folderId, userEmail });
       if (!folderDoc) {
-        return res.status(404).json({ message: `Folder '${folderId}' not found` });
+        return res
+          .status(404)
+          .json({ message: `Folder '${folderId}' not found` });
       }
       folderObjectId = folderDoc._id;
-      console.log(`✅ Resolved folder '${folderId}' to ObjectId: ${folderObjectId}`);
+      console.log(
+        `✅ Resolved folder '${folderId}' to ObjectId: ${folderObjectId}`,
+      );
     }
 
     const leads = await Lead.find({
@@ -66,7 +75,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       folderId: lead.folderId.toString(),
     }));
 
-    console.log(`📦 Returning ${cleanedLeads.length} leads from folder ${folderObjectId}`);
+    console.log(
+      `📦 Returning ${cleanedLeads.length} leads from folder ${folderObjectId}`,
+    );
 
     return res.status(200).json({
       leads: cleanedLeads as LeadType[],

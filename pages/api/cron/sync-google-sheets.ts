@@ -8,14 +8,18 @@ import DripCampaign from "@/models/DripCampaign";
 import { sendSMS } from "@/lib/twilio/sendSMS";
 import { google } from "googleapis";
 import { ObjectId } from "mongodb";
-import { renderTemplate, ensureOptOut, splitName } from "@/utils/renderTemplate";
+import {
+  renderTemplate,
+  ensureOptOut,
+  splitName,
+} from "@/utils/renderTemplate";
 
 function getFirstStepText(drip: any): string | null {
   const steps = Array.isArray(drip?.steps) ? [...drip.steps] : [];
   if (!steps.length) return null;
   steps.sort(
     (a: any, b: any) =>
-      (parseInt(a?.day ?? "0", 10) || 0) - (parseInt(b?.day ?? "0", 10) || 0)
+      (parseInt(a?.day ?? "0", 10) || 0) - (parseInt(b?.day ?? "0", 10) || 0),
   );
   const text = steps[0]?.text?.trim?.();
   return text || null;
@@ -34,7 +38,7 @@ function normalizeToE164Maybe(phone?: string): string | null {
 async function runBatched<T>(
   items: T[],
   batchSize: number,
-  worker: (item: T, index: number) => Promise<void>
+  worker: (item: T, index: number) => Promise<void>,
 ) {
   let i = 0;
   while (i < items.length) {
@@ -44,7 +48,10 @@ async function runBatched<T>(
   }
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   if (req.method !== "GET") {
     return res.status(405).json({ message: "Method not allowed" });
   }
@@ -53,13 +60,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     await dbConnect();
 
     // Pull users who have Google Sheets refresh tokens configured
-    const users = await User.find({ "googleSheets.refreshToken": { $exists: true } })
-      .select({ email: 1, name: 1, googleSheets: 1 });
+    const users = await User.find({
+      "googleSheets.refreshToken": { $exists: true },
+    }).select({ email: 1, name: 1, googleSheets: 1 });
 
     const oauth2Client = new google.auth.OAuth2(
       process.env.GOOGLE_CLIENT_ID!,
       process.env.GOOGLE_CLIENT_SECRET!,
-      process.env.GOOGLE_REDIRECT_URI!
+      process.env.GOOGLE_REDIRECT_URI!,
     );
 
     let imported = 0;
@@ -98,7 +106,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             });
           }
           if (!folder && cfg.sheetName) {
-            folder = await Folder.findOne({ name: cfg.sheetName, userEmail: user.email });
+            folder = await Folder.findOne({
+              name: cfg.sheetName,
+              userEmail: user.email,
+            });
           }
           if (!folder) continue;
 
@@ -144,13 +155,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               phone
                 ? { userEmail: user.email, Phone: phone }
                 : emailLower
-                ? { userEmail: user.email, Email: emailLower }
-                : { _id: null }
+                  ? { userEmail: user.email, Email: emailLower }
+                  : { _id: null },
             ).lean();
             if (exists) continue;
 
             // Pull folder's assigned drips NOW so we persist on the new lead
-            const folderAssignedDrips: string[] = Array.isArray(folder.assignedDrips)
+            const folderAssignedDrips: string[] = Array.isArray(
+              folder.assignedDrips,
+            )
               ? folder.assignedDrips
               : [];
 
@@ -173,28 +186,41 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             imported++;
 
             // Enroll & send first step for each assigned drip
-            if (folderAssignedDrips.length && newLead.Phone && !newLead.unsubscribed) {
+            if (
+              folderAssignedDrips.length &&
+              newLead.Phone &&
+              !newLead.unsubscribed
+            ) {
               const to = normalizeToE164Maybe(newLead.Phone);
               if (to) {
                 await runBatched(folderAssignedDrips, 3, async (dripId) => {
                   try {
-                    const drip = await DripCampaign.findById(dripId).lean();
-                    if (!drip || drip.type !== "sms") return;
+                    const dripDoc: any = await DripCampaign.findById(
+                      dripId,
+                    ).lean();
+                    if (!dripDoc || dripDoc.type !== "sms") return;
 
-                    const firstTextRaw = getFirstStepText(drip);
+                    const firstTextRaw = getFirstStepText(dripDoc);
                     if (!firstTextRaw) return;
 
                     // Safety: don't send a raw opt-out keyword as a message
                     const lower = firstTextRaw.toLowerCase();
-                    const optOutKeywords = ["stop", "unsubscribe", "end", "quit", "cancel"];
+                    const optOutKeywords = [
+                      "stop",
+                      "unsubscribe",
+                      "end",
+                      "quit",
+                      "cancel",
+                    ];
                     if (optOutKeywords.includes(lower)) return;
 
                     // Build contact context from the lead we just created
                     const firstName = (newLead as any)["First Name"] || null;
                     const lastName = (newLead as any)["Last Name"] || null;
                     const fullName =
-                      [firstName, lastName].filter((x) => x && String(x).trim().length > 0).join(" ") ||
-                      null;
+                      [firstName, lastName]
+                        .filter((x) => x && String(x).trim().length > 0)
+                        .join(" ") || null;
 
                     // Render + ensure opt-out
                     const rendered = renderTemplate(firstTextRaw, {
@@ -211,12 +237,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                     await sendSMS(to, finalBody, user._id.toString());
 
                     // ✅ Initialize dripProgress for this drip (Day 1 was sent -> index 0)
-                    const canonicalDripId = String((drip as any)?._id || dripId);
+                    const canonicalDripId = String(
+                      (dripDoc as any)?._id || dripId,
+                    );
                     const now = new Date();
 
                     const matched = await Lead.updateOne(
-                      { _id: newLead._id, "dripProgress.dripId": canonicalDripId },
-                      { $set: { "dripProgress.$.startedAt": now, "dripProgress.$.lastSentIndex": 0 } }
+                      {
+                        _id: newLead._id,
+                        "dripProgress.dripId": canonicalDripId,
+                      },
+                      {
+                        $set: {
+                          "dripProgress.$.startedAt": now,
+                          "dripProgress.$.lastSentIndex": 0,
+                        },
+                      },
                     );
 
                     if (matched.matchedCount === 0) {
@@ -230,7 +266,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                               lastSentIndex: 0,
                             },
                           },
-                        }
+                        },
                       );
                     }
 
@@ -249,9 +285,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
-    return res
-      .status(200)
-      .json({ message: "Google Sheets sync complete", imported, smsSent, smsFailed });
+    return res.status(200).json({
+      message: "Google Sheets sync complete",
+      imported,
+      smsSent,
+      smsFailed,
+    });
   } catch (error) {
     console.error("❌ Cron sync error:", error);
     return res.status(500).json({ message: "Server error" });

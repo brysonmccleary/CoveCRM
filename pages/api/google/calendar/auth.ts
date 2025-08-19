@@ -2,7 +2,10 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import { getGoogleOAuthClient, SCOPES } from "@/lib/googleClient";
 
 // This API route starts the Google OAuth 2.0 flow for Calendar access
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   try {
     const client = getGoogleOAuthClient();
 
@@ -15,6 +18,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.redirect(url);
   } catch (error) {
     console.error("❌ Error generating Google auth URL:", error);
-    return res.status(500).json({ message: "Google Auth URL generation failed." });
+    return res
+      .status(500)
+      .json({ message: "Google Auth URL generation failed." });
   }
 }
