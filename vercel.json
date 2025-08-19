@@ -1,36 +1,13 @@
 {
   "crons": [
-    {
-      "path": "/api/poll-new-lead",
-      "schedule": "*/1 * * * *"
-    },
-    {
-      "path": "/api/cron/schedule-sms-reminders",
-      "schedule": "*/15 * * * *"
-    },
-    {
-      "path": "/api/cron/affiliate-payouts?token=45567812345678910123456789",
-      "schedule": "0 16 * * 5"
-    },
-    {
-      "path": "/api/cron",
-      "schedule": "0 17 * * *"
-    },
-    {
-      "path": "/api/cron/twilio-daily-sync",
-      "schedule": "0 16 * * *"
-    },
-    {
-      "path": "/api/cron/run-drips",
-      "schedule": "0 16 * * *"
-    },
-    {
-      "path": "/api/cron/check-a2p-status",
-      "schedule": "*/30 * * * *"
-    },
-    {
-      "path": "/api/cron/sync-google-sheets-leads",
-      "schedule": "*/1 * * * *"
-    }
+    { "path": "/api/poll-new-lead", "schedule": "* * * * *" },
+    { "path": "/api/cron/schedule-sms-reminders", "schedule": "*/15 * * * *" },
+    { "path": "/api/cron/affiliate-payouts?token=45567812345678910123456789", "schedule": "0 16 * * 5" },
+    { "path": "/api/cron", "schedule": "0 17 * * *" },
+    { "path": "/api/cron/twilio-daily-sync", "schedule": "0 16 * * *" },
+    { "path": "/api/cron/run-drips", "schedule": "0 16 * * *" },
+    { "path": "/api/cron/check-a2p-status", "schedule": "*/30 * * * *" },
+    { "path": "/api/cron/sync-google-sheets-leads", "schedule": "* * * * *" },
+    { "path": "/api/cron/google-sheets-poll?token=19283351239797", "schedule": "* * * * *" }
   ]
 }
