@@ -2,29 +2,30 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
+import mongoose from "mongoose";
 import dbConnect from "@/lib/mongooseConnect";
 import twilioClient from "@/lib/twilioClient";
 import User from "@/models/User";
 import PhoneNumber from "@/models/PhoneNumber";
-// Legacy ownership collection (email-based)
-import LegacyNumber from "@/models/number";
 
 /**
  * Sync logic:
  * 1) Load signed-in user.
- * 2) Try PhoneNumber (userId-based) ownership. If none, FALL BACK to legacy `numbers` by userEmail
- *    and auto-migrate those into PhoneNumber (userId + phoneNumber).
+ * 2) Preferred ownership = PhoneNumber (userId-based). If none, FALL BACK to legacy collection "numbers"
+ *    by userEmail (raw collection read) and auto-migrate those into PhoneNumber (userId + phoneNumber).
  * 3) Fetch Twilio IncomingPhoneNumbers and map by E.164 + SID.
  * 4) Upsert each owned Twilio number into user.numbers[] while preserving subscriptionId/usage.
  * 5) Save user; return merged list (only numbers that still exist on Twilio).
  *
  * Notes:
+ * - No direct import of "@/models/Number" (avoids Vercel compile failure).
  * - Does not touch Stripe or create subscriptions.
- * - Does not attach to Messaging Service here. (We can add later once you confirm per-user service.)
+ * - Does not attach to a Messaging Service here.
  */
+
 export default async function handler(
   req: NextApiRequest,
-  res: NextApiResponse,
+  res: NextApiResponse
 ) {
   if (req.method !== "POST") {
     return res.status(405).json({ message: "Method not allowed" });
@@ -42,30 +43,29 @@ export default async function handler(
     const user = await User.findOne({ email: session.user.email });
     if (!user) return res.status(404).json({ message: "User not found" });
 
-    // 2) Ownership: preferred = PhoneNumber (userId). If empty, migrate from legacy `numbers` by userEmail.
+    // 2) Ownership: preferred = PhoneNumber (userId). If empty, migrate from legacy collection "numbers".
     let owned = await PhoneNumber.find({ userId: user._id }).lean();
 
     if (!owned || owned.length === 0) {
-      // Look for legacy docs by userEmail (e.g., { phoneNumber, twilioSid, userEmail })
-      const legacy = await LegacyNumber.find({ userEmail: user.email }).lean();
+      const legacy = await readLegacyNumbersByEmail(user.email);
 
-      if (legacy && legacy.length > 0) {
-        // Migrate each legacy doc into PhoneNumber (idempotent)
+      if (legacy.length > 0) {
+        // Idempotent migration into PhoneNumber
         for (const l of legacy) {
-          const exists = await PhoneNumber.findOne({
-            phoneNumber: l.phoneNumber,
-          });
+          const phone = sanitizePhone(l?.phoneNumber);
+          if (!phone) continue;
+
+          const exists = await PhoneNumber.findOne({ userId: user._id, phoneNumber: phone }).lean();
           if (!exists) {
             await PhoneNumber.create({
               userId: user._id,
-              phoneNumber: l.phoneNumber,
-              twilioSid: l.twilioSid, // optional legacy field
+              phoneNumber: phone,
+              twilioSid: typeof l?.twilioSid === "string" ? l.twilioSid : undefined,
               datePurchased: new Date(),
-              a2pApproved: true, // legacy numbers likely intended for A2P use
+              a2pApproved: true, // conservatively mark as intended for A2P use
             });
           }
         }
-        // reload owned after migration
         owned = await PhoneNumber.find({ userId: user._id }).lean();
       }
     }
@@ -76,9 +76,7 @@ export default async function handler(
     }
 
     // 3) Fetch Twilio IncomingPhoneNumbers (your account)
-    const twilioList = await twilioClient.incomingPhoneNumbers.list({
-      limit: 100,
-    });
+    const twilioList = await twilioClient.incomingPhoneNumbers.list({ limit: 100 });
 
     // Index for quick lookup
     const byE164 = new Map<string, (typeof twilioList)[number]>();
@@ -93,7 +91,7 @@ export default async function handler(
 
     // Helper to find an entry in user.numbers by SID or phoneNumber
     const findUserNumberIndex = (sid?: string, phone?: string) => {
-      return user.numbers!.findIndex((u) => {
+      return user.numbers!.findIndex((u: any) => {
         if (sid && u.sid === sid) return true;
         if (phone && u.phoneNumber === phone) return true;
         return false;
@@ -103,6 +101,8 @@ export default async function handler(
     // 4) Reconcile each owned number that still exists in Twilio
     for (const doc of owned) {
       const phone = doc.phoneNumber;
+      if (!phone) continue;
+
       const t =
         byE164.get(phone) ||
         (doc.twilioSid ? bySid.get(doc.twilioSid) : undefined);
@@ -114,7 +114,7 @@ export default async function handler(
       if (!doc.twilioSid || doc.twilioSid !== t.sid) {
         await PhoneNumber.updateOne(
           { _id: doc._id },
-          { $set: { twilioSid: t.sid } },
+          { $set: { twilioSid: t.sid } }
         );
       }
 
@@ -143,8 +143,8 @@ export default async function handler(
     await user.save();
 
     const merged = (user.numbers || [])
-      .filter((n) => bySid.has(n.sid) || byE164.has(n.phoneNumber))
-      .map((n) => ({
+      .filter((n: any) => bySid.has(n.sid) || byE164.has(n.phoneNumber))
+      .map((n: any) => ({
         sid: n.sid,
         phoneNumber: n.phoneNumber,
         subscriptionId: n.subscriptionId || null,
@@ -162,4 +162,32 @@ export default async function handler(
     console.error("❌ /api/numbers/sync error:", err);
     return res.status(500).json({ message: err.message || "Server error" });
   }
+}
+
+/**
+ * Reads legacy numbers from the raw "numbers" collection (if present),
+ * filtered by userEmail. This avoids importing a legacy model file that
+ * may not exist on case-sensitive filesystems in Vercel.
+ */
+async function readLegacyNumbersByEmail(userEmail: string): Promise<any[]> {
+  try {
+    const conn = mongoose.connection;
+    // Ensure a DB is available
+    if (!conn?.db) return [];
+    // Legacy collection name used historically
+    const coll = conn.db.collection("numbers");
+    const docs = await coll.find({ userEmail }).toArray();
+    return Array.isArray(docs) ? docs : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Basic phone sanitizer to ensure we match Twilio E.164 keys */
+function sanitizePhone(input: any): string | null {
+  if (typeof input !== "string") return null;
+  const s = input.trim();
+  if (!s) return null;
+  // If it already looks like E.164, keep; otherwise return as-is (your data may already be normalized)
+  return s.startsWith("+") ? s : s;
 }
