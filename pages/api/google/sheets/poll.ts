@@ -18,15 +18,13 @@ function normalizeEmail(input: any): string {
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  // NOTE: This polls ONLY the logged-in user's synced sheets.
-  // For a global cron, you'd iterate all users without relying on session.
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
   const session = await getServerSession(req, res, authOptions);
   if (!session?.user?.email) return res.status(401).json({ error: "Unauthorized" });
   const userEmail = session.user.email.toLowerCase();
 
-  const MAX_ROWS_PER_SHEET = 500; // safety cap per poll
+  const MAX_ROWS_PER_SHEET = 500;
 
   try {
     await dbConnect();
@@ -37,7 +35,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const syncedSheets: any[] = (user as any)?.googleSheets?.syncedSheets || [];
     if (!syncedSheets.length) return res.status(200).json({ ok: true, polled: 0, details: [] });
 
-    // OAuth client
     const base =
       process.env.NEXTAUTH_URL ||
       process.env.NEXT_PUBLIC_BASE_URL ||
@@ -69,7 +66,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         headerRow = 1,
         mapping = {},
         skip = {},
-        lastRowImported = headerRow, // stored as 1-based
+        lastRowImported = headerRow,
         folderId,
         folderName,
       } = sheetCfg || {};
@@ -102,13 +99,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       const headerIdx = Math.max(0, headerRow - 1);
       const headers = (values[headerIdx] || []).map((h) => String(h || "").trim());
-      const startIndex = Math.max(headerIdx + 1, (lastRowImported as number)); // incoming is 1-based
+      const startIndex = Math.max(headerIdx + 1, (lastRowImported as number));
       const endIndex = Math.min(values.length - 1, startIndex + MAX_ROWS_PER_SHEET - 1);
 
       let imported = 0;
       let updated = 0;
       let skippedNoKey = 0;
-      let lastProcessed = (lastRowImported as number) - 1; // back to 0-based
+      let lastProcessed = (lastRowImported as number) - 1;
 
       for (let r = startIndex; r <= endIndex; r++) {
         const row = values[r] || [];
@@ -146,7 +143,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (emailLower) or.push({ email: emailLower });
         const filter = { userEmail, ...(or.length ? { $or: or } : {}) };
 
-        const existing = await Lead.findOne(filter).lean();
+        // Fetch only _id for existence check
+        const existing = await Lead.findOne(filter).select("_id").lean<{ _id: mongoose.Types.ObjectId } | null>();
+
         if (!existing) {
           doc.folderId = targetFolderId;
           await Lead.create(doc);
@@ -158,7 +157,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
       }
 
-      // Update pointer
       const newLast = Math.max(lastProcessed + 1, lastRowImported);
       const positional = await User.updateOne(
         { email: userEmail, "googleSheets.syncedSheets.spreadsheetId": spreadsheetId, "googleSheets.syncedSheets.title": title },

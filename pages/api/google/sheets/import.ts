@@ -11,25 +11,23 @@ import mongoose from "mongoose";
 
 type ImportBody = {
   spreadsheetId: string;
-  title?: string;           // tab title (preferred)
-  sheetId?: number;         // optional alternative to title
-  headerRow?: number;       // 1-based index (default 1)
-  startRow?: number;        // 1-based data row to start importing (default headerRow+1)
-  endRow?: number;          // optional, inclusive
-  folderId?: string;        // if provided, we use this folder
-  folderName?: string;      // else we create/find by name
-  mapping: Record<string, string>;   // header -> fieldName (ignored if empty)
-  skip?: Record<string, boolean>;    // header -> true to skip
-  createFolderIfMissing?: boolean;   // default true
-  moveExistingToFolder?: boolean;    // default true
+  title?: string;
+  sheetId?: number;
+  headerRow?: number;
+  startRow?: number;
+  endRow?: number;
+  folderId?: string;
+  folderName?: string;
+  mapping: Record<string, string>;
+  skip?: Record<string, boolean>;
+  createFolderIfMissing?: boolean;
+  moveExistingToFolder?: boolean;
 };
 
 function normalizePhone(input: any): string {
   const digits = String(input || "").replace(/\D+/g, "");
-  // keep as raw digits; typical US will be 10 or 11 (with country code)
   return digits;
 }
-
 function normalizeEmail(input: any): string {
   const s = String(input || "").trim();
   return s ? s.toLowerCase() : "";
@@ -67,7 +65,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const gs = (user as any)?.googleSheets;
     if (!gs?.refreshToken) return res.status(400).json({ error: "Google not connected" });
 
-    // OAuth client (reuse redirect used in other routes)
     const base =
       process.env.NEXTAUTH_URL ||
       process.env.NEXT_PUBLIC_BASE_URL ||
@@ -104,27 +101,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (!tabTitle) return res.status(400).json({ error: "sheetId not found" });
     }
 
-    // Pull rows (A1:ZZ for simplicity)
+    // Pull rows
     const valueResp = await sheets.spreadsheets.values.get({
       spreadsheetId,
       range: `'${tabTitle}'!A1:ZZ`,
       majorDimension: "ROWS",
     });
     const values = (valueResp.data.values || []) as string[][];
-
     if (!values.length) {
       return res.status(200).json({ imported: 0, updated: 0, skippedNoKey: 0, rowCount: 0, lastRowImported: 0, note: "No data in sheet." });
     }
 
-    // headers
     const headerIdx = Math.max(0, headerRow - 1);
     const headers = (values[headerIdx] || []).map((h) => String(h || "").trim());
 
-    // data range
     const firstDataRowIndex = typeof startRow === "number"
       ? Math.max(1, startRow) - 1
       : headerIdx + 1;
-
     const lastRowIndex = typeof endRow === "number"
       ? Math.min(values.length, Math.max(endRow, firstDataRowIndex + 1)) - 1
       : values.length - 1;
@@ -140,7 +133,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         { new: true, upsert: createFolderIfMissing }
       );
     } else {
-      // default folder name: spreadsheet name + tab title
       const meta = await google.drive({ version: "v3", auth: oauth2 }).files.get({
         fileId: spreadsheetId,
         fields: "name",
@@ -155,7 +147,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!folderDoc) return res.status(400).json({ error: "Folder not found/created" });
     const targetFolderId = folderDoc._id as mongoose.Types.ObjectId;
 
-    // Import loop
     let imported = 0;
     let updated = 0;
     let skippedNoKey = 0;
@@ -202,17 +193,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const or: any[] = [];
       if (normalizedPhone) or.push({ normalizedPhone });
       if (emailLower) or.push({ email: emailLower });
-
       const filter = { userEmail, ...(or.length ? { $or: or } : {}) };
 
-      const existing = await Lead.findOne(filter).lean();
+      // Only fetch _id to avoid type noise and keep it lean
+      const existing = await Lead.findOne(filter).select("_id").lean<{ _id: mongoose.Types.ObjectId } | null>();
+
       if (!existing) {
-        // create new
         doc.folderId = targetFolderId;
         await Lead.create(doc);
         imported++;
       } else {
-        // update existing
         const update: any = { $set: { ...doc } };
         if (moveExistingToFolder) update.$set.folderId = targetFolderId;
         await Lead.updateOne({ _id: existing._id }, update);
