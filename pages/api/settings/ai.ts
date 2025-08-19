@@ -30,7 +30,7 @@ export default async function handler(
       return res.status(404).json({ ok: false, error: "User not found" });
     return res.status(200).json({
       ok: true,
-      aiAssistantName: user.aiAssistantName || "Taylor",
+      aiAssistantName: user.aiAssistantName || "Assistant",
       hasAI: user.hasAI ?? false,
       plan: user.plan ?? "Free",
     });
@@ -57,7 +57,7 @@ export default async function handler(
 
     return res
       .status(200)
-      .json({ ok: true, aiAssistantName: user.aiAssistantName || "Taylor" });
+      .json({ ok: true, aiAssistantName: user.aiAssistantName || "Assistant" });
   }
 
   res.setHeader("Allow", "GET, POST");

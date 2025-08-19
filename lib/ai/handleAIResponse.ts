@@ -51,7 +51,7 @@ export async function handleAIResponse(
     return;
   }
 
-  const aiName = user?.aiAssistantName || "Taylor";
+  const aiName = user?.aiAssistantName || "Assistant";
 
   const normalizedMsg = (incomingMessage || "").toLowerCase();
   const interactionHistory: IInteraction[] = (lead.interactionHistory ||

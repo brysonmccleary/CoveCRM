@@ -48,7 +48,7 @@ export default function SettingsPage() {
   const [message, setMessage] = useState("");
 
   // ✅ local state for AI Assistant panel
-  const [aiName, setAiName] = useState("Taylor");
+  const [aiName, setAiName] = useState("Assistant");
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
   const [aiSaved, setAiSaved] = useState(false);
@@ -94,7 +94,7 @@ export default function SettingsPage() {
         const res = await fetch("/api/settings/ai");
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Failed to load");
-        if (!cancelled) setAiName(data.aiAssistantName || "Taylor");
+        if (!cancelled) setAiName(data.aiAssistantName || "Assistant");
       } catch (e: any) {
         if (!cancelled) setAiError(e.message || "Failed to load");
       } finally {
@@ -118,7 +118,7 @@ export default function SettingsPage() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Failed to save");
-      setAiName(data.aiAssistantName || "Taylor");
+      setAiName(data.aiAssistantName || "Assistant");
       setAiSaved(true);
       setTimeout(() => setAiSaved(false), 2500);
     } catch (e: any) {
@@ -144,7 +144,7 @@ export default function SettingsPage() {
         value={aiName}
         onChange={(e) => setAiName(e.target.value)}
         maxLength={40}
-        placeholder="Taylor"
+        placeholder="Assistant"
       />
       <div className="flex items-center gap-3">
         <button

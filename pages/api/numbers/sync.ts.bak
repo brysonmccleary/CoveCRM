@@ -7,7 +7,7 @@ import twilioClient from "@/lib/twilioClient";
 import User from "@/models/User";
 import PhoneNumber from "@/models/PhoneNumber";
 // Legacy ownership collection (email-based)
-import LegacyNumber from "@/models/number";
+import LegacyNumber from "@/models/Number";
 
 /**
  * Sync logic:

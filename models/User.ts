@@ -205,7 +205,7 @@ const UserSchema = new Schema<IUser>({
     autoConfirm: { type: Boolean, default: true },
   },
 
-  aiAssistantName: { type: String, default: "Taylor" },
+  aiAssistantName: { type: String, default: "Assistant" },
 
   // ✅ Affiliate fields
   referralCode: { type: String, unique: true, sparse: true },
