@@ -1,4 +1,3 @@
-// /pages/api/connect/google-sheets/callback.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../../auth/[...nextauth]";
@@ -27,40 +26,31 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   );
 
   const { tokens } = await oauth2.getToken(code);
-  oauth2.setCredentials(tokens);
-
-  // Try to fetch the Google account email (optional but nice for debugging)
-  let googleEmail = "";
-  try {
-    const oauth2Api = google.oauth2({ version: "v2", auth: oauth2 });
-    const me = await oauth2Api.userinfo.get();
-    googleEmail = me.data.email || "";
-  } catch {
-    // ignore
-  }
 
   await dbConnect();
-  const user = await User.findOne({ email: session.user.email.toLowerCase() }).lean();
 
-  // Preserve previous refresh token if Google doesn't return it on re-consent
-  const existingRefresh = (user as any)?.googleSheets?.refreshToken || "";
+  const email = session.user.email.toLowerCase();
+  const existing = await User.findOne({ email }).select("googleSheets googleTokens").lean<any>();
+
+  const refreshToken =
+    tokens.refresh_token ||
+    existing?.googleSheets?.refreshToken ||
+    existing?.googleTokens?.refreshToken ||
+    "";
+
+  const accessToken = tokens.access_token || existing?.googleSheets?.accessToken || "";
+  const expiryDate = tokens.expiry_date ?? existing?.googleSheets?.expiryDate ?? null;
+  const scope = tokens.scope || existing?.googleSheets?.scope || "";
 
   await User.updateOne(
-    { email: session.user.email.toLowerCase() },
+    { email },
     {
       $set: {
-        googleSheets: {
-          accessToken: tokens.access_token || (user as any)?.googleSheets?.accessToken || "",
-          refreshToken: tokens.refresh_token || existingRefresh,
-          expiryDate: tokens.expiry_date ?? (user as any)?.googleSheets?.expiryDate ?? null,
-          scope: tokens.scope || (user as any)?.googleSheets?.scope || "",
-          googleEmail,
-          // Keep any existing sync metadata if present
-          syncedSheets: (user as any)?.googleSheets?.syncedSheets || [],
-        },
+        googleSheets: { accessToken, refreshToken, expiryDate, scope },
+        googleTokens: { accessToken, refreshToken, expiryDate, scope }, // back-compat
+        googleSheetsConnected: true,
       },
-    },
-    { upsert: false }
+    }
   );
 
   return res.redirect("/dashboard?tab=leads");
