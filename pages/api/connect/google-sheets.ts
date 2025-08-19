@@ -8,33 +8,44 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const session = await getServerSession(req, res, authOptions);
   if (!session?.user?.email) return res.status(401).json({ error: "Unauthorized" });
 
+  const clientId = process.env.GOOGLE_CLIENT_ID!;
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET!;
   const redirectUri = process.env.GOOGLE_REDIRECT_URI_SHEETS;
-  if (!redirectUri) {
+
+  if (!clientId || !clientSecret || !redirectUri) {
     return res.status(500).json({
-      error: "Missing GOOGLE_REDIRECT_URI_SHEETS",
-      hint: "Set it in Vercel to https://www.covecrm.com/api/connect/google-sheets/callback (and add this exact URI in Google Cloud > OAuth Client).",
+      error: "Missing env",
+      have: { clientId: !!clientId, clientSecret: !!clientSecret, redirectUri: redirectUri || null },
+      need: {
+        GOOGLE_CLIENT_ID: "(set to your Web client ID)",
+        GOOGLE_CLIENT_SECRET: "(set to your Web client secret)",
+        GOOGLE_REDIRECT_URI_SHEETS: "https://www.covecrm.com/api/connect/google-sheets/callback",
+      },
     });
   }
 
-  const oauth2 = new google.auth.OAuth2(
-    process.env.GOOGLE_CLIENT_ID!,
-    process.env.GOOGLE_CLIENT_SECRET!,
-    redirectUri
-  );
+  const oauth2 = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
 
-  const url = oauth2.generateAuthUrl({
+  const scope = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/userinfo.email",
+  ];
+
+  const authorizeUrl = oauth2.generateAuthUrl({
     access_type: "offline",
     prompt: "consent",
-    scope: [
-      "https://www.googleapis.com/auth/spreadsheets",
-      "https://www.googleapis.com/auth/userinfo.email",
-    ],
+    scope,
   });
 
-  // Debug mode: shows the exact URL we will redirect to
-  if (req.query.debug === "1") {
-    return res.status(200).json({ redirectUri, authorizeUrl: url });
+  // If ?debug is present (any value), DO NOT redirect. Show exactly what we would send.
+  if (typeof req.query.debug !== "undefined") {
+    return res.status(200).json({
+      clientId,
+      redirectUri,
+      scope,
+      authorizeUrl,
+    });
   }
 
-  return res.redirect(url);
+  return res.redirect(authorizeUrl);
 }
