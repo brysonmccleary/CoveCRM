@@ -4,7 +4,6 @@ import Image from "next/image";
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const [unreadCount, setUnreadCount] = useState(0);
-  const callbackUrl = process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000";
 
   const links = [
     { name: "Home", path: "/dashboard?tab=home" },
@@ -71,9 +70,11 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             ))}
           </nav>
         </div>
+
         <div className="mt-8">
           <button
-            onClick={() => signOut({ callbackUrl })}
+            // Send users back to the hosted sign-in page (no localhost fallback)
+            onClick={() => signOut({ callbackUrl: "/auth/signin" })}
             className="block text-red-400 hover:underline"
           >
             Log Out
