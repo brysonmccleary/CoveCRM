@@ -5,6 +5,7 @@ import dbConnect from "@/lib/mongooseConnect";
 import A2PProfile, { IA2PProfile } from "@/models/A2PProfile";
 import User from "@/models/User";
 import { sendA2PApprovedEmail } from "@/lib/email";
+import { chargeA2PApprovalIfNeeded } from "@/lib/billing/trackUsage";
 
 type A2PStatus = "pending" | "approved" | "declined";
 
@@ -33,17 +34,34 @@ export default async function handler(
     let emailed = 0;
 
     for (const p of profiles) {
-      const currentStatus = ((p as any).applicationStatus ||
-        "pending") as A2PStatus;
+      const currentStatus = ((p as any).applicationStatus || "pending") as A2PStatus;
       const nextStatus = deriveStatus(p as IA2PProfile);
 
-      // Only update if it changed
+      // Update if status changed
       if (currentStatus !== nextStatus) {
         await A2PProfile.updateOne(
           { _id: (p as any)._id },
           { $set: { applicationStatus: nextStatus } },
         );
         updated++;
+      }
+
+      // If approved, attempt one-time $15 billing (idempotent on Stripe metadata)
+      if (nextStatus === "approved" && (p as any).userId) {
+        const user = await User.findById((p as any).userId);
+        if (user) {
+          try {
+            const result = await chargeA2PApprovalIfNeeded({ user });
+            if ((result as any)?.pending) {
+              console.warn(
+                "[a2p-sync] A2P charge pending (no Stripe customer or billing disabled) for",
+                user.email
+              );
+            }
+          } catch (e) {
+            console.warn("[a2p-sync] A2P charge attempt failed for", user.email, e);
+          }
+        }
       }
 
       // One-time approved email
