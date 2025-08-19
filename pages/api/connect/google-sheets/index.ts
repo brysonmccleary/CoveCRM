@@ -1,27 +1,32 @@
+// /pages/api/connect/google-sheets/index.ts
 import type { NextApiRequest, NextApiResponse } from "next";
+import { getServerSession } from "next-auth/next";
+import { authOptions } from "../../auth/[...nextauth]";
 import { google } from "googleapis";
 
 function getBaseUrl(req: NextApiRequest) {
   const proto =
     (req.headers["x-forwarded-proto"] as string) ||
-    (process.env.VERCEL ? "https" : "http");
-  const host = (req.headers["x-forwarded-host"] as string) || req.headers.host;
-  if (proto && host) return `${proto}://${host}`;
-  return (
-    process.env.NEXTAUTH_URL ||
-    process.env.NEXT_PUBLIC_BASE_URL ||
-    "http://localhost:3000"
-  );
+    (process.env.NODE_ENV === "production" ? "https" : "http");
+  const host =
+    (req.headers["x-forwarded-host"] as string) ||
+    req.headers.host ||
+    "localhost:3000";
+  return `${proto}://${host}`.replace(/\/$/, "");
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "GET" && req.method !== "HEAD" && req.method !== "OPTIONS") {
-    res.status(405).json({ error: "Method Not Allowed" });
-    return;
-  }
+  const session = await getServerSession(req, res, authOptions);
+  if (!session?.user?.email) return res.status(401).json({ error: "Unauthorized" });
 
-  const base = getBaseUrl(req);
-  const redirectUri = `${base}/api/connect/google-sheets/callback`;
+  const base =
+    process.env.NEXTAUTH_URL ||
+    process.env.NEXT_PUBLIC_BASE_URL ||
+    getBaseUrl(req);
+
+  const redirectUri =
+    process.env.GOOGLE_REDIRECT_URI_SHEETS ||
+    `${base}/api/connect/google-sheets/callback`;
 
   const oauth2Client = new google.auth.OAuth2(
     process.env.GOOGLE_CLIENT_ID!,
@@ -39,14 +44,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     ],
   });
 
-  // Debug view without redirect
-  if (req.query.debug) {
-    res.status(200).json({ base, redirectUri, authorizedUrl: url });
-    return;
-  }
+  // Tip: append ?debug=1 to see the raw URL instead of redirecting
+  if (req.query.debug) return res.status(200).json({ url, redirectUri, base });
 
-  // Be explicit: set the header and end the response
-  res.setHeader("Location", url);
-  // 302 (or 307) are fine; 302 is widely accepted by Google OAuth
-  res.status(302).end();
+  return res.redirect(url);
 }
