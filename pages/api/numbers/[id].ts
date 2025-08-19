@@ -2,7 +2,7 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
 import dbConnect from "@/lib/mongodb";
-import Number from "@/models/number";
+import Number from "@/models/Number";
 import twilioClient from "@/lib/twilioClient";
 
 export default async function handler(
