@@ -2,21 +2,9 @@
 import { useState, useRef } from "react";
 import Papa from "papaparse";
 
-interface FieldOption {
-  label: string;
-  value: string;
-}
-interface DriveFile {
-  id: string;
-  name: string;
-  modifiedTime?: string;
-  owners?: { emailAddress?: string }[];
-}
-interface Tab {
-  sheetId?: number | null;
-  title?: string | null;
-  index?: number | null;
-}
+interface FieldOption { label: string; value: string; }
+interface DriveFile { id: string; name: string; modifiedTime?: string; owners?: { emailAddress?: string }[]; }
+interface Tab { sheetId?: number | null; title?: string | null; index?: number | null; }
 
 const defaultFields: FieldOption[] = [
   { label: "First Name", value: "firstName" },
@@ -58,6 +46,12 @@ export default function LeadImportForm() {
   const [previewing, setPreviewing] = useState(false);
   const [previewErr, setPreviewErr] = useState<string | null>(null);
 
+  // Import
+  const [folderName, setFolderName] = useState<string>("");
+  const [importing, setImporting] = useState(false);
+  const [importErr, setImportErr] = useState<string | null>(null);
+  const [importSummary, setImportSummary] = useState<any>(null);
+
   // ===== CSV handlers =====
   const handleFileUpload = (file: File) => {
     Papa.parse(file, {
@@ -90,9 +84,7 @@ export default function LeadImportForm() {
   const handleCheckboxChange = (header: string) => {
     setSkipFields((prev) => {
       const newVal = !prev[header];
-      if (newVal) {
-        setFieldMapping((map) => ({ ...map, [header]: "" }));
-      }
+      if (newVal) setFieldMapping((map) => ({ ...map, [header]: "" }));
       return { ...prev, [header]: newVal };
     });
   };
@@ -114,14 +106,13 @@ export default function LeadImportForm() {
   };
 
   // 🔄 OAuth start for Google Sheets
-  const handleGoogleAuth = () => {
-    window.location.href = "/api/connect/google-sheets";
-  };
+  const handleGoogleAuth = () => (window.location.href = "/api/connect/google-sheets");
 
   // 🔎 Load spreadsheets after OAuth success
   const loadMySheets = async () => {
     setLoadingFiles(true);
     setFileErr(null);
+    setImportSummary(null);
     try {
       const r = await fetch("/api/sheets/list");
       const j = await r.json();
@@ -136,6 +127,8 @@ export default function LeadImportForm() {
       setSampleRow({});
       setFieldMapping({});
       setSkipFields({});
+      setHeaderRow(1);
+      setFolderName("");
     } catch (e: any) {
       setFileErr(e.message || "Failed to list spreadsheets");
       setFiles(null);
@@ -148,6 +141,7 @@ export default function LeadImportForm() {
     setSelectedSpreadsheet(f);
     setTabs(null);
     setTabErr(null);
+    setImportSummary(null);
     setLoadingTabs(true);
     setSelectedTabTitle("");
     setSelectedSheetId(null);
@@ -185,18 +179,71 @@ export default function LeadImportForm() {
       });
       const j = await r.json();
       if (!r.ok) throw new Error(j?.error || "Preview failed");
-      // Reuse your CSV mapping UI
+      // Reuse mapping UI
       setCsvHeaders(j.headers || []);
       setSampleRow(j.sampleRow || {});
-      // Reset any previous mapping/skip state
       setFieldMapping({});
       setSkipFields({});
+      // Default folder name suggestion
+      const suggested = `${selectedSpreadsheet.name} — ${selectedTabTitle || ""}`.trim();
+      setFolderName(suggested);
     } catch (e: any) {
       setPreviewErr(e.message || "Preview failed");
       setCsvHeaders([]);
       setSampleRow({});
     } finally {
       setPreviewing(false);
+    }
+  };
+
+  const handleImport = async () => {
+    if (!selectedSpreadsheet) return;
+    if (!selectedTabTitle && selectedSheetId == null) {
+      setImportErr("Choose a tab first");
+      return;
+    }
+    if (!csvHeaders.length) {
+      setImportErr("Preview first so we can read headers");
+      return;
+    }
+    if (!folderName.trim()) {
+      setImportErr("Enter a folder name");
+      return;
+    }
+    setImportErr(null);
+    setImporting(true);
+    setImportSummary(null);
+
+    // Build clean mapping/skip (only headers with a chosen field)
+    const cleanMapping: Record<string, string> = {};
+    csvHeaders.forEach((h) => {
+      const v = fieldMapping[h];
+      if (v && !skipFields[h]) cleanMapping[h] = v;
+    });
+
+    try {
+      const r = await fetch("/api/google/sheets/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          spreadsheetId: selectedSpreadsheet.id,
+          title: selectedTabTitle || undefined,
+          sheetId: selectedSheetId ?? undefined,
+          headerRow: headerRow || 1,
+          folderName: folderName.trim(),
+          mapping: cleanMapping,
+          skip: skipFields,
+          createFolderIfMissing: true,
+          moveExistingToFolder: true,
+        }),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j?.error || "Import failed");
+      setImportSummary(j);
+    } catch (e: any) {
+      setImportErr(e.message || "Import failed");
+    } finally {
+      setImporting(false);
     }
   };
 
@@ -209,24 +256,15 @@ export default function LeadImportForm() {
       <h2 className="text-xl font-bold mb-4">Import Leads</h2>
 
       <div className="flex flex-wrap gap-3 mb-4">
-        <button
-          onClick={handleClickUpload}
-          className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
-        >
+        <button onClick={handleClickUpload} className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">
           Upload CSV
         </button>
 
-        <button
-          onClick={handleGoogleAuth}
-          className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700"
-        >
+        <button onClick={handleGoogleAuth} className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700">
           Connect Google Sheet
         </button>
 
-        <button
-          onClick={loadMySheets}
-          className="bg-gray-700 text-white px-4 py-2 rounded hover:bg-gray-800"
-        >
+        <button onClick={loadMySheets} className="bg-gray-700 text-white px-4 py-2 rounded hover:bg-gray-800">
           Load My Spreadsheets
         </button>
       </div>
@@ -243,15 +281,11 @@ export default function LeadImportForm() {
               {files.map((f) => (
                 <li
                   key={f.id}
-                  className={`p-3 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700 ${
-                    selectedSpreadsheet?.id === f.id ? "bg-gray-50 dark:bg-gray-700" : ""
-                  }`}
+                  className={`p-3 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700 ${selectedSpreadsheet?.id === f.id ? "bg-gray-50 dark:bg-gray-700" : ""}`}
                   onClick={() => onSelectSpreadsheet(f)}
                 >
                   <div className="font-medium">{f.name}</div>
-                  <div className="text-xs text-gray-500">
-                    {f.owners?.[0]?.emailAddress} • {f.modifiedTime}
-                  </div>
+                  <div className="text-xs text-gray-500">{f.owners?.[0]?.emailAddress} • {f.modifiedTime}</div>
                 </li>
               ))}
             </ul>
@@ -300,8 +334,28 @@ export default function LeadImportForm() {
                 >
                   {previewing ? "Previewing…" : "Preview Columns"}
                 </button>
+              </div>
+            )}
 
-                {previewErr && <div className="text-sm text-red-600">{previewErr}</div>}
+            {/* Folder name + Import */}
+            {csvHeaders.length > 0 && (
+              <div className="flex flex-wrap items-center gap-3 mt-3">
+                <label className="text-sm text-gray-600">Folder name</label>
+                <input
+                  type="text"
+                  value={folderName}
+                  onChange={(e) => setFolderName(e.target.value)}
+                  placeholder="Imported Leads"
+                  className="border p-2 rounded min-w-[260px]"
+                />
+                <button
+                  onClick={handleImport}
+                  disabled={importing}
+                  className="bg-emerald-600 text-white px-4 py-2 rounded hover:bg-emerald-700 disabled:opacity-60"
+                >
+                  {importing ? "Importing…" : "Import to Folder"}
+                </button>
+                {importErr && <div className="text-sm text-red-600">{importErr}</div>}
               </div>
             )}
           </div>
@@ -340,9 +394,7 @@ export default function LeadImportForm() {
             return (
               <div
                 key={header}
-                className={`grid grid-cols-3 gap-4 items-center mb-2 border-b pb-2 ${
-                  isMapped ? "bg-green-100" : isSkipped ? "bg-red-100" : ""
-                }`}
+                className={`grid grid-cols-3 gap-4 items-center mb-2 border-b pb-2 ${isMapped ? "bg-green-100" : isSkipped ? "bg-red-100" : ""}`}
               >
                 <div>
                   <div className="font-medium">{header}</div>
@@ -373,12 +425,26 @@ export default function LeadImportForm() {
             );
           })}
 
-          {/* This button will call the real import in the next step */}
+          {/* Import summary */}
+          {importSummary && (
+            <div className="mt-4 p-3 rounded border bg-gray-50 dark:bg-gray-700">
+              <div className="font-semibold mb-1">Import complete</div>
+              <div className="text-sm">
+                Imported: {importSummary.imported} • Updated: {importSummary.updated} • Skipped (no key): {importSummary.skippedNoKey}
+              </div>
+              <div className="text-sm">
+                Folder: {importSummary.folderName} (ID: {importSummary.folderId})
+              </div>
+              <div className="text-xs text-gray-500">Last Row Imported: {importSummary.lastRowImported}</div>
+            </div>
+          )}
+
+          {/* Legacy CSV button left in place */}
           <button
-            onClick={() => alert("Ready to import — paste Lead.ts & Folder.ts so I can wire DB upserts cleanly.")}
+            onClick={handleSubmit}
             className="mt-4 bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
           >
-            Continue: Import to Folder
+            Import Leads (CSV simulation)
           </button>
         </div>
       )}
