@@ -38,14 +38,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     access_type: "offline",
     prompt: "consent",
     include_granted_scopes: true,
+    // Pass the signed-in user's email so callback can identify them even if the session cookie isn't present
+    state: encodeURIComponent(session.user.email),
     scope: [
       "https://www.googleapis.com/auth/spreadsheets",
       "https://www.googleapis.com/auth/userinfo.email",
     ],
   });
 
-  // Tip: append ?debug=1 to see the raw URL instead of redirecting
-  if (req.query.debug) return res.status(200).json({ url, redirectUri, base });
+  if (req.query.debug) {
+    return res.status(200).json({
+      url,
+      redirectUri,
+      base,
+      state: session.user.email,
+    });
+  }
 
   return res.redirect(url);
 }
