@@ -1,9 +1,16 @@
 /* /styles/globals.css */
 @import "tailwindcss";
 
+/* ── Base tokens ───────────────────────────────────────────── */
 :root {
   --background: #ffffff;
   --foreground: #171717;
+
+  /* Cove brand (from DashboardLayout + cards) */
+  --cove-bg-dark:  #0f172a; /* sidebar */
+  --cove-bg:       #1e293b; /* main area */
+  --cove-card:     #111D35; /* card panels */
+  --cove-accent:   #3B82F6; /* accent blue */
 }
 
 @theme inline {
@@ -17,9 +24,16 @@
   :root {
     --background: #0a0a0a;
     --foreground: #ededed;
+
+    /* Keep brand colors consistent in dark mode */
+    --cove-bg-dark:  #0f172a;
+    --cove-bg:       #1e293b;
+    --cove-card:     #111D35;
+    --cove-accent:   #3B82F6;
   }
 }
 
+/* ── Global base styles ────────────────────────────────────── */
 body {
   background: var(--background);
   color: var(--foreground);

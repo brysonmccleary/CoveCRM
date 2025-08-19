@@ -38,7 +38,7 @@ export default function SignUp() {
       setAffiliateEmail(ownerEmail || "");
       setDiscountApplied(true);
       toast.success("✅ Code applied! Price updated.");
-    } catch (err) {
+    } catch {
       toast.error("Invalid or expired code.");
       setDiscountApplied(false);
       setFinalPrice(basePrice);
@@ -62,12 +62,10 @@ export default function SignUp() {
         affiliateEmail,
       });
 
-      // New: server tells us if this email is admin (skip billing)
       const isAdmin = !!res.data?.admin;
-
       if (isAdmin) {
         toast.success("Account created! You’re all set (admin — no billing).");
-        return router.push("/"); // or your dashboard route
+        return router.push("/");
       }
 
       toast.success("Account created! Redirecting to billing...");
@@ -85,39 +83,82 @@ export default function SignUp() {
   };
 
   return (
-    <div className="max-w-md mx-auto mt-10 p-6 bg-white rounded-xl shadow">
-      <h1 className="text-3xl font-bold mb-6 text-center">Create Your CRM Cove Account</h1>
-      <form onSubmit={handleSubmit} className="space-y-5">
-        <input type="text" placeholder="Full Name" className="w-full p-3 border border-gray-300 rounded"
-          value={name} onChange={(e) => setName(e.target.value)} />
-        <input type="email" placeholder="Email" className="w-full p-3 border border-gray-300 rounded"
-          value={email} onChange={(e) => setEmail(e.target.value)} />
-        <input type="password" placeholder="Password" className="w-full p-3 border border-gray-300 rounded"
-          value={password} onChange={(e) => setPassword(e.target.value)} />
+    <div className="min-h-screen flex items-center justify-center px-4
+                    bg-gradient-to-b from-[var(--cove-bg-dark)] to-[var(--cove-bg)]">
+      <div className="max-w-md w-full p-6 rounded-2xl shadow-xl
+                      bg-[var(--cove-card)] text-white border border-[#1e293b]">
+        <h1 className="text-3xl font-bold mb-6 text-center">
+          Create Your CRM Cove Account
+        </h1>
 
-        <label className="block text-sm font-medium text-gray-700">Referral / Promo Code (optional)</label>
-        <input type="text" placeholder="Enter a code"
-          className="w-full p-3 border border-gray-300 rounded"
-          value={promoCode} onChange={(e) => setPromoCode(e.target.value)} onBlur={handleCodeBlur} />
-        {checkingCode && <p className="text-sm text-blue-600 mt-1">Checking code...</p>}
-        {discountApplied && (
-          <p className="text-green-600 text-sm mt-1">✅ Code applied! Your new base price is ${finalPrice}/month.</p>
-        )}
+        <form onSubmit={handleSubmit} className="space-y-5">
+          <input
+            type="text"
+            placeholder="Full Name"
+            className="w-full p-3 rounded bg-[#0f172a] border border-[#1e293b] text-white placeholder-gray-400"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+          />
+          <input
+            type="email"
+            placeholder="Email"
+            className="w-full p-3 rounded bg-[#0f172a] border border-[#1e293b] text-white placeholder-gray-400"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+          />
+          <input
+            type="password"
+            placeholder="Password"
+            className="w-full p-3 rounded bg-[#0f172a] border border-[#1e293b] text-white placeholder-gray-400"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+          />
 
-        <div className="flex items-center space-x-2">
-          <input type="checkbox" id="aiUpgrade" checked={aiUpgrade}
-            onChange={() => setAiUpgrade(!aiUpgrade)} className="w-5 h-5 text-blue-600" />
-          <label htmlFor="aiUpgrade" className="text-sm text-gray-700">Add AI Upgrade (+$50/mo)</label>
-        </div>
+          <label className="block text-sm font-medium text-gray-300">
+            Referral / Promo Code (optional)
+          </label>
+          <input
+            type="text"
+            placeholder="Enter a code"
+            className="w-full p-3 rounded bg-[#0f172a] border border-[#1e293b] text-white placeholder-gray-400"
+            value={promoCode}
+            onChange={(e) => setPromoCode(e.target.value)}
+            onBlur={handleCodeBlur}
+          />
+          {checkingCode && <p className="text-sm text-blue-300 mt-1">Checking code...</p>}
+          {discountApplied && (
+            <p className="text-green-400 text-sm mt-1">
+              ✅ Code applied! Your new base price is ${finalPrice}/month.
+            </p>
+          )}
 
-        <button type="submit" disabled={isSubmitting}
-          className={`w-full py-3 rounded text-white font-semibold ${isSubmitting ? "bg-gray-400" : "bg-blue-600 hover:bg-blue-700"}`}>
-          {isSubmitting ? "Creating Account..." : "Start Free Trial"}
-        </button>
-        <p className="text-xs text-center text-gray-500 mt-3">
-          7-day free trial • CRM access is free, phone usage may still bill
-        </p>
-      </form>
+          <div className="flex items-center space-x-2">
+            <input
+              type="checkbox"
+              id="aiUpgrade"
+              checked={aiUpgrade}
+              onChange={() => setAiUpgrade(!aiUpgrade)}
+              className="w-5 h-5 accent-[var(--cove-accent)]"
+            />
+            <label htmlFor="aiUpgrade" className="text-sm text-gray-300">
+              Add AI Upgrade (+$50/mo)
+            </label>
+          </div>
+
+          <button
+            type="submit"
+            disabled={isSubmitting}
+            className="w-full py-3 rounded text-white font-semibold
+                       bg-[var(--cove-accent)] hover:opacity-95 disabled:opacity-60"
+          >
+            {isSubmitting ? "Creating Account..." : "Start Free Trial"}
+          </button>
+
+          <p className="text-xs text-center text-gray-400 mt-3">
+            7-day free trial • CRM access is free, phone usage may still bill
+          </p>
+        </form>
+      </div>
     </div>
   );
 }
