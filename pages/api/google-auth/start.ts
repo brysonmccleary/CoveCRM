@@ -1,4 +1,3 @@
-// /pages/api/google-auth/start.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { google } from "googleapis";
 
@@ -22,14 +21,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     access_type: "offline",
     prompt: "consent",
     scope: [
+      "https://www.googleapis.com/auth/userinfo.email",
       "https://www.googleapis.com/auth/calendar",
       "https://www.googleapis.com/auth/calendar.events",
-      "https://www.googleapis.com/auth/userinfo.email",
-      // add this if/when you need Sheets write/read:
-      // "https://www.googleapis.com/auth/spreadsheets",
+      "https://www.googleapis.com/auth/spreadsheets",
     ],
   });
 
-  // Redirect the browser straight to Google
   return res.redirect(url);
 }
