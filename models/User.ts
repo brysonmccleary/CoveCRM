@@ -1,7 +1,7 @@
 // /models/User.ts
-import mongoose, { Schema, Document } from "mongoose";
+import mongoose, { Schema } from "mongoose";
 
-export interface IUser extends Document {
+export interface IUser {
   email: string;
   password?: string;
   name?: string;
@@ -197,11 +197,11 @@ const UserSchema = new Schema<IUser>({
 
   // ✅ Defaults added here so every user has a usable setup out of the box
   bookingSettings: {
-    timezone: { type: String, default: "America/Los_Angeles" }, // agent/local tz (AZ handled in util as America/Phoenix)
-    slotLength: { type: Number, default: 30 }, // minutes
-    bufferTime: { type: Number, default: 0 }, // minutes between slots
-    workingHours: { type: Schema.Types.Mixed, default: {} }, // you can seed per-day hours later
-    maxPerDay: { type: Number, default: 0 }, // 0 = unlimited
+    timezone: { type: String, default: "America/Los_Angeles" },
+    slotLength: { type: Number, default: 30 },
+    bufferTime: { type: Number, default: 0 },
+    workingHours: { type: Schema.Types.Mixed, default: {} },
+    maxPerDay: { type: Number, default: 0 },
     autoConfirm: { type: Boolean, default: true },
   },
 

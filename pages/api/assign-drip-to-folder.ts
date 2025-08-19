@@ -1,4 +1,3 @@
-// /pages/api/assign-drip-to-folder.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "./auth/[...nextauth]";
@@ -104,12 +103,13 @@ export default async function handler(
     );
 
     // 4) Send first step immediately (only for SMS drips)
-    const drip = await resolveDrip(dripId);
+    const raw = await resolveDrip(dripId);
+    const drip: any = Array.isArray(raw) ? raw[0] : raw;
     if (
       !drip ||
-      drip.type !== "sms" ||
-      !Array.isArray(drip.steps) ||
-      drip.steps.length === 0
+      drip?.type !== "sms" ||
+      !Array.isArray(drip?.steps) ||
+      drip?.steps.length === 0
     ) {
       return res.status(200).json({
         message: "Drip assigned. No immediate SMS sent (non-SMS or no steps).",
@@ -119,7 +119,7 @@ export default async function handler(
       });
     }
 
-    const stepsSorted = [...drip.steps].sort(
+    const stepsSorted = [...(drip.steps as any[])].sort(
       (a: any, b: any) =>
         (parseInt(a?.day ?? "0", 10) || 0) - (parseInt(b?.day ?? "0", 10) || 0),
     );

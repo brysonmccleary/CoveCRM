@@ -3,7 +3,7 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from "./auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import Lead from "@/models/Lead";
-import { ObjectId } from "mongoose";
+import { Types } from "mongoose";
 
 export default async function handler(
   req: NextApiRequest,
@@ -27,14 +27,14 @@ export default async function handler(
     const updateFields: any = {};
     if (status) updateFields.status = status;
     if (notes) updateFields["Notes"] = notes; // match your schema field casing
-    if (folderId) updateFields.folderId = new ObjectId(folderId);
+    if (folderId) updateFields.folderId = new Types.ObjectId(folderId);
 
     const result = await Lead.updateOne(
       { _id: leadId, userEmail },
       { $set: updateFields },
     );
 
-    if (result.matchedCount === 0) {
+    if ((result as any).matchedCount === 0) {
       return res
         .status(404)
         .json({ message: "Lead not found or access denied" });

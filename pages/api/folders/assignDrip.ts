@@ -1,6 +1,7 @@
-import dbConnect from "../../../dbConnect";
-import Folder from "../../../models/Folder";
+// /pages/api/folders/assignDrip.ts
 import type { NextApiRequest, NextApiResponse } from "next";
+import dbConnect from "@/lib/mongooseConnect";
+import Folder from "@/models/Folder";
 
 export default async function handler(
   req: NextApiRequest,
@@ -8,29 +9,43 @@ export default async function handler(
 ) {
   await dbConnect();
 
-  if (req.method === "POST") {
-    const { folderId, dripId } = req.body;
+  if (req.method !== "POST") {
+    return res.status(405).json({ message: "Method not allowed" });
+  }
 
-    if (!folderId || !dripId) {
-      return res.status(400).json({ message: "Missing folderId or dripId" });
+  const { folderId, dripId } = req.body as {
+    folderId?: string;
+    dripId?: string;
+  };
+
+  if (!folderId || !dripId) {
+    return res.status(400).json({ message: "Missing folderId or dripId" });
+  }
+
+  try {
+    const folder: any = await Folder.findById(folderId);
+    if (!folder) {
+      return res.status(404).json({ message: "Folder not found" });
     }
 
-    try {
-      const folder = await Folder.findById(folderId);
+    // Ensure array field exists, align with other code paths that use `assignedDrips`
+    folder.assignedDrips = Array.isArray(folder.assignedDrips)
+      ? folder.assignedDrips
+      : [];
 
-      if (!folder) {
-        return res.status(404).json({ message: "Folder not found" });
-      }
-
-      folder.assignedDrip = dripId;
-      await folder.save();
-
-      res.status(200).json({ message: "Drip assigned successfully", folder });
-    } catch (error) {
-      console.error(error);
-      res.status(500).json({ message: "Error assigning drip to folder" });
+    if (!folder.assignedDrips.includes(dripId)) {
+      folder.assignedDrips.push(dripId);
     }
-  } else {
-    res.status(405).json({ message: "Method not allowed" });
+
+    await folder.save();
+
+    return res
+      .status(200)
+      .json({ message: "Drip assigned successfully", folderId: folder._id });
+  } catch (error) {
+    console.error(error);
+    return res
+      .status(500)
+      .json({ message: "Error assigning drip to folder" });
   }
 }

@@ -1,4 +1,3 @@
-// pages/api/twilio/release-number.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
@@ -7,10 +6,6 @@ import User from "@/models/User";
 import PhoneNumber from "@/models/PhoneNumber";
 import { stripe } from "@/lib/stripe";
 import twilioClient from "@/lib/twilioClient";
-
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: "2024-04-10",
-});
 
 function normalizeE164(p: string) {
   const digits = (p || "").replace(/\D/g, "");
@@ -68,7 +63,7 @@ export default async function handler(
     // 1) Cancel Stripe subscription (if any)
     try {
       if (target.subscriptionId) {
-        await stripe.subscriptions.del(target.subscriptionId);
+        await stripe.subscriptions.cancel(target.subscriptionId);
       }
     } catch (err) {
       console.warn("⚠️ Stripe subscription cancel warning:", err);

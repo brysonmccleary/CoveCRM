@@ -1,15 +1,10 @@
-// /pages/api/cron/affiliate-payouts.ts
 import type { NextApiRequest, NextApiResponse } from "next";
-import { stripe } from "@/lib/stripe";
 import dbConnect from "@/lib/mongooseConnect";
 import Affiliate from "@/models/Affiliate";
 import AffiliatePayout from "@/models/AffiliatePayout";
 import { sendAffiliatePayoutEmail } from "@/lib/email";
+import { stripe } from "@/lib/stripe";
 import crypto from "crypto";
-
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: "2024-04-10",
-});
 
 const MIN_PAYOUT = Number(process.env.AFFILIATE_MIN_PAYOUT || 50);
 
@@ -34,13 +29,14 @@ export default async function handler(
 
   // Auth: header OR query param token
   const bearer = req.headers.authorization || "";
-  const expectedHeader = `Bearer ${process.env.INTERNAL_API_TOKEN}`;
+  const expectedHeader = `Bearer ${process.env.INTERNAL_API_TOKEN || ""}`;
   const queryToken =
     typeof req.query.token === "string" ? req.query.token : undefined;
 
-  const okHeader = expectedHeader && bearer === expectedHeader;
+  const okHeader =
+    Boolean(process.env.INTERNAL_API_TOKEN) && bearer === expectedHeader;
   const okQuery =
-    process.env.INTERNAL_API_TOKEN &&
+    Boolean(process.env.INTERNAL_API_TOKEN) &&
     queryToken === process.env.INTERNAL_API_TOKEN;
 
   if (!okHeader && !okQuery) {
@@ -119,7 +115,7 @@ export default async function handler(
           periodStart,
           periodEnd,
           stripeTransferId: transfer.id,
-          status: "sent", // webhook will confirm/flip if reversed
+          status: "sent", // webhook can confirm/flip if reversed
           idempotencyKey: idemKey,
         });
 

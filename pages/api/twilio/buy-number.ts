@@ -1,5 +1,5 @@
-// pages/api/twilio/buy-number.ts
 import type { NextApiRequest, NextApiResponse } from "next";
+import type Stripe from "stripe";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
@@ -9,14 +9,11 @@ import User from "@/models/User";
 import { stripe } from "@/lib/stripe";
 import twilioClient from "@/lib/twilioClient";
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: "2024-04-10",
-});
-
-// $/mo price for a phone number
+// $/mo price for a phone number (env is better, but keeping your constant)
 const PHONE_PRICE_ID = "price_1RpvR9DF9aEsjVyJk9GiJkpe";
 
-const BASE_URL = process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "";
+const BASE_URL =
+  process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "";
 
 /** Normalize to E.164 (+1XXXXXXXXXX) */
 function normalizeE164(p: string) {
@@ -144,12 +141,20 @@ export default async function handler(
       user.stripeCustomerId = customer.id;
       await user.save();
     }
-    const customer = (await stripe.customers.retrieve(
-      user.stripeCustomerId,
-    )) as Stripe.Customer;
+
+    const customer =
+      (await stripe.customers.retrieve(
+        user.stripeCustomerId,
+      )) as Stripe.Customer | Stripe.DeletedCustomer;
+
     const hasDefaultPM =
-      Boolean(customer.invoice_settings?.default_payment_method) ||
-      Boolean(customer.default_source);
+      "deleted" in customer
+        ? false
+        : Boolean(
+            customer.invoice_settings?.default_payment_method ||
+              (customer as Stripe.Customer).default_source,
+          );
+
     if (!hasDefaultPM) {
       return res.status(402).json({
         code: "no_payment_method",
@@ -171,9 +176,7 @@ export default async function handler(
     // Buy number
     const purchased = await twilioClient.incomingPhoneNumbers.create({
       phoneNumber: requestedNumber,
-      // (Optional) number-level webhooks; we rely on MS-level:
-      // smsUrl: `${BASE_URL}/api/twilio/inbound-sms`,
-      // statusCallback: `${BASE_URL}/api/twilio/status-callback`,
+      // number-level webhooks not needed when using messaging service webhooks
     });
     purchasedSid = purchased.sid;
 
@@ -189,9 +192,7 @@ export default async function handler(
       });
       await addNumberToMessagingService(messagingServiceSid, purchased.sid);
     } else {
-      console.log(
-        "ℹ️ Number bought but A2P not started yet; skipping sender-pool attach. Will attach on A2P approval.",
-      );
+      // no-op, will attach when A2P is completed
     }
 
     // Save on user doc
@@ -214,7 +215,7 @@ export default async function handler(
     await PhoneNumber.create({
       userId: user._id,
       phoneNumber: purchased.phoneNumber,
-      messagingServiceSid, // may be undefined until A2P started → we’ll backfill on approval
+      messagingServiceSid, // may be undefined until A2P started → backfill later
       profileSid: a2p?.profileSid,
       a2pApproved: Boolean(a2p?.messagingReady),
       datePurchased: new Date(),
@@ -240,7 +241,7 @@ export default async function handler(
     } catch {}
     try {
       if (createdSubscriptionId)
-        await stripe.subscriptions.del(createdSubscriptionId);
+        await stripe.subscriptions.cancel(createdSubscriptionId);
     } catch {}
 
     const msg =

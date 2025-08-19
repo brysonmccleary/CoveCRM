@@ -9,9 +9,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "./auth/[...nextauth]";
 
 export const config = {
-  api: {
-    bodyParser: false,
-  },
+  api: { bodyParser: false },
 };
 
 function bufferToStream(buffer: Buffer): Readable {
@@ -33,18 +31,19 @@ export default async function handler(
   if (!session?.user?.email) {
     return res.status(401).json({ message: "Unauthorized" });
   }
+  const userEmail = session.user.email as string;
 
   await dbConnect();
 
   const form = formidable({ multiples: false, keepExtensions: true });
 
-  form.parse(req, async (err, fields, files) => {
+  form.parse(req, async (err, _fields, files) => {
     if (err) {
       console.error("❌ Formidable parse error:", err);
       return res.status(500).json({ message: "Error parsing form" });
     }
 
-    const file = Array.isArray(files.file) ? files.file[0] : files.file;
+    const file = Array.isArray(files.file) ? files.file[0] : (files.file as any);
 
     if (!file || !file.filepath) {
       return res.status(400).json({ message: "CSV file missing" });
@@ -59,8 +58,7 @@ export default async function handler(
         .on("data", (row) => {
           const clean = Object.entries(row).reduce(
             (acc, [key, value]) => {
-              acc[key.trim()] =
-                typeof value === "string" ? value.trim() : value;
+              acc[String(key).trim()] = String(value ?? "").trim();
               return acc;
             },
             {} as Record<string, string>,
@@ -71,8 +69,8 @@ export default async function handler(
           try {
             const folders = rows.map((row) => ({
               name: row["Folder Name"] || "Unnamed",
-              userEmail: session.user.email,
-              assignedDrips: [],
+              userEmail,
+              assignedDrips: [] as string[],
             }));
 
             await Folder.insertMany(folders);

@@ -1,5 +1,3 @@
-// /pages/admin/affiliates.tsx
-
 import { useEffect, useState } from "react";
 import axios from "axios";
 import { getSession, useSession } from "next-auth/react";
@@ -21,11 +19,15 @@ export default function AdminAffiliateList() {
   useEffect(() => {
     async function fetchStats() {
       const currentSession = await getSession();
+
+      // If not admin, stop loading so we can show "Access Denied"
       if (
-        !currentSession ||
+        !currentSession?.user ||
         currentSession.user.email !== "bryson.mccleary1@gmail.com"
-      )
+      ) {
+        setLoading(false);
         return;
+      }
 
       try {
         const res = await axios.get("/api/admin/get-affiliate-codes");
@@ -65,7 +67,7 @@ export default function AdminAffiliateList() {
           Affiliate Dashboard (Admin Only)
         </h1>
 
-        {/* Your original table */}
+        {/* Basic table */}
         <div className="mb-10">
           <h2 className="text-xl font-semibold mb-4">
             Basic Signups by Referral Code
@@ -93,7 +95,7 @@ export default function AdminAffiliateList() {
           </table>
         </div>
 
-        {/* New full leaderboard */}
+        {/* Full leaderboard */}
         <div>
           <h2 className="text-xl font-semibold mb-4">
             Full Revenue + Payout Leaderboard

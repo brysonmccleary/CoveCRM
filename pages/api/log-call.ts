@@ -1,6 +1,6 @@
 // /pages/api/log-call.ts
 import type { NextApiRequest, NextApiResponse } from "next";
-import dbConnect from "@/lib/mongooseconnect";
+import dbConnect from "@/lib/mongooseConnect";
 import CallLog from "@/models/CallLog";
 
 export default async function handler(

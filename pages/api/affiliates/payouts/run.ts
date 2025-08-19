@@ -1,4 +1,3 @@
-// /pages/api/affiliates/payouts/run.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../../auth/[...nextauth]";
@@ -8,10 +7,6 @@ import AffiliatePayout from "@/models/AffiliatePayout";
 import { sendAffiliatePayoutEmail } from "@/lib/email";
 import { stripe } from "@/lib/stripe";
 import crypto from "crypto";
-
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: "2024-04-10",
-});
 
 // Minimum payout threshold (USD)
 const MIN_PAYOUT = Number(process.env.AFFILIATE_MIN_PAYOUT || 5);
@@ -35,7 +30,7 @@ export default async function handler(
     return res.status(405).json({ message: "Method not allowed" });
 
   const session = await getServerSession(req, res, authOptions);
-  if (!session?.user?.email || (session.user as any).role !== "admin") {
+  if (!session?.user || (session.user as any).role !== "admin") {
     return res.status(403).json({ message: "Admin only" });
   }
 
@@ -106,8 +101,8 @@ export default async function handler(
         { idempotencyKey: idemKey },
       );
 
-      // Record payout (status queued -> will flip via webhooks; we mark 'sent' optimistically)
-      const payoutDoc = await AffiliatePayout.create({
+      // Record payout
+      await AffiliatePayout.create({
         affiliateId: a._id.toString(),
         affiliateEmail: a.email,
         amount,
@@ -138,7 +133,12 @@ export default async function handler(
         periodStart: periodStart.toISOString(),
         periodEnd: periodEnd.toISOString(),
         balanceAfter: a.payoutDue || 0,
-        dashboardUrl: `${process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || process.env.NEXTAUTH_URL || ""}/affiliates/earnings`,
+        dashboardUrl: `${
+          process.env.NEXT_PUBLIC_BASE_URL ||
+          process.env.BASE_URL ||
+          process.env.NEXTAUTH_URL ||
+          ""
+        }/affiliates/earnings`,
       });
 
       results.push({

@@ -2,7 +2,7 @@
 
 import type { NextApiRequest, NextApiResponse } from "next";
 import dbConnect from "@/lib/mongooseConnect";
-import Lead from "@/models/lead";
+import Lead from "@/models/Lead";
 
 export default async function handler(
   req: NextApiRequest,

@@ -1,6 +1,6 @@
 import dotenv from "dotenv";
 import mongoose from "mongoose";
-import User from "../models/user";
+import User from "../models/User";
 
 // ✅ Load .env
 dotenv.config();

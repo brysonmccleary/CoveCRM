@@ -3,7 +3,7 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
 import twilioClient from "@/lib/twilioClient";
 import dbConnect from "@/lib/mongooseConnect";
-import User from "@/models/user";
+import User from "@/models/User";
 import Stripe from "stripe";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {

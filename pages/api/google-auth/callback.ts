@@ -1,17 +1,13 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { google } from "googleapis";
-import { getServerSession } from "next-auth";
+import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
-import { updateUserGoogleSheets } from "@/models/User";
+import { updateUserGoogleSheets } from "@/lib/userHelpers";
 
-export default async function handler(
-  req: NextApiRequest,
-  res: NextApiResponse,
-) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
     const session = await getServerSession(req, res, authOptions);
-
-    if (!session || !session.user?.email) {
+    if (!session?.user?.email) {
       return res.status(401).json({ error: "Unauthorized" });
     }
 
@@ -20,30 +16,31 @@ export default async function handler(
       return res.status(400).json({ error: "Missing authorization code" });
     }
 
+    const base =
+      process.env.NEXTAUTH_URL ||
+      process.env.NEXT_PUBLIC_BASE_URL ||
+      "http://localhost:3000";
+    const redirectUri = `${base}/api/google-auth/callback`;
+
     const oauth2Client = new google.auth.OAuth2(
       process.env.GOOGLE_CLIENT_ID!,
       process.env.GOOGLE_CLIENT_SECRET!,
-      process.env.GOOGLE_REDIRECT_URI!, // Should match /api/google/callback
+      redirectUri
     );
 
     const { tokens } = await oauth2Client.getToken(code);
-    oauth2Client.setCredentials(tokens);
 
-    const oauth2 = google.oauth2({ auth: oauth2Client, version: "v2" });
-    const profile = await oauth2.userinfo.get();
-
-    // Save to user DB record
+    // Save tokens on user
     await updateUserGoogleSheets(session.user.email, {
       accessToken: tokens.access_token || "",
       refreshToken: tokens.refresh_token || "",
-      expiryDate: tokens.expiry_date || 0,
-      googleEmail: profile.data.email || "",
+      expiryDate: tokens.expiry_date ?? null,
     });
 
-    // Redirect to sheet selection
-    return res.redirect("/google-sheets-sync");
+    // Back to settings (or wherever you want)
+    return res.redirect("/dashboard?tab=settings");
   } catch (err: any) {
-    console.error("Google OAuth error:", err?.response?.data || err);
+    console.error("Google OAuth callback error:", err?.response?.data || err);
     return res.status(500).json({ error: "Google OAuth callback failed" });
   }
 }

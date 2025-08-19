@@ -1,7 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import dbConnect from "@/lib/mongooseConnect";
 import Lead from "@/models/Lead";
-import { handleAIResponse } from "@/lib/ai/handleairesponse";
+import { handleAIResponse } from "@/lib/ai/handleAIResponse";
 import mongoose from "mongoose";
 
 export default async function handler(

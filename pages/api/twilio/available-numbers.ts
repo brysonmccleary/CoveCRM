@@ -1,34 +1,12 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import twilioClient from "@/lib/twilioClient";
 
-// Extended area code city map (many major US cities)
+// Deduped area code → city map (unique keys only)
 const areaCodeCityMap: Record<string, string> = {
-  "212": "New York",
-  "213": "Los Angeles",
-  "305": "Miami",
-  "312": "Chicago",
-  "404": "Atlanta",
-  "415": "San Francisco",
-  "425": "Seattle Eastside",
-  "512": "Austin",
-  "602": "Phoenix",
-  "617": "Boston",
-  "702": "Las Vegas",
-  "703": "Northern Virginia",
-  "704": "Charlotte",
-  "713": "Houston",
-  "714": "Orange County",
-  "718": "Brooklyn",
-  "720": "Denver",
-  "801": "Salt Lake City",
-  "808": "Honolulu",
-  "816": "Kansas City",
-  "901": "Memphis",
-  "904": "Jacksonville",
-  "916": "Sacramento",
-  "919": "Raleigh",
   "202": "Washington DC",
   "210": "San Antonio",
+  "212": "New York",
+  "213": "Los Angeles",
   "214": "Dallas",
   "215": "Philadelphia",
   "216": "Cleveland",
@@ -39,8 +17,10 @@ const areaCodeCityMap: Record<string, string> = {
   "317": "Indianapolis",
   "323": "Los Angeles",
   "347": "New York",
+  "404": "Atlanta",
   "408": "San Jose",
   "415": "San Francisco",
+  "425": "Seattle Eastside",
   "480": "Phoenix East",
   "502": "Louisville",
   "503": "Portland",
@@ -62,9 +42,11 @@ const areaCodeCityMap: Record<string, string> = {
   "678": "Atlanta",
   "682": "Fort Worth",
   "702": "Las Vegas",
+  "703": "Northern Virginia",
   "704": "Charlotte",
   "713": "Houston",
-  "714": "Anaheim",
+  "714": "Orange County",
+  "718": "Brooklyn",
   "720": "Denver",
   "732": "New Jersey Shore",
   "754": "Fort Lauderdale",
@@ -75,7 +57,9 @@ const areaCodeCityMap: Record<string, string> = {
   "774": "Central Massachusetts",
   "786": "Miami",
   "801": "Salt Lake City",
+  "808": "Honolulu",
   "813": "Tampa",
+  "816": "Kansas City",
   "817": "Fort Worth",
   "818": "San Fernando Valley",
   "832": "Houston",
@@ -103,7 +87,6 @@ const areaCodeCityMap: Record<string, string> = {
   "980": "Charlotte",
   "984": "Raleigh",
   "985": "Houma",
-  // Add more if you'd like
 };
 
 export default async function handler(
@@ -120,11 +103,16 @@ export default async function handler(
     return res.status(400).json({ message: "Missing area code" });
   }
 
+  const areaCodeNum = Number(String(areaCode).replace(/\D/g, ""));
+  if (!Number.isInteger(areaCodeNum) || areaCodeNum < 200 || areaCodeNum > 999) {
+    return res.status(400).json({ message: "Invalid area code" });
+  }
+
   try {
     const numbers = await twilioClient
       .availablePhoneNumbers(country as string)
       .local.list({
-        areaCode: areaCode as string,
+        areaCode: areaCodeNum, // must be a number
         smsEnabled: true,
         voiceEnabled: true,
         limit: 10,
@@ -133,7 +121,6 @@ export default async function handler(
     const formatted = numbers.map((num) => {
       const match = num.phoneNumber.match(/\+1(\d{3})/);
       const extractedAreaCode = match ? match[1] : "";
-
       const city =
         num.locality || areaCodeCityMap[extractedAreaCode] || "Available city";
       const state = num.region || "US";

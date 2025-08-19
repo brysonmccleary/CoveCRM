@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/router";
 import toast from "react-hot-toast";
 import { loadStripe } from "@stripe/stripe-js";
+import type { StripeElementsOptions } from "@stripe/stripe-js";
 import { Elements } from "@stripe/react-stripe-js";
 import CheckoutForm from "@/components/CheckoutForm";
 
@@ -124,10 +125,16 @@ export default function BillingPage() {
     };
   }, [emailStr, aiUpgrade, affiliateEmailStr, promoCodeStr]);
 
-  const elementsOptions = useMemo(
+  const elementsOptions = useMemo<StripeElementsOptions | undefined>(
     () =>
       clientSecret
-        ? { clientSecret, appearance: { labels: "floating" } }
+        ? {
+            clientSecret,
+            appearance: {
+              // must be a string literal, not string
+              labels: "floating" as const,
+            },
+          }
         : undefined,
     [clientSecret],
   );

@@ -1,127 +1,132 @@
-import React, { useState, useEffect } from "react";
-import toast from "react-hot-toast";
-import { prebuiltDrips } from "@/utils/prebuiltDrips";
+// /components/AssignDripModal.tsx
+import { useEffect, useState } from "react";
 
-interface Folder {
+export interface Folder {
   _id: string;
   name: string;
-  leadCount?: number;
 }
 
-interface AssignDripModalProps {
+export interface AssignDripModalProps {
   dripId: string;
   onClose: () => void;
-  isOpen: boolean;
+  /** Optional: pass folders in; if omitted, component will fetch them. */
+  folders?: Folder[];
+  /**
+   * Called with the selected folderId. If not provided,
+   * the component will POST to /api/assign-drip-to-folder itself.
+   */
+  onAssign?: (folderId: string) => Promise<void> | void;
 }
 
 export default function AssignDripModal({
   dripId,
   onClose,
-  isOpen,
+  folders: foldersProp,
+  onAssign,
 }: AssignDripModalProps) {
-  const [folders, setFolders] = useState<Folder[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const [assigning, setAssigning] = useState(false);
+  const [folders, setFolders] = useState<Folder[]>(foldersProp || []);
+  const [loading, setLoading] = useState(false);
+  const [selected, setSelected] = useState<string>("");
 
+  // If folders not provided, fetch them
   useEffect(() => {
-    if (!isOpen) return;
-
-    const fetchFolders = async () => {
-      setLoading(true);
-      setError("");
+    if (foldersProp?.length) return;
+    let cancelled = false;
+    (async () => {
       try {
-        const res = await fetch("/api/get-folders");
-        if (!res.ok) throw new Error("Failed to fetch folders");
-        const data = await res.json();
-        // ✅ API returns { folders: [...] }
-        setFolders(Array.isArray(data?.folders) ? data.folders : []);
-      } catch (err: any) {
-        setError(err.message || "Error fetching folders");
+        setLoading(true);
+        const r = await fetch("/api/get-folders");
+        const j = await r.json();
+        if (!cancelled) {
+          setFolders(j?.folders || []);
+        }
+      } catch {
+        // noop
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
+    })();
+    return () => {
+      cancelled = true;
     };
+  }, [foldersProp]);
 
-    fetchFolders();
-  }, [isOpen]);
-
-  const handleAssign = async (folderId: string) => {
-    setAssigning(true);
+  const handleAssign = async () => {
+    if (!selected) return;
     try {
-      // ✅ Use the correct API route name
-      const res = await fetch("/api/assign-drip-to-folder", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ dripId, folderId }),
-      });
-
-      if (res.ok) {
-        toast.success("✅ Drip assigned to folder. New leads will auto-enroll.");
-        onClose();
+      if (onAssign) {
+        await onAssign(selected);
       } else {
-        const data = await res.json().catch(() => ({}));
-        toast.error(`❌ ${data.message || "Failed to assign drip."}`);
+        // Default behavior: call the API directly
+        const r = await fetch("/api/assign-drip-to-folder", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ dripId, folderId: selected }),
+        });
+        if (!r.ok) {
+          const j = await r.json().catch(() => ({}));
+          throw new Error(j?.message || "Failed to assign drip");
+        }
+        alert("Drip assigned successfully!");
       }
-    } catch (error) {
-      console.error("Assign error:", error);
-      toast.error("❌ Error assigning the drip.");
-    } finally {
-      setAssigning(false);
+      onClose();
+    } catch (e: any) {
+      alert(e?.message || "Error assigning drip");
     }
   };
 
-  const dripName =
-    prebuiltDrips.find((d) => d.id === dripId)?.name || dripId || "Unknown";
-
-  if (!isOpen) return null;
-
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-70 flex justify-center items-center z-50">
-      <div className="bg-[#1e293b] text-white p-6 rounded-lg shadow-lg w-full max-w-md space-y-4">
-        <h2 className="text-xl font-bold">Assign Drip to Folder</h2>
-        <p className="text-sm text-gray-300">
-          Drip: <strong>{dripName}</strong>
-        </p>
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+      role="dialog"
+      aria-modal="true"
+    >
+      <div className="w-full max-w-md rounded-lg bg-[#0b1220] border border-white/10 p-4 text-white">
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-lg font-semibold">Assign Drip</h2>
+          <button
+            onClick={onClose}
+            className="text-gray-400 hover:text-gray-200"
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
 
-        {loading && <p className="text-sm">Loading folders...</p>}
-        {error && <p className="text-red-500">{error}</p>}
-
-        {!loading && !error && folders.length === 0 && (
-          <p className="text-sm text-gray-400">
-            No folders found. Please create one first.
-          </p>
-        )}
-
-        {!loading && folders.length > 0 && (
-          <ul className="space-y-2 max-h-64 overflow-y-auto">
-            {folders.map((folder) => (
-              <li key={folder._id}>
-                <button
-                  disabled={assigning}
-                  onClick={() => handleAssign(folder._id)}
-                  className="w-full text-left px-4 py-2 border border-gray-600 rounded hover:bg-gray-700"
-                >
-                  <div className="flex items-center justify-between">
-                    <span>{folder.name}</span>
-                    {typeof folder.leadCount === "number" && (
-                      <span className="text-xs text-gray-400">
-                        {folder.leadCount} lead{folder.leadCount === 1 ? "" : "s"}
-                      </span>
-                    )}
-                  </div>
-                </button>
-              </li>
+        <div className="space-y-2">
+          <label className="block text-sm text-gray-300">Folder</label>
+          <select
+            value={selected}
+            onChange={(e) => setSelected(e.target.value)}
+            className="w-full bg-[#0f172a] border border-white/10 rounded p-2"
+            disabled={loading || !folders.length}
+          >
+            <option value="" disabled>
+              {loading ? "Loading folders…" : "Select a folder"}
+            </option>
+            {folders.map((f) => (
+              <option key={f._id} value={f._id}>
+                {f.name}
+              </option>
             ))}
-          </ul>
-        )}
+          </select>
+        </div>
 
-        <button
-          onClick={onClose}
-          className="w-full mt-4 px-4 py-2 bg-gray-600 hover:bg-gray-700 rounded"
-        >
-          Close
-        </button>
+        <div className="mt-4 flex justify-end gap-2">
+          <button
+            onClick={onClose}
+            className="px-3 py-2 rounded bg-gray-700 hover:bg-gray-600"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleAssign}
+            disabled={!selected || loading}
+            className="px-3 py-2 rounded bg-green-600 hover:bg-green-700 disabled:opacity-60"
+          >
+            Assign
+          </button>
+        </div>
       </div>
     </div>
   );

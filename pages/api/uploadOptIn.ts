@@ -1,7 +1,7 @@
 // /pages/api/uploadOptIn.ts
-
 import type { NextApiRequest, NextApiResponse } from "next";
 import { IncomingForm } from "formidable";
+import type { File as FormidableFile } from "formidable";
 import fs from "fs";
 import path from "path";
 
@@ -33,20 +33,25 @@ export default async function handler(
     maxFileSize: 5 * 1024 * 1024, // 5 MB limit
   });
 
-  form.parse(req, async (err, fields, files) => {
+  form.parse(req, async (err, _fields, files) => {
     if (err) {
       console.error("Form parse error:", err);
       return res.status(500).json({ message: "File upload error" });
     }
 
-    const file = files.file?.[0] || files.file;
+    // "file" can be a single File or File[]
+    const fileField = (files as any).file as FormidableFile | FormidableFile[] | undefined;
+    const file: FormidableFile | undefined = Array.isArray(fileField)
+      ? fileField[0]
+      : fileField;
+
     if (!file) {
       return res.status(400).json({ message: "No file uploaded" });
     }
 
-    const fileName = path.basename(file.filepath);
+    const fileName = path.basename((file as FormidableFile).filepath);
     const fileUrl = `/uploads/${fileName}`;
 
-    res.status(200).json({ message: "File uploaded", url: fileUrl });
+    return res.status(200).json({ message: "File uploaded", url: fileUrl });
   });
 }

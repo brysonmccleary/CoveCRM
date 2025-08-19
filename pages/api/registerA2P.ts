@@ -1,5 +1,7 @@
+// /pages/api/registerA2P.ts
 import type { NextApiRequest, NextApiResponse } from "next";
-import { getServerSession } from "next-auth";
+import { getServerSession } from "next-auth/next";
+import type { Session } from "next-auth";
 import { authOptions } from "./auth/[...nextauth]";
 import twilio from "twilio";
 import dbConnect from "@/lib/dbConnect";
@@ -8,6 +10,7 @@ import parseAddress from "parse-address";
 
 const accountSid = process.env.TWILIO_ACCOUNT_SID!;
 const authToken = process.env.TWILIO_AUTH_TOKEN!;
+// Keep defined even if not used here; may be used by downstream utils
 const messagingServiceSid = process.env.TWILIO_MESSAGING_SERVICE_SID!;
 
 const twilioClient = twilio(accountSid, authToken);
@@ -18,7 +21,11 @@ export default async function handler(
 ) {
   if (req.method !== "POST") return res.status(405).end("Method Not Allowed");
 
-  const session = await getServerSession(req, res, authOptions);
+  const session = (await getServerSession(
+    req,
+    res,
+    authOptions as any,
+  )) as Session | null;
   if (!session) return res.status(401).json({ message: "Unauthorized" });
 
   const {
@@ -35,7 +42,7 @@ export default async function handler(
     optInDetails,
     volume,
     optInScreenshotUrl,
-  } = req.body;
+  } = (req.body || {}) as Record<string, any>;
 
   if (
     !businessName ||
@@ -87,10 +94,10 @@ export default async function handler(
 
     const policySid = standardA2PPolicy.sid;
 
+    // Remove unsupported `businessName` property (use friendlyName instead)
     const brand = await twilioClient.trusthub.v1.customerProfiles.create({
       policySid,
       friendlyName: businessName,
-      businessName,
       businessRegistrationNumber: ein,
       customerProfileType: "END_USER",
       email,
@@ -101,17 +108,27 @@ export default async function handler(
       stateProvinceRegion: parsed.state,
       postalCode: parsed.zip,
       country: "US",
+      // Keeping authorizedContact; if Twilio's types disallow it in your SDK version,
+      // you can move this to a follow-up API if needed, but leaving it here preserves behavior.
       authorizedContact: {
         title: contactTitle || "Owner",
         firstName: contactFirstName,
         lastName: contactLastName,
         email,
         phone,
-      },
-    });
+      } as any,
+    } as any);
+
+    const userId = String(
+      // prefer a stable internal id; fall back to email
+      (session as any)?.user?.id || (session as any)?.user?.email || "",
+    );
+    if (!userId) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
 
     await A2PProfile.create({
-      userId: session.user.id,
+      userId,
       businessName,
       ein,
       website,

@@ -97,13 +97,19 @@ async function sendViaResend({
   }
 }
 
+/* ---------- Helpers ---------- */
+
+function toISO(input: string | Date) {
+  return input instanceof Date ? input.toISOString() : String(input);
+}
+
 /* ---------- Existing templates ---------- */
 
 export function renderLeadBookingEmail(opts: {
   leadName?: string;
   agentName?: string;
-  startISO: string;
-  endISO: string;
+  startISO: string | Date;
+  endISO: string | Date;
   title?: string;
   description?: string;
   eventUrl?: string;
@@ -117,8 +123,8 @@ export function renderLeadBookingEmail(opts: {
     description,
     eventUrl,
   } = opts;
-  const start = new Date(startISO).toLocaleString();
-  const end = new Date(endISO).toLocaleString();
+  const start = new Date(toISO(startISO)).toLocaleString();
+  const end = new Date(toISO(endISO)).toLocaleString();
   return `
     <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif">
       <h2>Appointment Confirmed</h2>
@@ -141,8 +147,8 @@ export function renderAgentBookingEmail(opts: {
   leadName?: string;
   leadPhone?: string;
   leadEmail?: string;
-  startISO: string;
-  endISO: string;
+  startISO: string | Date;
+  endISO: string | Date;
   title?: string;
   description?: string;
   leadUrl?: string;
@@ -160,8 +166,8 @@ export function renderAgentBookingEmail(opts: {
     leadUrl,
     eventUrl,
   } = opts;
-  const start = new Date(startISO).toLocaleString();
-  const end = new Date(endISO).toLocaleString();
+  const start = new Date(toISO(startISO)).toLocaleString();
+  const end = new Date(toISO(endISO)).toLocaleString();
   return `
     <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif">
       <h2>New Booking</h2>
@@ -190,7 +196,7 @@ function escapeHtml(str: string) {
     .replace(/>/g, "&gt;");
 }
 
-function formatDateTimeFriendly(timeISO: string, tzLabel?: string) {
+function formatDateTimeFriendly(timeISO: string, tzLabel?: string | null) {
   try {
     const d = new Date(timeISO);
     const when = d.toLocaleString(undefined, {
@@ -212,7 +218,7 @@ export function renderAgentAppointmentNotice(opts: {
   phone: string;
   state?: string;
   timeISO: string;
-  timezone?: string; // e.g. "CST" or "CDT"
+  timezone?: string | null; // e.g. "CST" or "CDT"
   source?: "AI" | "Dialer" | "Manual";
   eventUrl?: string;
 }) {
@@ -251,13 +257,24 @@ export async function sendAppointmentBookedEmail(opts: {
   phone: string;
   state?: string;
   timeISO: string; // event start in ISO
-  timezone?: string; // e.g. "CST"/"CDT"
+  timezone?: string | null; // accept null or undefined
   source?: "AI" | "Dialer" | "Manual";
   eventUrl?: string;
+  /** Back-compat: accept `eventLink` as an alias for `eventUrl` from older callers */
+  eventLink?: string;
 }): Promise<SendEmailResult> {
-  const pretty = formatDateTimeFriendly(opts.timeISO, opts.timezone);
+  const pretty = formatDateTimeFriendly(opts.timeISO, opts.timezone ?? null);
   const subject = `📅 New appointment: ${opts.leadName} — ${pretty}`;
-  const html = renderAgentAppointmentNotice(opts);
+  const html = renderAgentAppointmentNotice({
+    agentName: opts.agentName,
+    leadName: opts.leadName,
+    phone: opts.phone,
+    state: opts.state,
+    timeISO: opts.timeISO,
+    timezone: opts.timezone ?? null,
+    source: opts.source,
+    eventUrl: opts.eventUrl ?? opts.eventLink,
+  });
   return sendViaResend({ to: opts.to, subject, html });
 }
 

@@ -103,12 +103,10 @@ export default async function handler(
     return res.status(405).json({ message: "Method not allowed" });
 
   if (!shouldRunNowPT()) {
-    return res
-      .status(200)
-      .json({
-        message:
-          "Not run window (expects 9:00 AM PT). Set DRIPS_DEBUG_ALWAYS_RUN=1 to override.",
-      });
+    return res.status(200).json({
+      message:
+        "Not run window (expects 9:00 AM PT). Set DRIPS_DEBUG_ALWAYS_RUN=1 to override.",
+    });
   }
 
   try {
@@ -177,9 +175,9 @@ export default async function handler(
         if (!prog || !prog.startedAt) continue;
 
         // Load drip and sort steps by Day number
-        const drip = await resolveDrip(dripId);
-        if (!drip || drip.type !== "sms") continue;
-        const steps = sortDaySteps(drip);
+        const dripDoc: any = await resolveDrip(dripId);
+        if (!dripDoc || dripDoc.type !== "sms") continue;
+        const steps = sortDaySteps(dripDoc);
         if (!steps.length) continue;
 
         // Determine next step index to consider

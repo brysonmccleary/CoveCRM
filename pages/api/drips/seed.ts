@@ -1,27 +1,36 @@
-import dbConnect from "@/lib/dbConnect";
+// /pages/api/drips/seed.ts
+import type { NextApiRequest, NextApiResponse } from "next";
+import dbConnect from "@/lib/mongooseConnect";
 import DripCampaign from "@/models/DripCampaign";
 import { prebuiltDrips } from "@/utils/prebuiltDrips";
 
-export default async function handler(req, res) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
+  // Optionally restrict to POST in prod
+  // if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed" });
+
   await dbConnect();
 
   try {
     // Clear existing drips to avoid duplicates
     await DripCampaign.deleteMany({});
 
-    // Transform each drip
-    const formattedDrips = prebuiltDrips.map((drip) => ({
+    // Transform each drip from prebuilt format -> DB format
+    const formattedDrips = prebuiltDrips.map((drip: any) => ({
       name: drip.name,
-      type: drip.type,
+      type: drip.type, // e.g., "sms"
       isActive: true,
+      isGlobal: true,
       assignedFolders: [],
-      steps: drip.messages.map((msg) => ({
+      steps: (drip.messages || []).map((msg: any) => ({
         text: msg.text,
-        day: msg.day,
-        time: "9:00 AM", // Default
-        calendarLink: "", // Default
-        views: 0, // Default
-        responses: 0, // Default
+        day: String(msg.day ?? ""),
+        time: "9:00 AM", // default send time
+        calendarLink: "",
+        views: 0,
+        responses: 0,
       })),
       analytics: {
         views: 0,

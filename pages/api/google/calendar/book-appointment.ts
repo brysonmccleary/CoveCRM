@@ -13,7 +13,7 @@ import twilioClient from "@/lib/twilioClient";
 import { google } from "googleapis";
 import { getTimezoneFromState } from "@/utils/timezone";
 import { DateTime } from "luxon";
-import { sendAppointmentBookedEmail } from "@/lib/email"; // ✅ NEW
+import { sendAppointmentBookedEmail } from "@/lib/email"; // ✅
 
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID!;
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET!;
@@ -27,7 +27,6 @@ const MIN_SCHEDULE_LEAD_MINUTES = 15;
 
 // ------- State normalization (handles "GA", "Georgia", "washington dc") -------
 const STATE_CODE_FROM_NAME: Record<string, string> = {
-  // Eastern & neighbors
   alabama: "AL",
   al: "AL",
   georgia: "GA",
@@ -76,7 +75,6 @@ const STATE_CODE_FROM_NAME: Record<string, string> = {
   ky: "KY",
   tennessee: "TN",
   tn: "TN",
-  // Central
   illinois: "IL",
   il: "IL",
   wisconsin: "WI",
@@ -105,7 +103,6 @@ const STATE_CODE_FROM_NAME: Record<string, string> = {
   nd: "ND",
   texas: "TX",
   tx: "TX",
-  // Mountain
   colorado: "CO",
   co: "CO",
   newmexico: "NM",
@@ -120,7 +117,6 @@ const STATE_CODE_FROM_NAME: Record<string, string> = {
   id: "ID",
   arizona: "AZ",
   az: "AZ",
-  // Pacific
   california: "CA",
   ca: "CA",
   oregon: "OR",
@@ -129,7 +125,6 @@ const STATE_CODE_FROM_NAME: Record<string, string> = {
   wa: "WA",
   nevada: "NV",
   nv: "NV",
-  // Alaska / Hawaii
   alaska: "AK",
   ak: "AK",
   hawaii: "HI",
@@ -313,12 +308,10 @@ export default async function handler(
     (user as any)?.googleSheets?.refreshToken;
 
   if (!refreshToken) {
-    res
-      .status(400)
-      .json({
-        message:
-          "Agent not connected to Google. Please connect Google in Settings.",
-      });
+    res.status(400).json({
+      message:
+        "Agent not connected to Google. Please connect Google in Settings.",
+    });
     return;
   }
 
@@ -473,10 +466,13 @@ export default async function handler(
 
       let sentAt = new Date();
       if (scheduledAt && canSchedule(params)) {
-        const sendAtUTC = enforceMinLead(scheduledAt).toISO();
-        (params as any).scheduleType = "fixed";
-        (params as any).sendAt = sendAtUTC;
-        sentAt = new Date(sendAtUTC);
+        const dt = enforceMinLead(scheduledAt);
+        const sendAtUTC = dt.toISO(); // string | null by type
+        if (sendAtUTC) {
+          (params as any).scheduleType = "fixed";
+          (params as any).sendAt = sendAtUTC;
+        }
+        sentAt = dt.toJSDate(); // ✅ avoid TS error from string | null
       } else if (scheduledAt && !canSchedule(params)) {
         console.warn(
           "⚠️ Cannot schedule without Messaging Service SID — sending immediately.",
@@ -533,7 +529,7 @@ export default async function handler(
       await sendOrSchedule(fifteenBody, fifteenBefore);
     }
 
-    // ✅ NEW: Email the agent a booking notice (AI vs Manual based on auth path)
+    // ✅ Email the agent a booking notice
     try {
       await sendAppointmentBookedEmail({
         to: user.email,
@@ -541,7 +537,7 @@ export default async function handler(
         leadName: name,
         phone: to,
         state,
-        timeISO: clientStart.toISO(),
+        timeISO: clientStart.toISO()!,
         timezone: tzShort,
         source: bearer && bearer === INTERNAL_API_TOKEN ? "AI" : "Manual",
         eventUrl: created.data.htmlLink || undefined,

@@ -4,7 +4,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "./auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import Lead from "@/models/Lead";
-import Folder from "@/models/folder"; // keep your existing import path/casing
+import Folder from "@/models/Folder"; // keep your existing import path/casing
 
 export default async function handler(
   req: NextApiRequest,

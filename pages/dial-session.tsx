@@ -1,4 +1,3 @@
-// pages/dial-session.tsx
 import { useState, useEffect } from "react";
 import { useRouter } from "next/router";
 import Sidebar from "@/components/Sidebar";
@@ -43,7 +42,16 @@ export default function DialSession() {
 
   // Prime audio context once for autoplay restrictions (iOS/Safari)
   useEffect(() => {
-    primeAudioContext().catch(() => {});
+    try {
+      // primeAudioContext previously returned void; calling inside try/catch avoids `.catch()` on void.
+      const maybe = primeAudioContext() as unknown;
+      // If it *does* return a promise in some environments, make best-effort to silence errors.
+      if (maybe && typeof (maybe as any).catch === "function") {
+        (maybe as Promise<void>).catch(() => {});
+      }
+    } catch {
+      // ignore
+    }
   }, []);
 
   useEffect(() => {
@@ -344,7 +352,7 @@ export default function DialSession() {
       <div className="bg-[#1e293b] p-4 border-b border-gray-700 flex justify-between items-center">
         <h1 className="text-xl font-bold">Dial Session</h1>
         <button
-          onClick={handleToggleSummary}
+          onClick={() => setSummaryCollapsed((s) => !s)}
           className="text-sm px-3 py-1 rounded bg-gray-700 hover:bg-gray-600"
         >
           {summaryCollapsed ? "Show Summary" : "Hide Summary"}
@@ -490,7 +498,7 @@ export default function DialSession() {
 
             <div className="flex space-x-2 mt-2">
               <button
-                onClick={togglePause}
+                onClick={() => setIsPaused((p) => !p)}
                 className="bg-yellow-400 hover:bg-yellow-500 text-black px-4 py-2 rounded cursor-pointer"
               >
                 {isPaused ? "Resume Dial Session" : "Pause Dial Session"}

@@ -41,7 +41,7 @@ export default async function handler(
     const isAdmin = !!requester && (requester as any).role === "admin";
 
     // Ensure lead belongs to requester (unless admin)
-    const lead = await Lead.findById(leadId).lean();
+    const lead: any = await (Lead as any).findById(leadId).lean();
     if (!lead) return res.status(404).json({ message: "Lead not found" });
     if (
       !isAdmin &&
@@ -58,15 +58,16 @@ export default async function handler(
     if (!isAdmin) q.userEmail = requesterEmail;
 
     const [rows, total] = await Promise.all([
-      Call.find(q)
+      (Call as any)
+        .find(q)
         .sort({ startedAt: -1, createdAt: -1 })
         .skip(skip)
         .limit(s)
         .lean(),
-      Call.countDocuments(q),
+      (Call as any).countDocuments(q),
     ]);
 
-    const mapped = rows.map((c: any) => ({
+    const mapped = (rows as any[]).map((c: any) => ({
       id: String(c._id),
       callSid: c.callSid,
       userEmail: c.userEmail,

@@ -1,3 +1,4 @@
+// /components/DripCampaignsPanel.tsx
 import { useEffect, useState } from "react";
 import axios from "axios";
 import toast from "react-hot-toast";
@@ -33,7 +34,7 @@ export default function DripCampaignsPanel() {
       try {
         const res = await axios.get("/api/folders");
         setFolders(res.data);
-      } catch (error) {
+      } catch {
         toast.error("❌ Error fetching folders");
       }
     };
@@ -42,9 +43,8 @@ export default function DripCampaignsPanel() {
 
   const addStep = () => {
     if (!currentText) return;
-
     const numericDay =
-      currentDay === "immediately" ? 0 : parseInt(currentDay.replace("Day ", ""));
+      currentDay === "immediately" ? 0 : parseInt(currentDay.replace("Day ", ""), 10);
 
     const optOut = " Reply STOP to opt out.";
     const enforcedText = currentText.trim().endsWith(optOut)
@@ -117,19 +117,34 @@ export default function DripCampaignsPanel() {
 
   const generateDayOptions = () => {
     const options: string[] = [];
-    if (maxDayUsed === 0) {
-      options.push("immediately");
-    }
+    if (maxDayUsed === 0) options.push("immediately");
     const start = maxDayUsed === 0 ? 1 : maxDayUsed + 1;
-    for (let i = start; i <= 365; i++) {
-      options.push(`Day ${i}`);
-    }
+    for (let i = start; i <= 365; i++) options.push(`Day ${i}`);
     return options;
+  };
+
+  const handleAssignConfirm = async (folderId: string) => {
+    if (!selectedDripId) return;
+    try {
+      const res = await axios.post("/api/assign-drip-to-folder", {
+        dripId: selectedDripId,
+        folderId,
+      });
+      if (res.status === 200) {
+        toast.success("✅ Drip assigned successfully!");
+        setShowModal(false);
+        setSelectedDripId(null);
+      } else {
+        toast.error("❌ Error assigning drip");
+      }
+    } catch {
+      toast.error("❌ Error assigning drip");
+    }
   };
 
   return (
     <div className="p-4 space-y-6">
-      {/* Custom Campaign Creator */}
+      {/* Creator */}
       <div className="border border-black dark:border-white p-4 rounded">
         <h2 className="text-xl font-bold mb-2">Create Custom Drip Campaign</h2>
         <input
@@ -138,33 +153,11 @@ export default function DripCampaignsPanel() {
           placeholder="Campaign Name"
           className="border border-black dark:border-white p-2 w-full rounded mb-2"
         />
-
-        {/* Merge Fields */}
         <div className="mb-2 space-x-2">
-          <button
-            onClick={() => insertMergeField("client_first_name")}
-            className="text-xs bg-gray-700 text-white px-2 py-1 rounded hover:bg-gray-600"
-          >
-            Insert Client First Name
-          </button>
-          <button
-            onClick={() => insertMergeField("agent_name")}
-            className="text-xs bg-gray-700 text-white px-2 py-1 rounded hover:bg-gray-600"
-          >
-            Insert Agent Name
-          </button>
-          <button
-            onClick={() => insertMergeField("agent_phone")}
-            className="text-xs bg-gray-700 text-white px-2 py-1 rounded hover:bg-gray-600"
-          >
-            Insert Agent Phone
-          </button>
-          <button
-            onClick={() => insertMergeField("folder_name")}
-            className="text-xs bg-gray-700 text-white px-2 py-1 rounded hover:bg-gray-600"
-          >
-            Insert Folder Name
-          </button>
+          <button onClick={() => insertMergeField("client_first_name")} className="text-xs bg-gray-700 text-white px-2 py-1 rounded hover:bg-gray-600">Insert Client First Name</button>
+          <button onClick={() => insertMergeField("agent_name")} className="text-xs bg-gray-700 text-white px-2 py-1 rounded hover:bg-gray-600">Insert Agent Name</button>
+          <button onClick={() => insertMergeField("agent_phone")} className="text-xs bg-gray-700 text-white px-2 py-1 rounded hover:bg-gray-600">Insert Agent Phone</button>
+          <button onClick={() => insertMergeField("folder_name")} className="text-xs bg-gray-700 text-white px-2 py-1 rounded hover:bg-gray-600">Insert Folder Name</button>
         </div>
 
         <div className="flex flex-col md:flex-row space-y-2 md:space-y-0 md:space-x-2">
@@ -183,10 +176,7 @@ export default function DripCampaignsPanel() {
               <option key={idx} value={day}>{day}</option>
             ))}
           </select>
-          <button
-            onClick={addStep}
-            className="border border-black dark:border-white px-4 rounded cursor-pointer"
-          >
+          <button onClick={addStep} className="border border-black dark:border-white px-4 rounded cursor-pointer">
             Add
           </button>
         </div>
@@ -203,10 +193,7 @@ export default function DripCampaignsPanel() {
           </div>
         )}
 
-        <button
-          onClick={saveCampaign}
-          className="mt-2 border border-black dark:border-white px-4 py-2 rounded cursor-pointer"
-        >
+        <button onClick={saveCampaign} className="mt-2 border border-black dark:border-white px-4 py-2 rounded cursor-pointer">
           Save Campaign
         </button>
       </div>
@@ -216,10 +203,7 @@ export default function DripCampaignsPanel() {
       {prebuiltDrips.map((drip) => (
         <div key={drip.id} className="border border-black dark:border-white p-3 rounded mb-4">
           <div className="flex justify-between items-center">
-            <button
-              onClick={() => toggleExpand(drip.id)}
-              className="text-left font-semibold text-lg cursor-pointer"
-            >
+            <button onClick={() => toggleExpand(drip.id)} className="text-left font-semibold text-lg cursor-pointer">
               {drip.name} — {drip.messages.length} messages
             </button>
             <button
@@ -247,16 +231,10 @@ export default function DripCampaignsPanel() {
                 </div>
               ))}
               <div className="flex space-x-2 pt-2">
-                <button
-                  onClick={() => handleSaveDrip(drip.id)}
-                  className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded cursor-pointer"
-                >
+                <button onClick={() => handleSaveDrip(drip.id)} className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded cursor-pointer">
                   Save Changes
                 </button>
-                <button
-                  onClick={() => handleDeleteDrip(drip.id)}
-                  className="bg-red-600 hover:bg-red-700 text-white px-3 py-1 rounded cursor-pointer"
-                >
+                <button onClick={() => handleDeleteDrip(drip.id)} className="bg-red-600 hover:bg-red-700 text-white px-3 py-1 rounded cursor-pointer">
                   Delete Drip
                 </button>
               </div>
@@ -285,14 +263,15 @@ export default function DripCampaignsPanel() {
       )}
 
       {/* Assign Drip Modal */}
-      {selectedDripId && (
+      {showModal && selectedDripId && (
         <AssignDripModal
-          isOpen={showModal}
+          dripId={selectedDripId}
+          folders={folders}
           onClose={() => {
             setShowModal(false);
             setSelectedDripId(null);
           }}
-          dripId={selectedDripId}
+          onAssign={handleAssignConfirm}
         />
       )}
     </div>

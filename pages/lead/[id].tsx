@@ -1,18 +1,20 @@
-// /pages/lead/[id].tsx
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { useRouter } from "next/router";
 import Sidebar from "@/components/Sidebar";
 import toast from "react-hot-toast";
 import dynamic from "next/dynamic";
 
-// Optional Close-style right rail
-const CallPanelClose = dynamic(
-  () => import("@/components/CallPanelClose").catch(() => null),
-  {
-    ssr: false,
-    loading: () => null,
-  },
-);
+// Strongly type the dynamic import’s props and remove the `.catch(() => null)`
+// which broke Next.js’ expected loader type.
+const CallPanelClose = dynamic<{
+  leadId: string;
+  userHasAI: boolean;
+  defaultFromNumber?: string;
+  onOpenCall?: (callId: string) => void;
+}>(() => import("@/components/CallPanelClose"), {
+  ssr: false,
+  loading: () => null,
+});
 
 type Lead = {
   id: string;
@@ -421,7 +423,6 @@ export default function LeadProfileDial() {
         <div className="max-w-3xl">
           <h3 className="text-lg font-bold mb-2">Notes</h3>
 
-          {/* ⬇️ This was the white box; now dark blue to match CRM */}
           <div className="rounded-lg mb-2 bg-[#0f172a] border border-white/10">
             <textarea
               value={notes}
@@ -532,50 +533,14 @@ export default function LeadProfileDial() {
       {/* RIGHT: Calls panel */}
       <div className="w-[400px] p-4 bg-[#0b1220]">
         {lead?.id ? (
-          CallPanelClose ? (
-            <CallPanelClose
-              leadId={lead.id}
-              userHasAI={userHasAI}
-              defaultFromNumber={
-                process.env.NEXT_PUBLIC_DEFAULT_FROM as string | undefined
-              }
-              onOpenCall={(callId) => router.push(`/calls/${callId}`)}
-            />
-          ) : (
-            <div className="bg-[#0b1220] border border-white/10 rounded-xl">
-              <div className="px-4 py-3 border-b border-white/10">
-                <div className="text-xs text-gray-400">Activity</div>
-                <div className="text-base font-semibold text-white">Calls</div>
-              </div>
-              <ul className="divide-y divide-white/10">
-                {calls.map((c) => (
-                  <li key={c.id} className="px-3 py-2">
-                    <div className="text-sm">
-                      {fmtDateTime(c.startedAt)} • {fmtSecs(c.duration)} •{" "}
-                      {c.hasRecording
-                        ? "Recording"
-                        : (c.duration ?? 0) > 0
-                          ? "Completed"
-                          : "No answer"}
-                    </div>
-                    {c.recordingUrl ? (
-                      <audio
-                        controls
-                        preload="none"
-                        src={c.recordingUrl}
-                        className="w-full mt-2"
-                      />
-                    ) : null}
-                    {userHasAI && c.aiSummary ? (
-                      <div className="mt-2 text-xs text-gray-300 whitespace-pre-line">
-                        {c.aiSummary}
-                      </div>
-                    ) : null}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )
+          <CallPanelClose
+            leadId={lead.id}
+            userHasAI={userHasAI}
+            defaultFromNumber={
+              process.env.NEXT_PUBLIC_DEFAULT_FROM as string | undefined
+            }
+            onOpenCall={(callId) => router.push(`/calls/${callId}`)}
+          />
         ) : null}
       </div>
     </div>

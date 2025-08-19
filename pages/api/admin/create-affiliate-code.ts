@@ -1,41 +1,35 @@
 import type { NextApiRequest, NextApiResponse } from "next";
-import dbConnect from "@/lib/mongooseConnect";
-import AffiliateCode from "@/models/AffiliateCode";
-import { getServerSession } from "next-auth";
+import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
+import dbConnect from "@/lib/mongooseConnect";
+import Affiliate from "@/models/Affiliate";
 
-export default async function handler(
-  req: NextApiRequest,
-  res: NextApiResponse,
-) {
-  if (req.method !== "POST")
-    return res.status(405).json({ message: "Method not allowed" });
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed" });
 
   const session = await getServerSession(req, res, authOptions);
-  if (!session || session.user.email !== "bryson.mccleary1@gmail.com") {
+  const adminEmail = session?.user?.email ?? null;
+  if (adminEmail !== "bryson.mccleary1@gmail.com") {
     return res.status(401).json({ message: "Unauthorized" });
   }
 
-  const { referralCode, email } = req.body;
+  const { email, promoCode } = (req.body || {}) as { email?: string; promoCode?: string };
+  if (!email || !promoCode) return res.status(400).json({ message: "Missing email or promoCode" });
 
-  if (!referralCode || !email) {
-    return res.status(400).json({ message: "Missing fields" });
-  }
+  const code = promoCode.trim().toUpperCase();
+  if (!code) return res.status(400).json({ message: "Invalid promoCode" });
 
-  try {
-    await dbConnect();
+  await dbConnect();
 
-    const exists = await AffiliateCode.findOne({ referralCode });
-    if (exists) {
-      return res.status(400).json({ message: "Referral code already exists" });
-    }
+  // Ensure code uniqueness against other affiliates
+  const exists = await Affiliate.findOne({ promoCode: code, email: { $ne: email } }).lean();
+  if (exists) return res.status(409).json({ message: "Promo code already in use" });
 
-    const newCode = new AffiliateCode({ referralCode, email });
-    await newCode.save();
+  const doc = await Affiliate.findOneAndUpdate(
+    { email },
+    { $setOnInsert: { email }, $set: { promoCode: code } },
+    { new: true, upsert: true },
+  );
 
-    res.status(201).json({ message: "Affiliate code created successfully" });
-  } catch (err) {
-    console.error("Affiliate code creation error:", err);
-    res.status(500).json({ message: "Internal server error" });
-  }
+  return res.status(200).json({ ok: true, affiliate: doc });
 }

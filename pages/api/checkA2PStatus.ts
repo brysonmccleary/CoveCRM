@@ -1,3 +1,4 @@
+// /pages/api/checkA2PStatus.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import dbConnect from "@/lib/mongooseConnect";
 import A2PVerification from "@/models/A2PVerification";
@@ -18,37 +19,48 @@ export default async function handler(
 
   try {
     await dbConnect();
-    const pendingVerifications = await A2PVerification.find({
-      status: "pending",
-    });
+    const pendingVerifications = await A2PVerification.find({ status: "pending" });
 
     for (const verification of pendingVerifications) {
       const brandSid = verification.brandSid;
       const campaignSid = verification.campaignSid;
 
+      // --- Brand status (TrustHub) ---
       let brandStatus = "unknown";
       try {
         const brand = await twilioClient.trusthub.v1
           .customerProfiles(brandSid)
           .fetch();
-        brandStatus = brand.status || "unknown";
+        brandStatus = (brand as any)?.status || "unknown";
       } catch (error) {
         console.error(`Error fetching brand ${brandSid}:`, error);
       }
 
+      // --- Campaign status (Messaging) ---
       let campaignStatus = "unknown";
       try {
-        const campaign = await twilioClient.messaging.v1.a2p
-          .services(campaignSid)
-          .fetch();
-        campaignStatus = campaign.status || "unknown";
+        // Access messaging v1 as any so TS won't block us on SDK internals
+        const messagingV1: any = (twilioClient as any).messaging?.v1;
+
+        // Most installs expose campaigns under messaging.v1.campaigns
+        const campaign =
+          (await messagingV1?.campaigns?.(campaignSid)?.fetch?.()) ??
+          // Fallbacks if SDK shape differs
+          (await messagingV1?.a2p?.campaigns?.(campaignSid)?.fetch?.()) ??
+          (await messagingV1?.services?.(campaignSid)?.fetch?.());
+
+        campaignStatus =
+          campaign?.status || campaign?.state || campaign?.approvalStatus || "unknown";
       } catch (error) {
         console.error(`Error fetching campaign ${campaignSid}:`, error);
       }
 
-      if (brandStatus === "approved" && campaignStatus === "approved") {
+      if (brandStatus.toLowerCase() === "approved" && campaignStatus.toLowerCase() === "approved") {
         verification.status = "approved";
-      } else if (brandStatus === "rejected" || campaignStatus === "rejected") {
+      } else if (
+        brandStatus.toLowerCase() === "rejected" ||
+        campaignStatus.toLowerCase() === "rejected"
+      ) {
         verification.status = "rejected";
       }
 

@@ -1,24 +1,21 @@
-// /pages/api/create-stripe-account.ts
-import { NextApiRequest, NextApiResponse } from "next";
-import { getServerSession } from "next-auth";
+import type { NextApiRequest, NextApiResponse } from "next";
+import { getServerSession } from "next-auth/next";
 import { authOptions } from "./auth/[...nextauth]";
 import { stripe } from "@/lib/stripe";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
-
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: "2023-08-16",
-});
 
 export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse,
 ) {
   const session = await getServerSession(req, res, authOptions);
-  if (!session) return res.status(401).json({ error: "Unauthorized" });
+  if (!session?.user?.email) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
 
   await dbConnect();
-  const user = await User.findOne({ email: session.user?.email });
+  const user = await User.findOne({ email: session.user.email });
   if (!user) return res.status(404).json({ error: "User not found" });
 
   // Create Stripe Connect Account if not already linked
@@ -32,10 +29,16 @@ export default async function handler(
   }
 
   // Generate onboarding link
+  const base =
+    process.env.NEXT_PUBLIC_BASE_URL ||
+    process.env.BASE_URL ||
+    process.env.NEXTAUTH_URL ||
+    "https://covecrm.com";
+
   const accountLink = await stripe.accountLinks.create({
     account: user.stripeConnectId!,
-    refresh_url: "https://covecrm.com/settings",
-    return_url: "https://covecrm.com/settings",
+    refresh_url: `${base}/settings`,
+    return_url: `${base}/settings`,
     type: "account_onboarding",
   });
 

@@ -40,13 +40,17 @@ export default async function handler(
     const requester = await getUserByEmail(requesterEmail);
     const isAdmin = !!requester && (requester as any).role === "admin";
 
-    const call =
-      (id && (await Call.findById(id).lean())) ||
-      (callSid && (await Call.findOne({ callSid }).lean())) ||
+    const callRaw =
+      (id && ((await (Call as any).findById(id).lean()) as any)) ||
+      (callSid &&
+        ((await (Call as any).findOne({ callSid }).lean()) as any)) ||
       null;
 
-    if (!call) return res.status(404).json({ message: "Call not found" });
-    if (!isAdmin && call.userEmail?.toLowerCase() !== requesterEmail) {
+    if (!callRaw) return res.status(404).json({ message: "Call not found" });
+
+    const call: any = callRaw; // 👈 relax types to avoid mongoose union issues
+
+    if (!isAdmin && (call.userEmail as string | undefined)?.toLowerCase() !== requesterEmail) {
       return res.status(403).json({ message: "Forbidden" });
     }
 
@@ -60,7 +64,7 @@ export default async function handler(
 
     // Optional lead join
     if (includeLead === "1" && call.leadId) {
-      const lead = await Lead.findOne({ _id: call.leadId }).lean();
+      const lead: any = await (Lead as any).findOne({ _id: call.leadId }).lean();
       if (lead) {
         payload.lead = {
           id: String(lead._id),

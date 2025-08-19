@@ -6,7 +6,7 @@ import { authOptions } from "../auth/[...nextauth]";
 import dbConnect from "@/lib/dbConnect";
 import User from "@/models/User";
 import Lead from "@/models/Lead";
-import Folder from "@/models/folder";
+import Folder from "@/models/Folder";
 import Message from "@/models/Message";
 import { google } from "googleapis";
 import twilioClient from "@/lib/twilioClient";
@@ -153,9 +153,10 @@ export default async function handler(
       requestBody: {
         summary,
         description: desc,
-        start: { dateTime: startAgent.toISO(), timeZone: agentTz },
-        end: { dateTime: endAgent.toISO(), timeZone: agentTz },
-        attendees,
+        // Use toJSDate().toISOString() to avoid Luxon string|null typing
+        start: { dateTime: startAgent.toJSDate().toISOString(), timeZone: agentTz },
+        end: { dateTime: endAgent.toJSDate().toISOString(), timeZone: agentTz },
+        attendees: attendees as any,
         reminders: { useDefault: true },
       },
       sendUpdates: attendees ? "all" : "none",
@@ -215,8 +216,9 @@ export default async function handler(
           leadName:
             [firstName, lastName].filter(Boolean).join(" ") || undefined,
           agentName,
-          startISO: startAgent.toISO(),
-          endISO: endAgent.toISO(),
+          // Ensure plain string type
+          startISO: startAgent.toJSDate().toISOString(),
+          endISO: endAgent.toJSDate().toISOString(),
           title: summary,
           description: desc,
           eventUrl,
@@ -233,8 +235,9 @@ export default async function handler(
             [firstName, lastName].filter(Boolean).join(" ") || undefined,
           leadPhone,
           leadEmail,
-          startISO: startAgent.toISO(),
-          endISO: endAgent.toISO(),
+          // Ensure plain string type
+          startISO: startAgent.toJSDate().toISOString(),
+          endISO: endAgent.toJSDate().toISOString(),
           title: summary,
           description: desc,
           leadUrl,

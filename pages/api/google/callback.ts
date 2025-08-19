@@ -1,4 +1,4 @@
-// pages/api/google/callback.ts
+// /pages/api/google/callback.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { google } from "googleapis";
 import mongooseConnect from "@/lib/mongooseConnect";
@@ -17,7 +17,10 @@ function getOrigin(req: NextApiRequest): string {
   return base.replace(/\/$/, "");
 }
 
-function decodeEmailFromIdToken(idToken?: string): string | null {
+// ✅ Accept null | undefined safely
+function decodeEmailFromIdToken(
+  idToken: string | null | undefined,
+): string | null {
   try {
     if (!idToken) return null;
     const payload = JSON.parse(
@@ -74,15 +77,13 @@ export default async function handler(
     } = tokens;
 
     if (!refresh_token) {
-      // Without a refresh_token we can’t do long-term automation.
       const base = origin;
       return res.redirect(`${base}/settings?calendar=needs_reconnect`);
     }
 
     oauth2Client.setCredentials({ access_token, refresh_token });
 
-    // 2) Determine which CRM user to attach to:
-    //    Prefer state.userEmail (from /api/google/auth), else fallback to Google account email.
+    // 2) Which CRM user to attach? Prefer state.userEmail, else Google acct email.
     let targetEmail =
       decodeState(String(req.query.state || ""))?.userEmail || "";
 
@@ -96,9 +97,7 @@ export default async function handler(
       googleEmail = decodeEmailFromIdToken(id_token) || "";
     }
 
-    // If no state, use google email as the CRM key
     if (!targetEmail) targetEmail = googleEmail;
-
     if (!targetEmail)
       return res.status(400).send("Could not resolve account email");
 
@@ -106,7 +105,6 @@ export default async function handler(
     await mongooseConnect();
     const user = await User.findOne({ email: targetEmail });
     if (!user) {
-      // If state email wasn't found, but googleEmail differs and exists, try fallback:
       if (googleEmail && googleEmail !== targetEmail) {
         const fallbackUser = await User.findOne({ email: googleEmail });
         if (!fallbackUser) {
@@ -117,7 +115,7 @@ export default async function handler(
               `No CRM user found for ${targetEmail} or ${googleEmail}. Make sure your CRM email matches, or start auth from your signed-in session.`,
             );
         }
-        // attach to fallback user
+
         (fallbackUser as any).googleTokens = {
           ...(fallbackUser as any).googleTokens,
           accessToken: access_token || "",
@@ -147,7 +145,6 @@ export default async function handler(
           googleEmail,
           calendarId: primaryCalendarId,
         };
-        // Keep backward-compat path some code reads:
         (fallbackUser as any).integrations = {
           ...(fallbackUser as any).integrations,
           googleCalendar: {
@@ -168,7 +165,6 @@ export default async function handler(
         return res.redirect(`${base}/settings?calendar=connected`);
       }
 
-      // no user at all
       return res
         .status(404)
         .send(
@@ -184,10 +180,10 @@ export default async function handler(
       primaryCalendarId =
         list.data.items?.find((c: any) => c.primary)?.id || "primary";
     } catch {
-      /* ignore; default "primary" */
+      /* ignore */
     }
 
-    // 5) Persist tokens + calendar metadata (compat with multiple code paths)
+    // 5) Persist tokens + calendar metadata
     (user as any).googleTokens = {
       ...(user as any).googleTokens,
       accessToken: access_token || "",
@@ -212,7 +208,6 @@ export default async function handler(
       calendarId: primaryCalendarId,
     };
 
-    // Back-compat alternative path used elsewhere
     (user as any).integrations = {
       ...(user as any).integrations,
       googleCalendar: {

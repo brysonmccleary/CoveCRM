@@ -195,10 +195,12 @@ export default async function handler(
               if (to) {
                 await runBatched(folderAssignedDrips, 3, async (dripId) => {
                   try {
-                    const drip = await DripCampaign.findById(dripId).lean();
-                    if (!drip || drip.type !== "sms") return;
+                    const dripDoc: any = await DripCampaign.findById(
+                      dripId,
+                    ).lean();
+                    if (!dripDoc || dripDoc.type !== "sms") return;
 
-                    const firstTextRaw = getFirstStepText(drip);
+                    const firstTextRaw = getFirstStepText(dripDoc);
                     if (!firstTextRaw) return;
 
                     // Safety: don't send a raw opt-out keyword as a message
@@ -236,7 +238,7 @@ export default async function handler(
 
                     // ✅ Initialize dripProgress for this drip (Day 1 was sent -> index 0)
                     const canonicalDripId = String(
-                      (drip as any)?._id || dripId,
+                      (dripDoc as any)?._id || dripId,
                     );
                     const now = new Date();
 
@@ -283,14 +285,12 @@ export default async function handler(
       }
     }
 
-    return res
-      .status(200)
-      .json({
-        message: "Google Sheets sync complete",
-        imported,
-        smsSent,
-        smsFailed,
-      });
+    return res.status(200).json({
+      message: "Google Sheets sync complete",
+      imported,
+      smsSent,
+      smsFailed,
+    });
   } catch (error) {
     console.error("❌ Cron sync error:", error);
     return res.status(500).json({ message: "Server error" });

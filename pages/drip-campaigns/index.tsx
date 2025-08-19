@@ -1,3 +1,4 @@
+// /pages/drip-campaigns/index.tsx
 import { useEffect, useState } from "react";
 import Sidebar from "@/components/Sidebar";
 import Link from "next/link";
@@ -15,14 +16,8 @@ interface Drip {
   steps: Step[];
 }
 
-interface Folder {
-  _id: string;
-  name: string;
-}
-
 export default function DripCampaignsPanel() {
   const [drips, setDrips] = useState<Drip[]>([]);
-  const [folders, setFolders] = useState<Folder[]>([]);
   const [name, setName] = useState("");
   const [steps, setSteps] = useState<Step[]>([]);
   const [currentText, setCurrentText] = useState("");
@@ -34,18 +29,14 @@ export default function DripCampaignsPanel() {
   useEffect(() => {
     fetch("/api/drips")
       .then((res) => res.json())
-      .then((data) => setDrips(data));
-
-    fetch("/api/get-folders")
-      .then((res) => res.json())
-      .then((data) => setFolders(data.folders || []))
-      .catch((err) => console.error("Error loading folders:", err));
+      .then((data) => setDrips(data))
+      .catch(() => {});
   }, []);
 
   // Add new step to custom drip
   const addStep = () => {
     if (!currentText) return;
-    setSteps([...steps, { text: currentText, day: currentDay }]);
+    setSteps((s) => [...s, { text: currentText, day: currentDay }]);
     setCurrentText("");
     setCurrentDay("immediately");
   };
@@ -64,12 +55,13 @@ export default function DripCampaignsPanel() {
 
     if (res.ok) {
       const newDrip = await res.json();
-      setDrips([...drips, newDrip]);
+      setDrips((d) => [...d, newDrip]);
       setName("");
       setSteps([]);
       alert("Custom drip saved!");
     } else {
-      alert("Error saving drip");
+      const j = await res.json().catch(() => ({}));
+      alert(j?.error || "Error saving drip");
     }
   };
 
@@ -91,7 +83,8 @@ export default function DripCampaignsPanel() {
       alert("Drip assigned successfully!");
       setShowAssignModal(false);
     } else {
-      alert("Error assigning drip");
+      const j = await res.json().catch(() => ({}));
+      alert(j?.message || "Error assigning drip");
     }
   };
 
@@ -194,7 +187,6 @@ export default function DripCampaignsPanel() {
         {showAssignModal && selectedDripId && (
           <AssignDripModal
             dripId={selectedDripId}
-            folders={folders}
             onClose={() => setShowAssignModal(false)}
             onAssign={handleAssignConfirm}
           />

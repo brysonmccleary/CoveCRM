@@ -1,6 +1,20 @@
-// pages/api/test-sync.ts
 import type { NextApiRequest, NextApiResponse } from "next";
-import { syncSheetRow } from "@/utils/syncSheetRow";
+// ✅ Use your existing helper’s path
+import { syncSheetRow } from "@/lib/utils/syncSheetRow";
+
+type Body = {
+  "First Name"?: string;
+  "Last Name"?: string;
+  Email?: string;
+  Phone?: string;
+  Notes?: string;
+  State?: string;
+  Age?: string | number;
+  Beneficiary?: string;
+  "Coverage Amount"?: string | number;
+  folderName?: string;
+  userEmail?: string;
+};
 
 export default async function handler(
   req: NextApiRequest,
@@ -23,17 +37,17 @@ export default async function handler(
       "Coverage Amount": coverage,
       folderName,
       userEmail,
-    } = req.body;
+    } = (req.body || {}) as Body;
 
-    const fullName = `${firstName} ${lastName}`.trim();
+    const fullName = `${firstName || ""} ${lastName || ""}`.trim();
 
     const lead = await syncSheetRow({
       name: fullName,
-      email: Email,
-      phone: Phone,
-      notes: Notes,
-      folderName,
-      userEmail,
+      email: Email || "",
+      phone: Phone || "",
+      notes: Notes || "",
+      folderName: folderName || "",
+      userEmail: userEmail || "",
       additionalFields: {
         State,
         Age,
@@ -44,9 +58,11 @@ export default async function handler(
       },
     });
 
-    res.status(200).json({ success: true, lead });
+    return res.status(200).json({ success: true, lead });
   } catch (err: any) {
-    console.error("Sync Error:", err.message);
-    res.status(500).json({ success: false, error: err.message });
+    console.error("Sync Error:", err?.message || err);
+    return res
+      .status(500)
+      .json({ success: false, error: err?.message || "Sync failed" });
   }
 }

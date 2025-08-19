@@ -1,17 +1,12 @@
-// /pages/api/affiliates/payouts.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
-import { authOptions } from "../auth/[...nextauth]"; // ✅ correct relative path
+import { authOptions } from "../auth/[...nextauth]";
 import mongooseConnect from "@/lib/mongooseConnect";
 import Affiliate from "@/models/Affiliate";
 import AffiliatePayout from "@/models/AffiliatePayout";
 import { sendAffiliatePayoutEmail } from "@/lib/email";
 import { stripe } from "@/lib/stripe";
 import crypto from "crypto";
-
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY as string, {
-  apiVersion: "2024-04-10",
-});
 
 const MIN_PAYOUT = Number(process.env.AFFILIATE_MIN_PAYOUT || 50);
 
@@ -35,7 +30,7 @@ export default async function handler(
 
   // Admin-only
   const session = await getServerSession(req, res, authOptions);
-  if (!session?.user?.email || (session.user as any).role !== "admin") {
+  if (!session?.user || (session.user as any).role !== "admin") {
     return res.status(403).json({ message: "Admin only" });
   }
 

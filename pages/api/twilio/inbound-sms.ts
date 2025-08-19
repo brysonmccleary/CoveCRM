@@ -745,9 +745,9 @@ export default async function handler(
         .json({ message: "Lead unsubscribed; no auto-reply." });
 
     // If this reply is from a retention campaign, don't engage AI
-    const assignedDrips = lead.assignedDrips || [];
-    const isClientRetention = assignedDrips.some((id) =>
-      id.includes("client_retention"),
+    const assignedDrips = (lead as any).assignedDrips || [];
+    const isClientRetention = (assignedDrips as any[]).some(
+      (id: any) => typeof id === "string" && id.includes("client_retention"),
     );
     if (isClientRetention)
       return res
@@ -895,7 +895,7 @@ export default async function handler(
                 phone: lead.Phone || (lead as any).phone || fromNumber,
                 state: stateCanon || "",
                 timeISO: clientTime.toISO()!,
-                timezone: clientTime.offsetNameShort,
+                timezone: clientTime.offsetNameShort || undefined,
                 source: "AI",
                 eventLink: (bookingRes.data?.event?.htmlLink ||
                   bookingRes.data?.htmlLink ||

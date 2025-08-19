@@ -1,4 +1,3 @@
-// pages/api/twilio/cancel-number.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
@@ -7,10 +6,6 @@ import User from "@/models/User";
 import PhoneNumber from "@/models/PhoneNumber";
 import twilioClient from "@/lib/twilioClient";
 import { stripe } from "@/lib/stripe";
-
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: "2024-04-10",
-});
 
 function normalizeE164(p: string) {
   const digits = (p || "").replace(/\D/g, "");
@@ -72,7 +67,7 @@ export default async function handler(
     // 1) Cancel Stripe subscription (best-effort)
     try {
       if (target.subscriptionId) {
-        await stripe.subscriptions.del(target.subscriptionId);
+        await stripe.subscriptions.cancel(target.subscriptionId);
       }
     } catch (err) {
       console.warn("⚠️ Stripe subscription cancellation warning:", err);
@@ -153,7 +148,7 @@ export default async function handler(
           userId: user._id,
           phoneNumber: normalizeE164(phone),
         });
-        await PhoneNumber.deleteOne({ userId: user._id, phoneNumber: phone }); // in case stored un-normalized
+        await PhoneNumber.deleteOne({ userId: user._id, phoneNumber }); // in case stored un-normalized
       } else if (twilioSid) {
         await PhoneNumber.deleteOne({ userId: user._id, twilioSid });
       }
@@ -161,11 +156,9 @@ export default async function handler(
       console.warn("⚠️ PhoneNumber doc delete warning:", err);
     }
 
-    return res
-      .status(200)
-      .json({
-        message: `Number ${phone || twilioSid} cancelled, unlinked, released, and removed`,
-      });
+    return res.status(200).json({
+      message: `Number ${phone || twilioSid} cancelled, unlinked, released, and removed`,
+    });
   } catch (err: any) {
     console.error("Cancel number error:", err);
     return res

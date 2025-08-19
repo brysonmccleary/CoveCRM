@@ -1,26 +1,16 @@
-// pages/api/getNumbers.ts
-
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "./auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import { stripe } from "@/lib/stripe";
+import type Stripe from "stripe";
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: "2024-04-10",
-});
-
-export default async function handler(
-  req: NextApiRequest,
-  res: NextApiResponse,
-) {
-  if (req.method !== "GET")
-    return res.status(405).json({ message: "Method not allowed" });
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  if (req.method !== "GET") return res.status(405).json({ message: "Method not allowed" });
 
   const session = await getServerSession(req, res, authOptions);
-  if (!session?.user?.email)
-    return res.status(401).json({ message: "Unauthorized" });
+  if (!session?.user?.email) return res.status(401).json({ message: "Unauthorized" });
 
   try {
     await dbConnect();
@@ -31,22 +21,20 @@ export default async function handler(
     }
 
     const enrichedNumbers = await Promise.all(
-      user.numbers.map(async (num) => {
+      user.numbers.map(async (num: any) => {
         let status = "unknown";
-        let nextBillingDate = null;
+        let nextBillingDate: string | null = null;
 
         if (num.subscriptionId) {
           try {
-            const sub = await stripe.subscriptions.retrieve(num.subscriptionId);
+            const subResp = await stripe.subscriptions.retrieve(num.subscriptionId);
+            const sub = subResp as unknown as Stripe.Subscription;
             status = sub.status;
             nextBillingDate = sub.current_period_end
               ? new Date(sub.current_period_end * 1000).toISOString()
               : null;
           } catch (err) {
-            console.warn(
-              `❗ Failed to fetch Stripe subscription for ${num.phoneNumber}`,
-              err,
-            );
+            console.warn(`❗ Failed to fetch Stripe subscription for ${num.phoneNumber}`, err);
           }
         }
 

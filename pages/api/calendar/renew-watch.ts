@@ -1,5 +1,4 @@
 // /pages/api/calendar/renew-watch.ts
-
 import type { NextApiRequest, NextApiResponse } from "next";
 import { google } from "googleapis";
 import dbConnect from "@/lib/mongooseConnect";
@@ -25,14 +24,17 @@ export default async function handler(
     const renewedUsers: string[] = [];
 
     for (const user of users) {
-      const expires = parseInt(user.googleWatch?.expiration || "0", 10);
+      // 👇 Ensure parseInt always receives a string
+      const expires = parseInt(String(user.googleWatch?.expiration ?? "0"), 10);
       if (!expires || now < expires - 60 * 1000) continue; // skip if not close to expiring
 
       const tokens =
-        user.googleTokens || user.googleCalendar || user.googleSheets;
+        (user as any).googleTokens ||
+        (user as any).googleCalendar ||
+        (user as any).googleSheets;
       if (!tokens) continue;
 
-      const calendarId = user.calendarId || "primary";
+      const calendarId = (user as any).calendarId || "primary";
 
       const oauth2Client = new google.auth.OAuth2(
         process.env.GOOGLE_CLIENT_ID!,
@@ -61,7 +63,7 @@ export default async function handler(
       });
 
       await User.updateOne(
-        { email: user.email },
+        { email: (user as any).email },
         {
           $set: {
             googleWatch: {
@@ -73,7 +75,7 @@ export default async function handler(
         },
       );
 
-      renewedUsers.push(user.email);
+      renewedUsers.push((user as any).email);
     }
 
     return res.status(200).json({
