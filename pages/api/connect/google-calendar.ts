@@ -1,18 +1,25 @@
-// /pages/api/connect/google-calendar.ts
 import type { NextApiRequest, NextApiResponse } from "next";
-import { getServerSession } from "next-auth/next";
-import { authOptions } from "../auth/[...nextauth]";
+import { google } from "googleapis";
 
-/**
- * Compat endpoint used by your “Connect Google Calendar” button.
- * It simply redirects into the unified start endpoint with target=calendar.
- */
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  const session = await getServerSession(req, res, authOptions);
-  if (!session?.user?.email) {
-    return res.status(401).json({ error: "Unauthorized" });
-  }
+  const base = process.env.NEXT_PUBLIC_BASE_URL || process.env.NEXTAUTH_URL || "http://localhost:3000";
+  const redirectUri = process.env.GOOGLE_REDIRECT_URI_CALENDAR || `${base}/api/connect/google-calendar/callback`;
 
-  // Kick off OAuth — the callback is /api/google-auth/callback
-  return res.redirect(302, "/api/google-auth/start?target=calendar");
+  const client = new google.auth.OAuth2(
+    process.env.GOOGLE_CLIENT_ID!,
+    process.env.GOOGLE_CLIENT_SECRET!,
+    redirectUri
+  );
+
+  const url = client.generateAuthUrl({
+    access_type: "offline",
+    prompt: "consent",
+    scope: [
+      "https://www.googleapis.com/auth/calendar",
+      "https://www.googleapis.com/auth/calendar.events",
+      "https://www.googleapis.com/auth/userinfo.email",
+    ],
+  });
+
+  return res.redirect(url);
 }
