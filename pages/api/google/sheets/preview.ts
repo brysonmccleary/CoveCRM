@@ -8,11 +8,16 @@ import { google } from "googleapis";
 
 type PreviewBody = {
   spreadsheetId: string;
-  title?: string;       // sheet/tab title
-  sheetId?: number;     // optional if you prefer using sheetId
-  headerRow?: number;   // 1-based, default 1
-  sampleOffset?: number;// default 1 (first row after header)
+  title?: string;        // sheet/tab title
+  sheetId?: number;      // optional if you prefer using sheetId
+  headerRow?: number;    // 1-based, default 1
+  sampleOffset?: number; // default 1 (first row after header)
 };
+
+function escapeA1Title(title: string) {
+  // A1 notation: single quotes inside sheet names are doubled
+  return title.replace(/'/g, "''");
+}
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
@@ -28,11 +33,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(400).json({ error: "Provide title or sheetId" });
 
   await dbConnect();
-  const user = await User.findOne({ email: session.user.email.toLowerCase() }).lean();
-  const gs = (user as any)?.googleSheets;
+  const user = await User.findOne({ email: session.user.email.toLowerCase() }).lean<any>();
+  const gs = user?.googleSheets || user?.googleTokens;
   if (!gs?.refreshToken) return res.status(400).json({ error: "Google not connected" });
 
-  // Build OAuth client
   const base =
     process.env.NEXTAUTH_URL ||
     process.env.NEXT_PUBLIC_BASE_URL ||
@@ -58,7 +62,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     let tabTitle = title;
 
-    // If only sheetId was provided, resolve the tab title
+    // Resolve title from sheetId if needed
     if (!tabTitle && typeof sheetId === "number") {
       const meta = await sheets.spreadsheets.get({
         spreadsheetId,
@@ -71,24 +75,32 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (!tabTitle) return res.status(400).json({ error: "sheetId not found" });
     }
 
+    const safeTitle = escapeA1Title(tabTitle!);
+
     // Pull values (A1:ZZ to be safe)
-    const range = `'${tabTitle}'!A1:ZZ`;
     const valueResp = await sheets.spreadsheets.values.get({
       spreadsheetId,
-      range,
+      range: `'${safeTitle}'!A1:ZZ`,
       majorDimension: "ROWS",
     });
 
     const values = (valueResp.data.values || []) as string[][];
     if (!values.length) {
-      return res.status(200).json({ headers: [], sampleRow: {}, rowCount: 0, title: tabTitle });
+      return res.status(200).json({
+        headers: [],
+        sampleRow: {},
+        sampleRows: [] as string[][],
+        rowCount: 0,
+        headerRow,
+        title: tabTitle,
+      });
     }
 
-    // headerRow is 1-based in UI; convert to 0-based index here
+    // headerRow is 1-based; convert to 0-based index
     const headerIdx = Math.max(0, headerRow - 1);
     const headers = (values[headerIdx] || []).map((h) => String(h || "").trim());
 
-    // pick the first non-empty row after headerIdx
+    // first non-empty row after headerIdx
     let sampleRowIndex = headerIdx + sampleOffset;
     while (sampleRowIndex < values.length) {
       const row = values[sampleRowIndex];
@@ -104,9 +116,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       sampleRow[h] = row[i] ?? "";
     });
 
+    // also return up to 5 example rows (for nicer preview UIs)
+    const sampleRows: string[][] = [];
+    for (let i = headerIdx + 1; i < Math.min(values.length, headerIdx + 6); i++) {
+      sampleRows.push(values[i] || []);
+    }
+
     return res.status(200).json({
       headers,
       sampleRow,
+      sampleRows,
       rowCount: values.length,
       headerRow,
       title: tabTitle,

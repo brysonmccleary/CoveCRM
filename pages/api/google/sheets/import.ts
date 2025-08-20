@@ -25,12 +25,14 @@ type ImportBody = {
 };
 
 function normalizePhone(input: any): string {
-  const digits = String(input || "").replace(/\D+/g, "");
-  return digits;
+  return String(input || "").replace(/\D+/g, "");
 }
 function normalizeEmail(input: any): string {
   const s = String(input || "").trim();
   return s ? s.toLowerCase() : "";
+}
+function escapeA1Title(title: string) {
+  return title.replace(/'/g, "''");
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -61,8 +63,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     await dbConnect();
-    const user = await User.findOne({ email: userEmail }).lean();
-    const gs = (user as any)?.googleSheets;
+    const user = await User.findOne({ email: userEmail }).lean<any>();
+    const gs = user?.googleSheets || user?.googleTokens;
     if (!gs?.refreshToken) return res.status(400).json({ error: "Google not connected" });
 
     const base =
@@ -101,15 +103,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (!tabTitle) return res.status(400).json({ error: "sheetId not found" });
     }
 
+    const safeTitle = escapeA1Title(tabTitle!);
+
     // Pull rows
     const valueResp = await sheets.spreadsheets.values.get({
       spreadsheetId,
-      range: `'${tabTitle}'!A1:ZZ`,
+      range: `'${safeTitle}'!A1:ZZ`,
       majorDimension: "ROWS",
     });
     const values = (valueResp.data.values || []) as string[][];
     if (!values.length) {
-      return res.status(200).json({ imported: 0, updated: 0, skippedNoKey: 0, rowCount: 0, lastRowImported: 0, note: "No data in sheet." });
+      return res.status(200).json({
+        ok: true, imported: 0, updated: 0, skippedNoKey: 0,
+        rowCount: 0, lastRowImported: 0, note: "No data in sheet."
+      });
     }
 
     const headerIdx = Math.max(0, headerRow - 1);
@@ -125,7 +132,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // Folder (find or create)
     let folderDoc: any = null;
     if (folderId) {
-      folderDoc = await Folder.findOne({ _id: new mongoose.Types.ObjectId(folderId) });
+      try {
+        folderDoc = await Folder.findOne({ _id: new mongoose.Types.ObjectId(folderId) });
+      } catch {
+        // fall through
+      }
     } else if (folderName) {
       folderDoc = await Folder.findOneAndUpdate(
         { userEmail, name: folderName },
@@ -169,11 +180,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         doc[fieldName] = row[i] ?? "";
       });
 
-      // Normalize identity
-      const phoneCandidate = doc.phone ?? doc.Phone ?? "";
-      const emailCandidate = doc.email ?? doc.Email ?? "";
-      const normalizedPhone = normalizePhone(phoneCandidate);
-      const emailLower = normalizeEmail(emailCandidate);
+      const normalizedPhone = normalizePhone(doc.phone ?? doc.Phone ?? "");
+      const emailLower = normalizeEmail(doc.email ?? doc.Email ?? "");
 
       if (!normalizedPhone && !emailLower) {
         skippedNoKey++;
@@ -189,13 +197,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       doc.normalizedPhone = normalizedPhone || undefined;
       if (emailLower) doc.email = emailLower;
 
-      // Upsert criteria
       const or: any[] = [];
       if (normalizedPhone) or.push({ normalizedPhone });
       if (emailLower) or.push({ email: emailLower });
       const filter = { userEmail, ...(or.length ? { $or: or } : {}) };
 
-      // Only fetch _id to avoid type noise and keep it lean
+      // Only fetch _id to keep it light
       const existing = await Lead.findOne(filter).select("_id").lean<{ _id: mongoose.Types.ObjectId } | null>();
 
       if (!existing) {
@@ -210,7 +217,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
-    // Update sync pointer on the user doc
+    // Update sync pointer on the user doc (for cron)
     const pointer = {
       spreadsheetId,
       title: tabTitle,
