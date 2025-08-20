@@ -16,12 +16,11 @@ function normalizeEmail(input: any) {
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  // Allow Vercel Cron (GET) or manual/CLI (POST)
   if (req.method !== "GET" && req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  // Accept secret via header OR query (?token=...)
+  // Token check: header or ?token= must match CRON_SECRET
   const headerToken = Array.isArray(req.headers["x-cron-secret"])
     ? req.headers["x-cron-secret"][0]
     : req.headers["x-cron-secret"];
@@ -38,7 +37,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     await dbConnect();
 
-    // Only users with a Sheets connection and at least one synced sheet
     const users = await User.find({
       "googleSheets.refreshToken": { $exists: true, $ne: "" },
       "googleSheets.syncedSheets.0": { $exists: true },
@@ -53,11 +51,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const gs: any = (user as any).googleSheets;
       if (!userEmail || !gs?.refreshToken) continue;
 
-      // OAuth client
       const redirectBase =
-        process.env.NEXTAUTH_URL ||
-        process.env.NEXT_PUBLIC_BASE_URL ||
-        "";
+        process.env.NEXTAUTH_URL || process.env.NEXT_PUBLIC_BASE_URL || "";
       const oauth2 = new google.auth.OAuth2(
         process.env.GOOGLE_CLIENT_ID!,
         process.env.GOOGLE_CLIENT_SECRET!,
@@ -79,14 +74,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           headerRow = 1,
           mapping = {},
           skip = {},
-          lastRowImported = headerRow, // stored as 1-based
+          lastRowImported = headerRow, // 1-based index of the LAST imported row
           folderId,
           folderName,
         } = sheetCfg || {};
 
         if (!spreadsheetId || !title) continue;
 
-        // Ensure folder exists
+        // Ensure folder exists (re-use if present)
         let folderDoc: any = null;
         if (folderId) {
           try {
@@ -112,7 +107,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
         const targetFolderId = folderDoc._id as mongoose.Types.ObjectId;
 
-        // Fetch values
+        // Pull sheet values
         const resp = await sheetsApi.spreadsheets.values.get({
           spreadsheetId,
           range: `'${title}'!A1:ZZ`,
@@ -122,21 +117,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const headerIdx = Math.max(0, headerRow - 1);
         const headers = (values[headerIdx] || []).map((h) => String(h || "").trim());
 
-        // lastRowImported is 1-based; start at max(header+1, lastRowImported)
-        const startIndex = Math.max(headerIdx + 1, Number(lastRowImported));
+        // lastRowImported is 1-based index of the LAST imported row.
+        // We want to start at the NEXT row (0-based) => start = lastRowImported (1-based next) - 0? No:
+        // Convert pointer to 0-based start index for iteration:
+        // Next row to process (1-based) = lastRowImported + 1
+        // 0-based index = (lastRowImported + 1) - 1 = lastRowImported
+        // But we must also respect header row:
+        const firstDataZero = headerIdx + 1;
+        const startIndex = Math.max(firstDataZero, Number(lastRowImported)); // <-- 0-based index to begin
         const endIndex = Math.min(values.length - 1, startIndex + MAX_ROWS_PER_SHEET - 1);
 
         let imported = 0;
         let updated = 0;
         let skippedNoKey = 0;
-        let lastProcessed = Number(lastRowImported) - 1; // 0-based working value
+        let lastProcessed = Number(lastRowImported) - 1; // keep as 0-based last processed
 
         for (let r = startIndex; r <= endIndex; r++) {
           const row = values[r] || [];
           if (!row.some((c) => String(c || "").trim() !== "")) continue;
           lastProcessed = r;
 
-          // Build doc using mapping (skip unmapped or skipped headers)
           const doc: Record<string, any> = {};
           headers.forEach((h, i) => {
             if (!h) return;
@@ -153,16 +153,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             continue;
           }
 
-          // Common fields
           doc.userEmail = userEmail;
           doc.source = "google-sheets";
           doc.sourceSpreadsheetId = spreadsheetId;
           doc.sourceTabTitle = title;
-          doc.sourceRowIndex = r + 1; // 1-based for storage
+          doc.sourceRowIndex = r + 1; // 1-based
           doc.normalizedPhone = normalizedPhone || undefined;
           if (emailLower) doc.email = emailLower;
 
-          // Existence check (by normalized phone or email + userEmail)
           const or: any[] = [];
           if (normalizedPhone) or.push({ normalizedPhone });
           if (emailLower) or.push({ email: emailLower });
@@ -185,7 +183,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
         }
 
-        const newLast = Math.max(lastProcessed + 1, Number(lastRowImported)); // store back as 1-based
+        // Store back pointer as 1-based index of the LAST imported row
+        const newLast = Math.max(lastProcessed + 1, Number(lastRowImported));
         await User.updateOne(
           {
             email: userEmail,
@@ -206,6 +205,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           userEmail,
           spreadsheetId,
           title,
+          startIndex,
+          endIndex,
           imported,
           updated,
           skippedNoKey,
@@ -220,8 +221,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       details: detailsAll,
     });
   } catch (err: any) {
-    return res
-      .status(500)
-      .json({ error: err?.message || "Cron poll failed" });
+    return res.status(500).json({ error: err?.message || "Cron poll failed" });
   }
 }
