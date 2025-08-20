@@ -1,3 +1,4 @@
+// /models/User.ts
 import mongoose, { Schema } from "mongoose";
 
 export interface IUser {
@@ -122,6 +123,14 @@ export interface IUser {
     lastSyncedAt?: Date;
   };
 
+  // ✅ Per-user Twilio routing/billing
+  twilio?: {
+    accountSid?: string;
+    apiKeySid?: string;
+    apiKeySecret?: string;
+  };
+  billingMode?: "platform" | "self";
+
   numbersLastSyncedAt?: Date;
 }
 
@@ -191,7 +200,7 @@ const UserSchema = new Schema<IUser>({
         folderName: String,
       },
     ],
-    syncedSheets: { type: [SyncedSheetSchema], default: [] }, // ✅ new
+    syncedSheets: { type: [SyncedSheetSchema], default: [] },
   },
 
   googleTokens: {
@@ -252,6 +261,14 @@ const UserSchema = new Schema<IUser>({
     lastSyncedAt: Date,
   },
 
+  // ✅ Per-user Twilio + billing mode
+  twilio: {
+    accountSid: String,
+    apiKeySid: String,
+    apiKeySecret: String,
+  },
+  billingMode: { type: String, enum: ["platform", "self"], default: "platform" },
+
   numbersLastSyncedAt: Date,
 });
 
@@ -264,6 +281,7 @@ const User =
 
 export default User;
 
+// ✅ Utility
 export async function getUserByEmail(email: string) {
   return await User.findOne({ email });
 }

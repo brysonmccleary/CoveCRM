@@ -1,6 +1,6 @@
 {
   "compilerOptions": {
-    "target": "ES2017",
+    "target": "ES2020",
     "lib": ["dom", "dom.iterable", "esnext"],
     "allowJs": true,
     "skipLibCheck": true,
@@ -8,7 +8,7 @@
     "noEmit": true,
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
-    "module": "esnext",                      // ⬅ change from "commonjs"
+    "module": "esnext",
     "moduleResolution": "node",
     "resolveJsonModule": true,
     "isolatedModules": true,
@@ -32,5 +32,11 @@
     "types/**/*.d.ts",
     "scripts/**/*"
   ],
-  "exclude": ["node_modules", "cypress", "twilio-voice.js"]
+  "exclude": [
+    "node_modules",
+    "cypress",
+    "twilio-voice.js",
+    ".next",
+    "dist"
+  ]
 }

@@ -1,5 +1,4 @@
 // /lib/twilio/sendSMS.ts
-import twilio from "twilio";
 import mongoose from "mongoose";
 import dbConnect from "@/lib/mongooseConnect";
 import { trackUsage } from "@/lib/billing/trackUsage";
@@ -9,14 +8,12 @@ import Lead from "@/models/Lead";
 import Message from "@/models/Message";
 import { DateTime } from "luxon";
 import { getTimezoneFromState } from "@/utils/timezone";
+import { getClientForUser } from "./getClientForUser";
 
-// ✅ Import the proper options type for messages.create
+// ✅ Twilio types (for params)
 import type { MessageListInstanceCreateOptions } from "twilio/lib/rest/api/v2010/account/message";
 
-const accountSid = process.env.TWILIO_ACCOUNT_SID!;
-const authToken = process.env.TWILIO_AUTH_TOKEN!;
-
-// ✅ Dev-safe base URL (ngrok or prod first, then localhost fallback)
+// ✅ Base URL for webhooks
 const BASE_URL = (
   process.env.NEXT_PUBLIC_BASE_URL ||
   process.env.BASE_URL ||
@@ -27,16 +24,19 @@ const STATUS_CALLBACK =
   process.env.A2P_STATUS_CALLBACK_URL ||
   (BASE_URL ? `${BASE_URL}/api/twilio/status-callback` : undefined);
 
+// ✅ Shared MG SID (for platform-billed / shared service)
 const SHARED_MESSAGING_SERVICE_SID = process.env.TWILIO_MESSAGING_SERVICE_SID;
+
+// ✅ Allow bypass in dev if needed
 const DEV_ALLOW_UNAPPROVED = process.env.DEV_ALLOW_UNAPPROVED === "1";
+
+// ✅ Your internal costing (platform-billed only)
 const SMS_COST = 0.0075;
 
-// Quiet hours
+// Quiet hours (local to lead’s time zone)
 const QUIET_START_HOUR = 21; // 9:00 PM
 const QUIET_END_HOUR = 8; // 8:00 AM
 const MIN_SCHEDULE_LEAD_MINUTES = 15;
-
-const client = twilio(accountSid, authToken);
 
 // ---------- helpers ----------
 function normalize(p: string) {
@@ -127,17 +127,27 @@ async function ensureUserDoc(userOrId: string | any) {
 
 /**
  * Ensure (or create) a per-tenant Messaging Service with correct webhooks.
- * Only used if you do NOT supply TWILIO_MESSAGING_SERVICE_SID.
+ * Only used if you do NOT supply TWILIO_MESSAGING_SERVICE_SID and there is no stored service.
+ * Note: uses a platform client under the hood (legacy path); for personal accounts
+ * we expect user.a2p.messagingServiceSid to be present in that account.
  */
 async function ensureTenantMessagingService(
   userId: string,
   friendlyNameHint?: string,
 ) {
+  // Legacy path uses a platform client via env creds to manage MS if needed.
+  const twilio = await import("twilio");
+  const platformClient = twilio.default(
+    process.env.TWILIO_API_KEY_SID || process.env.TWILIO_ACCOUNT_SID!,
+    process.env.TWILIO_API_KEY_SECRET || process.env.TWILIO_AUTH_TOKEN!,
+    { accountSid: process.env.TWILIO_ACCOUNT_SID! }
+  );
+
   let a2p = await A2PProfile.findOne({ userId });
 
   if (a2p?.messagingServiceSid) {
     try {
-      await client.messaging.v1.services(a2p.messagingServiceSid).update({
+      await platformClient.messaging.v1.services(a2p.messagingServiceSid).update({
         friendlyName: `CoveCRM – ${friendlyNameHint || userId}`,
         inboundRequestUrl: `${BASE_URL}/api/twilio/inbound-sms`,
         statusCallback: STATUS_CALLBACK,
@@ -148,7 +158,7 @@ async function ensureTenantMessagingService(
     return a2p.messagingServiceSid;
   }
 
-  const svc = await client.messaging.v1.services.create({
+  const svc = await platformClient.messaging.v1.services.create({
     friendlyName: `CoveCRM – ${friendlyNameHint || userId}`,
     inboundRequestUrl: `${BASE_URL}/api/twilio/inbound-sms`,
     statusCallback: STATUS_CALLBACK,
@@ -186,37 +196,59 @@ export async function sendSMS(
   if (!toNorm) throw new Error("Invalid destination phone number.");
   const isUSDest = isUS(toNorm);
 
-  // Load tenant A2P state (if any)
-  const a2p = await A2PProfile.findOne({ userId: String(user._id) }).lean();
+  // ✅ Resolve Twilio client for this user (personal vs platform)
+  const { client, usingPersonal } = await getClientForUser(user.email);
 
-  // Decide which Messaging Service to use:
-  // 1) Prefer the shared/approved MG SID from env (your case)
-  // 2) Else, use tenant-specific MG SID if present
-  // 3) Else, create one for the tenant
-  const messagingServiceSid =
+  // Load A2P state from User first (new flow via set-a2p-state), then legacy A2PProfile
+  const userA2P = (user as any).a2p || {};
+  const legacyA2P = await A2PProfile.findOne({ userId: String(user._id) }).lean();
+
+  // ✅ Decide which Messaging Service to use (priority):
+  // 1) user.a2p.messagingServiceSid (preferred; must exist in the *same* account you're sending from)
+  // 2) SHARED_MESSAGING_SERVICE_SID (platform-wide approved)
+  // 3) legacy A2PProfile.messagingServiceSid
+  // 4) (platform-only) create a tenant-specific service
+  let messagingServiceSid =
+    userA2P.messagingServiceSid ||
     SHARED_MESSAGING_SERVICE_SID ||
-    a2p?.messagingServiceSid ||
-    (await ensureTenantMessagingService(
+    legacyA2P?.messagingServiceSid ||
+    null;
+
+  if (!messagingServiceSid && !usingPersonal) {
+    // Only auto-create on platform path
+    messagingServiceSid = await ensureTenantMessagingService(
       String(user._id),
       user.name || user.email,
-    ));
+    );
+  }
 
-  // Compliance gate
+  if (!messagingServiceSid) {
+    // Personal path with no MS available
+    throw new Error(
+      "No Messaging Service linked. Please link your A2P-approved Messaging Service to your account.",
+    );
+  }
+
+  // ✅ Compliance gate (US only). Approval can be via user-level MS, shared MS, or legacy A2PProfile.
+  const approvedViaUser =
+    !!userA2P.messagingServiceSid && userA2P.messagingReady === true;
   const approvedViaShared = Boolean(SHARED_MESSAGING_SERVICE_SID);
-  const approvedViaTenant = Boolean(a2p?.messagingReady);
+  const approvedViaLegacy = Boolean(legacyA2P?.messagingReady);
+
   if (
     isUSDest &&
-    !(approvedViaShared || approvedViaTenant || DEV_ALLOW_UNAPPROVED)
+    !(approvedViaUser || approvedViaShared || approvedViaLegacy || DEV_ALLOW_UNAPPROVED)
   ) {
     throw new Error(
-      "Texting is not enabled yet. Your A2P 10DLC registration is pending approval.",
+      "Texting is not enabled yet. Your A2P 10DLC registration is pending or not linked.",
     );
   }
   if (
     DEV_ALLOW_UNAPPROVED &&
     isUSDest &&
+    !approvedViaUser &&
     !approvedViaShared &&
-    !approvedViaTenant
+    !approvedViaLegacy
   ) {
     console.warn(
       "[DEV] A2P not approved — sending anyway because DEV_ALLOW_UNAPPROVED=1",
@@ -252,13 +284,12 @@ export async function sendSMS(
   const params: MessageListInstanceCreateOptions = {
     to: toNorm,
     body,
-    messagingServiceSid,
+    messagingServiceSid, // ✅ Always send through Messaging Service (A2P)
     statusCallback: STATUS_CALLBACK,
   };
 
   // If within quiet hours, schedule for next 8:00 AM in the lead's local time (≥ 15 min ahead)
   if (isQuiet && scheduledAt) {
-    // Twilio SDK accepts Date for sendAt
     (params as any).scheduleType = "fixed";
     (params as any).sendAt = scheduledAt; // Date object
   }
@@ -266,8 +297,14 @@ export async function sendSMS(
   try {
     const message = await client.messages.create(params);
 
-    // ✅ Record usage
-    await trackUsage({ user, amount: SMS_COST, source: "twilio" });
+    // ✅ Billing logic: platform vs self
+    if (usingPersonal || (user as any).billingMode === "self") {
+      // Do NOT bill through CRM; optional zero-charge marker
+      await trackUsage({ user, amount: 0, source: "twilio-self" });
+    } else {
+      // Bill through CRM platform
+      await trackUsage({ user, amount: SMS_COST, source: "twilio" });
+    }
 
     // ✅ Save to conversation (Message model) with SID for exact status updates later
     if (lead) {
@@ -321,7 +358,7 @@ export async function sendSMS(
     }
     if (err?.code === 30007) {
       throw new Error(
-        "Carrier filtered the message (30007). Check content, opt-in, links, and links/shorteners.",
+        "Carrier filtered the message (30007). Check content, opt-in, and links/shorteners.",
       );
     }
 

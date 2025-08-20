@@ -86,10 +86,14 @@ async function createAndChargeInvoice(params: {
 
 /** ========= Public APIs ========= */
 
+type UsageSource = "twilio" | "twilio-self" | "twilio-voice" | "openai";
+
 /**
- * Track Twilio/OpenAI usage.
- * - Admin emails (ADMIN_EMAILS) are never billed; we still record AI usage counters.
+ * Track usage (Twilio/OpenAI).
+ * - Admin emails (ADMIN_EMAILS) are never billed; we still record usage counters.
  * - In prod for non-admins, requires stripeCustomerId; auto top-up $10 when balance < $1.
+ * - We fold "twilio" and "twilio-voice" into aiUsage.twilioCost to avoid schema changes.
+ *   "twilio-self" is typically passed with amount=0 (self-billed), but we still record totals.
  */
 export async function trackUsage({
   user,
@@ -98,7 +102,7 @@ export async function trackUsage({
 }: {
   user: any;
   amount: number;
-  source?: "twilio" | "openai";
+  source?: UsageSource;
 }) {
   await ensureDb();
 
@@ -110,24 +114,27 @@ export async function trackUsage({
     return;
   }
 
-  // Always record usage counters
+  // ---- Always record usage counters (analytics) ----
+  // twilioCost aggregates: "twilio" + "twilio-voice" + "twilio-self" (usually zero)
+  const addToTwilio =
+    source === "twilio" || source === "twilio-voice" || source === "twilio-self";
+  const addToOpenAI = source === "openai";
+
   userDoc.aiUsage = {
     ...userDoc.aiUsage,
-    twilioCost:
-      (userDoc.aiUsage?.twilioCost || 0) + (source === "twilio" ? amount : 0),
-    openAiCost:
-      (userDoc.aiUsage?.openAiCost || 0) + (source === "openai" ? amount : 0),
+    twilioCost: (userDoc.aiUsage?.twilioCost || 0) + (addToTwilio ? amount : 0),
+    openAiCost: (userDoc.aiUsage?.openAiCost || 0) + (addToOpenAI ? amount : 0),
     totalCost: (userDoc.aiUsage?.totalCost || 0) + amount,
   };
 
   /** Admin accounts never decrement balance or get charged */
   if (!shouldBill(userDoc.email)) {
-    // Optionally: keep an easy label for the UI
-    // userDoc.plan = "admin";
     await userDoc.save();
     return;
   }
 
+  // ---- Billing balance (platform-billed customers) ----
+  // For self-billed sends you should pass amount=0 — which simply won't decrement balance.
   // Hard freeze if balance too negative
   if ((userDoc.usageBalance || 0) < -20) {
     console.warn(`⛔ Usage frozen for ${userDoc.email} — balance too negative.`);
@@ -238,8 +245,8 @@ export async function chargeA2PApprovalIfNeeded({
   }
 
   const meta = customer?.metadata || {};
-  const already = String(meta["a2p_approval_charged"] || "").toLowerCase() ===
-    "true";
+  const already =
+    String(meta["a2p_approval_charged"] || "").toLowerCase() === "true";
 
   if (already) {
     return { charged: false, reason: "already-charged" };
