@@ -114,26 +114,33 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const values = (valueResp.data.values || []) as string[][];
     if (!values.length) {
       return res.status(200).json({
-        ok: true, imported: 0, updated: 0, skippedNoKey: 0,
-        rowCount: 0, lastRowImported: 0, note: "No data in sheet."
+        ok: true,
+        imported: 0,
+        updated: 0,
+        skippedNoKey: 0,
+        rowCount: 0,
+        lastRowImported: 0,
+        note: "No data in sheet.",
       });
     }
 
     const headerIdx = Math.max(0, headerRow - 1);
     const headers = (values[headerIdx] || []).map((h) => String(h || "").trim());
 
-    const firstDataRowIndex = typeof startRow === "number"
-      ? Math.max(1, startRow) - 1
-      : headerIdx + 1;
-    const lastRowIndex = typeof endRow === "number"
-      ? Math.min(values.length, Math.max(endRow, firstDataRowIndex + 1)) - 1
-      : values.length - 1;
+    const firstDataRowIndex =
+      typeof startRow === "number" ? Math.max(1, startRow) - 1 : headerIdx + 1;
+    const lastRowIndex =
+      typeof endRow === "number"
+        ? Math.min(values.length, Math.max(endRow, firstDataRowIndex + 1)) - 1
+        : values.length - 1;
 
     // Folder (find or create)
     let folderDoc: any = null;
     if (folderId) {
       try {
-        folderDoc = await Folder.findOne({ _id: new mongoose.Types.ObjectId(folderId) });
+        folderDoc = await Folder.findOne({
+          _id: new mongoose.Types.ObjectId(folderId),
+        });
       } catch {
         // fall through
       }
@@ -144,10 +151,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         { new: true, upsert: createFolderIfMissing }
       );
     } else {
-      const meta = await google.drive({ version: "v3", auth: oauth2 }).files.get({
-        fileId: spreadsheetId,
-        fields: "name",
-      });
+      const meta = await google
+        .drive({ version: "v3", auth: oauth2 })
+        .files.get({
+          fileId: spreadsheetId,
+          fields: "name",
+        });
       const defaultName = `${meta.data.name || "Imported Leads"} — ${tabTitle}`;
       folderDoc = await Folder.findOneAndUpdate(
         { userEmail, name: defaultName },
@@ -203,7 +212,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const filter = { userEmail, ...(or.length ? { $or: or } : {}) };
 
       // Only fetch _id to keep it light
-      const existing = await Lead.findOne(filter).select("_id").lean<{ _id: mongoose.Types.ObjectId } | null>();
+      const existing = await Lead.findOne(filter)
+        .select("_id")
+        .lean<{ _id: mongoose.Types.ObjectId } | null>();
 
       if (!existing) {
         doc.folderId = targetFolderId;
@@ -218,9 +229,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     // Update sync pointer on the user doc (for cron)
-    const pointer = {
+    const pointer: any = {
       spreadsheetId,
       title: tabTitle,
+      ...(typeof sheetId === "number" ? { sheetId } : {}),
       folderId: targetFolderId,
       folderName: folderDoc.name,
       headerRow,
@@ -231,7 +243,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     };
 
     const positional = await User.updateOne(
-      { email: userEmail, "googleSheets.syncedSheets.spreadsheetId": spreadsheetId, "googleSheets.syncedSheets.title": tabTitle },
+      {
+        email: userEmail,
+        "googleSheets.syncedSheets.spreadsheetId": spreadsheetId,
+        "googleSheets.syncedSheets.title": tabTitle,
+      },
       {
         $set: {
           "googleSheets.syncedSheets.$.folderId": pointer.folderId,
@@ -241,6 +257,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           "googleSheets.syncedSheets.$.skip": pointer.skip,
           "googleSheets.syncedSheets.$.lastRowImported": pointer.lastRowImported,
           "googleSheets.syncedSheets.$.lastImportedAt": pointer.lastImportedAt,
+          ...(typeof sheetId === "number"
+            ? { "googleSheets.syncedSheets.$.sheetId": sheetId }
+            : {}),
         },
       }
     );
@@ -248,7 +267,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (positional.matchedCount === 0) {
       await User.updateOne(
         { email: userEmail },
-        { $push: { "googleSheets.syncedSheets": pointer } }
+        { $push: { "googleSheets.syncedSheets": pointer } },
+        { strict: false } // allow push even if an older schema is loaded
       );
     }
 

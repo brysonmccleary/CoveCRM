@@ -1,4 +1,3 @@
-// /models/User.ts
 import mongoose, { Schema } from "mongoose";
 
 export interface IUser {
@@ -9,10 +8,7 @@ export interface IUser {
   createdAt?: Date;
   username?: string;
 
-  // ✅ Agent’s device number to ring first for outbound calls
   agentPhone?: string;
-
-  // ✅ Stripe billing
   stripeCustomerId?: string;
 
   numbers?: {
@@ -26,9 +22,8 @@ export interface IUser {
       textsReceived: number;
       cost: number;
     };
-    // 🔹 Optional number metadata (for Twilio sync)
-    status?: string; // e.g. "active"
-    country?: string; // e.g. "US"
+    status?: string;
+    country?: string;
     carrier?: string;
     capabilities?: {
       voice?: boolean;
@@ -36,22 +31,34 @@ export interface IUser {
       mms?: boolean;
     };
     purchasedAt?: Date;
-    messagingServiceSid?: string; // which MS this number is attached to (if any)
+    messagingServiceSid?: string;
     friendlyName?: string;
   }[];
 
   assignedDrips?: string[];
   leadIds?: string[];
 
-  // ✅ Google Sheets
+  // ✅ Google Sheets with syncedSheets
   googleSheets?: {
     accessToken: string;
     refreshToken: string;
     expiryDate: number;
-    googleEmail: string;
+    googleEmail?: string;
     sheets?: {
       sheetId: string;
       folderName: string;
+    }[];
+    syncedSheets?: {
+      spreadsheetId: string;
+      title: string;
+      sheetId?: number;
+      headerRow?: number;
+      mapping?: Record<string, string>;
+      skip?: Record<string, boolean>;
+      folderId?: mongoose.Types.ObjectId;
+      folderName?: string;
+      lastRowImported?: number;
+      lastImportedAt?: Date;
     }[];
   };
 
@@ -61,22 +68,18 @@ export interface IUser {
     expiryDate?: number;
   };
 
-  // ✅ Calendar settings
   calendarId?: string;
   bookingSettings?: {
-    timezone: string; // IANA tz, e.g. "America/Los_Angeles" (AZ → "America/Phoenix")
+    timezone: string;
     slotLength: number;
     bufferTime: number;
-    workingHours: {
-      [day: string]: { start: string; end: string };
-    };
+    workingHours: { [day: string]: { start: string; end: string } };
     maxPerDay: number;
     autoConfirm: boolean;
   };
 
   aiAssistantName?: string;
 
-  // ✅ Affiliate fields
   referralCode?: string;
   referredBy?: string;
   affiliateCode?: string;
@@ -88,47 +91,55 @@ export interface IUser {
   totalReferralEarnings?: number;
   commissionHistory?: { [month: string]: number };
 
-  // ✅ AI access fields
   hasAI?: boolean;
   plan?: "Free" | "Pro";
 
-  // ✅ Subscription
   subscriptionStatus?: "active" | "canceled";
 
-  // ✅ AI usage tracking
   aiUsage?: {
     openAiCost: number;
     twilioCost: number;
     totalCost: number;
   };
 
-  // ✅ New: usage balance for billing
   usageBalance?: number;
 
-  // ✅ Notification Preferences
   notifications?: {
     emailReminders?: boolean;
     dripAlerts?: boolean;
     bookingConfirmations?: boolean;
   };
 
-  // ✅ Country
   country?: string;
 
-  // ✅ NEW: A2P / Twilio Messaging state (populated by sync endpoint)
   a2p?: {
     brandSid?: string;
-    brandStatus?: string; // e.g. "APPROVED", "PENDING"
+    brandStatus?: string;
     campaignSid?: string;
-    campaignStatus?: string; // e.g. "ACTIVE"
+    campaignStatus?: string;
     messagingServiceSid?: string;
-    messagingReady?: boolean; // gate for sendSMS()
+    messagingReady?: boolean;
     lastSyncedAt?: Date;
   };
 
-  // ✅ NEW: last time numbers were refreshed from Twilio
   numbersLastSyncedAt?: Date;
 }
+
+const SyncedSheetSchema = new Schema(
+  {
+    spreadsheetId: String,
+    title: String,
+    sheetId: Number,
+    headerRow: { type: Number, default: 1 },
+    mapping: { type: Schema.Types.Mixed, default: {} },
+    skip: { type: Schema.Types.Mixed, default: {} },
+    folderId: { type: Schema.Types.ObjectId, ref: "Folder" },
+    folderName: String,
+    lastRowImported: { type: Number, default: 1 },
+    lastImportedAt: Date,
+  },
+  { _id: false }
+);
 
 const UserSchema = new Schema<IUser>({
   email: { type: String, required: true },
@@ -137,11 +148,7 @@ const UserSchema = new Schema<IUser>({
   role: { type: String, enum: ["user", "admin"], default: "user" },
   createdAt: { type: Date, default: Date.now },
   username: { type: String },
-
-  // ✅ Agent’s device number used for bridging outbound calls
   agentPhone: { type: String },
-
-  // ✅ Stripe billing
   stripeCustomerId: { type: String },
 
   numbers: [
@@ -156,7 +163,6 @@ const UserSchema = new Schema<IUser>({
         textsReceived: { type: Number, default: 0 },
         cost: { type: Number, default: 0 },
       },
-      // 🔹 Optional number metadata (safe to add)
       status: String,
       country: String,
       carrier: String,
@@ -185,6 +191,7 @@ const UserSchema = new Schema<IUser>({
         folderName: String,
       },
     ],
+    syncedSheets: { type: [SyncedSheetSchema], default: [] }, // ✅ new
   },
 
   googleTokens: {
@@ -194,8 +201,6 @@ const UserSchema = new Schema<IUser>({
   },
 
   calendarId: String,
-
-  // ✅ Defaults added here so every user has a usable setup out of the box
   bookingSettings: {
     timezone: { type: String, default: "America/Los_Angeles" },
     slotLength: { type: Number, default: 30 },
@@ -207,7 +212,6 @@ const UserSchema = new Schema<IUser>({
 
   aiAssistantName: { type: String, default: "Assistant" },
 
-  // ✅ Affiliate fields
   referralCode: { type: String, unique: true, sparse: true },
   referredBy: String,
   affiliateCode: String,
@@ -217,44 +221,27 @@ const UserSchema = new Schema<IUser>({
   lastPayoutDate: Date,
   stripeConnectId: String,
   totalReferralEarnings: { type: Number, default: 0 },
-  commissionHistory: {
-    type: Map,
-    of: Number,
-    default: {},
-  },
+  commissionHistory: { type: Map, of: Number, default: {} },
 
-  // ✅ AI access
   hasAI: { type: Boolean, default: false },
   plan: { type: String, enum: ["Free", "Pro"], default: "Free" },
+  subscriptionStatus: { type: String, enum: ["active", "canceled"], default: "active" },
 
-  // ✅ Billing status
-  subscriptionStatus: {
-    type: String,
-    enum: ["active", "canceled"],
-    default: "active",
-  },
-
-  // ✅ AI usage tracking
   aiUsage: {
     openAiCost: { type: Number, default: 0 },
     twilioCost: { type: Number, default: 0 },
     totalCost: { type: Number, default: 0 },
   },
 
-  // ✅ Usage balance
   usageBalance: { type: Number, default: 0 },
-
-  // ✅ Notifications
   notifications: {
     emailReminders: { type: Boolean, default: true },
     dripAlerts: { type: Boolean, default: true },
     bookingConfirmations: { type: Boolean, default: true },
   },
 
-  // ✅ Country
   country: { type: String },
 
-  // ✅ NEW: A2P / Twilio Messaging state
   a2p: {
     brandSid: String,
     brandStatus: String,
@@ -265,16 +252,11 @@ const UserSchema = new Schema<IUser>({
     lastSyncedAt: Date,
   },
 
-  // ✅ NEW: numbers last sync timestamp
   numbersLastSyncedAt: Date,
 });
 
-/* 🔹 Indexes for speed + compliance checks */
 UserSchema.index({ email: 1 }, { name: "user_email_idx" });
-UserSchema.index(
-  { "numbers.phoneNumber": 1 },
-  { name: "user_numbers_phone_idx" },
-);
+UserSchema.index({ "numbers.phoneNumber": 1 }, { name: "user_numbers_phone_idx" });
 
 const User =
   (mongoose.models.User as mongoose.Model<IUser>) ||
@@ -282,7 +264,6 @@ const User =
 
 export default User;
 
-// ✅ Utility
 export async function getUserByEmail(email: string) {
   return await User.findOne({ email });
 }
