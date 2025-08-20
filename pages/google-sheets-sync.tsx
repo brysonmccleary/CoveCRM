@@ -1,5 +1,5 @@
 // /pages/google-sheets-sync.tsx
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Sidebar from "@/components/Sidebar";
 import toast from "react-hot-toast";
 
@@ -53,6 +53,9 @@ export default function GoogleSheetsSyncPage() {
   const [folderName, setFolderName] = useState<string>("");
 
   const [importing, setImporting] = useState(false);
+
+  // refs
+  const mappingRef = useRef<HTMLDivElement | null>(null);
 
   const handleGoogleAuth = () => {
     window.location.href = "/api/connect/google-sheets";
@@ -143,6 +146,11 @@ export default function GoogleSheetsSyncPage() {
       });
       setMapping(guess);
 
+      // scroll to the mapping section
+      setTimeout(() => {
+        mappingRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 50);
+
       toast.success("Preview loaded");
     } catch (e: any) {
       toast.error(e.message || "Preview failed");
@@ -184,6 +192,9 @@ export default function GoogleSheetsSyncPage() {
       setImporting(false);
     }
   };
+
+  // Convenience: click "Sync new rows now" to re-run the import with the current mapping.
+  const runSyncNow = () => runImport();
 
   useEffect(() => {
     try {
@@ -263,7 +274,8 @@ export default function GoogleSheetsSyncPage() {
           <div className="mb-5 rounded-lg border border-slate-200 bg-white shadow-sm p-4 dark:bg-slate-800 dark:border-slate-700">
             <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
               <div className="font-semibold text-slate-900 dark:text-slate-100">
-                Control Panel — <span className="text-indigo-600">{selectedFile.name}</span>
+                Control Panel —{" "}
+                <span className="text-indigo-600">{selectedFile.name}</span>
               </div>
               <div className="text-xs text-slate-500 dark:text-slate-400">
                 Select a tab, set header row & folder name, then load preview.
@@ -331,39 +343,30 @@ export default function GoogleSheetsSyncPage() {
               </div>
             </div>
 
-            <div className="mt-3">
+            <div className="mt-3 flex gap-2">
               <button onClick={loadPreview} className={buttonPrimary}>
                 Load Preview
               </button>
+              {headers.length > 0 && (
+                <button
+                  onClick={runSyncNow}
+                  disabled={importing}
+                  className={buttonNeutral}
+                  title="Pull in any new rows using this mapping"
+                >
+                  {importing ? "Syncing…" : "Sync new rows now"}
+                </button>
+              )}
             </div>
           </div>
         )}
 
-        {/* FILES LIST */}
-        {!loadingFiles && files && files.length > 0 && (
-          <ul className="space-y-3 mb-6">
-            {files.map((f) => (
-              <li
-                key={f.id}
-                className={`border rounded-lg p-4 bg-white dark:bg-slate-800 dark:border-slate-700 shadow-sm cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700 ${
-                  selectedFile?.id === f.id ? "ring-2 ring-indigo-500" : ""
-                }`}
-                onClick={() => loadTabs(f)}
-              >
-                <div className="font-semibold text-slate-900 dark:text-slate-100">
-                  {f.name}
-                </div>
-                <div className="text-xs text-slate-500 dark:text-slate-400">
-                  {f.owners?.[0]?.emailAddress} • {f.modifiedTime}
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-
-        {/* PREVIEW + MAPPING */}
+        {/* PREVIEW + MAPPING (TOP, directly under panel) */}
         {headers.length > 0 && (
-          <div className="mt-6 rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:bg-slate-800 dark:border-slate-700">
+          <div
+            ref={mappingRef}
+            className="mt-2 mb-6 rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:bg-slate-800 dark:border-slate-700"
+          >
             <h3 className="text-lg font-semibold mb-2 text-slate-900 dark:text-slate-100">
               Map your fields
             </h3>
@@ -433,14 +436,42 @@ export default function GoogleSheetsSyncPage() {
               );
             })}
 
-            <button
-              onClick={runImport}
-              disabled={importing}
-              className={`${buttonPrimary} mt-4`}
-            >
-              {importing ? "Importing…" : "Save & Import"}
-            </button>
+            <div className="mt-4 flex gap-2">
+              <button onClick={runImport} disabled={importing} className={buttonPrimary}>
+                {importing ? "Importing…" : "Save & Import"}
+              </button>
+              <button
+                onClick={runSyncNow}
+                disabled={importing}
+                className={buttonNeutral}
+                title="Pull in any new rows using this mapping"
+              >
+                {importing ? "Syncing…" : "Sync new rows now"}
+              </button>
+            </div>
           </div>
+        )}
+
+        {/* FILES LIST (now below everything else) */}
+        {!loadingFiles && files && files.length > 0 && (
+          <ul className="space-y-3">
+            {files.map((f) => (
+              <li
+                key={f.id}
+                className={`border rounded-lg p-4 bg-white dark:bg-slate-800 dark:border-slate-700 shadow-sm cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700 ${
+                  selectedFile?.id === f.id ? "ring-2 ring-indigo-500" : ""
+                }`}
+                onClick={() => loadTabs(f)}
+              >
+                <div className="font-semibold text-slate-900 dark:text-slate-100">
+                  {f.name}
+                </div>
+                <div className="text-xs text-slate-500 dark:text-slate-400">
+                  {f.owners?.[0]?.emailAddress} • {f.modifiedTime}
+                </div>
+              </li>
+            ))}
+          </ul>
         )}
       </main>
     </div>
