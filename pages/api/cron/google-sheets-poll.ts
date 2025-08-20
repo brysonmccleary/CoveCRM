@@ -7,34 +7,61 @@ import Folder from "@/models/Folder";
 import { google } from "googleapis";
 import mongoose from "mongoose";
 
-function normalizePhone(input: any) {
-  return String(input || "").replace(/\D+/g, "");
-}
-function normalizeEmail(input: any) {
-  const s = String(input || "").trim();
-  return s ? s.toLowerCase() : "";
-}
+// --- Normalizers -------------------------------------------------------------
+const normPhone = (v: any) => String(v ?? "").replace(/\D+/g, "");
+const normEmail = (v: any) => {
+  const s = String(v ?? "").trim().toLowerCase();
+  return s || "";
+};
+// normalize header keys for tolerant matching: trim, collapse space/_/-, lowercase
+const normHeader = (s: any) =>
+  String(s ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ");
+
+type SyncedSheetCfg = {
+  spreadsheetId: string;
+  title?: string;         // saved tab title at time of import
+  sheetId?: number;       // <-- we will prefer this if present
+  headerRow?: number;
+  mapping?: Record<string, string>;
+  skip?: Record<string, boolean>;
+  folderId?: string;
+  folderName?: string;
+  lastRowImported?: number; // 1-based index of the LAST imported row
+};
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "GET" && req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  // Token check: header x-cron-secret or ?token= must match env
+  // Token via header or query
   const headerToken = Array.isArray(req.headers["x-cron-secret"])
     ? req.headers["x-cron-secret"][0]
     : (req.headers["x-cron-secret"] as string | undefined);
-  const queryToken = typeof req.query.token === "string" ? req.query.token : undefined;
+  const queryToken =
+    typeof req.query.token === "string" ? (req.query.token as string) : undefined;
   const provided = headerToken || queryToken;
   if (provided !== process.env.CRON_SECRET) {
     return res.status(401).json({ error: "Unauthorized" });
   }
 
-  // Debug helpers via query:
-  const onlyUserEmail = typeof req.query.userEmail === "string" ? req.query.userEmail.toLowerCase() : undefined;
-  const onlySpreadsheetId = typeof req.query.spreadsheetId === "string" ? req.query.spreadsheetId : undefined;
-  const onlyTab = typeof req.query.title === "string" ? req.query.title : undefined;
+  // Optional debug/filters
+  const onlyUserEmail =
+    typeof req.query.userEmail === "string"
+      ? (req.query.userEmail as string).toLowerCase()
+      : undefined;
+  const onlySpreadsheetId =
+    typeof req.query.spreadsheetId === "string"
+      ? (req.query.spreadsheetId as string)
+      : undefined;
+  const onlyTitle =
+    typeof req.query.title === "string" ? (req.query.title as string) : undefined;
   const dryRun = req.query.dryRun === "1" || req.query.dryRun === "true";
+  const debug = req.query.debug === "1" || req.query.debug === "true";
 
   const MAX_USERS = Number(process.env.POLL_MAX_USERS || 10);
   const MAX_ROWS_PER_SHEET = Number(process.env.POLL_MAX_ROWS || 500);
@@ -42,36 +69,33 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     await dbConnect();
 
-    // Include back-compat users who still store tokens in googleTokens
-    const userFilter: any = {
-      $and: [
-        { "googleSheets.syncedSheets.0": { $exists: true } }, // mapping saved
-        onlyUserEmail ? { email: onlyUserEmail } : {},        // optional filter
-      ].filter(Boolean),
-    };
+    const users = await User.find({
+      ...(onlyUserEmail ? { email: onlyUserEmail } : {}),
+      "googleSheets.syncedSheets.0": { $exists: true },
+    })
+      .limit(MAX_USERS)
+      .lean();
 
-    const users = await User.find(userFilter).limit(MAX_USERS).lean();
     const detailsAll: any[] = [];
 
     for (const user of users) {
       const userEmail = String((user as any).email || "").toLowerCase();
 
-      // Pick tokens from googleSheets or fallback googleTokens
+      // token from googleSheets or legacy googleTokens
       const gs: any = (user as any).googleSheets || {};
       const legacy: any = (user as any).googleTokens || {};
       const tok = gs?.refreshToken ? gs : legacy?.refreshToken ? legacy : null;
       if (!tok?.refreshToken) {
-        detailsAll.push({ userEmail, note: "No refresh token on user" });
+        detailsAll.push({ userEmail, note: "No Google refresh token" });
         continue;
       }
 
-      // OAuth client
-      const redirectBase =
+      const base =
         process.env.NEXTAUTH_URL || process.env.NEXT_PUBLIC_BASE_URL || "";
       const oauth2 = new google.auth.OAuth2(
         process.env.GOOGLE_CLIENT_ID!,
         process.env.GOOGLE_CLIENT_SECRET!,
-        `${redirectBase}/api/connect/google-sheets/callback`
+        `${base}/api/connect/google-sheets/callback`
       );
       oauth2.setCredentials({
         access_token: tok.accessToken,
@@ -82,43 +106,63 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const drive = google.drive({ version: "v3", auth: oauth2 });
       const sheetsApi = google.sheets({ version: "v4", auth: oauth2 });
 
-      const syncedSheets: any[] = (user as any)?.googleSheets?.syncedSheets || [];
-      if (!Array.isArray(syncedSheets) || syncedSheets.length === 0) {
-        detailsAll.push({ userEmail, note: "No syncedSheets configured" });
+      const syncedSheets: SyncedSheetCfg[] = (gs?.syncedSheets || []) as any[];
+      if (!syncedSheets?.length) {
+        detailsAll.push({ userEmail, note: "No syncedSheets" });
         continue;
       }
 
-      for (const sheetCfg of syncedSheets) {
-        const {
+      for (const cfg of syncedSheets) {
+        let {
           spreadsheetId,
           title,
+          sheetId,
           headerRow = 1,
           mapping = {},
           skip = {},
-          lastRowImported, // 1-based index of the LAST imported row
           folderId,
           folderName,
-        } = sheetCfg || {};
+          lastRowImported,
+        } = cfg || {};
 
-        if (!spreadsheetId || !title) continue;
+        if (!spreadsheetId) continue;
         if (onlySpreadsheetId && spreadsheetId !== onlySpreadsheetId) continue;
-        if (onlyTab && title !== onlyTab) continue;
+        if (onlyTitle && title && title !== onlyTitle) continue;
 
-        // Pointer default: if undefined, start at header row (nothing imported yet)
-        const pointer = typeof lastRowImported === "number" ? lastRowImported : headerRow;
+        // If we have a sheetId, resolve current title (tab might be renamed)
+        if (sheetId != null) {
+          try {
+            const meta = await sheetsApi.spreadsheets.get({
+              spreadsheetId,
+              fields: "sheets(properties(sheetId,title))",
+            });
+            const found = (meta.data.sheets || []).find(
+              (s) => s.properties?.sheetId === sheetId
+            );
+            if (found?.properties?.title) {
+              title = found.properties.title;
+            }
+          } catch {
+            // ignore and try title as-is
+          }
+        }
+        if (!title) continue; // still no title—skip safely
 
         // Ensure folder exists
         let folderDoc: any = null;
         if (folderId) {
           try {
-            folderDoc = await Folder.findOne({ _id: new mongoose.Types.ObjectId(folderId) });
+            folderDoc = await Folder.findOne({
+              _id: new mongoose.Types.ObjectId(folderId),
+            });
           } catch {
-            // ignore invalid id
+            /* noop */
           }
         }
         if (!folderDoc) {
           const meta = await drive.files.get({ fileId: spreadsheetId, fields: "name" });
-          const defaultName = folderName || `${meta.data.name || "Imported Leads"} — ${title}`;
+          const defaultName =
+            folderName || `${meta.data.name || "Imported Leads"} — ${title}`;
           folderDoc = await Folder.findOneAndUpdate(
             { userEmail, name: defaultName },
             { $setOnInsert: { userEmail, name: defaultName, source: "google-sheets" } },
@@ -127,7 +171,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
         const targetFolderId = folderDoc._id as mongoose.Types.ObjectId;
 
-        // Fetch current values
+        // Read values
         const resp = await sheetsApi.spreadsheets.values.get({
           spreadsheetId,
           range: `'${title}'!A1:ZZ`,
@@ -135,39 +179,54 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         });
         const values = (resp.data.values || []) as string[][];
         const headerIdx = Math.max(0, headerRow - 1);
-        const headers = (values[headerIdx] || []).map((h) => String(h || "").trim());
+        const rawHeaders = (values[headerIdx] || []).map((h) => String(h ?? "").trim());
 
-        // Compute start/end
-        const firstDataZero = headerIdx + 1; // first row after headers (0-based)
-        // pointer is 1-based LAST imported row; next row to process (0-based) is max(firstDataZero, pointer)
-        const startIndex = Math.max(firstDataZero, Number(pointer));
+        // Build a tolerant header index map
+        const headerNormToActual = new Map<string, string>();
+        rawHeaders.forEach((h) => headerNormToActual.set(normHeader(h), h));
+
+        // Normalize mapping keys once (so "First  Name", "first_name", "First-Name" all match)
+        const normalizedMapping: Record<string, string> = {};
+        Object.entries(mapping || {}).forEach(([key, val]) => {
+          normalizedMapping[normHeader(key)] = val;
+        });
+
+        // Determine start/end using pointer (1-based last imported)
+        const pointer = typeof lastRowImported === "number" ? lastRowImported : headerRow;
+        const firstDataZero = headerIdx + 1; // 0-based
+        // Convert 1-based LAST imported -> next row (0-based) = max(firstDataZero, pointer)
+        let startIndex = Math.max(firstDataZero, Number(pointer));
+        // If the sheet shrank or pointer drifted too far, clamp back to first data row
+        if (startIndex > values.length - 1) startIndex = firstDataZero;
+
         const endIndex = Math.min(values.length - 1, startIndex + MAX_ROWS_PER_SHEET - 1);
 
         let imported = 0;
         let updated = 0;
         let skippedNoKey = 0;
-        let lastProcessed = Number(pointer) - 1; // keep 0-based internal
+        let lastProcessed = Number(pointer) - 1;
 
         if (startIndex <= endIndex) {
           for (let r = startIndex; r <= endIndex; r++) {
             const row = values[r] || [];
-            const hasAny = row.some((c) => String(c || "").trim() !== "");
+            const hasAny = row.some((c) => String(c ?? "").trim() !== "");
             if (!hasAny) continue;
-
             lastProcessed = r;
 
+            // Build doc using tolerant mapping
             const doc: Record<string, any> = {};
-            headers.forEach((h, i) => {
-              if (!h) return;
-              if (skip[h]) return;
-              const fieldName = mapping[h];
+            rawHeaders.forEach((actualHeader, i) => {
+              const n = normHeader(actualHeader);
+              if (!n) return;
+              if (skip?.[actualHeader]) return; // honor skip only by actual header text
+              const fieldName = normalizedMapping[n];
               if (!fieldName) return;
               doc[fieldName] = row[i] ?? "";
             });
 
-            const normalizedPhone = normalizePhone(doc.phone ?? doc.Phone ?? "");
-            const emailLower = normalizeEmail(doc.email ?? doc.Email ?? "");
-            if (!normalizedPhone && !emailLower) {
+            const p = normPhone(doc.phone ?? doc.Phone);
+            const e = normEmail(doc.email ?? doc.Email);
+            if (!p && !e) {
               skippedNoKey++;
               continue;
             }
@@ -177,14 +236,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             doc.sourceSpreadsheetId = spreadsheetId;
             doc.sourceTabTitle = title;
             doc.sourceRowIndex = r + 1; // 1-based
-            doc.normalizedPhone = normalizedPhone || undefined;
-            if (emailLower) doc.email = emailLower;
+            doc.normalizedPhone = p || undefined;
+            if (e) doc.email = e;
 
             const or: any[] = [];
-            if (normalizedPhone) or.push({ normalizedPhone });
-            if (emailLower) or.push({ email: emailLower });
-            const filter = { userEmail, ...(or.length ? { $or: or } : {}) };
+            if (p) or.push({ normalizedPhone: p });
+            if (e) or.push({ email: e });
 
+            const filter = { userEmail, ...(or.length ? { $or: or } : {}) };
             const existing = await Lead.findOne(filter).select("_id").lean<{ _id: mongoose.Types.ObjectId } | null>();
 
             if (!existing) {
@@ -200,14 +259,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
         }
 
-        // Update pointer (1-based last processed row)
         const newLast = Math.max(lastProcessed + 1, Number(pointer));
         if (!dryRun) {
           await User.updateOne(
             {
               email: userEmail,
               "googleSheets.syncedSheets.spreadsheetId": spreadsheetId,
-              "googleSheets.syncedSheets.title": title,
+              "googleSheets.syncedSheets.title": cfg.title ?? title, // match either saved or current title
             },
             {
               $set: {
@@ -215,32 +273,42 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 "googleSheets.syncedSheets.$.lastImportedAt": new Date(),
                 "googleSheets.syncedSheets.$.folderId": targetFolderId,
                 "googleSheets.syncedSheets.$.folderName": folderDoc.name,
+                ...(sheetId != null ? { "googleSheets.syncedSheets.$.sheetId": sheetId } : {}),
+                // keep saved title in sync if it changed
+                ...(cfg.title !== title ? { "googleSheets.syncedSheets.$.title": title } : {}),
               },
             }
           );
         }
 
-        detailsAll.push({
+        const detail: any = {
           userEmail,
           spreadsheetId,
           title,
+          sheetId,
           headerRow,
           pointerWas: pointer,
           startIndex,
           endIndex,
+          rowCount: values.length,
           imported,
           updated,
           skippedNoKey,
           newLastRowImported: newLast,
           dryRun,
-        });
+        };
+        if (debug) {
+          detail.headers = rawHeaders;
+          detail.normalizedHeaders = rawHeaders.map(normHeader);
+          detail.mapping = mapping;
+          detail.mappingNormalized = normalizedMapping;
+        }
+        detailsAll.push(detail);
       }
     }
 
-    // Helpful console log for Vercel Functions tab
-    console.log("Sheets poll summary:", JSON.stringify(detailsAll, null, 2));
-
-    return res.status(200).json({ ok: true, processedUsers: users.length, details: detailsAll });
+    if (debug) console.log("Sheets poll (debug) →", JSON.stringify(detailsAll, null, 2));
+    return res.status(200).json({ ok: true, details: detailsAll });
   } catch (err: any) {
     console.error("Sheets poll error:", err);
     return res.status(500).json({ error: err?.message || "Cron poll failed" });
