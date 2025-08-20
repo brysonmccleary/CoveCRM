@@ -2,186 +2,190 @@ import { useEffect, useState } from "react";
 import Sidebar from "@/components/Sidebar";
 import toast from "react-hot-toast";
 
+// Types for convenience
+type DriveFile = {
+  id: string;
+  name: string;
+  modifiedTime?: string;
+  owners?: { emailAddress?: string }[];
+};
+type Tab = {
+  sheetId?: number | null;
+  title?: string | null;
+  index?: number | null;
+};
+
 export default function GoogleSheetsSyncPage() {
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [sheets, setSheets] = useState<any[]>([]);
-  const [folders, setFolders] = useState<any[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [fetchingSheets, setFetchingSheets] = useState(false);
+  // Sheets
+  const [files, setFiles] = useState<DriveFile[] | null>(null);
+  const [loadingFiles, setLoadingFiles] = useState(false);
+  const [filesErr, setFilesErr] = useState<string | null>(null);
 
-  // ✅ Start Google OAuth
-  const handleGoogleAuth = async () => {
-    setLoading(true);
+  // Tabs
+  const [selectedFile, setSelectedFile] = useState<DriveFile | null>(null);
+  const [tabs, setTabs] = useState<Tab[] | null>(null);
+  const [loadingTabs, setLoadingTabs] = useState(false);
+  const [tabsErr, setTabsErr] = useState<string | null>(null);
+
+  // ---- OAuth start ----
+  const handleGoogleAuth = () => {
+    // use your working OAuth start route
+    window.location.href = "/api/connect/google-sheets";
+  };
+
+  // ---- List spreadsheets ----
+  const loadMySheets = async () => {
+    setLoadingFiles(true);
+    setFilesErr(null);
+    setTabs(null);
+    setSelectedFile(null);
+
     try {
-      const res = await fetch("/api/google/auth");
-      const data = await res.json();
+      const r = await fetch("/api/sheets/list");
+      const j = await r.json();
 
-      if (data.url) {
-        window.location.href = data.url;
-      } else {
-        toast.error("Failed to initiate Google authentication.");
+      if (!r.ok) {
+        // Common case if not connected yet:
+        // { error: "Google Sheets not connected" }
+        throw new Error(j?.error || "Failed to list spreadsheets");
       }
-    } catch (err) {
-      console.error("Auth error:", err);
-      toast.error("Google authentication failed.");
+
+      setFiles(j.files || []);
+      if ((j.files || []).length === 0) {
+        toast("No Google Sheets found in Drive.", { icon: "ℹ️" });
+      }
+    } catch (e: any) {
+      setFiles(null);
+      setFilesErr(e.message || "Failed to list spreadsheets");
     } finally {
-      setLoading(false);
+      setLoadingFiles(false);
     }
   };
 
-  // ✅ Check if already connected
-  const checkGoogleStatus = async () => {
-    try {
-      const res = await fetch("/api/google/status");
-      const data = await res.json();
-      if (data.connected) {
-        setIsAuthenticated(true);
-      }
-    } catch (err) {
-      console.error("Status error:", err);
-    }
-  };
+  // ---- List tabs for a selected spreadsheet ----
+  const loadTabs = async (file: DriveFile) => {
+    setSelectedFile(file);
+    setTabs(null);
+    setTabsErr(null);
+    setLoadingTabs(true);
 
-  // ✅ Fetch Sheets from Google
-  const fetchSheets = async () => {
-    setFetchingSheets(true);
     try {
-      const res = await fetch("/api/google/list-sheets");
-      const data = await res.json();
-
-      const enhanced = (data.sheets || []).map((sheet: any) => ({
-        ...sheet,
-        folderId: "",
-      }));
-      setSheets(enhanced);
-    } catch (err) {
-      console.error("Fetch Sheets error:", err);
-      toast.error("Could not load your Google Sheets.");
+      const r = await fetch(
+        `/api/google/sheets/list-tabs?spreadsheetId=${encodeURIComponent(file.id)}`
+      );
+      const j = await r.json();
+      if (!r.ok) throw new Error(j?.error || "Failed to list tabs");
+      setTabs(j.tabs || []);
+    } catch (e: any) {
+      setTabsErr(e.message || "Failed to list tabs");
+      setTabs(null);
     } finally {
-      setFetchingSheets(false);
+      setLoadingTabs(false);
     }
   };
 
-  // ✅ Fetch user's folders from DB
-  const fetchFolders = async () => {
-    try {
-      const res = await fetch("/api/folders/list");
-      const data = await res.json();
-      if (res.ok) setFolders(data.folders || []);
-      else throw new Error(data.message);
-    } catch (err) {
-      console.error("Fetch Folders error:", err);
-      toast.error("Could not load folders.");
-    }
-  };
-
-  // ✅ Save Sync Setting
-  const saveSheetLink = async (sheet: any) => {
-    if (!sheet.folderId) return toast.error("Please select a folder first.");
-
-    try {
-      const res = await fetch("/api/google/save-sheet-link", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          sheetId: sheet.id,
-          sheetName: sheet.name,
-          folderId: sheet.folderId,
-        }),
-      });
-
-      const data = await res.json();
-      if (res.ok) {
-        toast.success("Sheet linked to folder!");
-      } else {
-        toast.error(data.message || "Failed to save sync.");
-      }
-    } catch (err) {
-      console.error("Save error:", err);
-      toast.error("Save failed.");
-    }
-  };
-
+  // ---- Autoload after OAuth callback ----
   useEffect(() => {
-    checkGoogleStatus();
+    try {
+      const params = new URLSearchParams(window.location.search);
+
+      // If we came back from OAuth, fetch immediately
+      if (params.get("connected") === "google-sheets") {
+        loadMySheets();
+
+        // Clean the URL so refreshes don't keep reloading
+        const url = new URL(window.location.href);
+        url.searchParams.delete("connected");
+        window.history.replaceState({}, "", url.toString());
+        return;
+      }
+
+      // Otherwise, we can still try loading (if already connected it will work)
+      loadMySheets();
+    } catch {
+      // no-op (SSR path guards)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  useEffect(() => {
-    if (isAuthenticated) {
-      fetchSheets();
-      fetchFolders();
-    }
-  }, [isAuthenticated]);
 
   return (
     <div className="flex">
       <Sidebar />
       <main className="flex-1 p-6">
-        <h1 className="text-2xl font-bold mb-4">Google Sheets Sync</h1>
+        <h1 className="text-2xl font-bold mb-2">Google Sheets Sync</h1>
         <p className="mb-4 text-gray-600 dark:text-gray-300">
-          Automatically sync leads from your Google Sheets into CRM folders.
+          Connect your Google account, pick a spreadsheet, and view its tabs. (Import happens on the Leads page.)
         </p>
 
-        {!isAuthenticated ? (
+        <div className="flex flex-wrap gap-3 mb-6">
           <button
             onClick={handleGoogleAuth}
             className="bg-[#34a853] text-white px-6 py-2 rounded hover:opacity-90"
-            disabled={loading}
           >
-            {loading ? "Connecting..." : "Connect Google Account"}
+            Connect Google Account
           </button>
-        ) : (
-          <>
-            {fetchingSheets ? (
-              <p className="text-gray-500">Loading your Google Sheets...</p>
-            ) : sheets.length === 0 ? (
-              <p className="text-gray-500">No Google Sheets found.</p>
-            ) : (
-              <div className="space-y-4">
-                {sheets.map((sheet) => (
-                  <div
-                    key={sheet.id}
-                    className="border rounded p-4 bg-white dark:bg-gray-800 shadow"
-                  >
-                    <h2 className="text-lg font-semibold">{sheet.name}</h2>
-                    <p className="text-sm text-gray-500">ID: {sheet.id}</p>
 
-                    <div className="mt-3">
-                      <label className="text-sm block mb-1">
-                        Assign to Folder:
-                      </label>
-                      <select
-                        className="w-full border px-2 py-1 rounded text-black"
-                        value={sheet.folderId || ""}
-                        onChange={(e) => {
-                          const updated = sheets.map((s) =>
-                            s.id === sheet.id
-                              ? { ...s, folderId: e.target.value }
-                              : s,
-                          );
-                          setSheets(updated);
-                        }}
-                      >
-                        <option value="">-- Select Folder --</option>
-                        {folders.map((folder) => (
-                          <option key={folder._id} value={folder._id}>
-                            {folder.name}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
+          <button
+            onClick={loadMySheets}
+            className="bg-gray-800 text-white px-4 py-2 rounded hover:bg-gray-900"
+            disabled={loadingFiles}
+          >
+            {loadingFiles ? "Loading..." : "Load My Spreadsheets"}
+          </button>
+        </div>
 
-                    <button
-                      className="mt-3 bg-blue-600 text-white px-4 py-1 rounded hover:opacity-90"
-                      onClick={() => saveSheetLink(sheet)}
-                    >
-                      Save Sync
-                    </button>
-                  </div>
-                ))}
-              </div>
+        {/* Sheets list */}
+        {filesErr && (
+          <div className="text-sm text-red-600 mb-4">{filesErr}</div>
+        )}
+
+        {loadingFiles && <div className="text-sm text-gray-500">Loading spreadsheets…</div>}
+
+        {!loadingFiles && files && files.length > 0 && (
+          <ul className="space-y-3">
+            {files.map((f) => (
+              <li
+                key={f.id}
+                className={`border rounded p-4 bg-white dark:bg-gray-800 shadow cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700 ${
+                  selectedFile?.id === f.id ? "ring-2 ring-indigo-500" : ""
+                }`}
+                onClick={() => loadTabs(f)}
+              >
+                <div className="font-semibold">{f.name}</div>
+                <div className="text-xs text-gray-500">
+                  {f.owners?.[0]?.emailAddress} • {f.modifiedTime}
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        {/* Tabs for the selected spreadsheet */}
+        {selectedFile && (
+          <div className="mt-6">
+            <div className="font-semibold mb-2">
+              Tabs in: <span className="text-indigo-600">{selectedFile.name}</span>
+            </div>
+
+            {loadingTabs && (
+              <div className="text-sm text-gray-500">Loading tabs…</div>
             )}
-          </>
+            {tabsErr && <div className="text-sm text-red-600">{tabsErr}</div>}
+
+            {tabs && tabs.length > 0 && (
+              <ul className="divide-y rounded border">
+                {tabs.map((t) => (
+                  <li key={`${t.sheetId}-${t.title}`} className="p-3">
+                    <div className="font-medium">{t.title}</div>
+                    <div className="text-xs text-gray-500">Sheet ID: {t.sheetId}</div>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {tabs && tabs.length === 0 && !loadingTabs && (
+              <div className="text-sm text-gray-500">No tabs found.</div>
+            )}
+          </div>
         )}
       </main>
     </div>

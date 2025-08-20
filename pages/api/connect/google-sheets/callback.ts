@@ -15,8 +15,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const session = await getServerSession(req, res, authOptions);
   if (!session?.user?.email) return res.status(401).send("Unauthorized");
 
-  const code = req.query.code as string;
+  const code = req.query.code as string | undefined;
+  const state = (req.query.state as string | undefined) || "";
   if (!code) return res.status(400).send("Missing code");
+
+  // Optional: basic CSRF check — we set state=email when starting OAuth
+  try {
+    const stateEmail = decodeURIComponent(state || "");
+    if (stateEmail && stateEmail.toLowerCase() !== session.user.email.toLowerCase()) {
+      return res.status(400).send("State mismatch");
+    }
+  } catch {
+    // ignore malformed state
+  }
 
   const redirectUri = `${baseUrl(req)}/api/connect/google-sheets/callback`;
   const oauth2 = new google.auth.OAuth2(
@@ -25,13 +36,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     redirectUri
   );
 
-  const { tokens } = await oauth2.getToken(code);
+  let tokens;
+  try {
+    const resp = await oauth2.getToken(code);
+    tokens = resp.tokens;
+  } catch (err: any) {
+    return res.status(400).send(`Token exchange failed: ${err?.message || "unknown error"}`);
+  }
 
   await dbConnect();
 
   const email = session.user.email.toLowerCase();
-  const existing = await User.findOne({ email }).select("googleSheets googleTokens").lean<any>();
+  const existing = await User.findOne({ email })
+    .select("googleSheets googleTokens")
+    .lean<any>();
 
+  // Preserve refresh_token if Google doesn't resend it
   const refreshToken =
     tokens.refresh_token ||
     existing?.googleSheets?.refreshToken ||
@@ -46,13 +66,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     { email },
     {
       $set: {
+        // Primary location our APIs read from
         googleSheets: { accessToken, refreshToken, expiryDate, scope },
-        googleTokens: { accessToken, refreshToken, expiryDate, scope }, // back-compat
+        // Back-compat with any older code paths
+        googleTokens: { accessToken, refreshToken, expiryDate, scope },
         googleSheetsConnected: true,
       },
     }
   );
 
-  // 👇 Add this flag so the client knows to fetch files immediately
-  return res.redirect("/dashboard?tab=leads&connected=google-sheets");
+  // Redirect to the sync page; it will auto-call /api/sheets/list when it sees this flag.
+  return res.redirect("/google-sheets-sync?connected=google-sheets");
 }
