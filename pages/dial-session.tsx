@@ -39,7 +39,7 @@ export default function DialSession() {
   const [notes, setNotes] = useState("");
   const [history, setHistory] = useState<string[]>([]);
 
-  // Numbers (for display only; server resolves authoritative values)
+  // Numbers (display only; server resolves authoritative values)
   const [fromNumber, setFromNumber] = useState<string>("");
   const [agentPhone, setAgentPhone] = useState<string>("");
 
@@ -135,16 +135,34 @@ export default function DialSession() {
     }
   };
 
+  // NEW: hard-hangup helper — ends the Twilio call at the source
+  const hangupActiveCall = async (why?: string) => {
+    const sid = activeCallSidRef.current;
+    activeCallSidRef.current = null; // ensure at-most-once
+    if (!sid) return;
+    try {
+      await fetch("/api/twilio/calls/hangup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ callSid: sid }),
+      });
+      if (why) console.log("Hangup requested:", { sid, why });
+    } catch (e) {
+      console.warn("Hangup request failed:", (e as any)?.message || e);
+    }
+  };
+
   const scheduleWatchdog = () => {
     clearWatchdog();
-    // Server times out at 25s; we give a little cushion (≈27s total) then advance.
+    // If Twilio keeps ringing (no webhook), auto-advance + hard-hangup.
     callWatchdogRef.current = setTimeout(() => {
       if (advanceScheduledRef.current || sessionEndedRef.current) return;
       setStatus("No answer (timeout)");
       stopRingback();
+      hangupActiveCall("watchdog-timeout");
       advanceScheduledRef.current = true;
       setTimeout(disconnectAndNext, 1200);
-    }, 27000);
+    }, 27000); // ~27s gives cushion around server-side 25s behaviors
   };
 
   /** ---------- bootstrap ---------- */
@@ -396,9 +414,9 @@ export default function DialSession() {
   const handleHangUp = () => {
     stopRingback();
     clearWatchdog();
+    hangupActiveCall("agent-hangup");
     setStatus("Ended");
     setCallActive(false);
-    // Do NOT schedule next if the user is actively hanging up; let them choose (we still auto-advance after 0.5s)
     if (!sessionEndedRef.current) {
       setTimeout(disconnectAndNext, 500);
     }
@@ -461,6 +479,7 @@ export default function DialSession() {
     if (sessionEndedRef.current) return; // hard guard
     stopRingback();
     clearWatchdog();
+    hangupActiveCall("advance-next");
     setCallActive(false);
     setReadyToCall(true);
     setTimeout(nextLead, 500);
@@ -471,6 +490,7 @@ export default function DialSession() {
     if (!isPaused) {
       stopRingback();
       clearWatchdog();
+      hangupActiveCall("pause");
       setStatus("Paused");
     } else {
       setReadyToCall(true);
@@ -486,6 +506,7 @@ export default function DialSession() {
     sessionEndedRef.current = true; // block any further calls immediately
     stopRingback();
     clearWatchdog();
+    hangupActiveCall("end-session");
     setIsPaused(false);
     setReadyToCall(false);
     setStatus("Session ended");
@@ -564,6 +585,7 @@ export default function DialSession() {
             if (s === "no-answer" || s === "busy" || s === "failed") {
               stopRingback();
               clearWatchdog();
+              hangupActiveCall(`status-${s}`);
               if (!advanceScheduledRef.current && !sessionEndedRef.current) {
                 advanceScheduledRef.current = true;
                 setStatus(s === "no-answer" ? "No answer" : s === "busy" ? "Busy" : "Failed");
@@ -574,6 +596,7 @@ export default function DialSession() {
             if (s === "completed") {
               stopRingback();
               clearWatchdog();
+              hangupActiveCall("status-completed");
               if (!advanceScheduledRef.current && !sessionEndedRef.current) {
                 advanceScheduledRef.current = true;
                 setTimeout(disconnectAndNext, 1200);
