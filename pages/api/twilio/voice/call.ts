@@ -18,8 +18,16 @@ function e164(num: string) {
   const d = num.replace(/\D+/g, "");
   if (d.startsWith("1") && d.length === 11) return `+${d}`;
   if (d.length === 10) return `+1${d}`;
-  if (num.startsWith("+")) return num;
+  if (num.startsWith("+")) return num.trim();
   return `+${d}`;
+}
+
+function identityFromEmail(email: string) {
+  return String(email || "")
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9_-]/g, "-")
+    .slice(0, 120);
 }
 
 export default async function handler(
@@ -33,7 +41,7 @@ export default async function handler(
   if (!session?.user?.email)
     return res.status(401).json({ message: "Unauthorized" });
 
-  const { leadId, agentPhone: agentPhoneRaw, fromNumber: fromNumberRaw } = req.body || {};
+  const { leadId, fromNumber: fromNumberRaw } = req.body || {};
   if (!leadId) return res.status(400).json({ message: "Missing leadId" });
 
   await dbConnect();
@@ -48,7 +56,7 @@ export default async function handler(
   const leadPhone = e164(lead.Phone || lead.phone || "");
   if (!leadPhone) return res.status(400).json({ message: "Lead has no phone number" });
 
-  // Resolve FROM Twilio DID from user profile (numbers array) or fallback env
+  // Pick a FROM caller ID (your Twilio DID)
   const ownedNumbers: any[] = Array.isArray((user as any).numbers) ? (user as any).numbers : [];
   const fromNumber = e164(
     fromNumberRaw ||
@@ -60,25 +68,11 @@ export default async function handler(
     return res.status(400).json({ message: "No Twilio number on account (fromNumber)" });
   }
 
-  // Resolve agent phone from user profile with broad fallbacks
-  const agentPhone = e164(
-    agentPhoneRaw ||
-      (user as any).agentPhone ||
-      (user as any).phone ||
-      (user as any).profile?.phone ||
-      (user as any).personalPhone ||
-      ""
-  );
-  if (!agentPhone) {
-    // We still fail here (we must ring a real device for agent leg).
-    // Front-end does NOT block; it defers this check to us.
-    return res.status(400).json({
-      message: "Missing agent phone on your profile. Set it in Settings → Profile (agentPhone).",
-    });
-  }
+  // We DO NOT call the agent's personal phone.
+  // We call the Twilio Client in the browser ("client:<identity>") and immediately bridge to the lead.
+  const clientIdentity = identityFromEmail(userEmail);
 
   try {
-    // Agent-first call. TwiML at /api/twilio/voice/answer bridges agent -> lead.
     const twimlUrl =
       `${BASE_URL}/api/twilio/voice/answer` +
       `?To=${encodeURIComponent(leadPhone)}` +
@@ -86,8 +80,9 @@ export default async function handler(
       `&leadId=${encodeURIComponent(leadId)}`;
 
     const call = await twilioClient.calls.create({
-      to: agentPhone,
-      from: fromNumber,
+      // Ring the browser client (not PSTN)
+      to: `client:${clientIdentity}`,
+      from: fromNumber, // still required; used as callerId for the bridge leg
       url: twimlUrl,
       statusCallback: `${BASE_URL}/api/twilio/status-callback`,
       statusCallbackMethod: "POST",
