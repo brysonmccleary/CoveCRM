@@ -67,14 +67,14 @@ export default async function handler(
     return res.status(400).json({ message: "No Twilio number on account (fromNumber)" });
   }
 
-  // ❗ Absolutely no agentPhone usage — we only place:
-  //  - PSTN call to the LEAD
-  //  - WebRTC call to Twilio Client (browser)
+  // ❗ Absolutely no agent PSTN leg — only:
+  // 1) PSTN call to the LEAD
+  // 2) Optional agent "web leg" to Twilio Client (never your cell)
   const clientIdentity = identityFromEmail(userEmail);
   const conferenceName = `ds-${leadId}-${Date.now().toString(36)}`;
 
   try {
-    // 1) Lead leg (PSTN). Joins conference on answer. Voicemail-ready via AMD.
+    // Lead leg (PSTN) — joins conference; enable AMD (DetectMessageEnd)
     const leadJoinUrl = `${BASE_URL}/api/voice/lead-join?conferenceName=${encodeURIComponent(
       conferenceName,
     )}`;
@@ -86,17 +86,11 @@ export default async function handler(
       statusCallback: `${BASE_URL}/api/twilio/status-callback`,
       statusCallbackMethod: "POST",
       statusCallbackEvent: ["initiated", "ringing", "answered", "completed"],
-      // Voicemail detection so you can leave a real message after the beep:
-      // (Twilio AMD on call create)
+      // AMD on create: OK to keep DetectMessageEnd (no extra callback props here)
       machineDetection: "DetectMessageEnd" as any,
-      amdStatusCallback: `${BASE_URL}/api/twilio/amd-callback`,
-      amdStatusCallbackMethod: "POST",
-      // Note: ring timeout (25s) is enforced when we dial the lead via <Dial> inside TwiML.
-      // In this lead-first pattern, carriers control ring timeout. We still auto-advance client-side.
     });
 
-    // 2) Agent leg (browser Twilio Client). Joins the same conference.
-    //    This will ONLY ring the Twilio Client in the browser — never the agent's phone.
+    // Agent "web" leg (Twilio Client) — this will NOT dial your phone
     const agentJoinUrl = `${BASE_URL}/api/voice/agent-join?conferenceName=${encodeURIComponent(
       conferenceName,
     )}`;
@@ -115,7 +109,6 @@ export default async function handler(
       conferenceName,
       leadCallSid: leadCall.sid,
       agentCallSid: agentCall.sid,
-      // for debugging visibility on the client if needed:
       toLead: leadPhone,
       from: fromNumber,
       toAgentClient: `client:${clientIdentity}`,
