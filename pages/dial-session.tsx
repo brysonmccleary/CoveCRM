@@ -1,4 +1,3 @@
-// pages/dial-session.tsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/router";
 import Sidebar from "@/components/Sidebar";
@@ -14,6 +13,9 @@ interface Lead {
 }
 
 type Json = Record<string, any>;
+
+// ===== Global dial pacing =====
+const DIAL_DELAY_MS = 2000;
 
 export default function DialSession() {
   const router = useRouter();
@@ -50,9 +52,17 @@ export default function DialSession() {
   const socketRef = useRef<any>(null);
   const userEmailRef = useRef<string>("");
   const callWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // NEW: track any pending “advance/next” timers so End Session can cancel them
+  const advanceTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const nextLeadTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const advanceScheduledRef = useRef<boolean>(false);
   const sessionEndedRef = useRef<boolean>(false); // hard block any redial after end
   const activeCallSidRef = useRef<string | null>(null);
+
+  // NEW: prevent duplicate call placement & block calls after End Session
+  const placingCallRef = useRef<boolean>(false);
 
   /** ---------- helpers ---------- */
 
@@ -135,17 +145,36 @@ export default function DialSession() {
     }
   };
 
+  // NEW: cancel any pending “advance / next” timers
+  const clearAdvanceTimers = () => {
+    if (advanceTimeoutRef.current) {
+      clearTimeout(advanceTimeoutRef.current);
+      advanceTimeoutRef.current = null;
+    }
+    if (nextLeadTimeoutRef.current) {
+      clearTimeout(nextLeadTimeoutRef.current);
+      nextLeadTimeoutRef.current = null;
+    }
+  };
+
+  // NEW: one function to cancel *everything* that could fire a re-dial
+  const killAllTimers = () => {
+    clearWatchdog();
+    clearAdvanceTimers();
+  };
+
   // NEW: hard-hangup helper — ends the Twilio call at the source
   const hangupActiveCall = async (why?: string) => {
     const sid = activeCallSidRef.current;
     activeCallSidRef.current = null; // ensure at-most-once
-    if (!sid) return;
     try {
-      await fetch("/api/twilio/calls/hangup", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ callSid: sid }),
-      });
+      if (sid) {
+        await fetch("/api/twilio/calls/hangup", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ callSid: sid }),
+        });
+      }
       if (why) console.log("Hangup requested:", { sid, why });
     } catch (e) {
       console.warn("Hangup request failed:", (e as any)?.message || e);
@@ -161,8 +190,26 @@ export default function DialSession() {
       stopRingback();
       hangupActiveCall("watchdog-timeout");
       advanceScheduledRef.current = true;
-      setTimeout(disconnectAndNext, 1200);
-    }, 27000); // ~27s gives cushion around server-side 25s behaviors
+      scheduleAdvance();
+    }, 27000); // cushion around server-side ~25s
+  };
+
+  // NEW: schedule advance -> next lead with global 2s delay
+  const scheduleAdvance = () => {
+    if (advanceTimeoutRef.current) clearTimeout(advanceTimeoutRef.current);
+    advanceTimeoutRef.current = setTimeout(() => {
+      if (sessionEndedRef.current) return;
+      disconnectAndNext();
+    }, DIAL_DELAY_MS);
+  };
+
+  // NEW: schedule next lead switch (kept separate for clarity)
+  const scheduleNextLead = () => {
+    if (nextLeadTimeoutRef.current) clearTimeout(nextLeadTimeoutRef.current);
+    nextLeadTimeoutRef.current = setTimeout(() => {
+      if (sessionEndedRef.current) return;
+      nextLead();
+    }, DIAL_DELAY_MS);
   };
 
   /** ---------- bootstrap ---------- */
@@ -291,17 +338,30 @@ export default function DialSession() {
       setStatus("Loading your numbers…");
       return;
     }
-    if (leadQueue.length > 0 && readyToCall && !isPaused && sessionStarted && !sessionEndedRef.current) {
+    if (
+      leadQueue.length > 0 &&
+      readyToCall &&
+      !isPaused &&
+      sessionStarted &&
+      !sessionEndedRef.current &&
+      !placingCallRef.current &&
+      !callActive
+    ) {
+      // lock so we never place two calls
+      placingCallRef.current = true;
       setReadyToCall(false);
-      callLead(leadQueue[currentLeadIndex]);
+      callLead(leadQueue[currentLeadIndex]).finally(() => {
+        placingCallRef.current = false;
+      });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [numbersLoaded, leadQueue, readyToCall, isPaused, sessionStarted, currentLeadIndex]);
+  }, [numbersLoaded, leadQueue, readyToCall, isPaused, sessionStarted, currentLeadIndex, callActive]);
 
   /** ---------- calling ---------- */
 
   // STRICT: Only use the new server endpoint that calls the LEAD directly.
   const startOutboundCall = async (leadId: string): Promise<string> => {
+    if (sessionEndedRef.current) throw new Error("Session ended");
     const r = await fetch("/api/twilio/voice/call", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -340,18 +400,26 @@ export default function DialSession() {
       setCallActive(true);
       playRingback();
 
-      // 🔸 Server resolves numbers and dials the LEAD only (no agent phone).
+      // Server resolves numbers and dials the LEAD only (no agent phone).
       const callSid = await startOutboundCall(leadToCall.id);
+      if (sessionEndedRef.current) {
+        // If you ended during the fetch, immediately hang up the just-started call
+        activeCallSidRef.current = callSid;
+        await hangupActiveCall("ended-during-start");
+        setCallActive(false);
+        stopRingback();
+        return;
+      }
       activeCallSidRef.current = callSid;
 
-      // Local watchdog in case a webhook is missed (server has 25s timeout)
+      // Local watchdog in case a webhook is missed
       scheduleWatchdog();
 
       // stop ringback after a bit even if device events don't fire
       setTimeout(() => stopRingback(), 8000);
       setSessionStartedCount((n) => n + 1);
 
-      // transcript + history
+      // transcript + history (best-effort)
       fetch("/api/leads/add-transcript", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -379,7 +447,7 @@ export default function DialSession() {
       setCallActive(false);
       if (!sessionEndedRef.current) {
         // move on so sessions never stall
-        setTimeout(disconnectAndNext, 1200);
+        scheduleAdvance();
       }
     }
   };
@@ -413,12 +481,12 @@ export default function DialSession() {
 
   const handleHangUp = () => {
     stopRingback();
-    clearWatchdog();
+    killAllTimers();
     hangupActiveCall("agent-hangup");
     setStatus("Ended");
     setCallActive(false);
     if (!sessionEndedRef.current) {
-      setTimeout(disconnectAndNext, 500);
+      scheduleAdvance();
     }
   };
 
@@ -478,18 +546,19 @@ export default function DialSession() {
   const disconnectAndNext = () => {
     if (sessionEndedRef.current) return; // hard guard
     stopRingback();
-    clearWatchdog();
+    killAllTimers();
     hangupActiveCall("advance-next");
     setCallActive(false);
-    setReadyToCall(true);
-    setTimeout(nextLead, 500);
+
+    // Wait 2s before switching leads & arming next dial
+    scheduleNextLead();
   };
 
   const togglePause = () => {
     setIsPaused((p) => !p);
     if (!isPaused) {
       stopRingback();
-      clearWatchdog();
+      killAllTimers();
       hangupActiveCall("pause");
       setStatus("Paused");
     } else {
@@ -503,12 +572,19 @@ export default function DialSession() {
       `Are you sure you want to end this dial session? You have called ${sessionStartedCount} of ${leadQueue.length} leads.`
     );
     if (!ok) return;
-    sessionEndedRef.current = true; // block any further calls immediately
+
+    // HARD KILL: stop all timers & guard against any re-dial
+    sessionEndedRef.current = true;
     stopRingback();
-    clearWatchdog();
-    hangupActiveCall("end-session");
-    setIsPaused(false);
+    killAllTimers();
+    placingCallRef.current = false;
     setReadyToCall(false);
+    setCallActive(false);
+
+    // Ensure any in-flight call is torn down
+    hangupActiveCall("end-session");
+
+    setIsPaused(false);
     setStatus("Session ended");
     showSessionSummary();
   };
@@ -553,6 +629,8 @@ export default function DialSession() {
         // Main event from status-callback.ts
         socket.on("call:status", (payload: any) => {
           try {
+            if (sessionEndedRef.current) return; // do nothing after End Session
+
             // payload: { callSid, status, direction, ownerNumber, otherNumber, durationSec, terminal, timestamp }
             const s = String(payload?.status || "").toLowerCase();
 
@@ -589,7 +667,7 @@ export default function DialSession() {
               if (!advanceScheduledRef.current && !sessionEndedRef.current) {
                 advanceScheduledRef.current = true;
                 setStatus(s === "no-answer" ? "No answer" : s === "busy" ? "Busy" : "Failed");
-                setTimeout(disconnectAndNext, 1200); // 1.2s delay for natural pacing
+                scheduleAdvance();
               }
             }
 
@@ -599,7 +677,7 @@ export default function DialSession() {
               hangupActiveCall("status-completed");
               if (!advanceScheduledRef.current && !sessionEndedRef.current) {
                 advanceScheduledRef.current = true;
-                setTimeout(disconnectAndNext, 1200);
+                scheduleAdvance();
               }
             }
           } catch {}
