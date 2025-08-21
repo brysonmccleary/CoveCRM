@@ -1,10 +1,9 @@
-// pages/dial-session.tsx
+// /pages/dial-session.tsx
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/router";
 import Sidebar from "@/components/Sidebar";
 import CallSummary from "@/components/CallSummary";
 import BookAppointmentModal from "@/components/BookAppointmentModal";
-import { isCallAllowed } from "@/utils/checkCallTime";
 import { playRingback, stopRingback, primeAudioContext } from "@/utils/ringAudio";
 import toast from "react-hot-toast";
 
@@ -12,12 +11,11 @@ interface Lead {
   id: string;
   [key: string]: any;
 }
-
 type Json = Record<string, any>;
 
 export default function DialSession() {
   const router = useRouter();
-  const { leads: leadIdsParam, fromNumber: fromNumberParam, leadId: singleLeadIdParam } = router.query;
+  const { leads: leadIdsParam, leadId: singleLeadIdParam } = router.query;
 
   // Queue & selection
   const [leadQueue, setLeadQueue] = useState<Lead[]>([]);
@@ -33,15 +31,15 @@ export default function DialSession() {
   const [sessionStarted, setSessionStarted] = useState(false);
   const [sessionStartedCount, setSessionStartedCount] = useState(0);
 
-  // UI bits
+  // UI
   const [summaryCollapsed, setSummaryCollapsed] = useState(true);
   const [showBookModal, setShowBookModal] = useState(false);
   const [notes, setNotes] = useState("");
   const [history, setHistory] = useState<string[]>([]);
 
-  // Numbers
-  const [fromNumber, setFromNumber] = useState<string>("");   // Twilio DID (callerId)
-  const [agentPhone, setAgentPhone] = useState<string>("");   // User's cell/desk phone to ring first
+  // Optional display-only numbers (not required for calling)
+  const [displayFrom, setDisplayFrom] = useState<string>("");
+  const [displayAgent, setDisplayAgent] = useState<string>("");
 
   /** ---------- helpers ---------- */
 
@@ -67,55 +65,6 @@ export default function DialSession() {
     return (await r.json()) as T;
   };
 
-  // Try to find agentPhone in several likely shapes from /api/settings/profile
-  const extractAgentPhone = (obj: Json): string | null => {
-    const candidates = [
-      obj?.agentPhone,
-      obj?.profile?.agentPhone,
-      obj?.settings?.agentPhone,
-      obj?.user?.agentPhone,
-      obj?.data?.agentPhone,
-      obj?.phone,
-      obj?.agent_phone,
-      obj?.agentMobile,
-      obj?.agentNumber,
-    ].filter(Boolean);
-    if (candidates.length) return String(candidates[0]);
-
-    // last-ditch: scan for key containing "agent" & "phone"
-    const scan = (o: any): string | null => {
-      if (!o || typeof o !== "object") return null;
-      for (const [k, v] of Object.entries(o)) {
-        if (typeof v === "string" && k.toLowerCase().includes("agent") && k.toLowerCase().includes("phone")) {
-          return v;
-        }
-        if (typeof v === "object") {
-          const found = scan(v);
-          if (found) return found;
-        }
-      }
-      return null;
-    };
-    return scan(obj);
-  };
-
-  const pickFirstVoiceNumber = (payload: Json): string | null => {
-    // Handles shapes like { numbers: [{ phoneNumber, capabilities: { voice:true }}, ...] }
-    const arr: any[] =
-      payload?.numbers ||
-      payload?.incomingPhoneNumbers ||
-      payload?.data ||
-      payload?.items ||
-      [];
-    for (const n of arr) {
-      const num = n?.phoneNumber || n?.friendlyName || n?.number || n?.value || n;
-      const caps = n?.capabilities || n?.capability || {};
-      const hasVoice = typeof caps === "object" ? !!(caps.voice ?? caps.Voice ?? caps.VOICE) : true;
-      if (num && hasVoice) return String(num);
-    }
-    return arr[0]?.phoneNumber || null;
-  };
-
   /** ---------- bootstrap ---------- */
 
   // 1) Prime audio once for autoplay restrictions
@@ -126,54 +75,28 @@ export default function DialSession() {
     } catch {}
   }, []);
 
-  // 2) Load agentPhone from profile, and fromNumber from query/localStorage/Twilio numbers
+  // 2) Load optional display numbers from profile (not required for calls anymore)
   useEffect(() => {
-    const loadNumbers = async () => {
-      // fromNumber: query → localStorage → owned numbers API
-      if (typeof fromNumberParam === "string" && fromNumberParam) {
-        setFromNumber(fromNumberParam);
-        localStorage.setItem("selectedDialNumber", fromNumberParam);
-      } else {
-        const saved = localStorage.getItem("selectedDialNumber");
-        if (saved) {
-          setFromNumber(saved);
-        } else {
-          try {
-            const list = await fetchJson<Json>("/api/twilio/list-numbers").catch(async (e) => {
-              // fallback to any legacy route names you may have
-              try {
-                return await fetchJson<Json>("/api/getNumbers");
-              } catch {
-                throw e;
-              }
-            });
-            const first = pickFirstVoiceNumber(list);
-            if (first) {
-              setFromNumber(first);
-              localStorage.setItem("selectedDialNumber", first);
-            }
-          } catch {
-            // leave blank; we'll error later if still missing
-          }
-        }
-      }
+    (async () => {
+      try {
+        const profile = await fetchJson<Json>("/api/settings/profile").catch(() => null);
+        const from =
+          profile?.settings?.defaultFromNumber ||
+          profile?.defaultFromNumber ||
+          (Array.isArray(profile?.numbers) ? profile?.numbers?.[0]?.phoneNumber : undefined);
+        const agent =
+          profile?.settings?.agentPhone ||
+          profile?.agentPhone ||
+          profile?.phone ||
+          profile?.profile?.phone ||
+          profile?.personalPhone;
+        if (from) setDisplayFrom(String(from));
+        if (agent) setDisplayAgent(String(agent));
+      } catch {}
+    })();
+  }, []);
 
-      // agentPhone: read from settings/profile API; allow existing local override if present
-      if (!agentPhone) {
-        try {
-          const profile = await fetchJson<Json>("/api/settings/profile");
-          const extracted = extractAgentPhone(profile);
-          if (extracted) setAgentPhone(extracted);
-        } catch {
-          // ignore (UI will prompt if missing)
-        }
-      }
-    };
-    loadNumbers();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fromNumberParam]);
-
-  // 3) Load leads, set auto-start flags
+  // 3) Load leads & arm auto-start
   useEffect(() => {
     const loadLeads = async () => {
       // Single lead
@@ -198,7 +121,7 @@ export default function DialSession() {
         return;
       }
 
-      // Multiple leads
+      // Multi-lead
       if (!leadIdsParam) return;
       const ids = String(leadIdsParam).split(",").filter(Boolean);
       try {
@@ -242,61 +165,11 @@ export default function DialSession() {
 
   /** ---------- calling ---------- */
 
-  const startOutboundCall = async (to: string, from: string, agent: string) => {
-    // Try modern → legacy endpoints. We pass what each likely expects.
-    const attempts: Array<{ url: string; body: Record<string, any> }> = [
-      { url: "/api/voice/call", body: { to, from, agent } },
-      { url: "/api/twilio/voice/call", body: { to, from, agent } },
-      { url: "/api/twilio/make-call", body: { leadNumber: to, agentNumber: agent, from } },
-      { url: "/api/start-conference", body: { leadNumber: to, agentNumber: agent } }, // uses env callerId
-    ];
-
-    let lastErr: Error | null = null;
-    for (const a of attempts) {
-      try {
-        const r = await fetch(a.url, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(a.body),
-        });
-        if (r.status === 404) continue; // not present in this build; try next
-        if (!r.ok) {
-          // bubble readable error when an endpoint exists but rejects
-          let msg = `Failed to start call (${a.url})`;
-          try {
-            const j = await r.json();
-            if (j?.message) msg = j.message;
-          } catch {}
-          throw new Error(msg);
-        }
-        return; // success ✅
-      } catch (e: any) {
-        lastErr = e instanceof Error ? e : new Error(String(e));
-      }
-    }
-    throw lastErr || new Error("No available call endpoint");
-  };
-
   const callLead = async (leadToCall: Lead) => {
     const to = String(getPhoneFallback(leadToCall) || "").trim();
     if (!to) {
       toast.error("Lead has no phone");
       setStatus("Missing lead phone");
-      return;
-    }
-    if (!fromNumber) {
-      toast.error("No Twilio number available. Buy/assign one on the Numbers page.");
-      setStatus("Missing Twilio number");
-      return;
-    }
-    if (!agentPhone) {
-      toast.error("Add your Agent Phone (Settings) so we can connect your leg.");
-      setStatus("Missing agent phone");
-      return;
-    }
-    if (typeof isCallAllowed === "function" && !isCallAllowed()) {
-      toast.error("Calls are restricted at this time.");
-      setStatus("Blocked by schedule");
       return;
     }
 
@@ -305,19 +178,39 @@ export default function DialSession() {
       setCallActive(true);
       playRingback();
 
-      await startOutboundCall(to, String(fromNumber), String(agentPhone));
+      const r = await fetch("/api/twilio/voice/call", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ leadId: leadToCall.id }),
+      });
 
-      // stop ringback after a bit even if device events don't fire
+      if (!r.ok) {
+        let msg = "Failed to start call";
+        try {
+          const j = await r.json();
+          if (j?.message) msg = j.message;
+        } catch {}
+        throw new Error(msg);
+      }
+
+      const j = await r.json().catch(() => ({}));
+      // Show friendly “who’s calling who” if available
+      if (j?.fromNumber || j?.agentPhone) {
+        setDisplayFrom(j.fromNumber || displayFrom);
+        setDisplayAgent(j.agentPhone || displayAgent);
+      }
+
+      // Stop ringback after a moment even if we don't receive device events here
       setTimeout(() => stopRingback(), 8000);
       setSessionStartedCount((n) => n + 1);
 
-      // transcript + history
+      // Log to lead transcript/history (best-effort)
       fetch("/api/leads/add-transcript", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           leadId: leadToCall.id,
-          entry: { agent: fromNumber, text: `Started call at ${new Date().toLocaleTimeString()}` },
+          entry: { text: `Started call at ${new Date().toLocaleTimeString()}` },
         }),
       }).catch(() => {});
       fetch("/api/leads/add-history", {
@@ -326,7 +219,7 @@ export default function DialSession() {
         body: JSON.stringify({
           leadId: leadToCall.id,
           type: "call",
-          message: `Call started from ${fromNumber}`,
+          message: "Call started",
           meta: { phase: "started" },
         }),
       }).catch(() => {});
@@ -336,7 +229,7 @@ export default function DialSession() {
       setStatus(err?.message || "Call failed");
       stopRingback();
       setCallActive(false);
-      // move on so sessions never stall
+      // keep sessions flowing; move on
       setTimeout(nextLead, 1000);
     }
   };
@@ -452,6 +345,11 @@ export default function DialSession() {
     }
   };
 
+  const showSessionSummary = () => {
+    alert(`✅ Session Complete!\nYou called ${sessionStartedCount} out of ${leadQueue.length} leads.`);
+    router.push("/leads").catch(() => {});
+  };
+
   const handleEndSession = () => {
     const ok = window.confirm(
       `Are you sure you want to end this dial session? You have called ${sessionStartedCount} of ${leadQueue.length} leads.`
@@ -460,11 +358,6 @@ export default function DialSession() {
     stopRingback();
     setIsPaused(false);
     showSessionSummary();
-  };
-
-  const showSessionSummary = () => {
-    alert(`✅ Session Complete!\nYou called ${sessionStartedCount} out of ${leadQueue.length} leads.`);
-    router.push("/leads").catch(() => {});
   };
 
   /** ---------- render ---------- */
@@ -492,10 +385,10 @@ export default function DialSession() {
 
         <div className="w-1/4 p-4 border-r border-gray-600 bg-[#1e293b] overflow-y-auto">
           <p className="text-green-400">
-            Calling from: {fromNumber ? formatPhone(fromNumber) : "Not set"}
+            Calling from: {displayFrom ? formatPhone(displayFrom) : "Auto (user default)"}
           </p>
           <p className="text-yellow-400">
-            Agent phone: {agentPhone ? formatPhone(agentPhone) : "Not set"}
+            Agent phone: {displayAgent ? formatPhone(displayAgent) : "Auto (from profile)"}
           </p>
           <p className="text-yellow-500 mb-2">Status: {status}</p>
 
