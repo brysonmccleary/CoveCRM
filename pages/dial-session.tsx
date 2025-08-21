@@ -46,11 +46,13 @@ export default function DialSession() {
   // ensure we don’t auto-dial before numbers are loaded (race fix)
   const [numbersLoaded, setNumbersLoaded] = useState(false);
 
-  // sockets + watchdogs
+  // sockets + watchdogs + guards
   const socketRef = useRef<any>(null);
   const userEmailRef = useRef<string>("");
   const callWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const advanceScheduledRef = useRef<boolean>(false);
+  const sessionEndedRef = useRef<boolean>(false); // hard block any redial after end
+  const activeCallSidRef = useRef<string | null>(null);
 
   /** ---------- helpers ---------- */
 
@@ -71,21 +73,6 @@ export default function DialSession() {
     if (raw.startsWith("+")) return raw.trim();
     return `+${d}`;
   };
-
-  const getLeadPhoneForLegacy = () => {
-    const l = leadQueue[currentLeadIndex];
-    if (!l) return "";
-    return (
-      (l as any)?.Phone ||
-      (l as any)?.phone ||
-      (l as any)?.["Phone Number"] ||
-      (l as any)?.["phone number"] ||
-      Object.entries(l).find(([k]) => k.toLowerCase().includes("phone"))?.[1] ||
-      ""
-    ) as string;
-  };
-
-  const currentLeadE164 = () => normalizeE164(getLeadPhoneForLegacy());
 
   const fetchJson = async <T = Json>(url: string, init?: RequestInit) => {
     const r = await fetch(url, init);
@@ -152,7 +139,7 @@ export default function DialSession() {
     clearWatchdog();
     // Server times out at 25s; we give a little cushion (≈27s total) then advance.
     callWatchdogRef.current = setTimeout(() => {
-      if (advanceScheduledRef.current) return;
+      if (advanceScheduledRef.current || sessionEndedRef.current) return;
       setStatus("No answer (timeout)");
       stopRingback();
       advanceScheduledRef.current = true;
@@ -204,7 +191,7 @@ export default function DialSession() {
         }
       }
 
-      // agentPhone from profile
+      // agentPhone from profile (display only)
       try {
         const profile = await fetchJson<Json>("/api/settings/profile");
         const extracted = extractAgentPhone(profile);
@@ -286,7 +273,7 @@ export default function DialSession() {
       setStatus("Loading your numbers…");
       return;
     }
-    if (leadQueue.length > 0 && readyToCall && !isPaused && sessionStarted) {
+    if (leadQueue.length > 0 && readyToCall && !isPaused && sessionStarted && !sessionEndedRef.current) {
       setReadyToCall(false);
       callLead(leadQueue[currentLeadIndex]);
     }
@@ -295,42 +282,28 @@ export default function DialSession() {
 
   /** ---------- calling ---------- */
 
-  // Prefer server-resolved endpoint; fall back if missing
-  const startOutboundCall = async (leadId: string) => {
-    const attempts: Array<{ url: string; body: Record<string, any> }> = [
-      // 🔹 server resolves fromNumber & agentPhone using the user profile
-      { url: "/api/twilio/voice/call", body: { leadId } },
-      // legacy fallbacks (explicit numbers if needed)
-      { url: "/api/twilio/make-call", body: { leadNumber: getLeadPhoneForLegacy(), agentNumber: agentPhone, from: fromNumber } },
-      { url: "/api/start-conference", body: { leadNumber: getLeadPhoneForLegacy(), agentNumber: agentPhone, from: fromNumber } },
-    ];
-
-    let lastErr: Error | null = null;
-    for (const a of attempts) {
+  // STRICT: Only use the new server endpoint that calls the LEAD directly.
+  const startOutboundCall = async (leadId: string): Promise<string> => {
+    const r = await fetch("/api/twilio/voice/call", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ leadId }),
+    });
+    if (!r.ok) {
+      let msg = `Failed to start call`;
       try {
-        const r = await fetch(a.url, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(a.body),
-        });
-        if (r.status === 404) continue; // route not present; try next
-        if (!r.ok) {
-          let msg = `Failed to start call (${a.url})`;
-          try {
-            const j = await r.json();
-            if (j?.message) msg = j.message;
-          } catch {}
-          throw new Error(msg);
-        }
-        return; // success
-      } catch (e: any) {
-        lastErr = e instanceof Error ? e : new Error(String(e));
-      }
+        const j = await r.json();
+        if (j?.message) msg = j.message;
+      } catch {}
+      throw new Error(msg);
     }
-    throw lastErr || new Error("No available call endpoint");
+    const j = (await r.json()) as { success?: boolean; callSid?: string };
+    if (!j?.success || !j?.callSid) throw new Error("Call start did not return a callSid");
+    return j.callSid;
   };
 
   const callLead = async (leadToCall: Lead) => {
+    if (sessionEndedRef.current) return; // hard guard
     if (!leadToCall?.id) {
       setStatus("Missing lead id");
       return;
@@ -349,8 +322,9 @@ export default function DialSession() {
       setCallActive(true);
       playRingback();
 
-      // 🔸 Let the server resolve numbers; don’t block on client-side checks
-      await startOutboundCall(leadToCall.id);
+      // 🔸 Server resolves numbers and dials the LEAD only (no agent phone).
+      const callSid = await startOutboundCall(leadToCall.id);
+      activeCallSidRef.current = callSid;
 
       // Local watchdog in case a webhook is missed (server has 25s timeout)
       scheduleWatchdog();
@@ -385,8 +359,10 @@ export default function DialSession() {
       stopRingback();
       clearWatchdog();
       setCallActive(false);
-      // move on so sessions never stall
-      setTimeout(disconnectAndNext, 1200);
+      if (!sessionEndedRef.current) {
+        // move on so sessions never stall
+        setTimeout(disconnectAndNext, 1200);
+      }
     }
   };
 
@@ -420,16 +396,12 @@ export default function DialSession() {
   const handleHangUp = () => {
     stopRingback();
     clearWatchdog();
-    if (lead?.id) {
-      fetch("/api/leads/add-history", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ leadId: lead.id, type: "call", message: "Call ended by agent", meta: { phase: "ended" } }),
-      }).catch(() => {});
-      setHistory((prev) => [`📞 Call ended`, ...prev]);
-    }
     setStatus("Ended");
-    disconnectAndNext();
+    setCallActive(false);
+    // Do NOT schedule next if the user is actively hanging up; let them choose (we still auto-advance after 0.5s)
+    if (!sessionEndedRef.current) {
+      setTimeout(disconnectAndNext, 500);
+    }
   };
 
   const handleDisposition = async (status: string) => {
@@ -477,6 +449,7 @@ export default function DialSession() {
   /** ---------- flow helpers ---------- */
 
   const nextLead = () => {
+    if (sessionEndedRef.current) return; // hard guard
     if (leadQueue.length <= 1) return showSessionSummary();
     const nextIndex = currentLeadIndex + 1;
     if (nextIndex >= leadQueue.length) return showSessionSummary();
@@ -485,6 +458,7 @@ export default function DialSession() {
   };
 
   const disconnectAndNext = () => {
+    if (sessionEndedRef.current) return; // hard guard
     stopRingback();
     clearWatchdog();
     setCallActive(false);
@@ -509,9 +483,12 @@ export default function DialSession() {
       `Are you sure you want to end this dial session? You have called ${sessionStartedCount} of ${leadQueue.length} leads.`
     );
     if (!ok) return;
+    sessionEndedRef.current = true; // block any further calls immediately
     stopRingback();
     clearWatchdog();
     setIsPaused(false);
+    setReadyToCall(false);
+    setStatus("Session ended");
     showSessionSummary();
   };
 
@@ -545,7 +522,6 @@ export default function DialSession() {
         socketRef.current = socket;
 
         socket.on("connect", () => {
-          // Try common join events; harmless if server ignores
           if (email) {
             socket.emit("join", email);
             socket.emit("room:join", email);
@@ -553,22 +529,29 @@ export default function DialSession() {
           }
         });
 
-        socket.on("disconnect", () => {});
-
         // Main event from status-callback.ts
         socket.on("call:status", (payload: any) => {
           try {
             // payload: { callSid, status, direction, ownerNumber, otherNumber, durationSec, terminal, timestamp }
-            const leadNum = currentLeadE164();
+            const s = String(payload?.status || "").toLowerCase();
+
+            // Only react to our current call (filter by SID if we have it)
+            const sid = activeCallSidRef.current;
+            if (sid && payload?.callSid && sid !== payload.callSid) return;
+
+            const leadNum = normalizeE164(
+              (leadQueue[currentLeadIndex] &&
+                (leadQueue[currentLeadIndex] as any)?.phone) ||
+              (leadQueue[currentLeadIndex] &&
+                Object.entries(leadQueue[currentLeadIndex]).find(([k]) => k.toLowerCase().includes("phone"))?.[1]) ||
+              ""
+            );
             const eventOther = normalizeE164(payload?.otherNumber || "");
             const ownerNum = normalizeE164(payload?.ownerNumber || "");
             const fromNum = normalizeE164(fromNumber || "");
 
-            // Only react to our current call leg (outbound to this lead, from our chosen Twilio DID)
             if (leadNum && eventOther && leadNum !== eventOther) return;
             if (fromNum && ownerNum && fromNum !== ownerNum) return;
-
-            const s = String(payload?.status || "").toLowerCase();
 
             if (s === "initiated") setStatus("Dial initiated…");
             if (s === "ringing") setStatus("Ringing…");
@@ -581,7 +564,7 @@ export default function DialSession() {
             if (s === "no-answer" || s === "busy" || s === "failed") {
               stopRingback();
               clearWatchdog();
-              if (!advanceScheduledRef.current) {
+              if (!advanceScheduledRef.current && !sessionEndedRef.current) {
                 advanceScheduledRef.current = true;
                 setStatus(s === "no-answer" ? "No answer" : s === "busy" ? "Busy" : "Failed");
                 setTimeout(disconnectAndNext, 1200); // 1.2s delay for natural pacing
@@ -591,7 +574,7 @@ export default function DialSession() {
             if (s === "completed") {
               stopRingback();
               clearWatchdog();
-              if (!advanceScheduledRef.current) {
+              if (!advanceScheduledRef.current && !sessionEndedRef.current) {
                 advanceScheduledRef.current = true;
                 setTimeout(disconnectAndNext, 1200);
               }
