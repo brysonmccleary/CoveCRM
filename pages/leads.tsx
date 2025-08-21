@@ -1,56 +1,161 @@
-import { useState, useEffect } from "react";
+// pages/leads.tsx
+import { useState, useEffect, useMemo } from "react";
 import { useRouter } from "next/router";
 import Sidebar from "@/components/Sidebar";
-import { ObjectId } from "mongodb";
 
 interface Folder {
   _id: string;
   name: string;
 }
 
+interface Lead {
+  _id: string;
+  [key: string]: any;
+}
+
 export default function LeadsPage() {
+  const router = useRouter();
+  const selectedFolderId = useMemo(
+    () => (typeof router.query.folderId === "string" ? router.query.folderId : ""),
+    [router.query.folderId]
+  );
+
   const [folders, setFolders] = useState<Folder[]>([]);
   const [folderCounts, setFolderCounts] = useState<Record<string, number>>({});
-  const router = useRouter();
+  const [leads, setLeads] = useState<Lead[] | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [loadingLeads, setLoadingLeads] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [leadError, setLeadError] = useState<string | null>(null);
 
   useEffect(() => {
     const fetchFoldersAndCounts = async () => {
       try {
-        // Get folders
-        const res = await fetch("/api/get-folders");
-        const data = await res.json();
-        setFolders(data.folders);
+        setLoading(true);
+        setError(null);
 
-        // Get counts
-        const countRes = await fetch("/api/get-folder-counts");
-        const countData = await countRes.json();
-        setFolderCounts(countData.counts);
-      } catch (err) {
+        const [resFolders, resCounts] = await Promise.all([
+          fetch("/api/get-folders"),
+          fetch("/api/get-folder-counts"),
+        ]);
+
+        if (!resFolders.ok) throw new Error("Failed to fetch folders");
+        if (!resCounts.ok) throw new Error("Failed to fetch folder counts");
+
+        const dataFolders = await resFolders.json();
+        const dataCounts = await resCounts.json();
+
+        setFolders(dataFolders.folders || []);
+        setFolderCounts(dataCounts.counts || {});
+      } catch (err: any) {
         console.error("Error fetching folders or counts:", err);
+        setError(err?.message || "Failed to load folders");
+      } finally {
+        setLoading(false);
       }
     };
 
     fetchFoldersAndCounts();
   }, []);
 
+  // If a folderId is present in the query, load its leads and render on this page.
+  useEffect(() => {
+    const loadLeads = async () => {
+      if (!selectedFolderId) {
+        setLeads(null);
+        setLeadError(null);
+        return;
+      }
+      try {
+        setLoadingLeads(true);
+        setLeadError(null);
+        const r = await fetch(`/api/get-leads-by-folder?folderId=${encodeURIComponent(selectedFolderId)}`);
+        if (!r.ok) throw new Error("Failed to fetch leads in folder");
+        const j = await r.json();
+        setLeads(j?.leads || []);
+      } catch (e: any) {
+        console.error(e);
+        setLeadError(e?.message || "Failed to load leads");
+        setLeads([]);
+      } finally {
+        setLoadingLeads(false);
+      }
+    };
+    loadLeads();
+  }, [selectedFolderId]);
+
   const handleFolderClick = (folderId: string) => {
-    router.push(`/leads/folder/${folderId}`);
+    // Stay on /leads and carry selection via query param (prevents 404)
+    router.push({ pathname: "/leads", query: { folderId } }).catch(() => {});
+  };
+
+  const clearSelection = () => {
+    router.push("/leads").catch(() => {});
   };
 
   return (
     <div className="flex bg-[#0f172a] text-white min-h-screen">
       <Sidebar />
       <div className="flex-1 p-6">
-        <h2 className="text-2xl font-bold mb-4">Lead Folders</h2>
-        {folders.map((folder) => (
-          <div
-            key={folder._id}
-            onClick={() => handleFolderClick(folder._id)}
-            className="border p-3 rounded cursor-pointer mb-2 hover:bg-gray-700"
-          >
-            {folder.name} — {folderCounts[folder._id] || 0} Leads
-          </div>
-        ))}
+        {!selectedFolderId ? (
+          <>
+            <h2 className="text-2xl font-bold mb-4">Lead Folders</h2>
+            {loading ? (
+              <p>Loading folders…</p>
+            ) : error ? (
+              <p className="text-red-400">{error}</p>
+            ) : folders.length === 0 ? (
+              <p className="text-gray-400">No folders yet.</p>
+            ) : (
+              <div className="space-y-2">
+                {folders.map((folder) => (
+                  <button
+                    key={folder._id}
+                    onClick={() => handleFolderClick(folder._id)}
+                    className="w-full text-left border p-3 rounded cursor-pointer hover:bg-gray-700"
+                    title={`Open ${folder.name}`}
+                  >
+                    {folder.name} — {folderCounts[folder._id] || 0} Leads
+                  </button>
+                ))}
+              </div>
+            )}
+          </>
+        ) : (
+          <>
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-2xl font-bold">
+                Folder: {selectedFolderId}
+              </h2>
+              <button
+                onClick={clearSelection}
+                className="px-3 py-1 rounded bg-gray-700 hover:bg-gray-600"
+                title="Back to all folders"
+              >
+                ← All Folders
+              </button>
+            </div>
+
+            {loadingLeads ? (
+              <p>Loading leads…</p>
+            ) : leadError ? (
+              <p className="text-red-400">{leadError}</p>
+            ) : !leads || leads.length === 0 ? (
+              <p className="text-gray-400">No leads in this folder.</p>
+            ) : (
+              <ul className="space-y-2">
+                {leads.map((lead) => (
+                  <li key={lead._id} className="p-3 border border-gray-600 rounded hover:bg-gray-700">
+                    <div className="font-medium">{lead.name || lead["First Name"] || lead["firstName"] || "(no name)"}</div>
+                    <div className="text-sm text-gray-300">
+                      {lead.phone || lead["Phone"] || lead["phone"] || ""} {lead.email ? `• ${lead.email}` : ""}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </>
+        )}
       </div>
     </div>
   );
