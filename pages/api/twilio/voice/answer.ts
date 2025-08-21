@@ -1,3 +1,4 @@
+// pages/api/twilio/voice/answer.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import twilio from "twilio";
 import dbConnect from "@/lib/mongooseConnect";
@@ -11,6 +12,8 @@ const BASE_URL = (
   ""
 ).replace(/\/$/, "");
 const STATUS_CB_URL = `${BASE_URL}/api/twilio/status-callback`;
+// Optional: if you add this endpoint later, we'll receive AMD events like machine_start/machine_end_beep
+const AMD_CB_URL = `${BASE_URL}/api/twilio/amd-callback`;
 const RECORDING_CB_BASE = `${BASE_URL}/api/twilio-recording`;
 
 function sanitizeIdentity(email: string) {
@@ -45,7 +48,7 @@ export default async function handler(
   const twiml = new VoiceResponse();
 
   try {
-    // ---- Outbound bridge (browser → PSTN)
+    // ---- Outbound bridge (browser Twilio Client → PSTN lead)
     if (toParam && /^\+?\d{7,15}$/.test(String(toParam))) {
       const leadNumber = normalizeE164(String(toParam));
       const callerId = normalizeE164(
@@ -70,6 +73,10 @@ export default async function handler(
           userEmailForCb,
         )}${leadIdParam ? `&leadId=${encodeURIComponent(leadIdParam)}` : ""}`;
 
+        // We bridge the agent (browser client) to the lead.
+        // Add:
+        //  - timeout: 25s → if no human/voicemail answers by then, Twilio ends the dial with no-answer
+        //  - machineDetection: DetectMessageEnd → detects voicemail and fires AMD callback at the beep
         const dial = twiml.dial({
           callerId,
           answerOnBridge: true,
@@ -89,6 +96,11 @@ export default async function handler(
               "answered",
               "completed",
             ],
+            timeout: 25, // <= ring for up to 25 seconds, then treat as no-answer
+            // AMD (Answering Machine Detection) so you can leave *real* voicemail after the beep.
+            machineDetection: "DetectMessageEnd",
+            amdStatusCallback: AMD_CB_URL,
+            amdStatusCallbackMethod: "POST",
           } as any,
           leadNumber,
         );
@@ -98,7 +110,7 @@ export default async function handler(
       return res.status(200).send(twiml.toString());
     }
 
-    // ---- Inbound routing (PSTN → agent browser)
+    // ---- Inbound routing (PSTN → agent browser client)
     await dbConnect();
     const owner =
       (calledNumber &&
