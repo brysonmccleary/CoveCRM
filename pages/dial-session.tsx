@@ -1,11 +1,11 @@
 // pages/dial-session.tsx
-import { useState, useEffect } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/router";
 import Sidebar from "@/components/Sidebar";
-import { isCallAllowed } from "@/utils/checkCallTime";
-import { playRingback, stopRingback, primeAudioContext } from "@/utils/ringAudio";
 import CallSummary from "@/components/CallSummary";
 import BookAppointmentModal from "@/components/BookAppointmentModal";
+import { isCallAllowed } from "@/utils/checkCallTime";
+import { playRingback, stopRingback, primeAudioContext } from "@/utils/ringAudio";
 import toast from "react-hot-toast";
 
 interface Lead {
@@ -13,66 +13,213 @@ interface Lead {
   [key: string]: any;
 }
 
+type Json = Record<string, any>;
+
 export default function DialSession() {
+  const router = useRouter();
+  const { leads: leadIdsParam, fromNumber: fromNumberParam, leadId: singleLeadIdParam } = router.query;
+
+  // Queue & selection
   const [leadQueue, setLeadQueue] = useState<Lead[]>([]);
   const [currentLeadIndex, setCurrentLeadIndex] = useState(0);
-  const [lead, setLead] = useState<Lead | null>(null);
-  const [notes, setNotes] = useState("");
-  const [history, setHistory] = useState<string[]>([]);
-  const [fromNumber, setFromNumber] = useState<string>("");
-  const [isPaused, setIsPaused] = useState(false);
-  const [status, setStatus] = useState("Initializing...");
+  const lead = useMemo(() => leadQueue[currentLeadIndex] ?? null, [leadQueue, currentLeadIndex]);
+
+  // Calling state
+  const [status, setStatus] = useState("Initializing…");
   const [readyToCall, setReadyToCall] = useState(false);
-  const [muted, setMuted] = useState(false);
-  const [sessionStartedCount, setSessionStartedCount] = useState(0);
+  const [isPaused, setIsPaused] = useState(false);
   const [callActive, setCallActive] = useState(false);
+  const [muted, setMuted] = useState(false);
   const [sessionStarted, setSessionStarted] = useState(false);
+  const [sessionStartedCount, setSessionStartedCount] = useState(0);
+
+  // UI bits
   const [summaryCollapsed, setSummaryCollapsed] = useState(true);
   const [showBookModal, setShowBookModal] = useState(false);
+  const [notes, setNotes] = useState("");
+  const [history, setHistory] = useState<string[]>([]);
 
-  const router = useRouter();
-  const {
-    leads: leadIdsParam,
-    fromNumber: fromNumberParam,
-    leadId: singleLeadIdParam,
-  } = router.query;
+  // Numbers (for display only; server resolves authoritative values)
+  const [fromNumber, setFromNumber] = useState<string>("");
+  const [agentPhone, setAgentPhone] = useState<string>("");
 
-  // Prime audio context once (helps autoplay on Safari/iOS)
+  // ensure we don’t auto-dial before numbers are loaded (race fix)
+  const [numbersLoaded, setNumbersLoaded] = useState(false);
+
+  // sockets + watchdogs + guards
+  const socketRef = useRef<any>(null);
+  const userEmailRef = useRef<string>("");
+  const callWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const advanceScheduledRef = useRef<boolean>(false);
+  const sessionEndedRef = useRef<boolean>(false); // hard block any redial after end
+  const activeCallSidRef = useRef<string | null>(null);
+
+  /** ---------- helpers ---------- */
+
+  const formatPhone = (phone: string) => {
+    const clean = (phone || "").replace(/\D/g, "");
+    if (clean.length === 10) return `${clean.slice(0, 3)}-${clean.slice(3, 6)}-${clean.slice(6)}`;
+    if (clean.length === 11 && clean.startsWith("1"))
+      return `${clean.slice(0, 1)}-${clean.slice(1, 4)}-${clean.slice(4, 7)}-${clean.slice(7)}`;
+    return phone || "";
+  };
+
+  const normalizeE164 = (raw?: string) => {
+    if (!raw) return "";
+    const d = raw.replace(/\D+/g, "");
+    if (!d) return "";
+    if (d.startsWith("1") && d.length === 11) return `+${d}`;
+    if (d.length === 10) return `+1${d}`;
+    if (raw.startsWith("+")) return raw.trim();
+    return `+${d}`;
+  };
+
+  const fetchJson = async <T = Json>(url: string, init?: RequestInit) => {
+    const r = await fetch(url, init);
+    if (!r.ok) throw new Error(`${r.status}`);
+    return (await r.json()) as T;
+  };
+
+  // Try to find agentPhone in several likely shapes from /api/settings/profile
+  const extractAgentPhone = (obj: Json): string | null => {
+    const candidates = [
+      obj?.agentPhone,
+      obj?.profile?.agentPhone,
+      obj?.settings?.agentPhone,
+      obj?.user?.agentPhone,
+      obj?.data?.agentPhone,
+      obj?.phone,
+      obj?.agent_phone,
+      obj?.agentMobile,
+      obj?.agentNumber,
+    ].filter(Boolean);
+    if (candidates.length) return String(candidates[0]);
+
+    // last-ditch: scan recursively
+    const scan = (o: any): string | null => {
+      if (!o || typeof o !== "object") return null;
+      for (const [k, v] of Object.entries(o)) {
+        if (typeof v === "string" && k.toLowerCase().includes("agent") && k.toLowerCase().includes("phone")) {
+          return v;
+        }
+        if (typeof v === "object") {
+          const found = scan(v);
+          if (found) return found;
+        }
+      }
+      return null;
+    };
+    return scan(obj);
+  };
+
+  const pickFirstVoiceNumber = (payload: Json): string | null => {
+    const arr: any[] =
+      payload?.numbers ||
+      payload?.incomingPhoneNumbers ||
+      payload?.data ||
+      payload?.items ||
+      [];
+    for (const n of arr) {
+      const num = n?.phoneNumber || n?.friendlyName || n?.number || n?.value || n;
+      const caps = n?.capabilities || n?.capability || {};
+      const hasVoice = typeof caps === "object" ? !!(caps.voice ?? caps.Voice ?? caps.VOICE) : true;
+      if (num && hasVoice) return String(num);
+    }
+    return arr[0]?.phoneNumber || null;
+  };
+
+  const clearWatchdog = () => {
+    if (callWatchdogRef.current) {
+      clearTimeout(callWatchdogRef.current);
+      callWatchdogRef.current = null;
+    }
+  };
+
+  const scheduleWatchdog = () => {
+    clearWatchdog();
+    // Server times out at 25s; we give a little cushion (≈27s total) then advance.
+    callWatchdogRef.current = setTimeout(() => {
+      if (advanceScheduledRef.current || sessionEndedRef.current) return;
+      setStatus("No answer (timeout)");
+      stopRingback();
+      advanceScheduledRef.current = true;
+      setTimeout(disconnectAndNext, 1200);
+    }, 27000);
+  };
+
+  /** ---------- bootstrap ---------- */
+
+  // 1) Prime audio once for autoplay restrictions
   useEffect(() => {
     try {
       const maybe = primeAudioContext() as unknown;
-      if (maybe && typeof (maybe as any).catch === "function") {
-        (maybe as Promise<void>).catch(() => {});
-      }
+      if (maybe && typeof (maybe as any).catch === "function") (maybe as Promise<void>).catch(() => {});
     } catch {}
   }, []);
 
-  // Seed fromNumber from query or localStorage
+  // 2) Load agentPhone from profile, and fromNumber from query/localStorage/Twilio numbers
   useEffect(() => {
-    if (fromNumberParam) {
-      setFromNumber(fromNumberParam as string);
-      localStorage.setItem("selectedDialNumber", fromNumberParam as string);
-    } else {
-      const saved = localStorage.getItem("selectedDialNumber");
-      if (saved) setFromNumber(saved);
-    }
+    let cancelled = false;
+    const loadNumbers = async () => {
+      setNumbersLoaded(false);
+
+      // fromNumber: query → localStorage → owned numbers API
+      if (typeof fromNumberParam === "string" && fromNumberParam) {
+        if (!cancelled) {
+          setFromNumber(fromNumberParam);
+          localStorage.setItem("selectedDialNumber", fromNumberParam);
+        }
+      } else {
+        const saved = localStorage.getItem("selectedDialNumber");
+        if (saved) {
+          if (!cancelled) setFromNumber(saved);
+        } else {
+          try {
+            const list = await fetchJson<Json>("/api/twilio/list-numbers").catch(async () => {
+              return await fetchJson<Json>("/api/getNumbers");
+            });
+            if (!cancelled) {
+              const first = pickFirstVoiceNumber(list);
+              if (first) {
+                setFromNumber(first);
+                localStorage.setItem("selectedDialNumber", first);
+              }
+            }
+          } catch {
+            // leave blank; server will still try to resolve
+          }
+        }
+      }
+
+      // agentPhone from profile (display only)
+      try {
+        const profile = await fetchJson<Json>("/api/settings/profile");
+        const extracted = extractAgentPhone(profile);
+        if (!cancelled && extracted) setAgentPhone(extracted);
+      } catch {
+        // ignore (server will resolve if possible)
+      }
+
+      if (!cancelled) setNumbersLoaded(true);
+    };
+    loadNumbers();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fromNumberParam]);
 
-  // Load leads (single lead or multiple ids)
+  // 3) Load leads, set auto-start flags
   useEffect(() => {
-    const fetchLeads = async () => {
-      // Single-lead mode
+    const loadLeads = async () => {
+      // Single lead
       if (singleLeadIdParam) {
         try {
-          const res = await fetch(`/api/get-lead?id=${singleLeadIdParam}`);
-          const data = await res.json();
-          if (data?.lead) {
-            const formatted = { id: data.lead._id, ...data.lead };
+          const j = await fetchJson<Json>(`/api/get-lead?id=${singleLeadIdParam}`);
+          if (j?.lead?._id) {
+            const formatted = { id: j.lead._id, ...j.lead };
             setLeadQueue([formatted]);
-            setLead(formatted);
             setCurrentLeadIndex(0);
-
-            // ✅ Auto-start once ready
             setSessionStarted(true);
             setReadyToCall(true);
             setStatus("Ready");
@@ -87,152 +234,142 @@ export default function DialSession() {
         return;
       }
 
-      // Multi-lead mode
+      // Multiple leads
       if (!leadIdsParam) return;
-      const ids = (leadIdsParam as string).split(",");
+      const ids = String(leadIdsParam).split(",").filter(Boolean);
       try {
-        const fetched: (Lead | null)[] = await Promise.all(
+        const fetched = await Promise.all(
           ids.map(async (id) => {
-            const res = await fetch(`/api/get-lead?id=${id}`);
-            if (!res.ok) return null;
-            const data = await res.json();
-            return { id: data.lead._id, ...data.lead };
+            try {
+              const j = await fetchJson<Json>(`/api/get-lead?id=${encodeURIComponent(id)}`);
+              return j?.lead?._id ? ({ id: j.lead._id, ...j.lead } as Lead) : null;
+            } catch {
+              return null;
+            }
           })
         );
-        const validLeads = fetched.filter((l): l is Lead => l !== null);
-        setLeadQueue(validLeads);
-        if (validLeads.length > 0) {
-          setLead(validLeads[0]);
-          setCurrentLeadIndex(0);
-
-          // ✅ Auto-start once ready
+        const valid = fetched.filter(Boolean) as Lead[];
+        setLeadQueue(valid);
+        setCurrentLeadIndex(0);
+        if (valid.length) {
           setSessionStarted(true);
           setReadyToCall(true);
           setStatus("Ready");
         } else {
-          toast("No valid leads to dial");
           setStatus("Idle");
+          toast("No valid leads to dial");
         }
-      } catch (e) {
-        console.error(e);
-        toast.error("Failed to load leads");
+      } catch {
         setStatus("Idle");
+        toast.error("Failed to load leads");
       }
     };
-    fetchLeads();
+    loadLeads();
   }, [leadIdsParam, singleLeadIdParam]);
 
-  // Auto-dial when conditions are met
+  // 4) Auto-dial when armed (wait until numbersLoaded to avoid race)
   useEffect(() => {
-    if (leadQueue.length > 0 && readyToCall && !isPaused && sessionStarted) {
+    if (!numbersLoaded) {
+      setStatus("Loading your numbers…");
+      return;
+    }
+    if (leadQueue.length > 0 && readyToCall && !isPaused && sessionStarted && !sessionEndedRef.current) {
       setReadyToCall(false);
       callLead(leadQueue[currentLeadIndex]);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [leadQueue, readyToCall, isPaused, sessionStarted]);
+  }, [numbersLoaded, leadQueue, readyToCall, isPaused, sessionStarted, currentLeadIndex]);
 
-  const getPhoneFallback = (l: Lead) => {
-    return (
-      l?.Phone ||
-      l?.phone ||
-      l?.["Phone Number"] ||
-      l?.["phone number"] ||
-      Object.entries(l).find(([key]) => key.toLowerCase().includes("phone"))?.[1] ||
-      ""
-    );
+  /** ---------- calling ---------- */
+
+  // STRICT: Only use the new server endpoint that calls the LEAD directly.
+  const startOutboundCall = async (leadId: string): Promise<string> => {
+    const r = await fetch("/api/twilio/voice/call", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ leadId }),
+    });
+    if (!r.ok) {
+      let msg = `Failed to start call`;
+      try {
+        const j = await r.json();
+        if (j?.message) msg = j.message;
+      } catch {}
+      throw new Error(msg);
+    }
+    const j = (await r.json()) as { success?: boolean; callSid?: string };
+    if (!j?.success || !j?.callSid) throw new Error("Call start did not return a callSid");
+    return j.callSid;
   };
 
   const callLead = async (leadToCall: Lead) => {
-    const phone = getPhoneFallback(leadToCall);
-    if (!phone) {
-      toast.error("Lead has no phone");
-      return;
-    }
-    if (!fromNumber) {
-      toast.error("Select a calling number first (Numbers page).");
-      setStatus("Waiting for number");
+    if (sessionEndedRef.current) return; // hard guard
+    if (!leadToCall?.id) {
+      setStatus("Missing lead id");
       return;
     }
 
     // Optional quiet hours guard
     if (typeof isCallAllowed === "function" && !isCallAllowed()) {
       toast.error("Calls are restricted at this time.");
+      setStatus("Blocked by schedule");
       return;
     }
 
     try {
+      advanceScheduledRef.current = false;
       setStatus("Dialing…");
       setCallActive(true);
       playRingback();
 
-      // 🔁 Start call via available endpoints (prefers /api/twilio/make-call)
-      const payload = { leadNumber: phone, agentNumber: fromNumber };
-      let res = await fetch("/api/twilio/make-call", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      if (res.status === 404) {
-        res = await fetch("/api/voice/call", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-      }
-      if (!res.ok) {
-        let msg = "Failed to start call";
-        try {
-          const j = await res.json();
-          if (j?.message) msg = j.message;
-        } catch {}
-        throw new Error(msg);
-      }
+      // 🔸 Server resolves numbers and dials the LEAD only (no agent phone).
+      const callSid = await startOutboundCall(leadToCall.id);
+      activeCallSidRef.current = callSid;
 
-      // Stop ringback after a short delay even if we don't get device events here
+      // Local watchdog in case a webhook is missed (server has 25s timeout)
+      scheduleWatchdog();
+
+      // stop ringback after a bit even if device events don't fire
       setTimeout(() => stopRingback(), 8000);
-      setSessionStartedCount((prev) => prev + 1);
+      setSessionStartedCount((n) => n + 1);
 
-      // Transcript entry
-      await fetch("/api/leads/add-transcript", {
+      // transcript + history
+      fetch("/api/leads/add-transcript", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           leadId: leadToCall.id,
-          entry: {
-            agent: fromNumber,
-            text: `Started call at ${new Date().toLocaleTimeString()}`,
-          },
+          entry: { agent: fromNumber || "auto", text: `Started call at ${new Date().toLocaleTimeString()}` },
         }),
-      });
-
-      // History entry
-      await fetch("/api/leads/add-history", {
+      }).catch(() => {});
+      fetch("/api/leads/add-history", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           leadId: leadToCall.id,
           type: "call",
-          message: `Call started from ${fromNumber}`,
+          message: `Call started`,
           meta: { phase: "started" },
         }),
       }).catch(() => {});
-
-      // Local echo
       setHistory((prev) => [`📞 Call started (${new Date().toLocaleTimeString()})`, ...prev]);
     } catch (err: any) {
-      console.error("Call failed:", err);
+      console.error(err);
       setStatus(err?.message || "Call failed");
       stopRingback();
+      clearWatchdog();
       setCallActive(false);
-      setTimeout(nextLead, 1000);
+      if (!sessionEndedRef.current) {
+        // move on so sessions never stall
+        setTimeout(disconnectAndNext, 1200);
+      }
     }
   };
 
+  /** ---------- notes / dispositions ---------- */
+
   const handleSaveNote = async () => {
-    if (!notes.trim() || !lead?.id) {
-      toast.error("Cannot save an empty note");
-      return;
-    }
+    if (!notes.trim() || !lead?.id) return toast.error("Cannot save an empty note");
     try {
       const r = await fetch("/api/leads/add-note", {
         method: "POST",
@@ -240,8 +377,12 @@ export default function DialSession() {
         body: JSON.stringify({ leadId: lead.id, text: notes.trim() }),
       });
       if (!r.ok) {
-        const j = await r.json().catch(() => ({}));
-        throw new Error(j?.message || "Failed to save note");
+        let msg = "Failed to save note";
+        try {
+          const j = await r.json();
+          if (j?.message) msg = j.message;
+        } catch {}
+        throw new Error(msg);
       }
       setHistory((prev) => [`📝 Note: ${notes.trim()}`, ...prev]);
       setNotes("");
@@ -252,55 +393,14 @@ export default function DialSession() {
     }
   };
 
-  const handleToggleSummary = () => setSummaryCollapsed(!summaryCollapsed);
-  const toggleMute = () => setMuted(!muted);
-
-  const nextLead = () => {
-    if (leadQueue.length <= 1) {
-      return showSessionSummary();
-    }
-    const nextIndex = currentLeadIndex + 1;
-    if (nextIndex >= leadQueue.length) return showSessionSummary();
-
-    setCurrentLeadIndex(nextIndex);
-    setLead(leadQueue[nextIndex]);
-    setReadyToCall(true);
-  };
-
-  const disconnectAndNext = () => {
-    stopRingback();
-    setCallActive(false);
-    setReadyToCall(true);
-    setTimeout(nextLead, 500);
-  };
-
   const handleHangUp = () => {
     stopRingback();
-    if (lead?.id) {
-      fetch("/api/leads/add-history", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          leadId: lead.id,
-          type: "call",
-          message: "Call ended by agent",
-          meta: { phase: "ended" },
-        }),
-      }).catch(() => {});
-      setHistory((prev) => [`📞 Call ended`, ...prev]);
-    }
+    clearWatchdog();
     setStatus("Ended");
-    disconnectAndNext();
-  };
-
-  const togglePause = () => {
-    setIsPaused((prev) => !prev);
-    if (!isPaused) {
-      stopRingback();
-      setStatus("Paused");
-    } else {
-      setReadyToCall(true);
-      setStatus("Ready");
+    setCallActive(false);
+    // Do NOT schedule next if the user is actively hanging up; let them choose (we still auto-advance after 0.5s)
+    if (!sessionEndedRef.current) {
+      setTimeout(disconnectAndNext, 500);
     }
   };
 
@@ -313,73 +413,188 @@ export default function DialSession() {
 
     try {
       if (leadQueue[currentLeadIndex]?.id) {
-        await fetch("/api/leads/add-history", {
+        fetch("/api/leads/add-history", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            leadId: leadQueue[currentLeadIndex].id,
-            type: "disposition",
-            message: newFolderName || status,
-          }),
+          body: JSON.stringify({ leadId: leadQueue[currentLeadIndex].id, type: "disposition", message: newFolderName || status }),
         }).catch(() => {});
         setHistory((prev) => [`✅ Disposition: ${newFolderName || status}`, ...prev]);
       }
 
       if (newFolderName && newFolderName !== "No Answer") {
-        const res = await fetch("/api/move-lead-folder", {
+        const r = await fetch("/api/move-lead-folder", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            leadId: leadQueue[currentLeadIndex].id,
-            newFolderName,
-          }),
+          body: JSON.stringify({ leadId: leadQueue[currentLeadIndex].id, newFolderName }),
         });
-        const data = await res.json();
-        if (data.success) {
-          const updatedQueue = [...leadQueue];
-          updatedQueue.splice(currentLeadIndex, 1);
-
-          if (updatedQueue.length === 0) return showSessionSummary();
-
-          const nextIndex = currentLeadIndex >= updatedQueue.length ? updatedQueue.length - 1 : currentLeadIndex;
-          setLeadQueue(updatedQueue);
+        const j = await r.json();
+        if (j?.success) {
+          const updated = [...leadQueue];
+          updated.splice(currentLeadIndex, 1);
+          if (!updated.length) return showSessionSummary();
+          const nextIndex = currentLeadIndex >= updated.length ? updated.length - 1 : currentLeadIndex;
+          setLeadQueue(updated);
           setCurrentLeadIndex(nextIndex);
-          setLead(updatedQueue[nextIndex]);
           setReadyToCall(true);
         } else {
           alert("Error moving lead. Please try again.");
         }
       }
-    } catch (error) {
-      console.error(error);
-      // Continue flow
+    } catch (e) {
+      console.error(e);
     }
-
     disconnectAndNext();
   };
 
+  /** ---------- flow helpers ---------- */
+
+  const nextLead = () => {
+    if (sessionEndedRef.current) return; // hard guard
+    if (leadQueue.length <= 1) return showSessionSummary();
+    const nextIndex = currentLeadIndex + 1;
+    if (nextIndex >= leadQueue.length) return showSessionSummary();
+    setCurrentLeadIndex(nextIndex);
+    setReadyToCall(true);
+  };
+
+  const disconnectAndNext = () => {
+    if (sessionEndedRef.current) return; // hard guard
+    stopRingback();
+    clearWatchdog();
+    setCallActive(false);
+    setReadyToCall(true);
+    setTimeout(nextLead, 500);
+  };
+
+  const togglePause = () => {
+    setIsPaused((p) => !p);
+    if (!isPaused) {
+      stopRingback();
+      clearWatchdog();
+      setStatus("Paused");
+    } else {
+      setReadyToCall(true);
+      setStatus("Ready");
+    }
+  };
+
   const handleEndSession = () => {
-    const confirmEnd = window.confirm(
+    const ok = window.confirm(
       `Are you sure you want to end this dial session? You have called ${sessionStartedCount} of ${leadQueue.length} leads.`
     );
-    if (!confirmEnd) return;
+    if (!ok) return;
+    sessionEndedRef.current = true; // block any further calls immediately
     stopRingback();
+    clearWatchdog();
     setIsPaused(false);
+    setReadyToCall(false);
+    setStatus("Session ended");
     showSessionSummary();
   };
 
   const showSessionSummary = () => {
     alert(`✅ Session Complete!\nYou called ${sessionStartedCount} out of ${leadQueue.length} leads.`);
-    router.push("/leads");
+    router.push("/leads").catch(() => {});
   };
 
-  const formatPhone = (phone: string) => {
-    const clean = phone.replace(/\D/g, "");
-    if (clean.length === 10) return `${clean.slice(0, 3)}-${clean.slice(3, 6)}-${clean.slice(6)}`;
-    if (clean.length === 11 && clean.startsWith("1"))
-      return `${clean.slice(0, 1)}-${clean.slice(1, 4)}-${clean.slice(4, 7)}-${clean.slice(7)}`;
-    return phone;
-  };
+  /** ---------- socket wiring (live call:status) ---------- */
+
+  useEffect(() => {
+    let mounted = true;
+
+    (async () => {
+      try {
+        // get user email to join their room
+        const sess = await fetchJson<{ user?: { email?: string } }>("/api/auth/session").catch(() => null as any);
+        const email = sess?.user?.email ? String(sess.user.email).toLowerCase() : "";
+        userEmailRef.current = email;
+
+        // dynamic import so we don't hard-require the dep if it's not installed
+        const mod = await import("socket.io-client").catch(() => null as any);
+        if (!mounted || !mod) return;
+        const { io } = mod as any;
+
+        const socket = io(undefined, {
+          transports: ["websocket"],
+          withCredentials: false,
+        });
+
+        socketRef.current = socket;
+
+        socket.on("connect", () => {
+          if (email) {
+            socket.emit("join", email);
+            socket.emit("room:join", email);
+            socket.emit("user:join", email);
+          }
+        });
+
+        // Main event from status-callback.ts
+        socket.on("call:status", (payload: any) => {
+          try {
+            // payload: { callSid, status, direction, ownerNumber, otherNumber, durationSec, terminal, timestamp }
+            const s = String(payload?.status || "").toLowerCase();
+
+            // Only react to our current call (filter by SID if we have it)
+            const sid = activeCallSidRef.current;
+            if (sid && payload?.callSid && sid !== payload.callSid) return;
+
+            const leadNum = normalizeE164(
+              (leadQueue[currentLeadIndex] &&
+                (leadQueue[currentLeadIndex] as any)?.phone) ||
+              (leadQueue[currentLeadIndex] &&
+                Object.entries(leadQueue[currentLeadIndex]).find(([k]) => k.toLowerCase().includes("phone"))?.[1]) ||
+              ""
+            );
+            const eventOther = normalizeE164(payload?.otherNumber || "");
+            const ownerNum = normalizeE164(payload?.ownerNumber || "");
+            const fromNum = normalizeE164(fromNumber || "");
+
+            if (leadNum && eventOther && leadNum !== eventOther) return;
+            if (fromNum && ownerNum && fromNum !== ownerNum) return;
+
+            if (s === "initiated") setStatus("Dial initiated…");
+            if (s === "ringing") setStatus("Ringing…");
+            if (s === "answered") {
+              setStatus("Connected");
+              stopRingback();
+              clearWatchdog();
+            }
+
+            if (s === "no-answer" || s === "busy" || s === "failed") {
+              stopRingback();
+              clearWatchdog();
+              if (!advanceScheduledRef.current && !sessionEndedRef.current) {
+                advanceScheduledRef.current = true;
+                setStatus(s === "no-answer" ? "No answer" : s === "busy" ? "Busy" : "Failed");
+                setTimeout(disconnectAndNext, 1200); // 1.2s delay for natural pacing
+              }
+            }
+
+            if (s === "completed") {
+              stopRingback();
+              clearWatchdog();
+              if (!advanceScheduledRef.current && !sessionEndedRef.current) {
+                advanceScheduledRef.current = true;
+                setTimeout(disconnectAndNext, 1200);
+              }
+            }
+          } catch {}
+        });
+      } catch {}
+    })();
+
+    return () => {
+      mounted = false;
+      try {
+        socketRef.current?.off?.("call:status");
+        socketRef.current?.disconnect?.();
+      } catch {}
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentLeadIndex, leadQueue.length, fromNumber]);
+
+  /** ---------- render ---------- */
 
   return (
     <div className="flex bg-[#0f172a] text-white min-h-screen flex-col">
@@ -401,16 +616,18 @@ export default function DialSession() {
 
       <div className="flex flex-1">
         <Sidebar />
+
         <div className="w-1/4 p-4 border-r border-gray-600 bg-[#1e293b] overflow-y-auto">
-          <h2 className="text-xl font-bold mb-2">
-            {`${lead?.["First Name"] || ""} ${lead?.["Last Name"] || ""}`.trim()}
-          </h2>
-          <p className="text-sm text-green-400 mb-2">
-            Calling from: {fromNumber ? formatPhone(fromNumber) : "Not selected"}
+          <p className="text-green-400">
+            Calling from: {fromNumber ? formatPhone(fromNumber) : "Resolving…"}
           </p>
-          <p className="text-sm text-yellow-400 mb-2">Status: {status}</p>
+          <p className="text-yellow-400">
+            Agent phone: {agentPhone ? formatPhone(agentPhone) : "Resolving…"}
+          </p>
+          <p className="text-yellow-500 mb-2">Status: {status}</p>
+
           <p className="text-sm text-gray-400 mb-2">
-            Lead {currentLeadIndex + 1} of {leadQueue.length}
+            Lead {Math.min(currentLeadIndex + 1, Math.max(leadQueue.length, 1))} of {leadQueue.length || 1}
           </p>
 
           {lead &&
@@ -421,11 +638,12 @@ export default function DialSession() {
                 )
               )
                 return null;
-              if (key.toLowerCase().includes("phone")) value = formatPhone(value as string);
+              const showVal =
+                typeof value === "string" && key.toLowerCase().includes("phone") ? formatPhone(value) : String(value ?? "-");
               return (
                 <div key={key}>
                   <p>
-                    <strong>{key.replace(/_/g, " ")}:</strong> {String(value) || "-"}
+                    <strong>{key.replace(/_/g, " ")}:</strong> {showVal}
                   </p>
                   <hr className="border-gray-700 my-1" />
                 </div>
@@ -433,24 +651,18 @@ export default function DialSession() {
             })}
 
           <div className="flex flex-col space-y-2 mt-4">
-            <button
-              onClick={() => setMuted((m) => !m)}
-              className="bg-purple-600 hover:bg-purple-700 px-3 py-2 rounded cursor-pointer"
-            >
+            <button onClick={() => setMuted((m) => !m)} className="bg-purple-600 hover:bg-purple-700 px-3 py-2 rounded">
               {muted ? "Unmute" : "Mute"}
             </button>
             <button
               onClick={handleHangUp}
-              className={`px-3 py-2 rounded cursor-pointer ${
+              className={`px-3 py-2 rounded ${
                 callActive ? "bg-red-600 hover:bg-red-700" : "bg-gray-600 hover:bg-gray-700"
               }`}
             >
               Hang Up
             </button>
-            <button
-              onClick={() => setShowBookModal(true)}
-              className="bg-blue-700 hover:bg-blue-800 px-3 py-2 rounded cursor-pointer"
-            >
+            <button onClick={() => setShowBookModal(true)} className="bg-blue-700 hover:bg-blue-800 px-3 py-2 rounded">
               📅 Book Appointment
             </button>
           </div>
@@ -468,10 +680,7 @@ export default function DialSession() {
                 placeholder="Type notes here..."
               />
             </div>
-            <button
-              onClick={handleSaveNote}
-              className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded mb-4 cursor-pointer"
-            >
+            <button onClick={handleSaveNote} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded mb-4">
               Save Note
             </button>
 
@@ -490,44 +699,32 @@ export default function DialSession() {
           </div>
 
           <div className="flex flex-col items-center mt-8 space-y-4">
-            <div className="flex justify-center flex-wrap space-x-2">
-              <button
-                onClick={() => handleDisposition("Sold")}
-                className="bg-gray-600 hover:bg-gray-700 px-3 py-2 rounded cursor-pointer"
-              >
+            <div className="flex justify-center flex-wrap gap-2">
+              <button onClick={() => handleDisposition("Sold")} className="bg-gray-600 hover:bg-gray-700 px-3 py-2 rounded">
                 Sold
               </button>
-              <button
-                onClick={() => handleDisposition("No Answer")}
-                className="bg-gray-600 hover:bg-gray-700 px-3 py-2 rounded cursor-pointer"
-              >
+              <button onClick={() => handleDisposition("No Answer")} className="bg-gray-600 hover:bg-gray-700 px-3 py-2 rounded">
                 No Answer
               </button>
               <button
                 onClick={() => handleDisposition("Booked Appointment")}
-                className="bg-gray-600 hover:bg-gray-700 px-3 py-2 rounded cursor-pointer"
+                className="bg-gray-600 hover:bg-gray-700 px-3 py-2 rounded"
               >
                 Booked Appointment
               </button>
               <button
                 onClick={() => handleDisposition("Not Interested")}
-                className="bg-gray-600 hover:bg-gray-700 px-3 py-2 rounded cursor-pointer"
+                className="bg-gray-600 hover:bg-gray-700 px-3 py-2 rounded"
               >
                 Not Interested
               </button>
             </div>
 
-            <div className="flex space-x-2 mt-2">
-              <button
-                onClick={() => setIsPaused((p) => !p)}
-                className="bg-yellow-400 hover:bg-yellow-500 text-black px-4 py-2 rounded cursor-pointer"
-              >
+            <div className="flex gap-2 mt-2">
+              <button onClick={togglePause} className="bg-yellow-400 hover:bg-yellow-500 text-black px-4 py-2 rounded">
                 {isPaused ? "Resume Dial Session" : "Pause Dial Session"}
               </button>
-              <button
-                onClick={handleEndSession}
-                className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded cursor-pointer"
-              >
+              <button onClick={handleEndSession} className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded">
                 End Dial Session
               </button>
             </div>
@@ -536,11 +733,7 @@ export default function DialSession() {
       </div>
 
       {lead && (
-        <BookAppointmentModal
-          isOpen={showBookModal}
-          onClose={() => setShowBookModal(false)}
-          lead={lead}
-        />
+        <BookAppointmentModal isOpen={showBookModal} onClose={() => setShowBookModal(false)} lead={lead} />
       )}
     </div>
   );

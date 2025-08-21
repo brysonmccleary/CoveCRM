@@ -106,7 +106,6 @@ export default async function handler(
     const CallSid = params.get("CallSid") || "";
     const CallStatus = (params.get("CallStatus") || "").toLowerCase(); // initiated | ringing | answered | completed | busy | failed | no-answer
     const CallDurationStr = params.get("CallDuration"); // seconds (string) - present on completed
-    // Some Twilio webhooks include Timestamp, but it’s not guaranteed:
     const Timestamp = params.get("Timestamp") || undefined;
 
     // =========================
@@ -205,7 +204,7 @@ export default async function handler(
     }
 
     // =========================
-    // B) Voice lifecycle + duration billing
+    // B) Voice lifecycle + duration billing + UI emits
     // =========================
     if (CallSid) {
       // Determine which side is "ours" to infer direction and owner
@@ -232,7 +231,6 @@ export default async function handler(
         ownerUser?.email?.toLowerCase?.() ||
         (await resolveOwnerEmailByOwnedNumber(ownerNumber));
 
-      // Build updates based on status
       const now = Timestamp ? new Date(Timestamp) : new Date();
       const durationSec = CallDurationStr
         ? parseInt(CallDurationStr, 10) || 0
@@ -242,11 +240,10 @@ export default async function handler(
         callSid: CallSid,
         userEmail: userEmail || undefined,
         direction,
-        startedAt: CallStatus === "answered" ? now : new Date(), // seed; will be corrected on "answered"
+        startedAt: CallStatus === "answered" ? now : new Date(),
       };
 
       const set: any = {};
-      // Keep a best-effort startedAt
       if (
         CallStatus === "answered" ||
         CallStatus === "ringing" ||
@@ -255,19 +252,12 @@ export default async function handler(
         set.startedAt = now;
       }
 
-      // Treat all terminal states as completion for dashboard counts
       if (TERMINAL_VOICE_STATES.has(CallStatus)) {
         set.completedAt = now;
-
         if (typeof durationSec === "number") {
           set.duration = durationSec;
         }
-        // talkTime = duration for answered/completed, 0 for non-answered terminals
-        if (CallStatus === "completed") {
-          set.talkTime = Math.max(0, durationSec || 0);
-        } else {
-          set.talkTime = 0;
-        }
+        set.talkTime = CallStatus === "completed" ? Math.max(0, durationSec || 0) : 0;
       }
 
       // Upsert Call document (idempotent by CallSid)
@@ -279,6 +269,25 @@ export default async function handler(
         },
         { upsert: true },
       );
+
+      // ---- Emit live voice status to the user room for UI automation
+      try {
+        const io = (res.socket as any)?.server?.io;
+        if (io && userEmail) {
+          io.to(userEmail).emit("call:status", {
+            callSid: CallSid,
+            status: CallStatus,           // initiated | ringing | answered | completed | busy | failed | no-answer
+            direction,
+            ownerNumber,                  // your Twilio DID
+            otherNumber,                  // the lead (for outbound)
+            durationSec: typeof durationSec === "number" ? durationSec : null,
+            terminal: TERMINAL_VOICE_STATES.has(CallStatus),
+            timestamp: now.toISOString(),
+          });
+        }
+      } catch (e) {
+        console.warn("ℹ️ Socket emit (call:status) failed:", (e as any)?.message || e);
+      }
 
       // ------- Usage/Billing for completed calls (existing behavior preserved)
       if (TERMINAL_VOICE_STATES.has(CallStatus) && ownerNumber) {

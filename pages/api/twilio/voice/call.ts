@@ -16,28 +16,67 @@ const BASE_URL = (
 function e164(num: string) {
   if (!num) return "";
   const d = num.replace(/\D+/g, "");
+  if (!d) return "";
   if (d.startsWith("1") && d.length === 11) return `+${d}`;
   if (d.length === 10) return `+1${d}`;
-  if (num.startsWith("+")) return num;
+  if (num.startsWith("+")) return num.trim();
   return `+${d}`;
 }
 
-export default async function handler(
-  req: NextApiRequest,
-  res: NextApiResponse,
-) {
-  if (req.method !== "POST")
-    return res.status(405).json({ message: "Method not allowed" });
+function uniq<T>(arr: T[]) {
+  return Array.from(new Set(arr.filter(Boolean)));
+}
+
+function collectAgentNumbers(user: any): string[] {
+  const raw: string[] = uniq([
+    user?.agentPhone,
+    user?.phone,
+    user?.personalPhone,
+    user?.profile?.phone,
+    user?.profile?.agentPhone,
+    ...(Array.isArray(user?.numbers) ? user.numbers.map((n: any) => n?.phoneNumber) : []),
+    process.env.TWILIO_CALLER_ID || "",
+  ]);
+  return uniq(raw.map((x) => e164(String(x || ""))));
+}
+
+function extractLeadPhones(lead: any): string[] {
+  const candidates: string[] = [];
+
+  const pushIfPhoneLike = (val: any) => {
+    if (!val) return;
+    if (typeof val === "string") {
+      const n = e164(val);
+      if (n.length >= 11) candidates.push(n);
+    } else if (Array.isArray(val)) {
+      val.forEach((v) => pushIfPhoneLike(v));
+    }
+  };
+
+  const priorityKeys = [
+    "phone","Phone","mobile","Mobile","cell","Cell",
+    "workPhone","homePhone","Phone Number","phone_number",
+    "primaryPhone","contactNumber"
+  ];
+  priorityKeys.forEach((k) => pushIfPhoneLike(lead?.[k]));
+
+  Object.entries(lead || {}).forEach(([k, v]) => {
+    const kl = k.toLowerCase();
+    if (kl.includes("phone") || kl.includes("mobile") || kl.includes("cell") || kl.includes("number")) {
+      pushIfPhoneLike(v);
+    }
+  });
+
+  return uniq(candidates);
+}
+
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed" });
 
   const session = await getServerSession(req, res, authOptions);
-  if (!session?.user?.email)
-    return res.status(401).json({ message: "Unauthorized" });
+  if (!session?.user?.email) return res.status(401).json({ message: "Unauthorized" });
 
-  const {
-    leadId,
-    agentPhone: agentPhoneRaw,
-    fromNumber: fromNumberRaw,
-  } = req.body || {};
+  const { leadId } = req.body || {};
   if (!leadId) return res.status(400).json({ message: "Missing leadId" });
 
   await dbConnect();
@@ -49,59 +88,51 @@ export default async function handler(
   const lead: any = await Lead.findOne({ _id: leadId, userEmail }).lean();
   if (!lead) return res.status(404).json({ message: "Lead not found" });
 
-  const leadPhone = e164(lead.Phone || lead.phone || "");
-  if (!leadPhone)
-    return res.status(400).json({ message: "Lead has no phone number" });
-
-  const ownedNumbers: any[] = Array.isArray((user as any).numbers)
-    ? (user as any).numbers
-    : [];
+  // FROM = your Twilio DID
+  const ownedNumbers: any[] = Array.isArray((user as any).numbers) ? (user as any).numbers : [];
   const fromNumber = e164(
-    fromNumberRaw ||
-      ownedNumbers?.[0]?.phoneNumber ||
+    ownedNumbers?.[0]?.phoneNumber ||
       process.env.TWILIO_CALLER_ID ||
-      "",
+      ""
   );
-  if (!fromNumber)
-    return res
-      .status(400)
-      .json({ message: "No Twilio number on account (fromNumber)" });
-
-  const agentPhone = e164(
-    agentPhoneRaw ||
-      (user as any).agentPhone ||
-      (user as any).phone ||
-      (user as any).profile?.phone ||
-      (user as any).personalPhone ||
-      "",
-  );
-  if (!agentPhone) {
-    return res.status(400).json({
-      message:
-        "Missing agent phone. Pass agentPhone in body, or set it on your user profile (e.g., user.agentPhone).",
-    });
+  if (!fromNumber) {
+    return res.status(400).json({ message: "No Twilio number on account (fromNumber)" });
   }
 
-  try {
-    // We call the agent first; TwiML then bridges to lead (To=<leadPhone>).
-    const twimlUrl = `${BASE_URL}/api/twilio/voice/answer?To=${encodeURIComponent(
-      leadPhone,
-    )}&From=${encodeURIComponent(fromNumber)}&leadId=${encodeURIComponent(leadId)}`;
+  // Resolve LEAD phone, excluding any of your numbers
+  const agentNumbers = collectAgentNumbers(user);
+  const leadCandidates = extractLeadPhones(lead);
+  let leadPhone = leadCandidates.find((n) => !agentNumbers.includes(n) && n !== fromNumber) || leadCandidates[0] || "";
 
+  if (!leadPhone) return res.status(400).json({ message: "Lead has no phone number" });
+  if (leadPhone === fromNumber) return res.status(400).json({ message: "Lead phone equals caller ID; cannot place call" });
+
+  try {
+    const twimlUrl = `${BASE_URL}/api/voice/lead-join?conferenceName=${encodeURIComponent(`ds-${leadId}-${Date.now().toString(36)}`)}`;
+
+    // 🚫 No agent leg at all — only place the PSTN call to the LEAD
     const call = await twilioClient.calls.create({
-      to: agentPhone,
+      to: leadPhone,
       from: fromNumber,
       url: twimlUrl,
       statusCallback: `${BASE_URL}/api/twilio/status-callback`,
       statusCallbackMethod: "POST",
-      statusCallbackEvent: ["completed"],
+      statusCallbackEvent: ["initiated", "ringing", "answered", "completed"],
+      // keep simple AMD; TwiML can also handle further logic
+      machineDetection: "DetectMessageEnd" as any,
     });
 
-    return res.status(200).json({ ok: true, callSid: call.sid });
+    console.log("voice/call placed (lead-only)", {
+      from: fromNumber,
+      toLead: leadPhone,
+      leadCandidates,
+      excludedAgentNumbers: agentNumbers,
+      callSid: call.sid,
+    });
+
+    return res.status(200).json({ success: true, callSid: call.sid, toLead: leadPhone, from: fromNumber });
   } catch (err: any) {
     console.error("❌ voice/call error:", err?.message || err);
-    return res
-      .status(500)
-      .json({ message: "Failed to initiate call", error: err?.message });
+    return res.status(500).json({ message: "Failed to initiate call", error: err?.message });
   }
 }
