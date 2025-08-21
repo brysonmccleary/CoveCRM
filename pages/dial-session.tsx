@@ -1,12 +1,9 @@
+// pages/dial-session.tsx
 import { useState, useEffect } from "react";
 import { useRouter } from "next/router";
 import Sidebar from "@/components/Sidebar";
 import { isCallAllowed } from "@/utils/checkCallTime";
-import {
-  playRingback,
-  stopRingback,
-  primeAudioContext,
-} from "@/utils/ringAudio";
+import { playRingback, stopRingback, primeAudioContext } from "@/utils/ringAudio";
 import CallSummary from "@/components/CallSummary";
 import BookAppointmentModal from "@/components/BookAppointmentModal";
 import toast from "react-hot-toast";
@@ -40,20 +37,17 @@ export default function DialSession() {
     leadId: singleLeadIdParam,
   } = router.query;
 
-  // Prime audio context once for autoplay restrictions (iOS/Safari)
+  // Prime audio context once (helps autoplay on Safari/iOS)
   useEffect(() => {
     try {
-      // primeAudioContext previously returned void; calling inside try/catch avoids `.catch()` on void.
       const maybe = primeAudioContext() as unknown;
-      // If it *does* return a promise in some environments, make best-effort to silence errors.
       if (maybe && typeof (maybe as any).catch === "function") {
         (maybe as Promise<void>).catch(() => {});
       }
-    } catch {
-      // ignore
-    }
+    } catch {}
   }, []);
 
+  // Seed fromNumber from query or localStorage
   useEffect(() => {
     if (fromNumberParam) {
       setFromNumber(fromNumberParam as string);
@@ -64,85 +58,141 @@ export default function DialSession() {
     }
   }, [fromNumberParam]);
 
+  // Load leads (single lead or multiple ids)
   useEffect(() => {
     const fetchLeads = async () => {
+      // Single-lead mode
       if (singleLeadIdParam) {
-        const res = await fetch(`/api/get-lead?id=${singleLeadIdParam}`);
-        const data = await res.json();
-        if (data?.lead) {
-          const formatted = { id: data.lead._id, ...data.lead };
-          setLeadQueue([formatted]);
-          setLead(formatted);
-          setCurrentLeadIndex(0);
+        try {
+          const res = await fetch(`/api/get-lead?id=${singleLeadIdParam}`);
+          const data = await res.json();
+          if (data?.lead) {
+            const formatted = { id: data.lead._id, ...data.lead };
+            setLeadQueue([formatted]);
+            setLead(formatted);
+            setCurrentLeadIndex(0);
+
+            // ✅ Auto-start once ready
+            setSessionStarted(true);
+            setReadyToCall(true);
+            setStatus("Ready");
+          } else {
+            toast.error("Lead not found");
+            setStatus("Idle");
+          }
+        } catch {
+          toast.error("Failed to load lead");
+          setStatus("Idle");
         }
         return;
       }
 
+      // Multi-lead mode
       if (!leadIdsParam) return;
       const ids = (leadIdsParam as string).split(",");
-      const fetched: (Lead | null)[] = await Promise.all(
-        ids.map(async (id) => {
-          const res = await fetch(`/api/get-lead?id=${id}`);
-          if (!res.ok) return null;
-          const data = await res.json();
-          return { id: data.lead._id, ...data.lead };
-        }),
-      );
-      const validLeads = fetched.filter((lead): lead is Lead => lead !== null);
-      setLeadQueue(validLeads);
-      if (validLeads.length > 0) {
-        setLead(validLeads[0]);
-        setCurrentLeadIndex(0);
+      try {
+        const fetched: (Lead | null)[] = await Promise.all(
+          ids.map(async (id) => {
+            const res = await fetch(`/api/get-lead?id=${id}`);
+            if (!res.ok) return null;
+            const data = await res.json();
+            return { id: data.lead._id, ...data.lead };
+          })
+        );
+        const validLeads = fetched.filter((l): l is Lead => l !== null);
+        setLeadQueue(validLeads);
+        if (validLeads.length > 0) {
+          setLead(validLeads[0]);
+          setCurrentLeadIndex(0);
+
+          // ✅ Auto-start once ready
+          setSessionStarted(true);
+          setReadyToCall(true);
+          setStatus("Ready");
+        } else {
+          toast("No valid leads to dial");
+          setStatus("Idle");
+        }
+      } catch (e) {
+        console.error(e);
+        toast.error("Failed to load leads");
+        setStatus("Idle");
       }
     };
     fetchLeads();
   }, [leadIdsParam, singleLeadIdParam]);
 
+  // Auto-dial when conditions are met
   useEffect(() => {
     if (leadQueue.length > 0 && readyToCall && !isPaused && sessionStarted) {
       setReadyToCall(false);
       callLead(leadQueue[currentLeadIndex]);
     }
-  }, [leadQueue, readyToCall, isPaused, sessionStarted]); // eslint-disable-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [leadQueue, readyToCall, isPaused, sessionStarted]);
 
-  const getPhoneFallback = (lead: Lead) => {
+  const getPhoneFallback = (l: Lead) => {
     return (
-      lead?.Phone ||
-      lead?.phone ||
-      lead?.["Phone Number"] ||
-      lead?.["phone number"] ||
-      Object.entries(lead).find(([key]) =>
-        key.toLowerCase().includes("phone"),
-      )?.[1] ||
+      l?.Phone ||
+      l?.phone ||
+      l?.["Phone Number"] ||
+      l?.["phone number"] ||
+      Object.entries(l).find(([key]) => key.toLowerCase().includes("phone"))?.[1] ||
       ""
     );
   };
 
   const callLead = async (leadToCall: Lead) => {
     const phone = getPhoneFallback(leadToCall);
-    if (!phone) return;
+    if (!phone) {
+      toast.error("Lead has no phone");
+      return;
+    }
+    if (!fromNumber) {
+      toast.error("Select a calling number first (Numbers page).");
+      setStatus("Waiting for number");
+      return;
+    }
 
-    // Optional windowing (quiet hours) guard, non-blocking if util returns true/false
+    // Optional quiet hours guard
     if (typeof isCallAllowed === "function" && !isCallAllowed()) {
       toast.error("Calls are restricted at this time.");
       return;
     }
 
     try {
-      setStatus("Dialing...");
+      setStatus("Dialing…");
       setCallActive(true);
       playRingback();
 
-      await fetch("/api/start-conference", {
+      // 🔁 Start call via available endpoints (prefers /api/twilio/make-call)
+      const payload = { leadNumber: phone, agentNumber: fromNumber };
+      let res = await fetch("/api/twilio/make-call", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ leadNumber: phone, agentNumber: fromNumber }),
+        body: JSON.stringify(payload),
       });
+      if (res.status === 404) {
+        res = await fetch("/api/voice/call", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+      }
+      if (!res.ok) {
+        let msg = "Failed to start call";
+        try {
+          const j = await res.json();
+          if (j?.message) msg = j.message;
+        } catch {}
+        throw new Error(msg);
+      }
 
+      // Stop ringback after a short delay even if we don't get device events here
       setTimeout(() => stopRingback(), 8000);
       setSessionStartedCount((prev) => prev + 1);
 
-      // (kept) add basic transcript entry
+      // Transcript entry
       await fetch("/api/leads/add-transcript", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -155,7 +205,7 @@ export default function DialSession() {
         }),
       });
 
-      // ✅ also log to history for the feed
+      // History entry
       await fetch("/api/leads/add-history", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -168,14 +218,12 @@ export default function DialSession() {
       }).catch(() => {});
 
       // Local echo
-      setHistory((prev) => [
-        `📞 Call started (${new Date().toLocaleTimeString()})`,
-        ...prev,
-      ]);
-    } catch (err) {
+      setHistory((prev) => [`📞 Call started (${new Date().toLocaleTimeString()})`, ...prev]);
+    } catch (err: any) {
       console.error("Call failed:", err);
-      setStatus("Call failed");
+      setStatus(err?.message || "Call failed");
       stopRingback();
+      setCallActive(false);
       setTimeout(nextLead, 1000);
     }
   };
@@ -186,7 +234,6 @@ export default function DialSession() {
       return;
     }
     try {
-      // ✅ Persist to canonical notes endpoint (also shows in /api/leads/history as a note)
       const r = await fetch("/api/leads/add-note", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -196,7 +243,6 @@ export default function DialSession() {
         const j = await r.json().catch(() => ({}));
         throw new Error(j?.message || "Failed to save note");
       }
-      // Local echo
       setHistory((prev) => [`📝 Note: ${notes.trim()}`, ...prev]);
       setNotes("");
       toast.success("✅ Note saved!");
@@ -213,7 +259,6 @@ export default function DialSession() {
     if (leadQueue.length <= 1) {
       return showSessionSummary();
     }
-
     const nextIndex = currentLeadIndex + 1;
     if (nextIndex >= leadQueue.length) return showSessionSummary();
 
@@ -231,7 +276,6 @@ export default function DialSession() {
 
   const handleHangUp = () => {
     stopRingback();
-    // Optional: log hangup as a call history entry
     if (lead?.id) {
       fetch("/api/leads/add-history", {
         method: "POST",
@@ -245,6 +289,7 @@ export default function DialSession() {
       }).catch(() => {});
       setHistory((prev) => [`📞 Call ended`, ...prev]);
     }
+    setStatus("Ended");
     disconnectAndNext();
   };
 
@@ -255,20 +300,19 @@ export default function DialSession() {
       setStatus("Paused");
     } else {
       setReadyToCall(true);
+      setStatus("Ready");
     }
   };
 
   const handleDisposition = async (status: string) => {
     let newFolderName = "";
     if (status === "Not Interested") newFolderName = "Not Interested";
-    else if (status === "Booked Appointment")
-      newFolderName = "Booked Appointment";
+    else if (status === "Booked Appointment") newFolderName = "Booked Appointment";
     else if (status === "Sold") newFolderName = "Sold";
     else if (status === "No Answer") newFolderName = "No Answer";
 
     try {
       if (leadQueue[currentLeadIndex]?.id) {
-        // ✅ Always log disposition to history first
         await fetch("/api/leads/add-history", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -278,14 +322,10 @@ export default function DialSession() {
             message: newFolderName || status,
           }),
         }).catch(() => {});
-        setHistory((prev) => [
-          `✅ Disposition: ${newFolderName || status}`,
-          ...prev,
-        ]);
+        setHistory((prev) => [`✅ Disposition: ${newFolderName || status}`, ...prev]);
       }
 
       if (newFolderName && newFolderName !== "No Answer") {
-        // Preserve your existing move behavior (no changes)
         const res = await fetch("/api/move-lead-folder", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -301,10 +341,7 @@ export default function DialSession() {
 
           if (updatedQueue.length === 0) return showSessionSummary();
 
-          const nextIndex =
-            currentLeadIndex >= updatedQueue.length
-              ? updatedQueue.length - 1
-              : currentLeadIndex;
+          const nextIndex = currentLeadIndex >= updatedQueue.length ? updatedQueue.length - 1 : currentLeadIndex;
           setLeadQueue(updatedQueue);
           setCurrentLeadIndex(nextIndex);
           setLead(updatedQueue[nextIndex]);
@@ -323,7 +360,7 @@ export default function DialSession() {
 
   const handleEndSession = () => {
     const confirmEnd = window.confirm(
-      `Are you sure you want to end this dial session? You have called ${sessionStartedCount} of ${leadQueue.length} leads.`,
+      `Are you sure you want to end this dial session? You have called ${sessionStartedCount} of ${leadQueue.length} leads.`
     );
     if (!confirmEnd) return;
     stopRingback();
@@ -332,16 +369,13 @@ export default function DialSession() {
   };
 
   const showSessionSummary = () => {
-    alert(
-      `✅ Session Complete!\nYou called ${sessionStartedCount} out of ${leadQueue.length} leads.`,
-    );
+    alert(`✅ Session Complete!\nYou called ${sessionStartedCount} out of ${leadQueue.length} leads.`);
     router.push("/leads");
   };
 
   const formatPhone = (phone: string) => {
     const clean = phone.replace(/\D/g, "");
-    if (clean.length === 10)
-      return `${clean.slice(0, 3)}-${clean.slice(3, 6)}-${clean.slice(6)}`;
+    if (clean.length === 10) return `${clean.slice(0, 3)}-${clean.slice(3, 6)}-${clean.slice(6)}`;
     if (clean.length === 11 && clean.startsWith("1"))
       return `${clean.slice(0, 1)}-${clean.slice(1, 4)}-${clean.slice(4, 7)}-${clean.slice(7)}`;
     return phone;
@@ -372,8 +406,7 @@ export default function DialSession() {
             {`${lead?.["First Name"] || ""} ${lead?.["Last Name"] || ""}`.trim()}
           </h2>
           <p className="text-sm text-green-400 mb-2">
-            Calling from:{" "}
-            {fromNumber ? formatPhone(fromNumber) : "Not selected"}
+            Calling from: {fromNumber ? formatPhone(fromNumber) : "Not selected"}
           </p>
           <p className="text-sm text-yellow-400 mb-2">Status: {status}</p>
           <p className="text-sm text-gray-400 mb-2">
@@ -383,26 +416,16 @@ export default function DialSession() {
           {lead &&
             Object.entries(lead).map(([key, value]) => {
               if (
-                [
-                  "_id",
-                  "id",
-                  "Notes",
-                  "First Name",
-                  "Last Name",
-                  "folderId",
-                  "createdAt",
-                  "ownerId",
-                  "userEmail",
-                ].includes(key)
+                ["_id", "id", "Notes", "First Name", "Last Name", "folderId", "createdAt", "ownerId", "userEmail"].includes(
+                  key
+                )
               )
                 return null;
-              if (key.toLowerCase().includes("phone"))
-                value = formatPhone(value as string);
+              if (key.toLowerCase().includes("phone")) value = formatPhone(value as string);
               return (
                 <div key={key}>
                   <p>
-                    <strong>{key.replace(/_/g, " ")}:</strong>{" "}
-                    {String(value) || "-"}
+                    <strong>{key.replace(/_/g, " ")}:</strong> {String(value) || "-"}
                   </p>
                   <hr className="border-gray-700 my-1" />
                 </div>
@@ -419,9 +442,7 @@ export default function DialSession() {
             <button
               onClick={handleHangUp}
               className={`px-3 py-2 rounded cursor-pointer ${
-                callActive
-                  ? "bg-red-600 hover:bg-red-700"
-                  : "bg-gray-600 hover:bg-gray-700"
+                callActive ? "bg-red-600 hover:bg-red-700" : "bg-gray-600 hover:bg-gray-700"
               }`}
             >
               Hang Up
