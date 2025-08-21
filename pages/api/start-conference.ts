@@ -48,7 +48,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const agentUrl = `${baseUrl}/api/voice/agent-join?conferenceName=${encodeURIComponent(conferenceName)}`;
     const leadUrl  = `${baseUrl}/api/voice/lead-join?conferenceName=${encodeURIComponent(conferenceName)}`;
 
-    // Helpful log breadcrumbs in Vercel runtime logs
     console.log("start-conference", {
       conferenceName,
       agentNumberMasked: agentNumber.replace(/.(?=.{4})/g, "•"),
@@ -58,7 +57,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       leadUrl,
     });
 
-    // 1) Call the AGENT first (joins conference, doesn't start it)
+    // 1) Call the AGENT first
     const agentCall = await client.calls.create({
       to: agentNumber,
       from: TWILIO_CALLER_ID,
@@ -68,12 +67,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       statusCallbackEvent: ["initiated", "ringing", "answered", "completed"],
     });
 
-    // 2) Then call the LEAD (starts conference when answered)
+    // 2) Then call the LEAD (record from answer)
     const leadCall = await client.calls.create({
       to: leadNumber,
       from: TWILIO_CALLER_ID,
       url: leadUrl,
-      record: "record-from-answer",
+      record: true, // <-- boolean; starts recording on answer
+      // recordingChannels: "mono", // optional; set "dual" if you want split tracks
       recordingStatusCallback: `${baseUrl}/api/twilio-recording`,
       recordingStatusCallbackEvent: ["completed"],
       statusCallback: `${baseUrl}/api/twilio/voice-status${leadId ? `?leadId=${encodeURIComponent(leadId)}` : ""}`,
