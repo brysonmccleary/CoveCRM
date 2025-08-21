@@ -2,7 +2,7 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import Twilio from "twilio";
 import { getServerSession } from "next-auth/next";
-import { authOptions } from "./auth/[...nextauth]"; // path is relative to /pages/api
+import { authOptions } from "./auth/[...nextauth]"; // relative to /pages/api
 
 const {
   TWILIO_ACCOUNT_SID,
@@ -45,12 +45,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    // Authenticate so we can derive the agent's Twilio Client identity
-    const session = await getServerSession(req, res, authOptions as any);
-    if (!session?.user?.email) {
+    // Auth so we can derive Twilio Client identity (never PSTN)
+    const session = (await getServerSession(req, res, authOptions)) as any;
+    const userEmail = String(session?.user?.email || "");
+    if (!userEmail) {
       return sendJSON(res, 401, { message: "Unauthorized" });
     }
-    const userEmail = String(session.user.email).toLowerCase();
     const clientIdentity = identityFromEmail(userEmail);
 
     if (!client) {
@@ -61,10 +61,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!baseUrl) return sendJSON(res, 500, { message: "Base URL not configured" });
     if (!TWILIO_CALLER_ID) return sendJSON(res, 500, { message: "TWILIO_CALLER_ID missing" });
 
-    // Legacy callers may still send agentNumber; we IGNORE it on purpose.
-    const { leadNumber, agentNumber: _ignoredAgentNumber, leadId } = (req.body ?? {}) as {
+    // Legacy callers might send agentNumber — we intentionally IGNORE it.
+    const { leadNumber, agentNumber: _ignored, leadId } = (req.body ?? {}) as {
       leadNumber?: string;
-      agentNumber?: string; // ignored
+      agentNumber?: string;
       leadId?: string;
     };
 
@@ -77,15 +77,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const agentUrl = `${baseUrl}/api/voice/agent-join?conferenceName=${encodeURIComponent(conferenceName)}`;
     const leadUrl  = `${baseUrl}/api/voice/lead-join?conferenceName=${encodeURIComponent(conferenceName)}`;
 
-    console.log("start-conference: initializing", {
+    console.log("start-conference:init", {
       conferenceName,
       from: TWILIO_CALLER_ID,
       toLead,
       toAgentClient: `client:${clientIdentity}`,
-      note: "agent PSTN intentionally disabled; using Twilio Client",
+      note: "PSTN agent disabled; using Twilio Client only",
     });
 
-    // 1) Agent "web" leg (Twilio Client) — this will NOT dial your phone
+    // 1) Agent "web" leg (Twilio Client) — cannot ring your cell
     const agentCall = await client.calls.create({
       to: `client:${clientIdentity}`,
       from: TWILIO_CALLER_ID,
@@ -100,22 +100,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       to: toLead,
       from: TWILIO_CALLER_ID,
       url: leadUrl,
-      // Let Twilio record from answer if configured by your TwiML
-      recordingStatusCallback: `${baseUrl}/api/twilio-recording`,
-      recordingStatusCallbackEvent: ["completed"],
       statusCallback: `${baseUrl}/api/twilio/status-callback${leadId ? `?leadId=${encodeURIComponent(leadId)}` : ""}`,
       statusCallbackMethod: "POST",
       statusCallbackEvent: ["initiated", "ringing", "answered", "completed"],
-      // Optional AMD on create (kept simple; the TwiML can also handle it)
+      // Optional AMD at create; TwiML can also handle detection if desired
       machineDetection: "DetectMessageEnd" as any,
+      recordingStatusCallback: `${baseUrl}/api/twilio-recording`,
+      recordingStatusCallbackEvent: ["completed"],
     });
 
-    console.log("start-conference: calls placed", {
+    console.log("start-conference:placed", {
       conferenceName,
       agentCallSid: agentCall.sid,
       leadCallSid: leadCall.sid,
-      toLead,
       from: TWILIO_CALLER_ID,
+      toLead,
       toAgentClient: `client:${clientIdentity}`,
     });
 
@@ -124,8 +123,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       conferenceName,
       agentCallSid: agentCall.sid,
       leadCallSid: leadCall.sid,
-      toLead,
       from: TWILIO_CALLER_ID,
+      toLead,
       toAgentClient: `client:${clientIdentity}`,
     });
   } catch (err: any) {
