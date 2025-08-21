@@ -41,7 +41,7 @@ export default async function handler(
   if (!session?.user?.email)
     return res.status(401).json({ message: "Unauthorized" });
 
-  const { leadId, fromNumber: fromNumberRaw } = req.body || {};
+  const { leadId } = req.body || {};
   if (!leadId) return res.status(400).json({ message: "Missing leadId" });
 
   await dbConnect();
@@ -56,11 +56,10 @@ export default async function handler(
   const leadPhone = e164(lead.Phone || lead.phone || "");
   if (!leadPhone) return res.status(400).json({ message: "Lead has no phone number" });
 
-  // Pick a FROM caller ID (your Twilio DID)
+  // Resolve FROM Twilio DID from user profile (numbers array) or fallback env
   const ownedNumbers: any[] = Array.isArray((user as any).numbers) ? (user as any).numbers : [];
   const fromNumber = e164(
-    fromNumberRaw ||
-      ownedNumbers?.[0]?.phoneNumber ||
+    ownedNumbers?.[0]?.phoneNumber ||
       process.env.TWILIO_CALLER_ID ||
       ""
   );
@@ -68,28 +67,59 @@ export default async function handler(
     return res.status(400).json({ message: "No Twilio number on account (fromNumber)" });
   }
 
-  // We DO NOT call the agent's personal phone.
-  // We call the Twilio Client in the browser ("client:<identity>") and immediately bridge to the lead.
+  // ❗ Absolutely no agentPhone usage — we only place:
+  //  - PSTN call to the LEAD
+  //  - WebRTC call to Twilio Client (browser)
   const clientIdentity = identityFromEmail(userEmail);
+  const conferenceName = `ds-${leadId}-${Date.now().toString(36)}`;
 
   try {
-    const twimlUrl =
-      `${BASE_URL}/api/twilio/voice/answer` +
-      `?To=${encodeURIComponent(leadPhone)}` +
-      `&From=${encodeURIComponent(fromNumber)}` +
-      `&leadId=${encodeURIComponent(leadId)}`;
+    // 1) Lead leg (PSTN). Joins conference on answer. Voicemail-ready via AMD.
+    const leadJoinUrl = `${BASE_URL}/api/voice/lead-join?conferenceName=${encodeURIComponent(
+      conferenceName,
+    )}`;
 
-    const call = await twilioClient.calls.create({
-      // Ring the browser client (not PSTN)
-      to: `client:${clientIdentity}`,
-      from: fromNumber, // still required; used as callerId for the bridge leg
-      url: twimlUrl,
+    const leadCall = await twilioClient.calls.create({
+      to: leadPhone,
+      from: fromNumber,
+      url: leadJoinUrl,
       statusCallback: `${BASE_URL}/api/twilio/status-callback`,
       statusCallbackMethod: "POST",
-      statusCallbackEvent: ["completed"],
+      statusCallbackEvent: ["initiated", "ringing", "answered", "completed"],
+      // Voicemail detection so you can leave a real message after the beep:
+      // (Twilio AMD on call create)
+      machineDetection: "DetectMessageEnd" as any,
+      amdStatusCallback: `${BASE_URL}/api/twilio/amd-callback`,
+      amdStatusCallbackMethod: "POST",
+      // Note: ring timeout (25s) is enforced when we dial the lead via <Dial> inside TwiML.
+      // In this lead-first pattern, carriers control ring timeout. We still auto-advance client-side.
     });
 
-    return res.status(200).json({ success: true, callSid: call.sid });
+    // 2) Agent leg (browser Twilio Client). Joins the same conference.
+    //    This will ONLY ring the Twilio Client in the browser — never the agent's phone.
+    const agentJoinUrl = `${BASE_URL}/api/voice/agent-join?conferenceName=${encodeURIComponent(
+      conferenceName,
+    )}`;
+
+    const agentCall = await twilioClient.calls.create({
+      to: `client:${clientIdentity}`,
+      from: fromNumber,
+      url: agentJoinUrl,
+      statusCallback: `${BASE_URL}/api/twilio/status-callback`,
+      statusCallbackMethod: "POST",
+      statusCallbackEvent: ["initiated", "ringing", "answered", "completed"],
+    });
+
+    return res.status(200).json({
+      success: true,
+      conferenceName,
+      leadCallSid: leadCall.sid,
+      agentCallSid: agentCall.sid,
+      // for debugging visibility on the client if needed:
+      toLead: leadPhone,
+      from: fromNumber,
+      toAgentClient: `client:${clientIdentity}`,
+    });
   } catch (err: any) {
     console.error("❌ voice/call error:", err?.message || err);
     return res.status(500).json({ message: "Failed to initiate call", error: err?.message });
