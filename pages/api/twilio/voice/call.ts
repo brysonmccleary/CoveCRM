@@ -16,6 +16,7 @@ const BASE_URL = (
 function e164(num: string) {
   if (!num) return "";
   const d = num.replace(/\D+/g, "");
+  if (!d) return "";
   if (d.startsWith("1") && d.length === 11) return `+${d}`;
   if (d.length === 10) return `+1${d}`;
   if (num.startsWith("+")) return num.trim();
@@ -28,6 +29,64 @@ function identityFromEmail(email: string) {
     .trim()
     .replace(/[^a-z0-9_-]/g, "-")
     .slice(0, 120);
+}
+
+function uniq<T>(arr: T[]) {
+  return Array.from(new Set(arr.filter(Boolean)));
+}
+
+function collectAgentNumbers(user: any): string[] {
+  const raw: string[] = uniq([
+    user?.agentPhone,
+    user?.phone,
+    user?.personalPhone,
+    user?.profile?.phone,
+    user?.profile?.agentPhone,
+    ...(Array.isArray(user?.numbers) ? user.numbers.map((n: any) => n?.phoneNumber) : []),
+    process.env.TWILIO_CALLER_ID || "",
+  ]);
+  return uniq(raw.map((x) => e164(String(x || ""))));
+}
+
+function extractLeadPhones(lead: any): string[] {
+  const candidates: string[] = [];
+
+  const pushIfPhoneLike = (val: any) => {
+    if (!val) return;
+    if (typeof val === "string") {
+      const n = e164(val);
+      if (n.length >= 11) candidates.push(n);
+    } else if (Array.isArray(val)) {
+      val.forEach((v) => pushIfPhoneLike(v));
+    }
+  };
+
+  // 1) Priority common fields
+  const priorityKeys = [
+    "phone",
+    "Phone",
+    "mobile",
+    "Mobile",
+    "cell",
+    "Cell",
+    "workPhone",
+    "homePhone",
+    "Phone Number",
+    "phone_number",
+    "primaryPhone",
+    "contactNumber",
+  ];
+  priorityKeys.forEach((k) => pushIfPhoneLike(lead?.[k]));
+
+  // 2) Any field that *sounds* like phone/number
+  Object.entries(lead || {}).forEach(([k, v]) => {
+    const kl = k.toLowerCase();
+    if (kl.includes("phone") || kl.includes("mobile") || kl.includes("cell") || kl.includes("number")) {
+      pushIfPhoneLike(v);
+    }
+  });
+
+  return uniq(candidates);
 }
 
 export default async function handler(
@@ -53,10 +112,7 @@ export default async function handler(
   const lead: any = await Lead.findOne({ _id: leadId, userEmail }).lean();
   if (!lead) return res.status(404).json({ message: "Lead not found" });
 
-  const leadPhone = e164(lead.Phone || lead.phone || "");
-  if (!leadPhone) return res.status(400).json({ message: "Lead has no phone number" });
-
-  // Resolve FROM Twilio DID from user profile (numbers array) or fallback env
+  // ---- Resolve FROM number (your Twilio DID)
   const ownedNumbers: any[] = Array.isArray((user as any).numbers) ? (user as any).numbers : [];
   const fromNumber = e164(
     ownedNumbers?.[0]?.phoneNumber ||
@@ -67,18 +123,44 @@ export default async function handler(
     return res.status(400).json({ message: "No Twilio number on account (fromNumber)" });
   }
 
-  // ❗ Absolutely no agent PSTN leg — only:
+  // ---- Resolve the LEAD phone robustly, excluding agent/personal numbers
+  const agentNumbers = collectAgentNumbers(user);
+  const leadPhoneCandidates = extractLeadPhones(lead).filter(Boolean);
+
+  // Prefer the first candidate that is NOT an agent/personal number
+  let leadPhone = leadPhoneCandidates.find((n) => !agentNumbers.includes(n)) || "";
+  // Fallback to first candidate if all were excluded
+  if (!leadPhone) leadPhone = leadPhoneCandidates[0] || "";
+
+  if (!leadPhone) {
+    return res.status(400).json({ message: "Lead has no phone number" });
+  }
+
+  // Safety: never allow FROM == TO
+  if (leadPhone === fromNumber) {
+    // If the first is identical to from, try another candidate
+    const alt = leadPhoneCandidates.find((n) => n !== fromNumber);
+    if (alt) leadPhone = alt;
+  }
+  if (leadPhone === fromNumber) {
+    return res.status(400).json({ message: "Lead phone equals caller ID; cannot place call" });
+  }
+
+  // ❗ No agent PSTN leg — only:
   // 1) PSTN call to the LEAD
   // 2) Optional agent "web leg" to Twilio Client (never your cell)
   const clientIdentity = identityFromEmail(userEmail);
   const conferenceName = `ds-${leadId}-${Date.now().toString(36)}`;
 
   try {
-    // Lead leg (PSTN) — joins conference; enable AMD (DetectMessageEnd)
     const leadJoinUrl = `${BASE_URL}/api/voice/lead-join?conferenceName=${encodeURIComponent(
       conferenceName,
     )}`;
+    const agentJoinUrl = `${BASE_URL}/api/voice/agent-join?conferenceName=${encodeURIComponent(
+      conferenceName,
+    )}`;
 
+    // 1) Lead PSTN leg (with AMD-on-create; TwiML will handle conference join)
     const leadCall = await twilioClient.calls.create({
       to: leadPhone,
       from: fromNumber,
@@ -86,15 +168,10 @@ export default async function handler(
       statusCallback: `${BASE_URL}/api/twilio/status-callback`,
       statusCallbackMethod: "POST",
       statusCallbackEvent: ["initiated", "ringing", "answered", "completed"],
-      // AMD on create: OK to keep DetectMessageEnd (no extra callback props here)
       machineDetection: "DetectMessageEnd" as any,
     });
 
-    // Agent "web" leg (Twilio Client) — this will NOT dial your phone
-    const agentJoinUrl = `${BASE_URL}/api/voice/agent-join?conferenceName=${encodeURIComponent(
-      conferenceName,
-    )}`;
-
+    // 2) Agent "web" leg — Twilio Client identity (cannot ring your cell)
     const agentCall = await twilioClient.calls.create({
       to: `client:${clientIdentity}`,
       from: fromNumber,
@@ -104,8 +181,22 @@ export default async function handler(
       statusCallbackEvent: ["initiated", "ringing", "answered", "completed"],
     });
 
+    // Helpful server log (check in Vercel)
+    console.log("voice/call placed", {
+      from: fromNumber,
+      toLead: leadPhone,
+      toAgentClient: `client:${clientIdentity}`,
+      conferenceName,
+      leadCallSid: leadCall.sid,
+      agentCallSid: agentCall.sid,
+      excludedAgentNumbers: agentNumbers,
+      leadCandidates: leadPhoneCandidates,
+    });
+
+    // Client expects a callSid — return the lead call SID
     return res.status(200).json({
       success: true,
+      callSid: leadCall.sid,
       conferenceName,
       leadCallSid: leadCall.sid,
       agentCallSid: agentCall.sid,
