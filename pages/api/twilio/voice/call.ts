@@ -23,14 +23,6 @@ function e164(num: string) {
   return `+${d}`;
 }
 
-function identityFromEmail(email: string) {
-  return String(email || "")
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9_-]/g, "-")
-    .slice(0, 120);
-}
-
 function uniq<T>(arr: T[]) {
   return Array.from(new Set(arr.filter(Boolean)));
 }
@@ -61,24 +53,13 @@ function extractLeadPhones(lead: any): string[] {
     }
   };
 
-  // 1) Priority common fields
   const priorityKeys = [
-    "phone",
-    "Phone",
-    "mobile",
-    "Mobile",
-    "cell",
-    "Cell",
-    "workPhone",
-    "homePhone",
-    "Phone Number",
-    "phone_number",
-    "primaryPhone",
-    "contactNumber",
+    "phone","Phone","mobile","Mobile","cell","Cell",
+    "workPhone","homePhone","Phone Number","phone_number",
+    "primaryPhone","contactNumber"
   ];
   priorityKeys.forEach((k) => pushIfPhoneLike(lead?.[k]));
 
-  // 2) Any field that *sounds* like phone/number
   Object.entries(lead || {}).forEach(([k, v]) => {
     const kl = k.toLowerCase();
     if (kl.includes("phone") || kl.includes("mobile") || kl.includes("cell") || kl.includes("number")) {
@@ -89,16 +70,11 @@ function extractLeadPhones(lead: any): string[] {
   return uniq(candidates);
 }
 
-export default async function handler(
-  req: NextApiRequest,
-  res: NextApiResponse,
-) {
-  if (req.method !== "POST")
-    return res.status(405).json({ message: "Method not allowed" });
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed" });
 
   const session = await getServerSession(req, res, authOptions);
-  if (!session?.user?.email)
-    return res.status(401).json({ message: "Unauthorized" });
+  if (!session?.user?.email) return res.status(401).json({ message: "Unauthorized" });
 
   const { leadId } = req.body || {};
   if (!leadId) return res.status(400).json({ message: "Missing leadId" });
@@ -112,7 +88,7 @@ export default async function handler(
   const lead: any = await Lead.findOne({ _id: leadId, userEmail }).lean();
   if (!lead) return res.status(404).json({ message: "Lead not found" });
 
-  // ---- Resolve FROM number (your Twilio DID)
+  // FROM = your Twilio DID
   const ownedNumbers: any[] = Array.isArray((user as any).numbers) ? (user as any).numbers : [];
   const fromNumber = e164(
     ownedNumbers?.[0]?.phoneNumber ||
@@ -123,87 +99,38 @@ export default async function handler(
     return res.status(400).json({ message: "No Twilio number on account (fromNumber)" });
   }
 
-  // ---- Resolve the LEAD phone robustly, excluding agent/personal numbers
+  // Resolve LEAD phone, excluding any of your numbers
   const agentNumbers = collectAgentNumbers(user);
-  const leadPhoneCandidates = extractLeadPhones(lead).filter(Boolean);
+  const leadCandidates = extractLeadPhones(lead);
+  let leadPhone = leadCandidates.find((n) => !agentNumbers.includes(n) && n !== fromNumber) || leadCandidates[0] || "";
 
-  // Prefer the first candidate that is NOT an agent/personal number
-  let leadPhone = leadPhoneCandidates.find((n) => !agentNumbers.includes(n)) || "";
-  // Fallback to first candidate if all were excluded
-  if (!leadPhone) leadPhone = leadPhoneCandidates[0] || "";
-
-  if (!leadPhone) {
-    return res.status(400).json({ message: "Lead has no phone number" });
-  }
-
-  // Safety: never allow FROM == TO
-  if (leadPhone === fromNumber) {
-    // If the first is identical to from, try another candidate
-    const alt = leadPhoneCandidates.find((n) => n !== fromNumber);
-    if (alt) leadPhone = alt;
-  }
-  if (leadPhone === fromNumber) {
-    return res.status(400).json({ message: "Lead phone equals caller ID; cannot place call" });
-  }
-
-  // ❗ No agent PSTN leg — only:
-  // 1) PSTN call to the LEAD
-  // 2) Optional agent "web leg" to Twilio Client (never your cell)
-  const clientIdentity = identityFromEmail(userEmail);
-  const conferenceName = `ds-${leadId}-${Date.now().toString(36)}`;
+  if (!leadPhone) return res.status(400).json({ message: "Lead has no phone number" });
+  if (leadPhone === fromNumber) return res.status(400).json({ message: "Lead phone equals caller ID; cannot place call" });
 
   try {
-    const leadJoinUrl = `${BASE_URL}/api/voice/lead-join?conferenceName=${encodeURIComponent(
-      conferenceName,
-    )}`;
-    const agentJoinUrl = `${BASE_URL}/api/voice/agent-join?conferenceName=${encodeURIComponent(
-      conferenceName,
-    )}`;
+    const twimlUrl = `${BASE_URL}/api/voice/lead-join?conferenceName=${encodeURIComponent(`ds-${leadId}-${Date.now().toString(36)}`)}`;
 
-    // 1) Lead PSTN leg (with AMD-on-create; TwiML will handle conference join)
-    const leadCall = await twilioClient.calls.create({
+    // 🚫 No agent leg at all — only place the PSTN call to the LEAD
+    const call = await twilioClient.calls.create({
       to: leadPhone,
       from: fromNumber,
-      url: leadJoinUrl,
+      url: twimlUrl,
       statusCallback: `${BASE_URL}/api/twilio/status-callback`,
       statusCallbackMethod: "POST",
       statusCallbackEvent: ["initiated", "ringing", "answered", "completed"],
+      // keep simple AMD; TwiML can also handle further logic
       machineDetection: "DetectMessageEnd" as any,
     });
 
-    // 2) Agent "web" leg — Twilio Client identity (cannot ring your cell)
-    const agentCall = await twilioClient.calls.create({
-      to: `client:${clientIdentity}`,
-      from: fromNumber,
-      url: agentJoinUrl,
-      statusCallback: `${BASE_URL}/api/twilio/status-callback`,
-      statusCallbackMethod: "POST",
-      statusCallbackEvent: ["initiated", "ringing", "answered", "completed"],
-    });
-
-    // Helpful server log (check in Vercel)
-    console.log("voice/call placed", {
+    console.log("voice/call placed (lead-only)", {
       from: fromNumber,
       toLead: leadPhone,
-      toAgentClient: `client:${clientIdentity}`,
-      conferenceName,
-      leadCallSid: leadCall.sid,
-      agentCallSid: agentCall.sid,
+      leadCandidates,
       excludedAgentNumbers: agentNumbers,
-      leadCandidates: leadPhoneCandidates,
+      callSid: call.sid,
     });
 
-    // Client expects a callSid — return the lead call SID
-    return res.status(200).json({
-      success: true,
-      callSid: leadCall.sid,
-      conferenceName,
-      leadCallSid: leadCall.sid,
-      agentCallSid: agentCall.sid,
-      toLead: leadPhone,
-      from: fromNumber,
-      toAgentClient: `client:${clientIdentity}`,
-    });
+    return res.status(200).json({ success: true, callSid: call.sid, toLead: leadPhone, from: fromNumber });
   } catch (err: any) {
     console.error("❌ voice/call error:", err?.message || err);
     return res.status(500).json({ message: "Failed to initiate call", error: err?.message });
