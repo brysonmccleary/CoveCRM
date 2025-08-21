@@ -7,15 +7,12 @@ import twilioClient from "@/lib/twilioClient";
 import Lead from "@/models/Lead";
 import { getUserByEmail } from "@/models/User";
 
-/** Base URL for TwiML + callbacks */
 const BASE_URL = (
   process.env.NEXT_PUBLIC_BASE_URL ||
   process.env.BASE_URL ||
-  process.env.NEXTAUTH_URL ||
   ""
 ).replace(/\/$/, "");
 
-/** Normalize to E.164 (US default if 10 digits) */
 function e164(num: string) {
   if (!num) return "";
   const d = num.replace(/\D+/g, "");
@@ -25,35 +22,16 @@ function e164(num: string) {
   return `+${d}`;
 }
 
-/** Safely pluck user's agent phone from common fields */
-function getAgentPhoneFromUser(user: any): string {
-  const candidates = [
-    user?.settings?.agentPhone,
-    user?.agentPhone,
-    user?.phone,
-    user?.profile?.phone,
-    user?.personalPhone,
-  ].filter(Boolean);
-  return e164(String(candidates[0] || ""));
-}
-
-/** Resolve user's default Twilio DID ("from" number) */
-function getFromNumberForUser(user: any, override?: string): string {
-  if (override) return e164(override);
-  const from =
-    user?.settings?.defaultFromNumber ||
-    user?.defaultFromNumber ||
-    (Array.isArray(user?.numbers) ? user.numbers[0]?.phoneNumber : undefined) ||
-    process.env.TWILIO_CALLER_ID ||
-    "";
-  return e164(String(from || ""));
-}
-
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed" });
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
+  if (req.method !== "POST")
+    return res.status(405).json({ message: "Method not allowed" });
 
   const session = await getServerSession(req, res, authOptions);
-  if (!session?.user?.email) return res.status(401).json({ message: "Unauthorized" });
+  if (!session?.user?.email)
+    return res.status(401).json({ message: "Unauthorized" });
 
   const { leadId, agentPhone: agentPhoneRaw, fromNumber: fromNumberRaw } = req.body || {};
   if (!leadId) return res.status(400).json({ message: "Missing leadId" });
@@ -64,74 +42,61 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const user = await getUserByEmail(userEmail);
   if (!user) return res.status(404).json({ message: "User not found" });
 
-  // Find the lead belonging to this user
   const lead: any = await Lead.findOne({ _id: leadId, userEmail }).lean();
   if (!lead) return res.status(404).json({ message: "Lead not found" });
 
-  const leadPhone = e164(lead.Phone || lead.phone || lead["Phone Number"] || "");
+  const leadPhone = e164(lead.Phone || lead.phone || "");
   if (!leadPhone) return res.status(400).json({ message: "Lead has no phone number" });
 
-  // Resolve numbers server-side (hands-off UX)
-  const fromNumber = getFromNumberForUser(user, fromNumberRaw);
+  // Resolve FROM Twilio DID from user profile (numbers array) or fallback env
+  const ownedNumbers: any[] = Array.isArray((user as any).numbers) ? (user as any).numbers : [];
+  const fromNumber = e164(
+    fromNumberRaw ||
+      ownedNumbers?.[0]?.phoneNumber ||
+      process.env.TWILIO_CALLER_ID ||
+      ""
+  );
   if (!fromNumber) {
-    return res.status(400).json({
-      message: "No Twilio 'from' number on file. Buy or assign a number on the Numbers page.",
-      fix: "Set users.settings.defaultFromNumber or assign a number to the user.",
-    });
+    return res.status(400).json({ message: "No Twilio number on account (fromNumber)" });
   }
 
-  const agentPhone = e164(agentPhoneRaw || getAgentPhoneFromUser(user));
+  // Resolve agent phone from user profile with broad fallbacks
+  const agentPhone = e164(
+    agentPhoneRaw ||
+      (user as any).agentPhone ||
+      (user as any).phone ||
+      (user as any).profile?.phone ||
+      (user as any).personalPhone ||
+      ""
+  );
   if (!agentPhone) {
+    // We still fail here (we must ring a real device for agent leg).
+    // Front-end does NOT block; it defers this check to us.
     return res.status(400).json({
-      message: "Missing agent phone on profile.",
-      fix: "Add your phone in Settings → Phone (users.settings.agentPhone).",
+      message: "Missing agent phone on your profile. Set it in Settings → Profile (agentPhone).",
     });
   }
-
-  // Build conference join URLs (these routes already exist in your app)
-  const conferenceName = `conf_${Date.now()}_${String(user._id).slice(-6)}`;
-  const agentUrl = `${BASE_URL}/api/voice/agent-join?conferenceName=${encodeURIComponent(conferenceName)}`;
-  const leadUrl  = `${BASE_URL}/api/voice/lead-join?conferenceName=${encodeURIComponent(conferenceName)}`;
 
   try {
-    // 1) Call the agent first (they’ll join muted / not starting the room)
-    const agentCall = await twilioClient.calls.create({
+    // Agent-first call. TwiML at /api/twilio/voice/answer bridges agent -> lead.
+    const twimlUrl =
+      `${BASE_URL}/api/twilio/voice/answer` +
+      `?To=${encodeURIComponent(leadPhone)}` +
+      `&From=${encodeURIComponent(fromNumber)}` +
+      `&leadId=${encodeURIComponent(leadId)}`;
+
+    const call = await twilioClient.calls.create({
       to: agentPhone,
       from: fromNumber,
-      url: agentUrl,
-      statusCallback: `${BASE_URL}/api/twilio/voice-status?who=agent&leadId=${encodeURIComponent(leadId)}`,
+      url: twimlUrl,
+      statusCallback: `${BASE_URL}/api/twilio/status-callback`,
       statusCallbackMethod: "POST",
-      statusCallbackEvent: ["initiated", "ringing", "answered", "completed"],
+      statusCallbackEvent: ["completed"],
     });
 
-    // 2) Then call the lead (will start the conference on enter)
-    const leadCall = await twilioClient.calls.create({
-      to: leadPhone,
-      from: fromNumber,
-      url: leadUrl,
-      // NOTE: older @types/twilio marks "record" boolean; omit here to avoid TS error and
-      // record at the Conference level if desired via TwiML, or use status callbacks.
-      statusCallback: `${BASE_URL}/api/twilio/voice-status?who=lead&leadId=${encodeURIComponent(leadId)}`,
-      statusCallbackMethod: "POST",
-      statusCallbackEvent: ["initiated", "ringing", "answered", "completed"],
-    });
-
-    // (Optional) you could also write a quick DB log here if you prefer server-side logging.
-
-    return res.status(200).json({
-      success: true,
-      conferenceName,
-      agentCallSid: agentCall.sid,
-      leadCallSid: leadCall.sid,
-      fromNumber,
-      agentPhone,
-      leadPhone,
-    });
+    return res.status(200).json({ success: true, callSid: call.sid });
   } catch (err: any) {
     console.error("❌ voice/call error:", err?.message || err);
-    return res.status(500).json({
-      message: "Failed to initiate call",
-      error: err?.message || "unknown",
-    });
+    return res.status(500).json({ message: "Failed to initiate call", error: err?.message });
   }
 }

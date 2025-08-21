@@ -1,9 +1,10 @@
-// /pages/dial-session.tsx
+// pages/dial-session.tsx
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/router";
 import Sidebar from "@/components/Sidebar";
 import CallSummary from "@/components/CallSummary";
 import BookAppointmentModal from "@/components/BookAppointmentModal";
+import { isCallAllowed } from "@/utils/checkCallTime";
 import { playRingback, stopRingback, primeAudioContext } from "@/utils/ringAudio";
 import toast from "react-hot-toast";
 
@@ -11,11 +12,12 @@ interface Lead {
   id: string;
   [key: string]: any;
 }
+
 type Json = Record<string, any>;
 
 export default function DialSession() {
   const router = useRouter();
-  const { leads: leadIdsParam, leadId: singleLeadIdParam } = router.query;
+  const { leads: leadIdsParam, fromNumber: fromNumberParam, leadId: singleLeadIdParam } = router.query;
 
   // Queue & selection
   const [leadQueue, setLeadQueue] = useState<Lead[]>([]);
@@ -31,15 +33,18 @@ export default function DialSession() {
   const [sessionStarted, setSessionStarted] = useState(false);
   const [sessionStartedCount, setSessionStartedCount] = useState(0);
 
-  // UI
+  // UI bits
   const [summaryCollapsed, setSummaryCollapsed] = useState(true);
   const [showBookModal, setShowBookModal] = useState(false);
   const [notes, setNotes] = useState("");
   const [history, setHistory] = useState<string[]>([]);
 
-  // Optional display-only numbers (not required for calling)
-  const [displayFrom, setDisplayFrom] = useState<string>("");
-  const [displayAgent, setDisplayAgent] = useState<string>("");
+  // Numbers (for display only; server resolves authoritative values)
+  const [fromNumber, setFromNumber] = useState<string>("");
+  const [agentPhone, setAgentPhone] = useState<string>("");
+
+  // ensure we don’t auto-dial before numbers are loaded (race fix)
+  const [numbersLoaded, setNumbersLoaded] = useState(false);
 
   /** ---------- helpers ---------- */
 
@@ -51,18 +56,58 @@ export default function DialSession() {
     return phone || "";
   };
 
-  const getPhoneFallback = (l: Lead) =>
-    l?.Phone ||
-    l?.phone ||
-    l?.["Phone Number"] ||
-    l?.["phone number"] ||
-    Object.entries(l).find(([k]) => k.toLowerCase().includes("phone"))?.[1] ||
-    "";
-
   const fetchJson = async <T = Json>(url: string, init?: RequestInit) => {
     const r = await fetch(url, init);
     if (!r.ok) throw new Error(`${r.status}`);
     return (await r.json()) as T;
+  };
+
+  // Try to find agentPhone in several likely shapes from /api/settings/profile
+  const extractAgentPhone = (obj: Json): string | null => {
+    const candidates = [
+      obj?.agentPhone,
+      obj?.profile?.agentPhone,
+      obj?.settings?.agentPhone,
+      obj?.user?.agentPhone,
+      obj?.data?.agentPhone,
+      obj?.phone,
+      obj?.agent_phone,
+      obj?.agentMobile,
+      obj?.agentNumber,
+    ].filter(Boolean);
+    if (candidates.length) return String(candidates[0]);
+
+    // last-ditch: scan recursively
+    const scan = (o: any): string | null => {
+      if (!o || typeof o !== "object") return null;
+      for (const [k, v] of Object.entries(o)) {
+        if (typeof v === "string" && k.toLowerCase().includes("agent") && k.toLowerCase().includes("phone")) {
+          return v;
+        }
+        if (typeof v === "object") {
+          const found = scan(v);
+          if (found) return found;
+        }
+      }
+      return null;
+    };
+    return scan(obj);
+  };
+
+  const pickFirstVoiceNumber = (payload: Json): string | null => {
+    const arr: any[] =
+      payload?.numbers ||
+      payload?.incomingPhoneNumbers ||
+      payload?.data ||
+      payload?.items ||
+      [];
+    for (const n of arr) {
+      const num = n?.phoneNumber || n?.friendlyName || n?.number || n?.value || n;
+      const caps = n?.capabilities || n?.capability || {};
+      const hasVoice = typeof caps === "object" ? !!(caps.voice ?? caps.Voice ?? caps.VOICE) : true;
+      if (num && hasVoice) return String(num);
+    }
+    return arr[0]?.phoneNumber || null;
   };
 
   /** ---------- bootstrap ---------- */
@@ -75,28 +120,59 @@ export default function DialSession() {
     } catch {}
   }, []);
 
-  // 2) Load optional display numbers from profile (not required for calls anymore)
+  // 2) Load agentPhone from profile, and fromNumber from query/localStorage/Twilio numbers
   useEffect(() => {
-    (async () => {
-      try {
-        const profile = await fetchJson<Json>("/api/settings/profile").catch(() => null);
-        const from =
-          profile?.settings?.defaultFromNumber ||
-          profile?.defaultFromNumber ||
-          (Array.isArray(profile?.numbers) ? profile?.numbers?.[0]?.phoneNumber : undefined);
-        const agent =
-          profile?.settings?.agentPhone ||
-          profile?.agentPhone ||
-          profile?.phone ||
-          profile?.profile?.phone ||
-          profile?.personalPhone;
-        if (from) setDisplayFrom(String(from));
-        if (agent) setDisplayAgent(String(agent));
-      } catch {}
-    })();
-  }, []);
+    let cancelled = false;
+    const loadNumbers = async () => {
+      setNumbersLoaded(false);
 
-  // 3) Load leads & arm auto-start
+      // fromNumber: query → localStorage → owned numbers API
+      if (typeof fromNumberParam === "string" && fromNumberParam) {
+        if (!cancelled) {
+          setFromNumber(fromNumberParam);
+          localStorage.setItem("selectedDialNumber", fromNumberParam);
+        }
+      } else {
+        const saved = localStorage.getItem("selectedDialNumber");
+        if (saved) {
+          if (!cancelled) setFromNumber(saved);
+        } else {
+          try {
+            const list = await fetchJson<Json>("/api/twilio/list-numbers").catch(async () => {
+              return await fetchJson<Json>("/api/getNumbers");
+            });
+            if (!cancelled) {
+              const first = pickFirstVoiceNumber(list);
+              if (first) {
+                setFromNumber(first);
+                localStorage.setItem("selectedDialNumber", first);
+              }
+            }
+          } catch {
+            // leave blank; server will still try to resolve
+          }
+        }
+      }
+
+      // agentPhone from profile
+      try {
+        const profile = await fetchJson<Json>("/api/settings/profile");
+        const extracted = extractAgentPhone(profile);
+        if (!cancelled && extracted) setAgentPhone(extracted);
+      } catch {
+        // ignore (server will resolve if possible)
+      }
+
+      if (!cancelled) setNumbersLoaded(true);
+    };
+    loadNumbers();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fromNumberParam]);
+
+  // 3) Load leads, set auto-start flags
   useEffect(() => {
     const loadLeads = async () => {
       // Single lead
@@ -121,7 +197,7 @@ export default function DialSession() {
         return;
       }
 
-      // Multi-lead
+      // Multiple leads
       if (!leadIdsParam) return;
       const ids = String(leadIdsParam).split(",").filter(Boolean);
       try {
@@ -154,22 +230,79 @@ export default function DialSession() {
     loadLeads();
   }, [leadIdsParam, singleLeadIdParam]);
 
-  // 4) Auto-dial when armed
+  // 4) Auto-dial when armed (also wait until numbersLoaded to avoid race)
   useEffect(() => {
+    if (!numbersLoaded) {
+      setStatus("Loading your numbers…");
+      return;
+    }
     if (leadQueue.length > 0 && readyToCall && !isPaused && sessionStarted) {
       setReadyToCall(false);
       callLead(leadQueue[currentLeadIndex]);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [leadQueue, readyToCall, isPaused, sessionStarted, currentLeadIndex]);
+  }, [numbersLoaded, leadQueue, readyToCall, isPaused, sessionStarted, currentLeadIndex]);
 
   /** ---------- calling ---------- */
 
+  // Prefer server-resolved endpoint; fall back if missing
+  const startOutboundCall = async (leadId: string) => {
+    const attempts: Array<{ url: string; body: Record<string, any> }> = [
+      // 🔹 server resolves fromNumber & agentPhone using the user profile
+      { url: "/api/twilio/voice/call", body: { leadId } },
+      // legacy fallbacks (explicit numbers if needed)
+      { url: "/api/twilio/make-call", body: { leadNumber: getLeadPhoneForLegacy(), agentNumber: agentPhone, from: fromNumber } },
+      { url: "/api/start-conference", body: { leadNumber: getLeadPhoneForLegacy(), agentNumber: agentPhone, from: fromNumber } },
+    ];
+
+    let lastErr: Error | null = null;
+    for (const a of attempts) {
+      try {
+        const r = await fetch(a.url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(a.body),
+        });
+        if (r.status === 404) continue; // route not present; try next
+        if (!r.ok) {
+          let msg = `Failed to start call (${a.url})`;
+          try {
+            const j = await r.json();
+            if (j?.message) msg = j.message;
+          } catch {}
+          throw new Error(msg);
+        }
+        return; // success
+      } catch (e: any) {
+        lastErr = e instanceof Error ? e : new Error(String(e));
+      }
+    }
+    throw lastErr || new Error("No available call endpoint");
+  };
+
+  const getLeadPhoneForLegacy = () => {
+    const l = leadQueue[currentLeadIndex];
+    if (!l) return "";
+    return (
+      l?.Phone ||
+      l?.phone ||
+      l?.["Phone Number"] ||
+      l?.["phone number"] ||
+      Object.entries(l).find(([k]) => k.toLowerCase().includes("phone"))?.[1] ||
+      ""
+    );
+  };
+
   const callLead = async (leadToCall: Lead) => {
-    const to = String(getPhoneFallback(leadToCall) || "").trim();
-    if (!to) {
-      toast.error("Lead has no phone");
-      setStatus("Missing lead phone");
+    if (!leadToCall?.id) {
+      setStatus("Missing lead id");
+      return;
+    }
+
+    // Optional quiet hours guard
+    if (typeof isCallAllowed === "function" && !isCallAllowed()) {
+      toast.error("Calls are restricted at this time.");
+      setStatus("Blocked by schedule");
       return;
     }
 
@@ -178,39 +311,20 @@ export default function DialSession() {
       setCallActive(true);
       playRingback();
 
-      const r = await fetch("/api/twilio/voice/call", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ leadId: leadToCall.id }),
-      });
+      // 🔸 Let the server resolve numbers; don’t block on client-side checks
+      await startOutboundCall(leadToCall.id);
 
-      if (!r.ok) {
-        let msg = "Failed to start call";
-        try {
-          const j = await r.json();
-          if (j?.message) msg = j.message;
-        } catch {}
-        throw new Error(msg);
-      }
-
-      const j = await r.json().catch(() => ({}));
-      // Show friendly “who’s calling who” if available
-      if (j?.fromNumber || j?.agentPhone) {
-        setDisplayFrom(j.fromNumber || displayFrom);
-        setDisplayAgent(j.agentPhone || displayAgent);
-      }
-
-      // Stop ringback after a moment even if we don't receive device events here
+      // stop ringback after a bit even if device events don't fire
       setTimeout(() => stopRingback(), 8000);
       setSessionStartedCount((n) => n + 1);
 
-      // Log to lead transcript/history (best-effort)
+      // transcript + history
       fetch("/api/leads/add-transcript", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           leadId: leadToCall.id,
-          entry: { text: `Started call at ${new Date().toLocaleTimeString()}` },
+          entry: { agent: fromNumber || "auto", text: `Started call at ${new Date().toLocaleTimeString()}` },
         }),
       }).catch(() => {});
       fetch("/api/leads/add-history", {
@@ -219,7 +333,7 @@ export default function DialSession() {
         body: JSON.stringify({
           leadId: leadToCall.id,
           type: "call",
-          message: "Call started",
+          message: `Call started`,
           meta: { phase: "started" },
         }),
       }).catch(() => {});
@@ -229,7 +343,7 @@ export default function DialSession() {
       setStatus(err?.message || "Call failed");
       stopRingback();
       setCallActive(false);
-      // keep sessions flowing; move on
+      // move on so sessions never stall
       setTimeout(nextLead, 1000);
     }
   };
@@ -345,11 +459,6 @@ export default function DialSession() {
     }
   };
 
-  const showSessionSummary = () => {
-    alert(`✅ Session Complete!\nYou called ${sessionStartedCount} out of ${leadQueue.length} leads.`);
-    router.push("/leads").catch(() => {});
-  };
-
   const handleEndSession = () => {
     const ok = window.confirm(
       `Are you sure you want to end this dial session? You have called ${sessionStartedCount} of ${leadQueue.length} leads.`
@@ -358,6 +467,11 @@ export default function DialSession() {
     stopRingback();
     setIsPaused(false);
     showSessionSummary();
+  };
+
+  const showSessionSummary = () => {
+    alert(`✅ Session Complete!\nYou called ${sessionStartedCount} out of ${leadQueue.length} leads.`);
+    router.push("/leads").catch(() => {});
   };
 
   /** ---------- render ---------- */
@@ -385,10 +499,10 @@ export default function DialSession() {
 
         <div className="w-1/4 p-4 border-r border-gray-600 bg-[#1e293b] overflow-y-auto">
           <p className="text-green-400">
-            Calling from: {displayFrom ? formatPhone(displayFrom) : "Auto (user default)"}
+            Calling from: {fromNumber ? formatPhone(fromNumber) : "Resolving…"}
           </p>
           <p className="text-yellow-400">
-            Agent phone: {displayAgent ? formatPhone(displayAgent) : "Auto (from profile)"}
+            Agent phone: {agentPhone ? formatPhone(agentPhone) : "Resolving…"}
           </p>
           <p className="text-yellow-500 mb-2">Status: {status}</p>
 
