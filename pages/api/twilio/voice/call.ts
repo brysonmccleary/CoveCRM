@@ -6,6 +6,7 @@ import dbConnect from "@/lib/mongooseConnect";
 import twilioClient from "@/lib/twilioClient";
 import Lead from "@/models/Lead";
 import { getUserByEmail } from "@/models/User";
+import Call from "@/models/Call";
 
 const BASE_URL = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "").replace(/\/$/, "");
 
@@ -52,7 +53,6 @@ function extractLeadPhones(lead: any): string[] {
   ];
   priority.forEach((k) => pushIfPhone(lead?.[k]));
 
-  // scan everything else for phone-like fields
   Object.entries(lead || {}).forEach(([k, v]) => {
     const kl = k.toLowerCase();
     if (kl.includes("phone") || kl.includes("mobile") || kl.includes("cell") || kl.includes("number")) {
@@ -112,9 +112,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    const twimlUrl = `${BASE_URL}/api/voice/lead-join?conferenceName=${encodeURIComponent(`ds-${leadId}-${Date.now().toString(36)}`)}`;
+    // We park the call silently and let AMD drive behavior.
+    const twimlUrl = `${BASE_URL}/api/voice/lead-park`;
 
-    // Lead-only outbound call (no agent leg)
     const call = await twilioClient.calls.create({
       to: toLead,
       from: fromNumber,
@@ -122,9 +122,34 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       statusCallback: `${BASE_URL}/api/twilio/status-callback`,
       statusCallbackMethod: "POST",
       statusCallbackEvent: ["initiated", "ringing", "answered", "completed"],
-      // Lightweight AMD now; we’ll refine in Step 3
+      // AMD with beep detection (+ faster tuning to reduce "carrier music" window)
       machineDetection: "DetectMessageEnd" as any,
+      machineDetectionTimeout: 10,
+      machineDetectionSpeechThreshold: 1000,
+      machineDetectionSpeechEndThreshold: 150,
+      machineDetectionSilenceTimeout: 500,
+      amdStatusCallback: `${BASE_URL}/api/twilio/amd-callback`,
+      amdStatusCallbackMethod: "POST",
     });
+
+    // Immediately persist the mapping so all webhooks can disposition this call
+    await Call.updateOne(
+      { callSid: call.sid },
+      {
+        $setOnInsert: {
+          callSid: call.sid,
+          userEmail,
+          direction: "outbound",
+          startedAt: new Date(),
+        },
+        $set: {
+          leadId,
+          ownerNumber: fromNumber,
+          otherNumber: toLead,
+        },
+      },
+      { upsert: true },
+    );
 
     console.log("📞 voice/call placed (lead-only)", {
       from: fromNumber,

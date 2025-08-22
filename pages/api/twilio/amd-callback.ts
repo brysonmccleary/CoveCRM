@@ -6,6 +6,8 @@ import twilioClient from "@/lib/twilioClient";
 import mongooseConnect from "@/lib/mongooseConnect";
 import { getUserByPhoneNumber } from "@/lib/getUserByPhoneNumber";
 import User from "@/models/User";
+import Lead from "@/models/Lead";
+import Call from "@/models/Call";
 
 export const config = { api: { bodyParser: false } };
 
@@ -73,8 +75,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const From = params.get("From") || params.get("Caller") || "";  // for outbound, this is our Twilio DID
     const To = params.get("To") || params.get("Called") || "";      // the lead number
 
-    // Twilio sends various AnsweredBy values with DetectMessageEnd + amdStatusCallback:
-    // 'human', 'machine_start', 'machine_end_beep', 'machine_end_silence', 'unknown'
+    // Twilio may send (values vary by region):
+    // 'human', 'machine', 'machine_start', 'machine_end', 'machine_end_beep', 'machine_end_silence', 'unknown'
     const AnsweredBy = (params.get("AnsweredBy") || "").toLowerCase();
     const MachineDetectionDuration = params.get("MachineDetectionDuration") || "";
     const MachineMessageEnd = (params.get("MachineMessageEnd") || "").toLowerCase(); // "true" when beep detected
@@ -86,6 +88,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       null;
     const userEmail =
       owner?.email?.toLowerCase?.() || (await resolveOwnerEmailByOwnedNumber(From)) || null;
+
+    // ---- Update Call doc with AMD telemetry (also gives us leadId)
+    const callDoc = await Call.findOneAndUpdate(
+      { callSid: CallSid },
+      {
+        $set: {
+          amd: {
+            answeredBy: AnsweredBy,
+            messageEnd: MachineMessageEnd === "true",
+            durationMs: MachineDetectionDuration ? Number(MachineDetectionDuration) : undefined,
+            at: new Date(),
+          },
+        },
+      },
+      { new: true },
+    );
+
+    const leadId = callDoc?.leadId || null;
 
     // ---- Emit to the user’s socket room so UI can show AMD state
     try {
@@ -99,6 +119,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           durationMs: MachineDetectionDuration ? Number(MachineDetectionDuration) : null,
           messageEnd: MachineMessageEnd === "true",
           timestamp: new Date().toISOString(),
+          leadId: leadId ? String(leadId) : null,
         });
       }
     } catch (e) {
@@ -111,10 +132,46 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     );
 
     // =========================
-    // AMD Decision Tree
+    // AMD Decision Tree (+ DB disposition)
     // =========================
+    const emitDisposition = async (disposition: string) => {
+      try {
+        const io = (res.socket as any)?.server?.io;
+        if (io && userEmail) {
+          io.to(userEmail).emit("call:disposition", {
+            callSid: CallSid,
+            disposition,
+            ownerNumber: From,
+            otherNumber: To,
+            leadId: leadId ? String(leadId) : null,
+            timestamp: new Date().toISOString(),
+          });
+        }
+      } catch {}
+    };
 
-    // 1) HUMAN — no agent leg in this flow, so end cleanly.
+    const addLeadHistory = async (text: string, meta?: any) => {
+      if (!leadId) return;
+      try {
+        await Lead.updateOne(
+          { _id: leadId },
+          {
+            $push: {
+              history: {
+                type: "call",
+                message: text,
+                meta: meta || {},
+                createdAt: new Date(),
+              },
+            },
+          },
+        );
+      } catch (e) {
+        console.warn("⚠️ Failed to write lead history from AMD:", (e as any)?.message || e);
+      }
+    };
+
+    // 1) HUMAN — no agent leg in this flow, so end cleanly + disposition
     if (AnsweredBy.includes("human")) {
       try {
         await twilioClient.calls(CallSid).update({ status: "completed" as any });
@@ -122,6 +179,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       } catch (e: any) {
         console.warn("⚠️ End-on-human failed:", e?.message || e);
       }
+      if (leadId) {
+        await Call.updateOne({ callSid: CallSid }, { $set: { disposition: "answered" } });
+        await addLeadHistory("Call answered (AMD: human).", { amd: AnsweredBy });
+      }
+      await emitDisposition("answered");
       res.status(200).end();
       return;
     }
@@ -137,7 +199,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return;
     }
 
-    // 3) MACHINE with beep detected — act per policy
+    // 3) MACHINE with beep detected — act per policy + disposition
     const beepDetected =
       AnsweredBy.includes("machine_end") || MachineMessageEnd === "true";
     if (beepDetected) {
@@ -151,11 +213,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         try {
           await twilioClient.calls(CallSid).update({ twiml: vr.toString() });
           console.log("💾 VM drop played & call ended (play policy).");
+          if (leadId) {
+            await Call.updateOne({ callSid: CallSid }, { $set: { disposition: "voicemail_drop_left" } });
+            await addLeadHistory("Voicemail drop left (AMD).", { amd: AnsweredBy, policy: "play" });
+          }
+          await emitDisposition("voicemail_drop_left");
         } catch (e: any) {
           console.warn("⚠️ Failed to play VM drop, falling back to hangup:", e?.message || e);
           try {
             await twilioClient.calls(CallSid).update({ status: "completed" as any });
           } catch {}
+          if (leadId) {
+            await Call.updateOne({ callSid: CallSid }, { $set: { disposition: "voicemail_detected" } });
+            await addLeadHistory("Voicemail detected (fallback to hangup).", { amd: AnsweredBy, policy: "hangup" });
+          }
+          await emitDisposition("voicemail_detected");
         }
       } else {
         // Default policy: hang up immediately (no dead air)
@@ -165,6 +237,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         } catch (e: any) {
           console.warn("⚠️ Hangup on machine failed:", e?.message || e);
         }
+        if (leadId) {
+          await Call.updateOne({ callSid: CallSid }, { $set: { disposition: "voicemail_detected" } });
+          await addLeadHistory("Voicemail detected (AMD).", { amd: AnsweredBy, policy: "hangup" });
+        }
+        await emitDisposition("voicemail_detected");
       }
 
       res.status(200).end();
