@@ -12,10 +12,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const dial = vr.dial();
   dial.conference(
     {
-      startConferenceOnEnter: true,  // lead starts the room so there is no “waiting”
-      endConferenceOnExit: true,     // tear down when the lead leaves
-      beep: "off",                   // no beeps
-      waitUrl: "",                   // <— absolute silence while waiting
+      startConferenceOnEnter: true, // lead starts the room (no waiting)
+      endConferenceOnExit: true,    // tear down when lead leaves
+      beep: false,                  // no beeps
+      // If anyone ever "waits", it's still silent:
+      waitUrl: "http://twimlets.com/holdmusic?Bucket=com.twilio.music.silent",
+      waitMethod: "GET",
     } as any,
     String(conferenceName),
   );

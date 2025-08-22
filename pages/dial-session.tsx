@@ -38,11 +38,11 @@ export default function DialSession() {
   const [notes, setNotes] = useState("");
   const [history, setHistory] = useState<string[]>([]);
 
-  // Numbers (display only; server resolves authoritative values)
+  // Numbers
   const [fromNumber, setFromNumber] = useState<string>("");
   const [agentPhone, setAgentPhone] = useState<string>("");
 
-  // guard to avoid auto-dial races
+  // guards
   const [numbersLoaded, setNumbersLoaded] = useState(false);
 
   // sockets + watchdogs + guards
@@ -60,20 +60,16 @@ export default function DialSession() {
 
   // prevent duplicate disposition clicks
   const dispositionBusyRef = useRef<boolean>(false);
-
+  // join-once guard per call
+  const hasJoinedRef = useRef<boolean>(false);
   // toast id for VM beep prompt
   const vmToastIdRef = useRef<string | null>(null);
-
-  // join-after-answer guards
-  const agentJoinedRef = useRef<boolean>(false);
-  const joiningNowRef = useRef<boolean>(false);
 
   /** helpers **/
   const formatPhone = (phone: string) => {
     const clean = (phone || "").replace(/\D/g, "");
     if (clean.length === 10) return `${clean.slice(0, 3)}-${clean.slice(3, 6)}-${clean.slice(6)}`;
-    if (clean.length === 11 && clean.startsWith("1"))
-      return `${clean.slice(0, 1)}-${clean.slice(1, 4)}-${clean.slice(4, 7)}-${clean.slice(7)}`;
+    if (clean.length === 11 && clean.startsWith("1")) return `${clean.slice(0, 1)}-${clean.slice(1, 4)}-${clean.slice(4, 7)}-${clean.slice(7)}`;
     return phone || "";
   };
   const normalizeE164 = (raw?: string) => {
@@ -151,8 +147,6 @@ export default function DialSession() {
       console.warn("leaveConference failed:", (e as any)?.message || e);
     } finally {
       activeConferenceRef.current = null;
-      agentJoinedRef.current = false;
-      joiningNowRef.current = false;
     }
   };
 
@@ -305,10 +299,9 @@ export default function DialSession() {
 
     try {
       advanceScheduledRef.current = false;
+      hasJoinedRef.current = false;
       setStatus("Dialing…");
       setCallActive(true);
-      agentJoinedRef.current = false;
-      joiningNowRef.current = false;
       playRingback();
 
       const { callSid, conferenceName } = await startOutboundCall(leadToCall.id);
@@ -322,13 +315,14 @@ export default function DialSession() {
         return;
       }
 
-      // Save identifiers; DO NOT JOIN YET (join-after-answer flow)
+      // Track the server-created resources, but DO NOT join yet
       activeCallSidRef.current = callSid;
       activeConferenceRef.current = conferenceName;
 
       scheduleWatchdog();
       setSessionStartedCount((n) => n + 1);
 
+      // lightweight journaling
       fetch("/api/leads/add-transcript", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -567,7 +561,7 @@ export default function DialSession() {
           return true;
         };
 
-        // ---- Voice status (JOIN AFTER ANSWER)
+        // ---- Voice status
         socket.on("call:status", async (payload: any) => {
           try {
             if (sessionEndedRef.current) return;
@@ -577,37 +571,27 @@ export default function DialSession() {
 
             if (s === "initiated") setStatus("Dial initiated…");
             if (s === "ringing") setStatus("Ringing…");
-
             if (s === "answered") {
-              // Stop our local ring, cancel watchdog
+              // This is the key: join only AFTER answer → no Twilio ringtone.
               stopRingback();
               clearWatchdog();
-              setStatus("Connecting…");
-
-              // Join the conference NOW (one time only)
-              if (!agentJoinedRef.current && !joiningNowRef.current && activeConferenceRef.current) {
-                joiningNowRef.current = true;
+              if (!hasJoinedRef.current && activeConferenceRef.current) {
+                hasJoinedRef.current = true;
                 try {
                   await joinConference(activeConferenceRef.current);
-                  agentJoinedRef.current = true;
                   setStatus("Connected");
                 } catch (e: any) {
-                  console.warn("joinConference failed:", e?.message || e);
-                  setStatus("Connected (browser join failed; retrying)");
-                  // one retry
-                  try { await joinConference(activeConferenceRef.current); agentJoinedRef.current = true; setStatus("Connected"); }
-                  catch {}
-                } finally {
-                  joiningNowRef.current = false;
+                  console.warn("joinConference failed after answer:", e?.message || e);
+                  setStatus("Connected (browser leg retry not available)");
                 }
+              } else {
+                setStatus("Connected");
               }
             }
 
             if (s === "no-answer" || s === "busy" || s === "failed") {
               stopRingback(); clearWatchdog(); dismissVmToast();
-              // ensure we do NOT join if it never answered
-              await leaveIfJoined(`status-${s}`);
-              await hangupActiveCall(`status-${s}`);
+              await hangupActiveCall(`status-${s}`); await leaveIfJoined(`status-${s}`);
               if (!advanceScheduledRef.current && !sessionEndedRef.current) {
                 advanceScheduledRef.current = true;
                 setStatus(s === "no-answer" ? "No answer" : s === "busy" ? "Busy" : "Failed");
@@ -617,17 +601,13 @@ export default function DialSession() {
 
             if (s === "completed") {
               stopRingback(); clearWatchdog(); dismissVmToast();
-              await leaveIfJoined("status-completed");
-              await hangupActiveCall("status-completed");
-              if (!advanceScheduledRef.current && !sessionEndedRef.current) {
-                advanceScheduledRef.current = true;
-                scheduleAdvance();
-              }
+              await hangupActiveCall("status-completed"); await leaveIfJoined("status-completed");
+              if (!advanceScheduledRef.current && !sessionEndedRef.current) { advanceScheduledRef.current = true; scheduleAdvance(); }
             }
           } catch {}
         });
 
-        // ---- AMD events: prompt for voicemail or mark human
+        // ---- AMD events (optional cueing)
         socket.on("call:amd", (payload: any) => {
           try {
             if (sessionEndedRef.current) return;
@@ -637,11 +617,17 @@ export default function DialSession() {
             const messageEnd = !!payload?.messageEnd;
 
             if (answeredBy.includes("human")) {
+              stopRingback(); clearWatchdog();
               setStatus("Connected");
               setHistory((prev) => [`🙋 Detected human (AMD).`, ...prev]);
             } else if (answeredBy.startsWith("machine")) {
               if (messageEnd || answeredBy.includes("end")) {
-                dismissVmToast();
+                // Beep detected — persistent hint for agent
+                if (!hasJoinedRef.current && activeConferenceRef.current) {
+                  // If for any reason we missed "answered", join now
+                  hasJoinedRef.current = true;
+                  joinConference(activeConferenceRef.current).catch(() => {});
+                }
                 vmToastIdRef.current = toast("Voicemail beep detected — leave your voicemail now.", { icon: "📮", duration: 60000 });
                 setStatus("Voicemail — leave message");
                 setHistory((prev) => [`📮 Voicemail beep detected.`, ...prev]);
@@ -653,6 +639,7 @@ export default function DialSession() {
           } catch {}
         });
 
+        // ---- Server-side disposition hints
         socket.on("call:disposition", (payload: any) => {
           try {
             if (sessionEndedRef.current) return;
@@ -669,13 +656,14 @@ export default function DialSession() {
               setStatus("Voicemail — leave message");
             } else if (label.includes("answered")) {
               setStatus("Connected");
+              stopRingback(); clearWatchdog();
             }
           } catch {}
         });
       } catch {}
     })();
 
-  return () => {
+    return () => {
       mounted = false;
       try {
         socketRef.current?.off?.("call:status");

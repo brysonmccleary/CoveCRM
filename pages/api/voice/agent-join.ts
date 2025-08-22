@@ -39,8 +39,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     {
       startConferenceOnEnter: true,
       endConferenceOnExit: true,
-      beep: false,   // no entry/exit beep
-      waitUrl: "",   // <— absolute silence while waiting
+      beep: false, // absolutely no entry/exit tone
+      // Guaranteed silence while waiting:
+      waitUrl: "http://twimlets.com/holdmusic?Bucket=com.twilio.music.silent",
+      waitMethod: "GET",
     } as any,
     String(conferenceName),
   );
