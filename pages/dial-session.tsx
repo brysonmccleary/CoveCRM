@@ -64,6 +64,10 @@ export default function DialSession() {
   // toast id for VM beep prompt
   const vmToastIdRef = useRef<string | null>(null);
 
+  // join-after-answer guards
+  const agentJoinedRef = useRef<boolean>(false);
+  const joiningNowRef = useRef<boolean>(false);
+
   /** helpers **/
   const formatPhone = (phone: string) => {
     const clean = (phone || "").replace(/\D/g, "");
@@ -147,6 +151,8 @@ export default function DialSession() {
       console.warn("leaveConference failed:", (e as any)?.message || e);
     } finally {
       activeConferenceRef.current = null;
+      agentJoinedRef.current = false;
+      joiningNowRef.current = false;
     }
   };
 
@@ -301,6 +307,8 @@ export default function DialSession() {
       advanceScheduledRef.current = false;
       setStatus("Dialing…");
       setCallActive(true);
+      agentJoinedRef.current = false;
+      joiningNowRef.current = false;
       playRingback();
 
       const { callSid, conferenceName } = await startOutboundCall(leadToCall.id);
@@ -314,14 +322,11 @@ export default function DialSession() {
         return;
       }
 
+      // Save identifiers; DO NOT JOIN YET (join-after-answer flow)
       activeCallSidRef.current = callSid;
       activeConferenceRef.current = conferenceName;
 
-      // Join the same conference as the lead so there’s no hold music
-      await joinConference(conferenceName);
-
       scheduleWatchdog();
-      setTimeout(() => stopRingback(), 8000);
       setSessionStartedCount((n) => n + 1);
 
       fetch("/api/leads/add-transcript", {
@@ -562,7 +567,7 @@ export default function DialSession() {
           return true;
         };
 
-        // ---- Voice status (existing)
+        // ---- Voice status (JOIN AFTER ANSWER)
         socket.on("call:status", async (payload: any) => {
           try {
             if (sessionEndedRef.current) return;
@@ -572,11 +577,37 @@ export default function DialSession() {
 
             if (s === "initiated") setStatus("Dial initiated…");
             if (s === "ringing") setStatus("Ringing…");
-            if (s === "answered") { setStatus("Connected"); stopRingback(); clearWatchdog(); }
+
+            if (s === "answered") {
+              // Stop our local ring, cancel watchdog
+              stopRingback();
+              clearWatchdog();
+              setStatus("Connecting…");
+
+              // Join the conference NOW (one time only)
+              if (!agentJoinedRef.current && !joiningNowRef.current && activeConferenceRef.current) {
+                joiningNowRef.current = true;
+                try {
+                  await joinConference(activeConferenceRef.current);
+                  agentJoinedRef.current = true;
+                  setStatus("Connected");
+                } catch (e: any) {
+                  console.warn("joinConference failed:", e?.message || e);
+                  setStatus("Connected (browser join failed; retrying)");
+                  // one retry
+                  try { await joinConference(activeConferenceRef.current); agentJoinedRef.current = true; setStatus("Connected"); }
+                  catch {}
+                } finally {
+                  joiningNowRef.current = false;
+                }
+              }
+            }
 
             if (s === "no-answer" || s === "busy" || s === "failed") {
               stopRingback(); clearWatchdog(); dismissVmToast();
-              hangupActiveCall(`status-${s}`); await leaveIfJoined(`status-${s}`);
+              // ensure we do NOT join if it never answered
+              await leaveIfJoined(`status-${s}`);
+              await hangupActiveCall(`status-${s}`);
               if (!advanceScheduledRef.current && !sessionEndedRef.current) {
                 advanceScheduledRef.current = true;
                 setStatus(s === "no-answer" ? "No answer" : s === "busy" ? "Busy" : "Failed");
@@ -586,8 +617,12 @@ export default function DialSession() {
 
             if (s === "completed") {
               stopRingback(); clearWatchdog(); dismissVmToast();
-              hangupActiveCall("status-completed"); await leaveIfJoined("status-completed");
-              if (!advanceScheduledRef.current && !sessionEndedRef.current) { advanceScheduledRef.current = true; scheduleAdvance(); }
+              await leaveIfJoined("status-completed");
+              await hangupActiveCall("status-completed");
+              if (!advanceScheduledRef.current && !sessionEndedRef.current) {
+                advanceScheduledRef.current = true;
+                scheduleAdvance();
+              }
             }
           } catch {}
         });
@@ -602,13 +637,10 @@ export default function DialSession() {
             const messageEnd = !!payload?.messageEnd;
 
             if (answeredBy.includes("human")) {
-              // Human detected — ensure we stop ringback and allow conversation
-              stopRingback(); clearWatchdog();
               setStatus("Connected");
               setHistory((prev) => [`🙋 Detected human (AMD).`, ...prev]);
             } else if (answeredBy.startsWith("machine")) {
               if (messageEnd || answeredBy.includes("end")) {
-                // Beep detected — show persistent toast prompting agent to speak
                 dismissVmToast();
                 vmToastIdRef.current = toast("Voicemail beep detected — leave your voicemail now.", { icon: "📮", duration: 60000 });
                 setStatus("Voicemail — leave message");
@@ -621,7 +653,6 @@ export default function DialSession() {
           } catch {}
         });
 
-        // ---- Server-side disposition hints (e.g., auto-drop path)
         socket.on("call:disposition", (payload: any) => {
           try {
             if (sessionEndedRef.current) return;
@@ -630,7 +661,6 @@ export default function DialSession() {
             const label = String(payload?.disposition || "");
             if (!label) return;
 
-            // Log + light status nudges; we still let status-callback drive advance
             setHistory((prev) => [`🏷️ Server disposition: ${label}`, ...prev]);
             if (label.includes("voicemail_drop_left")) {
               setStatus("Voicemail drop sent");
@@ -639,14 +669,13 @@ export default function DialSession() {
               setStatus("Voicemail — leave message");
             } else if (label.includes("answered")) {
               setStatus("Connected");
-              stopRingback(); clearWatchdog();
             }
           } catch {}
         });
       } catch {}
     })();
 
-    return () => {
+  return () => {
       mounted = false;
       try {
         socketRef.current?.off?.("call:status");
