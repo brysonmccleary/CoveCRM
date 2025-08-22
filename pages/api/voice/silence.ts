@@ -4,7 +4,6 @@ import type { NextApiRequest, NextApiResponse } from "next";
 export const config = { api: { bodyParser: false } };
 
 export default function handler(req: NextApiRequest, res: NextApiResponse) {
-  // One hour of silence. Conference will tear down earlier when your logic ends it.
   const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Pause length="3600"/>

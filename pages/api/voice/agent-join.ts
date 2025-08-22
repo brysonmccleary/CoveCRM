@@ -1,11 +1,9 @@
 // pages/api/voice/agent-join.ts
-// TwiML for the BROWSER leg (Twilio Client) to join the same conference
 import type { NextApiRequest, NextApiResponse } from "next";
 import { twiml as TwilioTwiml } from "twilio";
 
 export const config = { api: { bodyParser: false } };
 
-// Read raw body (bodyParser disabled)
 async function readRawBody(req: NextApiRequest): Promise<string> {
   return await new Promise((resolve, reject) => {
     let data = "";
@@ -15,11 +13,8 @@ async function readRawBody(req: NextApiRequest): Promise<string> {
   });
 }
 
-function resolveBaseUrl(req: NextApiRequest) {
-  const envBase =
-    process.env.NEXT_PUBLIC_BASE_URL ||
-    process.env.BASE_URL ||
-    "";
+function baseUrl(req: NextApiRequest) {
+  const envBase = process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "";
   if (envBase) return envBase.replace(/\/$/, "");
   const proto = (req.headers["x-forwarded-proto"] as string) || "https";
   const host = req.headers.host || "localhost:3000";
@@ -43,18 +38,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const fromQuery = (req.query.conferenceName as string) || "";
   if (!conferenceName && fromQuery) conferenceName = fromQuery;
 
-  const base = resolveBaseUrl(req);
-  const silenceUrl = `${base}/api/voice/silence`;
-
   const vr = new TwilioTwiml.VoiceResponse();
   const dial = vr.dial();
+
+  const silence = `${baseUrl(req)}/api/voice/silence`;
 
   dial.conference(
     {
       startConferenceOnEnter: true,
       endConferenceOnExit: true,
-      beep: false,          // absolutely no beeps
-      waitUrl: silenceUrl,  // explicit silence while waiting
+      beep: false,
+      waitUrl: silence,        // <- total silence while “waiting”
       waitMethod: "POST",
     } as any,
     String(conferenceName),

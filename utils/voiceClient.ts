@@ -38,7 +38,10 @@ function disableSdkSounds(dev: any) {
       try { dev.audio.outgoing?.(false); } catch {}
       try { dev.audio.disconnect?.(false); } catch {}
       try { dev.audio.dtmf?.(false); } catch {}
-      try { dev.audio.ringtone?.(false); } catch {} // some builds expose this
+      try { dev.audio.ringtone?.(false); } catch {}
+      // Some builds accept an array (custom sources). Force "no source".
+      try { dev.audio.outgoing?.([] as any); } catch {}
+      try { dev.audio.ringtone?.([] as any); } catch {}
     }
     if (dev?.sounds) {
       try { dev.sounds.incoming?.(false); } catch {}
@@ -70,6 +73,9 @@ async function ensureDevice(): Promise<void> {
       disableAudioContextProxy: true,
       closeProtection: false,
       allowIncomingWhileBusy: false,
+      // Extra belt-and-suspenders if supported:
+      // @ts-ignore
+      sounds: { incoming: false, outgoing: false, disconnect: false, dtmf: false, ringtone: false },
     });
 
     // Nuke built-in tones immediately (and again after register)
@@ -108,8 +114,8 @@ async function ensureDevice(): Promise<void> {
     await device.register();
   }
 
-  // belt & suspenders: re-disable after a short tick in case SDK toggled anything internally
-  setTimeout(() => disableSdkSounds(device), 250);
+  // A tiny delay, then disable again in case SDK flipped anything internally
+  setTimeout(() => disableSdkSounds(device), 150);
 }
 
 // ---- Proactive token refresh (safe no-op if already refreshing)
@@ -139,16 +145,14 @@ export async function joinConference(conferenceName: string) {
   // Forwarded to /api/voice/agent-join
   const params = { conferenceName };
 
-  // Voice SDK v2: connect() returns a Promise<Twilio.Call>
+  // Voice SDK v2: connect() returns a Promise<Twilio.Call> when ACCEPTED
   const call = await device.connect({ params });
 
   // Hook events on the resolved Call instance
-  call.on("accept", () => {
+  try {
     // keep SDK tones disabled even after accept
     disableSdkSounds(device);
-    // Refresh token ~45m in (default token TTL ~60m)
-    setTimeout(refreshTokenSoon, 45 * 60 * 1000);
-  });
+  } catch {}
 
   call.on("disconnect", () => {
     if (activeCall === call) activeCall = null;
@@ -157,6 +161,9 @@ export async function joinConference(conferenceName: string) {
   call.on("error", (e: any) => {
     console.warn("Call error:", e?.message || e);
   });
+
+  // Refresh token ~45m in (default token TTL ~60m)
+  setTimeout(refreshTokenSoon, 45 * 60 * 1000);
 
   activeCall = call;
   return call;

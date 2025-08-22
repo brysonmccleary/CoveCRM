@@ -1,15 +1,11 @@
 // pages/api/voice/lead-join.ts
-// TwiML that connects the LEAD into the conference immediately (no hold music)
 import type { NextApiRequest, NextApiResponse } from "next";
 import { twiml as TwilioTwiml } from "twilio";
 
 export const config = { api: { bodyParser: false } };
 
-function resolveBaseUrl(req: NextApiRequest) {
-  const envBase =
-    process.env.NEXT_PUBLIC_BASE_URL ||
-    process.env.BASE_URL ||
-    "";
+function baseUrl(req: NextApiRequest) {
+  const envBase = process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "";
   if (envBase) return envBase.replace(/\/$/, "");
   const proto = (req.headers["x-forwarded-proto"] as string) || "https";
   const host = req.headers.host || "localhost:3000";
@@ -18,18 +14,17 @@ function resolveBaseUrl(req: NextApiRequest) {
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const conferenceName = (req.query.conferenceName as string) || "default";
-  const base = resolveBaseUrl(req);
-  const silenceUrl = `${base}/api/voice/silence`;
+  const silence = `${baseUrl(req)}/api/voice/silence`;
 
   const vr = new TwilioTwiml.VoiceResponse();
   const dial = vr.dial();
 
   dial.conference(
     {
-      startConferenceOnEnter: true,  // lead starts/joins the room right away
-      endConferenceOnExit: true,     // tear down when the lead leaves
-      beep: false,                   // no beeps
-      waitUrl: silenceUrl,           // explicit silence (no Twilio default)
+      startConferenceOnEnter: true,
+      endConferenceOnExit: true,
+      beep: false,
+      waitUrl: silence,        // <- total silence while “waiting”
       waitMethod: "POST",
     } as any,
     String(conferenceName),
