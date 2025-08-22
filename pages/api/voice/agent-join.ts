@@ -1,4 +1,4 @@
-// /pages/api/voice/agent-join.ts
+// pages/api/voice/agent-join.ts
 // TwiML for the BROWSER leg (Twilio Client) to join the same conference
 import type { NextApiRequest, NextApiResponse } from "next";
 import { twiml as TwilioTwiml } from "twilio";
@@ -13,6 +13,17 @@ async function readRawBody(req: NextApiRequest): Promise<string> {
     req.on("end", () => resolve(data));
     req.on("error", reject);
   });
+}
+
+function resolveBaseUrl(req: NextApiRequest) {
+  const envBase =
+    process.env.NEXT_PUBLIC_BASE_URL ||
+    process.env.BASE_URL ||
+    "";
+  if (envBase) return envBase.replace(/\/$/, "");
+  const proto = (req.headers["x-forwarded-proto"] as string) || "https";
+  const host = req.headers.host || "localhost:3000";
+  return `${proto}://${host}`;
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -32,6 +43,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const fromQuery = (req.query.conferenceName as string) || "";
   if (!conferenceName && fromQuery) conferenceName = fromQuery;
 
+  const base = resolveBaseUrl(req);
+  const silenceUrl = `${base}/api/voice/silence`;
+
   const vr = new TwilioTwiml.VoiceResponse();
   const dial = vr.dial();
 
@@ -39,10 +53,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     {
       startConferenceOnEnter: true,
       endConferenceOnExit: true,
-      beep: false, // absolutely no entry/exit tone
-      // Guaranteed silence while waiting:
-      waitUrl: "http://twimlets.com/holdmusic?Bucket=com.twilio.music.silent",
-      waitMethod: "GET",
+      beep: false,          // absolutely no beeps
+      waitUrl: silenceUrl,  // explicit silence while waiting
+      waitMethod: "POST",
     } as any,
     String(conferenceName),
   );

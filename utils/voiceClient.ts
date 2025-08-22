@@ -30,7 +30,7 @@ async function fetchToken(): Promise<string> {
   return j.token;
 }
 
-// Kill every built-in SDK tone (ringing, disconnect, dtmf, etc.)
+// Hard-disable all Twilio SDK sounds (v2 + v1-style fallback)
 function disableSdkSounds(dev: any) {
   try {
     if (dev?.audio) {
@@ -38,6 +38,7 @@ function disableSdkSounds(dev: any) {
       try { dev.audio.outgoing?.(false); } catch {}
       try { dev.audio.disconnect?.(false); } catch {}
       try { dev.audio.dtmf?.(false); } catch {}
+      try { dev.audio.ringtone?.(false); } catch {} // some builds expose this
     }
     if (dev?.sounds) {
       try { dev.sounds.incoming?.(false); } catch {}
@@ -71,7 +72,7 @@ async function ensureDevice(): Promise<void> {
       allowIncomingWhileBusy: false,
     });
 
-    // Nuke tones immediately
+    // Nuke built-in tones immediately (and again after register)
     disableSdkSounds(device);
 
     device.on("error", (e: any) => {
@@ -80,7 +81,6 @@ async function ensureDevice(): Promise<void> {
 
     device.on("registered", () => {
       registered = true;
-      // Some builds flip audio config on register; nuke again just in case
       disableSdkSounds(device);
     });
 
@@ -88,10 +88,11 @@ async function ensureDevice(): Promise<void> {
       registered = false;
     });
 
-    // Inbound not supported — reject all
+    // We don’t accept inbound in this app; auto-reject to stay clean
     device.on("incoming", (call: any) => {
       try { call.reject(); } catch {}
     });
+
   } else {
     // Refresh token on an existing device
     try {
@@ -106,6 +107,9 @@ async function ensureDevice(): Promise<void> {
   if (!registered) {
     await device.register();
   }
+
+  // belt & suspenders: re-disable after a short tick in case SDK toggled anything internally
+  setTimeout(() => disableSdkSounds(device), 250);
 }
 
 // ---- Proactive token refresh (safe no-op if already refreshing)
@@ -125,7 +129,6 @@ async function refreshTokenSoon() {
 // ---- PUBLIC API
 
 // Join a conference by name (Twilio will invoke your TwiML App URL /api/voice/agent-join)
-// IMPORTANT: Only call this AFTER your server says the lead leg is ANSWERED.
 export async function joinConference(conferenceName: string) {
   await ensureDevice();
 
@@ -133,13 +136,16 @@ export async function joinConference(conferenceName: string) {
   try { activeCall?.disconnect?.(); } catch {}
   activeCall = null;
 
+  // Forwarded to /api/voice/agent-join
   const params = { conferenceName };
 
-  // Voice SDK v2 connect() resolves to a Call object
+  // Voice SDK v2: connect() returns a Promise<Twilio.Call>
   const call = await device.connect({ params });
 
-  // No tones (we disabled already), just set up lifecycle hooks
+  // Hook events on the resolved Call instance
   call.on("accept", () => {
+    // keep SDK tones disabled even after accept
+    disableSdkSounds(device);
     // Refresh token ~45m in (default token TTL ~60m)
     setTimeout(refreshTokenSoon, 45 * 60 * 1000);
   });
