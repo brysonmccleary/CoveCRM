@@ -1,34 +1,44 @@
-let audio: HTMLAudioElement | null = null;
+let audioEl: HTMLAudioElement | null = null;
+
+export function primeAudioContext() {
+  try {
+    const a = new Audio();
+    a.muted = true;
+    a.play().catch(() => {});
+    a.pause();
+  } catch {}
+}
 
 export function playRingback() {
-  console.log("🎵 playRingback() called (simplified)");
-
-  if (!audio) {
-    audio = new Audio("/ringback.mp3");
-    audio.loop = true;
-  }
-
-  audio.play().catch((err) => {
-    console.error("Error playing ringback:", err);
-  });
+  try {
+    stopRingback();
+    audioEl = new Audio("/ring.mp3"); // or your existing asset
+    audioEl.loop = true;
+    audioEl.play().catch(() => {});
+  } catch {}
 }
 
 export function stopRingback() {
-  if (audio) {
-    audio.pause();
-    audio.currentTime = 0;
-    audio = null; // Reset to allow new Audio object next time
-  }
+  try {
+    if (audioEl) {
+      audioEl.pause();
+      audioEl.src = "";
+      audioEl.remove();
+      audioEl = null;
+    }
+  } catch {}
 }
 
-export function primeAudioContext() {
-  if (typeof window !== "undefined") {
-    const context = new (window.AudioContext || (window as any).webkitAudioContext)();
-    const buffer = context.createBuffer(1, 1, 22050);
-    const source = context.createBufferSource();
-    source.buffer = buffer;
-    source.connect(context.destination);
-    source.start(0);
-    console.log("✅ Audio context primed");
-  }
+// nuclear option in case any other <audio> tags linger
+export function forceStopAllSounds() {
+  stopRingback();
+  try {
+    document.querySelectorAll("audio").forEach((el) => {
+      try {
+        (el as HTMLAudioElement).pause();
+        (el as HTMLAudioElement).src = "";
+        el.remove();
+      } catch {}
+    });
+  } catch {}
 }

@@ -78,12 +78,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   const allOk = results.every(r => r.ok);
-  const payload = {
-    success: allOk,
-    results,
-  };
+  const payload = { success: allOk, results };
 
-  // Helpful one-liner in logs
   try {
     const summary = results.map(r => `${r.sid}:${r.previousStatus}->${r.finalStatus}${r.ok ? "" : "(err)"}`).join(", ");
     console.log("🔴 hangup results:", summary);

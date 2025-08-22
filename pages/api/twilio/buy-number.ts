@@ -30,6 +30,13 @@ function normalizeE164(p: string) {
   return p.startsWith("+") ? p : `+${digits}`;
 }
 
+/** Utility to mask SIDs in logs (ACxxxx... or MGxxxx... etc.) */
+function maskSid(sid?: string): string | null {
+  if (!sid) return null;
+  if (sid.length <= 6) return sid;
+  return `${sid.slice(0, 4)}…${sid.slice(-4)}`;
+}
+
 /** Add a number to a Messaging Service sender pool. Handles 21712 (unlink/reattach) within the SAME Twilio account. */
 async function addNumberToMessagingService(
   client: any,
@@ -128,7 +135,18 @@ export default async function handler(
     const user = await User.findOne({ email });
     if (!user) return res.status(404).json({ message: "User not found" });
 
-    const { client, usingPersonal } = await getClientForUser(email);
+    // IMPORTANT: the resolver now returns { client, accountSid, usingPersonal, user }
+    const { client, accountSid: activeAccountSid, usingPersonal } = await getClientForUser(email);
+
+    console.log(
+      JSON.stringify({
+        msg: "buy-number: resolved client",
+        email,
+        usingPersonal,
+        userBillingMode: user?.billingMode ?? null,
+        activeAccountSidMasked: maskSid(activeAccountSid),
+      })
+    );
 
     // If a specific number is provided, normalize. Else we’ll search one from areaCode.
     const requestedNumber = number ? normalizeE164(number) : undefined;
@@ -148,7 +166,9 @@ export default async function handler(
     }
 
     // ---------- Billing: Platform users must have a payment method & subscription; personal/self users skip Stripe
-    if (!usingPersonal && (user as any).billingMode !== "self") {
+    const isSelfBilled = usingPersonal || (user as any).billingMode === "self";
+
+    if (!isSelfBilled) {
       if (!user.stripeCustomerId) {
         const customer = await stripe.customers.create({
           email: user.email,
@@ -172,6 +192,15 @@ export default async function handler(
             );
 
       if (!hasDefaultPM) {
+        console.warn(
+          JSON.stringify({
+            msg: "buy-number: blocking purchase due to missing payment method",
+            email,
+            usingPersonal,
+            userBillingMode: user?.billingMode ?? null,
+            stripeCustomerId: user.stripeCustomerId,
+          })
+        );
         return res.status(402).json({
           code: "no_payment_method",
           message:
@@ -245,7 +274,7 @@ export default async function handler(
       (user as any).a2p?.messagingServiceSid ||
       undefined;
 
-    if (!targetMS && !usingPersonal) {
+    if (!targetMS && !isSelfBilled) {
       // On platform path we can create/ensure a tenant MS in *this* account
       targetMS = await ensureTenantMessagingServiceInThisAccount(
         client,
@@ -292,7 +321,7 @@ export default async function handler(
       ok: true,
       message: targetMS
         ? "Number purchased and added to your messaging service."
-        : usingPersonal
+        : isSelfBilled
         ? "Number purchased. Link your A2P Messaging Service to enable texting; calls work now."
         : "Number purchased. Start A2P registration to enable texting; calls work now.",
       number: purchased.phoneNumber,
@@ -300,6 +329,7 @@ export default async function handler(
       subscriptionId: createdSubscriptionId || null,
       messagingServiceSid: targetMS || null,
       usingPersonal,
+      activeAccountSid: activeAccountSid,
     });
   } catch (err: any) {
     console.error("Buy number error:", err);

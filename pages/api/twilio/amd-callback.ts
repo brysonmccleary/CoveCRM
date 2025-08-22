@@ -22,11 +22,11 @@ const ALLOW_DEV_TWILIO_TEST =
   process.env.NODE_ENV !== "production";
 
 // VM policy controls
-// VM_POLICY = "hangup" | "play" | "observe"   (default: hangup)
-//  - hangup: end immediately on beep (no dead air)
-//  - play:   play MP3/TTS after beep, then hangup
-//  - observe: take no automatic action; let the conference keep running so the agent hears the greeting+beep
-const VM_POLICY = (process.env.VM_POLICY || "hangup").toLowerCase();
+// VM_POLICY = "hangup" | "play" | "observe"   (default: observe)
+//  - observe: take no automatic action; let the agent hear greeting+beep and speak
+//  - play:    auto-play MP3/TTS after beep, then hang up
+//  - hangup:  end immediately on beep (no dead air)
+const VM_POLICY = (process.env.VM_POLICY || "observe").toLowerCase();
 
 // If VM_POLICY = "play", prefer URL, else TTS text
 const VM_DROP_URL = process.env.VM_DROP_URL || "";
@@ -76,7 +76,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // ---- Common AMD fields
     const CallSid = params.get("CallSid") || "";
-    const From = params.get("From") || params.get("Caller") || "";  // for outbound, this is our Twilio DID
+    const From = params.get("From") || params.get("Caller") || "";  // outbound: our Twilio DID
     const To = params.get("To") || params.get("Called") || "";      // the lead number
 
     // Values vary by region:
@@ -88,12 +88,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // ---- Resolve owning user (room) based on our number
     const owner =
       (await getUserByPhoneNumber(From)) ||
-      (await getUserByPhoneNumber(To)) || // fallback if Twilio flips fields in some regions
+      (await getUserByPhoneNumber(To)) || // fallback for regional flips
       null;
     const userEmail =
       owner?.email?.toLowerCase?.() || (await resolveOwnerEmailByOwnedNumber(From)) || null;
 
-    // ---- Update Call doc with AMD telemetry (also gives us leadId)
+    // ---- Update Call doc with AMD telemetry
     const callDoc = await Call.findOneAndUpdate(
       { callSid: CallSid },
       {
@@ -111,47 +111,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const leadId = callDoc?.leadId || null;
 
-    // ---- Emit to the user’s socket room so UI can show AMD state
-    try {
-      const io = (res.socket as any)?.server?.io;
-      if (io && userEmail) {
-        io.to(userEmail).emit("call:amd", {
-          callSid: CallSid,
-          from: From,
-          to: To,
-          answeredBy: AnsweredBy,
-          durationMs: MachineDetectionDuration ? Number(MachineDetectionDuration) : null,
-          messageEnd: MachineMessageEnd === "true",
-          timestamp: new Date().toISOString(),
-          leadId: leadId ? String(leadId) : null,
-        });
-      }
-    } catch (e) {
-      console.warn("ℹ️ Socket emit (call:amd) failed:", (e as any)?.message || e);
-    }
-
-    // ---- Log for observability
-    console.log(
-      `🔎 AMD sid=${CallSid} answeredBy=${AnsweredBy} msgEnd=${MachineMessageEnd} from=${From} to=${To}`
-    );
-
-    // =========================
-    // AMD Decision Tree (+ DB disposition)
-    // =========================
-    const emitDisposition = async (disposition: string) => {
+    const emitAmd = async (payload: any) => {
       try {
         const io = (res.socket as any)?.server?.io;
         if (io && userEmail) {
-          io.to(userEmail).emit("call:disposition", {
-            callSid: CallSid,
-            disposition,
-            ownerNumber: From,
-            otherNumber: To,
-            leadId: leadId ? String(leadId) : null,
-            timestamp: new Date().toISOString(),
-          });
+          io.to(userEmail).emit("call:amd", payload);
         }
-      } catch {}
+      } catch (e) {
+        console.warn("ℹ️ Socket emit (call:amd) failed:", (e as any)?.message || e);
+      }
     };
 
     const addLeadHistory = async (text: string, meta?: any) => {
@@ -175,51 +143,50 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     };
 
-    // 1) HUMAN — with no PSTN agent leg, we end cleanly to avoid dead air.
+    // Emit AMD snapshot for the UI
+    await emitAmd({
+      callSid: CallSid,
+      from: From,
+      to: To,
+      answeredBy: AnsweredBy,
+      durationMs: MachineDetectionDuration ? Number(MachineDetectionDuration) : null,
+      messageEnd: MachineMessageEnd === "true",
+      timestamp: new Date().toISOString(),
+      leadId: leadId ? String(leadId) : null,
+    });
+
+    // =========================
+    // Decision tree (phone-like behavior)
+    // =========================
+
+    // 1) HUMAN — do NOT hang up. Let the agent talk immediately.
     if (AnsweredBy.includes("human")) {
-      try {
-        await twilioClient.calls(CallSid).update({ status: "completed" as any });
-        console.log("🙋 Human detected → call ended immediately.");
-      } catch (e: any) {
-        console.warn("⚠️ End-on-human failed:", e?.message || e);
-      }
       if (leadId) {
         await Call.updateOne({ callSid: CallSid }, { $set: { disposition: "answered" } });
-        await addLeadHistory("Call answered (AMD: human).", { amd: AnsweredBy });
+        await addLeadHistory("Call answered (AMD: human).", { amd: AnsweredBy, policy: "observe" });
       }
-      await emitDisposition("answered");
+      // No Twilio action — keep the call alive for live conversation.
       res.status(200).end();
       return;
     }
 
-    // 2) MACHINE pre-beep — keep the leg alive; conference/park is already in play.
+    // 2) MACHINE pre-beep — keep the leg alive so agent hears greeting and waits for beep
     const isMachinePreBeep =
       AnsweredBy === "machine" ||
       AnsweredBy === "machine_start" ||
       (AnsweredBy.startsWith("machine") && !AnsweredBy.includes("end"));
     if (isMachinePreBeep && MachineMessageEnd !== "true") {
+      // No action; agent/browsers are already joined to the conference and can listen.
       res.status(200).end();
       return;
     }
 
-    // 3) MACHINE with beep detected — act per policy
+    // 3) MACHINE with beep — default to observe so agent can leave a voicemail manually
     const beepDetected =
       AnsweredBy.includes("machine_end") || MachineMessageEnd === "true";
     if (beepDetected) {
-      if (VM_POLICY === "observe") {
-        // Do nothing — agent hears the greeting + beep in the conference.
-        console.log("👂 VM beep detected → observing (no auto action).");
-        if (leadId) {
-          await Call.updateOne({ callSid: CallSid }, { $set: { disposition: "voicemail_beep" } });
-          await addLeadHistory("Voicemail beep detected (observing).", { amd: AnsweredBy, policy: "observe" });
-        }
-        await emitDisposition("voicemail_beep");
-        res.status(200).end();
-        return;
-      }
-
       if (VM_POLICY === "play") {
-        // Build TwiML for drop then hang up
+        // Optional auto-drop path (only if explicitly configured)
         const vr = new twilio.twiml.VoiceResponse();
         if (VM_DROP_URL) vr.play(VM_DROP_URL);
         else vr.say({ voice: "Polly.Joanna" as any }, VM_DROP_TEXT);
@@ -227,38 +194,35 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         try {
           await twilioClient.calls(CallSid).update({ twiml: vr.toString() });
-          console.log("💾 VM drop played & call ended (play policy).");
           if (leadId) {
             await Call.updateOne({ callSid: CallSid }, { $set: { disposition: "voicemail_drop_left" } });
-            await addLeadHistory("Voicemail drop left (AMD).", { amd: AnsweredBy, policy: "play" });
+            await addLeadHistory("Voicemail drop left (AMD auto-play).", { amd: AnsweredBy, policy: "play" });
           }
-          await emitDisposition("voicemail_drop_left");
         } catch (e: any) {
-          console.warn("⚠️ Failed to play VM drop, falling back to hangup:", e?.message || e);
-          try {
-            await twilioClient.calls(CallSid).update({ status: "completed" as any });
-          } catch {}
-          if (leadId) {
-            await Call.updateOne({ callSid: CallSid }, { $set: { disposition: "voicemail_detected" } });
-            await addLeadHistory("Voicemail detected (fallback to hangup).", { amd: AnsweredBy, policy: "hangup" });
-          }
-          await emitDisposition("voicemail_detected");
+          console.warn("⚠️ Failed to play VM drop; leaving call as-is for manual voicemail:", e?.message || e);
         }
-      } else {
-        // Default policy: hang up immediately (no dead air)
-        try {
-          await twilioClient.calls(CallSid).update({ status: "completed" as any });
-          console.log("✂️  Machine beep detected → call ended (hangup policy).");
-        } catch (e: any) {
-          console.warn("⚠️ Hangup on machine failed:", e?.message || e);
-        }
-        if (leadId) {
-          await Call.updateOne({ callSid: CallSid }, { $set: { disposition: "voicemail_detected" } });
-          await addLeadHistory("Voicemail detected (AMD).", { amd: AnsweredBy, policy: "hangup" });
-        }
-        await emitDisposition("voicemail_detected");
+        res.status(200).end();
+        return;
       }
 
+      if (VM_POLICY === "hangup") {
+        // Explicit hangup policy (not recommended for your desired UX)
+        try {
+          await twilioClient.calls(CallSid).update({ status: "completed" as any });
+        } catch {}
+        if (leadId) {
+          await Call.updateOne({ callSid: CallSid }, { $set: { disposition: "voicemail_detected" } });
+          await addLeadHistory("Voicemail detected (hangup policy).", { amd: AnsweredBy, policy: "hangup" });
+        }
+        res.status(200).end();
+        return;
+      }
+
+      // Default (observe): do nothing — agent can start speaking after the beep.
+      if (leadId) {
+        await Call.updateOne({ callSid: CallSid }, { $set: { disposition: "voicemail_beep" } });
+        await addLeadHistory("Voicemail beep detected (observing).", { amd: AnsweredBy, policy: "observe" });
+      }
       res.status(200).end();
       return;
     }

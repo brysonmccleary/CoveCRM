@@ -1,4 +1,6 @@
+// components/folderslist.tsx
 import { useEffect, useState, useCallback } from "react";
+import { useRouter } from "next/router";
 
 interface Folder {
   _id: string;
@@ -8,12 +10,14 @@ interface Folder {
 
 interface FoldersListProps {
   onRefetchReady?: (refreshFn: () => void) => void;
+  /** Optional callback; if omitted we will navigate to /leads?folderId=... ourselves */
   onFolderSelect?: (folderId: string) => void;
 }
 
 const SYSTEM_FOLDERS = ["Not Interested", "Booked Appointment", "Sold"];
 
 export default function FoldersList({ onRefetchReady, onFolderSelect }: FoldersListProps) {
+  const router = useRouter();
   const [folders, setFolders] = useState<Folder[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -40,7 +44,6 @@ export default function FoldersList({ onRefetchReady, onFolderSelect }: FoldersL
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ folderId }),
       });
-
       const data = await res.json();
       if (data.success) {
         setFolders((prev) => prev.filter((f) => f._id !== folderId));
@@ -51,6 +54,24 @@ export default function FoldersList({ onRefetchReady, onFolderSelect }: FoldersL
       console.error("Delete error:", err);
       alert("Error deleting folder.");
     }
+  };
+
+  // default behavior if parent doesn't supply a handler
+  const goToFolder = (folderId?: string) => {
+    if (!folderId || typeof folderId !== "string" || folderId.trim() === "") {
+      console.warn("FoldersList.goToFolder: invalid folderId", { folderId });
+      return;
+    }
+    if (onFolderSelect) {
+      onFolderSelect(folderId);
+      return;
+    }
+    // Stay on the Leads page; pass selection via query param
+    const path = { pathname: "/leads", query: { folderId } };
+    console.log("FoldersList: navigating to", path);
+    router
+      .push(path)
+      .catch((e) => console.error("FoldersList: router.push failed", e));
   };
 
   // Expose the refresh function to parent
@@ -76,14 +97,15 @@ export default function FoldersList({ onRefetchReady, onFolderSelect }: FoldersL
               key={folder._id}
               className="mb-2 border border-gray-600 p-2 rounded flex justify-between items-center hover:bg-gray-700"
             >
-              <span
-                className="cursor-pointer w-full"
-                onClick={() => {
-                  if (onFolderSelect) onFolderSelect(folder._id);
-                }}
+              <button
+                type="button"
+                className="cursor-pointer w-full text-left"
+                onClick={() => goToFolder(folder._id)}
+                title={`Open ${folder.name}`}
               >
                 {folder.name} — {folder.leadCount} Lead{folder.leadCount !== 1 ? "s" : ""}
-              </span>
+              </button>
+
               {!SYSTEM_FOLDERS.includes(folder.name) && (
                 <button
                   onClick={() => handleDeleteFolder(folder._id)}

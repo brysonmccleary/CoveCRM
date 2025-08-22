@@ -1,38 +1,55 @@
-// pages/api/voice/agent-join.ts
+// /pages/api/voice/agent-join.ts
+// TwiML for the BROWSER leg (Twilio Client) to join the same conference
 import type { NextApiRequest, NextApiResponse } from "next";
-import twilio from "twilio";
-import { buffer } from "micro";
+import { twiml as TwilioTwiml } from "twilio";
 
-export const config = {
-  api: { bodyParser: false }, // Twilio posts x-www-form-urlencoded
-};
+export const config = { api: { bodyParser: false } };
+
+// Read raw body (bodyParser disabled)
+async function readRawBody(req: NextApiRequest): Promise<string> {
+  return await new Promise((resolve, reject) => {
+    let data = "";
+    req.on("data", (chunk) => (data += chunk));
+    req.on("end", () => resolve(data));
+    req.on("error", reject);
+  });
+}
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  // Twilio forwards params from Device.connect({ params }) either in the body or query
-  let conferenceName = String((req.query?.conferenceName as string) || "");
+  // Try to pull `conferenceName` from x-www-form-urlencoded body (POST), then from query
+  let conferenceName = "default";
 
-  if (req.method === "POST") {
-    try {
-      const raw = await buffer(req);
-      const params = new URLSearchParams(raw.toString("utf8"));
-      if (!conferenceName) conferenceName = params.get("conferenceName") || "";
-    } catch {
-      // fall through; we'll default to "default" if not provided
+  try {
+    if (req.method === "POST") {
+      const raw = await readRawBody(req);
+      if (raw) {
+        const params = new URLSearchParams(raw);
+        const fromBody = params.get("conferenceName");
+        if (fromBody) conferenceName = fromBody;
+      }
     }
+  } catch {
+    // ignore body read errors and fall back to query/default
   }
 
-  const twiml = new twilio.twiml.VoiceResponse();
-  const dial = twiml.dial();
+  const fromQuery = (req.query.conferenceName as string) || "";
+  if (!conferenceName && fromQuery) conferenceName = fromQuery;
+
+  const vr = new TwilioTwiml.VoiceResponse();
+  const dial = vr.dial();
 
   dial.conference(
     {
       startConferenceOnEnter: true,
-      endConferenceOnExit: true, // end room when agent leaves
-      beep: "false",             // NOTE: must be a string literal per Twilio typings
-    },
-    String(conferenceName || "default"),
+      endConferenceOnExit: true,
+      beep: false,            // no entry/exit beep
+      // Note: if you want absolute silence when waiting, provide a silent TwiML URL here.
+      // waitUrl: "https://handler.twilio.com/twiml/EHxxxxxxxxxxxxxxxxxxxx", 
+      // waitMethod: "POST",
+    } as any,
+    String(conferenceName),
   );
 
   res.setHeader("Content-Type", "text/xml");
-  res.status(200).send(twiml.toString());
+  res.status(200).send(vr.toString());
 }
