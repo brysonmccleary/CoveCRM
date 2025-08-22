@@ -57,7 +57,9 @@ export default function DialSession() {
   const activeCallSidRef = useRef<string | null>(null);
   const activeConferenceRef = useRef<string | null>(null);
   const placingCallRef = useRef<boolean>(false);
-  const joinedRef = useRef<boolean>(false); // <— do not join until answered
+
+  // NOTE: we now "early join" (silent) AND still join on answered via socket
+  const joinedRef = useRef<boolean>(false);
 
   // prevent duplicate disposition clicks
   const dispositionBusyRef = useRef<boolean>(false);
@@ -296,7 +298,7 @@ export default function DialSession() {
 
     try {
       advanceScheduledRef.current = false;
-      joinedRef.current = false; // <- do not join conf yet
+      joinedRef.current = false; // we will set true once joinConference resolves
       setStatus("Dialing…");
       setCallActive(true);
       playRingback();
@@ -315,10 +317,24 @@ export default function DialSession() {
       activeCallSidRef.current = callSid;
       activeConferenceRef.current = conferenceName;
 
-      // DO NOT join yet — we wait until "answered" via socket to avoid any SDK ring.
+      // ✅ EARLY JOIN: park the browser in the silent conference immediately.
+      // Ringback keeps playing until we get "answered" OR we timeout.
+      try {
+        if (!joinedRef.current && activeConferenceRef.current) {
+          joinedRef.current = true;
+          await joinConference(activeConferenceRef.current);
+        }
+      } catch (e) {
+        // If early join fails, we'll try again on "answered"
+        joinedRef.current = false;
+        console.warn("Early join failed; will retry on answered:", e);
+      }
+
+      // Watchdog for no-answer and bookkeeping
       scheduleWatchdog();
       setSessionStartedCount((n) => n + 1);
 
+      // Best-effort logging
       fetch("/api/leads/add-transcript", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -555,7 +571,7 @@ export default function DialSession() {
               stopRingback();
               clearWatchdog();
 
-              // JOIN NOW (this is the key to eliminating any SDK ring)
+              // JOIN (backup in case early-join failed)
               if (!joinedRef.current && activeConferenceRef.current) {
                 try {
                   joinedRef.current = true;
