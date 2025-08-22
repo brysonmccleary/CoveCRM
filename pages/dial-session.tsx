@@ -51,13 +51,14 @@ export default function DialSession() {
   const callWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const advanceTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const nextLeadTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const statusPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const advanceScheduledRef = useRef<boolean>(false);
   const sessionEndedRef = useRef<boolean>(false);
   const activeCallSidRef = useRef<string | null>(null);
   const activeConferenceRef = useRef<string | null>(null);
   const placingCallRef = useRef<boolean>(false);
-  const joinedRef = useRef<boolean>(false); // <— do not join until answered
+  const joinedRef = useRef<boolean>(false); // we now join immediately, but keep the guard
 
   // prevent duplicate disposition clicks
   const dispositionBusyRef = useRef<boolean>(false);
@@ -66,7 +67,8 @@ export default function DialSession() {
   const formatPhone = (phone: string) => {
     const clean = (phone || "").replace(/\D/g, "");
     if (clean.length === 10) return `${clean.slice(0, 3)}-${clean.slice(3, 6)}-${clean.slice(6)}`;
-    if (clean.length === 11 && clean.startsWith("1")) return `${clean.slice(0, 1)}-${clean.slice(1, 4)}-${clean.slice(4, 7)}-${clean.slice(7)}`;
+    if (clean.length === 11 && clean.startsWith("1"))
+      return `${clean.slice(0, 1)}-${clean.slice(1, 4)}-${clean.slice(4, 7)}-${clean.slice(7)}`;
     return phone || "";
   };
   const normalizeE164 = (raw?: string) => {
@@ -115,9 +117,9 @@ export default function DialSession() {
     if (advanceTimeoutRef.current) { clearTimeout(advanceTimeoutRef.current); advanceTimeoutRef.current = null; }
     if (nextLeadTimeoutRef.current) { clearTimeout(nextLeadTimeoutRef.current); nextLeadTimeoutRef.current = null; }
   };
-  const killAllTimers = () => { clearWatchdog(); clearAdvanceTimers(); };
+  const clearStatusPoll = () => { if (statusPollRef.current) { clearInterval(statusPollRef.current); statusPollRef.current = null; } };
+  const killAllTimers = () => { clearWatchdog(); clearAdvanceTimers(); clearStatusPoll(); };
 
-  // hard hangup on Twilio side
   const hangupActiveCall = async (why?: string) => {
     const sid = activeCallSidRef.current;
     activeCallSidRef.current = null;
@@ -283,6 +285,37 @@ export default function DialSession() {
     return { callSid: j.callSid, conferenceName: j.conferenceName };
   };
 
+  const beginStatusPolling = (sid: string) => {
+    clearStatusPoll();
+    statusPollRef.current = setInterval(async () => {
+      try {
+        const j = await fetchJson<{ status: string }>(`/api/twilio/calls/status?sid=${encodeURIComponent(sid)}`);
+        const s = (j?.status || "").toLowerCase();
+
+        if (s === "in-progress" || s === "answered") {
+          setStatus("Connected");
+          stopRingback();
+          clearWatchdog();
+
+          // We already joined immediately; nothing else to do.
+          clearStatusPoll();
+        }
+
+        if (s === "busy" || s === "failed" || s === "no-answer" || s === "canceled" || s === "completed") {
+          stopRingback(); clearWatchdog(); clearStatusPoll();
+          await hangupActiveCall(`status-${s}`); await leaveIfJoined(`status-${s}`);
+          if (!advanceScheduledRef.current && !sessionEndedRef.current) {
+            advanceScheduledRef.current = true;
+            setStatus(s === "no-answer" ? "No answer" : s.charAt(0).toUpperCase() + s.slice(1));
+            scheduleAdvance();
+          }
+        }
+      } catch {
+        // ignore transient errors
+      }
+    }, 1000);
+  };
+
   const callLead = async (leadToCall: Lead) => {
     if (sessionEndedRef.current) return;
     if (!leadToCall?.id) { setStatus("Missing lead id"); return; }
@@ -295,7 +328,7 @@ export default function DialSession() {
 
     try {
       advanceScheduledRef.current = false;
-      joinedRef.current = false; // <- do not join conf yet
+      joinedRef.current = false;
       setStatus("Dialing…");
       setCallActive(true);
       playRingback();
@@ -314,8 +347,20 @@ export default function DialSession() {
       activeCallSidRef.current = callSid;
       activeConferenceRef.current = conferenceName;
 
-      // DO NOT join yet — we wait until “answered”/“in-progress” via socket
+      // ✅ Join conference immediately (waitUrl = SILENCE)
+      if (!joinedRef.current && activeConferenceRef.current) {
+        try {
+          joinedRef.current = true;
+          await joinConference(activeConferenceRef.current);
+        } catch (e) {
+          console.warn("Failed to pre-join conference:", e);
+        }
+      }
+
+      // Start watchdog + polling fallback
       scheduleWatchdog();
+      beginStatusPolling(callSid);
+
       setSessionStartedCount((n) => n + 1);
 
       fetch("/api/leads/add-transcript", {
@@ -336,7 +381,7 @@ export default function DialSession() {
       console.error(err);
       setStatus(err?.message || "Call failed");
       stopRingback();
-      clearWatchdog();
+      killAllTimers();
       await leaveIfJoined("start-failed");
       setCallActive(false);
       if (!sessionEndedRef.current) scheduleAdvance();
@@ -366,7 +411,6 @@ export default function DialSession() {
     }
   };
 
-  // Try common endpoints to persist disposition; always fall back to history log
   const persistDisposition = async (leadId: string, label: string) => {
     const candidates: Array<{ url: string; body: any; required?: boolean }> = [
       { url: "/api/leads/set-disposition", body: { leadId, disposition: label } },
@@ -409,15 +453,12 @@ export default function DialSession() {
       stopRingback();
       killAllTimers();
 
-      // End any active call cleanly
       await hangupActiveCall(`disposition-${label.replace(/\s+/g, "-").toLowerCase()}`);
       await leaveIfJoined(`disposition-${label.replace(/\s+/g, "-").toLowerCase()}`);
       setCallActive(false);
 
-      // Persist server-side (best-effort)
       await persistDisposition(lead.id, label);
 
-      // Local UI history
       setHistory((prev) => [`🏷️ Disposition: ${label}`, ...prev]);
       setStatus(`Disposition saved: ${label}`);
       toast.success(`Saved: ${label}`);
@@ -502,7 +543,7 @@ export default function DialSession() {
     router.push("/leads").catch(() => {});
   };
 
-  /** sockets: live status (join on answered/in-progress) **/
+  /** sockets: live status (join already done; sockets just stop ringback sooner) **/
   useEffect(() => {
     let mounted = true;
     (async () => {
@@ -530,7 +571,7 @@ export default function DialSession() {
           try {
             if (sessionEndedRef.current) return;
 
-            const s = String(payload?.status || "").toLowerCase(); // initiated | ringing | answered | completed | busy | failed | no-answer | canceled
+            const s = String(payload?.status || "").toLowerCase();
             const sid = activeCallSidRef.current;
             if (sid && payload?.callSid && sid !== payload.callSid) return;
 
@@ -549,21 +590,11 @@ export default function DialSession() {
             if (s === "initiated") setStatus("Dial initiated…");
             if (s === "ringing") setStatus("Ringing…");
 
-            // Treat in-progress like answered
             if (s === "answered" || s === "in-progress") {
               setStatus("Connected");
               stopRingback();
               clearWatchdog();
-
-              // JOIN NOW
-              if (!joinedRef.current && activeConferenceRef.current) {
-                try {
-                  joinedRef.current = true;
-                  await joinConference(activeConferenceRef.current);
-                } catch (e) {
-                  console.warn("Failed to join conference on answered/in-progress:", e);
-                }
-              }
+              // already joined
             }
 
             if (s === "no-answer" || s === "busy" || s === "failed" || s === "canceled") {
@@ -590,6 +621,7 @@ export default function DialSession() {
       mounted = false;
       try { socketRef.current?.off?.("call:status"); socketRef.current?.disconnect?.(); } catch {}
       leaveIfJoined("unmount");
+      clearStatusPoll();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentLeadIndex, leadQueue.length, fromNumber]);
