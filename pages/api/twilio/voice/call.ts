@@ -86,11 +86,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const fromNumber = e164(ownedNumbers?.[0]?.phoneNumber || process.env.TWILIO_CALLER_ID || "");
   if (!fromNumber) return res.status(400).json({ message: "No Twilio number on account (fromNumber)" });
 
-  // Build excluded set: all agent/owned numbers + from DID
+  // Exclude your owned/agent numbers
   const agentNumbers = collectAgentNumbers(user);
   const excluded = new Set<string>([fromNumber, ...agentNumbers].map(e164));
 
-  // Gather candidate lead phones, then strictly filter out excluded numbers
+  // Candidate lead phones (strictly exclude your numbers)
   const rawCandidates = extractLeadPhones(lead);
   const candidates = rawCandidates.filter((n) => !excluded.has(e164(n)));
 
@@ -111,28 +111,34 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(422).json({ message: "Resolved lead number is invalid or excluded." });
   }
 
-  try {
-    // We park the call silently and let AMD drive behavior.
-    const twimlUrl = `${BASE_URL}/api/voice/lead-park`;
+  // Use a conference so the browser can hear the real greeting/beep
+  const conferenceName = `ds-${leadId}-${Date.now().toString(36)}`;
 
-    const call = await twilioClient.calls.create({
+  try {
+    const twimlUrl = `${BASE_URL}/api/voice/lead-join?conferenceName=${encodeURIComponent(conferenceName)}`;
+
+    // NOTE: Build as `any` so newer AMD fields don't trip older SDK typings
+    const createOpts: any = {
       to: toLead,
       from: fromNumber,
       url: twimlUrl,
       statusCallback: `${BASE_URL}/api/twilio/status-callback`,
       statusCallbackMethod: "POST",
       statusCallbackEvent: ["initiated", "ringing", "answered", "completed"],
-      // AMD with beep detection (+ faster tuning to reduce "carrier music" window)
-      machineDetection: "DetectMessageEnd" as any,
+      // AMD with beep detection (+ slightly faster tuning to reduce “comfort music”)
+      machineDetection: "DetectMessageEnd",
       machineDetectionTimeout: 10,
       machineDetectionSpeechThreshold: 1000,
       machineDetectionSpeechEndThreshold: 150,
       machineDetectionSilenceTimeout: 500,
+      // These exist in the REST API; some SDK versions lack types for them
       amdStatusCallback: `${BASE_URL}/api/twilio/amd-callback`,
       amdStatusCallbackMethod: "POST",
-    });
+    };
 
-    // Immediately persist the mapping so all webhooks can disposition this call
+    const call = await twilioClient.calls.create(createOpts);
+
+    // Persist mapping so webhooks & client can correlate
     await Call.updateOne(
       { callSid: call.sid },
       {
@@ -146,21 +152,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           leadId,
           ownerNumber: fromNumber,
           otherNumber: toLead,
+          conferenceName,
         },
       },
       { upsert: true },
     );
 
-    console.log("📞 voice/call placed (lead-only)", {
+    console.log("📞 voice/call placed (conference lead-only)", {
       from: fromNumber,
       toLead,
       callSid: call.sid,
-      excludedAgentNumbers: Array.from(excluded),
-      rawCandidates,
-      chosenFromCandidates: candidates,
+      conferenceName,
     });
 
-    return res.status(200).json({ success: true, callSid: call.sid, toLead, from: fromNumber });
+    // Return conferenceName so the browser can join via WebRTC
+    return res.status(200).json({
+      success: true,
+      callSid: call.sid,
+      toLead,
+      from: fromNumber,
+      conferenceName,
+    });
   } catch (err: any) {
     console.error("❌ voice/call error:", err?.message || err);
     return res.status(500).json({ message: "Failed to initiate call", error: err?.message });

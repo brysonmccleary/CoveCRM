@@ -22,8 +22,12 @@ const ALLOW_DEV_TWILIO_TEST =
   process.env.NODE_ENV !== "production";
 
 // VM policy controls
-// VM_POLICY = "hangup" | "play"   (default: hangup)
+// VM_POLICY = "hangup" | "play" | "observe"   (default: hangup)
+//  - hangup: end immediately on beep (no dead air)
+//  - play:   play MP3/TTS after beep, then hangup
+//  - observe: take no automatic action; let the conference keep running so the agent hears the greeting+beep
 const VM_POLICY = (process.env.VM_POLICY || "hangup").toLowerCase();
+
 // If VM_POLICY = "play", prefer URL, else TTS text
 const VM_DROP_URL = process.env.VM_DROP_URL || "";
 const VM_DROP_TEXT =
@@ -75,7 +79,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const From = params.get("From") || params.get("Caller") || "";  // for outbound, this is our Twilio DID
     const To = params.get("To") || params.get("Called") || "";      // the lead number
 
-    // Twilio may send (values vary by region):
+    // Values vary by region:
     // 'human', 'machine', 'machine_start', 'machine_end', 'machine_end_beep', 'machine_end_silence', 'unknown'
     const AnsweredBy = (params.get("AnsweredBy") || "").toLowerCase();
     const MachineDetectionDuration = params.get("MachineDetectionDuration") || "";
@@ -171,7 +175,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     };
 
-    // 1) HUMAN — no agent leg in this flow, so end cleanly + disposition
+    // 1) HUMAN — with no PSTN agent leg, we end cleanly to avoid dead air.
     if (AnsweredBy.includes("human")) {
       try {
         await twilioClient.calls(CallSid).update({ status: "completed" as any });
@@ -188,21 +192,32 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return;
     }
 
-    // 2) MACHINE pre-beep — park quietly; we'll wait for machine_end/beep.
+    // 2) MACHINE pre-beep — keep the leg alive; conference/park is already in play.
     const isMachinePreBeep =
       AnsweredBy === "machine" ||
       AnsweredBy === "machine_start" ||
       (AnsweredBy.startsWith("machine") && !AnsweredBy.includes("end"));
     if (isMachinePreBeep && MachineMessageEnd !== "true") {
-      // No action yet; /api/voice/lead-park is already pausing the leg.
       res.status(200).end();
       return;
     }
 
-    // 3) MACHINE with beep detected — act per policy + disposition
+    // 3) MACHINE with beep detected — act per policy
     const beepDetected =
       AnsweredBy.includes("machine_end") || MachineMessageEnd === "true";
     if (beepDetected) {
+      if (VM_POLICY === "observe") {
+        // Do nothing — agent hears the greeting + beep in the conference.
+        console.log("👂 VM beep detected → observing (no auto action).");
+        if (leadId) {
+          await Call.updateOne({ callSid: CallSid }, { $set: { disposition: "voicemail_beep" } });
+          await addLeadHistory("Voicemail beep detected (observing).", { amd: AnsweredBy, policy: "observe" });
+        }
+        await emitDisposition("voicemail_beep");
+        res.status(200).end();
+        return;
+      }
+
       if (VM_POLICY === "play") {
         // Build TwiML for drop then hang up
         const vr = new twilio.twiml.VoiceResponse();

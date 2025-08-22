@@ -1,3 +1,4 @@
+// pages/api/voice/lead-join.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import twilio from "twilio";
 
@@ -9,8 +10,10 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
     {
       startConferenceOnEnter: true,
       endConferenceOnExit: true,
+      beep: false,
+      // You can also add region/recording here if desired
     },
-    conferenceName as string,
+    String(conferenceName || "default"),
   );
 
   res.setHeader("Content-Type", "text/xml");
