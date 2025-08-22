@@ -16,6 +16,7 @@ async function readRawBody(req: NextApiRequest): Promise<string> {
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  // Try to pull `conferenceName` from x-www-form-urlencoded body (POST), then from query
   let conferenceName = "default";
 
   try {
@@ -27,7 +28,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (fromBody) conferenceName = fromBody;
       }
     }
-  } catch {}
+  } catch {
+    // ignore body read errors and fall back to query/default
+  }
 
   const fromQuery = (req.query.conferenceName as string) || "";
   if (!conferenceName && fromQuery) conferenceName = fromQuery;
@@ -39,8 +42,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     {
       startConferenceOnEnter: true,
       endConferenceOnExit: true,
-      beep: false,   // no entry/exit beep
-      waitUrl: "",   // <— absolute silence while waiting
+      beep: false,            // no entry/exit beep
+      // Note: if you want absolute silence when waiting, provide a silent TwiML URL here.
+      // waitUrl: "https://handler.twilio.com/twiml/EHxxxxxxxxxxxxxxxxxxxx", 
+      // waitMethod: "POST",
     } as any,
     String(conferenceName),
   );

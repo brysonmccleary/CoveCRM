@@ -1,3 +1,4 @@
+// utils/ringAudio.ts
 let audioEl: HTMLAudioElement | null = null;
 
 export function primeAudioContext() {
@@ -12,8 +13,11 @@ export function primeAudioContext() {
 export function playRingback() {
   try {
     stopRingback();
-    audioEl = new Audio("/ring.mp3"); // or your existing asset
+    audioEl = new Audio("/ring.mp3"); // your asset
     audioEl.loop = true;
+    // tag so our DOM tone killer never touches it
+    (audioEl as any).dataset = (audioEl as any).dataset || {};
+    (audioEl as any).dataset.coveRing = "1";
     audioEl.play().catch(() => {});
   } catch {}
 }
@@ -29,16 +33,17 @@ export function stopRingback() {
   } catch {}
 }
 
-// nuclear option in case any other <audio> tags linger
+// nuclear option if needed elsewhere (kept)
 export function forceStopAllSounds() {
   stopRingback();
   try {
     document.querySelectorAll("audio").forEach((el) => {
-      try {
-        (el as HTMLAudioElement).pause();
-        (el as HTMLAudioElement).src = "";
-        el.remove();
-      } catch {}
+      const a = el as HTMLAudioElement;
+      if ((a as any).dataset?.coveRing === "1") return; // keep ours
+      try { a.pause(); } catch {}
+      try { a.removeAttribute("src"); } catch {}
+      try { (a as any).srcObject = null; } catch {}
+      try { a.remove(); } catch {}
     });
   } catch {}
 }
