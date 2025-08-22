@@ -1,4 +1,3 @@
-// /pages/api/twilio/voice/call.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../../auth/[...nextauth]";
@@ -21,13 +20,11 @@ function e164(num: string) {
 }
 function uniq<T>(arr: T[]) { return Array.from(new Set(arr.filter(Boolean))); }
 
-function collectAgentNumbers(user: any): string[] {
+/**
+ * Return ONLY the user's Twilio-owned DIDs (not personal/agent mobiles)
+ */
+function collectOwnedTwilioNumbers(user: any): string[] {
   const raw: string[] = uniq([
-    user?.agentPhone,
-    user?.phone,
-    user?.personalPhone,
-    user?.profile?.phone,
-    user?.profile?.agentPhone,
     ...(Array.isArray(user?.numbers) ? user.numbers.map((n: any) => n?.phoneNumber) : []),
     process.env.TWILIO_CALLER_ID || "",
   ]);
@@ -69,7 +66,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const session = await getServerSession(req, res, authOptions);
   if (!session?.user?.email) return res.status(401).json({ message: "Unauthorized" });
 
-  const { leadId } = req.body || {};
+  const { leadId, allowSelfDial } = req.body || {};
   if (!leadId) return res.status(400).json({ message: "Missing leadId" });
 
   await dbConnect();
@@ -86,29 +83,34 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const fromNumber = e164(ownedNumbers?.[0]?.phoneNumber || process.env.TWILIO_CALLER_ID || "");
   if (!fromNumber) return res.status(400).json({ message: "No Twilio number on account (fromNumber)" });
 
-  // Exclude your owned/agent numbers
-  const agentNumbers = collectAgentNumbers(user);
-  const excluded = new Set<string>([fromNumber, ...agentNumbers].map(e164));
+  // Exclude ONLY Twilio-owned numbers (so you can still test by calling your own cell)
+  const ownedDIDs = collectOwnedTwilioNumbers(user);
+  const excludedSet = new Set<string>([fromNumber, ...ownedDIDs].map(e164));
 
-  // Candidate lead phones (strictly exclude your numbers)
-  const rawCandidates = extractLeadPhones(lead);
-  const candidates = rawCandidates.filter((n) => !excluded.has(e164(n)));
+  // Candidate lead phones
+  const rawCandidates = extractLeadPhones(lead).map(e164);
+  const filtered = rawCandidates.filter((n) => !excludedSet.has(n));
 
-  if (candidates.length === 0) {
-    console.warn("🚫 Refusing to dial: all candidate numbers are excluded (agent/from).", {
+  // Optional override to allow dialing anything (for testing)
+  const allowOverride = Boolean(allowSelfDial) || process.env.ALLOW_SELF_DIAL === "1";
+
+  const finalCandidates = filtered.length > 0 ? filtered : (allowOverride ? rawCandidates : []);
+  if (finalCandidates.length === 0) {
+    console.warn("🚫 Refusing to dial: all candidate numbers are excluded (Twilio-owned).", {
       leadId,
       rawCandidates,
-      excluded: Array.from(excluded),
+      excluded: Array.from(excludedSet),
     });
     return res.status(422).json({
-      message: "Lead has no dialable number (appears to match your agent/from numbers).",
+      message: "Lead has no dialable number (appears to match your Twilio-owned numbers).",
       blockedCandidates: rawCandidates,
     });
   }
 
-  const toLead = e164(candidates[0]);
-  if (!toLead || toLead === fromNumber || excluded.has(toLead)) {
-    return res.status(422).json({ message: "Resolved lead number is invalid or excluded." });
+  // Pick first resolved number. Still avoid dialing the exact from DID.
+  const toLead = finalCandidates.find((n) => n && n !== fromNumber) || finalCandidates[0];
+  if (!toLead || toLead === fromNumber) {
+    return res.status(422).json({ message: "Resolved lead number is invalid or equals caller ID." });
   }
 
   // Use a conference so the browser can hear the real greeting/beep
@@ -117,7 +119,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     const twimlUrl = `${BASE_URL}/api/voice/lead-join?conferenceName=${encodeURIComponent(conferenceName)}`;
 
-    // NOTE: Build as `any` so newer AMD fields don't trip older SDK typings
+    // Build as `any` so newer AMD fields don't trip older SDK typings
     const createOpts: any = {
       to: toLead,
       from: fromNumber,
@@ -125,13 +127,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       statusCallback: `${BASE_URL}/api/twilio/status-callback`,
       statusCallbackMethod: "POST",
       statusCallbackEvent: ["initiated", "ringing", "answered", "completed"],
-      // AMD with beep detection (+ slightly faster tuning to reduce “comfort music”)
+      // Safe AMD (no advanced tuning to avoid 500s)
       machineDetection: "DetectMessageEnd",
-      machineDetectionTimeout: 10,
-      machineDetectionSpeechThreshold: 1000,
-      machineDetectionSpeechEndThreshold: 150,
-      machineDetectionSilenceTimeout: 500,
-      // These exist in the REST API; some SDK versions lack types for them
       amdStatusCallback: `${BASE_URL}/api/twilio/amd-callback`,
       amdStatusCallbackMethod: "POST",
     };
@@ -163,6 +160,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       toLead,
       callSid: call.sid,
       conferenceName,
+      excludedOwnedDIDs: Array.from(excludedSet),
+      rawCandidates,
+      finalCandidates,
     });
 
     // Return conferenceName so the browser can join via WebRTC
