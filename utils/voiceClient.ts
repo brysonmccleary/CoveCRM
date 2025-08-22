@@ -1,7 +1,7 @@
 // utils/voiceClient.ts
 // Browser-only helper for Twilio WebRTC (Voice JS SDK v2: @twilio/voice-sdk)
 // - Disables Twilio SDK sounds so we only hear our own ring.mp3
-// - Joins/leaves conference by name
+// - Joins/leaves conference by name (defensive against SDK shape differences)
 
 let DeviceCtor: any | null = null;
 
@@ -10,6 +10,7 @@ let device: any | null = null;
 let activeCall: any | null = null;
 let registered = false;
 let refreshing = false;
+let tokenRefreshTimer: any = null;
 
 type TokenResponse = {
   token: string;
@@ -51,6 +52,16 @@ function disableSdkSounds(dev: any) {
   }
 }
 
+// Safe event attach that works whether the object exposes .on or .addListener
+function attach(call: any, evt: string, fn: (...args: any[]) => void) {
+  if (!call) return;
+  const maybeOn = (call as any)?.on;
+  const maybeAdd = (call as any)?.addListener;
+  if (typeof maybeOn === "function") return maybeOn.call(call, evt, fn);
+  if (typeof maybeAdd === "function") return maybeAdd.call(call, evt, fn);
+  // no-op if the SDK object doesn’t expose either
+}
+
 async function ensureDevice(): Promise<void> {
   if (!isBrowser()) throw new Error("voiceClient must run in the browser");
 
@@ -74,23 +85,23 @@ async function ensureDevice(): Promise<void> {
     // Immediately disable built-in tones
     disableSdkSounds(device);
 
-    device.on("error", (e: any) => console.warn("Twilio Device error:", e?.message || e));
-    device.on("registered", () => { registered = true; disableSdkSounds(device); });
-    device.on("unregistered", () => { registered = false; });
+    device.on?.("error", (e: any) => console.warn("Twilio Device error:", e?.message || e));
+    device.on?.("registered", () => { registered = true; disableSdkSounds(device); });
+    device.on?.("unregistered", () => { registered = false; });
 
     // No inbound in this app
-    device.on("incoming", (call: any) => { try { call.reject(); } catch {} });
+    device.on?.("incoming", (call: any) => { try { call.reject?.(); } catch {} });
   } else {
     try {
       await device.updateToken(token);
     } catch {
-      try { device.destroy(); } catch {}
+      try { device.destroy?.(); } catch {}
       device = null;
       return ensureDevice();
     }
   }
 
-  if (!registered) await device.register();
+  if (!registered) await device.register?.();
 }
 
 async function refreshTokenSoon() {
@@ -98,12 +109,18 @@ async function refreshTokenSoon() {
   refreshing = true;
   try {
     const t = await fetchToken();
-    await device.updateToken(t);
+    await device.updateToken?.(t);
   } catch (e) {
     console.warn("Token refresh failed:", (e as any)?.message || e);
   } finally {
     refreshing = false;
   }
+}
+
+function startTokenTimer() {
+  if (tokenRefreshTimer) clearTimeout(tokenRefreshTimer);
+  // 45 minutes after a successful connect is plenty
+  tokenRefreshTimer = setTimeout(refreshTokenSoon, 45 * 60 * 1000);
 }
 
 // PUBLIC API
@@ -115,13 +132,33 @@ export async function joinConference(conferenceName: string) {
 
   const params = { conferenceName }; // forwarded to /api/voice/agent-join
 
-  const call = await device.connect({ params });
+  // Some SDK builds return a Call (with .on), others expose a similar emitter API.
+  // We guard all accesses and never assume the shape.
+  let call: any;
+  try {
+    const maybe = await device.connect({ params });
+    call = maybe;
+  } catch (e) {
+    console.warn("Device.connect failed:", e);
+    throw e;
+  }
+
   // Just in case the SDK re-enabled tones on connect:
   disableSdkSounds(device);
 
-  call.on("accept", () => setTimeout(refreshTokenSoon, 45 * 60 * 1000));
-  call.on("disconnect", () => { if (activeCall === call) activeCall = null; });
-  call.on("error", (e: any) => console.warn("Call error:", e?.message || e));
+  // Start token refresh regardless of event availability
+  startTokenTimer();
+
+  // Attach listeners defensively
+  attach(call, "disconnect", () => {
+    if (activeCall === call) activeCall = null;
+    if (tokenRefreshTimer) { clearTimeout(tokenRefreshTimer); tokenRefreshTimer = null; }
+  });
+
+  attach(call, "error", (e: any) => console.warn("Call error:", e?.message || e));
+
+  // (Optional) If the SDK exposes 'accept', attach to it; otherwise we already set the timer.
+  attach(call, "accept", () => startTokenTimer());
 
   activeCall = call;
   return call;
@@ -130,6 +167,7 @@ export async function joinConference(conferenceName: string) {
 export async function leaveConference() {
   try { activeCall?.disconnect?.(); } catch {}
   activeCall = null;
+  if (tokenRefreshTimer) { clearTimeout(tokenRefreshTimer); tokenRefreshTimer = null; }
 }
 
 export function setMuted(mute: boolean) {
