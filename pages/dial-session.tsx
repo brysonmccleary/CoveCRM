@@ -57,7 +57,6 @@ export default function DialSession() {
   const activeCallSidRef = useRef<string | null>(null);
   const activeConferenceRef = useRef<string | null>(null);
   const placingCallRef = useRef<boolean>(false);
-  const joinedRef = useRef<boolean>(false); // <— do not join until answered
 
   // prevent duplicate disposition clicks
   const dispositionBusyRef = useRef<boolean>(false);
@@ -144,7 +143,6 @@ export default function DialSession() {
       console.warn("leaveConference failed:", (e as any)?.message || e);
     } finally {
       activeConferenceRef.current = null;
-      joinedRef.current = false;
     }
   };
 
@@ -296,7 +294,6 @@ export default function DialSession() {
 
     try {
       advanceScheduledRef.current = false;
-      joinedRef.current = false; // <- do not join conf yet
       setStatus("Dialing…");
       setCallActive(true);
       playRingback();
@@ -315,8 +312,11 @@ export default function DialSession() {
       activeCallSidRef.current = callSid;
       activeConferenceRef.current = conferenceName;
 
-      // DO NOT join yet — we wait until "answered" via socket to avoid any SDK ring.
+      // Join the same conference as the lead so there’s no hold music
+      await joinConference(conferenceName);
+
       scheduleWatchdog();
+      setTimeout(() => stopRingback(), 8000);
       setSessionStartedCount((n) => n + 1);
 
       fetch("/api/leads/add-transcript", {
@@ -369,10 +369,12 @@ export default function DialSession() {
 
   // Try common endpoints to persist disposition; always fall back to history log
   const persistDisposition = async (leadId: string, label: string) => {
+    // 1) Known/likely endpoints (ignore errors if not present)
     const candidates: Array<{ url: string; body: any; required?: boolean }> = [
       { url: "/api/leads/set-disposition", body: { leadId, disposition: label } },
       { url: "/api/leads/update", body: { leadId, update: { disposition: label } } },
     ];
+
     for (const c of candidates) {
       try {
         const r = await fetch(c.url, {
@@ -381,8 +383,12 @@ export default function DialSession() {
           body: JSON.stringify(c.body),
         });
         if (r.ok) break;
-      } catch {}
+      } catch {
+        // ignore and try next
+      }
     }
+
+    // 2) Always write a history entry
     try {
       await fetch("/api/leads/add-history", {
         method: "POST",
@@ -394,7 +400,9 @@ export default function DialSession() {
           meta: { disposition: label, ts: Date.now() },
         }),
       });
-    } catch {}
+    } catch {
+      // even if this fails, we still advance — UI already reflects the choice
+    }
   };
 
   const handleDisposition = async (label: "Sold" | "No Answer" | "Booked Appointment" | "Not Interested") => {
@@ -423,12 +431,19 @@ export default function DialSession() {
       setStatus(`Disposition saved: ${label}`);
       toast.success(`Saved: ${label}`);
 
-      if (label === "Booked Appointment") setShowBookModal(true);
+      // Special case: open booking modal if booked
+      if (label === "Booked Appointment") {
+        setShowBookModal(true);
+      }
 
-      if (!sessionEndedRef.current) scheduleNextLead();
+      // Move to next lead after small delay
+      if (!sessionEndedRef.current) {
+        scheduleNextLead();
+      }
     } catch (e: any) {
       console.error(e);
       toast.error(e?.message || "Failed to save disposition");
+      // even on error, ensure call is torn down and we don't get stuck
       if (!sessionEndedRef.current) scheduleNextLead();
     } finally {
       dispositionBusyRef.current = false;
@@ -503,7 +518,7 @@ export default function DialSession() {
     router.push("/leads").catch(() => {});
   };
 
-  /** sockets: live status (join on answered) **/
+  /** sockets: live status **/
   useEffect(() => {
     let mounted = true;
     (async () => {
@@ -549,36 +564,15 @@ export default function DialSession() {
 
             if (s === "initiated") setStatus("Dial initiated…");
             if (s === "ringing") setStatus("Ringing…");
-
-            if (s === "answered") {
-              setStatus("Connected");
-              stopRingback();
-              clearWatchdog();
-
-              // JOIN NOW (this is the key to eliminating any SDK ring)
-              if (!joinedRef.current && activeConferenceRef.current) {
-                try {
-                  joinedRef.current = true;
-                  await joinConference(activeConferenceRef.current);
-                } catch (e) {
-                  console.warn("Failed to join conference on answered:", e);
-                }
-              }
-            }
+            if (s === "answered") { setStatus("Connected"); stopRingback(); clearWatchdog(); }
 
             if (s === "no-answer" || s === "busy" || s === "failed") {
-              stopRingback(); clearWatchdog();
-              await hangupActiveCall(`status-${s}`); await leaveIfJoined(`status-${s}`);
-              if (!advanceScheduledRef.current && !sessionEndedRef.current) {
-                advanceScheduledRef.current = true;
-                setStatus(s === "no-answer" ? "No answer" : s === "busy" ? "Busy" : "Failed");
-                scheduleAdvance();
-              }
+              stopRingback(); clearWatchdog(); hangupActiveCall(`status-${s}`); await leaveIfJoined(`status-${s}`);
+              if (!advanceScheduledRef.current && !sessionEndedRef.current) { advanceScheduledRef.current = true; setStatus(s === "no-answer" ? "No answer" : s === "busy" ? "Busy" : "Failed"); scheduleAdvance(); }
             }
 
             if (s === "completed") {
-              stopRingback(); clearWatchdog();
-              await hangupActiveCall("status-completed"); await leaveIfJoined("status-completed");
+              stopRingback(); clearWatchdog(); hangupActiveCall("status-completed"); await leaveIfJoined("status-completed");
               if (!advanceScheduledRef.current && !sessionEndedRef.current) { advanceScheduledRef.current = true; scheduleAdvance(); }
             }
           } catch {}
