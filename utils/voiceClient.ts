@@ -1,5 +1,7 @@
 // utils/voiceClient.ts
 // Browser-only helper for Twilio WebRTC (Voice JS SDK v2: @twilio/voice-sdk)
+// - Disables Twilio SDK sounds so we only hear our own ring.mp3
+// - Joins/leaves conference by name
 
 let DeviceCtor: any | null = null;
 
@@ -21,7 +23,6 @@ function isBrowser() {
   return typeof window !== "undefined" && typeof document !== "undefined";
 }
 
-// ---- Token fetch
 async function fetchToken(): Promise<string> {
   const r = await fetch("/api/twilio/voice/token");
   if (!r.ok) throw new Error("Failed to fetch voice token");
@@ -30,7 +31,7 @@ async function fetchToken(): Promise<string> {
   return j.token;
 }
 
-// Hard-disable all Twilio SDK sounds (v2 + v1-style fallback)
+// Try both v2 audio API and legacy sounds API to kill SDK tones
 function disableSdkSounds(dev: any) {
   try {
     if (dev?.audio) {
@@ -38,10 +39,6 @@ function disableSdkSounds(dev: any) {
       try { dev.audio.outgoing?.(false); } catch {}
       try { dev.audio.disconnect?.(false); } catch {}
       try { dev.audio.dtmf?.(false); } catch {}
-      try { dev.audio.ringtone?.(false); } catch {}
-      // Some builds accept an array (custom sources). Force "no source".
-      try { dev.audio.outgoing?.([] as any); } catch {}
-      try { dev.audio.ringtone?.([] as any); } catch {}
     }
     if (dev?.sounds) {
       try { dev.sounds.incoming?.(false); } catch {}
@@ -50,11 +47,10 @@ function disableSdkSounds(dev: any) {
       try { dev.sounds.dtmf?.(false); } catch {}
     }
   } catch (e) {
-    console.warn("Failed to disable SDK sounds:", (e as any)?.message || e);
+    console.warn("disableSdkSounds failed:", (e as any)?.message || e);
   }
 }
 
-// ---- Ensure Voice Device
 async function ensureDevice(): Promise<void> {
   if (!isBrowser()) throw new Error("voiceClient must run in the browser");
 
@@ -73,34 +69,18 @@ async function ensureDevice(): Promise<void> {
       disableAudioContextProxy: true,
       closeProtection: false,
       allowIncomingWhileBusy: false,
-      // Extra belt-and-suspenders if supported:
-      // @ts-ignore
-      sounds: { incoming: false, outgoing: false, disconnect: false, dtmf: false, ringtone: false },
     });
 
-    // Nuke built-in tones immediately (and again after register)
+    // Immediately disable built-in tones
     disableSdkSounds(device);
 
-    device.on("error", (e: any) => {
-      console.warn("Twilio Device error:", e?.message || e);
-    });
+    device.on("error", (e: any) => console.warn("Twilio Device error:", e?.message || e));
+    device.on("registered", () => { registered = true; disableSdkSounds(device); });
+    device.on("unregistered", () => { registered = false; });
 
-    device.on("registered", () => {
-      registered = true;
-      disableSdkSounds(device);
-    });
-
-    device.on("unregistered", () => {
-      registered = false;
-    });
-
-    // We don’t accept inbound in this app; auto-reject to stay clean
-    device.on("incoming", (call: any) => {
-      try { call.reject(); } catch {}
-    });
-
+    // No inbound in this app
+    device.on("incoming", (call: any) => { try { call.reject(); } catch {} });
   } else {
-    // Refresh token on an existing device
     try {
       await device.updateToken(token);
     } catch {
@@ -110,15 +90,9 @@ async function ensureDevice(): Promise<void> {
     }
   }
 
-  if (!registered) {
-    await device.register();
-  }
-
-  // A tiny delay, then disable again in case SDK flipped anything internally
-  setTimeout(() => disableSdkSounds(device), 150);
+  if (!registered) await device.register();
 }
 
-// ---- Proactive token refresh (safe no-op if already refreshing)
 async function refreshTokenSoon() {
   if (refreshing || !device) return;
   refreshing = true;
@@ -132,54 +106,35 @@ async function refreshTokenSoon() {
   }
 }
 
-// ---- PUBLIC API
-
-// Join a conference by name (Twilio will invoke your TwiML App URL /api/voice/agent-join)
+// PUBLIC API
 export async function joinConference(conferenceName: string) {
   await ensureDevice();
 
-  // Disconnect any stale call first
   try { activeCall?.disconnect?.(); } catch {}
   activeCall = null;
 
-  // Forwarded to /api/voice/agent-join
-  const params = { conferenceName };
+  const params = { conferenceName }; // forwarded to /api/voice/agent-join
 
-  // Voice SDK v2: connect() returns a Promise<Twilio.Call> when ACCEPTED
   const call = await device.connect({ params });
+  // Just in case the SDK re-enabled tones on connect:
+  disableSdkSounds(device);
 
-  // Hook events on the resolved Call instance
-  try {
-    // keep SDK tones disabled even after accept
-    disableSdkSounds(device);
-  } catch {}
-
-  call.on("disconnect", () => {
-    if (activeCall === call) activeCall = null;
-  });
-
-  call.on("error", (e: any) => {
-    console.warn("Call error:", e?.message || e);
-  });
-
-  // Refresh token ~45m in (default token TTL ~60m)
-  setTimeout(refreshTokenSoon, 45 * 60 * 1000);
+  call.on("accept", () => setTimeout(refreshTokenSoon, 45 * 60 * 1000));
+  call.on("disconnect", () => { if (activeCall === call) activeCall = null; });
+  call.on("error", (e: any) => console.warn("Call error:", e?.message || e));
 
   activeCall = call;
   return call;
 }
 
-// Leave the current conference and keep device around (fast rejoin next call)
 export async function leaveConference() {
   try { activeCall?.disconnect?.(); } catch {}
   activeCall = null;
 }
 
-// Simple mute helpers for UI
 export function setMuted(mute: boolean) {
   try { activeCall?.mute?.(!!mute); } catch {}
 }
-
 export function getMuted(): boolean {
   try { return !!activeCall?.isMuted?.(); } catch { return false; }
 }
