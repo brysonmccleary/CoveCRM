@@ -5,7 +5,7 @@ import Sidebar from "@/components/Sidebar";
 import CallSummary from "@/components/CallSummary";
 import BookAppointmentModal from "@/components/BookAppointmentModal";
 import { isCallAllowed } from "@/utils/checkCallTime";
-import { playRingback, stopRingback, primeAudioContext, ringAssetHealthcheck } from "@/utils/ringAudio";
+import { playRingback, stopRingback, primeAudioContext } from "@/utils/ringAudio";
 import toast from "react-hot-toast";
 import { joinConference, leaveConference, setMuted as sdkSetMuted, getMuted as sdkGetMuted } from "@/utils/voiceClient";
 
@@ -57,7 +57,7 @@ export default function DialSession() {
   const activeCallSidRef = useRef<string | null>(null);
   const activeConferenceRef = useRef<string | null>(null);
   const placingCallRef = useRef<boolean>(false);
-  const joinedRef = useRef<boolean>(false);
+  const joinedRef = useRef<boolean>(false); // <— we only join once per call
 
   // prevent duplicate disposition clicks
   const dispositionBusyRef = useRef<boolean>(false);
@@ -169,30 +169,12 @@ export default function DialSession() {
     nextLeadTimeoutRef.current = setTimeout(() => { if (!sessionEndedRef.current) nextLead(); }, DIAL_DELAY_MS);
   };
 
-  // Ask for mic once up-front; if denied, we won't join.
-  const ensureMicPermission = async (): Promise<boolean> => {
-    try {
-      if (!navigator?.mediaDevices?.getUserMedia) return true; // older browsers
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      // stop tracks immediately; Twilio will attach its own
-      stream.getTracks().forEach((t) => t.stop());
-      return true;
-    } catch (e: any) {
-      console.warn("Mic permission denied or failed:", e?.message || e);
-      toast.error("Please allow microphone access to make calls.");
-      return false;
-    }
-  };
-
   /** bootstrap **/
   useEffect(() => {
-    (async () => {
-      try { await primeAudioContext(); } catch {}
-      try {
-        const ok = await ringAssetHealthcheck();
-        if (!ok) console.warn("ringback.mp3 not reachable at /ringback.mp3 — place it in /public");
-      } catch {}
-    })();
+    try {
+      const maybe = primeAudioContext() as unknown;
+      if ((maybe as any)?.catch) (maybe as Promise<void>).catch(() => {});
+    } catch {}
   }, []);
 
   useEffect(() => {
@@ -313,15 +295,11 @@ export default function DialSession() {
     }
 
     try {
-      // ensure mic permission up-front so we get 2-way audio
-      const micOK = await ensureMicPermission();
-      if (!micOK) { setStatus("Mic permission required"); return; }
-
       advanceScheduledRef.current = false;
-      joinedRef.current = false;
+      joinedRef.current = false; // <- do not join conf yet
       setStatus("Dialing…");
       setCallActive(true);
-      playRingback();
+      playRingback(); // plays /ringback.mp3
 
       const { callSid, conferenceName } = await startOutboundCall(leadToCall.id);
 
@@ -337,17 +315,7 @@ export default function DialSession() {
       activeCallSidRef.current = callSid;
       activeConferenceRef.current = conferenceName;
 
-      // Early join (silent)
-      try {
-        if (!joinedRef.current && activeConferenceRef.current) {
-          joinedRef.current = true;
-          await joinConference(activeConferenceRef.current);
-        }
-      } catch (e) {
-        joinedRef.current = false;
-        console.warn("Early join failed; will retry on answered:", e);
-      }
-
+      // wait for server "answered"/AMD before joining (prevents Twilio tones)
       scheduleWatchdog();
       setSessionStartedCount((n) => n + 1);
 
@@ -399,6 +367,7 @@ export default function DialSession() {
     }
   };
 
+  // Try common endpoints to persist disposition; always fall back to history log
   const persistDisposition = async (leadId: string, label: string) => {
     const candidates: Array<{ url: string; body: any; required?: boolean }> = [
       { url: "/api/leads/set-disposition", body: { leadId, disposition: label } },
@@ -441,12 +410,15 @@ export default function DialSession() {
       stopRingback();
       killAllTimers();
 
+      // End any active call cleanly
       await hangupActiveCall(`disposition-${label.replace(/\s+/g, "-").toLowerCase()}`);
       await leaveIfJoined(`disposition-${label.replace(/\s+/g, "-").toLowerCase()}`);
       setCallActive(false);
 
+      // Persist server-side (best-effort)
       await persistDisposition(lead.id, label);
 
+      // Local UI history
       setHistory((prev) => [`🏷️ Disposition: ${label}`, ...prev]);
       setStatus(`Disposition saved: ${label}`);
       toast.success(`Saved: ${label}`);
@@ -531,7 +503,24 @@ export default function DialSession() {
     router.push("/leads").catch(() => {});
   };
 
-  /** sockets: live status (join on answered) **/
+  /** --- NEW: single place to join + stop ringback --- **/
+  const safeJoinNow = async (reason: string) => {
+    if (joinedRef.current || !activeConferenceRef.current) return;
+    try {
+      joinedRef.current = true;
+      stopRingback();      // in case ring is still playing
+      clearWatchdog();     // no more “no answer” timeout
+      await joinConference(activeConferenceRef.current);
+      sdkSetMuted(false);
+      console.log("🟢 Joined conference:", activeConferenceRef.current, "reason:", reason);
+    } catch (e) {
+      // allow retry if join failed
+      joinedRef.current = false;
+      console.warn("Failed to join conference:", e);
+    }
+  };
+
+  /** sockets: live status (join on answered) + AMD fallback **/
   useEffect(() => {
     let mounted = true;
     (async () => {
@@ -555,6 +544,7 @@ export default function DialSession() {
           }
         });
 
+        // Primary status channel
         socket.on("call:status", async (payload: any) => {
           try {
             if (sessionEndedRef.current) return;
@@ -580,17 +570,7 @@ export default function DialSession() {
 
             if (s === "answered") {
               setStatus("Connected");
-              stopRingback();
-              clearWatchdog();
-
-              if (!joinedRef.current && activeConferenceRef.current) {
-                try {
-                  joinedRef.current = true;
-                  await joinConference(activeConferenceRef.current);
-                } catch (e) {
-                  console.warn("Failed to join conference on answered:", e);
-                }
-              }
+              await safeJoinNow("status-answered");
             }
 
             if (s === "no-answer" || s === "busy" || s === "failed") {
@@ -610,16 +590,57 @@ export default function DialSession() {
             }
           } catch {}
         });
+
+        // NEW: AMD fallback — join on human or beep
+        socket.on("call:amd", async (payload: any) => {
+          try {
+            if (sessionEndedRef.current) return;
+            const sid = activeCallSidRef.current;
+            if (sid && payload?.callSid && sid !== payload.callSid) return;
+
+            const leadNum = normalizeE164(
+              (leadQueue[currentLeadIndex] && (leadQueue[currentLeadIndex] as any)?.phone) ||
+              (leadQueue[currentLeadIndex] &&
+                Object.entries(leadQueue[currentLeadIndex]).find(([k]) => k.toLowerCase().includes("phone"))?.[1]) ||
+              "",
+            );
+            const pTo = normalizeE164(payload?.to || "");
+            const pFrom = normalizeE164(payload?.from || "");
+            const ownerNum = normalizeE164(fromNumber || "");
+            // loose sanity: either matches lead as "to" or "from" depending on region flips
+            if (leadNum && pTo && pFrom && !(leadNum === pTo || leadNum === pFrom)) return;
+            if (ownerNum && pTo && pFrom && !(ownerNum === pTo || ownerNum === pFrom)) return;
+
+            const answeredBy = String(payload?.answeredBy || "").toLowerCase();
+            const messageEnd = !!payload?.messageEnd;
+
+            if (answeredBy.includes("human") || messageEnd) {
+              setStatus("Connected");
+              await safeJoinNow(messageEnd ? "amd-beep" : "amd-human");
+            }
+          } catch {}
+        });
       } catch {}
     })();
 
     return () => {
       mounted = false;
-      try { socketRef.current?.off?.("call:status"); socketRef.current?.disconnect?.(); } catch {}
+      try {
+        socketRef.current?.off?.("call:status");
+        socketRef.current?.off?.("call:amd");
+        socketRef.current?.disconnect?.();
+      } catch {}
       leaveIfJoined("unmount");
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentLeadIndex, leadQueue.length, fromNumber]);
+
+  /** NEW: stop ring when the WebRTC leg tells us it's connected */
+  useEffect(() => {
+    const handler = () => stopRingback();
+    window.addEventListener("twilio:agent-joined", handler);
+    return () => window.removeEventListener("twilio:agent-joined", handler);
+  }, []);
 
   /** render **/
   return (
