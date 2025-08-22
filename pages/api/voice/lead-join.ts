@@ -10,8 +10,7 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
     {
       startConferenceOnEnter: true,
       endConferenceOnExit: true,
-      beep: false,
-      // You can also add region/recording here if desired
+      beep: "false", // string literal, not boolean
     },
     String(conferenceName || "default"),
   );
