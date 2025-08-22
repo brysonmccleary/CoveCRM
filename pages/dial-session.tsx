@@ -1,3 +1,4 @@
+// pages/dial-session.tsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/router";
 import Sidebar from "@/components/Sidebar";
@@ -6,6 +7,7 @@ import BookAppointmentModal from "@/components/BookAppointmentModal";
 import { isCallAllowed } from "@/utils/checkCallTime";
 import { playRingback, stopRingback, primeAudioContext } from "@/utils/ringAudio";
 import toast from "react-hot-toast";
+import { joinConference, leaveConference } from "@/utils/voiceClient"; // NEW
 
 interface Lead {
   id: string;
@@ -63,6 +65,10 @@ export default function DialSession() {
 
   // NEW: prevent duplicate call placement & block calls after End Session
   const placingCallRef = useRef<boolean>(false);
+
+  // NEW: keep a handle to the active WebRTC connection (from voiceClient.joinConference)
+  const rtcConnRef = useRef<any>(null);
+  const currentConferenceNameRef = useRef<string | null>(null);
 
   /** ---------- helpers ---------- */
 
@@ -360,7 +366,8 @@ export default function DialSession() {
   /** ---------- calling ---------- */
 
   // STRICT: Only use the new server endpoint that calls the LEAD directly.
-  const startOutboundCall = async (leadId: string): Promise<string> => {
+  // RETURNS: { callSid, conferenceName }
+  const startOutboundCall = async (leadId: string): Promise<{ callSid: string; conferenceName?: string }> => {
     if (sessionEndedRef.current) throw new Error("Session ended");
     const r = await fetch("/api/twilio/voice/call", {
       method: "POST",
@@ -375,9 +382,9 @@ export default function DialSession() {
       } catch {}
       throw new Error(msg);
     }
-    const j = (await r.json()) as { success?: boolean; callSid?: string };
+    const j = (await r.json()) as { success?: boolean; callSid?: string; conferenceName?: string };
     if (!j?.success || !j?.callSid) throw new Error("Call start did not return a callSid");
-    return j.callSid;
+    return { callSid: j.callSid, conferenceName: j.conferenceName };
   };
 
   const callLead = async (leadToCall: Lead) => {
@@ -401,7 +408,8 @@ export default function DialSession() {
       playRingback();
 
       // Server resolves numbers and dials the LEAD only (no agent phone).
-      const callSid = await startOutboundCall(leadToCall.id);
+      const { callSid, conferenceName } = await startOutboundCall(leadToCall.id);
+
       if (sessionEndedRef.current) {
         // If you ended during the fetch, immediately hang up the just-started call
         activeCallSidRef.current = callSid;
@@ -411,6 +419,18 @@ export default function DialSession() {
         return;
       }
       activeCallSidRef.current = callSid;
+
+      // 🔊 Join our WebRTC leg to the same conference immediately
+      if (conferenceName) {
+        currentConferenceNameRef.current = conferenceName;
+        try {
+          rtcConnRef.current = await joinConference(conferenceName);
+          // Ensure mute state propagates to the Twilio connection
+          try { rtcConnRef.current?.mute?.(muted); } catch {}
+        } catch (e) {
+          console.warn("Failed to join WebRTC conference:", (e as any)?.message || e);
+        }
+      }
 
       // Local watchdog in case a webhook is missed
       scheduleWatchdog();
@@ -445,6 +465,11 @@ export default function DialSession() {
       stopRingback();
       clearWatchdog();
       setCallActive(false);
+      // Clean up any partial WebRTC join
+      try { leaveConference(); } catch {}
+      rtcConnRef.current = null;
+      currentConferenceNameRef.current = null;
+
       if (!sessionEndedRef.current) {
         // move on so sessions never stall
         scheduleAdvance();
@@ -483,6 +508,12 @@ export default function DialSession() {
     stopRingback();
     killAllTimers();
     hangupActiveCall("agent-hangup");
+
+    // Leave WebRTC conference immediately
+    try { leaveConference(); } catch {}
+    rtcConnRef.current = null;
+    currentConferenceNameRef.current = null;
+
     setStatus("Ended");
     setCallActive(false);
     if (!sessionEndedRef.current) {
@@ -548,6 +579,12 @@ export default function DialSession() {
     stopRingback();
     killAllTimers();
     hangupActiveCall("advance-next");
+
+    // Leave WebRTC conference immediately
+    try { leaveConference(); } catch {}
+    rtcConnRef.current = null;
+    currentConferenceNameRef.current = null;
+
     setCallActive(false);
 
     // Wait 2s before switching leads & arming next dial
@@ -560,6 +597,12 @@ export default function DialSession() {
       stopRingback();
       killAllTimers();
       hangupActiveCall("pause");
+
+      // Leave conference while paused
+      try { leaveConference(); } catch {}
+      rtcConnRef.current = null;
+      currentConferenceNameRef.current = null;
+
       setStatus("Paused");
     } else {
       setReadyToCall(true);
@@ -583,6 +626,11 @@ export default function DialSession() {
 
     // Ensure any in-flight call is torn down
     hangupActiveCall("end-session");
+
+    // Leave conference immediately
+    try { leaveConference(); } catch {}
+    rtcConnRef.current = null;
+    currentConferenceNameRef.current = null;
 
     setIsPaused(false);
     setStatus("Session ended");
@@ -691,6 +739,10 @@ export default function DialSession() {
         socketRef.current?.off?.("call:status");
         socketRef.current?.disconnect?.();
       } catch {}
+      // Always leave the conference when unmounting
+      try { leaveConference(); } catch {}
+      rtcConnRef.current = null;
+      currentConferenceNameRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentLeadIndex, leadQueue.length, fromNumber]);
@@ -752,7 +804,16 @@ export default function DialSession() {
             })}
 
           <div className="flex flex-col space-y-2 mt-4">
-            <button onClick={() => setMuted((m) => !m)} className="bg-purple-600 hover:bg-purple-700 px-3 py-2 rounded">
+            <button
+              onClick={() =>
+                setMuted((m) => {
+                  const next = !m;
+                  try { rtcConnRef.current?.mute?.(next); } catch {}
+                  return next;
+                })
+              }
+              className="bg-purple-600 hover:bg-purple-700 px-3 py-2 rounded"
+            >
               {muted ? "Unmute" : "Mute"}
             </button>
             <button
