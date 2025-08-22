@@ -1,4 +1,3 @@
-// /pages/api/twilio/voice/token.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../../auth/[...nextauth]";
@@ -7,7 +6,7 @@ import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
 
-const { AccessToken } = twilio.jwt as any;
+const { AccessToken } = (twilio.jwt as any);
 const { VoiceGrant } = AccessToken;
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -24,32 +23,44 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     await dbConnect();
 
-    // Get per-user routing (personal vs platform)
+    // Determine which Twilio account to use (personal vs platform)
     const { usingPersonal, accountSid } = await getClientForUser(email);
 
-    // Pull the right credentials for the AccessToken
+    // Collect credentials
     let ACCOUNT_SID: string | undefined;
     let API_KEY_SID: string | undefined;
     let API_KEY_SECRET: string | undefined;
     let OUTGOING_APP_SID: string | undefined;
 
     if (usingPersonal) {
-      // Use Bryson's personal creds stored on user doc
+      // Per-user creds from DB
       const user = await User.findOne({ email }).lean<any>();
       ACCOUNT_SID = user?.twilio?.accountSid;
       API_KEY_SID = user?.twilio?.apiKeySid;
       API_KEY_SECRET = user?.twilio?.apiKeySecret;
-      // Optional per-user voice app if you store it later (not required)
-      OUTGOING_APP_SID = user?.twilio?.voiceAppSid || undefined;
+
+      // Prefer a per-user app SID, but FALL BACK to env (so browser can route to /api/voice/agent-join)
+      OUTGOING_APP_SID =
+        user?.twilio?.voiceAppSid ||
+        process.env.TWILIO_VOICE_APP_SID ||
+        process.env.OUTGOING_APP_SID ||
+        process.env.TWILIO_APP_SID ||
+        process.env.TWILIO_TWIML_APP_SID ||
+        undefined;
     } else {
-      // Use platform envs
+      // Platform envs
       ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID;
       API_KEY_SID = process.env.TWILIO_API_KEY_SID || process.env.TWILIO_API_KEY;
       API_KEY_SECRET = process.env.TWILIO_API_KEY_SECRET;
-      OUTGOING_APP_SID = process.env.TWILIO_APP_SID || process.env.TWILIO_TWIML_APP_SID || undefined;
+      OUTGOING_APP_SID =
+        process.env.TWILIO_VOICE_APP_SID ||
+        process.env.OUTGOING_APP_SID ||
+        process.env.TWILIO_APP_SID ||
+        process.env.TWILIO_TWIML_APP_SID ||
+        undefined;
     }
 
-    // Minimal requirements for a JWT: account SID + API key pair
+    // Minimal requirements for a JWT
     if (!ACCOUNT_SID || !API_KEY_SID || !API_KEY_SECRET) {
       console.error(
         "❌ voice/token: Missing credentials for AccessToken",
@@ -65,19 +76,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(500).json({ message: "Server voice config missing" });
     }
 
-    const identity = email; // any unique string per user
+    const identity = email;
     const token = new AccessToken(ACCOUNT_SID, API_KEY_SID, API_KEY_SECRET, {
       identity,
       ttl: 3600,
     });
 
+    // Build the Voice grant
     const grantOptions: Record<string, any> = { incomingAllow: true };
     if (OUTGOING_APP_SID) {
       grantOptions.outgoingApplicationSid = OUTGOING_APP_SID;
     } else {
       console.warn(
         JSON.stringify({
-          msg: "voice/token: OUTGOING_APP_SID not set; outbound calls may rely on default Voice URL",
+          msg: "voice/token: OUTGOING_APP_SID not set; Device.connect() will not reach /api/voice/agent-join",
           email,
           usingPersonal,
           accountSidMasked: maskSid(ACCOUNT_SID),
@@ -88,7 +100,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const voiceGrant = new VoiceGrant(grantOptions);
     token.addGrant(voiceGrant);
 
-    return res.status(200).json({ token: token.toJwt(), identity, usingPersonal, accountSid });
+    // Return token + the app SID so we can verify easily
+    return res.status(200).json({
+      token: token.toJwt(),
+      identity,
+      usingPersonal,
+      accountSid,
+      outgoingAppSid: OUTGOING_APP_SID || null,
+    });
   } catch (err: any) {
     console.error("❌ voice/token error:", err);
     return res.status(500).json({ message: "Unable to generate token" });
