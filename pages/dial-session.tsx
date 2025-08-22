@@ -5,7 +5,7 @@ import Sidebar from "@/components/Sidebar";
 import CallSummary from "@/components/CallSummary";
 import BookAppointmentModal from "@/components/BookAppointmentModal";
 import { isCallAllowed } from "@/utils/checkCallTime";
-import { playRingback, stopRingback, primeAudioContext } from "@/utils/ringAudio";
+import { playRingback, stopRingback, primeAudioContext, ringAssetHealthcheck } from "@/utils/ringAudio";
 import toast from "react-hot-toast";
 import { joinConference, leaveConference, setMuted as sdkSetMuted, getMuted as sdkGetMuted } from "@/utils/voiceClient";
 
@@ -57,8 +57,6 @@ export default function DialSession() {
   const activeCallSidRef = useRef<string | null>(null);
   const activeConferenceRef = useRef<string | null>(null);
   const placingCallRef = useRef<boolean>(false);
-
-  // NOTE: we now "early join" (silent) AND still join on answered via socket
   const joinedRef = useRef<boolean>(false);
 
   // prevent duplicate disposition clicks
@@ -171,12 +169,30 @@ export default function DialSession() {
     nextLeadTimeoutRef.current = setTimeout(() => { if (!sessionEndedRef.current) nextLead(); }, DIAL_DELAY_MS);
   };
 
+  // Ask for mic once up-front; if denied, we won't join.
+  const ensureMicPermission = async (): Promise<boolean> => {
+    try {
+      if (!navigator?.mediaDevices?.getUserMedia) return true; // older browsers
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      // stop tracks immediately; Twilio will attach its own
+      stream.getTracks().forEach((t) => t.stop());
+      return true;
+    } catch (e: any) {
+      console.warn("Mic permission denied or failed:", e?.message || e);
+      toast.error("Please allow microphone access to make calls.");
+      return false;
+    }
+  };
+
   /** bootstrap **/
   useEffect(() => {
-    try {
-      const maybe = primeAudioContext() as unknown;
-      if ((maybe as any)?.catch) (maybe as Promise<void>).catch(() => {});
-    } catch {}
+    (async () => {
+      try { await primeAudioContext(); } catch {}
+      try {
+        const ok = await ringAssetHealthcheck();
+        if (!ok) console.warn("ringback.mp3 not reachable at /ringback.mp3 — place it in /public");
+      } catch {}
+    })();
   }, []);
 
   useEffect(() => {
@@ -297,8 +313,12 @@ export default function DialSession() {
     }
 
     try {
+      // ensure mic permission up-front so we get 2-way audio
+      const micOK = await ensureMicPermission();
+      if (!micOK) { setStatus("Mic permission required"); return; }
+
       advanceScheduledRef.current = false;
-      joinedRef.current = false; // we will set true once joinConference resolves
+      joinedRef.current = false;
       setStatus("Dialing…");
       setCallActive(true);
       playRingback();
@@ -317,24 +337,20 @@ export default function DialSession() {
       activeCallSidRef.current = callSid;
       activeConferenceRef.current = conferenceName;
 
-      // ✅ EARLY JOIN: park the browser in the silent conference immediately.
-      // Ringback keeps playing until we get "answered" OR we timeout.
+      // Early join (silent)
       try {
         if (!joinedRef.current && activeConferenceRef.current) {
           joinedRef.current = true;
           await joinConference(activeConferenceRef.current);
         }
       } catch (e) {
-        // If early join fails, we'll try again on "answered"
         joinedRef.current = false;
         console.warn("Early join failed; will retry on answered:", e);
       }
 
-      // Watchdog for no-answer and bookkeeping
       scheduleWatchdog();
       setSessionStartedCount((n) => n + 1);
 
-      // Best-effort logging
       fetch("/api/leads/add-transcript", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -383,7 +399,6 @@ export default function DialSession() {
     }
   };
 
-  // Try common endpoints to persist disposition; always fall back to history log
   const persistDisposition = async (leadId: string, label: string) => {
     const candidates: Array<{ url: string; body: any; required?: boolean }> = [
       { url: "/api/leads/set-disposition", body: { leadId, disposition: label } },
@@ -426,15 +441,12 @@ export default function DialSession() {
       stopRingback();
       killAllTimers();
 
-      // End any active call cleanly
       await hangupActiveCall(`disposition-${label.replace(/\s+/g, "-").toLowerCase()}`);
       await leaveIfJoined(`disposition-${label.replace(/\s+/g, "-").toLowerCase()}`);
       setCallActive(false);
 
-      // Persist server-side (best-effort)
       await persistDisposition(lead.id, label);
 
-      // Local UI history
       setHistory((prev) => [`🏷️ Disposition: ${label}`, ...prev]);
       setStatus(`Disposition saved: ${label}`);
       toast.success(`Saved: ${label}`);
@@ -571,7 +583,6 @@ export default function DialSession() {
               stopRingback();
               clearWatchdog();
 
-              // JOIN (backup in case early-join failed)
               if (!joinedRef.current && activeConferenceRef.current) {
                 try {
                   joinedRef.current = true;

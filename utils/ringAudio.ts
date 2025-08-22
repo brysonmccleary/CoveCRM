@@ -1,49 +1,52 @@
 // utils/ringAudio.ts
+// Robust ringback player with autoplay fallback, using /ringback.mp3
+
 let audioEl: HTMLAudioElement | null = null;
 
-export function primeAudioContext() {
+export async function primeAudioContext(): Promise<void> {
   try {
-    const a = new Audio();
-    a.muted = true;
-    a.play().catch(() => {});
-    a.pause();
+    const AC: any = (window as any).AudioContext || (window as any).webkitAudioContext;
+    if (!AC) return;
+    const ctx = new AC();
+    if (ctx.state === "suspended") await ctx.resume();
   } catch {}
 }
 
-export function playRingback() {
+function ensureEl() {
+  if (audioEl) return audioEl;
+  audioEl = new Audio("/ringback.mp3"); // <-- filename here
+  audioEl.loop = true;
+  audioEl.preload = "auto";
+  audioEl.crossOrigin = "anonymous";
+  audioEl.volume = 0.35;
+  return audioEl;
+}
+
+export async function playRingback(): Promise<void> {
+  const el = ensureEl();
   try {
-    stopRingback();
-    audioEl = new Audio("/ring.mp3"); // your asset
-    audioEl.loop = true;
-    // tag so our DOM tone killer never touches it
-    (audioEl as any).dataset = (audioEl as any).dataset || {};
-    (audioEl as any).dataset.coveRing = "1";
-    audioEl.play().catch(() => {});
+    await el.play();
+  } catch (err) {
+    // Autoplay blocked (Safari). Resume on first tap/click.
+    const resume = async () => { try { await el.play(); } catch {} document.removeEventListener("click", resume); };
+    document.addEventListener("click", resume, { once: true, passive: true });
+  }
+}
+
+export function stopRingback(): void {
+  try {
+    if (!audioEl) return;
+    audioEl.pause();
+    audioEl.currentTime = 0;
   } catch {}
 }
 
-export function stopRingback() {
+// Quick HEAD check to verify the asset is reachable.
+export async function ringAssetHealthcheck(): Promise<boolean> {
   try {
-    if (audioEl) {
-      audioEl.pause();
-      audioEl.src = "";
-      audioEl.remove();
-      audioEl = null;
-    }
-  } catch {}
-}
-
-// nuclear option if needed elsewhere (kept)
-export function forceStopAllSounds() {
-  stopRingback();
-  try {
-    document.querySelectorAll("audio").forEach((el) => {
-      const a = el as HTMLAudioElement;
-      if ((a as any).dataset?.coveRing === "1") return; // keep ours
-      try { a.pause(); } catch {}
-      try { a.removeAttribute("src"); } catch {}
-      try { (a as any).srcObject = null; } catch {}
-      try { a.remove(); } catch {}
-    });
-  } catch {}
+    const r = await fetch("/ringback.mp3", { method: "HEAD", cache: "no-store" }); // <-- filename here
+    return r.ok;
+  } catch {
+    return false;
+  }
 }
