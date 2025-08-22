@@ -1,11 +1,9 @@
-// /pages/api/voice/agent-join.ts
-// TwiML for the BROWSER leg (Twilio Client) to join the same conference
+// pages/api/voice/agent-join.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { twiml as TwilioTwiml } from "twilio";
 
 export const config = { api: { bodyParser: false } };
 
-// Read raw body (bodyParser disabled)
 async function readRawBody(req: NextApiRequest): Promise<string> {
   return await new Promise((resolve, reject) => {
     let data = "";
@@ -15,8 +13,15 @@ async function readRawBody(req: NextApiRequest): Promise<string> {
   });
 }
 
+function baseUrl(req: NextApiRequest) {
+  const envBase = process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "";
+  if (envBase) return envBase.replace(/\/$/, "");
+  const proto = (req.headers["x-forwarded-proto"] as string) || "https";
+  const host = req.headers.host || "localhost:3000";
+  return `${proto}://${host}`;
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  // Try to pull `conferenceName` from x-www-form-urlencoded body (POST), then from query
   let conferenceName = "default";
 
   try {
@@ -28,9 +33,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (fromBody) conferenceName = fromBody;
       }
     }
-  } catch {
-    // ignore body read errors and fall back to query/default
-  }
+  } catch {}
 
   const fromQuery = (req.query.conferenceName as string) || "";
   if (!conferenceName && fromQuery) conferenceName = fromQuery;
@@ -38,14 +41,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const vr = new TwilioTwiml.VoiceResponse();
   const dial = vr.dial();
 
+  const silence = `${baseUrl(req)}/api/voice/silence`;
+
   dial.conference(
     {
       startConferenceOnEnter: true,
       endConferenceOnExit: true,
-      beep: false,            // no entry/exit beep
-      // Note: if you want absolute silence when waiting, provide a silent TwiML URL here.
-      // waitUrl: "https://handler.twilio.com/twiml/EHxxxxxxxxxxxxxxxxxxxx", 
-      // waitMethod: "POST",
+      beep: false,
+      waitUrl: silence,        // <- total silence while “waiting”
+      waitMethod: "POST",
     } as any,
     String(conferenceName),
   );
