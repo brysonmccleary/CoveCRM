@@ -5,7 +5,7 @@ let DeviceCtor: any | null = null;
 
 // Singleton state
 let device: any | null = null;
-let activeConnection: any | null = null;
+let activeCall: any | null = null;
 let registered = false;
 let refreshing = false;
 
@@ -36,10 +36,7 @@ async function ensureDevice(): Promise<void> {
 
   if (!DeviceCtor) {
     const mod = await import("@twilio/voice-sdk");
-    DeviceCtor =
-      (mod as any).Device ||
-      (mod as any).default?.Device ||
-      (mod as any); // safeguard for different build outputs
+    DeviceCtor = (mod as any).Device || (mod as any).default?.Device || (mod as any);
   }
 
   const token = await fetchToken();
@@ -52,8 +49,6 @@ async function ensureDevice(): Promise<void> {
       disableAudioContextProxy: true,
       closeProtection: false,
       allowIncomingWhileBusy: false,
-      // You can add audioConstraints here if needed for specific browsers.
-      // rtcConstraints: { audio: true } // default is fine in most cases
     });
 
     device.on("error", (e: any) => {
@@ -68,31 +63,16 @@ async function ensureDevice(): Promise<void> {
       registered = false;
     });
 
-    // Token lifecycle safety nets
-    device.on?.("tokenWillExpire", () => {
-      // refresh a bit early when Twilio warns us
-      void refreshTokenSoon();
+    // No inbound in this app; reject immediately to keep the device clean
+    device.on("incoming", (call: any) => {
+      try { call.reject(); } catch {}
     });
-    device.on?.("tokenExpired", () => {
-      // attempt immediate refresh if possible
-      void refreshTokenSoon();
-    });
-
-    // We don’t accept inbound in this app; auto-reject to stay clean
-    device.on("incoming", (conn: any) => {
-      try {
-        conn.reject();
-      } catch {}
-    });
-
   } else {
-    // Device exists; refresh token
+    // Refresh token on an existing device
     try {
       await device.updateToken(token);
     } catch {
-      try {
-        device.destroy();
-      } catch {}
+      try { device.destroy(); } catch {}
       device = null;
       return ensureDevice();
     }
@@ -117,96 +97,56 @@ async function refreshTokenSoon() {
   }
 }
 
-// Internal helper to nuke all connections safely
-async function disconnectAllSafe() {
-  try {
-    // Disconnect the tracked connection first
-    activeConnection?.disconnect?.();
-  } catch {}
-  activeConnection = null;
-
-  // Then ask the device to drop anything else it might still be holding
-  try {
-    device?.disconnectAll?.();
-  } catch {}
-}
-
 // ---- PUBLIC API
 
 // Join a conference by name (Twilio will invoke your TwiML App URL /api/voice/agent-join)
 export async function joinConference(conferenceName: string) {
   await ensureDevice();
 
-  // Disconnect any stale connection first
-  await disconnectAllSafe();
+  // Disconnect any stale call first
+  try { activeCall?.disconnect?.(); } catch {}
+  activeCall = null;
 
   // These params are forwarded to your TwiML App request
   const params = { conferenceName };
 
-  return new Promise<any>((resolve, reject) => {
-    try {
-      const conn = device.connect({ params });
+  try {
+    // Voice SDK v2: connect() returns a Promise<Twilio.Call>
+    const call = await device.connect({ params });
 
-      conn.on("accept", () => {
-        // Refresh token ~45m in (default token TTL ~60m)
-        setTimeout(refreshTokenSoon, 45 * 60 * 1000);
-      });
+    // Hook events on the resolved Call instance
+    call.on("accept", () => {
+      // Refresh token ~45m in (default token TTL ~60m)
+      setTimeout(refreshTokenSoon, 45 * 60 * 1000);
+    });
 
-      conn.on("disconnect", () => {
-        if (activeConnection === conn) activeConnection = null;
-      });
+    call.on("disconnect", () => {
+      if (activeCall === call) activeCall = null;
+    });
 
-      conn.on?.("cancel", () => {
-        if (activeConnection === conn) activeConnection = null;
-      });
+    call.on("error", (e: any) => {
+      console.warn("Call error:", e?.message || e);
+    });
 
-      conn.on?.("reject", () => {
-        if (activeConnection === conn) activeConnection = null;
-      });
-
-      conn.on("error", (e: any) => {
-        console.warn("Connection error:", e?.message || e);
-      });
-
-      activeConnection = conn;
-      resolve(conn);
-    } catch (err) {
-      reject(err);
-    }
-  });
+    activeCall = call;
+    return call;
+  } catch (err) {
+    throw err;
+  }
 }
 
 // Leave the current conference and keep device around (fast rejoin next call)
 export async function leaveConference() {
-  await disconnectAllSafe();
-  // Keep the device registered for faster next-call connect.
-  // If you prefer to fully tear down between calls, you can unregister/destroy via fullyTearDown().
-}
-
-// Optional: hard reset everything (used only if you want a complete cleanup)
-export async function fullyTearDown() {
-  await disconnectAllSafe();
-  try {
-    await device?.unregister?.();
-  } catch {}
-  try {
-    device?.destroy?.();
-  } catch {}
-  device = null;
-  registered = false;
+  try { activeCall?.disconnect?.(); } catch {}
+  activeCall = null;
+  // Keeping device registered for faster next-call connect.
 }
 
 // Simple mute helpers for UI
 export function setMuted(mute: boolean) {
-  try {
-    activeConnection?.mute?.(!!mute);
-  } catch {}
+  try { activeCall?.mute?.(!!mute); } catch {}
 }
 
 export function getMuted(): boolean {
-  try {
-    return !!activeConnection?.isMuted?.();
-  } catch {
-    return false;
-  }
+  try { return !!activeCall?.isMuted?.(); } catch { return false; }
 }
