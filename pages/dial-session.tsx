@@ -1,4 +1,3 @@
-// pages/dial-session.tsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/router";
 import Sidebar from "@/components/Sidebar";
@@ -7,7 +6,7 @@ import BookAppointmentModal from "@/components/BookAppointmentModal";
 import { isCallAllowed } from "@/utils/checkCallTime";
 import { playRingback, stopRingback, primeAudioContext } from "@/utils/ringAudio";
 import toast from "react-hot-toast";
-import { joinConference, leaveConference } from "@/utils/voiceClient"; // NEW
+import { joinConference, leaveConference } from "@/utils/voiceClient"; // ⬅️ NEW
 
 interface Lead {
   id: string;
@@ -55,20 +54,17 @@ export default function DialSession() {
   const userEmailRef = useRef<string>("");
   const callWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // NEW: track any pending “advance/next” timers so End Session can cancel them
+  // Track any pending “advance/next” timers so End Session can cancel them
   const advanceTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const nextLeadTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const advanceScheduledRef = useRef<boolean>(false);
   const sessionEndedRef = useRef<boolean>(false); // hard block any redial after end
   const activeCallSidRef = useRef<string | null>(null);
+  const activeConferenceRef = useRef<string | null>(null);
 
-  // NEW: prevent duplicate call placement & block calls after End Session
+  // prevent duplicate call placement & block calls after End Session
   const placingCallRef = useRef<boolean>(false);
-
-  // NEW: keep a handle to the active WebRTC connection (from voiceClient.joinConference)
-  const rtcConnRef = useRef<any>(null);
-  const currentConferenceNameRef = useRef<string | null>(null);
 
   /** ---------- helpers ---------- */
 
@@ -151,7 +147,6 @@ export default function DialSession() {
     }
   };
 
-  // NEW: cancel any pending “advance / next” timers
   const clearAdvanceTimers = () => {
     if (advanceTimeoutRef.current) {
       clearTimeout(advanceTimeoutRef.current);
@@ -163,13 +158,13 @@ export default function DialSession() {
     }
   };
 
-  // NEW: one function to cancel *everything* that could fire a re-dial
+  // one function to cancel *everything* that could fire a re-dial
   const killAllTimers = () => {
     clearWatchdog();
     clearAdvanceTimers();
   };
 
-  // NEW: hard-hangup helper — ends the Twilio call at the source
+  // hard-hangup helper — ends the Twilio call at the source
   const hangupActiveCall = async (why?: string) => {
     const sid = activeCallSidRef.current;
     activeCallSidRef.current = null; // ensure at-most-once
@@ -187,6 +182,17 @@ export default function DialSession() {
     }
   };
 
+  const leaveIfJoined = async (why?: string) => {
+    try {
+      await leaveConference();
+      if (why) console.log("Left conference:", why, activeConferenceRef.current);
+    } catch (e) {
+      console.warn("leaveConference failed:", (e as any)?.message || e);
+    } finally {
+      activeConferenceRef.current = null;
+    }
+  };
+
   const scheduleWatchdog = () => {
     clearWatchdog();
     // If Twilio keeps ringing (no webhook), auto-advance + hard-hangup.
@@ -195,12 +201,13 @@ export default function DialSession() {
       setStatus("No answer (timeout)");
       stopRingback();
       hangupActiveCall("watchdog-timeout");
+      leaveIfJoined("watchdog-timeout");
       advanceScheduledRef.current = true;
       scheduleAdvance();
     }, 27000); // cushion around server-side ~25s
   };
 
-  // NEW: schedule advance -> next lead with global 2s delay
+  // schedule advance -> next lead with global 2s delay
   const scheduleAdvance = () => {
     if (advanceTimeoutRef.current) clearTimeout(advanceTimeoutRef.current);
     advanceTimeoutRef.current = setTimeout(() => {
@@ -209,7 +216,7 @@ export default function DialSession() {
     }, DIAL_DELAY_MS);
   };
 
-  // NEW: schedule next lead switch (kept separate for clarity)
+  // schedule next lead switch (kept separate for clarity)
   const scheduleNextLead = () => {
     if (nextLeadTimeoutRef.current) clearTimeout(nextLeadTimeoutRef.current);
     nextLeadTimeoutRef.current = setTimeout(() => {
@@ -365,9 +372,8 @@ export default function DialSession() {
 
   /** ---------- calling ---------- */
 
-  // STRICT: Only use the new server endpoint that calls the LEAD directly.
-  // RETURNS: { callSid, conferenceName }
-  const startOutboundCall = async (leadId: string): Promise<{ callSid: string; conferenceName?: string }> => {
+  // call API → returns { callSid, conferenceName }
+  const startOutboundCall = async (leadId: string): Promise<{ callSid: string; conferenceName: string }> => {
     if (sessionEndedRef.current) throw new Error("Session ended");
     const r = await fetch("/api/twilio/voice/call", {
       method: "POST",
@@ -383,7 +389,7 @@ export default function DialSession() {
       throw new Error(msg);
     }
     const j = (await r.json()) as { success?: boolean; callSid?: string; conferenceName?: string };
-    if (!j?.success || !j?.callSid) throw new Error("Call start did not return a callSid");
+    if (!j?.success || !j?.callSid || !j?.conferenceName) throw new Error("Call start did not return callSid + conferenceName");
     return { callSid: j.callSid, conferenceName: j.conferenceName };
   };
 
@@ -407,30 +413,24 @@ export default function DialSession() {
       setCallActive(true);
       playRingback();
 
-      // Server resolves numbers and dials the LEAD only (no agent phone).
+      // Server resolves numbers and dials the LEAD (no agent PSTN leg).
       const { callSid, conferenceName } = await startOutboundCall(leadToCall.id);
 
       if (sessionEndedRef.current) {
-        // If you ended during the fetch, immediately hang up the just-started call
+        // If you ended during the fetch, immediately hang up the just-started call and leave conf
         activeCallSidRef.current = callSid;
         await hangupActiveCall("ended-during-start");
+        await leaveIfJoined("ended-during-start");
         setCallActive(false);
         stopRingback();
         return;
       }
-      activeCallSidRef.current = callSid;
 
-      // 🔊 Join our WebRTC leg to the same conference immediately
-      if (conferenceName) {
-        currentConferenceNameRef.current = conferenceName;
-        try {
-          rtcConnRef.current = await joinConference(conferenceName);
-          // Ensure mute state propagates to the Twilio connection
-          try { rtcConnRef.current?.mute?.(muted); } catch {}
-        } catch (e) {
-          console.warn("Failed to join WebRTC conference:", (e as any)?.message || e);
-        }
-      }
+      activeCallSidRef.current = callSid;
+      activeConferenceRef.current = conferenceName;
+
+      // Join the browser to the conference so you hear real greetings/voicemail/beep
+      await joinConference(conferenceName);
 
       // Local watchdog in case a webhook is missed
       scheduleWatchdog();
@@ -464,12 +464,8 @@ export default function DialSession() {
       setStatus(err?.message || "Call failed");
       stopRingback();
       clearWatchdog();
+      await leaveIfJoined("start-failed");
       setCallActive(false);
-      // Clean up any partial WebRTC join
-      try { leaveConference(); } catch {}
-      rtcConnRef.current = null;
-      currentConferenceNameRef.current = null;
-
       if (!sessionEndedRef.current) {
         // move on so sessions never stall
         scheduleAdvance();
@@ -508,12 +504,7 @@ export default function DialSession() {
     stopRingback();
     killAllTimers();
     hangupActiveCall("agent-hangup");
-
-    // Leave WebRTC conference immediately
-    try { leaveConference(); } catch {}
-    rtcConnRef.current = null;
-    currentConferenceNameRef.current = null;
-
+    leaveIfJoined("agent-hangup");
     setStatus("Ended");
     setCallActive(false);
     if (!sessionEndedRef.current) {
@@ -579,12 +570,7 @@ export default function DialSession() {
     stopRingback();
     killAllTimers();
     hangupActiveCall("advance-next");
-
-    // Leave WebRTC conference immediately
-    try { leaveConference(); } catch {}
-    rtcConnRef.current = null;
-    currentConferenceNameRef.current = null;
-
+    leaveIfJoined("advance-next");
     setCallActive(false);
 
     // Wait 2s before switching leads & arming next dial
@@ -597,12 +583,7 @@ export default function DialSession() {
       stopRingback();
       killAllTimers();
       hangupActiveCall("pause");
-
-      // Leave conference while paused
-      try { leaveConference(); } catch {}
-      rtcConnRef.current = null;
-      currentConferenceNameRef.current = null;
-
+      leaveIfJoined("pause");
       setStatus("Paused");
     } else {
       setReadyToCall(true);
@@ -624,13 +605,9 @@ export default function DialSession() {
     setReadyToCall(false);
     setCallActive(false);
 
-    // Ensure any in-flight call is torn down
+    // Ensure any in-flight call is torn down + leave conference audio
     hangupActiveCall("end-session");
-
-    // Leave conference immediately
-    try { leaveConference(); } catch {}
-    rtcConnRef.current = null;
-    currentConferenceNameRef.current = null;
+    leaveIfJoined("end-session");
 
     setIsPaused(false);
     setStatus("Session ended");
@@ -675,7 +652,7 @@ export default function DialSession() {
         });
 
         // Main event from status-callback.ts
-        socket.on("call:status", (payload: any) => {
+        socket.on("call:status", async (payload: any) => {
           try {
             if (sessionEndedRef.current) return; // do nothing after End Session
 
@@ -712,6 +689,7 @@ export default function DialSession() {
               stopRingback();
               clearWatchdog();
               hangupActiveCall(`status-${s}`);
+              await leaveIfJoined(`status-${s}`);
               if (!advanceScheduledRef.current && !sessionEndedRef.current) {
                 advanceScheduledRef.current = true;
                 setStatus(s === "no-answer" ? "No answer" : s === "busy" ? "Busy" : "Failed");
@@ -723,6 +701,7 @@ export default function DialSession() {
               stopRingback();
               clearWatchdog();
               hangupActiveCall("status-completed");
+              await leaveIfJoined("status-completed");
               if (!advanceScheduledRef.current && !sessionEndedRef.current) {
                 advanceScheduledRef.current = true;
                 scheduleAdvance();
@@ -733,16 +712,14 @@ export default function DialSession() {
       } catch {}
     })();
 
+    // Leave any lingering conference if the component unmounts
     return () => {
       mounted = false;
       try {
         socketRef.current?.off?.("call:status");
         socketRef.current?.disconnect?.();
       } catch {}
-      // Always leave the conference when unmounting
-      try { leaveConference(); } catch {}
-      rtcConnRef.current = null;
-      currentConferenceNameRef.current = null;
+      leaveIfJoined("unmount");
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentLeadIndex, leadQueue.length, fromNumber]);
@@ -804,16 +781,7 @@ export default function DialSession() {
             })}
 
           <div className="flex flex-col space-y-2 mt-4">
-            <button
-              onClick={() =>
-                setMuted((m) => {
-                  const next = !m;
-                  try { rtcConnRef.current?.mute?.(next); } catch {}
-                  return next;
-                })
-              }
-              className="bg-purple-600 hover:bg-purple-700 px-3 py-2 rounded"
-            >
+            <button onClick={() => setMuted((m) => !m)} className="bg-purple-600 hover:bg-purple-700 px-3 py-2 rounded">
               {muted ? "Unmute" : "Mute"}
             </button>
             <button
