@@ -14,13 +14,14 @@ type TokenResponse = {
   identity: string;
   usingPersonal?: boolean;
   accountSid?: string;
+  outgoingAppSid?: string;
 };
 
 function isBrowser() {
   return typeof window !== "undefined" && typeof document !== "undefined";
 }
 
-// Fetch a fresh Access Token from our API
+// ---- Token fetch
 async function fetchToken(): Promise<string> {
   const r = await fetch("/api/twilio/voice/token");
   if (!r.ok) throw new Error("Failed to fetch voice token");
@@ -29,30 +30,31 @@ async function fetchToken(): Promise<string> {
   return j.token;
 }
 
-// Ensure we have the Voice Device loaded & registered
+// ---- Ensure Voice Device
 async function ensureDevice(): Promise<void> {
   if (!isBrowser()) throw new Error("voiceClient must run in the browser");
 
   if (!DeviceCtor) {
-    // Lazy-load the SDK only in the browser
     const mod = await import("@twilio/voice-sdk");
-    DeviceCtor = (mod as any).Device || (mod as any).default?.Device || (mod as any);
+    DeviceCtor =
+      (mod as any).Device ||
+      (mod as any).default?.Device ||
+      (mod as any); // safeguard for different build outputs
   }
-  if (device && registered) return;
 
   const token = await fetchToken();
 
   if (!device) {
     device = new DeviceCtor(token, {
       logLevel: "error",
-      // Prefer Opus for better audio; PCMU fallback
       codecPreferences: ["opus", "pcmu"],
-      // Auto-reconnect on network blips
       allowIceRestart: true,
+      disableAudioContextProxy: true,
+      closeProtection: false,
+      allowIncomingWhileBusy: false,
     });
 
     device.on("error", (e: any) => {
-      // Keep logs concise
       console.warn("Twilio Device error:", e?.message || e);
     });
 
@@ -64,17 +66,20 @@ async function ensureDevice(): Promise<void> {
       registered = false;
     });
 
-    // Optional: handle incoming (we don't use them here, so auto-reject)
+    // We don’t accept inbound in this app; auto-reject to stay clean
     device.on("incoming", (conn: any) => {
-      try { conn.reject(); } catch {}
+      try {
+        conn.reject();
+      } catch {}
     });
   } else {
-    // Device existed but was not registered or token expired: refresh
+    // Device exists; refresh token
     try {
       await device.updateToken(token);
     } catch {
-      // If updateToken fails, rebuild the device
-      try { device.destroy(); } catch {}
+      try {
+        device.destroy();
+      } catch {}
       device = null;
       return ensureDevice();
     }
@@ -85,7 +90,7 @@ async function ensureDevice(): Promise<void> {
   }
 }
 
-// Proactively refresh the token (safe no-op if already refreshing)
+// ---- Proactive token refresh (safe no-op if already refreshing)
 async function refreshTokenSoon() {
   if (refreshing || !device) return;
   refreshing = true;
@@ -99,24 +104,27 @@ async function refreshTokenSoon() {
   }
 }
 
-// Join a conference by name (must have a TwiML App whose Voice URL is /api/voice/agent-join)
+// ---- PUBLIC API
+
+// Join a conference by name (Twilio will invoke your TwiML App URL /api/voice/agent-join)
 export async function joinConference(conferenceName: string) {
   await ensureDevice();
 
   // Disconnect any stale connection first
-  try { activeConnection?.disconnect?.(); } catch {}
+  try {
+    activeConnection?.disconnect?.();
+  } catch {}
   activeConnection = null;
 
-  // Connect with params the TwiML App expects
+  // These params are forwarded to your TwiML App request
   const params = { conferenceName };
 
-  // Connection event wiring
   return new Promise<any>((resolve, reject) => {
     try {
       const conn = device.connect({ params });
 
       conn.on("accept", () => {
-        // Schedule a token refresh a bit before typical 1h expiry
+        // Refresh token ~45m in (default token TTL ~60m)
         setTimeout(refreshTokenSoon, 45 * 60 * 1000);
       });
 
@@ -130,30 +138,35 @@ export async function joinConference(conferenceName: string) {
 
       activeConnection = conn;
 
-      // Minimal control surface we expose to the UI
-      const control = {
-        mute: (m: boolean) => {
-          try { conn.mute(!!m); } catch {}
-        },
-        disconnect: () => {
-          try { conn.disconnect(); } catch {}
-        },
-      };
-
-      resolve(control);
+      resolve(conn);
     } catch (err) {
       reject(err);
     }
   });
 }
 
-// Leave the current conference and unregister
-export function leaveConference() {
-  try { activeConnection?.disconnect?.(); } catch {}
+// Leave the current conference and keep device around (fast rejoin next call)
+export async function leaveConference() {
+  try {
+    activeConnection?.disconnect?.();
+  } catch {}
   activeConnection = null;
 
-  if (device) {
-    try { device.unregister(); } catch {}
-    // keep device instance around so we can re-register quickly next call
+  // Keep the device registered for faster next-call connect.
+  // If you prefer to fully tear down between calls, you can unregister/destroy here.
+}
+
+// Simple mute helpers for UI
+export function setMuted(mute: boolean) {
+  try {
+    activeConnection?.mute?.(!!mute);
+  } catch {}
+}
+
+export function getMuted(): boolean {
+  try {
+    return !!activeConnection?.isMuted?.();
+  } catch {
+    return false;
   }
 }
