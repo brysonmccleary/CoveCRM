@@ -14,6 +14,13 @@ interface Lead {
   }[];
 }
 
+function fmtStamp(input?: string) {
+  if (!input) return "";
+  const d = new Date(input);
+  if (isNaN(d.getTime())) return "";
+  return format(d, "MM/dd - h:mm");
+}
+
 export default function ConversationsPanel() {
   const [leads, setLeads] = useState<Lead[]>([]);
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
@@ -36,7 +43,7 @@ export default function ConversationsPanel() {
 
     await axios.post("/api/twilio/send-sms", {
       to: selectedLead.Phone,
-      from: selectedLead.Phone, // keep existing routing; backend decides actual sender
+      from: selectedLead.Phone, // backend decides actual sender
       body: reply,
       leadId: selectedLead._id,
     });
@@ -52,10 +59,9 @@ export default function ConversationsPanel() {
     if (!selectedLead || !bookingTime || bookingForMessageIndex === null) return;
 
     try {
-      // ⬇️ Updated endpoint
       const res = await axios.post("/api/calendar/create-event", {
         leadId: selectedLead._id,
-        time: bookingTime, // datetime-local string; API will convert & default to 30m duration
+        time: bookingTime,
         phone: selectedLead.Phone,
         name: selectedLead["First Name"],
       });
@@ -74,7 +80,7 @@ export default function ConversationsPanel() {
     }
   };
 
-  // keep auto-scroll to bottom when thread changes
+  // auto-scroll to bottom when thread changes
   useEffect(() => {
     if (chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight;
   }, [selectedLead?.interactionHistory?.length]);
@@ -86,6 +92,7 @@ export default function ConversationsPanel() {
         <h3 className="font-semibold text-lg mb-3">Conversations</h3>
         {leads.map((lead) => {
           const lastMsg = lead.interactionHistory?.slice(-1)[0];
+          const listTime = lastMsg?.date || lead.updatedAt;
           return (
             <div
               key={lead._id}
@@ -96,9 +103,7 @@ export default function ConversationsPanel() {
             >
               <p className="font-bold">{lead["First Name"]}</p>
               <p className="text-sm text-gray-600 truncate">{lastMsg?.text}</p>
-              <p className="text-xs text-gray-400">
-                {format(new Date(lead.updatedAt), "MM/dd @ h:mma")}
-              </p>
+              <p className="text-xs text-gray-400">{fmtStamp(listTime)}</p>
             </div>
           );
         })}
@@ -118,14 +123,10 @@ export default function ConversationsPanel() {
             >
               {selectedLead.interactionHistory.map((msg, idx) => {
                 const isSystem = msg.type === "system";
-                const isSent = msg.type === "outbound" || msg.type === "ai"; // ✅ treat AI as sent
+                const isSent = msg.type === "outbound" || msg.type === "ai";
                 const isReceived = msg.type === "inbound";
                 const showBooking = bookingForMessageIndex === idx;
 
-                // bubble alignment + colors:
-                // - Sent (outbound/ai): RIGHT in GREEN
-                // - Received (inbound): LEFT neutral
-                // - System: centered gray
                 const containerAlign = isSystem
                   ? "items-center"
                   : isSent
@@ -142,9 +143,7 @@ export default function ConversationsPanel() {
                   <div key={idx} className={`flex flex-col gap-1 ${containerAlign}`}>
                     <div className={`p-2 rounded-2xl max-w-[75%] ${bubbleClasses}`}>
                       <p className="text-sm whitespace-pre-line">{msg.text}</p>
-                      <p className="text-[10px] mt-1 text-right">
-                        {format(new Date(msg.date), "MM/dd h:mma")}
-                      </p>
+                      <p className="text-[10px] mt-1 text-right">{fmtStamp(msg.date)}</p>
                     </div>
 
                     {(isReceived || msg.type === "ai") && (

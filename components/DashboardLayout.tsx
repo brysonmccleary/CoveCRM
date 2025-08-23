@@ -1,9 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { signOut } from "next-auth/react";
 import Image from "next/image";
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const [unreadCount, setUnreadCount] = useState(0);
+  const intervalRef = useRef<NodeJS.Timeout | null>(null);
+  const socketRef = useRef<any>(null);
 
   const links = [
     { name: "Home", path: "/dashboard?tab=home" },
@@ -15,22 +17,51 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     { name: "Settings", path: "/dashboard?tab=settings" },
   ];
 
+  const fetchUnread = async () => {
+    try {
+      const res = await fetch("/api/conversations/unread-count");
+      const data = await res.json();
+      if (res.ok && typeof data.count === "number") {
+        setUnreadCount(data.count);
+      }
+    } catch (err) {
+      console.error("Unread fetch error:", err);
+    }
+  };
+
   useEffect(() => {
-    const fetchUnread = async () => {
+    // initial fetch + polling
+    fetchUnread();
+    intervalRef.current = setInterval(fetchUnread, 15000);
+
+    // socket live updates
+    (async () => {
       try {
-        const res = await fetch("/api/conversations/unread-count");
-        const data = await res.json();
-        if (res.ok && typeof data.count === "number") {
-          setUnreadCount(data.count);
-        }
-      } catch (err) {
-        console.error("Unread fetch error:", err);
+        const { io } = await import("socket.io-client");
+        const s = io({ path: "/api/socket" });
+        socketRef.current = s;
+
+        const refetch = () => fetchUnread();
+        s.on("connect", refetch);
+        s.on("message:new", refetch);
+        s.on("message:read", refetch);
+        s.on("conversation:updated", refetch);
+      } catch (e) {
+        console.warn("socket setup failed (layout), polling only", e);
+      }
+    })();
+
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+      if (socketRef.current) {
+        try {
+          socketRef.current.off("message:new");
+          socketRef.current.off("message:read");
+          socketRef.current.off("conversation:updated");
+          socketRef.current.disconnect();
+        } catch {}
       }
     };
-
-    fetchUnread();
-    const interval = setInterval(fetchUnread, 15000);
-    return () => clearInterval(interval);
   }, []);
 
   const badge = (count: number) =>
@@ -44,7 +75,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     <div className="flex min-h-screen text-white">
       <div className="w-60 p-4 bg-[#0f172a] flex flex-col justify-between border-r border-[#1e293b]">
         <div>
-          {/* ✅ Logo and title row */}
+          {/* Logo and title row */}
           <div className="flex items-center gap-2 mb-6">
             <Image
               src="/logo.png"
@@ -73,7 +104,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
         <div className="mt-8">
           <button
-            // Send users back to the hosted sign-in page (no localhost fallback)
             onClick={() => signOut({ callbackUrl: "/auth/signin" })}
             className="block text-red-400 hover:underline"
           >
