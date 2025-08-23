@@ -181,6 +181,8 @@ async function resolveLeadForSend(opts: {
 
 /**
  * Core implementation used by both `sendSMS()` and the newer `sendSms({...})`.
+ * NOW prefers an explicit `from` override. If none is provided, will
+ * auto-detect the right sender number from the last message in the thread.
  */
 async function sendCore(paramsIn: {
   to: string;
@@ -223,18 +225,16 @@ async function sendCore(paramsIn: {
     legacyA2P?.messagingServiceSid ||
     null;
 
-  if (!messagingServiceSid && !usingPersonal) {
-    messagingServiceSid = await ensureTenantMessagingService(
-      String(user._id),
-      user.name || user.email,
-    );
+  // If an explicit `from` is requested, FORCE direct-from path (ignore MSID)
+  if (paramsIn.from) {
+    messagingServiceSid = null;
   }
+
   if (!messagingServiceSid && !paramsIn.from) {
-    throw new Error(
-      "No Messaging Service linked. Please link your A2P-approved Messaging Service to your account.",
-    );
+    // we *might* still fill a from later from thread history; keep this check for now
+    // (actual enforcement happens a bit later before dispatch)
   }
-  console.log(`🛠 msid=${messagingServiceSid || "(from number)"}`);
+  console.log(`🛠 initial route msid=${messagingServiceSid || "(from number path)"}`);
 
   // Compliance gate (US only) — only when using a Messaging Service path
   const approvedViaUser =
@@ -244,14 +244,14 @@ async function sendCore(paramsIn: {
 
   if (
     isUSDest &&
-    !paramsIn.from &&
+    messagingServiceSid &&            // gate only if we're actually using an MSID
     !(approvedViaUser || approvedViaShared || approvedViaLegacy || DEV_ALLOW_UNAPPROVED)
   ) {
     throw new Error(
       "Texting is not enabled yet. Your A2P 10DLC registration is pending or not linked.",
     );
   }
-  if (DEV_ALLOW_UNAPPROVED && isUSDest && !paramsIn.from && !approvedViaUser && !approvedViaShared && !approvedViaLegacy) {
+  if (DEV_ALLOW_UNAPPROVED && isUSDest && messagingServiceSid && !approvedViaUser && !approvedViaShared && !approvedViaLegacy) {
     console.warn("[DEV] A2P not approved — sending anyway because DEV_ALLOW_UNAPPROVED=1");
   }
 
@@ -261,6 +261,27 @@ async function sendCore(paramsIn: {
     userEmail: user.email,
     toNorm,
   });
+
+  // --- Auto-select FROM based on thread if no explicit override ---
+  let forcedFrom: string | null = paramsIn.from || null;
+  if (!forcedFrom && lead?._id) {
+    const lastMsg = await Message.findOne({ leadId: lead._id })
+      .sort({ createdAt: -1 })
+      .lean()
+      .exec();
+
+    if (lastMsg?.direction === "inbound" && lastMsg.to) {
+      // Lead texted INTO this number → reply FROM that number
+      forcedFrom = String(lastMsg.to);
+    } else if (lastMsg?.from) {
+      // Last outbound used this number
+      forcedFrom = String(lastMsg.from);
+    }
+    if (forcedFrom) {
+      messagingServiceSid = null; // force direct-from path
+      console.log(`📎 thread-stick: forcing from=${forcedFrom} for lead=${String(lead?._id)}`);
+    }
+  }
 
   // Opt-out suppression (supports either flag)
   if ((lead as any)?.optOut === true || (lead as any)?.unsubscribed === true) {
@@ -274,6 +295,7 @@ async function sendCore(paramsIn: {
       suppressed: true,
       reason: "opt_out",
       to: toNorm,
+      from: forcedFrom || undefined,
       fromServiceSid: messagingServiceSid || undefined,
       queuedAt: new Date(),
     });
@@ -296,13 +318,15 @@ async function sendCore(paramsIn: {
     suppressed: false,
     reason: isQuiet ? "scheduled_quiet_hours" : undefined,
     to: toNorm,
-    from: paramsIn.from || undefined,
+    from: forcedFrom || undefined,
     fromServiceSid: messagingServiceSid || undefined,
     queuedAt: new Date(),
     scheduledAt: isQuiet && scheduledAt ? scheduledAt : undefined,
   });
   const messageId = String(preRow._id);
-  console.log(`⏳ queued msid=${messagingServiceSid || "(from)"} messageId=${messageId}`);
+  console.log(
+    `⏳ queued msid=${messagingServiceSid || "(from)"} from=${forcedFrom || "(auto)"} messageId=${messageId}`
+  );
 
   // Build Twilio params
   const twParams: MessageListInstanceCreateOptions = {
@@ -317,17 +341,30 @@ async function sendCore(paramsIn: {
 
   if (messagingServiceSid) {
     (twParams as any).messagingServiceSid = messagingServiceSid;
+    // Only MSID supports scheduling
     if (isQuiet && scheduledAt) {
       (twParams as any).scheduleType = "fixed";
       (twParams as any).sendAt = scheduledAt; // Date object
     }
-  } else if (paramsIn.from) {
-    (twParams as any).from = paramsIn.from;
+  } else if (forcedFrom) {
+    (twParams as any).from = forcedFrom;
     if (isQuiet && scheduledAt) {
       console.warn("⚠️ Quiet hours: cannot schedule without a Messaging Service SID; sending immediately.");
     }
   } else {
-    throw new Error("No routing set (neither messagingServiceSid nor from).");
+    // No route selected by now → try to fallback by minting tenant MSID if possible
+    if (!usingPersonal) {
+      const msid = await ensureTenantMessagingService(String(user._id), user.name || user.email);
+      (twParams as any).messagingServiceSid = msid;
+      messagingServiceSid = msid;
+      if (isQuiet && scheduledAt) {
+        (twParams as any).scheduleType = "fixed";
+        (twParams as any).sendAt = scheduledAt;
+      }
+      console.log(`🛠 fallback tenant MSID created/used: ${msid}`);
+    } else {
+      throw new Error("No routing set (neither messagingServiceSid nor from).");
+    }
   }
 
   // Throttle per MSID (simple in-process)
@@ -336,7 +373,7 @@ async function sendCore(paramsIn: {
   if (messagingServiceSid) await throttleForSender(messagingServiceSid, mps);
 
   try {
-    console.log(`🚀 dispatched to=${toNorm} msid=${messagingServiceSid || "(from)"} messageId=${messageId}`);
+    console.log(`🚀 dispatched to=${toNorm} via=${messagingServiceSid ? "MSID" : "FROM"} messageId=${messageId}`);
     const tw = await client.messages.create(twParams);
 
     // Billing parity
@@ -352,11 +389,11 @@ async function sendCore(paramsIn: {
       $set: {
         sid: tw.sid,
         status: newStatus,
-        sentAt: isQuiet && scheduledAt ? scheduledAt : new Date(),
+        sentAt: isQuiet && scheduledAt && messagingServiceSid ? scheduledAt : new Date(),
       },
     }).exec();
 
-    if (isQuiet && scheduledAt) {
+    if (isQuiet && scheduledAt && messagingServiceSid) {
       console.log(
         `🕘 scheduled sid=${tw.sid} at=${scheduledAt.toISOString()} zone=${zone} messageId=${messageId}`
       );

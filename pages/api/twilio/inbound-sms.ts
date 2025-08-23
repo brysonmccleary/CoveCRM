@@ -11,7 +11,7 @@ import { getTimezoneFromState } from "@/utils/timezone";
 import { DateTime } from "luxon";
 import { buffer } from "micro";
 import axios from "axios";
-import { sendAppointmentBookedEmail } from "@/lib/email"; // ✅ existing
+import { sendAppointmentBookedEmail } from "@/lib/email";
 
 export const config = { api: { bodyParser: false } };
 
@@ -253,6 +253,7 @@ interface LeadMemory {
   apptText?: string | null;
   tz?: string;
   lastConfirmAtISO?: string | null;
+  lastDraft?: string | null; // ✅ store the draft we plan to send
 }
 function askedRecently(memory: LeadMemory, key: string) {
   const hay = memory.lastAsked || [];
@@ -298,7 +299,7 @@ function historyToChatMessages(history: any[] = []) {
     if (m.type === "inbound") msgs.push({ role: "user", content: String(m.text) });
     else if (m.type === "ai" || m.type === "outbound") msgs.push({ role: "assistant", content: String(m.text) });
   }
-  return msgs.slice(-24);
+  return msgs.slice(-24); // last ~12 turns
 }
 
 // --- conversational reply
@@ -316,11 +317,13 @@ async function generateConversationalReply(opts: {
 
   const sys = `
 You are a helpful human-like SMS assistant for an insurance agent.
-- Tone: friendly, concise, natural texting (1–2 sentences).
+- Speak like a real person texting: friendly, concise, natural (1–2 sentences, ~240 chars max).
 - No names/signatures. No links. No emojis.
-- Steer back to ${context}.
-- Ask exactly one concrete follow-up to move forward.
-- Avoid repeating prior assistant lines; banned: ${banned.join(" | ") || "(none)"}.
+- You can acknowledge their message briefly (one clause), then pivot toward ${context} and time booking.
+- Ask exactly ONE specific follow-up each turn.
+- Vary phrasing—avoid repeating any of these: ${banned.join(" | ") || "(none)"}.
+- If they ask about cost or time commitment, answer briefly then ask for a time.
+- Keep momentum: suggest two choices when helpful (e.g., “later today or tomorrow afternoon?”).
 - Local timezone: ${tz}.
 `.trim();
 
@@ -331,8 +334,8 @@ You are a helpful human-like SMS assistant for an insurance agent.
     model: "gpt-4o-mini",
     temperature: 0.7,
     top_p: 0.9,
-    presence_penalty: 0.4,
-    frequency_penalty: 0.6,
+    presence_penalty: 0.5,
+    frequency_penalty: 0.7,
     messages: [{ role: "system", content: sys }, ...chat],
   });
 
@@ -415,7 +418,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (!user) {
       console.warn("⚠️ No user matched for To number:", toNumber);
-      // Still persist message unattached to a lead for visibility, if you want.
       return res.status(200).json({ message: "No user found for this number." });
     }
 
@@ -431,20 +433,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       (await Lead.findOne({ userEmail: user.email, phone: `+${fromDigits}` }));
 
     if (!lead) {
-      // Auto-create a minimal lead so Conversations can show the thread
-      const minimal = {
-        userEmail: user.email,
-        Phone: fromNumber,
-        phone: fromNumber,
-        "First Name": "SMS",
-        "Last Name": "Lead",
-        source: "inbound_sms",
-        status: "New",
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      } as any;
       try {
-        lead = await Lead.create(minimal);
+        lead = await Lead.create({
+          userEmail: user.email,
+          Phone: fromNumber,
+          phone: fromNumber,
+          "First Name": "SMS",
+          "Last Name": "Lead",
+          source: "inbound_sms",
+          status: "New",
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        } as any);
         console.log("➕ Created minimal lead for inbound:", fromNumber);
       } catch (e) {
         console.warn("⚠️ Failed to auto-create lead:", e);
@@ -452,13 +452,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     if (!lead) {
-      // Could not create; acknowledge anyway to avoid Twilio retries
       return res.status(200).json({ message: "Lead not found/created, acknowledged." });
     }
 
     const io = (res.socket as any)?.server?.io;
 
-    // Persist inbound message (with sid & delivery metadata)
+    // Persist inbound message
     await Message.create({
       leadId: lead._id,
       userEmail: user.email,
@@ -486,7 +485,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (io) io.to(user.email).emit("message:new", { leadId: lead._id, ...inboundEntry });
 
-    // === Keyword handling: we only toggle flags + note. No outbound auto-replies here. ===
+    // === Keyword handling (no auto-reply here, just flags) ===
     if (isOptOut(body)) {
       lead.assignedDrips = [];
       (lead as any).dripProgress = [];
@@ -545,12 +544,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(200).json({ message: "Lead unsubscribed; no auto-reply." });
     }
 
-    // If this reply is from a retention campaign, don't engage AI
+    // Do not engage AI for retention campaigns
     const assignedDrips = (lead as any).assignedDrips || [];
     const isClientRetention = (assignedDrips as any[]).some((id: any) => typeof id === "string" && id.includes("client_retention"));
     if (isClientRetention) return res.status(200).json({ message: "Client retention reply — no AI engagement." });
 
-    // ✅ Cancel drips & engage AI (kept from your original file)
+    // ✅ Cancel drips & engage AI
     lead.assignedDrips = [];
     (lead as any).dripProgress = [];
     lead.isAIEngaged = true;
@@ -564,12 +563,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       apptText: (lead as any).aiMemory?.apptText || null,
       tz,
       lastConfirmAtISO: (lead as any).aiMemory?.lastConfirmAtISO || null,
+      lastDraft: (lead as any).aiMemory?.lastDraft || null,
     };
 
+    // ===== decide next reply =====
     let aiReply = "When’s a good time today or tomorrow for a quick chat?";
     const stateCanon = normalizeStateInput(lead.State || (lead as any).state || "");
 
+    // 1) deterministic parse
     let requestedISO: string | null = extractRequestedISO(body, stateCanon);
+    // 2) “works” confirmations bind to last AI proposal
     if (!requestedISO && containsConfirmation(body)) {
       requestedISO =
         extractTimeFromLastAI(lead.interactionHistory || [], stateCanon) ||
@@ -577,6 +580,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         null;
     }
 
+    // 3) conversational fallback
     if (!requestedISO) {
       try {
         const ex = await extractIntentAndTimeLLM({ text: body, nowISO, tz });
@@ -586,10 +590,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (!requestedISO) {
           const context = computeContext(lead.assignedDrips);
           if (ex.intent === "ask_duration") {
-            aiReply = `It’s quick—about 10–15 minutes. What time works best for you—later today or tomorrow?`;
+            aiReply = `It’s quick—about 10–15 minutes. Would later today or tomorrow afternoon work?`;
             memory.state = "qa";
           } else if (ex.intent === "ask_cost") {
-            aiReply = `No cost to chat—just review options and you decide. What time works best—today or tomorrow?`;
+            aiReply = `No cost at all—just a quick review of options. What’s better for you, today or tomorrow?`;
             memory.state = "qa";
           } else {
             aiReply = await generateConversationalReply({
@@ -614,6 +618,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
+    // 4) If we have a concrete time now, confirm + book
     if (requestedISO) {
       const zone = tz;
       const clientTime = DateTime.fromISO(requestedISO, { zone }).set({ second: 0, millisecond: 0 });
@@ -691,16 +696,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
+    // ✅ Save the draft so the delayed sender uses the exact same text (no re-gen)
+    memory.lastDraft = aiReply;
+
     (lead as any).aiMemory = memory;
     lead.aiLastResponseAt = new Date();
     await lead.save();
 
-    // Delayed AI reply (human-like)
+    // Delayed AI reply (human-like), force FROM the exact inbound number
     setTimeout(async () => {
       try {
         const fresh = await Lead.findById(lead._id);
         if (!fresh) return;
 
+        // Cooldown
         if (fresh.aiLastResponseAt && Date.now() - new Date(fresh.aiLastResponseAt).getTime() < 2 * 60 * 1000) {
           console.log("⏳ Skipping AI reply (cool-down).");
           return;
@@ -710,13 +719,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           return;
         }
 
+        // Use the saved draft; avoid duplicates
         const lastAI = [...(fresh.interactionHistory || [])].reverse().find((m: any) => m.type === "ai");
-        // avoid sending exact duplicate text
-        let aiReply = (lead as any)?.aiMemory?.lastDraft || "";
-        if (!aiReply) {
-          aiReply = "When’s a good time today or tomorrow for a quick chat?";
-        }
-        if (lastAI && lastAI.text?.trim() === aiReply.trim()) {
+        const draft = ((fresh as any).aiMemory?.lastDraft as string) || "When’s a good time today or tomorrow for a quick chat?";
+        if (lastAI && lastAI.text?.trim() === draft.trim()) {
           console.log("🔁 Same AI content as last time — not sending.");
           return;
         }
@@ -724,18 +730,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const zone = pickLeadZone(fresh);
         const { isQuiet, scheduledAt } = computeQuietHoursScheduling(zone);
 
-        const baseParams = await getSendParams(String(user._id), toNumber, fromNumber);
-        const paramsOut: Parameters<Twilio["messages"]["create"]>[0] = { ...baseParams, body: aiReply };
-        const canSchedule = "messagingServiceSid" in paramsOut;
+        // Force FROM the number that received the SMS (no Messaging Service pooling)
+        const baseParams = await getSendParams(String(user._id), toNumber, fromNumber, { forceFrom: toNumber });
+        const paramsOut: Parameters<Twilio["messages"]["create"]>[0] = { ...baseParams, body: draft };
 
+        // Only schedule if we are using a Messaging Service (not when forcing a single from number)
+        const canSchedule = "messagingServiceSid" in paramsOut;
         if (isQuiet && scheduledAt && canSchedule) {
           (paramsOut as any).scheduleType = "fixed";
           (paramsOut as any).sendAt = scheduledAt.toISOString();
         } else if (isQuiet && !canSchedule) {
-          console.warn("⚠️ Quiet hours detected but cannot schedule without Messaging Service SID. Sending immediately.");
+          console.warn("⚠️ Quiet hours but cannot schedule when forcing a single From number. Sending immediately.");
         }
 
-        const aiEntry = { type: "ai" as const, text: aiReply, date: new Date() };
+        const aiEntry = { type: "ai" as const, text: draft, date: new Date() };
         fresh.interactionHistory = fresh.interactionHistory || [];
         fresh.interactionHistory.push(aiEntry);
         fresh.aiLastResponseAt = new Date();
@@ -747,7 +755,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           leadId: fresh._id,
           userEmail: user.email,
           direction: "outbound",
-          text: aiReply,
+          text: draft,
           read: true,
           to: fromNumber,
           from: toNumber,
@@ -762,7 +770,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (isQuiet && scheduledAt && canSchedule) {
           console.log(`🕘 Quiet hours: scheduled AI reply to ${fromNumber} at ${scheduledAt.toISOString()} (${zone}) | SID: ${(twilioMsg as any)?.sid}`);
         } else {
-          console.log(`🤖 AI reply sent to ${fromNumber} | SID: ${(twilioMsg as any)?.sid}`);
+          console.log(`🤖 AI reply sent to ${fromNumber} FROM ${toNumber} | SID: ${(twilioMsg as any)?.sid}`);
         }
       } catch (err) {
         console.error("❌ Delayed send failed:", err);
@@ -776,12 +784,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 }
 
-/** Prefer shared Messaging Service if present; else tenant MS; else direct from
+/** Prefer shared Messaging Service if present; else tenant MS; else direct from.
+ *  You can force a specific FROM (e.g., reply from the number that received the SMS).
  *  Always attaches statusCallback so lifecycle updates land in DB/UI.
  */
-async function getSendParams(userId: string, toNumber: string, fromNumber: string) {
+async function getSendParams(
+  userId: string,
+  toNumber: string,
+  fromNumber: string,
+  opts?: { forceFrom?: string }
+) {
   const base: any = { statusCallback: STATUS_CALLBACK };
 
+  // If a specific From is requested, honor it (this avoids MS number pooling).
+  if (opts?.forceFrom) {
+    return {
+      ...base,
+      from: opts.forceFrom,
+      to: fromNumber,
+    } as Parameters<Twilio["messages"]["create"]>[0];
+  }
+
+  // Otherwise, prefer Messaging Service (allows scheduling & A2P protections)
   if (process.env.TWILIO_MESSAGING_SERVICE_SID) {
     return {
       ...base,
@@ -799,7 +823,7 @@ async function getSendParams(userId: string, toNumber: string, fromNumber: strin
     } as Parameters<Twilio["messages"]["create"]>[0];
   }
 
-  // NOTE: Scheduling is NOT supported when sending with a bare "from" number.
+  // Fallback: direct from the number that received the SMS
   return {
     ...base,
     from: toNumber,
