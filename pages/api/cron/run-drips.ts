@@ -138,13 +138,12 @@ export default async function handler(
     const nowPT = DateTime.now().setZone(PT_ZONE);
     console.log(`🕘 run-drips start @ ${nowPT.toISO()} PT | force=${force} dry=${dry} limit=${limit || "∞"}`);
 
-    // Fetch leads with assigned drips & progress; skip unsubscribed/opt-out proactively
+    // Fetch leads with assigned drips; DO NOT require dripProgress here (we'll auto-init it)
     const leadQuery: any = {
       $and: [
         { unsubscribed: { $ne: true } },
         { optOut: { $ne: true } }, // extra guard; sendSms will also suppress
         { assignedDrips: { $exists: true, $ne: [] } },
-        { dripProgress: { $exists: true, $ne: [] } },
       ],
     };
 
@@ -169,6 +168,8 @@ export default async function handler(
     let scheduled = 0;
     let suppressed = 0;
     let failed = 0;
+    let initializedProgress = 0;
+    let wouldInitProgress = 0;
 
     const skippedByReason: SkipMap = {};
     const perDripCounters = new Map<string, DripCounters>();
@@ -195,8 +196,7 @@ export default async function handler(
       const to = normalizeToE164Maybe((lead as any).Phone);
       if (!to) {
         bump(skippedByReason, "invalidPhone");
-        skippedSample.length < 10 &&
-          skippedSample.push({ leadId: String((lead as any)._id), reason: "invalidPhone" });
+        if (skippedSample.length < 10) skippedSample.push({ leadId: String((lead as any)._id), reason: "invalidPhone" });
         return;
       }
 
@@ -206,8 +206,7 @@ export default async function handler(
         .lean();
       if (!user?._id) {
         bump(skippedByReason, "userMissing");
-        skippedSample.length < 10 &&
-          skippedSample.push({ leadId: String((lead as any)._id), reason: "userMissing" });
+        if (skippedSample.length < 10) skippedSample.push({ leadId: String((lead as any)._id), reason: "userMissing" });
         return;
       }
 
@@ -231,39 +230,17 @@ export default async function handler(
 
       if (!assigned.length) {
         bump(skippedByReason, "noAssignedDrips");
-        skippedSample.length < 10 &&
-          skippedSample.push({ leadId: String((lead as any)._id), reason: "noAssignedDrips" });
-        return;
-      }
-      if (!progressArr.length) {
-        bump(skippedByReason, "noDripProgress");
-        skippedSample.length < 10 &&
-          skippedSample.push({ leadId: String((lead as any)._id), reason: "noDripProgress" });
+        if (skippedSample.length < 10) skippedSample.push({ leadId: String((lead as any)._id), reason: "noAssignedDrips" });
         return;
       }
 
       for (const dripId of assigned) {
-        const prog = progressArr.find((p) => String(p.dripId) === String(dripId));
-        if (!prog || !prog.startedAt) {
-          bump(skippedByReason, "noProgressForDrip");
-          skippedSample.length < 10 &&
-            skippedSample.push({
-              leadId: String((lead as any)._id),
-              dripId: String(dripId),
-              reason: "noProgressForDrip",
-            });
-          continue;
-        }
-
+        // Resolve drip definition
         const dripDoc: any = await resolveDrip(dripId);
         if (!dripDoc) {
           bump(skippedByReason, "dripMissing");
-          skippedSample.length < 10 &&
-            skippedSample.push({
-              leadId: String((lead as any)._id),
-              dripId: String(dripId),
-              reason: "dripMissing",
-            });
+          if (skippedSample.length < 10)
+            skippedSample.push({ leadId: String((lead as any)._id), dripId: String(dripId), reason: "dripMissing" });
           continue;
         }
         if (dripDoc.type !== "sms") {
@@ -275,6 +252,36 @@ export default async function handler(
         if (!steps.length) {
           bump(skippedByReason, "noSteps");
           continue;
+        }
+
+        // Find progress for this drip; if missing, initialize
+        let prog = progressArr.find((p) => String(p.dripId) === String(dripId));
+
+        if (!prog || !prog.startedAt) {
+          if (dry) {
+            wouldInitProgress++;
+            // Simulate as if started now, so Day 1 is considered
+            prog = {
+              dripId: String(dripId),
+              startedAt: DateTime.now().setZone(PT_ZONE).toJSDate(),
+              lastSentIndex: -1,
+              _simulated: true,
+            };
+          } else {
+            const init = {
+              dripId: String(dripId),
+              startedAt: new Date(),
+              lastSentIndex: -1,
+            };
+            await Lead.updateOne(
+              { _id: (lead as any)._id, "dripProgress.dripId": { $ne: String(dripId) } },
+              { $push: { dripProgress: init } },
+            );
+            initializedProgress++;
+            // Reflect locally so this run proceeds to send Day 1
+            prog = init as any;
+            progressArr.push(prog);
+          }
         }
 
         let nextIndex =
@@ -301,7 +308,7 @@ export default async function handler(
 
           if (nowPTlocal < duePT) {
             bump(skippedByReason, "notDue");
-            skippedSample.length < 10 &&
+            if (skippedSample.length < 10)
               skippedSample.push({
                 leadId: String((lead as any)._id),
                 dripId: String(dripId),
@@ -333,8 +340,7 @@ export default async function handler(
           const finalBody = ensureOptOut(rendered);
 
           if (dry) {
-            // Mark progress as if we advanced (but do not mutate DB)
-            sentSample.length < 10 &&
+            if (sentSample.length < 10)
               sentSample.push({
                 leadId: String((lead as any)._id),
                 dripId: String(dripId),
@@ -363,7 +369,7 @@ export default async function handler(
                 accepted++;
                 bumpDrip(String(dripId), "sentAccepted");
               }
-              sentSample.length < 10 &&
+              if (sentSample.length < 10)
                 sentSample.push({
                   leadId: String((lead as any)._id),
                   dripId: String(dripId),
@@ -374,7 +380,7 @@ export default async function handler(
             } else {
               suppressed++;
               bumpDrip(String(dripId), "suppressed");
-              skippedSample.length < 10 &&
+              if (skippedSample.length < 10)
                 skippedSample.push({
                   leadId: String((lead as any)._id),
                   dripId: String(dripId),
@@ -395,7 +401,7 @@ export default async function handler(
           } catch (e: any) {
             failed++;
             bumpDrip(String(dripId), "failed");
-            skippedSample.length < 10 &&
+            if (skippedSample.length < 10)
               skippedSample.push({
                 leadId: String((lead as any)._id),
                 dripId: String(dripId),
@@ -410,7 +416,6 @@ export default async function handler(
 
         if (!advancedAtLeastOne && nextIndex < steps.length) {
           // Nothing sent and we broke due to 'notDue'
-          // (already counted above), just continue to next drip.
         }
       }
     });
@@ -435,6 +440,8 @@ export default async function handler(
       scheduled,
       suppressed,
       failed,
+      initializedProgress,
+      wouldInitProgress,
       skippedByReason,
       perCampaign,
       examples: {
@@ -444,7 +451,7 @@ export default async function handler(
     };
 
     console.log(
-      `🏁 run-drips done checked=${checked} candidates=${candidates} ✅accepted=${accepted} 🕘scheduled=${scheduled} ⚠️suppressed=${suppressed} ❌failed=${failed}`,
+      `🏁 run-drips done checked=${checked} candidates=${candidates} ✅accepted=${accepted} 🕘scheduled=${scheduled} ⚠️suppressed=${suppressed} ❌failed=${failed} 🧩init=${initializedProgress} (would=${wouldInitProgress})`,
     );
 
     return res.status(200).json(response);
