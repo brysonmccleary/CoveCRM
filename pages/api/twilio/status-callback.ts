@@ -1,3 +1,4 @@
+// pages/api/twilio/status-callback.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { buffer } from "micro";
 import twilio from "twilio";
@@ -78,21 +79,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // =========================
     if (MessageSid && MessageStatus) {
       try {
-        // Fetch current doc first so we can detect first terminal transition (avoid double-counting)
         const prev = await Message.findOne({ sid: MessageSid });
         const priorStatus = (prev?.status || "").toString().toLowerCase();
 
-        // Build updates based on state transitions
         const now = new Date();
         const updates: any = { status: MessageStatus };
         if (ErrorCode) updates.errorCode = ErrorCode;
 
-        // Record key timestamps
         if ((MessageStatus === "accepted" || MessageStatus === "sending" || MessageStatus === "sent") && !prev?.sentAt) {
           updates.sentAt = now;
         }
         if (MessageStatus === "scheduled" && !prev?.scheduledAt) {
-          updates.scheduledAt = now; // may also be set pre-send for quiet hours
+          updates.scheduledAt = now;
         }
         if (MessageStatus === "delivered") {
           updates.deliveredAt = now;
@@ -127,8 +125,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
         } catch (e) { console.warn("ℹ️ Socket emit (message:status) failed:", (e as any)?.message || e); }
 
-        // Per-number usage rollup when entering a terminal state for the **first** time
-        if (TERMINAL_SMS_STATES.has(MessageStatus) && !TERMINAL_SMS_STATES.has(priorStatus)) {
+        if (["delivered","failed","undelivered","canceled"].includes(MessageStatus) && !["delivered","failed","undelivered","canceled"].includes(priorStatus)) {
           const ownerUser =
             (await User.findOne({ "numbers.phoneNumber": From })) ||
             (await User.findOne({ "numbers.messagingServiceSid": MessagingServiceSid }));
@@ -154,7 +151,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       } catch (e) {
         console.warn("⚠️ SMS status-callback handling error:", (e as any)?.message || e);
       }
-      // Always 200 for Twilio
       res.status(200).end();
       return;
     }
@@ -163,7 +159,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // B) Voice lifecycle
     // =========================
     if (CallSid) {
-      // Determine direction + owner number
       let direction: "inbound" | "outbound" = "outbound";
       let ownerNumber = From;
       let otherNumber = To;
@@ -181,36 +176,42 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const now = Timestamp ? new Date(Timestamp) : new Date();
       const durationSec = CallDurationStr ? parseInt(CallDurationStr, 10) || 0 : undefined;
 
-      // ---- Emit FIRST so UI can react even if DB is unhappy
+      // Emit to UI (unchanged)
       try {
         const io = (res.socket as any)?.server?.io;
         if (io && userEmail) {
           io.to(userEmail).emit("call:status", {
             callSid: CallSid,
-            status: CallStatus,            // initiated | ringing | answered | completed | busy | failed | no-answer | canceled
+            status: CallStatus,
             direction,
             ownerNumber,
             otherNumber,
             durationSec: typeof durationSec === "number" ? durationSec : null,
-            terminal: TERMINAL_VOICE_STATES.has(CallStatus),
+            terminal: ["completed","busy","failed","no-answer","canceled"].includes(CallStatus),
             timestamp: now.toISOString(),
           });
         }
       } catch (e) { console.warn("ℹ️ Socket emit (call:status) failed:", (e as any)?.message || e); }
 
-      // ---- Persist Call document (defensively)
+      // Persist Call document (add from/to; keep all existing logic)
       try {
         const setOnInsert: any = {
           callSid: CallSid,
           userEmail: userEmail || undefined,
           direction,
           startedAt: CallStatus === "answered" ? now : new Date(),
+          from: ownerNumber,
+          to: otherNumber,
         };
-        const set: any = {};
+        const set: any = {
+          from: ownerNumber,
+          to: otherNumber,
+        };
         if (CallStatus === "answered" || CallStatus === "ringing" || CallStatus === "initiated") set.startedAt = now;
-        if (TERMINAL_VOICE_STATES.has(CallStatus)) {
+        if (["completed","busy","failed","no-answer","canceled"].includes(CallStatus)) {
           set.completedAt = now;
-          if (typeof durationSec === "number") set.duration = durationSec;
+          set.endedAt = now; // acceptance-criteria alias
+          if (typeof durationSec === "number") { set.duration = durationSec; set.durationSec = durationSec; }
           set.talkTime = CallStatus === "completed" ? Math.max(0, durationSec || 0) : 0;
         }
         await Call.updateOne({ callSid: CallSid }, { $setOnInsert: setOnInsert, $set: set }, { upsert: true });
@@ -218,9 +219,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         console.warn("⚠️ Call doc upsert failed (continuing):", (e as any)?.message || e);
       }
 
-      // ---- Usage/Billing (best effort)
+      // Usage/Billing unchanged...
       try {
-        if (TERMINAL_VOICE_STATES.has(CallStatus) && ownerNumber) {
+        if (["completed","busy","failed","no-answer","canceled"].includes(CallStatus) && ownerNumber) {
           const user = await getUserByPhoneNumber(ownerNumber);
           if (user) {
             const userDoc = await User.findById(user._id);
@@ -231,7 +232,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               if (direction === "outbound") numberEntry.usage.callsMade += 1;
 
               const sec = durationSec || 0;
-              const usageCost = parseFloat((sec * CALL_COST_PER_SECOND).toFixed(6));
+              const usageCost = parseFloat((sec * 0.000333).toFixed(6));
               numberEntry.usage.cost += usageCost;
               await (userDoc as any).save();
 
@@ -246,21 +247,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       const vEmoji =
         CallStatus === "answered" || CallStatus === "completed" ? "✅" :
-        CallStatus === "failed" || CallStatus === "busy" || CallStatus === "no-answer" || CallStatus === "canceled" ? "❌" :
-        "📞";
+        ["failed","busy","no-answer","canceled"].includes(CallStatus) ? "❌" : "📞";
       console.log(`${vEmoji} Voice cb status=${CallStatus} dir=${direction} owner=${ownerNumber} other=${otherNumber} sid=${CallSid}`);
 
       res.status(200).end();
       return;
     }
 
-    // Unknown payload — acknowledge
     console.log("ℹ️ Unknown status-callback payload received.");
     res.status(200).end();
     return;
   } catch (err) {
     console.error("❌ Twilio status callback error:", err);
-    // Always 200 for Twilio webhooks
     res.status(200).end();
   }
 }

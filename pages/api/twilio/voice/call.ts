@@ -8,6 +8,7 @@ import { getUserByEmail } from "@/models/User";
 import Call from "@/models/Call";
 
 const BASE_URL = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "").replace(/\/$/, "");
+const CALL_AI_SUMMARY_ENABLED = (process.env.CALL_AI_SUMMARY_ENABLED || "").toString() === "1";
 
 function e164(num: string) {
   if (!num) return "";
@@ -115,6 +116,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   // Use a conference so the browser can hear the real greeting/beep
   const conferenceName = `ds-${leadId}-${Date.now().toString(36)}`;
+  const aiActiveForThisUser = Boolean((user as any)?.hasAI) && CALL_AI_SUMMARY_ENABLED;
 
   try {
     const twimlUrl = `${BASE_URL}/api/voice/lead-join?conferenceName=${encodeURIComponent(conferenceName)}`;
@@ -144,6 +146,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           userEmail,
           direction: "outbound",
           startedAt: new Date(),
+          aiEnabledAtCallTime: aiActiveForThisUser,
         },
         $set: {
           leadId,
@@ -163,6 +166,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       excludedOwnedDIDs: Array.from(excludedSet),
       rawCandidates,
       finalCandidates,
+      aiEnabledAtCallTime: aiActiveForThisUser,
     });
 
     // Return conferenceName so the browser can join via WebRTC
