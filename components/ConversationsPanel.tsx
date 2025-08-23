@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef } from "react";
 import axios from "axios";
-import { format } from "date-fns";
+import { useNotifStore } from "@/lib/notificationsStore";
+import { formatStamp } from "@/lib/format";
 
 interface Lead {
   _id: string;
@@ -14,13 +15,6 @@ interface Lead {
   }[];
 }
 
-function fmtStamp(input?: string) {
-  if (!input) return "";
-  const d = new Date(input);
-  if (isNaN(d.getTime())) return "";
-  return format(d, "MM/dd - h:mm");
-}
-
 export default function ConversationsPanel() {
   const [leads, setLeads] = useState<Lead[]>([]);
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
@@ -28,6 +22,10 @@ export default function ConversationsPanel() {
   const [bookingTime, setBookingTime] = useState("");
   const [bookingForMessageIndex, setBookingForMessageIndex] = useState<number | null>(null);
   const chatRef = useRef<HTMLDivElement>(null);
+
+  // 🔔 unread store
+  const unreadByLead = useNotifStore((s) => s.unreadByLead);
+  const clearUnread = useNotifStore((s) => s.clear);
 
   useEffect(() => {
     loadLeads();
@@ -85,6 +83,11 @@ export default function ConversationsPanel() {
     if (chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight;
   }, [selectedLead?.interactionHistory?.length]);
 
+  // 🔔 clear unread when a thread opens
+  useEffect(() => {
+    if (selectedLead?._id) clearUnread(selectedLead._id);
+  }, [selectedLead?._id, clearUnread]);
+
   return (
     <div className="flex flex-col md:flex-row gap-4 p-4">
       {/* Sidebar */}
@@ -93,17 +96,29 @@ export default function ConversationsPanel() {
         {leads.map((lead) => {
           const lastMsg = lead.interactionHistory?.slice(-1)[0];
           const listTime = lastMsg?.date || lead.updatedAt;
+          const unreadCount = unreadByLead?.[lead._id] || 0;
+
           return (
             <div
               key={lead._id}
-              className={`border p-2 rounded mb-2 cursor-pointer ${
-                selectedLead?._id === lead._id ? "bg-blue-100" : ""
+              className={`relative border p-2 rounded mb-2 cursor-pointer ${
+                selectedLead?._id === lead._id ? "bg-blue-100" : "hover:bg-gray-50"
               }`}
-              onClick={() => setSelectedLead(lead)}
+              onClick={() => {
+                setSelectedLead(lead);
+                if (unreadCount > 0) clearUnread(lead._id);
+              }}
             >
-              <p className="font-bold">{lead["First Name"]}</p>
+              {/* numeric badge */}
+              {unreadCount > 0 && (
+                <span className="absolute right-2 top-2 inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-pink-500 px-1 text-xs font-semibold text-white">
+                  {unreadCount}
+                </span>
+              )}
+
+              <p className="font-bold pr-6">{lead["First Name"]}</p>
               <p className="text-sm text-gray-600 truncate">{lastMsg?.text}</p>
-              <p className="text-xs text-gray-400">{fmtStamp(listTime)}</p>
+              <p className="text-xs text-gray-400">{formatStamp(listTime)}</p>
             </div>
           );
         })}
@@ -143,7 +158,7 @@ export default function ConversationsPanel() {
                   <div key={idx} className={`flex flex-col gap-1 ${containerAlign}`}>
                     <div className={`p-2 rounded-2xl max-w-[75%] ${bubbleClasses}`}>
                       <p className="text-sm whitespace-pre-line">{msg.text}</p>
-                      <p className="text-[10px] mt-1 text-right">{fmtStamp(msg.date)}</p>
+                      <p className="text-[10px] mt-1 text-right">{formatStamp(msg.date)}</p>
                     </div>
 
                     {(isReceived || msg.type === "ai") && (

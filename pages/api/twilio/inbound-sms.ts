@@ -13,6 +13,8 @@ import { DateTime } from "luxon";
 import { buffer } from "micro";
 import axios from "axios";
 import { sendAppointmentBookedEmail } from "@/lib/email";
+// ✅ NEW: ensure socket server exists even if /api/socket wasn't hit
+import { initSocket } from "@/lib/socket";
 
 export const config = { api: { bodyParser: false } };
 
@@ -473,7 +475,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(200).json({ message: "Lead not found/created, acknowledged." });
     }
 
-    const io = (res.socket as any)?.server?.io;
+    // ✅ Ensure Socket.IO exists (init if needed)
+    let io = (res as any)?.socket?.server?.io;
+    try {
+      if (!io) {
+        io = initSocket(res as any);
+        console.log("✅ Socket server initialized inside inbound-sms");
+      }
+    } catch (e) {
+      console.warn("⚠️ Could not init socket server from inbound-sms:", e);
+    }
 
     // Persist inbound message
     await Message.create({
