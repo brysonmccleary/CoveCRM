@@ -231,8 +231,7 @@ async function sendCore(paramsIn: {
   }
 
   if (!messagingServiceSid && !paramsIn.from) {
-    // we *might* still fill a from later from thread history; keep this check for now
-    // (actual enforcement happens a bit later before dispatch)
+    // we may still fill a `from` later based on thread history
   }
   console.log(`🛠 initial route msid=${messagingServiceSid || "(from number path)"}`);
 
@@ -283,8 +282,22 @@ async function sendCore(paramsIn: {
     }
   }
 
-  // Opt-out suppression (supports either flag)
+  // Opt-out suppression (supports either flag) + move to Not Interested
   if ((lead as any)?.optOut === true || (lead as any)?.unsubscribed === true) {
+    try {
+      if (lead && (lead as any).status !== "Not Interested") {
+        (lead as any).status = "Not Interested";
+        (lead as any).updatedAt = new Date();
+        (lead as any).interactionHistory = (lead as any).interactionHistory || [];
+        (lead as any).interactionHistory.push({
+          type: "system",
+          text: "[system] Outbound suppressed: lead opted out — moved to Not Interested.",
+          date: new Date(),
+        });
+        await lead.save();
+      }
+    } catch {/* ignore */}
+
     const suppressed = await Message.create({
       leadId: lead?._id,
       userEmail: user.email,
@@ -395,13 +408,13 @@ async function sendCore(paramsIn: {
 
     if (isQuiet && scheduledAt && messagingServiceSid) {
       console.log(
-        `🕘 scheduled sid=${tw.sid} at=${scheduledAt.toISOString()} zone=${zone} messageId=${messageId}`
+        `🕘 scheduled sid=${tw.sid} at=${(scheduledAt as Date).toISOString()} zone=${zone} messageId=${messageId}`
       );
       return {
         sid: tw.sid,
         serviceSid: messagingServiceSid || "",
         messageId,
-        scheduledAt: scheduledAt.toISOString(),
+        scheduledAt: (scheduledAt as Date).toISOString(),
       };
     } else {
       console.log(`✅ accepted sid=${tw.sid} status=${newStatus} messageId=${messageId}`);
@@ -412,11 +425,25 @@ async function sendCore(paramsIn: {
     const msg = err?.message || "Failed to send SMS";
     console.error(`❌ error code=${code || "unknown"} message="${msg}" messageId=${messageId}`);
 
-    // Special handling: 21610 STOPed recipient
+    // Special handling: 21610 STOPed recipient → mark opted-out + Not Interested
     if (code === 21610 && lead?._id) {
       try {
-        await Lead.findByIdAndUpdate(lead._id, { $set: { optOut: true } }).exec();
-        console.warn(`🚫 auto-set lead.optOut=true due to 21610 for ${toNorm}`);
+        await Lead.findByIdAndUpdate(lead._id, {
+          $set: {
+            optOut: true,
+            unsubscribed: true,
+            status: "Not Interested",
+            updatedAt: new Date(),
+          },
+          $push: {
+            interactionHistory: {
+              type: "system",
+              text: "[system] Twilio 21610 (STOP) — lead marked Not Interested.",
+              date: new Date(),
+            } as any,
+          },
+        }).exec();
+        console.warn(`🚫 auto-set lead.optOut=true & status="Not Interested" due to 21610 for ${toNorm}`);
       } catch {/* ignore */}
     }
 
