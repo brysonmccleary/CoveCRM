@@ -10,9 +10,8 @@ import { sendSMS } from "@/lib/twilio/sendSMS";
  * POST /api/sms/send
  * Body: { to: string (E.164), body: string }
  *
- * - Auth required (NextAuth).
- * - Sends via the user's Messaging Service SID if available (A2P path),
- *   otherwise falls back to TWILIO_PHONE_NUMBER (as implemented in sendSMS()).
+ * - Auth required.
+ * - Sends via the user's Messaging Service SID if available (A2P path).
  */
 export default async function handler(
   req: NextApiRequest,
@@ -33,9 +32,7 @@ export default async function handler(
   if (!to.startsWith("+")) {
     return res
       .status(400)
-      .json({
-        message: "Recipient phone must be in E.164 format, e.g. +15551234567.",
-      });
+      .json({ message: "Recipient phone must be in E.164 format, e.g. +15551234567." });
   }
 
   try {
@@ -44,9 +41,33 @@ export default async function handler(
     const user = await User.findOne({ email: session.user.email });
     if (!user) return res.status(404).json({ message: "User not found" });
 
-    const sid = await sendSMS(to, body, user._id.toString());
+    console.log(`📮 /api/sms/send user=${user.email} to=${to}`);
+    const { sid, serviceSid, messageId, scheduledAt } = await sendSMS(
+      to,
+      body,
+      user._id.toString()
+    );
 
-    return res.status(200).json({ message: "SMS sent", sid });
+    // If suppressed (no SID), still return 200 with details for the UI
+    if (!sid) {
+      console.log(`⚠️ suppressed to=${to} messageId=${messageId}`);
+      return res.status(200).json({
+        message: "Suppressed (opt-out or policy)",
+        suppressed: true,
+        serviceSid,
+        messageId,
+      });
+    }
+
+    const payload: Record<string, any> = {
+      message: scheduledAt ? "SMS scheduled" : "SMS accepted",
+      sid,
+      serviceSid,
+      messageId,
+    };
+    if (scheduledAt) payload.scheduledAt = scheduledAt;
+
+    return res.status(200).json(payload);
   } catch (err: any) {
     console.error("❌ /api/sms/send error:", err);
     const msg = err?.message || "Failed to send SMS";

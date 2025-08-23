@@ -1,4 +1,4 @@
-// models/Message.ts
+// /models/Message.ts
 import mongoose, { Schema, Types } from "mongoose";
 
 export type MessageDirection = "inbound" | "outbound" | "ai";
@@ -17,16 +17,25 @@ export interface IMessage {
 
   // Twilio delivery + traceability
   sid?: string; // Twilio Message SID (SM...)
-  status?: string; // queued | sent | delivered | failed | undelivered | etc.
-  errorCode?: string; // e.g. 30034, 30007
+  status?: string; // queued | accepted | sending | sent | delivered | failed | undelivered | error | suppressed | scheduled
+  errorCode?: string;
+  errorMessage?: string;
 
   // Routing info
-  to?: string; // E.164 destination
-  from?: string; // Specific number if used (rare)
-  fromServiceSid?: string; // Messaging Service SID (MG...)
+  to?: string;
+  from?: string;
+  fromServiceSid?: string;
 
-  // Timestamps
-  sentAt?: Date; // when we attempted to send
+  // Lifecycle timestamps
+  queuedAt?: Date;
+  scheduledAt?: Date;
+  sentAt?: Date;
+  deliveredAt?: Date;
+  failedAt?: Date;
+
+  // Suppression/flags
+  suppressed?: boolean;
+  reason?: string; // "opt_out" | "scheduled_quiet_hours" | etc.
 
   // Added by { timestamps: true }
   createdAt?: Date;
@@ -52,16 +61,23 @@ const MessageSchema = new Schema<IMessage>(
     text: { type: String, required: true },
     read: { type: Boolean, default: false },
 
-    // ⚠️ Removed inline index on `sid` to avoid duplicate with schema-level index
     sid: { type: String },
     status: { type: String },
     errorCode: { type: String },
+    errorMessage: { type: String },
 
     to: { type: String },
     from: { type: String },
     fromServiceSid: { type: String },
 
+    queuedAt: { type: Date },
+    scheduledAt: { type: Date },
     sentAt: { type: Date },
+    deliveredAt: { type: Date },
+    failedAt: { type: Date },
+
+    suppressed: { type: Boolean, default: false },
+    reason: { type: String },
   },
   { timestamps: true },
 );
@@ -79,7 +95,6 @@ MessageSchema.index(
 );
 
 // Single, authoritative index for Twilio SIDs
-// - unique only when `sid` exists & is a string
 MessageSchema.index(
   { sid: 1 },
   {

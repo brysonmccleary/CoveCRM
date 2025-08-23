@@ -4,18 +4,18 @@ import dbConnect from "@/lib/mongooseConnect";
 import Lead from "@/models/Lead";
 import User from "@/models/User";
 import DripCampaign from "@/models/DripCampaign";
-import { sendSMS } from "@/lib/twilio/sendSMS";
-import {
-  renderTemplate,
-  ensureOptOut,
-  splitName,
-} from "@/utils/renderTemplate";
+import { sendSms } from "@/lib/twilio/sendSMS";
+import { renderTemplate, ensureOptOut, splitName } from "@/utils/renderTemplate";
 import { prebuiltDrips } from "@/utils/prebuiltDrips";
 import { DateTime } from "luxon";
 
 // --- Config ---
 const PT_ZONE = "America/Los_Angeles"; // 9:00 AM Pacific
 const SEND_HOUR_PT = 9;
+
+// Concurrency for per-lead processing
+const PER_LEAD_CONCURRENCY =
+  Math.max(1, parseInt(process.env.DRIP_CONCURRENCY || "10", 10)) || 10;
 
 // --- Helpers ---
 function isValidObjectId(id: string) {
@@ -77,11 +77,8 @@ function sortDaySteps(drip: any): Array<{ text: string; day: string }> {
 
 /** Compute the scheduled DateTime in PT for a given step day number and startedAt. */
 function computeStepWhenPT(startedAt: Date, dayNumber: number): DateTime {
-  const startPT = DateTime.fromJSDate(startedAt, { zone: PT_ZONE }).startOf(
-    "day",
-  );
-  // Day 1 => +0 days; Day N => +(N-1) days
-  const offsetDays = Math.max(0, dayNumber - 1);
+  const startPT = DateTime.fromJSDate(startedAt, { zone: PT_ZONE }).startOf("day");
+  const offsetDays = Math.max(0, dayNumber - 1); // Day 1 => +0 days
   return startPT
     .plus({ days: offsetDays })
     .set({ hour: SEND_HOUR_PT, minute: 0, second: 0, millisecond: 0 });
@@ -93,6 +90,14 @@ function shouldRunNowPT(): boolean {
   const nowPT = DateTime.now().setZone(PT_ZONE);
   return nowPT.hour === SEND_HOUR_PT; // run exactly on the hour; schedule cron accordingly
 }
+
+type DripCounters = {
+  considered: number;
+  sentAccepted: number;
+  scheduled: number;
+  suppressed: number;
+  failed: number;
+};
 
 // --- Handler ---
 export default async function handler(
@@ -113,12 +118,16 @@ export default async function handler(
     await dbConnect();
 
     const nowPT = DateTime.now().setZone(PT_ZONE);
+    console.log(`🕘 run-drips start @ ${nowPT.toISO()} PT`);
 
-    // Fetch leads that have assigned drips and a progress record; skip unsubscribed
+    // Fetch leads with assigned drips & progress; skip unsubscribed/opt-out proactively
     const leads = await Lead.find({
-      unsubscribed: { $ne: true },
-      assignedDrips: { $exists: true, $ne: [] },
-      dripProgress: { $exists: true, $ne: [] },
+      $and: [
+        { unsubscribed: { $ne: true } },
+        { optOut: { $ne: true } }, // extra guard; sendSms will also suppress
+        { assignedDrips: { $exists: true, $ne: [] } },
+        { dripProgress: { $exists: true, $ne: [] } },
+      ],
     })
       .select({
         _id: 1,
@@ -131,22 +140,43 @@ export default async function handler(
       })
       .lean();
 
+    console.log(`📋 Leads eligible: ${leads.length}`);
+
     let checked = 0;
     let sent = 0;
     let failed = 0;
-    const perLeadBatch = 10;
 
-    await runBatched(leads, perLeadBatch, async (lead) => {
+    const perDripCounters = new Map<string, DripCounters>();
+    function bump(dripId: string, key: keyof DripCounters) {
+      const c =
+        perDripCounters.get(dripId) || {
+          considered: 0,
+          sentAccepted: 0,
+          scheduled: 0,
+          suppressed: 0,
+          failed: 0,
+        };
+      c[key] = (c[key] as number) + 1;
+      perDripCounters.set(dripId, c);
+    }
+
+    await runBatched(leads, PER_LEAD_CONCURRENCY, async (lead) => {
       checked++;
 
       const to = normalizeToE164Maybe((lead as any).Phone);
-      if (!to) return;
+      if (!to) {
+        console.warn(`⚠️ lead=${(lead as any)._id} missing/invalid Phone`);
+        return;
+      }
 
       // Lookup agent/user for rendering context + A2P gating
       const user = await User.findOne({ email: (lead as any).userEmail })
         .select({ _id: 1, email: 1, name: 1 })
         .lean();
-      if (!user?._id) return;
+      if (!user?._id) {
+        console.warn(`⚠️ user not found for lead=${(lead as any)._id}`);
+        return;
+      }
 
       const { first: agentFirst, last: agentLast } = splitName(user.name || "");
       const agentCtx = {
@@ -184,6 +214,7 @@ export default async function handler(
         let nextIndex =
           (typeof prog.lastSentIndex === "number" ? prog.lastSentIndex : -1) +
           1;
+
         // Sequentially catch-up any missed steps (still at 9am PT gate)
         while (nextIndex < steps.length) {
           const step = steps[nextIndex];
@@ -191,20 +222,25 @@ export default async function handler(
           if (isNaN(dayNum)) break;
 
           const duePT = computeStepWhenPT(new Date(prog.startedAt), dayNum);
-          if (nowPT < duePT) break; // not yet time for this next step
+          if (DateTime.now().setZone(PT_ZONE) < duePT) break; // not yet time for this next step
+
+          bump(String(dripId), "considered");
+          console.log(
+            `📆 lead=${(lead as any)._id} drip=${String(
+              dripId,
+            )} stepIndex=${nextIndex} day=${step.day} duePT=${duePT.toISO()}`,
+          );
 
           // Safety: don't send raw opt-out keywords as a message
           const raw = String(step.text || "");
           const lower = raw.trim().toLowerCase();
-          const optOutKeywords = [
-            "stop",
-            "unsubscribe",
-            "end",
-            "quit",
-            "cancel",
-          ];
+          const optOutKeywords = ["stop", "unsubscribe", "end", "quit", "cancel"];
           if (optOutKeywords.includes(lower)) {
-            // Skip and advance to avoid getting stuck
+            console.log(
+              `⚠️ skipping step containing opt-out keyword (lead=${(lead as any)._id}, drip=${String(
+                dripId,
+              )}, day=${step.day})`,
+            );
             nextIndex++;
             continue;
           }
@@ -221,17 +257,60 @@ export default async function handler(
             });
             const finalBody = ensureOptOut(rendered);
 
-            await sendSMS(to, finalBody, String(user._id));
+            console.log(
+              `⏳ queue send lead=${(lead as any)._id} drip=${String(
+                dripId,
+              )} step=${step.day}`,
+            );
 
-            // Mark progress: lastSentIndex -> nextIndex
+            const result = await sendSms({
+              to,
+              body: finalBody,
+              userEmail: user.email,
+              leadId: String((lead as any)._id),
+            });
+
+            // Note: sendSms creates Message row and handles quiet-hours scheduling/opt-out
+            if (result.sid) {
+              if (result.scheduledAt) {
+                console.log(
+                  `🕘 scheduled lead=${(lead as any)._id} drip=${String(
+                    dripId,
+                  )} step=${step.day} sid=${result.sid} at=${result.scheduledAt}`,
+                );
+                bump(String(dripId), "scheduled");
+              } else {
+                console.log(
+                  `✅ accepted lead=${(lead as any)._id} drip=${String(
+                    dripId,
+                  )} step=${step.day} sid=${result.sid}`,
+                );
+                bump(String(dripId), "sentAccepted");
+              }
+            } else {
+              console.log(
+                `⚠️ suppressed lead=${(lead as any)._id} drip=${String(
+                  dripId,
+                )} step=${step.day} messageId=${result.messageId}`,
+              );
+              bump(String(dripId), "suppressed");
+            }
+
+            // Mark progress: lastSentIndex -> nextIndex (even if suppressed)
             await Lead.updateOne(
               { _id: (lead as any)._id, "dripProgress.dripId": String(dripId) },
               { $set: { "dripProgress.$.lastSentIndex": nextIndex } },
             );
 
             sent++;
-          } catch (e) {
-            console.error("Scheduled drip send failed:", e);
+          } catch (e: any) {
+            console.error(
+              `❌ drip send failed lead=${(lead as any)._id} drip=${String(
+                dripId,
+              )} step=${step.day}:`,
+              e?.message || e,
+            );
+            bump(String(dripId), "failed");
             failed++;
             // On failure, do not advance index; exit loop for this drip to retry next run
             break;
@@ -243,11 +322,25 @@ export default async function handler(
       }
     });
 
+    // Summarize per-campaign
+    const perCampaign: Record<string, DripCounters & { id: string }> = {};
+    for (const [id, c] of perDripCounters.entries()) {
+      perCampaign[id] = { id, ...c };
+      console.log(
+        `🧾 drip=${id} considered=${c.considered} ✅=${c.sentAccepted} 🕘=${c.scheduled} ⚠️=${c.suppressed} ❌=${c.failed}`,
+      );
+    }
+
+    console.log(
+      `🏁 run-drips done leadsChecked=${checked} sentAccepted=${sent} failed=${failed}`,
+    );
+
     return res.status(200).json({
       message: "run-drips executed at 9:00 AM PT",
       leadsChecked: checked,
-      sent,
+      sentAccepted: sent,
       failed,
+      perCampaign,
     });
   } catch (error) {
     console.error("❌ run-drips error:", error);

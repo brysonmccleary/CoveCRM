@@ -1,4 +1,3 @@
-// /models/User.ts
 import mongoose, { Schema } from "mongoose";
 
 export interface IUser {
@@ -39,16 +38,12 @@ export interface IUser {
   assignedDrips?: string[];
   leadIds?: string[];
 
-  // ✅ Google Sheets with syncedSheets
   googleSheets?: {
     accessToken: string;
     refreshToken: string;
     expiryDate: number;
     googleEmail?: string;
-    sheets?: {
-      sheetId: string;
-      folderName: string;
-    }[];
+    sheets?: { sheetId: string; folderName: string }[];
     syncedSheets?: {
       spreadsheetId: string;
       title: string;
@@ -63,11 +58,7 @@ export interface IUser {
     }[];
   };
 
-  googleTokens?: {
-    accessToken: string;
-    refreshToken?: string;
-    expiryDate?: number;
-  };
+  googleTokens?: { accessToken: string; refreshToken?: string; expiryDate?: number };
 
   calendarId?: string;
   bookingSettings?: {
@@ -97,11 +88,7 @@ export interface IUser {
 
   subscriptionStatus?: "active" | "canceled";
 
-  aiUsage?: {
-    openAiCost: number;
-    twilioCost: number;
-    totalCost: number;
-  };
+  aiUsage?: { openAiCost: number; twilioCost: number; totalCost: number };
 
   usageBalance?: number;
 
@@ -123,12 +110,7 @@ export interface IUser {
     lastSyncedAt?: Date;
   };
 
-  // ✅ Per-user Twilio routing/billing
-  twilio?: {
-    accountSid?: string;
-    apiKeySid?: string;
-    apiKeySecret?: string;
-  };
+  twilio?: { accountSid?: string; apiKeySid?: string; apiKeySecret?: string };
   billingMode?: "platform" | "self";
 
   numbersLastSyncedAt?: Date;
@@ -194,20 +176,11 @@ const UserSchema = new Schema<IUser>({
     refreshToken: String,
     expiryDate: Number,
     googleEmail: String,
-    sheets: [
-      {
-        sheetId: String,
-        folderName: String,
-      },
-    ],
+    sheets: [{ sheetId: String, folderName: String }],
     syncedSheets: { type: [SyncedSheetSchema], default: [] },
   },
 
-  googleTokens: {
-    accessToken: String,
-    refreshToken: String,
-    expiryDate: Number,
-  },
+  googleTokens: { accessToken: String, refreshToken: String, expiryDate: Number },
 
   calendarId: String,
   bookingSettings: {
@@ -261,7 +234,7 @@ const UserSchema = new Schema<IUser>({
     lastSyncedAt: Date,
   },
 
-  // ✅ Per-user Twilio + billing mode
+  // Per-user Twilio + billing mode
   twilio: {
     accountSid: String,
     apiKeySid: String,
@@ -272,8 +245,13 @@ const UserSchema = new Schema<IUser>({
   numbersLastSyncedAt: Date,
 });
 
+// Existing
 UserSchema.index({ email: 1 }, { name: "user_email_idx" });
 UserSchema.index({ "numbers.phoneNumber": 1 }, { name: "user_numbers_phone_idx" });
+
+// New helpful indexes we query in callbacks/routing
+UserSchema.index({ "numbers.messagingServiceSid": 1 }, { name: "user_numbers_msid_idx", sparse: true });
+UserSchema.index({ "a2p.messagingServiceSid": 1 }, { name: "user_a2p_msid_idx", sparse: true });
 
 const User =
   (mongoose.models.User as mongoose.Model<IUser>) ||
@@ -281,7 +259,6 @@ const User =
 
 export default User;
 
-// ✅ Utility
 export async function getUserByEmail(email: string) {
   return await User.findOne({ email });
 }

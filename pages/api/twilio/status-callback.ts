@@ -1,4 +1,3 @@
-// pages/api/twilio/status-callback.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { buffer } from "micro";
 import twilio from "twilio";
@@ -18,7 +17,8 @@ const AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN!;
 const BASE_URL = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "").replace(/\/$/, "");
 const ALLOW_DEV_TWILIO_TEST = process.env.ALLOW_LOCAL_TWILIO_TEST === "1" && process.env.NODE_ENV !== "production";
 
-const TERMINAL_SMS_STATES = new Set(["delivered","failed","undelivered","sent"]);
+// Terminal states (for rollups/billing). We purposely do NOT include "sent".
+const TERMINAL_SMS_STATES = new Set(["delivered","failed","undelivered","canceled"]);
 const TERMINAL_VOICE_STATES = new Set(["completed","busy","failed","no-answer","canceled"]);
 
 // Helper: resolve which user owns a Twilio number
@@ -41,8 +41,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const requestUrl = `${BASE_URL}/api/twilio/status-callback`;
 
   const valid = twilio.validateRequest(AUTH_TOKEN, signature, requestUrl, Object.fromEntries(params as any));
-  if (!valid && !ALLOW_DEV_TWILIO_TEST) { console.warn("❌ Invalid Twilio signature on status-callback"); res.status(403).end("Invalid signature"); return; }
-  if (!valid && ALLOW_DEV_TWILIO_TEST) { console.warn("⚠️ Dev bypass: Twilio signature validation skipped (status-callback)."); }
+  if (!valid && !ALLOW_DEV_TWILIO_TEST) {
+    console.warn("❌ Invalid Twilio signature on status-callback");
+    res.status(403).end("Invalid signature");
+    return;
+  }
+  if (!valid && ALLOW_DEV_TWILIO_TEST) {
+    console.warn("⚠️ Dev bypass: Twilio signature validation skipped (status-callback).");
+  }
 
   try {
     await mongooseConnect();
@@ -72,9 +78,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // =========================
     if (MessageSid && MessageStatus) {
       try {
+        // Fetch current doc first so we can detect first terminal transition (avoid double-counting)
+        const prev = await Message.findOne({ sid: MessageSid });
+        const priorStatus = (prev?.status || "").toString().toLowerCase();
+
+        // Build updates based on state transitions
+        const now = new Date();
         const updates: any = { status: MessageStatus };
         if (ErrorCode) updates.errorCode = ErrorCode;
-        if (MessageStatus === "delivered") updates.deliveredAt = new Date();
+
+        // Record key timestamps
+        if ((MessageStatus === "accepted" || MessageStatus === "sending" || MessageStatus === "sent") && !prev?.sentAt) {
+          updates.sentAt = now;
+        }
+        if (MessageStatus === "scheduled" && !prev?.scheduledAt) {
+          updates.scheduledAt = now; // may also be set pre-send for quiet hours
+        }
+        if (MessageStatus === "delivered") {
+          updates.deliveredAt = now;
+        }
+        if (MessageStatus === "failed" || MessageStatus === "undelivered" || MessageStatus === "canceled") {
+          updates.failedAt = now;
+        }
 
         const msg = await Message.findOneAndUpdate({ sid: MessageSid }, { $set: updates }, { new: true });
 
@@ -102,8 +127,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
         } catch (e) { console.warn("ℹ️ Socket emit (message:status) failed:", (e as any)?.message || e); }
 
-        // Per-number usage rollup when terminal
-        if (TERMINAL_SMS_STATES.has(MessageStatus)) {
+        // Per-number usage rollup when entering a terminal state for the **first** time
+        if (TERMINAL_SMS_STATES.has(MessageStatus) && !TERMINAL_SMS_STATES.has(priorStatus)) {
           const ownerUser =
             (await User.findOne({ "numbers.phoneNumber": From })) ||
             (await User.findOne({ "numbers.messagingServiceSid": MessagingServiceSid }));
@@ -117,11 +142,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
         }
 
-        if (ErrorCode) console.warn(`⚠️ SMS error for ${From} -> ${To}: status=${MessageStatus} code=${ErrorCode} sid=${MessageSid}`);
-        else console.log(`📬 SMS status ${MessageStatus} for ${From} -> ${To} (sid ${MessageSid})`);
+        if (ErrorCode) {
+          console.warn(`❗ SMS cb status=${MessageStatus} code=${ErrorCode} from=${From} -> to=${To} sid=${MessageSid}`);
+        } else {
+          const emoji =
+            MessageStatus === "delivered" ? "✅" :
+            MessageStatus === "failed" || MessageStatus === "undelivered" || MessageStatus === "canceled" ? "❌" :
+            "📬";
+          console.log(`${emoji} SMS cb status=${MessageStatus} from=${From} -> to=${To} sid=${MessageSid}`);
+        }
       } catch (e) {
         console.warn("⚠️ SMS status-callback handling error:", (e as any)?.message || e);
       }
+      // Always 200 for Twilio
       res.status(200).end();
       return;
     }
@@ -211,11 +244,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         console.warn("⚠️ Billing/usage update failed (continuing):", (e as any)?.message || e);
       }
 
+      const vEmoji =
+        CallStatus === "answered" || CallStatus === "completed" ? "✅" :
+        CallStatus === "failed" || CallStatus === "busy" || CallStatus === "no-answer" || CallStatus === "canceled" ? "❌" :
+        "📞";
+      console.log(`${vEmoji} Voice cb status=${CallStatus} dir=${direction} owner=${ownerNumber} other=${otherNumber} sid=${CallSid}`);
+
       res.status(200).end();
       return;
     }
 
     // Unknown payload — acknowledge
+    console.log("ℹ️ Unknown status-callback payload received.");
     res.status(200).end();
     return;
   } catch (err) {

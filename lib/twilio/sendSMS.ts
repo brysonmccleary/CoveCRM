@@ -9,11 +9,8 @@ import Message from "@/models/Message";
 import { DateTime } from "luxon";
 import { getTimezoneFromState } from "@/utils/timezone";
 import { getClientForUser } from "./getClientForUser";
-
-// ✅ Twilio types (for params)
 import type { MessageListInstanceCreateOptions } from "twilio/lib/rest/api/v2010/account/message";
 
-// ✅ Base URL for webhooks
 const BASE_URL = (
   process.env.NEXT_PUBLIC_BASE_URL ||
   process.env.BASE_URL ||
@@ -24,13 +21,14 @@ const STATUS_CALLBACK =
   process.env.A2P_STATUS_CALLBACK_URL ||
   (BASE_URL ? `${BASE_URL}/api/twilio/status-callback` : undefined);
 
-// ✅ Shared MG SID (for platform-billed / shared service)
 const SHARED_MESSAGING_SERVICE_SID = process.env.TWILIO_MESSAGING_SERVICE_SID;
-
-// ✅ Allow bypass in dev if needed
 const DEV_ALLOW_UNAPPROVED = process.env.DEV_ALLOW_UNAPPROVED === "1";
+const DEFAULT_MPS = Math.max(
+  1,
+  parseInt(process.env.TWILIO_DEFAULT_MPS || "1", 10) || 1
+);
 
-// ✅ Your internal costing (platform-billed only)
+// Internal costing (platform-billed only)
 const SMS_COST = 0.0075;
 
 // Quiet hours (local to lead’s time zone)
@@ -49,68 +47,44 @@ function normalize(p: string) {
 function isUS(num: string) {
   return (num || "").startsWith("+1");
 }
-
 function pickLeadZone(lead: any): string {
-  // Primary: map from State (handles America/Phoenix for AZ)
+  // Must return an IANA zone; AZ should map to "America/Phoenix" (no DST)
   const fromState = getTimezoneFromState(lead?.State || "");
   if (fromState) return fromState;
-  // Fallback: east coast default
   return "America/New_York";
+}
+function sleep(ms: number) {
+  return new Promise((r) => setTimeout(r, ms));
 }
 
 /**
- * Given a zone and "now", return:
- * - isQuiet: boolean if we're in [21:00, 08:00) local
- * - scheduledAt: Date if we should schedule (next 08:00 local, ≥ 15 minutes from now UTC)
+ * Simple in-process throttle per sender (MSID).
+ * Works best when multiple sends happen within the same runtime (drip batches).
+ * Not a durable queue — drip runner batches provide additional pacing.
  */
-function computeQuietHoursScheduling(zone: string): {
-  isQuiet: boolean;
-  scheduledAt?: Date;
-} {
-  const nowLocal = DateTime.now().setZone(zone);
-  const hour = nowLocal.hour;
-  const inQuiet = hour >= QUIET_START_HOUR || hour < QUIET_END_HOUR;
-
-  if (!inQuiet) return { isQuiet: false };
-
-  let target = nowLocal;
-  if (hour < QUIET_END_HOUR) {
-    target = nowLocal.set({
-      hour: QUIET_END_HOUR,
-      minute: 0,
-      second: 0,
-      millisecond: 0,
-    });
-  } else {
-    target = nowLocal
-      .plus({ days: 1 })
-      .set({ hour: QUIET_END_HOUR, minute: 0, second: 0, millisecond: 0 });
+const senderThrottle = new Map<string, number>(); // msid -> nextAvailableTs
+async function throttleForSender(msid: string, mps: number) {
+  const now = Date.now();
+  const step = Math.ceil(1000 / Math.max(1, mps));
+  const next = senderThrottle.get(msid) || 0;
+  const wait = Math.max(0, next - now);
+  if (wait > 0) {
+    console.log(`🧯 throttled msid=${msid} wait=${wait}ms`);
+    await sleep(wait);
   }
-
-  // Twilio requires ≥ 15 minutes ahead (UTC)
-  const minUtc = DateTime.utc().plus({ minutes: MIN_SCHEDULE_LEAD_MINUTES });
-  const targetUtc = target.toUTC();
-  const finalTarget = targetUtc < minUtc ? minUtc : targetUtc;
-
-  return { isQuiet: true, scheduledAt: finalTarget.toJSDate() };
+  senderThrottle.set(msid, Date.now() + step);
 }
 
 /** Ensure we have a real Mongoose User document */
 async function ensureUserDoc(userOrId: string | any) {
   if (!userOrId) return null;
-
-  // Already a Mongoose doc?
   if (typeof (userOrId as any).save === "function") return userOrId;
 
-  // String id or email
   if (typeof userOrId === "string") {
-    if (mongoose.isValidObjectId(userOrId)) {
-      return await User.findById(userOrId);
-    }
+    if (mongoose.isValidObjectId(userOrId)) return await User.findById(userOrId);
     return await User.findOne({ email: String(userOrId).toLowerCase() });
   }
 
-  // Object with _id or email
   if (userOrId._id && mongoose.isValidObjectId(userOrId._id)) {
     const doc = await User.findById(userOrId._id);
     if (doc) return doc;
@@ -121,21 +95,17 @@ async function ensureUserDoc(userOrId: string | any) {
     });
     if (doc) return doc;
   }
-
   return null;
 }
 
 /**
  * Ensure (or create) a per-tenant Messaging Service with correct webhooks.
  * Only used if you do NOT supply TWILIO_MESSAGING_SERVICE_SID and there is no stored service.
- * Note: uses a platform client under the hood (legacy path); for personal accounts
- * we expect user.a2p.messagingServiceSid to be present in that account.
  */
 async function ensureTenantMessagingService(
   userId: string,
   friendlyNameHint?: string,
 ) {
-  // Legacy path uses a platform client via env creds to manage MS if needed.
   const twilio = await import("twilio");
   const platformClient = twilio.default(
     process.env.TWILIO_API_KEY_SID || process.env.TWILIO_ACCOUNT_SID!,
@@ -174,15 +144,56 @@ async function ensureTenantMessagingService(
   return svc.sid;
 }
 
-// ---------- main ----------
-export async function sendSMS(
-  to: string,
-  body: string,
-  userIdOrUser: string | any,
-): Promise<{ sid: string; serviceSid: string; scheduledAt?: string }> {
+/** Try to resolve lead by explicit ID first; else by phone number */
+async function resolveLeadForSend(opts: {
+  leadId?: string | null;
+  userEmail: string;
+  toNorm: string;
+}) {
+  if (opts.leadId && mongoose.isValidObjectId(opts.leadId)) {
+    const lead = await Lead.findById(opts.leadId);
+    if (lead && (lead as any).userEmail?.toLowerCase() === opts.userEmail) {
+      return lead;
+    }
+  }
+  // fall back to phone lookups (handles +1 / digits-only variants)
+  return (
+    (await Lead.findOne({ userEmail: opts.userEmail, Phone: opts.toNorm })) ||
+    (await Lead.findOne({
+      userEmail: opts.userEmail,
+      Phone: opts.toNorm.replace(/^\+1/, ""),
+    })) ||
+    (await Lead.findOne({
+      userEmail: opts.userEmail,
+      Phone: opts.toNorm.replace(/^\+/, ""),
+    })) ||
+    (await Lead.findOne({ ownerEmail: opts.userEmail, Phone: opts.toNorm })) ||
+    (await Lead.findOne({
+      ownerEmail: opts.userEmail,
+      Phone: opts.toNorm.replace(/^\+1/, ""),
+    })) ||
+    (await Lead.findOne({
+      ownerEmail: opts.userEmail,
+      Phone: opts.toNorm.replace(/^\+/, ""),
+    }))
+  );
+}
+
+/**
+ * Core implementation used by both `sendSMS()` and the newer `sendSms({...})`.
+ */
+async function sendCore(paramsIn: {
+  to: string;
+  body: string;
+  user: any; // Mongoose User doc
+  leadId?: string | null;
+  overrideMsid?: string | null;
+  from?: string | null;
+  mediaUrls?: string[] | null;
+}): Promise<{ sid?: string; serviceSid: string; messageId: string; scheduledAt?: string }> {
   await dbConnect();
 
-  const user = await ensureUserDoc(userIdOrUser);
+  const user = paramsIn.user;
   if (!user) throw new Error("User not found");
 
   // Freeze check (read-only; trackUsage enforces too)
@@ -192,44 +203,40 @@ export async function sendSMS(
     );
   }
 
-  const toNorm = normalize(to);
+  const toNorm = normalize(paramsIn.to);
   if (!toNorm) throw new Error("Invalid destination phone number.");
   const isUSDest = isUS(toNorm);
 
-  // ✅ Resolve Twilio client for this user (personal vs platform)
+  // Resolve Twilio client for this user (personal vs platform)
   const { client, usingPersonal } = await getClientForUser(user.email);
+  console.log(`📤 sendSms user=${user.email} usingPersonal=${!!usingPersonal} to=${toNorm}`);
 
   // Load A2P state from User first (new flow via set-a2p-state), then legacy A2PProfile
   const userA2P = (user as any).a2p || {};
   const legacyA2P = await A2PProfile.findOne({ userId: String(user._id) }).lean();
 
-  // ✅ Decide which Messaging Service to use (priority):
-  // 1) user.a2p.messagingServiceSid (preferred; must exist in the *same* account you're sending from)
-  // 2) SHARED_MESSAGING_SERVICE_SID (platform-wide approved)
-  // 3) legacy A2PProfile.messagingServiceSid
-  // 4) (platform-only) create a tenant-specific service
+  // Decide Messaging Service (priority) with optional override
   let messagingServiceSid =
+    paramsIn.overrideMsid ||
     userA2P.messagingServiceSid ||
     SHARED_MESSAGING_SERVICE_SID ||
     legacyA2P?.messagingServiceSid ||
     null;
 
   if (!messagingServiceSid && !usingPersonal) {
-    // Only auto-create on platform path
     messagingServiceSid = await ensureTenantMessagingService(
       String(user._id),
       user.name || user.email,
     );
   }
-
-  if (!messagingServiceSid) {
-    // Personal path with no MS available
+  if (!messagingServiceSid && !paramsIn.from) {
     throw new Error(
       "No Messaging Service linked. Please link your A2P-approved Messaging Service to your account.",
     );
   }
+  console.log(`🛠 msid=${messagingServiceSid || "(from number)"}`);
 
-  // ✅ Compliance gate (US only). Approval can be via user-level MS, shared MS, or legacy A2PProfile.
+  // Compliance gate (US only) — only when using a Messaging Service path
   const approvedViaUser =
     !!userA2P.messagingServiceSid && userA2P.messagingReady === true;
   const approvedViaShared = Boolean(SHARED_MESSAGING_SERVICE_SID);
@@ -237,132 +244,238 @@ export async function sendSMS(
 
   if (
     isUSDest &&
+    !paramsIn.from &&
     !(approvedViaUser || approvedViaShared || approvedViaLegacy || DEV_ALLOW_UNAPPROVED)
   ) {
     throw new Error(
       "Texting is not enabled yet. Your A2P 10DLC registration is pending or not linked.",
     );
   }
-  if (
-    DEV_ALLOW_UNAPPROVED &&
-    isUSDest &&
-    !approvedViaUser &&
-    !approvedViaShared &&
-    !approvedViaLegacy
-  ) {
-    console.warn(
-      "[DEV] A2P not approved — sending anyway because DEV_ALLOW_UNAPPROVED=1",
-    );
+  if (DEV_ALLOW_UNAPPROVED && isUSDest && !paramsIn.from && !approvedViaUser && !approvedViaShared && !approvedViaLegacy) {
+    console.warn("[DEV] A2P not approved — sending anyway because DEV_ALLOW_UNAPPROVED=1");
   }
 
-  // ---------- Quiet hours logic (lead-local) ----------
-  // Find lead early to determine their local zone from State
-  const lead =
-    (await Lead.findOne({ userEmail: user.email, Phone: toNorm })) ||
-    (await Lead.findOne({
-      userEmail: user.email,
-      Phone: toNorm.replace(/^\+1/, ""),
-    })) ||
-    (await Lead.findOne({
-      userEmail: user.email,
-      Phone: toNorm.replace(/^\+/, ""),
-    })) ||
-    (await Lead.findOne({ ownerEmail: user.email, Phone: toNorm })) ||
-    (await Lead.findOne({
-      ownerEmail: user.email,
-      Phone: toNorm.replace(/^\+1/, ""),
-    })) ||
-    (await Lead.findOne({
-      ownerEmail: user.email,
-      Phone: toNorm.replace(/^\+/, ""),
-    }));
+  // Resolve lead (prefer explicit)
+  const lead = await resolveLeadForSend({
+    leadId: paramsIn.leadId,
+    userEmail: user.email,
+    toNorm,
+  });
 
+  // Opt-out suppression (supports either flag)
+  if ((lead as any)?.optOut === true || (lead as any)?.unsubscribed === true) {
+    const suppressed = await Message.create({
+      leadId: lead?._id,
+      userEmail: user.email,
+      direction: "outbound",
+      text: paramsIn.body,
+      read: true,
+      status: "suppressed",
+      suppressed: true,
+      reason: "opt_out",
+      to: toNorm,
+      fromServiceSid: messagingServiceSid || undefined,
+      queuedAt: new Date(),
+    });
+    console.log(`⚠️ suppressed reason=opt_out to=${toNorm} messageId=${suppressed._id}`);
+    return { serviceSid: messagingServiceSid || "", messageId: String(suppressed._id) };
+  }
+
+  // Quiet hours compute (we schedule instead of suppressing)
   const zone = pickLeadZone(lead);
   const { isQuiet, scheduledAt } = computeQuietHoursScheduling(zone);
 
-  // Build Twilio send params with the correct type
-  const params: MessageListInstanceCreateOptions = {
+  // Pre-create queued Message (DB = source of truth)
+  const preRow = await Message.create({
+    leadId: lead?._id,
+    userEmail: user.email,
+    direction: "outbound",
+    text: paramsIn.body,
+    read: true,
+    status: "queued",
+    suppressed: false,
+    reason: isQuiet ? "scheduled_quiet_hours" : undefined,
     to: toNorm,
-    body,
-    messagingServiceSid, // ✅ Always send through Messaging Service (A2P)
+    from: paramsIn.from || undefined,
+    fromServiceSid: messagingServiceSid || undefined,
+    queuedAt: new Date(),
+    scheduledAt: isQuiet && scheduledAt ? scheduledAt : undefined,
+  });
+  const messageId = String(preRow._id);
+  console.log(`⏳ queued msid=${messagingServiceSid || "(from)"} messageId=${messageId}`);
+
+  // Build Twilio params
+  const twParams: MessageListInstanceCreateOptions = {
+    to: toNorm,
+    body: paramsIn.body,
     statusCallback: STATUS_CALLBACK,
   };
 
-  // If within quiet hours, schedule for next 8:00 AM in the lead's local time (≥ 15 min ahead)
-  if (isQuiet && scheduledAt) {
-    (params as any).scheduleType = "fixed";
-    (params as any).sendAt = scheduledAt; // Date object
+  if (paramsIn.mediaUrls && paramsIn.mediaUrls.length) {
+    (twParams as any).mediaUrl = paramsIn.mediaUrls;
   }
 
-  try {
-    const message = await client.messages.create(params);
+  if (messagingServiceSid) {
+    (twParams as any).messagingServiceSid = messagingServiceSid;
+    if (isQuiet && scheduledAt) {
+      (twParams as any).scheduleType = "fixed";
+      (twParams as any).sendAt = scheduledAt; // Date object
+    }
+  } else if (paramsIn.from) {
+    (twParams as any).from = paramsIn.from;
+    if (isQuiet && scheduledAt) {
+      console.warn("⚠️ Quiet hours: cannot schedule without a Messaging Service SID; sending immediately.");
+    }
+  } else {
+    throw new Error("No routing set (neither messagingServiceSid nor from).");
+  }
 
-    // ✅ Billing logic: platform vs self
+  // Throttle per MSID (simple in-process)
+  const mps =
+    (typeof userA2P.mps === "number" && userA2P.mps > 0 ? userA2P.mps : DEFAULT_MPS);
+  if (messagingServiceSid) await throttleForSender(messagingServiceSid, mps);
+
+  try {
+    console.log(`🚀 dispatched to=${toNorm} msid=${messagingServiceSid || "(from)"} messageId=${messageId}`);
+    const tw = await client.messages.create(twParams);
+
+    // Billing parity
     if (usingPersonal || (user as any).billingMode === "self") {
-      // Do NOT bill through CRM; optional zero-charge marker
       await trackUsage({ user, amount: 0, source: "twilio-self" });
     } else {
-      // Bill through CRM platform
       await trackUsage({ user, amount: SMS_COST, source: "twilio" });
     }
 
-    // ✅ Save to conversation (Message model) with SID for exact status updates later
-    if (lead) {
-      try {
-        await Message.create({
-          leadId: lead._id,
-          userEmail: user.email,
-          direction: "outbound",
-          text: body,
-          read: true,
-          sid: message.sid, // Twilio SID
-          status: message.status, // 'accepted' | 'queued' | 'scheduled' etc.
-          to: toNorm,
-          fromServiceSid: messagingServiceSid,
-          sentAt: isQuiet && scheduledAt ? scheduledAt : new Date(), // reflect schedule time if any
-        });
-      } catch {
-        await Message.create({
-          leadId: lead._id,
-          userEmail: user.email,
-          direction: "outbound",
-          text: body,
-          read: true,
-        });
-      }
-    } else {
-      console.warn(
-        "⚠️ Outbound SMS saved, but no matching lead found for:",
-        toNorm,
-      );
-    }
+    // Update the queued Message row with SID + status
+    const newStatus = (tw.status as string) || "accepted";
+    await Message.findByIdAndUpdate(preRow._id, {
+      $set: {
+        sid: tw.sid,
+        status: newStatus,
+        sentAt: isQuiet && scheduledAt ? scheduledAt : new Date(),
+      },
+    }).exec();
 
     if (isQuiet && scheduledAt) {
       console.log(
-        `🕘 Quiet hours: scheduled SMS to ${toNorm} at ${scheduledAt.toISOString()} (${zone}) | SID: ${message.sid}`,
+        `🕘 scheduled sid=${tw.sid} at=${scheduledAt.toISOString()} zone=${zone} messageId=${messageId}`
       );
       return {
-        sid: message.sid,
-        serviceSid: messagingServiceSid,
+        sid: tw.sid,
+        serviceSid: messagingServiceSid || "",
+        messageId,
         scheduledAt: scheduledAt.toISOString(),
       };
     } else {
-      console.log(`✅ SMS sent to ${toNorm} | SID: ${message.sid}`);
-      return { sid: message.sid, serviceSid: messagingServiceSid };
+      console.log(`✅ accepted sid=${tw.sid} status=${newStatus} messageId=${messageId}`);
+      return { sid: tw.sid, serviceSid: messagingServiceSid || "", messageId };
     }
   } catch (err: any) {
-    if (err?.code === 30034) {
-      throw new Error(
-        "Carrier blocked message (30034). This tenant’s A2P brand/campaign isn’t fully approved yet.",
-      );
-    }
-    if (err?.code === 30007) {
-      throw new Error(
-        "Carrier filtered the message (30007). Check content, opt-in, and links/shorteners.",
-      );
+    const code = err?.code;
+    const msg = err?.message || "Failed to send SMS";
+    console.error(`❌ error code=${code || "unknown"} message="${msg}" messageId=${messageId}`);
+
+    // Special handling: 21610 STOPed recipient
+    if (code === 21610 && lead?._id) {
+      try {
+        await Lead.findByIdAndUpdate(lead._id, { $set: { optOut: true } }).exec();
+        console.warn(`🚫 auto-set lead.optOut=true due to 21610 for ${toNorm}`);
+      } catch {/* ignore */}
     }
 
-    console.error("❌ Twilio send error:", err);
-    throw new Error(err?.message || "Failed to send SMS");
+    await Message.findByIdAndUpdate(preRow._id, {
+      $set: {
+        status: "error",
+        errorCode: code,
+        errorMessage: msg,
+        failedAt: new Date(),
+      },
+    }).exec();
+
+    if (code === 30034) {
+      throw new Error(
+        "Carrier blocked message (30034). This tenant’s A2P brand/campaign isn’t fully approved yet."
+      );
+    }
+    if (code === 30007) {
+      throw new Error(
+        "Carrier filtered the message (30007). Check content, opt-in, and links/shorteners."
+      );
+    }
+    if (code === 21610) {
+      throw new Error(
+        "Recipient has opted out (21610). You can’t send to this number unless they reply UNSTOP."
+      );
+    }
+    throw new Error(msg);
   }
+}
+
+/**
+ * Quiet hours scheduling util
+ * Given a zone and "now", return:
+ * - isQuiet: boolean if we're in [21:00, 08:00) local
+ * - scheduledAt: Date if we should schedule (next 08:00 local, ≥ 15 minutes from now UTC)
+ */
+function computeQuietHoursScheduling(zone: string): {
+  isQuiet: boolean;
+  scheduledAt?: Date;
+} {
+  const nowLocal = DateTime.now().setZone(zone);
+  const hour = nowLocal.hour;
+  const inQuiet = hour >= QUIET_START_HOUR || hour < QUIET_END_HOUR;
+
+  if (!inQuiet) return { isQuiet: false };
+
+  let target = nowLocal;
+  if (hour < QUIET_END_HOUR) {
+    target = nowLocal.set({ hour: QUIET_END_HOUR, minute: 0, second: 0, millisecond: 0 });
+  } else {
+    target = nowLocal.plus({ days: 1 }).set({ hour: QUIET_END_HOUR, minute: 0, second: 0, millisecond: 0 });
+  }
+
+  const minUtc = DateTime.utc().plus({ minutes: MIN_SCHEDULE_LEAD_MINUTES });
+  const targetUtc = target.toUTC();
+  const finalTarget = targetUtc < minUtc ? minUtc : targetUtc;
+
+  return { isQuiet: true, scheduledAt: finalTarget.toJSDate() };
+}
+
+/**
+ * LEGACY: keep the original positional API for existing callers.
+ */
+export async function sendSMS(
+  to: string,
+  body: string,
+  userIdOrUser: string | any,
+): Promise<{ sid?: string; serviceSid: string; messageId: string; scheduledAt?: string }> {
+  const user = await ensureUserDoc(userIdOrUser);
+  if (!user) throw new Error("User not found");
+  return await sendCore({ to, body, user });
+}
+
+/**
+ * NEW: object-form with richer inputs.
+ * Inputs: { to, body, userEmail, leadId?, messagingServiceSid?, from?, mediaUrls? }
+ */
+export async function sendSms(args: {
+  to: string;
+  body: string;
+  userEmail: string;
+  leadId?: string;
+  messagingServiceSid?: string;
+  from?: string;
+  mediaUrls?: string[];
+}): Promise<{ sid?: string; serviceSid: string; messageId: string; scheduledAt?: string }> {
+  const user = await ensureUserDoc(args.userEmail);
+  if (!user) throw new Error("User not found");
+  return await sendCore({
+    to: args.to,
+    body: args.body,
+    user,
+    leadId: args.leadId,
+    overrideMsid: args.messagingServiceSid || null,
+    from: args.from || null,
+    mediaUrls: args.mediaUrls || null,
+  });
 }
