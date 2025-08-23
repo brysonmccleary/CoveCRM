@@ -1,7 +1,8 @@
-import { sendSMS } from "../twilio/sendSMS";
+// /lib/ai/handleAIResponse.ts
+import { sendSms } from "../twilio/sendSMS"; // ⬅️ use object-form sender
 import Lead from "@/models/Lead";
 import User from "@/models/User";
-import Message from "@/models/Message"; // ✅ new
+import Message from "@/models/Message";
 import { OpenAI } from "openai";
 import delay from "../utils/delay";
 import mongoose from "mongoose";
@@ -11,7 +12,7 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 const MAX_AI_MESSAGES_BEFORE_LINK = 2;
 const OPT_OUT_WORDS = ["stop", "unsubscribe", "no thanks", "not interested"];
-const BASE_URL = "https://covecrm.com";
+const BASE_URL = (process.env.NEXT_PUBLIC_BASE_URL || "https://covecrm.com").replace(/\/$/, "");
 
 // Local interaction types
 type InteractionType = "inbound" | "outbound" | "ai";
@@ -25,36 +26,68 @@ interface IInteraction {
 
 type ChatMsg = { role: "system" | "user" | "assistant"; content: string };
 
-// --- helpers ----------------------------------------------------
-
 function hasBookingLanguage(s: string) {
-  return /\b(mon|tue|wed|thu|fri|sat|sun|today|tomorrow|tmrw|morning|afternoon|evening|\d{1,2}(:\d{2})?\s?(am|pm))\b/i
-    .test(s || "");
-}
-
-// “Can you email/text/mail the info?” detector
-function asksForInfoOnly(s: string) {
-  const t = (s || "").toLowerCase();
-  return (
-    /\b(send|email|e-mail|text|txt|mail|message|pdf|brochure|doc|document|info|information)\b/.test(t) &&
-    /\b(send|email|text|mail|just|can you|could you|do you have|is there)\b/.test(t) &&
-    !hasBookingLanguage(t)
+  return /\b(mon|tue|wed|thu|fri|sat|sun|today|tomorrow|tmrw|morning|afternoon|evening|\d{1,2}(:\d{2})?\s?(am|pm))\b/i.test(
+    s || "",
   );
 }
 
-// Anti-repeat: if we’d duplicate the last AI line, nudge wording
-function rephraseIfDuplicate(draft: string, lastAI?: string) {
-  if (!draft || !lastAI) return draft;
-  const a = draft.replace(/\s+/g, " ").trim().toLowerCase();
-  const b = lastAI.replace(/\s+/g, " ").trim().toLowerCase();
-  if (a === b) {
-    // small, natural variation
-    return "Got it. What time works for a quick 5-minute call today or tomorrow?";
-  }
-  return draft;
+function isSendInfoRequest(s: string) {
+  const t = (s || "").toLowerCase();
+  return (
+    /\b(email|e-mail|mail|text|send|shoot|forward)\b.*\b(info|information|details|paperwork|brochure|quote|quotes)\b/.test(
+      t,
+    ) ||
+    /\b(can you|could you|just)\b.*\b(email|mail|text)\b.*\b(it|me)\b/.test(t) ||
+    t.includes("can you just email") ||
+    t.includes("can you just text") ||
+    t.includes("can you just mail")
+  );
 }
 
-// ---------------------------------------------------------------
+/**
+ * Pull the user's owned numbers as clean E.164 strings.
+ * Supports shapes like [{ phoneNumber: "+1555..." }, "+1555..."]
+ */
+function extractUserNumbers(user: any): string[] {
+  const raw = Array.isArray(user?.numbers) ? user.numbers : [];
+  const out: string[] = [];
+  for (const n of raw) {
+    if (!n) continue;
+    if (typeof n === "string") out.push(n);
+    else if (typeof n === "object" && typeof n.phoneNumber === "string")
+      out.push(n.phoneNumber);
+    else if (typeof n === "object" && typeof n.number === "string")
+      out.push(n.number);
+  }
+  // de-dupe
+  return Array.from(new Set(out));
+}
+
+/**
+ * Choose a "from" number for this lead/thread:
+ * 1) If the last message shows which Twilio number was used to talk to them, prefer that (sticky).
+ * 2) Else, fall back to the user's first owned number (if any).
+ * If none found, return null (we'll use the Messaging Service path).
+ */
+async function pickFromNumberForThread(leadId: string, user: any): Promise<string | null> {
+  const userNums = extractUserNumbers(user);
+  if (!userNums.length) return null;
+
+  const last = await Message.findOne({ leadId }).sort({ createdAt: -1 }).lean();
+  if (last) {
+    // If last inbound, our Twilio number is in `to`; if outbound/ai, it's in `from`.
+    const candidate =
+      last.direction === "inbound" ? (last as any).to : (last as any).from;
+
+    if (candidate && userNums.includes(candidate)) {
+      return candidate;
+    }
+  }
+
+  // Fallback to first user number
+  return userNums[0] || null;
+}
 
 export async function handleAIResponse(
   leadId: string,
@@ -79,7 +112,8 @@ export async function handleAIResponse(
   const aiName = user?.aiAssistantName || "Assistant";
 
   const normalizedMsg = (incomingMessage || "").toLowerCase();
-  const interactionHistory: IInteraction[] = (lead.interactionHistory || []) as IInteraction[];
+  const interactionHistory: IInteraction[] = (lead.interactionHistory ||
+    []) as IInteraction[];
   const leadType: string = lead.leadType || "Final Expense";
 
   if (OPT_OUT_WORDS.some((word) => normalizedMsg.includes(word))) {
@@ -87,26 +121,33 @@ export async function handleAIResponse(
     return;
   }
 
-  // Natural delay 2–3 minutes
+  // Natural delay 2–3 minutes (kept)
   const delayMs = Math.floor(Math.random() * (180000 - 120000 + 1)) + 120000;
   await delay(delayMs);
 
-  // ✅ Count prior AI replies
+  // Count prior AI replies
   let pastAIReplies = 0;
-  for (const msg of interactionHistory) if (msg.type === "ai") pastAIReplies++;
+  for (const msg of interactionHistory) {
+    if (msg.type === "ai") pastAIReplies++;
+  }
 
   const bookingUrl = `${BASE_URL}/book/${encodeURIComponent(lead.userEmail)}`;
   const linkAlreadySent = interactionHistory.some(
-    (i: IInteraction) => i.type === "ai" && typeof i.text === "string" && i.text.includes(bookingUrl),
+    (i: IInteraction) =>
+      i.type === "ai" &&
+      typeof i.text === "string" &&
+      i.text.includes(bookingUrl),
   );
 
-  // Build conversation memory (last 10 turns, lead↔AI only)
+  // Conversation memory (last 10 turns, lead↔AI only)
   const recent: IInteraction[] = [];
-  for (const h of interactionHistory) if (h.type === "inbound" || h.type === "ai") recent.push(h);
+  for (const h of interactionHistory) {
+    if (h.type === "inbound" || h.type === "ai") recent.push(h);
+  }
   const recentLast10 = recent.slice(-10);
 
-  // Last few AI lines to ban repetition
-  const lastAiLines = recent
+  // Build list of recent assistant lines to help de-dup after generation
+  const recentAssistantLines = recentLast10
     .filter((m) => m.type === "ai")
     .map((m) => (m.text || "").trim())
     .filter(Boolean)
@@ -119,7 +160,7 @@ You are ${aiName}, an appointment-setting assistant for Final Expense life insur
 You are not a licensed agent—do not give quotes or policy details. Your job is to schedule a quick call with a licensed agent.
     `.trim(),
     Veteran: `
-You are ${aiName}, an appointment-setting assistant for life insurance options for military/veterans.
+You are ${aiName}, an appointment-setting assistant for life insurance options available to military/veterans.
 You are not a licensed agent—avoid policy specifics. Your goal is to book a quick call with a licensed agent.
     `.trim(),
     "Mortgage Protection": `
@@ -132,15 +173,17 @@ You are not a financial advisor. Avoid giving advice; focus on booking a quick c
     `.trim(),
   };
 
-  // Style & anti-repetition guardrails
+  // Style & anti-repetition guardrails (+ explicit "send info" handling)
   const styleRules = `
 Write like a real human: warm, concise, and specific to what the lead just said.
-1–2 short sentences max. No links/emojis/signatures.
-Acknowledge briefly, then move the convo toward setting a time.
-Ask exactly ONE concrete question that advances scheduling.
-Avoid repeating any of these prior assistant lines: ${lastAiLines.join(" | ") || "(none)"}.
-If they ask for cost/duration, answer briefly then ask for a time.
-If they give a time/day, confirm it clearly and keep momentum.
+Acknowledge their message in your own words (no copy/paste).
+Ask exactly ONE concrete question that moves toward scheduling.
+Never repeat the same sentence or offer twice in a row. Vary your phrasing.
+Keep it to 1–2 short sentences max.
+Don't discuss policy details, quotes, or eligibility—book a call instead.
+If they ask to email/text/mail the information instead of a call, do NOT send a link or materials; say:
+"Unfortunately as of now there's nothing to send over without getting some information from you, when's a good time for a quick 5 minute call and then we can send everything out"
+Only include the booking link if we've already sent at least ${MAX_AI_MESSAGES_BEFORE_LINK} assistant messages in this thread AND the lead still hasn't given a time. Put the link on its own short line.
   `.trim();
 
   const systemMessage = `${domainPromptMap[leadType] || domainPromptMap["Final Expense"]}\n\n${styleRules}`;
@@ -148,7 +191,11 @@ If they give a time/day, confirm it clearly and keep momentum.
   // Build chat history for the model
   const messages: ChatMsg[] = [{ role: "system", content: systemMessage }];
   for (const h of recentLast10) {
-    messages.push(h.type === "inbound" ? { role: "user", content: h.text } : { role: "assistant", content: h.text });
+    messages.push(
+      h.type === "inbound"
+        ? { role: "user", content: h.text }
+        : { role: "assistant", content: h.text },
+    );
   }
   messages.push({ role: "user", content: incomingMessage });
 
@@ -157,37 +204,47 @@ If they give a time/day, confirm it clearly and keep momentum.
     messages.push({
       role: "system",
       content:
-        "The user mentioned a day/time. Confirm clearly and ask one focused follow-up if needed (e.g., ‘Does 3:30 pm your time work?’). Keep it under 2 sentences.",
+        "The user mentioned a day/time. Confirm clearly, and ask one focused follow-up if needed (e.g., 'Does 3:30 pm your time work?'). Keep under 2 sentences.",
     });
   }
 
-  // Hard rule for “just send me the info”
-  if (asksForInfoOnly(incomingMessage)) {
+  // Extra guard: if they explicitly asked to send info, short-circuit to the exact sentence
+  if (isSendInfoRequest(incomingMessage)) {
     const aiReply =
-      "Unfortunately as of now there’s nothing to send over without getting a few details from you first. When’s a good time for a quick 5-minute call and then we can send everything out?";
-    await sendWithCorrectNumber(lead, user, aiReply);
-    await persistAI(lead, aiReply);
+      "Unfortunately as of now there's nothing to send over without getting some information from you, when's a good time for a quick 5 minute call and then we can send everything out";
+
+    await persistAndSend({ lead, user, aiReply });
     return;
   }
 
-  // Default prompt & model call
   let aiReply =
-    "Hey! Do you have 5 minutes later today or tomorrow for a quick call with the agent?";
+    "Hey! Just checking in. Do you have 5 minutes later today or tomorrow to chat real quick with your agent?";
 
   try {
     const completion = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
+      model: "gpt-4o",
       messages,
-      temperature: 0.65,
+      temperature: 0.6,
       presence_penalty: 0.6,
       frequency_penalty: 0.8,
     });
 
-    const raw = (completion.choices?.[0]?.message?.content || "").toString().trim();
+    const raw = (completion.choices?.[0]?.message?.content || "")
+      .toString()
+      .trim();
     if (raw.length > 2) aiReply = raw;
 
+    // Post-filter to reduce repetition against our last few assistant lines
+    if (recentAssistantLines.includes(aiReply.trim())) {
+      aiReply = aiReply.replace(/^(Hey|Hi|Hello)[,!]?\s*/i, "Got it — ");
+    }
+
     // ✅ Charge for OpenAI usage ($0.01 per AI response)
-    await trackUsage({ user, amount: 0.01, source: "openai" });
+    await trackUsage({
+      user,
+      amount: 0.01,
+      source: "openai",
+    });
   } catch (err) {
     console.error("OpenAI error:", err);
   }
@@ -197,43 +254,40 @@ If they give a time/day, confirm it clearly and keep momentum.
     aiReply += `\n\nSchedule here: ${bookingUrl}`;
   }
 
-  // Avoid repeating the last assistant line verbatim
-  const lastAI = [...recent].reverse().find((m) => m.type === "ai")?.text || "";
-  aiReply = rephraseIfDuplicate(aiReply, lastAI);
-
-  await sendWithCorrectNumber(lead, user, aiReply);
-  await persistAI(lead, aiReply);
+  await persistAndSend({ lead, user, aiReply });
 }
 
-// --- send/persist helpers --------------------------------------
+/** persist + send helper (object-form sender w/ thread-sticky "from") */
+async function persistAndSend({
+  lead,
+  user,
+  aiReply,
+}: {
+  lead: any;
+  user: any;
+  aiReply: string;
+}) {
+  // Choose the best "from" number for this thread (or null to use MSID)
+  const fromOverride = await pickFromNumberForThread(String(lead._id), user);
 
-async function sendWithCorrectNumber(lead: any, user: any, body: string) {
-  // Prefer the exact number this thread used most recently:
-  // - if last message was inbound, reply FROM that inbound’s “To” (the user’s number they texted)
-  // - else if last message was outbound, reply FROM that outbound “from”
-  // - fallback to the user's first configured number
-  let fromOverride: string | undefined;
+  // Send (object-form; includes leadId for Message linkage)
+  await sendSms({
+    to: lead.Phone || (lead as any).phone,
+    body: aiReply,
+    userEmail: user.email,
+    leadId: String(lead._id),
+    from: fromOverride || undefined, // if undefined, MSID path is used
+  });
 
-  const lastMsg = await Message.findOne({ leadId: lead._id })
-    .sort({ createdAt: -1 })
-    .lean()
-    .exec();
+  // Persist convo (interactionHistory mirrors UI)
+  const interactionHistory: IInteraction[] = (lead.interactionHistory ||
+    []) as IInteraction[];
 
-  if (lastMsg?.direction === "inbound" && lastMsg.to) {
-    fromOverride = lastMsg.to as string;
-  } else if (lastMsg?.direction !== "inbound" && lastMsg?.from) {
-    fromOverride = lastMsg.from as string;
-  } else if (Array.isArray(user?.numbers) && user.numbers.length > 0) {
-    fromOverride = user.numbers[0]?.phoneNumber;
-  }
-
-  // `sendSMS` updated to accept an optional { from } override
-  await sendSMS(lead.Phone, body, user, { from: fromOverride });
-}
-
-async function persistAI(lead: any, aiReply: string) {
-  const interactionHistory: IInteraction[] = (lead.interactionHistory || []) as IInteraction[];
-  interactionHistory.push({ type: "ai", text: aiReply, date: new Date() });
+  interactionHistory.push({
+    type: "ai",
+    text: aiReply,
+    date: new Date(),
+  });
 
   lead.interactionHistory = interactionHistory;
   lead.isAIEngaged = true;
