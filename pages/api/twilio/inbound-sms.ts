@@ -1,3 +1,4 @@
+// pages/api/twilio/inbound-sms.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import mongooseConnect from "@/lib/mongooseConnect";
 import Lead from "@/models/Lead";
@@ -129,14 +130,18 @@ function computeQuietHoursScheduling(zone: string): {
 // ---------- helpers ----------
 function isUS(num: string) { return (num || "").startsWith("+1"); }
 function normalizeDigits(p: string) { return (p || "").replace(/\D/g, ""); }
+
+// ⬇️ Expanded opt-out detector
 function isOptOut(text: string): boolean {
   const t = (text || "").trim().toLowerCase();
-  return (
-    ["stop", "stopall", "unsubscribe", "cancel", "end", "quit"].some((k) => t === k) ||
-    t.includes("remove") ||
-    t.includes("opt out")
-  );
+  const exact = ["stop", "stopall", "unsubscribe", "cancel", "end", "quit"];
+  const soft = [
+    "remove", "opt out", "do not text", "don't text", "dont text",
+    "no more text", "no more texts", "not interested", "no longer interested"
+  ];
+  return exact.includes(t) || soft.some((k) => t.includes(k));
 }
+
 function isHelp(text: string): boolean {
   const t = (text || "").trim().toLowerCase();
   return t === "help" || t.includes("help");
@@ -151,6 +156,19 @@ function containsConfirmation(text: string) {
     "that works","works for me","sounds good","sounds great","perfect","let's do","lets do",
     "confirm","confirmed","book it","schedule it","set it","lock it in","we can do","we could do","3 works","works",
   ].some((p) => t.includes(p));
+}
+
+// ⬇️ Detect “just send me the info / email me the details / text it, etc.”
+function isInfoRequest(text: string): boolean {
+  const t = (text || "").toLowerCase();
+  const phrases = [
+    "send the info", "send info", "send details", "send me info", "send me the info",
+    "email the info", "email me the info", "email details", "email me details", "just email me",
+    "text the info", "text me the info", "text details", "text it", "can you text it",
+    "mail the info", "mail me the info", "mail details", "just send it", "can you send it",
+    "do you have something you can send", "do you have anything you can send", "link", "website"
+  ];
+  return phrases.some((p) => t.includes(p));
 }
 
 const TZ_ABBR: Record<string, string> = {
@@ -492,26 +510,45 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       lead.isAIEngaged = false;
       (lead as any).unsubscribed = true;
       (lead as any).optOut = true;
-      lead.interactionHistory.push({ type: "inbound", text: "[system] STOP detected — lead opted out.", date: new Date() });
+
+      // ⬅️ Move to Not Interested
+      (lead as any).status = "Not Interested";
+
+      // Log a system note
+      const note = { type: "system" as const, text: "[system] Lead opted out — moved to Not Interested.", date: new Date() };
+      lead.interactionHistory.push(note);
       await lead.save();
-      if (io) io.to(user.email).emit("message:new", { leadId: lead._id, type: "inbound", text: "[system] STOP detected — lead opted out.", date: new Date() });
-      console.log("🚫 Opt-out set for", fromNumber);
-      return res.status(200).json({ message: "Lead opted out via keyword." });
+
+      // Live update UI
+      if (io) {
+        io.to(user.email).emit("lead:updated", {
+          _id: lead._id,
+          status: "Not Interested",
+          unsubscribed: true,
+          optOut: true,
+        });
+        io.to(user.email).emit("message:new", { leadId: lead._id, ...note });
+      }
+
+      console.log("🚫 Opt-out set & moved to Not Interested for", fromNumber);
+      return res.status(200).json({ message: "Lead opted out; moved to Not Interested." });
     }
 
     if (isHelp(body)) {
-      lead.interactionHistory.push({ type: "inbound", text: "[system] HELP detected.", date: new Date() });
+      const note = { type: "system" as const, text: "[system] HELP detected.", date: new Date() };
+      lead.interactionHistory.push(note);
       await lead.save();
-      if (io) io.to(user.email).emit("message:new", { leadId: lead._id, type: "inbound", text: "[system] HELP detected.", date: new Date() });
+      if (io) io.to(user.email).emit("message:new", { leadId: lead._id, ...note });
       return res.status(200).json({ message: "Help handled (no auto-reply)." });
     }
 
     if (isStart(body)) {
       (lead as any).unsubscribed = false;
       (lead as any).optOut = false;
-      lead.interactionHistory.push({ type: "inbound", text: "[system] START/UNSTOP detected — lead opted back in.", date: new Date() });
+      const note = { type: "system" as const, text: "[system] START/UNSTOP detected — lead opted back in.", date: new Date() };
+      lead.interactionHistory.push(note);
       await lead.save();
-      if (io) io.to(user.email).emit("message:new", { leadId: lead._id, type: "inbound", text: "[system] START/UNSTOP detected — lead opted back in.", date: new Date() });
+      if (io) io.to(user.email).emit("message:new", { leadId: lead._id, ...note });
       console.log("🔓 Opt-in restored for", fromNumber);
       return res.status(200).json({ message: "Start handled." });
     }
@@ -521,19 +558,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const usConversation = isUS(fromNumber) || isUS(toNumber);
     const approved = SHARED_MESSAGING_SERVICE_SID || (a2p?.messagingReady && a2p?.messagingServiceSid);
     if (usConversation && !approved) {
-      lead.interactionHistory.push({
-        type: "inbound",
-        text: "[note] Auto-reply suppressed: A2P not approved yet.",
-        date: new Date(),
-      });
+      const note = { type: "system" as const, text: "[note] Auto-reply suppressed: A2P not approved yet.", date: new Date() };
+      lead.interactionHistory.push(note);
       await lead.save();
-      if (io)
-        io.to(user.email).emit("message:new", {
-          leadId: lead._id,
-          type: "inbound",
-          text: "[note] Auto-reply suppressed: A2P not approved yet.",
-          date: new Date(),
-        });
+      if (io) io.to(user.email).emit("message:new", { leadId: lead._id, ...note });
       console.warn("⚠️ Auto-reply suppressed (A2P not approved)");
       return res.status(200).json({ message: "A2P not approved; no auto-reply sent." });
     }
@@ -580,8 +608,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         null;
     }
 
+    // 2.5) explicit info-request → use your canned line
+    if (!requestedISO && isInfoRequest(body)) {
+      aiReply = `Unfortunately as of now there's nothing to send over without getting some information from you. When's a good time for a quick 5 minute call? After that we can send everything out.`;
+      memory.state = "qa";
+    }
+
     // 3) conversational fallback
-    if (!requestedISO) {
+    if (!requestedISO && !isInfoRequest(body)) {
       try {
         const ex = await extractIntentAndTimeLLM({ text: body, nowISO, tz });
         const norm = normalizeWhen(ex.datetime_text, nowISO, tz);
