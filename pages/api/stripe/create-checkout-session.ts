@@ -22,16 +22,19 @@ export default async function handler(
 
   const { wantsUpgrade } = (req.body || {}) as { wantsUpgrade?: boolean };
 
+  const BASE_PRICE = process.env.STRIPE_PRICE_ID_MONTHLY || "price_1RoAGJDF9aEsjVyJV2wARrFp";
+  const AI_PRICE = process.env.STRIPE_PRICE_ID_AI_MONTHLY || "price_1RoAK4DF9aEsjVyJeoR3w3RL";
+
   const line_items: Stripe.Checkout.SessionCreateParams.LineItem[] = [
     {
-      price: "price_1RoAGJDF9aEsjVyJV2wARrFp", // $200/month base
+      price: BASE_PRICE, // base plan (e.g., $200/mo)
       quantity: 1,
     },
   ];
 
   if (wantsUpgrade) {
     line_items.push({
-      price: "price_1RoAK4DF9aEsjVyJeoR3w3RL", // $50/month AI Upgrade
+      price: AI_PRICE, // AI add-on (e.g., $50/mo)
       quantity: 1,
     });
   }
