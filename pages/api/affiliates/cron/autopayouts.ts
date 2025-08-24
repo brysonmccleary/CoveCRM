@@ -12,13 +12,21 @@ const envBool = (name: string, def = false) => {
 const toCents = (usd: number) => Math.round(Number(usd || 0) * 100);
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "POST") return res.status(405).end("Method Not Allowed");
-
-  const authz = req.headers.authorization || "";
-  const secret = process.env.CRON_SECRET;
-  if (!secret || authz !== `Bearer ${secret}`) {
-    return res.status(401).json({ error: "Unauthorized" });
+  // Allow GET or POST for Vercel Cron
+  if (req.method !== "GET" && req.method !== "POST") {
+    return res.status(405).end("Method Not Allowed");
   }
+
+  const secret = process.env.CRON_SECRET || "";
+  const authz = req.headers.authorization || "";
+  const token = (req.query.token as string) || "";
+
+  // Accept Authorization header OR ?token= for Vercel Cron
+  const ok =
+    (!!secret && authz === `Bearer ${secret}`) ||
+    (!!secret && token === secret);
+
+  if (!ok) return res.status(401).json({ error: "Unauthorized" });
 
   const minUSD = Number(process.env.AFFILIATE_MIN_PAYOUT_USD || 50);
   const autopay = envBool("AFFILIATE_AUTOPAY", false);
@@ -26,10 +34,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     await dbConnect();
 
-    // Candidates with balance >= threshold
     const affiliates = await Affiliate.find({
       payoutDue: { $gte: minUSD },
-    }).lean(false); // get mongoose documents
+    }).lean(false);
 
     const results: any[] = [];
 
@@ -37,7 +44,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const amountUSD = Math.floor(Number(affiliate.payoutDue || 0) * 100) / 100;
       const idempotencyKey = `sweep:${affiliate._id}:${Math.round(amountUSD * 100)}`;
 
-      // If already processed for this amount, skip
       const exists = await AffiliatePayout.findOne({ idempotencyKey }).lean();
       if (exists) {
         results.push({ promoCode: affiliate.promoCode, skipped: "already processed" });
