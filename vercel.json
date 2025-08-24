@@ -1,4 +1,12 @@
 {
+  "redirects": [
+    {
+      "source": "/(.*)",
+      "has": [{ "type": "host", "value": "www.covecrm.com" }],
+      "destination": "https://covecrm.com/$1",
+      "permanent": true
+    }
+  ],
   "crons": [
     { "path": "/api/poll-new-lead", "schedule": "* * * * *" },
     { "path": "/api/cron/schedule-sms-reminders", "schedule": "*/15 * * * *" },
