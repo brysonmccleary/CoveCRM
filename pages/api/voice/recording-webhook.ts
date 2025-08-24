@@ -4,101 +4,32 @@ import twilio from "twilio";
 import dbConnect from "@/lib/mongooseConnect";
 import Call from "@/models/Call";
 import User from "@/models/User";
+import { getUserByPhoneNumber } from "@/lib/getUserByPhoneNumber";
 
 export const config = { api: { bodyParser: false } };
 
 const AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN!;
-const ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID!;
 const BASE_URL = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "").replace(/\/$/, "");
 const ALLOW_DEV_TWILIO_TEST = process.env.ALLOW_LOCAL_TWILIO_TEST === "1" && process.env.NODE_ENV !== "production";
 
-const CALL_AI_SUMMARY_ENABLED = (process.env.CALL_AI_SUMMARY_ENABLED || "").toString() === "1";
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
+// Optional global kill-switch; and we also require user.hasAI=true before doing any AI work
+const CALL_AI_SUMMARY_ENABLED =
+  (process.env.CALL_AI_SUMMARY_ENABLED || "").toLowerCase() === "1" ||
+  (process.env.CALL_AI_SUMMARY_ENABLED || "").toLowerCase() === "true";
 
-// Lazy import so build won’t fail if OPENAI_API_KEY isn’t set
-async function summarizeIfEnabled(callDoc: any, recordingMp3Url: string) {
-  try {
-    if (!CALL_AI_SUMMARY_ENABLED) return;
-    if (!OPENAI_API_KEY) return;
-
-    const user = await User.findOne({ email: callDoc.userEmail });
-    if (!user?.hasAI) return;
-
-    // Download audio with Twilio Basic auth
-    const auth = Buffer.from(`${ACCOUNT_SID}:${AUTH_TOKEN}`).toString("base64");
-    const resp = await fetch(recordingMp3Url, { headers: { Authorization: `Basic ${auth}` } });
-    if (!resp.ok) throw new Error(`fetch mp3 failed ${resp.status}`);
-    const blob = await resp.blob();
-
-    const { default: OpenAI } = await import("openai");
-    const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
-
-    // 1) Transcribe (Whisper)
-    const file = new File([blob], "call.mp3", { type: "audio/mpeg" });
-    const tr = await openai.audio.transcriptions.create({
-      model: "whisper-1",
-      file,
-      response_format: "text",
-      temperature: 0,
-    });
-    const transcript = (tr as any) as string;
-
-    // 2) Summarize to bullets + action items
-    const sys = `You are an SDR assistant. Summarize phone calls briefly.
-Return JSON with keys:
-- "summary": short paragraph,
-- "bullets": 3-7 concise bullet points,
-- "actionItems": optional next steps (array of strings),
-- "score": integer 0-100 for quality of the outcome,
-- "sentiment": "positive" | "neutral" | "negative".`;
-    const usr = `Transcript:\n"""${transcript}"""`;
-
-    const chat = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      temperature: 0.2,
-      response_format: { type: "json_object" },
-      messages: [
-        { role: "system", content: sys },
-        { role: "user", content: usr },
-      ],
-    });
-
-    const parsed = JSON.parse(chat.choices[0].message.content || "{}");
-    await Call.updateOne(
-      { _id: callDoc._id },
-      {
-        $set: {
-          transcript,
-          aiSummary: parsed.summary || "",
-          aiBullets: Array.isArray(parsed.bullets) ? parsed.bullets : [],
-          aiActionItems: Array.isArray(parsed.actionItems) ? parsed.actionItems : [],
-          aiScore: typeof parsed.score === "number" ? parsed.score : undefined,
-          aiSentiment: parsed.sentiment || "neutral",
-          aiProcessing: "done",
-        },
-      },
-    );
-
-    // Live update for UI
-    try {
-      const io = (global as any)?.socketServer?.io || (global as any)?.__io || (global as any)?.io || (global as any);
-      const resAny = ({} as any);
-      const ioFromApi = (resAny?.socket as any)?.server?.io; // best-effort if available in this runtime
-      const target = ioFromApi || io;
-      if (target) target.to(callDoc.userEmail).emit("call:updated", { id: String(callDoc._id), callSid: callDoc.callSid });
-    } catch {}
-  } catch (e) {
-    await Call.updateOne(
-      { _id: callDoc._id },
-      { $set: { aiProcessing: "error" } },
-    );
-    console.warn("AI summary failed:", (e as any)?.message || e);
-  }
+// Helper: resolve which user owns a Twilio number
+async function resolveOwnerEmailByOwnedNumber(num: string): Promise<string | null> {
+  if (!num) return null;
+  const owner =
+    (await User.findOne({ "numbers.phoneNumber": num })) ||
+    (await User.findOne({ "numbers.messagingServiceSid": num }));
+  return owner?.email?.toLowerCase?.() || null;
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") { res.status(405).end("Method Not Allowed"); return; }
 
+  // ---- Verify Twilio signature (allow dev bypass)
   const raw = await buffer(req);
   const bodyStr = raw.toString("utf8");
   const params = new URLSearchParams(bodyStr);
@@ -118,78 +49,137 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     await dbConnect();
 
-    const RecordingSid = params.get("RecordingSid") || "";
-    const RecordingUrlBare = params.get("RecordingUrl") || ""; // no extension
-    const RecordingStatus = (params.get("RecordingStatus") || "").toLowerCase(); // completed | failed | absent
-    const RecordingDuration = params.get("RecordingDuration") || ""; // seconds (string)
+    // ---- Core Twilio fields
     const CallSid = params.get("CallSid") || "";
-    const ConferenceSid = params.get("ConferenceSid") || "";
-    const ConferenceName = params.get("ConferenceName") || "";
+    const RecordingSid = params.get("RecordingSid") || "";
+    const RecordingStatus = (params.get("RecordingStatus") || "").toLowerCase(); // completed | processing | failed | ...
+    const RecordingUrlRaw = params.get("RecordingUrl") || ""; // often without extension
+    const RecordingDurationStr = params.get("RecordingDuration") || ""; // seconds (string)
+    const ConferenceName = params.get("ConferenceName") || params.get("conferenceName") || "";
 
-    // Twilio mp3 URL
-    const recordingMp3Url = RecordingUrlBare ? `${RecordingUrlBare}.mp3` : "";
+    const From = params.get("From") || params.get("Caller") || "";
+    const To = params.get("To") || params.get("Called") || "";
+    const Timestamp = params.get("Timestamp") || undefined;
 
-    // Find the Call doc
+    // Normalize URL → prefer mp3
+    const recordingUrl =
+      RecordingUrlRaw
+        ? (RecordingUrlRaw.endsWith(".mp3") || RecordingUrlRaw.endsWith(".wav"))
+          ? RecordingUrlRaw
+          : `${RecordingUrlRaw}.mp3`
+        : "";
+    const recordingDuration = RecordingDurationStr ? parseInt(RecordingDurationStr, 10) || undefined : undefined;
+    const now = Timestamp ? new Date(Timestamp) : new Date();
+
+    // ---- Resolve owner / user
+    const inboundOwner = await getUserByPhoneNumber(To);
+    const outboundOwner = await getUserByPhoneNumber(From);
+    const direction: "inbound" | "outbound" = inboundOwner ? "inbound" : "outbound";
+    const ownerNumber = inboundOwner ? To : From;
+    const userEmail =
+      (inboundOwner?.email?.toLowerCase?.() ||
+       outboundOwner?.email?.toLowerCase?.() ||
+       (await resolveOwnerEmailByOwnedNumber(ownerNumber)) ||
+       undefined) as string | undefined;
+
+    // ---- Find an existing Call doc by reliable keys (prefer CallSid)
     const callDoc =
-      (await Call.findOne({ callSid })) ||
-      (await Call.findOne({ conferenceName: ConferenceName })) ||
-      (await Call.findOne({ recordingSid: RecordingSid })) ||
+      (CallSid && (await Call.findOne({ callSid: CallSid }))) ||
+      (RecordingSid && (await Call.findOne({ recordingSid: RecordingSid }))) ||
       null;
 
-    if (!callDoc) {
-      // If we can't find it, write a minimal doc so UI still works
+    // ---- Build updates
+    const setBase: any = {
+      recordingSid: RecordingSid || undefined,
+      recordingUrl: recordingUrl || undefined,
+      recordingStatus: RecordingStatus || undefined,
+      recordingDuration: recordingDuration,
+    };
+
+    // If Twilio marks as completed, update completion/timing if missing
+    if (RecordingStatus === "completed") {
+      setBase.completedAt = callDoc?.completedAt || now;
+      if (typeof recordingDuration === "number" && recordingDuration >= 0) {
+        // If duration not yet set on the call, use recordingDuration as fallback
+        if (typeof (callDoc as any)?.duration !== "number") setBase.duration = recordingDuration;
+      }
+    }
+
+    // ---- Upsert logic
+    if (callDoc) {
       await Call.updateOne(
-        { callSid: CallSid || `unknown-${RecordingSid}` },
+        { _id: callDoc._id },
+        {
+          $set: {
+            ...setBase,
+            userEmail: callDoc.userEmail || userEmail, // preserve if previously known
+            direction: callDoc.direction || direction,
+          },
+        },
+      );
+    } else if (CallSid) {
+      // Create or update by CallSid
+      await Call.updateOne(
+        { callSid: CallSid },
         {
           $setOnInsert: {
-            callSid: CallSid || `unknown-${RecordingSid}`,
-            userEmail: "", // unknown
-            direction: "outbound",
-            startedAt: new Date(),
+            callSid: CallSid,
+            userEmail,
+            direction,
+            startedAt: now,
           },
-          $set: {
-            conferenceName: ConferenceName || undefined,
-            recordingSid: RecordingSid || undefined,
-            recordingUrl: recordingMp3Url || undefined,
-            recordingDuration: RecordingDuration ? Number(RecordingDuration) : undefined,
-            recordingStatus: RecordingStatus || undefined,
-            completedAt: new Date(),
-          },
+          $set: setBase,
         },
         { upsert: true },
       );
+    } else {
+      // No reliable identifier—ack and bail
+      console.warn("⚠️ Recording webhook without CallSid; skipping upsert.", { RecordingSid, ConferenceName });
       res.status(200).end();
       return;
     }
 
-    await Call.updateOne(
-      { _id: callDoc._id },
-      {
-        $set: {
-          recordingSid: RecordingSid || callDoc.recordingSid,
-          recordingUrl: recordingMp3Url || callDoc.recordingUrl,
-          recordingDuration: RecordingDuration ? Number(RecordingDuration) : callDoc.recordingDuration,
-          recordingStatus: RecordingStatus || callDoc.recordingStatus,
-          completedAt: callDoc.completedAt || new Date(),
-        },
-        $setOnInsert: { startedAt: new Date() },
-      },
-    );
-
-    // Live update for UI immediately
+    // ---- Emit live update for UI
     try {
       const io = (res.socket as any)?.server?.io;
-      if (io && callDoc.userEmail) {
-        io.to(callDoc.userEmail).emit("call:updated", { id: String(callDoc._id), callSid: callDoc.callSid });
+      if (io && userEmail) {
+        io.to(userEmail).emit("call:updated", {
+          callSid: CallSid || RecordingSid,
+          status: RecordingStatus || "recorded",
+          recordingUrl,
+          recordingSid: RecordingSid || null,
+          durationSec: recordingDuration || null,
+          timestamp: now.toISOString(),
+        });
       }
-    } catch {}
+    } catch (e) {
+      console.warn("ℹ️ Socket emit (call:updated) failed:", (e as any)?.message || e);
+    }
 
-    // AI (optional) — run after storing so the recording appears right away
-    await summarizeIfEnabled(callDoc, recordingMp3Url);
+    // ---- AI gate: only mark pending if env enabled AND the user has AI
+    if (RecordingStatus === "completed" && recordingUrl) {
+      try {
+        const user =
+          (userEmail && (await User.findOne({ email: userEmail }))) || null;
+        const aiAllowed = !!(user?.hasAI && CALL_AI_SUMMARY_ENABLED);
+
+        if (aiAllowed) {
+          await Call.updateOne(
+            { callSid: CallSid || (callDoc as any)?.callSid || undefined },
+            { $set: { aiProcessing: "pending" } },
+          );
+          // (Optional) kick off your background summarizer here if you have a worker/cron
+          // e.g. await fetch(`${BASE_URL}/api/ai/process-call`, { method: "POST", headers: {...}, body: JSON.stringify({ callSid: CallSid, url: recordingUrl }) });
+        }
+      } catch (e) {
+        console.warn("ℹ️ Skipped AI queue:", (e as any)?.message || e);
+      }
+    }
 
     res.status(200).end();
   } catch (err) {
-    console.error("❌ recording-webhook error:", err);
-    res.status(200).end(); // Always 200 to Twilio
+    console.error("❌ Recording webhook error:", err);
+    // Always 200 so Twilio doesn't retry infinitely
+    res.status(200).end();
   }
 }
