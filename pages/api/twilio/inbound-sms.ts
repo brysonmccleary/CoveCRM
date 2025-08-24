@@ -6,7 +6,7 @@ import User from "@/models/User";
 import A2PProfile from "@/models/A2PProfile";
 import Message from "@/models/Message";
 import twilio, { Twilio } from "twilio";
-import twilioClient from "@/lib/twilioClient";
+// import twilioClient from "@/lib/twilioClient"; // ⬅️ removed: we will use per-user client
 import { OpenAI } from "openai";
 import { getTimezoneFromState } from "@/utils/timezone";
 import { DateTime } from "luxon";
@@ -15,6 +15,8 @@ import axios from "axios";
 import { sendAppointmentBookedEmail } from "@/lib/email";
 // ✅ NEW: ensure socket server exists even if /api/socket wasn't hit
 import { initSocket } from "@/lib/socket";
+// ✅ NEW: per-user Twilio client resolver
+import { getClientForUser } from "@/lib/twilio/getClientForUser";
 
 export const config = { api: { bodyParser: false } };
 
@@ -794,7 +796,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         fresh.aiLastResponseAt = new Date();
         await fresh.save();
 
-        const twilioMsg = await twilioClient.messages.create(paramsOut);
+        // ✅ Send from the correct Twilio account for THIS user
+        const { client } = await getClientForUser(user.email);
+        const twilioMsg = await client.messages.create(paramsOut);
 
         await Message.create({
           leadId: fresh._id,
