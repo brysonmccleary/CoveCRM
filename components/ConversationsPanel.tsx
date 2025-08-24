@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef } from "react";
 import axios from "axios";
-import { format } from "date-fns";
+import { useNotifStore } from "@/lib/notificationsStore";
+import { formatStamp } from "@/lib/format";
 
 interface Lead {
   _id: string;
@@ -22,6 +23,10 @@ export default function ConversationsPanel() {
   const [bookingForMessageIndex, setBookingForMessageIndex] = useState<number | null>(null);
   const chatRef = useRef<HTMLDivElement>(null);
 
+  // 🔔 unread store
+  const unreadByLead = useNotifStore((s) => s.unreadByLead);
+  const clearUnread = useNotifStore((s) => s.clear);
+
   useEffect(() => {
     loadLeads();
   }, []);
@@ -36,7 +41,7 @@ export default function ConversationsPanel() {
 
     await axios.post("/api/twilio/send-sms", {
       to: selectedLead.Phone,
-      from: selectedLead.Phone, // keep existing routing; backend decides actual sender
+      from: selectedLead.Phone, // backend decides actual sender
       body: reply,
       leadId: selectedLead._id,
     });
@@ -52,10 +57,9 @@ export default function ConversationsPanel() {
     if (!selectedLead || !bookingTime || bookingForMessageIndex === null) return;
 
     try {
-      // ⬇️ Updated endpoint
       const res = await axios.post("/api/calendar/create-event", {
         leadId: selectedLead._id,
-        time: bookingTime, // datetime-local string; API will convert & default to 30m duration
+        time: bookingTime,
         phone: selectedLead.Phone,
         name: selectedLead["First Name"],
       });
@@ -74,10 +78,15 @@ export default function ConversationsPanel() {
     }
   };
 
-  // keep auto-scroll to bottom when thread changes
+  // auto-scroll to bottom when thread changes
   useEffect(() => {
     if (chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight;
   }, [selectedLead?.interactionHistory?.length]);
+
+  // 🔔 clear unread when a thread opens
+  useEffect(() => {
+    if (selectedLead?._id) clearUnread(selectedLead._id);
+  }, [selectedLead?._id, clearUnread]);
 
   return (
     <div className="flex flex-col md:flex-row gap-4 p-4">
@@ -86,19 +95,30 @@ export default function ConversationsPanel() {
         <h3 className="font-semibold text-lg mb-3">Conversations</h3>
         {leads.map((lead) => {
           const lastMsg = lead.interactionHistory?.slice(-1)[0];
+          const listTime = lastMsg?.date || lead.updatedAt;
+          const unreadCount = unreadByLead?.[lead._id] || 0;
+
           return (
             <div
               key={lead._id}
-              className={`border p-2 rounded mb-2 cursor-pointer ${
-                selectedLead?._id === lead._id ? "bg-blue-100" : ""
+              className={`relative border p-2 rounded mb-2 cursor-pointer ${
+                selectedLead?._id === lead._id ? "bg-blue-100" : "hover:bg-gray-50"
               }`}
-              onClick={() => setSelectedLead(lead)}
+              onClick={() => {
+                setSelectedLead(lead);
+                if (unreadCount > 0) clearUnread(lead._id);
+              }}
             >
-              <p className="font-bold">{lead["First Name"]}</p>
+              {/* numeric badge */}
+              {unreadCount > 0 && (
+                <span className="absolute right-2 top-2 inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-pink-500 px-1 text-xs font-semibold text-white">
+                  {unreadCount}
+                </span>
+              )}
+
+              <p className="font-bold pr-6">{lead["First Name"]}</p>
               <p className="text-sm text-gray-600 truncate">{lastMsg?.text}</p>
-              <p className="text-xs text-gray-400">
-                {format(new Date(lead.updatedAt), "MM/dd @ h:mma")}
-              </p>
+              <p className="text-xs text-gray-400">{formatStamp(listTime)}</p>
             </div>
           );
         })}
@@ -118,14 +138,10 @@ export default function ConversationsPanel() {
             >
               {selectedLead.interactionHistory.map((msg, idx) => {
                 const isSystem = msg.type === "system";
-                const isSent = msg.type === "outbound" || msg.type === "ai"; // ✅ treat AI as sent
+                const isSent = msg.type === "outbound" || msg.type === "ai";
                 const isReceived = msg.type === "inbound";
                 const showBooking = bookingForMessageIndex === idx;
 
-                // bubble alignment + colors:
-                // - Sent (outbound/ai): RIGHT in GREEN
-                // - Received (inbound): LEFT neutral
-                // - System: centered gray
                 const containerAlign = isSystem
                   ? "items-center"
                   : isSent
@@ -142,9 +158,7 @@ export default function ConversationsPanel() {
                   <div key={idx} className={`flex flex-col gap-1 ${containerAlign}`}>
                     <div className={`p-2 rounded-2xl max-w-[75%] ${bubbleClasses}`}>
                       <p className="text-sm whitespace-pre-line">{msg.text}</p>
-                      <p className="text-[10px] mt-1 text-right">
-                        {format(new Date(msg.date), "MM/dd h:mma")}
-                      </p>
+                      <p className="text-[10px] mt-1 text-right">{formatStamp(msg.date)}</p>
                     </div>
 
                     {(isReceived || msg.type === "ai") && (

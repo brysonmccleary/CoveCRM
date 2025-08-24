@@ -1,4 +1,4 @@
-// models/Message.ts
+// /models/Message.ts
 import mongoose, { Schema, Types } from "mongoose";
 
 export type MessageDirection = "inbound" | "outbound" | "ai";
@@ -15,18 +15,30 @@ export interface IMessage {
   text: string;
   read?: boolean;
 
+  // Optional kind (e.g., "call" for voice events you record as Message docs)
+  kind?: string;
+
   // Twilio delivery + traceability
   sid?: string; // Twilio Message SID (SM...)
-  status?: string; // queued | sent | delivered | failed | undelivered | etc.
-  errorCode?: string; // e.g. 30034, 30007
+  status?: string; // queued | accepted | sending | sent | delivered | failed | undelivered | error | suppressed | scheduled | answered | completed | connected
+  errorCode?: string;
+  errorMessage?: string;
 
   // Routing info
-  to?: string; // E.164 destination
-  from?: string; // Specific number if used (rare)
-  fromServiceSid?: string; // Messaging Service SID (MG...)
+  to?: string;
+  from?: string;
+  fromServiceSid?: string;
 
-  // Timestamps
-  sentAt?: Date; // when we attempted to send
+  // Lifecycle timestamps
+  queuedAt?: Date;
+  scheduledAt?: Date;
+  sentAt?: Date;
+  deliveredAt?: Date;
+  failedAt?: Date;
+
+  // Suppression/flags
+  suppressed?: boolean;
+  reason?: string; // "opt_out" | "scheduled_quiet_hours" | etc.
 
   // Added by { timestamps: true }
   createdAt?: Date;
@@ -52,38 +64,58 @@ const MessageSchema = new Schema<IMessage>(
     text: { type: String, required: true },
     read: { type: Boolean, default: false },
 
-    // ⚠️ Removed inline index on `sid` to avoid duplicate with schema-level index
+    // Optional "kind" so we can tag call attempts/records and aggregate fast
+    kind: { type: String },
+
     sid: { type: String },
     status: { type: String },
     errorCode: { type: String },
+    errorMessage: { type: String },
 
     to: { type: String },
     from: { type: String },
     fromServiceSid: { type: String },
 
+    queuedAt: { type: Date },
+    scheduledAt: { type: Date },
     sentAt: { type: Date },
+    deliveredAt: { type: Date },
+    failedAt: { type: Date },
+
+    suppressed: { type: Boolean, default: false },
+    reason: { type: String },
   },
   { timestamps: true },
 );
 
+/** 🔎 Indexes (no explicit names to avoid future name conflicts)
+ * - userEmail + leadId + createdAt: fast thread fetch (recency)
+ * - userEmail + leadId + read + createdAt: fast unread checks
+ * - userEmail + createdAt: generic listing by recency
+ * - userEmail + kind + direction + status + createdAt: dashboard aggregates
+ * - userEmail + from + to + createdAt: delivery/debug lookups
+ * - sid (unique + partial): prevent duplicate Twilio SIDs
+ */
+
 // Conversation fetch (most recent first)
-MessageSchema.index(
-  { userEmail: 1, leadId: 1, createdAt: -1 },
-  { name: "conv_by_user_lead_createdAt" },
-);
+MessageSchema.index({ userEmail: 1, leadId: 1, createdAt: -1 });
 
 // Fast unread lookups within a lead's thread
-MessageSchema.index(
-  { userEmail: 1, leadId: 1, read: 1, createdAt: -1 },
-  { name: "unread_by_user_lead" },
-);
+MessageSchema.index({ userEmail: 1, leadId: 1, read: 1, createdAt: -1 });
+
+// Generic listing by user and recency
+MessageSchema.index({ userEmail: 1, createdAt: -1 });
+
+// Dashboard: dials & talks (if you log calls into Message with kind="call")
+MessageSchema.index({ userEmail: 1, kind: 1, direction: 1, status: 1, createdAt: -1 });
+
+// Useful for delivery debugging
+MessageSchema.index({ userEmail: 1, from: 1, to: 1, createdAt: -1 });
 
 // Single, authoritative index for Twilio SIDs
-// - unique only when `sid` exists & is a string
 MessageSchema.index(
   { sid: 1 },
   {
-    name: "sid_unique_partial",
     unique: true,
     partialFilterExpression: { sid: { $exists: true, $type: "string" } },
   },

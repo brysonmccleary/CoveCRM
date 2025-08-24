@@ -13,6 +13,10 @@ import Head from "next/head";
 import { useRouter } from "next/router";
 import SoftphoneProvider from "@/components/telephony/SoftphoneProvider";
 
+// 🔌 client socket + unread store
+import { connectAndJoin } from "@/lib/socketClient";
+import { useNotifStore } from "@/lib/notificationsStore";
+
 /** Public routes where we must NOT init voice/callback/leads/widgets */
 const PUBLIC_ROUTES = new Set<string>([
   "/",
@@ -61,7 +65,7 @@ function InnerApp({
   useEffect(() => {
     if (!authed || isPublic) return;
 
-    // ensure socket.io server is initialized
+    // ensure socket.io server is initialized (backs the /api/socket handler that calls initSocket)
     fetch("/api/socket").catch(() => {});
 
     const fetchLeads = async () => {
@@ -144,6 +148,11 @@ function InnerApp({
         </div>
       )}
 
+      {/* 🔌 Socket bridge mounts only when authed & internal */}
+      {authed && !isPublic && (
+        <SocketBridge email={String(session?.user?.email || "")} />
+      )}
+
       {/* Page content */}
       <Component {...pageProps} />
 
@@ -157,4 +166,46 @@ function InnerApp({
     return <SoftphoneProvider>{pageContent}</SoftphoneProvider>;
   }
   return pageContent;
+}
+
+/**
+ * 🔌 SocketBridge
+ * - Connects to Socket.IO via connectAndJoin
+ * - Joins the per-user room by email
+ * - Increments unread badge on inbound text: io.to(user.email).emit("message:new", { leadId, type: "inbound", ... })
+ */
+function SocketBridge({ email }: { email: string }) {
+  const inc = useNotifStore((s) => s.inc);
+
+  useEffect(() => {
+    if (!email) return;
+
+    // establish client socket + join room (handles reconnect internally if your socketClient does)
+    const s = connectAndJoin(email);
+    if (!s) return;
+
+    const handler = (payload: any) => {
+      try {
+        const leadId =
+          payload?.leadId || payload?.lead?._id || payload?.message?.leadId;
+        const isInbound =
+          payload?.type === "inbound" ||
+          payload?.direction === "inbound" ||
+          payload?.message?.direction === "inbound";
+
+        if (leadId && isInbound) {
+          inc(leadId);
+        }
+      } catch {
+        // no-op
+      }
+    };
+
+    s.on("message:new", handler);
+    return () => {
+      s.off("message:new", handler);
+    };
+  }, [email, inc]);
+
+  return null;
 }

@@ -2,21 +2,17 @@ import { useEffect, useState } from "react";
 
 export default function BillingPanel() {
   const [isLoading, setIsLoading] = useState(false);
-  const [portalUrl, setPortalUrl] = useState("");
+  const [buyingAI, setBuyingAI] = useState(false);
   const [billingAmount, setBillingAmount] = useState<string | null>(null);
   const [hasAIUpgrade, setHasAIUpgrade] = useState(false);
 
   useEffect(() => {
     const fetchBilling = async () => {
       try {
-        const res = await fetch("/api/stripe/get-subscription");
+        const res = await fetch("/api/stripe/get-subscription", { cache: "no-store" });
         const data = await res.json();
-        if (data.amount) {
-          setBillingAmount(`$${data.amount}/month`);
-        }
-        if (data.hasAIUpgrade !== undefined) {
-          setHasAIUpgrade(data.hasAIUpgrade);
-        }
+        if (data.amount != null) setBillingAmount(`$${data.amount}/month`);
+        if (typeof data.hasAIUpgrade === "boolean") setHasAIUpgrade(data.hasAIUpgrade);
       } catch (err) {
         console.error("Error fetching subscription info:", err);
       }
@@ -27,21 +23,29 @@ export default function BillingPanel() {
   const goToBilling = async () => {
     setIsLoading(true);
     try {
-      const res = await fetch("/api/create-stripe-portal", {
-        method: "POST",
-      });
+      const res = await fetch("/api/create-stripe-portal", { method: "POST" });
       const data = await res.json();
-      if (data.url) {
-        setPortalUrl(data.url);
-        window.location.href = data.url;
-      } else {
-        throw new Error("No URL returned");
-      }
+      if (data.url) window.location.href = data.url;
+      else throw new Error("No URL returned");
     } catch (err) {
       console.error("Stripe portal error:", err);
       alert("There was a problem redirecting to billing.");
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const buyAI = async () => {
+    setBuyingAI(true);
+    try {
+      const r = await fetch("/api/billing/create-ai-checkout", { method: "POST" });
+      const j = await r.json();
+      if (!r.ok || !j?.url) throw new Error(j?.error || "Failed to start checkout");
+      window.location.href = j.url;
+    } catch (e: any) {
+      alert(e?.message || "Unable to start checkout");
+    } finally {
+      setBuyingAI(false);
     }
   };
 
@@ -56,7 +60,7 @@ export default function BillingPanel() {
           🟢 <strong>CRM Cove</strong> – {billingAmount || "Loading..."}
         </p>
         <p className="text-sm text-gray-500 dark:text-gray-300">
-          This organization is billed {billingAmount || "$..."} plus tax where applicable and call/text usage.
+          This organization is billed {billingAmount || "$…"} plus tax and call/text usage.
         </p>
       </div>
 
@@ -73,16 +77,20 @@ export default function BillingPanel() {
               <li>$0.02 per minute on recorded calls</li>
             </ul>
           </div>
-          <div>
-            <label className="inline-flex items-center cursor-pointer">
-              <input
-                type="checkbox"
-                className="sr-only peer"
-                checked={hasAIUpgrade}
-                readOnly
-              />
-              <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-blue-500 rounded-full peer dark:bg-gray-700 peer-checked:bg-blue-600"></div>
-            </label>
+          <div className="flex items-center gap-3">
+            {hasAIUpgrade ? (
+              <span className="px-3 py-1.5 rounded bg-emerald-600/20 text-emerald-200 text-sm">
+                Enabled
+              </span>
+            ) : (
+              <button
+                onClick={buyAI}
+                disabled={buyingAI}
+                className="px-3 py-1.5 rounded bg-blue-600 hover:bg-blue-700 text-white text-sm"
+              >
+                {buyingAI ? "Starting checkout…" : "Enable AI Add-on"}
+              </button>
+            )}
           </div>
         </div>
       </div>

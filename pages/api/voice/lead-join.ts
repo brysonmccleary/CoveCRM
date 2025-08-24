@@ -1,5 +1,5 @@
-// pages/api/voice/lead-join.ts
 // TwiML that connects the LEAD into the conference (silence only while waiting)
+// and starts a conference recording (no beeps/ringback changes).
 import type { NextApiRequest, NextApiResponse } from "next";
 import { twiml as TwilioTwiml } from "twilio";
 
@@ -19,6 +19,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       beep: false,                    // no beeps
       waitUrl: SILENCE_URL,           // absolute silence (no Twilio music)
       waitMethod: "POST",
+      // 🔴 Recording: this does NOT change ringback or add any tones.
+      record: "record-from-start",
+      recordingStatusCallback: `${BASE_URL}/api/voice/recording-webhook`,
+      recordingStatusCallbackMethod: "POST",
+      recordingStatusCallbackEvent: "completed",
     } as any,
     String(conferenceName),
   );

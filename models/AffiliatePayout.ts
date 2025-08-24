@@ -1,4 +1,3 @@
-// /models/AffiliatePayout.ts
 import mongoose, { Schema, Document, models } from "mongoose";
 
 export interface IAffiliatePayout extends Document {
@@ -10,7 +9,7 @@ export interface IAffiliatePayout extends Document {
   periodEnd?: Date; // reporting window end
   stripeTransferId?: string; // Stripe transfer id
   status: "queued" | "sent" | "failed"; // lifecycle tracking
-  idempotencyKey: string; // unique (affiliate + period + amount)
+  idempotencyKey: string; // unique (e.g., affiliate + triggering invoice)
   createdAt: Date;
   updatedAt: Date;
 }
