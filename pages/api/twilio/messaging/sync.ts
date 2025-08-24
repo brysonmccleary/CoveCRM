@@ -1,6 +1,7 @@
+// pages/api/twilio/messaging/sync.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
-import { authOptions } from "../auth/[...nextauth]";
+import { authOptions } from "../../auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import A2PProfile from "@/models/A2PProfile";
@@ -23,7 +24,8 @@ const BASE_URL =
   "http://localhost:3000";
 
 const INBOUND_SMS_WEBHOOK = `${BASE_URL}/api/twilio/inbound-sms`;
-const STATUS_CALLBACK = `${BASE_URL}/api/twilio/status-callback`;
+const STATUS_CALLBACK =
+  process.env.A2P_STATUS_CALLBACK_URL || `${BASE_URL}/api/twilio/status-callback`;
 
 /** Utility to mask SIDs in logs (ACxxxx... or MGxxxx... etc.) */
 function maskSid(sid?: string): string | null {
