@@ -1,3 +1,4 @@
+// /pages/api/stripe/webhook.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { buffer } from "micro";
 import { stripe } from "@/lib/stripe";
@@ -18,6 +19,14 @@ const envBool = (name: string, def = false) => {
   if (v == null) return def;
   return v === "1" || v.toLowerCase() === "true";
 };
+
+const ADMIN_FREE_AI_EMAILS: string[] = (process.env.ADMIN_FREE_AI_EMAILS || "")
+  .split(",")
+  .map((s) => s.trim().toLowerCase())
+  .filter(Boolean);
+
+const isAdminFree = (email?: string | null) =>
+  !!email && ADMIN_FREE_AI_EMAILS.includes(email.toLowerCase());
 
 const safeUpper = (s?: string | null) => (s || "").trim().toUpperCase();
 const toCents = (usd: number) => Math.round(Number(usd || 0) * 100);
@@ -311,9 +320,10 @@ export default async function handler(
 
         // Immediate AI flag from checkout intent (final authority is sub.updated)
         const upgradeIncluded =
-          (session.metadata?.upgradeIncluded || "false").toLowerCase() ===
-          "true";
-        user.hasAI = upgradeIncluded;
+          (session.metadata?.upgradeIncluded || "false").toLowerCase() === "true";
+
+        // Admins always get AI for free
+        user.hasAI = isAdminFree(email) ? true : upgradeIncluded;
 
         user.plan = "Pro";
         user.stripeCustomerId =
@@ -466,7 +476,6 @@ export default async function handler(
         const sub = event.data.object as Stripe.Subscription;
         const customerId = sub.customer as string;
 
-        // Is the subscription active-like?
         const subStatus = sub.status; // includes 'trialing'
         const isActiveLike = subStatus === "active" || subStatus === "trialing";
 
@@ -474,15 +483,18 @@ export default async function handler(
         if (user) {
           user.subscriptionStatus = isActiveLike ? "active" : "canceled";
 
-          // Toggle AI based on presence of AI price in items AND active-like status
           const AI_PRICE_ID = process.env.STRIPE_PRICE_ID_AI_MONTHLY || "";
           const isAiPriceId = (id?: string | null) =>
             !!id && !!AI_PRICE_ID && id === AI_PRICE_ID;
-
           const hasAiItem =
             !!sub.items?.data?.some((it) => isAiPriceId(it.price?.id));
 
-          user.hasAI = isActiveLike && hasAiItem;
+          // Admins always keep AI regardless of subscription composition
+          if (isAdminFree(user.email)) {
+            user.hasAI = true;
+          } else {
+            user.hasAI = isActiveLike && hasAiItem;
+          }
 
           await user.save();
         }
@@ -496,7 +508,10 @@ export default async function handler(
         const user = await User.findOne({ stripeCustomerId: customerId });
         if (user) {
           user.subscriptionStatus = "canceled";
-          user.hasAI = false; // AI removed when sub ends
+          // Do NOT remove AI for admin-comped users
+          if (!isAdminFree(user.email)) {
+            user.hasAI = false;
+          }
           await user.save();
         }
         break;

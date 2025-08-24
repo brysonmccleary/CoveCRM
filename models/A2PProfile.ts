@@ -17,7 +17,7 @@ export interface IA2PProfile extends Document {
   // linkage
   userId: string;
 
-  // ---- Business info collected from tenant (kept from your schema) ----
+  // ---- Business info collected from tenant ----
   businessName: string;
   ein: string;
   website: string;
@@ -28,45 +28,53 @@ export interface IA2PProfile extends Document {
   contactFirstName: string;
   contactLastName: string;
 
-  // ---- TrustHub/Profile (you already stored this) ----
-  profileSid: string; // TH/Business Profile SID
+  // ---- TrustHub/Profile ----
+  profileSid: string; // Secondary Customer Profile (BU...)
+  // extra TrustHub artifacts used by /api/a2p/start.ts
+  businessEndUserSid?: string;
+  authorizedRepEndUserSid?: string;
+  trustProductSid?: string; // TP...
+  a2pProfileEndUserSid?: string; // us_a2p_messaging_profile_information end user
+  assignedToPrimary?: boolean; // secondary assigned to ISV primary
 
-  // Optional legacy/use-case sid you had
+  // Optional legacy/use-case sid
   useCaseSid?: string;
 
-  // ---- Campaign content & consent (kept from your schema) ----
-  sampleMessages: string; // keep for backward compatibility
+  // ---- Campaign content & consent ----
+  sampleMessages: string; // legacy string
+  sampleMessagesArr?: string[]; // modern array variant
   optInDetails: string;
   volume: string;
   optInScreenshotUrl: string;
 
   // -------------------- ISV automation fields --------------------
-  // A2P artifacts
-  brandSid?: string; // BNxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-  campaignSid?: string; // CMxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-  messagingServiceSid?: string; // MGxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+  brandSid?: string; // BNxxxxxxxx
+  campaignSid?: string; // (optional legacy)
+  usa2pSid?: string; // QE/CM identifier created under Messaging Service
+  messagingServiceSid?: string; // MGxxxxxxxx
 
-  // Registration lifecycle + health (detailed)
+  // Lifecycle + health
   registrationStatus?: A2PRegistrationStatus;
-  messagingReady?: boolean; // true once campaign_approved and wired
+  messagingReady?: boolean;
   lastError?: string;
 
-  // NEW: high-level status + notification bookkeeping
-  applicationStatus?: A2PApplicationStatus; // 'pending' | 'approved' | 'declined'
-  approvalNotifiedAt?: Date; // set once when we email the agent
-  declinedReason?: string; // optional text reason if declined
+  // Rollup status + notifications
+  applicationStatus?: A2PApplicationStatus;
+  approvalNotifiedAt?: Date;
+  declinedReason?: string;
 
   // Optional richer compliance content
   compliance?: {
-    help?: string; // e.g., "Reply HELP for help"
-    stop?: string; // e.g., "Reply STOP to opt out"
-    optOutKeywords?: string[]; // e.g., ["STOP","STOPALL","UNSUBSCRIBE","CANCEL","END","QUIT"]
+    help?: string;
+    stop?: string;
+    optOutKeywords?: string[];
   };
 
-  // Optional modernized sample messages (array) while keeping your string
-  sampleMessagesArr?: string[];
+  // Optional metrics / vetting details
+  vettingScore?: number;
+  lastSyncedAt?: Date;
 
-  // Audit trail (optional)
+  // Audit trail
   approvalHistory?: {
     stage: A2PRegistrationStatus | string;
     at: Date;
@@ -92,14 +100,22 @@ const A2PProfileSchema = new Schema<IA2PProfile>({
   contactFirstName: { type: String, required: true },
   contactLastName: { type: String, required: true },
 
-  // TrustHub/Business profile
+  // TrustHub/Business profile (secondary)
   profileSid: { type: String, required: true },
+
+  // Extra TrustHub artifacts you create/attach in /api/a2p/start
+  businessEndUserSid: { type: String },
+  authorizedRepEndUserSid: { type: String },
+  trustProductSid: { type: String },
+  a2pProfileEndUserSid: { type: String },
+  assignedToPrimary: { type: Boolean },
 
   // Legacy/use-case
   useCaseSid: { type: String },
 
   // Consent & messaging details
   sampleMessages: { type: String, required: true },
+  sampleMessagesArr: { type: [String], default: undefined },
   optInDetails: { type: String, required: true },
   volume: { type: String, required: true },
   optInScreenshotUrl: { type: String, required: true },
@@ -107,6 +123,7 @@ const A2PProfileSchema = new Schema<IA2PProfile>({
   // ISV artifacts
   brandSid: { type: String },
   campaignSid: { type: String },
+  usa2pSid: { type: String },
   messagingServiceSid: { type: String },
 
   // Detailed lifecycle
@@ -126,7 +143,7 @@ const A2PProfileSchema = new Schema<IA2PProfile>({
   messagingReady: { type: Boolean, default: false },
   lastError: { type: String },
 
-  // NEW: high-level rollup + notification + decline reason
+  // High-level rollup + notification + decline reason
   applicationStatus: {
     type: String,
     enum: ["pending", "approved", "declined"],
@@ -143,8 +160,8 @@ const A2PProfileSchema = new Schema<IA2PProfile>({
     optOutKeywords: { type: [String], default: undefined },
   },
 
-  // Optional modernized sample messages
-  sampleMessagesArr: { type: [String], default: undefined },
+  vettingScore: { type: Number },
+  lastSyncedAt: { type: Date },
 
   // Audit
   approvalHistory: [

@@ -1,4 +1,4 @@
-// pages/api/a2p/status.ts
+// /pages/api/a2p/status.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
@@ -27,13 +27,13 @@ const PENDING = new Set([
 ]);
 
 type NextAction =
-  | "start_profile" // user hasn't started A2P flow
-  | "submit_brand" // we have secondary profile, need brand
-  | "brand_pending" // brand submitted, waiting
-  | "submit_campaign" // brand approved, need campaign
-  | "campaign_pending" // campaign submitted, waiting
-  | "create_messaging_service" // approved but no MS yet (edge)
-  | "ready"; // fully ready to send SMS
+  | "start_profile"
+  | "submit_brand"
+  | "brand_pending"
+  | "submit_campaign"
+  | "campaign_pending"
+  | "create_messaging_service"
+  | "ready";
 
 export default async function handler(
   req: NextApiRequest,
@@ -55,7 +55,6 @@ export default async function handler(
     const a2p = await A2PProfile.findOne({ userId: String(user._id) });
     if (!a2p) {
       return res.status(200).json({
-        // No doc yet means they haven't started
         nextAction: "start_profile" as NextAction,
         messagingReady: false,
         registrationStatus: "not_started",
@@ -63,6 +62,7 @@ export default async function handler(
         campaign: { sid: null, status: "unknown" },
         messagingServiceSid: null,
         canSendSms: false,
+        senders: [],
       });
     }
 
@@ -80,7 +80,7 @@ export default async function handler(
           a2p.registrationStatus = "brand_submitted";
         }
       } catch {
-        // keep previous status
+        // keep previous
       }
     }
 
@@ -106,11 +106,50 @@ export default async function handler(
       }
     }
 
+    // --- Fetch senders attached to the Messaging Service (phone numbers) ---
+    let senders: Array<{
+      phoneNumberSid: string;
+      phoneNumber?: string | null;
+      attached: boolean;
+      a2pReady: boolean;
+    }> = [];
+
+    if (a2p.messagingServiceSid) {
+      try {
+        const attached = await client.messaging.v1
+          .services(a2p.messagingServiceSid)
+          .phoneNumbers.list({ limit: 100 });
+
+        // Map PN sid → phone number string
+        const pnSids = attached.map((p: any) => p.phoneNumberSid).filter(Boolean);
+        if (pnSids.length) {
+          // Fetch each IncomingPhoneNumber for its E.164 string
+          const pnDetailPromises = pnSids.map((sid) =>
+            client.incomingPhoneNumbers(sid).fetch().then(
+              (d) => ({ sid, phoneNumber: (d as any).phoneNumber || null }),
+              () => ({ sid, phoneNumber: null }),
+            ),
+          );
+          const pnDetails = await Promise.all(pnDetailPromises);
+          const phoneBySid = new Map(pnDetails.map((d) => [d.sid, d.phoneNumber]));
+
+          senders = attached.map((p: any) => ({
+            phoneNumberSid: p.phoneNumberSid,
+            phoneNumber: phoneBySid.get(p.phoneNumberSid) ?? null,
+            attached: true,
+            a2pReady: Boolean(a2p.messagingReady),
+          }));
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    a2p.lastSyncedAt = new Date();
     await a2p.save();
 
-    // --- Decide nextAction for the UI ---
+    // --- Decide next action ---
     let nextAction: NextAction = "ready";
-
     if (!a2p.profileSid) {
       nextAction = "start_profile";
     } else if (!a2p.brandSid) {
@@ -140,7 +179,7 @@ export default async function handler(
       brand: { sid: a2p.brandSid || null, status: brandStatus },
       campaign: { sid: campaignSid || null, status: campaignStatus },
       messagingServiceSid: a2p.messagingServiceSid || null,
-      // Optional hints your UI can show:
+      senders,
       hints: {
         hasProfile: Boolean(a2p.profileSid),
         hasBrand: Boolean(a2p.brandSid),
