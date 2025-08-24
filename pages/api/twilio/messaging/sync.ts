@@ -24,8 +24,7 @@ const BASE_URL =
   "http://localhost:3000";
 
 const INBOUND_SMS_WEBHOOK = `${BASE_URL}/api/twilio/inbound-sms`;
-const STATUS_CALLBACK =
-  process.env.A2P_STATUS_CALLBACK_URL || `${BASE_URL}/api/twilio/status-callback`;
+const STATUS_CALLBACK = `${BASE_URL}/api/twilio/status-callback`;
 
 /** Utility to mask SIDs in logs (ACxxxx... or MGxxxx... etc.) */
 function maskSid(sid?: string): string | null {
@@ -78,6 +77,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const user = await User.findOne({ email });
     if (!user) return res.status(404).json({ message: "User not found" });
 
+    // Non-null alias for closures to satisfy TS
+    const userDoc = user as typeof user;
+
     const { client, accountSid, usingPersonal } = await getClientForUser(email);
 
     // Find or create per-user Messaging Service in THIS account
@@ -86,8 +88,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // 2) User.a2p.messagingServiceSid
     // 3) Create a new one
     let serviceSid: string | undefined =
-      (await A2PProfile.findOne({ userId: String(user._id) }).lean())?.messagingServiceSid ||
-      (user as any)?.a2p?.messagingServiceSid ||
+      (await A2PProfile.findOne({ userId: String(userDoc._id) }).lean())?.messagingServiceSid ||
+      (userDoc as any)?.a2p?.messagingServiceSid ||
       undefined;
 
     let createdNew = false;
@@ -99,7 +101,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           const svc = await client.messaging.v1.services(serviceSid).fetch();
           // Refresh hooks every time to be safe
           await client.messaging.v1.services(serviceSid).update({
-            friendlyName: `CoveCRM – ${user.name || user.email}`,
+            friendlyName: `CoveCRM – ${userDoc.name || userDoc.email}`,
             inboundRequestUrl: INBOUND_SMS_WEBHOOK,
             statusCallback: STATUS_CALLBACK,
           });
@@ -110,7 +112,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
 
       const svc = await client.messaging.v1.services.create({
-        friendlyName: `CoveCRM – ${user.name || user.email}`,
+        friendlyName: `CoveCRM – ${userDoc.name || userDoc.email}`,
         inboundRequestUrl: INBOUND_SMS_WEBHOOK,
         statusCallback: STATUS_CALLBACK,
       });
@@ -124,12 +126,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // Source of truth: User.numbers[].sid (PN...), fallback to PhoneNumber collection
     const pnSids = new Set<string>();
 
-    (user.numbers || []).forEach((n: any) => {
+    (userDoc.numbers || []).forEach((n: any) => {
       if (n?.sid) pnSids.add(n.sid);
     });
 
     // Fallback: numbers in PhoneNumber collection for this user
-    const extraNums = await PhoneNumber.find({ userId: user._id }, { twilioSid: 1 }).lean();
+    const extraNums = await PhoneNumber.find({ userId: userDoc._id }, { twilioSid: 1 }).lean();
     (extraNums || []).forEach((p: any) => {
       if (p?.twilioSid) pnSids.add(p.twilioSid);
     });
@@ -148,14 +150,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // Persist linkage on both documents
     // User.a2p
-    (user as any).a2p = (user as any).a2p || {};
-    (user as any).a2p.messagingServiceSid = serviceSid;
-    (user as any).a2p.lastSyncedAt = new Date();
-    await user.save();
+    (userDoc as any).a2p = (userDoc as any).a2p || {};
+    (userDoc as any).a2p.messagingServiceSid = serviceSid;
+    (userDoc as any).a2p.lastSyncedAt = new Date();
+    await userDoc.save();
 
     // A2PProfile
     await A2PProfile.updateOne(
-      { userId: String(user._id) },
+      { userId: String(userDoc._id) },
       { $set: { messagingServiceSid: serviceSid, updatedAt: new Date() } },
       { upsert: true },
     );
