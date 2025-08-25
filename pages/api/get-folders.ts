@@ -1,3 +1,4 @@
+// pages/api/get-folders.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "./auth/[...nextauth]";
@@ -6,81 +7,103 @@ import Folder from "@/models/Folder";
 import Lead from "@/models/Lead";
 import { Types } from "mongoose";
 
-const DEFAULT_FOLDERS = ["Sold", "Not Interested", "Booked Appointment"];
+type LeanFolder = {
+  _id: Types.ObjectId | string;
+  name: string;
+  userEmail: string;
+  assignedDrips?: any[];
+  createdAt?: Date;
+  updatedAt?: Date;
+};
 
-// Normalize for name comparisons
-function normName(s: string) {
-  return String(s || "").trim().toLowerCase().replace(/\s+/g, " ");
-}
+const SYSTEM_DEFAULTS = ["Sold", "Not Interested", "Booked Appointment"];
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
     const session = await getServerSession(req, res, authOptions);
-    const userEmail =
+    const email =
       typeof session?.user?.email === "string" ? session.user.email.toLowerCase() : "";
-    if (!userEmail) return res.status(401).json({ message: "Unauthorized" });
+    if (!email) return res.status(401).json({ message: "Unauthorized" });
 
     await dbConnect();
 
-    // Ensure per-user defaults exist (email scoped)
-    for (const name of DEFAULT_FOLDERS) {
-      const exists = await Folder.findOne({ userEmail, name }).select("_id").lean();
-      if (!exists) await Folder.create({ name, userEmail, assignedDrips: [] });
+    // Ensure the three system folders exist for this user (once).
+    for (const name of SYSTEM_DEFAULTS) {
+      await Folder.updateOne(
+        { userEmail: email, name },
+        { $setOnInsert: { userEmail: email, name, assignedDrips: [] } },
+        { upsert: true }
+      );
     }
 
-    // Load all this user's folders
-    const folders = await Folder.find({ userEmail }).sort({ createdAt: 1 }).lean();
+    // Load ONLY this user's folders
+    const rawFolders = (await Folder.find({ userEmail: email })
+      .sort({ createdAt: -1 })
+      .lean()) as LeanFolder[];
 
-    // ----- One-time self-healing: dedupe same-name folders for this user -----
-    const mapByName = new Map<string, any[]>();
-    for (const f of folders) {
-      const key = normName(f.name);
-      mapByName.set(key, [...(mapByName.get(key) || []), f]);
+    // De-duplicate by name (case-insensitive) just for display to avoid doubles.
+    const byName = new Map<string, LeanFolder>();
+    for (const f of rawFolders) {
+      const key = (f.name || "").trim().toLowerCase();
+      if (!key) continue;
+      if (!byName.has(key)) byName.set(key, f); // keep most-recent (because of sort above)
+    }
+    const folders = Array.from(byName.values());
+
+    // Build accurate counts: match user, require folderId set,
+    // coerce folderId to string for consistent grouping,
+    // and count per folderId.
+    const countsAgg = await Lead.aggregate([
+      {
+        $match: {
+          $or: [{ userEmail: email }, { user: email }],
+          folderId: { $exists: true, $ne: null },
+        },
+      },
+      {
+        $project: {
+          folderIdStr: {
+            $cond: [
+              { $eq: [{ $type: "$folderId" }, "objectId"] },
+              { $toString: "$folderId" },
+              "$folderId",
+            ],
+          },
+        },
+      },
+      { $group: { _id: "$folderIdStr", count: { $sum: 1 } } },
+    ]);
+
+    const countMap = new Map<string, number>();
+    for (const row of countsAgg) {
+      countMap.set(String(row._id), row.count as number);
     }
 
-    for (const [_, arr] of mapByName.entries()) {
-      if (arr.length <= 1) continue;
+    // Sort: custom (imported) first, then system folders.
+    // Within each group, keep newest first.
+    const sorted = folders.sort((a, b) => {
+      const aIsSystem = SYSTEM_DEFAULTS.includes(a.name);
+      const bIsSystem = SYSTEM_DEFAULTS.includes(b.name);
+      if (aIsSystem !== bIsSystem) return aIsSystem ? 1 : -1; // custom first
+      const at = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+      const bt = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+      return bt - at;
+    });
 
-      // Keep the earliest created; merge others into it
-      const primary = arr[0];
-      const dups = arr.slice(1);
-      const primaryId = new Types.ObjectId(String(primary._id));
+    const result = sorted.map((f) => {
+      const idStr = String(f._id);
+      return {
+        _id: idStr,
+        name: f.name,
+        userEmail: f.userEmail,
+        assignedDrips: f.assignedDrips || [],
+        leadCount: countMap.get(idStr) || 0,
+      };
+    });
 
-      for (const dup of dups) {
-        const dupId = new Types.ObjectId(String(dup._id));
-        // move leads from dup -> primary
-        await Lead.updateMany(
-          { userEmail, folderId: dupId },
-          { $set: { folderId: primaryId } }
-        );
-        // delete dup folder
-        await Folder.deleteOne({ _id: dupId, userEmail });
-      }
-    }
-
-    // Re-load after dedupe
-    const cleanFolders = await Folder.find({ userEmail }).sort({ createdAt: 1 }).lean();
-
-    // STRICT counts: only folderId === folder._id (no legacy name fallback here)
-    const withCounts = await Promise.all(
-      cleanFolders.map(async (f) => {
-        const fIdObj = new Types.ObjectId(String(f._id));
-        const count = await Lead.countDocuments({
-          userEmail,
-          $or: [{ folderId: fIdObj }, { folderId: String(f._id) }], // tolerate string-stored id
-        });
-
-        return {
-          ...f,
-          _id: String(f._id),
-          leadCount: count,
-        };
-      })
-    );
-
-    return res.status(200).json({ folders: withCounts });
-  } catch (err) {
-    console.error("❌ get-folders error:", err);
+    return res.status(200).json({ folders: result });
+  } catch (error) {
+    console.error("❌ get-folders error:", error);
     return res.status(500).json({ message: "Failed to fetch folders" });
   }
 }
