@@ -14,6 +14,9 @@ type Json = Record<string, any>;
 
 const DIAL_DELAY_MS = 2000;
 
+// 👇 anti-bounce window for early "no-answer/completed" glitches
+const EARLY_STATUS_MS = 12000;
+
 export default function DialSession() {
   const router = useRouter();
   const { leads: leadIdsParam, fromNumber: fromNumberParam, leadId: singleLeadIdParam } = router.query;
@@ -58,10 +61,14 @@ export default function DialSession() {
   const activeCallSidRef = useRef<string | null>(null);
   const activeConferenceRef = useRef<string | null>(null);
   const placingCallRef = useRef<boolean>(false);
-  const joinedRef = useRef<boolean>(false); // we now join immediately, but keep the guard
+  const joinedRef = useRef<boolean>(false);
 
   // prevent duplicate disposition clicks
   const dispositionBusyRef = useRef<boolean>(false);
+
+  // 👇 track when a call attempt starts (for anti-bounce)
+  const callStartAtRef = useRef<number>(0);
+  const tooEarly = () => !callStartAtRef.current || Date.now() - callStartAtRef.current < EARLY_STATUS_MS;
 
   /** helpers **/
   const formatPhone = (phone: string) => {
@@ -161,17 +168,13 @@ export default function DialSession() {
       scheduleAdvance();
     }, 27000);
   };
-
-  // ⬇️ UPDATED: advance now; preview handles the dial delay
   const scheduleAdvance = () => {
     if (advanceTimeoutRef.current) clearTimeout(advanceTimeoutRef.current);
-    advanceTimeoutRef.current = setTimeout(() => { if (!sessionEndedRef.current) disconnectAndNext(); }, 0);
+    advanceTimeoutRef.current = setTimeout(() => { if (!sessionEndedRef.current) disconnectAndNext(); }, DIAL_DELAY_MS);
   };
-
-  // ⬇️ UPDATED: no waiting here — preview happens immediately and arms dial after DIAL_DELAY_MS
   const scheduleNextLead = () => {
     if (nextLeadTimeoutRef.current) clearTimeout(nextLeadTimeoutRef.current);
-    previewNextLeadAndDelayDial();
+    nextLeadTimeoutRef.current = setTimeout(() => { if (!sessionEndedRef.current) nextLead(); }, DIAL_DELAY_MS);
   };
 
   /** bootstrap **/
@@ -300,12 +303,14 @@ export default function DialSession() {
           setStatus("Connected");
           stopRingback();
           clearWatchdog();
-
-          // We already joined immediately; nothing else to do.
           clearStatusPoll();
         }
 
         if (s === "busy" || s === "failed" || s === "no-answer" || s === "canceled" || s === "completed") {
+          // 👇 ignore very-early bounces (let watchdog handle real timeouts)
+          if (s === "no-answer" || s === "completed") {
+            if (tooEarly()) return;
+          }
           stopRingback(); clearWatchdog(); clearStatusPoll();
           await hangupActiveCall(`status-${s}`); await leaveIfJoined(`status-${s}`);
           if (!advanceScheduledRef.current && !sessionEndedRef.current) {
@@ -336,6 +341,9 @@ export default function DialSession() {
       setStatus("Dialing…");
       setCallActive(true);
       playRingback();
+
+      // mark start time for anti-bounce checks
+      callStartAtRef.current = Date.now();
 
       const { callSid, conferenceName } = await startOutboundCall(leadToCall.id);
 
@@ -469,12 +477,11 @@ export default function DialSession() {
 
       if (label === "Booked Appointment") setShowBookModal(true);
 
-      // ⬇️ UPDATED: preview next lead now; dial arms after delay
-      if (!sessionEndedRef.current) previewNextLeadAndDelayDial();
+      if (!sessionEndedRef.current) scheduleNextLead();
     } catch (e: any) {
       console.error(e);
       toast.error(e?.message || "Failed to save disposition");
-      if (!sessionEndedRef.current) previewNextLeadAndDelayDial();
+      if (!sessionEndedRef.current) scheduleNextLead();
     } finally {
       dispositionBusyRef.current = false;
     }
@@ -490,29 +497,6 @@ export default function DialSession() {
     setReadyToCall(true);
   };
 
-  // ⬇️ NEW: show next lead immediately; arm auto-dial after DIAL_DELAY_MS
-  const previewNextLeadAndDelayDial = () => {
-    if (sessionEndedRef.current) return;
-    if (leadQueue.length <= 1) return showSessionSummary();
-
-    const nextIndex = currentLeadIndex + 1;
-    if (nextIndex >= leadQueue.length) return showSessionSummary();
-
-    // 1) Show next lead right away
-    setCurrentLeadIndex(nextIndex);
-
-    // 2) Hold auto-dial for a beat
-    setReadyToCall(false);
-    setStatus("Preview");
-
-    if (nextLeadTimeoutRef.current) clearTimeout(nextLeadTimeoutRef.current);
-    nextLeadTimeoutRef.current = setTimeout(() => {
-      if (sessionEndedRef.current) return;
-      setStatus("Ready");
-      setReadyToCall(true);
-    }, DIAL_DELAY_MS);
-  };
-
   const disconnectAndNext = () => {
     if (sessionEndedRef.current) return;
     stopRingback();
@@ -520,8 +504,7 @@ export default function DialSession() {
     hangupActiveCall("advance-next");
     leaveIfJoined("advance-next");
     setCallActive(false);
-    // ⬇️ UPDATED: move to next lead now; dial later
-    previewNextLeadAndDelayDial();
+    scheduleNextLead();
   };
 
   const handleHangUp = () => {
@@ -572,7 +555,7 @@ export default function DialSession() {
     router.push("/leads").catch(() => {});
   };
 
-  /** sockets: live status (join already done; sockets just stop ringback sooner) **/
+  /** sockets: live status (now pointing to /api/socket) **/
   useEffect(() => {
     let mounted = true;
     (async () => {
@@ -585,7 +568,12 @@ export default function DialSession() {
         if (!mounted || !mod) return;
         const { io } = mod as any;
 
-        const socket = io(undefined, { transports: ["websocket"], withCredentials: false });
+        // 👇 IMPORTANT: make client use /api/socket
+        const socket = io(undefined, {
+          path: "/api/socket",
+          transports: ["websocket"],
+          withCredentials: false,
+        });
         socketRef.current = socket;
 
         socket.on("connect", () => {
@@ -626,20 +614,17 @@ export default function DialSession() {
               // already joined
             }
 
-            if (s === "no-answer" || s === "busy" || s === "failed" || s === "canceled") {
+            if (s === "no-answer" || s === "busy" || s === "failed" || s === "canceled" || s === "completed") {
+              // 👇 guard against single-ring auto-skip
+              if ((s === "no-answer" || s === "completed") && tooEarly()) return;
+
               stopRingback(); clearWatchdog();
               await hangupActiveCall(`status-${s}`); await leaveIfJoined(`status-${s}`);
               if (!advanceScheduledRef.current && !sessionEndedRef.current) {
                 advanceScheduledRef.current = true;
-                setStatus(s === "no-answer" ? "No answer" : s === "busy" ? "Busy" : s === "failed" ? "Failed" : "Canceled");
+                setStatus(s === "no-answer" ? "No answer" : s === "busy" ? "Busy" : s === "failed" ? "Failed" : s === "canceled" ? "Canceled" : "Completed");
                 scheduleAdvance();
               }
-            }
-
-            if (s === "completed") {
-              stopRingback(); clearWatchdog();
-              await hangupActiveCall("status-completed"); await leaveIfJoined("status-completed");
-              if (!advanceScheduledRef.current && !sessionEndedRef.current) { advanceScheduledRef.current = true; scheduleAdvance(); }
             }
           } catch {}
         });

@@ -1,6 +1,8 @@
+// pages/api/twilio/voice/call.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
-import { authOptions } from "../../auth/[...nextauth]";
+// ⬇️ path from pages/api/twilio/voice/call.ts to pages/api/auth/[...nextauth].ts
+import { authOptions } from "../../../auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import Lead from "@/models/Lead";
 import { getUserByEmail } from "@/models/User";
@@ -119,12 +121,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       to: toLead,
       from: fromNumber,
       url: twimlUrl,
+      // ⬇️ Ring longer to reduce one-ring auto-advance
+      timeout: 25, // seconds
       statusCallback: `${BASE_URL}/api/twilio/status-callback`,
       statusCallbackMethod: "POST",
       statusCallbackEvent: ["initiated", "ringing", "answered", "completed"],
       machineDetection: "DetectMessageEnd",
       amdStatusCallback: `${BASE_URL}/api/twilio/amd-callback`,
       amdStatusCallbackMethod: "POST",
+      // timeLimit: 14400, // optional: max call length (4h)
     };
 
     // Use the correct Twilio account for this user (platform or personal)
