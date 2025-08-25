@@ -2,7 +2,7 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import type { Session } from "next-auth";
 import { authOptions } from "../auth/[...nextauth]";
-import dbConnect from "@/lib/mongooseConnect";
+import mongooseConnect from "@/lib/mongooseConnect";
 import Lead from "@/models/Lead";
 import Message from "@/models/Message";
 
@@ -41,40 +41,45 @@ export default async function handler(
       return res.status(401).json({ error: "Unauthorized" });
     }
 
-    await dbConnect();
+    await mongooseConnect();
 
-    // Grab leads and all messages for this user (latest first)
-    const [leads, messages] = await Promise.all([
-      Lead.find({ userEmail }).lean<LeanLead[]>().exec(),
-      Message.find({ userEmail }).sort({ createdAt: -1 }).lean().exec(),
-    ]);
+    // Efficiently compute latest message per lead + unread counts in Mongo
+    const latest = await Message.aggregate([
+      { $match: { userEmail } },
+      { $sort: { createdAt: -1 } },
+      {
+        $group: {
+          _id: "$leadId",
+          last: { $first: "$$ROOT" },
+          unreadCount: {
+            $sum: {
+              $cond: [
+                { $and: [{ $eq: ["$direction", "inbound"] }, { $eq: ["$read", false] }] },
+                1,
+                0,
+              ],
+            },
+          },
+        },
+      },
+    ]).exec();
+
+    const leadIds = latest.map((r: any) => r._id).filter(Boolean);
+    const leads = await Lead.find({ _id: { $in: leadIds } })
+      .lean<LeanLead[]>()
+      .exec();
 
     // Quick lookup
     const leadById = new Map<string, LeanLead>();
     for (const l of leads) leadById.set(String(l._id), l);
 
-    // Unread counts & pick latest-per-lead (messages already sorted desc)
-    const unreadByLead = new Map<string, number>();
-    const latestByLead = new Map<string, any>();
-
-    for (const m of messages as any[]) {
-      const leadIdStr = String(m.leadId || "");
-      if (!leadIdStr) continue;
-
-      // unread aggregation
-      if (m.direction === "inbound" && !m.read) {
-        unreadByLead.set(leadIdStr, (unreadByLead.get(leadIdStr) || 0) + 1);
-      }
-
-      // first seen is latest due to sort desc
-      if (!latestByLead.has(leadIdStr)) {
-        latestByLead.set(leadIdStr, m);
-      }
-    }
-
-    // Build conversation rows
+    // Build conversation rows (shape preserved)
     const conversations: any[] = [];
-    for (const [leadIdStr, lastMsg] of latestByLead.entries()) {
+    for (const row of latest as any[]) {
+      const leadIdStr = String(row._id || "");
+      const lastMsg = row.last || {};
+      const unreadCount = Number(row.unreadCount || 0);
+
       const lead = leadById.get(leadIdStr);
       if (!lead) continue;
 
@@ -82,7 +87,6 @@ export default async function handler(
       const phone = lead.Phone || lead.phone || "";
       const displayName = fullName || phone || "Unknown";
 
-      // prefer concrete lifecycle timestamps for sorting/UX
       const lastMessageTime =
         lastMsg.deliveredAt ||
         lastMsg.sentAt ||
@@ -91,19 +95,15 @@ export default async function handler(
         lastMsg.date ||
         new Date();
 
-      const unreadCount = unreadByLead.get(leadIdStr) || 0;
-
       conversations.push({
         _id: lead._id,
         name: displayName,
         phone,
 
-        // last message preview
         lastMessage: lastMsg.text || lastMsg.body || "",
         lastMessageTime,
         lastMessageDirection: lastMsg.direction || null,
 
-        // delivery lifecycle (DB = source of truth)
         lastMessageSid: lastMsg.sid || null,
         lastMessageStatus: lastMsg.status || null, // queued | accepted | sending | sent | delivered | failed | undelivered | error | suppressed | scheduled
         lastMessageErrorCode: lastMsg.errorCode || null,
@@ -113,13 +113,12 @@ export default async function handler(
         lastMessageDeliveredAt: lastMsg.deliveredAt || null,
         lastMessageFailedAt: lastMsg.failedAt || null,
 
-        // unread badge
         unread: unreadCount > 0,
         unreadCount,
       });
     }
 
-    // Sort by last activity time desc
+    // Sort by last activity time desc (aggregation preserves latest, but sort for safety)
     conversations.sort(
       (a, b) =>
         new Date(b.lastMessageTime).getTime() -
