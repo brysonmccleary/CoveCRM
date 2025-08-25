@@ -24,15 +24,13 @@ export default function BillingPanel() {
   const goToBilling = async () => {
     setIsLoading(true);
     try {
-      const res = await fetch("/api/create-stripe-portal", { method: "POST" });
+      // You can temporarily add ?debug=1 to surface more details
+      const res = await fetch("/api/create-stripe-portal?debug=1", { method: "POST" });
       const data = await res.json();
 
       if (res.status === 409 && data?.needsCheckout) {
-        const ok = confirm(
-          "You don’t have a billing profile yet. Start your subscription now?"
-        );
+        const ok = confirm("You don’t have a billing profile yet. Start your subscription now?");
         if (ok) {
-          // Start base-plan checkout
           const r = await fetch("/api/stripe/create-checkout-session", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -46,7 +44,12 @@ export default function BillingPanel() {
       }
 
       if (!res.ok) {
-        throw new Error(data?.error || "There was a problem redirecting to billing.");
+        const msg =
+          data?.reason ||
+          data?.error ||
+          "There was a problem creating the billing portal session.";
+        alert(msg);
+        return;
       }
 
       if (data?.url) {
