@@ -9,7 +9,7 @@ export function useSocket(userEmail: string, onMessage: (data: any) => void) {
   useEffect(() => {
     if (!userEmail || initialized.current) return;
 
-    socket = io({
+    socket = io(undefined, {
       path: "/api/socket",
     });
 
