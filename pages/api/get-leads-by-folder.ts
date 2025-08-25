@@ -1,10 +1,13 @@
+// pages/api/get-leads-by-folder.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import dbConnect from "@/lib/mongooseConnect";
 import Lead from "@/models/Lead";
 import Folder from "@/models/Folder";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "./auth/[...nextauth]";
-import mongoose, { Types } from "mongoose";
+import { Types } from "mongoose";
+
+type FolderLean = { _id: Types.ObjectId | string; name?: string; userEmail?: string } | null;
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "GET") {
@@ -26,20 +29,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(401).json({ message: "Unauthorized" });
     }
 
-    // Resolve an ObjectId (accepts either an id or a folder name)
-    let targetFolderId: Types.ObjectId | null = null;
+    // Resolve a concrete ObjectId for the folder (accept id or name)
+    let targetFolderId: Types.ObjectId;
 
     if (Types.ObjectId.isValid(folderId)) {
       targetFolderId = new Types.ObjectId(folderId);
     } else {
-      const folderDoc = await Folder.findOne({ userEmail, name: folderId }).lean();
-      if (!folderDoc) {
+      const folderDoc = (await Folder.findOne({ userEmail, name: folderId })
+        .select("_id")
+        .lean()) as FolderLean;
+
+      if (!folderDoc?._id) {
         return res.status(404).json({ message: `Folder '${folderId}' not found` });
       }
       targetFolderId = new Types.ObjectId(String(folderDoc._id));
     }
 
-    // STRICT filter: leads in this folder only (no legacy name fallback)
+    // STRICT filter: only leads whose folderId matches (no legacy name fallback)
     const leads = await Lead.find({
       userEmail,
       $or: [{ folderId: targetFolderId }, { folderId: String(targetFolderId) }],
@@ -48,7 +54,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .limit(1000)
       .lean();
 
-    const cleaned = leads.map((l: any) => ({
+    const cleaned = (leads as any[]).map((l) => ({
       ...l,
       _id: String(l._id),
       folderId: l.folderId ? String(l.folderId) : null,
