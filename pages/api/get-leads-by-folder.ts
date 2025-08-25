@@ -68,8 +68,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // 3) Fallback set: ONLY leads with NO folderId but legacy name that matches
     const leadsByLegacyName = await Lead.find({
       ...userMatch(email),
-      $or: [{ folderId: { $exists: false } }, { folderId: null }],
-      $or: [{ folderName: nameRegex }, { Folder: nameRegex }, { ["Folder Name"]: nameRegex }],
+      $and: [
+        { $or: [{ folderId: { $exists: false } }, { folderId: null }] },
+        { $or: [{ folderName: nameRegex }, { Folder: nameRegex }, { ["Folder Name"]: nameRegex }] },
+      ],
     })
       .sort({ updatedAt: -1 })
       .lean()
