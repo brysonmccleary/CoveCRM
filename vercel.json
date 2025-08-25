@@ -2,11 +2,12 @@
   "version": 2,
   "regions": ["iad1"],
   "functions": {
-    "api/**": {
-      "runtime": "@vercel/node@2.15.10",
-      "maxDuration": 30,
-      "memory": 1024
-    }
+    "pages/api/**/*.ts": { "runtime": "nodejs20.x", "maxDuration": 30, "memory": 1024 },
+    "pages/api/**/*.js": { "runtime": "nodejs20.x", "maxDuration": 30, "memory": 1024 },
+    "src/pages/api/**/*.ts": { "runtime": "nodejs20.x", "maxDuration": 30, "memory": 1024 },
+    "src/pages/api/**/*.js": { "runtime": "nodejs20.x", "maxDuration": 30, "memory": 1024 },
+    "app/**/route.ts": { "runtime": "nodejs20.x", "maxDuration": 30, "memory": 1024 },
+    "app/**/route.js": { "runtime": "nodejs20.x", "maxDuration": 30, "memory": 1024 }
   },
   "crons": [
     { "path": "/api/poll-new-lead", "schedule": "* * * * *" },
