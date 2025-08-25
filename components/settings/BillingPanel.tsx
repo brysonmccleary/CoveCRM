@@ -26,9 +26,29 @@ export default function BillingPanel() {
     try {
       const res = await fetch("/api/create-stripe-portal", { method: "POST" });
       const data = await res.json();
+
+      if (res.status === 409 && data?.needsCheckout) {
+        const ok = confirm(
+          "You don’t have a billing profile yet. Start your subscription now?"
+        );
+        if (ok) {
+          // Start base-plan checkout
+          const r = await fetch("/api/stripe/create-checkout-session", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ wantsUpgrade: false }),
+          });
+          const j = await r.json();
+          if (!r.ok || !j?.url) throw new Error(j?.error || "Failed to start checkout");
+          window.location.href = j.url;
+        }
+        return;
+      }
+
       if (!res.ok) {
         throw new Error(data?.error || "There was a problem redirecting to billing.");
       }
+
       if (data?.url) {
         window.location.href = data.url;
       } else {
@@ -36,7 +56,7 @@ export default function BillingPanel() {
       }
     } catch (err: any) {
       console.error("Stripe portal error:", err);
-      alert(err?.message || "There was a problem redirecting to billing.");
+      alert(err?.message || "Failed to create portal session");
     } finally {
       setIsLoading(false);
     }

@@ -6,10 +6,15 @@ import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import { stripe } from "@/lib/stripe";
 
+/**
+ * Creates a short-lived Stripe Customer Portal session.
+ * - Searches for the customer in BOTH contexts (connected account, then platform),
+ *   and opens the portal in the context where the customer actually exists.
+ * - If no customer is found, returns 409 { needsCheckout: true }.
+ * - Idempotently saves stripeCustomerId on the user when found.
+ */
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "POST") {
-    return res.status(405).json({ error: "Method not allowed" });
-  }
+  if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
   const session = await getServerSession(req, res, authOptions);
   const email = session?.user?.email?.toLowerCase();
@@ -21,44 +26,85 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const user: any = await User.findOne({ email });
     if (!user) return res.status(404).json({ error: "User not found" });
 
-    // Support self-billed users via Stripe Connect (if you store a connected account id)
-    const stripeAccount: string | undefined =
+    // Potential connected account (self-billed) indicator(s)
+    const connectedAccount: string | undefined =
       user.billingStripeAccountId || user.stripeAccountId || user.stripeConnectId || undefined;
 
-    // Reuse saved customer when available
-    let customerId: string | undefined = user.stripeCustomerId || undefined;
-
-    // If missing, try to find an existing customer by email (idempotent; avoids dupes)
-    if (!customerId) {
+    // Helper to find a customer by email within a specific Stripe account context
+    const findCustomerInContext = async (
+      acct?: string
+    ): Promise<{ id?: string } | null> => {
       try {
-        // Prefer Search API for accuracy
+        // Prefer Search API
         const search = await stripe.customers.search(
           { query: `email:'${email}'` },
-          stripeAccount ? { stripeAccount } : undefined
+          acct ? { stripeAccount: acct } : undefined
         );
-        if (search?.data?.length) {
-          customerId = search.data[0].id;
-        } else {
-          // Fallback to list filter if Search not enabled
-          const list = await stripe.customers.list(
-            { email, limit: 1 },
-            stripeAccount ? { stripeAccount } : undefined
-          );
-          if (list?.data?.length) customerId = list.data[0].id;
-        }
+        if (search?.data?.length) return { id: search.data[0].id };
 
-        if (customerId) {
-          await User.updateOne({ email }, { $set: { stripeCustomerId: customerId } });
-          user.stripeCustomerId = customerId;
-        }
-      } catch (lookupErr) {
-        // Non-fatal; we handle "no customer" below
-        console.error("Stripe customer lookup error:", lookupErr);
+        // Fallback to list
+        const list = await stripe.customers.list(
+          { email, limit: 1 },
+          acct ? { stripeAccount: acct } : undefined
+        );
+        if (list?.data?.length) return { id: list.data[0].id };
+        return null;
+      } catch (err) {
+        // Non-fatal; return null to allow fallback to other context
+        console.error("Stripe customer lookup error (context=", acct || "platform", "):", err);
+        return null;
+      }
+    };
+
+    // 1) If user already has a saved customer id, try to detect its context by fetching it
+    let customerId: string | undefined = user.stripeCustomerId || undefined;
+    let portalContext: "connected" | "platform" | null = null;
+
+    const verifyCustomerInContext = async (id: string, acct?: string) => {
+      try {
+        await stripe.customers.retrieve(id, acct ? { stripeAccount: acct } : undefined);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    if (customerId) {
+      // First try connected acct (if any), then platform
+      if (connectedAccount && (await verifyCustomerInContext(customerId, connectedAccount))) {
+        portalContext = "connected";
+      } else if (await verifyCustomerInContext(customerId)) {
+        portalContext = "platform";
+      } else {
+        // Saved id invalid in both contexts; unset to re-discover below
+        customerId = undefined;
       }
     }
 
-    // If still no customer, ask the user to start checkout instead of creating a new customer here
+    // 2) No valid saved id → search by email in connected account then platform
     if (!customerId) {
+      if (connectedAccount) {
+        const c1 = await findCustomerInContext(connectedAccount);
+        if (c1?.id) {
+          customerId = c1.id;
+          portalContext = "connected";
+        }
+      }
+      if (!customerId) {
+        const c2 = await findCustomerInContext(undefined);
+        if (c2?.id) {
+          customerId = c2.id;
+          portalContext = "platform";
+        }
+      }
+      if (customerId) {
+        await User.updateOne({ email }, { $set: { stripeCustomerId: customerId } });
+        user.stripeCustomerId = customerId;
+      }
+    }
+
+    // 3) Still nothing → ask user to start checkout (avoid creating dupes here)
+    if (!customerId || !portalContext) {
       res.setHeader("Cache-Control", "no-store");
       return res.status(409).json({
         error:
@@ -67,7 +113,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    // Build a safe return URL (envs first; derive from request as a last resort)
+    // Build a safe return URL
     const baseUrl =
       process.env.STRIPE_CUSTOMER_PORTAL_RETURN_URL ||
       process.env.NEXT_PUBLIC_BASE_URL ||
@@ -77,18 +123,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const returnUrl = `${baseUrl.replace(/\/$/, "")}/settings?tab=billing`;
 
+    // 4) Create portal session in the context where the customer actually exists
     const portal = await stripe.billingPortal.sessions.create(
       {
         customer: customerId,
         return_url: returnUrl,
       },
-      stripeAccount ? { stripeAccount } : undefined
+      portalContext === "connected" && connectedAccount ? { stripeAccount: connectedAccount } : undefined
     );
 
     res.setHeader("Cache-Control", "no-store");
     return res.status(200).json({ url: portal.url });
   } catch (err: any) {
-    console.error("❌ create-portal error:", err?.message || err);
+    console.error("❌ create-stripe-portal error:", err?.message || err);
     return res.status(500).json({ error: "Failed to create portal session" });
   }
 }
