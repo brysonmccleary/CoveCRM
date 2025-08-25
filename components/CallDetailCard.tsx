@@ -92,19 +92,18 @@ export default function CallDetailCard({
     return () => { s.off("call:updated", onAny); s.off("call:status", onAny); s.off("call:amd", onAny); };
   }, [callId, callSid, load]);
 
+  // 🔗 Navigate to your existing dial session page for this lead
+  const goToDialForLead = useCallback(() => {
+    const id = call?.lead?.id;
+    if (!id) { alert("No lead attached to this call."); return; }
+    // Use passed handler if parent wants to override; default to /dial/[id]
+    if (onOpenLead) onOpenLead(id);
+    else window.location.assign(`/dial/${id}`);
+  }, [call?.lead?.id, onOpenLead]);
+
+  // “Call Back” should open the same dial session screen as from Leads
   async function callBack() {
-    try {
-      if (!call?.lead?.id) return alert("No lead attached to this call.");
-      const res = await fetch("/api/twilio/voice/call", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ leadId: call.lead.id, fromNumber: defaultFromNumber || undefined }),
-      });
-      if (!res.ok) {
-        const j = await res.json().catch(() => ({}));
-        throw new Error(j?.message || "Failed to start callback.");
-      }
-      alert("Calling the lead now…");
-    } catch (e: any) { alert(e?.message || "Failed to start callback."); }
+    goToDialForLead();
   }
 
   async function upgradeAI() {
@@ -151,8 +150,9 @@ export default function CallDetailCard({
 
         <div className="flex-none flex items-center gap-2">
           {call?.lead?.id ? (
-            <button className="px-3 py-1.5 rounded bg-white/10 hover:bg-white/20 text-xs"
-              onClick={() => (onOpenLead ? onOpenLead(call.lead!.id) : window.location.assign(`/leads/${call.lead!.id}`))}
+            <button
+              className="px-3 py-1.5 rounded bg-white/10 hover:bg-white/20 text-xs"
+              onClick={goToDialForLead}
             >
               Open Lead
             </button>
