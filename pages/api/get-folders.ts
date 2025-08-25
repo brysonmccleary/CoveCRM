@@ -5,8 +5,16 @@ import { authOptions } from "./auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import Folder from "@/models/Folder";
 import Lead from "@/models/Lead";
+import { Types } from "mongoose";
 
 const DEFAULT_FOLDERS = ["Sold", "Not Interested", "Booked Appointment"];
+
+type LeanFolder = {
+  _id: Types.ObjectId | string;
+  name: string;
+  userEmail: string;
+  assignedDrips?: any[];
+} & Record<string, any>;
 
 // Escape a string for safe use inside a RegExp
 function escapeRegExp(s: string) {
@@ -27,29 +35,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     await dbConnect();
 
-    // Create per-user default folders if missing (only by userEmail)
+    // Create per-user default folders if missing (email-scoped only)
     for (const name of DEFAULT_FOLDERS) {
       const exists = await Folder.findOne({ name, userEmail }).select("_id").lean();
       if (!exists) await Folder.create({ name, userEmail, assignedDrips: [] });
     }
 
-    // Only this user's folders (no legacy "user" key — we are email-only)
-    const folders = await Folder.find({ userEmail }).sort({ createdAt: -1 }).lean();
+    // Only this user's folders
+    const folders = (await Folder.find({ userEmail })
+      .sort({ createdAt: -1 })
+      .lean()) as LeanFolder[];
 
-    // Count leads per folder:
-    //  - Canonical: folderId == folder._id
-    //  - Legacy:    NO folderId (missing/null) AND name matches this folder (folderName | Folder | "Folder Name")
     const foldersWithCounts = await Promise.all(
       folders.map(async (folder) => {
+        const folderId = new Types.ObjectId(String(folder._id)); // normalize for ObjectId comparisons
         const nameRegex = eqi(folder.name);
 
         const count = await Lead.countDocuments({
           userEmail,
           $or: [
-            // Canonical ID assignment
-            { folderId: folder._id },
+            // Canonical ID assignment (cover ObjectId or possible string-stored id)
+            { folderId: folderId },
+            { folderId: String(folder._id) },
 
-            // Legacy name-based assignment ONLY when folderId absent
+            // Legacy name-based assignment ONLY when folderId is missing/null
             {
               $and: [
                 { $or: [{ folderId: { $exists: false } }, { folderId: null }] },
@@ -67,7 +76,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         return {
           ...folder,
-          _id: folder._id.toString(),
+          _id: String(folder._id),
           leadCount: count,
         };
       })
