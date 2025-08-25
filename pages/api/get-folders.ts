@@ -1,4 +1,3 @@
-// pages/api/get-folders.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "./auth/[...nextauth]";
@@ -9,21 +8,9 @@ import { Types } from "mongoose";
 
 const DEFAULT_FOLDERS = ["Sold", "Not Interested", "Booked Appointment"];
 
-type LeanFolder = {
-  _id: Types.ObjectId | string;
-  name: string;
-  userEmail: string;
-  assignedDrips?: any[];
-} & Record<string, any>;
-
-// Escape a string for safe use inside a RegExp
-function escapeRegExp(s: string) {
-  return String(s || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-// Build a strict, case-insensitive equality regex (ignores surrounding spaces)
-function eqi(name: string) {
-  return new RegExp(`^\\s*${escapeRegExp(String(name || ""))}\\s*$`, "i");
+// Normalize for name comparisons
+function normName(s: string) {
+  return String(s || "").trim().toLowerCase().replace(/\s+/g, " ");
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -35,55 +22,65 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     await dbConnect();
 
-    // Create per-user default folders if missing (email-scoped only)
+    // Ensure per-user defaults exist (email scoped)
     for (const name of DEFAULT_FOLDERS) {
-      const exists = await Folder.findOne({ name, userEmail }).select("_id").lean();
+      const exists = await Folder.findOne({ userEmail, name }).select("_id").lean();
       if (!exists) await Folder.create({ name, userEmail, assignedDrips: [] });
     }
 
-    // Only this user's folders
-    const raw = await Folder.find({ userEmail }).sort({ createdAt: -1 }).lean();
-    const folders = raw as unknown as LeanFolder[];
+    // Load all this user's folders
+    const folders = await Folder.find({ userEmail }).sort({ createdAt: 1 }).lean();
 
-    const foldersWithCounts = await Promise.all(
-      folders.map(async (folder) => {
-        const folderIdObj = new Types.ObjectId(String(folder._id)); // normalize for ObjectId comparisons
-        const nameRegex = eqi(folder.name);
+    // ----- One-time self-healing: dedupe same-name folders for this user -----
+    const mapByName = new Map<string, any[]>();
+    for (const f of folders) {
+      const key = normName(f.name);
+      mapByName.set(key, [...(mapByName.get(key) || []), f]);
+    }
 
+    for (const [_, arr] of mapByName.entries()) {
+      if (arr.length <= 1) continue;
+
+      // Keep the earliest created; merge others into it
+      const primary = arr[0];
+      const dups = arr.slice(1);
+      const primaryId = new Types.ObjectId(String(primary._id));
+
+      for (const dup of dups) {
+        const dupId = new Types.ObjectId(String(dup._id));
+        // move leads from dup -> primary
+        await Lead.updateMany(
+          { userEmail, folderId: dupId },
+          { $set: { folderId: primaryId } }
+        );
+        // delete dup folder
+        await Folder.deleteOne({ _id: dupId, userEmail });
+      }
+    }
+
+    // Re-load after dedupe
+    const cleanFolders = await Folder.find({ userEmail }).sort({ createdAt: 1 }).lean();
+
+    // STRICT counts: only folderId === folder._id (no legacy name fallback here)
+    const withCounts = await Promise.all(
+      cleanFolders.map(async (f) => {
+        const fIdObj = new Types.ObjectId(String(f._id));
         const count = await Lead.countDocuments({
           userEmail,
-          $or: [
-            // Canonical ID assignment (cover ObjectId or possible string-stored id)
-            { folderId: folderIdObj },
-            { folderId: String(folder._id) },
-
-            // Legacy name-based assignment ONLY when folderId is missing/null
-            {
-              $and: [
-                { $or: [{ folderId: { $exists: false } }, { folderId: null }] },
-                {
-                  $or: [
-                    { folderName: nameRegex },
-                    { Folder: nameRegex },
-                    { ["Folder Name"]: nameRegex },
-                  ],
-                },
-              ],
-            },
-          ],
+          $or: [{ folderId: fIdObj }, { folderId: String(f._id) }], // tolerate string-stored id
         });
 
         return {
-          ...folder,
-          _id: String(folder._id),
+          ...f,
+          _id: String(f._id),
           leadCount: count,
         };
       })
     );
 
-    return res.status(200).json({ folders: foldersWithCounts });
-  } catch (error) {
-    console.error("❌ get-folders error:", error);
+    return res.status(200).json({ folders: withCounts });
+  } catch (err) {
+    console.error("❌ get-folders error:", err);
     return res.status(500).json({ message: "Failed to fetch folders" });
   }
 }
