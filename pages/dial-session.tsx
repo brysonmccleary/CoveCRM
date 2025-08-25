@@ -161,13 +161,17 @@ export default function DialSession() {
       scheduleAdvance();
     }, 27000);
   };
+
+  // ⬇️ UPDATED: advance now; preview handles the dial delay
   const scheduleAdvance = () => {
     if (advanceTimeoutRef.current) clearTimeout(advanceTimeoutRef.current);
-    advanceTimeoutRef.current = setTimeout(() => { if (!sessionEndedRef.current) disconnectAndNext(); }, DIAL_DELAY_MS);
+    advanceTimeoutRef.current = setTimeout(() => { if (!sessionEndedRef.current) disconnectAndNext(); }, 0);
   };
+
+  // ⬇️ UPDATED: no waiting here — preview happens immediately and arms dial after DIAL_DELAY_MS
   const scheduleNextLead = () => {
     if (nextLeadTimeoutRef.current) clearTimeout(nextLeadTimeoutRef.current);
-    nextLeadTimeoutRef.current = setTimeout(() => { if (!sessionEndedRef.current) nextLead(); }, DIAL_DELAY_MS);
+    previewNextLeadAndDelayDial();
   };
 
   /** bootstrap **/
@@ -465,11 +469,12 @@ export default function DialSession() {
 
       if (label === "Booked Appointment") setShowBookModal(true);
 
-      if (!sessionEndedRef.current) scheduleNextLead();
+      // ⬇️ UPDATED: preview next lead now; dial arms after delay
+      if (!sessionEndedRef.current) previewNextLeadAndDelayDial();
     } catch (e: any) {
       console.error(e);
       toast.error(e?.message || "Failed to save disposition");
-      if (!sessionEndedRef.current) scheduleNextLead();
+      if (!sessionEndedRef.current) previewNextLeadAndDelayDial();
     } finally {
       dispositionBusyRef.current = false;
     }
@@ -485,6 +490,29 @@ export default function DialSession() {
     setReadyToCall(true);
   };
 
+  // ⬇️ NEW: show next lead immediately; arm auto-dial after DIAL_DELAY_MS
+  const previewNextLeadAndDelayDial = () => {
+    if (sessionEndedRef.current) return;
+    if (leadQueue.length <= 1) return showSessionSummary();
+
+    const nextIndex = currentLeadIndex + 1;
+    if (nextIndex >= leadQueue.length) return showSessionSummary();
+
+    // 1) Show next lead right away
+    setCurrentLeadIndex(nextIndex);
+
+    // 2) Hold auto-dial for a beat
+    setReadyToCall(false);
+    setStatus("Preview");
+
+    if (nextLeadTimeoutRef.current) clearTimeout(nextLeadTimeoutRef.current);
+    nextLeadTimeoutRef.current = setTimeout(() => {
+      if (sessionEndedRef.current) return;
+      setStatus("Ready");
+      setReadyToCall(true);
+    }, DIAL_DELAY_MS);
+  };
+
   const disconnectAndNext = () => {
     if (sessionEndedRef.current) return;
     stopRingback();
@@ -492,7 +520,8 @@ export default function DialSession() {
     hangupActiveCall("advance-next");
     leaveIfJoined("advance-next");
     setCallActive(false);
-    scheduleNextLead();
+    // ⬇️ UPDATED: move to next lead now; dial later
+    previewNextLeadAndDelayDial();
   };
 
   const handleHangUp = () => {

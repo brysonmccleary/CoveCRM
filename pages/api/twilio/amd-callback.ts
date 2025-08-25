@@ -1,4 +1,3 @@
-// pages/api/twilio/amd-callback.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { buffer } from "micro";
 import twilio from "twilio";
@@ -21,12 +20,13 @@ const ALLOW_DEV_TWILIO_TEST =
   process.env.ALLOW_LOCAL_TWILIO_TEST === "1" &&
   process.env.NODE_ENV !== "production";
 
-// VM policy controls
-// VM_POLICY = "hangup" | "play" | "observe"   (default: observe)
-//  - observe: take no automatic action; let the agent hear greeting+beep and speak
-//  - play:    auto-play MP3/TTS after beep, then hang up
-//  - hangup:  end immediately on beep (no dead air)
-const VM_POLICY = (process.env.VM_POLICY || "observe").toLowerCase();
+/**
+ * VM policy controls (default now = "play")
+ *  - observe: take no automatic action; let the agent hear greeting+beep and speak
+ *  - play:    auto-play MP3/TTS after beep, then hang up (conference leg only)
+ *  - hangup:  end immediately on beep (not recommended for your UX)
+ */
+const VM_POLICY = (process.env.VM_POLICY || "play").toLowerCase();
 
 // If VM_POLICY = "play", prefer URL, else TTS text
 const VM_DROP_URL = process.env.VM_DROP_URL || "";
@@ -41,6 +41,24 @@ async function resolveOwnerEmailByOwnedNumber(num: string): Promise<string | nul
     (await User.findOne({ "numbers.phoneNumber": num })) ||
     (await User.findOne({ "numbers.messagingServiceSid": num }));
   return owner?.email?.toLowerCase?.() || null;
+}
+
+/** Per-user voicemail drop overrides (optional) */
+async function getUserVmDropConfig(email: string | null) {
+  if (!email) return { url: VM_DROP_URL, text: VM_DROP_TEXT };
+  const u = await User.findOne({ email }).lean();
+  // support a few likely shapes without breaking existing data
+  const url =
+    (u as any)?.voicemail?.dropUrl ||
+    (u as any)?.vmDropUrl ||
+    (u as any)?.voicemailDropUrl ||
+    VM_DROP_URL;
+  const text =
+    (u as any)?.voicemail?.dropText ||
+    (u as any)?.vmDropText ||
+    (u as any)?.voicemailDropText ||
+    VM_DROP_TEXT;
+  return { url: String(url || ""), text: String(text || "") };
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -163,7 +181,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (AnsweredBy.includes("human")) {
       if (leadId) {
         await Call.updateOne({ callSid: CallSid }, { $set: { disposition: "answered" } });
-        await addLeadHistory("Call answered (AMD: human).", { amd: AnsweredBy, policy: "observe" });
+        await addLeadHistory("Call answered (AMD: human).", { amd: AnsweredBy, policy: VM_POLICY });
       }
       // No Twilio action — keep the call alive for live conversation.
       res.status(200).end();
@@ -181,32 +199,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return;
     }
 
-    // 3) MACHINE with beep — default to observe so agent can leave a voicemail manually
+    // 3) MACHINE with beep — default to auto-play voicemail drop, then hang up this leg
     const beepDetected =
       AnsweredBy.includes("machine_end") || MachineMessageEnd === "true";
+
     if (beepDetected) {
-      if (VM_POLICY === "play") {
-        // Optional auto-drop path (only if explicitly configured)
-        const vr = new twilio.twiml.VoiceResponse();
-        if (VM_DROP_URL) vr.play(VM_DROP_URL);
-        else vr.say({ voice: "Polly.Joanna" as any }, VM_DROP_TEXT);
-        vr.hangup();
-
-        try {
-          await twilioClient.calls(CallSid).update({ twiml: vr.toString() });
-          if (leadId) {
-            await Call.updateOne({ callSid: CallSid }, { $set: { disposition: "voicemail_drop_left" } });
-            await addLeadHistory("Voicemail drop left (AMD auto-play).", { amd: AnsweredBy, policy: "play" });
-          }
-        } catch (e: any) {
-          console.warn("⚠️ Failed to play VM drop; leaving call as-is for manual voicemail:", e?.message || e);
-        }
-        res.status(200).end();
-        return;
-      }
-
       if (VM_POLICY === "hangup") {
-        // Explicit hangup policy (not recommended for your desired UX)
         try {
           await twilioClient.calls(CallSid).update({ status: "completed" as any });
         } catch {}
@@ -218,11 +216,48 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return;
       }
 
-      // Default (observe): do nothing — agent can start speaking after the beep.
-      if (leadId) {
-        await Call.updateOne({ callSid: CallSid }, { $set: { disposition: "voicemail_beep" } });
-        await addLeadHistory("Voicemail beep detected (observing).", { amd: AnsweredBy, policy: "observe" });
+      if (VM_POLICY === "observe") {
+        // Do nothing — agent will leave VM manually. Conference/ringback config untouched.
+        if (leadId) {
+          await Call.updateOne({ callSid: CallSid }, { $set: { disposition: "voicemail_beep" } });
+          await addLeadHistory("Voicemail beep detected (observing).", { amd: AnsweredBy, policy: "observe" });
+        }
+        res.status(200).end();
+        return;
       }
+
+      // Default & recommended: "play"
+      try {
+        const { url: dropUrl, text: dropText } = await getUserVmDropConfig(userEmail);
+
+        const vr = new twilio.twiml.VoiceResponse();
+        if (dropUrl) vr.play(dropUrl);
+        else vr.say({ voice: "Polly.Joanna" as any }, dropText || VM_DROP_TEXT);
+        vr.hangup(); // end the callee leg after leaving VM; conference ends per your lead-join (endConferenceOnExit=true)
+
+        await twilioClient.calls(CallSid).update({ twiml: vr.toString() });
+
+        if (leadId) {
+          await Call.updateOne({ callSid: CallSid }, { $set: { disposition: "voicemail_drop_left" } });
+          await addLeadHistory("Voicemail drop left (AMD auto-play).", {
+            amd: AnsweredBy,
+            policy: "play",
+            usedUrl: !!dropUrl,
+          });
+        }
+
+        // Let the UI know a drop was played so it can advance if desired.
+        await emitAmd({
+          callSid: CallSid,
+          event: "voicemail-drop-played",
+          usedUrl: !!dropUrl,
+          leadId: leadId ? String(leadId) : null,
+          timestamp: new Date().toISOString(),
+        });
+      } catch (e: any) {
+        console.warn("⚠️ Failed to auto-play VM drop; leaving call as-is for manual voicemail:", e?.message || e);
+      }
+
       res.status(200).end();
       return;
     }

@@ -1,4 +1,3 @@
-// /pages/api/google/calendar/book-appointment.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/pages/api/auth/[...nextauth]";
@@ -13,7 +12,8 @@ import twilioClient from "@/lib/twilioClient";
 import { google } from "googleapis";
 import { getTimezoneFromState } from "@/utils/timezone";
 import { DateTime } from "luxon";
-import { sendAppointmentBookedEmail } from "@/lib/email"; // ✅
+import { sendAppointmentBookedEmail } from "@/lib/email";
+import { sendSms } from "@/lib/twilio/sendSMS"; // ✅ use thread-sticky sender for CONFIRMATION
 
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID!;
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET!;
@@ -456,7 +456,23 @@ export default async function handler(
 
     const nowClient = DateTime.now().setZone(clientZone);
 
-    // Helper to send/schedule + persist Message
+    // ✅ 1) Confirmation NOW from the SAME THREAD NUMBER (sticky "from")
+    // Uses sendSms(), which looks at recent Message history for this leadId
+    // and forces the exact Twilio number the conversation used.
+    if (leadId) {
+      await sendSms({
+        to,
+        body: confirmBody,
+        userEmail: user.email,
+        leadId: String(leadId),
+      });
+    } else {
+      // Fallback if no leadId (shouldn't happen here)
+      const paramsBase = await getSendParams(String((user as any)._id), to);
+      await twilioClient.messages.create({ ...paramsBase, body: confirmBody });
+    }
+
+    // Helper to send/schedule + persist Message (used for reminders only)
     const sendOrSchedule = async (body: string, scheduledAt?: DateTime) => {
       const paramsBase = await getSendParams(String((user as any)._id), to);
       const params: Parameters<Twilio["messages"]["create"]>[0] = {
@@ -467,12 +483,12 @@ export default async function handler(
       let sentAt = new Date();
       if (scheduledAt && canSchedule(params)) {
         const dt = enforceMinLead(scheduledAt);
-        const sendAtUTC = dt.toISO(); // string | null by type
+        const sendAtUTC = dt.toISO();
         if (sendAtUTC) {
           (params as any).scheduleType = "fixed";
           (params as any).sendAt = sendAtUTC;
         }
-        sentAt = dt.toJSDate(); // ✅ avoid TS error from string | null
+        sentAt = dt.toJSDate();
       } else if (scheduledAt && !canSchedule(params)) {
         console.warn(
           "⚠️ Cannot schedule without Messaging Service SID — sending immediately.",
@@ -495,9 +511,6 @@ export default async function handler(
         sentAt,
       });
     };
-
-    // 1) Confirmation now
-    await sendOrSchedule(confirmBody);
 
     // 2) Morning-of at 9:00 AM local (only if appointment is on a later day)
     const isFutureDay = clientStart.startOf("day") > nowClient.startOf("day");
