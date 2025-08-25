@@ -1,4 +1,3 @@
-// /pages/api/leads/history.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import type { Session } from "next-auth";
@@ -6,8 +5,8 @@ import { authOptions } from "../auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import Lead from "@/models/Lead";
 import Message from "@/models/Message";
-import Call from "@/models/Call";
-import { Types } from "mongoose";
+import Call from "@/models/Call";           // used only if includeCalls=1
+import { Types } from "mongoose";           // used only if includeCalls=1
 
 type ApiEvent =
   | {
@@ -37,66 +36,39 @@ function coerceDateISO(d?: any): string {
   return isNaN(dt.getTime()) ? new Date().toISOString() : dt.toISOString();
 }
 
-export default async function handler(
-  req: NextApiRequest,
-  res: NextApiResponse,
-) {
-  if (req.method !== "GET") {
-    res.status(405).json({ message: "Method not allowed" });
-    return;
-  }
+function parseBool(v: any): boolean {
+  const s = String(v || "").toLowerCase();
+  return s === "1" || s === "true" || s === "yes";
+}
 
-  const session = (await getServerSession(
-    req,
-    res,
-    authOptions as any,
-  )) as Session | null;
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  if (req.method !== "GET") { res.status(405).json({ message: "Method not allowed" }); return; }
 
-  const userEmail =
-    typeof session?.user?.email === "string"
-      ? session.user.email.toLowerCase()
-      : "";
-
-  if (!userEmail) {
-    res.status(401).json({ message: "Unauthorized" });
-    return;
-  }
+  const session = (await getServerSession(req, res, authOptions as any)) as Session | null;
+  const userEmail = typeof session?.user?.email === "string" ? session.user.email.toLowerCase() : "";
+  if (!userEmail) { res.status(401).json({ message: "Unauthorized" }); return; }
 
   const leadId = String(req.query.id || "").trim();
   const limit = Math.min(Number(req.query.limit || 50), 200);
   const before = req.query.before ? new Date(String(req.query.before)) : null;
 
-  if (!leadId) {
-    res.status(400).json({ message: "Missing lead id" });
-    return;
-  }
+  // NEW: default to texts/notes only; calls can be included via includeCalls=1 (not used by UI)
+  const includeCalls = parseBool(req.query.includeCalls);
+
+  if (!leadId) { res.status(400).json({ message: "Missing lead id" }); return; }
 
   await dbConnect();
 
-  const leadDoc = (await Lead.findOne({ _id: leadId, userEmail })
-    .lean<any>()
-    .exec()) as any;
-  if (!leadDoc) {
-    res.status(404).json({ message: "Lead not found" });
-    return;
-  }
+  const leadDoc = await Lead.findOne({ _id: leadId, userEmail }).lean<any>().exec();
+  if (!leadDoc) { res.status(404).json({ message: "Lead not found" }); return; }
 
   const events: ApiEvent[] = [];
   const cutoff = before || new Date();
 
   // ---------- SMS (Message collection) ----------
   try {
-    const msgQuery: any = {
-      userEmail,
-      leadId,
-      createdAt: { $lte: cutoff },
-    };
-
-    const msgs: any[] = await Message.find(msgQuery)
-      .sort({ createdAt: -1 })
-      .limit(limit)
-      .lean();
-
+    const msgQuery: any = { userEmail, leadId, createdAt: { $lte: cutoff } };
+    const msgs: any[] = await Message.find(msgQuery).sort({ createdAt: -1 }).limit(limit).lean();
     for (const m of msgs) {
       events.push({
         type: "sms",
@@ -112,59 +84,47 @@ export default async function handler(
     // If Message model/collection isn't present, silently skip
   }
 
-  // ---------- Calls (Call collection) ----------
-  try {
-    const idObj = Types.ObjectId.isValid(leadId)
-      ? new Types.ObjectId(leadId)
-      : null;
+  // ---------- Calls (optional; disabled by default) ----------
+  if (includeCalls) {
+    try {
+      const idObj = Types.ObjectId.isValid(leadId) ? new Types.ObjectId(leadId) : null;
+      const timeOr = [
+        { startedAt: { $lte: cutoff } },
+        { completedAt: { $lte: cutoff } },
+        { createdAt: { $lte: cutoff } },
+      ];
+      // leadId-scoped only (no phone fallbacks)
+      const query: any = {
+        userEmail,
+        $or: [{ leadId }, ...(idObj ? [{ leadId: idObj }] : [])],
+        $orTime: timeOr,
+      };
+      // expand the pseudo key
+      const { $orTime, ...base } = query;
+      const mongoQuery = { ...base, $or: $orTime };
 
-    const timeOr = [
-      { startedAt: { $lte: cutoff } },
-      { completedAt: { $lte: cutoff } },
-      { createdAt: { $lte: cutoff } },
-    ];
+      const calls: any[] = await Call.find(mongoQuery).sort({ createdAt: -1 }).limit(limit).lean();
+      for (const c of calls) {
+        const when = c.startedAt || c.completedAt || c.createdAt;
+        const dur = typeof c.duration === "number" ? c.duration : undefined;
+        const talk = typeof c.talkTime === "number" ? c.talkTime : undefined;
+        let status: string | undefined;
+        if (c.completedAt) status = (talk ?? 0) > 0 ? "completed" : "no-answer";
 
-    const finalQuery: any = {
-      userEmail,
-      $or: [{ leadId }, ...(idObj ? [{ leadId: idObj }] : [])],
-      $orTime: timeOr,
-    };
-
-    // Mongo doesn't allow custom key $orTime, so expand inline:
-    const { $orTime, ...base } = finalQuery;
-    const query = {
-      ...base,
-      $or: $orTime,
-    };
-
-    const calls: any[] = await Call.find(query)
-      .sort({ createdAt: -1 })
-      .limit(limit)
-      .lean();
-
-    for (const c of calls) {
-      // choose a sensible timestamp
-      const when = c.startedAt || c.completedAt || c.createdAt;
-      const dur = typeof c.duration === "number" ? c.duration : undefined;
-      const talk = typeof c.talkTime === "number" ? c.talkTime : undefined;
-      let status: string | undefined;
-      if (c.completedAt) {
-        status = (talk ?? 0) > 0 ? "completed" : "no-answer";
+        events.push({
+          type: "call",
+          id: String(c._id),
+          date: coerceDateISO(when),
+          durationSec: dur,
+          status,
+          recordingUrl: c.recordingUrl,
+          summary: c.aiSummary,
+          sentiment: c.aiSentiment,
+        });
       }
-
-      events.push({
-        type: "call",
-        id: String(c._id),
-        date: coerceDateISO(when),
-        durationSec: dur,
-        status,
-        recordingUrl: c.recordingUrl,
-        summary: c.aiSummary,
-        sentiment: c.aiSentiment,
-      });
+    } catch (e) {
+      console.warn("history: optional Call lookup error:", (e as any)?.message || e);
     }
-  } catch (e) {
-    console.warn("history: Call lookup error:", (e as any)?.message || e);
   }
 
   // ---------- Embedded transcripts as notes ----------
@@ -187,20 +147,16 @@ export default async function handler(
     to: leadDoc.status || "New",
   });
 
-  // Sort DESC by date and paginate
-  events.sort(
-    (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime(),
-  );
+  // Sort DESC and paginate
+  events.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
   const sliced = events.slice(0, limit);
 
   res.setHeader("Cache-Control", "no-store");
   res.status(200).json({
     lead: {
       _id: String(leadDoc._id),
-      firstName:
-        leadDoc.firstName || leadDoc["First Name"] || leadDoc.FIRST_NAME || "",
-      lastName:
-        leadDoc.lastName || leadDoc["Last Name"] || leadDoc.LAST_NAME || "",
+      firstName: leadDoc.firstName || leadDoc["First Name"] || leadDoc.FIRST_NAME || "",
+      lastName: leadDoc.lastName || leadDoc["Last Name"] || leadDoc.LAST_NAME || "",
       phone: leadDoc.phone || leadDoc.Phone || leadDoc.PHONE || "",
       email: leadDoc.email || leadDoc.Email || leadDoc.EMAIL || "",
       state: leadDoc.state || leadDoc.State || leadDoc.STATE || "",
@@ -210,5 +166,4 @@ export default async function handler(
     events: sliced,
     nextBefore: sliced.length ? sliced[sliced.length - 1].date : null,
   });
-  return;
 }
