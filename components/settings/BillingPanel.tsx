@@ -1,3 +1,4 @@
+// /components/settings/BillingPanel.tsx
 import { useEffect, useState } from "react";
 
 export default function BillingPanel() {
@@ -25,11 +26,17 @@ export default function BillingPanel() {
     try {
       const res = await fetch("/api/create-stripe-portal", { method: "POST" });
       const data = await res.json();
-      if (data.url) window.location.href = data.url;
-      else throw new Error("No URL returned");
-    } catch (err) {
+      if (!res.ok) {
+        throw new Error(data?.error || "There was a problem redirecting to billing.");
+      }
+      if (data?.url) {
+        window.location.href = data.url;
+      } else {
+        throw new Error("No URL returned from billing portal.");
+      }
+    } catch (err: any) {
       console.error("Stripe portal error:", err);
-      alert("There was a problem redirecting to billing.");
+      alert(err?.message || "There was a problem redirecting to billing.");
     } finally {
       setIsLoading(false);
     }
