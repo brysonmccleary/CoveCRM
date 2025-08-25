@@ -14,7 +14,7 @@ export default function MessagesPanel() {
 
   useEffect(() => {
     if (!socket) {
-      socket = io({
+      socket = io(undefined, {
         path: "/api/socket",
         transports: ["websocket"],
       });

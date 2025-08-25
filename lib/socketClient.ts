@@ -17,7 +17,7 @@ function isBrowser() {
 }
 
 function createClient(): Socket {
-  return io("/", {
+  return io(undefined, {
     path: "/api/socket",
     transports: ["websocket"],
     autoConnect: false,

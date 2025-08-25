@@ -5,56 +5,68 @@ import type { NextApiResponse } from "next";
 
 type NextApiResponseWithSocket = NextApiResponse & {
   socket: {
-    server: NetServer & {
-      io?: SocketIOServer;
-    };
+    server: NetServer & { io?: SocketIOServer };
   };
 };
 
-let io: SocketIOServer | undefined;
+let _io: SocketIOServer | undefined;
 
+/**
+ * Initializes (or reuses) a singleton Socket.IO server bound to /api/socket.
+ * Safe to call from any API route. Idempotent.
+ */
 export function initSocket(res: NextApiResponseWithSocket): SocketIOServer {
-  // Reuse if already initialized (hot reload safe)
-  if (res.socket.server.io) {
-    return res.socket.server.io;
+  // Reuse instance already attached to the HTTP server (hot/cold starts)
+  if (res.socket?.server?.io) {
+    _io = res.socket.server.io;
+    return _io!;
   }
 
-  const newIo = new SocketIOServer(res.socket.server, {
+  // Reuse in-process singleton if present
+  if (_io) return _io;
+
+  const io = new SocketIOServer(res.socket.server, {
     path: "/api/socket",
     addTrailingSlash: false,
     cors: {
-      // If you want to lock this down, replace "*" with your app origin.
-      origin: "*",
+      origin: "*", // tighten if you want to restrict to your domain
       methods: ["GET", "POST"],
       credentials: true,
     },
-    transports: ["websocket"], // prefer websocket
+    transports: ["websocket"], // prefer websocket (matches your client)
   });
 
-  res.socket.server.io = newIo;
-  io = newIo;
+  res.socket.server.io = io;
+  _io = io;
 
-  newIo.on("connection", (socket: Socket) => {
-    console.log("🔌 New socket connection:", socket.id);
+  io.on("connection", (socket: Socket) => {
+    try {
+      const ip =
+        (socket.handshake.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() ||
+        socket.handshake.address ||
+        "unknown";
+      console.log(`🔌 Socket connected ${socket.id} from ${ip}`);
+    } catch {
+      console.log(`🔌 Socket connected ${socket.id}`);
+    }
 
     // Per-user room join
     socket.on("join", (userEmail: string) => {
       if (!userEmail) return;
       socket.join(userEmail);
-      console.log(`👥 Socket ${socket.id} joined room: ${userEmail}`);
+      console.log(`👥 ${socket.id} joined room: ${userEmail}`);
     });
 
-    // Basic diagnostics
     socket.on("disconnect", (reason) => {
-      console.log(`⚪︎ Socket ${socket.id} disconnected: ${reason}`);
+      console.log(`⚪︎ ${socket.id} disconnected: ${reason}`);
     });
     socket.on("error", (err) => {
-      console.warn(`⚠️ Socket ${socket.id} error:`, err);
+      console.warn(`⚠️ ${socket.id} error:`, err);
     });
     socket.on("connect_error", (err) => {
-      console.warn(`⚠️ Socket ${socket.id} connect_error:`, err?.message || err);
+      console.warn(`⚠️ ${socket.id} connect_error:`, err?.message || err);
     });
   });
 
-  return newIo;
+  return io;
 }

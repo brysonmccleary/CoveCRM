@@ -1,8 +1,8 @@
-// pages/api/twilio/voice/call.ts
+// /pages/api/twilio/voice/call.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
-// ⬇️ path from pages/api/twilio/voice/call.ts to pages/api/auth/[...nextauth].ts
-import { authOptions } from "../../../auth/[...nextauth]";
+// ✅ correct relative path from /pages/api/twilio/voice/call.ts to /pages/api/auth/[...nextauth].ts
+import { authOptions } from "../../auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import Lead from "@/models/Lead";
 import { getUserByEmail } from "@/models/User";
@@ -23,7 +23,6 @@ function e164(num: string) {
 }
 function uniq<T>(arr: T[]) { return Array.from(new Set(arr.filter(Boolean))); }
 
-/** Return ONLY the user's Twilio-owned DIDs (not personal/agent mobiles) */
 function collectOwnedTwilioNumbers(user: any): string[] {
   const raw: string[] = uniq([
     ...(Array.isArray(user?.numbers) ? user.numbers.map((n: any) => n?.phoneNumber) : []),
@@ -77,20 +76,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const lead: any = await Lead.findOne({ _id: leadId, userEmail }).lean();
   if (!lead) return res.status(404).json({ message: "Lead not found" });
 
-  // FROM = your Twilio DID (must be one you own)
   const ownedNumbers: any[] = Array.isArray((user as any).numbers) ? (user as any).numbers : [];
   const fromNumber = e164(ownedNumbers?.[0]?.phoneNumber || process.env.TWILIO_CALLER_ID || "");
   if (!fromNumber) return res.status(400).json({ message: "No Twilio number on account (fromNumber)" });
 
-  // Exclude ONLY Twilio-owned numbers (so you can still test by calling your own cell)
   const ownedDIDs = collectOwnedTwilioNumbers(user);
   const excludedSet = new Set<string>([fromNumber, ...ownedDIDs].map(e164));
 
-  // Candidate lead phones
   const rawCandidates = extractLeadPhones(lead).map(e164);
   const filtered = rawCandidates.filter((n) => !excludedSet.has(n));
 
-  // Optional override to allow dialing anything (for testing)
   const allowOverride = Boolean(allowSelfDial) || process.env.ALLOW_SELF_DIAL === "1";
 
   const finalCandidates = filtered.length > 0 ? filtered : (allowOverride ? rawCandidates : []);
@@ -104,13 +99,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 
-  // Pick first resolved number. Still avoid dialing the exact from DID.
   const toLead = finalCandidates.find((n) => n && n !== fromNumber) || finalCandidates[0];
   if (!toLead || toLead === fromNumber) {
     return res.status(422).json({ message: "Resolved lead number is invalid or equals caller ID." });
   }
 
-  // Use a conference so the browser can hear the real greeting/beep
   const conferenceName = `ds-${leadId}-${Date.now().toString(36)}`;
   const aiActiveForThisUser = Boolean((user as any)?.hasAI) && CALL_AI_SUMMARY_ENABLED;
 
@@ -121,22 +114,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       to: toLead,
       from: fromNumber,
       url: twimlUrl,
-      // ⬇️ Ring longer to reduce one-ring auto-advance
-      timeout: 25, // seconds
       statusCallback: `${BASE_URL}/api/twilio/status-callback`,
       statusCallbackMethod: "POST",
       statusCallbackEvent: ["initiated", "ringing", "answered", "completed"],
+      timeout: 25, // a touch shorter so it doesn’t hop too fast
       machineDetection: "DetectMessageEnd",
       amdStatusCallback: `${BASE_URL}/api/twilio/amd-callback`,
       amdStatusCallbackMethod: "POST",
-      // timeLimit: 14400, // optional: max call length (4h)
     };
 
-    // Use the correct Twilio account for this user (platform or personal)
     const { client } = await getClientForUser(userEmail);
     const call = await client.calls.create(createOpts);
 
-    // Persist mapping so webhooks & client can correlate
     await Call.updateOne(
       { callSid: call.sid },
       {
@@ -161,8 +150,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     console.log("📞 voice/call placed (conference lead-only)", {
       from: fromNumber, toLead, callSid: call.sid, conferenceName,
-      excludedOwnedDIDs: Array.from(excludedSet), rawCandidates, finalCandidates,
-      aiEnabledAtCallTime: aiActiveForThisUser,
     });
 
     return res.status(200).json({
