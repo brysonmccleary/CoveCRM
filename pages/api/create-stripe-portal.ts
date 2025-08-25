@@ -15,7 +15,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const email = session?.user?.email?.toLowerCase();
   if (!email) return res.status(401).json({ error: "Unauthorized" });
 
-  // Optional: append ?debug=1 to surface more details in the JSON (still requires auth)
   const DEBUG = req.query.debug === "1";
 
   try {
@@ -34,8 +33,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       process.env.NEXTAUTH_URL ||
       `${(req.headers["x-forwarded-proto"] as string) || "https"}://${req.headers.host}`;
 
-    // Match your earlier behavior/path
-    const returnUrl = `${baseUrl.replace(/\/$/, "")}/dashboard?tab=settings`;
+    // Keep your earlier path if you prefer:
+    const returnUrl = `${baseUrl.replace(/\/$/, "")}/settings?tab=billing`;
+
+    const PLATFORM_PORTAL_CONFIGURATION_ID = process.env.STRIPE_PORTAL_CONFIGURATION_ID;
+    const CONNECT_PORTAL_CONFIGURATION_ID = process.env.STRIPE_CONNECT_PORTAL_CONFIGURATION_ID;
 
     // ---- helpers ------------------------------------------------------------
 
@@ -53,14 +55,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const findCustomerByEmail = async (ctx: Ctx): Promise<string | undefined> => {
       try {
-        // Prefer Search API
         const search = await stripe.customers.search(
           { query: `email:'${email}'` },
           ctx === "connected" && connectedAccount ? { stripeAccount: connectedAccount } : undefined
         );
         if (search?.data?.length) return search.data[0].id;
 
-        // Fallback: list
         const list = await stripe.customers.list(
           { email, limit: 1 },
           ctx === "connected" && connectedAccount ? { stripeAccount: connectedAccount } : undefined
@@ -75,11 +75,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     };
 
     const ensurePlatformCustomer = async (): Promise<string> => {
-      // 1) reuse saved
       if (user.stripeCustomerId && (await retrieveCustomer(user.stripeCustomerId, "platform"))) {
         return user.stripeCustomerId;
       }
-      // 2) find by email
       const found = await findCustomerByEmail("platform");
       if (found) {
         if (found !== user.stripeCustomerId) {
@@ -88,7 +86,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
         return found;
       }
-      // 3) create new
       const created = await stripe.customers.create({
         email,
         metadata: { userId: (user as any)?._id?.toString?.() || "" },
@@ -99,20 +96,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     };
 
     const createPortal = async (customerId: string, ctx: Ctx) => {
+      const params: any = { customer: customerId, return_url: returnUrl };
+      if (ctx === "platform" && PLATFORM_PORTAL_CONFIGURATION_ID) {
+        params.configuration = PLATFORM_PORTAL_CONFIGURATION_ID;
+      }
+      if (ctx === "connected" && CONNECT_PORTAL_CONFIGURATION_ID) {
+        params.configuration = CONNECT_PORTAL_CONFIGURATION_ID;
+      }
       return stripe.billingPortal.sessions.create(
-        { customer: customerId, return_url: returnUrl },
+        params,
         ctx === "connected" && connectedAccount ? { stripeAccount: connectedAccount } : undefined
       );
     };
 
     // ---- strategy -----------------------------------------------------------
-    // Prefer the context where a valid customer actually lives.
-    // If connected fails (portal not enabled, etc.), fall back to platform.
 
     let contextToUse: Ctx = "platform";
     let customerId: string | undefined = user.stripeCustomerId || undefined;
 
-    // Validate saved id
     if (customerId) {
       if (await retrieveCustomer(customerId, "platform")) {
         contextToUse = "platform";
@@ -123,7 +124,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
-    // If none, try to discover in connected, then platform
     if (!customerId && connectedAccount) {
       const inConnected = await findCustomerByEmail("connected");
       if (inConnected) {
@@ -139,13 +139,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
-    // Still none → guarantee a platform customer so owner/admin can manage payment methods
     if (!customerId) {
       customerId = await ensurePlatformCustomer();
       contextToUse = "platform";
     }
 
-    // Try portal in chosen context; if connected fails, fall back to platform
     try {
       const portal = await createPortal(customerId, contextToUse);
       res.setHeader("Cache-Control", "no-store");
@@ -155,7 +153,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const message = err?.message || err?.raw?.message || "Portal create failed";
       if (DEBUG) console.error(`Portal creation error (${contextToUse})`, err);
 
-      // If connected failed (common: portal not enabled on connected), fall back to platform.
       if (contextToUse === "connected") {
         try {
           const platformCustomer = await ensurePlatformCustomer();
@@ -172,7 +169,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
       }
 
-      // Platform failed
       return res.status(500).json({
         error: "Failed to create portal session",
         reason: message,

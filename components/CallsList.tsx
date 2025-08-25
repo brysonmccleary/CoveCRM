@@ -1,4 +1,3 @@
-// components/CallsList.tsx
 import { useEffect, useMemo, useState, useCallback } from "react";
 import { getSocket } from "@/lib/socketClient";
 
@@ -12,6 +11,7 @@ type Row = {
   completedAt?: string;
   duration?: number;
   talkTime?: number;
+  isVoicemail?: boolean;
   hasRecording?: boolean;
   recordingUrl?: string;
   hasAI?: boolean;
@@ -47,6 +47,14 @@ function dirPill(kind?: "inbound" | "outbound") {
   return (
     <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${cls}`}>
       {kind === "inbound" ? "Inbound" : "Outbound"}
+    </span>
+  );
+}
+function vmPill(v?: boolean) {
+  if (!v) return null;
+  return (
+    <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-900/40 text-amber-300 border border-amber-700/40">
+      Voicemail
     </span>
   );
 }
@@ -158,6 +166,7 @@ export default function CallsList({
                         {r.lead?.name || r.lead?.phone || r.callSid}
                       </div>
                       {dirPill(r.direction)}
+                      {vmPill(r.isVoicemail)}
                     </div>
                     <div className="mt-0.5 text-xs text-gray-400">
                       {fmtTime(r.startedAt)}

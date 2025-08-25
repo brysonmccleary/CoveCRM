@@ -1,4 +1,3 @@
-// /pages/api/calls/by-lead.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
@@ -12,26 +11,14 @@ function toInt(v: string | string[] | undefined, d = 25) {
   return Number.isFinite(n) && n > 0 ? n : d;
 }
 
-export default async function handler(
-  req: NextApiRequest,
-  res: NextApiResponse,
-) {
-  if (req.method !== "GET")
-    return res.status(405).json({ message: "Method not allowed" });
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  if (req.method !== "GET") return res.status(405).json({ message: "Method not allowed" });
 
   const session = await getServerSession(req, res, authOptions);
   const requesterEmail = session?.user?.email?.toLowerCase();
   if (!requesterEmail) return res.status(401).json({ message: "Unauthorized" });
 
-  const {
-    leadId,
-    page = "1",
-    pageSize = "25",
-  } = req.query as {
-    leadId?: string;
-    page?: string;
-    pageSize?: string;
-  };
+  const { leadId, page = "1", pageSize = "25" } = req.query as { leadId?: string; page?: string; pageSize?: string; };
   if (!leadId) return res.status(400).json({ message: "Missing leadId" });
 
   try {
@@ -43,10 +30,7 @@ export default async function handler(
     // Ensure lead belongs to requester (unless admin)
     const lead: any = await (Lead as any).findById(leadId).lean();
     if (!lead) return res.status(404).json({ message: "Lead not found" });
-    if (
-      !isAdmin &&
-      String(lead.userEmail || "").toLowerCase() !== requesterEmail
-    ) {
+    if (!isAdmin && String(lead.userEmail || "").toLowerCase() !== requesterEmail) {
       return res.status(403).json({ message: "Forbidden" });
     }
 
@@ -58,12 +42,7 @@ export default async function handler(
     if (!isAdmin) q.userEmail = requesterEmail;
 
     const [rows, total] = await Promise.all([
-      (Call as any)
-        .find(q)
-        .sort({ startedAt: -1, createdAt: -1 })
-        .skip(skip)
-        .limit(s)
-        .lean(),
+      (Call as any).find(q).sort({ startedAt: -1, createdAt: -1 }).skip(skip).limit(s).lean(),
       (Call as any).countDocuments(q),
     ]);
 

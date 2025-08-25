@@ -19,7 +19,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       beep: false,                    // no beeps
       waitUrl: SILENCE_URL,           // absolute silence (no Twilio music)
       waitMethod: "POST",
-      // 🔴 Recording: this does NOT change ringback or add any tones.
+
+      // Recording from start (does not alter ringback/no-beeps in your browser conference)
       record: "record-from-start",
       recordingStatusCallback: `${BASE_URL}/api/voice/recording-webhook`,
       recordingStatusCallbackMethod: "POST",

@@ -2,10 +2,10 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../../auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
-import twilioClient from "@/lib/twilioClient";
 import Lead from "@/models/Lead";
 import { getUserByEmail } from "@/models/User";
 import Call from "@/models/Call";
+import { getClientForUser } from "@/lib/twilio/getClientForUser";
 
 const BASE_URL = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "").replace(/\/$/, "");
 const CALL_AI_SUMMARY_ENABLED = (process.env.CALL_AI_SUMMARY_ENABLED || "").toString() === "1";
@@ -21,9 +21,7 @@ function e164(num: string) {
 }
 function uniq<T>(arr: T[]) { return Array.from(new Set(arr.filter(Boolean))); }
 
-/**
- * Return ONLY the user's Twilio-owned DIDs (not personal/agent mobiles)
- */
+/** Return ONLY the user's Twilio-owned DIDs (not personal/agent mobiles) */
 function collectOwnedTwilioNumbers(user: any): string[] {
   const raw: string[] = uniq([
     ...(Array.isArray(user?.numbers) ? user.numbers.map((n: any) => n?.phoneNumber) : []),
@@ -53,9 +51,7 @@ function extractLeadPhones(lead: any): string[] {
 
   Object.entries(lead || {}).forEach(([k, v]) => {
     const kl = k.toLowerCase();
-    if (kl.includes("phone") || kl.includes("mobile") || kl.includes("cell") || kl.includes("number")) {
-      pushIfPhone(v);
-    }
+    if (kl.includes("phone") || kl.includes("mobile") || kl.includes("cell") || kl.includes("number")) pushIfPhone(v);
   });
 
   return uniq(out);
@@ -98,9 +94,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const finalCandidates = filtered.length > 0 ? filtered : (allowOverride ? rawCandidates : []);
   if (finalCandidates.length === 0) {
     console.warn("🚫 Refusing to dial: all candidate numbers are excluded (Twilio-owned).", {
-      leadId,
-      rawCandidates,
-      excluded: Array.from(excludedSet),
+      leadId, rawCandidates, excluded: Array.from(excludedSet),
     });
     return res.status(422).json({
       message: "Lead has no dialable number (appears to match your Twilio-owned numbers).",
@@ -121,7 +115,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     const twimlUrl = `${BASE_URL}/api/voice/lead-join?conferenceName=${encodeURIComponent(conferenceName)}`;
 
-    // Build as `any` so newer AMD fields don't trip older SDK typings
     const createOpts: any = {
       to: toLead,
       from: fromNumber,
@@ -129,13 +122,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       statusCallback: `${BASE_URL}/api/twilio/status-callback`,
       statusCallbackMethod: "POST",
       statusCallbackEvent: ["initiated", "ringing", "answered", "completed"],
-      // Safe AMD (no advanced tuning to avoid 500s)
       machineDetection: "DetectMessageEnd",
       amdStatusCallback: `${BASE_URL}/api/twilio/amd-callback`,
       amdStatusCallbackMethod: "POST",
     };
 
-    const call = await twilioClient.calls.create(createOpts);
+    // Use the correct Twilio account for this user (platform or personal)
+    const { client } = await getClientForUser(userEmail);
+    const call = await client.calls.create(createOpts);
 
     // Persist mapping so webhooks & client can correlate
     await Call.updateOne(
@@ -152,6 +146,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           leadId,
           ownerNumber: fromNumber,
           otherNumber: toLead,
+          from: fromNumber,
+          to: toLead,
           conferenceName,
         },
       },
@@ -159,17 +155,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     );
 
     console.log("📞 voice/call placed (conference lead-only)", {
-      from: fromNumber,
-      toLead,
-      callSid: call.sid,
-      conferenceName,
-      excludedOwnedDIDs: Array.from(excludedSet),
-      rawCandidates,
-      finalCandidates,
+      from: fromNumber, toLead, callSid: call.sid, conferenceName,
+      excludedOwnedDIDs: Array.from(excludedSet), rawCandidates, finalCandidates,
       aiEnabledAtCallTime: aiActiveForThisUser,
     });
 
-    // Return conferenceName so the browser can join via WebRTC
     return res.status(200).json({
       success: true,
       callSid: call.sid,

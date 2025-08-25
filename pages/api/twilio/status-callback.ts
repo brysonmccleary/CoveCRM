@@ -1,4 +1,3 @@
-// pages/api/twilio/status-callback.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { buffer } from "micro";
 import twilio from "twilio";
@@ -11,16 +10,37 @@ import Call from "@/models/Call";
 
 export const config = { api: { bodyParser: false } };
 
-// Voice: $0.02/min ≈ $0.000333/second
 const CALL_COST_PER_SECOND = 0.000333;
 
-const AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN!;
-const BASE_URL = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "").replace(/\/$/, "");
+const PLATFORM_AUTH_TOKEN = (process.env.TWILIO_AUTH_TOKEN || "").trim();
+const RAW_BASE = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "").replace(/\/$/, "");
+const BASE_URL = RAW_BASE || "";
 const ALLOW_DEV_TWILIO_TEST = process.env.ALLOW_LOCAL_TWILIO_TEST === "1" && process.env.NODE_ENV !== "production";
 
-// Terminal states (for rollups/billing). We purposely do NOT include "sent".
 const TERMINAL_SMS_STATES = new Set(["delivered","failed","undelivered","canceled"]);
 const TERMINAL_VOICE_STATES = new Set(["completed","busy","failed","no-answer","canceled"]);
+
+function candidateUrls(path: string): string[] {
+  if (!BASE_URL) return [];
+  const u = new URL(BASE_URL);
+  const withWww = u.hostname.startsWith("www.") ? BASE_URL : `${u.protocol}//www.${u.hostname}${u.port ? ":" + u.port : ""}`;
+  const withoutWww = u.hostname.startsWith("www.") ? `${u.protocol}//${u.hostname.replace(/^www\./, "")}${u.port ? ":" + u.port : ""}` : BASE_URL;
+  return [
+    `${BASE_URL}${path}`,
+    `${withWww}${path}`,
+    `${withoutWww}${path}`,
+  ].filter((v, i, a) => !!v && a.indexOf(v) === i);
+}
+async function tryValidate(signature: string, params: Record<string, any>, urls: string[], tokens: (string | undefined)[]) {
+  for (const token of tokens) {
+    const t = (token || "").trim();
+    if (!t) continue;
+    for (const url of urls) {
+      if (twilio.validateRequest(t, signature, url, params)) return true;
+    }
+  }
+  return false;
+}
 
 // Helper: resolve which user owns a Twilio number
 async function resolveOwnerEmailByOwnedNumber(num: string): Promise<string | null> {
@@ -39,11 +59,44 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const bodyStr = raw.toString("utf8");
   const params = new URLSearchParams(bodyStr);
   const signature = (req.headers["x-twilio-signature"] || "") as string;
-  const requestUrl = `${BASE_URL}/api/twilio/status-callback`;
+  const urls = candidateUrls("/api/twilio/status-callback");
+  const paramsObj = Object.fromEntries(params as any);
 
-  const valid = twilio.validateRequest(AUTH_TOKEN, signature, requestUrl, Object.fromEntries(params as any));
+  await mongooseConnect();
+
+  // Try platform token first
+  let valid = await tryValidate(signature, paramsObj, urls, [PLATFORM_AUTH_TOKEN]);
+
+  // If invalid and not bypass, try the user's personal token when we can infer the owner
   if (!valid && !ALLOW_DEV_TWILIO_TEST) {
-    console.warn("❌ Invalid Twilio signature on status-callback");
+    const To = params.get("To") || params.get("Called") || "";
+    const From = params.get("From") || params.get("Caller") || "";
+    const CallSid = params.get("CallSid") || "";
+
+    const inboundOwner = To ? await getUserByPhoneNumber(To) : null;
+    const outboundOwner = From ? await getUserByPhoneNumber(From) : null;
+    const callDoc = CallSid ? await Call.findOne({ callSid: CallSid }) : null;
+
+    let personalToken: string | undefined;
+    const candidateEmails = [
+      inboundOwner?.email?.toLowerCase?.(),
+      outboundOwner?.email?.toLowerCase?.(),
+      (callDoc as any)?.userEmail?.toLowerCase?.(),
+    ].filter(Boolean) as string[];
+
+    for (const em of candidateEmails) {
+      const u = await User.findOne({ email: em });
+      const tok = (u as any)?.twilio?.authToken as string | undefined;
+      if (tok) { personalToken = tok; break; }
+    }
+
+    if (personalToken) {
+      valid = await tryValidate(signature, paramsObj, urls, [personalToken]);
+    }
+  }
+
+  if (!valid && !ALLOW_DEV_TWILIO_TEST) {
+    console.warn("❌ Invalid Twilio signature on status-callback (all tokens/URLs failed)");
     res.status(403).end("Invalid signature");
     return;
   }
@@ -52,8 +105,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    await mongooseConnect();
-
     // Common fields
     const To = params.get("To") || params.get("Called") || "";
     const From = params.get("From") || params.get("Caller") || "";
@@ -68,10 +119,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // ---- Voice fields
     const CallSid = params.get("CallSid") || "";
     const callStatusRaw = (params.get("CallStatus") || "").toLowerCase(); // initiated | ringing | in-progress | completed | busy | failed | no-answer | canceled
-    // Normalize for UI: treat "in-progress" exactly like "answered"
     const CallStatus = callStatusRaw === "in-progress" ? "answered" : callStatusRaw;
 
-    const CallDurationStr = params.get("CallDuration"); // seconds (string) - present on completed
+    const CallDurationStr = params.get("CallDuration"); // seconds (string)
+    const AnsweredBy = (params.get("AnsweredBy") || "").toLowerCase(); // human | machine_*
     const Timestamp = params.get("Timestamp") || undefined;
 
     // =========================
@@ -125,7 +176,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
         } catch (e) { console.warn("ℹ️ Socket emit (message:status) failed:", (e as any)?.message || e); }
 
-        if (["delivered","failed","undelivered","canceled"].includes(MessageStatus) && !["delivered","failed","undelivered","canceled"].includes(priorStatus)) {
+        if (TERMINAL_SMS_STATES.has(MessageStatus) && !TERMINAL_SMS_STATES.has(priorStatus)) {
           const ownerUser =
             (await User.findOne({ "numbers.phoneNumber": From })) ||
             (await User.findOne({ "numbers.messagingServiceSid": MessagingServiceSid }));
@@ -144,8 +195,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         } else {
           const emoji =
             MessageStatus === "delivered" ? "✅" :
-            MessageStatus === "failed" || MessageStatus === "undelivered" || MessageStatus === "canceled" ? "❌" :
-            "📬";
+            (MessageStatus === "failed" || MessageStatus === "undelivered" || "canceled") ? "❌" : "📬";
           console.log(`${emoji} SMS cb status=${MessageStatus} from=${From} -> to=${To} sid=${MessageSid}`);
         }
       } catch (e) {
@@ -176,7 +226,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const now = Timestamp ? new Date(Timestamp) : new Date();
       const durationSec = CallDurationStr ? parseInt(CallDurationStr, 10) || 0 : undefined;
 
-      // Emit to UI (unchanged)
+      // Emit to UI
       try {
         const io = (res.socket as any)?.server?.io;
         if (io && userEmail) {
@@ -187,13 +237,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             ownerNumber,
             otherNumber,
             durationSec: typeof durationSec === "number" ? durationSec : null,
-            terminal: ["completed","busy","failed","no-answer","canceled"].includes(CallStatus),
+            terminal: TERMINAL_VOICE_STATES.has(CallStatus),
             timestamp: now.toISOString(),
           });
         }
       } catch (e) { console.warn("ℹ️ Socket emit (call:status) failed:", (e as any)?.message || e); }
 
-      // Persist Call document (add from/to; keep all existing logic)
+      // Persist Call document
       try {
         const setOnInsert: any = {
           callSid: CallSid,
@@ -202,18 +252,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           startedAt: CallStatus === "answered" ? now : new Date(),
           from: ownerNumber,
           to: otherNumber,
+          ownerNumber,
+          otherNumber,
         };
         const set: any = {
           from: ownerNumber,
           to: otherNumber,
+          ownerNumber,
+          otherNumber,
         };
         if (CallStatus === "answered" || CallStatus === "ringing" || CallStatus === "initiated") set.startedAt = now;
-        if (["completed","busy","failed","no-answer","canceled"].includes(CallStatus)) {
+        if (TERMINAL_VOICE_STATES.has(CallStatus)) {
           set.completedAt = now;
-          set.endedAt = now; // acceptance-criteria alias
+          set.endedAt = now;
           if (typeof durationSec === "number") { set.duration = durationSec; set.durationSec = durationSec; }
           set.talkTime = CallStatus === "completed" ? Math.max(0, durationSec || 0) : 0;
         }
+        if (AnsweredBy && AnsweredBy.startsWith("machine")) {
+          set.isVoicemail = true;
+        }
+
         await Call.updateOne({ callSid: CallSid }, { $setOnInsert: setOnInsert, $set: set }, { upsert: true });
       } catch (e) {
         console.warn("⚠️ Call doc upsert failed (continuing):", (e as any)?.message || e);
@@ -221,7 +279,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       // Usage/Billing unchanged...
       try {
-        if (["completed","busy","failed","no-answer","canceled"].includes(CallStatus) && ownerNumber) {
+        if (TERMINAL_VOICE_STATES.has(CallStatus) && ownerNumber) {
           const user = await getUserByPhoneNumber(ownerNumber);
           if (user) {
             const userDoc = await User.findById(user._id);
@@ -232,7 +290,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               if (direction === "outbound") numberEntry.usage.callsMade += 1;
 
               const sec = durationSec || 0;
-              const usageCost = parseFloat((sec * 0.000333).toFixed(6));
+              const usageCost = parseFloat((sec * CALL_COST_PER_SECOND).toFixed(6));
               numberEntry.usage.cost += usageCost;
               await (userDoc as any).save();
 

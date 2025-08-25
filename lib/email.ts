@@ -1,4 +1,3 @@
-// /lib/email.ts
 // Use CommonJS require for Nodemailer to avoid TS type requirement on @types/nodemailer
 // (works fine at runtime and side-steps the "Could not find a declaration file" error)
 const nodemailer = require("nodemailer") as any;
@@ -130,6 +129,67 @@ function formatDateTimeFriendly(timeISO: string, tzLabel?: string | null) {
   } catch {
     return timeISO;
   }
+}
+
+/**
+ * ✅ Robust lead display-name resolver.
+ * - Checks many common field shapes (`First Name`/`Last Name`, `firstName`/`lastName`, `Name`, `Full Name`, etc.)
+ * - Trims/normalizes whitespace.
+ * - If no name fields present, optionally falls back to a phone string.
+ * Never returns the literal word "Client" unless YOU pass it in as the fallback.
+ */
+export function resolveLeadDisplayName(lead: any, fallbackIfEmpty?: string): string {
+  if (!lead || typeof lead !== "object") return fallbackIfEmpty || "";
+
+  // Gather candidate fields (very permissive on casing/spacing)
+  const get = (k: string) => {
+    try {
+      const v = (lead as any)[k];
+      return typeof v === "string" ? v.trim() : "";
+    } catch {
+      return "";
+    }
+  };
+
+  // Common permutations
+  const firsts = [
+    "First Name", "firstName", "First", "first", "givenName", "given"
+  ].map(get).filter(Boolean);
+  const lasts = [
+    "Last Name", "lastName", "Last", "last", "familyName", "family"
+  ].map(get).filter(Boolean);
+  const singles = [
+    "Name", "name", "Full Name", "fullName", "Full", "displayName"
+  ].map(get).filter(Boolean);
+
+  // Prefer explicit first/last
+  const first = firsts[0] || "";
+  const last = lasts[0] || "";
+
+  if (first || last) {
+    return `${first} ${last}`.replace(/\s+/g, " ").trim();
+  }
+
+  if (singles.length) {
+    return String(singles[0]).replace(/\s+/g, " ").trim();
+  }
+
+  // Sometimes data lands in generic "First"/"Last" lowercase
+  const altFirst = get("first");
+  const altLast = get("last");
+  if (altFirst || altLast) {
+    return `${altFirst} ${altLast}`.replace(/\s+/g, " ").trim();
+  }
+
+  // As a very last resort, try to derive from Notes like "Name: John Doe"
+  const notes = get("Notes") || get("notes");
+  if (notes && /\bname\s*:\s*([^\n]+)/i.test(notes)) {
+    const m = notes.match(/\bname\s*:\s*([^\n]+)/i);
+    if (m && m[1]) return m[1].trim();
+  }
+
+  // Fallback (phone or empty)
+  return (fallbackIfEmpty || "").trim();
 }
 
 /* ---------- Existing templates ---------- */
@@ -397,11 +457,7 @@ export async function sendAffiliateApplicationAdminEmail(opts: {
 
 /* ---------- Affiliate: Notify affiliate when approved (via Stripe promo code going live) ---------- */
 
-function renderAffiliateApprovedEmail(opts: {
-  name?: string;
-  promoCode: string; // final normalized code to show
-  dashboardUrl?: string; // optional link back into app
-}) {
+function renderAffiliateApprovedEmail(opts: { name?: string; promoCode: string; dashboardUrl?: string; }) {
   return `
     <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; color:#0f172a">
       <h2 style="margin:0 0 12px 0">You're approved 🎉</h2>
@@ -411,11 +467,7 @@ function renderAffiliateApprovedEmail(opts: {
       <p style="margin:0 0 12px 0">
         Your referral code is <b>${escapeHtml(opts.promoCode)}</b>. Share it anywhere you like. When people sign up with your code, their discounts and your commissions apply automatically.
       </p>
-      ${
-        opts.dashboardUrl
-          ? `<p style="margin:0 0 12px 0"><a href="${opts.dashboardUrl}">Open your affiliate dashboard</a></p>`
-          : ""
-      }
+      ${ opts.dashboardUrl ? `<p style="margin:0 0 12px 0"><a href="${opts.dashboardUrl}">Open your affiliate dashboard</a></p>` : "" }
       <p style="margin:0 0 12px 0">Thanks for partnering with us! — The Cove CRM Team</p>
     </div>
   `;
@@ -424,8 +476,8 @@ function renderAffiliateApprovedEmail(opts: {
 export async function sendAffiliateApprovedEmail(opts: {
   to: string;
   name?: string;
-  promoCode?: string; // accept either promoCode…
-  code?: string; // …or code (from Stripe event)
+  promoCode?: string;
+  code?: string;
   dashboardUrl?: string;
 }): Promise<SendEmailResult> {
   const codeStr = (opts.promoCode || opts.code || "").toString().toUpperCase();

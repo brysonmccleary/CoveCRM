@@ -1,4 +1,3 @@
-// pages/api/twilio/inbound-sms.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import mongooseConnect from "@/lib/mongooseConnect";
 import Lead from "@/models/Lead";
@@ -11,7 +10,7 @@ import { getTimezoneFromState } from "@/utils/timezone";
 import { DateTime } from "luxon";
 import { buffer } from "micro";
 import axios from "axios";
-import { sendAppointmentBookedEmail, sendLeadReplyNotificationEmail } from "@/lib/email";
+import { sendAppointmentBookedEmail, sendLeadReplyNotificationEmail, resolveLeadDisplayName } from "@/lib/email";
 import { initSocket } from "@/lib/socket";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
 
@@ -524,21 +523,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     try {
       const emailEnabled = user?.notifications?.emailOnInboundSMS !== false; // default true
       if (emailEnabled) {
-        const first = (lead["First Name"] || (lead as any)["First"] || (lead as any)["Name"] || "").toString().trim();
-        const last = ((lead as any)["Last Name"] || (lead as any)["Last"] || "").toString().trim();
-        const leadName = (first || last) ? `${first} ${last}`.trim() : "";
+        // ✅ Robust display name (handles many field shapes; falls back to phone if empty)
+        const leadDisplayName =
+          resolveLeadDisplayName(lead, lead.Phone || (lead as any).phone || fromNumber);
 
-        const subjectLead = leadName || (lead.Phone || (lead as any).phone || fromNumber);
         const snippet = body.length > 60 ? `${body.slice(0, 60)}…` : body;
         const dripTag = hadDrips ? "[drip] " : "";
 
         const deepLink = `${ABS_BASE_URL}${LEAD_ENTRY_PATH}/${lead._id}`;
 
+        // Subject uses the best name we have; falls back to phone (never "client")
+        const subjectWho = leadDisplayName || (lead.Phone || (lead as any).phone || fromNumber);
+
         await sendLeadReplyNotificationEmail({
           to: user.email,
           replyTo: user.email, // agent can reply directly
-          subject: `[New Lead Reply] ${dripTag}${subjectLead} — ${snippet || "(no text)"}`,
-          leadName: leadName || "Unknown",
+          subject: `[New Lead Reply] ${dripTag}${subjectWho} — ${snippet || "(no text)"}`,
+          leadName: leadDisplayName || undefined,
           leadPhone: lead.Phone || (lead as any).phone || fromNumber,
           leadEmail: lead.Email || (lead as any).email || "",
           folder: (lead as any).folder || (lead as any).Folder || (lead as any)["Folder Name"],
@@ -716,7 +717,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         try {
           const bookingPayload = {
             agentEmail: (lead.userEmail || user.email || "").toLowerCase(),
-            name: lead["First Name"] || (lead as any)["First"] || (lead as any)["Name"] || "Client",
+            name: resolveLeadDisplayName(lead) || "Client",
             phone: lead.Phone || (lead as any).phone || fromNumber,
             email: lead.Email || (lead as any).email || "",
             time: clientTime.toISO(),
@@ -741,8 +742,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             (lead as any).appointmentTime = clientTime.toJSDate();
 
             try {
+              // ✅ Use robust display name (never literal "Client" unless absolutely unknown)
               const fullName =
-                `${lead["First Name"] || ""} ${(lead as any)["Last Name"] || (lead as any)["Last"] || ""}`.trim() || "Client";
+                resolveLeadDisplayName(lead, lead.Phone || (lead as any).phone || fromNumber);
+
               await sendAppointmentBookedEmail({
                 to: (lead.userEmail || user.email || "").toLowerCase(),
                 agentName: (user as any)?.name || user.email,
@@ -752,7 +755,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 timeISO: clientTime.toISO()!,
                 timezone: clientTime.offsetNameShort || undefined,
                 source: "AI",
-                eventLink: (bookingRes.data?.event?.htmlLink || bookingRes.data?.htmlLink || "") as string | undefined,
+                eventUrl: (bookingRes.data?.event?.htmlLink || bookingRes.data?.htmlLink || "") as string | undefined,
               });
             } catch (e) {
               console.warn("Email send failed (appointment):", e);

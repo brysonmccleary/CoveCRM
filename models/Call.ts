@@ -10,17 +10,27 @@ export interface ICall extends Document {
   // numbers + routing
   ownerNumber?: string;    // our Twilio DID that owns the call
   otherNumber?: string;    // the external/lead number
+  from?: string;           // alias for ownerNumber (some code sets from/to)
+  to?: string;             // alias for otherNumber
   conferenceName?: string; // name we dialed into
 
   startedAt?: Date;
   completedAt?: Date;
+  endedAt?: Date;          // lifecycle alias
   duration?: number;       // total seconds
+  durationSec?: number;    // alias
   talkTime?: number;       // seconds with speech (optional)
+  isVoicemail?: boolean;   // AMD or AnsweredBy indicates machine
 
   recordingSid?: string;
-  recordingUrl?: string;   // final mp3 URL
-  recordingDuration?: number; // seconds
-  recordingStatus?: string;   // completed | in-progress | failed | ...
+  recordingUrl?: string;         // final https URL (mp3/wav)
+  recordingDuration?: number;    // seconds
+  recordingStatus?: string;      // completed | in-progress | failed | ...
+  recordingFormat?: string;      // mp3 | wav | unknown
+  recordingChannels?: string;    // mono | dual | ...
+  recordingSource?: string;      // RecordVerb | DialVerb | ...
+  recordingType?: string;        // audio | ...
+  recordingSizeBytes?: number;   // HEAD content-length when available
 
   aiEnabledAtCallTime?: boolean;
   transcript?: string;
@@ -41,17 +51,27 @@ const CallSchema = new Schema<ICall>(
 
     ownerNumber: String,
     otherNumber: String,
+    from: String,
+    to: String,
     conferenceName: String,
 
     startedAt: Date,
     completedAt: Date,
+    endedAt: Date,
     duration: Number,
+    durationSec: Number,
     talkTime: Number,
+    isVoicemail: { type: Boolean, default: false },
 
     recordingSid: String,
     recordingUrl: String,
     recordingDuration: Number,
     recordingStatus: String,
+    recordingFormat: String,
+    recordingChannels: String,
+    recordingSource: String,
+    recordingType: String,
+    recordingSizeBytes: Number,
 
     aiEnabledAtCallTime: Boolean,
     transcript: String,
@@ -71,5 +91,6 @@ CallSchema.index({ userEmail: 1, completedAt: -1 }, { name: "call_user_completed
 CallSchema.index({ leadId: 1, completedAt: -1 }, { name: "call_by_lead_completed_desc" });
 CallSchema.index({ userEmail: 1, direction: 1, startedAt: -1 }, { name: "call_user_dir_started_desc" });
 CallSchema.index({ userEmail: 1, recordingUrl: 1 }, { name: "call_user_has_recording" });
+CallSchema.index({ userEmail: 1, isVoicemail: 1, completedAt: -1 }, { name: "call_user_voicemail" });
 
 export default models.Call || mongoose.model<ICall>("Call", CallSchema);
