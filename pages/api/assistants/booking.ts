@@ -18,6 +18,12 @@ Collect what's missing: full name, phone (US), state, and desired date/time (ema
 If they give a casual time like "tomorrow 3pm", that's fine—I'll convert it. Avoid quotes/policy details.
 `.trim();
 
+/** Helper to safely read tool call shapes across SDK versions */
+type FnToolCall = {
+  type?: string;
+  function?: { name?: string; arguments?: string };
+} & Record<string, any>;
+
 // ---- state → timezone helpers (lightweight local copy)
 const STATE_CODE_FROM_NAME: Record<string, string> = {
   alabama: "AL", al: "AL", georgia: "GA", ga: "GA", florida: "FL", fl: "FL",
@@ -194,7 +200,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
 
     const msg = first.choices?.[0]?.message;
-    const toolCalls = msg?.tool_calls || [];
+    const toolCalls = (msg?.tool_calls as any[]) || [];
 
     // If no tool call, return the assistant's text (nudge toward booking)
     if (!toolCalls.length) {
@@ -203,15 +209,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(200).json({ reply });
     }
 
-    // Handle first tool call
-    const call = toolCalls[0];
-    if (call.function?.name !== "book_appointment") {
-      return res.status(200).json({ reply: "Mind sharing your full name, phone, state, and a date/time that works? I’ll get it booked." });
+    // Handle first tool call (guarded for SDK type variance)
+    const call = toolCalls[0] as FnToolCall;
+    if (!call?.function || call.function.name !== "book_appointment") {
+      return res.status(200).json({
+        reply:
+          "Mind sharing your full name, phone, state, and a date/time that works? I’ll get it booked.",
+      });
     }
 
-    // Parse args
+    // Parse args (supports both `.function.arguments` and any `.arguments`)
+    const argsJson =
+      call.function.arguments ??
+      (typeof (call as any).arguments === "string" ? (call as any).arguments : "{}");
+
     let args: any = {};
-    try { args = JSON.parse(call.function.arguments || "{}"); } catch {}
+    try { args = JSON.parse(argsJson || "{}"); } catch {}
+
     const agentEmail = (args.agentEmail || sessionAgentEmail || "").toLowerCase() || undefined;
     const name = String(args.name || "").trim();
     const phone = String(args.phone || "").trim();
