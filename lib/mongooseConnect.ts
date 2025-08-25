@@ -1,3 +1,4 @@
+// /lib/mongooseConnect.ts
 import mongoose from "mongoose";
 
 type Cached = {
@@ -11,31 +12,56 @@ declare global {
   var __mongooseCache: Cached | undefined;
 }
 
-const cached: Cached = global.__mongooseCache || { conn: null, promise: null };
+let cached: Cached = global.__mongooseCache || { conn: null, promise: null };
 if (!global.__mongooseCache) global.__mongooseCache = cached;
 
-export default async function mongooseConnect() {
+export default async function mongooseConnect(): Promise<typeof mongoose> {
   if (cached.conn) return cached.conn;
 
   if (!cached.promise) {
     const uri = process.env.MONGODB_URI || process.env.MONGODB_URL || "";
     if (!uri) throw new Error("Missing MONGODB_URI");
 
+    // Safer defaults
+    mongoose.set("strictQuery", true);
+
     // Keep pool tiny on serverless to avoid connection storms
-    const maxPool = parseInt(process.env.MONGODB_MAX_POOL_SIZE || "10", 10);
+    const maxPool = parseInt(
+      process.env.MONGODB_MAX_POOL_SIZE || process.env.MONGO_MAX_POOL_SIZE || "10",
+      10
+    );
 
     const options: any = {
+      // Pooling caps to avoid Atlas free-tier alerts
       maxPoolSize: maxPool,
       minPoolSize: 0,
-      maxConnecting: 2,              // throttle how many sockets connect at once
+      maxConnecting: 2, // throttle concurrent new sockets
+
+      // Faster fail to avoid piling up sockets if Atlas hiccups
       serverSelectionTimeoutMS: 5000,
-      socketTimeoutMS: 45000,
-      // family: 4,                  // uncomment if you ever hit IPv6 + DNS weirdness
+      socketTimeoutMS: 20000,
+      heartbeatFrequencyMS: 10000,
+
+      // Don't buffer commands while disconnected
+      bufferCommands: false,
+
+      // Reasonable defaults
+      retryWrites: true,
+      w: "majority",
+      family: 4,
+      appName: "CoveCRM",
     };
 
-    cached.promise = mongoose.connect(uri, options).then((m) => m);
+    cached.promise = mongoose
+      .connect(uri, options)
+      .then((m) => m)
+      .catch((err) => {
+        // allow a later retry if the first connect fails
+        cached.promise = null;
+        throw err;
+      });
   }
 
   cached.conn = await cached.promise;
-  return cached.conn;
+  return cached.conn!;
 }

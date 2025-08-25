@@ -787,6 +787,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // Delayed AI reply (human-like), force FROM the exact inbound number
     setTimeout(async () => {
       try {
+        // ensure we’re still using the same cached connection when the timer fires
+        await mongooseConnect();
+
         const fresh = await Lead.findById(lead._id);
         if (!fresh) return;
 
