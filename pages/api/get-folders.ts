@@ -42,20 +42,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     // Only this user's folders
-    const folders = (await Folder.find({ userEmail })
-      .sort({ createdAt: -1 })
-      .lean()) as LeanFolder[];
+    const raw = await Folder.find({ userEmail }).sort({ createdAt: -1 }).lean();
+    const folders = raw as unknown as LeanFolder[];
 
     const foldersWithCounts = await Promise.all(
       folders.map(async (folder) => {
-        const folderId = new Types.ObjectId(String(folder._id)); // normalize for ObjectId comparisons
+        const folderIdObj = new Types.ObjectId(String(folder._id)); // normalize for ObjectId comparisons
         const nameRegex = eqi(folder.name);
 
         const count = await Lead.countDocuments({
           userEmail,
           $or: [
             // Canonical ID assignment (cover ObjectId or possible string-stored id)
-            { folderId: folderId },
+            { folderId: folderIdObj },
             { folderId: String(folder._id) },
 
             // Legacy name-based assignment ONLY when folderId is missing/null
