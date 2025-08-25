@@ -8,81 +8,72 @@ import Lead from "@/models/Lead";
 
 const DEFAULT_FOLDERS = ["Sold", "Not Interested", "Booked Appointment"];
 
-const norm = (s: string) => String(s || "").trim().toLowerCase();
-const userMatch = (email: string) => ({
-  $or: [{ userEmail: email }, { ownerEmail: email }, { user: email }],
-});
+// Escape a string for safe use inside a RegExp
+function escapeRegExp(s: string) {
+  return String(s || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// Build a strict, case-insensitive equality regex (ignores surrounding spaces)
+function eqi(name: string) {
+  return new RegExp(`^\\s*${escapeRegExp(String(name || ""))}\\s*$`, "i");
+}
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
     const session = await getServerSession(req, res, authOptions);
-    const email =
+    const userEmail =
       typeof session?.user?.email === "string" ? session.user.email.toLowerCase() : "";
-    if (!email) return res.status(401).json({ message: "Unauthorized" });
+    if (!userEmail) return res.status(401).json({ message: "Unauthorized" });
 
     await dbConnect();
 
-    // Ensure user’s defaults exist (user-scoped only)
+    // Create per-user default folders if missing (only by userEmail)
     for (const name of DEFAULT_FOLDERS) {
-      const exists = await Folder.findOne({ name, userEmail: email }).select("_id").lean();
-      if (!exists) await Folder.create({ name, userEmail: email, assignedDrips: [] });
+      const exists = await Folder.findOne({ name, userEmail }).select("_id").lean();
+      if (!exists) await Folder.create({ name, userEmail, assignedDrips: [] });
     }
 
-    // Load folders (prefer user’s versions by name; then fallback to global)
-    const [userFolders, globalFolders] = await Promise.all([
-      Folder.find({ userEmail: email }).sort({ createdAt: -1 }).lean(),
-      Folder.find({ userEmail: { $exists: false } }).sort({ createdAt: -1 }).lean(),
-    ]);
-    const byName = new Map<string, any>();
-    for (const f of userFolders) byName.set(norm(f.name), f);
-    for (const f of globalFolders) if (!byName.has(norm(f.name))) byName.set(norm(f.name), f);
-    const folders = Array.from(byName.values());
+    // Only this user's folders (no legacy "user" key — we are email-only)
+    const folders = await Folder.find({ userEmail }).sort({ createdAt: -1 }).lean();
 
-    // ===== 1) Counts by folderId (canonical) =====
-    const canonicalCounts = await Lead.aggregate([
-      { $match: { ...userMatch(email), folderId: { $exists: true, $ne: null } } },
-      { $group: { _id: "$folderId", count: { $sum: 1 } } },
-    ]);
-    const countsById = new Map<string, number>();
-    for (const row of canonicalCounts) countsById.set(String(row._id), row.count || 0);
+    // Count leads per folder:
+    //  - Canonical: folderId == folder._id
+    //  - Legacy:    NO folderId (missing/null) AND name matches this folder (folderName | Folder | "Folder Name")
+    const foldersWithCounts = await Promise.all(
+      folders.map(async (folder) => {
+        const nameRegex = eqi(folder.name);
 
-    // ===== 2) Legacy counts by legacy name (no folderId) =====
-    const legacyCounts = await Lead.aggregate([
-      { $match: { ...userMatch(email), $or: [{ folderId: { $exists: false } }, { folderId: null }] } },
-      {
-        $addFields: {
-          _legacyRaw: {
-            $ifNull: ["$folderName", { $ifNull: ["$Folder", "$$ROOT['Folder Name']"] }],
-          },
-        },
-      },
-      {
-        $addFields: {
-          _legacyNorm: {
-            $toLower: {
-              $trim: { input: { $ifNull: ["$_legacyRaw", ""] } },
+        const count = await Lead.countDocuments({
+          userEmail,
+          $or: [
+            // Canonical ID assignment
+            { folderId: folder._id },
+
+            // Legacy name-based assignment ONLY when folderId absent
+            {
+              $and: [
+                { $or: [{ folderId: { $exists: false } }, { folderId: null }] },
+                {
+                  $or: [
+                    { folderName: nameRegex },
+                    { Folder: nameRegex },
+                    { ["Folder Name"]: nameRegex },
+                  ],
+                },
+              ],
             },
-          },
-        },
-      },
-      { $match: { _legacyNorm: { $ne: "" } } },
-      { $group: { _id: "$_legacyNorm", count: { $sum: 1 } } },
-    ]);
-    const countsByLegacyName = new Map<string, number>();
-    for (const row of legacyCounts) countsByLegacyName.set(String(row._id), row.count || 0);
+          ],
+        });
 
-    // Merge per folder (exact, no leakage)
-    const results = folders.map((f) => {
-      const idCount = countsById.get(String(f._id)) || 0;
-      const legacyCount = countsByLegacyName.get(norm(f.name)) || 0;
-      return {
-        _id: String(f._id),
-        name: f.name,
-        leadCount: idCount + legacyCount,
-      };
-    });
+        return {
+          ...folder,
+          _id: folder._id.toString(),
+          leadCount: count,
+        };
+      })
+    );
 
-    return res.status(200).json({ folders: results });
+    return res.status(200).json({ folders: foldersWithCounts });
   } catch (error) {
     console.error("❌ get-folders error:", error);
     return res.status(500).json({ message: "Failed to fetch folders" });
