@@ -6,32 +6,28 @@ import User from "@/models/User";
 import A2PProfile from "@/models/A2PProfile";
 import Message from "@/models/Message";
 import twilio, { Twilio } from "twilio";
-// import twilioClient from "@/lib/twilioClient"; // ⬅️ removed: we will use per-user client
 import { OpenAI } from "openai";
 import { getTimezoneFromState } from "@/utils/timezone";
 import { DateTime } from "luxon";
 import { buffer } from "micro";
 import axios from "axios";
-import { sendAppointmentBookedEmail } from "@/lib/email";
-// ✅ NEW: ensure socket server exists even if /api/socket wasn't hit
+import { sendAppointmentBookedEmail, sendLeadReplyNotificationEmail } from "@/lib/email";
 import { initSocket } from "@/lib/socket";
-// ✅ NEW: per-user Twilio client resolver
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
 
 export const config = { api: { bodyParser: false } };
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN!;
-const BASE_URL = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "").replace(/\/$/, "");
+const RAW_BASE_URL = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "").replace(/\/$/, "");
 const SHARED_MESSAGING_SERVICE_SID = process.env.TWILIO_MESSAGING_SERVICE_SID || "";
 const INTERNAL_API_TOKEN = process.env.INTERNAL_API_TOKEN || "";
+const LEAD_ENTRY_PATH = (process.env.APP_LEAD_ENTRY_PATH || "/lead").replace(/\/?$/, "");
 
-// Always point message sends at our status-callback endpoint
 const STATUS_CALLBACK =
   process.env.A2P_STATUS_CALLBACK_URL ||
-  (BASE_URL ? `${BASE_URL}/api/twilio/status-callback` : undefined);
+  (RAW_BASE_URL ? `${RAW_BASE_URL}/api/twilio/status-callback` : undefined);
 
-// Dev-only webhook testing (bypass Twilio signature)
 const ALLOW_DEV_TWILIO_TEST = process.env.ALLOW_LOCAL_TWILIO_TEST === "1" && process.env.NODE_ENV !== "production";
 
 // Human delay: 3–4 min; set AI_TEST_MODE=1 for 3–5s while testing
@@ -135,7 +131,6 @@ function computeQuietHoursScheduling(zone: string): {
 function isUS(num: string) { return (num || "").startsWith("+1"); }
 function normalizeDigits(p: string) { return (p || "").replace(/\D/g, ""); }
 
-// ⬇️ Expanded opt-out detector
 function isOptOut(text: string): boolean {
   const t = (text || "").trim().toLowerCase();
   const exact = ["stop", "stopall", "unsubscribe", "cancel", "end", "quit"];
@@ -145,7 +140,6 @@ function isOptOut(text: string): boolean {
   ];
   return exact.includes(t) || soft.some((k) => t.includes(k));
 }
-
 function isHelp(text: string): boolean {
   const t = (text || "").trim().toLowerCase();
   return t === "help" || t.includes("help");
@@ -161,16 +155,14 @@ function containsConfirmation(text: string) {
     "confirm","confirmed","book it","schedule it","set it","lock it in","we can do","we could do","3 works","works",
   ].some((p) => t.includes(p));
 }
-
-// ⬇️ Detect “just send me the info / email me the details / text it, etc.”
 function isInfoRequest(text: string): boolean {
   const t = (text || "").toLowerCase();
   const phrases = [
-    "send the info", "send info", "send details", "send me info", "send me the info",
-    "email the info", "email me the info", "email details", "email me details", "just email me",
-    "text the info", "text me the info", "text details", "text it", "can you text it",
-    "mail the info", "mail me the info", "mail details", "just send it", "can you send it",
-    "do you have something you can send", "do you have anything you can send", "link", "website"
+    "send the info","send info","send details","send me info","send me the info",
+    "email the info","email me the info","email details","email me details","just email me",
+    "text the info","text me the info","text details","text it","can you text it",
+    "mail the info","mail me the info","mail details","just send it","can you send it",
+    "do you have something you can send","do you have anything you can send","link","website"
   ];
   return phrases.some((p) => t.includes(p));
 }
@@ -275,7 +267,7 @@ interface LeadMemory {
   apptText?: string | null;
   tz?: string;
   lastConfirmAtISO?: string | null;
-  lastDraft?: string | null; // ✅ store the draft we plan to send
+  lastDraft?: string | null;
 }
 function askedRecently(memory: LeadMemory, key: string) {
   const hay = memory.lastAsked || [];
@@ -321,7 +313,7 @@ function historyToChatMessages(history: any[] = []) {
     if (m.type === "inbound") msgs.push({ role: "user", content: String(m.text) });
     else if (m.type === "ai" || m.type === "outbound") msgs.push({ role: "assistant", content: String(m.text) });
   }
-  return msgs.slice(-24); // last ~12 turns
+  return msgs.slice(-24);
 }
 
 // --- conversational reply
@@ -386,18 +378,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const host = (req.headers["x-forwarded-host"] as string) || (req.headers.host as string) || "";
   const proto = (req.headers["x-forwarded-proto"] as string) || "https";
   const pathOnly = (req.url || "").split("?")[0] || "/api/twilio/inbound-sms";
-  const absoluteUrl = host ? `${proto}://${host}${pathOnly}` :
-    (BASE_URL ? `${BASE_URL}${pathOnly}` : "");
+  const ABS_BASE_URL = host ? `${proto}://${host}` : RAW_BASE_URL || "";
+  const absoluteUrl = host ? `${proto}://${host}${pathOnly}` : (RAW_BASE_URL ? `${RAW_BASE_URL}${pathOnly}` : "");
 
   // Verify Twilio signature (unless dev bypass)
   const signature = (req.headers["x-twilio-signature"] || "") as string;
+
+  // ✅ New: prod-safe test bypass via Authorization: Bearer INTERNAL_API_TOKEN
+  const hasAuthBypass =
+    !!INTERNAL_API_TOKEN &&
+    typeof req.headers.authorization === "string" &&
+    req.headers.authorization === `Bearer ${INTERNAL_API_TOKEN}`;
+
   const valid = absoluteUrl
     ? twilio.validateRequest(AUTH_TOKEN, signature, absoluteUrl, Object.fromEntries(params as any))
     : false;
 
   if (!valid) {
-    if (ALLOW_DEV_TWILIO_TEST) {
-      console.warn("⚠️ Dev bypass: Twilio signature validation skipped.");
+    if (ALLOW_DEV_TWILIO_TEST || hasAuthBypass) {
+      console.warn("⚠️ Signature bypass enabled for inbound-sms (dev/test).");
     } else {
       console.warn("❌ Invalid Twilio signature on inbound-sms", { absoluteUrl });
       return res.status(403).send("Invalid signature");
@@ -419,7 +418,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(200).json({ message: "Missing required fields, acknowledged." });
     }
 
-    // Idempotency: if Twilio retried, don't double-write
+    // Idempotency: if Twilio retried, don't double-write or double-email
     if (messageSid) {
       const existing = await Message.findOne({ sid: messageSid }).lean().exec();
       if (existing) {
@@ -477,6 +476,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(200).json({ message: "Lead not found/created, acknowledged." });
     }
 
+    // Snapshot whether this looked like a drip thread BEFORE we clear drips later
+    const hadDrips = Array.isArray((lead as any).assignedDrips) && (lead as any).assignedDrips.length > 0;
+
     // ✅ Ensure Socket.IO exists (init if needed)
     let io = (res as any)?.socket?.server?.io;
     try {
@@ -489,7 +491,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     // Persist inbound message
-    await Message.create({
+    const createdMsg = await Message.create({
       leadId: lead._id,
       userEmail: user.email,
       direction: "inbound",
@@ -516,6 +518,40 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (io) io.to(user.email).emit("message:new", { leadId: lead._id, ...inboundEntry });
 
+    /* =======================
+       NEW: Agent email notify
+       ======================= */
+    try {
+      const emailEnabled = user?.notifications?.emailOnInboundSMS !== false; // default true
+      if (emailEnabled) {
+        const first = (lead["First Name"] || (lead as any)["First"] || (lead as any)["Name"] || "").toString().trim();
+        const last = ((lead as any)["Last Name"] || (lead as any)["Last"] || "").toString().trim();
+        const leadName = (first || last) ? `${first} ${last}`.trim() : "";
+
+        const subjectLead = leadName || (lead.Phone || (lead as any).phone || fromNumber);
+        const snippet = body.length > 60 ? `${body.slice(0, 60)}…` : body;
+        const dripTag = hadDrips ? "[drip] " : "";
+
+        const deepLink = `${ABS_BASE_URL}${LEAD_ENTRY_PATH}/${lead._id}`;
+
+        await sendLeadReplyNotificationEmail({
+          to: user.email,
+          replyTo: user.email, // agent can reply directly
+          subject: `[New Lead Reply] ${dripTag}${subjectLead} — ${snippet || "(no text)"}`,
+          leadName: leadName || "Unknown",
+          leadPhone: lead.Phone || (lead as any).phone || fromNumber,
+          leadEmail: lead.Email || (lead as any).email || "",
+          folder: (lead as any).folder || (lead as any).Folder || (lead as any)["Folder Name"],
+          status: (lead as any).status || (lead as any).Status,
+          message: body || (numMedia ? "[media]" : ""),
+          receivedAtISO: new Date().toISOString(),
+          linkUrl: deepLink,
+        });
+      }
+    } catch (e) {
+      console.warn("⚠️ Inbound reply email failed (non-fatal):", (e as any)?.message || e);
+    }
+
     // === Keyword handling (no auto-reply here, just flags) ===
     if (isOptOut(body)) {
       lead.assignedDrips = [];
@@ -523,16 +559,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       lead.isAIEngaged = false;
       (lead as any).unsubscribed = true;
       (lead as any).optOut = true;
-
-      // ⬅️ Move to Not Interested
       (lead as any).status = "Not Interested";
 
-      // Log a system note
       const note = { type: "system" as const, text: "[system] Lead opted out — moved to Not Interested.", date: new Date() };
       lead.interactionHistory.push(note);
       await lead.save();
 
-      // Live update UI
       if (io) {
         io.to(user.email).emit("lead:updated", {
           _id: lead._id,
@@ -696,7 +728,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           console.log("📌 Booking payload ->", bookingPayload);
 
           const bookingRes = await axios.post(
-            `${BASE_URL}/api/google/calendar/book-appointment`,
+            `${RAW_BASE_URL || ABS_BASE_URL}/api/google/calendar/book-appointment`,
             bookingPayload,
             {
               headers: { Authorization: `Bearer ${INTERNAL_API_TOKEN}`, "Content-Type": "application/json" },
@@ -743,7 +775,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
-    // ✅ Save the draft so the delayed sender uses the exact same text (no re-gen)
     memory.lastDraft = aiReply;
 
     (lead as any).aiMemory = memory;
@@ -756,7 +787,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const fresh = await Lead.findById(lead._id);
         if (!fresh) return;
 
-        // Cooldown
         if (fresh.aiLastResponseAt && Date.now() - new Date(fresh.aiLastResponseAt).getTime() < 2 * 60 * 1000) {
           console.log("⏳ Skipping AI reply (cool-down).");
           return;
@@ -766,7 +796,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           return;
         }
 
-        // Use the saved draft; avoid duplicates
         const lastAI = [...(fresh.interactionHistory || [])].reverse().find((m: any) => m.type === "ai");
         const draft = ((fresh as any).aiMemory?.lastDraft as string) || "When’s a good time today or tomorrow for a quick chat?";
         if (lastAI && lastAI.text?.trim() === draft.trim()) {
@@ -777,11 +806,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const zone = pickLeadZone(fresh);
         const { isQuiet, scheduledAt } = computeQuietHoursScheduling(zone);
 
-        // Force FROM the number that received the SMS (no Messaging Service pooling)
         const baseParams = await getSendParams(String(user._id), toNumber, fromNumber, { forceFrom: toNumber });
         const paramsOut: Parameters<Twilio["messages"]["create"]>[0] = { ...baseParams, body: draft };
 
-        // Only schedule if we are using a Messaging Service (not when forcing a single from number)
         const canSchedule = "messagingServiceSid" in paramsOut;
         if (isQuiet && scheduledAt && canSchedule) {
           (paramsOut as any).scheduleType = "fixed";
@@ -796,7 +823,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         fresh.aiLastResponseAt = new Date();
         await fresh.save();
 
-        // ✅ Send from the correct Twilio account for THIS user
         const { client } = await getClientForUser(user.email);
         const twilioMsg = await client.messages.create(paramsOut);
 
@@ -833,10 +859,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 }
 
-/** Prefer shared Messaging Service if present; else tenant MS; else direct from.
- *  You can force a specific FROM (e.g., reply from the number that received the SMS).
- *  Always attaches statusCallback so lifecycle updates land in DB/UI.
- */
+/** Prefer shared Messaging Service if present; else tenant MS; else direct from. */
 async function getSendParams(
   userId: string,
   toNumber: string,
@@ -845,7 +868,6 @@ async function getSendParams(
 ) {
   const base: any = { statusCallback: STATUS_CALLBACK };
 
-  // If a specific From is requested, honor it (this avoids MS number pooling).
   if (opts?.forceFrom) {
     return {
       ...base,
@@ -854,7 +876,6 @@ async function getSendParams(
     } as Parameters<Twilio["messages"]["create"]>[0];
   }
 
-  // Otherwise, prefer Messaging Service (allows scheduling & A2P protections)
   if (process.env.TWILIO_MESSAGING_SERVICE_SID) {
     return {
       ...base,
@@ -872,7 +893,6 @@ async function getSendParams(
     } as Parameters<Twilio["messages"]["create"]>[0];
   }
 
-  // Fallback: direct from the number that received the SMS
   return {
     ...base,
     from: toNumber,

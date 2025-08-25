@@ -40,6 +40,7 @@ export async function sendEmail(
   to: string | string[],
   subject: string,
   html: string,
+  replyTo?: string | string[],
 ): Promise<SendEmailResult> {
   try {
     ensureSmtpConfig();
@@ -54,6 +55,7 @@ export async function sendEmail(
       to,
       subject,
       html,
+      ...(replyTo ? { replyTo } : {}),
     });
     return { ok: true, id: info.messageId };
   } catch (err: any) {
@@ -71,19 +73,23 @@ async function sendViaResend({
   to,
   subject,
   html,
+  replyTo,
 }: {
   to: string | string[];
   subject: string;
   html: string;
+  replyTo?: string | string[];
 }): Promise<SendEmailResult> {
   try {
-    if (!resend || !EMAIL_FROM) return await sendEmail(to, subject, html);
+    if (!resend || !EMAIL_FROM) return await sendEmail(to, subject, html, replyTo);
     const result = await resend.emails.send({
       from: EMAIL_FROM,
       to,
       subject,
       html,
-    });
+      // Resend expects `reply_to`
+      ...(replyTo ? { reply_to: replyTo } : {}),
+    } as any);
     if ((result as any)?.error)
       throw new Error((result as any).error?.message || "Resend send failed");
     return { ok: true, id: (result as any)?.data?.id };
@@ -101,6 +107,29 @@ async function sendViaResend({
 
 function toISO(input: string | Date) {
   return input instanceof Date ? input.toISOString() : String(input);
+}
+
+function escapeHtml(str: string) {
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function formatDateTimeFriendly(timeISO: string, tzLabel?: string | null) {
+  try {
+    const d = new Date(timeISO);
+    const when = d.toLocaleString(undefined, {
+      year: "numeric",
+      month: "short",
+      day: "2-digit",
+      hour: "numeric",
+      minute: "2-digit",
+    });
+    return tzLabel ? `${when} ${tzLabel}` : when;
+  } catch {
+    return timeISO;
+  }
 }
 
 /* ---------- Existing templates ---------- */
@@ -131,11 +160,11 @@ export function renderLeadBookingEmail(opts: {
       <p>Hi ${leadName || "there"},</p>
       <p>Your call with ${agentName || "our team"} is confirmed.</p>
       <ul>
-        <li><b>Topic:</b> ${title || "Consultation"}</li>
-        <li><b>Starts:</b> ${start}</li>
-        <li><b>Ends:</b> ${end}</li>
+        <li><b>Topic:</b> ${escapeHtml(title || "Consultation")}</li>
+        <li><b>Starts:</b> ${escapeHtml(start)}</li>
+        <li><b>Ends:</b> ${escapeHtml(end)}</li>
       </ul>
-      ${description ? `<p>${description}</p>` : ""}
+      ${description ? `<p>${escapeHtml(description)}</p>` : ""}
       ${eventUrl ? `<p><a href="${eventUrl}">View event</a></p>` : ""}
       <p>Talk soon,<br/>CRM Cove</p>
     </div>
@@ -171,46 +200,25 @@ export function renderAgentBookingEmail(opts: {
   return `
     <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif">
       <h2>New Booking</h2>
-      <p>Hi ${agentName || "Agent"}, you’ve got a new appointment.</p>
+      <p>Hi ${escapeHtml(agentName || "Agent")}, you’ve got a new appointment.</p>
       <ul>
-        <li><b>Lead:</b> ${leadName || "Unknown"} ${leadUrl ? `— <a href="${leadUrl}">Open lead</a>` : ""}</li>
-        ${leadPhone ? `<li><b>Phone:</b> ${leadPhone}</li>` : ""}
-        ${leadEmail ? `<li><b>Email:</b> ${leadEmail}</li>` : ""}
-        <li><b>Topic:</b> ${title || "Consultation"}</li>
-        <li><b>Starts:</b> ${start}</li>
-        <li><b>Ends:</b> ${end}</li>
+        <li><b>Lead:</b> ${escapeHtml(leadName || "Unknown")} ${
+          leadUrl ? `— <a href="${leadUrl}">Open lead</a>` : ""
+        }</li>
+        ${leadPhone ? `<li><b>Phone:</b> ${escapeHtml(leadPhone)}</li>` : ""}
+        ${leadEmail ? `<li><b>Email:</b> ${escapeHtml(leadEmail)}</li>` : ""}
+        <li><b>Topic:</b> ${escapeHtml(title || "Consultation")}</li>
+        <li><b>Starts:</b> ${escapeHtml(start)}</li>
+        <li><b>Ends:</b> ${escapeHtml(end)}</li>
       </ul>
-      ${description ? `<p>${description}</p>` : ""}
+      ${description ? `<p>${escapeHtml(description)}</p>` : ""}
       ${eventUrl ? `<p><a href="${eventUrl}">View calendar event</a></p>` : ""}
       <p>— CRM Cove</p>
     </div>
   `;
 }
 
-/* ========== NEW: Agent appointment notice with state + phone (for AI/dial bookings) ========== */
-
-function escapeHtml(str: string) {
-  return String(str)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
-}
-
-function formatDateTimeFriendly(timeISO: string, tzLabel?: string | null) {
-  try {
-    const d = new Date(timeISO);
-    const when = d.toLocaleString(undefined, {
-      year: "numeric",
-      month: "short",
-      day: "2-digit",
-      hour: "numeric",
-      minute: "2-digit",
-    });
-    return tzLabel ? `${when} ${tzLabel}` : when;
-  } catch {
-    return timeISO;
-  }
-}
+/* ========== Agent appointment notice with state + phone (for AI/dial bookings) ========== */
 
 export function renderAgentAppointmentNotice(opts: {
   agentName?: string;
@@ -309,7 +317,7 @@ export async function sendPasswordResetEmail(opts: {
 export function renderWelcomeEmail(name?: string) {
   return `
     <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; color:#0f172a">
-      <h2 style="margin:0 0 12px 0">Welcome to Cove CRM${name ? `, ${name}` : ""}!</h2>
+      <h2 style="margin:0 0 12px 0">Welcome to Cove CRM${name ? `, ${escapeHtml(name)}` : ""}!</h2>
       <p style="margin:0 0 12px 0">
         You’re in. We built Cove to help you call, text, and book faster—without the busywork.
       </p>
@@ -353,16 +361,12 @@ function renderAffiliateApplicationAdminEmail(opts: {
       <p style="margin:0 0 12px 0">A new affiliate has applied to the Cove CRM program.</p>
       <table style="border-collapse:collapse">
         <tbody>
-          <tr><td style="padding:4px 8px"><b>Name</b></td><td style="padding:4px 8px">${opts.name}</td></tr>
-          <tr><td style="padding:4px 8px"><b>Email</b></td><td style="padding:4px 8px">${opts.email}</td></tr>
-          <tr><td style="padding:4px 8px"><b>Company</b></td><td style="padding:4px 8px">${opts.company}</td></tr>
-          <tr><td style="padding:4px 8px"><b># Agents</b></td><td style="padding:4px 8px">${String(
-            opts.agents,
-          )}</td></tr>
-          <tr><td style="padding:4px 8px"><b>Requested Code</b></td><td style="padding:4px 8px">${
-            opts.promoCode
-          }</td></tr>
-          <tr><td style="padding:4px 8px"><b>Submitted</b></td><td style="padding:4px 8px">${when}</td></tr>
+          <tr><td style="padding:4px 8px"><b>Name</b></td><td style="padding:4px 8px">${escapeHtml(opts.name)}</td></tr>
+          <tr><td style="padding:4px 8px"><b>Email</b></td><td style="padding:4px 8px">${escapeHtml(opts.email)}</td></tr>
+          <tr><td style="padding:4px 8px"><b>Company</b></td><td style="padding:4px 8px">${escapeHtml(opts.company)}</td></tr>
+          <tr><td style="padding:4px 8px"><b># Agents</b></td><td style="padding:4px 8px">${escapeHtml(String(opts.agents))}</td></tr>
+          <tr><td style="padding:4px 8px"><b>Requested Code</b></td><td style="padding:4px 8px">${escapeHtml(opts.promoCode)}</td></tr>
+          <tr><td style="padding:4px 8px"><b>Submitted</b></td><td style="padding:4px 8px">${escapeHtml(when)}</td></tr>
         </tbody>
       </table>
       <p style="margin:16px 0 0 0">— Cove CRM</p>
@@ -402,10 +406,10 @@ function renderAffiliateApprovedEmail(opts: {
     <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; color:#0f172a">
       <h2 style="margin:0 0 12px 0">You're approved 🎉</h2>
       <p style="margin:0 0 12px 0">
-        ${opts.name ? `Hi ${opts.name}, ` : ""}your Cove CRM affiliate application has been approved.
+        ${opts.name ? `Hi ${escapeHtml(opts.name)}, ` : ""}your Cove CRM affiliate application has been approved.
       </p>
       <p style="margin:0 0 12px 0">
-        Your referral code is <b>${opts.promoCode}</b>. Share it anywhere you like. When people sign up with your code, their discounts and your commissions apply automatically.
+        Your referral code is <b>${escapeHtml(opts.promoCode)}</b>. Share it anywhere you like. When people sign up with your code, their discounts and your commissions apply automatically.
       </p>
       ${
         opts.dashboardUrl
@@ -443,7 +447,7 @@ function renderAffiliateOnboardingCompleteEmail(opts: { name?: string }) {
     <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; color:#0f172a">
       <h2 style="margin:0 0 12px 0">Payouts ready ✅</h2>
       <p style="margin:0 0 12px 0">
-        ${opts.name ? `Hi ${opts.name}, ` : ""}your Stripe Connect onboarding is complete. Payouts for your affiliate commissions are now enabled.
+        ${opts.name ? `Hi ${escapeHtml(opts.name)}, ` : ""}your Stripe Connect onboarding is complete. Payouts for your affiliate commissions are now enabled.
       </p>
       <p style="margin:0 0 12px 0">
         You can return to your dashboard anytime to see referrals and payouts.
@@ -483,8 +487,8 @@ export function renderAffiliatePayoutEmail(opts: {
   return `
     <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; color:#0f172a">
       <h2 style="margin:0 0 12px 0">Your affiliate payout is on the way 🎉</h2>
-      <p style="margin:0 0 8px 0">Amount: <b>$${opts.amount.toFixed(2)} ${currency}</b></p>
-      <p style="margin:0 0 8px 0">Period: ${period}</p>
+      <p style="margin:0 0 8px 0">Amount: <b>$${opts.amount.toFixed(2)} ${escapeHtml(currency)}</b></p>
+      <p style="margin:0 0 8px 0">Period: ${escapeHtml(period)}</p>
       ${
         typeof opts.balanceAfter === "number"
           ? `<p style="margin:0 0 8px 0">Remaining balance: <b>$${opts.balanceAfter.toFixed(
@@ -592,4 +596,86 @@ export async function sendA2PDeclinedEmail(opts: {
     helpUrl: opts.helpUrl,
   });
   return sendViaResend({ to: opts.to, subject, html });
+}
+
+/* ========== NEW: Lead reply notification email ========== */
+
+export function renderLeadReplyNotificationEmail(opts: {
+  leadName?: string;
+  leadPhone?: string;
+  leadEmail?: string;
+  folder?: string;
+  status?: string;
+  message: string;
+  receivedAtISO?: string;
+  linkUrl?: string; // deep-link to /lead/{id}
+}) {
+  const when =
+    opts.receivedAtISO
+      ? new Date(opts.receivedAtISO).toLocaleString()
+      : new Date().toLocaleString();
+
+  const bodyHtml = escapeHtml(opts.message || "").replace(/\n/g, "<br/>");
+
+  return `
+    <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; color:#0f172a">
+      <h2 style="margin:0 0 12px 0">New Lead Reply</h2>
+      <table style="border-collapse:collapse;margin:8px 0 16px 0">
+        <tbody>
+          ${opts.leadName ? `<tr><td style="padding:4px 8px;color:#64748b">Lead</td><td style="padding:4px 8px"><b>${escapeHtml(opts.leadName)}</b></td></tr>` : ""}
+          ${opts.leadPhone ? `<tr><td style="padding:4px 8px;color:#64748b">Phone</td><td style="padding:4px 8px">${escapeHtml(opts.leadPhone)}</td></tr>` : ""}
+          ${opts.leadEmail ? `<tr><td style="padding:4px 8px;color:#64748b">Email</td><td style="padding:4px 8px">${escapeHtml(opts.leadEmail)}</td></tr>` : ""}
+          ${opts.folder ? `<tr><td style="padding:4px 8px;color:#64748b">Folder</td><td style="padding:4px 8px">${escapeHtml(opts.folder)}</td></tr>` : ""}
+          ${opts.status ? `<tr><td style="padding:4px 8px;color:#64748b">Status</td><td style="padding:4px 8px">${escapeHtml(opts.status)}</td></tr>` : ""}
+          <tr><td style="padding:4px 8px;color:#64748b">Received</td><td style="padding:4px 8px">${escapeHtml(when)}</td></tr>
+          ${
+            opts.linkUrl
+              ? `<tr><td style="padding:4px 8px;color:#64748b">Lead Link</td><td style="padding:4px 8px"><a href="${opts.linkUrl}">Open in Cove</a></td></tr>`
+              : ""
+          }
+        </tbody>
+      </table>
+      <div style="padding:12px 14px;border:1px solid #e5e7eb;border-radius:10px;background:#f8fafc">
+        <div style="font-size:12px;color:#64748b;margin-bottom:6px">Message</div>
+        <div style="line-height:1.5">${bodyHtml || "<i>(no text)</i>"}</div>
+      </div>
+      <p style="margin:16px 0 0 0">Tip: Reply to this email to respond quickly via your email client.</p>
+    </div>
+  `;
+}
+
+/**
+ * Sends the per-user inbound SMS notification email.
+ * Subject should be composed by the caller (we keep that logic near the webhook),
+ * but From is the app’s configured address and Reply-To is the agent’s email.
+ */
+export async function sendLeadReplyNotificationEmail(opts: {
+  to: string;                 // agent email (user.email)
+  replyTo?: string | string[]; // set to user.email so agent can reply quickly
+  subject: string;            // e.g. "[New Lead Reply] {Lead Name or Phone} — {first 60 chars}"
+  leadName?: string;
+  leadPhone?: string;
+  leadEmail?: string;
+  folder?: string;
+  status?: string;
+  message: string;
+  receivedAtISO?: string;
+  linkUrl?: string;
+}): Promise<SendEmailResult> {
+  const html = renderLeadReplyNotificationEmail({
+    leadName: opts.leadName,
+    leadPhone: opts.leadPhone,
+    leadEmail: opts.leadEmail,
+    folder: opts.folder,
+    status: opts.status,
+    message: opts.message,
+    receivedAtISO: opts.receivedAtISO,
+    linkUrl: opts.linkUrl,
+  });
+  return sendViaResend({
+    to: opts.to,
+    subject: opts.subject,
+    html,
+    replyTo: opts.replyTo,
+  });
 }

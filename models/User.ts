@@ -1,3 +1,4 @@
+// models/User.ts
 import mongoose, { Schema } from "mongoose";
 
 export interface IUser {
@@ -96,6 +97,8 @@ export interface IUser {
     emailReminders?: boolean;
     dripAlerts?: boolean;
     bookingConfirmations?: boolean;
+    /** NEW: inbound SMS → email notifications (default true) */
+    emailOnInboundSMS?: boolean;
   };
 
   country?: string;
@@ -220,6 +223,7 @@ const UserSchema = new Schema<IUser>({
     emailReminders: { type: Boolean, default: true },
     dripAlerts: { type: Boolean, default: true },
     bookingConfirmations: { type: Boolean, default: true },
+    emailOnInboundSMS: { type: Boolean, default: true }, // ⬅️ NEW
   },
 
   country: { type: String },
