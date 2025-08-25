@@ -1,3 +1,4 @@
+// pages/api/get-folders.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "./auth/[...nextauth]";
@@ -21,13 +22,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     await dbConnect();
 
-    // Ensure default folders exist for THIS user only (don’t create global dupes)
+    // Ensure user’s defaults exist (user-scoped only)
     for (const name of DEFAULT_FOLDERS) {
       const exists = await Folder.findOne({ name, userEmail: email }).select("_id").lean();
       if (!exists) await Folder.create({ name, userEmail: email, assignedDrips: [] });
     }
 
-    // Load user + global folders, but de-dupe by name (user folder wins)
+    // Load folders (prefer user’s versions by name; then fallback to global)
     const [userFolders, globalFolders] = await Promise.all([
       Folder.find({ userEmail: email }).sort({ createdAt: -1 }).lean(),
       Folder.find({ userEmail: { $exists: false } }).sort({ createdAt: -1 }).lean(),
@@ -37,38 +38,49 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     for (const f of globalFolders) if (!byName.has(norm(f.name))) byName.set(norm(f.name), f);
     const folders = Array.from(byName.values());
 
-    // For each folder, count ONLY the leads that belong to it.
-    //  - canonical: folderId === this folder _id
-    //  - legacy:    no folderId AND name matches exactly (case-insensitive) in old fields
-    const results = await Promise.all(
-      folders.map(async (f) => {
-        const [byId, byLegacy] = await Promise.all([
-          Lead.countDocuments({
-            ...userMatch(email),
-            folderId: f._id,
-          }),
-          Lead.countDocuments({
-            ...userMatch(email),
-            $and: [
-              { $or: [{ folderId: { $exists: false } }, { folderId: null }] },
-              {
-                $or: [
-                  { folderName: f.name },
-                  { Folder: f.name },
-                  { ["Folder Name"]: f.name },
-                ],
-              },
-            ],
-          }),
-        ]);
+    // ===== 1) Counts by folderId (canonical) =====
+    const canonicalCounts = await Lead.aggregate([
+      { $match: { ...userMatch(email), folderId: { $exists: true, $ne: null } } },
+      { $group: { _id: "$folderId", count: { $sum: 1 } } },
+    ]);
+    const countsById = new Map<string, number>();
+    for (const row of canonicalCounts) countsById.set(String(row._id), row.count || 0);
 
-        return {
-          _id: String(f._id),
-          name: f.name,
-          leadCount: byId + byLegacy,
-        };
-      })
-    );
+    // ===== 2) Legacy counts by legacy name (no folderId) =====
+    const legacyCounts = await Lead.aggregate([
+      { $match: { ...userMatch(email), $or: [{ folderId: { $exists: false } }, { folderId: null }] } },
+      {
+        $addFields: {
+          _legacyRaw: {
+            $ifNull: ["$folderName", { $ifNull: ["$Folder", "$$ROOT['Folder Name']"] }],
+          },
+        },
+      },
+      {
+        $addFields: {
+          _legacyNorm: {
+            $toLower: {
+              $trim: { input: { $ifNull: ["$_legacyRaw", ""] } },
+            },
+          },
+        },
+      },
+      { $match: { _legacyNorm: { $ne: "" } } },
+      { $group: { _id: "$_legacyNorm", count: { $sum: 1 } } },
+    ]);
+    const countsByLegacyName = new Map<string, number>();
+    for (const row of legacyCounts) countsByLegacyName.set(String(row._id), row.count || 0);
+
+    // Merge per folder (exact, no leakage)
+    const results = folders.map((f) => {
+      const idCount = countsById.get(String(f._id)) || 0;
+      const legacyCount = countsByLegacyName.get(norm(f.name)) || 0;
+      return {
+        _id: String(f._id),
+        name: f.name,
+        leadCount: idCount + legacyCount,
+      };
+    });
 
     return res.status(200).json({ folders: results });
   } catch (error) {
