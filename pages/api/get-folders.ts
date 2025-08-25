@@ -5,16 +5,8 @@ import { authOptions } from "./auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import Folder from "@/models/Folder";
 import Lead from "@/models/Lead";
-import { Types } from "mongoose";
 
-type LeanFolder = {
-  _id: Types.ObjectId | string;
-  name: string;
-  userEmail: string;
-  assignedDrips?: any[];
-  createdAt?: Date;
-  updatedAt?: Date;
-};
+type AnyDoc = Record<string, any>;
 
 const SYSTEM_DEFAULTS = ["Sold", "Not Interested", "Booked Appointment"];
 
@@ -27,7 +19,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     await dbConnect();
 
-    // Ensure the three system folders exist for this user (once).
+    // Ensure required system folders exist for this user
     for (const name of SYSTEM_DEFAULTS) {
       await Folder.updateOne(
         { userEmail: email, name },
@@ -36,27 +28,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       );
     }
 
-    // Load ONLY this user's folders
-    const rawFolders = (await Folder.find({ userEmail: email })
+    // Load ONLY this user's folders (lean -> AnyDoc to avoid TS friction on strict:false schemas)
+    const rawFolders: AnyDoc[] = await Folder.find({ userEmail: email })
       .sort({ createdAt: -1 })
-      .lean()) as LeanFolder[];
+      .lean()
+      .exec();
 
-    // De-duplicate by name (case-insensitive) just for display to avoid doubles.
-    const byName = new Map<string, LeanFolder>();
+    // De-duplicate by name (case-insensitive) to avoid doubles in UI
+    const byName = new Map<string, AnyDoc>();
     for (const f of rawFolders) {
-      const key = (f.name || "").trim().toLowerCase();
+      const key = String(f?.name || "").trim().toLowerCase();
       if (!key) continue;
-      if (!byName.has(key)) byName.set(key, f); // keep most-recent (because of sort above)
+      if (!byName.has(key)) byName.set(key, f);
     }
-    const folders = Array.from(byName.values());
+    const folders: AnyDoc[] = Array.from(byName.values());
 
-    // Build accurate counts: match user, require folderId set,
-    // coerce folderId to string for consistent grouping,
-    // and count per folderId.
-    const countsAgg = await Lead.aggregate([
+    // Build accurate counts: only this user's leads that HAVE a folderId
+    const countsAgg: AnyDoc[] = await Lead.aggregate([
       {
         $match: {
-          $or: [{ userEmail: email }, { user: email }],
+          $or: [{ userEmail: email }, { user: email }], // support legacy "user"
           folderId: { $exists: true, $ne: null },
         },
       },
@@ -72,19 +63,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         },
       },
       { $group: { _id: "$folderIdStr", count: { $sum: 1 } } },
-    ]);
+    ]).exec();
 
     const countMap = new Map<string, number>();
-    for (const row of countsAgg) {
-      countMap.set(String(row._id), row.count as number);
-    }
+    for (const r of countsAgg) countMap.set(String(r._id), Number(r.count) || 0);
 
-    // Sort: custom (imported) first, then system folders.
-    // Within each group, keep newest first.
+    // Sort: custom/imported FIRST, system defaults AFTER (newest first within each bucket)
     const sorted = folders.sort((a, b) => {
-      const aIsSystem = SYSTEM_DEFAULTS.includes(a.name);
-      const bIsSystem = SYSTEM_DEFAULTS.includes(b.name);
-      if (aIsSystem !== bIsSystem) return aIsSystem ? 1 : -1; // custom first
+      const aSystem = SYSTEM_DEFAULTS.includes(String(a.name));
+      const bSystem = SYSTEM_DEFAULTS.includes(String(b.name));
+      if (aSystem !== bSystem) return aSystem ? 1 : -1; // custom first
       const at = a.createdAt ? new Date(a.createdAt).getTime() : 0;
       const bt = b.createdAt ? new Date(b.createdAt).getTime() : 0;
       return bt - at;
@@ -94,9 +82,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const idStr = String(f._id);
       return {
         _id: idStr,
-        name: f.name,
-        userEmail: f.userEmail,
-        assignedDrips: f.assignedDrips || [],
+        name: String(f.name || ""),
+        userEmail: String(f.userEmail || email),
+        assignedDrips: Array.isArray(f.assignedDrips) ? f.assignedDrips : [],
         leadCount: countMap.get(idStr) || 0,
       };
     });
