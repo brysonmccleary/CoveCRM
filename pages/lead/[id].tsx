@@ -198,23 +198,31 @@ export default function LeadProfileDial() {
     } catch (e: any) { toast.error(e?.message || "Failed to save note"); }
   };
 
+  // 🔧 Single source of truth for dispositions: /api/disposition-lead
   const handleDisposition = async (newFolderName: string) => {
     if (!lead?.id) return;
+    if (newFolderName === "No Answer") {
+      toast("No change for 'No Answer'");
+      return;
+    }
     try {
-      await fetch("/api/leads/add-history", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ leadId: lead.id, type: "disposition", message: newFolderName }),
-      }).catch(() => {});
+      // Optimistic local line so the user sees immediate feedback
       setHistoryLines((prev) => [`✅ Disposition: ${newFolderName} • ${new Date().toLocaleString()}`, ...prev]);
 
-      const res = await fetch("/api/move-lead-folder", {
-        method: "POST", headers: { "Content-Type": "application/json" },
+      const res = await fetch("/api/disposition-lead", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ leadId: lead.id, newFolderName }),
       });
-      const data = await res.json();
-      if (!res.ok) { console.error("Move folder error:", data.message); toast.error("Failed to move lead"); return; }
+      const data = await res.json().catch(() => ({} as any));
+      if (!res.ok || !data?.success) {
+        throw new Error(data?.message || "Failed to move lead");
+      }
       toast.success(`✅ Lead moved to ${newFolderName}`);
-    } catch (error) { console.error("Error moving lead:", error); toast.error("Error moving lead"); }
+    } catch (error: any) {
+      console.error("Disposition error:", error);
+      toast.error(error?.message || "Error moving lead");
+    }
   };
 
   const startCall = async () => {
