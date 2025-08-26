@@ -1,4 +1,3 @@
-// /components/LeadsPanel.tsx
 import React, { useState, useEffect } from "react";
 import LeadImportPanel from "./LeadImportPanel";
 import LeadPreviewPanel from "./LeadPreviewPanel";
@@ -158,26 +157,8 @@ export default function LeadsPanel() {
       const res = await fetch("/api/get-folders");
       const data = await res.json();
       const userFolders = Array.isArray(data.folders) ? data.folders : [];
-
-      const foldersWithCounts = await Promise.all(
-        userFolders.map(async (folder: any) => {
-          if (!folder._id || typeof folder._id !== "string") folder._id = folder.name;
-          const leadsRes = await fetch(`/api/get-leads-by-folder?folderId=${folder._id}`);
-          const leadsData = await leadsRes.json();
-          return {
-            ...folder,
-            leadCount: Array.isArray(leadsData.leads) ? leadsData.leads.length : 0,
-          };
-        })
-      );
-
-      SYSTEM_FOLDERS.forEach((name) => {
-        if (!foldersWithCounts.find((f) => f.name === name)) {
-          foldersWithCounts.push({ _id: name, name, leadCount: 0 });
-        }
-      });
-
-      setFolders(foldersWithCounts);
+      // ✅ TRUST SERVER COUNTS; do NOT recompute per folder
+      setFolders(userFolders);
     } catch (err) {
       console.error("Failed to fetch folders:", err);
       setFolders([]);
@@ -313,7 +294,7 @@ export default function LeadsPanel() {
     }
   };
 
-  // 🔄 Updated: hard-redirect to your OAuth start endpoint
+  // 🔄 OAuth start
   const handleConnectGoogleSheet = () => {
     window.location.href = "/api/connect/google-sheets";
   };
@@ -331,7 +312,7 @@ export default function LeadsPanel() {
       const data = await res.json();
       if (data.success) {
         setLeads(leads.filter((l) => l._id !== leadId));
-        fetchFolders();
+        fetchFolders(); // refresh server-side counts
         setPreviewLead(null);
       } else {
         console.error("Disposition failed:", data.message);
@@ -376,7 +357,7 @@ export default function LeadsPanel() {
                   expandedFolder === folder._id ? "bg-[#6b5b95] text-white" : ""
                 }`}
               >
-                {folder.name} — {folder.leadCount || 0} Leads
+                {folder.name} — {folder.leadCount ?? 0} Leads
               </button>
               {!SYSTEM_FOLDERS.includes(folder.name) && (
                 <button

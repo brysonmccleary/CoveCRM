@@ -1,4 +1,3 @@
-// pages/leads.tsx
 import { useState, useEffect, useMemo } from "react";
 import { useRouter } from "next/router";
 import Sidebar from "@/components/Sidebar";
@@ -6,6 +5,7 @@ import Sidebar from "@/components/Sidebar";
 interface Folder {
   _id: string;
   name: string;
+  leadCount?: number;
 }
 
 interface Lead {
@@ -21,7 +21,6 @@ export default function LeadsPage() {
   );
 
   const [folders, setFolders] = useState<Folder[]>([]);
-  const [folderCounts, setFolderCounts] = useState<Record<string, number>>({});
   const [leads, setLeads] = useState<Lead[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadingLeads, setLoadingLeads] = useState(false);
@@ -29,33 +28,25 @@ export default function LeadsPage() {
   const [leadError, setLeadError] = useState<string | null>(null);
 
   useEffect(() => {
-    const fetchFoldersAndCounts = async () => {
+    const fetchFolders = async () => {
       try {
         setLoading(true);
         setError(null);
 
-        const [resFolders, resCounts] = await Promise.all([
-          fetch("/api/get-folders"),
-          fetch("/api/get-folder-counts"),
-        ]);
-
+        const resFolders = await fetch("/api/get-folders");
         if (!resFolders.ok) throw new Error("Failed to fetch folders");
-        if (!resCounts.ok) throw new Error("Failed to fetch folder counts");
-
         const dataFolders = await resFolders.json();
-        const dataCounts = await resCounts.json();
 
         setFolders(dataFolders.folders || []);
-        setFolderCounts(dataCounts.counts || {});
       } catch (err: any) {
-        console.error("Error fetching folders or counts:", err);
+        console.error("Error fetching folders:", err);
         setError(err?.message || "Failed to load folders");
       } finally {
         setLoading(false);
       }
     };
 
-    fetchFoldersAndCounts();
+    fetchFolders();
   }, []);
 
   // If a folderId is present in the query, load its leads and render on this page.
@@ -85,13 +76,15 @@ export default function LeadsPage() {
   }, [selectedFolderId]);
 
   const handleFolderClick = (folderId: string) => {
-    // Stay on /leads and carry selection via query param (prevents 404)
     router.push({ pathname: "/leads", query: { folderId } }).catch(() => {});
   };
 
   const clearSelection = () => {
     router.push("/leads").catch(() => {});
   };
+
+  const selectedFolderName =
+    (selectedFolderId && folders.find((f) => f._id === selectedFolderId)?.name) || "";
 
   return (
     <div className="flex bg-[#0f172a] text-white min-h-screen">
@@ -115,7 +108,7 @@ export default function LeadsPage() {
                     className="w-full text-left border p-3 rounded cursor-pointer hover:bg-gray-700"
                     title={`Open ${folder.name}`}
                   >
-                    {folder.name} — {folderCounts[folder._id] || 0} Leads
+                    {folder.name} — {folder.leadCount ?? 0} Leads
                   </button>
                 ))}
               </div>
@@ -125,7 +118,7 @@ export default function LeadsPage() {
           <>
             <div className="mb-4 flex items-center justify-between">
               <h2 className="text-2xl font-bold">
-                Folder: {selectedFolderId}
+                Folder: {selectedFolderName || selectedFolderId}
               </h2>
               <button
                 onClick={clearSelection}
@@ -146,9 +139,12 @@ export default function LeadsPage() {
               <ul className="space-y-2">
                 {leads.map((lead) => (
                   <li key={lead._id} className="p-3 border border-gray-600 rounded hover:bg-gray-700">
-                    <div className="font-medium">{lead.name || lead["First Name"] || lead["firstName"] || "(no name)"}</div>
+                    <div className="font-medium">
+                      {lead.name || lead["First Name"] || lead["firstName"] || "(no name)"}
+                    </div>
                     <div className="text-sm text-gray-300">
-                      {lead.phone || lead["Phone"] || lead["phone"] || ""} {lead.email ? `• ${lead.email}` : ""}
+                      {(lead.phone || lead["Phone"] || lead["phone"] || "")}
+                      {lead.email ? ` • ${lead.email}` : ""}
                     </div>
                   </li>
                 ))}
