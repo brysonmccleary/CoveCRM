@@ -1,68 +1,72 @@
 // pages/api/get-leads-by-folder.ts
 import type { NextApiRequest, NextApiResponse } from "next";
+import { getServerSession } from "next-auth/next";
+import { authOptions } from "./auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import Lead from "@/models/Lead";
 import Folder from "@/models/Folder";
-import { getServerSession } from "next-auth/next";
-import { authOptions } from "./auth/[...nextauth]";
 import { Types } from "mongoose";
 
-type FolderLean = { _id: Types.ObjectId | string; name?: string; userEmail?: string } | null;
+type LeadType = Record<string, any>;
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "GET") {
-    return res.status(405).json({ message: "Method not allowed" });
-  }
-
-  const { folderId } = req.query as { folderId?: string };
-  if (!folderId) {
-    return res.status(400).json({ message: "folderId is required" });
-  }
+  if (req.method !== "GET") return res.status(405).json({ message: "Method not allowed" });
 
   try {
+    const session = await getServerSession(req, res, authOptions);
+    const email = typeof session?.user?.email === "string" ? session.user.email.toLowerCase() : "";
+    if (!email) return res.status(401).json({ message: "Unauthorized" });
+
+    const { folderId } = req.query as { folderId?: string };
     await dbConnect();
 
-    const session = await getServerSession(req, res, authOptions);
-    const userEmail =
-      typeof session?.user?.email === "string" ? session.user.email.toLowerCase() : "";
-    if (!userEmail) {
-      return res.status(401).json({ message: "Unauthorized" });
+    // If no folder is selected, return an empty list (prevents "show all")
+    if (!folderId || typeof folderId !== "string" || !folderId.trim()) {
+      return res.status(200).json({ leads: [] as LeadType[], folderName: null });
     }
 
-    // Resolve a concrete ObjectId for the folder (accept id or name)
-    let targetFolderId: Types.ObjectId;
+    // Resolve folder: support ObjectId or legacy Name
+    let resolvedId: Types.ObjectId | null = null;
+    let matchedBy: "id" | "name" | null = null;
 
     if (Types.ObjectId.isValid(folderId)) {
-      targetFolderId = new Types.ObjectId(folderId);
+      resolvedId = new Types.ObjectId(folderId);
+      matchedBy = "id";
     } else {
-      const folderDoc = (await Folder.findOne({ userEmail, name: folderId })
-        .select("_id")
-        .lean()) as FolderLean;
-
-      if (!folderDoc?._id) {
-        return res.status(404).json({ message: `Folder '${folderId}' not found` });
+      const byName = await Folder.findOne({ userEmail: email, name: folderId })
+        .select({ _id: 1, name: 1 })
+        .lean();
+      if (!byName) {
+        return res.status(200).json({ leads: [] as LeadType[], folderName: null });
       }
-      targetFolderId = new Types.ObjectId(String(folderDoc._id));
+      resolvedId = new Types.ObjectId(String(byName._id));
+      matchedBy = "name";
     }
 
-    // STRICT filter: only leads whose folderId matches (no legacy name fallback)
+    const resolvedIdStr = String(resolvedId);
+
+    // STRICT: only this user's leads AND in this folder.
+    // Robust match: handle folderId stored as ObjectId OR as string in existing docs.
     const leads = await Lead.find({
-      userEmail,
-      $or: [{ folderId: targetFolderId }, { folderId: String(targetFolderId) }],
+      userEmail: email,
+      $or: [
+        { folderId: resolvedId },                 // ObjectId match
+        { folderId: resolvedIdStr },              // string field equal to ObjectId as string
+        { $expr: { $eq: [{ $toString: "$folderId" }, resolvedIdStr] } }, // force-cast compare
+      ],
     })
       .sort({ updatedAt: -1 })
-      .limit(1000)
       .lean();
 
-    const cleaned = (leads as any[]).map((l) => ({
-      ...l,
-      _id: String(l._id),
-      folderId: l.folderId ? String(l.folderId) : null,
-    }));
-
     return res.status(200).json({
-      leads: cleaned,
+      leads: (leads || []).map((l) => ({
+        ...l,
+        _id: String(l._id),
+        folderId: l.folderId ? String(l.folderId) : null,
+      })) as LeadType[],
       folderName: folderId,
+      resolvedFolderId: resolvedIdStr,
+      matchedBy,
     });
   } catch (error) {
     console.error("❌ get-leads-by-folder error:", error);
