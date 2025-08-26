@@ -1,4 +1,3 @@
-// pages/api/get-leads-by-folder.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "./auth/[...nextauth]";
@@ -20,12 +19,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const { folderId } = req.query as { folderId?: string };
     await dbConnect();
 
-    // If no folder is selected, return an empty list (prevents "show all")
+    // No folder selected → intentionally return empty (prevents "show all")
     if (!folderId || typeof folderId !== "string" || !folderId.trim()) {
       return res.status(200).json({ leads: [] as LeadType[], folderName: null });
     }
 
-    // Resolve folder: support ObjectId or legacy Name
+    // Resolve the folder: accept either ObjectId or legacy folder name
     let resolvedId: Types.ObjectId | null = null;
     let matchedBy: "id" | "name" | null = null;
 
@@ -35,7 +34,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     } else {
       const byName = await Folder.findOne({ userEmail: email, name: folderId })
         .select({ _id: 1, name: 1 })
-        .lean();
+        .lean<{ _id: Types.ObjectId; name: string } | null>();
       if (!byName) {
         return res.status(200).json({ leads: [] as LeadType[], folderName: null });
       }
@@ -45,14 +44,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const resolvedIdStr = String(resolvedId);
 
-    // STRICT: only this user's leads AND in this folder.
-    // Robust match: handle folderId stored as ObjectId OR as string in existing docs.
+    // STRICT + ROBUST: match only this user's leads in this folder,
+    // allowing for folderId stored as ObjectId or as a string.
     const leads = await Lead.find({
       userEmail: email,
       $or: [
-        { folderId: resolvedId },                 // ObjectId match
-        { folderId: resolvedIdStr },              // string field equal to ObjectId as string
-        { $expr: { $eq: [{ $toString: "$folderId" }, resolvedIdStr] } }, // force-cast compare
+        { folderId: resolvedId },                                    // folderId is ObjectId
+        { folderId: resolvedIdStr },                                  // folderId is string of the ObjectId
+        { $expr: { $eq: [{ $toString: "$folderId" }, resolvedIdStr] } } // mixed types
       ],
     })
       .sort({ updatedAt: -1 })
