@@ -6,9 +6,9 @@ import "dotenv/config";
 import mongoose, { Types } from "mongoose";
 
 // ⬇️ Explicit .ts extensions so the ESM loader can resolve them.
-import dbConnect from "../../lib/mongooseConnect.ts";
-import Lead from "../../models/Lead.ts";
-import Folder from "../../models/Folder.ts";
+import dbConnect from "../../lib/mongooseConnect";
+import Lead from "../../models/Lead";
+import Folder from "../../models/Folder";
 
 type AnyLead = Record<string, any>;
 
