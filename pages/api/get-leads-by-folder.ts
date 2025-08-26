@@ -19,18 +19,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const { folderId } = req.query as { folderId?: string };
     await dbConnect();
 
-    // No folder selected → intentionally return empty (prevents "show all")
+    // No folder selected → intentionally empty (prevents "show all")
     if (!folderId || typeof folderId !== "string" || !folderId.trim()) {
       return res.status(200).json({ leads: [] as LeadType[], folderName: null });
     }
 
-    // Resolve the folder: accept either ObjectId or legacy folder name
+    // Resolve folder (accept hex ObjectId string or legacy folder name)
     let resolvedId: Types.ObjectId | null = null;
-    let matchedBy: "id" | "name" | null = null;
 
     if (Types.ObjectId.isValid(folderId)) {
       resolvedId = new Types.ObjectId(folderId);
-      matchedBy = "id";
     } else {
       const byName = await Folder.findOne({ userEmail: email, name: folderId })
         .select({ _id: 1, name: 1 })
@@ -39,19 +37,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return res.status(200).json({ leads: [] as LeadType[], folderName: null });
       }
       resolvedId = new Types.ObjectId(String(byName._id));
-      matchedBy = "name";
     }
 
     const resolvedIdStr = String(resolvedId);
 
-    // STRICT + ROBUST: match only this user's leads in this folder,
-    // allowing for folderId stored as ObjectId or as a string.
+    // STRICT + ROBUST: only this user's leads, and only this folder, regardless of stored type
     const leads = await Lead.find({
       userEmail: email,
       $or: [
-        { folderId: resolvedId },                                    // folderId is ObjectId
-        { folderId: resolvedIdStr },                                  // folderId is string of the ObjectId
-        { $expr: { $eq: [{ $toString: "$folderId" }, resolvedIdStr] } } // mixed types
+        { folderId: resolvedId },                                     // ObjectId
+        { folderId: resolvedIdStr },                                   // string "ObjectId"
+        { $expr: { $eq: [{ $toString: "$folderId" }, resolvedIdStr] } } // mixed
       ],
     })
       .sort({ updatedAt: -1 })
@@ -65,7 +61,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       })) as LeadType[],
       folderName: folderId,
       resolvedFolderId: resolvedIdStr,
-      matchedBy,
     });
   } catch (error) {
     console.error("❌ get-leads-by-folder error:", error);

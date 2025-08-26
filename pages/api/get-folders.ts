@@ -1,79 +1,79 @@
-// pages/api/get-folders.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "./auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import Folder from "@/models/Folder";
 import Lead from "@/models/Lead";
+import { Types } from "mongoose";
 
-type AnyDoc = Record<string, any>;
-const SYSTEM_DEFAULTS = ["Sold", "Not Interested", "Booked Appointment"];
+const SYSTEM_FOLDERS = ["Sold", "Not Interested", "Booked Appointment"];
+
+type LeanFolder = {
+  _id: Types.ObjectId | string;
+  name: string;
+  userEmail: string;
+  assignedDrips?: any[];
+  createdAt?: Date;
+  updatedAt?: Date;
+};
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
     const session = await getServerSession(req, res, authOptions);
-    const email =
-      typeof session?.user?.email === "string" ? session.user.email.toLowerCase() : "";
+    const email = typeof session?.user?.email === "string" ? session.user.email.toLowerCase() : "";
     if (!email) return res.status(401).json({ message: "Unauthorized" });
 
     await dbConnect();
 
-    // Ensure system folders exist for THIS email
-    for (const name of SYSTEM_DEFAULTS) {
-      await Folder.updateOne(
-        { userEmail: email, name },
-        { $setOnInsert: { userEmail: email, name, assignedDrips: [] } },
-        { upsert: true }
-      );
+    // Ensure system folders exist for this user (idempotent)
+    for (const name of SYSTEM_FOLDERS) {
+      const exists = await Folder.findOne({ userEmail: email, name }).lean();
+      if (!exists) {
+        await Folder.create({ userEmail: email, name, assignedDrips: [] });
+      }
     }
 
     // Only this user's folders
-    const raw: AnyDoc[] = await Folder.find({ userEmail: email })
+    const rawFolders = (await Folder.find({ userEmail: email })
       .sort({ createdAt: -1 })
-      .lean()
-      .exec();
+      .lean()) as any as LeanFolder[];
 
-    // De-dupe by name (case-insensitive) to avoid doubles
-    const byName = new Map<string, AnyDoc>();
-    for (const f of raw) {
-      const key = String(f?.name || "").trim().toLowerCase();
-      if (!key) continue;
-      if (!byName.has(key)) byName.set(key, f);
-    }
-    const folders: AnyDoc[] = Array.from(byName.values());
-
-    // **Bulletproof counts**: count per folderId (no aggregation surprises)
-    const counts = new Map<string, number>();
-    for (const f of folders) {
-      const idStr = String(f._id);
-      const n = await Lead.countDocuments({
-        $or: [{ userEmail: email }, { user: email }], // support legacy "user"
-        folderId: f._id, // ***STRICT: must match this folder _id***
-      }).exec();
-      counts.set(idStr, n);
+    // Separate custom vs system
+    const custom: LeanFolder[] = [];
+    const system: LeanFolder[] = [];
+    for (const f of rawFolders) {
+      (SYSTEM_FOLDERS.includes(f.name) ? system : custom).push(f);
     }
 
-    // Sort: custom/imported first, system after (newest first within each bucket)
-    folders.sort((a, b) => {
-      const aSys = SYSTEM_DEFAULTS.includes(String(a.name));
-      const bSys = SYSTEM_DEFAULTS.includes(String(b.name));
-      if (aSys !== bSys) return aSys ? 1 : -1;
-      const at = a.createdAt ? new Date(a.createdAt).getTime() : 0;
-      const bt = b.createdAt ? new Date(b.createdAt).getTime() : 0;
-      return bt - at;
-    });
+    // ORDER: custom (alpha), then system in fixed order
+    custom.sort((a, b) => a.name.localeCompare(b.name));
+    system.sort((a, b) => SYSTEM_FOLDERS.indexOf(a.name) - SYSTEM_FOLDERS.indexOf(b.name));
+    const ordered = [...custom, ...system];
 
-    const result = folders.map((f) => ({
+    // Build list of folder ids as strings for robust matching
+    const idStrs = ordered.map((f) => String(f._id));
+
+    // STRICT + ROBUST COUNTS by { userEmail, folderId } with type normalization
+    const countsAgg = await Lead.aggregate([
+      { $match: { userEmail: email } },
+      { $group: { _id: { $toString: "$folderId" }, n: { $sum: 1 } } },
+      { $match: { _id: { $in: idStrs } } },
+    ]);
+
+    const countsMap = new Map<string, number>();
+    for (const row of countsAgg) {
+      countsMap.set(String(row._id), row.n as number);
+    }
+
+    const foldersWithCounts = ordered.map((f) => ({
+      ...f,
       _id: String(f._id),
-      name: String(f.name || ""),
-      userEmail: String(f.userEmail || email),
-      assignedDrips: Array.isArray(f.assignedDrips) ? f.assignedDrips : [],
-      leadCount: counts.get(String(f._id)) || 0,
+      leadCount: countsMap.get(String(f._id)) || 0,
     }));
 
-    return res.status(200).json({ folders: result });
-  } catch (err) {
-    console.error("❌ get-folders error:", err);
+    return res.status(200).json({ folders: foldersWithCounts });
+  } catch (error) {
+    console.error("❌ get-folders error:", error);
     return res.status(500).json({ message: "Failed to fetch folders" });
   }
 }
