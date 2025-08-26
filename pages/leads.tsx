@@ -1,4 +1,3 @@
-// pages/leads.tsx
 import { useState, useEffect, useMemo } from "react";
 import { useRouter } from "next/router";
 import Sidebar from "@/components/Sidebar";
@@ -69,7 +68,9 @@ export default function LeadsPage() {
       try {
         setLoadingLeads(true);
         setLeadError(null);
-        const r = await fetch(`/api/get-leads-by-folder?folderId=${encodeURIComponent(selectedFolderId)}`);
+        const r = await fetch(
+          `/api/get-leads-by-folder?folderId=${encodeURIComponent(selectedFolderId)}`
+        );
         if (!r.ok) throw new Error("Failed to fetch leads in folder");
         const j = await r.json();
         setLeads(j?.leads || []);

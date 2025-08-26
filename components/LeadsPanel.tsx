@@ -1,4 +1,3 @@
-// /components/LeadsPanel.tsx
 import React, { useState, useEffect } from "react";
 import LeadImportPanel from "./LeadImportPanel";
 import LeadPreviewPanel from "./LeadPreviewPanel";
@@ -162,7 +161,9 @@ export default function LeadsPanel() {
       const foldersWithCounts = await Promise.all(
         userFolders.map(async (folder: any) => {
           if (!folder._id || typeof folder._id !== "string") folder._id = folder.name;
-          const leadsRes = await fetch(`/api/get-leads-by-folder?folderId=${folder._id}`);
+          const leadsRes = await fetch(
+            `/api/get-leads-by-folder?folderId=${encodeURIComponent(String(folder._id))}`
+          );
           const leadsData = await leadsRes.json();
           return {
             ...folder,
@@ -204,7 +205,9 @@ export default function LeadsPanel() {
     if (!expandedFolder) return;
     const fetchLeads = async () => {
       try {
-        const res = await fetch(`/api/get-leads-by-folder?folderId=${expandedFolder}`);
+        const res = await fetch(
+          `/api/get-leads-by-folder?folderId=${encodeURIComponent(String(expandedFolder))}`
+        );
         const data = await res.json();
         const sortedLeads = (Array.isArray(data.leads) ? (data.leads as LeadRow[]) : []).sort(
           (a: LeadRow, b: LeadRow) =>
