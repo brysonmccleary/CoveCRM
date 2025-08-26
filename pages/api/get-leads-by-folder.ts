@@ -24,30 +24,49 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(200).json({ leads: [] as LeadType[], folderName: null });
     }
 
-    // Resolve folder (accept hex ObjectId string or legacy folder name)
+    // Resolve folder (accept ObjectId or legacy Name)
     let resolvedId: Types.ObjectId | null = null;
+    let folderDoc: { _id: Types.ObjectId; name?: string } | null = null;
 
     if (Types.ObjectId.isValid(folderId)) {
       resolvedId = new Types.ObjectId(folderId);
-    } else {
-      const byName = await Folder.findOne({ userEmail: email, name: folderId })
+      folderDoc = await Folder.findOne({ _id: resolvedId, userEmail: email })
         .select({ _id: 1, name: 1 })
-        .lean<{ _id: Types.ObjectId; name: string } | null>();
-      if (!byName) {
+        .lean<{ _id: Types.ObjectId; name?: string } | null>();
+    } else {
+      folderDoc = await Folder.findOne({ userEmail: email, name: folderId })
+        .select({ _id: 1, name: 1 })
+        .lean<{ _id: Types.ObjectId; name?: string } | null>();
+      if (!folderDoc) {
         return res.status(200).json({ leads: [] as LeadType[], folderName: null });
       }
-      resolvedId = new Types.ObjectId(String(byName._id));
+      resolvedId = folderDoc._id;
     }
 
     const resolvedIdStr = String(resolvedId);
+    const folderNameLc = (folderDoc?.name || folderId).toString().toLowerCase();
 
-    // STRICT + ROBUST: only this user's leads, and only this folder, regardless of stored type
+    // STRICT for normalized docs + FALLBACK for legacy name-only docs (no folderId)
     const leads = await Lead.find({
       userEmail: email,
       $or: [
-        { folderId: resolvedId },                                     // ObjectId
-        { folderId: resolvedIdStr },                                   // string "ObjectId"
-        { $expr: { $eq: [{ $toString: "$folderId" }, resolvedIdStr] } } // mixed
+        { folderId: resolvedId },                                   // ObjectId
+        { folderId: resolvedIdStr },                                 // string "ObjectId"
+        { $expr: { $eq: [{ $toString: "$folderId" }, resolvedIdStr] } }, // mixed
+
+        // Fallback by legacy names only when folderId missing/null
+        {
+          $and: [
+            { $or: [{ folderId: { $exists: false } }, { folderId: null }] },
+            {
+              $or: [
+                { $expr: { $eq: [{ $toLower: "$folderName" }, folderNameLc] } },
+                { $expr: { $eq: [{ $toLower: "$Folder" }, folderNameLc] } },
+                { $expr: { $eq: [{ $toLower: { $ifNull: ["$Folder Name", ""] } }, folderNameLc] } },
+              ],
+            },
+          ],
+        },
       ],
     })
       .sort({ updatedAt: -1 })
@@ -59,7 +78,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         _id: String(l._id),
         folderId: l.folderId ? String(l.folderId) : null,
       })) as LeadType[],
-      folderName: folderId,
+      folderName: folderDoc?.name || folderId,
       resolvedFolderId: resolvedIdStr,
     });
   } catch (error) {

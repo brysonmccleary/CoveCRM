@@ -28,15 +28,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // Ensure system folders exist for this user (idempotent)
     for (const name of SYSTEM_FOLDERS) {
       const exists = await Folder.findOne({ userEmail: email, name }).lean();
-      if (!exists) {
-        await Folder.create({ userEmail: email, name, assignedDrips: [] });
-      }
+      if (!exists) await Folder.create({ userEmail: email, name, assignedDrips: [] });
     }
 
     // Only this user's folders
-    const rawFolders = (await Folder.find({ userEmail: email })
-      .sort({ createdAt: -1 })
-      .lean()) as any as LeanFolder[];
+    const rawFolders = (await Folder.find({ userEmail: email }).sort({ createdAt: -1 }).lean()) as any as LeanFolder[];
 
     // Separate custom vs system
     const custom: LeanFolder[] = [];
@@ -50,26 +46,53 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     system.sort((a, b) => SYSTEM_FOLDERS.indexOf(a.name) - SYSTEM_FOLDERS.indexOf(b.name));
     const ordered = [...custom, ...system];
 
-    // Build list of folder ids as strings for robust matching
+    // Build ids and name-lowers
     const idStrs = ordered.map((f) => String(f._id));
+    const nameLowers = ordered.map((f) => f.name.toLowerCase());
 
-    // STRICT + ROBUST COUNTS by { userEmail, folderId } with type normalization
-    const countsAgg = await Lead.aggregate([
+    // A) Counts by folderId (robust to string/ObjectId)
+    const countsByIdAgg = await Lead.aggregate([
       { $match: { userEmail: email } },
       { $group: { _id: { $toString: "$folderId" }, n: { $sum: 1 } } },
       { $match: { _id: { $in: idStrs } } },
     ]);
 
-    const countsMap = new Map<string, number>();
-    for (const row of countsAgg) {
-      countsMap.set(String(row._id), row.n as number);
-    }
+    const countsById = new Map<string, number>();
+    for (const r of countsByIdAgg) countsById.set(String(r._id), r.n as number);
 
-    const foldersWithCounts = ordered.map((f) => ({
-      ...f,
-      _id: String(f._id),
-      leadCount: countsMap.get(String(f._id)) || 0,
-    }));
+    // B) Counts by legacy folder name ONLY where folderId is missing/null
+    const countsByNameAgg = await Lead.aggregate([
+      {
+        $match: {
+          userEmail: email,
+          $or: [{ folderId: { $exists: false } }, { folderId: null }],
+        },
+      },
+      {
+        $project: {
+          nameRaw: {
+            $ifNull: [
+              "$folderName",
+              { $ifNull: ["$Folder", { $ifNull: ["$Folder Name", null] }] },
+            ],
+          },
+        },
+      },
+      { $match: { nameRaw: { $type: "string" } } },
+      { $group: { _id: { $toLower: { $trim: { input: "$nameRaw" } } }, n: { $sum: 1 } } },
+      { $match: { _id: { $in: nameLowers } } },
+    ]);
+
+    const countsByName = new Map<string, number>();
+    for (const r of countsByNameAgg) countsByName.set(String(r._id), r.n as number);
+
+    const foldersWithCounts = ordered.map((f) => {
+      const id = String(f._id);
+      const nameLc = f.name.toLowerCase();
+      const byId = countsById.get(id) || 0;
+      const byName = countsByName.get(nameLc) || 0;
+      return { ...f, _id: id, leadCount: byId + byName };
+    });
 
     return res.status(200).json({ folders: foldersWithCounts });
   } catch (error) {
