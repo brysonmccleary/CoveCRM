@@ -1,3 +1,4 @@
+// components/LeadsPanel.tsx
 import React, { useState, useEffect } from "react";
 import LeadImportPanel from "./LeadImportPanel";
 import LeadPreviewPanel from "./LeadPreviewPanel";
@@ -185,7 +186,7 @@ export default function LeadsPanel() {
     if (!expandedFolder) return;
     const fetchLeads = async () => {
       try {
-        const res = await fetch(`/api/get-leads-by-folder?folderId=${expandedFolder}`);
+        const res = await fetch(`/api/get-leads-by-folder?folderId=${encodeURIComponent(expandedFolder)}`);
         const data = await res.json();
         const sortedLeads = (Array.isArray(data.leads) ? (data.leads as LeadRow[]) : []).sort(
           (a: LeadRow, b: LeadRow) =>
@@ -310,13 +311,33 @@ export default function LeadsPanel() {
       });
 
       const data = await res.json();
-      if (data.success) {
-        setLeads(leads.filter((l) => l._id !== leadId));
-        fetchFolders(); // refresh server-side counts
-        setPreviewLead(null);
-      } else {
-        console.error("Disposition failed:", data.message);
+      if (!res.ok || !data?.success) {
+        console.error("Disposition failed:", data?.message || res.statusText);
+        return;
       }
+
+      // 1) Remove from current view immediately
+      setLeads((prev) => prev.filter((l) => l._id !== leadId));
+
+      // 2) Refresh server-side counts
+      // 3) If a folder is open, reload that folder's leads from the server (authoritative)
+      await Promise.all([
+        fetchFolders(),
+        expandedFolder
+          ? fetch(`/api/get-leads-by-folder?folderId=${encodeURIComponent(expandedFolder)}`)
+              .then((r) => r.json())
+              .then((j) => {
+                const sorted = (Array.isArray(j?.leads) ? j.leads : []).sort(
+                  (a: any, b: any) =>
+                    new Date(b.createdAt ?? 0).getTime() - new Date(a.createdAt ?? 0).getTime()
+                );
+                setLeads(sorted);
+              })
+              .catch(() => {})
+          : Promise.resolve(),
+      ]);
+
+      setPreviewLead(null);
     } catch (err) {
       console.error("Error updating disposition:", err);
     }

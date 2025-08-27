@@ -1,69 +1,51 @@
-// /pages/api/disposition-lead.ts
+// pages/api/disposition-lead.ts
 import type { NextApiRequest, NextApiResponse } from "next";
-import { getServerSession } from "next-auth/next";
+import { getServerSession } from "next-auth";
 import { authOptions } from "./auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import Lead from "@/models/Lead";
 import Folder from "@/models/Folder";
 
+const SYSTEM = new Set(["Not Interested", "Booked Appointment", "Sold"]);
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "POST") {
-    return res.status(405).json({ message: "Method not allowed" });
-  }
+  if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed" });
 
   const session = await getServerSession(req, res, authOptions);
-  const sessionEmail =
-    typeof session?.user?.email === "string" ? session.user.email.toLowerCase() : null;
+  const userEmail = session?.user?.email?.toLowerCase();
+  if (!userEmail) return res.status(401).json({ message: "Unauthorized" });
 
-  const { leadId, newFolderName } = (req.body || {}) as {
-    leadId?: string;
-    newFolderName?: string;
-  };
-
-  if (!leadId || !newFolderName || !newFolderName.trim()) {
+  const { leadId, newFolderName } = (req.body ?? {}) as { leadId?: string; newFolderName?: string };
+  if (!leadId || !newFolderName?.trim()) {
     return res.status(400).json({ message: "Missing required fields." });
   }
-  const destName = newFolderName.trim();
 
   try {
     await dbConnect();
 
-    // Load lead by _id first (don’t filter by userEmail yet to allow normalization)
-    const lead = await Lead.findById(leadId);
+    // Ensure this is your lead
+    const lead = await Lead.findOne({ _id: leadId, userEmail });
     if (!lead) return res.status(404).json({ message: "Lead not found." });
 
-    // Determine effective email for this action
-    const userLc  = String(lead.userEmail || "").toLowerCase();
-    const ownerLc = String((lead as any).ownerEmail || "").toLowerCase();
-    const otherLc = String((lead as any).user || "").toLowerCase();
+    // Ensure target folder exists
+    let folder = await Folder.findOne({ userEmail, name: newFolderName });
+    if (!folder) folder = await Folder.create({ userEmail, name: newFolderName, assignedDrips: [] });
 
-    // Prefer session email; else fall back to whichever email is on the lead
-    const effectiveEmail = sessionEmail || userLc || ownerLc || otherLc;
-    if (!effectiveEmail) {
-      return res.status(403).json({ message: "Forbidden: no owner to attribute." });
-    }
-
-    // Ensure destination folder exists for the effective owner
-    let folder = await Folder.findOne({ userEmail: effectiveEmail, name: destName });
-    if (!folder) {
-      folder = await Folder.create({ userEmail: effectiveEmail, name: destName, assignedDrips: [] });
-    }
-
-    // Normalize lead ownership and move
-    (lead as any).userEmail  = effectiveEmail;
-    (lead as any).ownerEmail = effectiveEmail;
-    (lead as any).folderId   = folder._id;
-    (lead as any).status     = destName;
+    // Move it (and sync status for system folders)
+    const fromFolderId = lead.folderId ? String(lead.folderId) : null;
+    lead.folderId = folder._id;
+    if (SYSTEM.has(newFolderName)) lead.status = newFolderName;
     await lead.save();
 
-    // Append a simple history line
+    // History entry (visible in feed)
     await Lead.updateOne(
-      { _id: lead._id },
+      { _id: lead._id, userEmail },
       {
         $push: {
           interactionHistory: {
             type: "status",
-            to: destName,
+            from: fromFolderId,
+            to: newFolderName,
             date: new Date(),
           },
         },
@@ -72,11 +54,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     return res.status(200).json({
       success: true,
-      message: "Lead moved successfully.",
-      folderId: String(folder._id),
+      message: "Lead moved.",
+      fromFolderId,
+      toFolderId: String(folder._id),
     });
-  } catch (error) {
-    console.error("Disposition error:", error);
+  } catch (e) {
+    console.error("disposition-lead error:", e);
     return res.status(500).json({ message: "Internal server error." });
   }
 }

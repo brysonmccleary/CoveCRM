@@ -5,6 +5,7 @@ import Folder from "@/models/Folder";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "./auth/[...nextauth]";
 
+export { default } from "./disposition-lead";
 export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse,

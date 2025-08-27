@@ -1,3 +1,4 @@
+// pages/api/get-folders.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "./auth/[...nextauth]";
@@ -6,7 +7,7 @@ import Folder from "@/models/Folder";
 import Lead from "@/models/Lead";
 import { Types } from "mongoose";
 
-const SYSTEM_FOLDERS = ["Sold", "Not Interested", "Booked Appointment"];
+const SYSTEM_FOLDERS = ["Sold", "Not Interested", "Booked Appointment"]; // keep your order
 
 type LeanFolder = {
   _id: Types.ObjectId | string;
@@ -25,7 +26,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     await dbConnect();
 
-    // Ensure system folders exist for this user (idempotent)
+    // Ensure system folders exist (idempotent)
     for (const name of SYSTEM_FOLDERS) {
       const exists = await Folder.findOne({ userEmail: email, name }).lean();
       if (!exists) await Folder.create({ userEmail: email, name, assignedDrips: [] });
@@ -46,21 +47,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     system.sort((a, b) => SYSTEM_FOLDERS.indexOf(a.name) - SYSTEM_FOLDERS.indexOf(b.name));
     const ordered = [...custom, ...system];
 
-    // Build ids and name-lowers
+    // Build ids and lowercase names
     const idStrs = ordered.map((f) => String(f._id));
     const nameLowers = ordered.map((f) => f.name.toLowerCase());
 
-    // A) Counts by folderId (robust to string/ObjectId)
+    // A) counts by folderId (works for ObjectId OR string ids)
     const countsByIdAgg = await Lead.aggregate([
       { $match: { userEmail: email } },
-      { $group: { _id: { $toString: "$folderId" }, n: { $sum: 1 } } },
+      { $project: { fid: { $toString: "$folderId" } } },
+      { $group: { _id: "$fid", n: { $sum: 1 } } },
       { $match: { _id: { $in: idStrs } } },
     ]);
 
     const countsById = new Map<string, number>();
     for (const r of countsByIdAgg) countsById.set(String(r._id), r.n as number);
 
-    // B) Counts by legacy folder name ONLY where folderId is missing/null
+    // B) legacy name counts ONLY when folderId missing/null
     const countsByNameAgg = await Lead.aggregate([
       {
         $match: {
@@ -71,10 +73,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       {
         $project: {
           nameRaw: {
-            $ifNull: [
-              "$folderName",
-              { $ifNull: ["$Folder", { $ifNull: ["$Folder Name", null] }] },
-            ],
+            $ifNull: ["$folderName", { $ifNull: ["$Folder", { $ifNull: ["$Folder Name", null] }] }],
           },
         },
       },

@@ -1,53 +1,71 @@
+// pages/api/get-folder-counts.ts
 import type { NextApiRequest, NextApiResponse } from "next";
-import { getServerSession } from "next-auth/next";
+import { getServerSession } from "next-auth";
 import { authOptions } from "./auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import Lead from "@/models/Lead";
+import Folder from "@/models/Folder";
+import { Types } from "mongoose";
 
-const norm = (s: string) => String(s || "").trim().toLowerCase();
-const userMatch = (email: string) => ({
-  $or: [{ userEmail: email }, { ownerEmail: email }, { user: email }],
-});
+const SYSTEM = ["Not Interested", "Booked Appointment", "Sold", "Unsorted"];
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  if (req.method !== "GET") return res.status(405).json({ message: "Method not allowed" });
+
   try {
     const session = await getServerSession(req, res, authOptions);
-    const email =
-      typeof session?.user?.email === "string" ? session.user.email.toLowerCase() : "";
-    if (!email) return res.status(401).json({ message: "Unauthorized" });
+    const userEmail = session?.user?.email?.toLowerCase();
+    if (!userEmail) return res.status(401).json({ message: "Unauthorized" });
 
     await dbConnect();
 
-    // A) counts by folderId (canonical)
-    const idAgg = await Lead.aggregate([
-      { $match: { ...userMatch(email), folderId: { $exists: true, $ne: null } } },
-      { $group: { _id: "$folderId", count: { $sum: 1 } } },
-    ]).exec();
-    const countsById: Record<string, number> = {};
-    for (const c of idAgg) countsById[String(c._id)] = c.count;
+    // Make sure system folders exist (cheap upsert)
+    await Promise.all(
+      SYSTEM.map((name) =>
+        Folder.updateOne({ userEmail, name }, { $setOnInsert: { userEmail, name } }, { upsert: true })
+      )
+    );
 
-    // B) counts by legacy folder name, ONLY where folderId is missing/null
-    const nameAgg = await Lead.aggregate([
-      { $match: { ...userMatch(email), $or: [{ folderId: { $exists: false } }, { folderId: null }] } },
-      {
-        $project: {
-          nameRaw: {
-            $ifNull: [
-              "$folderName",
-              { $ifNull: ["$Folder", { $getField: { input: "$$ROOT", field: "Folder Name" } }] },
-            ],
-          },
-        },
-      },
-      { $match: { nameRaw: { $ne: null, $type: "string" } } },
-      { $group: { _id: { $toLower: { $trim: { input: "$nameRaw" } } }, count: { $sum: 1 } } },
-    ]).exec();
-    const countsByName: Record<string, number> = {};
-    for (const c of nameAgg) countsByName[String(c._id)] = c.count;
+    const folders = await Folder.find({ userEmail }).select({ _id: 1, name: 1 }).lean();
 
-    return res.status(200).json({ countsById, countsByName });
-  } catch (err) {
-    console.error("Error fetching folder counts:", err);
-    res.status(500).json({ message: "Error fetching folder counts" });
+    const pairs = await Promise.all(
+      folders.map(async (f) => {
+        const id = f._id as Types.ObjectId;
+        const idStr = String(id);
+        const nameLc = (f.name || "").toLowerCase();
+
+        const count = await Lead.countDocuments({
+          userEmail,
+          $or: [
+            { folderId: id },
+            { folderId: idStr },
+            { $expr: { $eq: [{ $toString: "$folderId" }, idStr] } },
+            {
+              $and: [
+                { $or: [{ folderId: { $exists: false } }, { folderId: null }] },
+                {
+                  $or: [
+                    { $expr: { $eq: [{ $toLower: "$status" }, nameLc] } },
+                    { $expr: { $eq: [{ $toLower: "$folderName" }, nameLc] } },
+                    { $expr: { $eq: [{ $toLower: "$Folder" }, nameLc] } },
+                    { $expr: { $eq: [{ $toLower: { $ifNull: ["$Folder Name", ""] } }, nameLc] } },
+                  ],
+                },
+              ],
+            },
+          ],
+        });
+
+        return [String(f._id), count] as const;
+      })
+    );
+
+    const counts: Record<string, number> = {};
+    pairs.forEach(([id, n]) => (counts[id] = n));
+
+    res.status(200).json({ counts });
+  } catch (e) {
+    console.error("get-folder-counts error:", e);
+    res.status(500).json({ message: "Failed to build counts" });
   }
 }

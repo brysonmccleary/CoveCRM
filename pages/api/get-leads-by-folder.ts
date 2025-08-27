@@ -1,3 +1,4 @@
+// pages/api/get-leads-by-folder.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "./auth/[...nextauth]";
@@ -7,6 +8,7 @@ import Folder from "@/models/Folder";
 import { Types } from "mongoose";
 
 type LeadType = Record<string, any>;
+type LeanFolderDoc = { _id: Types.ObjectId; name?: string };
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "GET") return res.status(405).json({ message: "Method not allowed" });
@@ -24,34 +26,38 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(200).json({ leads: [] as LeadType[], folderName: null });
     }
 
-    // Resolve folder (accept ObjectId or legacy Name)
-    let resolvedId: Types.ObjectId | null = null;
-    let folderDoc: { _id: Types.ObjectId; name?: string } | null = null;
+    const rawId = String(folderId).trim();
 
-    if (Types.ObjectId.isValid(folderId)) {
-      resolvedId = new Types.ObjectId(folderId);
-      folderDoc = await Folder.findOne({ _id: resolvedId, userEmail: email })
+    // Resolve folder (accept ObjectId or legacy Name) — force lean() type to avoid TS union w/ array
+    let folderDoc: LeanFolderDoc | null = null;
+
+    if (Types.ObjectId.isValid(rawId)) {
+      folderDoc = (await Folder.findOne({ _id: new Types.ObjectId(rawId), userEmail: email })
         .select({ _id: 1, name: 1 })
-        .lean<{ _id: Types.ObjectId; name?: string } | null>();
+        .lean()
+        .exec()) as LeanFolderDoc | null;
     } else {
-      folderDoc = await Folder.findOne({ userEmail: email, name: folderId })
+      folderDoc = (await Folder.findOne({ userEmail: email, name: rawId })
         .select({ _id: 1, name: 1 })
-        .lean<{ _id: Types.ObjectId; name?: string } | null>();
-      if (!folderDoc) {
-        return res.status(200).json({ leads: [] as LeadType[], folderName: null });
-      }
-      resolvedId = folderDoc._id;
+        .lean()
+        .exec()) as LeanFolderDoc | null;
     }
 
+    if (!folderDoc) {
+      return res.status(200).json({ leads: [] as LeadType[], folderName: null });
+    }
+
+    const resolvedId = folderDoc._id;
     const resolvedIdStr = String(resolvedId);
-    const folderNameLc = (folderDoc?.name || folderId).toString().toLowerCase();
+    const folderName = folderDoc.name || rawId;
+    const folderNameLc = folderName.toLowerCase();
 
     // STRICT for normalized docs + FALLBACK for legacy name-only docs (no folderId)
     const leads = await Lead.find({
       userEmail: email,
       $or: [
-        { folderId: resolvedId },                                   // ObjectId
-        { folderId: resolvedIdStr },                                 // string "ObjectId"
+        { folderId: resolvedId }, // ObjectId match
+        { folderId: resolvedIdStr }, // stored as string
         { $expr: { $eq: [{ $toString: "$folderId" }, resolvedIdStr] } }, // mixed
 
         // Fallback by legacy names only when folderId missing/null
@@ -70,7 +76,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       ],
     })
       .sort({ updatedAt: -1 })
-      .lean();
+      .lean()
+      .exec();
 
     return res.status(200).json({
       leads: (leads || []).map((l) => ({
@@ -78,7 +85,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         _id: String(l._id),
         folderId: l.folderId ? String(l.folderId) : null,
       })) as LeadType[],
-      folderName: folderDoc?.name || folderId,
+      folderName,
       resolvedFolderId: resolvedIdStr,
     });
   } catch (error) {
