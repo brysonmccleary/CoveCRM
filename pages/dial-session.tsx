@@ -69,11 +69,11 @@ export default function DialSession() {
   };
   const normalizeE164 = (raw?: string) => {
     if (!raw) return "";
+    if (raw.startsWith("+")) return raw.trim();
     const d = raw.replace(/\D+/g, "");
     if (!d) return "";
     if (d.startsWith("1") && d.length === 11) return `+${d}`;
     if (d.length === 10) return `+1${d}`;
-    if (raw.startsWith("+")) return raw.trim();
     return `+${d}`;
   };
   const fetchJson = async <T = Json>(url: string, init?: RequestInit) => {
@@ -403,7 +403,7 @@ export default function DialSession() {
     }
   };
 
-  // ✅ NEW: single, authoritative disposition call
+  // ✅ Single authoritative disposition call
   const persistDisposition = async (leadId: string, label: string) => {
     const r = await fetch("/api/disposition-lead", {
       method: "POST",
@@ -411,17 +411,12 @@ export default function DialSession() {
       body: JSON.stringify({ leadId, newFolderName: label }),
     });
     const j = await r.json().catch(() => ({} as any));
-    if (!r.ok || !j?.success) {
-      throw new Error(j?.message || "Failed to move lead");
-    }
-    return j as { success: true; toFolderId: string; status: string };
+    if (!r.ok || !j?.success) throw new Error(j?.message || "Failed to move lead");
+    return j as { success: true; toFolderId: string; toFolderName: string; verify?: any };
   };
 
   const handleDisposition = async (label: "Sold" | "No Answer" | "Booked Appointment" | "Not Interested") => {
-    if (!lead?.id) {
-      toast.error("No active lead to disposition");
-      return;
-    }
+    if (!lead?.id) { toast.error("No active lead to disposition"); return; }
     if (dispositionBusyRef.current) return;
     dispositionBusyRef.current = true;
 
@@ -436,7 +431,7 @@ export default function DialSession() {
 
       const result = await persistDisposition(lead.id, label);
 
-      // Optimistically update local lead row for clarity
+      // Optimistic local update
       setLeadQueue((prev) =>
         prev.map((l) => (l.id === lead.id ? { ...l, status: label, folderId: result.toFolderId } : l))
       );
@@ -446,7 +441,6 @@ export default function DialSession() {
       toast.success(`Saved: ${label}`);
 
       if (label === "Booked Appointment") setShowBookModal(true);
-
       if (!sessionEndedRef.current) scheduleNextLead();
     } catch (e: any) {
       console.error(e);
