@@ -1,7 +1,7 @@
-// /utils/sendInitialDrip.ts
 import type { LeadType } from "@/models/Lead";
-import { sendSMS } from "@/lib/twilio/sendSMS"; // ✅ use central Twilio sender that logs to Message
+import { sendSms } from "@/lib/twilio/sendSMS"; // use object-form sender
 import { renderTemplate, ensureOptOut, splitName } from "@/utils/renderTemplate";
+import crypto from "crypto";
 
 // 👇 Defaults
 const DEFAULT_AGENT_NAME = "your licensed agent";
@@ -21,11 +21,18 @@ function getCurrentTime() {
  * Uses {{ contact.first_name }}, {{ contact.last_name }}, {{ contact.full_name }},
  * {{ agent.name }}, {{ agent.first_name }}, {{ agent.last_name }} and ensures opt-out.
  * Preserves legacy <client_first_name> style tokens for backward compatibility.
+ * Idempotent per lead+message so it can’t fire 2–4x on overlap.
  */
 export async function sendInitialDrip(lead: LeadType, rawMessage?: string) {
   try {
     const to = (lead as any)?.phone || (lead as any)?.Phone;
     if (!to) return;
+
+    const userEmail =
+      (lead as any)?.userEmail ||
+      (lead as any)?.ownerEmail ||
+      (lead as any)?.agentEmail;
+    if (!userEmail) return;
 
     // Contact names
     const firstName =
@@ -98,8 +105,20 @@ export async function sendInitialDrip(lead: LeadType, rawMessage?: string) {
     // 3) Ensure opt-out
     message = ensureOptOut(message);
 
-    // 4) Send & log via Twilio sendSMS helper (which writes to Message collection)
-    await sendSMS(to, message, (lead as any)?.userId || (lead as any)?.userEmail || "");
+    // 4) Idempotency: lock to (lead × message content)
+    const idem = crypto
+      .createHash("sha1")
+      .update(`drip-initial:${String((lead as any)?._id)}:${message}`)
+      .digest("hex");
+
+    // 5) Send via unified sender
+    await sendSms({
+      to,
+      body: message,
+      userEmail,
+      leadId: String((lead as any)?._id || ""),
+      idempotencyKey: idem,
+    });
   } catch (error) {
     console.error("Failed to send initial drip message:", error);
   }

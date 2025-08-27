@@ -1,4 +1,3 @@
-// /pages/api/cron/run-drips.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import dbConnect from "@/lib/mongooseConnect";
 import Lead from "@/models/Lead";
@@ -8,6 +7,7 @@ import { sendSms } from "@/lib/twilio/sendSMS";
 import { renderTemplate, ensureOptOut, splitName } from "@/utils/renderTemplate";
 import { prebuiltDrips } from "@/utils/prebuiltDrips";
 import { DateTime } from "luxon";
+import crypto from "crypto";
 
 // --- Config ---
 const PT_ZONE = "America/Los_Angeles"; // 9:00 AM Pacific
@@ -353,12 +353,19 @@ export default async function handler(
             continue;
           }
 
+          // ---- Idempotency: unique per lead × campaign × step index
+          const key = crypto
+            .createHash("sha1")
+            .update(`drip:${String(dripDoc._id || dripId)}:${String(nextIndex)}:${String((lead as any)._id)}`)
+            .digest("hex");
+
           try {
             const result = await sendSms({
               to,
               body: finalBody,
               userEmail: user.email,
               leadId: String((lead as any)._id),
+              idempotencyKey: key,
             });
 
             if (result.sid) {

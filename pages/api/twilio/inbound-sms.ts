@@ -11,6 +11,7 @@ import { getTimezoneFromState } from "@/utils/timezone";
 import { DateTime } from "luxon";
 import { buffer } from "micro";
 import axios from "axios";
+import crypto from "crypto";
 import { sendAppointmentBookedEmail, sendLeadReplyNotificationEmail, resolveLeadDisplayName } from "@/lib/email";
 import { initSocket } from "@/lib/socket";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
@@ -23,18 +24,21 @@ const RAW_BASE_URL = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL |
 const SHARED_MESSAGING_SERVICE_SID = process.env.TWILIO_MESSAGING_SERVICE_SID || "";
 const INTERNAL_API_TOKEN = process.env.INTERNAL_API_TOKEN || "";
 const LEAD_ENTRY_PATH = (process.env.APP_LEAD_ENTRY_PATH || "/lead").replace(/\/?$/, "");
-
 const STATUS_CALLBACK =
   process.env.A2P_STATUS_CALLBACK_URL ||
   (RAW_BASE_URL ? `${RAW_BASE_URL}/api/twilio/status-callback` : undefined);
 
-const ALLOW_DEV_TWILIO_TEST = process.env.ALLOW_LOCAL_TWILIO_TEST === "1" && process.env.NODE_ENV !== "production";
+const ALLOW_DEV_TWILIO_TEST =
+  process.env.ALLOW_LOCAL_TWILIO_TEST === "1" && process.env.NODE_ENV !== "production";
 
-// Human delay: 3–4 min; set AI_TEST_MODE=1 for 3–5s while testing
+// Human-like delay: 3–4 min; set AI_TEST_MODE=1 for 3–5s while testing
 const AI_TEST_MODE = process.env.AI_TEST_MODE === "1";
 function humanDelayMs() {
   return AI_TEST_MODE ? 3000 + Math.random() * 2000 : 180000 + Math.random() * 60000;
 }
+
+// Outbound duplicate suppression window
+const DEDUPE_WINDOW_MS = AI_TEST_MODE ? 15_000 : 10 * 60 * 1000; // 15s test, 10m prod
 
 // ---------- quiet hours (lead-local) ----------
 const QUIET_START_HOUR = 21; // 9:00 PM
@@ -93,33 +97,24 @@ function normalizeStateInput(raw: string | undefined | null): string {
   const s = String(raw || "").toLowerCase().replace(/[^a-z]/g, "");
   return STATE_CODE_FROM_NAME[s] || (STATE_CODE_FROM_NAME[s.slice(0, 2)] ? STATE_CODE_FROM_NAME[s.slice(0, 2)] : "");
 }
-
 function zoneFromAnyState(raw: string | undefined | null): string | null {
   const code = normalizeStateInput(raw);
   const z = code ? CODE_TO_ZONE[code] || null : null;
   return z || getTimezoneFromState(code || String(raw || "")) || null;
 }
-
 function pickLeadZone(lead: any): string {
   const z = zoneFromAnyState(lead?.State) || zoneFromAnyState((lead as any)?.state) || "America/New_York";
   return z;
 }
-
-function computeQuietHoursScheduling(zone: string): {
-  isQuiet: boolean;
-  scheduledAt?: Date;
-} {
+function computeQuietHoursScheduling(zone: string): { isQuiet: boolean; scheduledAt?: Date } {
   const nowLocal = DateTime.now().setZone(zone);
   const hour = nowLocal.hour;
   const inQuiet = hour >= QUIET_START_HOUR || hour < QUIET_END_HOUR;
   if (!inQuiet) return { isQuiet: false };
 
   let target = nowLocal;
-  if (hour < QUIET_END_HOUR) {
-    target = nowLocal.set({ hour: QUIET_END_HOUR, minute: 0, second: 0, millisecond: 0 });
-  } else {
-    target = nowLocal.plus({ days: 1 }).set({ hour: QUIET_END_HOUR, minute: 0, second: 0, millisecond: 0 });
-  }
+  if (hour < QUIET_END_HOUR) target = nowLocal.set({ hour: QUIET_END_HOUR, minute: 0, second: 0, millisecond: 0 });
+  else target = nowLocal.plus({ days: 1 }).set({ hour: QUIET_END_HOUR, minute: 0, second: 0, millisecond: 0 });
 
   const minUtc = DateTime.utc().plus({ minutes: MIN_SCHEDULE_LEAD_MINUTES });
   const targetUtc = target.toUTC();
@@ -134,10 +129,7 @@ function normalizeDigits(p: string) { return (p || "").replace(/\D/g, ""); }
 function isOptOut(text: string): boolean {
   const t = (text || "").trim().toLowerCase();
   const exact = ["stop", "stopall", "unsubscribe", "cancel", "end", "quit"];
-  const soft = [
-    "remove", "opt out", "do not text", "don't text", "dont text",
-    "no more text", "no more texts", "not interested", "no longer interested"
-  ];
+  const soft = ["remove", "opt out", "do not text", "don't text", "dont text", "no more text", "no more texts", "not interested", "no longer interested"];
   return exact.includes(t) || soft.some((k) => t.includes(k));
 }
 function isHelp(text: string): boolean {
@@ -365,7 +357,7 @@ function normalizeWhen(datetimeText: string | null, nowISO: string, tz: string) 
   return null;
 }
 
-/* --------- NEW: Only trust a previous outbound if that lead’s phone actually matches this inbound --------- */
+/* --------- Trust a previous outbound only if that lead’s phone actually matches this inbound --------- */
 function leadPhoneMatches(lead: any, fromDigits: string): boolean {
   if (!lead) return false;
   const cand: string[] = [];
@@ -386,8 +378,7 @@ function leadPhoneMatches(lead: any, fromDigits: string): boolean {
 
 // ---------- handler ----------
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "POST")
-    return res.status(405).json({ message: "Method not allowed." });
+  if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed." });
 
   // Read raw body for signature verification
   const raw = (await buffer(req)).toString();
@@ -403,7 +394,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // Verify Twilio signature (unless dev bypass)
   const signature = (req.headers["x-twilio-signature"] || "") as string;
 
-  // ✅ Prod-safe test bypass via Authorization: Bearer INTERNAL_API_TOKEN
+  // Prod-safe test bypass via Authorization: Bearer INTERNAL_API_TOKEN
   const hasAuthBypass =
     !!INTERNAL_API_TOKEN &&
     typeof req.headers.authorization === "string" &&
@@ -437,17 +428,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(200).json({ message: "Missing required fields, acknowledged." });
     }
 
-    // Idempotency
+    // Idempotency: if Twilio retried, don't double-write or double-email
     if (messageSid) {
       const existing = await Message.findOne({ sid: messageSid }).lean().exec();
-      if (existing) {
-        return res.status(200).json({ message: "Duplicate delivery (sid), acknowledged." });
-      }
+      if (existing) return res.status(200).json({ message: "Duplicate delivery (sid), acknowledged." });
     }
 
-    console.log(
-      `📥 inbound sid=${messageSid || "n/a"} from=${fromNumber} -> to=${toNumber} text="${body.slice(0, 120)}${body.length > 120 ? "…" : ""}"`
-    );
+    console.log(`📥 inbound sid=${messageSid || "n/a"} from=${fromNumber} -> to=${toNumber} text="${body.slice(0, 120)}${body.length > 120 ? "…" : ""}"`);
 
     // Map to the user by the inbound (owned) number
     const toDigits = normalizeDigits(toNumber);
@@ -461,7 +448,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(200).json({ message: "No user found for this number." });
     }
 
-    // ===================== FIXED: lead resolution =====================
+    // ===================== PHONE-FIRST lead resolution =====================
     const fromDigits = normalizeDigits(fromNumber);
     const last10 = fromDigits.slice(-10);
     const anchored = last10 ? new RegExp(`${last10}$`) : undefined;
@@ -472,22 +459,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const lastOutbound = await Message.findOne({
       userEmail: user.email,
       direction: "outbound",
-      from: toNumber,
-      $or: [
-        { to: fromNumber },
-        { to: `+1${last10}` },
-        ...(anchored ? [{ to: anchored }] : []),
-      ],
+      from: toNumber, // sent from this owned number
+      $or: [{ to: fromNumber }, { to: `+1${last10}` }, ...(anchored ? [{ to: anchored }] : [])],
     }).sort({ sentAt: -1, createdAt: -1, _id: -1 });
 
     if (lastOutbound?.leadId) {
       const viaMsg = await Lead.findById(lastOutbound.leadId);
-      if (viaMsg && leadPhoneMatches(viaMsg, fromDigits)) {
-        lead = viaMsg;
-      } else if (viaMsg) {
-        console.warn(
-          `↪︎ Ignoring lastOutbound lead (${String(viaMsg._id)}) — phone on lead does not match inbound ${fromNumber}`,
-        );
+      if (viaMsg && leadPhoneMatches(viaMsg, fromDigits)) lead = viaMsg;
+      else if (viaMsg) {
+        console.warn(`↪︎ Ignoring lastOutbound lead (${String(viaMsg._id)}) — lead phone doesn't match inbound ${fromNumber}`);
       }
     }
 
@@ -527,7 +507,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         (await Lead.findOne({ userEmail: user.email, mobile: anchored } as any)) ||
         (await Lead.findOne({ userEmail: user.email, "phones.value": anchored } as any));
     }
-    // =================================================================
+    // =====================================================================
 
     if (!lead) {
       try {
@@ -593,15 +573,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (io) io.to(user.email).emit("message:new", { leadId: lead._id, ...inboundEntry });
 
-    /* =======================
-       Agent email notify
-       ======================= */
+    /* ======================= Agent email notify ======================= */
     try {
-      const emailEnabled = user?.notifications?.emailOnInboundSMS !== false;
+      const emailEnabled = user?.notifications?.emailOnInboundSMS !== false; // default true
       if (emailEnabled) {
-        const leadDisplayName =
-          resolveLeadDisplayName(lead, lead.Phone || (lead as any).phone || fromNumber);
-
+        const leadDisplayName = resolveLeadDisplayName(lead, lead.Phone || (lead as any).phone || fromNumber);
         const snippet = body.length > 60 ? `${body.slice(0, 60)}…` : body;
         const dripTag = hadDrips ? "[drip] " : "";
         const deepLink = `${ABS_BASE_URL}${LEAD_ENTRY_PATH}/${lead._id}`;
@@ -609,7 +585,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         await sendLeadReplyNotificationEmail({
           to: user.email,
-          replyTo: user.email,
+          replyTo: user.email, // reply-to agent
           subject: `[New Lead Reply] ${dripTag}${subjectWho} — ${snippet || "(no text)"}`,
           leadName: leadDisplayName || undefined,
           leadPhone: lead.Phone || (lead as any).phone || fromNumber,
@@ -717,7 +693,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // 1) deterministic parse
     let requestedISO: string | null = extractRequestedISO(body, stateCanon);
-    // 2) “works” confirmations bind to last AI proposal
+    // 2) confirmation binds to last AI proposal
     if (!requestedISO && containsConfirmation(body)) {
       requestedISO =
         extractTimeFromLastAI(lead.interactionHistory || [], stateCanon) ||
@@ -725,7 +701,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         null;
     }
 
-    // 2.5) explicit info-request
+    // 2.5) explicit info-request → canned line
     if (!requestedISO && isInfoRequest(body)) {
       aiReply = `Unfortunately as of now there's nothing to send over without getting some information from you. When's a good time for a quick 5 minute call? After that we can send everything out.`;
       memory.state = "qa";
@@ -809,9 +785,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             (lead as any).appointmentTime = clientTime.toJSDate();
 
             try {
-              const fullName =
-                resolveLeadDisplayName(lead, lead.Phone || (lead as any).phone || fromNumber);
-
+              const fullName = resolveLeadDisplayName(lead, lead.Phone || (lead as any).phone || fromNumber);
               await sendAppointmentBookedEmail({
                 to: (lead.userEmail || user.email || "").toLowerCase(),
                 agentName: (user as any)?.name || user.email,
@@ -858,6 +832,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const fresh = await Lead.findById(lead._id);
         if (!fresh) return;
 
+        // Cool-down: don't spam if we just responded
         if (fresh.aiLastResponseAt && Date.now() - new Date(fresh.aiLastResponseAt).getTime() < 2 * 60 * 1000) {
           console.log("⏳ Skipping AI reply (cool-down).");
           return;
@@ -869,8 +844,47 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         const lastAI = [...(fresh.interactionHistory || [])].reverse().find((m: any) => m.type === "ai");
         const draft = ((fresh as any).aiMemory?.lastDraft as string) || "When’s a good time today or tomorrow for a quick chat?";
+
+        // Plain-text repeat guard
         if (lastAI && lastAI.text?.trim() === draft.trim()) {
           console.log("🔁 Same AI content as last time — not sending.");
+          return;
+        }
+
+        // **Hard dedupe**: per-lead lock on same draft within window
+        const key = `${user.email}|${fresh._id}|${toNumber}|${fromNumber}|${draft}`;
+        const keyHash = crypto.createHash("sha1").update(key).digest("hex");
+        const threshold = new Date(Date.now() - DEDUPE_WINDOW_MS);
+
+        const lockOk = await Lead.findOneAndUpdate(
+          {
+            _id: fresh._id,
+            $or: [
+              { "aiSendLock.at": { $lt: threshold } },
+              { "aiSendLock.key": { $ne: keyHash } },
+              { aiSendLock: { $exists: false } },
+            ],
+          },
+          { $set: { aiSendLock: { key: keyHash, at: new Date() } } },
+          { new: true, upsert: false }
+        );
+        if (!lockOk) {
+          console.log("🛑 Duplicate send blocked by lead lock.");
+          return;
+        }
+
+        // Extra safety: recent identical outbound exists?
+        const recentDupe = await Message.findOne({
+          userEmail: user.email,
+          leadId: fresh._id,
+          direction: { $in: ["outbound", "ai"] },
+          text: draft,
+          to: fromNumber,
+          from: toNumber,
+          createdAt: { $gt: threshold },
+        }).lean();
+        if (recentDupe) {
+          console.log("🛑 Duplicate send blocked by recent message check.");
           return;
         }
 
