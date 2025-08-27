@@ -1,12 +1,9 @@
-// pages/api/disposition-lead.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth";
 import { authOptions } from "./auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import Lead from "@/models/Lead";
 import Folder from "@/models/Folder";
-
-const SYSTEM = new Set(["Not Interested", "Booked Appointment", "Sold"]);
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed" });
@@ -27,17 +24,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const lead = await Lead.findOne({ _id: leadId, userEmail });
     if (!lead) return res.status(404).json({ message: "Lead not found." });
 
-    // Ensure target folder exists
+    // Ensure target folder exists (by name, scoped to user)
     let folder = await Folder.findOne({ userEmail, name: newFolderName });
     if (!folder) folder = await Folder.create({ userEmail, name: newFolderName, assignedDrips: [] });
 
-    // Move it (and sync status for system folders)
+    // Move + ALWAYS sync status with the folder name (per acceptance criteria)
     const fromFolderId = lead.folderId ? String(lead.folderId) : null;
     lead.folderId = folder._id;
-    if (SYSTEM.has(newFolderName)) lead.status = newFolderName;
+    lead.status = newFolderName;        // <- surgical change
     await lead.save();
 
-    // History entry (visible in feed)
+    // History entry (best-effort)
     await Lead.updateOne(
       { _id: lead._id, userEmail },
       {

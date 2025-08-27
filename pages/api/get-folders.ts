@@ -51,11 +51,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const idStrs = ordered.map((f) => String(f._id));
     const nameLowers = ordered.map((f) => f.name.toLowerCase());
 
-    // A) counts by folderId (works for ObjectId OR string ids)
+    // A) counts by folderId (ObjectId or string), null-safe
     const countsByIdAgg = await Lead.aggregate([
-      { $match: { userEmail: email } },
+      // Only this user's leads **with** a folderId present
+      { $match: { userEmail: email, folderId: { $exists: true, $ne: null } } },
+      // Convert to string safely
       { $project: { fid: { $toString: "$folderId" } } },
       { $group: { _id: "$fid", n: { $sum: 1 } } },
+      // Keep only folders we actually have
       { $match: { _id: { $in: idStrs } } },
     ]);
 
