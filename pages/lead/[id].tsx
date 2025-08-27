@@ -218,6 +218,12 @@ export default function LeadProfileDial() {
       if (!res.ok || !data?.success) {
         throw new Error(data?.message || "Failed to move lead");
       }
+
+      // 🔄 reflect the change locally so status/folder update immediately
+      setLead((prev) =>
+        prev ? { ...prev, status: newFolderName, folderId: data?.toFolderId || prev.folderId } : prev
+      );
+
       toast.success(`✅ Lead moved to ${newFolderName}`);
     } catch (error: any) {
       console.error("Disposition error:", error);

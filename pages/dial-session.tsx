@@ -1,4 +1,3 @@
-// pages/dial-session.tsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/router";
 import Sidebar from "@/components/Sidebar";
@@ -13,6 +12,8 @@ interface Lead { id: string; [key: string]: any; }
 type Json = Record<string, any>;
 
 const DIAL_DELAY_MS = 2000;
+
+// 👇 anti-bounce window for early "no-answer/completed" glitches
 const EARLY_STATUS_MS = 12000;
 
 export default function DialSession() {
@@ -43,6 +44,7 @@ export default function DialSession() {
   const [fromNumber, setFromNumber] = useState<string>("");
   const [agentPhone, setAgentPhone] = useState<string>("");
 
+  // guard to avoid auto-dial races
   const [numbersLoaded, setNumbersLoaded] = useState(false);
 
   // sockets + watchdogs + guards
@@ -59,8 +61,11 @@ export default function DialSession() {
   const activeConferenceRef = useRef<string | null>(null);
   const placingCallRef = useRef<boolean>(false);
   const joinedRef = useRef<boolean>(false);
+
+  // prevent duplicate disposition clicks
   const dispositionBusyRef = useRef<boolean>(false);
 
+  // 👇 track when a call attempt starts (for anti-bounce)
   const callStartAtRef = useRef<number>(0);
   const tooEarly = () => !callStartAtRef.current || Date.now() - callStartAtRef.current < EARLY_STATUS_MS;
 
@@ -301,6 +306,7 @@ export default function DialSession() {
         }
 
         if (s === "busy" || s === "failed" || s === "no-answer" || s === "canceled" || s === "completed") {
+          // 👇 ignore very-early bounces (let watchdog handle real timeouts)
           if (s === "no-answer" || s === "completed") {
             if (tooEarly()) return;
           }
@@ -335,6 +341,7 @@ export default function DialSession() {
       setCallActive(true);
       playRingback();
 
+      // mark start time for anti-bounce checks
       callStartAtRef.current = Date.now();
 
       const { callSid, conferenceName } = await startOutboundCall(leadToCall.id);
@@ -351,6 +358,7 @@ export default function DialSession() {
       activeCallSidRef.current = callSid;
       activeConferenceRef.current = conferenceName;
 
+      // ✅ Join conference immediately (waitUrl = SILENCE)
       if (!joinedRef.current && activeConferenceRef.current) {
         try {
           joinedRef.current = true;
@@ -360,6 +368,7 @@ export default function DialSession() {
         }
       }
 
+      // Start watchdog + polling fallback
       scheduleWatchdog();
       beginStatusPolling(callSid);
 
@@ -413,29 +422,31 @@ export default function DialSession() {
     }
   };
 
-  // ✅ use canonical endpoint to move the lead to a folder (and mirror a history line)
+  // 🔧 REPLACED: always use /api/disposition-lead and mirror to history
   const persistDisposition = async (leadId: string, label: string) => {
     const r = await fetch("/api/disposition-lead", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ leadId, newFolderName: label }),
     });
-    const j = await r.json().catch(() => ({}));
+    const j = await r.json().catch(() => ({} as any));
     if (!r.ok || !j?.success) {
       throw new Error(j?.message || "Failed to move lead");
     }
-    try {
-      await fetch("/api/leads/add-history", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          leadId,
-          type: "disposition",
-          message: label,
-          meta: { disposition: label, ts: Date.now() },
-        }),
-      });
-    } catch {}
+
+    // best-effort history (doesn't block)
+    fetch("/api/leads/add-history", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        leadId,
+        type: "disposition",
+        message: label,
+        meta: { disposition: label, ts: Date.now() },
+      }),
+    }).catch(() => {});
+
+    return j as { success: true; toFolderId: string; fromFolderId?: string; status?: string };
   };
 
   const handleDisposition = async (label: "Sold" | "No Answer" | "Booked Appointment" | "Not Interested") => {
@@ -455,7 +466,20 @@ export default function DialSession() {
       await leaveIfJoined(`disposition-${label.replace(/\s+/g, "-").toLowerCase()}`);
       setCallActive(false);
 
-      await persistDisposition(lead.id, label);
+      const result = await persistDisposition(lead.id, label);
+
+      // reflect locally so any UI that reads status/folder sees it immediately
+      setLeadQueue((prev) => {
+        const arr = [...prev];
+        if (arr[currentLeadIndex]) {
+          arr[currentLeadIndex] = {
+            ...arr[currentLeadIndex],
+            status: label,
+            folderId: result?.toFolderId || arr[currentLeadIndex].folderId,
+          };
+        }
+        return arr;
+      });
 
       setHistory((prev) => [`🏷️ Disposition: ${label}`, ...prev]);
       setStatus(`Disposition saved: ${label}`);
@@ -541,7 +565,7 @@ export default function DialSession() {
     router.push("/leads").catch(() => {});
   };
 
-  /** sockets **/
+  /** sockets: live status (now pointing to /api/socket) **/
   useEffect(() => {
     let mounted = true;
     (async () => {
@@ -554,6 +578,7 @@ export default function DialSession() {
         if (!mounted || !mod) return;
         const { io } = mod as any;
 
+        // 👇 IMPORTANT: make client use /api/socket
         const socket = io(undefined, {
           path: "/api/socket",
           transports: ["websocket"],
@@ -596,9 +621,11 @@ export default function DialSession() {
               setStatus("Connected");
               stopRingback();
               clearWatchdog();
+              // already joined
             }
 
             if (s === "no-answer" || s === "busy" || s === "failed" || s === "canceled" || s === "completed") {
+              // 👇 guard against single-ring auto-skip
               if ((s === "no-answer" || s === "completed") && tooEarly()) return;
 
               stopRingback(); clearWatchdog();
