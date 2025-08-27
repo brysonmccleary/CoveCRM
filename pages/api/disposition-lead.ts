@@ -12,8 +12,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   // ✅ Properly typed session
   const session = (await getServerSession(req, res, authOptions as any)) as Session | null;
-  const userEmail = typeof session?.user?.email === "string" ? session.user.email.toLowerCase() : "";
-  if (!userEmail) return res.status(401).json({ message: "Unauthorized" });
+  const authedEmail = typeof session?.user?.email === "string" ? session.user.email.toLowerCase() : "";
+  if (!authedEmail) return res.status(401).json({ message: "Unauthorized" });
 
   const { leadId, newFolderName } = (req.body ?? {}) as { leadId?: string; newFolderName?: string };
   if (!leadId || !newFolderName?.trim()) {
@@ -24,24 +24,39 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     await dbConnect();
 
-    // Ensure ownership
-    const lead = await Lead.findOne({ _id: leadId, userEmail });
+    // ✅ Find the lead for this user (support legacy ownerEmail as well)
+    const lead = await Lead.findOne({
+      _id: leadId,
+      $or: [{ userEmail: authedEmail }, { ownerEmail: authedEmail }],
+    });
     if (!lead) return res.status(404).json({ message: "Lead not found." });
 
-    // Ensure target folder exists for this user
-    let folder = await Folder.findOne({ userEmail, name: targetName });
-    if (!folder) folder = await Folder.create({ userEmail, name: targetName, assignedDrips: [] });
+    // ✅ Find (or create) the destination folder scoped to this user
+    let folder = await Folder.findOne({
+      name: targetName,
+      $or: [{ userEmail: authedEmail }, { ownerEmail: authedEmail }],
+    });
 
-    // Move + sync status
+    if (!folder) {
+      // Create with BOTH fields so all parts of the app can see it
+      folder = await Folder.create({
+        name: targetName,
+        userEmail: authedEmail,
+        ownerEmail: authedEmail,
+        assignedDrips: [],
+      });
+    }
+
+    // ✅ Move and mirror status
     const fromFolderId = lead.folderId ? String(lead.folderId) : null;
     lead.folderId = folder._id;
     lead.status = targetName;
     await lead.save();
 
-    // Best-effort history push
+    // 👍 Best-effort history entry (doesn't block)
     try {
       await Lead.updateOne(
-        { _id: lead._id, userEmail },
+        { _id: lead._id },
         {
           $push: {
             interactionHistory: {
@@ -60,6 +75,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       message: "Lead moved.",
       fromFolderId,
       toFolderId: String(folder._id),
+      leadId: String(lead._id),
+      status: lead.status,
     });
   } catch (e) {
     console.error("disposition-lead error:", e);
