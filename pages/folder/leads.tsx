@@ -1,4 +1,4 @@
-// pages/leads/index.tsx
+// pages/leads/index.tsx (currently located at pages/folder/leads.tsx)
 import React, { useState, useEffect } from "react";
 import { useRouter } from "next/router";
 import LeadPreviewPanel from "../../components/LeadPreviewPanel";
@@ -18,9 +18,16 @@ export default function LeadsPage() {
   // Fetch folders
   useEffect(() => {
     const fetchFolders = async () => {
-      const res = await fetch("/api/get-folders");
-      const data = await res.json();
-      setFolders(data);
+      try {
+        const res = await fetch("/api/get-folders");
+        const data = await res.json();
+        // API shape: { folders: [...] }
+        const rows = Array.isArray(data?.folders) ? data.folders : [];
+        setFolders(rows);
+      } catch (e) {
+        console.error("load folders failed", e);
+        setFolders([]);
+      }
     };
     fetchFolders();
   }, []);
@@ -33,19 +40,27 @@ export default function LeadsPage() {
         setFilteredLeads([]);
         return;
       }
-      const res = await fetch(
-        `/api/get-leads-by-folder?folderId=${activeFolder._id}`,
-      );
-      const data = await res.json();
-      setLeads(data);
-      setFilteredLeads(data);
-      setSelectedLeads([]);
-      setSelectAll(false);
+      try {
+        const res = await fetch(
+          `/api/get-leads-by-folder?folderId=${encodeURIComponent(activeFolder._id)}`
+        );
+        const data = await res.json();
+        // API shape: { leads: [...] }
+        const rows = Array.isArray(data?.leads) ? data.leads : [];
+        setLeads(rows);
+        setFilteredLeads(rows);
+        setSelectedLeads([]);
+        setSelectAll(false);
+      } catch (e) {
+        console.error("load leads failed", e);
+        setLeads([]);
+        setFilteredLeads([]);
+      }
     };
     fetchLeads();
   }, [activeFolder]);
 
-  // Search filter
+  // Search filter (client-side)
   useEffect(() => {
     if (!searchQuery) {
       setFilteredLeads(leads);
@@ -58,16 +73,14 @@ export default function LeadsPage() {
           String(lead["First Name"]).toLowerCase().includes(lower)) ||
         (lead["Last Name"] &&
           String(lead["Last Name"]).toLowerCase().includes(lower)) ||
-        (lead["Phone"] && String(lead["Phone"]).toLowerCase().includes(lower)),
+        (lead["Phone"] && String(lead["Phone"]).toLowerCase().includes(lower))
     );
     setFilteredLeads(filtered);
   }, [searchQuery, leads]);
 
   const toggleLeadSelection = (id: string) => {
     setSelectedLeads((prev) =>
-      prev.includes(id)
-        ? prev.filter((leadId) => leadId !== id)
-        : [...prev, id],
+      prev.includes(id) ? prev.filter((leadId) => leadId !== id) : [...prev, id]
     );
   };
 
@@ -80,7 +93,7 @@ export default function LeadsPage() {
     setSelectAll(!selectAll);
   };
 
-  // ✅ Start the actual dial session page with selected lead IDs
+  // Start the dial session page with selected lead IDs
   const startDialSession = () => {
     if (selectedLeads.length === 0) {
       alert("No leads selected");
@@ -92,10 +105,9 @@ export default function LeadsPage() {
     router.push(`/dial-session?${qs}`);
   };
 
-  // ✅ Persist notes using the canonical notes endpoint (also mirrors into history)
+  // Persist notes using the canonical notes endpoint
   const handleSaveNotes = async (notes: string) => {
     if (!previewLead) return;
-
     const res = await fetch(`/api/leads/add-note`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -106,9 +118,7 @@ export default function LeadsPage() {
       // Update preview + table rows
       setPreviewLead({ ...previewLead, Notes: notes, notes });
       const updatedLeads = leads.map((l) =>
-        String(l._id) === String(previewLead._id)
-          ? { ...l, Notes: notes, notes }
-          : l,
+        String(l._id) === String(previewLead._id) ? { ...l, Notes: notes, notes } : l
       );
       setLeads(updatedLeads);
       setFilteredLeads(updatedLeads);

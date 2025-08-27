@@ -13,9 +13,15 @@ export default function LeadsPage() {
     <div className="p-4 text-white">
       <h1 className="text-2xl font-bold mb-4">Lead Folders</h1>
 
+      {/* Global search is allowed to call /api/leads/search */}
       <LeadSearch />
 
-      <FoldersList onFolderSelect={() => {}} />
+      {/* Folder click -> go to strict folder view */}
+      <FoldersList
+        onFolderSelect={(folderId: string) =>
+          router.push({ pathname: "/leads", query: { folderId } }).catch(() => {})
+        }
+      />
 
       {previewLead && (
         <LeadPreviewPanel
