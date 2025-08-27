@@ -1,11 +1,11 @@
+// pages/api/move-lead-folder.ts
 import type { NextApiRequest, NextApiResponse } from "next";
+import { getServerSession } from "next-auth/next";
+import { authOptions } from "./auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import Lead from "@/models/Lead";
 import Folder from "@/models/Folder";
-import { getServerSession } from "next-auth/next";
-import { authOptions } from "./auth/[...nextauth]";
 
-export { default } from "./disposition-lead";
 export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse,
@@ -14,9 +14,20 @@ export default async function handler(
     return res.status(405).json({ message: "Method not allowed" });
   }
 
-  const { leadId, newFolderName } = req.body;
+  const session = await getServerSession(req, res, authOptions);
+  const userEmail =
+    typeof session?.user?.email === "string"
+      ? session.user.email.toLowerCase()
+      : "";
+  if (!userEmail) {
+    return res.status(401).json({ message: "Unauthorized" });
+  }
 
-  if (!leadId || !newFolderName) {
+  const { leadId, newFolderName } = req.body as {
+    leadId?: string;
+    newFolderName?: string;
+  };
+  if (!leadId || !newFolderName?.trim()) {
     return res
       .status(400)
       .json({ message: "leadId and newFolderName are required" });
@@ -24,46 +35,59 @@ export default async function handler(
 
   try {
     await dbConnect();
-    console.log("✅ Connected to DB (move-lead-folder)");
 
-    const session = await getServerSession(req, res, authOptions);
-    if (!session?.user?.email) {
-      return res.status(401).json({ message: "Unauthorized" });
-    }
-    const userEmail = session.user.email;
-
-    // ✅ Find or create folder for this user
-    let folder = await Folder.findOne({ name: newFolderName, userEmail });
+    // Ensure or create the destination folder for this user
+    let folder = await Folder.findOne({ userEmail, name: newFolderName })
+      .select({ _id: 1 })
+      .lean<{ _id: any } | null>();
     if (!folder) {
-      folder = new Folder({
-        name: newFolderName,
+      const created = await Folder.create({
         userEmail,
+        name: newFolderName,
         assignedDrips: [],
-        createdAt: new Date(),
       });
-      await folder.save();
-      console.log(`✅ Created folder '${newFolderName}' for ${userEmail}`);
+      folder = { _id: created._id };
     }
 
-    // ✅ Update lead to move to new folder (main fix: use userEmail)
-    const lead = await Lead.findOneAndUpdate(
+    // Move the lead (strictly scoped to this user)
+    const updated = await Lead.findOneAndUpdate(
       { _id: leadId, userEmail },
-      { folderId: folder._id },
+      { $set: { folderId: folder._id, status: newFolderName } },
       { new: true },
     );
 
-    if (!lead) {
-      return res
-        .status(404)
-        .json({ message: "Lead not found or does not belong to this user" });
+    if (!updated) {
+      return res.status(404).json({
+        message: "Lead not found or does not belong to this user",
+      });
     }
 
-    console.log(
-      `✅ Lead ${leadId} moved to '${newFolderName}' for ${userEmail}`,
-    );
-    res.status(200).json({ message: "Lead moved successfully" });
+    // Optional: add a simple history line (best-effort)
+    try {
+      await Lead.updateOne(
+        { _id: updated._id, userEmail },
+        {
+          $push: {
+            interactionHistory: {
+              type: "status",
+              from: updated.status,
+              to: newFolderName,
+              date: new Date(),
+            },
+          },
+        },
+      );
+    } catch {
+      // ignore history failures
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Lead moved successfully",
+      folderId: String(folder._id),
+    });
   } catch (error) {
     console.error("Move lead error:", error);
-    res.status(500).json({ message: "Error moving lead" });
+    return res.status(500).json({ message: "Error moving lead" });
   }
 }
