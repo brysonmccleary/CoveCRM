@@ -1,5 +1,6 @@
+// /pages/api/disposition-lead.ts
 import type { NextApiRequest, NextApiResponse } from "next";
-import { getServerSession } from "next-auth";
+import { getServerSession } from "next-auth/next";
 import { authOptions } from "./auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import Lead from "@/models/Lead";
@@ -8,7 +9,7 @@ import Folder from "@/models/Folder";
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed" });
 
-  const session = await getServerSession(req, res, authOptions);
+  const session = await getServerSession(req, res, authOptions as any);
   const userEmail = session?.user?.email?.toLowerCase();
   if (!userEmail) return res.status(401).json({ message: "Unauthorized" });
 
@@ -24,14 +25,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const lead = await Lead.findOne({ _id: leadId, userEmail });
     if (!lead) return res.status(404).json({ message: "Lead not found." });
 
-    // Ensure target folder exists (by name, scoped to user)
+    // Ensure target folder exists (by exact name, scoped to user)
     let folder = await Folder.findOne({ userEmail, name: newFolderName });
     if (!folder) folder = await Folder.create({ userEmail, name: newFolderName, assignedDrips: [] });
 
-    // Move + ALWAYS sync status with the folder name (per acceptance criteria)
+    // Move + sync status with the folder name
     const fromFolderId = lead.folderId ? String(lead.folderId) : null;
     lead.folderId = folder._id;
-    lead.status = newFolderName;        // <- surgical change
+    lead.status = newFolderName;
     await lead.save();
 
     // History entry (best-effort)

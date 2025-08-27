@@ -1,4 +1,3 @@
-// pages/dial-session.tsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/router";
 import Sidebar from "@/components/Sidebar";
@@ -423,33 +422,17 @@ export default function DialSession() {
     }
   };
 
-  const persistDisposition = async (leadId: string, label: string) => {
-    const candidates: Array<{ url: string; body: any; required?: boolean }> = [
-      { url: "/api/leads/set-disposition", body: { leadId, disposition: label } },
-      { url: "/api/leads/update", body: { leadId, update: { disposition: label } } },
-    ];
-    for (const c of candidates) {
-      try {
-        const r = await fetch(c.url, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(c.body),
-        });
-        if (r.ok) break;
-      } catch {}
+  // 🔁 NEW: canonical move using /api/disposition-lead
+  const moveLeadToFolder = async (leadId: string, label: string) => {
+    const res = await fetch("/api/disposition-lead", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ leadId, newFolderName: label }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data?.success) {
+      throw new Error(data?.message || "Failed to move lead");
     }
-    try {
-      await fetch("/api/leads/add-history", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          leadId,
-          type: "disposition",
-          message: label,
-          meta: { disposition: label, ts: Date.now() },
-        }),
-      });
-    } catch {}
   };
 
   const handleDisposition = async (label: "Sold" | "No Answer" | "Booked Appointment" | "Not Interested") => {
@@ -469,7 +452,8 @@ export default function DialSession() {
       await leaveIfJoined(`disposition-${label.replace(/\s+/g, "-").toLowerCase()}`);
       setCallActive(false);
 
-      await persistDisposition(lead.id, label);
+      // ✅ use the canonical endpoint
+      await moveLeadToFolder(lead.id, label);
 
       setHistory((prev) => [`🏷️ Disposition: ${label}`, ...prev]);
       setStatus(`Disposition saved: ${label}`);
