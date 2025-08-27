@@ -1,3 +1,4 @@
+// /pages/api/twilio/inbound-sms.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import mongooseConnect from "@/lib/mongooseConnect";
 import Lead from "@/models/Lead";
@@ -208,7 +209,7 @@ function extractRequestedISO(textIn: string, state?: string): string | null {
         while (dt.weekday !== target) dt = dt.plus({ days: 1 });
         dt = dt.set({ hour: h, minute: min, second: 0, millisecond: 0 });
         if (dt <= now) dt = dt.plus({ weeks: 1 });
-        return dt.toISO();
+        return dt.isValid ? dt.toISO() : null;
       }
     }
   }
@@ -441,16 +442,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(200).json({ message: "No user found for this number." });
     }
 
-    // Find or create lead by sender
+    // ======= MINIMAL FIX: lead resolution by exact/anchored phone =======
     const fromDigits = normalizeDigits(fromNumber);
     const last10 = fromDigits.slice(-10);
+    const last10Anchored = last10 ? new RegExp(`${last10}$`) : undefined;
+
+    // Prefer exact E.164 matches, then +1 last10, then anchored last10 regex
     let lead =
-      (await Lead.findOne({ userEmail: user.email, Phone: { $regex: last10 } })) ||
+      (await Lead.findOne({ userEmail: user.email, Phone: fromNumber })) ||
+      (await Lead.findOne({ userEmail: user.email, phone: fromNumber })) ||
       (await Lead.findOne({ userEmail: user.email, Phone: `+1${last10}` })) ||
-      (await Lead.findOne({ userEmail: user.email, Phone: `+${fromDigits}` })) ||
-      (await Lead.findOne({ userEmail: user.email, phone: { $regex: last10 } })) ||
       (await Lead.findOne({ userEmail: user.email, phone: `+1${last10}` })) ||
+      (last10Anchored ? await Lead.findOne({ userEmail: user.email, Phone: last10Anchored }) : null) ||
+      (last10Anchored ? await Lead.findOne({ userEmail: user.email, phone: last10Anchored }) : null) ||
+      // Final strict fallback: full digits with +
+      (await Lead.findOne({ userEmail: user.email, Phone: `+${fromDigits}` })) ||
       (await Lead.findOne({ userEmail: user.email, phone: `+${fromDigits}` }));
+
+    // ====================================================================
 
     if (!lead) {
       try {
@@ -730,7 +739,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
           const bookingRes = await axios.post(
             `${RAW_BASE_URL || ABS_BASE_URL}/api/google/calendar/book-appointment`,
-            bookingPayload,
+            { ...bookingPayload },
             {
               headers: { Authorization: `Bearer ${INTERNAL_API_TOKEN}`, "Content-Type": "application/json" },
               timeout: 15000,
@@ -742,7 +751,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             (lead as any).appointmentTime = clientTime.toJSDate();
 
             try {
-              // ✅ Use robust display name (never literal "Client" unless absolutely unknown)
               const fullName =
                 resolveLeadDisplayName(lead, lead.Phone || (lead as any).phone || fromNumber);
 
@@ -787,7 +795,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // Delayed AI reply (human-like), force FROM the exact inbound number
     setTimeout(async () => {
       try {
-        // ensure we’re still using the same cached connection when the timer fires
         await mongooseConnect();
 
         const fresh = await Lead.findById(lead._id);
