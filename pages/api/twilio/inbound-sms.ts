@@ -365,6 +365,25 @@ function normalizeWhen(datetimeText: string | null, nowISO: string, tz: string) 
   return null;
 }
 
+/* --------- NEW: Only trust a previous outbound if that lead’s phone actually matches this inbound --------- */
+function leadPhoneMatches(lead: any, fromDigits: string): boolean {
+  if (!lead) return false;
+  const cand: string[] = [];
+  const push = (v: any) => { if (v) cand.push(normalizeDigits(String(v))); };
+  push((lead as any).Phone);
+  push((lead as any).phone);
+  push((lead as any)["Phone Number"]);
+  push((lead as any).PhoneNumber);
+  push((lead as any).Mobile);
+  push((lead as any).mobile);
+  if (Array.isArray((lead as any).phones)) {
+    for (const p of (lead as any).phones) push(p?.value);
+  }
+  const last10 = fromDigits.slice(-10);
+  return cand.some(d => d && d.endsWith(last10));
+}
+// ----------------------------------------------------------------------------------------------------------
+
 // ---------- handler ----------
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST")
@@ -384,7 +403,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // Verify Twilio signature (unless dev bypass)
   const signature = (req.headers["x-twilio-signature"] || "") as string;
 
-  // ✅ New: prod-safe test bypass via Authorization: Bearer INTERNAL_API_TOKEN
+  // ✅ Prod-safe test bypass via Authorization: Bearer INTERNAL_API_TOKEN
   const hasAuthBypass =
     !!INTERNAL_API_TOKEN &&
     typeof req.headers.authorization === "string" &&
@@ -418,7 +437,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(200).json({ message: "Missing required fields, acknowledged." });
     }
 
-    // Idempotency: if Twilio retried, don't double-write or double-email
+    // Idempotency
     if (messageSid) {
       const existing = await Message.findOne({ sid: messageSid }).lean().exec();
       if (existing) {
@@ -442,18 +461,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(200).json({ message: "No user found for this number." });
     }
 
-    // ===================== CORE FIX: Robust lead resolution =====================
+    // ===================== FIXED: lead resolution =====================
     const fromDigits = normalizeDigits(fromNumber);
     const last10 = fromDigits.slice(-10);
     const anchored = last10 ? new RegExp(`${last10}$`) : undefined;
 
     let lead: any = null;
 
-    // (A) Prefer the lead from our most recent OUTBOUND to this exact phone (and same owned fromNumber)
+    // (A) Consider last outbound ONLY if that lead’s saved phone matches this inbound
     const lastOutbound = await Message.findOne({
       userEmail: user.email,
       direction: "outbound",
-      from: toNumber, // ensure it was sent from this owned number
+      from: toNumber,
       $or: [
         { to: fromNumber },
         { to: `+1${last10}` },
@@ -463,7 +482,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (lastOutbound?.leadId) {
       const viaMsg = await Lead.findById(lastOutbound.leadId);
-      if (viaMsg) lead = viaMsg;
+      if (viaMsg && leadPhoneMatches(viaMsg, fromDigits)) {
+        lead = viaMsg;
+      } else if (viaMsg) {
+        console.warn(
+          `↪︎ Ignoring lastOutbound lead (${String(viaMsg._id)}) — phone on lead does not match inbound ${fromNumber}`,
+        );
+      }
     }
 
     // (B) Exact E.164 match on common fields
@@ -502,7 +527,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         (await Lead.findOne({ userEmail: user.email, mobile: anchored } as any)) ||
         (await Lead.findOne({ userEmail: user.email, "phones.value": anchored } as any));
     }
-    // ===========================================================================
+    // =================================================================
 
     if (!lead) {
       try {
@@ -527,7 +552,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(200).json({ message: "Lead not found/created, acknowledged." });
     }
 
-    // Snapshot whether this looked like a drip thread BEFORE we clear drips later
     const hadDrips = Array.isArray((lead as any).assignedDrips) && (lead as any).assignedDrips.length > 0;
 
     // ✅ Ensure Socket.IO exists (init if needed)
@@ -542,7 +566,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     // Persist inbound message
-    const createdMsg = await Message.create({
+    await Message.create({
       leadId: lead._id,
       userEmail: user.email,
       direction: "inbound",
@@ -570,26 +594,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (io) io.to(user.email).emit("message:new", { leadId: lead._id, ...inboundEntry });
 
     /* =======================
-       NEW: Agent email notify
+       Agent email notify
        ======================= */
     try {
-      const emailEnabled = user?.notifications?.emailOnInboundSMS !== false; // default true
+      const emailEnabled = user?.notifications?.emailOnInboundSMS !== false;
       if (emailEnabled) {
-        // ✅ Robust display name (handles many field shapes; falls back to phone if empty)
         const leadDisplayName =
           resolveLeadDisplayName(lead, lead.Phone || (lead as any).phone || fromNumber);
 
         const snippet = body.length > 60 ? `${body.slice(0, 60)}…` : body;
         const dripTag = hadDrips ? "[drip] " : "";
-
         const deepLink = `${ABS_BASE_URL}${LEAD_ENTRY_PATH}/${lead._id}`;
-
-        // Subject uses the best name we have; falls back to phone (never "client")
         const subjectWho = leadDisplayName || (lead.Phone || (lead as any).phone || fromNumber);
 
         await sendLeadReplyNotificationEmail({
           to: user.email,
-          replyTo: user.email, // agent can reply directly
+          replyTo: user.email,
           subject: `[New Lead Reply] ${dripTag}${subjectWho} — ${snippet || "(no text)"}`,
           leadName: leadDisplayName || undefined,
           leadPhone: lead.Phone || (lead as any).phone || fromNumber,
@@ -664,7 +684,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(200).json({ message: "A2P not approved; no auto-reply sent." });
     }
 
-    // If already unsubscribed/optOut, do not auto-reply
     if ((lead as any).unsubscribed || (lead as any).optOut) {
       console.log("⛔ Lead marked unsubscribed/optOut — skipping auto-reply.");
       return res.status(200).json({ message: "Lead unsubscribed; no auto-reply." });
@@ -706,7 +725,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         null;
     }
 
-    // 2.5) explicit info-request → use your canned line
+    // 2.5) explicit info-request
     if (!requestedISO && isInfoRequest(body)) {
       aiReply = `Unfortunately as of now there's nothing to send over without getting some information from you. When's a good time for a quick 5 minute call? After that we can send everything out.`;
       memory.state = "qa";
@@ -758,10 +777,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const alreadyConfirmedSame =
         (lead as any).aiLastConfirmedISO &&
         DateTime.fromISO((lead as any).aiLastConfirmedISO).toISO() === clientTime.toISO();
-
-      const recentConfirmCooldown =
-        memory.lastConfirmAtISO &&
-        Date.now() - Date.parse(memory.lastConfirmAtISO) < 10 * 60 * 1000;
 
       if (alreadyConfirmedSame) {
         aiReply = `All set — you’re on my schedule. Talk soon!`;
