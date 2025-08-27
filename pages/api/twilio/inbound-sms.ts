@@ -442,24 +442,67 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(200).json({ message: "No user found for this number." });
     }
 
-    // ======= MINIMAL FIX: lead resolution by exact/anchored phone =======
+    // ===================== CORE FIX: Robust lead resolution =====================
     const fromDigits = normalizeDigits(fromNumber);
     const last10 = fromDigits.slice(-10);
-    const last10Anchored = last10 ? new RegExp(`${last10}$`) : undefined;
+    const anchored = last10 ? new RegExp(`${last10}$`) : undefined;
 
-    // Prefer exact E.164 matches, then +1 last10, then anchored last10 regex
-    let lead =
-      (await Lead.findOne({ userEmail: user.email, Phone: fromNumber })) ||
-      (await Lead.findOne({ userEmail: user.email, phone: fromNumber })) ||
-      (await Lead.findOne({ userEmail: user.email, Phone: `+1${last10}` })) ||
-      (await Lead.findOne({ userEmail: user.email, phone: `+1${last10}` })) ||
-      (last10Anchored ? await Lead.findOne({ userEmail: user.email, Phone: last10Anchored }) : null) ||
-      (last10Anchored ? await Lead.findOne({ userEmail: user.email, phone: last10Anchored }) : null) ||
-      // Final strict fallback: full digits with +
-      (await Lead.findOne({ userEmail: user.email, Phone: `+${fromDigits}` })) ||
-      (await Lead.findOne({ userEmail: user.email, phone: `+${fromDigits}` }));
+    let lead: any = null;
 
-    // ====================================================================
+    // (A) Prefer the lead from our most recent OUTBOUND to this exact phone (and same owned fromNumber)
+    const lastOutbound = await Message.findOne({
+      userEmail: user.email,
+      direction: "outbound",
+      from: toNumber, // ensure it was sent from this owned number
+      $or: [
+        { to: fromNumber },
+        { to: `+1${last10}` },
+        ...(anchored ? [{ to: anchored }] : []),
+      ],
+    }).sort({ sentAt: -1, createdAt: -1, _id: -1 });
+
+    if (lastOutbound?.leadId) {
+      const viaMsg = await Lead.findById(lastOutbound.leadId);
+      if (viaMsg) lead = viaMsg;
+    }
+
+    // (B) Exact E.164 match on common fields
+    if (!lead) {
+      lead =
+        (await Lead.findOne({ userEmail: user.email, Phone: fromNumber })) ||
+        (await Lead.findOne({ userEmail: user.email, phone: fromNumber })) ||
+        (await Lead.findOne({ userEmail: user.email, ["Phone Number"]: fromNumber } as any)) ||
+        (await Lead.findOne({ userEmail: user.email, PhoneNumber: fromNumber } as any)) ||
+        (await Lead.findOne({ userEmail: user.email, Mobile: fromNumber } as any)) ||
+        (await Lead.findOne({ userEmail: user.email, mobile: fromNumber } as any)) ||
+        (await Lead.findOne({ userEmail: user.email, "phones.value": fromNumber } as any));
+    }
+
+    // (C) +1 last-10 equality
+    if (!lead && last10) {
+      const plus1 = `+1${last10}`;
+      lead =
+        (await Lead.findOne({ userEmail: user.email, Phone: plus1 })) ||
+        (await Lead.findOne({ userEmail: user.email, phone: plus1 })) ||
+        (await Lead.findOne({ userEmail: user.email, ["Phone Number"]: plus1 } as any)) ||
+        (await Lead.findOne({ userEmail: user.email, PhoneNumber: plus1 } as any)) ||
+        (await Lead.findOne({ userEmail: user.email, Mobile: plus1 } as any)) ||
+        (await Lead.findOne({ userEmail: user.email, mobile: plus1 } as any)) ||
+        (await Lead.findOne({ userEmail: user.email, "phones.value": plus1 } as any));
+    }
+
+    // (D) Anchored last-10 regex
+    if (!lead && anchored) {
+      lead =
+        (await Lead.findOne({ userEmail: user.email, Phone: anchored })) ||
+        (await Lead.findOne({ userEmail: user.email, phone: anchored })) ||
+        (await Lead.findOne({ userEmail: user.email, ["Phone Number"]: anchored } as any)) ||
+        (await Lead.findOne({ userEmail: user.email, PhoneNumber: anchored } as any)) ||
+        (await Lead.findOne({ userEmail: user.email, Mobile: anchored } as any)) ||
+        (await Lead.findOne({ userEmail: user.email, mobile: anchored } as any)) ||
+        (await Lead.findOne({ userEmail: user.email, "phones.value": anchored } as any));
+    }
+    // ===========================================================================
 
     if (!lead) {
       try {
@@ -720,7 +763,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         memory.lastConfirmAtISO &&
         Date.now() - Date.parse(memory.lastConfirmAtISO) < 10 * 60 * 1000;
 
-      if (alreadyConfirmedSame || recentConfirmCooldown) {
+      if (alreadyConfirmedSame) {
         aiReply = `All set — you’re on my schedule. Talk soon!`;
       } else {
         try {
