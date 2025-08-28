@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import axios from "axios";
 import { useRouter } from "next/router";
 
@@ -9,29 +9,39 @@ interface CallbackLead {
   Phone?: string;
 }
 
+// One-line kill switch. Set NEXT_PUBLIC_HIDE_CALLBACK_BANNER=1 to hide.
+const HIDE = process.env.NEXT_PUBLIC_HIDE_CALLBACK_BANNER === "1";
+
 export default function CallbackBanner() {
+  // If hidden, don't render or start any polling at all.
+  if (HIDE) return null;
+
   const [lead, setLead] = useState<CallbackLead | null>(null);
   const router = useRouter();
+  const timerRef = useRef<number | null>(null);
 
   useEffect(() => {
+    let mounted = true;
+
     const fetchCallbackLead = async () => {
       try {
         const res = await axios.get("/api/leads/callback-lead");
         const found = res.data?.lead;
-        if (found?._id) {
-          setLead(found);
-        } else {
-          setLead(null); // clear if no lead
-        }
+        if (!mounted) return;
+        setLead(found?._id ? found : null);
       } catch (err) {
+        if (!mounted) return;
         console.error("❌ Failed to fetch callback lead", err);
         setLead(null);
       }
     };
 
     fetchCallbackLead();
-    const interval = setInterval(fetchCallbackLead, 5000); // Poll every 5s
-    return () => clearInterval(interval);
+    timerRef.current = window.setInterval(fetchCallbackLead, 5000); // Poll every 5s
+    return () => {
+      mounted = false;
+      if (timerRef.current) window.clearInterval(timerRef.current);
+    };
   }, []);
 
   const handleAnswer = async () => {
