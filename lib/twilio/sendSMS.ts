@@ -373,23 +373,47 @@ async function sendCore(paramsIn: {
   const { isQuiet, scheduledAt } = computeQuietHoursScheduling(zone);
 
   // Pre-create queued Message (DB = source of truth)
-  const preRow = await Message.create({
-    leadId: lead?._id,
-    userEmail: user.email,
-    direction: "outbound",
-    text: paramsIn.body,
-    read: true,
-    status: "queued",
-    suppressed: false,
-    reason: isQuiet ? "scheduled_quiet_hours" : undefined,
-    to: toNorm,
-    from: forcedFrom || undefined,
-    fromServiceSid: messagingServiceSid || undefined,
-    queuedAt: new Date(),
-    scheduledAt: isQuiet && scheduledAt ? scheduledAt : undefined,
-    idempotencyKey: paramsIn.idempotencyKey || undefined,
-    contentHash: sha(`${toNorm}|${(forcedFrom || messagingServiceSid || "")}|${paramsIn.body.trim()}`),
-  } as any);
+  let preRow: any;
+  try {
+    preRow = await Message.create({
+      leadId: lead?._id,
+      userEmail: user.email,
+      direction: "outbound",
+      text: paramsIn.body,
+      read: true,
+      status: "queued",
+      suppressed: false,
+      reason: isQuiet ? "scheduled_quiet_hours" : undefined,
+      to: toNorm,
+      from: forcedFrom || undefined,
+      fromServiceSid: messagingServiceSid || undefined,
+      queuedAt: new Date(),
+      scheduledAt: isQuiet && scheduledAt ? scheduledAt : undefined,
+      idempotencyKey: paramsIn.idempotencyKey || undefined,
+      contentHash: sha(`${toNorm}|${(forcedFrom || messagingServiceSid || "")}|${paramsIn.body.trim()}`),
+    } as any);
+  } catch (e: any) {
+    // Race on unique(idempotencyKey): use the existing row rather than double-sending
+    if ((e?.code === 11000 || e?.name === "MongoServerError") && paramsIn.idempotencyKey) {
+      const existing = await Message.findOne({
+        userEmail: user.email,
+        idempotencyKey: paramsIn.idempotencyKey,
+      }).lean();
+      if (existing) {
+        console.log(`🔒 idem-race: using existing messageId=${existing._id}`);
+        return {
+          sid: (existing as any).sid,
+          serviceSid: (existing as any).fromServiceSid || "",
+          messageId: String(existing._id),
+          scheduledAt: (existing as any)?.scheduledAt
+            ? new Date((existing as any).scheduledAt).toISOString()
+            : undefined,
+        };
+      }
+    }
+    throw e;
+  }
+
   const messageId = String(preRow._id);
   console.log(
     `⏳ queued msid=${messagingServiceSid || "(from)"} from=${forcedFrom || "(auto)"} messageId=${messageId}`

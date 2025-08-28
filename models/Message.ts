@@ -28,6 +28,8 @@ export interface IMessage {
   to?: string;
   from?: string;
   fromServiceSid?: string;
+  accountSid?: string;
+  numMedia?: number;
 
   // Lifecycle timestamps
   queuedAt?: Date;
@@ -39,6 +41,10 @@ export interface IMessage {
   // Suppression/flags
   suppressed?: boolean;
   reason?: string; // "opt_out" | "scheduled_quiet_hours" | etc.
+
+  // Idempotency & lightweight dedupe
+  idempotencyKey?: string;
+  contentHash?: string;
 
   // Added by { timestamps: true }
   createdAt?: Date;
@@ -75,6 +81,8 @@ const MessageSchema = new Schema<IMessage>(
     to: { type: String },
     from: { type: String },
     fromServiceSid: { type: String },
+    accountSid: { type: String },
+    numMedia: { type: Number },
 
     queuedAt: { type: Date },
     scheduledAt: { type: Date },
@@ -84,6 +92,10 @@ const MessageSchema = new Schema<IMessage>(
 
     suppressed: { type: Boolean, default: false },
     reason: { type: String },
+
+    // Idempotency & dedupe
+    idempotencyKey: { type: String },
+    contentHash: { type: String },
   },
   { timestamps: true },
 );
@@ -95,6 +107,8 @@ const MessageSchema = new Schema<IMessage>(
  * - userEmail + kind + direction + status + createdAt: dashboard aggregates
  * - userEmail + from + to + createdAt: delivery/debug lookups
  * - sid (unique + partial): prevent duplicate Twilio SIDs
+ * - idempotencyKey (unique + partial): enforce one-and-only-once per provided key
+ * - userEmail + direction + to + text + createdAt: quick recent duplicate checks
  */
 
 // Conversation fetch (most recent first)
@@ -120,6 +134,18 @@ MessageSchema.index(
     partialFilterExpression: { sid: { $exists: true, $type: "string" } },
   },
 );
+
+// 🔒 Idempotency (unique only when present)
+MessageSchema.index(
+  { idempotencyKey: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { idempotencyKey: { $exists: true, $type: "string" } },
+  },
+);
+
+// Useful for duplicate-drip detection windows
+MessageSchema.index({ userEmail: 1, direction: 1, to: 1, text: 1, createdAt: -1 });
 
 export type MessageModel = mongoose.Model<IMessage>;
 export default (mongoose.models.Message as MessageModel) ||
