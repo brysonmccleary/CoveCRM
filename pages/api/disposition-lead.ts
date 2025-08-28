@@ -17,66 +17,68 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!userEmail) return res.status(401).json({ message: "Unauthorized" });
 
   const { leadId, newFolderName } = (req.body ?? {}) as { leadId?: string; newFolderName?: string };
-  if (!leadId || !newFolderName?.trim()) return res.status(400).json({ message: "Missing required fields." });
+  if (!leadId || !newFolderName?.trim()) {
+    return res.status(400).json({ message: "Missing required fields." });
+  }
 
   try {
     await dbConnect();
 
-    // Ensure ownership
+    // Ensure this is your lead
     const lead = await Lead.findOne({ _id: leadId, userEmail });
     if (!lead) return res.status(404).json({ message: "Lead not found." });
 
-    // Ensure target folder exists
+    // Ensure target folder exists (create if needed)
     let folder = await Folder.findOne({ userEmail, name: newFolderName });
-    if (!folder) folder = await Folder.create({ userEmail, name: newFolderName, assignedDrips: [] });
-
-    const fromFolderId = lead.folderId ? String(lead.folderId) : null;
-    const prevStatus = (lead as any).status || (lead as any).Status || "";
-
-    // Move & normalize fields
-    lead.folderId = folder._id;
-    (lead as any).Folder = folder._id;                 // legacy compatibility
-    (lead as any)["Folder Name"] = newFolderName;      // legacy compatibility
-    (lead as any).updatedAt = new Date();
-
-    // Sync status for system folders (including "Resolved")
-    if (SYSTEM.has(newFolderName)) {
-      (lead as any).status = newFolderName;
-      (lead as any).Status = newFolderName;            // legacy compatibility
-
-      // When truly resolved-ish, stamp resolvedAt
-      if (["Resolved", "Not Interested", "Sold"].includes(newFolderName)) {
-        (lead as any).resolvedAt = new Date();
-        (lead as any).isAIEngaged = false;
-        (lead as any).assignedDrips = [];
-        (lead as any).dripProgress = [];
-      }
+    if (!folder) {
+      folder = await Folder.create({ userEmail, name: newFolderName, assignedDrips: [] });
     }
 
-    // Visible history entry
-    lead.interactionHistory = lead.interactionHistory || [];
-    lead.interactionHistory.push({
-      type: "status",
-      from: prevStatus || fromFolderId || "(none)",
-      to: newFolderName,
-      date: new Date(),
-    });
+    const fromFolderId = lead.folderId ? String(lead.folderId) : null;
 
+    // Move + keep backward-compat fields in sync
+    lead.folderId = folder._id;
+    (lead as any).folder = newFolderName;              // legacy
+    (lead as any)["Folder Name"] = newFolderName;      // legacy
+    (lead as any).folderName = newFolderName;          // friendly alias
+    if (SYSTEM.has(newFolderName)) {
+      lead.status = newFolderName; // mark disposition as status
+    }
+    lead.updatedAt = new Date();
     await lead.save();
 
-    // 🔔 Realtime UI update
-    let io = (res as any)?.socket?.server?.io;
+    // Write a visible history entry
+    await Lead.updateOne(
+      { _id: lead._id, userEmail },
+      {
+        $push: {
+          interactionHistory: {
+            type: "status",
+            from: fromFolderId,
+            to: newFolderName,
+            date: new Date(),
+          },
+        },
+      }
+    );
+
+    // Emit socket event so lists refresh elsewhere
     try {
+      let io = (res as any)?.socket?.server?.io;
       if (!io) io = initSocket(res as any);
-      io.to(userEmail).emit("lead:updated", {
-        _id: String(lead._id),
-        folderId: String(folder._id),
-        status: (lead as any).status,
-        resolvedAt: (lead as any).resolvedAt || null,
-        updatedAt: (lead as any).updatedAt,
-      });
+      if (io) {
+        io.to(userEmail).emit("lead:updated", {
+          _id: String(lead._id),
+          folderId: String(folder._id),
+          folder: newFolderName,
+          folderName: newFolderName,
+          ["Folder Name"]: newFolderName,
+          status: lead.status,
+          updatedAt: lead.updatedAt,
+        });
+      }
     } catch (e) {
-      console.warn("disposition-lead: socket emit failed (non-fatal):", (e as any)?.message || e);
+      console.warn("disposition-lead: socket emit failed (non-fatal):", e);
     }
 
     return res.status(200).json({
@@ -84,7 +86,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       message: "Lead moved.",
       fromFolderId,
       toFolderId: String(folder._id),
-      status: (lead as any).status,
+      status: lead.status,
+      folderName: newFolderName,
     });
   } catch (e) {
     console.error("disposition-lead error:", e);
