@@ -1,4 +1,3 @@
-// /pages/api/twilio/inbound-sms.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import mongooseConnect from "@/lib/mongooseConnect";
 import Lead from "@/models/Lead";
@@ -37,9 +36,6 @@ const ALLOW_DEV_TWILIO_TEST =
 
 // Human-like delay: 3–4 min; set AI_TEST_MODE=1 for 3–5s while testing
 const AI_TEST_MODE = process.env.AI_TEST_MODE === "1";
-// Kill switch for “stick to last outbound” routing
-const IGNORE_LAST_OUTBOUND = process.env.INBOUND_IGNORE_LAST_OUTBOUND === "1";
-
 function humanDelayMs() {
   return AI_TEST_MODE ? 3000 + Math.random() * 2000 : 180000 + Math.random() * 60000;
 }
@@ -355,16 +351,37 @@ function leadPhoneMatches(lead: any, fromDigits: string): boolean {
   return cand.some(d => d && d.endsWith(last10));
 }
 
-// Prefer newest matching lead when multiples share the same phone
-async function findLeadByPhone(userEmail: string, value: string | RegExp) {
-  return await Lead.findOne({
-    userEmail,
-    $or: [
-      { Phone: value }, { phone: value }, { ["Phone Number"]: value as any }, { PhoneNumber: value as any },
-      { Mobile: value }, { mobile: value }, { "phones.value": value as any },
-    ],
-  }).sort({ updatedAt: -1, createdAt: -1 }).exec();
+/* --------- NEW: single deterministic phone-first resolver with sorting --------- */
+async function findLeadByPhoneDeterministic(userEmail: string, fromNumber: string) {
+  const fromDigits = normalizeDigits(fromNumber);
+  const last10 = fromDigits.slice(-10);
+  const plus1 = last10 ? `+1${last10}` : null;
+  const anchored = last10 ? new RegExp(`${last10}$`) : null;
+
+  const phoneFields = [
+    "Phone", "phone",
+    "Phone Number", "PhoneNumber",
+    "Mobile", "mobile",
+    "phones.value",
+  ];
+
+  const or: any[] = [];
+  for (const f of phoneFields) {
+    or.push({ userEmail, [f]: fromNumber } as any);
+    if (plus1) or.push({ userEmail, [f]: plus1 } as any);
+    if (anchored) or.push({ userEmail, [f]: anchored } as any);
+  }
+
+  if (or.length === 0) return null;
+
+  // Choose the *most recently touched* lead deterministically
+  const lead = await Lead.findOne({ $or: or })
+    .sort({ updatedAt: -1, lastInboundAt: -1, createdAt: -1, _id: -1 })
+    .exec();
+
+  return lead;
 }
+// ----------------------------------------------------------------------------------------------------------
 
 // ---------- handler ----------
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -438,39 +455,35 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(200).json({ message: "No user found for this number." });
     }
 
-    // ===================== PHONE-FIRST lead resolution =====================
+    // ===================== PHONE-FIRST lead resolution (deterministic) =====================
     const fromDigits = normalizeDigits(fromNumber);
-    const last10 = fromDigits.slice(-10);
-    const anchored = last10 ? new RegExp(`${last10}$`) : undefined;
-
     let lead: any = null;
+    let resolvedBy: "lastOutbound" | "phoneMatch" | "autocreate" | "unknown" = "unknown";
 
-    // (A) Consider last outbound ONLY if that lead’s saved phone matches this inbound
-    if (!IGNORE_LAST_OUTBOUND) {
-      const lastOutbound = await Message.findOne({
-        userEmail: user.email,
-        direction: "outbound",
-        from: toNumber, // sent from this owned number
-        $or: [{ to: fromNumber }, { to: `+1${last10}` }, ...(anchored ? [{ to: anchored }] : [])],
-      }).sort({ sentAt: -1, createdAt: -1, _id: -1 });
+    // (A) Prefer last outbound from THIS owned number to THIS caller, only if lead phone actually matches
+    const lastOutbound = await Message.findOne({
+      userEmail: user.email,
+      direction: "outbound",
+      from: toNumber, // sent from this owned number
+      $or: [{ to: fromNumber }, { to: `+1${fromDigits.slice(-10)}` }, { to: new RegExp(`${fromDigits.slice(-10)}$`) }],
+    }).sort({ sentAt: -1, createdAt: -1, _id: -1 });
 
-      if (lastOutbound?.leadId) {
-        const viaMsg = await Lead.findById(lastOutbound.leadId);
-        if (viaMsg && leadPhoneMatches(viaMsg, fromDigits)) lead = viaMsg;
-        else if (viaMsg) {
-          console.warn(`↪︎ Ignoring lastOutbound lead (${String(viaMsg._id)}) — lead phone doesn't match inbound ${fromNumber}`);
-        }
+    if (lastOutbound?.leadId) {
+      const viaMsg = await Lead.findById(lastOutbound.leadId);
+      if (viaMsg && leadPhoneMatches(viaMsg, fromDigits)) {
+        lead = viaMsg;
+        resolvedBy = "lastOutbound";
+      } else if (viaMsg) {
+        console.warn(`↪︎ Ignoring lastOutbound lead (${String(viaMsg._id)}) — lead phone doesn't match inbound ${fromNumber}`);
       }
     }
 
-    // (B) Exact E.164 match on common fields (prefer most recently updated)
-    if (!lead) lead = await findLeadByPhone(user.email, fromNumber);
+    // (B) Deterministic phone match across all common fields with sorting
+    if (!lead) {
+      lead = await findLeadByPhoneDeterministic(user.email, fromNumber);
+      if (lead) resolvedBy = "phoneMatch";
+    }
 
-    // (C) +1 last-10 equality (prefer most recently updated)
-    if (!lead && last10) lead = await findLeadByPhone(user.email, `+1${last10}`);
-
-    // (D) Anchored last-10 regex (prefer most recently updated)
-    if (!lead && anchored) lead = await findLeadByPhone(user.email, anchored);
     // =====================================================================
 
     if (!lead) {
@@ -486,6 +499,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           createdAt: new Date(),
           updatedAt: new Date(),
         } as any);
+        resolvedBy = "autocreate";
         console.log("➕ Created minimal lead for inbound:", fromNumber);
       } catch (e) {
         console.warn("⚠️ Failed to auto-create lead:", e);
@@ -495,6 +509,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!lead) {
       return res.status(200).json({ message: "Lead not found/created, acknowledged." });
     }
+
+    console.log(`✅ inbound mapped leadId=${String(lead._id)} by=${resolvedBy} name="${resolveLeadDisplayName(lead, lead.Phone || (lead as any).phone || fromNumber) || "(no name)"}"`);
 
     const hadDrips = Array.isArray((lead as any).assignedDrips) && (lead as any).assignedDrips.length > 0;
 
@@ -563,11 +579,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     } catch (e) {
       console.warn("⚠️ Inbound reply email failed (non-fatal):", (e as any)?.message || e);
-    }
-
-    // 🔒 If we’re in test/containment mode, stop here (no auto-reply/booking)
-    if (AI_TEST_MODE) {
-      return res.status(200).json({ message: "Inbound saved; AI_TEST_MODE=1 (no auto-reply)." });
     }
 
     // === Keyword handling (no auto-reply here, just flags) ===
