@@ -36,6 +36,11 @@ function humanDelayMs() {
   return AI_TEST_MODE ? 3000 + Math.random() * 2000 : 180000 + Math.random() * 60000;
 }
 
+// ---------- NEW: feature flag to hard-disable recent-outbound tie-breaker ----------
+// Default OFF (phone-only mapping). Set ENABLE_LAST_OUTBOUND_TIEBREAK=1 to re-enable the heuristic.
+const ENABLE_LAST_OUTBOUND_TIEBREAK = process.env.ENABLE_LAST_OUTBOUND_TIEBREAK === "1";
+// ----------------------------------------------------------------------------------
+
 // ---------- quiet hours (lead-local) ----------
 const QUIET_START_HOUR = 21; // 9:00 PM
 const QUIET_END_HOUR = 8; // 8:00 AM
@@ -365,7 +370,7 @@ function normalizeWhen(datetimeText: string | null, nowISO: string, tz: string) 
   return null;
 }
 
-/* --------- NEW: Only trust a previous outbound if that lead’s phone actually matches this inbound --------- */
+/* --------- helper: confirm a lead really owns the inbound phone --------- */
 function leadPhoneMatches(lead: any, fromDigits: string): boolean {
   if (!lead) return false;
   const cand: string[] = [];
@@ -382,7 +387,6 @@ function leadPhoneMatches(lead: any, fromDigits: string): boolean {
   const last10 = fromDigits.slice(-10);
   return cand.some(d => d && d.endsWith(last10));
 }
-// ----------------------------------------------------------------------------------------------------------
 
 // ---------- handler ----------
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -446,7 +450,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     console.log(
-      `📥 inbound sid=${messageSid || "n/a"} from=${fromNumber} -> to=${toNumber} text="${body.slice(0, 120)}${body.length > 120 ? "…" : ""}"`
+      `📥 inbound(v4-safe) sid=${messageSid || "n/a"} from=${fromNumber} -> to=${toNumber} tieBreak=${ENABLE_LAST_OUTBOUND_TIEBREAK}`
     );
 
     // Map to the user by the inbound (owned) number
@@ -461,33 +465,35 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(200).json({ message: "No user found for this number." });
     }
 
-    // ===================== FIXED: lead resolution =====================
+    // ===================== lead resolution =====================
     const fromDigits = normalizeDigits(fromNumber);
     const last10 = fromDigits.slice(-10);
     const anchored = last10 ? new RegExp(`${last10}$`) : undefined;
 
     let lead: any = null;
 
-    // (A) Consider last outbound ONLY if that lead’s saved phone matches this inbound
-    const lastOutbound = await Message.findOne({
-      userEmail: user.email,
-      direction: "outbound",
-      from: toNumber,
-      $or: [
-        { to: fromNumber },
-        { to: `+1${last10}` },
-        ...(anchored ? [{ to: anchored }] : []),
-      ],
-    }).sort({ sentAt: -1, createdAt: -1, _id: -1 });
+    // (A) OPTIONAL: recent outbound heuristic (disabled by default)
+    if (ENABLE_LAST_OUTBOUND_TIEBREAK) {
+      const lastOutbound = await Message.findOne({
+        userEmail: user.email,
+        direction: "outbound",
+        from: toNumber,
+        $or: [
+          { to: fromNumber },
+          { to: `+1${last10}` },
+          ...(anchored ? [{ to: anchored }] : []),
+        ],
+      }).sort({ sentAt: -1, createdAt: -1, _id: -1 });
 
-    if (lastOutbound?.leadId) {
-      const viaMsg = await Lead.findById(lastOutbound.leadId);
-      if (viaMsg && leadPhoneMatches(viaMsg, fromDigits)) {
-        lead = viaMsg;
-      } else if (viaMsg) {
-        console.warn(
-          `↪︎ Ignoring lastOutbound lead (${String(viaMsg._id)}) — phone on lead does not match inbound ${fromNumber}`,
-        );
+      if (lastOutbound?.leadId) {
+        const viaMsg = await Lead.findById(lastOutbound.leadId);
+        if (viaMsg && leadPhoneMatches(viaMsg, fromDigits)) {
+          lead = viaMsg;
+        } else if (viaMsg) {
+          console.warn(
+            `↪︎ Ignoring lastOutbound lead (${String(viaMsg._id)}) — phone on lead does not match inbound ${fromNumber}`,
+          );
+        }
       }
     }
 
@@ -527,7 +533,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         (await Lead.findOne({ userEmail: user.email, mobile: anchored } as any)) ||
         (await Lead.findOne({ userEmail: user.email, "phones.value": anchored } as any));
     }
-    // =================================================================
+    // ============================================================
 
     if (!lead) {
       try {
@@ -584,11 +590,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // Update lead interaction history
     const inboundEntry = { type: "inbound" as const, text: body || (numMedia ? "[media]" : ""), date: new Date() };
-    lead.interactionHistory = lead.interactionHistory || [];
-    lead.interactionHistory.push(inboundEntry);
-    lead.lastInboundAt = new Date();
-    lead.lastInboundBody = body;
-    lead.updatedAt = new Date();
+    (lead as any).interactionHistory = (lead as any).interactionHistory || [];
+    (lead as any).interactionHistory.push(inboundEntry);
+    (lead as any).lastInboundAt = new Date();
+    (lead as any).lastInboundBody = body;
+    (lead as any).updatedAt = new Date();
     await lead.save();
 
     if (io) io.to(user.email).emit("message:new", { leadId: lead._id, ...inboundEntry });
@@ -600,20 +606,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const emailEnabled = user?.notifications?.emailOnInboundSMS !== false;
       if (emailEnabled) {
         const leadDisplayName =
-          resolveLeadDisplayName(lead, lead.Phone || (lead as any).phone || fromNumber);
+          resolveLeadDisplayName(lead, (lead as any).Phone || (lead as any).phone || fromNumber);
 
         const snippet = body.length > 60 ? `${body.slice(0, 60)}…` : body;
         const dripTag = hadDrips ? "[drip] " : "";
         const deepLink = `${ABS_BASE_URL}${LEAD_ENTRY_PATH}/${lead._id}`;
-        const subjectWho = leadDisplayName || (lead.Phone || (lead as any).phone || fromNumber);
+        const subjectWho = leadDisplayName || ((lead as any).Phone || (lead as any).phone || fromNumber);
 
         await sendLeadReplyNotificationEmail({
           to: user.email,
           replyTo: user.email,
           subject: `[New Lead Reply] ${dripTag}${subjectWho} — ${snippet || "(no text)"}`,
           leadName: leadDisplayName || undefined,
-          leadPhone: lead.Phone || (lead as any).phone || fromNumber,
-          leadEmail: lead.Email || (lead as any).email || "",
+          leadPhone: (lead as any).Phone || (lead as any).phone || fromNumber,
+          leadEmail: (lead as any).Email || (lead as any).email || "",
           folder: (lead as any).folder || (lead as any).Folder || (lead as any)["Folder Name"],
           status: (lead as any).status || (lead as any).Status,
           message: body || (numMedia ? "[media]" : ""),
@@ -627,15 +633,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // === Keyword handling (no auto-reply here, just flags) ===
     if (isOptOut(body)) {
-      lead.assignedDrips = [];
+      (lead as any).assignedDrips = [];
       (lead as any).dripProgress = [];
-      lead.isAIEngaged = false;
+      (lead as any).isAIEngaged = false;
       (lead as any).unsubscribed = true;
       (lead as any).optOut = true;
       (lead as any).status = "Not Interested";
 
       const note = { type: "system" as const, text: "[system] Lead opted out — moved to Not Interested.", date: new Date() };
-      lead.interactionHistory.push(note);
+      (lead as any).interactionHistory.push(note);
       await lead.save();
 
       if (io) {
@@ -654,7 +660,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (isHelp(body)) {
       const note = { type: "system" as const, text: "[system] HELP detected.", date: new Date() };
-      lead.interactionHistory.push(note);
+      (lead as any).interactionHistory.push(note);
       await lead.save();
       if (io) io.to(user.email).emit("message:new", { leadId: lead._id, ...note });
       return res.status(200).json({ message: "Help handled (no auto-reply)." });
@@ -664,7 +670,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       (lead as any).unsubscribed = false;
       (lead as any).optOut = false;
       const note = { type: "system" as const, text: "[system] START/UNSTOP detected — lead opted back in.", date: new Date() };
-      lead.interactionHistory.push(note);
+      (lead as any).interactionHistory.push(note);
       await lead.save();
       if (io) io.to(user.email).emit("message:new", { leadId: lead._id, ...note });
       console.log("🔓 Opt-in restored for", fromNumber);
@@ -677,7 +683,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const approved = SHARED_MESSAGING_SERVICE_SID || (a2p?.messagingReady && a2p?.messagingServiceSid);
     if (usConversation && !approved) {
       const note = { type: "system" as const, text: "[note] Auto-reply suppressed: A2P not approved yet.", date: new Date() };
-      lead.interactionHistory.push(note);
+      (lead as any).interactionHistory.push(note);
       await lead.save();
       if (io) io.to(user.email).emit("message:new", { leadId: lead._id, ...note });
       console.warn("⚠️ Auto-reply suppressed (A2P not approved)");
@@ -695,9 +701,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (isClientRetention) return res.status(200).json({ message: "Client retention reply — no AI engagement." });
 
     // ✅ Cancel drips & engage AI
-    lead.assignedDrips = [];
+    (lead as any).assignedDrips = [];
     (lead as any).dripProgress = [];
-    lead.isAIEngaged = true;
+    (lead as any).isAIEngaged = true;
 
     const tz = pickLeadZone(lead);
     const nowISO = DateTime.utc().toISO();
@@ -713,14 +719,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // ===== decide next reply =====
     let aiReply = "When’s a good time today or tomorrow for a quick chat?";
-    const stateCanon = normalizeStateInput(lead.State || (lead as any).state || "");
+    const stateCanon = normalizeStateInput((lead as any).State || (lead as any).state || "");
 
     // 1) deterministic parse
     let requestedISO: string | null = extractRequestedISO(body, stateCanon);
     // 2) “works” confirmations bind to last AI proposal
     if (!requestedISO && containsConfirmation(body)) {
       requestedISO =
-        extractTimeFromLastAI(lead.interactionHistory || [], stateCanon) ||
+        extractTimeFromLastAI((lead as any).interactionHistory || [], stateCanon) ||
         (lead as any).aiLastProposedISO ||
         null;
     }
@@ -739,7 +745,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (norm?.start) requestedISO = norm.start.toISO();
 
         if (!requestedISO) {
-          const context = computeContext(lead.assignedDrips);
+          const context = computeContext((lead as any).assignedDrips);
           if (ex.intent === "ask_duration") {
             aiReply = `It’s quick—about 10–15 minutes. Would later today or tomorrow afternoon work?`;
             memory.state = "qa";
@@ -753,7 +759,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               context,
               tz,
               inboundText: body,
-              history: lead.interactionHistory || [],
+              history: (lead as any).interactionHistory || [],
             });
             if (!askedRecently(memory, "chat_followup")) pushAsked(memory, "chat_followup");
             memory.state = "awaiting_time";
@@ -761,7 +767,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
       } catch {
         memory.state = "awaiting_time";
-        const lastAI = [...(lead.interactionHistory || [])].reverse().find((m: any) => m.type === "ai");
+        const lastAI = [...((lead as any).interactionHistory || [])].reverse().find((m: any) => m.type === "ai");
         const v = `What time works for you—today or tomorrow? You can reply like “tomorrow 3:00 pm”.`;
         aiReply = lastAI?.text?.trim() === v
           ? `Shoot me a time that works (e.g., “tomorrow 3:00 pm”) and I’ll text a confirmation.`
@@ -783,10 +789,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       } else {
         try {
           const bookingPayload = {
-            agentEmail: (lead.userEmail || user.email || "").toLowerCase(),
+            agentEmail: ((lead as any).userEmail || user.email || "").toLowerCase(),
             name: resolveLeadDisplayName(lead) || "Client",
-            phone: lead.Phone || (lead as any).phone || fromNumber,
-            email: lead.Email || (lead as any).email || "",
+            phone: (lead as any).Phone || (lead as any).phone || fromNumber,
+            email: (lead as any).Email || (lead as any).email || "",
             time: clientTime.toISO(),
             state: stateCanon || "AZ",
             durationMinutes: 30,
@@ -810,13 +816,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
             try {
               const fullName =
-                resolveLeadDisplayName(lead, lead.Phone || (lead as any).phone || fromNumber);
+                resolveLeadDisplayName(lead, (lead as any).Phone || (lead as any).phone || fromNumber);
 
               await sendAppointmentBookedEmail({
-                to: (lead.userEmail || user.email || "").toLowerCase(),
+                to: ((lead as any).userEmail || user.email || "").toLowerCase(),
                 agentName: (user as any)?.name || user.email,
                 leadName: fullName,
-                phone: lead.Phone || (lead as any).phone || fromNumber,
+                phone: (lead as any).Phone || (lead as any).phone || fromNumber,
                 state: stateCanon || "",
                 timeISO: clientTime.toISO()!,
                 timezone: clientTime.offsetNameShort || undefined,
@@ -847,7 +853,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     memory.lastDraft = aiReply;
 
     (lead as any).aiMemory = memory;
-    lead.aiLastResponseAt = new Date();
+    (lead as any).aiLastResponseAt = new Date();
     await lead.save();
 
     // Delayed AI reply (human-like), force FROM the exact inbound number
@@ -858,7 +864,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const fresh = await Lead.findById(lead._id);
         if (!fresh) return;
 
-        if (fresh.aiLastResponseAt && Date.now() - new Date(fresh.aiLastResponseAt).getTime() < 2 * 60 * 1000) {
+        if ((fresh as any).aiLastResponseAt && Date.now() - new Date((fresh as any).aiLastResponseAt).getTime() < 2 * 60 * 1000) {
           console.log("⏳ Skipping AI reply (cool-down).");
           return;
         }
@@ -867,8 +873,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           return;
         }
 
-        const lastAI = [...(fresh.interactionHistory || [])].reverse().find((m: any) => m.type === "ai");
-        const draft = ((fresh as any).aiMemory?.lastDraft as string) || "When’s a good time today or tomorrow for a quick chat?";
+        const lastAI = [...(((fresh as any).interactionHistory) || [])].reverse().find((m: any) => m.type === "ai");
+        const draft = (((fresh as any).aiMemory?.lastDraft) as string) || "When’s a good time today or tomorrow for a quick chat?";
         if (lastAI && lastAI.text?.trim() === draft.trim()) {
           console.log("🔁 Same AI content as last time — not sending.");
           return;
@@ -889,16 +895,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
 
         const aiEntry = { type: "ai" as const, text: draft, date: new Date() };
-        fresh.interactionHistory = fresh.interactionHistory || [];
-        fresh.interactionHistory.push(aiEntry);
-        fresh.aiLastResponseAt = new Date();
-        await fresh.save();
+        (fresh as any).interactionHistory = (fresh as any).interactionHistory || [];
+        (fresh as any).interactionHistory.push(aiEntry);
+        (fresh as any).aiLastResponseAt = new Date();
+        await (fresh as any).save();
 
         const { client } = await getClientForUser(user.email);
         const twilioMsg = await client.messages.create(paramsOut);
 
         await Message.create({
-          leadId: fresh._id,
+          leadId: (fresh as any)._id,
           userEmail: user.email,
           direction: "outbound",
           text: draft,
@@ -911,7 +917,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           fromServiceSid: (paramsOut as any).messagingServiceSid,
         });
 
-        if (io) io.to(user.email).emit("message:new", { leadId: fresh._id, ...aiEntry });
+        if (io) io.to(user.email).emit("message:new", { leadId: (fresh as any)._id, ...aiEntry });
 
         if (isQuiet && scheduledAt && canSchedule) {
           console.log(`🕘 Quiet hours: scheduled AI reply to ${fromNumber} at ${scheduledAt.toISOString()} (${zone}) | SID: ${(twilioMsg as any)?.sid}`);
