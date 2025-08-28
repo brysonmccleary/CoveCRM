@@ -5,6 +5,7 @@ import { authOptions } from "./auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import Lead from "@/models/Lead";
 import Folder from "@/models/Folder";
+import { initSocket } from "@/lib/socket";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed" });
@@ -53,6 +54,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         },
       }
     );
+
+    // 🔔 Broadcast to user room so folder views & lists refetch
+    try {
+      const io = initSocket(res as any);
+      // We use the userEmail as the room (your client already joins this)
+      io?.to(userEmail).emit("lead:disposition", {
+        leadId: String(lead._id),
+        fromFolderId,
+        toFolderId: String(folder._id),
+        status: lead.status,
+        userEmail,
+        ts: Date.now(),
+      });
+    } catch (e) {
+      // Non-fatal; just log if socket isn’t available
+      console.warn("disposition-lead: socket emit failed (non-fatal):", (e as any)?.message || e);
+    }
 
     return res.status(200).json({
       success: true,
