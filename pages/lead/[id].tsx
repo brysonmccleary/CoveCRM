@@ -1,3 +1,4 @@
+// pages/lead/[id].tsx
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { useRouter } from "next/router";
 import Sidebar from "@/components/Sidebar";
@@ -218,6 +219,22 @@ export default function LeadProfileDial() {
       if (!res.ok || !data?.success) {
         throw new Error(data?.message || "Failed to move lead");
       }
+
+      // reflect status/folder immediately in this page
+      setLead((prev) =>
+        prev
+          ? {
+              ...prev,
+              status: data.status || newFolderName,
+              folderId: data.toFolderId ?? prev.folderId,
+              ["Folder Name"]: newFolderName,
+            }
+          : prev
+      );
+
+      // reload visible history
+      loadHistory();
+
       toast.success(`✅ Lead moved to ${newFolderName}`);
     } catch (error: any) {
       console.error("Disposition error:", error);
@@ -257,6 +274,7 @@ export default function LeadProfileDial() {
         <div className="mb-2">
           <h2 className="text-xl font-bold">{leadName}</h2>
           {phoneDisplay ? (<div className="text-gray-300">{phoneDisplay}</div>) : null}
+          {lead?.status ? (<div className="text-xs mt-1 text-gray-400">Status: {lead.status}</div>) : null}
         </div>
 
         {Object.entries(lead || {})
@@ -325,6 +343,7 @@ export default function LeadProfileDial() {
             <button onClick={() => handleDisposition("Sold")} className="bg-gray-700 hover:bg-gray-600 px-3 py-2 rounded">Sold</button>
             <button onClick={() => handleDisposition("Booked Appointment")} className="bg-gray-700 hover:bg-gray-600 px-3 py-2 rounded">Booked Appointment</button>
             <button onClick={() => handleDisposition("Not Interested")} className="bg-gray-700 hover:bg-gray-600 px-3 py-2 rounded">Not Interested</button>
+            <button onClick={() => handleDisposition("Resolved")} className="bg-gray-700 hover:bg-gray-600 px-3 py-2 rounded">Resolve</button>
           </div>
 
           <div className="mt-4">
