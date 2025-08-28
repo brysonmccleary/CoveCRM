@@ -12,7 +12,11 @@ import { DateTime } from "luxon";
 import { buffer } from "micro";
 import axios from "axios";
 import crypto from "crypto";
-import { sendAppointmentBookedEmail, sendLeadReplyNotificationEmail, resolveLeadDisplayName } from "@/lib/email";
+import {
+  sendAppointmentBookedEmail,
+  sendLeadReplyNotificationEmail,
+  resolveLeadDisplayName,
+} from "@/lib/email";
 import { initSocket } from "@/lib/socket";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
 
@@ -37,7 +41,7 @@ function humanDelayMs() {
   return AI_TEST_MODE ? 3000 + Math.random() * 2000 : 180000 + Math.random() * 60000;
 }
 
-// Outbound duplicate suppression window
+// Outbound duplicate suppression window (hard lock per lead+draft)
 const DEDUPE_WINDOW_MS = AI_TEST_MODE ? 15_000 : 10 * 60 * 1000; // 15s test, 10m prod
 
 // ---------- quiet hours (lead-local) ----------
@@ -70,7 +74,6 @@ const STATE_CODE_FROM_NAME: Record<string, string> = {
   // Alaska / Hawaii
   alaska: "AK", ak: "AK", hawaii: "HI", hi: "HI",
 };
-
 const CODE_TO_ZONE: Record<string, string> = {
   AL: "America/Chicago", GA: "America/New_York", FL: "America/New_York", SC: "America/New_York",
   NC: "America/New_York", VA: "America/New_York", WV: "America/New_York", MD: "America/New_York",
@@ -92,7 +95,6 @@ const CODE_TO_ZONE: Record<string, string> = {
   // Alaska / Hawaii
   AK: "America/Anchorage", HI: "Pacific/Honolulu",
 };
-
 function normalizeStateInput(raw: string | undefined | null): string {
   const s = String(raw || "").toLowerCase().replace(/[^a-z]/g, "");
   return STATE_CODE_FROM_NAME[s] || (STATE_CODE_FROM_NAME[s.slice(0, 2)] ? STATE_CODE_FROM_NAME[s.slice(0, 2)] : "");
@@ -242,36 +244,7 @@ function extractTimeFromLastAI(history: any[], state?: string): string | null {
   return extractRequestedISO(String(lastAI.text), state);
 }
 
-function computeContext(drips?: string[]) {
-  const d = drips?.[0] || "";
-  if (d.includes("mortgage")) return "mortgage protection";
-  if (d.includes("veteran")) return "veteran life insurance";
-  if (d.includes("iul")) return "retirement income protection";
-  if (d.includes("final_expense")) return "final expense insurance";
-  return "life insurance services";
-}
-
-type ConvState = "idle" | "awaiting_time" | "scheduled" | "qa";
-interface LeadMemory {
-  state: ConvState;
-  lastAsked?: string[];
-  apptISO?: string | null;
-  apptText?: string | null;
-  tz?: string;
-  lastConfirmAtISO?: string | null;
-  lastDraft?: string | null;
-}
-function askedRecently(memory: LeadMemory, key: string) {
-  const hay = memory.lastAsked || [];
-  return hay.includes(key);
-}
-function pushAsked(memory: LeadMemory, key: string) {
-  const arr = (memory.lastAsked || []).slice(-1);
-  arr.push(key);
-  memory.lastAsked = arr;
-}
-
-// --- LLM helpers
+// --- LLM helpers (lightweight intent/time extraction)
 async function extractIntentAndTimeLLM(input: { text: string; nowISO: string; tz: string; }) {
   const sys = `Extract intent for a brief SMS thread about booking a call.
 Return STRICT JSON with keys:
@@ -297,7 +270,14 @@ yesno: "yes"|"no"|"unknown"`;
   };
 }
 
-// --- chat history for LLM (user/assistant roles)
+function computeContext(drips?: string[]) {
+  const d = drips?.[0] || "";
+  if (d.includes("mortgage")) return "mortgage protection";
+  if (d.includes("veteran")) return "veteran life insurance";
+  if (d.includes("iul")) return "retirement income protection";
+  if (d.includes("final_expense")) return "final expense insurance";
+  return "life insurance services";
+}
 function historyToChatMessages(history: any[] = []) {
   const msgs: { role: "user" | "assistant"; content: string }[] = [];
   for (const m of history) {
@@ -307,8 +287,6 @@ function historyToChatMessages(history: any[] = []) {
   }
   return msgs.slice(-24);
 }
-
-// --- conversational reply
 async function generateConversationalReply(opts: {
   lead: any; userEmail: string; context: string; tz: string; inboundText: string; history: any[];
 }) {
@@ -349,7 +327,6 @@ You are a helpful human-like SMS assistant for an insurance agent.
   if (!text) return "Got it — what time works for a quick call today or tomorrow?";
   return text.replace(/\s+/g, " ").trim();
 }
-
 function normalizeWhen(datetimeText: string | null, nowISO: string, tz: string) {
   if (!datetimeText) return null;
   const iso = extractRequestedISO(datetimeText);
@@ -677,6 +654,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const tz = pickLeadZone(lead);
     const nowISO = DateTime.utc().toISO();
+    type ConvState = "idle" | "awaiting_time" | "scheduled" | "qa";
+    interface LeadMemory {
+      state: ConvState;
+      lastAsked?: string[];
+      apptISO?: string | null;
+      apptText?: string | null;
+      tz?: string;
+      lastConfirmAtISO?: string | null;
+      lastDraft?: string | null;
+    }
     const memory: LeadMemory = {
       state: ((lead as any).aiMemory?.state as ConvState) || "idle",
       lastAsked: (lead as any).aiMemory?.lastAsked || [],
@@ -731,7 +718,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               inboundText: body,
               history: lead.interactionHistory || [],
             });
-            if (!askedRecently(memory, "chat_followup")) pushAsked(memory, "chat_followup");
+            const askedRecently = (memory.lastAsked || []).includes("chat_followup");
+            if (!askedRecently) memory.lastAsked = [...(memory.lastAsked || []).slice(-1), "chat_followup"];
             memory.state = "awaiting_time";
           }
         }
@@ -768,9 +756,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             durationMinutes: 30,
             notes: "Auto-booked via inbound SMS",
           };
-
-          console.log("📌 Booking payload ->", bookingPayload);
-
           const bookingRes = await axios.post(
             `${RAW_BASE_URL || ABS_BASE_URL}/api/google/calendar/book-appointment`,
             { ...bookingPayload },

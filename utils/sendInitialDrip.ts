@@ -1,3 +1,4 @@
+// /utils/sendInitialDrip.ts
 import type { LeadType } from "@/models/Lead";
 import { sendSms } from "@/lib/twilio/sendSMS"; // use object-form sender
 import { renderTemplate, ensureOptOut, splitName } from "@/utils/renderTemplate";
@@ -11,7 +12,6 @@ const DEFAULT_FOLDER_NAME = "your campaign";
 function getCurrentDate() {
   return new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
 }
-
 function getCurrentTime() {
   return new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
 }

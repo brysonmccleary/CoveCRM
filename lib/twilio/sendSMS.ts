@@ -37,11 +37,11 @@ const QUIET_START_HOUR = 21; // 9:00 PM
 const QUIET_END_HOUR = 8; // 8:00 AM
 const MIN_SCHEDULE_LEAD_MINUTES = 15;
 
-// Duplicate suppression window (set AI_TEST_MODE=1 or SMS_DEDUPE_WINDOW_MS for testing)
-const AI_TEST_MODE = process.env.AI_TEST_MODE === "1";
-const DEDUPE_WINDOW_MS =
-  parseInt(process.env.SMS_DEDUPE_WINDOW_MS || "", 10) ||
-  (AI_TEST_MODE ? 15_000 : 10 * 60 * 1000);
+// Duplicate suppression window (prevent back-to-back identical sends)
+const RECENT_DUP_WINDOW_MIN = Math.max(
+  5,
+  parseInt(process.env.SMS_DUP_WINDOW_MIN || "10", 10) || 10
+);
 
 // ---------- helpers ----------
 function normalize(p: string) {
@@ -55,6 +55,7 @@ function isUS(num: string) {
   return (num || "").startsWith("+1");
 }
 function pickLeadZone(lead: any): string {
+  // Must return an IANA zone; AZ should map to "America/Phoenix" (no DST)
   const fromState = getTimezoneFromState(lead?.State || "");
   if (fromState) return fromState;
   return "America/New_York";
@@ -62,7 +63,7 @@ function pickLeadZone(lead: any): string {
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
 }
-function sha1(s: string) {
+function sha(s: string) {
   return crypto.createHash("sha1").update(s).digest("hex");
 }
 
@@ -189,10 +190,10 @@ async function resolveLeadForSend(opts: {
 }
 
 /**
- * Core implementation used by both `sendSMS()` and the newer `sendSms({...})`.
- * NOW prefers an explicit `from` override. If none is provided, will
+ * Core implementation used by both `sendSMS()` and `sendSms({...})`.
+ * Prefers explicit `from` override. If none is provided, will
  * auto-detect the right sender number from the last message in the thread.
- * Bulletproofed with dedupe + per-lead lock to stop multi-send storms.
+ * Includes: A2P compliance gate, quiet-hours scheduling, idempotency guards, billing updates.
  */
 async function sendCore(paramsIn: {
   to: string;
@@ -202,7 +203,7 @@ async function sendCore(paramsIn: {
   overrideMsid?: string | null;
   from?: string | null;
   mediaUrls?: string[] | null;
-  idempotencyKey?: string | null; // optional external key (drips can pass)
+  idempotencyKey?: string | null; // NEW
 }): Promise<{ sid?: string; serviceSid: string; messageId: string; scheduledAt?: string }> {
   await dbConnect();
 
@@ -241,6 +242,30 @@ async function sendCore(paramsIn: {
     messagingServiceSid = null;
   }
 
+  if (!messagingServiceSid && !paramsIn.from) {
+    // may still fill a `from` later based on thread history
+  }
+  console.log(`🛠 initial route msid=${messagingServiceSid || "(from number path)"}`);
+
+  // Compliance gate (US only) — only when using a Messaging Service path
+  const approvedViaUser =
+    !!userA2P.messagingServiceSid && userA2P.messagingReady === true;
+  const approvedViaShared = Boolean(SHARED_MESSAGING_SERVICE_SID);
+  const approvedViaLegacy = Boolean(legacyA2P?.messagingReady);
+
+  if (
+    isUSDest &&
+    messagingServiceSid &&            // gate only if we're actually using an MSID
+    !(approvedViaUser || approvedViaShared || approvedViaLegacy || DEV_ALLOW_UNAPPROVED)
+  ) {
+    throw new Error(
+      "Texting is not enabled yet. Your A2P 10DLC registration is pending or not linked.",
+    );
+  }
+  if (DEV_ALLOW_UNAPPROVED && isUSDest && messagingServiceSid && !approvedViaUser && !approvedViaShared && !approvedViaLegacy) {
+    console.warn("[DEV] A2P not approved — sending anyway because DEV_ALLOW_UNAPPROVED=1");
+  }
+
   // Resolve lead (prefer explicit)
   const lead = await resolveLeadForSend({
     leadId: paramsIn.leadId,
@@ -268,115 +293,6 @@ async function sendCore(paramsIn: {
       console.log(`📎 thread-stick: forcing from=${forcedFrom} for lead=${String(lead?._id)}`);
     }
   }
-
-  // If after thread-stick we still have no route, we'll try tenant MSID later.
-  console.log(`🛠 initial route msid=${messagingServiceSid || "(from number path)"}`);
-
-  // Compliance gate (US only) — only when using a Messaging Service path
-  const approvedViaUser =
-    !!userA2P.messagingServiceSid && userA2P.messagingReady === true;
-  const approvedViaShared = Boolean(SHARED_MESSAGING_SERVICE_SID);
-  const approvedViaLegacy = Boolean(legacyA2P?.messagingReady);
-
-  if (
-    isUSDest &&
-    messagingServiceSid &&            // gate only if we're actually using an MSID
-    !(approvedViaUser || approvedViaShared || approvedViaLegacy || DEV_ALLOW_UNAPPROVED)
-  ) {
-    throw new Error(
-      "Texting is not enabled yet. Your A2P 10DLC registration is pending or not linked.",
-    );
-  }
-  if (DEV_ALLOW_UNAPPROVED && isUSDest && messagingServiceSid && !approvedViaUser && !approvedViaShared && !approvedViaLegacy) {
-    console.warn("[DEV] A2P not approved — sending anyway because DEV_ALLOW_UNAPPROVED=1");
-  }
-
-  // ---------- HARD DEDUPE BEFORE QUEUEING ----------
-  const routeId = forcedFrom ? `from:${forcedFrom}` : (messagingServiceSid ? `msid:${messagingServiceSid}` : "route:pending");
-  const dedupeKey =
-    paramsIn.idempotencyKey ||
-    sha1(`${user.email}|${lead?._id || ""}|${toNorm}|${routeId}|${paramsIn.body}`);
-
-  // If route still pending, we may mint tenant MSID (non-personal) to finalize routeId
-  if (routeId === "route:pending") {
-    if (!usingPersonal) {
-      const msid = await ensureTenantMessagingService(String(user._id), user.name || user.email);
-      messagingServiceSid = msid;
-      console.log(`🛠 fallback tenant MSID created/used: ${msid}`);
-    } else {
-      throw new Error("No routing set (neither messagingServiceSid nor from).");
-    }
-  }
-
-  const finalRouteId = forcedFrom ? `from:${forcedFrom}` : `msid:${messagingServiceSid}`;
-  const threshold = new Date(Date.now() - DEDUPE_WINDOW_MS);
-
-  // 1) Per-lead lock (atomic)
-  if (lead?._id) {
-    const lockOk = await Lead.findOneAndUpdate(
-      {
-        _id: lead._id,
-        $or: [
-          { "outboundLock.at": { $lt: threshold } },
-          { "outboundLock.key": { $ne: dedupeKey } },
-          { outboundLock: { $exists: false } },
-        ],
-      },
-      { $set: { outboundLock: { key: dedupeKey, at: new Date(), route: finalRouteId } } },
-      { new: true, upsert: false }
-    );
-    if (!lockOk) {
-      // Write a suppressed marker so the UI shows what happened
-      const suppressed = await Message.create({
-        leadId: lead._id,
-        userEmail: user.email,
-        direction: "outbound",
-        text: paramsIn.body,
-        read: true,
-        status: "suppressed",
-        suppressed: true,
-        reason: "duplicate_lock",
-        to: toNorm,
-        from: forcedFrom || undefined,
-        fromServiceSid: messagingServiceSid || undefined,
-        queuedAt: new Date(),
-      });
-      console.log("🛑 duplicate blocked by lead lock");
-      return { serviceSid: messagingServiceSid || "", messageId: String(suppressed._id) };
-    }
-  }
-
-  // 2) Recent identical message check (same route + to + body)
-  const recentDupe = await Message.findOne({
-    userEmail: user.email,
-    to: toNorm,
-    text: paramsIn.body,
-    ...(forcedFrom
-      ? { from: forcedFrom }
-      : { fromServiceSid: messagingServiceSid || undefined }),
-    createdAt: { $gt: threshold },
-    suppressed: { $ne: true },
-  }).lean();
-
-  if (recentDupe) {
-    const suppressed = await Message.create({
-      leadId: lead?._id,
-      userEmail: user.email,
-      direction: "outbound",
-      text: paramsIn.body,
-      read: true,
-      status: "suppressed",
-      suppressed: true,
-      reason: "duplicate_recent",
-      to: toNorm,
-      from: forcedFrom || undefined,
-      fromServiceSid: messagingServiceSid || undefined,
-      queuedAt: new Date(),
-    });
-    console.log("🛑 duplicate blocked by recent message check");
-    return { serviceSid: messagingServiceSid || "", messageId: String(suppressed._id) };
-  }
-  // ---------- END HARD DEDUPE ----------
 
   // Opt-out suppression (supports either flag) + move to Not Interested
   if ((lead as any)?.optOut === true || (lead as any)?.unsubscribed === true) {
@@ -407,10 +323,50 @@ async function sendCore(paramsIn: {
       from: forcedFrom || undefined,
       fromServiceSid: messagingServiceSid || undefined,
       queuedAt: new Date(),
-    });
+      idempotencyKey: paramsIn.idempotencyKey || undefined,
+    } as any);
     console.log(`⚠️ suppressed reason=opt_out to=${toNorm} messageId=${suppressed._id}`);
     return { serviceSid: messagingServiceSid || "", messageId: String(suppressed._id) };
   }
+
+  // ---------- Idempotency / recent-duplicate guards ----------
+  // 1) explicit idempotencyKey gate
+  if (paramsIn.idempotencyKey) {
+    const existing = await Message.findOne({
+      userEmail: user.email,
+      idempotencyKey: paramsIn.idempotencyKey,
+    }).lean();
+    if (existing) {
+      console.log(`🔒 idem-hit key=${paramsIn.idempotencyKey} -> messageId=${existing._id}`);
+      return {
+        sid: (existing as any).sid,
+        serviceSid: (existing as any).fromServiceSid || "",
+        messageId: String(existing._id),
+        scheduledAt: (existing as any)?.scheduledAt ? new Date((existing as any).scheduledAt).toISOString() : undefined,
+      };
+    }
+  }
+  // 2) recent same-body to same number window guard
+  const since = new Date(Date.now() - RECENT_DUP_WINDOW_MIN * 60 * 1000);
+  const recentDup = await Message.findOne({
+    userEmail: user.email,
+    direction: "outbound",
+    to: toNorm,
+    text: paramsIn.body,
+    createdAt: { $gte: since },
+    status: { $nin: ["error"] },
+  }).sort({ createdAt: -1 }).lean();
+
+  if (recentDup) {
+    console.log(`🛑 recent-dup guard to=${toNorm} within=${RECENT_DUP_WINDOW_MIN}min messageId=${recentDup._id}`);
+    return {
+      sid: (recentDup as any).sid,
+      serviceSid: (recentDup as any).fromServiceSid || "",
+      messageId: String(recentDup._id),
+      scheduledAt: (recentDup as any)?.scheduledAt ? new Date((recentDup as any).scheduledAt).toISOString() : undefined,
+    };
+  }
+  // -----------------------------------------------------------
 
   // Quiet hours compute (we schedule instead of suppressing)
   const zone = pickLeadZone(lead);
@@ -431,14 +387,12 @@ async function sendCore(paramsIn: {
     fromServiceSid: messagingServiceSid || undefined,
     queuedAt: new Date(),
     scheduledAt: isQuiet && scheduledAt ? scheduledAt : undefined,
-    // store dedupe metadata for later audits
-    dedupeKey: dedupeKey,
-    dedupeRoute: finalRouteId,
-    dedupeWindowMs: DEDUPE_WINDOW_MS,
-  });
+    idempotencyKey: paramsIn.idempotencyKey || undefined,
+    contentHash: sha(`${toNorm}|${(forcedFrom || messagingServiceSid || "")}|${paramsIn.body.trim()}`),
+  } as any);
   const messageId = String(preRow._id);
   console.log(
-    `⏳ queued route=${finalRouteId} messageId=${messageId}`
+    `⏳ queued msid=${messagingServiceSid || "(from)"} from=${forcedFrom || "(auto)"} messageId=${messageId}`
   );
 
   // Build Twilio params
@@ -465,7 +419,8 @@ async function sendCore(paramsIn: {
       console.warn("⚠️ Quiet hours: cannot schedule without a Messaging Service SID; sending immediately.");
     }
   } else {
-    // Should not happen (we resolved above), but just in case
+    // No route selected by now → try to fallback by minting tenant MSID if possible
+    const { usingPersonal } = await getClientForUser(user.email);
     if (!usingPersonal) {
       const msid = await ensureTenantMessagingService(String(user._id), user.name || user.email);
       (twParams as any).messagingServiceSid = msid;
@@ -607,16 +562,17 @@ function computeQuietHoursScheduling(zone: string): {
 
 /**
  * LEGACY: keep the original positional API for existing callers.
+ * (Uses a deterministic hourly idempotency key.)
  */
 export async function sendSMS(
   to: string,
   body: string,
   userIdOrUser: string | any,
-  idempotencyKey?: string
 ): Promise<{ sid?: string; serviceSid: string; messageId: string; scheduledAt?: string }> {
   const user = await ensureUserDoc(userIdOrUser);
   if (!user) throw new Error("User not found");
-  return await sendCore({ to, body, user, idempotencyKey: idempotencyKey || null });
+  const idem = sha(`${to}|${body}|${user.email}|${DateTime.utc().toFormat("yyyyLLddHH")}`);
+  return await sendCore({ to, body, user, idempotencyKey: idem });
 }
 
 /**

@@ -1,3 +1,4 @@
+// /pages/api/cron/run-drips.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import dbConnect from "@/lib/mongooseConnect";
 import Lead from "@/models/Lead";
@@ -221,9 +222,12 @@ export default async function handler(
       const lastName = (lead as any)["Last Name"] || null;
       const fullName = [firstName, lastName].filter(Boolean).join(" ") || null;
 
-      const assigned: string[] = Array.isArray((lead as any).assignedDrips)
+      // ✅ de-dupe assigned drips (this removes a common 4x-send cause)
+      const assignedRaw: string[] = Array.isArray((lead as any).assignedDrips)
         ? (lead as any).assignedDrips
         : [];
+      const assigned = Array.from(new Set(assignedRaw.map(String)));
+
       const progressArr: any[] = Array.isArray((lead as any).dripProgress)
         ? (lead as any).dripProgress
         : [];
