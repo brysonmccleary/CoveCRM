@@ -40,3 +40,9 @@ pnpm-lock.yaml
 
 # TS build info
 tsconfig.tsbuildinfo
+
+# env files
+.env
+.env.*
+.env.local
+.env.vercel
