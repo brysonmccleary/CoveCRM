@@ -37,6 +37,7 @@ export interface IMessage {
   sentAt?: Date;
   deliveredAt?: Date;
   failedAt?: Date;
+  receivedAt?: Date; // <-- added: used by inbound handler
 
   // Suppression/flags
   suppressed?: boolean;
@@ -89,6 +90,7 @@ const MessageSchema = new Schema<IMessage>(
     sentAt: { type: Date },
     deliveredAt: { type: Date },
     failedAt: { type: Date },
+    receivedAt: { type: Date }, // <-- added to match inbound write
 
     suppressed: { type: Boolean, default: false },
     reason: { type: String },

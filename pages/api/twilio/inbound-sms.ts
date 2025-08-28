@@ -37,6 +37,9 @@ const ALLOW_DEV_TWILIO_TEST =
 
 // Human-like delay: 3–4 min; set AI_TEST_MODE=1 for 3–5s while testing
 const AI_TEST_MODE = process.env.AI_TEST_MODE === "1";
+// Kill switch for “stick to last outbound” routing
+const IGNORE_LAST_OUTBOUND = process.env.INBOUND_IGNORE_LAST_OUTBOUND === "1";
+
 function humanDelayMs() {
   return AI_TEST_MODE ? 3000 + Math.random() * 2000 : 180000 + Math.random() * 60000;
 }
@@ -351,7 +354,17 @@ function leadPhoneMatches(lead: any, fromDigits: string): boolean {
   const last10 = fromDigits.slice(-10);
   return cand.some(d => d && d.endsWith(last10));
 }
-// ----------------------------------------------------------------------------------------------------------
+
+// Prefer newest matching lead when multiples share the same phone
+async function findLeadByPhone(userEmail: string, value: string | RegExp) {
+  return await Lead.findOne({
+    userEmail,
+    $or: [
+      { Phone: value }, { phone: value }, { ["Phone Number"]: value as any }, { PhoneNumber: value as any },
+      { Mobile: value }, { mobile: value }, { "phones.value": value as any },
+    ],
+  }).sort({ updatedAt: -1, createdAt: -1 }).exec();
+}
 
 // ---------- handler ----------
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -433,57 +446,31 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     let lead: any = null;
 
     // (A) Consider last outbound ONLY if that lead’s saved phone matches this inbound
-    const lastOutbound = await Message.findOne({
-      userEmail: user.email,
-      direction: "outbound",
-      from: toNumber, // sent from this owned number
-      $or: [{ to: fromNumber }, { to: `+1${last10}` }, ...(anchored ? [{ to: anchored }] : [])],
-    }).sort({ sentAt: -1, createdAt: -1, _id: -1 });
+    if (!IGNORE_LAST_OUTBOUND) {
+      const lastOutbound = await Message.findOne({
+        userEmail: user.email,
+        direction: "outbound",
+        from: toNumber, // sent from this owned number
+        $or: [{ to: fromNumber }, { to: `+1${last10}` }, ...(anchored ? [{ to: anchored }] : [])],
+      }).sort({ sentAt: -1, createdAt: -1, _id: -1 });
 
-    if (lastOutbound?.leadId) {
-      const viaMsg = await Lead.findById(lastOutbound.leadId);
-      if (viaMsg && leadPhoneMatches(viaMsg, fromDigits)) lead = viaMsg;
-      else if (viaMsg) {
-        console.warn(`↪︎ Ignoring lastOutbound lead (${String(viaMsg._id)}) — lead phone doesn't match inbound ${fromNumber}`);
+      if (lastOutbound?.leadId) {
+        const viaMsg = await Lead.findById(lastOutbound.leadId);
+        if (viaMsg && leadPhoneMatches(viaMsg, fromDigits)) lead = viaMsg;
+        else if (viaMsg) {
+          console.warn(`↪︎ Ignoring lastOutbound lead (${String(viaMsg._id)}) — lead phone doesn't match inbound ${fromNumber}`);
+        }
       }
     }
 
-    // (B) Exact E.164 match on common fields
-    if (!lead) {
-      lead =
-        (await Lead.findOne({ userEmail: user.email, Phone: fromNumber })) ||
-        (await Lead.findOne({ userEmail: user.email, phone: fromNumber })) ||
-        (await Lead.findOne({ userEmail: user.email, ["Phone Number"]: fromNumber } as any)) ||
-        (await Lead.findOne({ userEmail: user.email, PhoneNumber: fromNumber } as any)) ||
-        (await Lead.findOne({ userEmail: user.email, Mobile: fromNumber } as any)) ||
-        (await Lead.findOne({ userEmail: user.email, mobile: fromNumber } as any)) ||
-        (await Lead.findOne({ userEmail: user.email, "phones.value": fromNumber } as any));
-    }
+    // (B) Exact E.164 match on common fields (prefer most recently updated)
+    if (!lead) lead = await findLeadByPhone(user.email, fromNumber);
 
-    // (C) +1 last-10 equality
-    if (!lead && last10) {
-      const plus1 = `+1${last10}`;
-      lead =
-        (await Lead.findOne({ userEmail: user.email, Phone: plus1 })) ||
-        (await Lead.findOne({ userEmail: user.email, phone: plus1 })) ||
-        (await Lead.findOne({ userEmail: user.email, ["Phone Number"]: plus1 } as any)) ||
-        (await Lead.findOne({ userEmail: user.email, PhoneNumber: plus1 } as any)) ||
-        (await Lead.findOne({ userEmail: user.email, Mobile: plus1 } as any)) ||
-        (await Lead.findOne({ userEmail: user.email, mobile: plus1 } as any)) ||
-        (await Lead.findOne({ userEmail: user.email, "phones.value": plus1 } as any));
-    }
+    // (C) +1 last-10 equality (prefer most recently updated)
+    if (!lead && last10) lead = await findLeadByPhone(user.email, `+1${last10}`);
 
-    // (D) Anchored last-10 regex
-    if (!lead && anchored) {
-      lead =
-        (await Lead.findOne({ userEmail: user.email, Phone: anchored })) ||
-        (await Lead.findOne({ userEmail: user.email, phone: anchored })) ||
-        (await Lead.findOne({ userEmail: user.email, ["Phone Number"]: anchored } as any)) ||
-        (await Lead.findOne({ userEmail: user.email, PhoneNumber: anchored } as any)) ||
-        (await Lead.findOne({ userEmail: user.email, Mobile: anchored } as any)) ||
-        (await Lead.findOne({ userEmail: user.email, mobile: anchored } as any)) ||
-        (await Lead.findOne({ userEmail: user.email, "phones.value": anchored } as any));
-    }
+    // (D) Anchored last-10 regex (prefer most recently updated)
+    if (!lead && anchored) lead = await findLeadByPhone(user.email, anchored);
     // =====================================================================
 
     if (!lead) {
@@ -576,6 +563,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     } catch (e) {
       console.warn("⚠️ Inbound reply email failed (non-fatal):", (e as any)?.message || e);
+    }
+
+    // 🔒 If we’re in test/containment mode, stop here (no auto-reply/booking)
+    if (AI_TEST_MODE) {
+      return res.status(200).json({ message: "Inbound saved; AI_TEST_MODE=1 (no auto-reply)." });
     }
 
     // === Keyword handling (no auto-reply here, just flags) ===
