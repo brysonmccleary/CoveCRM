@@ -104,7 +104,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       statusCallbackEvent: ["initiated", "ringing", "answered", "completed"],
       // Optional AMD at create; TwiML can also handle detection if desired
       machineDetection: "DetectMessageEnd" as any,
-      asyncAmd: true,
+      asyncAmd: "true",
       recordingStatusCallback: `${baseUrl}/api/twilio-recording`,
       recordingStatusCallbackEvent: ["completed"],
     });
