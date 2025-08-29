@@ -14,6 +14,9 @@ function escapeRegex(s: string) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+type ExistingLeadLean = { _id: any; folderId?: any; status?: string } | null;
+type FolderLean = { _id: any; name: string } | null;
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed" });
 
@@ -28,51 +31,29 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     await dbConnect();
 
-    // Ensure this lead belongs to the user
-    const leadExisting: any = await Lead.findOne({ _id: leadId, userEmail }).lean();
-    if (!leadExisting) return res.status(404).json({ message: "Lead not found." });
-
-    const fromFolderId = leadExisting.folderId ? String(leadExisting.folderId) : null;
-
-    // Resolve CANONICAL folder id for this exact name (case-insensitive, per-user)
-    const nameRegex = new RegExp(`^${escapeRegex(rawName)}$`, "i");
-    const sameNameFolders = await Folder.find({ userEmail, name: nameRegex })
-      .select({ _id: 1, name: 1, createdAt: 1 })
-      .sort({ createdAt: 1, _id: 1 })
-      .lean()
+    // Ensure the lead exists and belongs to this user
+    const existing: ExistingLeadLean = await Lead.findOne({ _id: leadId, userEmail })
+      .select({ _id: 1, folderId: 1, status: 1 })
+      .lean<ExistingLeadLean>()
       .exec();
+    if (!existing) return res.status(404).json({ message: "Lead not found." });
 
-    let canonicalId: any;
-    if (sameNameFolders.length > 0) {
-      canonicalId = sameNameFolders[0]._id;
+    const fromFolderId = existing.folderId ? String(existing.folderId) : null;
 
-      // If duplicates with SAME NAME exist, repoint leads on the extras to the canonical id (best-effort)
-      if (sameNameFolders.length > 1) {
-        const otherIds = sameNameFolders.slice(1).map((f) => f._id);
-        if (otherIds.length) {
-          await Lead.updateMany(
-            { userEmail, folderId: { $in: otherIds } },
-            {
-              $set: {
-                folderId: canonicalId,
-                folderName: rawName,
-                ["Folder Name"]: rawName,
-                folder: rawName,
-                ...(SYSTEM.has(rawName) ? { status: rawName } : {}),
-                updatedAt: new Date(),
-              },
-            }
-          );
-        }
-      }
-    } else {
+    // Resolve or create EXACT name (case-insensitive) for this user
+    const nameRegex = new RegExp(`^${escapeRegex(rawName)}$`, "i");
+    let target: FolderLean = await Folder.findOne({ userEmail, name: nameRegex })
+      .select({ _id: 1, name: 1 })
+      .lean<FolderLean>()
+      .exec();
+    if (!target) {
       const created = await Folder.create({ userEmail, name: rawName, assignedDrips: [] });
-      canonicalId = created._id;
+      target = { _id: created._id, name: rawName };
     }
 
-    // 🔒 Atomic write to guarantee the move persists
+    // 🔒 Atomic single-document update — move only THIS lead
     const setFields: Record<string, any> = {
-      folderId: canonicalId,
+      folderId: target._id,
       folderName: rawName,
       ["Folder Name"]: rawName,
       folder: rawName,
@@ -80,26 +61,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     };
     if (SYSTEM.has(rawName)) setFields.status = rawName;
 
-    const write = await Lead.updateOne({ _id: leadId, userEmail }, { $set: setFields });
+    const write = await Lead.updateOne({ _id: leadId, userEmail }, { $set: setFields }).exec();
     if (write.matchedCount === 0) {
       return res.status(404).json({ message: "Lead not found after update." });
     }
 
-    // Emit socket so other views refresh
+    // Socket notify so lists/pages refetch
     try {
       let io = (res as any)?.socket?.server?.io;
       if (!io) io = initSocket(res as any);
-      if (io) {
-        io.to(userEmail).emit("lead:updated", {
-          _id: String(leadId),
-          folderId: String(canonicalId),
-          folder: rawName,
-          folderName: rawName,
-          ["Folder Name"]: rawName,
-          status: SYSTEM.has(rawName) ? rawName : leadExisting?.status,
-          updatedAt: new Date(),
-        });
-      }
+      io?.to(userEmail).emit("lead:updated", {
+        _id: String(leadId),
+        folderId: String(target._id),
+        folderName: rawName,
+        status: SYSTEM.has(rawName) ? rawName : existing.status,
+        updatedAt: new Date(),
+      });
     } catch (e) {
       console.warn("disposition-lead: socket emit failed (non-fatal):", e);
     }
@@ -108,8 +85,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       success: true,
       message: "Lead moved.",
       fromFolderId,
-      toFolderId: String(canonicalId),
-      status: SYSTEM.has(rawName) ? rawName : leadExisting?.status,
+      toFolderId: String(target._id),
+      status: SYSTEM.has(rawName) ? rawName : existing.status,
       folderName: rawName,
     });
   } catch (e) {
