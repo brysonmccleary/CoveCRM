@@ -21,23 +21,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const { folderId } = req.query as { folderId?: string };
     await dbConnect();
 
-    // No folder selected → intentionally empty (prevents "show all")
     if (!folderId || typeof folderId !== "string" || !folderId.trim()) {
       return res.status(200).json({ leads: [] as LeadType[], folderName: null });
     }
 
     const rawId = folderId.trim();
 
-    // Resolve the folder doc (narrow to a single object, not array)
+    // Resolve folder (allow id or name), but we will fetch leads by folderId only.
     let folderDoc: LeanFolderDoc | null = null;
-
     if (Types.ObjectId.isValid(rawId)) {
       folderDoc = (await Folder.findOne({ _id: new Types.ObjectId(rawId), userEmail: email })
         .select({ _id: 1, name: 1 })
         .lean()
         .exec()) as LeanFolderDoc | null;
     } else {
-      // name fallback only for resolving the id; we still fetch leads by folderId
       folderDoc = (await Folder.findOne({ userEmail: email, name: rawId })
         .select({ _id: 1, name: 1 })
         .lean()
@@ -52,18 +49,29 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const canonicalIdStr = String(canonicalId);
     const folderName = folderDoc.name || rawId;
 
-    // STRICT: only leads actually assigned to this folderId.
-    // (Handles both ObjectId and string-stored folderId, plus mixed types.)
+    // STRICT: only docs whose folderId equals this folder (handles ObjectId|string|mixed)
     const leads = await Lead.find(
       {
         userEmail: email,
         $or: [
-          { folderId: canonicalId },            // ObjectId match
-          { folderId: canonicalIdStr },         // stored as string
-          { $expr: { $eq: [{ $toString: "$folderId" }, canonicalIdStr] } }, // mixed
+          { folderId: canonicalId },
+          { folderId: canonicalIdStr },
+          { $expr: { $eq: [{ $toString: "$folderId" }, canonicalIdStr] } },
         ],
       },
-      { _id: 1, name: 1, Phone: 1, phone: 1, Email: 1, status: 1, updatedAt: 1 }
+      {
+        _id: 1,
+        name: 1,
+        "First Name": 1,
+        "Last Name": 1,
+        Phone: 1,
+        phone: 1,
+        Email: 1,
+        status: 1,
+        State: 1,
+        Age: 1,
+        updatedAt: 1,
+      }
     )
       .sort({ updatedAt: -1, createdAt: -1, _id: -1 })
       .lean()
