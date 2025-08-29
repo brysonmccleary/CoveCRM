@@ -28,35 +28,42 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const lead = await Lead.findOne({ _id: leadId, userEmail });
     if (!lead) return res.status(404).json({ message: "Lead not found." });
 
-    // Resolve a *canonical* target folder:
-    // - case-insensitive exact name match
-    // - oldest first (createdAt, then _id) to avoid duplicates picking the wrong one
-    const targetName = newFolderName.trim();
-    let folder =
-      (await Folder.findOne({
-        userEmail,
-        name: new RegExp(`^${targetName}$`, "i"),
-      })
-        .sort({ createdAt: 1, _id: 1 })
-        .exec()) || null;
+    // --- FIX: resolve canonical folder (handles duplicates) ---
+    const nameTrimmed = newFolderName.trim();
+    const escaped = nameTrimmed.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); // escape for regex
+    // Find all same-name folders (case-insensitive) for this user, pick the NEWEST one.
+    const candidates = await Folder.find({
+      userEmail,
+      name: { $regex: new RegExp(`^${escaped}$`, "i") },
+    })
+      .sort({ createdAt: -1, _id: -1 })
+      .select({ _id: 1, name: 1 })
+      .lean();
 
-    // Create if none exists
-    if (!folder) {
-      folder = await Folder.create({ userEmail, name: targetName, assignedDrips: [] });
+    let targetFolderId: any;
+    let targetFolderName = nameTrimmed;
+
+    if (candidates.length > 0) {
+      targetFolderId = candidates[0]._id;
+      targetFolderName = candidates[0].name ?? nameTrimmed;
+    } else {
+      const created = await Folder.create({ userEmail, name: nameTrimmed, assignedDrips: [] });
+      targetFolderId = created._id;
+      targetFolderName = created.name;
     }
+    // ----------------------------------------------------------
 
     const fromFolderId = lead.folderId ? String(lead.folderId) : null;
 
     // Move + keep backward-compat fields in sync
-    lead.folderId = folder._id;
-    (lead as any).folder = targetName;           // legacy
-    (lead as any)["Folder Name"] = targetName;   // legacy
-    (lead as any).folderName = targetName;       // friendly alias
+    lead.folderId = targetFolderId;
+    (lead as any).folder = targetFolderName;         // legacy
+    (lead as any)["Folder Name"] = targetFolderName; // legacy
+    (lead as any).folderName = targetFolderName;     // friendly alias
 
-    if (SYSTEM.has(targetName)) {
-      lead.status = targetName; // disposition mirrors status
+    if (SYSTEM.has(targetFolderName)) {
+      lead.status = targetFolderName; // mark disposition as status
     }
-
     lead.updatedAt = new Date();
     await lead.save();
 
@@ -68,24 +75,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           interactionHistory: {
             type: "status",
             from: fromFolderId,
-            to: targetName,
+            to: targetFolderName,
             date: new Date(),
           },
         },
       }
     );
 
-    // Notify any open UIs
+    // Socket notify (refresh lists)
     try {
       let io = (res as any)?.socket?.server?.io;
       if (!io) io = initSocket(res as any);
       if (io) {
         io.to(userEmail).emit("lead:updated", {
           _id: String(lead._id),
-          folderId: String(folder._id),
-          folder: targetName,
-          folderName: targetName,
-          ["Folder Name"]: targetName,
+          folderId: String(targetFolderId),
+          folder: targetFolderName,
+          folderName: targetFolderName,
+          ["Folder Name"]: targetFolderName,
           status: lead.status,
           updatedAt: lead.updatedAt,
         });
@@ -98,9 +105,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       success: true,
       message: "Lead moved.",
       fromFolderId,
-      toFolderId: String(folder._id),
+      toFolderId: String(targetFolderId),
       status: lead.status,
-      folderName: targetName,
+      folderName: targetFolderName,
     });
   } catch (e) {
     console.error("disposition-lead error:", e);
