@@ -134,43 +134,49 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         ? Math.min(values.length, Math.max(endRow, firstDataRowIndex + 1)) - 1
         : values.length - 1;
 
-    // Folder (find or create)
+    // === Folder selection / creation (owner-guarded) ===
     let folderDoc: any = null;
     if (folderId) {
-      try {
-        folderDoc = await Folder.findOne({
-          _id: new mongoose.Types.ObjectId(folderId),
-        });
-      } catch {
-        // fall through
+      if (mongoose.isValidObjectId(folderId)) {
+        folderDoc = await Folder.findOne({ _id: folderId, userEmail }).lean();
+      }
+      if (!folderDoc) {
+        return res.status(400).json({ error: "Folder not found or not owned by user" });
       }
     } else if (folderName) {
-      folderDoc = await Folder.findOneAndUpdate(
-        { userEmail, name: folderName },
-        { $setOnInsert: { userEmail, name: folderName, source: "google-sheets" } },
-        { new: true, upsert: createFolderIfMissing }
-      );
+      folderDoc = await Folder.findOne({ userEmail, name: folderName }).lean();
+      if (!folderDoc && createFolderIfMissing) {
+        const created = await Folder.create({ userEmail, name: folderName, source: "google-sheets" });
+        folderDoc = created.toObject();
+      }
+      if (!folderDoc) {
+        return res.status(400).json({ error: "Folder not found and createFolderIfMissing=false" });
+      }
     } else {
+      // Default: create/use "<Spreadsheet> — <Tab>"
       const meta = await google
         .drive({ version: "v3", auth: oauth2 })
-        .files.get({
-          fileId: spreadsheetId,
-          fields: "name",
-        });
+        .files.get({ fileId: spreadsheetId, fields: "name" });
       const defaultName = `${meta.data.name || "Imported Leads"} — ${tabTitle}`;
-      folderDoc = await Folder.findOneAndUpdate(
-        { userEmail, name: defaultName },
-        { $setOnInsert: { userEmail, name: defaultName, source: "google-sheets" } },
-        { new: true, upsert: true }
-      );
+      let def = await Folder.findOne({ userEmail, name: defaultName }).lean();
+      if (!def) {
+        const created = await Folder.create({ userEmail, name: defaultName, source: "google-sheets" });
+        def = created.toObject();
+      }
+      folderDoc = def;
     }
+
     if (!folderDoc) return res.status(400).json({ error: "Folder not found/created" });
     const targetFolderId = folderDoc._id as mongoose.Types.ObjectId;
+    const targetFolderName = folderDoc.name as string;
 
     let imported = 0;
     let updated = 0;
     let skippedNoKey = 0;
     let lastNonEmptyRow = headerIdx;
+
+    // For adding to Folder.leadIds at the end
+    const affectedIds: string[] = [];
 
     for (let r = firstDataRowIndex; r <= lastRowIndex; r++) {
       const row = values[r] || [];
@@ -212,20 +218,40 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const filter = { userEmail, ...(or.length ? { $or: or } : {}) };
 
       // Only fetch _id to keep it light
-      const existing = await Lead.findOne(filter)
-        .select("_id")
-        .lean<{ _id: mongoose.Types.ObjectId } | null>();
+      const existing = await Lead.findOne(filter).select("_id status").lean<{ _id: mongoose.Types.ObjectId, status?: string } | null>();
 
       if (!existing) {
-        doc.folderId = targetFolderId;
-        await Lead.create(doc);
+        // NEW lead → force into target folder + default New
+        const toInsert = {
+          ...doc,
+          folderId: targetFolderId,
+          folder_name: targetFolderName,          // keep UI/legacy happy
+          "Folder Name": targetFolderName,        // legacy field
+          status: "New",
+        };
+        const created = await Lead.create(toInsert);
+        affectedIds.push(String(created._id));
         imported++;
       } else {
-        const update: any = { $set: { ...doc } };
-        if (moveExistingToFolder) update.$set.folderId = targetFolderId;
-        await Lead.updateOne({ _id: existing._id }, update);
-        updated++;
+        // EXISTING lead → optionally move folder + do not clobber status
+        const setUpdate: any = { ...doc };
+        if (moveExistingToFolder) {
+          setUpdate.folderId = targetFolderId;
+          setUpdate.folder_name = targetFolderName;
+          setUpdate["Folder Name"] = targetFolderName;
+        }
+        const result = await Lead.updateOne({ _id: existing._id }, { $set: setUpdate });
+        if (result.modifiedCount > 0) updated++;
+        affectedIds.push(String(existing._id));
       }
+    }
+
+    // Update Folder.leadIds (best-effort, no hard dependency)
+    if (affectedIds.length) {
+      await Folder.updateOne(
+        { _id: targetFolderId, userEmail },
+        { $addToSet: { leadIds: { $each: affectedIds } } }
+      );
     }
 
     // Update sync pointer on the user doc (for cron)
@@ -234,7 +260,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       title: tabTitle,
       ...(typeof sheetId === "number" ? { sheetId } : {}),
       folderId: targetFolderId,
-      folderName: folderDoc.name,
+      folderName: targetFolderName,
       headerRow,
       mapping,
       skip,
@@ -268,7 +294,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       await User.updateOne(
         { email: userEmail },
         { $push: { "googleSheets.syncedSheets": pointer } },
-        { strict: false } // allow push even if an older schema is loaded
+        { strict: false }
       );
     }
 
@@ -281,7 +307,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       headerRow,
       lastRowImported: lastNonEmptyRow + 1,
       folderId: String(targetFolderId),
-      folderName: folderDoc.name,
+      folderName: targetFolderName,
     });
   } catch (err: any) {
     const message = err?.errors?.[0]?.message || err?.message || "Import failed";

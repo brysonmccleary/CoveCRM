@@ -29,119 +29,57 @@ function toLast10(phone?: string | null): string | undefined {
 }
 
 const STATE_MAP: Record<string, string> = {
-  AL: "AL",
-  ALABAMA: "AL",
-  AK: "AK",
-  ALASKA: "AK",
-  AZ: "AZ",
-  ARIZONA: "AZ",
-  AR: "AR",
-  ARKANSAS: "AR",
-  CA: "CA",
-  CALIFORNIA: "CA",
-  CO: "CO",
-  COLORADO: "CO",
-  CT: "CT",
-  CONNECTICUT: "CT",
-  DE: "DE",
-  DELAWARE: "DE",
-  FL: "FL",
-  FLORIDA: "FL",
-  GA: "GA",
-  GEORGIA: "GA",
-  HI: "HI",
-  HAWAII: "HI",
-  ID: "ID",
-  IDAHO: "ID",
-  IL: "IL",
-  ILLINOIS: "IL",
-  IN: "IN",
-  INDIANA: "IN",
-  IA: "IA",
-  IOWA: "IA",
-  KS: "KS",
-  KANSAS: "KS",
-  KY: "KY",
-  KENTUCKY: "KY",
-  LA: "LA",
-  LOUISIANA: "LA",
-  ME: "ME",
-  MAINE: "ME",
-  MD: "MD",
-  MARYLAND: "MD",
-  MA: "MA",
-  MASSACHUSETTS: "MA",
-  MI: "MI",
-  MICHIGAN: "MI",
-  MN: "MN",
-  MINNESOTA: "MN",
-  MS: "MS",
-  MISSISSIPPI: "MS",
-  MO: "MO",
-  MISSOURI: "MO",
-  MT: "MT",
-  MONTANA: "MT",
-  NE: "NE",
-  NEBRASKA: "NE",
-  NV: "NV",
-  NEVADA: "NV",
-  NH: "NH",
-  NEW_HAMPSHIRE: "NH",
-  "NEW HAMPSHIRE": "NH",
-  NJ: "NJ",
-  NEW_JERSEY: "NJ",
-  "NEW JERSEY": "NJ",
-  NM: "NM",
-  NEW_MEXICO: "NM",
-  "NEW MEXICO": "NM",
-  NY: "NY",
-  NEW_YORK: "NY",
-  "NEW YORK": "NY",
-  NC: "NC",
-  NORTH_CAROLINA: "NC",
-  "NORTH CAROLINA": "NC",
-  ND: "ND",
-  NORTH_DAKOTA: "ND",
-  "NORTH DAKOTA": "ND",
-  OH: "OH",
-  OHIO: "OH",
-  OK: "OK",
-  OKLAHOMA: "OK",
-  OR: "OR",
-  OREGON: "OR",
-  PA: "PA",
-  PENNSYLVANIA: "PA",
-  RI: "RI",
-  RHODE_ISLAND: "RI",
-  "RHODE ISLAND": "RI",
-  SC: "SC",
-  SOUTH_CAROLINA: "SC",
-  "SOUTH CAROLINA": "SC",
-  SD: "SD",
-  SOUTH_DAKOTA: "SD",
-  "SOUTH DAKOTA": "SD",
-  TN: "TN",
-  TENNESSEE: "TN",
-  TX: "TX",
-  TEXAS: "TX",
-  UT: "UT",
-  UTAH: "UT",
-  VT: "VT",
-  VERMONT: "VT",
-  VA: "VA",
-  VIRGINIA: "VA",
-  WA: "WA",
-  WASHINGTON: "WA",
-  WV: "WV",
-  WEST_VIRGINIA: "WV",
-  "WEST VIRGINIA": "WV",
-  WI: "WI",
-  WISCONSIN: "WI",
-  WY: "WY",
-  WYOMING: "WY",
-  DC: "DC",
-  "DISTRICT OF COLUMBIA": "DC",
-  DISTRICT_OF_COLUMBIA: "DC",
+  AL: "AL", ALABAMA: "AL",
+  AK: "AK", ALASKA: "AK",
+  AZ: "AZ", ARIZONA: "AZ",
+  AR: "AR", ARKANSAS: "AR",
+  CA: "CA", CALIFORNIA: "CA",
+  CO: "CO", COLORADO: "CO",
+  CT: "CT", CONNECTICUT: "CT",
+  DE: "DE", DELAWARE: "DE",
+  FL: "FL", FLORIDA: "FL",
+  GA: "GA", GEORGIA: "GA",
+  HI: "HI", HAWAII: "HI",
+  ID: "ID", IDAHO: "ID",
+  IL: "IL", ILLINOIS: "IL",
+  IN: "IN", INDIANA: "IN",
+  IA: "IA", IOWA: "IA",
+  KS: "KS", KANSAS: "KS",
+  KY: "KY", KENTUCKY: "KY",
+  LA: "LA", LOUISIANA: "LA",
+  ME: "ME", MAINE: "ME",
+  MD: "MD", MARYLAND: "MD",
+  MA: "MA", MASSACHUSETTS: "MA",
+  MI: "MI", MICHIGAN: "MI",
+  MN: "MN", MINNESOTA: "MN",
+  MS: "MS", MISSISSIPPI: "MS",
+  MO: "MO", MISSOURI: "MO",
+  MT: "MT", MONTANA: "MT",
+  NE: "NE", NEBRASKA: "NE",
+  NV: "NV", NEVADA: "NV",
+  NH: "NH", NEW_HAMPSHIRE: "NH", "NEW HAMPSHIRE": "NH",
+  NJ: "NJ", NEW_JERSEY: "NJ", "NEW JERSEY": "NJ",
+  NM: "NM", NEW_MEXICO: "NM", "NEW MEXICO": "NM",
+  NY: "NY", NEW_YORK: "NY", "NEW YORK": "NY",
+  NC: "NC", NORTH_CAROLINA: "NC", "NORTH CAROLINA": "NC",
+  ND: "ND", NORTH_DAKOTA: "ND", "NORTH DAKOTA": "ND",
+  OH: "OH", OHIO: "OH",
+  OK: "OK", OKLAHOMA: "OK",
+  OR: "OR", OREGON: "OR",
+  PA: "PA", PENNSYLVANIA: "PA",
+  RI: "RI", RHODE_ISLAND: "RI", "RHODE ISLAND": "RI",
+  SC: "SC", SOUTH_CAROLINA: "SC", "SOUTH CAROLINA": "SC",
+  SD: "SD", SOUTH_DAKOTA: "SD", "SOUTH DAKOTA": "SD",
+  TN: "TN", TENNESSEE: "TN",
+  TX: "TX", TEXAS: "TX",
+  UT: "UT", UTAH: "UT",
+  VT: "VT", VERMONT: "VT",
+  VA: "VA", VIRGINIA: "VA",
+  WA: "WA", WASHINGTON: "WA",
+  WV: "WV", WEST_VIRGINIA: "WV", "WEST VIRGINIA": "WV",
+  WI: "WI", WISCONSIN: "WI",
+  WY: "WY", WYOMING: "WY",
+  DC: "DC", "DISTRICT OF COLUMBIA": "DC", DISTRICT_OF_COLUMBIA: "DC",
 };
 
 function normalizeState(input?: string | null): string | undefined {
@@ -217,7 +155,7 @@ function mapRow(row: Record<string, any>, mapping: Record<string, string>) {
   const source = pick("source");
   const leadTypeRaw = row["Lead Type"] || row["leadType"] || row["LeadType"];
 
-  // store source into Notes if provided (schema doesn't have a dedicated field)
+  // store source into Notes if provided
   const mergedNotes =
     source && notes
       ? `${notes} | Source: ${source}`
@@ -282,6 +220,8 @@ export default async function handler(
         userEmail,
         ownerEmail: userEmail,
         folderId: folder._id,
+        folder_name: folder.name,      // keep legacy/UI in sync
+        "Folder Name": folder.name,    // legacy field
       }));
 
       // Build dedupe lookup sets
@@ -339,6 +279,8 @@ export default async function handler(
           const set: any = {
             ownerEmail: userEmail,
             folderId: folder._id,
+            folder_name: folder.name,
+            "Folder Name": folder.name,
           };
           if (m["First Name"] !== undefined)
             set["First Name"] = m["First Name"];
@@ -377,6 +319,8 @@ export default async function handler(
           };
           const set: any = {
             folderId: folder._id,
+            folder_name: folder.name,
+            "Folder Name": folder.name,
           };
           if (m["First Name"] !== undefined)
             set["First Name"] = m["First Name"];
@@ -404,7 +348,6 @@ export default async function handler(
 
       if (ops.length) {
         const result = await Lead.bulkWrite(ops, { ordered: false });
-        // Mongoose 7 bulk result
         inserted = (result as any).upsertedCount || 0;
         updated = (result as any).modifiedCount || 0;
 
@@ -498,6 +441,8 @@ export default async function handler(
           userEmail,
           ownerEmail: userEmail,
           folderId: folder._id,
+          folder_name: folder.name,
+          "Folder Name": folder.name,
         }));
 
         const phoneKeys = Array.from(
@@ -556,6 +501,8 @@ export default async function handler(
             const set: any = {
               ownerEmail: userEmail,
               folderId: folder._id,
+              folder_name: folder.name,
+              "Folder Name": folder.name,
             };
             if (m["First Name"] !== undefined)
               set["First Name"] = m["First Name"];
@@ -589,6 +536,8 @@ export default async function handler(
             };
             const set: any = {
               folderId: folder._id,
+              folder_name: folder.name,
+              "Folder Name": folder.name,
             };
             if (m["First Name"] !== undefined)
               set["First Name"] = m["First Name"];
@@ -649,7 +598,7 @@ export default async function handler(
       }
     }
 
-    // Legacy path: folderName + CSV file (no mapping provided) → keep your original behavior
+    // Legacy path: folderName + CSV file (no mapping provided)
     const folderName = folderNameField;
     if (!folderName)
       return res.status(400).json({ message: "Missing folder name" });
@@ -685,12 +634,25 @@ export default async function handler(
         ...lead,
         userEmail,
         folderId: folder._id,
+        folder_name: folder.name,
+        "Folder Name": folder.name,
         status: "New",
         leadType: sanitizeLeadType(lead["Lead Type"] || ""),
       }));
 
       // Legacy util (kept intact)
       await createLeadsFromCSV(leadsToInsert, userEmail, String(folder._id));
+
+      // Best-effort keep folder.leadIds updated
+      const ids = await Lead.find({ userEmail, folderId: folder._id })
+        .select("_id")
+        .lean();
+      if (ids.length) {
+        await Folder.updateOne(
+          { _id: folder._id, userEmail },
+          { $addToSet: { leadIds: { $each: ids.map((d) => String(d._id)) } } }
+        );
+      }
 
       return res.status(200).json({
         message: "Leads imported successfully",
