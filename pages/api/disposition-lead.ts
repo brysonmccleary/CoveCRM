@@ -9,6 +9,11 @@ import { initSocket } from "@/lib/socket";
 
 const SYSTEM = new Set(["Not Interested", "Booked Appointment", "Sold", "Resolved"]);
 
+// Safe regex escape for exact, case-insensitive name matching
+function escapeRegex(s: string) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed" });
 
@@ -17,84 +22,94 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!userEmail) return res.status(401).json({ message: "Unauthorized" });
 
   const { leadId, newFolderName } = (req.body ?? {}) as { leadId?: string; newFolderName?: string };
-  if (!leadId || !newFolderName?.trim()) {
-    return res.status(400).json({ message: "Missing required fields." });
-  }
+  const rawName = (newFolderName || "").trim();
+  if (!leadId || !rawName) return res.status(400).json({ message: "Missing required fields." });
 
   try {
     await dbConnect();
 
-    // Ensure this is your lead
-    const lead = await Lead.findOne({ _id: leadId, userEmail });
-    if (!lead) return res.status(404).json({ message: "Lead not found." });
+    // Make sure this is your lead and capture prior folder for history
+    const existing = await Lead.findOne({ _id: leadId, userEmail }).select({ _id: 1, folderId: 1, status: 1 }).lean();
+    if (!existing) return res.status(404).json({ message: "Lead not found." });
+    const fromFolderId = existing.folderId ? String(existing.folderId) : null;
 
-    // --- FIX: resolve canonical folder (handles duplicates) ---
-    const nameTrimmed = newFolderName.trim();
-    const escaped = nameTrimmed.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); // escape for regex
-    // Find all same-name folders (case-insensitive) for this user, pick the NEWEST one.
-    const candidates = await Folder.find({
-      userEmail,
-      name: { $regex: new RegExp(`^${escaped}$`, "i") },
-    })
-      .sort({ createdAt: -1, _id: -1 })
-      .select({ _id: 1, name: 1 })
-      .lean();
+    // ——— Resolve CANONICAL folder for this exact name (case-insensitive) ———
+    const nameRegex = new RegExp(`^${escapeRegex(rawName)}$`, "i");
 
-    let targetFolderId: any;
-    let targetFolderName = nameTrimmed;
+    const sameNameFolders = await Folder.find({ userEmail, name: nameRegex })
+      .select({ _id: 1, name: 1, createdAt: 1 })
+      .sort({ createdAt: 1, _id: 1 })
+      .lean()
+      .exec();
 
-    if (candidates.length > 0) {
-      targetFolderId = candidates[0]._id;
-      targetFolderName = candidates[0].name ?? nameTrimmed;
-    } else {
-      const created = await Folder.create({ userEmail, name: nameTrimmed, assignedDrips: [] });
-      targetFolderId = created._id;
-      targetFolderName = created.name;
+    let canonical = sameNameFolders[0] || null;
+    if (!canonical) {
+      const created = await Folder.create({ userEmail, name: rawName, assignedDrips: [] });
+      canonical = { _id: created._id, name: created.name, createdAt: created.get("createdAt") };
     }
-    // ----------------------------------------------------------
 
-    const fromFolderId = lead.folderId ? String(lead.folderId) : null;
-
-    // Move + keep backward-compat fields in sync
-    lead.folderId = targetFolderId;
-    (lead as any).folder = targetFolderName;         // legacy
-    (lead as any)["Folder Name"] = targetFolderName; // legacy
-    (lead as any).folderName = targetFolderName;     // friendly alias
-
-    if (SYSTEM.has(targetFolderName)) {
-      lead.status = targetFolderName; // mark disposition as status
+    // Optional: if there are duplicates with the same name, repoint their leads to the canonical id
+    if (sameNameFolders.length > 1) {
+      const otherIds = sameNameFolders.slice(1).map((f) => f._id);
+      if (otherIds.length) {
+        await Lead.updateMany(
+          { userEmail, folderId: { $in: otherIds } },
+          {
+            $set: {
+              folderId: canonical._id,
+              folderName: rawName,
+              ["Folder Name"]: rawName,
+              ...(SYSTEM.has(rawName) ? { status: rawName } : {}),
+              updatedAt: new Date(),
+            },
+          }
+        );
+      }
     }
-    lead.updatedAt = new Date();
-    await lead.save();
 
-    // Visible history entry
-    await Lead.updateOne(
-      { _id: lead._id, userEmail },
+    // ——— ATOMIC UPDATE: move & write history in a single operation ———
+    const now = new Date();
+    const $set: Record<string, any> = {
+      folderId: canonical._id,
+      folderName: rawName,
+      ["Folder Name"]: rawName, // legacy alias
+      updatedAt: now,
+    };
+    if (SYSTEM.has(rawName)) $set.status = rawName;
+
+    const updated = await Lead.findOneAndUpdate(
+      { _id: leadId, userEmail },
       {
+        $set,
         $push: {
           interactionHistory: {
             type: "status",
             from: fromFolderId,
-            to: targetFolderName,
-            date: new Date(),
+            to: rawName,
+            date: now,
           },
         },
-      }
-    );
+      },
+      { new: true }
+    ).lean();
 
-    // Socket notify (refresh lists)
+    if (!updated) {
+      return res.status(409).json({ message: "Lead changed concurrently; try again." });
+    }
+
+    // Emit socket event so other lists refresh
     try {
       let io = (res as any)?.socket?.server?.io;
       if (!io) io = initSocket(res as any);
       if (io) {
         io.to(userEmail).emit("lead:updated", {
-          _id: String(lead._id),
-          folderId: String(targetFolderId),
-          folder: targetFolderName,
-          folderName: targetFolderName,
-          ["Folder Name"]: targetFolderName,
-          status: lead.status,
-          updatedAt: lead.updatedAt,
+          _id: String(updated._id),
+          folderId: String(canonical._id),
+          folder: rawName,
+          folderName: rawName,
+          ["Folder Name"]: rawName,
+          status: updated.status,
+          updatedAt: updated.updatedAt,
         });
       }
     } catch (e) {
@@ -105,9 +120,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       success: true,
       message: "Lead moved.",
       fromFolderId,
-      toFolderId: String(targetFolderId),
-      status: lead.status,
-      folderName: targetFolderName,
+      toFolderId: String(canonical._id),
+      status: updated.status,
+      folderName: rawName,
     });
   } catch (e) {
     console.error("disposition-lead error:", e);
