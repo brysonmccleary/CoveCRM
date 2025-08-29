@@ -29,57 +29,28 @@ function toLast10(phone?: string | null): string | undefined {
 }
 
 const STATE_MAP: Record<string, string> = {
-  AL: "AL", ALABAMA: "AL",
-  AK: "AK", ALASKA: "AK",
-  AZ: "AZ", ARIZONA: "AZ",
-  AR: "AR", ARKANSAS: "AR",
-  CA: "CA", CALIFORNIA: "CA",
-  CO: "CO", COLORADO: "CO",
-  CT: "CT", CONNECTICUT: "CT",
-  DE: "DE", DELAWARE: "DE",
-  FL: "FL", FLORIDA: "FL",
-  GA: "GA", GEORGIA: "GA",
-  HI: "HI", HAWAII: "HI",
-  ID: "ID", IDAHO: "ID",
-  IL: "IL", ILLINOIS: "IL",
-  IN: "IN", INDIANA: "IN",
-  IA: "IA", IOWA: "IA",
-  KS: "KS", KANSAS: "KS",
-  KY: "KY", KENTUCKY: "KY",
-  LA: "LA", LOUISIANA: "LA",
-  ME: "ME", MAINE: "ME",
-  MD: "MD", MARYLAND: "MD",
-  MA: "MA", MASSACHUSETTS: "MA",
-  MI: "MI", MICHIGAN: "MI",
-  MN: "MN", MINNESOTA: "MN",
-  MS: "MS", MISSISSIPPI: "MS",
-  MO: "MO", MISSOURI: "MO",
-  MT: "MT", MONTANA: "MT",
-  NE: "NE", NEBRASKA: "NE",
-  NV: "NV", NEVADA: "NV",
-  NH: "NH", NEW_HAMPSHIRE: "NH", "NEW HAMPSHIRE": "NH",
-  NJ: "NJ", NEW_JERSEY: "NJ", "NEW JERSEY": "NJ",
-  NM: "NM", NEW_MEXICO: "NM", "NEW MEXICO": "NM",
-  NY: "NY", NEW_YORK: "NY", "NEW YORK": "NY",
-  NC: "NC", NORTH_CAROLINA: "NC", "NORTH CAROLINA": "NC",
-  ND: "ND", NORTH_DAKOTA: "ND", "NORTH DAKOTA": "ND",
-  OH: "OH", OHIO: "OH",
-  OK: "OK", OKLAHOMA: "OK",
-  OR: "OR", OREGON: "OR",
-  PA: "PA", PENNSYLVANIA: "PA",
-  RI: "RI", RHODE_ISLAND: "RI", "RHODE ISLAND": "RI",
-  SC: "SC", SOUTH_CAROLINA: "SC", "SOUTH CAROLINA": "SC",
-  SD: "SD", SOUTH_DAKOTA: "SD", "SOUTH DAKOTA": "SD",
-  TN: "TN", TENNESSEE: "TN",
-  TX: "TX", TEXAS: "TX",
-  UT: "UT", UTAH: "UT",
-  VT: "VT", VERMONT: "VT",
-  VA: "VA", VIRGINIA: "VA",
-  WA: "WA", WASHINGTON: "WA",
-  WV: "WV", WEST_VIRGINIA: "WV", "WEST VIRGINIA": "WV",
-  WI: "WI", WISCONSIN: "WI",
-  WY: "WY", WYOMING: "WY",
-  DC: "DC", "DISTRICT OF COLUMBIA": "DC", DISTRICT_OF_COLUMBIA: "DC",
+  AL: "AL", ALABAMA: "AL", AK: "AK", ALASKA: "AK", AZ: "AZ", ARIZONA: "AZ",
+  AR: "AR", ARKANSAS: "AR", CA: "CA", CALIFORNIA: "CA", CO: "CO", COLORADO: "CO",
+  CT: "CT", CONNECTICUT: "CT", DE: "DE", DELAWARE: "DE", FL: "FL", FLORIDA: "FL",
+  GA: "GA", GEORGIA: "GA", HI: "HI", HAWAII: "HI", ID: "ID", IDAHO: "ID",
+  IL: "IL", ILLINOIS: "IL", IN: "IN", INDIANA: "IN", IA: "IA", IOWA: "IA",
+  KS: "KS", KANSAS: "KS", KY: "KY", KENTUCKY: "KY", LA: "LA", LOUISIANA: "LA",
+  ME: "ME", MAINE: "ME", MD: "MD", MARYLAND: "MD", MA: "MA", MASSACHUSETTS: "MA",
+  MI: "MI", MICHIGAN: "MI", MN: "MN", MINNESOTA: "MN", MS: "MS", MISSISSIPPI: "MS",
+  MO: "MO", MISSOURI: "MO", MT: "MT", MONTANA: "MT", NE: "NE", NEBRASKA: "NE",
+  NV: "NV", NEVADA: "NV", NH: "NH", NEW_HAMPSHIRE: "NH", "NEW HAMPSHIRE": "NH",
+  NJ: "NJ", NEW_JERSEY: "NJ", "NEW JERSEY": "NJ", NM: "NM", NEW_MEXICO: "NM",
+  "NEW MEXICO": "NM", NY: "NY", NEW_YORK: "NY", "NEW YORK": "NY", NC: "NC",
+  NORTH_CAROLINA: "NC", "NORTH CAROLINA": "NC", ND: "ND", NORTH_DAKOTA: "ND",
+  "NORTH DAKOTA": "ND", OH: "OH", OHIO: "OH", OK: "OK", OKLAHOMA: "OK",
+  OR: "OR", OREGON: "OR", PA: "PA", PENNSYLVANIA: "PA", RI: "RI",
+  RHODE_ISLAND: "RI", "RHODE ISLAND": "RI", SC: "SC", SOUTH_CAROLINA: "SC",
+  "SOUTH CAROLINA": "SC", SD: "SD", SOUTH_DAKOTA: "SD", "SOUTH DAKOTA": "SD",
+  TN: "TN", TENNESSEE: "TN", TX: "TX", TEXAS: "TX", UT: "UT", UTAH: "UT",
+  VT: "VT", VERMONT: "VT", VA: "VA", VIRGINIA: "VA", WA: "WA", WASHINGTON: "WA",
+  WV: "WV", WEST_VIRGINIA: "WV", "WEST VIRGINIA": "WV", WI: "WI",
+  WISCONSIN: "WI", WY: "WY", WYOMING: "WY", DC: "DC",
+  "DISTRICT OF COLUMBIA": "DC", DISTRICT_OF_COLUMBIA: "DC",
 };
 
 function normalizeState(input?: string | null): string | undefined {
@@ -97,7 +68,7 @@ type JsonPayload = {
   folderName?: string; // backward compat
   mapping?: Record<string, string>; // { firstName: "First Name", phone: "Phone", ... }
   rows?: Record<string, any>[];
-  skipExisting?: boolean;
+  skipExisting?: boolean; // we will default to false to MOVE + RESET status
 };
 
 // Read raw JSON when bodyParser is disabled
@@ -155,13 +126,12 @@ function mapRow(row: Record<string, any>, mapping: Record<string, string>) {
   const source = pick("source");
   const leadTypeRaw = row["Lead Type"] || row["leadType"] || row["LeadType"];
 
-  // store source into Notes if provided
   const mergedNotes =
     source && notes
       ? `${notes} | Source: ${source}`
       : source && !notes
-        ? `Source: ${source}`
-        : notes;
+      ? `Source: ${source}`
+      : notes;
 
   const normalizedState = normalizeState(stateRaw);
   const emailLc = lc(email);
@@ -170,9 +140,9 @@ function mapRow(row: Record<string, any>, mapping: Record<string, string>) {
   return {
     "First Name": first,
     "Last Name": last,
-    Email: emailLc, // store lowercased for dedupe
+    Email: emailLc,
     Phone: phone,
-    phoneLast10, // used for dedupe + stored in schema
+    phoneLast10,
     State: normalizedState,
     Notes: mergedNotes,
     leadType: sanitizeLeadType(leadTypeRaw || ""),
@@ -193,7 +163,7 @@ export default async function handler(
   const userEmail = lc(session.user.email)!;
   await dbConnect();
 
-  // ---------- JSON MODE (new contract)
+  // ---------- JSON MODE
   const json = await readJsonBody(req);
   if (json) {
     try {
@@ -202,17 +172,14 @@ export default async function handler(
         folderName,
         mapping,
         rows,
-        skipExisting = true,
+        // DEFAULT: move duplicates and reset to New
+        skipExisting = false,
       } = json;
       if (!mapping || !rows || !Array.isArray(rows)) {
         return res.status(400).json({ message: "Missing mapping or rows[]" });
       }
 
-      const folder = await ensureFolder({
-        userEmail,
-        targetFolderId,
-        folderName,
-      });
+      const folder = await ensureFolder({ userEmail, targetFolderId, folderName });
 
       // Map rows → leads
       const mapped = rows.map((r) => ({
@@ -220,11 +187,9 @@ export default async function handler(
         userEmail,
         ownerEmail: userEmail,
         folderId: folder._id,
-        folder_name: folder.name,      // keep legacy/UI in sync
-        "Folder Name": folder.name,    // legacy field
       }));
 
-      // Build dedupe lookup sets
+      // Dedupe keys
       const phoneKeys = Array.from(
         new Set(mapped.map((m) => m.phoneLast10).filter(Boolean) as string[]),
       );
@@ -232,13 +197,11 @@ export default async function handler(
         new Set(mapped.map((m) => m.Email).filter(Boolean) as string[]),
       );
 
-      // Preload existing leads for this user by phone or email
+      // Existing
       const existing = await Lead.find({
         userEmail,
         $or: [
-          phoneKeys.length
-            ? { phoneLast10: { $in: phoneKeys } }
-            : { _id: null },
+          phoneKeys.length ? { phoneLast10: { $in: phoneKeys } } : { _id: null },
           emailKeys.length ? { Email: { $in: emailKeys } } : { _id: null },
         ],
       }).select("_id phoneLast10 Email folderId");
@@ -251,8 +214,7 @@ export default async function handler(
       }
 
       const ops: any[] = [];
-      const processedFilters: Array<{ phoneLast10?: string; Email?: string }> =
-        [];
+      const processedFilters: Array<{ phoneLast10?: string; Email?: string }> = [];
       let skipped = 0;
 
       for (const m of mapped) {
@@ -265,10 +227,11 @@ export default async function handler(
             skipped++;
             continue;
           }
-          // update existing + move to folder
-          const filter = m.phoneLast10
-            ? { userEmail, phoneLast10: m.phoneLast10 }
-            : m.Email
+          // MOVE + RESET STATUS
+          const filter =
+            m.phoneLast10
+              ? { userEmail, phoneLast10: m.phoneLast10 }
+              : m.Email
               ? { userEmail, Email: m.Email }
               : null;
           if (!filter) {
@@ -279,11 +242,11 @@ export default async function handler(
           const set: any = {
             ownerEmail: userEmail,
             folderId: folder._id,
-            folder_name: folder.name,
-            "Folder Name": folder.name,
+            folder_name: String(folder.name),
+            "Folder Name": String(folder.name),
+            status: "New",
           };
-          if (m["First Name"] !== undefined)
-            set["First Name"] = m["First Name"];
+          if (m["First Name"] !== undefined) set["First Name"] = m["First Name"];
           if (m["Last Name"] !== undefined) set["Last Name"] = m["Last Name"];
           if (m.Email !== undefined) set["Email"] = m.Email;
           if (m.Phone !== undefined) set["Phone"] = m.Phone;
@@ -292,19 +255,14 @@ export default async function handler(
           if (m.Notes !== undefined) set["Notes"] = m.Notes;
           if (m.leadType) set["leadType"] = m.leadType;
 
-          ops.push({
-            updateOne: {
-              filter,
-              update: { $set: set }, // do not overwrite status; leave as-is
-              upsert: false,
-            },
-          });
+          ops.push({ updateOne: { filter, update: { $set: set }, upsert: false } });
           processedFilters.push(filter);
         } else {
-          // upsert new
-          const filter = m.phoneLast10
-            ? { userEmail, phoneLast10: m.phoneLast10 }
-            : m.Email
+          // NEW
+          const filter =
+            m.phoneLast10
+              ? { userEmail, phoneLast10: m.phoneLast10 }
+              : m.Email
               ? { userEmail, Email: m.Email }
               : null;
           if (!filter) {
@@ -316,14 +274,11 @@ export default async function handler(
             userEmail,
             ownerEmail: userEmail,
             status: "New",
+            folder_name: String(folder.name),
+            "Folder Name": String(folder.name),
           };
-          const set: any = {
-            folderId: folder._id,
-            folder_name: folder.name,
-            "Folder Name": folder.name,
-          };
-          if (m["First Name"] !== undefined)
-            set["First Name"] = m["First Name"];
+          const set: any = { folderId: folder._id };
+          if (m["First Name"] !== undefined) set["First Name"] = m["First Name"];
           if (m["Last Name"] !== undefined) set["Last Name"] = m["Last Name"];
           if (m.Email !== undefined) set["Email"] = m.Email;
           if (m.Phone !== undefined) set["Phone"] = m.Phone;
@@ -333,11 +288,7 @@ export default async function handler(
           if (m.leadType) set["leadType"] = m.leadType;
 
           ops.push({
-            updateOne: {
-              filter,
-              update: { $set: set, $setOnInsert: setOnInsert },
-              upsert: true,
-            },
+            updateOne: { filter, update: { $set: set, $setOnInsert: setOnInsert }, upsert: true },
           });
           processedFilters.push(filter);
         }
@@ -351,7 +302,6 @@ export default async function handler(
         inserted = (result as any).upsertedCount || 0;
         updated = (result as any).modifiedCount || 0;
 
-        // Resolve all affected lead IDs and add to folder.leadIds
         if (processedFilters.length) {
           const orFilters = processedFilters.map((f) => {
             if (f.phoneLast10) return { userEmail, phoneLast10: f.phoneLast10 };
@@ -372,19 +322,18 @@ export default async function handler(
       return res.status(200).json({
         message: "Import completed",
         folderId: folder._id,
+        folderName: folder.name,
         counts: { inserted, updated, skipped },
         mode: "json",
-        skipExisting,
+        skipExisting: false,
       });
     } catch (e: any) {
       console.error("❌ JSON import error:", e);
-      return res
-        .status(500)
-        .json({ message: "Import failed", error: e?.message || String(e) });
+      return res.status(500).json({ message: "Import failed", error: e?.message || String(e) });
     }
   }
 
-  // ---------- MULTIPART MODE (backward compatible)
+  // ---------- MULTIPART MODE (CSV upload)
   const form = formidable({ multiples: false });
 
   form.parse(req, async (err, fields, files) => {
@@ -393,26 +342,20 @@ export default async function handler(
       return res.status(500).json({ message: "Form parse error" });
     }
 
-    // New path if mapping + targetFolderId were passed as fields (stringified)
     const targetFolderId = fields.targetFolderId?.toString();
     const folderNameField = fields.folderName?.toString()?.trim();
     const mappingStr = fields.mapping?.toString();
-    const skipExisting =
-      fields.skipExisting?.toString() === "false" ? false : true; // default true
+    // DEFAULT: move duplicates + reset to New
+    const skipExisting = fields.skipExisting?.toString() === "true" ? true : false;
 
     const file = Array.isArray(files.file) ? files.file[0] : files.file;
-    if (!file || !file.filepath)
-      return res.status(400).json({ message: "Missing file" });
+    if (!file?.filepath) return res.status(400).json({ message: "Missing file" });
 
-    // If mapping provided, use the new logic on CSV rows
+    // New path (mapping provided)
     if (mappingStr) {
       try {
         const mapping = JSON.parse(mappingStr) as Record<string, string>;
-        const folder = await ensureFolder({
-          userEmail,
-          targetFolderId,
-          folderName: folderNameField,
-        });
+        const folder = await ensureFolder({ userEmail, targetFolderId, folderName: folderNameField });
 
         const buffer = await fs.promises.readFile(file.filepath);
         const rawRows: any[] = [];
@@ -421,45 +364,31 @@ export default async function handler(
           bufferToStream(buffer)
             .pipe(csvParser())
             .on("data", (row) => {
-              const cleaned = Object.entries(row).reduce(
-                (acc, [key, val]) => {
-                  acc[String(key).trim()] =
-                    typeof val === "string" ? val.trim() : val;
-                  return acc;
-                },
-                {} as Record<string, any>,
-              );
+              const cleaned = Object.entries(row).reduce((acc, [key, val]) => {
+                acc[String(key).trim()] = typeof val === "string" ? val.trim() : val;
+                return acc;
+              }, {} as Record<string, any>);
               rawRows.push(cleaned);
             })
             .on("end", () => resolve())
             .on("error", (e) => reject(e));
         });
 
-        // Reuse JSON path with mapped rows
+        // Reuse JSON path
         const rowsMapped = rawRows.map((r) => ({
           ...mapRow(r, mapping),
           userEmail,
           ownerEmail: userEmail,
           folderId: folder._id,
-          folder_name: folder.name,
-          "Folder Name": folder.name,
         }));
 
-        const phoneKeys = Array.from(
-          new Set(
-            rowsMapped.map((m) => m.phoneLast10).filter(Boolean) as string[],
-          ),
-        );
-        const emailKeys = Array.from(
-          new Set(rowsMapped.map((m) => m.Email).filter(Boolean) as string[]),
-        );
+        const phoneKeys = Array.from(new Set(rowsMapped.map((m) => m.phoneLast10).filter(Boolean) as string[]));
+        const emailKeys = Array.from(new Set(rowsMapped.map((m) => m.Email).filter(Boolean) as string[]));
 
         const existing = await Lead.find({
           userEmail,
           $or: [
-            phoneKeys.length
-              ? { phoneLast10: { $in: phoneKeys } }
-              : { _id: null },
+            phoneKeys.length ? { phoneLast10: { $in: phoneKeys } } : { _id: null },
             emailKeys.length ? { Email: { $in: emailKeys } } : { _id: null },
           ],
         }).select("_id phoneLast10 Email folderId");
@@ -472,10 +401,7 @@ export default async function handler(
         }
 
         const ops: any[] = [];
-        const processedFilters: Array<{
-          phoneLast10?: string;
-          Email?: string;
-        }> = [];
+        const processedFilters: Array<{ phoneLast10?: string; Email?: string }> = [];
         let skipped = 0;
 
         for (const m of rowsMapped) {
@@ -488,9 +414,10 @@ export default async function handler(
               skipped++;
               continue;
             }
-            const filter = m.phoneLast10
-              ? { userEmail, phoneLast10: m.phoneLast10 }
-              : m.Email
+            const filter =
+              m.phoneLast10
+                ? { userEmail, phoneLast10: m.phoneLast10 }
+                : m.Email
                 ? { userEmail, Email: m.Email }
                 : null;
             if (!filter) {
@@ -501,11 +428,11 @@ export default async function handler(
             const set: any = {
               ownerEmail: userEmail,
               folderId: folder._id,
-              folder_name: folder.name,
-              "Folder Name": folder.name,
+              folder_name: String(folder.name),
+              "Folder Name": String(folder.name),
+              status: "New",
             };
-            if (m["First Name"] !== undefined)
-              set["First Name"] = m["First Name"];
+            if (m["First Name"] !== undefined) set["First Name"] = m["First Name"];
             if (m["Last Name"] !== undefined) set["Last Name"] = m["Last Name"];
             if (m.Email !== undefined) set["Email"] = m.Email;
             if (m.Phone !== undefined) set["Phone"] = m.Phone;
@@ -514,14 +441,13 @@ export default async function handler(
             if (m.Notes !== undefined) set["Notes"] = m.Notes;
             if (m.leadType) set["leadType"] = m.leadType;
 
-            ops.push({
-              updateOne: { filter, update: { $set: set }, upsert: false },
-            });
+            ops.push({ updateOne: { filter, update: { $set: set }, upsert: false } });
             processedFilters.push(filter);
           } else {
-            const filter = m.phoneLast10
-              ? { userEmail, phoneLast10: m.phoneLast10 }
-              : m.Email
+            const filter =
+              m.phoneLast10
+                ? { userEmail, phoneLast10: m.phoneLast10 }
+                : m.Email
                 ? { userEmail, Email: m.Email }
                 : null;
             if (!filter) {
@@ -533,14 +459,11 @@ export default async function handler(
               userEmail,
               ownerEmail: userEmail,
               status: "New",
+              folder_name: String(folder.name),
+              "Folder Name": String(folder.name),
             };
-            const set: any = {
-              folderId: folder._id,
-              folder_name: folder.name,
-              "Folder Name": folder.name,
-            };
-            if (m["First Name"] !== undefined)
-              set["First Name"] = m["First Name"];
+            const set: any = { folderId: folder._id };
+            if (m["First Name"] !== undefined) set["First Name"] = m["First Name"];
             if (m["Last Name"] !== undefined) set["Last Name"] = m["Last Name"];
             if (m.Email !== undefined) set["Email"] = m.Email;
             if (m.Phone !== undefined) set["Phone"] = m.Phone;
@@ -550,11 +473,7 @@ export default async function handler(
             if (m.leadType) set["leadType"] = m.leadType;
 
             ops.push({
-              updateOne: {
-                filter,
-                update: { $set: set, $setOnInsert: setOnInsert },
-                upsert: true,
-              },
+              updateOne: { filter, update: { $set: set, $setOnInsert: setOnInsert }, upsert: true },
             });
             processedFilters.push(filter);
           }
@@ -586,22 +505,20 @@ export default async function handler(
         return res.status(200).json({
           message: "Leads imported successfully",
           folderId: folder._id,
+          folderName: folder.name,
           counts: { inserted, updated, skipped },
           mode: "multipart+mapping",
-          skipExisting,
+          skipExisting: false,
         });
       } catch (e: any) {
         console.error("❌ Multipart mapping import error:", e);
-        return res
-          .status(500)
-          .json({ message: "Import failed", error: e?.message || String(e) });
+        return res.status(500).json({ message: "Import failed", error: e?.message || String(e) });
       }
     }
 
     // Legacy path: folderName + CSV file (no mapping provided)
     const folderName = folderNameField;
-    if (!folderName)
-      return res.status(400).json({ message: "Missing folder name" });
+    if (!folderName) return res.status(400).json({ message: "Missing folder name" });
 
     try {
       const buffer = await fs.promises.readFile(file.filepath);
@@ -611,14 +528,10 @@ export default async function handler(
         bufferToStream(buffer)
           .pipe(csvParser())
           .on("data", (row) => {
-            const cleaned = Object.entries(row).reduce(
-              (acc, [key, val]) => {
-                acc[String(key).trim()] =
-                  typeof val === "string" ? val.trim() : val;
-                return acc;
-              },
-              {} as Record<string, any>,
-            );
+            const cleaned = Object.entries(row).reduce((acc, [key, val]) => {
+              acc[String(key).trim()] = typeof val === "string" ? val.trim() : val;
+              return acc;
+            }, {} as Record<string, any>);
             rawLeads.push(cleaned);
           })
           .on("end", () => resolve())
@@ -627,44 +540,30 @@ export default async function handler(
 
       // Find or create folder (legacy)
       let folder = await Folder.findOne({ name: folderName, userEmail });
-      if (!folder)
-        folder = await Folder.create({ name: folderName, userEmail });
+      if (!folder) folder = await Folder.create({ name: folderName, userEmail });
 
       const leadsToInsert = rawLeads.map((lead) => ({
         ...lead,
         userEmail,
         folderId: folder._id,
-        folder_name: folder.name,
-        "Folder Name": folder.name,
+        folder_name: String(folder.name),
+        "Folder Name": String(folder.name),
         status: "New",
         leadType: sanitizeLeadType(lead["Lead Type"] || ""),
       }));
 
-      // Legacy util (kept intact)
       await createLeadsFromCSV(leadsToInsert, userEmail, String(folder._id));
-
-      // Best-effort keep folder.leadIds updated
-      const ids = await Lead.find({ userEmail, folderId: folder._id })
-        .select("_id")
-        .lean();
-      if (ids.length) {
-        await Folder.updateOne(
-          { _id: folder._id, userEmail },
-          { $addToSet: { leadIds: { $each: ids.map((d) => String(d._id)) } } }
-        );
-      }
 
       return res.status(200).json({
         message: "Leads imported successfully",
         count: leadsToInsert.length,
         folderId: folder._id,
+        folderName: folder.name,
         mode: "multipart-legacy",
       });
     } catch (e: any) {
       console.error("❌ Legacy import error:", e);
-      return res
-        .status(500)
-        .json({ message: "Insert failed", error: e?.message || String(e) });
+      return res.status(500).json({ message: "Insert failed", error: e?.message || String(e) });
     }
   });
 }
