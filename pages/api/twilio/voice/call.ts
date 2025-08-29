@@ -120,7 +120,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       machineDetection: "DetectMessageEnd",
       amdStatusCallback: `${BASE_URL}/api/twilio/amd-callback`,
       amdStatusCallbackMethod: "POST",
-      asyncAmd: true,
+      asyncAmd: "true",
     };
 
     const { client } = await getClientForUser(userEmail);
