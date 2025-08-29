@@ -1,4 +1,3 @@
-// pages/dial-session.tsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/router";
 import Sidebar from "@/components/Sidebar";
@@ -477,11 +476,11 @@ export default function DialSession() {
 
       if (label === "Booked Appointment") setShowBookModal(true);
 
-      if (!sessionEndedRef.current) scheduleNextLead();
+      if (!sessionEndedRef.current) scheduleNextLead(); // ✅ advance to next lead
     } catch (e: any) {
       console.error(e);
       toast.error(e?.message || "Failed to save disposition");
-      if (!sessionEndedRef.current) scheduleNextLead();
+      if (!sessionEndedRef.current) scheduleNextLead(); // ✅ still advance on error
     } finally {
       dispositionBusyRef.current = false;
     }
@@ -552,7 +551,7 @@ export default function DialSession() {
 
   const showSessionSummary = () => {
     alert(`✅ Session Complete!\nYou called ${sessionStartedCount} out of ${leadQueue.length} leads.`);
-    router.push("/leads").catch(() => {});
+    window.location.href = "/leads"; // ✅ go to the real folders list
   };
 
   /** sockets: live status (now pointing to /api/socket) **/
@@ -634,6 +633,9 @@ export default function DialSession() {
     return () => {
       mounted = false;
       try { socketRef.current?.off?.("call:status"); socketRef.current?.disconnect?.(); } catch {}
+      // ✅ ensure audio/timers cannot bleed after navigating away
+      stopRingback();
+      killAllTimers();
       leaveIfJoined("unmount");
       clearStatusPoll();
     };
@@ -661,7 +663,6 @@ export default function DialSession() {
 
         <div className="w-1/4 p-4 border-r border-gray-600 bg-[#1e293b] overflow-y-auto">
           <p className="text-green-400">Calling from: {fromNumber ? formatPhone(fromNumber) : "Resolving…"}</p>
-          <p className="text-yellow-400">Agent phone: {agentPhone ? formatPhone(agentPhone) : "Resolving…"}</p>
           <p className="text-yellow-500 mb-2">Status: {status}</p>
 
           <p className="text-sm text-gray-400 mb-2">
