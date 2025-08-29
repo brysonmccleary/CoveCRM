@@ -1,4 +1,3 @@
-// pages/api/start-conference.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import Twilio from "twilio";
 import { getServerSession } from "next-auth/next";
@@ -105,6 +104,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       statusCallbackEvent: ["initiated", "ringing", "answered", "completed"],
       // Optional AMD at create; TwiML can also handle detection if desired
       machineDetection: "DetectMessageEnd" as any,
+      asyncAmd: true,
       recordingStatusCallback: `${baseUrl}/api/twilio-recording`,
       recordingStatusCallbackEvent: ["completed"],
     });
