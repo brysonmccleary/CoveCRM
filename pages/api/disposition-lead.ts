@@ -28,88 +28,84 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     await dbConnect();
 
-    // Make sure this is your lead and capture prior folder for history
-    const existing = await Lead.findOne({ _id: leadId, userEmail }).select({ _id: 1, folderId: 1, status: 1 }).lean();
-    if (!existing) return res.status(404).json({ message: "Lead not found." });
-    const fromFolderId = existing.folderId ? String(existing.folderId) : null;
+    // Ensure this lead belongs to the user
+    const lead: any = await Lead.findOne({ _id: leadId, userEmail });
+    if (!lead) return res.status(404).json({ message: "Lead not found." });
 
-    // ——— Resolve CANONICAL folder for this exact name (case-insensitive) ———
+    const fromFolderId = lead.folderId ? String(lead.folderId) : null;
+
+    // Resolve CANONICAL folder id for this exact name (case-insensitive, per-user)
     const nameRegex = new RegExp(`^${escapeRegex(rawName)}$`, "i");
-
     const sameNameFolders = await Folder.find({ userEmail, name: nameRegex })
       .select({ _id: 1, name: 1, createdAt: 1 })
       .sort({ createdAt: 1, _id: 1 })
       .lean()
       .exec();
 
-    let canonical = sameNameFolders[0] || null;
-    if (!canonical) {
-      const created = await Folder.create({ userEmail, name: rawName, assignedDrips: [] });
-      canonical = { _id: created._id, name: created.name, createdAt: created.get("createdAt") };
-    }
+    let canonicalId: any;
+    if (sameNameFolders.length > 0) {
+      canonicalId = sameNameFolders[0]._id;
 
-    // Optional: if there are duplicates with the same name, repoint their leads to the canonical id
-    if (sameNameFolders.length > 1) {
-      const otherIds = sameNameFolders.slice(1).map((f) => f._id);
-      if (otherIds.length) {
-        await Lead.updateMany(
-          { userEmail, folderId: { $in: otherIds } },
-          {
-            $set: {
-              folderId: canonical._id,
-              folderName: rawName,
-              ["Folder Name"]: rawName,
-              ...(SYSTEM.has(rawName) ? { status: rawName } : {}),
-              updatedAt: new Date(),
-            },
-          }
-        );
+      // If duplicates with SAME NAME exist, repoint leads on the extras to the canonical id
+      if (sameNameFolders.length > 1) {
+        const otherIds = sameNameFolders.slice(1).map((f) => f._id);
+        if (otherIds.length) {
+          await Lead.updateMany(
+            { userEmail, folderId: { $in: otherIds } },
+            {
+              $set: {
+                folderId: canonicalId,
+                folderName: rawName,
+                ["Folder Name"]: rawName,
+                ...(SYSTEM.has(rawName) ? { status: rawName } : {}),
+                updatedAt: new Date(),
+              },
+            }
+          );
+        }
       }
+    } else {
+      const created = await Folder.create({ userEmail, name: rawName, assignedDrips: [] });
+      canonicalId = created._id;
     }
 
-    // ——— ATOMIC UPDATE: move & write history in a single operation ———
-    const now = new Date();
-    const $set: Record<string, any> = {
-      folderId: canonical._id,
-      folderName: rawName,
-      ["Folder Name"]: rawName, // legacy alias
-      updatedAt: now,
-    };
-    if (SYSTEM.has(rawName)) $set.status = rawName;
+    // Move THIS lead + sync legacy/friendly fields
+    lead.folderId = canonicalId;
+    (lead as any).folder = rawName;            // legacy
+    (lead as any)["Folder Name"] = rawName;    // legacy
+    (lead as any).folderName = rawName;        // friendly alias
+    if (SYSTEM.has(rawName)) lead.status = rawName;
+    lead.updatedAt = new Date();
+    await lead.save();
 
-    const updated = await Lead.findOneAndUpdate(
-      { _id: leadId, userEmail },
+    // Visible history entry
+    await Lead.updateOne(
+      { _id: lead._id, userEmail },
       {
-        $set,
         $push: {
           interactionHistory: {
             type: "status",
             from: fromFolderId,
             to: rawName,
-            date: now,
+            date: new Date(),
           },
         },
-      },
-      { new: true }
-    ).lean();
+      }
+    );
 
-    if (!updated) {
-      return res.status(409).json({ message: "Lead changed concurrently; try again." });
-    }
-
-    // Emit socket event so other lists refresh
+    // Emit socket so other views refresh
     try {
       let io = (res as any)?.socket?.server?.io;
       if (!io) io = initSocket(res as any);
       if (io) {
         io.to(userEmail).emit("lead:updated", {
-          _id: String(updated._id),
-          folderId: String(canonical._id),
+          _id: String(lead._id),
+          folderId: String(canonicalId),
           folder: rawName,
           folderName: rawName,
           ["Folder Name"]: rawName,
-          status: updated.status,
-          updatedAt: updated.updatedAt,
+          status: lead.status,
+          updatedAt: lead.updatedAt,
         });
       }
     } catch (e) {
@@ -120,8 +116,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       success: true,
       message: "Lead moved.",
       fromFolderId,
-      toFolderId: String(canonical._id),
-      status: updated.status,
+      toFolderId: String(canonicalId),
+      status: lead.status,
       folderName: rawName,
     });
   } catch (e) {
