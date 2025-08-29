@@ -29,10 +29,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     await dbConnect();
 
     // Ensure this lead belongs to the user
-    const lead: any = await Lead.findOne({ _id: leadId, userEmail });
-    if (!lead) return res.status(404).json({ message: "Lead not found." });
+    const leadExisting: any = await Lead.findOne({ _id: leadId, userEmail }).lean();
+    if (!leadExisting) return res.status(404).json({ message: "Lead not found." });
 
-    const fromFolderId = lead.folderId ? String(lead.folderId) : null;
+    const fromFolderId = leadExisting.folderId ? String(leadExisting.folderId) : null;
 
     // Resolve CANONICAL folder id for this exact name (case-insensitive, per-user)
     const nameRegex = new RegExp(`^${escapeRegex(rawName)}$`, "i");
@@ -46,7 +46,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (sameNameFolders.length > 0) {
       canonicalId = sameNameFolders[0]._id;
 
-      // If duplicates with SAME NAME exist, repoint leads on the extras to the canonical id
+      // If duplicates with SAME NAME exist, repoint leads on the extras to the canonical id (best-effort)
       if (sameNameFolders.length > 1) {
         const otherIds = sameNameFolders.slice(1).map((f) => f._id);
         if (otherIds.length) {
@@ -57,6 +57,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 folderId: canonicalId,
                 folderName: rawName,
                 ["Folder Name"]: rawName,
+                folder: rawName,
                 ...(SYSTEM.has(rawName) ? { status: rawName } : {}),
                 updatedAt: new Date(),
               },
@@ -69,29 +70,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       canonicalId = created._id;
     }
 
-    // Move THIS lead + sync legacy/friendly fields
-    lead.folderId = canonicalId;
-    (lead as any).folder = rawName;            // legacy
-    (lead as any)["Folder Name"] = rawName;    // legacy
-    (lead as any).folderName = rawName;        // friendly alias
-    if (SYSTEM.has(rawName)) lead.status = rawName;
-    lead.updatedAt = new Date();
-    await lead.save();
+    // 🔒 Atomic write to guarantee the move persists
+    const setFields: Record<string, any> = {
+      folderId: canonicalId,
+      folderName: rawName,
+      ["Folder Name"]: rawName,
+      folder: rawName,
+      updatedAt: new Date(),
+    };
+    if (SYSTEM.has(rawName)) setFields.status = rawName;
 
-    // Visible history entry
-    await Lead.updateOne(
-      { _id: lead._id, userEmail },
-      {
-        $push: {
-          interactionHistory: {
-            type: "status",
-            from: fromFolderId,
-            to: rawName,
-            date: new Date(),
-          },
-        },
-      }
-    );
+    const write = await Lead.updateOne({ _id: leadId, userEmail }, { $set: setFields });
+    if (write.matchedCount === 0) {
+      return res.status(404).json({ message: "Lead not found after update." });
+    }
 
     // Emit socket so other views refresh
     try {
@@ -99,13 +91,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (!io) io = initSocket(res as any);
       if (io) {
         io.to(userEmail).emit("lead:updated", {
-          _id: String(lead._id),
+          _id: String(leadId),
           folderId: String(canonicalId),
           folder: rawName,
           folderName: rawName,
           ["Folder Name"]: rawName,
-          status: lead.status,
-          updatedAt: lead.updatedAt,
+          status: SYSTEM.has(rawName) ? rawName : leadExisting?.status,
+          updatedAt: new Date(),
         });
       }
     } catch (e) {
@@ -117,7 +109,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       message: "Lead moved.",
       fromFolderId,
       toFolderId: String(canonicalId),
-      status: lead.status,
+      status: SYSTEM.has(rawName) ? rawName : leadExisting?.status,
       folderName: rawName,
     });
   } catch (e) {
