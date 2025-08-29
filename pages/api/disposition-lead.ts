@@ -40,16 +40,37 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const fromFolderId = existing.folderId ? String(existing.folderId) : null;
 
-    // Resolve or create EXACT name (case-insensitive) for this user
+    // ── Updated: resolve by exact name first, then case-insensitive exact; never cross-match ──
+    const nameExact = rawName;
     const nameRegex = new RegExp(`^${escapeRegex(rawName)}$`, "i");
-    let target: FolderLean = await Folder.findOne({ userEmail, name: nameRegex })
+
+    // 1) Exact (case-sensitive) match
+    let target: FolderLean = await Folder.findOne({ userEmail, name: nameExact })
       .select({ _id: 1, name: 1 })
       .lean<FolderLean>()
       .exec();
+
+    // 2) If not found, case-insensitive exact; prefer oldest if duplicates
     if (!target) {
-      const created = await Folder.create({ userEmail, name: rawName, assignedDrips: [] });
-      target = { _id: created._id, name: rawName };
+      target = await Folder.findOne({ userEmail, name: nameRegex })
+        .select({ _id: 1, name: 1, createdAt: 1 })
+        .sort({ createdAt: 1, _id: 1 })
+        .lean<any>()
+        .exec();
     }
+
+    // 3) If still not found, create the correct folder
+    if (!target) {
+      const created = await Folder.create({ userEmail, name: nameExact, assignedDrips: [] });
+      target = { _id: created._id, name: nameExact };
+    }
+
+    // 4) Safety: if the resolved doc's name doesn't equal the requested name (ignoring case), create correct one
+    if (String(target.name).toLowerCase() !== nameExact.toLowerCase()) {
+      const created = await Folder.create({ userEmail, name: nameExact, assignedDrips: [] });
+      target = { _id: created._id, name: nameExact };
+    }
+    // ── end updated block ──
 
     // 🔒 Atomic single-document update — move only THIS lead
     const setFields: Record<string, any> = {
