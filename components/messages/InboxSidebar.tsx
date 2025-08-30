@@ -1,3 +1,4 @@
+// components/messages/InboxSidebar.tsx
 import { useEffect, useState } from "react";
 import axios from "axios";
 import { Socket } from "socket.io-client";
@@ -37,13 +38,22 @@ export default function InboxSidebar({
   useEffect(() => {
     if (!socket) return;
 
+    // Existing listener for local outbound echo
     const handleNewMessage = () => {
       fetchConversations();
     };
 
+    // NEW: Also react to server-emitted inbound event name
+    const handleServerMessageNew = () => {
+      fetchConversations();
+    };
+
     socket.on("newMessage", handleNewMessage);
+    socket.on("message:new", handleServerMessageNew);
+
     return () => {
       socket.off("newMessage", handleNewMessage);
+      socket.off("message:new", handleServerMessageNew);
     };
   }, [socket]);
 
@@ -61,9 +71,7 @@ export default function InboxSidebar({
             key={conv._id}
             onClick={() => onSelect(conv._id)}
             className={`cursor-pointer px-4 py-3 transition-colors duration-150 ${
-              isActive
-                ? "bg-[#334155] rounded-r-md"
-                : "hover:bg-[#2d3b53]"
+              isActive ? "bg-[#334155] rounded-r-md" : "hover:bg-[#2d3b53]"
             }`}
           >
             <div className="flex justify-between items-center mb-1">

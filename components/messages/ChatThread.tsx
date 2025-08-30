@@ -38,6 +38,7 @@ export default function ChatThread({ leadId, socket }: ChatThreadProps) {
   useEffect(() => {
     if (!socket) return;
 
+    // Existing local event used by our own outbound flow
     const handleNewMessage = (message: Message) => {
       if (message.leadId === leadId) {
         setMessages((prev) => [...prev, message]);
@@ -45,9 +46,20 @@ export default function ChatThread({ leadId, socket }: ChatThreadProps) {
       }
     };
 
+    // NEW: Also react to server-emitted inbound event name
+    const handleServerMessageNew = (payload: Partial<Message> & { leadId?: string }) => {
+      if (payload?.leadId === leadId) {
+        // Re-fetch to guarantee parity with server formatting/state
+        fetchMessages();
+      }
+    };
+
     socket.on("newMessage", handleNewMessage);
+    socket.on("message:new", handleServerMessageNew);
+
     return () => {
       socket.off("newMessage", handleNewMessage);
+      socket.off("message:new", handleServerMessageNew);
     };
   }, [socket, leadId]);
 
@@ -76,8 +88,8 @@ export default function ChatThread({ leadId, socket }: ChatThreadProps) {
           const base =
             "px-4 py-2 rounded-2xl text-sm max-w-[75%] w-fit whitespace-pre-wrap break-words shadow";
           const alignment = isSent
-            ? "self-end ml-auto text-white bg-green-600"   // sent → right & green
-            : "self-start text-white bg-[#334155]";        // received → left & slate
+            ? "self-end ml-auto text-white bg-green-600" // sent → right & green
+            : "self-start text-white bg-[#334155]"; // received → left & slate
 
           return (
             <div key={idx} className={`${base} ${alignment}`}>
