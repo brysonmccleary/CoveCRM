@@ -1,4 +1,4 @@
-// /components/leads/LeadImportPanel.tsx
+// components/LeadImportPanel.tsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import Papa from "papaparse";
 import toast from "react-hot-toast";
@@ -31,6 +31,11 @@ const systemFields = [
   "Coverage Amount",
   "Add Custom Field",
 ];
+
+// ---- System folders guard for CSV imports (client-side; API enforces on Sheets path) ----
+const SYSTEM_FOLDERS = new Set(["sold", "booked appointment", "not interested", "resolved"]);
+const isSystemFolder = (name?: string | null) =>
+  SYSTEM_FOLDERS.has(String(name || "").trim().toLowerCase());
 
 function lc(s?: string) {
   return (s || "").toLowerCase();
@@ -116,6 +121,15 @@ export default function LeadImportPanel({ onImportSuccess }: { onImportSuccess?:
     })();
   }, []);
 
+  // Ensure a previously saved system folder id cannot remain selected
+  useEffect(() => {
+    if (!folders.length) return;
+    const safeFolders = folders.filter((f) => !isSystemFolder(f.name));
+    if (!safeFolders.some((f) => f._id === targetFolderId)) {
+      setTargetFolderId("");
+    }
+  }, [folders, targetFolderId]);
+
   // Auto-open file picker on mount (kept from your original)
   useEffect(() => {
     fileInputRef.current?.click();
@@ -199,9 +213,18 @@ export default function LeadImportPanel({ onImportSuccess }: { onImportSuccess?:
           toast.error("❌ Choose a folder to import into");
           return;
         }
+        const selected = folders.find((f) => f._id === targetFolderId);
+        if (selected && isSystemFolder(selected.name)) {
+          toast.error("Cannot import into system folders");
+          return;
+        }
       } else {
         if (!newFolderName.trim()) {
           toast.error("❌ Enter a new folder name");
+          return;
+        }
+        if (isSystemFolder(newFolderName)) {
+          toast.error("Cannot import into system folders");
           return;
         }
       }
@@ -284,7 +307,7 @@ export default function LeadImportPanel({ onImportSuccess }: { onImportSuccess?:
             <span>Import into existing folder</span>
           </label>
           <label className="flex items-center gap-2">
-            <input
+          <input
               type="radio"
               checked={!useExisting}
               onChange={() => setUseExisting(false)}
@@ -302,11 +325,13 @@ export default function LeadImportPanel({ onImportSuccess }: { onImportSuccess?:
               className="border p-2 rounded w-full"
             >
               <option value="">— Select a folder —</option>
-              {folders.map((f) => (
-                <option key={f._id} value={f._id}>
-                  {f.name}
-                </option>
-              ))}
+              {folders
+                .filter((f) => !isSystemFolder(f.name))
+                .map((f) => (
+                  <option key={f._id} value={f._id}>
+                    {f.name}
+                  </option>
+                ))}
             </select>
           </div>
         ) : (
@@ -387,7 +412,7 @@ export default function LeadImportPanel({ onImportSuccess }: { onImportSuccess?:
                 disabled={!!skipHeader[header]}
               >
                 <option value="">Select Field</option>
-                {getAvailableFields(header).map((field) => (
+                {systemFields.map((field) => (
                   <option key={field} value={field}>
                     {field}
                   </option>
