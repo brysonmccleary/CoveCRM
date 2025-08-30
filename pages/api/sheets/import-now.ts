@@ -7,6 +7,13 @@ import User from "@/models/User";
 import Lead from "@/models/Lead";
 import { google } from "googleapis";
 
+// ---- System folders guard (case-insensitive) ----
+const SYSTEM_FOLDERS = new Set(["sold", "booked appointment", "not interested", "resolved"]);
+function isSystemFolder(name?: string | null) {
+  const n = String(name || "").trim().toLowerCase();
+  return n.length > 0 && SYSTEM_FOLDERS.has(n);
+}
+
 function last10(s?: string) {
   const d = String(s || "").replace(/\D+/g, "");
   return d.slice(-10) || "";
@@ -27,6 +34,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const { sheetId, tabName, folderName } = req.body || {};
   if (!sheetId || !folderName) {
     return res.status(400).json({ error: "Missing sheetId or folderName" });
+  }
+
+  // HARD BLOCK: never import into system folders (e.g., Sold)
+  if (isSystemFolder(folderName)) {
+    return res.status(400).json({ error: "Cannot import into system folders" });
   }
 
   await dbConnect();
@@ -104,7 +116,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       $setOnInsert: { createdAt: new Date() },
       $set: {
         userEmail: session.user.email,
-        folderName,
+        folderName, // legacy field in this endpoint — unchanged
         "First Name": firstName,
         "Last Name": lastName,
         Email: email,

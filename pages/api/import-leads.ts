@@ -13,6 +13,13 @@ import { sanitizeLeadType, createLeadsFromCSV } from "@/lib/mongo/leads";
 
 export const config = { api: { bodyParser: false } };
 
+// ---- System folders guard (case-insensitive) ----
+const SYSTEM_FOLDERS = new Set(["sold", "booked appointment", "not interested", "resolved"]);
+function isSystemFolder(name?: string | null) {
+  const n = String(name || "").trim().toLowerCase();
+  return n.length > 0 && SYSTEM_FOLDERS.has(n);
+}
+
 // ---------- helpers
 function bufferToStream(buffer: Buffer): Readable {
   const stream = new Readable();
@@ -88,6 +95,7 @@ async function readJsonBody(req: NextApiRequest): Promise<JsonPayload | null> {
   }
 }
 
+// Ensure/return folder with guards against system folders
 async function ensureFolder({
   userEmail,
   targetFolderId,
@@ -100,9 +108,11 @@ async function ensureFolder({
   if (targetFolderId) {
     const f = await Folder.findOne({ _id: targetFolderId, userEmail });
     if (!f) throw new Error("Folder not found or not owned by user");
+    if (isSystemFolder(f.name)) throw new Error("Cannot import into system folders");
     return f;
   }
   if (!folderName) throw new Error("Missing targetFolderId or folderName");
+  if (isSystemFolder(folderName)) throw new Error("Cannot import into system folders");
   let f = await Folder.findOne({ name: folderName, userEmail });
   if (!f) f = await Folder.create({ name: folderName, userEmail });
   return f;
@@ -328,8 +338,12 @@ export default async function handler(
         skipExisting: false,
       });
     } catch (e: any) {
+      const msg = e?.message || String(e);
+      if (msg.includes("Cannot import into system folders")) {
+        return res.status(400).json({ message: "Cannot import into system folders" });
+      }
       console.error("❌ JSON import error:", e);
-      return res.status(500).json({ message: "Import failed", error: e?.message || String(e) });
+      return res.status(500).json({ message: "Import failed", error: msg });
     }
   }
 
@@ -511,14 +525,21 @@ export default async function handler(
           skipExisting: false,
         });
       } catch (e: any) {
+        const msg = e?.message || String(e);
+        if (msg.includes("Cannot import into system folders")) {
+          return res.status(400).json({ message: "Cannot import into system folders" });
+        }
         console.error("❌ Multipart mapping import error:", e);
-        return res.status(500).json({ message: "Import failed", error: e?.message || String(e) });
+        return res.status(500).json({ message: "Import failed", error: msg });
       }
     }
 
     // Legacy path: folderName + CSV file (no mapping provided)
     const folderName = folderNameField;
     if (!folderName) return res.status(400).json({ message: "Missing folder name" });
+    if (isSystemFolder(folderName)) {
+      return res.status(400).json({ message: "Cannot import into system folders" });
+    }
 
     try {
       const buffer = await fs.promises.readFile(file.filepath);
