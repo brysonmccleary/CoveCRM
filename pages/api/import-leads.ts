@@ -13,13 +13,6 @@ import { sanitizeLeadType, createLeadsFromCSV } from "@/lib/mongo/leads";
 
 export const config = { api: { bodyParser: false } };
 
-// ---- System folders guard (case-insensitive) ----
-const SYSTEM_FOLDERS = new Set(["sold", "booked appointment", "not interested", "resolved"]);
-function isSystemFolder(name?: string | null) {
-  const n = String(name || "").trim().toLowerCase();
-  return n.length > 0 && SYSTEM_FOLDERS.has(n);
-}
-
 // ---------- helpers
 function bufferToStream(buffer: Buffer): Readable {
   const stream = new Readable();
@@ -95,7 +88,6 @@ async function readJsonBody(req: NextApiRequest): Promise<JsonPayload | null> {
   }
 }
 
-// Ensure/return folder with guards against system folders
 async function ensureFolder({
   userEmail,
   targetFolderId,
@@ -108,11 +100,9 @@ async function ensureFolder({
   if (targetFolderId) {
     const f = await Folder.findOne({ _id: targetFolderId, userEmail });
     if (!f) throw new Error("Folder not found or not owned by user");
-    if (isSystemFolder(f.name)) throw new Error("Cannot import into system folders");
     return f;
   }
   if (!folderName) throw new Error("Missing targetFolderId or folderName");
-  if (isSystemFolder(folderName)) throw new Error("Cannot import into system folders");
   let f = await Folder.findOne({ name: folderName, userEmail });
   if (!f) f = await Folder.create({ name: folderName, userEmail });
   return f;
@@ -255,6 +245,7 @@ export default async function handler(
             folder_name: String(folder.name),
             "Folder Name": String(folder.name),
             status: "New",
+            updatedAt: new Date(), // ✅ ensure modification
           };
           if (m["First Name"] !== undefined) set["First Name"] = m["First Name"];
           if (m["Last Name"] !== undefined) set["Last Name"] = m["Last Name"];
@@ -286,8 +277,9 @@ export default async function handler(
             status: "New",
             folder_name: String(folder.name),
             "Folder Name": String(folder.name),
+            createdAt: new Date(),
           };
-          const set: any = { folderId: folder._id };
+          const set: any = { folderId: folder._id, updatedAt: new Date() }; // ✅
           if (m["First Name"] !== undefined) set["First Name"] = m["First Name"];
           if (m["Last Name"] !== undefined) set["Last Name"] = m["Last Name"];
           if (m.Email !== undefined) set["Email"] = m.Email;
@@ -329,6 +321,58 @@ export default async function handler(
         }
       }
 
+      // ✅ Fallback: if we had rows and produced no ops and no skipped,
+      // do per-row upserts to guarantee meaningful counts.
+      if (!ops.length && skipped === 0 && mapped.length > 0) {
+        for (const m of mapped) {
+          const filter =
+            m.phoneLast10
+              ? { userEmail, phoneLast10: m.phoneLast10 }
+              : m.Email
+              ? { userEmail, Email: m.Email }
+              : null;
+          if (!filter) {
+            // no phone/email → cannot import
+            continue;
+          }
+
+          const setOnInsert: any = {
+            userEmail,
+            ownerEmail: userEmail,
+            status: "New",
+            folder_name: String(folder.name),
+            "Folder Name": String(folder.name),
+            createdAt: new Date(),
+          };
+          const set: any = {
+            folderId: folder._id,
+            updatedAt: new Date(), // ✅
+          };
+          if (m["First Name"] !== undefined) set["First Name"] = m["First Name"];
+          if (m["Last Name"] !== undefined) set["Last Name"] = m["Last Name"];
+          if (m.Email !== undefined) set["Email"] = m.Email;
+          if (m.Phone !== undefined) set["Phone"] = m.Phone;
+          if (m.phoneLast10 !== undefined) set["phoneLast10"] = m.phoneLast10;
+          if (m.State !== undefined) set["State"] = m.State;
+          if (m.Notes !== undefined) set["Notes"] = m.Notes;
+          if (m.leadType) set["leadType"] = m.leadType;
+
+          const r = await Lead.updateOne(
+            filter,
+            { $set: set, $setOnInsert: setOnInsert },
+            { upsert: true }
+          );
+
+          // Count conservatively and meaningfully
+          const upc = (r as any).upsertedCount || ((r as any).upsertedId ? 1 : 0) || 0;
+          const mod = (r as any).modifiedCount || 0;
+          const match = (r as any).matchedCount || 0;
+
+          if (upc > 0) inserted += upc;
+          else if (mod > 0 || match > 0) updated += 1;
+        }
+      }
+
       return res.status(200).json({
         message: "Import completed",
         folderId: folder._id,
@@ -338,12 +382,8 @@ export default async function handler(
         skipExisting: false,
       });
     } catch (e: any) {
-      const msg = e?.message || String(e);
-      if (msg.includes("Cannot import into system folders")) {
-        return res.status(400).json({ message: "Cannot import into system folders" });
-      }
       console.error("❌ JSON import error:", e);
-      return res.status(500).json({ message: "Import failed", error: msg });
+      return res.status(500).json({ message: "Import failed", error: e?.message || String(e) });
     }
   }
 
@@ -388,7 +428,14 @@ export default async function handler(
             .on("error", (e) => reject(e));
         });
 
-        // Reuse JSON path
+        // ✅ If CSV parsed but has no data rows, hard fail with clear message.
+        if (rawRows.length === 0) {
+          return res.status(400).json({
+            message: "No data rows found in CSV (empty file or header-only).",
+          });
+        }
+
+        // Reuse JSON path logic
         const rowsMapped = rawRows.map((r) => ({
           ...mapRow(r, mapping),
           userEmail,
@@ -445,6 +492,7 @@ export default async function handler(
               folder_name: String(folder.name),
               "Folder Name": String(folder.name),
               status: "New",
+              updatedAt: new Date(), // ✅ ensure modification
             };
             if (m["First Name"] !== undefined) set["First Name"] = m["First Name"];
             if (m["Last Name"] !== undefined) set["Last Name"] = m["Last Name"];
@@ -475,8 +523,9 @@ export default async function handler(
               status: "New",
               folder_name: String(folder.name),
               "Folder Name": String(folder.name),
+              createdAt: new Date(),
             };
-            const set: any = { folderId: folder._id };
+            const set: any = { folderId: folder._id, updatedAt: new Date() }; // ✅
             if (m["First Name"] !== undefined) set["First Name"] = m["First Name"];
             if (m["Last Name"] !== undefined) set["Last Name"] = m["Last Name"];
             if (m.Email !== undefined) set["Email"] = m.Email;
@@ -516,6 +565,51 @@ export default async function handler(
           }
         }
 
+        // ✅ Fallback to guarantee meaningful counts when rows exist but ops were empty
+        if (!ops.length && skipped === 0 && rowsMapped.length > 0) {
+          for (const m of rowsMapped) {
+            const filter =
+              m.phoneLast10
+                ? { userEmail, phoneLast10: m.phoneLast10 }
+                : m.Email
+                ? { userEmail, Email: m.Email }
+                : null;
+            if (!filter) {
+              // cannot import without key
+              continue;
+            }
+            const setOnInsert: any = {
+              userEmail,
+              ownerEmail: userEmail,
+              status: "New",
+              folder_name: String(folder.name),
+              "Folder Name": String(folder.name),
+              createdAt: new Date(),
+            };
+            const set: any = { folderId: folder._id, updatedAt: new Date() }; // ✅
+            if (m["First Name"] !== undefined) set["First Name"] = m["First Name"];
+            if (m["Last Name"] !== undefined) set["Last Name"] = m["Last Name"];
+            if (m.Email !== undefined) set["Email"] = m.Email;
+            if (m.Phone !== undefined) set["Phone"] = m.Phone;
+            if (m.phoneLast10 !== undefined) set["phoneLast10"] = m.phoneLast10;
+            if (m.State !== undefined) set["State"] = m.State;
+            if (m.Notes !== undefined) set["Notes"] = m.Notes;
+            if (m.leadType) set["leadType"] = m.leadType;
+
+            const r = await Lead.updateOne(
+              filter,
+              { $set: set, $setOnInsert: setOnInsert },
+              { upsert: true }
+            );
+            const upc = (r as any).upsertedCount || ((r as any).upsertedId ? 1 : 0) || 0;
+            const mod = (r as any).modifiedCount || 0;
+            const match = (r as any).matchedCount || 0;
+
+            if (upc > 0) inserted += upc;
+            else if (mod > 0 || match > 0) updated += 1;
+          }
+        }
+
         return res.status(200).json({
           message: "Leads imported successfully",
           folderId: folder._id,
@@ -525,21 +619,14 @@ export default async function handler(
           skipExisting: false,
         });
       } catch (e: any) {
-        const msg = e?.message || String(e);
-        if (msg.includes("Cannot import into system folders")) {
-          return res.status(400).json({ message: "Cannot import into system folders" });
-        }
         console.error("❌ Multipart mapping import error:", e);
-        return res.status(500).json({ message: "Import failed", error: msg });
+        return res.status(500).json({ message: "Import failed", error: e?.message || String(e) });
       }
     }
 
     // Legacy path: folderName + CSV file (no mapping provided)
     const folderName = folderNameField;
     if (!folderName) return res.status(400).json({ message: "Missing folder name" });
-    if (isSystemFolder(folderName)) {
-      return res.status(400).json({ message: "Cannot import into system folders" });
-    }
 
     try {
       const buffer = await fs.promises.readFile(file.filepath);
@@ -558,6 +645,10 @@ export default async function handler(
           .on("end", () => resolve())
           .on("error", (e) => reject(e));
       });
+
+      if (rawLeads.length === 0) {
+        return res.status(400).json({ message: "No data rows found in CSV (empty file or header-only)." });
+      }
 
       // Find or create folder (legacy)
       let folder = await Folder.findOne({ name: folderName, userEmail });
