@@ -21,13 +21,20 @@ function bufferToStream(buffer: Buffer): Readable {
   return stream;
 }
 
-function toLast10(phone?: string | null): string | undefined {
+function last10(phone?: string | null): string | undefined {
   if (!phone) return undefined;
   const digits = String(phone).replace(/\D+/g, "");
   if (!digits) return undefined;
-  return digits.slice(-10) || undefined;
+  const k = digits.slice(-10);
+  return k || undefined;
+}
+function lcEmail(email?: string | null): string | undefined {
+  if (!email) return undefined;
+  const s = String(email).trim().toLowerCase();
+  return s || undefined;
 }
 
+// For state normalization (unchanged)
 const STATE_MAP: Record<string, string> = {
   AL: "AL", ALABAMA: "AL", AK: "AK", ALASKA: "AK", AZ: "AZ", ARIZONA: "AZ",
   AR: "AR", ARKANSAS: "AR", CA: "CA", CALIFORNIA: "CA", CO: "CO", COLORADO: "CO",
@@ -52,13 +59,11 @@ const STATE_MAP: Record<string, string> = {
   WISCONSIN: "WI", WY: "WY", WYOMING: "WY", DC: "DC",
   "DISTRICT OF COLUMBIA": "DC", DISTRICT_OF_COLUMBIA: "DC",
 };
-
 function normalizeState(input?: string | null): string | undefined {
   if (!input) return undefined;
   const key = String(input).trim().toUpperCase();
   return STATE_MAP[key] || STATE_MAP[key.replace(/\s+/g, "_")] || undefined;
 }
-
 function lc(str?: string | null) {
   return str ? String(str).trim().toLowerCase() : undefined;
 }
@@ -68,7 +73,7 @@ type JsonPayload = {
   folderName?: string; // backward compat
   mapping?: Record<string, string>; // { firstName: "First Name", phone: "Phone", ... }
   rows?: Record<string, any>[];
-  skipExisting?: boolean; // we will default to false to MOVE + RESET status
+  skipExisting?: boolean; // default false here = MOVE + RESET
 };
 
 // Read raw JSON when bodyParser is disabled
@@ -134,36 +139,61 @@ function mapRow(row: Record<string, any>, mapping: Record<string, string>) {
       : notes;
 
   const normalizedState = normalizeState(stateRaw);
-  const emailLc = lc(email);
-  const phoneLast10 = toLast10(phone);
+  const emailLc = lcEmail(email);
+  const phoneKey = last10(phone);
 
   return {
     "First Name": first,
     "Last Name": last,
-    Email: emailLc,
+    Email: emailLc,     // canonical stored lowercase
+    email: emailLc,     // mirror for compatibility
     Phone: phone,
-    phoneLast10,
+    phoneLast10: phoneKey,
+    normalizedPhone: phoneKey, // mirror for compatibility
     State: normalizedState,
     Notes: mergedNotes,
     leadType: sanitizeLeadType(leadTypeRaw || ""),
   };
 }
 
-export default async function handler(
-  req: NextApiRequest,
-  res: NextApiResponse,
-) {
-  if (req.method !== "POST")
-    return res.status(405).json({ message: "Method not allowed" });
+// ---- Common helpers to build filters and sets with all dedupe fields ----
+function buildFilter(userEmail: string, phoneKey?: string, emailKey?: string) {
+  if (phoneKey) {
+    return {
+      userEmail,
+      $or: [{ phoneLast10: phoneKey }, { normalizedPhone: phoneKey }],
+    };
+  }
+  if (emailKey) {
+    return {
+      userEmail,
+      $or: [{ Email: emailKey }, { email: emailKey }],
+    };
+  }
+  return null;
+}
+function applyIdentityFields(set: Record<string, any>, phoneKey?: string, emailKey?: string, phoneRaw?: any) {
+  if (phoneRaw !== undefined) set["Phone"] = phoneRaw;
+  if (phoneKey !== undefined) {
+    set["phoneLast10"] = phoneKey;
+    set["normalizedPhone"] = phoneKey;
+  }
+  if (emailKey !== undefined) {
+    set["Email"] = emailKey;
+    set["email"] = emailKey;
+  }
+}
+
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed" });
 
   const session = await getServerSession(req, res, authOptions);
-  if (!session?.user?.email)
-    return res.status(401).json({ message: "Unauthorized" });
+  if (!session?.user?.email) return res.status(401).json({ message: "Unauthorized" });
 
   const userEmail = lc(session.user.email)!;
   await dbConnect();
 
-  // ---------- JSON MODE
+  // ---------- JSON MODE ----------
   const json = await readJsonBody(req);
   if (json) {
     try {
@@ -172,8 +202,7 @@ export default async function handler(
         folderName,
         mapping,
         rows,
-        // DEFAULT: move duplicates and reset to New
-        skipExisting = false,
+        skipExisting = false, // default false = MOVE + RESET
       } = json;
       if (!mapping || !rows || !Array.isArray(rows)) {
         return res.status(400).json({ message: "Missing mapping or rows[]" });
@@ -181,7 +210,7 @@ export default async function handler(
 
       const folder = await ensureFolder({ userEmail, targetFolderId, folderName });
 
-      // Map rows → leads
+      // Map rows → normalized leads
       const mapped = rows.map((r) => ({
         ...mapRow(r, mapping),
         userEmail,
@@ -189,55 +218,55 @@ export default async function handler(
         folderId: folder._id,
       }));
 
-      // Dedupe keys
-      const phoneKeys = Array.from(
-        new Set(mapped.map((m) => m.phoneLast10).filter(Boolean) as string[]),
-      );
-      const emailKeys = Array.from(
-        new Set(mapped.map((m) => m.Email).filter(Boolean) as string[]),
-      );
+      // Build dedupe key sets
+      const phoneKeys = Array.from(new Set(mapped.map((m) => m.phoneLast10).filter(Boolean) as string[]));
+      const emailKeys = Array.from(new Set(mapped.map((m) => m.Email).filter(Boolean) as string[]));
 
-      // Existing
-      const existing = await Lead.find({
-        userEmail,
-        $or: [
-          phoneKeys.length ? { phoneLast10: { $in: phoneKeys } } : { _id: null },
-          emailKeys.length ? { Email: { $in: emailKeys } } : { _id: null },
-        ],
-      }).select("_id phoneLast10 Email folderId");
+      // Fetch existing across BOTH phone fields and BOTH email fields
+      const ors: any[] = [];
+      if (phoneKeys.length) {
+        ors.push({ phoneLast10: { $in: phoneKeys } });
+        ors.push({ normalizedPhone: { $in: phoneKeys } });
+      }
+      if (emailKeys.length) {
+        ors.push({ Email: { $in: emailKeys } });
+        ors.push({ email: { $in: emailKeys } });
+      }
+
+      const existing = ors.length
+        ? await Lead.find({ userEmail, $or: ors }).select("_id phoneLast10 normalizedPhone Email email folderId")
+        : [];
 
       const byPhone = new Map<string, any>();
       const byEmail = new Map<string, any>();
       for (const l of existing) {
-        if (l.phoneLast10) byPhone.set(l.phoneLast10, l);
-        if (l.Email) byEmail.set(String(l.Email).toLowerCase(), l);
+        const p1 = l.phoneLast10 && String(l.phoneLast10);
+        const p2 = l.normalizedPhone && String(l.normalizedPhone);
+        const e1 = l.Email && String(l.Email).toLowerCase();
+        const e2 = l.email && String(l.email).toLowerCase();
+        if (p1) byPhone.set(p1, l);
+        if (p2) byPhone.set(p2, l);
+        if (e1) byEmail.set(e1, l);
+        if (e2) byEmail.set(e2, l);
       }
 
       const ops: any[] = [];
-      const processedFilters: Array<{ phoneLast10?: string; Email?: string }> = [];
+      const processedFilters: any[] = [];
       let skipped = 0;
 
       for (const m of mapped) {
-        const exists =
-          (m.phoneLast10 && byPhone.get(m.phoneLast10)) ||
-          (m.Email && byEmail.get(String(m.Email).toLowerCase()));
+        const phoneKey = m.phoneLast10 as string | undefined;
+        const emailKey = (m.Email as string | undefined) || (m.email as string | undefined);
+
+        const exists = (phoneKey && byPhone.get(phoneKey)) || (emailKey && byEmail.get(String(emailKey)));
 
         if (exists) {
           if (skipExisting) {
             skipped++;
             continue;
           }
-          // MOVE + RESET STATUS
-          const filter =
-            m.phoneLast10
-              ? { userEmail, phoneLast10: m.phoneLast10 }
-              : m.Email
-              ? { userEmail, Email: m.Email }
-              : null;
-          if (!filter) {
-            skipped++;
-            continue;
-          }
+          const filter = buildFilter(userEmail, phoneKey, emailKey);
+          if (!filter) { skipped++; continue; }
 
           const set: any = {
             ownerEmail: userEmail,
@@ -245,31 +274,23 @@ export default async function handler(
             folder_name: String(folder.name),
             "Folder Name": String(folder.name),
             status: "New",
-            updatedAt: new Date(), // ✅ ensure modification
+            updatedAt: new Date(),
           };
+          // Keep core fields
           if (m["First Name"] !== undefined) set["First Name"] = m["First Name"];
           if (m["Last Name"] !== undefined) set["Last Name"] = m["Last Name"];
-          if (m.Email !== undefined) set["Email"] = m.Email;
-          if (m.Phone !== undefined) set["Phone"] = m.Phone;
-          if (m.phoneLast10 !== undefined) set["phoneLast10"] = m.phoneLast10;
           if (m.State !== undefined) set["State"] = m.State;
           if (m.Notes !== undefined) set["Notes"] = m.Notes;
           if (m.leadType) set["leadType"] = m.leadType;
 
+          // ✅ Always set identity fields for consistency
+          applyIdentityFields(set, phoneKey, emailKey, m.Phone);
+
           ops.push({ updateOne: { filter, update: { $set: set }, upsert: false } });
           processedFilters.push(filter);
         } else {
-          // NEW
-          const filter =
-            m.phoneLast10
-              ? { userEmail, phoneLast10: m.phoneLast10 }
-              : m.Email
-              ? { userEmail, Email: m.Email }
-              : null;
-          if (!filter) {
-            skipped++;
-            continue;
-          }
+          const filter = buildFilter(userEmail, phoneKey, emailKey);
+          if (!filter) { skipped++; continue; }
 
           const setOnInsert: any = {
             userEmail,
@@ -279,19 +300,18 @@ export default async function handler(
             "Folder Name": String(folder.name),
             createdAt: new Date(),
           };
-          const set: any = { folderId: folder._id, updatedAt: new Date() }; // ✅
+          const set: any = { folderId: folder._id, updatedAt: new Date() };
+
           if (m["First Name"] !== undefined) set["First Name"] = m["First Name"];
           if (m["Last Name"] !== undefined) set["Last Name"] = m["Last Name"];
-          if (m.Email !== undefined) set["Email"] = m.Email;
-          if (m.Phone !== undefined) set["Phone"] = m.Phone;
-          if (m.phoneLast10 !== undefined) set["phoneLast10"] = m.phoneLast10;
           if (m.State !== undefined) set["State"] = m.State;
           if (m.Notes !== undefined) set["Notes"] = m.Notes;
           if (m.leadType) set["leadType"] = m.leadType;
 
-          ops.push({
-            updateOne: { filter, update: { $set: set, $setOnInsert: setOnInsert }, upsert: true },
-          });
+          applyIdentityFields(set, phoneKey, emailKey, m.Phone);
+          applyIdentityFields(setOnInsert, phoneKey, emailKey, m.Phone);
+
+          ops.push({ updateOne: { filter, update: { $set: set, $setOnInsert: setOnInsert }, upsert: true } });
           processedFilters.push(filter);
         }
       }
@@ -305,36 +325,22 @@ export default async function handler(
         updated = (result as any).modifiedCount || 0;
 
         if (processedFilters.length) {
-          const orFilters = processedFilters.map((f) => {
-            if (f.phoneLast10) return { userEmail, phoneLast10: f.phoneLast10 };
-            if (f.Email) return { userEmail, Email: f.Email };
-            return { _id: null };
-          });
+          const orFilters = processedFilters.flatMap((f) => (f.$or || []).map((clause: any) => ({ userEmail, ...clause })));
           const affected = await Lead.find({ $or: orFilters }).select("_id");
           const ids = affected.map((d) => String(d._id));
           if (ids.length) {
-            await Folder.updateOne(
-              { _id: folder._id, userEmail },
-              { $addToSet: { leadIds: { $each: ids } } },
-            );
+            await Folder.updateOne({ _id: folder._id, userEmail }, { $addToSet: { leadIds: { $each: ids } } });
           }
         }
       }
 
-      // ✅ Fallback: if we had rows and produced no ops and no skipped,
-      // do per-row upserts to guarantee meaningful counts.
+      // Fallback per-row upserts if ops ended up empty but we had mappable rows
       if (!ops.length && skipped === 0 && mapped.length > 0) {
         for (const m of mapped) {
-          const filter =
-            m.phoneLast10
-              ? { userEmail, phoneLast10: m.phoneLast10 }
-              : m.Email
-              ? { userEmail, Email: m.Email }
-              : null;
-          if (!filter) {
-            // no phone/email → cannot import
-            continue;
-          }
+          const phoneKey = m.phoneLast10 as string | undefined;
+          const emailKey = (m.Email as string | undefined) || (m.email as string | undefined);
+          const filter = buildFilter(userEmail, phoneKey, emailKey);
+          if (!filter) continue;
 
           const setOnInsert: any = {
             userEmail,
@@ -344,30 +350,21 @@ export default async function handler(
             "Folder Name": String(folder.name),
             createdAt: new Date(),
           };
-          const set: any = {
-            folderId: folder._id,
-            updatedAt: new Date(), // ✅
-          };
+          const set: any = { folderId: folder._id, updatedAt: new Date() };
+
           if (m["First Name"] !== undefined) set["First Name"] = m["First Name"];
           if (m["Last Name"] !== undefined) set["Last Name"] = m["Last Name"];
-          if (m.Email !== undefined) set["Email"] = m.Email;
-          if (m.Phone !== undefined) set["Phone"] = m.Phone;
-          if (m.phoneLast10 !== undefined) set["phoneLast10"] = m.phoneLast10;
           if (m.State !== undefined) set["State"] = m.State;
           if (m.Notes !== undefined) set["Notes"] = m.Notes;
           if (m.leadType) set["leadType"] = m.leadType;
 
-          const r = await Lead.updateOne(
-            filter,
-            { $set: set, $setOnInsert: setOnInsert },
-            { upsert: true }
-          );
+          applyIdentityFields(set, phoneKey, emailKey, m.Phone);
+          applyIdentityFields(setOnInsert, phoneKey, emailKey, m.Phone);
 
-          // Count conservatively and meaningfully
+          const r = await Lead.updateOne(filter, { $set: set, $setOnInsert: setOnInsert }, { upsert: true });
           const upc = (r as any).upsertedCount || ((r as any).upsertedId ? 1 : 0) || 0;
           const mod = (r as any).modifiedCount || 0;
           const match = (r as any).matchedCount || 0;
-
           if (upc > 0) inserted += upc;
           else if (mod > 0 || match > 0) updated += 1;
         }
@@ -387,7 +384,7 @@ export default async function handler(
     }
   }
 
-  // ---------- MULTIPART MODE (CSV upload)
+  // ---------- MULTIPART MODE (CSV upload) ----------
   const form = formidable({ multiples: false });
 
   form.parse(req, async (err, fields, files) => {
@@ -399,8 +396,7 @@ export default async function handler(
     const targetFolderId = fields.targetFolderId?.toString();
     const folderNameField = fields.folderName?.toString()?.trim();
     const mappingStr = fields.mapping?.toString();
-    // DEFAULT: move duplicates + reset to New
-    const skipExisting = fields.skipExisting?.toString() === "true" ? true : false;
+    const skipExisting = fields.skipExisting?.toString() === "true" ? true : false; // default false = MOVE + RESET
 
     const file = Array.isArray(files.file) ? files.file[0] : files.file;
     if (!file?.filepath) return res.status(400).json({ message: "Missing file" });
@@ -428,14 +424,10 @@ export default async function handler(
             .on("error", (e) => reject(e));
         });
 
-        // ✅ If CSV parsed but has no data rows, hard fail with clear message.
         if (rawRows.length === 0) {
-          return res.status(400).json({
-            message: "No data rows found in CSV (empty file or header-only).",
-          });
+          return res.status(400).json({ message: "No data rows found in CSV (empty file or header-only)." });
         }
 
-        // Reuse JSON path logic
         const rowsMapped = rawRows.map((r) => ({
           ...mapRow(r, mapping),
           userEmail,
@@ -446,45 +438,50 @@ export default async function handler(
         const phoneKeys = Array.from(new Set(rowsMapped.map((m) => m.phoneLast10).filter(Boolean) as string[]));
         const emailKeys = Array.from(new Set(rowsMapped.map((m) => m.Email).filter(Boolean) as string[]));
 
-        const existing = await Lead.find({
-          userEmail,
-          $or: [
-            phoneKeys.length ? { phoneLast10: { $in: phoneKeys } } : { _id: null },
-            emailKeys.length ? { Email: { $in: emailKeys } } : { _id: null },
-          ],
-        }).select("_id phoneLast10 Email folderId");
+        const ors: any[] = [];
+        if (phoneKeys.length) {
+          ors.push({ phoneLast10: { $in: phoneKeys } });
+          ors.push({ normalizedPhone: { $in: phoneKeys } });
+        }
+        if (emailKeys.length) {
+          ors.push({ Email: { $in: emailKeys } });
+          ors.push({ email: { $in: emailKeys } });
+        }
+
+        const existing = ors.length
+          ? await Lead.find({ userEmail, $or: ors }).select("_id phoneLast10 normalizedPhone Email email folderId")
+          : [];
 
         const byPhone = new Map<string, any>();
         const byEmail = new Map<string, any>();
         for (const l of existing) {
-          if (l.phoneLast10) byPhone.set(l.phoneLast10, l);
-          if (l.Email) byEmail.set(String(l.Email).toLowerCase(), l);
+          const p1 = l.phoneLast10 && String(l.phoneLast10);
+          const p2 = l.normalizedPhone && String(l.normalizedPhone);
+          const e1 = l.Email && String(l.Email).toLowerCase();
+          const e2 = l.email && String(l.email).toLowerCase();
+          if (p1) byPhone.set(p1, l);
+          if (p2) byPhone.set(p2, l);
+          if (e1) byEmail.set(e1, l);
+          if (e2) byEmail.set(e2, l);
         }
 
         const ops: any[] = [];
-        const processedFilters: Array<{ phoneLast10?: string; Email?: string }> = [];
+        const processedFilters: any[] = [];
         let skipped = 0;
 
         for (const m of rowsMapped) {
-          const exists =
-            (m.phoneLast10 && byPhone.get(m.phoneLast10)) ||
-            (m.Email && byEmail.get(String(m.Email).toLowerCase()));
+          const phoneKey = m.phoneLast10 as string | undefined;
+          const emailKey = (m.Email as string | undefined) || (m.email as string | undefined);
+
+          const exists = (phoneKey && byPhone.get(phoneKey)) || (emailKey && byEmail.get(String(emailKey)));
 
           if (exists) {
             if (skipExisting) {
               skipped++;
               continue;
             }
-            const filter =
-              m.phoneLast10
-                ? { userEmail, phoneLast10: m.phoneLast10 }
-                : m.Email
-                ? { userEmail, Email: m.Email }
-                : null;
-            if (!filter) {
-              skipped++;
-              continue;
-            }
+            const filter = buildFilter(userEmail, phoneKey, emailKey);
+            if (!filter) { skipped++; continue; }
 
             const set: any = {
               ownerEmail: userEmail,
@@ -492,30 +489,21 @@ export default async function handler(
               folder_name: String(folder.name),
               "Folder Name": String(folder.name),
               status: "New",
-              updatedAt: new Date(), // ✅ ensure modification
+              updatedAt: new Date(),
             };
             if (m["First Name"] !== undefined) set["First Name"] = m["First Name"];
             if (m["Last Name"] !== undefined) set["Last Name"] = m["Last Name"];
-            if (m.Email !== undefined) set["Email"] = m.Email;
-            if (m.Phone !== undefined) set["Phone"] = m.Phone;
-            if (m.phoneLast10 !== undefined) set["phoneLast10"] = m.phoneLast10;
             if (m.State !== undefined) set["State"] = m.State;
             if (m.Notes !== undefined) set["Notes"] = m.Notes;
             if (m.leadType) set["leadType"] = m.leadType;
 
+            applyIdentityFields(set, phoneKey, emailKey, m.Phone);
+
             ops.push({ updateOne: { filter, update: { $set: set }, upsert: false } });
             processedFilters.push(filter);
           } else {
-            const filter =
-              m.phoneLast10
-                ? { userEmail, phoneLast10: m.phoneLast10 }
-                : m.Email
-                ? { userEmail, Email: m.Email }
-                : null;
-            if (!filter) {
-              skipped++;
-              continue;
-            }
+            const filter = buildFilter(userEmail, phoneKey, emailKey);
+            if (!filter) { skipped++; continue; }
 
             const setOnInsert: any = {
               userEmail,
@@ -525,19 +513,18 @@ export default async function handler(
               "Folder Name": String(folder.name),
               createdAt: new Date(),
             };
-            const set: any = { folderId: folder._id, updatedAt: new Date() }; // ✅
+            const set: any = { folderId: folder._id, updatedAt: new Date() };
+
             if (m["First Name"] !== undefined) set["First Name"] = m["First Name"];
             if (m["Last Name"] !== undefined) set["Last Name"] = m["Last Name"];
-            if (m.Email !== undefined) set["Email"] = m.Email;
-            if (m.Phone !== undefined) set["Phone"] = m.Phone;
-            if (m.phoneLast10 !== undefined) set["phoneLast10"] = m.phoneLast10;
             if (m.State !== undefined) set["State"] = m.State;
             if (m.Notes !== undefined) set["Notes"] = m.Notes;
             if (m.leadType) set["leadType"] = m.leadType;
 
-            ops.push({
-              updateOne: { filter, update: { $set: set, $setOnInsert: setOnInsert }, upsert: true },
-            });
+            applyIdentityFields(set, phoneKey, emailKey, m.Phone);
+            applyIdentityFields(setOnInsert, phoneKey, emailKey, m.Phone);
+
+            ops.push({ updateOne: { filter, update: { $set: set, $setOnInsert: setOnInsert }, upsert: true } });
             processedFilters.push(filter);
           }
         }
@@ -550,34 +537,22 @@ export default async function handler(
           inserted = (result as any).upsertedCount || 0;
           updated = (result as any).modifiedCount || 0;
 
-          const orFilters = processedFilters.map((f) => {
-            if (f.phoneLast10) return { userEmail, phoneLast10: f.phoneLast10 };
-            if (f.Email) return { userEmail, Email: f.Email };
-            return { _id: null };
-          });
+          const orFilters = processedFilters.flatMap((f) => (f.$or || []).map((clause: any) => ({ userEmail, ...clause })));
           const affected = await Lead.find({ $or: orFilters }).select("_id");
           const ids = affected.map((d) => String(d._id));
           if (ids.length) {
-            await Folder.updateOne(
-              { _id: folder._id, userEmail },
-              { $addToSet: { leadIds: { $each: ids } } },
-            );
+            await Folder.updateOne({ _id: folder._id, userEmail }, { $addToSet: { leadIds: { $each: ids } } });
           }
         }
 
-        // ✅ Fallback to guarantee meaningful counts when rows exist but ops were empty
+        // Fallback per-row upserts to guarantee counts
         if (!ops.length && skipped === 0 && rowsMapped.length > 0) {
           for (const m of rowsMapped) {
-            const filter =
-              m.phoneLast10
-                ? { userEmail, phoneLast10: m.phoneLast10 }
-                : m.Email
-                ? { userEmail, Email: m.Email }
-                : null;
-            if (!filter) {
-              // cannot import without key
-              continue;
-            }
+            const phoneKey = m.phoneLast10 as string | undefined;
+            const emailKey = (m.Email as string | undefined) || (m.email as string | undefined);
+            const filter = buildFilter(userEmail, phoneKey, emailKey);
+            if (!filter) continue;
+
             const setOnInsert: any = {
               userEmail,
               ownerEmail: userEmail,
@@ -586,25 +561,21 @@ export default async function handler(
               "Folder Name": String(folder.name),
               createdAt: new Date(),
             };
-            const set: any = { folderId: folder._id, updatedAt: new Date() }; // ✅
+            const set: any = { folderId: folder._id, updatedAt: new Date() };
+
             if (m["First Name"] !== undefined) set["First Name"] = m["First Name"];
             if (m["Last Name"] !== undefined) set["Last Name"] = m["Last Name"];
-            if (m.Email !== undefined) set["Email"] = m.Email;
-            if (m.Phone !== undefined) set["Phone"] = m.Phone;
-            if (m.phoneLast10 !== undefined) set["phoneLast10"] = m.phoneLast10;
             if (m.State !== undefined) set["State"] = m.State;
             if (m.Notes !== undefined) set["Notes"] = m.Notes;
             if (m.leadType) set["leadType"] = m.leadType;
 
-            const r = await Lead.updateOne(
-              filter,
-              { $set: set, $setOnInsert: setOnInsert },
-              { upsert: true }
-            );
+            applyIdentityFields(set, phoneKey, emailKey, m.Phone);
+            applyIdentityFields(setOnInsert, phoneKey, emailKey, m.Phone);
+
+            const r = await Lead.updateOne(filter, { $set: set, $setOnInsert: setOnInsert }, { upsert: true });
             const upc = (r as any).upsertedCount || ((r as any).upsertedId ? 1 : 0) || 0;
             const mod = (r as any).modifiedCount || 0;
             const match = (r as any).matchedCount || 0;
-
             if (upc > 0) inserted += upc;
             else if (mod > 0 || match > 0) updated += 1;
           }
@@ -624,7 +595,7 @@ export default async function handler(
       }
     }
 
-    // Legacy path: folderName + CSV file (no mapping provided)
+    // ---------- Legacy path: folderName + CSV (no mapping provided) ----------
     const folderName = folderNameField;
     if (!folderName) return res.status(400).json({ message: "Missing folder name" });
 
@@ -654,15 +625,25 @@ export default async function handler(
       let folder = await Folder.findOne({ name: folderName, userEmail });
       if (!folder) folder = await Folder.create({ name: folderName, userEmail });
 
-      const leadsToInsert = rawLeads.map((lead) => ({
-        ...lead,
-        userEmail,
-        folderId: folder._id,
-        folder_name: String(folder.name),
-        "Folder Name": String(folder.name),
-        status: "New",
-        leadType: sanitizeLeadType(lead["Lead Type"] || ""),
-      }));
+      // Normalize identity fields for legacy path too
+      const leadsToInsert = rawLeads.map((lead) => {
+        const phoneKey = last10(lead["Phone"] || lead["phone"]);
+        const emailKey = lcEmail(lead["Email"] || lead["email"]);
+        return {
+          ...lead,
+          userEmail,
+          folderId: folder._id,
+          folder_name: String(folder.name),
+          "Folder Name": String(folder.name),
+          status: "New",
+          Phone: lead["Phone"] ?? lead["phone"],
+          phoneLast10: phoneKey,
+          normalizedPhone: phoneKey,
+          Email: emailKey,
+          email: emailKey,
+          leadType: sanitizeLeadType(lead["Lead Type"] || ""),
+        };
+      });
 
       await createLeadsFromCSV(leadsToInsert, userEmail, String(folder._id));
 
