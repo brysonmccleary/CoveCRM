@@ -21,8 +21,16 @@ type ImportBody = {
   mapping: Record<string, string>;
   skip?: Record<string, boolean>;
   createFolderIfMissing?: boolean;
-  moveExistingToFolder?: boolean; // we’ll force true below
+  moveExistingToFolder?: boolean; // kept for compat
+  skipExisting?: boolean;          // ✅ NEW: skip duplicates instead of moving
 };
+
+// ---- System folders guard (case-insensitive) ----
+const SYSTEM_FOLDERS = new Set(["sold", "booked appointment", "not interested", "resolved"]);
+function isSystemFolder(name?: string | null) {
+  const n = String(name || "").trim().toLowerCase();
+  return n.length > 0 && SYSTEM_FOLDERS.has(n);
+}
 
 function normalizePhone(input: any): string {
   return String(input || "").replace(/\D+/g, "");
@@ -54,11 +62,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     mapping = {},
     skip = {},
     createFolderIfMissing = true,
+    skipExisting = false, // ✅ default: move/update duplicates
   } = (req.body || {}) as ImportBody;
 
   if (!spreadsheetId) return res.status(400).json({ error: "Missing spreadsheetId" });
   if (!title && typeof sheetId !== "number")
     return res.status(400).json({ error: "Provide sheet 'title' or numeric 'sheetId'" });
+
+  // Client may attempt to pass a system folder name; hard-block here.
+  if (isSystemFolder(folderName)) {
+    return res.status(400).json({ error: "Cannot import into system folders" });
+  }
 
   try {
     await dbConnect();
@@ -117,6 +131,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         imported: 0,
         updated: 0,
         skippedNoKey: 0,
+        skippedExisting: 0,
         rowCount: 0,
         lastRowImported: 0,
         note: "No data in sheet.",
@@ -161,11 +176,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       );
     }
     if (!folderDoc) return res.status(400).json({ error: "Folder not found/created" });
+    if (isSystemFolder(folderDoc.name)) {
+      return res.status(400).json({ error: "Cannot import into system folders" });
+    }
     const targetFolderId = folderDoc._id as mongoose.Types.ObjectId;
 
     let imported = 0;
     let updated = 0;
     let skippedNoKey = 0;
+    let skippedExisting = 0; // ✅ count duplicates skipped
     let lastNonEmptyRow = headerIdx;
 
     for (let r = firstDataRowIndex; r <= lastRowIndex; r++) {
@@ -217,7 +236,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         await Lead.create(doc);
         imported++;
       } else {
-        // MOVE + RESET STATUS (always)
+        if (skipExisting) {
+          skippedExisting++; // ✅ do not move/update, just count it
+          continue;
+        }
+        // MOVE + RESET STATUS (default)
         const update: any = {
           $set: {
             ...doc,
@@ -279,6 +302,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       imported,
       updated,
       skippedNoKey,
+      skippedExisting, // ✅ exposed
       rowCount: values.length,
       headerRow,
       lastRowImported: lastNonEmptyRow + 1,

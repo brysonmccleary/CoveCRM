@@ -5,6 +5,7 @@ import { authOptions } from "../auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import Lead from "@/models/Lead";
+import Folder from "@/models/Folder"; // ✅ ensure folder created/linked
 import { google } from "googleapis";
 
 // ---- System folders guard (case-insensitive) ----
@@ -44,6 +45,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   await dbConnect();
   const user = await User.findOne({ email: session.user.email });
   if (!user) return res.status(404).json({ error: "User not found" });
+
+  // ✅ Ensure/find Folder doc and use folderId on leads
+  const folderDoc = await Folder.findOneAndUpdate(
+    { userEmail: session.user.email, name: folderName },
+    { $setOnInsert: { userEmail: session.user.email, name: folderName, source: "google-sheets" } },
+    { upsert: true, new: true }
+  );
+  if (!folderDoc) return res.status(400).json({ error: "Folder not found/created" });
 
   const gs = (user as any).googleSheets || {};
   if (!gs?.refreshToken) {
@@ -116,11 +125,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       $setOnInsert: { createdAt: new Date() },
       $set: {
         userEmail: session.user.email,
-        folderName, // legacy field in this endpoint — unchanged
+        folderId: folderDoc._id, // ✅ link to folder
+        folder_name: String(folderDoc.name),
+        "Folder Name": String(folderDoc.name),
+        status: "New",
         "First Name": firstName,
         "Last Name": lastName,
         Email: email,
         Phone: String(phone || ""),
+        phoneLast10: phoneKey || undefined, // ✅ persist key for future de-dupe
         State: state,
         Notes: notes,
         Age: age ? Number(age) : undefined,
@@ -148,5 +161,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     await user.save();
   }
 
-  res.status(200).json({ imported, tab: resolvedTab, headers });
+  res.status(200).json({
+    imported,
+    tab: resolvedTab,
+    headers,
+    folderId: String(folderDoc._id),
+    folderName: String(folderDoc.name),
+  });
 }

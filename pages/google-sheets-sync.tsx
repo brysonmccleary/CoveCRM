@@ -32,6 +32,11 @@ const defaultFields: FieldOption[] = [
   { label: "Notes", value: "notes" },
 ];
 
+// ---- System folders guard (client-side convenience; server still enforces) ----
+const SYSTEM_FOLDERS = new Set(["sold", "booked appointment", "not interested", "resolved"]);
+const isSystemFolder = (name?: string | null) =>
+  SYSTEM_FOLDERS.has(String(name || "").trim().toLowerCase());
+
 export default function GoogleSheetsSyncPage() {
   // files/tabs
   const [files, setFiles] = useState<DriveFile[] | null>(null);
@@ -52,6 +57,7 @@ export default function GoogleSheetsSyncPage() {
   const [skip, setSkip] = useState<Record<string, boolean>>({});
   const [folderName, setFolderName] = useState<string>("");
 
+  const [skipExisting, setSkipExisting] = useState<boolean>(false); // ✅ NEW
   const [importing, setImporting] = useState(false);
 
   // refs
@@ -73,6 +79,7 @@ export default function GoogleSheetsSyncPage() {
     setMapping({});
     setSkip({});
     setFolderName("");
+    setSkipExisting(false);
 
     try {
       const r = await fetch("/api/sheets/list");
@@ -97,6 +104,7 @@ export default function GoogleSheetsSyncPage() {
     setMapping({});
     setSkip({});
     setFolderName(`${file.name} — `);
+    setSkipExisting(false);
 
     try {
       setLoadingTabs(true);
@@ -167,6 +175,12 @@ export default function GoogleSheetsSyncPage() {
       return toast.error("Map at least Phone or Email");
     }
 
+    const intendedFolderName =
+      folderName || `${selectedFile.name} — ${selectedTab || "Sheet"}`;
+    if (isSystemFolder(intendedFolderName)) {
+      return toast.error("Cannot import into system folders");
+    }
+
     setImporting(true);
     try {
       const r = await fetch("/api/google/sheets/import", {
@@ -178,14 +192,16 @@ export default function GoogleSheetsSyncPage() {
           headerRow,
           mapping,
           skip,
-          folderName:
-            folderName || `${selectedFile.name} — ${selectedTab || "Sheet"}`,
+          folderName: intendedFolderName,
           moveExistingToFolder: true,
+          skipExisting, // ✅ pass user choice
         }),
       });
       const j = await r.json();
       if (!r.ok) throw new Error(j?.error || "Import failed");
-      toast.success(`Imported ${j.imported}, updated ${j.updated}. Sync saved.`);
+      toast.success(
+        `Imported ${j.imported}, updated ${j.updated}, skipped dups ${j.skippedExisting ?? 0}.`
+      );
     } catch (e: any) {
       toast.error(e.message || "Import failed");
     } finally {
@@ -269,7 +285,7 @@ export default function GoogleSheetsSyncPage() {
           </div>
         )}
 
-        {/* CONTROL PANEL (TOP) */}
+        {/* CONTROL PANEL */}
         {selectedFile && (
           <div className="mb-5 rounded-lg border border-slate-200 bg-white shadow-sm p-4 dark:bg-slate-800 dark:border-slate-700">
             <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
@@ -278,7 +294,7 @@ export default function GoogleSheetsSyncPage() {
                 <span className="text-indigo-600">{selectedFile.name}</span>
               </div>
               <div className="text-xs text-slate-500 dark:text-slate-400">
-                Select a tab, set header row & folder name, then load preview.
+                Select a tab, set header row & folder name, choose skip mode, then load preview.
               </div>
             </div>
 
@@ -343,6 +359,20 @@ export default function GoogleSheetsSyncPage() {
               </div>
             </div>
 
+            {/* ✅ Skip duplicates toggle for Google Sheets sync */}
+            <div className="mt-3 flex items-center gap-2">
+              <input
+                id="skipExistingSheets"
+                type="checkbox"
+                className="h-5 w-5 accent-indigo-600"
+                checked={skipExisting}
+                onChange={(e) => setSkipExisting(e.target.checked)}
+              />
+              <label htmlFor="skipExistingSheets" className="text-sm text-slate-700 dark:text-slate-200">
+                Skip existing leads (dedupe by phone/email)
+              </label>
+            </div>
+
             <div className="mt-3 flex gap-2">
               <button onClick={loadPreview} className={buttonPrimary}>
                 Load Preview
@@ -361,7 +391,7 @@ export default function GoogleSheetsSyncPage() {
           </div>
         )}
 
-        {/* PREVIEW + MAPPING (TOP, directly under panel) */}
+        {/* PREVIEW + MAPPING */}
         {headers.length > 0 && (
           <div
             ref={mappingRef}
@@ -452,7 +482,7 @@ export default function GoogleSheetsSyncPage() {
           </div>
         )}
 
-        {/* FILES LIST (now below everything else) */}
+        {/* FILES LIST */}
         {!loadingFiles && files && files.length > 0 && (
           <ul className="space-y-3">
             {files.map((f) => (
