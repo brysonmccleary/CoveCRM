@@ -2,7 +2,7 @@
 import NextAuth, { type NextAuthOptions } from "next-auth";
 import CredentialsProvider from "next-auth/providers/credentials";
 import GoogleProvider from "next-auth/providers/google";
-import bcrypt from "bcryptjs"; // ✅ use bcryptjs to match your install
+import bcrypt from "bcryptjs";
 import mongooseConnect from "@/lib/mongooseConnect";
 import { getUserByEmail } from "@/models/User";
 import twilio from "twilio";
@@ -20,26 +20,46 @@ const accountSid = process.env.TWILIO_ACCOUNT_SID!;
 const authToken = process.env.TWILIO_AUTH_TOKEN!;
 const client = twilio(accountSid, authToken);
 
-async function ensureMessagingService(userId: string, userEmail: string) {
-  const existingProfile = await A2PProfile.findOne({ userId });
-  if (existingProfile?.messagingServiceSid) return;
-
-  const baseUrl =
+// Canonical public base URL (do NOT throw if missing — auth must not crash)
+function getBaseUrl() {
+  const url =
     process.env.NEXT_PUBLIC_BASE_URL ||
-    process.env.BASE_URL ||
-    process.env.NEXTAUTH_URL;
+    process.env.NEXTAUTH_URL ||
+    (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "");
+  return url?.replace(/\/+$/, "") || "";
+}
 
-  const service = await client.messaging.services.create({
-    friendlyName: `CoveCRM Service – ${userEmail}`,
-    inboundRequestUrl: `${baseUrl}/api/twilio/inbound-sms`,
-    statusCallback: `${baseUrl}/api/twilio/status-callback`,
-  });
+/**
+ * Create/attach a Twilio Messaging Service, but NEVER let errors break auth.
+ * Upserts A2PProfile without strict validation.
+ */
+async function ensureMessagingService(userId: string, userEmail: string) {
+  try {
+    const existing = await A2PProfile.findOne({ userId }).lean();
+    if (existing?.messagingServiceSid) return;
 
-  if (existingProfile) {
-    existingProfile.messagingServiceSid = service.sid;
-    await existingProfile.save();
-  } else {
-    await A2PProfile.create({ userId, messagingServiceSid: service.sid });
+    const baseUrl = getBaseUrl();
+    if (!baseUrl) {
+      console.warn("ensureMessagingService: missing BASE URL, skipping");
+      return;
+    }
+
+    const service = await client.messaging.services.create({
+      friendlyName: `CoveCRM Service – ${userEmail}`,
+      inboundRequestUrl: `${baseUrl}/api/twilio/inbound-sms`,
+      statusCallback: `${baseUrl}/api/twilio/status-callback`,
+    });
+
+    await A2PProfile.updateOne(
+      { userId },
+      {
+        $setOnInsert: { userId },
+        $set: { messagingServiceSid: service.sid },
+      },
+      { upsert: true, runValidators: false, strict: false }
+    );
+  } catch (e: any) {
+    console.warn("ensureMessagingService skipped:", e?.message || String(e));
   }
 }
 
@@ -75,7 +95,6 @@ function getCookieValue(cookieHeader: string | undefined, name: string) {
 
 export const authOptions: NextAuthOptions = {
   debug: true,
-  // trustHost: true, // removed to satisfy stricter typings
   useSecureCookies: !isDev,
 
   providers: [
@@ -127,11 +146,13 @@ export const authOptions: NextAuthOptions = {
           : false;
         if (!isValid) return null;
 
+        // Side-effects must never block login
         if (isNewUser) {
-          await ensureMessagingService(String((user as any)._id), user.email);
+          Promise.resolve(
+            ensureMessagingService(String((user as any)._id), user.email)
+          ).catch(() => {});
         }
-
-        await safeSyncA2PByEmail(user.email, true);
+        Promise.resolve(safeSyncA2PByEmail(user.email, false)).catch(() => {});
 
         return {
           id: user._id?.toString(),
@@ -181,10 +202,11 @@ export const authOptions: NextAuthOptions = {
         }
 
         if (isNewUser) {
-          await ensureMessagingService(String((user as any)._id), user.email);
+          Promise.resolve(
+            ensureMessagingService(String((user as any)._id), user.email)
+          ).catch(() => {});
         }
-
-        await safeSyncA2PByEmail(user.email, true);
+        Promise.resolve(safeSyncA2PByEmail(user.email, false)).catch(() => {});
 
         return {
           id: user._id?.toString(),
@@ -197,9 +219,7 @@ export const authOptions: NextAuthOptions = {
     }),
   ],
 
-  pages: {
-    signIn: "/auth/signin",
-  },
+  pages: { signIn: "/auth/signin" },
 
   session: { strategy: "jwt" },
 
@@ -264,8 +284,24 @@ export const authOptions: NextAuthOptions = {
       return session;
     },
 
-    async redirect({ url, baseUrl }) {
-      return url.startsWith("/") ? `${baseUrl}${url}` : url;
+    // Force a stable post-login landing page to avoid loops
+    async redirect({ baseUrl }) {
+      return `${baseUrl}/leads`;
+    },
+  },
+
+  // Minimal server-side logging
+  logger: {
+    error(code, ...meta) {
+      console.error("NextAuth error:", code, ...meta);
+    },
+    warn(code, ...meta) {
+      console.warn("NextAuth warn:", code, ...meta);
+    },
+    debug(code, ...meta) {
+      if (process.env.NODE_ENV !== "production") {
+        console.debug("NextAuth debug:", code, ...meta);
+      }
     },
   },
 
