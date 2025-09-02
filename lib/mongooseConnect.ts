@@ -15,48 +15,75 @@ declare global {
 let cached: Cached = global.__mongooseCache || { conn: null, promise: null };
 if (!global.__mongooseCache) global.__mongooseCache = cached;
 
+function stripUnsupportedOptionsFromUri(uri: string): string {
+  if (!uri) return uri;
+  // Remove keepAlive/keepalive from query string to avoid MongoParseError on newer drivers
+  // Handles ?keepAlive=... or &keepAlive=...
+  let out = uri.replace(/([?&])keepalive(=[^&]*)?/gi, "$1")
+               .replace(/([?&])keepAlive(=[^&]*)?/g, "$1");
+
+  // cleanup any trailing ? or & that might remain
+  out = out.replace(/[?&]$/g, "");
+  // collapse "&&" or "?&"
+  out = out.replace(/\?&/g, "?").replace(/&&/g, "&");
+  return out;
+}
+
 export default async function mongooseConnect(): Promise<typeof mongoose> {
   if (cached.conn) return cached.conn;
 
   if (!cached.promise) {
-    const uri = process.env.MONGODB_URI || process.env.MONGODB_URL || "";
-    if (!uri) throw new Error("Missing MONGODB_URI");
+    const rawUri = process.env.MONGODB_URI || process.env.MONGODB_URL || "";
+    if (!rawUri) throw new Error("Missing MONGODB_URI");
+
+    const uri = stripUnsupportedOptionsFromUri(rawUri);
 
     // Safer defaults
     mongoose.set("strictQuery", true);
 
-    // Keep pool tiny on serverless to avoid connection storms
+    // Keep pool tiny on serverless to avoid connection storms (overridable via env)
     const maxPool = parseInt(
-      process.env.MONGODB_MAX_POOL_SIZE || process.env.MONGO_MAX_POOL_SIZE || "10",
+      process.env.MONGODB_MAX_POOL_SIZE || process.env.MONGO_MAX_POOL_SIZE || "5",
       10
     );
 
+    // IMPORTANT: Do NOT pass driver options that are no longer supported (keepAlive, keepAliveInitialDelay, etc.)
     const options: any = {
-      // Pooling caps to avoid Atlas free-tier alerts
       maxPoolSize: maxPool,
       minPoolSize: 0,
-      maxConnecting: 2, // throttle concurrent new sockets
-
-      // Faster fail to avoid piling up sockets if Atlas hiccups
-      serverSelectionTimeoutMS: 5000,
-      socketTimeoutMS: 20000,
-      heartbeatFrequencyMS: 10000,
-
-      // Don't buffer commands while disconnected
+      maxConnecting: 1,               // throttle concurrent new sockets
+      serverSelectionTimeoutMS: 30000,
+      socketTimeoutMS: 45000,
+      // Don’t buffer commands while disconnected
       bufferCommands: false,
-
       // Reasonable defaults
       retryWrites: true,
       w: "majority",
-      family: 4,
       appName: "CoveCRM",
     };
 
+    // Ensure we reset the cache on connection loss in this runtime
+    const attachOnce = () => {
+      if (!mongoose.connection.listeners("disconnected").length) {
+        mongoose.connection.on("disconnected", () => {
+          cached.conn = null;
+          cached.promise = null;
+        });
+        mongoose.connection.on("error", () => {
+          cached.conn = null;
+          cached.promise = null;
+        });
+      }
+    };
+    attachOnce();
+
     cached.promise = mongoose
       .connect(uri, options)
-      .then((m) => m)
+      .then((m) => {
+        cached.conn = m;
+        return m;
+      })
       .catch((err) => {
-        // allow a later retry if the first connect fails
         cached.promise = null;
         throw err;
       });
