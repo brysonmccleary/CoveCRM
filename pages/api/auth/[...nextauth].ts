@@ -4,10 +4,9 @@ import CredentialsProvider from "next-auth/providers/credentials";
 import GoogleProvider from "next-auth/providers/google";
 import bcrypt from "bcryptjs";
 import mongooseConnect from "@/lib/mongooseConnect";
-import { getUserByEmail } from "@/models/User";
+import User from "@/models/User";
 import twilio from "twilio";
 import A2PProfile from "@/models/A2PProfile";
-import User from "@/models/User";
 import { syncA2PForUser } from "@/lib/twilio/syncA2P";
 import { sendWelcomeEmail } from "@/lib/email";
 
@@ -27,6 +26,15 @@ function getBaseUrl() {
     process.env.NEXTAUTH_URL ||
     (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "");
   return url?.replace(/\/+$/, "") || "";
+}
+
+// helpers for case-insensitive email lookup
+function escapeRegex(s: string) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+async function getUserByEmailCI(email: string) {
+  const esc = escapeRegex(email);
+  return User.findOne({ email: { $regex: `^${esc}$`, $options: "i" } });
 }
 
 /**
@@ -108,21 +116,26 @@ export const authOptions: NextAuthOptions = {
       async authorize(credentials: any, req) {
         if (!credentials?.email || !credentials?.password) return null;
 
-        const { email, password, code } = credentials;
+        const emailRaw = String(credentials.email).trim();
+        const email = emailRaw.toLowerCase();
+        const password = String(credentials.password);
+        const DBG = process.env.DEBUG_LOGIN === "1";
+
         await mongooseConnect();
 
-        let user = await getUserByEmail(email);
+        // Case-insensitive find
+        let user = await getUserByEmailCI(emailRaw);
         let isNewUser = false;
 
+        // Create if missing (store email lowercased)
         if (!user) {
           const hashedPassword = await bcrypt.hash(password, 10);
           const cookieHeader =
             (req as any)?.headers?.cookie as string | undefined;
           const cookieAffiliate = getCookieValue(cookieHeader, "affiliate_code");
-          const affiliateCode = code || cookieAffiliate || null;
-          const UserModel = (await import("@/models/User")).default;
+          const affiliateCode = credentials.code || cookieAffiliate || null;
 
-          user = await UserModel.create({
+          user = await User.create({
             email,
             password: hashedPassword,
             name: email.split("@")[0],
@@ -138,12 +151,25 @@ export const authOptions: NextAuthOptions = {
           } catch (e) {
             console.warn("welcome email (credentials) failed:", e);
           }
+        } else if (user.email !== email) {
+          // normalize stored casing to lowercase going forward
+          await User.updateOne({ _id: user._id }, { $set: { email } });
+          user.email = email;
         }
 
-        const userPassword = ((user as any).password ?? "") as string;
-        const isValid = userPassword
-          ? await bcrypt.compare(password, String(userPassword))
-          : false;
+        const currentHash = ((user as any).password ?? "") as string;
+        let isValid = false;
+
+        if (!currentHash) {
+          if (DBG) console.log("AUTH DEBUG: no password set, setting one", email);
+          const hashed = await bcrypt.hash(password, 10);
+          await User.updateOne({ _id: (user as any)._id }, { $set: { password: hashed } });
+          isValid = true;
+        } else {
+          isValid = await bcrypt.compare(password, String(currentHash));
+          if (DBG) console.log("AUTH DEBUG: compare result", { email, ok: isValid });
+        }
+
         if (!isValid) return null;
 
         // Side-effects must never block login
@@ -179,14 +205,15 @@ export const authOptions: NextAuthOptions = {
       },
       async profile(profile) {
         await mongooseConnect();
-        let user = await getUserByEmail(profile.email);
+        const email = String(profile.email).toLowerCase();
+
+        let user = await getUserByEmailCI(email);
         let isNewUser = false;
 
         if (!user) {
-          const UserModel = (await import("@/models/User")).default;
-          user = await UserModel.create({
-            email: profile.email,
-            name: profile.name || profile.email.split("@")[0],
+          user = await User.create({
+            email,
+            name: profile.name || email.split("@")[0],
             role: "user",
             affiliateCode: null,
             subscriptionStatus: "active",
@@ -199,6 +226,9 @@ export const authOptions: NextAuthOptions = {
           } catch (e) {
             console.warn("welcome email (google) failed:", e);
           }
+        } else if (user.email !== email) {
+          await User.updateOne({ _id: user._id }, { $set: { email } });
+          user.email = email;
         }
 
         if (isNewUser) {
