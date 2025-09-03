@@ -17,7 +17,6 @@ type LeanFolder = {
   updatedAt?: Date;
 };
 
-// Raw shape coming back from mongoose .lean()
 type DBFolderLean = {
   _id: any;
   name?: string;
@@ -31,69 +30,73 @@ function escapeRegex(s: string) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-/**
- * Idempotently ensure a system folder exists for a user.
- * Case-insensitive EXACT match to avoid dupes. Returns a LeanFolder.
- */
-async function ensureSystemFolder(userEmail: string, name: string): Promise<LeanFolder> {
-  const rx = new RegExp(`^${escapeRegex(name)}$`, "i");
-  const found = await Folder.findOne({ userEmail, name: rx }).lean<DBFolderLean>().exec();
-  if (found) {
-    return {
-      _id: String(found._id),
-      name: String(found.name ?? name),
-      userEmail: String(found.userEmail ?? userEmail),
-      assignedDrips: found.assignedDrips ?? [],
-      createdAt: found.createdAt ? new Date(found.createdAt) : undefined,
-      updatedAt: found.updatedAt ? new Date(found.updatedAt) : undefined,
-    };
-  }
-  const created = await Folder.create({ userEmail, name, assignedDrips: [] });
+/** Map raw mongo docs to our LeanFolder shape */
+function toLeanFolder(doc: DBFolderLean, fallbackEmail: string): LeanFolder {
   return {
-    _id: String(created._id),
-    name,
-    userEmail,
-    assignedDrips: [],
-    createdAt: created.createdAt ? new Date(created.createdAt) : undefined,
-    updatedAt: created.updatedAt ? new Date(created.updatedAt) : undefined,
+    _id: String(doc._id),
+    name: String(doc.name ?? ""),
+    userEmail: String(doc.userEmail ?? fallbackEmail),
+    assignedDrips: doc.assignedDrips ?? [],
+    createdAt: doc.createdAt ? new Date(doc.createdAt) : undefined,
+    updatedAt: doc.updatedAt ? new Date(doc.updatedAt) : undefined,
   };
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
     const session = await getServerSession(req, res, authOptions);
-    const email = typeof session?.user?.email === "string" ? session.user.email.toLowerCase() : "";
+    const email =
+      typeof session?.user?.email === "string" ? session.user.email.toLowerCase() : "";
     if (!email) return res.status(401).json({ message: "Unauthorized" });
 
     await dbConnect();
 
-    // 1) Ensure system folders exist (no dupes, case-insensitive)
-    const ensuredSystem = await Promise.all(SYSTEM_FOLDERS.map((n) => ensureSystemFolder(email, n)));
-    const systemByLower = new Map(ensuredSystem.map((f) => [f.name.toLowerCase(), f]));
-
-    // 2) Fetch all user folders (lean), then map explicitly to LeanFolder
-    const allRaw = await Folder.find({ userEmail: email }).sort({ createdAt: -1 }).lean<DBFolderLean[]>().exec();
-    const all: LeanFolder[] = (allRaw || []).map((f) => ({
-      _id: String(f._id),
-      name: String(f.name ?? ""),
-      userEmail: String(f.userEmail ?? email),
-      assignedDrips: f.assignedDrips ?? [],
-      createdAt: f.createdAt ? new Date(f.createdAt) : undefined,
-      updatedAt: f.updatedAt ? new Date(f.updatedAt) : undefined,
+    // --- 1) Atomically ensure system folders exist (case-insensitive, no dupes)
+    const ops = SYSTEM_FOLDERS.map((name) => ({
+      updateOne: {
+        filter: {
+          userEmail: email,
+          name: { $regex: `^${escapeRegex(name)}$`, $options: "i" },
+        },
+        update: { $setOnInsert: { userEmail: email, name, assignedDrips: [] } },
+        upsert: true,
+        collation: { locale: "en", strength: 2 }, // case-insensitive
+      },
     }));
+    await (Folder as any).bulkWrite(ops, { ordered: false });
 
-    // 3) Split custom vs system (by name, case-insensitive). Keep only one canonical system instance.
+    // --- 2) Fetch all folders for this user and normalize
+    const allRaw = await Folder.find({ userEmail: email })
+      .sort({ createdAt: -1 })
+      .lean<DBFolderLean[]>()
+      .exec();
+    const all: LeanFolder[] = (allRaw || []).map((f) => toLeanFolder(f, email));
+
+    // --- 3) Partition custom vs. system (case-insensitive); pick canonical system docs
     const systemLower = new Set(SYSTEM_FOLDERS.map((n) => n.toLowerCase()));
     const custom = all.filter((f) => !systemLower.has(f.name.toLowerCase()));
     custom.sort((a, b) => a.name.localeCompare(b.name));
 
-    // Final ordered list: custom first, then system in canonical order
+    // For each system name, pick the earliest-created matching doc (stable & dupe-safe)
+    const systemByLower: Map<string, LeanFolder> = new Map();
+    for (const sysName of SYSTEM_FOLDERS) {
+      const matches = all
+        .filter((f) => f.name.toLowerCase() === sysName.toLowerCase())
+        .sort((a, b) => {
+          const ad = a.createdAt?.getTime() ?? 0;
+          const bd = b.createdAt?.getTime() ?? 0;
+          return ad - bd || a._id.localeCompare(b._id);
+        });
+      if (matches[0]) systemByLower.set(sysName.toLowerCase(), matches[0]);
+    }
+
+    // Final ordered list: custom first, then canonical system in fixed order
     const ordered: LeanFolder[] = [
       ...custom,
       ...SYSTEM_FOLDERS.map((n) => systemByLower.get(n.toLowerCase())!).filter(Boolean) as LeanFolder[],
     ];
 
-    // 4) Counts by actual folderId (strict)
+    // --- 4) Counts by folderId (strict)
     const byIdAgg = await (Lead as any).aggregate([
       { $match: { userEmail: email, folderId: { $exists: true, $ne: null } } },
       { $addFields: { fid: { $toString: "$folderId" } } },
@@ -102,7 +105,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const byId = new Map<string, number>();
     for (const r of byIdAgg) byId.set(String(r._id), Number(r.n) || 0);
 
-    // 5) Optional: Unsorted support (we do NOT create it; only count if the user has one)
+    // --- 5) Legacy "Unsorted": include count of leads without a folderId if such a folder exists
     const unsorted = all
       .filter((f) => f.name.toLowerCase() === "unsorted")
       .sort((a, b) => {
@@ -117,7 +120,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       $or: [{ folderId: { $exists: false } }, { folderId: null }],
     });
 
-    // 6) Attach counts and return
+    // --- 6) Attach counts and return
     const foldersWithCounts = ordered.map((f) => {
       const idStr = String(f._id);
       const count = (byId.get(idStr) || 0) + (unsortedIdStr && idStr === unsortedIdStr ? unsortedCount : 0);
