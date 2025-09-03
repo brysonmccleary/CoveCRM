@@ -21,8 +21,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       process.env.NEXT_PUBLIC_BASE_URL ||
       "http://localhost:3000";
 
+    // IMPORTANT: keep in sync with events.ts and index.ts
     const redirectUri =
-      process.env.GOOGLE_REDIRECT_URI_CALENDAR ||
+      process.env.GOOGLE_REDIRECT_URI ||
       `${base.replace(/\/$/, "")}/api/connect/google-calendar/callback`;
 
     const oauth2 = new google.auth.OAuth2(
