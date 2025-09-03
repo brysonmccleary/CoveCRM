@@ -19,15 +19,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const googleSheets   = (user as any).googleSheets   || null;
     const googleTokens   = (user as any).googleTokens   || null;
 
-    const refreshToken =
-      googleTokens?.refreshToken ||
-      googleCalendar?.refreshToken ||
-      googleSheets?.refreshToken ||
-      null;
+    const hasGT = !!googleTokens?.refreshToken;
+    const hasGC = !!googleCalendar?.refreshToken;
+    const hasGS = !!googleSheets?.refreshToken;
+
+    const hasRefreshToken = hasGT || hasGC || hasGS;
 
     return res.status(200).json({
-      calendarConnected: !!refreshToken, // ✅ only true if refresh token exists
-      hasRefreshToken:   !!refreshToken,
+      calendarConnected: hasRefreshToken,   // ✅ only true if a refresh token exists
+      hasRefreshToken,
+      sources: { hasGT, hasGC, hasGS },     // non-sensitive booleans to help us verify
     });
   } catch (err) {
     console.error("❌ Error checking calendar status:", err);
