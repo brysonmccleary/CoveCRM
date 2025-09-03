@@ -1,4 +1,3 @@
-// pages/lead/[id].tsx
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { useRouter } from "next/router";
 import Sidebar from "@/components/Sidebar";
@@ -237,17 +236,10 @@ export default function LeadProfileDial() {
     }
   };
 
-  const startCall = async () => {
-    if (!lead?.id) return;
-    try {
-      const res = await fetch("/api/twilio/voice/call", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ leadId: lead.id }),
-      });
-      const j = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(j?.message || "Failed to start call");
-      toast.success("📞 Calling lead…");
-    } catch (e: any) { toast.error(e?.message || "Failed to start call"); }
+  // ✅ Route to dialer for this exact lead
+  const startCall = () => {
+    if (!lead?.id) return toast.error("Lead not loaded");
+    router.push({ pathname: "/dial-session", query: { leadId: lead.id } });
   };
 
   const leadName = useMemo(() => {
@@ -308,7 +300,7 @@ export default function LeadProfileDial() {
 
           <div className="flex items-center gap-2 mb-4">
             <button onClick={handleSaveNote} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded">Save Note</button>
-            <button onClick={startCall} className="bg-green-600 hover:bg-green-700 px-4 py-2 rounded">Call</button>
+            <button type="button" onClick={startCall} className="bg-green-600 hover:bg-green-700 px-4 py-2 rounded">Call</button>
           </div>
 
           {userHasAI && calls.find((c) => c.aiSummary) ? (

@@ -61,6 +61,9 @@ export interface IUser {
 
   googleTokens?: { accessToken: string; refreshToken?: string; expiryDate?: number };
 
+  // ✅ NEW: explicit calendar token storage
+  googleCalendar?: { accessToken: string; refreshToken?: string; expiryDate?: number };
+
   calendarId?: string;
   bookingSettings?: {
     timezone: string;
@@ -184,6 +187,9 @@ const UserSchema = new Schema<IUser>({
   },
 
   googleTokens: { accessToken: String, refreshToken: String, expiryDate: Number },
+
+  // ✅ NEW: schema block to persist calendar tokens explicitly
+  googleCalendar: { accessToken: String, refreshToken: String, expiryDate: Number },
 
   calendarId: String,
   bookingSettings: {

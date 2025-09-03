@@ -1,3 +1,4 @@
+// pages/api/assign-drip-to-folder.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "./auth/[...nextauth]";
@@ -7,6 +8,7 @@ import Lead from "@/models/Lead";
 import DripCampaign from "@/models/DripCampaign";
 import User from "@/models/User";
 import { sendSMS } from "@/lib/twilio/sendSMS";
+import { acquireLock } from "@/lib/locks"; // 🔒 add lock
 import { ObjectId } from "mongodb";
 import { prebuiltDrips } from "@/utils/prebuiltDrips";
 import {
@@ -36,7 +38,7 @@ function normalizeToE164Maybe(phone?: string): string | null {
   if (!digits) return null;
   if (digits.length === 10) return `+1${digits}`;
   if (digits.length === 11 && digits.startsWith("1")) return `+${digits}`;
-  if (phone.startsWith("+")) return phone;
+  if ((phone || "").startsWith("+")) return phone!;
   return null;
 }
 
@@ -197,36 +199,57 @@ export default async function handler(
         // Ensure compliant opt-out tag even if missing in a custom/user drip
         const finalBody = ensureOptOut(rendered);
 
-        // ✅ Send via Twilio helper (persists to Message, status-callback, usage, etc.)
-        await sendSMS(to, finalBody, String(user._id));
+        // 🔒 Duplicate drip guard for initial step (10 min TTL)
+        let actuallySent = false;
+        {
+          const stepKey = String(stepsSorted[0]?.day ?? 1);
+          const ok = await acquireLock(
+            "drip",
+            `${userEmail}:${String((lead as any)._id)}:${String(canonicalDripId)}:${stepKey}`,
+            600
+          );
+          if (!ok) {
+            console.log("Duplicate drip suppressed", {
+              userEmail,
+              leadId: String((lead as any)._id),
+              campaignId: String(canonicalDripId),
+              stepId: stepKey,
+            });
+          } else {
+            await sendSMS(to, finalBody, String(user._id));
+            actuallySent = true;
+          }
+        }
 
         // ✅ Initialize/Update dripProgress for this lead (Day 1 has been sent -> index 0)
-        const matched = await Lead.updateOne(
-          { _id: (lead as any)._id, "dripProgress.dripId": canonicalDripId },
-          {
-            $set: {
-              "dripProgress.$.startedAt": now,
-              "dripProgress.$.lastSentIndex": 0,
-            },
-          },
-        );
-
-        if (matched.matchedCount === 0) {
-          await Lead.updateOne(
-            { _id: (lead as any)._id },
+        if (actuallySent) {
+          const matched = await Lead.updateOne(
+            { _id: (lead as any)._id, "dripProgress.dripId": canonicalDripId },
             {
-              $push: {
-                dripProgress: {
-                  dripId: canonicalDripId,
-                  startedAt: now,
-                  lastSentIndex: 0,
-                },
+              $set: {
+                "dripProgress.$.startedAt": now,
+                "dripProgress.$.lastSentIndex": 0,
               },
             },
           );
-        }
 
-        sent++;
+          if (matched.matchedCount === 0) {
+            await Lead.updateOne(
+              { _id: (lead as any)._id },
+              {
+                $push: {
+                  dripProgress: {
+                    dripId: canonicalDripId,
+                    startedAt: now,
+                    lastSentIndex: 0,
+                  },
+                },
+              },
+            );
+          }
+
+          sent++;
+        }
       } catch (e) {
         failed++;
         console.error("Immediate drip send failed:", e);

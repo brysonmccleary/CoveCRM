@@ -1,6 +1,6 @@
 // pages/leads/folder/[id].tsx
 import { useRouter } from "next/router";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 type Lead = {
   _id: string;
@@ -8,6 +8,7 @@ type Lead = {
   phone?: string;
   email?: string;
   status?: string;
+  folderId?: string | null;
 };
 
 export default function FolderPage() {
@@ -17,28 +18,86 @@ export default function FolderPage() {
   const [leads, setLeads] = useState<Lead[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const socketRef = useRef<any>(null);
+  const currentFolderIdRef = useRef<string | null>(null);
 
+  async function fetchFolder(folderId: string) {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/get-leads-by-folder?folderId=${encodeURIComponent(folderId)}`, {
+        cache: "no-store",
+      });
+      if (!res.ok) throw new Error(`Failed to fetch leads for folder ${folderId}`);
+      const data = await res.json();
+
+      // Canonical redirect
+      if (data?.resolvedFolderId && data.resolvedFolderId !== folderId) {
+        currentFolderIdRef.current = data.resolvedFolderId;
+        router.replace(`/leads/folder/${data.resolvedFolderId}`);
+        return;
+      }
+
+      currentFolderIdRef.current = folderId;
+      setLeads(Array.isArray(data?.leads) ? data.leads : []);
+    } catch (e: any) {
+      console.error("FolderPage: fetch error", e);
+      setError(e?.message || "Failed to load leads");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // Initial fetch + when id changes
   useEffect(() => {
     if (!id || typeof id !== "string") return;
-
-    const run = async () => {
-      setLoading(true);
-      setError(null);
-      try {
-        const res = await fetch(`/api/get-leads-by-folder?folderId=${encodeURIComponent(id)}`);
-        if (!res.ok) throw new Error(`Failed to fetch leads for folder ${id}`);
-        const data = await res.json();
-        setLeads(data?.leads ?? []);
-      } catch (e: any) {
-        console.error("FolderPage: fetch error", e);
-        setError(e?.message || "Failed to load leads");
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    run();
+    fetchFolder(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
+
+  // Subscribe to lead updates and refetch this folder when anything changes
+  useEffect(() => {
+    let unmounted = false;
+    (async () => {
+      try {
+        const mod = await import("socket.io-client").catch(() => null as any);
+        if (!mod) return;
+        const { io } = mod as any;
+
+        const s = io(undefined, {
+          path: "/api/socket",
+          transports: ["websocket"],
+          withCredentials: false,
+        });
+        socketRef.current = s;
+
+        // join the user's room so we get events
+        try {
+          const r = await fetch("/api/auth/session");
+          const j = await r.json();
+          const email = (j?.user?.email || "").toLowerCase();
+          if (email) s.emit("join", email);
+        } catch {}
+
+        const refetch = () => {
+          const fid = currentFolderIdRef.current;
+          if (fid) fetchFolder(fid);
+        };
+
+        s.on("lead:updated", refetch);
+      } catch (e) {
+        console.warn("FolderPage: socket init failed (non-fatal)", e);
+      }
+    })();
+
+    return () => {
+      unmounted = true;
+      try {
+        socketRef.current?.off?.("lead:updated");
+        socketRef.current?.disconnect?.();
+      } catch {}
+    };
+  }, []);
 
   if (!id || typeof id !== "string") {
     return (
@@ -71,10 +130,7 @@ export default function FolderPage() {
       ) : (
         <ul className="space-y-2">
           {leads.map((lead) => (
-            <li
-              key={lead._id}
-              className="p-3 border border-gray-600 rounded hover:bg-gray-700"
-            >
+            <li key={lead._id} className="p-3 border border-gray-600 rounded hover:bg-gray-700">
               <div className="font-medium">{lead.name || "(no name)"}</div>
               <div className="text-sm text-gray-300">
                 {lead.phone || ""} {lead.email ? `• ${lead.email}` : ""}
