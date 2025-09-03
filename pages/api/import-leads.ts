@@ -71,7 +71,7 @@ function lc(str?: string | null) {
 type JsonPayload = {
   targetFolderId?: string;
   folderName?: string; // backward compat
-  mapping?: Record<string, string>;
+  mapping?: Record<string, string>; // { firstName: "First Name", phone: "Phone", ... }
   rows?: Record<string, any>[];
   skipExisting?: boolean; // default false here = MOVE + RESET
 };
@@ -145,11 +145,11 @@ function mapRow(row: Record<string, any>, mapping: Record<string, string>) {
   return {
     "First Name": first,
     "Last Name": last,
-    Email: emailLc,
-    email: emailLc,
+    Email: emailLc,     // canonical stored lowercase
+    email: emailLc,     // mirror for compatibility
     Phone: phone,
     phoneLast10: phoneKey,
-    normalizedPhone: phoneKey,
+    normalizedPhone: phoneKey, // mirror for compatibility
     State: normalizedState,
     Notes: mergedNotes,
     leadType: sanitizeLeadType(leadTypeRaw || ""),
@@ -202,7 +202,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         folderName,
         mapping,
         rows,
-        skipExisting = false,
+        skipExisting = false, // default false = MOVE + RESET
       } = json;
       if (!mapping || !rows || !Array.isArray(rows)) {
         return res.status(400).json({ message: "Missing mapping or rows[]" });
@@ -215,7 +215,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         ...mapRow(r, mapping),
         userEmail,
         ownerEmail: userEmail,
-        folderId: folder._id, // ObjectId enforced by schema
+        folderId: folder._id,
       }));
 
       // Build dedupe key sets
@@ -283,7 +283,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           if (m.Notes !== undefined) set["Notes"] = m.Notes;
           if (m.leadType) set["leadType"] = m.leadType;
 
-          // ✅ Always set identity fields for consistency
+          // ✅ identity fields only in $set (never in $setOnInsert)
           applyIdentityFields(set, phoneKey, emailKey, m.Phone);
 
           ops.push({ updateOne: { filter, update: { $set: set }, upsert: false } });
@@ -296,11 +296,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             userEmail,
             ownerEmail: userEmail,
             status: "New",
-            folder_name: String(folder.name),
-            "Folder Name": String(folder.name),
             createdAt: new Date(),
           };
-          const set: any = { folderId: folder._id, updatedAt: new Date() };
+          const set: any = {
+            folderId: folder._id,
+            folder_name: String(folder.name),
+            "Folder Name": String(folder.name),
+            updatedAt: new Date(),
+          };
 
           if (m["First Name"] !== undefined) set["First Name"] = m["First Name"];
           if (m["Last Name"] !== undefined) set["Last Name"] = m["Last Name"];
@@ -308,8 +311,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           if (m.Notes !== undefined) set["Notes"] = m.Notes;
           if (m.leadType) set["leadType"] = m.leadType;
 
+          // ✅ identity fields only in $set
           applyIdentityFields(set, phoneKey, emailKey, m.Phone);
-          applyIdentityFields(setOnInsert, phoneKey, emailKey, m.Phone);
 
           ops.push({ updateOne: { filter, update: { $set: set, $setOnInsert: setOnInsert }, upsert: true } });
           processedFilters.push(filter);
@@ -346,11 +349,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             userEmail,
             ownerEmail: userEmail,
             status: "New",
-            folder_name: String(folder.name),
-            "Folder Name": String(folder.name),
             createdAt: new Date(),
           };
-          const set: any = { folderId: folder._id, updatedAt: new Date() };
+          const set: any = {
+            folderId: folder._id,
+            folder_name: String(folder.name),
+            "Folder Name": String(folder.name),
+            updatedAt: new Date(),
+          };
 
           if (m["First Name"] !== undefined) set["First Name"] = m["First Name"];
           if (m["Last Name"] !== undefined) set["Last Name"] = m["Last Name"];
@@ -358,8 +364,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           if (m.Notes !== undefined) set["Notes"] = m.Notes;
           if (m.leadType) set["leadType"] = m.leadType;
 
+          // identity fields only in $set
           applyIdentityFields(set, phoneKey, emailKey, m.Phone);
-          applyIdentityFields(setOnInsert, phoneKey, emailKey, m.Phone);
 
           const r = await Lead.updateOne(filter, { $set: set, $setOnInsert: setOnInsert }, { upsert: true });
           const upc = (r as any).upsertedCount || ((r as any).upsertedId ? 1 : 0) || 0;
@@ -376,7 +382,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         folderName: folder.name,
         counts: { inserted, updated, skipped },
         mode: "json",
-        skipExisting: false,
+        skipExisting,
       });
     } catch (e: any) {
       console.error("❌ JSON import error:", e);
@@ -396,7 +402,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const targetFolderId = fields.targetFolderId?.toString();
     const folderNameField = fields.folderName?.toString()?.trim();
     const mappingStr = fields.mapping?.toString();
-    const skipExisting = fields.skipExisting?.toString() === "true" ? true : false;
+    const skipExisting = fields.skipExisting?.toString() === "true" ? true : false; // default false = MOVE + RESET
 
     const file = Array.isArray(files.file) ? files.file[0] : files.file;
     if (!file?.filepath) return res.status(400).json({ message: "Missing file" });
@@ -497,6 +503,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             if (m.Notes !== undefined) set["Notes"] = m.Notes;
             if (m.leadType) set["leadType"] = m.leadType;
 
+            // ✅ identity fields only in $set
             applyIdentityFields(set, phoneKey, emailKey, m.Phone);
 
             ops.push({ updateOne: { filter, update: { $set: set }, upsert: false } });
@@ -509,11 +516,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               userEmail,
               ownerEmail: userEmail,
               status: "New",
-              folder_name: String(folder.name),
-              "Folder Name": String(folder.name),
               createdAt: new Date(),
             };
-            const set: any = { folderId: folder._id, updatedAt: new Date() };
+            const set: any = {
+              folderId: folder._id,
+              folder_name: String(folder.name),
+              "Folder Name": String(folder.name),
+              updatedAt: new Date(),
+            };
 
             if (m["First Name"] !== undefined) set["First Name"] = m["First Name"];
             if (m["Last Name"] !== undefined) set["Last Name"] = m["Last Name"];
@@ -521,8 +531,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             if (m.Notes !== undefined) set["Notes"] = m.Notes;
             if (m.leadType) set["leadType"] = m.leadType;
 
+            // ✅ identity fields only in $set
             applyIdentityFields(set, phoneKey, emailKey, m.Phone);
-            applyIdentityFields(setOnInsert, phoneKey, emailKey, m.Phone);
 
             ops.push({ updateOne: { filter, update: { $set: set, $setOnInsert: setOnInsert }, upsert: true } });
             processedFilters.push(filter);
@@ -557,11 +567,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               userEmail,
               ownerEmail: userEmail,
               status: "New",
-              folder_name: String(folder.name),
-              "Folder Name": String(folder.name),
               createdAt: new Date(),
             };
-            const set: any = { folderId: folder._id, updatedAt: new Date() };
+            const set: any = {
+              folderId: folder._id,
+              folder_name: String(folder.name),
+              "Folder Name": String(folder.name),
+              updatedAt: new Date(),
+            };
 
             if (m["First Name"] !== undefined) set["First Name"] = m["First Name"];
             if (m["Last Name"] !== undefined) set["Last Name"] = m["Last Name"];
@@ -569,8 +582,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             if (m.Notes !== undefined) set["Notes"] = m.Notes;
             if (m.leadType) set["leadType"] = m.leadType;
 
+            // identity fields only in $set
             applyIdentityFields(set, phoneKey, emailKey, m.Phone);
-            applyIdentityFields(setOnInsert, phoneKey, emailKey, m.Phone);
 
             const r = await Lead.updateOne(filter, { $set: set, $setOnInsert: setOnInsert }, { upsert: true });
             const upc = (r as any).upsertedCount || ((r as any).upsertedId ? 1 : 0) || 0;
@@ -587,7 +600,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           folderName: folder.name,
           counts: { inserted, updated, skipped },
           mode: "multipart+mapping",
-          skipExisting: false,
+          skipExisting,
         });
       } catch (e: any) {
         console.error("❌ Multipart mapping import error:", e);
