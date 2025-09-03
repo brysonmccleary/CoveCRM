@@ -28,7 +28,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(200).json({
       calendarConnected: hasRefreshToken,   // ✅ only true if a refresh token exists
       hasRefreshToken,
-      sources: { hasGT, hasGC, hasGS },     // non-sensitive booleans to help us verify
+      sources: { hasGT, hasGC, hasGS },     // helper booleans (non-sensitive)
     });
   } catch (err) {
     console.error("❌ Error checking calendar status:", err);
