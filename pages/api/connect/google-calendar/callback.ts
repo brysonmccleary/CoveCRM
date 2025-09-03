@@ -2,13 +2,16 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { google } from "googleapis";
 import { getServerSession } from "next-auth/next";
-import { authOptions } from "../../auth/[...nextauth]"; // note: up TWO levels
+import { authOptions } from "../../auth/[...nextauth]"; // up TWO levels
 import { updateUserGoogleSheets } from "@/lib/userHelpers";
+import dbConnect from "@/lib/mongooseConnect";
+import User from "@/models/User";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
     const session = await getServerSession(req, res, authOptions);
-    if (!session?.user?.email) return res.status(401).json({ error: "Unauthorized" });
+    const email = typeof session?.user?.email === "string" ? session.user.email.toLowerCase() : "";
+    if (!email) return res.status(401).json({ error: "Unauthorized" });
 
     const code = req.query.code as string;
     if (!code) return res.status(400).json({ error: "Missing authorization code" });
@@ -18,7 +21,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       process.env.NEXT_PUBLIC_BASE_URL ||
       "http://localhost:3000";
 
-    // Prefer the explicit env var if you set it in Vercel
     const redirectUri =
       process.env.GOOGLE_REDIRECT_URI_CALENDAR ||
       `${base.replace(/\/$/, "")}/api/connect/google-calendar/callback`;
@@ -31,12 +33,36 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const { tokens } = await oauth2.getToken(code);
 
-    // Save (includes refresh_token on first consent or when prompt=consent)
-    await updateUserGoogleSheets(session.user.email, {
+    // Persist under googleSheets (existing helper)
+    await updateUserGoogleSheets(email, {
       accessToken: tokens.access_token || "",
       refreshToken: tokens.refresh_token || "",
       expiryDate: tokens.expiry_date ?? null,
     });
+
+    // ALSO persist under googleTokens so any calendar code path can read it
+    await dbConnect();
+    const current = await User.findOne({ email }).lean<{ googleTokens?: any; googleSheets?: any; googleCalendar?: any }>();
+    const fallbackRefresh =
+      tokens.refresh_token ||
+      current?.googleTokens?.refreshToken ||
+      current?.googleSheets?.refreshToken ||
+      current?.googleCalendar?.refreshToken ||
+      "";
+
+    await User.findOneAndUpdate(
+      { email },
+      {
+        $set: {
+          googleTokens: {
+            accessToken: tokens.access_token || current?.googleTokens?.accessToken || "",
+            refreshToken: fallbackRefresh,
+            expiryDate: tokens.expiry_date ?? current?.googleTokens?.expiryDate ?? null,
+          },
+        },
+      },
+      { new: false }
+    );
 
     return res.redirect("/dashboard?tab=settings");
   } catch (err: any) {
