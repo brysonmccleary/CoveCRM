@@ -22,10 +22,9 @@ type ImportBody = {
   skip?: Record<string, boolean>;
   createFolderIfMissing?: boolean;
   moveExistingToFolder?: boolean; // kept for compat
-  skipExisting?: boolean;          // ✅ NEW: skip duplicates instead of moving
+  skipExisting?: boolean;          // skip duplicates instead of moving
 };
 
-// ---- System folders guard (case-insensitive) ----
 const SYSTEM_FOLDERS = new Set(["sold", "booked appointment", "not interested", "resolved"]);
 function isSystemFolder(name?: string | null) {
   const n = String(name || "").trim().toLowerCase();
@@ -34,6 +33,9 @@ function isSystemFolder(name?: string | null) {
 
 function normalizePhone(input: any): string {
   return String(input || "").replace(/\D+/g, "");
+}
+function last10(input: string): string {
+  return input ? input.slice(-10) : "";
 }
 function normalizeEmail(input: any): string {
   const s = String(input || "").trim();
@@ -62,14 +64,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     mapping = {},
     skip = {},
     createFolderIfMissing = true,
-    skipExisting = false, // ✅ default: move/update duplicates
+    skipExisting = false,
   } = (req.body || {}) as ImportBody;
 
   if (!spreadsheetId) return res.status(400).json({ error: "Missing spreadsheetId" });
   if (!title && typeof sheetId !== "number")
     return res.status(400).json({ error: "Provide sheet 'title' or numeric 'sheetId'" });
 
-  // Client may attempt to pass a system folder name; hard-block here.
   if (isSystemFolder(folderName)) {
     return res.status(400).json({ error: "Cannot import into system folders" });
   }
@@ -184,7 +185,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     let imported = 0;
     let updated = 0;
     let skippedNoKey = 0;
-    let skippedExisting = 0; // ✅ count duplicates skipped
+    let skippedExisting = 0;
     let lastNonEmptyRow = headerIdx;
 
     for (let r = firstDataRowIndex; r <= lastRowIndex; r++) {
@@ -219,7 +220,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       doc.sourceTabTitle = tabTitle;
       doc.sourceRowIndex = r + 1; // 1-based
       doc.normalizedPhone = normalizedPhone || undefined;
-      if (emailLower) doc.email = emailLower;
+      if (normalizedPhone) doc.phoneLast10 = last10(normalizedPhone);
+      if (emailLower) {
+        doc.email = emailLower;
+        doc.Email = emailLower;
+      }
 
       const or: any[] = [];
       if (normalizedPhone) or.push({ normalizedPhone });
@@ -237,10 +242,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         imported++;
       } else {
         if (skipExisting) {
-          skippedExisting++; // ✅ do not move/update, just count it
+          skippedExisting++;
           continue;
         }
-        // MOVE + RESET STATUS (default)
         const update: any = {
           $set: {
             ...doc,
@@ -302,7 +306,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       imported,
       updated,
       skippedNoKey,
-      skippedExisting, // ✅ exposed
+      skippedExisting,
       rowCount: values.length,
       headerRow,
       lastRowImported: lastNonEmptyRow + 1,

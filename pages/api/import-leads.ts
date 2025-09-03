@@ -71,7 +71,7 @@ function lc(str?: string | null) {
 type JsonPayload = {
   targetFolderId?: string;
   folderName?: string; // backward compat
-  mapping?: Record<string, string>; // { firstName: "First Name", phone: "Phone", ... }
+  mapping?: Record<string, string>;
   rows?: Record<string, any>[];
   skipExisting?: boolean; // default false here = MOVE + RESET
 };
@@ -145,11 +145,11 @@ function mapRow(row: Record<string, any>, mapping: Record<string, string>) {
   return {
     "First Name": first,
     "Last Name": last,
-    Email: emailLc,     // canonical stored lowercase
-    email: emailLc,     // mirror for compatibility
+    Email: emailLc,
+    email: emailLc,
     Phone: phone,
     phoneLast10: phoneKey,
-    normalizedPhone: phoneKey, // mirror for compatibility
+    normalizedPhone: phoneKey,
     State: normalizedState,
     Notes: mergedNotes,
     leadType: sanitizeLeadType(leadTypeRaw || ""),
@@ -202,7 +202,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         folderName,
         mapping,
         rows,
-        skipExisting = false, // default false = MOVE + RESET
+        skipExisting = false,
       } = json;
       if (!mapping || !rows || !Array.isArray(rows)) {
         return res.status(400).json({ message: "Missing mapping or rows[]" });
@@ -215,7 +215,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         ...mapRow(r, mapping),
         userEmail,
         ownerEmail: userEmail,
-        folderId: folder._id,
+        folderId: folder._id, // ObjectId enforced by schema
       }));
 
       // Build dedupe key sets
@@ -320,7 +320,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       let updated = 0;
 
       if (ops.length) {
-        const result = await Lead.bulkWrite(ops, { ordered: false });
+        const result = await (Lead as any).bulkWrite(ops, { ordered: false });
         inserted = (result as any).upsertedCount || 0;
         updated = (result as any).modifiedCount || 0;
 
@@ -396,7 +396,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const targetFolderId = fields.targetFolderId?.toString();
     const folderNameField = fields.folderName?.toString()?.trim();
     const mappingStr = fields.mapping?.toString();
-    const skipExisting = fields.skipExisting?.toString() === "true" ? true : false; // default false = MOVE + RESET
+    const skipExisting = fields.skipExisting?.toString() === "true" ? true : false;
 
     const file = Array.isArray(files.file) ? files.file[0] : files.file;
     if (!file?.filepath) return res.status(400).json({ message: "Missing file" });
@@ -533,7 +533,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         let updated = 0;
 
         if (ops.length) {
-          const result = await Lead.bulkWrite(ops, { ordered: false });
+          const result = await (Lead as any).bulkWrite(ops, { ordered: false });
           inserted = (result as any).upsertedCount || 0;
           updated = (result as any).modifiedCount || 0;
 
@@ -632,7 +632,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return {
           ...lead,
           userEmail,
-          folderId: folder._id,
+          folderId: folder._id, // ObjectId
           folder_name: String(folder.name),
           "Folder Name": String(folder.name),
           status: "New",
