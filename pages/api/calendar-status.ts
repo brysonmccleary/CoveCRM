@@ -8,28 +8,16 @@ import dbConnect from "@/lib/mongooseConnect";
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   await dbConnect();
   const session = await getServerSession(req, res, authOptions);
-
   const email = typeof session?.user?.email === "string" ? session.user.email.toLowerCase() : "";
-  if (!email) {
-    return res.status(401).json({ error: "Unauthorized" });
-  }
+  if (!email) return res.status(401).json({ error: "Unauthorized" });
 
   try {
     const user = await getUserByEmail(email);
-    if (!user) {
-      return res.status(404).json({ error: "User not found" });
-    }
+    if (!user) return res.status(404).json({ error: "User not found" });
 
-    const googleCalendar = user.googleCalendar || null;
-    const googleSheets = user.googleSheets || null;
-    const googleTokens = (user as any).googleTokens || null;
-    const calendarId = (user as any).calendarId || null;
-
-    const accessToken =
-      googleTokens?.accessToken ||
-      googleCalendar?.accessToken ||
-      googleSheets?.accessToken ||
-      null;
+    const googleCalendar = (user as any).googleCalendar || null;
+    const googleSheets   = (user as any).googleSheets   || null;
+    const googleTokens   = (user as any).googleTokens   || null;
 
     const refreshToken =
       googleTokens?.refreshToken ||
@@ -38,13 +26,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       null;
 
     return res.status(200).json({
-      // "Connected" if we have at least one token saved
-      calendarConnected: !!(accessToken || refreshToken),
-      // Extra signal many UIs use to show "reconnect" when refresh is missing
-      hasRefreshToken: !!refreshToken,
-      calendarId,
-      // keep existing key for forward compatibility
-      googleCalendar,
+      calendarConnected: !!refreshToken, // ✅ only true if refresh token exists
+      hasRefreshToken:   !!refreshToken,
     });
   } catch (err) {
     console.error("❌ Error checking calendar status:", err);

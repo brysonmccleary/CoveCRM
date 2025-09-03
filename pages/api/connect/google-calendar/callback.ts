@@ -2,7 +2,7 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { google } from "googleapis";
 import { getServerSession } from "next-auth/next";
-import { authOptions } from "../../auth/[...nextauth]"; // up TWO levels
+import { authOptions } from "../../auth/[...nextauth]";
 import { updateUserGoogleSheets } from "@/lib/userHelpers";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
@@ -21,7 +21,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       process.env.NEXT_PUBLIC_BASE_URL ||
       "http://localhost:3000";
 
-    // IMPORTANT: keep in sync with events.ts and index.ts
     const redirectUri =
       process.env.GOOGLE_REDIRECT_URI ||
       `${base.replace(/\/$/, "")}/api/connect/google-calendar/callback`;
@@ -34,14 +33,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const { tokens } = await oauth2.getToken(code);
 
-    // Persist under googleSheets (existing helper)
+    // Save (helper you already use)
     await updateUserGoogleSheets(email, {
       accessToken: tokens.access_token || "",
       refreshToken: tokens.refresh_token || "",
       expiryDate: tokens.expiry_date ?? null,
     });
 
-    // ALSO persist under googleTokens so any calendar code path can read it
+    // Also save in googleTokens for calendar/event readers
     await dbConnect();
     const current = await User.findOne({ email }).lean<{ googleTokens?: any; googleSheets?: any; googleCalendar?: any }>();
     const fallbackRefresh =
@@ -61,8 +60,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             expiryDate: tokens.expiry_date ?? current?.googleTokens?.expiryDate ?? null,
           },
         },
-      },
-      { new: false }
+      }
     );
 
     return res.redirect("/dashboard?tab=settings");

@@ -14,7 +14,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     process.env.NEXT_PUBLIC_BASE_URL ||
     "http://localhost:3000";
 
-  // IMPORTANT: matches your events.ts usage
+  // MUST match callback and your Google Cloud “Authorized redirect URI”
   const redirectUri =
     process.env.GOOGLE_REDIRECT_URI ||
     `${base.replace(/\/$/, "")}/api/connect/google-calendar/callback`;
@@ -31,8 +31,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   ];
 
   const url = oauth2.generateAuthUrl({
-    access_type: "offline",     // ensures refresh_token
-    prompt: "consent",          // force consent so Google returns refresh_token
+    access_type: "offline",   // ← required to receive refresh_token
+    prompt: "consent",        // ← force consent so Google issues refresh_token
     include_granted_scopes: true,
     scope: scopes,
     redirect_uri: redirectUri,
