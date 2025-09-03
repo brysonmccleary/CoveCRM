@@ -17,6 +17,16 @@ type LeanFolder = {
   updatedAt?: Date;
 };
 
+// Raw shape coming back from mongoose .lean()
+type DBFolderLean = {
+  _id: any;
+  name?: string;
+  userEmail?: string;
+  assignedDrips?: any[];
+  createdAt?: any;
+  updatedAt?: any;
+};
+
 function escapeRegex(s: string) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -27,15 +37,15 @@ function escapeRegex(s: string) {
  */
 async function ensureSystemFolder(userEmail: string, name: string): Promise<LeanFolder> {
   const rx = new RegExp(`^${escapeRegex(name)}$`, "i");
-  const found = await Folder.findOne({ userEmail, name: rx }).lean();
+  const found = await Folder.findOne({ userEmail, name: rx }).lean<DBFolderLean>().exec();
   if (found) {
     return {
       _id: String(found._id),
-      name: String(found.name || name),
-      userEmail: String(found.userEmail || userEmail),
-      assignedDrips: (found as any).assignedDrips || [],
-      createdAt: (found as any).createdAt ? new Date((found as any).createdAt) : undefined,
-      updatedAt: (found as any).updatedAt ? new Date((found as any).updatedAt) : undefined,
+      name: String(found.name ?? name),
+      userEmail: String(found.userEmail ?? userEmail),
+      assignedDrips: found.assignedDrips ?? [],
+      createdAt: found.createdAt ? new Date(found.createdAt) : undefined,
+      updatedAt: found.updatedAt ? new Date(found.updatedAt) : undefined,
     };
   }
   const created = await Folder.create({ userEmail, name, assignedDrips: [] });
@@ -61,13 +71,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const ensuredSystem = await Promise.all(SYSTEM_FOLDERS.map((n) => ensureSystemFolder(email, n)));
     const systemByLower = new Map(ensuredSystem.map((f) => [f.name.toLowerCase(), f]));
 
-    // 2) Fetch all user folders (lean), then map to our LeanFolder
-    const allRaw = await Folder.find({ userEmail: email }).sort({ createdAt: -1 }).lean().exec();
-    const all: LeanFolder[] = (allRaw as any[]).map((f) => ({
+    // 2) Fetch all user folders (lean), then map explicitly to LeanFolder
+    const allRaw = await Folder.find({ userEmail: email }).sort({ createdAt: -1 }).lean<DBFolderLean[]>().exec();
+    const all: LeanFolder[] = (allRaw || []).map((f) => ({
       _id: String(f._id),
-      name: String(f.name || ""),
-      userEmail: String(f.userEmail || email),
-      assignedDrips: f.assignedDrips || [],
+      name: String(f.name ?? ""),
+      userEmail: String(f.userEmail ?? email),
+      assignedDrips: f.assignedDrips ?? [],
       createdAt: f.createdAt ? new Date(f.createdAt) : undefined,
       updatedAt: f.updatedAt ? new Date(f.updatedAt) : undefined,
     }));
@@ -80,7 +90,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // Final ordered list: custom first, then system in canonical order
     const ordered: LeanFolder[] = [
       ...custom,
-      ...SYSTEM_FOLDERS.map((n) => systemByLower.get(n.toLowerCase())!).filter(Boolean),
+      ...SYSTEM_FOLDERS.map((n) => systemByLower.get(n.toLowerCase())!).filter(Boolean) as LeanFolder[],
     ];
 
     // 4) Counts by actual folderId (strict)
@@ -92,12 +102,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const byId = new Map<string, number>();
     for (const r of byIdAgg) byId.set(String(r._id), Number(r.n) || 0);
 
-    // 5) Optional: Unsorted support (we do NOT create it; count leads lacking folderId if user has one)
+    // 5) Optional: Unsorted support (we do NOT create it; only count if the user has one)
     const unsorted = all
       .filter((f) => f.name.toLowerCase() === "unsorted")
       .sort((a, b) => {
-        const ad = a.createdAt?.getTime() || 0;
-        const bd = b.createdAt?.getTime() || 0;
+        const ad = a.createdAt?.getTime() ?? 0;
+        const bd = b.createdAt?.getTime() ?? 0;
         return ad - bd || a._id.localeCompare(b._id);
       })[0];
     const unsortedIdStr = unsorted ? String(unsorted._id) : null;
