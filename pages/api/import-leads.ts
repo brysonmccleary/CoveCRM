@@ -10,6 +10,7 @@ import Lead from "@/models/Lead";
 import { getServerSession } from "next-auth";
 import { authOptions } from "./auth/[...nextauth]";
 import { sanitizeLeadType, createLeadsFromCSV } from "@/lib/mongo/leads";
+import { isSystemFolderName } from "@/lib/systemFolders";
 
 export const config = { api: { bodyParser: false } };
 
@@ -105,9 +106,11 @@ async function ensureFolder({
   if (targetFolderId) {
     const f = await Folder.findOne({ _id: targetFolderId, userEmail });
     if (!f) throw new Error("Folder not found or not owned by user");
+    if (isSystemFolderName(f.name)) throw new Error("Cannot import into system folders");
     return f;
   }
   if (!folderName) throw new Error("Missing targetFolderId or folderName");
+  if (isSystemFolderName(folderName)) throw new Error("Cannot import into system folders");
   let f = await Folder.findOne({ name: folderName, userEmail });
   if (!f) f = await Folder.create({ name: folderName, userEmail });
   return f;
@@ -611,6 +614,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // ---------- Legacy path: folderName + CSV (no mapping provided) ----------
     const folderName = folderNameField;
     if (!folderName) return res.status(400).json({ message: "Missing folder name" });
+    if (isSystemFolderName(folderName)) {
+      return res.status(400).json({ message: "Cannot import into system folders" });
+    }
 
     try {
       const buffer = await fs.promises.readFile(file.filepath);

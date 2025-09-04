@@ -8,6 +8,7 @@ import Lead from "@/models/Lead";
 import Folder from "@/models/Folder";
 import { google } from "googleapis";
 import mongoose from "mongoose";
+import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
 
 type ImportBody = {
   spreadsheetId: string;
@@ -24,12 +25,6 @@ type ImportBody = {
   moveExistingToFolder?: boolean; // kept for compat
   skipExisting?: boolean;          // skip duplicates instead of moving
 };
-
-const SYSTEM_FOLDERS = new Set(["sold", "booked appointment", "not interested", "resolved"]);
-function isSystemFolder(name?: string | null) {
-  const n = String(name || "").trim().toLowerCase();
-  return n.length > 0 && SYSTEM_FOLDERS.has(n);
-}
 
 function normalizePhone(input: any): string {
   return String(input || "").replace(/\D+/g, "");

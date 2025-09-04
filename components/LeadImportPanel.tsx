@@ -1,7 +1,7 @@
-// components/LeadImportPanel.tsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import Papa from "papaparse";
 import toast from "react-hot-toast";
+import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
 
 type Folder = { _id: string; name: string };
 
@@ -31,11 +31,6 @@ const systemFields = [
   "Coverage Amount",
   "Add Custom Field",
 ];
-
-// ---- System folders guard for CSV imports (client-side; API enforces on Sheets path) ----
-const SYSTEM_FOLDERS = new Set(["sold", "booked appointment", "not interested", "resolved"]);
-const isSystemFolder = (name?: string | null) =>
-  SYSTEM_FOLDERS.has(String(name || "").trim().toLowerCase());
 
 function lc(s?: string) {
   return (s || "").toLowerCase();

@@ -7,13 +7,7 @@ import User from "@/models/User";
 import Lead from "@/models/Lead";
 import Folder from "@/models/Folder"; // ✅ ensure folder created/linked
 import { google } from "googleapis";
-
-// ---- System folders guard (case-insensitive) ----
-const SYSTEM_FOLDERS = new Set(["sold", "booked appointment", "not interested", "resolved"]);
-function isSystemFolder(name?: string | null) {
-  const n = String(name || "").trim().toLowerCase();
-  return n.length > 0 && SYSTEM_FOLDERS.has(n);
-}
+import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
 
 function last10(s?: string) {
   const d = String(s || "").replace(/\D+/g, "");

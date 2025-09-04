@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import Sidebar from "@/components/Sidebar";
 import toast from "react-hot-toast";
+import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
 
 type DriveFile = {
   id: string;
@@ -32,11 +33,6 @@ const defaultFields: FieldOption[] = [
   { label: "Notes", value: "notes" },
 ];
 
-// ---- System folders guard (client-side convenience; server still enforces) ----
-const SYSTEM_FOLDERS = new Set(["sold", "booked appointment", "not interested", "resolved"]);
-const isSystemFolder = (name?: string | null) =>
-  SYSTEM_FOLDERS.has(String(name || "").trim().toLowerCase());
-
 export default function GoogleSheetsSyncPage() {
   // files/tabs
   const [files, setFiles] = useState<DriveFile[] | null>(null);
@@ -57,7 +53,7 @@ export default function GoogleSheetsSyncPage() {
   const [skip, setSkip] = useState<Record<string, boolean>>({});
   const [folderName, setFolderName] = useState<string>("");
 
-  const [skipExisting, setSkipExisting] = useState<boolean>(false); // ✅ NEW
+  const [skipExisting, setSkipExisting] = useState<boolean>(false);
   const [importing, setImporting] = useState(false);
 
   // refs
@@ -194,7 +190,7 @@ export default function GoogleSheetsSyncPage() {
           skip,
           folderName: intendedFolderName,
           moveExistingToFolder: true,
-          skipExisting, // ✅ pass user choice
+          skipExisting,
         }),
       });
       const j = await r.json();
@@ -359,7 +355,7 @@ export default function GoogleSheetsSyncPage() {
               </div>
             </div>
 
-            {/* ✅ Skip duplicates toggle for Google Sheets sync */}
+            {/* Skip duplicates toggle for Google Sheets sync */}
             <div className="mt-3 flex items-center gap-2">
               <input
                 id="skipExistingSheets"
