@@ -15,18 +15,32 @@ declare global {
 let cached: Cached = global.__mongooseCache || { conn: null, promise: null };
 if (!global.__mongooseCache) global.__mongooseCache = cached;
 
+// Remove legacy keepAlive params that can break new drivers
 function stripUnsupportedOptionsFromUri(uri: string): string {
   if (!uri) return uri;
-  // Remove keepAlive/keepalive from query string to avoid MongoParseError on newer drivers
-  // Handles ?keepAlive=... or &keepAlive=...
   let out = uri.replace(/([?&])keepalive(=[^&]*)?/gi, "$1")
                .replace(/([?&])keepAlive(=[^&]*)?/g, "$1");
-
-  // cleanup any trailing ? or & that might remain
   out = out.replace(/[?&]$/g, "");
-  // collapse "&&" or "?&"
   out = out.replace(/\?&/g, "?").replace(/&&/g, "&");
   return out;
+}
+
+// Extract the db name from a Mongo URI if present
+function extractDbFromUri(uri: string): string | null {
+  // Matches "...mongodb.net/<dbName>?..." OR "...mongodb.net/<dbName>"
+  const m = uri.match(/^mongodb(?:\+srv)?:\/\/[^/]+\/([^?\/]+)(?:[?].*)?$/i);
+  return m?.[1] ?? null;
+}
+
+// Ensure the URI contains a "/<dbName>" segment; append if missing
+function ensureDbInUri(uri: string, dbName: string): string {
+  const hasDb = !!extractDbFromUri(uri);
+  if (hasDb) return uri;
+  const qIndex = uri.indexOf("?");
+  if (qIndex === -1) return `${uri.replace(/\/?$/, "")}/${dbName}`;
+  const base = uri.slice(0, qIndex).replace(/\/?$/, "");
+  const qs = uri.slice(qIndex);
+  return `${base}/${dbName}${qs}`;
 }
 
 export default async function mongooseConnect(): Promise<typeof mongoose> {
@@ -36,7 +50,17 @@ export default async function mongooseConnect(): Promise<typeof mongoose> {
     const rawUri = process.env.MONGODB_URI || process.env.MONGODB_URL || "";
     if (!rawUri) throw new Error("Missing MONGODB_URI");
 
-    const uri = stripUnsupportedOptionsFromUri(rawUri);
+    const uriNoLegacy = stripUnsupportedOptionsFromUri(rawUri);
+
+    // Choose dbName in this order:
+    // 1) Explicit env override
+    // 2) Whatever is already in the URI
+    // 3) Fallback to "covecrm"
+    const dbFromUri = extractDbFromUri(uriNoLegacy);
+    const finalDbName = process.env.MONGODB_DBNAME || dbFromUri || "covecrm";
+
+    // Make sure the URI actually contains "/<db>"
+    const finalUri = ensureDbInUri(uriNoLegacy, finalDbName);
 
     // Safer defaults
     mongoose.set("strictQuery", true);
@@ -47,22 +71,27 @@ export default async function mongooseConnect(): Promise<typeof mongoose> {
       10
     );
 
-    // IMPORTANT: Do NOT pass driver options that are no longer supported (keepAlive, keepAliveInitialDelay, etc.)
+    // IMPORTANT: Do NOT pass deprecated driver options
     const options: any = {
+      // Guarantee the db even if URI was missing or env wants to override
+      dbName: finalDbName,
+
       maxPoolSize: maxPool,
       minPoolSize: 0,
       maxConnecting: 1,               // throttle concurrent new sockets
       serverSelectionTimeoutMS: 30000,
       socketTimeoutMS: 45000,
+
       // Don’t buffer commands while disconnected
       bufferCommands: false,
+
       // Reasonable defaults
       retryWrites: true,
       w: "majority",
       appName: "CoveCRM",
     };
 
-    // Ensure we reset the cache on connection loss in this runtime
+    // Reset cache on disconnect/error in this runtime
     const attachOnce = () => {
       if (!mongoose.connection.listeners("disconnected").length) {
         mongoose.connection.on("disconnected", () => {
@@ -78,7 +107,7 @@ export default async function mongooseConnect(): Promise<typeof mongoose> {
     attachOnce();
 
     cached.promise = mongoose
-      .connect(uri, options)
+      .connect(finalUri, options)
       .then((m) => {
         cached.conn = m;
         return m;
