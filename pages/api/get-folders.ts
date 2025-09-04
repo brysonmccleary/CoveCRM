@@ -6,7 +6,7 @@ import dbConnect from "@/lib/mongooseConnect";
 import Folder from "@/models/Folder";
 import Lead from "@/models/Lead";
 
-const SYSTEM_FOLDERS = ["Not Interested", "Booked Appointment", "Sold"];
+const SYSTEM_FOLDERS = ["Sold", "Not Interested", "Booked Appointment"] as const;
 
 type LeanFolder = {
   _id: string;
@@ -29,6 +29,16 @@ type DBFolderLean = {
 function escapeRegex(s: string) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
+
+// normalize for comparisons (handle NBSP, trim/collapse spaces, lowercase)
+function norm(s: any) {
+  return String(s ?? "")
+    .replace(/\u00A0/g, " ")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+}
+
 function toLeanFolder(doc: DBFolderLean, fallbackEmail: string): LeanFolder {
   return {
     _id: String(doc._id),
@@ -41,9 +51,9 @@ function toLeanFolder(doc: DBFolderLean, fallbackEmail: string): LeanFolder {
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  // Ensure no caching at any layer
+  // Never cache during troubleshooting
   res.setHeader("Cache-Control", "no-store");
-  res.setHeader("X-Folders-Impl", "sys-v4"); // visible marker so we know this code is live
+  res.setHeader("X-Folders-Impl", "sys-v5"); // marker to verify the live code path
 
   try {
     const session = await getServerSession(req, res, authOptions);
@@ -53,13 +63,32 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     await dbConnect();
 
-    // 1) Idempotently upsert the 3 system folders (simple & reliable: one-by-one)
-    for (const name of SYSTEM_FOLDERS) {
-      await Folder.findOneAndUpdate(
-        { userEmail: email, name: { $regex: `^${escapeRegex(name)}$`, $options: "i" } },
-        { $setOnInsert: { userEmail: email, name, assignedDrips: [] } },
-        { upsert: true, new: false, lean: true }
-      ).exec();
+    // 1) Ensure + canonicalize + dedupe system folders (case/space-insensitive)
+    //    Keep the earliest, rename to canonical, delete any later variants.
+    for (const canonical of SYSTEM_FOLDERS) {
+      const rx = new RegExp(`^\\s*${escapeRegex(canonical)}\\s*$`, "i");
+      const matches = await Folder.find({ userEmail: email, name: rx })
+        .sort({ createdAt: 1, _id: 1 })
+        .lean<DBFolderLean[]>()
+        .exec();
+
+      if (!matches.length) {
+        // Create the canonical one if none exist
+        await Folder.create({ userEmail: email, name: canonical, assignedDrips: [] });
+        continue;
+      }
+
+      // Keep earliest
+      const keep = matches[0];
+      if (String(keep.name) !== canonical) {
+        await Folder.updateOne({ _id: keep._id }, { $set: { name: canonical } }).exec();
+      }
+
+      // Delete all later duplicates
+      const deleteIds = matches.slice(1).map((m) => m._id);
+      if (deleteIds.length) {
+        await Folder.deleteMany({ _id: { $in: deleteIds } }).exec();
+      }
     }
 
     // 2) Fetch all folders and normalize to LeanFolder
@@ -69,26 +98,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .exec();
     const all: LeanFolder[] = (allRaw || []).map((f) => toLeanFolder(f, email));
 
-    // 3) Partition custom vs. system and canonicalize system entries
-    const systemLower = new Set(SYSTEM_FOLDERS.map((n) => n.toLowerCase()));
-    const custom = all.filter((f) => !systemLower.has(f.name.toLowerCase()));
+    // 3) Partition custom vs system; stable order (custom A→Z, then fixed system order)
+    const systemLower = new Set(SYSTEM_FOLDERS.map((n) => norm(n)));
+    const custom = all.filter((f) => !systemLower.has(norm(f.name)));
     custom.sort((a, b) => a.name.localeCompare(b.name));
 
-    const systemByLower: Map<string, LeanFolder> = new Map();
+    // Choose the (now canonicalized) unique system entries by name
+    const systemByName = new Map<string, LeanFolder>();
     for (const sysName of SYSTEM_FOLDERS) {
-      const matches = all
-        .filter((f) => f.name.toLowerCase() === sysName.toLowerCase())
-        .sort((a, b) => {
-          const ad = a.createdAt?.getTime() ?? 0;
-          const bd = b.createdAt?.getTime() ?? 0;
-          return ad - bd || a._id.localeCompare(b._id);
-        });
-      if (matches[0]) systemByLower.set(sysName.toLowerCase(), matches[0]);
+      const pick = all.find((f) => norm(f.name) === norm(sysName));
+      if (pick) systemByName.set(sysName, pick);
     }
 
     const ordered: LeanFolder[] = [
       ...custom,
-      ...SYSTEM_FOLDERS.map((n) => systemByLower.get(n.toLowerCase())!).filter(Boolean) as LeanFolder[],
+      ...SYSTEM_FOLDERS.map((n) => systemByName.get(n)!).filter(Boolean) as LeanFolder[],
     ];
 
     // 4) Counts by folderId (strict)
@@ -100,9 +124,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const byId = new Map<string, number>();
     for (const r of byIdAgg) byId.set(String(r._id), Number(r.n) || 0);
 
-    // 5) Legacy "Unsorted" handling (do not create it; include no-folder leads if it exists)
+    // 5) Legacy "Unsorted" handling (do not create; include no-folder leads if it exists)
     const unsorted = all
-      .filter((f) => f.name.toLowerCase() === "unsorted")
+      .filter((f) => norm(f.name) === norm("Unsorted"))
       .sort((a, b) => {
         const ad = a.createdAt?.getTime() ?? 0;
         const bd = b.createdAt?.getTime() ?? 0;
@@ -118,7 +142,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // 6) Attach counts and return
     const foldersWithCounts = ordered.map((f) => {
       const idStr = String(f._id);
-      const count = (byId.get(idStr) || 0) + (unsortedIdStr && idStr === unsortedIdStr ? unsortedCount : 0);
+      const count =
+        (byId.get(idStr) || 0) +
+        (unsortedIdStr && idStr === unsortedIdStr ? unsortedCount : 0);
       return { ...f, _id: idStr, leadCount: count };
     });
 
