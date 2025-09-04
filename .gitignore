@@ -46,3 +46,9 @@ tsconfig.tsbuildinfo
 .env.*
 .env.local
 .env.vercel
+
+# never upload local env/zips
+.env*
+cookies.txt
+*.zip
+
