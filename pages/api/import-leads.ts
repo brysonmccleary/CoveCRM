@@ -94,26 +94,35 @@ async function readJsonBody(req: NextApiRequest): Promise<JsonPayload | null> {
   }
 }
 
-async function ensureFolder({
-  userEmail,
-  targetFolderId,
-  folderName,
-}: {
-  userEmail: string;
-  targetFolderId?: string;
-  folderName?: string;
-}) {
-  if (targetFolderId) {
-    const f = await Folder.findOne({ _id: targetFolderId, userEmail });
+/**
+ * Resolve destination folder with strict rules:
+ *  - If folderName is provided (non-empty), it WINS. Create/find by name.
+ *  - Else if targetFolderId is provided, use it.
+ *  - System folders are always blocked.
+ */
+async function resolveImportFolder(
+  userEmail: string,
+  opts: { targetFolderId?: string; folderName?: string }
+) {
+  const byName = (opts.folderName || "").trim();
+  if (byName) {
+    if (isSystemFolderName(byName)) {
+      throw new Error("Cannot import into system folders");
+    }
+    const f = await Folder.findOneAndUpdate(
+      { userEmail, name: byName },
+      { $setOnInsert: { userEmail, name: byName } },
+      { new: true, upsert: true }
+    );
+    return f;
+  }
+  if (opts.targetFolderId) {
+    const f = await Folder.findOne({ _id: opts.targetFolderId, userEmail });
     if (!f) throw new Error("Folder not found or not owned by user");
     if (isSystemFolderName(f.name)) throw new Error("Cannot import into system folders");
     return f;
   }
-  if (!folderName) throw new Error("Missing targetFolderId or folderName");
-  if (isSystemFolderName(folderName)) throw new Error("Cannot import into system folders");
-  let f = await Folder.findOne({ name: folderName, userEmail });
-  if (!f) f = await Folder.create({ name: folderName, userEmail });
-  return f;
+  throw new Error("Missing targetFolderId or folderName");
 }
 
 // Map one CSV row using provided mapping
@@ -211,7 +220,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return res.status(400).json({ message: "Missing mapping or rows[]" });
       }
 
-      const folder = await ensureFolder({ userEmail, targetFolderId, folderName });
+      // ✅ Name wins if present; block system folders
+      const folder = await resolveImportFolder(userEmail, { targetFolderId, folderName });
 
       // Map rows → normalized leads
       const mapped = rows.map((r) => ({
@@ -402,8 +412,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(500).json({ message: "Form parse error" });
     }
 
-    const targetFolderId = fields.targetFolderId?.toString();
-    const folderNameField = fields.folderName?.toString()?.trim();
+    const targetFolderId = fields.targetFolderId?.toString() || undefined;
+    const folderNameField = fields.folderName?.toString()?.trim() || "";
     const mappingStr = fields.mapping?.toString();
     const skipExisting = fields.skipExisting?.toString() === "true" ? true : false; // default false = MOVE + RESET
 
@@ -414,7 +424,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (mappingStr) {
       try {
         const mapping = JSON.parse(mappingStr) as Record<string, string>;
-        const folder = await ensureFolder({ userEmail, targetFolderId, folderName: folderNameField });
+        // ✅ Name wins if present; block system folders
+        const folder = await resolveImportFolder(userEmail, { targetFolderId, folderName: folderNameField });
 
         const buffer = await fs.promises.readFile(file.filepath);
         const rawRows: any[] = [];
