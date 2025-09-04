@@ -29,8 +29,6 @@ type DBFolderLean = {
 function escapeRegex(s: string) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
-
-/** Map raw mongo docs to our LeanFolder shape */
 function toLeanFolder(doc: DBFolderLean, fallbackEmail: string): LeanFolder {
   return {
     _id: String(doc._id),
@@ -43,6 +41,10 @@ function toLeanFolder(doc: DBFolderLean, fallbackEmail: string): LeanFolder {
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  // Ensure no caching at any layer
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("X-Folders-Impl", "sys-v4"); // visible marker so we know this code is live
+
   try {
     const session = await getServerSession(req, res, authOptions);
     const email =
@@ -51,33 +53,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     await dbConnect();
 
-    // --- 1) Atomically ensure system folders exist (case-insensitive, no dupes)
-    const ops = SYSTEM_FOLDERS.map((name) => ({
-      updateOne: {
-        filter: {
-          userEmail: email,
-          name: { $regex: `^${escapeRegex(name)}$`, $options: "i" },
-        },
-        update: { $setOnInsert: { userEmail: email, name, assignedDrips: [] } },
-        upsert: true,
-        collation: { locale: "en", strength: 2 }, // case-insensitive
-      },
-    }));
-    await (Folder as any).bulkWrite(ops, { ordered: false });
+    // 1) Idempotently upsert the 3 system folders (simple & reliable: one-by-one)
+    for (const name of SYSTEM_FOLDERS) {
+      await Folder.findOneAndUpdate(
+        { userEmail: email, name: { $regex: `^${escapeRegex(name)}$`, $options: "i" } },
+        { $setOnInsert: { userEmail: email, name, assignedDrips: [] } },
+        { upsert: true, new: false, lean: true }
+      ).exec();
+    }
 
-    // --- 2) Fetch all folders for this user and normalize
+    // 2) Fetch all folders and normalize to LeanFolder
     const allRaw = await Folder.find({ userEmail: email })
       .sort({ createdAt: -1 })
       .lean<DBFolderLean[]>()
       .exec();
     const all: LeanFolder[] = (allRaw || []).map((f) => toLeanFolder(f, email));
 
-    // --- 3) Partition custom vs. system (case-insensitive); pick canonical system docs
+    // 3) Partition custom vs. system and canonicalize system entries
     const systemLower = new Set(SYSTEM_FOLDERS.map((n) => n.toLowerCase()));
     const custom = all.filter((f) => !systemLower.has(f.name.toLowerCase()));
     custom.sort((a, b) => a.name.localeCompare(b.name));
 
-    // For each system name, pick the earliest-created matching doc (stable & dupe-safe)
     const systemByLower: Map<string, LeanFolder> = new Map();
     for (const sysName of SYSTEM_FOLDERS) {
       const matches = all
@@ -90,13 +86,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (matches[0]) systemByLower.set(sysName.toLowerCase(), matches[0]);
     }
 
-    // Final ordered list: custom first, then canonical system in fixed order
     const ordered: LeanFolder[] = [
       ...custom,
       ...SYSTEM_FOLDERS.map((n) => systemByLower.get(n.toLowerCase())!).filter(Boolean) as LeanFolder[],
     ];
 
-    // --- 4) Counts by folderId (strict)
+    // 4) Counts by folderId (strict)
     const byIdAgg = await (Lead as any).aggregate([
       { $match: { userEmail: email, folderId: { $exists: true, $ne: null } } },
       { $addFields: { fid: { $toString: "$folderId" } } },
@@ -105,7 +100,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const byId = new Map<string, number>();
     for (const r of byIdAgg) byId.set(String(r._id), Number(r.n) || 0);
 
-    // --- 5) Legacy "Unsorted": include count of leads without a folderId if such a folder exists
+    // 5) Legacy "Unsorted" handling (do not create it; include no-folder leads if it exists)
     const unsorted = all
       .filter((f) => f.name.toLowerCase() === "unsorted")
       .sort((a, b) => {
@@ -120,7 +115,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       $or: [{ folderId: { $exists: false } }, { folderId: null }],
     });
 
-    // --- 6) Attach counts and return
+    // 6) Attach counts and return
     const foldersWithCounts = ordered.map((f) => {
       const idStr = String(f._id);
       const count = (byId.get(idStr) || 0) + (unsortedIdStr && idStr === unsortedIdStr ? unsortedCount : 0);
