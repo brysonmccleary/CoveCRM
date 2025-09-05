@@ -1,4 +1,4 @@
-// pages/leads/index.tsx
+// pages/folder/leads.tsx
 import React, { useState, useEffect, useMemo } from "react";
 import { useRouter } from "next/router";
 import LeadPreviewPanel from "../../components/LeadPreviewPanel";
