@@ -256,7 +256,11 @@ export default function LeadsPage() {
         if (!r2.ok) setResumeInfo(null);
         else {
           const j2 = await r2.json();
-          setResumeInfo({ lastIndex: j2?.lastIndex ?? null, total: j2?.total ?? null, updatedAt: j2?.updatedAt ?? null });
+          setResumeInfo({
+            lastIndex: j2?.lastIndex ?? null,
+            total: j2?.total ?? null,
+            updatedAt: j2?.updatedAt ?? null,
+          });
         }
       } catch {
         setResumeInfo(null);
@@ -333,7 +337,7 @@ export default function LeadsPage() {
     }
 
     const progressKey = buildLocalProgressKey();
-    const savedRaw = localStorage.getItem(progressKey);
+    const savedRaw = typeof window !== "undefined" ? localStorage.getItem(progressKey) : null;
     const saved = savedRaw ? (JSON.parse(savedRaw) as { index: number }) : null;
     const maxIndex = selectedLeadIds.length - 1;
 
@@ -401,6 +405,30 @@ export default function LeadsPage() {
       leads: ids.join(","),
       fromNumber: selectedNumber,
       startIndex: "0",
+      progressKey: buildLocalProgressKey(),
+      serverProgressKey: serverKey,
+    });
+    router.push(`/dial-session?${params.toString()}`);
+  };
+
+  /** Quick Resume button beside Start Dial Session (server-backed) */
+  const handleResumeQuickButton = async () => {
+    const hasLeads = !!leads && leads.length > 0;
+    if (!hasResume || !hasLeads) return;
+    if (!selectedNumber) {
+      alert("Please select a number to call from before resuming.");
+      return;
+    }
+    localStorage.setItem("selectedDialNumber", selectedNumber);
+
+    const serverKey = buildServerProgressKey();
+    const ids = (selectedLeadIds.length ? selectedLeadIds : (leads as Lead[]).map((l) => l._id));
+    const startAt = Math.max(0, (resumeInfo?.lastIndex ?? -1) + 1);
+
+    const params = new URLSearchParams({
+      leads: ids.join(","),
+      fromNumber: selectedNumber,
+      startIndex: String(startAt),
       progressKey: buildLocalProgressKey(),
       serverProgressKey: serverKey,
     });
@@ -487,6 +515,10 @@ export default function LeadsPage() {
     resumeInfo.lastIndex != null &&
     resumeInfo.lastIndex >= 0;
 
+  const canStart = selectedLeadIds.length > 0;
+  const canResume =
+    hasResume && !!selectedNumber && !!leads && leads.length > 0;
+
   return (
     <div className="flex bg-[#0f172a] text-white min-h-screen">
       <Sidebar />
@@ -540,13 +572,15 @@ export default function LeadsPage() {
 
             {/* Import panel lives here when no folder is opened */}
             <div className="mt-6">
-              <LeadImportPanel onImportSuccess={async () => {
-                try {
-                  const r = await fetch("/api/get-folders");
-                  const j = await r.json();
-                  setFolders(Array.isArray(j?.folders) ? j.folders : []);
-                } catch {}
-              }} />
+              <LeadImportPanel
+                onImportSuccess={async () => {
+                  try {
+                    const r = await fetch("/api/get-folders");
+                    const j = await r.json();
+                    setFolders(Array.isArray(j?.folders) ? j.folders : []);
+                  } catch {}
+                }}
+              />
             </div>
           </>
         ) : (
@@ -564,7 +598,7 @@ export default function LeadsPage() {
               </button>
             </div>
 
-            {/* Resume / Start Fresh (server-backed) */}
+            {/* Resume / Start Fresh (server-backed banner) */}
             {hasResume && (
               <div className="mb-4 p-3 rounded bg-amber-50 text-amber-900 border border-amber-200">
                 <div className="flex flex-wrap items-center justify-between gap-2">
@@ -615,15 +649,31 @@ export default function LeadsPage() {
                   </button>
                   <span className="text-sm text-gray-300">{selectedLeadIds.length} selected</span>
                 </div>
-                <button
-                  onClick={startDialSession}
-                  className={`${
-                    selectedLeadIds.length > 0 ? "bg-green-600" : "bg-gray-500 cursor-not-allowed"
-                  } text-white px-3 py-1 rounded`}
-                  disabled={selectedLeadIds.length === 0}
-                >
-                  Start Dial Session
-                </button>
+
+                {/* Right-side actions: Start + Resume */}
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={startDialSession}
+                    className={`${
+                      canStart ? "bg-green-600 hover:bg-green-700" : "bg-gray-500 cursor-not-allowed"
+                    } text-white px-3 py-1 rounded`}
+                    disabled={!canStart}
+                  >
+                    Start Dial Session
+                  </button>
+
+                  {/* New blue Resume button (server-backed) */}
+                  <button
+                    onClick={handleResumeQuickButton}
+                    className={`${
+                      canResume ? "bg-blue-600 hover:bg-blue-700" : "bg-gray-500 cursor-not-allowed"
+                    } text-white px-3 py-1 rounded`}
+                    disabled={!canResume}
+                    title={hasResume ? "Resume where you left off" : "No server resume available for this folder yet"}
+                  >
+                    Resume
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -667,14 +717,14 @@ export default function LeadsPage() {
                               onClick={() => setPreviewLead(lead)}
                               className="text-blue-500 underline cursor-pointer"
                             >
-                              {lead.firstName || lead["First Name"] || "-"}
+                              {lead.firstName || (lead as any)["First Name"] || "-"}
                             </button>
                           </td>
-                          <td className="px-2">{lead.lastName || lead["Last Name"] || "-"}</td>
-                          <td className="px-2">{lead.phone || lead["Phone"] || "-"}</td>
-                          <td className="px-2">{lead.email || lead["Email"] || "-"}</td>
-                          <td className="px-2">{lead.state || lead["State"] || "-"}</td>
-                          <td className="px-2">{lead.age ?? lead["Age"] ?? "-"}</td>
+                          <td className="px-2">{lead.lastName || (lead as any)["Last Name"] || "-"}</td>
+                          <td className="px-2">{lead.phone || (lead as any)["Phone"] || "-"}</td>
+                          <td className="px-2">{lead.email || (lead as any)["Email"] || "-"}</td>
+                          <td className="px-2">{lead.state || (lead as any)["State"] || "-"}</td>
+                          <td className="px-2">{(lead as any).age ?? (lead as any)["Age"] ?? "-"}</td>
                         </tr>
                       );
                     })}

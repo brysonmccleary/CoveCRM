@@ -263,10 +263,9 @@ export default function LeadsPanel() {
     setSelectAll(!selectAll);
   };
 
-  // --- Your original local-storage key (kept intact) ---
+  // --- Local key (kept intact) ---
   const buildProgressKey = () => {
     const folder = expandedFolder || "no-folder";
-    // lock order; ids already in UI order
     const ids = selectedLeads.join(",");
     return `dialProgress:${folder}:${ids}`;
   };
@@ -318,8 +317,8 @@ export default function LeadsPanel() {
       leads: selectedLeads.join(","),
       fromNumber: selectedNumber,
       startIndex: String(startIndex),
-      progressKey: progressKey,      // local key (kept)
-      serverProgressKey: serverKey,  // server key (per-folder)
+      progressKey: progressKey, // local key (kept)
+      serverProgressKey: serverKey, // server key (per-folder)
     }).toString();
 
     router.push(`/dial-session?${q}`);
@@ -333,11 +332,11 @@ export default function LeadsPanel() {
       return;
     }
     const serverKey = buildServerProgressKey();
-    const startAt = Math.max(0, ((resumeInfo?.lastIndex ?? -1) + 1));
+    const startAt = Math.max(0, (resumeInfo?.lastIndex ?? -1) + 1);
     localStorage.setItem("selectedDialNumber", selectedNumber);
 
     // If no manual selection, use whole folder in current UI order
-    const ids = (selectedLeads.length ? selectedLeads : leads.map((l) => l._id));
+    const ids = selectedLeads.length ? selectedLeads : leads.map((l) => l._id);
     const params = new URLSearchParams();
     params.set("leads", ids.join(","));
     params.set("fromNumber", selectedNumber);
@@ -368,13 +367,38 @@ export default function LeadsPanel() {
     }
 
     localStorage.setItem("selectedDialNumber", selectedNumber);
-    const ids = (selectedLeads.length ? selectedLeads : leads.map((l) => l._id));
+    const ids = selectedLeads.length ? selectedLeads : leads.map((l) => l._id);
     const params = new URLSearchParams();
     params.set("leads", ids.join(","));
     params.set("fromNumber", selectedNumber);
     params.set("startIndex", "0");
     params.set("progressKey", buildProgressKey());
     params.set("serverProgressKey", serverKey);
+    router.push(`/dial-session?${params.toString()}`);
+  };
+
+  const hasResume =
+    !!resumeInfo && resumeInfo.lastIndex != null && resumeInfo.lastIndex >= 0 && leads.length > 0;
+
+  const canStart = selectedLeads.length > 0;
+  const canResume = hasResume && !!selectedNumber && leads.length > 0;
+
+  // NEW: Quick Resume button beside Start Dial Session (server-backed)
+  const handleResumeQuickButton = async () => {
+    if (!canResume) return;
+    localStorage.setItem("selectedDialNumber", selectedNumber);
+
+    const serverKey = buildServerProgressKey();
+    const ids = selectedLeads.length ? selectedLeads : leads.map((l) => l._id);
+    const startAt = Math.max(0, (resumeInfo?.lastIndex ?? -1) + 1);
+
+    const params = new URLSearchParams({
+      leads: ids.join(","),
+      fromNumber: selectedNumber,
+      startIndex: String(startAt),
+      progressKey: buildProgressKey(),
+      serverProgressKey: serverKey,
+    });
     router.push(`/dial-session?${params.toString()}`);
   };
 
@@ -508,8 +532,8 @@ export default function LeadsPanel() {
                   <div className="mb-3 p-3 rounded bg-amber-50 text-amber-900 border border-amber-200">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div>
-                        You last called <strong>{resumeInfo.lastIndex + 1}</strong>
-                        {" "}of <strong>{resumeInfo.total ?? leads.length}</strong> in this list.
+                        You last called <strong>{resumeInfo.lastIndex + 1}</strong>{" "}
+                        of <strong>{resumeInfo.total ?? leads.length}</strong> in this list.
                       </div>
                       <div className="flex gap-2">
                         <button
@@ -553,16 +577,30 @@ export default function LeadsPanel() {
                     <span className="text-sm">{selectedLeads.length} leads selected</span>
                   </div>
 
-                  {/* Keep your Start Dial Session button (localStorage flow). */}
-                  <button
-                    onClick={startDialSession}
-                    className={`${
-                      selectedLeads.length > 0 ? "bg-green-600" : "bg-gray-400 cursor-not-allowed"
-                    } text-white px-3 py-1 rounded cursor-pointer`}
-                    disabled={selectedLeads.length === 0}
-                  >
-                    Start Dial Session
-                  </button>
+                  {/* Right-side actions: Start + Resume */}
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={startDialSession}
+                      className={`${
+                        canStart ? "bg-green-600 hover:bg-green-700" : "bg-gray-400 cursor-not-allowed"
+                      } text-white px-3 py-1 rounded cursor-pointer`}
+                      disabled={!canStart}
+                    >
+                      Start Dial Session
+                    </button>
+
+                    {/* New blue Resume button (server-backed quick resume) */}
+                    <button
+                      onClick={handleResumeQuickButton}
+                      className={`${
+                        canResume ? "bg-blue-600 hover:bg-blue-700" : "bg-gray-400 cursor-not-allowed"
+                      } text-white px-3 py-1 rounded cursor-pointer`}
+                      disabled={!canResume}
+                      title={hasResume ? "Resume where you left off" : "No server resume available yet"}
+                    >
+                      Resume
+                    </button>
+                  </div>
                 </div>
 
                 <table className="min-w-full text-base">
