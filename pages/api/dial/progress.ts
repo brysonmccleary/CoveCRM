@@ -2,69 +2,53 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
-import mongoose from "mongoose";
+import User from "@/models/User";
 
-type Resp =
-  | { message: string }
-  | { lastIndex: number | null; total: number | null; updatedAt: string | null }
-  | { ok: true };
-
-async function getCollection() {
-  await dbConnect();
-  const coll = mongoose.connection.collection("dial_progress");
-  // create the unique key once; ignored on subsequent calls
-  try {
-    await coll.createIndex({ userEmail: 1, key: 1 }, { unique: true });
-  } catch {}
-  return coll;
-}
-
-export default async function handler(req: NextApiRequest, res: NextApiResponse<Resp>) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const session = await getServerSession(req, res, authOptions);
   const email = session?.user?.email?.toLowerCase();
   if (!email) return res.status(401).json({ message: "Unauthorized" });
 
-  const coll = await getCollection();
+  await dbConnect();
 
   if (req.method === "GET") {
-    const key = String(req.query.key || "").trim();
+    const key = String(req.query.key || "");
     if (!key) return res.status(400).json({ message: "Missing key" });
 
-    const doc = await coll.findOne<{ lastIndex?: number; total?: number; updatedAt?: Date }>({ userEmail: email, key });
-    return res.status(200).json({
-      lastIndex: typeof doc?.lastIndex === "number" ? doc!.lastIndex : null,
-      total: typeof doc?.total === "number" ? doc!.total : null,
-      updatedAt: doc?.updatedAt ? doc.updatedAt.toISOString() : null,
-    });
+    const user = await User.findOne({ email }).lean();
+    const entry = (user?.dialProgress || []).find((p: any) => p.key === key);
+    return res.status(200).json({ lastIndex: entry?.lastIndex ?? null, total: entry?.total ?? null, updatedAt: entry?.updatedAt ?? null });
   }
 
   if (req.method === "POST") {
-    const { key, lastIndex, total } = (req.body || {}) as { key?: string; lastIndex?: number; total?: number };
+    const { key, lastIndex, total } = req.body || {};
     if (!key || typeof lastIndex !== "number") {
       return res.status(400).json({ message: "Missing key or lastIndex" });
     }
 
-    await coll.updateOne(
-      { userEmail: email, key },
-      {
-        $set: {
-          lastIndex,
-          ...(typeof total === "number" ? { total } : {}),
-          updatedAt: new Date(),
-        },
-        $setOnInsert: { createdAt: new Date() },
-      },
-      { upsert: true },
-    );
+    const u = await User.findOne({ email });
+    if (!u) return res.status(404).json({ message: "User not found" });
 
+    u.dialProgress = u.dialProgress || [];
+    const idx = u.dialProgress.findIndex((p: any) => p.key === key);
+    const payload = { key, lastIndex, total: typeof total === "number" ? total : undefined, updatedAt: new Date() };
+    if (idx >= 0) u.dialProgress[idx] = { ...u.dialProgress[idx], ...payload };
+    else u.dialProgress.push(payload);
+
+    await (u as any).save();
     return res.status(200).json({ ok: true });
   }
 
-  // Optional but useful for “Start Fresh” button: clear saved progress for this key
+  // NEW: allow wiping a saved pointer
   if (req.method === "DELETE") {
-    const { key } = (req.body || {}) as { key?: string };
+    const key = (req.body && (req.body as any).key) || String(req.query.key || "");
     if (!key) return res.status(400).json({ message: "Missing key" });
-    await coll.deleteOne({ userEmail: email, key });
+
+    const u = await User.findOne({ email });
+    if (!u) return res.status(404).json({ message: "User not found" });
+
+    u.dialProgress = (u.dialProgress || []).filter((p: any) => p.key !== key);
+    await (u as any).save();
     return res.status(200).json({ ok: true });
   }
 
