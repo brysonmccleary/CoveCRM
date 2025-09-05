@@ -2,11 +2,11 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import Twilio from "twilio";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "./auth/[...nextauth]"; // relative to /pages/api
+import { resolveFromNumber } from "@/lib/voice";
 
 const {
   TWILIO_ACCOUNT_SID,
   TWILIO_AUTH_TOKEN,
-  TWILIO_CALLER_ID,
   NEXT_PUBLIC_BASE_URL,
   NEXTAUTH_URL,
 } = process.env;
@@ -58,13 +58,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const baseUrl = (NEXT_PUBLIC_BASE_URL || NEXTAUTH_URL || "").replace(/\/$/, "");
     if (!baseUrl) return sendJSON(res, 500, { message: "Base URL not configured" });
-    if (!TWILIO_CALLER_ID) return sendJSON(res, 500, { message: "TWILIO_CALLER_ID missing" });
 
-    // Legacy callers might send agentNumber — we intentionally IGNORE it.
-    const { leadNumber, agentNumber: _ignored, leadId } = (req.body ?? {}) as {
+    // Incoming body (we ignore agentNumber by design)
+    const {
+      leadNumber,
+      agentNumber: _ignored,
+      leadId,
+      from: fromBody,
+      fromNumber: fromNumberBody,
+    } = (req.body ?? {}) as {
       leadNumber?: string;
       agentNumber?: string;
       leadId?: string;
+      from?: string;
+      fromNumber?: string;
     };
 
     const toLead = e164(leadNumber || "");
@@ -72,22 +79,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return sendJSON(res, 400, { message: "Missing or invalid leadNumber" });
     }
 
+    // ✅ Dynamic, per-user caller ID (fully automated)
+    const requestedFrom = (fromNumberBody || fromBody || "").trim() || null;
+    const fromNumber = await resolveFromNumber({ requested: requestedFrom, userEmail });
+
     const conferenceName = `conf_${Date.now()}`;
     const agentUrl = `${baseUrl}/api/voice/agent-join?conferenceName=${encodeURIComponent(conferenceName)}`;
     const leadUrl  = `${baseUrl}/api/voice/lead-join?conferenceName=${encodeURIComponent(conferenceName)}`;
 
     console.log("start-conference:init", {
       conferenceName,
-      from: TWILIO_CALLER_ID,
+      from: fromNumber,
       toLead,
       toAgentClient: `client:${clientIdentity}`,
       note: "PSTN agent disabled; using Twilio Client only",
     });
 
-    // 1) Agent "web" leg (Twilio Client) — cannot ring your cell
+    // 1) Agent "web" leg (Twilio Client)
     const agentCall = await client.calls.create({
       to: `client:${clientIdentity}`,
-      from: TWILIO_CALLER_ID,
+      from: fromNumber,
       url: agentUrl,
       statusCallback: `${baseUrl}/api/twilio/status-callback${leadId ? `?leadId=${encodeURIComponent(leadId)}` : ""}`,
       statusCallbackMethod: "POST",
@@ -97,12 +108,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // 2) Lead PSTN leg
     const leadCall = await client.calls.create({
       to: toLead,
-      from: TWILIO_CALLER_ID,
+      from: fromNumber,
       url: leadUrl,
       statusCallback: `${baseUrl}/api/twilio/status-callback${leadId ? `?leadId=${encodeURIComponent(leadId)}` : ""}`,
       statusCallbackMethod: "POST",
       statusCallbackEvent: ["initiated", "ringing", "answered", "completed"],
-      // Optional AMD at create; TwiML can also handle detection if desired
       machineDetection: "DetectMessageEnd" as any,
       asyncAmd: "true",
       recordingStatusCallback: `${baseUrl}/api/twilio-recording`,
@@ -113,7 +123,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       conferenceName,
       agentCallSid: agentCall.sid,
       leadCallSid: leadCall.sid,
-      from: TWILIO_CALLER_ID,
+      from: fromNumber,
       toLead,
       toAgentClient: `client:${clientIdentity}`,
     });
@@ -123,7 +133,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       conferenceName,
       agentCallSid: agentCall.sid,
       leadCallSid: leadCall.sid,
-      from: TWILIO_CALLER_ID,
+      from: fromNumber,
       toLead,
       toAgentClient: `client:${clientIdentity}`,
     });
