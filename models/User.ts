@@ -1,4 +1,3 @@
-// models/User.ts
 import mongoose, { Schema } from "mongoose";
 
 export interface IUser {
@@ -26,11 +25,7 @@ export interface IUser {
     status?: string;
     country?: string;
     carrier?: string;
-    capabilities?: {
-      voice?: boolean;
-      sms?: boolean;
-      mms?: boolean;
-    };
+    capabilities?: { voice?: boolean; sms?: boolean; mms?: boolean };
     purchasedAt?: Date;
     messagingServiceSid?: string;
     friendlyName?: string;
@@ -60,8 +55,6 @@ export interface IUser {
   };
 
   googleTokens?: { accessToken: string; refreshToken?: string; expiryDate?: number };
-
-  // ✅ NEW: explicit calendar token storage
   googleCalendar?: { accessToken: string; refreshToken?: string; expiryDate?: number };
 
   calendarId?: string;
@@ -89,7 +82,6 @@ export interface IUser {
 
   hasAI?: boolean;
   plan?: "Free" | "Pro";
-
   subscriptionStatus?: "active" | "canceled";
 
   aiUsage?: { openAiCost: number; twilioCost: number; totalCost: number };
@@ -100,7 +92,6 @@ export interface IUser {
     emailReminders?: boolean;
     dripAlerts?: boolean;
     bookingConfirmations?: boolean;
-    /** NEW: inbound SMS → email notifications (default true) */
     emailOnInboundSMS?: boolean;
   };
 
@@ -120,6 +111,14 @@ export interface IUser {
   billingMode?: "platform" | "self";
 
   numbersLastSyncedAt?: Date;
+
+  /** ⬇️ NEW: per-user dial progress */
+  dialProgress?: {
+    key: string;          // session key (e.g., hash of lead ids list)
+    lastIndex: number;    // 0-based index
+    total?: number;       // optional: total leads when saved
+    updatedAt: Date;
+  }[];
 }
 
 const SyncedSheetSchema = new Schema(
@@ -134,6 +133,16 @@ const SyncedSheetSchema = new Schema(
     folderName: String,
     lastRowImported: { type: Number, default: 1 },
     lastImportedAt: Date,
+  },
+  { _id: false }
+);
+
+const DialProgressSchema = new Schema(
+  {
+    key: { type: String, index: true },
+    lastIndex: { type: Number, default: 0 },
+    total: { type: Number },
+    updatedAt: { type: Date, default: Date.now },
   },
   { _id: false }
 );
@@ -163,11 +172,7 @@ const UserSchema = new Schema<IUser>({
       status: String,
       country: String,
       carrier: String,
-      capabilities: {
-        voice: { type: Boolean, default: undefined },
-        sms: { type: Boolean, default: undefined },
-        mms: { type: Boolean, default: undefined },
-      },
+      capabilities: { voice: { type: Boolean }, sms: { type: Boolean }, mms: { type: Boolean } },
       purchasedAt: Date,
       messagingServiceSid: String,
       friendlyName: String,
@@ -187,8 +192,6 @@ const UserSchema = new Schema<IUser>({
   },
 
   googleTokens: { accessToken: String, refreshToken: String, expiryDate: Number },
-
-  // ✅ NEW: schema block to persist calendar tokens explicitly
   googleCalendar: { accessToken: String, refreshToken: String, expiryDate: Number },
 
   calendarId: String,
@@ -229,7 +232,7 @@ const UserSchema = new Schema<IUser>({
     emailReminders: { type: Boolean, default: true },
     dripAlerts: { type: Boolean, default: true },
     bookingConfirmations: { type: Boolean, default: true },
-    emailOnInboundSMS: { type: Boolean, default: true }, // ⬅️ NEW
+    emailOnInboundSMS: { type: Boolean, default: true },
   },
 
   country: { type: String },
@@ -244,24 +247,19 @@ const UserSchema = new Schema<IUser>({
     lastSyncedAt: Date,
   },
 
-  // Per-user Twilio + billing mode
-  twilio: {
-    accountSid: String,
-    apiKeySid: String,
-    apiKeySecret: String,
-  },
+  twilio: { accountSid: String, apiKeySid: String, apiKeySecret: String },
   billingMode: { type: String, enum: ["platform", "self"], default: "platform" },
 
   numbersLastSyncedAt: Date,
+
+  dialProgress: { type: [DialProgressSchema], default: [] },
 });
 
-// Existing
 UserSchema.index({ email: 1 }, { name: "user_email_idx" });
 UserSchema.index({ "numbers.phoneNumber": 1 }, { name: "user_numbers_phone_idx" });
-
-// New helpful indexes we query in callbacks/routing
 UserSchema.index({ "numbers.messagingServiceSid": 1 }, { name: "user_numbers_msid_idx", sparse: true });
 UserSchema.index({ "a2p.messagingServiceSid": 1 }, { name: "user_a2p_msid_idx", sparse: true });
+UserSchema.index({ "dialProgress.key": 1 }, { name: "user_dial_progress_key_idx", sparse: true });
 
 const User =
   (mongoose.models.User as mongoose.Model<IUser>) ||
