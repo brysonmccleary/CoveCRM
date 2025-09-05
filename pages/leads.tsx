@@ -1,6 +1,9 @@
-import { useState, useEffect, useMemo } from "react";
+// pages/leads.tsx
+import React, { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/router";
 import Sidebar from "@/components/Sidebar";
+import LeadImportPanel from "@/components/LeadImportPanel";
+import LeadPreviewPanel from "@/components/LeadPreviewPanel";
 
 interface Folder {
   _id: string;
@@ -14,8 +17,134 @@ interface Lead {
 }
 
 type NumberEntry = { id: string; phoneNumber: string; sid: string };
-type ResumeInfo = { lastIndex: number | null; total: number | null };
+type ResumeInfo = { lastIndex: number | null; total: number | null; updatedAt?: string | null };
 
+const SYSTEM_FOLDERS = ["Not Interested", "Booked Appointment", "Sold"];
+
+/** ───────────────────────── Global lead search ───────────────────────── **/
+function LeadSearchInline() {
+  const [q, setQ] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [results, setResults] = useState<
+    { _id: string; displayName: string; phone?: string; email?: string; state?: string; status?: string }[]
+  >([]);
+  const [open, setOpen] = useState(false);
+  const [active, setActive] = useState(-1);
+  const router = useRouter();
+
+  useEffect(() => {
+    const handler = setTimeout(async () => {
+      const term = q.trim();
+      if (term.length < 2) {
+        setResults([]);
+        setOpen(false);
+        setActive(-1);
+        return;
+      }
+      setLoading(true);
+      try {
+        const r = await fetch(`/api/leads/search?q=${encodeURIComponent(term)}`);
+        const data = await r.json();
+        const rows = Array.isArray(data?.results) ? data.results : [];
+        setResults(rows);
+        setOpen(true);
+        setActive(rows.length ? 0 : -1);
+      } catch {
+        setResults([]);
+        setOpen(false);
+      } finally {
+        setLoading(false);
+      }
+    }, 250);
+    return () => clearTimeout(handler);
+  }, [q]);
+
+  const go = (id: string) => {
+    setOpen(false);
+    setResults([]);
+    setActive(-1);
+    router.push(`/dial/${id}`).catch(() => {});
+  };
+
+  return (
+    <div className="mb-3">
+      <div className="relative flex items-center gap-2">
+        <input
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          onKeyDown={(e) => {
+            if (!open || !results.length) return;
+            if (e.key === "ArrowDown") {
+              e.preventDefault();
+              setActive((i) => Math.min(i + 1, results.length - 1));
+            } else if (e.key === "ArrowUp") {
+              e.preventDefault();
+              setActive((i) => Math.max(i - 1, 0));
+            } else if (e.key === "Enter") {
+              e.preventDefault();
+              const item = results[active];
+              if (item) go(item._id);
+            } else if (e.key === "Escape") {
+              setOpen(false);
+              setActive(-1);
+            }
+          }}
+          placeholder="Search leads (name, phone, email)…"
+          className="border p-2 rounded w-full pr-10 text-black"
+        />
+        {q && (
+          <button
+            onClick={() => {
+              setQ("");
+              setResults([]);
+              setOpen(false);
+              setActive(-1);
+            }}
+            className="absolute right-2 text-gray-500 hover:text-gray-700"
+            aria-label="Clear search"
+          >
+            ×
+          </button>
+        )}
+        {loading && <span className="text-sm text-gray-500 ml-2">Searching…</span>}
+      </div>
+
+      {open && (
+        <div className="mt-2 border rounded divide-y max-h-96 overflow-auto bg-white dark:bg-zinc-900">
+          {results.length ? (
+            results.map((r, idx) => (
+              <button
+                key={r._id}
+                className={`w-full text-left p-2 hover:bg-zinc-50 dark:hover:bg-zinc-800 ${
+                  idx === active ? "bg-zinc-50 dark:bg-zinc-800" : ""
+                }`}
+                onMouseEnter={() => setActive(idx)}
+                onClick={() => go(r._id)}
+                title="Open dial session"
+              >
+                <div className="flex items-center justify-between">
+                  <div className="font-medium">
+                    {r.displayName || "(No name)"}{" "}
+                    <span className="text-xs text-gray-500">• {r.status || "New"}</span>
+                  </div>
+                  <div className="text-sm text-gray-600">
+                    {r.phone || r.email || "—"} {r.state ? `• ${r.state}` : ""}
+                  </div>
+                </div>
+              </button>
+            ))
+          ) : (
+            <div className="p-2 text-sm text-gray-500">
+              {q.trim().length >= 2 && !loading ? "No results." : "Type to search…"}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** ───────────────────────────── Page ───────────────────────────── **/
 export default function LeadsPage() {
   const router = useRouter();
   const selectedFolderId = useMemo(
@@ -23,6 +152,7 @@ export default function LeadsPage() {
     [router.query.folderId]
   );
 
+  // folders + leads + loading
   const [folders, setFolders] = useState<Folder[]>([]);
   const [leads, setLeads] = useState<Lead[] | null>(null);
   const [loading, setLoading] = useState(true);
@@ -30,13 +160,19 @@ export default function LeadsPage() {
   const [error, setError] = useState<string | null>(null);
   const [leadError, setLeadError] = useState<string | null>(null);
 
-  // Additions for dialing from this page
+  // dial controls
   const [numbers, setNumbers] = useState<NumberEntry[]>([]);
   const [selectedNumber, setSelectedNumber] = useState<string>("");
   const [selectedLeadIds, setSelectedLeadIds] = useState<string[]>([]);
   const [selectAll, setSelectAll] = useState(false);
+
+  // server resume pointer
   const [resumeInfo, setResumeInfo] = useState<ResumeInfo | null>(null);
 
+  // preview panel
+  const [previewLead, setPreviewLead] = useState<any | null>(null);
+
+  /** fetch folders */
   useEffect(() => {
     const fetchFolders = async () => {
       try {
@@ -59,14 +195,13 @@ export default function LeadsPage() {
     fetchFolders();
   }, []);
 
-  // numbers list for “call from”
+  /** fetch numbers to call from */
   useEffect(() => {
     const fetchNumbers = async () => {
       try {
         const res = await fetch("/api/getNumbers");
         const data = await res.json();
         setNumbers(data.numbers || []);
-        // pick last used number if available
         const saved = localStorage.getItem("selectedDialNumber");
         if (saved) setSelectedNumber(saved);
       } catch (error) {
@@ -77,7 +212,7 @@ export default function LeadsPage() {
     fetchNumbers();
   }, []);
 
-  // If a folderId is present in the query, load its leads and render on this page.
+  /** load leads for folder + server resume pointer */
   useEffect(() => {
     const loadLeads = async () => {
       if (!selectedFolderId) {
@@ -97,7 +232,7 @@ export default function LeadsPage() {
         const rows: Lead[] = Array.isArray(j?.leads) ? j.leads : [];
         setLeads(rows);
 
-        // restore any selection for this folder (your prior pattern)
+        // restore per-folder selection
         try {
           const saved = localStorage.getItem(`selectedLeads_${selectedFolderId}`);
           setSelectedLeadIds(saved ? (JSON.parse(saved) as string[]) : []);
@@ -114,15 +249,14 @@ export default function LeadsPage() {
         setLoadingLeads(false);
       }
 
-      // Fetch server-backed resume pointer for this folder
+      // server pointer
       try {
         const key = `folder:${selectedFolderId}`;
         const r2 = await fetch(`/api/dial/progress?key=${encodeURIComponent(key)}`);
-        if (!r2.ok) {
-          setResumeInfo(null);
-        } else {
+        if (!r2.ok) setResumeInfo(null);
+        else {
           const j2 = await r2.json();
-          setResumeInfo({ lastIndex: j2?.lastIndex ?? null, total: j2?.total ?? null });
+          setResumeInfo({ lastIndex: j2?.lastIndex ?? null, total: j2?.total ?? null, updatedAt: j2?.updatedAt ?? null });
         }
       } catch {
         setResumeInfo(null);
@@ -131,7 +265,7 @@ export default function LeadsPage() {
     loadLeads();
   }, [selectedFolderId]);
 
-  // persist selected ids per-folder
+  /** persist selected ids per-folder */
   useEffect(() => {
     if (selectedFolderId) {
       try {
@@ -140,18 +274,17 @@ export default function LeadsPage() {
     }
   }, [selectedLeadIds, selectedFolderId]);
 
+  /** nav helpers */
   const handleFolderClick = (folderId: string) => {
     router.push({ pathname: "/leads", query: { folderId } }).catch(() => {});
   };
-
   const clearSelection = () => {
     router.push("/leads").catch(() => {});
   };
-
   const selectedFolderName =
     (selectedFolderId && folders.find((f) => f._id === selectedFolderId)?.name) || "";
 
-  // helpers for progress keys (keep your original localStorage behavior)
+  /** progress keys */
   const buildLocalProgressKey = () => {
     const folder = selectedFolderId || "no-folder";
     const ids = selectedLeadIds.join(",");
@@ -162,7 +295,7 @@ export default function LeadsPage() {
     return `folder:${folder}`;
   };
 
-  // selection toggles
+  /** selection toggles */
   const toggleLeadSelection = (id: string) => {
     if (selectedLeadIds.includes(id)) {
       setSelectedLeadIds(selectedLeadIds.filter((x) => x !== id));
@@ -180,7 +313,7 @@ export default function LeadsPage() {
     setSelectAll(!selectAll);
   };
 
-  // start dial session (same flow you had in LeadsPanel)
+  /** start dial session (local resume prompt + pass server key) */
   const startDialSession = async () => {
     if (!leads || leads.length === 0) return;
     if (selectedLeadIds.length === 0) {
@@ -226,7 +359,7 @@ export default function LeadsPage() {
     router.push(`/dial-session?${params.toString()}`);
   };
 
-  // Resume banner actions
+  /** Resume banner actions (server-backed) */
   const handleResumeBannerResume = async () => {
     if (!leads || leads.length === 0) return;
     const ids = selectedLeadIds.length ? selectedLeadIds : leads.map((l) => l._id);
@@ -251,14 +384,18 @@ export default function LeadsPage() {
     if (!selectedNumber) return alert("Please select a number to call from before starting.");
     localStorage.setItem("selectedDialNumber", selectedNumber);
 
+    // Your /api/dial/progress supports GET + POST only; "reset" with POST to -1
     const serverKey = buildServerProgressKey();
     try {
       await fetch("/api/dial/progress", {
-        method: "DELETE",
+        method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ key: serverKey }),
+        body: JSON.stringify({ key: serverKey, lastIndex: -1, total: leads.length }),
       });
-    } catch {}
+      setResumeInfo(null);
+    } catch {
+      // ignore reset errors; proceed local fresh
+    }
 
     const params = new URLSearchParams({
       leads: ids.join(","),
@@ -270,10 +407,103 @@ export default function LeadsPage() {
     router.push(`/dial-session?${params.toString()}`);
   };
 
+  /** delete folder (unchanged behavior) */
+  const handleDeleteFolder = async (folderId: string) => {
+    const confirmed = confirm("Are you sure you want to delete this folder? This cannot be undone.");
+    if (!confirmed) return;
+
+    try {
+      const res = await fetch("/api/delete-folder", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ folderId }),
+      });
+
+      const data = await res.json();
+      if (data.success) {
+        setFolders(folders.filter((f) => f._id !== folderId));
+        if (selectedFolderId === folderId) {
+          clearSelection();
+        }
+      } else {
+        alert(data.message || "Failed to delete folder.");
+      }
+    } catch (error) {
+      console.error("Error deleting folder:", error);
+      alert("An error occurred while deleting the folder.");
+    }
+  };
+
+  /** OAuth start */
+  const handleConnectGoogleSheet = () => {
+    window.location.href = "/api/connect/google-sheets";
+  };
+
+  /** Move lead to disposition folder (same as your component) */
+  const handleDisposition = async (leadId: string, disposition: string) => {
+    if (disposition === "No Answer") return;
+
+    try {
+      const res = await fetch("/api/disposition-lead", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ leadId, newFolderName: disposition }),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data?.success) {
+        console.error("Disposition failed:", data?.message || res.statusText);
+        return;
+      }
+
+      setLeads((prev) => (Array.isArray(prev) ? prev.filter((l) => l._id !== leadId) : prev));
+
+      // refresh folder counts + reload leads in current folder
+      await Promise.all([
+        fetch("/api/get-folders")
+          .then((r) => r.json())
+          .then((j) => setFolders(Array.isArray(j?.folders) ? j.folders : []))
+          .catch(() => {}),
+        selectedFolderId
+          ? fetch(`/api/get-leads-by-folder?folderId=${encodeURIComponent(selectedFolderId)}`)
+              .then((r) => r.json())
+              .then((j) => setLeads(Array.isArray(j?.leads) ? j.leads : []))
+              .catch(() => {})
+          : Promise.resolve(),
+      ]);
+
+      setPreviewLead(null);
+    } catch (err) {
+      console.error("Error updating disposition:", err);
+    }
+  };
+
+  /** render */
+  const hasResume =
+    !!selectedFolderId &&
+    !!leads &&
+    leads.length > 0 &&
+    !!resumeInfo &&
+    resumeInfo.lastIndex != null &&
+    resumeInfo.lastIndex >= 0;
+
   return (
     <div className="flex bg-[#0f172a] text-white min-h-screen">
       <Sidebar />
       <div className="flex-1 p-6">
+        {/* Top actions */}
+        <div className="flex flex-wrap gap-2 mb-4">
+          <button
+            onClick={handleConnectGoogleSheet}
+            className="bg-green-600 text-white px-4 py-2 rounded hover:opacity-90 cursor-pointer"
+          >
+            Connect Google Sheet
+          </button>
+        </div>
+
+        {/* Global search */}
+        <LeadSearchInline />
+
         {!selectedFolderId ? (
           <>
             <h2 className="text-2xl font-bold mb-4">Lead Folders</h2>
@@ -286,17 +516,38 @@ export default function LeadsPage() {
             ) : (
               <div className="space-y-2">
                 {folders.map((folder) => (
-                  <button
-                    key={folder._id}
-                    onClick={() => handleFolderClick(folder._id)}
-                    className="w-full text-left border p-3 rounded cursor-pointer hover:bg-gray-700"
-                    title={`Open ${folder.name}`}
-                  >
-                    {folder.name} — {folder.leadCount ?? 0} Leads
-                  </button>
+                  <div key={folder._id} className="flex items-center justify-between">
+                    <button
+                      onClick={() => handleFolderClick(folder._id)}
+                      className="w-full text-left border p-3 rounded cursor-pointer hover:bg-gray-700"
+                      title={`Open ${folder.name}`}
+                    >
+                      {folder.name} — {folder.leadCount ?? 0} Leads
+                    </button>
+                    {!SYSTEM_FOLDERS.includes(folder.name) && (
+                      <button
+                        onClick={() => handleDeleteFolder(folder._id)}
+                        className="text-red-600 hover:text-red-800 px-2 cursor-pointer"
+                        title="Delete Folder"
+                      >
+                        🗑️
+                      </button>
+                    )}
+                  </div>
                 ))}
               </div>
             )}
+
+            {/* Import panel lives here when no folder is opened */}
+            <div className="mt-6">
+              <LeadImportPanel onImportSuccess={async () => {
+                try {
+                  const r = await fetch("/api/get-folders");
+                  const j = await r.json();
+                  setFolders(Array.isArray(j?.folders) ? j.folders : []);
+                } catch {}
+              }} />
+            </div>
           </>
         ) : (
           <>
@@ -314,12 +565,13 @@ export default function LeadsPage() {
             </div>
 
             {/* Resume / Start Fresh (server-backed) */}
-            {resumeInfo?.lastIndex !== null && (
+            {hasResume && (
               <div className="mb-4 p-3 rounded bg-amber-50 text-amber-900 border border-amber-200">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div>
-                    You last called <strong>{(resumeInfo.lastIndex ?? -1) + 1}</strong> of{" "}
-                    <strong>{resumeInfo.total ?? (leads?.length ?? 0)}</strong> in this list.
+                    You last called{" "}
+                    <strong>{(resumeInfo!.lastIndex ?? -1) + 1}</strong> of{" "}
+                    <strong>{resumeInfo!.total ?? (leads?.length ?? 0)}</strong> in this list.
                   </div>
                   <div className="flex gap-2">
                     <button
@@ -382,36 +634,97 @@ export default function LeadsPage() {
             ) : !leads || leads.length === 0 ? (
               <p className="text-gray-400">No leads in this folder.</p>
             ) : (
-              <ul className="space-y-2">
-                {leads.map((lead, idx) => {
-                  const checked = selectedLeadIds.includes(lead._id);
-                  return (
-                    <li
-                      key={lead._id}
-                      className={`p-3 border border-gray-600 rounded hover:bg-gray-700 flex items-start gap-3 ${
-                        checked ? "bg-gray-700" : ""
-                      }`}
-                    >
-                      <input
-                        type="checkbox"
-                        className="mt-1 cursor-pointer"
-                        checked={checked}
-                        onChange={() => toggleLeadSelection(lead._id)}
-                      />
-                      <div className="flex-1">
-                        <div className="font-medium">
-                          {lead.name || lead["First Name"] || lead["firstName"] || "(no name)"}{" "}
-                          <span className="text-xs text-gray-400">• #{idx + 1}</span>
-                        </div>
-                        <div className="text-sm text-gray-300">
-                          {(lead.phone || lead["Phone"] || lead["phone"] || "")}
-                          {lead.email ? ` • ${lead.email}` : ""}
-                        </div>
+              <div className="border p-4 rounded mt-2 overflow-auto bg-gray-100 dark:bg-gray-800">
+                <table className="min-w-full text-base">
+                  <thead>
+                    <tr>
+                      <th></th>
+                      <th>#</th>
+                      <th>First Name</th>
+                      <th>Last Name</th>
+                      <th>Phone</th>
+                      <th>Email</th>
+                      <th>State</th>
+                      <th>Age</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {leads.map((lead, index) => {
+                      const checked = selectedLeadIds.includes(lead._id);
+                      return (
+                        <tr key={lead._id} className={`border-t ${checked ? "bg-gray-700 text-white" : ""}`}>
+                          <td className="px-2">
+                            <input
+                              type="checkbox"
+                              className="cursor-pointer"
+                              checked={checked}
+                              onChange={() => toggleLeadSelection(lead._id)}
+                            />
+                          </td>
+                          <td className="px-2">{index + 1}</td>
+                          <td className="px-2">
+                            <button
+                              onClick={() => setPreviewLead(lead)}
+                              className="text-blue-500 underline cursor-pointer"
+                            >
+                              {lead.firstName || lead["First Name"] || "-"}
+                            </button>
+                          </td>
+                          <td className="px-2">{lead.lastName || lead["Last Name"] || "-"}</td>
+                          <td className="px-2">{lead.phone || lead["Phone"] || "-"}</td>
+                          <td className="px-2">{lead.email || lead["Email"] || "-"}</td>
+                          <td className="px-2">{lead.state || lead["State"] || "-"}</td>
+                          <td className="px-2">{lead.age ?? lead["Age"] ?? "-"}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {/* Preview panel with AI bits (kept) */}
+            {previewLead && (
+              <div className="bg-white text-black dark:bg-gray-900 dark:text-white rounded shadow p-4 mt-4">
+                <LeadPreviewPanel
+                  lead={previewLead}
+                  onClose={() => setPreviewLead(null)}
+                  onSaveNotes={(notes: string) => {
+                    if (!leads) return;
+                    const updatedLeads = leads.map((l) =>
+                      l._id === previewLead._id ? { ...l, Notes: notes } : l
+                    );
+                    setLeads(updatedLeads);
+                    setPreviewLead({ ...previewLead, Notes: notes });
+                  }}
+                  onDispositionChange={(disposition) => handleDisposition(previewLead._id, disposition)}
+                />
+
+                {previewLead.hasAIAccess && Array.isArray(previewLead.callTranscripts) && (
+                  <div className="mt-6 space-y-6">
+                    <div>
+                      <h2 className="text-lg font-semibold mb-2">🧠 AI Call Summary</h2>
+                      <div className="p-3 bg-yellow-50 border rounded shadow text-sm text-gray-800">
+                        {previewLead.aiSummary || "No AI summary generated yet."}
                       </div>
-                    </li>
-                  );
-                })}
-              </ul>
+                    </div>
+
+                    <div>
+                      <h2 className="text-lg font-semibold mb-2">📞 Full Call Transcript</h2>
+                      <div className="space-y-4 max-h-64 overflow-y-auto border rounded p-4 bg-gray-50">
+                        {previewLead.callTranscripts.map((entry: any, index: number) => (
+                          <div key={index} className="border-b pb-2">
+                            <p className="text-sm text-gray-700 whitespace-pre-line">{entry.text}</p>
+                            <p className="text-xs text-gray-500 mt-1">
+                              {new Date(entry.createdAt).toLocaleString()}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
             )}
           </>
         )}
