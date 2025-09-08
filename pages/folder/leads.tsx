@@ -304,32 +304,7 @@ export default function LeadsPage() {
               </div>
             </div>
 
-            {/* Server-backed Resume banner */}
-            {hasResume && (
-              <div className="mb-3 p-3 rounded bg-amber-50 text-amber-900 border border-amber-200">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    You last called{" "}
-                    <strong>{(resumeInfo!.lastIndex ?? -1) + 1}</strong> of{" "}
-                    <strong>{resumeInfo!.total ?? filteredLeads.length}</strong> in this list.
-                  </div>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={quickResume}
-                      className="px-3 py-1 rounded bg-blue-600 text-white hover:bg-blue-700"
-                    >
-                      Resume
-                    </button>
-                    <button
-                      onClick={resetServerPointerAndStart}
-                      className="px-3 py-1 rounded bg-gray-700 text-white hover:bg-gray-800"
-                    >
-                      Start Fresh
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
+            {/* (Banner removed by request) */}
 
             {/* Search */}
             <input
@@ -466,7 +441,6 @@ export default function LeadsPage() {
  * Next.js will route /leads to this file (`pages/leads/index.tsx`) instead of `pages/leads.tsx`.
  * That’s why the blue Resume button didn’t appear earlier. This file now includes:
  * - Blue “Resume” button next to “Start Dial Session”
- * - Server-backed banner (Resume / Start Fresh)
  * - Local resume prompt preserved on Start
  * - Number selector persisted via localStorage (`selectedDialNumber`)
  */

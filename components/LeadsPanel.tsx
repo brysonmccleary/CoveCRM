@@ -527,31 +527,7 @@ export default function LeadsPanel() {
 
             {expandedFolder === folder._id && leads.length > 0 && (
               <div className="border p-4 rounded mt-2 overflow-auto bg-gray-100 dark:bg-gray-800">
-                {/* Close-style Resume / Start Fresh banner (server-backed) */}
-                {resumeInfo && resumeInfo.lastIndex != null && resumeInfo.lastIndex >= 0 && (
-                  <div className="mb-3 p-3 rounded bg-amber-50 text-amber-900 border border-amber-200">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div>
-                        You last called <strong>{resumeInfo.lastIndex + 1}</strong>{" "}
-                        of <strong>{resumeInfo.total ?? leads.length}</strong> in this list.
-                      </div>
-                      <div className="flex gap-2">
-                        <button
-                          onClick={handleResume}
-                          className="px-3 py-1 rounded bg-amber-600 text-white hover:bg-amber-700"
-                        >
-                          Resume
-                        </button>
-                        <button
-                          onClick={handleStartFreshRibbon}
-                          className="px-3 py-1 rounded bg-gray-700 text-white hover:bg-gray-800"
-                        >
-                          Start Fresh
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                )}
+                {/* (Banner removed by request) */}
 
                 <div className="flex flex-col space-y-2 mb-2">
                   <label className="font-semibold">Select Number to Call From:</label>
