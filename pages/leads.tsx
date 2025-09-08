@@ -172,6 +172,22 @@ export default function LeadsPage() {
   // preview panel
   const [previewLead, setPreviewLead] = useState<any | null>(null);
 
+  /** Keep user on last-opened folder view (when landing on /leads without folderId) */
+  useEffect(() => {
+    if (selectedFolderId) {
+      try {
+        localStorage.setItem("lastOpenedFolderId", selectedFolderId);
+      } catch {}
+      return;
+    }
+    try {
+      const last = localStorage.getItem("lastOpenedFolderId");
+      if (last) {
+        router.replace({ pathname: "/leads", query: { folderId: last } }).catch(() => {});
+      }
+    } catch {}
+  }, [selectedFolderId, router]);
+
   /** fetch folders */
   useEffect(() => {
     const fetchFolders = async () => {
@@ -280,6 +296,9 @@ export default function LeadsPage() {
 
   /** nav helpers */
   const handleFolderClick = (folderId: string) => {
+    try {
+      localStorage.setItem("lastOpenedFolderId", folderId);
+    } catch {}
     router.push({ pathname: "/leads", query: { folderId } }).catch(() => {});
   };
   const clearSelection = () => {
@@ -317,7 +336,7 @@ export default function LeadsPage() {
     setSelectAll(!selectAll);
   };
 
-  /** start dial session (local resume prompt + pass server key) */
+  /** Start (green): ALWAYS fresh — clear local+server progress and start at 0 */
   const startDialSession = async () => {
     if (!leads || leads.length === 0) return;
     if (selectedLeadIds.length === 0) {
@@ -337,84 +356,44 @@ export default function LeadsPage() {
     }
 
     const progressKey = buildLocalProgressKey();
-    const savedRaw = typeof window !== "undefined" ? localStorage.getItem(progressKey) : null;
-    const saved = savedRaw ? (JSON.parse(savedRaw) as { index: number }) : null;
-    const maxIndex = selectedLeadIds.length - 1;
+    try {
+      localStorage.removeItem(progressKey);
+    } catch {}
 
-    let startIndex = 0;
-    if (saved && typeof saved.index === "number" && saved.index >= 0 && saved.index <= maxIndex) {
-      const resume = window.confirm(
-        `Resume where you left off?\n\nSaved position: ${saved.index + 1} of ${selectedLeadIds.length}.\n\nOK = Resume • Cancel = Start Fresh`
-      );
-      startIndex = resume ? saved.index : 0;
-      if (!resume) localStorage.removeItem(progressKey);
+    const serverKey = buildServerProgressKey();
+    try {
+      await fetch("/api/dial/progress", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ key: serverKey, lastIndex: -1, total: selectedLeadIds.length }),
+      });
+    } catch {
+      /* ignore reset errors; still start fresh */
     }
 
     localStorage.setItem("selectedDialNumber", selectedNumber);
 
-    const serverKey = buildServerProgressKey();
     const params = new URLSearchParams({
       leads: selectedLeadIds.join(","),
       fromNumber: selectedNumber,
-      startIndex: String(startIndex),
+      startIndex: "0",
       progressKey,
       serverProgressKey: serverKey,
     });
     router.push(`/dial-session?${params.toString()}`);
   };
 
-  /** Resume banner actions (server-backed) */
-  const handleResumeBannerResume = async () => {
-    if (!leads || leads.length === 0) return;
-    const ids = selectedLeadIds.length ? selectedLeadIds : leads.map((l) => l._id);
-    if (!selectedNumber) return alert("Please select a number to call from before resuming.");
-    localStorage.setItem("selectedDialNumber", selectedNumber);
-
-    const serverKey = buildServerProgressKey();
-    const startAt = Math.max(0, (resumeInfo?.lastIndex ?? -1) + 1);
-    const params = new URLSearchParams({
-      leads: ids.join(","),
-      fromNumber: selectedNumber,
-      startIndex: String(startAt),
-      progressKey: buildLocalProgressKey(),
-      serverProgressKey: serverKey,
-    });
-    router.push(`/dial-session?${params.toString()}`);
-  };
-
-  const handleResumeBannerFresh = async () => {
-    if (!leads || leads.length === 0) return;
-    const ids = selectedLeadIds.length ? selectedLeadIds : leads.map((l) => l._id);
-    if (!selectedNumber) return alert("Please select a number to call from before starting.");
-    localStorage.setItem("selectedDialNumber", selectedNumber);
-
-    // Your /api/dial/progress supports GET + POST only; "reset" with POST to -1
-    const serverKey = buildServerProgressKey();
-    try {
-      await fetch("/api/dial/progress", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ key: serverKey, lastIndex: -1, total: leads.length }),
-      });
-      setResumeInfo(null);
-    } catch {
-      // ignore reset errors; proceed local fresh
-    }
-
-    const params = new URLSearchParams({
-      leads: ids.join(","),
-      fromNumber: selectedNumber,
-      startIndex: "0",
-      progressKey: buildLocalProgressKey(),
-      serverProgressKey: serverKey,
-    });
-    router.push(`/dial-session?${params.toString()}`);
-  };
-
-  /** Quick Resume button beside Start Dial Session (server-backed) */
+  /** Quick Resume (blue): pick up from server lastIndex + 1 */
   const handleResumeQuickButton = async () => {
-    const hasLeads = !!leads && leads.length > 0;
-    if (!hasResume || !hasLeads) return;
+    const hasResumeNow =
+      !!selectedFolderId &&
+      !!leads &&
+      leads.length > 0 &&
+      !!resumeInfo &&
+      resumeInfo.lastIndex != null &&
+      resumeInfo.lastIndex >= 0;
+
+    if (!hasResumeNow) return;
     if (!selectedNumber) {
       alert("Please select a number to call from before resuming.");
       return;
@@ -422,7 +401,7 @@ export default function LeadsPage() {
     localStorage.setItem("selectedDialNumber", selectedNumber);
 
     const serverKey = buildServerProgressKey();
-    const ids = (selectedLeadIds.length ? selectedLeadIds : (leads as Lead[]).map((l) => l._id));
+    const ids = selectedLeadIds.length ? selectedLeadIds : (leads as Lead[]).map((l) => l._id);
     const startAt = Math.max(0, (resumeInfo?.lastIndex ?? -1) + 1);
 
     const params = new URLSearchParams({
@@ -516,8 +495,7 @@ export default function LeadsPage() {
     resumeInfo.lastIndex >= 0;
 
   const canStart = selectedLeadIds.length > 0;
-  const canResume =
-    hasResume && !!selectedNumber && !!leads && leads.length > 0;
+  const canResume = hasResume && !!selectedNumber && !!leads && leads.length > 0;
 
   return (
     <div className="flex bg-[#0f172a] text-white min-h-screen">
@@ -598,32 +576,7 @@ export default function LeadsPage() {
               </button>
             </div>
 
-            {/* Resume / Start Fresh (server-backed banner) */}
-            {hasResume && (
-              <div className="mb-4 p-3 rounded bg-amber-50 text-amber-900 border border-amber-200">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    You last called{" "}
-                    <strong>{(resumeInfo!.lastIndex ?? -1) + 1}</strong> of{" "}
-                    <strong>{resumeInfo!.total ?? (leads?.length ?? 0)}</strong> in this list.
-                  </div>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={handleResumeBannerResume}
-                      className="px-3 py-1 rounded bg-amber-600 text-white hover:bg-amber-700"
-                    >
-                      Resume
-                    </button>
-                    <button
-                      onClick={handleResumeBannerFresh}
-                      className="px-3 py-1 rounded bg-gray-700 text-white hover:bg-gray-800"
-                    >
-                      Start Fresh
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
+            {/* Removed the amber resume banner on purpose */}
 
             {/* Dial controls */}
             <div className="flex flex-col gap-3 mb-4">
@@ -662,7 +615,7 @@ export default function LeadsPage() {
                     Start Dial Session
                   </button>
 
-                  {/* New blue Resume button (server-backed) */}
+                  {/* Blue Resume button (server-backed) */}
                   <button
                     onClick={handleResumeQuickButton}
                     className={`${
