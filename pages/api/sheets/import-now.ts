@@ -5,13 +5,24 @@ import { authOptions } from "../auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import Lead from "@/models/Lead";
+import Folder from "@/models/Folder";
 import { google } from "googleapis";
+import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
 
+function digits(s: any) {
+  return String(s ?? "").replace(/\D+/g, "");
+}
 function last10(s?: string) {
-  const d = String(s || "").replace(/\D+/g, "");
+  const d = digits(s);
   return d.slice(-10) || "";
 }
-
+function lcEmail(s: any) {
+  const v = String(s ?? "").trim().toLowerCase();
+  return v || "";
+}
+function escapeA1Title(title: string) {
+  return title.replace(/'/g, "''");
+}
 function headerMap(headers: string[], row: any[]) {
   const obj: Record<string, any> = {};
   headers.forEach((h, i) => (obj[h] = row[i]));
@@ -23,17 +34,36 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const session = await getServerSession(req, res, authOptions);
   if (!session?.user?.email) return res.status(401).json({ error: "Unauthorized" });
+  const userEmail = session.user.email.toLowerCase();
 
-  const { sheetId, tabName, folderName } = req.body || {};
+  const { sheetId, tabName, folderName } = (req.body || {}) as {
+    sheetId?: string;
+    tabName?: string;
+    folderName?: string;
+  };
   if (!sheetId || !folderName) {
     return res.status(400).json({ error: "Missing sheetId or folderName" });
   }
+  if (isSystemFolder(folderName)) {
+    return res.status(400).json({ error: "Cannot import into system folders" });
+  }
 
   await dbConnect();
-  const user = await User.findOne({ email: session.user.email });
+  const user = await User.findOne({ email: userEmail });
   if (!user) return res.status(404).json({ error: "User not found" });
 
-  const gs = (user as any).googleSheets || {};
+  // Ensure/find destination Folder (by name) and block system folders
+  const folderDoc = await Folder.findOneAndUpdate(
+    { userEmail, name: folderName.trim() },
+    { $setOnInsert: { userEmail, name: folderName.trim(), source: "google-sheets" } },
+    { upsert: true, new: true }
+  );
+  if (!folderDoc) return res.status(400).json({ error: "Folder not found/created" });
+  if (isSystemFolder(folderDoc.name)) {
+    return res.status(400).json({ error: "Cannot import into system folders" });
+  }
+
+  const gs = (user as any).googleSheets || (user as any).googleTokens || {};
   if (!gs?.refreshToken) {
     return res.status(400).json({ error: "Google Sheets not connected" });
   }
@@ -44,7 +74,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     process.env.GOOGLE_REDIRECT_URI_SHEETS ||
       `${process.env.NEXTAUTH_URL}/api/connect/google-sheets/callback`
   );
-
   oauth2Client.setCredentials({
     access_token: gs.accessToken || undefined,
     refresh_token: gs.refreshToken || undefined,
@@ -53,28 +82,39 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const sheets = google.sheets({ version: "v4", auth: oauth2Client });
 
-  // Resolve the tab (sheet) name
+  // Resolve sheet/tab title
   let resolvedTab = tabName;
   if (!resolvedTab) {
-    const meta = await sheets.spreadsheets.get({ spreadsheetId: sheetId });
+    const meta = await sheets.spreadsheets.get({ spreadsheetId: sheetId, fields: "sheets(properties/title)" });
     resolvedTab = meta.data.sheets?.[0]?.properties?.title || "Sheet1";
   }
+  const safeTab = `'${escapeA1Title(resolvedTab!)}'!A:Z`;
 
   // Read rows
   const valuesResp = await sheets.spreadsheets.values.get({
     spreadsheetId: sheetId,
-    range: `${resolvedTab}!A:Z`,
+    range: safeTab,
     valueRenderOption: "UNFORMATTED_VALUE",
     dateTimeRenderOption: "FORMATTED_STRING",
   });
 
   const rows = valuesResp.data.values || [];
   if (rows.length < 2) {
-    return res.status(200).json({ imported: 0, message: "No data rows" });
+    return res.status(200).json({
+      inserted: 0,
+      updated: 0,
+      imported: 0,
+      message: "No data rows",
+      tab: resolvedTab,
+      headers: rows[0] || [],
+      folderId: String(folderDoc._id),
+      folderName: String(folderDoc.name),
+    });
   }
 
-  const headers = rows[0].map((h: any) => String(h).trim());
-  let imported = 0;
+  const headers = rows[0].map((h: any) => String(h ?? "").trim());
+  let inserted = 0;
+  let updated = 0;
 
   for (let i = 1; i < rows.length; i++) {
     const r = rows[i];
@@ -86,55 +126,81 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       obj["First Name"] || obj["firstName"] || obj["first_name"] || "";
     const lastName =
       obj["Last Name"] || obj["lastName"] || obj["last_name"] || "";
-    const email = obj["Email"] || obj["email"] || "";
-    const phone = obj["Phone"] || obj["phone"] || obj["Phone Number"] || "";
+    const emailRaw = obj["Email"] || obj["email"] || "";
+    const phoneRaw = obj["Phone"] || obj["phone"] || obj["Phone Number"] || "";
     const state = obj["State"] || obj["state"] || "";
     const notes = obj["Notes"] || obj["notes"] || "";
     const age = obj["Age"] || obj["age"] || "";
 
-    const phoneKey = last10(String(phone));
+    const phoneKey = last10(String(phoneRaw));
+    const emailLower = lcEmail(emailRaw);
 
-    // Idempotent upsert by (userEmail + phoneLast10) or (userEmail + email)
-    const query: any = { userEmail: session.user.email };
-    if (phoneKey) query.phoneLast10 = phoneKey;
-    else if (email) query.Email = email;
-    else continue; // discard if no identifier
+    // Require at least one identifier
+    if (!phoneKey && !emailLower) continue;
 
-    const update: any = {
-      $setOnInsert: { createdAt: new Date() },
-      $set: {
-        userEmail: session.user.email,
-        folderName,
-        "First Name": firstName,
-        "Last Name": lastName,
-        Email: email,
-        Phone: String(phone || ""),
-        State: state,
-        Notes: notes,
-        Age: age ? Number(age) : undefined,
-        updatedAt: new Date(),
-      },
+    // Build de-dupe filter across ALL mirrors
+    const or: any[] = [];
+    if (phoneKey) or.push({ phoneLast10: phoneKey }, { normalizedPhone: phoneKey });
+    if (emailLower) or.push({ Email: emailLower }, { email: emailLower });
+    const filter = { userEmail, ...(or.length ? { $or: or } : {}) };
+
+    const setOnInsert: any = { createdAt: new Date() };
+    const set: any = {
+      userEmail,
+      ownerEmail: userEmail,
+      folderId: folderDoc._id,
+      folder_name: String(folderDoc.name),
+      "Folder Name": String(folderDoc.name),
+      status: "New",
+      "First Name": firstName,
+      "Last Name": lastName,
+      Email: emailLower || undefined,
+      email: emailLower || undefined,
+      Phone: String(phoneRaw || ""),
+      phoneLast10: phoneKey || undefined,
+      normalizedPhone: phoneKey || undefined,
+      State: state || undefined,
+      Notes: notes || undefined,
+      Age: age !== "" && age !== null && age !== undefined ? Number(age) : undefined,
+      updatedAt: new Date(),
+      source: "google-sheets",
+      sourceSpreadsheetId: sheetId,
+      sourceTabTitle: resolvedTab,
     };
 
-    const resDoc = await Lead.findOneAndUpdate(query, update, {
-      upsert: true,
-      new: true,
-      setDefaultsOnInsert: true,
-    });
+    const result = await (Lead as any).updateOne(filter, { $set: set, $setOnInsert: setOnInsert }, { upsert: true });
+    const upc = result?.upsertedCount || (result?.upsertedId ? 1 : 0) || 0;
+    const mod = result?.modifiedCount || 0;
+    const match = result?.matchedCount || 0;
 
-    if (resDoc) imported += 1;
+    if (upc > 0) inserted += upc;
+    else if (mod > 0 || match > 0) updated += 1;
   }
 
-  // Mark last sync for this sheet
-  const arr = Array.isArray((user as any).googleSheets?.sheets)
-    ? (user as any).googleSheets.sheets
-    : [];
-  const idx = arr.findIndex((s: any) => s.sheetId === sheetId);
-  if (idx >= 0) {
-    arr[idx].lastSyncedAt = new Date();
-    (user as any).googleSheets.sheets = arr;
-    await user.save();
+  // Optional: record last sync time (best effort)
+  try {
+    const arr = Array.isArray((user as any).googleSheets?.sheets)
+      ? (user as any).googleSheets.sheets
+      : [];
+    const idx = arr.findIndex((s: any) => s.sheetId === sheetId);
+    if (idx >= 0) {
+      arr[idx].lastSyncedAt = new Date();
+      (user as any).googleSheets.sheets = arr;
+      await user.save();
+    }
+  } catch {
+    // non-fatal
   }
 
-  res.status(200).json({ imported, tab: resolvedTab, headers });
+  const imported = inserted + updated;
+
+  return res.status(200).json({
+    inserted,
+    updated,
+    imported,
+    tab: resolvedTab,
+    headers,
+    folderId: String(folderDoc._id),
+    folderName: String(folderDoc.name),
+  });
 }

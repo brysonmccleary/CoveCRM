@@ -1,4 +1,3 @@
-// pages/api/twilio/voice/answer.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import twilio from "twilio";
 import dbConnect from "@/lib/mongooseConnect";
@@ -101,6 +100,7 @@ export default async function handler(
             machineDetection: "DetectMessageEnd",
             amdStatusCallback: AMD_CB_URL,
             amdStatusCallbackMethod: "POST",
+            asyncAmd: true,
           } as any,
           leadNumber,
         );

@@ -4,7 +4,6 @@ import Sidebar from "@/components/Sidebar";
 import toast from "react-hot-toast";
 import dynamic from "next/dynamic";
 
-// Strongly type the dynamic import’s props.
 const CallPanelClose = dynamic<{
   leadId: string;
   userHasAI: boolean;
@@ -20,11 +19,14 @@ type Lead = {
   _id?: string;
   userEmail?: string;
   name?: string;
+  firstName?: string;
+  lastName?: string;
   ["First Name"]?: string;
   ["Last Name"]?: string;
   Phone?: string;
   phone?: string;
   Email?: string;
+  email?: string;
   Notes?: string;
   status?: string;
   folderId?: string | null;
@@ -51,7 +53,6 @@ type CallRow = {
 
 type HistoryEvent =
   | { type: "sms"; id: string; dir: "inbound" | "outbound" | "ai"; text: string; date: string; sid?: string; status?: string }
-  // We *ignore* "call" in the center panel now (calls live in right panel)
   | { type: "call"; id: string; date: string; durationSec?: number; status?: string; recordingUrl?: string; summary?: string; sentiment?: string }
   | { type: "booking"; id: string; date: string; title?: string; startsAt?: string; endsAt?: string; calendarId?: string }
   | { type: "note"; id: string; date: string; text: string }
@@ -91,25 +92,31 @@ export default function LeadProfileDial() {
     return dt.toLocaleString();
   };
 
+  // Small helper so we can force-refresh after a disposition
+  const fetchLeadById = useCallback(async (lookup: string) => {
+    const r = await fetch(`/api/get-lead?id=${encodeURIComponent(lookup)}`, { cache: "no-store" });
+    const j = await r.json().catch(() => ({} as any));
+    if (r.ok && j?.lead) {
+      setLead({ id: j.lead._id, ...j.lead });
+      setResolvedId(j.lead._id);
+      return true;
+    }
+    return false;
+  }, []);
+
   // Load lead (id or phone fallback)
   useEffect(() => {
-    const fetchLead = async () => {
+    const run = async () => {
       if (!id) return;
       const idStr = Array.isArray(id) ? id[0] : String(id);
 
-      let r = await fetch(`/api/get-lead?id=${encodeURIComponent(idStr)}`, { cache: "no-store" });
-      let j = await r.json().catch(() => ({} as any));
-      if (r.ok && j?.lead) {
-        setLead({ id: j.lead._id, ...j.lead });
-        setResolvedId(j.lead._id);
-        return;
-      }
+      if (await fetchLeadById(idStr)) return;
 
       // fallback by phone if looks like a phone
       const digits = idStr.replace(/\D+/g, "");
-      if (!r.ok && digits.length >= 10) {
-        r = await fetch(`/api/get-lead?phone=${encodeURIComponent(idStr)}`, { cache: "no-store" });
-        j = await r.json().catch(() => ({} as any));
+      if (digits.length >= 10) {
+        const r = await fetch(`/api/get-lead?phone=${encodeURIComponent(idStr)}`, { cache: "no-store" });
+        const j = await r.json().catch(() => ({} as any));
         if (r.ok && j?.lead) {
           setLead({ id: j.lead._id, ...j.lead });
           setResolvedId(j.lead._id);
@@ -117,11 +124,11 @@ export default function LeadProfileDial() {
         }
       }
 
-      console.error("Error fetching lead:", j?.message || r.statusText);
+      console.error("Error fetching lead");
       toast.error("Lead not found.");
     };
-    fetchLead();
-  }, [id]);
+    run();
+  }, [id, fetchLeadById]);
 
   // Center: texts/notes/status only
   const loadHistory = useCallback(async () => {
@@ -149,7 +156,6 @@ export default function LeadProfileDial() {
         } else if (ev.type === "status") {
           lines.push(`🔖 Status: ${(ev as any).to || "Updated"} • ${fmtDateTime(ev.date)}`);
         }
-        // ignore call events here
       });
 
       setHistoryLines(lines);
@@ -206,7 +212,7 @@ export default function LeadProfileDial() {
       return;
     }
     try {
-      // Optimistic local line so the user sees immediate feedback
+      // Optimistic line
       setHistoryLines((prev) => [`✅ Disposition: ${newFolderName} • ${new Date().toLocaleString()}`, ...prev]);
 
       const res = await fetch("/api/disposition-lead", {
@@ -218,6 +224,11 @@ export default function LeadProfileDial() {
       if (!res.ok || !data?.success) {
         throw new Error(data?.message || "Failed to move lead");
       }
+
+      // Force-refresh from server so status/folderId are the source of truth
+      await fetchLeadById(lead.id);
+      loadHistory();
+
       toast.success(`✅ Lead moved to ${newFolderName}`);
     } catch (error: any) {
       console.error("Disposition error:", error);
@@ -225,21 +236,17 @@ export default function LeadProfileDial() {
     }
   };
 
-  const startCall = async () => {
-    if (!lead?.id) return;
-    try {
-      const res = await fetch("/api/twilio/voice/call", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ leadId: lead.id }),
-      });
-      const j = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(j?.message || "Failed to start call");
-      toast.success("📞 Calling lead…");
-    } catch (e: any) { toast.error(e?.message || "Failed to start call"); }
+  // ✅ Route to dialer for this exact lead
+  const startCall = () => {
+    if (!lead?.id) return toast.error("Lead not loaded");
+    router.push({ pathname: "/dial-session", query: { leadId: lead.id } });
   };
 
   const leadName = useMemo(() => {
-    const full = `${lead?.["First Name"] || ""} ${lead?.["Last Name"] || ""}`.trim() || lead?.name || "";
+    const full =
+      `${lead?.firstName || lead?.["First Name"] || ""} ${lead?.lastName || lead?.["Last Name"] || ""}`.trim()
+      || lead?.name
+      || "";
     return full || "Lead";
   }, [lead]);
 
@@ -257,6 +264,7 @@ export default function LeadProfileDial() {
         <div className="mb-2">
           <h2 className="text-xl font-bold">{leadName}</h2>
           {phoneDisplay ? (<div className="text-gray-300">{phoneDisplay}</div>) : null}
+          {lead?.status ? (<div className="text-xs mt-1 text-gray-400">Status: {lead.status}</div>) : null}
         </div>
 
         {Object.entries(lead || {})
@@ -281,7 +289,7 @@ export default function LeadProfileDial() {
         <p className="text-gray-500 mt-2 text-xs">Click fields to edit live.</p>
       </div>
 
-      {/* CENTER: make this column fill height */}
+      {/* CENTER */}
       <div className="flex-1 p-6 bg-[#0f172a] border-r border-gray-800 flex flex-col min-h-0">
         <div className="max-w-3xl flex flex-col min-h-0 flex-1">
           <h3 className="text-lg font-bold mb-2">Notes</h3>
@@ -292,7 +300,7 @@ export default function LeadProfileDial() {
 
           <div className="flex items-center gap-2 mb-4">
             <button onClick={handleSaveNote} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded">Save Note</button>
-            <button onClick={startCall} className="bg-green-600 hover:bg-green-700 px-4 py-2 rounded">Call</button>
+            <button type="button" onClick={startCall} className="bg-green-600 hover:bg-green-700 px-4 py-2 rounded">Call</button>
           </div>
 
           {userHasAI && calls.find((c) => c.aiSummary) ? (
@@ -309,7 +317,6 @@ export default function LeadProfileDial() {
             {histLoading ? <span className="text-xs text-gray-400">Loading…</span> : null}
           </div>
 
-          {/* ⬇️ Stretch to fill remaining height; scroll inside */}
           <div className="bg-[#0b1220] border border-white/10 rounded p-3 flex-1 min-h-0 overflow-y-auto">
             {historyLines.length === 0 ? (
               <p className="text-gray-400">No interactions yet.</p>
@@ -320,11 +327,11 @@ export default function LeadProfileDial() {
             )}
           </div>
 
-          {/* Actions below list */}
           <div className="flex flex-wrap gap-2 mt-4">
             <button onClick={() => handleDisposition("Sold")} className="bg-gray-700 hover:bg-gray-600 px-3 py-2 rounded">Sold</button>
             <button onClick={() => handleDisposition("Booked Appointment")} className="bg-gray-700 hover:bg-gray-600 px-3 py-2 rounded">Booked Appointment</button>
             <button onClick={() => handleDisposition("Not Interested")} className="bg-gray-700 hover:bg-gray-600 px-3 py-2 rounded">Not Interested</button>
+            <button onClick={() => handleDisposition("Resolved")} className="bg-gray-700 hover:bg-gray-600 px-3 py-2 rounded">Resolve</button>
           </div>
 
           <div className="mt-4">
@@ -333,7 +340,7 @@ export default function LeadProfileDial() {
         </div>
       </div>
 
-      {/* RIGHT: stretch + scroll */}
+      {/* RIGHT */}
       <div className="w-[400px] p-4 bg-[#0b1220] flex flex-col min-h-0">
         <div className="flex-1 min-h-0 overflow-y-auto">
           {lead?.id ? (

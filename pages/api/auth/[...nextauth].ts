@@ -2,12 +2,11 @@
 import NextAuth, { type NextAuthOptions } from "next-auth";
 import CredentialsProvider from "next-auth/providers/credentials";
 import GoogleProvider from "next-auth/providers/google";
-import bcrypt from "bcryptjs"; // ✅ use bcryptjs to match your install
+import bcrypt from "bcryptjs";
 import mongooseConnect from "@/lib/mongooseConnect";
-import { getUserByEmail } from "@/models/User";
+import User from "@/models/User";
 import twilio from "twilio";
 import A2PProfile from "@/models/A2PProfile";
-import User from "@/models/User";
 import { syncA2PForUser } from "@/lib/twilio/syncA2P";
 import { sendWelcomeEmail } from "@/lib/email";
 
@@ -20,26 +19,55 @@ const accountSid = process.env.TWILIO_ACCOUNT_SID!;
 const authToken = process.env.TWILIO_AUTH_TOKEN!;
 const client = twilio(accountSid, authToken);
 
-async function ensureMessagingService(userId: string, userEmail: string) {
-  const existingProfile = await A2PProfile.findOne({ userId });
-  if (existingProfile?.messagingServiceSid) return;
-
-  const baseUrl =
+// Canonical public base URL (do NOT throw if missing — auth must not crash)
+function getBaseUrl() {
+  const url =
     process.env.NEXT_PUBLIC_BASE_URL ||
-    process.env.BASE_URL ||
-    process.env.NEXTAUTH_URL;
+    process.env.NEXTAUTH_URL ||
+    (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "");
+  return url?.replace(/\/+$/, "") || "";
+}
 
-  const service = await client.messaging.services.create({
-    friendlyName: `CoveCRM Service – ${userEmail}`,
-    inboundRequestUrl: `${baseUrl}/api/twilio/inbound-sms`,
-    statusCallback: `${baseUrl}/api/twilio/status-callback`,
-  });
+// helpers for case-insensitive email lookup
+function escapeRegex(s: string) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+async function getUserByEmailCI(email: string) {
+  const esc = escapeRegex(email);
+  return User.findOne({ email: { $regex: `^${esc}$`, $options: "i" } });
+}
 
-  if (existingProfile) {
-    existingProfile.messagingServiceSid = service.sid;
-    await existingProfile.save();
-  } else {
-    await A2PProfile.create({ userId, messagingServiceSid: service.sid });
+/**
+ * Create/attach a Twilio Messaging Service, but NEVER let errors break auth.
+ * Upserts A2PProfile without strict validation.
+ */
+async function ensureMessagingService(userId: string, userEmail: string) {
+  try {
+    const existing = await A2PProfile.findOne({ userId }).lean();
+    if (existing?.messagingServiceSid) return;
+
+    const baseUrl = getBaseUrl();
+    if (!baseUrl) {
+      console.warn("ensureMessagingService: missing BASE URL, skipping");
+      return;
+    }
+
+    const service = await client.messaging.services.create({
+      friendlyName: `CoveCRM Service – ${userEmail}`,
+      inboundRequestUrl: `${baseUrl}/api/twilio/inbound-sms`,
+      statusCallback: `${baseUrl}/api/twilio/status-callback`,
+    });
+
+    await A2PProfile.updateOne(
+      { userId },
+      {
+        $setOnInsert: { userId },
+        $set: { messagingServiceSid: service.sid },
+      },
+      { upsert: true, runValidators: false, strict: false }
+    );
+  } catch (e: any) {
+    console.warn("ensureMessagingService skipped:", e?.message || String(e));
   }
 }
 
@@ -75,7 +103,6 @@ function getCookieValue(cookieHeader: string | undefined, name: string) {
 
 export const authOptions: NextAuthOptions = {
   debug: true,
-  // trustHost: true, // removed to satisfy stricter typings
   useSecureCookies: !isDev,
 
   providers: [
@@ -89,21 +116,26 @@ export const authOptions: NextAuthOptions = {
       async authorize(credentials: any, req) {
         if (!credentials?.email || !credentials?.password) return null;
 
-        const { email, password, code } = credentials;
+        const emailRaw = String(credentials.email).trim();
+        const email = emailRaw.toLowerCase();
+        const password = String(credentials.password);
+        const DBG = process.env.DEBUG_LOGIN === "1";
+
         await mongooseConnect();
 
-        let user = await getUserByEmail(email);
+        // Case-insensitive find
+        let user = await getUserByEmailCI(emailRaw);
         let isNewUser = false;
 
+        // Create if missing (store email lowercased)
         if (!user) {
           const hashedPassword = await bcrypt.hash(password, 10);
           const cookieHeader =
             (req as any)?.headers?.cookie as string | undefined;
           const cookieAffiliate = getCookieValue(cookieHeader, "affiliate_code");
-          const affiliateCode = code || cookieAffiliate || null;
-          const UserModel = (await import("@/models/User")).default;
+          const affiliateCode = credentials.code || cookieAffiliate || null;
 
-          user = await UserModel.create({
+          user = await User.create({
             email,
             password: hashedPassword,
             name: email.split("@")[0],
@@ -119,19 +151,34 @@ export const authOptions: NextAuthOptions = {
           } catch (e) {
             console.warn("welcome email (credentials) failed:", e);
           }
+        } else if (user.email !== email) {
+          // normalize stored casing to lowercase going forward
+          await User.updateOne({ _id: user._id }, { $set: { email } });
+          user.email = email;
         }
 
-        const userPassword = ((user as any).password ?? "") as string;
-        const isValid = userPassword
-          ? await bcrypt.compare(password, String(userPassword))
-          : false;
+        const currentHash = ((user as any).password ?? "") as string;
+        let isValid = false;
+
+        if (!currentHash) {
+          if (DBG) console.log("AUTH DEBUG: no password set, setting one", email);
+          const hashed = await bcrypt.hash(password, 10);
+          await User.updateOne({ _id: (user as any)._id }, { $set: { password: hashed } });
+          isValid = true;
+        } else {
+          isValid = await bcrypt.compare(password, String(currentHash));
+          if (DBG) console.log("AUTH DEBUG: compare result", { email, ok: isValid });
+        }
+
         if (!isValid) return null;
 
+        // Side-effects must never block login
         if (isNewUser) {
-          await ensureMessagingService(String((user as any)._id), user.email);
+          Promise.resolve(
+            ensureMessagingService(String((user as any)._id), user.email)
+          ).catch(() => {});
         }
-
-        await safeSyncA2PByEmail(user.email, true);
+        Promise.resolve(safeSyncA2PByEmail(user.email, false)).catch(() => {});
 
         return {
           id: user._id?.toString(),
@@ -158,14 +205,15 @@ export const authOptions: NextAuthOptions = {
       },
       async profile(profile) {
         await mongooseConnect();
-        let user = await getUserByEmail(profile.email);
+        const email = String(profile.email).toLowerCase();
+
+        let user = await getUserByEmailCI(email);
         let isNewUser = false;
 
         if (!user) {
-          const UserModel = (await import("@/models/User")).default;
-          user = await UserModel.create({
-            email: profile.email,
-            name: profile.name || profile.email.split("@")[0],
+          user = await User.create({
+            email,
+            name: profile.name || email.split("@")[0],
             role: "user",
             affiliateCode: null,
             subscriptionStatus: "active",
@@ -178,13 +226,17 @@ export const authOptions: NextAuthOptions = {
           } catch (e) {
             console.warn("welcome email (google) failed:", e);
           }
+        } else if (user.email !== email) {
+          await User.updateOne({ _id: user._id }, { $set: { email } });
+          user.email = email;
         }
 
         if (isNewUser) {
-          await ensureMessagingService(String((user as any)._id), user.email);
+          Promise.resolve(
+            ensureMessagingService(String((user as any)._id), user.email)
+          ).catch(() => {});
         }
-
-        await safeSyncA2PByEmail(user.email, true);
+        Promise.resolve(safeSyncA2PByEmail(user.email, false)).catch(() => {});
 
         return {
           id: user._id?.toString(),
@@ -197,9 +249,7 @@ export const authOptions: NextAuthOptions = {
     }),
   ],
 
-  pages: {
-    signIn: "/auth/signin",
-  },
+  pages: { signIn: "/auth/signin" },
 
   session: { strategy: "jwt" },
 
@@ -264,8 +314,24 @@ export const authOptions: NextAuthOptions = {
       return session;
     },
 
-    async redirect({ url, baseUrl }) {
-      return url.startsWith("/") ? `${baseUrl}${url}` : url;
+    // Force a stable post-login landing page to avoid loops
+    async redirect({ baseUrl }) {
+      return `${baseUrl}/leads`;
+    },
+  },
+
+  // Minimal server-side logging
+  logger: {
+    error(code, ...meta) {
+      console.error("NextAuth error:", code, ...meta);
+    },
+    warn(code, ...meta) {
+      console.warn("NextAuth warn:", code, ...meta);
+    },
+    debug(code, ...meta) {
+      if (process.env.NODE_ENV !== "production") {
+        console.debug("NextAuth debug:", code, ...meta);
+      }
     },
   },
 

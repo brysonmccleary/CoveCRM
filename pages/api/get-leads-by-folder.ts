@@ -21,72 +21,77 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const { folderId } = req.query as { folderId?: string };
     await dbConnect();
 
-    // No folder selected → intentionally empty (prevents "show all")
     if (!folderId || typeof folderId !== "string" || !folderId.trim()) {
       return res.status(200).json({ leads: [] as LeadType[], folderName: null });
     }
 
-    const rawId = String(folderId).trim();
+    const rawId = folderId.trim();
 
-    // Resolve folder (accept ObjectId or legacy Name) — force lean() type to avoid TS union w/ array
+    // Resolve folder (allow _id or name)
     let folderDoc: LeanFolderDoc | null = null;
-
     if (Types.ObjectId.isValid(rawId)) {
       folderDoc = (await Folder.findOne({ _id: new Types.ObjectId(rawId), userEmail: email })
         .select({ _id: 1, name: 1 })
-        .lean()
-        .exec()) as LeanFolderDoc | null;
+        .lean()) as LeanFolderDoc | null;
     } else {
       folderDoc = (await Folder.findOne({ userEmail: email, name: rawId })
         .select({ _id: 1, name: 1 })
-        .lean()
-        .exec()) as LeanFolderDoc | null;
+        .lean()) as LeanFolderDoc | null;
     }
 
     if (!folderDoc) {
       return res.status(200).json({ leads: [] as LeadType[], folderName: null });
     }
 
-    const resolvedId = folderDoc._id;
-    const resolvedIdStr = String(resolvedId);
+    const canonicalId = folderDoc._id;
+    const canonicalIdStr = String(canonicalId);
     const folderName = folderDoc.name || rawId;
-    const folderNameLc = folderName.toLowerCase();
+    const folderNameLc = (folderName || "").toLowerCase();
 
-    // STRICT for normalized docs + FALLBACK for legacy name-only docs (no folderId)
-    const leads = await Lead.find({
-      userEmail: email,
-      $or: [
-        { folderId: resolvedId }, // ObjectId match
-        { folderId: resolvedIdStr }, // stored as string
-        { $expr: { $eq: [{ $toString: "$folderId" }, resolvedIdStr] } }, // mixed
+    let leads: any[] = [];
 
-        // Fallback by legacy names only when folderId missing/null
+    // Unsorted: ONLY docs with no folderId
+    if (folderNameLc === "unsorted") {
+      leads = await Lead.find(
+        { userEmail: email, $or: [{ folderId: { $exists: false } }, { folderId: null }] },
         {
-          $and: [
-            { $or: [{ folderId: { $exists: false } }, { folderId: null }] },
-            {
-              $or: [
-                { $expr: { $eq: [{ $toLower: "$folderName" }, folderNameLc] } },
-                { $expr: { $eq: [{ $toLower: "$Folder" }, folderNameLc] } },
-                { $expr: { $eq: [{ $toLower: { $ifNull: ["$Folder Name", ""] } }, folderNameLc] } },
-              ],
-            },
+          _id: 1, name: 1, firstName: 1, lastName: 1, "First Name": 1, "Last Name": 1,
+          Phone: 1, phone: 1, Email: 1, email: 1, status: 1, updatedAt: 1, folderId: 1,
+        }
+      )
+        .sort({ updatedAt: -1, createdAt: -1, _id: -1 })
+        .lean()
+        .exec();
+    } else {
+      // STRICT: must match folderId only
+      leads = await Lead.find(
+        {
+          userEmail: email,
+          $or: [
+            { folderId: canonicalId },
+            { folderId: canonicalIdStr },
+            { $expr: { $eq: [{ $toString: "$folderId" }, canonicalIdStr] } },
           ],
         },
-      ],
-    })
-      .sort({ updatedAt: -1 })
-      .lean()
-      .exec();
+        {
+          _id: 1, name: 1, firstName: 1, lastName: 1, "First Name": 1, "Last Name": 1,
+          Phone: 1, phone: 1, Email: 1, email: 1, status: 1, State: 1, state: 1,
+          Age: 1, age: 1, updatedAt: 1, folderId: 1,
+        }
+      )
+        .sort({ updatedAt: -1, createdAt: -1, _id: -1 })
+        .lean()
+        .exec();
+    }
 
     return res.status(200).json({
-      leads: (leads || []).map((l) => ({
+      leads: (leads || []).map((l: any) => ({
         ...l,
         _id: String(l._id),
-        folderId: l.folderId ? String(l.folderId) : null,
+        folderId: l?.folderId ? String(l.folderId) : null,
       })) as LeadType[],
       folderName,
-      resolvedFolderId: resolvedIdStr,
+      resolvedFolderId: canonicalIdStr,
     });
   } catch (error) {
     console.error("❌ get-leads-by-folder error:", error);

@@ -40,6 +40,21 @@ pnpm-lock.yaml
 
 # TS build info
 tsconfig.tsbuildinfo
+<<<<<<< HEAD
 .env
 .env.*
 vercel.*.json
+=======
+
+# env files
+.env
+.env.*
+.env.local
+.env.vercel
+
+# never upload local env/zips
+.env*
+cookies.txt
+*.zip
+
+>>>>>>> feat/dynamic-caller-id

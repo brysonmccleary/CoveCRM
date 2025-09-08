@@ -8,6 +8,7 @@ import { sendSms } from "@/lib/twilio/sendSMS";
 import { renderTemplate, ensureOptOut, splitName } from "@/utils/renderTemplate";
 import { prebuiltDrips } from "@/utils/prebuiltDrips";
 import { DateTime } from "luxon";
+import { acquireLock } from "@/lib/locks"; // 🔒 add lock
 
 // --- Config ---
 const PT_ZONE = "America/Los_Angeles"; // 9:00 AM Pacific
@@ -30,6 +31,11 @@ async function resolveDrip(dripId: string) {
   const def = prebuiltDrips.find((d) => d.id === dripId);
   if (!def) return null;
   return await DripCampaign.findOne({ isGlobal: true, name: def.name }).lean();
+}
+
+/** Prefer the Mongo _id as the canonical campaign key; fall back to whatever was assigned (slug). */
+function getCanonicalDripId(dripDoc: any, fallbackId: string): string {
+  return String((dripDoc && dripDoc._id) ? dripDoc._id : fallbackId);
 }
 
 /** Extract the first integer found in a string like "Day 7" -> 7. Returns NaN if none. */
@@ -248,33 +254,50 @@ export default async function handler(
           continue;
         }
 
-        const steps = sortDaySteps(dripDoc);
+        // 🔑 Canonical campaign key used everywhere (progress, counters, locks)
+        const campaignId = getCanonicalDripId(dripDoc, String(dripId));
+
+        const steps = ((): Array<{ text: string; day?: string }> => {
+          const arr = Array.isArray(dripDoc?.steps) ? dripDoc.steps : [];
+          // If steps have day labels, keep order by numeric day; otherwise, preserve original order
+          if (arr.some((s: any) => s?.day)) {
+            const numeric = arr
+              .filter((s: any) => !isNaN(parseStepDayNumber(s?.day)))
+              .sort((a: any, b: any) => parseStepDayNumber(a?.day) - parseStepDayNumber(b?.day));
+            return numeric;
+          }
+          return arr;
+        })();
+
         if (!steps.length) {
           bump(skippedByReason, "noSteps");
           continue;
         }
 
         // Find progress for this drip; if missing, initialize
-        let prog = progressArr.find((p) => String(p.dripId) === String(dripId));
+        // Prefer canonical (Mongo _id). For compatibility, also accept legacy slug.
+        let prog =
+          progressArr.find((p) => String(p.dripId) === String(campaignId)) ||
+          progressArr.find((p) => String(p.dripId) === String(dripId));
 
         if (!prog || !prog.startedAt) {
           if (dry) {
             wouldInitProgress++;
             // Simulate as if started now, so Day 1 is considered
             prog = {
-              dripId: String(dripId),
+              dripId: String(campaignId),
               startedAt: DateTime.now().setZone(PT_ZONE).toJSDate(),
               lastSentIndex: -1,
               _simulated: true,
             };
           } else {
             const init = {
-              dripId: String(dripId),
+              dripId: String(campaignId),
               startedAt: new Date(),
               lastSentIndex: -1,
             };
             await Lead.updateOne(
-              { _id: (lead as any)._id, "dripProgress.dripId": { $ne: String(dripId) } },
+              { _id: (lead as any)._id, "dripProgress.dripId": { $ne: String(campaignId) } },
               { $push: { dripProgress: init } },
             );
             initializedProgress++;
@@ -292,7 +315,6 @@ export default async function handler(
           continue;
         }
 
-        // Sequentially catch-up any missed steps (still at 9am PT gate)
         let advancedAtLeastOne = false;
 
         // eslint-disable-next-line no-constant-condition
@@ -301,9 +323,10 @@ export default async function handler(
 
           const step = steps[nextIndex];
           const dayNum = parseStepDayNumber(step.day);
-          if (isNaN(dayNum)) break;
+          const duePT = !isNaN(dayNum)
+            ? computeStepWhenPT(new Date(prog.startedAt), dayNum)
+            : DateTime.now().setZone(PT_ZONE); // if unlabeled, treat as due now
 
-          const duePT = computeStepWhenPT(new Date(prog.startedAt), dayNum);
           const nowPTlocal = DateTime.now().setZone(PT_ZONE);
 
           if (nowPTlocal < duePT) {
@@ -313,7 +336,7 @@ export default async function handler(
                 leadId: String((lead as any)._id),
                 dripId: String(dripId),
                 reason: "notDue",
-                step: step.day,
+                step: step.day || nextIndex,
                 duePT: duePT.toISO(),
               });
             break; // future step; stop for this drip
@@ -329,9 +352,9 @@ export default async function handler(
             continue;
           }
 
-          // Candidate is due now or in the past → we will send (or dry-run)
+          // Candidate is due
           candidates++;
-          bumpDrip(String(dripId), "considered");
+          bumpDrip(String(campaignId), "considered");
 
           const rendered = renderTemplate(raw, {
             contact: { first_name: firstName, last_name: lastName, full_name: fullName },
@@ -344,7 +367,7 @@ export default async function handler(
               sentSample.push({
                 leadId: String((lead as any)._id),
                 dripId: String(dripId),
-                step: step.day,
+                step: step.day || nextIndex,
                 duePT: duePT.toISO(),
                 preview: finalBody.slice(0, 120),
               });
@@ -354,6 +377,24 @@ export default async function handler(
           }
 
           try {
+            // 🔒 Duplicate drip guard (10 min TTL) — use canonical campaignId
+            const stepKey = String(step?.day ?? nextIndex);
+            const ok = await acquireLock(
+              "drip",
+              `${String(user.email)}:${String((lead as any)._id)}:${String(campaignId)}:${stepKey}`,
+              600
+            );
+            if (!ok) {
+              console.log("Duplicate drip suppressed", {
+                userEmail: user.email,
+                leadId: String((lead as any)._id),
+                campaignId: String(campaignId),
+                stepId: stepKey,
+              });
+              // Do NOT advance progress here; the other runner will
+              break;
+            }
+
             const result = await sendSms({
               to,
               body: finalBody,
@@ -364,27 +405,27 @@ export default async function handler(
             if (result.sid) {
               if (result.scheduledAt) {
                 scheduled++;
-                bumpDrip(String(dripId), "scheduled");
+                bumpDrip(String(campaignId), "scheduled");
               } else {
                 accepted++;
-                bumpDrip(String(dripId), "sentAccepted");
+                bumpDrip(String(campaignId), "sentAccepted");
               }
               if (sentSample.length < 10)
                 sentSample.push({
                   leadId: String((lead as any)._id),
                   dripId: String(dripId),
-                  step: step.day,
+                  step: step.day || nextIndex,
                   sid: result.sid,
                   scheduledAt: result.scheduledAt || null,
                 });
             } else {
               suppressed++;
-              bumpDrip(String(dripId), "suppressed");
+              bumpDrip(String(campaignId), "suppressed");
               if (skippedSample.length < 10)
                 skippedSample.push({
                   leadId: String((lead as any)._id),
                   dripId: String(dripId),
-                  step: step.day,
+                  step: step.day || nextIndex,
                   reason: "suppressed",
                   messageId: result.messageId || null,
                 });
@@ -392,7 +433,7 @@ export default async function handler(
 
             // Advance progress index even if suppressed (so we don't loop forever)
             await Lead.updateOne(
-              { _id: (lead as any)._id, "dripProgress.dripId": String(dripId) },
+              { _id: (lead as any)._id, "dripProgress.dripId": String(campaignId) },
               { $set: { "dripProgress.$.lastSentIndex": nextIndex } },
             );
 
@@ -400,12 +441,12 @@ export default async function handler(
             advancedAtLeastOne = true;
           } catch (e: any) {
             failed++;
-            bumpDrip(String(dripId), "failed");
+            bumpDrip(String(campaignId), "failed");
             if (skippedSample.length < 10)
               skippedSample.push({
                 leadId: String((lead as any)._id),
                 dripId: String(dripId),
-                step: step.day,
+                step: step.day || nextIndex,
                 reason: "sendError",
                 error: e?.message || String(e),
               });
@@ -420,7 +461,7 @@ export default async function handler(
       }
     });
 
-    // Summarize per-campaign
+    // Summarize per-campaign (now keyed by canonical campaignId)
     const perCampaign: Record<string, DripCounters & { id: string }> = {};
     for (const [id, c] of perDripCounters.entries()) {
       perCampaign[id] = { id, ...c };

@@ -1,7 +1,7 @@
-// /components/leads/LeadImportPanel.tsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import Papa from "papaparse";
 import toast from "react-hot-toast";
+import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
 
 type Folder = { _id: string; name: string };
 
@@ -18,9 +18,8 @@ const CANONICAL_FIELDS = [
   "Notes",
   "Source",
 ] as const;
-type Canonical = typeof CANONICAL_FIELDS[number];
+type Canonical = (typeof CANONICAL_FIELDS)[number];
 
-/** Dropdown options shown (kept superset for compatibility with your old UI) */
 const systemFields = [
   ...CANONICAL_FIELDS,
   "Address",
@@ -34,6 +33,12 @@ const systemFields = [
 
 function lc(s?: string) {
   return (s || "").toLowerCase();
+}
+
+// Catch common visual lookalikes for system names (0→o, I→l)
+function looksSystemish(name: string) {
+  const n = name.trim().toLowerCase().replace(/0/g, "o").replace(/ı|i/g, "l");
+  return isSystemFolder(n);
 }
 
 function bestGuessField(header: string): Canonical | "" {
@@ -58,18 +63,22 @@ const fieldKeyForApi: Record<Canonical, string> = {
   Source: "source",
 };
 
-export default function LeadImportPanel({ onImportSuccess }: { onImportSuccess?: () => void }) {
+export default function LeadImportPanel({
+  onImportSuccess,
+}: {
+  onImportSuccess?: () => void;
+}) {
   // CSV
   const [csvHeaders, setCsvHeaders] = useState<string[]>([]);
   const [csvData, setCsvData] = useState<Record<string, any>[]>([]);
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
 
-  // Mapping state: header -> chosen field label
+  // Mapping state
   const [mapping, setMapping] = useState<Record<string, string>>({});
   const [skipHeader, setSkipHeader] = useState<Record<string, boolean>>({});
   const [customFieldNames, setCustomFieldNames] = useState<Record<string, string>>({});
 
-  // Folder choose/create
+  // Folders
   const [folders, setFolders] = useState<Folder[]>([]);
   const [useExisting, setUseExisting] = useState(true);
   const [targetFolderId, setTargetFolderId] = useState<string>("");
@@ -80,7 +89,11 @@ export default function LeadImportPanel({ onImportSuccess }: { onImportSuccess?:
 
   // UI
   const [isUploading, setIsUploading] = useState(false);
-  const [resultCounts, setResultCounts] = useState<{ inserted?: number; updated?: number; skipped?: number } | null>(null);
+  const [resultCounts, setResultCounts] = useState<{
+    inserted?: number;
+    updated?: number;
+    skipped?: number;
+  } | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -91,14 +104,11 @@ export default function LeadImportPanel({ onImportSuccess }: { onImportSuccess?:
         const r = await fetch("/api/get-folders");
         if (r.ok) {
           const data = await r.json();
-          if (Array.isArray(data?.folders)) {
-            setFolders(data.folders);
-          } else if (Array.isArray(data)) {
-            setFolders(data as Folder[]);
-          }
+          if (Array.isArray(data?.folders)) setFolders(data.folders);
+          else if (Array.isArray(data)) setFolders(data as Folder[]);
         }
       } catch {
-        // no-op
+        /* no-op */
       }
       try {
         const saved = localStorage.getItem(LOCAL_KEY_MAPPING);
@@ -111,12 +121,21 @@ export default function LeadImportPanel({ onImportSuccess }: { onImportSuccess?:
         const savedSkip = localStorage.getItem(LOCAL_KEY_SKIP);
         if (savedSkip != null) setSkipExisting(savedSkip === "true");
       } catch {
-        // ignore
+        /* ignore */
       }
     })();
   }, []);
 
-  // Auto-open file picker on mount (kept from your original)
+  // If a previously-saved system folder id sneaks in, drop it
+  useEffect(() => {
+    if (!folders.length) return;
+    const safe = folders.filter((f) => !isSystemFolder(f.name));
+    if (!safe.some((f) => f._id === targetFolderId)) {
+      setTargetFolderId("");
+    }
+  }, [folders, targetFolderId]);
+
+  // Auto-open file picker on mount (kept behavior)
   useEffect(() => {
     fileInputRef.current?.click();
   }, []);
@@ -135,12 +154,10 @@ export default function LeadImportPanel({ onImportSuccess }: { onImportSuccess?:
       complete: (results) => {
         const headers = results.meta.fields || [];
         const typedData = (results.data as Record<string, any>[]).filter(Boolean);
-        // Keep headers that have at least one non-empty value in data
         const validHeaders = headers.filter((h) =>
           typedData.some((row) => row[h] && String(row[h]).trim() !== "")
         );
 
-        // Initialize mapping with best-guess (but don’t override saved choices if present)
         const nextMap: Record<string, string> = { ...(mapping || {}) };
         validHeaders.forEach((h) => {
           if (!nextMap[h]) {
@@ -164,7 +181,6 @@ export default function LeadImportPanel({ onImportSuccess }: { onImportSuccess?:
       .filter(([h]) => h !== currentHeader)
       .map(([, val]) => val)
       .filter((v) => v && v !== "Add Custom Field");
-
     return systemFields.filter((f) => !selected.includes(f) || f === mapping[currentHeader]);
   };
 
@@ -174,13 +190,12 @@ export default function LeadImportPanel({ onImportSuccess }: { onImportSuccess?:
   }, [mapping]);
 
   const buildApiMappingObject = () => {
-    // Invert: canonicalKey -> csvHeader
     const result: Record<string, string> = {};
     for (const [header, fieldLabel] of Object.entries(mapping)) {
       if (!fieldLabel || skipHeader[header] || fieldLabel === "Add Custom Field") continue;
       if ((CANONICAL_FIELDS as readonly string[]).includes(fieldLabel)) {
         const apiKey = fieldKeyForApi[fieldLabel as Canonical];
-        if (!result[apiKey]) result[apiKey] = header; // first wins
+        if (!result[apiKey]) result[apiKey] = header;
       }
     }
     return result;
@@ -199,9 +214,19 @@ export default function LeadImportPanel({ onImportSuccess }: { onImportSuccess?:
           toast.error("❌ Choose a folder to import into");
           return;
         }
+        const selected = folders.find((f) => f._id === targetFolderId);
+        if (selected && isSystemFolder(selected.name)) {
+          toast.error("Cannot import into system folders");
+          return;
+        }
       } else {
-        if (!newFolderName.trim()) {
+        const name = newFolderName.trim();
+        if (!name) {
           toast.error("❌ Enter a new folder name");
+          return;
+        }
+        if (isSystemFolder(name) || looksSystemish(name)) {
+          toast.error("Cannot import into system folders");
           return;
         }
       }
@@ -221,14 +246,28 @@ export default function LeadImportPanel({ onImportSuccess }: { onImportSuccess?:
       // Persist preferences
       localStorage.setItem(LOCAL_KEY_MAPPING, JSON.stringify(mapping));
       localStorage.setItem(LOCAL_KEY_SKIP, String(skipExisting));
-      if (useExisting && targetFolderId) localStorage.setItem(LOCAL_KEY_FOLDER, targetFolderId);
+      if (useExisting && targetFolderId) {
+        localStorage.setItem(LOCAL_KEY_FOLDER, targetFolderId);
+      } else {
+        localStorage.removeItem(LOCAL_KEY_FOLDER);
+      }
 
       const form = new FormData();
       form.append("file", uploadedFile);
-      if (useExisting) form.append("targetFolderId", targetFolderId);
-      else form.append("folderName", newFolderName.trim());
       form.append("mapping", JSON.stringify(mappingForApi));
       form.append("skipExisting", String(skipExisting));
+      form.append("_ts", String(Date.now())); // bust any caches
+
+      if (useExisting) {
+        form.append("targetFolderId", targetFolderId);
+      } else {
+        const name = newFolderName.trim();
+        // Send name under every legacy key the API might accept
+        form.append("folderName", name);
+        form.append("newFolderName", name);
+        form.append("newFolder", name);
+        form.append("name", name);
+      }
 
       setIsUploading(true);
       setResultCounts(null);
@@ -237,10 +276,9 @@ export default function LeadImportPanel({ onImportSuccess }: { onImportSuccess?:
       const data = await res.json();
 
       if (!res.ok) {
-        throw new Error(data?.message || "Import failed");
+        throw new Error(data?.message || data?.error || "Import failed");
       }
 
-      // Prefer new counts shape; fallback to legacy `count`
       const inserted = data?.counts?.inserted ?? 0;
       const updated = data?.counts?.updated ?? 0;
       const skipped = data?.counts?.skipped ?? 0;
@@ -279,7 +317,9 @@ export default function LeadImportPanel({ onImportSuccess }: { onImportSuccess?:
             <input
               type="radio"
               checked={useExisting}
-              onChange={() => setUseExisting(true)}
+              onChange={() => {
+                setUseExisting(true);
+              }}
             />
             <span>Import into existing folder</span>
           </label>
@@ -287,7 +327,12 @@ export default function LeadImportPanel({ onImportSuccess }: { onImportSuccess?:
             <input
               type="radio"
               checked={!useExisting}
-              onChange={() => setUseExisting(false)}
+              onChange={() => {
+                setUseExisting(false);
+                // hard guard: clear any previously selected id so it can’t sneak in
+                setTargetFolderId("");
+                localStorage.removeItem(LOCAL_KEY_FOLDER);
+              }}
             />
             <span>Create new folder</span>
           </label>
@@ -302,11 +347,13 @@ export default function LeadImportPanel({ onImportSuccess }: { onImportSuccess?:
               className="border p-2 rounded w-full"
             >
               <option value="">— Select a folder —</option>
-              {folders.map((f) => (
-                <option key={f._id} value={f._id}>
-                  {f.name}
-                </option>
-              ))}
+              {folders
+                .filter((f) => !isSystemFolder(f.name))
+                .map((f) => (
+                  <option key={f._id} value={f._id}>
+                    {f.name}
+                  </option>
+                ))}
             </select>
           </div>
         ) : (
@@ -387,7 +434,7 @@ export default function LeadImportPanel({ onImportSuccess }: { onImportSuccess?:
                 disabled={!!skipHeader[header]}
               >
                 <option value="">Select Field</option>
-                {getAvailableFields(header).map((field) => (
+                {systemFields.map((field) => (
                   <option key={field} value={field}>
                     {field}
                   </option>

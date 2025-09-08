@@ -1,4 +1,3 @@
-// pages/dial-session.tsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/router";
 import Sidebar from "@/components/Sidebar";
@@ -13,13 +12,29 @@ interface Lead { id: string; [key: string]: any; }
 type Json = Record<string, any>;
 
 const DIAL_DELAY_MS = 2000;
-
-// 👇 anti-bounce window for early "no-answer/completed" glitches
 const EARLY_STATUS_MS = 12000;
+
+type HistoryRow =
+  | { kind: "text"; text: string }
+  | { kind: "link"; text: string; href: string; download?: boolean };
 
 export default function DialSession() {
   const router = useRouter();
-  const { leads: leadIdsParam, fromNumber: fromNumberParam, leadId: singleLeadIdParam } = router.query;
+  const {
+    leads: leadIdsParam,
+    fromNumber: fromNumberParam,
+    leadId: singleLeadIdParam,
+    startIndex,
+    progressKey,
+    serverProgressKey, // NEW: server-backed pointer key (per-folder)
+  } = router.query as {
+    leads?: string;
+    fromNumber?: string;
+    leadId?: string;
+    startIndex?: string;
+    progressKey?: string;
+    serverProgressKey?: string;
+  };
 
   // Queue & selection
   const [leadQueue, setLeadQueue] = useState<Lead[]>([]);
@@ -39,7 +54,7 @@ export default function DialSession() {
   const [summaryCollapsed, setSummaryCollapsed] = useState(true);
   const [showBookModal, setShowBookModal] = useState(false);
   const [notes, setNotes] = useState("");
-  const [history, setHistory] = useState<string[]>([]);
+  const [history, setHistory] = useState<HistoryRow[]>([]);
 
   // Numbers (display only; server resolves authoritative values)
   const [fromNumber, setFromNumber] = useState<string>("");
@@ -63,10 +78,8 @@ export default function DialSession() {
   const placingCallRef = useRef<boolean>(false);
   const joinedRef = useRef<boolean>(false);
 
-  // prevent duplicate disposition clicks
   const dispositionBusyRef = useRef<boolean>(false);
 
-  // 👇 track when a call attempt starts (for anti-bounce)
   const callStartAtRef = useRef<number>(0);
   const tooEarly = () => !callStartAtRef.current || Date.now() - callStartAtRef.current < EARLY_STATUS_MS;
 
@@ -177,6 +190,27 @@ export default function DialSession() {
     nextLeadTimeoutRef.current = setTimeout(() => { if (!sessionEndedRef.current) nextLead(); }, DIAL_DELAY_MS);
   };
 
+  // NEW: server-backed progress helpers (non-breaking)
+  const serverPersist = async (idx: number) => {
+    if (typeof serverProgressKey !== "string" || !serverProgressKey) return;
+    try {
+      await fetch("/api/dial/progress", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ key: serverProgressKey, lastIndex: idx, total: leadQueue.length }),
+      });
+    } catch {}
+  };
+  const serverFetchLastIndex = async (): Promise<number | null> => {
+    if (typeof serverProgressKey !== "string" || !serverProgressKey) return null;
+    try {
+      const r = await fetch(`/api/dial/progress?key=${encodeURIComponent(serverProgressKey)}`);
+      if (!r.ok) return null;
+      const j = await r.json();
+      return typeof j?.lastIndex === "number" ? j.lastIndex : null;
+    } catch { return null; }
+  };
+
   /** bootstrap **/
   useEffect(() => {
     try {
@@ -185,6 +219,7 @@ export default function DialSession() {
     } catch {}
   }, []);
 
+  // Load selected number + agent phone
   useEffect(() => {
     let cancelled = false;
     const loadNumbers = async () => {
@@ -228,8 +263,10 @@ export default function DialSession() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fromNumberParam]);
 
+  // Load leads list + support startIndex/progressKey + SERVER resume
   useEffect(() => {
     const loadLeads = async () => {
+      // single lead mode
       if (singleLeadIdParam) {
         try {
           const j = await fetchJson<Json>(`/api/get-lead?id=${singleLeadIdParam}`);
@@ -255,14 +292,83 @@ export default function DialSession() {
           } catch { return null; }
         }));
         const valid = (fetched.filter(Boolean) as Lead[]);
+
+        // starting index (local startIndex > server pointer fallback)
+        let start = 0;
+        if (typeof startIndex === "string") {
+          start = Math.max(0, Math.min(parseInt(startIndex, 10) || 0, Math.max(valid.length - 1, 0)));
+        } else if (typeof serverProgressKey === "string" && serverProgressKey) {
+          const last = await serverFetchLastIndex();
+          start = last !== null ? Math.min(last + 1, Math.max(valid.length - 1, 0)) : 0;
+        }
+
         setLeadQueue(valid);
-        setCurrentLeadIndex(0);
+        setCurrentLeadIndex(start);
         if (valid.length) { setSessionStarted(true); setReadyToCall(true); setStatus("Ready"); }
         else { setStatus("Idle"); toast("No valid leads to dial"); }
+
+        // write initial LOCAL progress if key passed (your original)
+        if (typeof progressKey === "string" && valid.length) {
+          localStorage.setItem(progressKey, JSON.stringify({ index: start }));
+        }
+        // prime SERVER pointer so "last finished" is start-1 before first attempt
+        await serverPersist(Math.max(start - 1, -1));
       } catch { setStatus("Idle"); toast.error("Failed to load leads"); }
     };
     loadLeads();
-  }, [leadIdsParam, singleLeadIdParam]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [leadIdsParam, singleLeadIdParam, startIndex, progressKey, serverProgressKey]);
+
+  // Persist local progress on index change (your original)
+  useEffect(() => {
+    if (typeof progressKey === "string" && leadQueue.length) {
+      try { localStorage.setItem(progressKey, JSON.stringify({ index: currentLeadIndex })); } catch {}
+    }
+  }, [currentLeadIndex, progressKey, leadQueue.length]);
+
+  // Clear + load history for each lead (prevents cross-lead bleed)
+  useEffect(() => {
+    const loadHistory = async () => {
+      if (!lead?.id) { setHistory([]); return; }
+      setHistory([]);
+      try {
+        const j = await fetchJson<{
+          events: Array<
+            | { type: "sms"; dir: "inbound" | "outbound" | "ai"; text: string; date: string }
+            | { type: "call"; status?: string; durationSec?: number; date: string; recordingUrl?: string }
+            | { type: "note"; text: string; date: string }
+            | { type: "status"; to?: string; date: string }
+          >;
+        }>(`/api/leads/history?id=${encodeURIComponent(lead.id)}&limit=50&includeCalls=1`);
+
+        const rows: HistoryRow[] = [];
+        for (const ev of (j?.events || [])) {
+          const when = new Date((ev as any).date).toLocaleString();
+          if ((ev as any).type === "sms") {
+            const sms = ev as any;
+            rows.push({ kind: "text", text: `💬 ${sms.dir.toUpperCase()} • ${when} — ${sms.text}` });
+          } else if ((ev as any).type === "note") {
+            rows.push({ kind: "text", text: `📝 Note • ${when} — ${(ev as any).text}` });
+          } else if ((ev as any).type === "status") {
+            rows.push({ kind: "text", text: `📌 Status • ${when} — ${(ev as any).to || "-"}` });
+          } else if ((ev as any).type === "call") {
+            const c = ev as any;
+            const pieces = [`📞 Call • ${when}`];
+            if (c.status) pieces.push(c.status);
+            if (typeof c.durationSec === "number") pieces.push(`${c.durationSec}s`);
+            rows.push({ kind: "text", text: pieces.join(" — ") });
+            if (c.recordingUrl) {
+              rows.push({ kind: "link", text: "▶️ Recording", href: c.recordingUrl, download: false });
+            }
+          }
+        }
+        setHistory(rows);
+      } catch {
+        setHistory([]);
+      }
+    };
+    loadHistory();
+  }, [lead?.id]);
 
   useEffect(() => {
     if (!numbersLoaded) { setStatus("Loading your numbers…"); return; }
@@ -307,7 +413,6 @@ export default function DialSession() {
         }
 
         if (s === "busy" || s === "failed" || s === "no-answer" || s === "canceled" || s === "completed") {
-          // 👇 ignore very-early bounces (let watchdog handle real timeouts)
           if (s === "no-answer" || s === "completed") {
             if (tooEarly()) return;
           }
@@ -342,7 +447,6 @@ export default function DialSession() {
       setCallActive(true);
       playRingback();
 
-      // mark start time for anti-bounce checks
       callStartAtRef.current = Date.now();
 
       const { callSid, conferenceName } = await startOutboundCall(leadToCall.id);
@@ -359,7 +463,6 @@ export default function DialSession() {
       activeCallSidRef.current = callSid;
       activeConferenceRef.current = conferenceName;
 
-      // ✅ Join conference immediately (waitUrl = SILENCE)
       if (!joinedRef.current && activeConferenceRef.current) {
         try {
           joinedRef.current = true;
@@ -369,26 +472,13 @@ export default function DialSession() {
         }
       }
 
-      // Start watchdog + polling fallback
       scheduleWatchdog();
       beginStatusPolling(callSid);
 
       setSessionStartedCount((n) => n + 1);
 
-      fetch("/api/leads/add-transcript", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          leadId: leadToCall.id,
-          entry: { agent: fromNumber || "auto", text: `Started call at ${new Date().toLocaleTimeString()}` },
-        }),
-      }).catch(() => {});
-      fetch("/api/leads/add-history", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ leadId: leadToCall.id, type: "call", message: `Call started`, meta: { phase: "started" } }),
-      }).catch(() => {});
-      setHistory((prev) => [`📞 Call started (${new Date().toLocaleTimeString()})`, ...prev]);
+      // Write a lightweight local history line (UI only)
+      setHistory((prev) => [{ kind: "text", text: `📞 Call started (${new Date().toLocaleTimeString()})` }, ...prev]);
     } catch (err: any) {
       console.error(err);
       setStatus(err?.message || "Call failed");
@@ -414,7 +504,7 @@ export default function DialSession() {
         try { const j = await r.json(); if (j?.message) msg = j.message; } catch {}
         throw new Error(msg);
       }
-      setHistory((prev) => [`📝 Note: ${notes.trim()}`, ...prev]);
+      setHistory((prev) => [{ kind: "text", text: `📝 Note: ${notes.trim()}` }, ...prev]);
       setNotes("");
       toast.success("✅ Note saved!");
     } catch (e: any) {
@@ -471,17 +561,17 @@ export default function DialSession() {
 
       await persistDisposition(lead.id, label);
 
-      setHistory((prev) => [`🏷️ Disposition: ${label}`, ...prev]);
+      setHistory((prev) => [{ kind: "text", text: `🏷️ Disposition: ${label}` }, ...prev]);
       setStatus(`Disposition saved: ${label}`);
       toast.success(`Saved: ${label}`);
 
       if (label === "Booked Appointment") setShowBookModal(true);
 
-      if (!sessionEndedRef.current) scheduleNextLead();
+      if (!sessionEndedRef.current) scheduleNextLead(); // ✅ advance to next lead
     } catch (e: any) {
       console.error(e);
       toast.error(e?.message || "Failed to save disposition");
-      if (!sessionEndedRef.current) scheduleNextLead();
+      if (!sessionEndedRef.current) scheduleNextLead(); // ✅ still advance on error
     } finally {
       dispositionBusyRef.current = false;
     }
@@ -493,6 +583,8 @@ export default function DialSession() {
     if (leadQueue.length <= 1) return showSessionSummary();
     const nextIndex = currentLeadIndex + 1;
     if (nextIndex >= leadQueue.length) return showSessionSummary();
+    // NEW: persist the just-finished index to server
+    serverPersist(currentLeadIndex);
     setCurrentLeadIndex(nextIndex);
     setReadyToCall(true);
   };
@@ -533,7 +625,7 @@ export default function DialSession() {
 
   const handleEndSession = () => {
     const ok = window.confirm(
-      `Are you sure you want to end this dial session? You have called ${sessionStartedCount} of ${leadQueue.length} leads.`,
+      `Are you sure you want to end this dial session? You have called ${sessionStartedCount} of ${leadQueue.length} leads.`
     );
     if (!ok) return;
 
@@ -547,15 +639,23 @@ export default function DialSession() {
     leaveIfJoined("end-session");
     setIsPaused(false);
     setStatus("Session ended");
+
+    // clear saved LOCAL progress if provided
+    if (typeof progressKey === "string") {
+      try { localStorage.removeItem(progressKey); } catch {}
+    }
+    // NEW: persist final index to server so Resume starts after it
+    serverPersist(currentLeadIndex);
+
     showSessionSummary();
   };
 
   const showSessionSummary = () => {
     alert(`✅ Session Complete!\nYou called ${sessionStartedCount} out of ${leadQueue.length} leads.`);
-    router.push("/leads").catch(() => {});
+    window.location.href = "/leads";
   };
 
-  /** sockets: live status (now pointing to /api/socket) **/
+  /** sockets **/
   useEffect(() => {
     let mounted = true;
     (async () => {
@@ -568,7 +668,6 @@ export default function DialSession() {
         if (!mounted || !mod) return;
         const { io } = mod as any;
 
-        // 👇 IMPORTANT: make client use /api/socket
         const socket = io(undefined, {
           path: "/api/socket",
           transports: ["websocket"],
@@ -611,11 +710,9 @@ export default function DialSession() {
               setStatus("Connected");
               stopRingback();
               clearWatchdog();
-              // already joined
             }
 
             if (s === "no-answer" || s === "busy" || s === "failed" || s === "canceled" || s === "completed") {
-              // 👇 guard against single-ring auto-skip
               if ((s === "no-answer" || s === "completed") && tooEarly()) return;
 
               stopRingback(); clearWatchdog();
@@ -634,6 +731,8 @@ export default function DialSession() {
     return () => {
       mounted = false;
       try { socketRef.current?.off?.("call:status"); socketRef.current?.disconnect?.(); } catch {}
+      stopRingback();
+      killAllTimers();
       leaveIfJoined("unmount");
       clearStatusPoll();
     };
@@ -661,7 +760,6 @@ export default function DialSession() {
 
         <div className="w-1/4 p-4 border-r border-gray-600 bg-[#1e293b] overflow-y-auto">
           <p className="text-green-400">Calling from: {fromNumber ? formatPhone(fromNumber) : "Resolving…"}</p>
-          <p className="text-yellow-400">Agent phone: {agentPhone ? formatPhone(agentPhone) : "Resolving…"}</p>
           <p className="text-yellow-500 mb-2">Status: {status}</p>
 
           <p className="text-sm text-gray-400 mb-2">
@@ -727,11 +825,15 @@ export default function DialSession() {
               {history.length === 0 ? (
                 <p className="text-gray-400">No interactions yet.</p>
               ) : (
-                history.map((item, idx) => (
-                  <p key={idx} className="border-b border-gray-700 py-1">
-                    {item}
-                  </p>
-                ))
+                history.map((item, idx) =>
+                  item.kind === "text" ? (
+                    <p key={idx} className="border-b border-gray-700 py-1">{item.text}</p>
+                  ) : (
+                    <p key={idx} className="border-b border-gray-700 py-1">
+                      <a href={item.href} target="_blank" rel="noreferrer" className="text-blue-400 underline">{item.text}</a>
+                    </p>
+                  )
+                )
               )}
             </div>
           </div>

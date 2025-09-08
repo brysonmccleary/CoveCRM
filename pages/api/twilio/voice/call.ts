@@ -1,4 +1,3 @@
-// /pages/api/twilio/voice/call.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 // ✅ correct relative path from /pages/api/twilio/voice/call.ts to /pages/api/auth/[...nextauth].ts
@@ -121,6 +120,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       machineDetection: "DetectMessageEnd",
       amdStatusCallback: `${BASE_URL}/api/twilio/amd-callback`,
       amdStatusCallbackMethod: "POST",
+      asyncAmd: "true",
     };
 
     const { client } = await getClientForUser(userEmail);

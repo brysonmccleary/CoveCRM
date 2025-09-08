@@ -1,4 +1,3 @@
-// redeploy 1756409393
 // /pages/api/twilio/inbound-sms.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import mongooseConnect from "@/lib/mongooseConnect";
@@ -24,6 +23,8 @@ const RAW_BASE_URL = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL |
 const SHARED_MESSAGING_SERVICE_SID = process.env.TWILIO_MESSAGING_SERVICE_SID || "";
 const INTERNAL_API_TOKEN = process.env.INTERNAL_API_TOKEN || "";
 const LEAD_ENTRY_PATH = (process.env.APP_LEAD_ENTRY_PATH || "/lead").replace(/\/?$/, "");
+const BUILD_TAG = "inbound-sms@2025-08-28T19:45Z";
+console.log(`[inbound-sms] build=${BUILD_TAG}`);
 
 const STATUS_CALLBACK =
   process.env.A2P_STATUS_CALLBACK_URL ||
@@ -224,7 +225,7 @@ function extractRequestedISO(textIn: string, state?: string): string | null {
     if (m) {
       const month = parseInt(m[1], 10), day = parseInt(m[2], 10);
       let h = parseInt(m[3], 10);
-      const min = m[4] ? parseInt(m[4], 10) : 0;
+      const min = parseInt(m[4], 10) || 0;
       const ap = m[5];
       if (ap) { if (ap === "pm" && h < 12) h += 12; if (ap === "am" && h === 12) h = 0; }
       let dt = DateTime.fromObject({ year: now.year, month, day, hour: h, minute: min, second: 0, millisecond: 0 }, { zone });
@@ -530,6 +531,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
     // =================================================================
 
+    // 🔒 Final sanity: if we somehow matched a lead whose phone DOES NOT end with the inbound last-10, drop it.
+    if (lead && last10 && !leadPhoneMatches(lead, fromDigits)) {
+      console.warn(`[inbound-sms] Rejecting suspect lead match leadId=${String(lead._id)} — phone on lead does not end with ${last10}`);
+      lead = null;
+    }
+
     if (!lead) {
       try {
         lead = await Lead.create({
@@ -552,6 +559,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!lead) {
       return res.status(200).json({ message: "Lead not found/created, acknowledged." });
     }
+
+    console.log(`[inbound-sms] RESOLVED leadId=${lead?._id || null} from=${fromNumber} to=${toNumber}`);
 
     const hadDrips = Array.isArray((lead as any).assignedDrips) && (lead as any).assignedDrips.length > 0;
 
@@ -912,7 +921,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           fromServiceSid: (paramsOut as any).messagingServiceSid,
         });
 
-        if (io) io.to(user.email).emit("message:new", { leadId: fresh._id, ...aiEntry });
+        let io2 = (res as any)?.socket?.server?.io;
+        if (io2) io2.to(user.email).emit("message:new", { leadId: fresh._id, ...aiEntry });
 
         if (isQuiet && scheduledAt && canSchedule) {
           console.log(`🕘 Quiet hours: scheduled AI reply to ${fromNumber} at ${scheduledAt.toISOString()} (${zone}) | SID: ${(twilioMsg as any)?.sid}`);
