@@ -172,22 +172,6 @@ export default function LeadsPage() {
   // preview panel
   const [previewLead, setPreviewLead] = useState<any | null>(null);
 
-  /** Keep user on last-opened folder view (when landing on /leads without folderId) */
-  useEffect(() => {
-    if (selectedFolderId) {
-      try {
-        localStorage.setItem("lastOpenedFolderId", selectedFolderId);
-      } catch {}
-      return;
-    }
-    try {
-      const last = localStorage.getItem("lastOpenedFolderId");
-      if (last) {
-        router.replace({ pathname: "/leads", query: { folderId: last } }).catch(() => {});
-      }
-    } catch {}
-  }, [selectedFolderId, router]);
-
   /** fetch folders */
   useEffect(() => {
     const fetchFolders = async () => {
@@ -296,9 +280,6 @@ export default function LeadsPage() {
 
   /** nav helpers */
   const handleFolderClick = (folderId: string) => {
-    try {
-      localStorage.setItem("lastOpenedFolderId", folderId);
-    } catch {}
     router.push({ pathname: "/leads", query: { folderId } }).catch(() => {});
   };
   const clearSelection = () => {
@@ -336,7 +317,7 @@ export default function LeadsPage() {
     setSelectAll(!selectAll);
   };
 
-  /** Start (green): ALWAYS fresh — clear local+server progress and start at 0 */
+  /** Start Dial Session — ALWAYS fresh: clear local pointer + reset server pointer, then start at 0 */
   const startDialSession = async () => {
     if (!leads || leads.length === 0) return;
     if (selectedLeadIds.length === 0) {
@@ -357,9 +338,12 @@ export default function LeadsPage() {
 
     const progressKey = buildLocalProgressKey();
     try {
-      localStorage.removeItem(progressKey);
+      localStorage.removeItem(progressKey); // start fresh: clear local resume
     } catch {}
 
+    localStorage.setItem("selectedDialNumber", selectedNumber);
+
+    // Reset server resume pointer to -1 for this folder BEFORE starting
     const serverKey = buildServerProgressKey();
     try {
       await fetch("/api/dial/progress", {
@@ -367,11 +351,10 @@ export default function LeadsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ key: serverKey, lastIndex: -1, total: selectedLeadIds.length }),
       });
+      setResumeInfo(null);
     } catch {
-      /* ignore reset errors; still start fresh */
+      /* ignore and proceed */
     }
-
-    localStorage.setItem("selectedDialNumber", selectedNumber);
 
     const params = new URLSearchParams({
       leads: selectedLeadIds.join(","),
@@ -383,17 +366,17 @@ export default function LeadsPage() {
     router.push(`/dial-session?${params.toString()}`);
   };
 
-  /** Quick Resume (blue): pick up from server lastIndex + 1 */
+  /** Quick Resume button beside Start Dial Session (server-backed) */
   const handleResumeQuickButton = async () => {
-    const hasResumeNow =
+    const hasLeads = !!leads && leads.length > 0;
+    const hasResume =
       !!selectedFolderId &&
-      !!leads &&
-      leads.length > 0 &&
+      hasLeads &&
       !!resumeInfo &&
       resumeInfo.lastIndex != null &&
       resumeInfo.lastIndex >= 0;
 
-    if (!hasResumeNow) return;
+    if (!hasResume) return;
     if (!selectedNumber) {
       alert("Please select a number to call from before resuming.");
       return;
@@ -485,7 +468,7 @@ export default function LeadsPage() {
     }
   };
 
-  /** render */
+  /** derived */
   const hasResume =
     !!selectedFolderId &&
     !!leads &&
@@ -564,9 +547,7 @@ export default function LeadsPage() {
         ) : (
           <>
             <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-2xl font-bold">
-                Folder: {selectedFolderName || selectedFolderId}
-              </h2>
+              <h2 className="text-2xl font-bold">Folder: {selectedFolderName || selectedFolderId}</h2>
               <button
                 onClick={clearSelection}
                 className="px-3 py-1 rounded bg-gray-700 hover:bg-gray-600"
@@ -575,8 +556,6 @@ export default function LeadsPage() {
                 ← All Folders
               </button>
             </div>
-
-            {/* Removed the amber resume banner on purpose */}
 
             {/* Dial controls */}
             <div className="flex flex-col gap-3 mb-4">
@@ -611,11 +590,11 @@ export default function LeadsPage() {
                       canStart ? "bg-green-600 hover:bg-green-700" : "bg-gray-500 cursor-not-allowed"
                     } text-white px-3 py-1 rounded`}
                     disabled={!canStart}
+                    title="Start from the beginning (fresh)"
                   >
                     Start Dial Session
                   </button>
 
-                  {/* Blue Resume button (server-backed) */}
                   <button
                     onClick={handleResumeQuickButton}
                     className={`${
