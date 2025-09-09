@@ -1,10 +1,10 @@
-// components/LeadImportPanel.tsx
+// /components/LeadImportPanel.tsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import Papa from "papaparse";
 import toast from "react-hot-toast";
 import {
   isSystemFolderName as isSystemFolder,
-  isBlockedSystemName as isBlockedSystemName,
+  isBlockedSystemName,
 } from "@/lib/systemFolders";
 
 type Folder = { _id: string; name: string };
@@ -127,7 +127,7 @@ export default function LeadImportPanel({
       const savedId = localStorage.getItem(LOCAL_KEY_FOLDER);
       if (!savedId) return;
       const found = folders.find((f) => f._id === savedId);
-      if (!found || isSystemFolder(found.name)) {
+      if (!found || isSystemFolder(found.name) || isBlockedSystemName(found.name)) {
         localStorage.removeItem(LOCAL_KEY_FOLDER);
         setTargetFolderId("");
         setUseExisting(true);
@@ -144,7 +144,7 @@ export default function LeadImportPanel({
   useEffect(() => {
     if (!folders.length) return;
     const selected = folders.find((f) => f._id === targetFolderId);
-    if (selected && isSystemFolder(selected.name)) {
+    if (selected && (isSystemFolder(selected.name) || isBlockedSystemName(selected.name))) {
       setTargetFolderId("");
     }
   }, [folders, targetFolderId]);
@@ -366,7 +366,7 @@ export default function LeadImportPanel({
             >
               <option value="">— Select a folder —</option>
               {folders
-                .filter((f) => !isSystemFolder(f.name))
+                .filter((f) => !isSystemFolder(f.name) && !isBlockedSystemName(f.name))
                 .map((f) => (
                   <option key={f._id} value={f._id}>
                     {f.name}
