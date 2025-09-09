@@ -1,7 +1,11 @@
+// components/LeadImportPanel.tsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import Papa from "papaparse";
 import toast from "react-hot-toast";
-import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
+import {
+  isSystemFolderName as isSystemFolder,
+  isBlockedSystemName as isBlockedSystemName,
+} from "@/lib/systemFolders";
 
 type Folder = { _id: string; name: string };
 
@@ -33,12 +37,6 @@ const systemFields = [
 
 function lc(s?: string) {
   return (s || "").toLowerCase();
-}
-
-// Catch common visual lookalikes for system names (0→o, I→l)
-function looksSystemish(name: string) {
-  const n = name.trim().toLowerCase().replace(/0/g, "o").replace(/ı|i/g, "l");
-  return isSystemFolder(n);
 }
 
 function bestGuessField(header: string): Canonical | "" {
@@ -113,11 +111,7 @@ export default function LeadImportPanel({
       try {
         const saved = localStorage.getItem(LOCAL_KEY_MAPPING);
         if (saved) setMapping(JSON.parse(saved));
-        const savedFolder = localStorage.getItem(LOCAL_KEY_FOLDER);
-        if (savedFolder) {
-          setTargetFolderId(savedFolder);
-          setUseExisting(true);
-        }
+
         const savedSkip = localStorage.getItem(LOCAL_KEY_SKIP);
         if (savedSkip != null) setSkipExisting(savedSkip === "true");
       } catch {
@@ -126,11 +120,31 @@ export default function LeadImportPanel({
     })();
   }, []);
 
-  // If a previously-saved system folder id sneaks in, drop it
+  // Drop any stale saved system-folder id once folders load
+  useEffect(() => {
+    try {
+      if (!folders.length) return;
+      const savedId = localStorage.getItem(LOCAL_KEY_FOLDER);
+      if (!savedId) return;
+      const found = folders.find((f) => f._id === savedId);
+      if (!found || isSystemFolder(found.name)) {
+        localStorage.removeItem(LOCAL_KEY_FOLDER);
+        setTargetFolderId("");
+        setUseExisting(true);
+      } else {
+        setTargetFolderId(savedId);
+        setUseExisting(true);
+      }
+    } catch {
+      /* ignore */
+    }
+  }, [folders]);
+
+  // Also clear target id if current selection becomes unsafe
   useEffect(() => {
     if (!folders.length) return;
-    const safe = folders.filter((f) => !isSystemFolder(f.name));
-    if (!safe.some((f) => f._id === targetFolderId)) {
+    const selected = folders.find((f) => f._id === targetFolderId);
+    if (selected && isSystemFolder(selected.name)) {
       setTargetFolderId("");
     }
   }, [folders, targetFolderId]);
@@ -208,14 +222,14 @@ export default function LeadImportPanel({
         return;
       }
 
-      // Folder validation
+      // Folder validation (UI mirrors server rules)
       if (useExisting) {
         if (!targetFolderId) {
           toast.error("❌ Choose a folder to import into");
           return;
         }
         const selected = folders.find((f) => f._id === targetFolderId);
-        if (selected && isSystemFolder(selected.name)) {
+        if (selected && (isSystemFolder(selected.name) || isBlockedSystemName(selected.name))) {
           toast.error("Cannot import into system folders");
           return;
         }
@@ -225,7 +239,7 @@ export default function LeadImportPanel({
           toast.error("❌ Enter a new folder name");
           return;
         }
-        if (isSystemFolder(name) || looksSystemish(name)) {
+        if (isSystemFolder(name) || isBlockedSystemName(name)) {
           toast.error("Cannot import into system folders");
           return;
         }
@@ -260,11 +274,10 @@ export default function LeadImportPanel({
 
       if (useExisting) {
         form.append("targetFolderId", targetFolderId);
-        // explicit guard
         form.delete("createNewFolder");
       } else {
         const name = newFolderName.trim();
-        // Explicitly indicate "create" and make sure no id is present
+        // Explicitly indicate creation; server ignores any id if present anywhere
         form.append("createNewFolder", "true");
         form.delete("targetFolderId");
         // Send name under every legacy key the API might accept
@@ -302,7 +315,7 @@ export default function LeadImportPanel({
       setSkipHeader({});
       setCustomFieldNames({});
 
-      if (onImportSuccess) onImportSuccess();
+      onImportSuccess?.();
     } catch (e: any) {
       console.error("❌ Import error:", e);
       toast.error(`❌ ${e?.message || "An unexpected error occurred"}`);
