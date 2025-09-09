@@ -1,6 +1,6 @@
 export const SYSTEM_FOLDERS = ["Sold", "Not Interested", "Booked Appointment"] as const;
 
-function canon(s?: string) {
+function canon(s?: string | null) {
   return String(s ?? "")
     .normalize("NFKD")
     .toLowerCase()
