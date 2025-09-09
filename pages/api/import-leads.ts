@@ -12,6 +12,7 @@ import { sanitizeLeadType, createLeadsFromCSV } from "@/lib/mongo/leads";
 import { isSystemFolderName } from "@/lib/systemFolders";
 
 export const config = { api: { bodyParser: false } };
+const IMPORT_BUILD_TAG = "import-guard-v3";
 
 // ---------- helpers
 function bufferToStream(buffer: Buffer): Readable {
@@ -226,7 +227,7 @@ async function resolveImportFolder(
     return f;
   }
   if (opts.targetFolderId) {
-    const f = await Folder.findOne({ _id: opts.targetFolderId, userEmail });
+    const f = await Folder.findOne({ _id: opts.targetFolderId, userEmail }).select("name");
     if (!f) throw new Error("Folder not found or not owned by user");
     if (isBlockedSystemName(f.name)) throw new Error("Cannot import into system folders");
     return f;
@@ -276,10 +277,10 @@ function mapRow(row: Record<string, any>, mapping: Record<string, string>) {
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed" });
+  if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed", tag: IMPORT_BUILD_TAG });
 
   const session = await getServerSession(req, res, authOptions);
-  if (!session?.user?.email) return res.status(401).json({ message: "Unauthorized" });
+  if (!session?.user?.email) return res.status(401).json({ message: "Unauthorized", tag: IMPORT_BUILD_TAG });
 
   const userEmail = lc(session.user.email)!;
   await dbConnect();
@@ -299,8 +300,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         targetFolderId = undefined;
       }
 
+      if (targetFolderId) {
+        const f = await Folder.findOne({ _id: targetFolderId, userEmail }).select("name");
+        if (f && isBlockedSystemName(f.name)) {
+          return res.status(400).json({ message: "Cannot import into system folders", tag: IMPORT_BUILD_TAG });
+        }
+      }
+      if (folderName && isBlockedSystemName(folderName)) {
+        return res.status(400).json({ message: "Cannot import into system folders", tag: IMPORT_BUILD_TAG });
+      }
+
       if (!mapping || !rows || !Array.isArray(rows)) {
-        return res.status(400).json({ message: "Missing mapping or rows[]" });
+        return res.status(400).json({ message: "Missing mapping or rows[]", tag: IMPORT_BUILD_TAG });
       }
 
       const folder = await resolveImportFolder(userEmail, { targetFolderId, folderName });
@@ -465,11 +476,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         counts: { inserted, updated, skipped },
         mode: "json",
         skipExisting,
+        tag: IMPORT_BUILD_TAG,
       });
     } catch (e: any) {
       console.error("❌ JSON import error:", e);
       const msg = /system folders/i.test(String(e?.message)) ? String(e?.message) : "Import failed";
-      return res.status(400).json({ message: msg, error: e?.message || String(e) });
+      return res.status(400).json({ message: msg, error: e?.message || String(e), tag: IMPORT_BUILD_TAG });
     }
   }
 
@@ -479,7 +491,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   form.parse(req, async (err, fields, files) => {
     if (err) {
       console.error("❌ Form parse error:", err);
-      return res.status(500).json({ message: "Form parse error" });
+      return res.status(500).json({ message: "Form parse error", tag: IMPORT_BUILD_TAG });
     }
 
     let targetFolderId = firstString((fields as any).targetFolderId);
@@ -492,8 +504,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       targetFolderId = undefined;
     }
 
+    // ID pre-check to block system folders early
+    if (targetFolderId) {
+      const f = await Folder.findOne({ _id: targetFolderId, userEmail }).select("name");
+      if (f && isBlockedSystemName(f.name)) {
+        return res.status(400).json({ message: "Cannot import into system folders", tag: IMPORT_BUILD_TAG });
+      }
+    }
+    if (folderNameField && isBlockedSystemName(folderNameField)) {
+      return res.status(400).json({ message: "Cannot import into system folders", tag: IMPORT_BUILD_TAG });
+    }
+
     const file = Array.isArray((files as any).file) ? (files as any).file[0] : (files as any).file;
-    if (!file?.filepath) return res.status(400).json({ message: "Missing file" });
+    if (!file?.filepath) return res.status(400).json({ message: "Missing file", tag: IMPORT_BUILD_TAG });
 
     // New path (mapping provided)
     if (mappingStr) {
@@ -523,7 +546,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         });
 
         if (rawRows.length === 0) {
-          return res.status(400).json({ message: "No data rows found in CSV (empty file or header-only)." });
+          return res.status(400).json({ message: "No data rows found in CSV (empty file or header-only).", tag: IMPORT_BUILD_TAG });
         }
 
         const rowsMapped = rawRows.map((r) => ({
@@ -589,7 +612,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             if (m["Last Name"] !== undefined) set["Last Name"] = m["Last Name"];
             if (m.State !== undefined) set["State"] = m.State;
             if (m.Notes !== undefined) set["Notes"] = m.Notes;
-            if (m.leadType) set["leadType"] = m.leadType;
+            if (m.leadType) set["leadType"] = m["leadType"];
 
             applyIdentityFields(set, phoneKey, emailKey, m.Phone);
             ops.push({ updateOne: { filter, update: { $set: set }, upsert: false } });
@@ -615,7 +638,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             if (m["Last Name"] !== undefined) set["Last Name"] = m["Last Name"];
             if (m.State !== undefined) set["State"] = m.State;
             if (m.Notes !== undefined) set["Notes"] = m.Notes;
-            if (m.leadType) set["leadType"] = m.leadType;
+            if (m.leadType) set["leadType"] = m["leadType"];
 
             applyIdentityFields(set, phoneKey, emailKey, m.Phone);
             ops.push({ updateOne: { filter, update: { $set: set, $setOnInsert: setOnInsert }, upsert: true } });
@@ -667,7 +690,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             if (m["Last Name"] !== undefined) set["Last Name"] = m["Last Name"];
             if (m.State !== undefined) set["State"] = m.State;
             if (m.Notes !== undefined) set["Notes"] = m.Notes;
-            if (m.leadType) set["leadType"] = m.leadType;
+            if (m.leadType) set["leadType"] = m["leadType"];
 
             applyIdentityFields(set, phoneKey, emailKey, m.Phone);
 
@@ -687,19 +710,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           counts: { inserted, updated, skipped },
           mode: "multipart+mapping",
           skipExisting,
+          tag: IMPORT_BUILD_TAG,
         });
       } catch (e: any) {
         console.error("❌ Multipart mapping import error:", e);
         const msg = /system folders/i.test(String(e?.message)) ? String(e?.message) : "Import failed";
-        return res.status(400).json({ message: msg, error: e?.message || String(e) });
+        return res.status(400).json({ message: msg, error: e?.message || String(e), tag: IMPORT_BUILD_TAG });
       }
     }
 
     // ---------- Legacy path: folderName + CSV (no mapping provided) ----------
     const folderNameLegacy = folderNameField || detectFolderNameFromForm(fields) || "";
-    if (!folderNameLegacy) return res.status(400).json({ message: "Missing folder name" });
+    if (!folderNameLegacy) return res.status(400).json({ message: "Missing folder name", tag: IMPORT_BUILD_TAG });
     if (isBlockedSystemName(folderNameLegacy)) {
-      return res.status(400).json({ message: "Cannot import into system folders" });
+      return res.status(400).json({ message: "Cannot import into system folders", tag: IMPORT_BUILD_TAG });
     }
 
     try {
@@ -721,7 +745,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
 
       if (rawLeads.length === 0) {
-        return res.status(400).json({ message: "No data rows found in CSV (empty file or header-only)." });
+        return res.status(400).json({ message: "No data rows found in CSV (empty file or header-only).", tag: IMPORT_BUILD_TAG });
       }
 
       let folder = await Folder.findOne({ name: folderNameLegacy, userEmail });
@@ -754,10 +778,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         folderId: folder._id,
         folderName: folder.name,
         mode: "multipart-legacy",
+        tag: IMPORT_BUILD_TAG,
       });
     } catch (e: any) {
       console.error("❌ Legacy import error:", e);
-      return res.status(500).json({ message: "Insert failed", error: e?.message || String(e) });
+      return res.status(500).json({ message: "Insert failed", error: e?.message || String(e), tag: IMPORT_BUILD_TAG });
     }
   });
 }
