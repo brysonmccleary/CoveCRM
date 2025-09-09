@@ -84,6 +84,17 @@ const truthy = (v: any) =>
     ? v
     : ["1", "true", "yes", "on"].includes(String(v ?? "").trim().toLowerCase());
 
+/** Load system folder ids for the user (belt + suspenders) */
+async function getSystemFolderIdSet(userEmail: string): Promise<Set<string>> {
+  const rows = await Folder.find({
+    userEmail,
+    name: { $in: Array.from(SYSTEM_FOLDERS) as string[] },
+  })
+    .select("_id name")
+    .lean();
+  return new Set(rows.map((r: any) => String(r._id)));
+}
+
 /** Detect a "create new folder" name from many possible keys (multipart/form fields) */
 function detectFolderNameFromForm(fields: Record<string, any>): string | undefined {
   const candidates = [
@@ -153,6 +164,10 @@ function detectFolderNameFromJson(body: Record<string, any>): string | undefined
  * Resolve destination folder with strict rules & hard blocking:
  *  - If a non-empty folder *name* is present, it WINS and we IGNORE any targetFolderId.
  *  - Else if targetFolderId is provided, use it (but block system folders by id & name).
+ *
+ * IMPORTANT CHANGE:
+ *  When creating by *name*, we use the raw Mongo collection to upsert,
+ *  so no Mongoose query middleware can normalize the filter into "Sold".
  */
 async function resolveImportFolder(
   userEmail: string,
@@ -164,11 +179,27 @@ async function resolveImportFolder(
     if (isSystemFolderName(byName) || isBlockedSystemName(byName)) {
       throw new Error("Cannot import into system folders");
     }
-    return await Folder.findOneAndUpdate(
-      { userEmail, name: byName },
+
+    // ⬇️ Bypass Mongoose middleware to guarantee exact-name behavior
+    const raw = await Folder.collection.findOneAndUpdate(
+      { userEmail, name: byName }, // exact match only
       { $setOnInsert: { userEmail, name: byName } },
-      { new: true, upsert: true, runValidators: true }
+      { upsert: true, returnDocument: "after" } as any
     );
+
+    if (!raw.value) {
+      throw new Error("Failed to resolve folder");
+    }
+
+    // Load as a Mongoose doc (optional, for .name etc.)
+    const f = await Folder.findOne({ _id: raw.value._id, userEmail });
+    if (!f) throw new Error("Folder not found after upsert");
+
+    // Final defense
+    if (isSystemFolderName(f.name) || isBlockedSystemName(f.name)) {
+      throw new Error("Cannot import into system folders");
+    }
+    return f;
   }
 
   if (opts.targetFolderId) {
@@ -259,13 +290,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const skipExisting = Boolean((json as any).skipExisting);
       const folderName = detectFolderNameFromJson(json) || undefined;
 
-      const requestedNew = truthy((json as any).createNewFolder);
-
-      if (requestedNew && !folderName) {
-        return res.status(400).json({ message: "Missing new folder name" });
-      }
-      if (requestedNew) {
+      // explicit override from client to create new folder
+      if (truthy((json as any).createNewFolder)) {
         targetFolderId = undefined;
+        // require a non-empty name when createNewFolder=true
+        if (!folderName || !folderName.trim()) {
+          return res.status(400).json({ message: "Missing folder name" });
+        }
       }
 
       if (!mapping || !rows || !Array.isArray(rows)) {
@@ -274,6 +305,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       const folder = await resolveImportFolder(userEmail, { targetFolderId, folderName });
 
+      // final defense
       if (isSystemFolderName(folder.name) || isBlockedSystemName(folder.name)) {
         return res.status(400).json({ message: "Cannot import into system folders" });
       }
@@ -428,7 +460,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           if (m["Last Name"] !== undefined) set["Last Name"] = m["Last Name"];
           if (m.State !== undefined) set["State"] = m.State;
           if (m.Notes !== undefined) set["Notes"] = m.Notes;
-          if (m.leadType) set["leadType"] = m["leadType"];
+          if (m.leadType) set["leadType"] = m.leadType;
 
           if (m.Phone !== undefined) set["Phone"] = m.Phone;
           if (phoneKey !== undefined) { set["phoneLast10"] = phoneKey; set["normalizedPhone"] = phoneKey; }
@@ -472,13 +504,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const mappingStr = firstString((fields as any).mapping);
     const skipExisting = firstString((fields as any).skipExisting) === "true";
 
-    const requestedNew = truthy((fields as any).createNewFolder);
-
-    if (requestedNew && !folderNameField.trim()) {
-      return res.status(400).json({ message: "Missing new folder name" });
-    }
-    if (requestedNew) {
+    // explicit override from client to create a new folder
+    if (truthy((fields as any).createNewFolder)) {
       targetFolderId = undefined;
+      if (!folderNameField.trim()) {
+        return res.status(400).json({ message: "Missing folder name" });
+      }
     }
 
     const file = Array.isArray((files as any).file) ? (files as any).file[0] : (files as any).file;
@@ -494,6 +525,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           folderName: folderNameField || undefined,
         });
 
+        // final defense
         if (isSystemFolderName(folder.name) || isBlockedSystemName(folder.name)) {
           return res.status(400).json({ message: "Cannot import into system folders" });
         }
@@ -583,9 +615,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             if (m["Last Name"] !== undefined) set["Last Name"] = m["Last Name"];
             if (m.State !== undefined) set["State"] = m.State;
             if (m.Notes !== undefined) set["Notes"] = m.Notes;
-            if (m.leadType) set["leadType"] = m["leadType"];
+            if (m.leadType) set["leadType"] = m.leadType;
 
-            if (m.Phone !== undefined) set["Phone"] = m["Phone"];
+            if (m.Phone !== undefined) set["Phone"] = m.Phone;
             if (phoneKey !== undefined) { set["phoneLast10"] = phoneKey; set["normalizedPhone"] = phoneKey; }
             if (emailKey !== undefined) { set["Email"] = emailKey; set["email"] = emailKey; }
 
@@ -611,11 +643,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
             if (m["First Name"] !== undefined) set["First Name"] = m["First Name"];
             if (m["Last Name"] !== undefined) set["Last Name"] = m["Last Name"];
-            if (m.State !== undefined) set["State"] = m["State"];
-            if (m.Notes !== undefined) set["Notes"] = m["Notes"];
-            if (m.leadType) set["leadType"] = m["leadType"];
+            if (m.State !== undefined) set["State"] = m.State;
+            if (m.Notes !== undefined) set["Notes"] = m.Notes;
+            if (m.leadType) set["leadType"] = m.leadType;
 
-            if (m.Phone !== undefined) set["Phone"] = m["Phone"];
+            if (m.Phone !== undefined) set["Phone"] = m.Phone;
             if (phoneKey !== undefined) { set["phoneLast10"] = phoneKey; set["normalizedPhone"] = phoneKey; }
             if (emailKey !== undefined) { set["Email"] = emailKey; set["email"] = emailKey; }
 
@@ -667,11 +699,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
             if (m["First Name"] !== undefined) set["First Name"] = m["First Name"];
             if (m["Last Name"] !== undefined) set["Last Name"] = m["Last Name"];
-            if (m.State !== undefined) set["State"] = m["State"];
-            if (m.Notes !== undefined) set["Notes"] = m["Notes"];
-            if (m.leadType) set["leadType"] = m["leadType"];
+            if (m.State !== undefined) set["State"] = m.State;
+            if (m.Notes !== undefined) set["Notes"] = m.Notes;
+            if (m.leadType) set["leadType"] = m.leadType;
 
-            if (m.Phone !== undefined) set["Phone"] = m["Phone"];
+            if (m.Phone !== undefined) set["Phone"] = m.Phone;
             if (phoneKey !== undefined) { set["phoneLast10"] = phoneKey; set["normalizedPhone"] = phoneKey; }
             if (emailKey !== undefined) { set["Email"] = emailKey; set["email"] = emailKey; }
 
@@ -728,9 +760,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return res.status(400).json({ message: "No data rows found in CSV (empty file or header-only)." });
       }
 
-      let folder = await Folder.findOne({ name: folderNameLegacy, userEmail });
-      if (!folder) folder = await Folder.create({ name: folderNameLegacy, userEmail });
+      // Same raw-collection upsert to guarantee exact-name behavior
+      const raw = await Folder.collection.findOneAndUpdate(
+        { userEmail, name: folderNameLegacy },
+        { $setOnInsert: { userEmail, name: folderNameLegacy } },
+        { upsert: true, returnDocument: "after" } as any
+      );
+      if (!raw.value) return res.status(400).json({ message: "Failed to resolve folder" });
 
+      const folder = await Folder.findOne({ _id: raw.value._id, userEmail });
+      if (!folder) return res.status(400).json({ message: "Failed to load folder" });
+
+      // defense
       if (isSystemFolderName(folder.name) || isBlockedSystemName(folder.name)) {
         return res.status(400).json({ message: "Cannot import into system folders" });
       }
