@@ -69,17 +69,6 @@ function lc(str?: string | null) {
   return str ? String(str).trim().toLowerCase() : undefined;
 }
 
-type JsonPayload = {
-  targetFolderId?: string;
-  folderName?: string;           // primary name key
-  newFolderName?: string;        // legacy UI key (supported)
-  newFolder?: string;            // extra legacy key (supported)
-  mapping?: Record<string, string>;
-  rows?: Record<string, any>[];
-  skipExisting?: boolean;        // default false = MOVE + RESET
-};
-
-// --- field extraction helpers ---
 function firstString(v: any): string | undefined {
   if (v == null) return undefined;
   if (Array.isArray(v)) return firstString(v[0]);
@@ -87,9 +76,8 @@ function firstString(v: any): string | undefined {
   return s ? s : undefined;
 }
 
-/** Detect a "create new folder" name from many possible keys */
+/** Detect a "create new folder" name from many possible keys (multipart/form fields) */
 function detectFolderNameFromForm(fields: Record<string, any>): string | undefined {
-  // Preferred explicit keys first
   const candidates = [
     "folderName",
     "newFolderName",
@@ -103,23 +91,17 @@ function detectFolderNameFromForm(fields: Record<string, any>): string | undefin
     "create_new_folder",
     "folder_name",
   ];
-
   for (const k of candidates) {
     const val = firstString((fields as any)[k]);
     if (val) return val;
   }
-
-  // Fallback: scan for keys that look like "new*folder*name" or "folder*name"
   for (const [k, v] of Object.entries(fields)) {
     const key = k.toLowerCase();
     if (key.includes("targetfolderid")) continue;
     if (key.includes("mapping")) continue;
     if (key.includes("skip")) continue;
     if (key.includes("file")) continue;
-
-    if (
-      /new.*folder.*name|folder.*name|create.*folder/.test(key)
-    ) {
+    if (/new.*folder.*name|folder.*name|create.*folder/.test(key)) {
       const val = firstString(v);
       if (val) return val;
     }
@@ -127,7 +109,8 @@ function detectFolderNameFromForm(fields: Record<string, any>): string | undefin
   return undefined;
 }
 
-function detectFolderNameFromJson(body: any): string | undefined {
+/** Detect a "create new folder" name from many possible keys (JSON) */
+function detectFolderNameFromJson(body: Record<string, any>): string | undefined {
   const candidates = [
     "folderName",
     "newFolderName",
@@ -145,7 +128,6 @@ function detectFolderNameFromJson(body: any): string | undefined {
     const val = firstString((body as any)[k]);
     if (val) return val;
   }
-  // Broad scan fallback
   for (const [k, v] of Object.entries(body || {})) {
     const key = k.toLowerCase();
     if (key.includes("targetfolderid")) continue;
@@ -182,44 +164,29 @@ function isBlockedSystemName(name?: string | null) {
   );
 }
 
-/**
- * Resolve destination folder with strict rules:
- *  - If a non-empty folder *name* is present (folderName/newFolderName/etc), it WINS and we IGNORE any targetFolderId.
- *  - Else if targetFolderId is provided, use it (but hard-block system folders).
- */
-async function resolveImportFolder(
-  userEmail: string,
-  opts: { targetFolderId?: string; folderName?: string }
-) {
-  const byName = (opts.folderName || "").trim();
-  if (byName) {
-    if (isBlockedSystemName(byName)) {
-      throw new Error("Cannot import into system folders");
-    }
-    const f = await Folder.findOneAndUpdate(
-      { userEmail, name: byName },
-      { $setOnInsert: { userEmail, name: byName } },
-      { new: true, upsert: true }
-    );
-    return f;
+/** Build dedupe filters and identity set fields */
+function buildFilter(userEmail: string, phoneKey?: string, emailKey?: string) {
+  if (phoneKey) {
+    return { userEmail, $or: [{ phoneLast10: phoneKey }, { normalizedPhone: phoneKey }] };
   }
-  if (opts.targetFolderId) {
-    const f = await Folder.findOne({ _id: opts.targetFolderId, userEmail });
-    if (!f) throw new Error("Folder not found or not owned by user");
-    if (isBlockedSystemName(f.name)) throw new Error("Cannot import into system folders");
-    return f;
+  if (emailKey) {
+    return { userEmail, $or: [{ Email: emailKey }, { email: emailKey }] };
   }
-  throw new Error("Missing targetFolderId or folderName");
+  return null;
+}
+function applyIdentityFields(set: Record<string, any>, phoneKey?: string, emailKey?: string, phoneRaw?: any) {
+  if (phoneRaw !== undefined) set["Phone"] = phoneRaw;
+  if (phoneKey !== undefined) {
+    set["phoneLast10"] = phoneKey;
+    set["normalizedPhone"] = phoneKey;
+  }
+  if (emailKey !== undefined) {
+    set["Email"] = emailKey;
+    set["email"] = emailKey;
+  }
 }
 
-type JsonPayload = {
-  targetFolderId?: string;
-  mapping?: Record<string, string>;
-  rows?: Record<string, any>[];
-  skipExisting?: boolean;
-};
-
-// Read raw JSON when bodyParser is disabled
+/** Read raw JSON when bodyParser is disabled */
 async function readJsonBody(req: NextApiRequest): Promise<Record<string, any> | null> {
   if (!req.headers["content-type"]?.includes("application/json")) return null;
   const chunks: Buffer[] = [];
@@ -234,6 +201,34 @@ async function readJsonBody(req: NextApiRequest): Promise<Record<string, any> | 
   } catch {
     return {};
   }
+}
+
+/**
+ * Resolve destination folder with strict rules:
+ *  - If a non-empty folder *name* is present, it WINS and we IGNORE any targetFolderId.
+ *  - Else if targetFolderId is provided, use it (but hard-block system folders).
+ */
+async function resolveImportFolder(
+  userEmail: string,
+  opts: { targetFolderId?: string; folderName?: string }
+) {
+  const byName = (opts.folderName || "").trim();
+  if (byName) {
+    if (isBlockedSystemName(byName)) throw new Error("Cannot import into system folders");
+    const f = await Folder.findOneAndUpdate(
+      { userEmail, name: byName },
+      { $setOnInsert: { userEmail, name: byName } },
+      { new: true, upsert: true }
+    );
+    return f;
+  }
+  if (opts.targetFolderId) {
+    const f = await Folder.findOne({ _id: opts.targetFolderId, userEmail });
+    if (!f) throw new Error("Folder not found or not owned by user");
+    if (isBlockedSystemName(f.name)) throw new Error("Cannot import into system folders");
+    return f;
+  }
+  throw new Error("Missing targetFolderId or folderName");
 }
 
 // Map one CSV row using provided mapping
@@ -277,28 +272,6 @@ function mapRow(row: Record<string, any>, mapping: Record<string, string>) {
   };
 }
 
-// ---- Common helpers to build filters and sets with all dedupe fields ----
-function buildFilter(userEmail: string, phoneKey?: string, emailKey?: string) {
-  if (phoneKey) {
-    return { userEmail, $or: [{ phoneLast10: phoneKey }, { normalizedPhone: phoneKey }] };
-  }
-  if (emailKey) {
-    return { userEmail, $or: [{ Email: emailKey }, { email: emailKey }] };
-  }
-  return null;
-}
-function applyIdentityFields(set: Record<string, any>, phoneKey?: string, emailKey?: string, phoneRaw?: any) {
-  if (phoneRaw !== undefined) set["Phone"] = phoneRaw;
-  if (phoneKey !== undefined) {
-    set["phoneLast10"] = phoneKey;
-    set["normalizedPhone"] = phoneKey;
-  }
-  if (emailKey !== undefined) {
-    set["Email"] = emailKey;
-    set["email"] = emailKey;
-  }
-}
-
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed" });
 
@@ -312,12 +285,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const json = await readJsonBody(req);
   if (json && Object.keys(json).length) {
     try {
-      const { targetFolderId, mapping, rows, skipExisting = false } = json as JsonPayload;
-
-      // Accept many possible name keys from clients
-      const folderName =
-        detectFolderNameFromJson(json) ||
-        undefined;
+      const targetFolderId = firstString((json as any).targetFolderId);
+      const mapping = (json as any).mapping as Record<string, string> | undefined;
+      const rows = (json as any).rows as Record<string, any>[] | undefined;
+      const skipExisting = Boolean((json as any).skipExisting);
+      const folderName = detectFolderNameFromJson(json) || undefined;
 
       if (!mapping || !rows || !Array.isArray(rows)) {
         return res.status(400).json({ message: "Missing mapping or rows[]" });
@@ -518,7 +490,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const mapping = JSON.parse(mappingStr) as Record<string, string>;
 
         // Name wins if present; blocks system names/lookalikes
-        const folder = await resolveImportFolder(lc(session.user!.email)!, {
+        const folder = await resolveImportFolder(userEmail, {
           targetFolderId,
           folderName: folderNameField || undefined,
         });
