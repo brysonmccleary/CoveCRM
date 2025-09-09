@@ -18,6 +18,9 @@ import {
 
 export const config = { api: { bodyParser: false } };
 
+// ---------- diag helper (no behavior change)
+const IMP = (...args: any[]) => console.log("[#IMPORT]", ...args);
+
 // ---------- helpers
 function bufferToStream(buffer: Buffer): Readable {
   const stream = new Readable();
@@ -175,7 +178,6 @@ async function resolveImportFolder(
     if (isSystemFolderName(byName) || isBlockedSystemName(byName)) {
       throw new Error("Cannot import into system folders");
     }
-    // create or fetch by exact user/name
     const f =
       (await Folder.findOne({ userEmail, name: byName })) ||
       (await Folder.create({ userEmail, name: byName }));
@@ -236,6 +238,8 @@ function mapRow(row: Record<string, any>, mapping: Record<string, string>) {
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  IMP("handler start", { file: __filename, method: req.method });
+
   if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed" });
 
   const session = await getServerSession(req, res, authOptions);
@@ -243,6 +247,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const userEmail = lc(session.user.email)!;
   await dbConnect();
+  IMP("user", { userEmail });
 
   // ---------- JSON MODE ----------
   const readJsonBody = async (): Promise<Record<string, any> | null> => {
@@ -271,7 +276,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const folderName = detectFolderNameFromJson(json) || undefined;
       const createNew = truthy((json as any).createNewFolder);
 
-      // If client says "create new", we REQUIRE a name and we IGNORE any id.
+      IMP("mode=json inputs", { createNew, folderName, targetFolderId, hasMapping: !!mapping, rows: Array.isArray(rows) ? rows.length : 0 });
+
       if (createNew) {
         targetFolderId = undefined;
         if (!folderName || !folderName.trim()) {
@@ -284,8 +290,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
 
       const folder = await resolveImportFolder(userEmail, { targetFolderId, folderName });
+      IMP("mode=json resolved", { folderId: String(folder._id), folderName: folder.name });
 
-      // final defense
       if (isSystemFolderName(folder.name) || isBlockedSystemName(folder.name)) {
         return res.status(400).json({ message: "Cannot import into system folders" });
       }
@@ -415,46 +421,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
       }
 
-      if (!ops.length && skipped === 0 && mapped.length > 0) {
-        for (const m of mapped) {
-          const phoneKey = m.phoneLast10 as string | undefined;
-          const emailKey = (m.Email as string | undefined) || (m.email as string | undefined);
-          const filter = { userEmail, ...(phoneKey
-            ? { $or: [{ phoneLast10: phoneKey }, { normalizedPhone: phoneKey }] }
-            : { $or: [{ Email: emailKey }, { email: emailKey }] }) };
-
-          const setOnInsert: any = {
-            userEmail,
-            ownerEmail: userEmail,
-            status: "New",
-            createdAt: new Date(),
-          };
-          const set: any = {
-            folderId: folder._id,
-            folder_name: String(folder.name),
-            "Folder Name": String(folder.name),
-            updatedAt: new Date(),
-          };
-
-          if (m["First Name"] !== undefined) set["First Name"] = m["First Name"];
-          if (m["Last Name"] !== undefined) set["Last Name"] = m["Last Name"];
-          if (m.State !== undefined) set["State"] = m.State;
-          if (m.Notes !== undefined) set["Notes"] = m.Notes;
-          if (m.leadType) set["leadType"] = m.leadType;
-
-          if (m.Phone !== undefined) set["Phone"] = m.Phone;
-          if (phoneKey !== undefined) { set["phoneLast10"] = phoneKey; set["normalizedPhone"] = phoneKey; }
-          if (emailKey !== undefined) { set["Email"] = emailKey; set["email"] = emailKey; }
-
-          const r = await Lead.updateOne(filter, { $set: set, $setOnInsert: setOnInsert }, { upsert: true });
-          const upc = (r as any).upsertedCount || ((r as any).upsertedId ? 1 : 0) || 0;
-          const mod = (r as any).modifiedCount || 0;
-          const match = (r as any).matchedCount || 0;
-          if (upc > 0) inserted += upc;
-          else if (mod > 0 || match > 0) updated += 1;
-        }
-      }
-
       return res.status(200).json({
         message: "Import completed",
         folderId: folder._id,
@@ -485,6 +451,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const skipExisting = firstString((fields as any).skipExisting) === "true";
     const createNew = truthy((fields as any).createNewFolder);
 
+    IMP("mode=multipart inputs", {
+      createNew,
+      folderNameField,
+      targetFolderId,
+      hasMapping: !!mappingStr,
+    });
+
     // If client says "create new", REQUIRE a name and IGNORE any id
     if (createNew) {
       targetFolderId = undefined;
@@ -505,6 +478,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           targetFolderId,
           folderName: folderNameField || undefined,
         });
+
+        IMP("mode=multipart resolved", { folderId: String(folder._id), folderName: folder.name });
 
         // final defense
         if (isSystemFolderName(folder.name) || isBlockedSystemName(folder.name)) {
@@ -657,46 +632,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
         }
 
-        if (!ops.length && skipped === 0 && rowsMapped.length > 0) {
-          for (const m of rowsMapped) {
-            const phoneKey = m.phoneLast10 as string | undefined;
-            const emailKey = (m.Email as string | undefined) || (m.email as string | undefined);
-            const filter = { userEmail, ...(phoneKey
-              ? { $or: [{ phoneLast10: phoneKey }, { normalizedPhone: phoneKey }] }
-              : { $or: [{ Email: emailKey }, { email: emailKey }] }) };
-
-            const setOnInsert: any = {
-              userEmail,
-              ownerEmail: userEmail,
-              status: "New",
-              createdAt: new Date(),
-            };
-            const set: any = {
-              folderId: folder._id,
-              folder_name: String(folder.name),
-              "Folder Name": String(folder.name),
-              updatedAt: new Date(),
-            };
-
-            if (m["First Name"] !== undefined) set["First Name"] = m["First Name"];
-            if (m["Last Name"] !== undefined) set["Last Name"] = m["Last Name"];
-            if (m.State !== undefined) set["State"] = m["State"];
-            if (m.Notes !== undefined) set["Notes"] = m["Notes"];
-            if (m.leadType) set["leadType"] = m["leadType"];
-
-            if (m.Phone !== undefined) set["Phone"] = m["Phone"];
-            if (phoneKey !== undefined) { set["phoneLast10"] = phoneKey; set["normalizedPhone"] = phoneKey; }
-            if (emailKey !== undefined) { set["Email"] = emailKey; set["email"] = emailKey; }
-
-            const r = await Lead.updateOne(filter, { $set: set, $setOnInsert: setOnInsert }, { upsert: true });
-            const upc = (r as any).upsertedCount || ((r as any).upsertedId ? 1 : 0) || 0;
-            const mod = (r as any).modifiedCount || 0;
-            const match = (r as any).matchedCount || 0;
-            if (upc > 0) inserted += upc;
-            else if (mod > 0 || match > 0) updated += 1;
-          }
-        }
-
         return res.status(200).json({
           message: "Leads imported successfully",
           folderId: folder._id,
@@ -714,6 +649,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // ---------- Legacy path: folderName + CSV (no mapping provided) ----------
     const folderNameLegacy = folderNameField || detectFolderNameFromForm(fields) || "";
+    IMP("mode=multipart legacy inputs", { folderNameLegacy });
+
     if (!folderNameLegacy) return res.status(400).json({ message: "Missing folder name" });
     if (isSystemFolderName(folderNameLegacy) || isBlockedSystemName(folderNameLegacy)) {
       return res.status(400).json({ message: "Cannot import into system folders" });
@@ -744,7 +681,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       let folder = await Folder.findOne({ name: folderNameLegacy, userEmail });
       if (!folder) folder = await Folder.create({ name: folderNameLegacy, userEmail });
 
-      // defense
+      IMP("mode=multipart legacy resolved", { folderId: String(folder._id), folderName: folder.name });
+
       if (isSystemFolderName(folder.name) || isBlockedSystemName(folder.name)) {
         return res.status(400).json({ message: "Cannot import into system folders" });
       }
