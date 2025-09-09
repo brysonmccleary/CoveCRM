@@ -1,4 +1,3 @@
-// /pages/api/import-leads.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import formidable from "formidable";
 import fs from "fs";
@@ -75,6 +74,10 @@ function firstString(v: any): string | undefined {
   const s = String(v).trim();
   return s ? s : undefined;
 }
+const truthy = (v: any) =>
+  typeof v === "boolean"
+    ? v
+    : ["1", "true", "yes", "on"].includes(String(v ?? "").trim().toLowerCase());
 
 /** Detect a "create new folder" name from many possible keys (multipart/form fields) */
 function detectFolderNameFromForm(fields: Record<string, any>): string | undefined {
@@ -285,11 +288,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const json = await readJsonBody(req);
   if (json && Object.keys(json).length) {
     try {
-      const targetFolderId = firstString((json as any).targetFolderId);
+      let targetFolderId = firstString((json as any).targetFolderId);
       const mapping = (json as any).mapping as Record<string, string> | undefined;
       const rows = (json as any).rows as Record<string, any>[] | undefined;
       const skipExisting = Boolean((json as any).skipExisting);
       const folderName = detectFolderNameFromJson(json) || undefined;
+
+      // hard override if client explicitly asked to create a new folder
+      if (truthy((json as any).createNewFolder)) {
+        targetFolderId = undefined;
+      }
 
       if (!mapping || !rows || !Array.isArray(rows)) {
         return res.status(400).json({ message: "Missing mapping or rows[]" });
@@ -474,12 +482,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(500).json({ message: "Form parse error" });
     }
 
-    const targetFolderId = firstString((fields as any).targetFolderId);
-    // Accept many name keys; if present, it will ALWAYS win over targetFolderId
+    let targetFolderId = firstString((fields as any).targetFolderId);
     const folderNameField = detectFolderNameFromForm(fields) || "";
-
     const mappingStr = firstString((fields as any).mapping);
     const skipExisting = firstString((fields as any).skipExisting) === "true";
+
+    // hard override if client explicitly asked to create a new folder
+    if (truthy((fields as any).createNewFolder)) {
+      targetFolderId = undefined;
+    }
 
     const file = Array.isArray((files as any).file) ? (files as any).file[0] : (files as any).file;
     if (!file?.filepath) return res.status(400).json({ message: "Missing file" });
@@ -489,7 +500,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       try {
         const mapping = JSON.parse(mappingStr) as Record<string, string>;
 
-        // Name wins if present; blocks system names/lookalikes
         const folder = await resolveImportFolder(userEmail, {
           targetFolderId,
           folderName: folderNameField || undefined,

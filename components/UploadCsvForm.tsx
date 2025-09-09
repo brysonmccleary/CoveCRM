@@ -1,10 +1,7 @@
-// /components/UploadCsvForm.tsx
 import { useState } from "react";
 import Papa from "papaparse";
 import toast from "react-hot-toast";
-import ColumnMappingForm, {
-  MappingSubmitPayload,
-} from "./ColumnMappingForm";
+import ColumnMappingForm, { MappingSubmitPayload } from "./ColumnMappingForm";
 
 export default function UploadCsvForm({ ownerId }: { ownerId: string }) {
   const [csvData, setCsvData] = useState<Record<string, any>[]>([]);
@@ -51,17 +48,25 @@ export default function UploadCsvForm({ ownerId }: { ownerId: string }) {
         return;
       }
 
+      const body: any = {
+        mapping,               // { firstName, lastName, phone, email, state, notes, source } -> CSV header names
+        rows: csvData,         // raw rows from CSV; server will map & normalize
+        skipExisting,          // default true on the UI
+      };
+
+      // Make intent explicit so server ignores any stale ids
+      if (folderName && folderName.trim()) {
+        body.folderName = folderName.trim();
+        body.createNewFolder = true;
+      } else if (targetFolderId) {
+        body.targetFolderId = targetFolderId;
+      }
+
       // JSON mode for /api/import-leads
       const res = await fetch("/api/import-leads", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          targetFolderId,
-          folderName,
-          mapping,            // { firstName, lastName, phone, email, state, notes, source } -> CSV header names
-          rows: csvData,      // raw rows from CSV; server will map & normalize
-          skipExisting,       // default true on the UI
-        }),
+        body: JSON.stringify(body),
       });
 
       const data = await res.json();

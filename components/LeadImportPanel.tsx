@@ -135,7 +135,7 @@ export default function LeadImportPanel({
     }
   }, [folders, targetFolderId]);
 
-  // Auto-open file picker on mount (kept behavior)
+  // Auto-open file picker on mount
   useEffect(() => {
     fileInputRef.current?.click();
   }, []);
@@ -260,8 +260,13 @@ export default function LeadImportPanel({
 
       if (useExisting) {
         form.append("targetFolderId", targetFolderId);
+        // explicit guard
+        form.delete("createNewFolder");
       } else {
         const name = newFolderName.trim();
+        // Explicitly indicate "create" and make sure no id is present
+        form.append("createNewFolder", "true");
+        form.delete("targetFolderId");
         // Send name under every legacy key the API might accept
         form.append("folderName", name);
         form.append("newFolderName", name);
