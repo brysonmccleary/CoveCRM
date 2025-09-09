@@ -79,38 +79,113 @@ type JsonPayload = {
   skipExisting?: boolean;        // default false = MOVE + RESET
 };
 
-// Read raw JSON when bodyParser is disabled
-async function readJsonBody(req: NextApiRequest): Promise<JsonPayload | null> {
-  if (!req.headers["content-type"]?.includes("application/json")) return null;
-  const chunks: Buffer[] = [];
-  await new Promise<void>((resolve, reject) => {
-    req.on("data", (c) => chunks.push(Buffer.from(c)));
-    req.on("end", () => resolve());
-    req.on("error", (e) => reject(e));
-  });
-  if (!chunks.length) return {};
-  try {
-    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
-  } catch {
-    return {};
-  }
+// --- field extraction helpers ---
+function firstString(v: any): string | undefined {
+  if (v == null) return undefined;
+  if (Array.isArray(v)) return firstString(v[0]);
+  const s = String(v).trim();
+  return s ? s : undefined;
 }
 
-/** Normalize visually-confusable system names (e.g., S0ld/SOId -> Sold) */
-function normalizeSystemish(name?: string | null) {
-  const s = String(name ?? "").trim().toLowerCase();
-  // common confusions: 0->o, i->l when uppercase I used
-  return s.replace(/0/g, "o").replace(/ı|i/g, "l");
+/** Detect a "create new folder" name from many possible keys */
+function detectFolderNameFromForm(fields: Record<string, any>): string | undefined {
+  // Preferred explicit keys first
+  const candidates = [
+    "folderName",
+    "newFolderName",
+    "newFolder",
+    "name",
+    "new_folder_name",
+    "new-folder-name",
+    "createFolder",
+    "create_folder",
+    "createNewFolder",
+    "create_new_folder",
+    "folder_name",
+  ];
+
+  for (const k of candidates) {
+    const val = firstString((fields as any)[k]);
+    if (val) return val;
+  }
+
+  // Fallback: scan for keys that look like "new*folder*name" or "folder*name"
+  for (const [k, v] of Object.entries(fields)) {
+    const key = k.toLowerCase();
+    if (key.includes("targetfolderid")) continue;
+    if (key.includes("mapping")) continue;
+    if (key.includes("skip")) continue;
+    if (key.includes("file")) continue;
+
+    if (
+      /new.*folder.*name|folder.*name|create.*folder/.test(key)
+    ) {
+      const val = firstString(v);
+      if (val) return val;
+    }
+  }
+  return undefined;
+}
+
+function detectFolderNameFromJson(body: any): string | undefined {
+  const candidates = [
+    "folderName",
+    "newFolderName",
+    "newFolder",
+    "name",
+    "new_folder_name",
+    "new-folder-name",
+    "createFolder",
+    "create_folder",
+    "createNewFolder",
+    "create_new_folder",
+    "folder_name",
+  ];
+  for (const k of candidates) {
+    const val = firstString((body as any)[k]);
+    if (val) return val;
+  }
+  // Broad scan fallback
+  for (const [k, v] of Object.entries(body || {})) {
+    const key = k.toLowerCase();
+    if (key.includes("targetfolderid")) continue;
+    if (key.includes("mapping")) continue;
+    if (key.includes("rows")) continue;
+    if (/new.*folder.*name|folder.*name|create.*folder/.test(key)) {
+      const val = firstString(v);
+      if (val) return val;
+    }
+  }
+  return undefined;
+}
+
+/** Canonicalize and detect system-folder lookalikes safely */
+function canonicalize(name?: string | null) {
+  const s = String(name ?? "")
+    .normalize("NFKD")
+    .toLowerCase()
+    .replace(/\s+/g, "")
+    .replace(/[_-]+/g, "")
+    .replace(/0/g, "o")
+    .replace(/\|/g, "l")
+    .replace(/1/g, "l");
+  return s;
 }
 function isBlockedSystemName(name?: string | null) {
-  return isSystemFolderName(String(name ?? "")) || isSystemFolderName(normalizeSystemish(name));
+  if (!name) return false;
+  if (isSystemFolderName(String(name))) return true;
+  const c = canonicalize(name);
+  return (
+    c === canonicalize("Sold") ||
+    c === canonicalize("Not Interested") ||
+    c === canonicalize("Booked Appointment")
+  );
 }
 
 /**
  * Resolve destination folder with strict rules:
- *  - If a non-empty folder *name* is present (folderName/newFolderName/newFolder), it WINS and we IGNORE any targetFolderId.
- *  - Else if targetFolderId is provided, use it.
- *  - System folders (or lookalikes like “S0ld/SOId”) are always blocked.
+ *  - If a non-empty folder *name* is present (folderName/newFolderName/etc), it WINS and we IGNORE any targetFolderId.
+ *  - Else if targetFolderId is provided, use it (but hard-block system folders).
  */
 async function resolveImportFolder(
   userEmail: string,
@@ -137,6 +212,30 @@ async function resolveImportFolder(
   throw new Error("Missing targetFolderId or folderName");
 }
 
+type JsonPayload = {
+  targetFolderId?: string;
+  mapping?: Record<string, string>;
+  rows?: Record<string, any>[];
+  skipExisting?: boolean;
+};
+
+// Read raw JSON when bodyParser is disabled
+async function readJsonBody(req: NextApiRequest): Promise<Record<string, any> | null> {
+  if (!req.headers["content-type"]?.includes("application/json")) return null;
+  const chunks: Buffer[] = [];
+  await new Promise<void>((resolve, reject) => {
+    req.on("data", (c) => chunks.push(Buffer.from(c)));
+    req.on("end", () => resolve());
+    req.on("error", (e) => reject(e));
+  });
+  if (!chunks.length) return {};
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  } catch {
+    return {};
+  }
+}
+
 // Map one CSV row using provided mapping
 function mapRow(row: Record<string, any>, mapping: Record<string, string>) {
   const pick = (k: string) => {
@@ -156,11 +255,9 @@ function mapRow(row: Record<string, any>, mapping: Record<string, string>) {
   const leadTypeRaw = row["Lead Type"] || row["leadType"] || row["LeadType"];
 
   const mergedNotes =
-    source && notes
-      ? `${notes} | Source: ${source}`
-      : source && !notes
-      ? `Source: ${source}`
-      : notes;
+    source && notes ? `${notes} | Source: ${source}`
+    : source && !notes ? `Source: ${source}`
+    : notes;
 
   const normalizedState = normalizeState(stateRaw);
   const emailLc = lcEmail(email);
@@ -183,16 +280,10 @@ function mapRow(row: Record<string, any>, mapping: Record<string, string>) {
 // ---- Common helpers to build filters and sets with all dedupe fields ----
 function buildFilter(userEmail: string, phoneKey?: string, emailKey?: string) {
   if (phoneKey) {
-    return {
-      userEmail,
-      $or: [{ phoneLast10: phoneKey }, { normalizedPhone: phoneKey }],
-    };
+    return { userEmail, $or: [{ phoneLast10: phoneKey }, { normalizedPhone: phoneKey }] };
   }
   if (emailKey) {
-    return {
-      userEmail,
-      $or: [{ Email: emailKey }, { email: emailKey }],
-    };
+    return { userEmail, $or: [{ Email: emailKey }, { email: emailKey }] };
   }
   return null;
 }
@@ -219,18 +310,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   // ---------- JSON MODE ----------
   const json = await readJsonBody(req);
-  if (json) {
+  if (json && Object.keys(json).length) {
     try {
-      const {
-        targetFolderId,
-        mapping,
-        rows,
-        skipExisting = false,
-      } = json;
+      const { targetFolderId, mapping, rows, skipExisting = false } = json as JsonPayload;
 
-      // accept multiple possible name keys from clients
+      // Accept many possible name keys from clients
       const folderName =
-        (json.folderName || json.newFolderName || (json as any).newFolder || "").trim() || undefined;
+        detectFolderNameFromJson(json) ||
+        undefined;
 
       if (!mapping || !rows || !Array.isArray(rows)) {
         return res.status(400).json({ message: "Missing mapping or rows[]" });
@@ -284,12 +371,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const emailKey = (m.Email as string | undefined) || (m.email as string | undefined);
 
         const exists = (phoneKey && byPhone.get(phoneKey)) || (emailKey && byEmail.get(String(emailKey)));
-
         if (exists) {
-          if (skipExisting) {
-            skipped++;
-            continue;
-          }
+          if (skipExisting) { skipped++; continue; }
           const filter = buildFilter(userEmail, phoneKey, emailKey);
           if (!filter) { skipped++; continue; }
 
@@ -308,7 +391,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           if (m.leadType) set["leadType"] = m.leadType;
 
           applyIdentityFields(set, phoneKey, emailKey, m.Phone);
-
           ops.push({ updateOne: { filter, update: { $set: set }, upsert: false } });
           processedFilters.push(filter);
         } else {
@@ -335,7 +417,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           if (m.leadType) set["leadType"] = m.leadType;
 
           applyIdentityFields(set, phoneKey, emailKey, m.Phone);
-
           ops.push({ updateOne: { filter, update: { $set: set, $setOnInsert: setOnInsert }, upsert: true } });
           processedFilters.push(filter);
         }
@@ -350,7 +431,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         updated = (result as any).modifiedCount || 0;
 
         if (processedFilters.length) {
-          const orFilters = processedFilters.flatMap((f) => (f.$or || []).map((clause: any) => ({ userEmail, ...clause })));
+          const orFilters = processedFilters.flatMap((f) =>
+            (f.$or || []).map((clause: any) => ({ userEmail, ...clause }))
+          );
           const affected = await Lead.find({ $or: orFilters }).select("_id");
           const ids = affected.map((d) => String(d._id));
           if (ids.length) {
@@ -386,7 +469,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           if (m.leadType) set["leadType"] = m.leadType;
 
           applyIdentityFields(set, phoneKey, emailKey, m.Phone);
-
           const r = await Lead.updateOne(filter, { $set: set, $setOnInsert: setOnInsert }, { upsert: true });
           const upc = (r as any).upsertedCount || ((r as any).upsertedId ? 1 : 0) || 0;
           const mod = (r as any).modifiedCount || 0;
@@ -406,7 +488,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     } catch (e: any) {
       console.error("❌ JSON import error:", e);
-      return res.status(500).json({ message: "Import failed", error: e?.message || String(e) });
+      const msg = /system folders/i.test(String(e?.message)) ? String(e?.message) : "Import failed";
+      return res.status(400).json({ message: msg, error: e?.message || String(e) });
     }
   }
 
@@ -419,21 +502,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(500).json({ message: "Form parse error" });
     }
 
-    const targetFolderId = fields.targetFolderId?.toString() || undefined;
+    const targetFolderId = firstString((fields as any).targetFolderId);
+    // Accept many name keys; if present, it will ALWAYS win over targetFolderId
+    const folderNameField = detectFolderNameFromForm(fields) || "";
 
-    // accept multiple possible name keys from clients
-    const rawName =
-      (fields.folderName ??
-        (fields as any).newFolderName ??
-        (fields as any).newFolder ??
-        (fields as any).name) as any;
-    const folderNameField =
-      (Array.isArray(rawName) ? rawName[0] : rawName)?.toString()?.trim() || "";
+    const mappingStr = firstString((fields as any).mapping);
+    const skipExisting = firstString((fields as any).skipExisting) === "true";
 
-    const mappingStr = fields.mapping?.toString();
-    const skipExisting = fields.skipExisting?.toString() === "true";
-
-    const file = Array.isArray(files.file) ? files.file[0] : files.file;
+    const file = Array.isArray((files as any).file) ? (files as any).file[0] : (files as any).file;
     if (!file?.filepath) return res.status(400).json({ message: "Missing file" });
 
     // New path (mapping provided)
@@ -442,7 +518,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const mapping = JSON.parse(mappingStr) as Record<string, string>;
 
         // Name wins if present; blocks system names/lookalikes
-        const folder = await resolveImportFolder(userEmail, {
+        const folder = await resolveImportFolder(lc(session.user!.email)!, {
           targetFolderId,
           folderName: folderNameField || undefined,
         });
@@ -514,12 +590,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           const emailKey = (m.Email as string | undefined) || (m.email as string | undefined);
 
           const exists = (phoneKey && byPhone.get(phoneKey)) || (emailKey && byEmail.get(String(emailKey)));
-
           if (exists) {
-            if (skipExisting) {
-              skipped++;
-              continue;
-            }
+            if (skipExisting) { skipped++; continue; }
             const filter = buildFilter(userEmail, phoneKey, emailKey);
             if (!filter) { skipped++; continue; }
 
@@ -538,7 +610,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             if (m.leadType) set["leadType"] = m.leadType;
 
             applyIdentityFields(set, phoneKey, emailKey, m.Phone);
-
             ops.push({ updateOne: { filter, update: { $set: set }, upsert: false } });
             processedFilters.push(filter);
           } else {
@@ -565,7 +636,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             if (m.leadType) set["leadType"] = m.leadType;
 
             applyIdentityFields(set, phoneKey, emailKey, m.Phone);
-
             ops.push({ updateOne: { filter, update: { $set: set, $setOnInsert: setOnInsert }, upsert: true } });
             processedFilters.push(filter);
           }
@@ -579,11 +649,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           inserted = (result as any).upsertedCount || 0;
           updated = (result as any).modifiedCount || 0;
 
-          const orFilters = processedFilters.flatMap((f) => (f.$or || []).map((clause: any) => ({ userEmail, ...clause })));
-          const affected = await Lead.find({ $or: orFilters }).select("_id");
-          const ids = affected.map((d) => String(d._id));
-          if (ids.length) {
-            await Folder.updateOne({ _id: folder._id, userEmail }, { $addToSet: { leadIds: { $each: ids } } });
+          if (processedFilters.length) {
+            const orFilters = processedFilters.flatMap((f) =>
+              (f.$or || []).map((clause: any) => ({ userEmail, ...clause }))
+            );
+            const affected = await Lead.find({ $or: orFilters }).select("_id");
+            const ids = affected.map((d) => String(d._id));
+            if (ids.length) {
+              await Folder.updateOne({ _id: folder._id, userEmail }, { $addToSet: { leadIds: { $each: ids } } });
+            }
           }
         }
 
@@ -634,14 +708,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         });
       } catch (e: any) {
         console.error("❌ Multipart mapping import error:", e);
-        return res.status(500).json({ message: "Import failed", error: e?.message || String(e) });
+        const msg = /system folders/i.test(String(e?.message)) ? String(e?.message) : "Import failed";
+        return res.status(400).json({ message: msg, error: e?.message || String(e) });
       }
     }
 
     // ---------- Legacy path: folderName + CSV (no mapping provided) ----------
-    const folderName = folderNameField;
-    if (!folderName) return res.status(400).json({ message: "Missing folder name" });
-    if (isBlockedSystemName(folderName)) {
+    const folderNameLegacy = folderNameField || detectFolderNameFromForm(fields) || "";
+    if (!folderNameLegacy) return res.status(400).json({ message: "Missing folder name" });
+    if (isBlockedSystemName(folderNameLegacy)) {
       return res.status(400).json({ message: "Cannot import into system folders" });
     }
 
@@ -667,8 +742,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return res.status(400).json({ message: "No data rows found in CSV (empty file or header-only)." });
       }
 
-      let folder = await Folder.findOne({ name: folderName, userEmail });
-      if (!folder) folder = await Folder.create({ name: folderName, userEmail });
+      let folder = await Folder.findOne({ name: folderNameLegacy, userEmail });
+      if (!folder) folder = await Folder.create({ name: folderNameLegacy, userEmail });
 
       const leadsToInsert = rawLeads.map((lead) => {
         const phoneKey = last10(lead["Phone"] || lead["phone"]);
