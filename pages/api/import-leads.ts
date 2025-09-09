@@ -178,7 +178,7 @@ async function resolveImportFolder(
     return await Folder.findOneAndUpdate(
       { userEmail, name: byName },
       { $setOnInsert: { userEmail, name: byName } },
-      { new: true, upsert: true }
+      { new: true, upsert: true, runValidators: true } // ensure model validators fire
     );
   }
 
@@ -270,8 +270,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const skipExisting = Boolean((json as any).skipExisting);
       const folderName = detectFolderNameFromJson(json) || undefined;
 
-      // explicit override from client to create new folder
-      if (truthy((json as any).createNewFolder)) {
+      const requestedNew = truthy((json as any).createNewFolder);
+
+      // Fail-closed: if client requested "create new" but didn't provide a usable name, error out.
+      if (requestedNew && !folderName) {
+        return res.status(400).json({ message: "Missing new folder name" });
+      }
+      // Explicit override from client to create new folder → ignore any provided id
+      if (requestedNew) {
         targetFolderId = undefined;
       }
 
@@ -480,8 +486,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const mappingStr = firstString((fields as any).mapping);
     const skipExisting = firstString((fields as any).skipExisting) === "true";
 
+    const requestedNew = truthy((fields as any).createNewFolder);
+
+    // Fail-closed: if client requested "create new" but didn't provide a usable name, error out.
+    if (requestedNew && !folderNameField.trim()) {
+      return res.status(400).json({ message: "Missing new folder name" });
+    }
     // explicit override from client to create a new folder
-    if (truthy((fields as any).createNewFolder)) {
+    if (requestedNew) {
       targetFolderId = undefined;
     }
 
@@ -707,7 +719,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // ---------- Legacy path: folderName + CSV (no mapping provided) ----------
     const folderNameLegacy = folderNameField || detectFolderNameFromForm(fields) || "";
     if (!folderNameLegacy) return res.status(400).json({ message: "Missing folder name" });
-    if (isBlockedSystemName(folderNameLegacy)) {
+    if (isSystemFolderName(folderNameLegacy) || isBlockedSystemName(folderNameLegacy)) {
       return res.status(400).json({ message: "Cannot import into system folders" });
     }
 
@@ -737,7 +749,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (!folder) folder = await Folder.create({ name: folderNameLegacy, userEmail });
 
       // defense
-      if (isBlockedSystemName(folder.name)) {
+      if (isSystemFolderName(folder.name) || isBlockedSystemName(folder.name)) {
         return res.status(400).json({ message: "Cannot import into system folders" });
       }
 
