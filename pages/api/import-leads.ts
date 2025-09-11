@@ -18,6 +18,11 @@ import {
 
 export const config = { api: { bodyParser: false } };
 
+// ---- trace/fingerprint (appears in every 200 OK)
+const TRACE =
+  `import-leads.ts@${process.env.VERCEL_REGION || "local"}#${(process.env.VERCEL_GIT_COMMIT_SHA || "dev").slice(0,7)}`;
+console.warn(`[IMPORT_HANDLER] loaded ${TRACE}`);
+
 // ---------- helpers
 function bufferToStream(buffer: Buffer): Readable {
   const stream = new Readable();
@@ -217,10 +222,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return res.status(400).json({ message: "Cannot import into system folders" });
       }
 
-      // ... (UNCHANGED) mapping -> bulkWrite logic ...
-      // (Keep your existing mapping/upsert code exactly as-is)
-
-      // BEGIN of unchanged bulk upsert block
+      // ---- map rows
       const mapped = rows.map((r) => ({
         "First Name": r[mapping.firstName || ""],
         "Last Name": r[mapping.lastName || ""],
@@ -294,9 +296,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           if (m["Last Name"] !== undefined) set["Last Name"] = m["Last Name"];
           if (m.State !== undefined) set["State"] = m.State;
           if (m.Notes !== undefined) set["Notes"] = m.Notes;
-          if (m.leadType) set["leadType"] = m.leadType;
+          if (m.leadType) set["leadType"] = m["leadType"];
 
-          if (m.Phone !== undefined) set["Phone"] = m.Phone;
+          if (m.Phone !== undefined) set["Phone"] = m["Phone"];
           if (phoneKey !== undefined) { set["phoneLast10"] = phoneKey; set["normalizedPhone"] = phoneKey; }
           if (emailKey !== undefined) { set["Email"] = emailKey; set["email"] = emailKey; }
 
@@ -324,9 +326,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           if (m["Last Name"] !== undefined) set["Last Name"] = m["Last Name"];
           if (m.State !== undefined) set["State"] = m.State;
           if (m.Notes !== undefined) set["Notes"] = m.Notes;
-          if (m.leadType) set["leadType"] = m.leadType;
+          if (m.leadType) set["leadType"] = m["leadType"];
 
-          if (m.Phone !== undefined) set["Phone"] = m.Phone;
+          if (m.Phone !== undefined) set["Phone"] = m["Phone"];
           if (phoneKey !== undefined) { set["phoneLast10"] = phoneKey; set["normalizedPhone"] = phoneKey; }
           if (emailKey !== undefined) { set["Email"] = emailKey; set["email"] = emailKey; }
 
@@ -354,6 +356,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
         }
       }
+
+      // --- TRACE HEADERS (JSON)
+      res.setHeader("X-Import-Trace", TRACE);
+      res.setHeader("X-Import-Mode", "json");
 
       return res.status(200).json({
         message: "Import completed",
@@ -415,9 +421,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (isSystemFolderName(folder.name) || isBlockedSystemName(folder.name)) {
           return res.status(400).json({ message: "Cannot import into system folders" });
         }
-
-        // ... (UNCHANGED) CSV read + bulk upsert block ...
-        // keep your existing logic here exactly as in your current file
 
         const buffer = await fs.promises.readFile(file.filepath);
         const rawRows: any[] = [];
@@ -509,8 +512,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             };
             if (m["First Name"] !== undefined) set["First Name"] = m["First Name"];
             if (m["Last Name"] !== undefined) set["Last Name"] = m["Last Name"];
-            if (m.State !== undefined) set["State"] = m.State;
-            if (m.Notes !== undefined) set["Notes"] = m.Notes;
+            if (m.State !== undefined) set["State"] = m["State"];
+            if (m.Notes !== undefined) set["Notes"] = m["Notes"];
             if (m.leadType) set["leadType"] = m["leadType"];
 
             if (m.Phone !== undefined) set["Phone"] = m["Phone"];
@@ -571,6 +574,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             }
           }
         }
+
+        // --- TRACE HEADERS (multipart+mapping)
+        res.setHeader("X-Import-Trace", TRACE);
+        res.setHeader("X-Import-Mode", "multipart+mapping");
 
         return res.status(200).json({
           message: "Leads imported successfully",
@@ -642,6 +649,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
 
       await createLeadsFromCSV(leadsToInsert, userEmail, String(folder._id));
+
+      // --- TRACE HEADERS (legacy)
+      res.setHeader("X-Import-Trace", TRACE);
+      res.setHeader("X-Import-Mode", "multipart-legacy");
 
       return res.status(200).json({
         message: "Leads imported successfully",
