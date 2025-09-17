@@ -18,7 +18,7 @@ import {
 
 export const config = { api: { bodyParser: false } };
 
-// ---- trace/fingerprint (appears in every 200 OK)
+// ---- trace/fingerprint (appears in every response via X-Import-Tag)
 const TRACE =
   `import-leads.ts@${process.env.VERCEL_REGION || "local"}#${(process.env.VERCEL_GIT_COMMIT_SHA || "dev").slice(0,7)}`;
 console.warn(`[IMPORT_HANDLER] loaded ${TRACE}`);
@@ -173,6 +173,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const userEmail = lc(session.user.email)!;
   await dbConnect();
 
+  // Always tag the response so we know which build handled it
+  res.setHeader("X-Import-Tag", TRACE);
+
   // ---------- JSON MODE ----------
   const readJsonBody = async (): Promise<Record<string, any> | null> => {
     if (!req.headers["content-type"]?.includes("application/json")) return null;
@@ -218,8 +221,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       res.setHeader("X-Import-Resolver", folderName ? "name" : (targetFolderId ? "id" : "missing"));
       console.log("[IMPORT_JSON] chosen folder _id=%s name=%s", String(folder._id), folder.name);
 
+      // HARD GUARD (diagnostic): if somehow a system folder sneaks through, trip guard
       if (isSystemFolderName(folder.name) || isBlockedSystemName(folder.name)) {
-        return res.status(400).json({ message: "Cannot import into system folders" });
+        res.setHeader("X-Guard", "tripped");
+        return res.status(451).json({ message: "Guard: Cannot import into system folders", folder: folder.name });
       }
 
       // ---- map rows
@@ -418,8 +423,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         res.setHeader("X-Import-Resolver", folderNameField ? "name" : (targetFolderId ? "id" : "missing"));
         console.log("[IMPORT_MP] chosen folder _id=%s name=%s", String(folder._id), folder.name);
 
+        // HARD GUARD (diagnostic): if somehow a system folder sneaks through, trip guard
         if (isSystemFolderName(folder.name) || isBlockedSystemName(folder.name)) {
-          return res.status(400).json({ message: "Cannot import into system folders" });
+          res.setHeader("X-Guard", "tripped");
+          return res.status(451).json({ message: "Guard: Cannot import into system folders", folder: folder.name });
         }
 
         const buffer = await fs.promises.readFile(file.filepath);
@@ -598,7 +605,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const folderNameLegacy = folderNameField || detectFolderNameFromForm(fields) || "";
     if (!folderNameLegacy) return res.status(400).json({ message: "Missing folder name" });
     if (isSystemFolderName(folderNameLegacy) || isBlockedSystemName(folderNameLegacy)) {
-      return res.status(400).json({ message: "Cannot import into system folders" });
+      res.setHeader("X-Guard", "tripped");
+      return res.status(451).json({ message: "Guard: Cannot import into system folders" });
     }
 
     try {
@@ -626,7 +634,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (!folder) folder = await Folder.create({ name: folderNameLegacy, userEmail });
 
       if (isSystemFolderName(folder.name) || isBlockedSystemName(folder.name)) {
-        return res.status(400).json({ message: "Cannot import into system folders" });
+        res.setHeader("X-Guard", "tripped");
+        return res.status(451).json({ message: "Guard: Cannot import into system folders" });
       }
 
       const leadsToInsert = rawLeads.map((lead) => {
