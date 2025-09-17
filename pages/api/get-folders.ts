@@ -15,6 +15,7 @@ type LeanFolder = {
   assignedDrips?: any[];
   createdAt?: Date;
   updatedAt?: Date;
+  leadCount?: number;
 };
 
 type DBFolder = {
@@ -35,6 +36,9 @@ function normalizeName(s?: string) {
 function normKey(s?: string) {
   return normalizeName(s).toLowerCase();
 }
+function ciExact(value: string) {
+  return { $regex: `^${escapeRegex(value)}$`, $options: "i" as const };
+}
 function toLeanFolder(doc: DBFolder, fallbackEmail: string): LeanFolder {
   return {
     _id: String(doc._id),
@@ -49,39 +53,34 @@ function toLeanFolder(doc: DBFolder, fallbackEmail: string): LeanFolder {
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   // prevent stale caches while we’re stabilizing
   res.setHeader("Cache-Control", "no-store");
-  res.setHeader("X-Folders-Impl", "sys-v5");
+  res.setHeader("X-Folders-Impl", "sys-v6");
 
   try {
     const session = await getServerSession(req, res, authOptions);
-    const email = typeof session?.user?.email === "string" ? session.user.email.toLowerCase() : "";
+    const email = typeof session?.user?.email === "string" ? session.user.email : "";
     if (!email) return res.status(401).json({ message: "Unauthorized" });
 
     await dbConnect();
 
-    // 1) Idempotently ensure the 3 system folders exist (match ignoring outer whitespace & case)
-    for (const name of SYSTEM_FOLDERS) {
-      await Folder.findOneAndUpdate(
-        { userEmail: email, name: { $regex: `^\\s*${escapeRegex(name)}\\s*$`, $options: "i" } },
-        { $setOnInsert: { userEmail: email, name, assignedDrips: [] } },
-        { upsert: true, new: false, lean: true }
-      ).exec();
-    }
+    // 1) Fetch all folders for this user (case-insensitive match for legacy docs)
+    const raw = await Folder.find({ userEmail: ciExact(email) })
+      .sort({ createdAt: -1 })
+      .lean<DBFolder[]>()
+      .exec();
 
-    // 2) Fetch & normalize
-    const raw = await Folder.find({ userEmail: email }).sort({ createdAt: -1 }).lean<DBFolder[]>().exec();
     const all = raw.map((r) => toLeanFolder(r, email));
 
-    // 3) Partition: custom vs system (using *trimmed* case-insensitive key)
+    // 2) Partition: custom vs system (case-insensitive)
     const systemKeys = new Set(SYSTEM_FOLDERS.map((n) => normKey(n)));
     const custom: LeanFolder[] = [];
-    const systemBuckets = new Map<string, LeanFolder[]>();
+    const systemSeen = new Map<string, LeanFolder[]>();
 
     for (const f of all) {
       const key = normKey(f.name);
       if (systemKeys.has(key)) {
-        const arr = systemBuckets.get(key) || [];
+        const arr = systemSeen.get(key) || [];
         arr.push(f);
-        systemBuckets.set(key, arr);
+        systemSeen.set(key, arr);
       } else {
         custom.push(f);
       }
@@ -90,27 +89,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // Custom alphabetical
     custom.sort((a, b) => a.name.localeCompare(b.name));
 
-    // For each system bucket, choose the canonical doc (oldest by createdAt, then by _id)
+    // Canonicalize any legacy system docs if they exist (we won’t create them here)
     const canonicalByKey = new Map<string, LeanFolder>();
-    for (const [key, arr] of systemBuckets) {
+    for (const [key, arr] of systemSeen) {
       arr.sort((a, b) => {
         const ad = a.createdAt?.getTime() ?? 0;
         const bd = b.createdAt?.getTime() ?? 0;
         return ad - bd || a._id.localeCompare(b._id);
       });
-      canonicalByKey.set(key, arr[0]); // arr is non-empty
+      canonicalByKey.set(key, arr[0]);
     }
 
-    // 4) Counts by folderId (strict by ObjectId string)
+    // 3) Counts by folderId (strict on id; case-insensitive on userEmail)
     const byIdAgg = await (Lead as any).aggregate([
-      { $match: { userEmail: email, folderId: { $exists: true, $ne: null } } },
+      { $match: { userEmail: ciExact(email), folderId: { $exists: true, $ne: null } } },
       { $addFields: { fid: { $toString: "$folderId" } } },
       { $group: { _id: "$fid", n: { $sum: 1 } } },
     ]);
     const byId = new Map<string, number>();
     for (const r of byIdAgg) byId.set(String(r._id), Number(r.n) || 0);
 
-    // 5) Optional legacy "Unsorted" handling (only if present)
+    // 4) Optional legacy "Unsorted" handling (only if present)
     const unsorted = all
       .filter((f) => normKey(f.name) === "unsorted")
       .sort((a, b) => {
@@ -120,14 +119,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       })[0];
     const unsortedIdStr = unsorted ? String(unsorted._id) : null;
     const unsortedCount = await Lead.countDocuments({
-      userEmail: email,
+      userEmail: ciExact(email),
       $or: [{ folderId: { $exists: false } }, { folderId: null }],
     });
 
-    // 6) Build final ordered list: custom, then canonical system in fixed order
+    // 5) Build final list: custom + any existing canonical system docs (we never create them here)
     const systemOrdered = SYSTEM_FOLDERS.map((n) => canonicalByKey.get(normKey(n))).filter(Boolean) as LeanFolder[];
-
     const ordered = [...custom, ...systemOrdered];
+
     const foldersWithCounts = ordered.map((f) => {
       const idStr = String(f._id);
       const base = byId.get(idStr) || 0;
