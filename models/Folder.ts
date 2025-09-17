@@ -1,8 +1,13 @@
 // /models/Folder.ts
-import mongoose, { Schema, models, model } from "mongoose";
-import { isSystemFolderName, isBlockedSystemName, canonicalizeName } from "@/lib/systemFolders";
+import mongoose, { Schema, model, models } from "mongoose";
+import { isSystemFolderName, isBlockedSystemName } from "@/lib/systemFolders";
 
-const FolderSchema = new Schema(
+type FolderDoc = mongoose.Document & {
+  name: string;
+  userEmail: string;
+};
+
+const FolderSchema = new Schema<FolderDoc>(
   {
     // keep flexible, but make sure "name" is validated
     name: {
@@ -10,9 +15,9 @@ const FolderSchema = new Schema(
       trim: true,
       required: true,
       validate: {
-        validator: (v: string) => {
-          const n = String(v || "").trim();
-          return n && !isSystemFolderName(n) && !isBlockedSystemName(n);
+        validator: (v: unknown): boolean => {
+          const n = String(v ?? "").trim();
+          return n.length > 0 && !isSystemFolderName(n) && !isBlockedSystemName(n);
         },
         message: "Cannot create or rename to system folders",
       },
@@ -29,9 +34,9 @@ function pullNameFromUpdate(update: any): string | undefined {
   return n || undefined;
 }
 
-function blocked(n?: string | null) {
+function blocked(n?: string | null): boolean {
   const name = String(n ?? "").trim();
-  return !!name && (isSystemFolderName(name) || isBlockedSystemName(name));
+  return name.length > 0 && (isSystemFolderName(name) || isBlockedSystemName(name));
 }
 
 // Block normal saves
@@ -48,5 +53,7 @@ FolderSchema.pre("findOneAndUpdate", function (next) {
   next();
 });
 
-const Folder = (models.Folder as mongoose.Model<any>) || model("Folder", FolderSchema);
+const Folder =
+  (models.Folder as mongoose.Model<FolderDoc>) || model<FolderDoc>("Folder", FolderSchema);
+
 export default Folder;
