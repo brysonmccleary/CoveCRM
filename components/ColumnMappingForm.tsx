@@ -1,6 +1,7 @@
 // /components/ColumnMappingForm.tsx
 import { useEffect, useMemo, useState } from "react";
 import toast from "react-hot-toast";
+import { isSystemFolderName } from "@/lib/systemFolders";
 
 export type MappingSubmitPayload = {
   mapping: {
@@ -15,6 +16,7 @@ export type MappingSubmitPayload = {
   targetFolderId?: string;
   folderName?: string;
   skipExisting: boolean;
+  createNewFolder?: boolean;
 };
 
 type Folder = { _id: string; name: string };
@@ -78,7 +80,6 @@ export default function ColumnMappingForm({
   const [folderName, setFolderName] = useState("");
   const [skipExisting, setSkipExisting] = useState(true);
 
-  // canonicalKey -> selected CSV header
   const [mapSel, setMapSel] = useState<Record<keyof MappingSubmitPayload["mapping"], string>>({
     firstName: "",
     lastName: "",
@@ -99,26 +100,35 @@ export default function ColumnMappingForm({
           const list: Folder[] = Array.isArray(data?.folders) ? data.folders : data;
           setFolders(list || []);
         }
-      } catch {
-        /* no-op */
-      }
+      } catch { /* no-op */ }
       try {
         const savedMap = localStorage.getItem(LOCAL_KEY_MAPPING);
         if (savedMap) setMapSel(JSON.parse(savedMap));
-        const lastFolder = localStorage.getItem(LOCAL_KEY_FOLDER);
-        if (lastFolder) {
-          setTargetFolderId(lastFolder);
-          setUseExisting(true);
-        }
+
         const savedSkip = localStorage.getItem(LOCAL_KEY_SKIP);
         if (savedSkip != null) setSkipExisting(savedSkip === "true");
-      } catch {
-        /* ignore */
-      }
+      } catch { /* ignore */ }
     })();
   }, []);
 
-  // Set best-guess defaults for any unmapped fields
+  // Drop any stale saved system-folder id once folders are loaded
+  useEffect(() => {
+    try {
+      const savedId = localStorage.getItem(LOCAL_KEY_FOLDER);
+      if (!savedId || !folders.length) return;
+      const found = folders.find((f) => f._id === savedId);
+      if (!found || isSystemFolderName(found.name)) {
+        localStorage.removeItem(LOCAL_KEY_FOLDER);
+        setTargetFolderId("");
+        setUseExisting(true);
+      } else {
+        setTargetFolderId(savedId);
+        setUseExisting(true);
+      }
+    } catch { /* ignore */ }
+  }, [folders]);
+
+  // Best-guess defaults for unmapped fields
   useEffect(() => {
     setMapSel((prev) => {
       const next = { ...prev };
@@ -135,11 +145,8 @@ export default function ColumnMappingForm({
   }, [headers]);
 
   const options = useMemo(() => ["", ...headers], [headers]);
-
-  const atLeastOneId = useMemo(
-    () => Boolean(mapSel.phone || mapSel.email),
-    [mapSel.phone, mapSel.email]
-  );
+  const atLeastOneId = useMemo(() => Boolean(mapSel.phone || mapSel.email), [mapSel.phone, mapSel.email]);
+  const safeFolders = useMemo(() => folders.filter((f) => !isSystemFolderName(f.name)), [folders]);
 
   const submit = () => {
     if (useExisting && !targetFolderId) {
@@ -155,16 +162,17 @@ export default function ColumnMappingForm({
       return;
     }
 
-    // persist prefs
     localStorage.setItem(LOCAL_KEY_MAPPING, JSON.stringify(mapSel));
     localStorage.setItem(LOCAL_KEY_SKIP, String(skipExisting));
     if (useExisting && targetFolderId) localStorage.setItem(LOCAL_KEY_FOLDER, targetFolderId);
+    if (!useExisting) localStorage.removeItem(LOCAL_KEY_FOLDER);
 
     onSubmit({
       mapping: mapSel,
       targetFolderId: useExisting ? targetFolderId : undefined,
       folderName: useExisting ? undefined : folderName.trim(),
       skipExisting,
+      createNewFolder: !useExisting, // <-- ensure server ignores any stale id
     });
   };
 
@@ -179,22 +187,17 @@ export default function ColumnMappingForm({
         )}
       </div>
 
-      {/* Folder selection */}
       <div className="space-y-2">
         <div className="flex items-center gap-4">
           <label className="flex items-center gap-2">
-            <input
-              type="radio"
-              checked={useExisting}
-              onChange={() => setUseExisting(true)}
-            />
+            <input type="radio" checked={useExisting} onChange={() => setUseExisting(true)} />
             <span>Import into existing folder</span>
           </label>
           <label className="flex items-center gap-2">
             <input
               type="radio"
               checked={!useExisting}
-              onChange={() => setUseExisting(false)}
+              onChange={() => { setUseExisting(false); setTargetFolderId(""); localStorage.removeItem(LOCAL_KEY_FOLDER); }}
             />
             <span>Create new folder</span>
           </label>
@@ -209,7 +212,7 @@ export default function ColumnMappingForm({
               className="border p-2 rounded w-full"
             >
               <option value="">— Select a folder —</option>
-              {folders.map((f) => (
+              {safeFolders.map((f) => (
                 <option key={f._id} value={f._id}>
                   {f.name}
                 </option>
@@ -230,7 +233,6 @@ export default function ColumnMappingForm({
         )}
       </div>
 
-      {/* Options */}
       <label className="flex items-center gap-2">
         <input
           type="checkbox"
@@ -240,7 +242,6 @@ export default function ColumnMappingForm({
         <span>Skip existing leads (dedupe by phone/email)</span>
       </label>
 
-      {/* Mapping */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         {CANONICAL_FIELDS.map((label) => {
           const key = apiKey[label];
@@ -250,9 +251,7 @@ export default function ColumnMappingForm({
               <select
                 className="border p-2 rounded w-full"
                 value={mapSel[key] || ""}
-                onChange={(e) =>
-                  setMapSel((prev) => ({ ...prev, [key]: e.target.value }))
-                }
+                onChange={(e) => setMapSel((prev) => ({ ...prev, [key]: e.target.value }))}
               >
                 {options.map((h) => (
                   <option key={h} value={h}>
@@ -271,10 +270,7 @@ export default function ColumnMappingForm({
       </div>
 
       <div className="flex items-center gap-3 pt-2">
-        <button
-          onClick={submit}
-          className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded"
-        >
+        <button onClick={submit} className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded">
           Save & Import
         </button>
       </div>
