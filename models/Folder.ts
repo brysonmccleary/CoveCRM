@@ -5,13 +5,13 @@ import { isSystemFolderName, isBlockedSystemName } from "@/lib/systemFolders";
 type FolderDoc = mongoose.Document & {
   name: string;
   userEmail: string;
+  description?: string;                    // <-- used by /api/folders/[id].ts
   assignedDrips: string[];                 // <-- used by /api/assign-drip-to-folder
   leadIds: mongoose.Types.ObjectId[];      // <-- used by imports to $addToSet
 };
 
 const FolderSchema = new Schema<FolderDoc>(
   {
-    // keep flexible, but make sure "name" is validated
     name: {
       type: String,
       trim: true,
@@ -26,7 +26,8 @@ const FolderSchema = new Schema<FolderDoc>(
     },
     userEmail: { type: String, index: true, required: true, lowercase: true, trim: true },
 
-    // optional fields we use elsewhere
+    // Optional fields referenced elsewhere
+    description: { type: String, default: "" },
     assignedDrips: { type: [String], default: [] },
     leadIds: { type: [Schema.Types.ObjectId], default: [] },
   },
