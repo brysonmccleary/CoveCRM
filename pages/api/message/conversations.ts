@@ -11,20 +11,30 @@ type LeanLead = {
   _id: any;
   userEmail?: string | null;
   ownerEmail?: string | null;
+
+  // Common name fields
   firstName?: string;
   lastName?: string;
-  Phone?: string;
-  phone?: string;
   ["First Name"]?: string;
   ["Last Name"]?: string;
   Name?: string;
   FullName?: string;
   displayName?: string;
+
+  // Common phone fields
+  Phone?: string;
+  phone?: string;
+  Mobile?: string;   // <-- added
+  mobile?: string;   // <-- added
+  ["Phone Number"]?: string;
+  PhoneNumber?: string;
+  phones?: Array<{ value?: string }>;
+
+  // Optional metadata
   Email?: string;
   email?: string;
   State?: string;
   state?: string;
-  phones?: Array<{ value?: string }>;
 };
 
 function normalizeDigits(p: string) {
@@ -119,8 +129,7 @@ export default async function handler(
       },
     ]).exec();
 
-    // 2) Also consider messages that somehow lack leadId:
-    //    We take the latest inbound/outbound and try to map to a lead by phone (last-10/E.164).
+    // 2) Also consider messages that lack leadId (fallback: phone → lead)
     const latestNoLead = await Message.aggregate([
       { $match: { userEmail, $or: [{ leadId: { $exists: false } }, { leadId: null }] } },
       { $sort: { createdAt: -1 } },
@@ -132,7 +141,7 @@ export default async function handler(
       },
     ]).exec();
 
-    // Fetch all leads referenced by ID
+    // Fetch leads by ID for the normal set
     const leadIds = latestByLead.map((r: any) => r._id).filter(Boolean);
     const leads = await Lead.find({ _id: { $in: leadIds } })
       .lean<LeanLead[]>()
@@ -141,28 +150,25 @@ export default async function handler(
     const leadById = new Map<string, LeanLead>();
     for (const l of leads) leadById.set(String(l._id), l);
 
-    // For the no-lead set, attempt a per-user phone→lead resolution
+    // Build a unique phone list from the no-lead set
     const toCheckPhones: string[] = [];
     const phoneKey = (v: string | undefined | null) => (v || "").trim();
     for (const row of latestNoLead as any[]) {
       const last = row?.last;
       if (!last) continue;
-      // Prefer the counterparty number (the lead’s phone)
+      // Counterparty number (lead’s side)
       const candidate = last.direction === "inbound" ? last.from : last.to;
       if (candidate) toCheckPhones.push(phoneKey(candidate));
     }
-
-    // Unique phones
     const uniqPhones = Array.from(new Set(toCheckPhones.filter(Boolean)));
 
-    // Pull a superset of possible leads for quick in-memory matching
+    // Build an $or with both exacts and anchored last-10
     const phoneOrRegex: any[] = [];
     for (const ph of uniqPhones) {
       const d = normalizeDigits(ph);
       const last10 = d.slice(-10);
       if (!last10) continue;
       const anchored = new RegExp(`${last10}$`);
-      // add exact +1 and anchored
       phoneOrRegex.push(
         { Phone: ph }, { phone: ph }, { ["Phone Number"]: ph }, { PhoneNumber: ph },
         { Mobile: ph }, { mobile: ph }, { "phones.value": ph },
@@ -183,9 +189,7 @@ export default async function handler(
         .exec();
     }
 
-    // Index leads by last-10 sets for quick match
     const candidates: LeanLead[] = possibleLeads || [];
-
     const conversations: any[] = [];
 
     // Build rows for normal leadId cases
@@ -236,12 +240,8 @@ export default async function handler(
       const cp = (counterparty || "").trim();
       if (!cp) continue;
 
-      // Match a candidate lead whose phone ends with last-10
       const match = candidates.find((l) => leadMatchesLast10(l, cp));
-      if (!match) {
-        // If we can’t map to a lead, skip it so the UI doesn’t show an orphan row with just a number.
-        continue;
-      }
+      if (!match) continue;
 
       const fullName = resolveDisplayName(match);
       const phone = resolvePhone(match);
