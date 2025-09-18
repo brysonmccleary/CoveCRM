@@ -4,7 +4,7 @@ import Sidebar from "@/components/Sidebar";
 import CallSummary from "@/components/CallSummary";
 import BookAppointmentModal from "@/components/BookAppointmentModal";
 import { isCallAllowed } from "@/utils/checkCallTime";
-import { playRingback, stopRingback, primeAudioContext } from "@/utils/ringAudio";
+import { playRingback, stopRingback, primeAudioContext, ensureUnlocked } from "@/utils/ringAudio";
 import toast from "react-hot-toast";
 import { joinConference, leaveConference, setMuted as sdkSetMuted, getMuted as sdkGetMuted } from "@/utils/voiceClient";
 
@@ -81,6 +81,7 @@ export default function DialSession() {
   const dispositionBusyRef = useRef<boolean>(false);
 
   const callStartAtRef = useRef<number>(0);
+  const hasConnectedRef = useRef<boolean>(false);
   const tooEarly = () => !callStartAtRef.current || Date.now() - callStartAtRef.current < EARLY_STATUS_MS;
 
   /** helpers **/
@@ -214,8 +215,9 @@ export default function DialSession() {
   /** bootstrap **/
   useEffect(() => {
     try {
-      const maybe = primeAudioContext() as unknown;
-      if ((maybe as any)?.catch) (maybe as Promise<void>).catch(() => {});
+      // Prime AudioContext and arm one-time unlock listeners immediately.
+      primeAudioContext();
+      ensureUnlocked();
     } catch {}
   }, []);
 
@@ -412,10 +414,8 @@ export default function DialSession() {
           clearStatusPoll();
         }
 
-        if (s === "busy" || s === "failed" || s === "no-answer" || s === "canceled" || s === "completed") {
-          if (s === "no-answer" || s === "completed") {
-            if (tooEarly()) return;
-          }
+        if (s === "busy" || s === "failed" || s === "no-answer") {
+          if (s === "no-answer" && tooEarly()) return;
           stopRingback(); clearWatchdog(); clearStatusPoll();
           await hangupActiveCall(`status-${s}`); await leaveIfJoined(`status-${s}`);
           if (!advanceScheduledRef.current && !sessionEndedRef.current) {
@@ -424,10 +424,30 @@ export default function DialSession() {
             scheduleAdvance();
           }
         }
+
+        // Treat canceled/completed as a definitive disconnect (no gating).
+        if (s === "canceled" || s === "completed") {
+          clearStatusPoll();
+          await markDisconnected(`status-${s}`);
+        }
       } catch {
         // ignore transient errors
       }
     }, 1000);
+  };
+
+  // Centralized "Disconnected now" path
+  const markDisconnected = async (reason: string) => {
+    stopRingback();
+    killAllTimers();
+    await hangupActiveCall(reason);
+    await leaveIfJoined(reason);
+    setCallActive(false);
+    setStatus("Disconnected");
+    if (!advanceScheduledRef.current && !sessionEndedRef.current) {
+      advanceScheduledRef.current = true;
+      scheduleAdvance();
+    }
   };
 
   const callLead = async (leadToCall: Lead) => {
@@ -443,8 +463,12 @@ export default function DialSession() {
     try {
       advanceScheduledRef.current = false;
       joinedRef.current = false;
+      hasConnectedRef.current = false;
       setStatus("Dialing…");
       setCallActive(true);
+
+      // Ensure audio is gesture-unlocked; then start ringback.
+      ensureUnlocked();
       playRingback();
 
       callStartAtRef.current = Date.now();
@@ -466,7 +490,38 @@ export default function DialSession() {
       if (!joinedRef.current && activeConferenceRef.current) {
         try {
           joinedRef.current = true;
-          await joinConference(activeConferenceRef.current);
+
+          // Capture the returned call object and cut ringback on instant connect
+          const callObj = await joinConference(activeConferenceRef.current);
+
+          const safeOn = (ev: string, fn: (...args: any[]) => void) => {
+            try {
+              if ((callObj as any)?.on) (callObj as any).on(ev, fn);
+              else if ((callObj as any)?.addListener) (callObj as any).addListener(ev, fn);
+            } catch {}
+          };
+
+          const connectedNow = () => {
+            hasConnectedRef.current = true;
+            stopRingback();
+            clearWatchdog();
+            setStatus("Connected");
+          };
+
+          // Twilio SDK variants
+          safeOn("accept", connectedNow);
+          safeOn("connect", connectedNow);
+          safeOn("connected", connectedNow);
+
+          // Instant "Disconnected" on hangup events from either side.
+          safeOn("disconnect", () => { markDisconnected("twilio-disconnect"); });
+          safeOn("disconnected", () => { markDisconnected("twilio-disconnected"); });
+          safeOn("hangup", () => { markDisconnected("twilio-hangup"); });
+
+          // Defensive cuts for non-success paths (not necessarily a hangup)
+          safeOn("cancel", () => stopRingback());
+          safeOn("reject", () => stopRingback());
+          safeOn("error", () => stopRingback());
         } catch (e) {
           console.warn("Failed to pre-join conference:", e);
         }
@@ -477,7 +532,7 @@ export default function DialSession() {
 
       setSessionStartedCount((n) => n + 1);
 
-      // Write a lightweight local history line (UI only)
+      // UI-only history line
       setHistory((prev) => [{ kind: "text", text: `📞 Call started (${new Date().toLocaleTimeString()})` }, ...prev]);
     } catch (err: any) {
       console.error(err);
@@ -600,13 +655,8 @@ export default function DialSession() {
   };
 
   const handleHangUp = () => {
-    stopRingback();
-    killAllTimers();
-    hangupActiveCall("agent-hangup");
-    leaveIfJoined("agent-hangup");
-    setStatus("Ended");
-    setCallActive(false);
-    if (!sessionEndedRef.current) scheduleAdvance();
+    // Agent hangup should also show Disconnected immediately.
+    markDisconnected("agent-hangup");
   };
 
   const togglePause = () => {
@@ -618,6 +668,8 @@ export default function DialSession() {
       leaveIfJoined("pause");
       setStatus("Paused");
     } else {
+      // Ensure unlock so ringback starts instantly on resume
+      ensureUnlocked();
       setReadyToCall(true);
       setStatus("Ready");
     }
@@ -710,18 +762,23 @@ export default function DialSession() {
               setStatus("Connected");
               stopRingback();
               clearWatchdog();
+              hasConnectedRef.current = true;
             }
 
-            if (s === "no-answer" || s === "busy" || s === "failed" || s === "canceled" || s === "completed") {
-              if ((s === "no-answer" || s === "completed") && tooEarly()) return;
-
+            if (s === "no-answer" || s === "busy" || s === "failed") {
+              if (s === "no-answer" && tooEarly()) return;
               stopRingback(); clearWatchdog();
               await hangupActiveCall(`status-${s}`); await leaveIfJoined(`status-${s}`);
               if (!advanceScheduledRef.current && !sessionEndedRef.current) {
                 advanceScheduledRef.current = true;
-                setStatus(s === "no-answer" ? "No answer" : s === "busy" ? "Busy" : s === "failed" ? "Failed" : s === "canceled" ? "Canceled" : "Completed");
+                setStatus(s === "no-answer" ? "No answer" : s === "busy" ? "Busy" : "Failed");
                 scheduleAdvance();
               }
+            }
+
+            // Completed/canceled => show Disconnected immediately.
+            if (s === "completed" || s === "canceled") {
+              await markDisconnected(`socket-${s}`);
             }
           } catch {}
         });
@@ -816,11 +873,11 @@ export default function DialSession() {
                 placeholder="Type notes here..."
               />
             </div>
-            <button onClick={handleSaveNote} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded mb-4">
+            <button onClick={handleSaveNote} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded">
               Save Note
             </button>
 
-            <h3 className="text-lg font-bold mb-2">Interaction History</h3>
+            <h3 className="text-lg font-bold mb-2 mt-4">Interaction History</h3>
             <div className="bg-gray-800 p-3 rounded max-h-60 overflow-y-auto">
               {history.length === 0 ? (
                 <p className="text-gray-400">No interactions yet.</p>
