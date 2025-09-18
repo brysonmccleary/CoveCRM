@@ -1,4 +1,3 @@
-// /pages/api/import-leads.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import formidable from "formidable";
 import fs from "fs";
@@ -220,26 +219,20 @@ function mapRow(row: Record<string, any>, mapping: Record<string, string>) {
 // ---- dedupe helpers
 function buildFilter(userEmail: string, phoneKey?: string, emailKey?: string) {
   if (phoneKey) {
-    return {
-      userEmail,
-      $or: [{ phoneLast10: phoneKey }, { normalizedPhone: phoneKey }],
-    };
+    return { userEmail, $or: [{ phoneLast10: phoneKey }, { normalizedPhone: phoneKey }] };
   }
   if (emailKey) {
-    return {
-      userEmail,
-      $or: [{ Email: emailKey }, { email: emailKey }],
-    };
+    return { userEmail, $or: [{ Email: emailKey }, { email: emailKey }] };
   }
   return null;
 }
 function applyIdentityFields(set: Record<string, any>, phoneKey?: string, emailKey?: string, phoneRaw?: any) {
-  if (phoneRaw !== undefined) set["Phone"] = phoneRaw;
-  if (phoneKey !== undefined) {
+  if (typeof phoneRaw !== "undefined") set["Phone"] = phoneRaw;
+  if (typeof phoneKey !== "undefined") {
     set["phoneLast10"] = phoneKey;
     set["normalizedPhone"] = phoneKey;
   }
-  if (emailKey !== undefined) {
+  if (typeof emailKey !== "undefined") {
     set["Email"] = emailKey;
     set["email"] = emailKey;
   }
@@ -254,16 +247,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const userEmail = lc(session.user.email)!;
   await dbConnect();
 
+  // We will remove any legacy ownerEmail on every write.
+  const UNSET_OWNER = { ownerEmail: "" };
+
   // ---------- JSON MODE ----------
   const json = await readJsonBody(req);
   if (json) {
     try {
-      const {
-        targetFolderId,
-        mapping,
-        rows,
-        skipExisting = false,
-      } = json;
+      const { targetFolderId, mapping, rows, skipExisting = false } = json;
 
       const folderName =
         (json.folderName || json.newFolderName || (json as any).newFolder || "").trim() || undefined;
@@ -277,7 +268,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const mapped = rows.map((r) => ({
         ...mapRow(r, mapping),
         userEmail,
-        ownerEmail: userEmail,
         folderId: folder._id,
       }));
 
@@ -317,6 +307,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       for (const m of mapped) {
         const phoneKey = m.phoneLast10 as string | undefined;
+
         theLoop: {
           const emailKey = (m.Email as string | undefined) || (m.email as string | undefined);
           const exists = (phoneKey && byPhone.get(phoneKey)) || (emailKey && byEmail.get(String(emailKey)));
@@ -325,13 +316,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           if (!filter) { skipped++; break theLoop; }
 
           const base: any = {
-            ownerEmail: userEmail,
             folderId: folder._id,
             folder_name: String(folder.name),
             "Folder Name": String(folder.name),
             updatedAt: new Date(),
           };
-          // honor status if provided, else leave as-is or default on insert
           if (m.status) base.status = m.status;
 
           if (exists) {
@@ -342,12 +331,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             if (m.Notes !== undefined) base["Notes"] = m.Notes;
             if (m.leadType) base["leadType"] = m.leadType;
 
-            ops.push({ updateOne: { filter, update: { $set: base }, upsert: false } });
+            ops.push({ updateOne: { filter, update: { $set: base, $unset: UNSET_OWNER }, upsert: false } });
             processedFilters.push(filter);
           } else {
             const setOnInsert: any = {
               userEmail,
-              ownerEmail: userEmail,
               status: m.status || "New",
               createdAt: new Date(),
             };
@@ -358,7 +346,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             if (m.Notes !== undefined) base["Notes"] = m.Notes;
             if (m.leadType) base["leadType"] = m.leadType;
 
-            ops.push({ updateOne: { filter, update: { $set: base, $setOnInsert: setOnInsert }, upsert: true } });
+            ops.push({
+              updateOne: { filter, update: { $set: base, $setOnInsert: setOnInsert, $unset: UNSET_OWNER }, upsert: true },
+            });
             processedFilters.push(filter);
           }
         }
@@ -382,7 +372,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
       }
 
-      // ultra-small batches fall back to individual upserts
+      // ultra-small batches: single upserts
       if (!ops.length && skipped === 0 && mapped.length > 0) {
         for (const m of mapped) {
           const phoneKey = m.phoneLast10 as string | undefined;
@@ -392,7 +382,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
           const setOnInsert: any = {
             userEmail,
-            ownerEmail: userEmail,
             status: m.status || "New",
             createdAt: new Date(),
           };
@@ -412,7 +401,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
           applyIdentityFields(set, phoneKey, emailKey, m.Phone);
 
-          const r = await Lead.updateOne(filter, { $set: set, $setOnInsert: setOnInsert }, { upsert: true });
+          const r = await Lead.updateOne(
+            filter,
+            { $set: set, $setOnInsert: setOnInsert, $unset: UNSET_OWNER },
+            { upsert: true }
+          );
           const upc = (r as any).upsertedCount || ((r as any).upsertedId ? 1 : 0) || 0;
           const mod = (r as any).modifiedCount || 0;
           const match = (r as any).matchedCount || 0;
@@ -494,7 +487,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const rowsMapped = rawRows.map((r) => ({
           ...mapRow(r, mapping),
           userEmail,
-          ownerEmail: userEmail,
           folderId: folder._id,
         }));
 
@@ -539,18 +531,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           const exists = (phoneKey && byPhone.get(phoneKey)) || (emailKey && byEmail.get(String(emailKey)));
 
           const base: any = {
-            ownerEmail: userEmail,
             folderId: folder._id,
             folder_name: String(folder.name),
             "Folder Name": String(folder.name),
             updatedAt: new Date(),
           };
-          if (m.status) base.status = m.status; // ← honor status if present
+          if (m.status) base.status = m.status; // honor status if present
+
+          const filter = buildFilter(userEmail, phoneKey, emailKey);
+          if (!filter) { skipped++; continue; }
 
           if (exists) {
-            const filter = buildFilter(userEmail, phoneKey, emailKey);
-            if (!filter) { skipped++; continue; }
-
             if (m["First Name"] !== undefined) base["First Name"] = m["First Name"];
             if (m["Last Name"] !== undefined) base["Last Name"] = m["Last Name"];
             if (m.State !== undefined) base["State"] = m.State;
@@ -559,15 +550,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
             applyIdentityFields(base, phoneKey, emailKey, m.Phone);
 
-            ops.push({ updateOne: { filter, update: { $set: base }, upsert: false } });
+            ops.push({ updateOne: { filter, update: { $set: base, $unset: UNSET_OWNER }, upsert: false } });
             processedFilters.push(filter);
           } else {
-            const filter = buildFilter(userEmail, phoneKey, emailKey);
-            if (!filter) { skipped++; continue; }
-
             const setOnInsert: any = {
               userEmail,
-              ownerEmail: userEmail,
               status: m.status || "New",
               createdAt: new Date(),
             };
@@ -579,7 +566,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
             applyIdentityFields(base, phoneKey, emailKey, m.Phone);
 
-            ops.push({ updateOne: { filter, update: { $set: base, $setOnInsert: setOnInsert }, upsert: true } });
+            ops.push({
+              updateOne: { filter, update: { $set: base, $setOnInsert: setOnInsert, $unset: UNSET_OWNER }, upsert: true },
+            });
             processedFilters.push(filter);
           }
         }
@@ -609,7 +598,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
             const setOnInsert: any = {
               userEmail,
-              ownerEmail: userEmail,
               status: m.status || "New",
               createdAt: new Date(),
             };
@@ -629,12 +617,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
             applyIdentityFields(set, phoneKey, emailKey, m.Phone);
 
-            const r = await Lead.updateOne(filter, { $set: set, $setOnInsert: setOnInsert }, { upsert: true });
-            const upc = (r as any).upsertedCount || ((r as any).upsertedId ? 1 : 0) || 0;
-            const mod = (r as any).modifiedCount || 0;
-            const match = (r as any).matchedCount || 0;
-            if (upc > 0) inserted += upc;
-            else if (mod > 0 || match > 0) updated += 1;
+            await Lead.updateOne(
+              filter,
+              { $set: set, $setOnInsert: setOnInsert, $unset: UNSET_OWNER },
+              { upsert: true }
+            );
           }
         }
 

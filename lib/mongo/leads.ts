@@ -1,4 +1,3 @@
-// /lib/mongo/leads.ts
 import mongoose, { Schema, model, models, Types } from "mongoose";
 
 // -------- Subdocuments --------
@@ -24,7 +23,7 @@ const TranscriptSchema = new Schema(
 // -------- Main schema --------
 const LeadSchema = new Schema(
   {
-    // Common lead fields (kept flexible; many imports use these exact keys)
+    // Common lead fields
     State: { type: String },
     "First Name": { type: String },
     "Last Name": { type: String },
@@ -40,7 +39,7 @@ const LeadSchema = new Schema(
 
     // Ownership / scoping
     userEmail: { type: String, required: true },
-    ownerEmail: { type: String },
+    ownerEmail: { type: Schema.Types.Mixed }, // keep legacy docs readable; we no longer write to it
 
     // Folder linkage (canonical)
     folderId: { type: Schema.Types.ObjectId, ref: "Folder" },
@@ -75,11 +74,11 @@ const LeadSchema = new Schema(
   { timestamps: true, strict: false }
 );
 
-// -------- Indexes (moved here from models/Lead.ts to centralize) --------
+// -------- Indexes --------
 LeadSchema.index({ userEmail: 1, updatedAt: -1 }, { name: "lead_user_updated_desc" });
 LeadSchema.index({ userEmail: 1, Phone: 1 }, { name: "lead_user_phone_idx" });
 LeadSchema.index({ userEmail: 1, normalizedPhone: 1 }, { name: "lead_user_normalized_phone_idx" });
-LeadSchema.index({ ownerEmail: 1, Phone: 1 }, { name: "lead_owner_phone_idx" });
+LeadSchema.index({ ownerEmail: 1, Phone: 1 }, { name: "lead_owner_phone_idx" }); // legacy reads OK
 LeadSchema.index({ userEmail: 1, folderId: 1 }, { name: "lead_user_folder_idx" });
 LeadSchema.index({ State: 1 }, { name: "lead_state_idx" });
 LeadSchema.index({ userEmail: 1, isAIEngaged: 1, updatedAt: -1 }, { name: "lead_ai_engaged_idx" });
@@ -120,21 +119,31 @@ export const createLeadsFromCSV = async (
   folderId: string | Types.ObjectId
 ) => {
   const fid = toObjectId(folderId);
-  const mapped = leads.map((lead) => ({
-    ...lead,
-    userEmail,
-    ownerEmail: lead.ownerEmail ?? userEmail,
-    folderId: fid,
-    status: lead.status ?? "New",
-    // keep any precomputed phone/email mirrors; do not overwrite if already set
-    phoneLast10: lead.phoneLast10 ?? lead.normalizedPhone?.slice(-10),
-    normalizedPhone:
+  const mapped = leads.map((lead) => {
+    const emailLower =
+      typeof lead.Email === "string" ? lead.Email.toLowerCase().trim() : lead.Email;
+    const emailLower2 =
+      typeof lead.email === "string" ? lead.email.toLowerCase().trim() : lead.email;
+    const normalizedPhone =
       lead.normalizedPhone ??
-      (typeof lead.Phone === "string" ? lead.Phone.replace(/\D+/g, "") : undefined),
-    Email: typeof lead.Email === "string" ? lead.Email.toLowerCase().trim() : lead.Email,
-    email: typeof lead.email === "string" ? lead.email.toLowerCase().trim() : lead.email,
-    leadType: sanitizeLeadType(lead.leadType || ""),
-  }));
+      (typeof lead.Phone === "string" ? lead.Phone.replace(/\D+/g, "") : undefined);
+
+    // never write ownerEmail in new docs
+    const { ownerEmail, ...rest } = lead;
+
+    return {
+      ...rest,
+      userEmail,
+      folderId: fid,
+      status: lead.status ?? "New",
+      phoneLast10: lead.phoneLast10 ?? normalizedPhone?.slice(-10),
+      normalizedPhone,
+      Email: emailLower,
+      email: emailLower2,
+      leadType: sanitizeLeadType(lead.leadType || ""),
+    };
+  });
+
   return await Lead.insertMany(mapped, { ordered: false });
 };
 
@@ -144,20 +153,30 @@ export const createLeadsFromGoogleSheet = async (
   folderId: string | Types.ObjectId
 ) => {
   const fid = toObjectId(folderId);
-  const parsed = sheetLeads.map((lead) => ({
-    ...lead,
-    userEmail,
-    ownerEmail: lead.ownerEmail ?? userEmail,
-    folderId: fid,
-    status: lead.status ?? "New",
-    phoneLast10: lead.phoneLast10 ?? lead.normalizedPhone?.slice(-10),
-    normalizedPhone:
+  const parsed = sheetLeads.map((lead) => {
+    const emailLower =
+      typeof lead.Email === "string" ? lead.Email.toLowerCase().trim() : lead.Email;
+    const emailLower2 =
+      typeof lead.email === "string" ? lead.email.toLowerCase().trim() : lead.email;
+    const normalizedPhone =
       lead.normalizedPhone ??
-      (typeof lead.Phone === "string" ? lead.Phone.replace(/\D+/g, "") : undefined),
-    Email: typeof lead.Email === "string" ? lead.Email.toLowerCase().trim() : lead.Email,
-    email: typeof lead.email === "string" ? lead.email.toLowerCase().trim() : lead.email,
-    leadType: sanitizeLeadType(lead.leadType || ""),
-  }));
+      (typeof lead.Phone === "string" ? lead.Phone.replace(/\D+/g, "") : undefined);
+
+    const { ownerEmail, ...rest } = lead;
+
+    return {
+      ...rest,
+      userEmail,
+      folderId: fid,
+      status: lead.status ?? "New",
+      phoneLast10: lead.phoneLast10 ?? normalizedPhone?.slice(-10),
+      normalizedPhone,
+      Email: emailLower,
+      email: emailLower2,
+      leadType: sanitizeLeadType(lead.leadType || ""),
+    };
+  });
+
   return await Lead.insertMany(parsed, { ordered: false });
 };
 
