@@ -5,29 +5,12 @@ import { authOptions } from "../auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import Lead from "@/models/Lead";
 import Message from "@/models/Message";
-import Call from "@/models/Call";           // used only if includeCalls=1
-import { Types } from "mongoose";           // used only if includeCalls=1
+import Call from "@/models/Call";
+import { Types } from "mongoose";
 
 type ApiEvent =
-  | {
-      type: "sms";
-      id: string;
-      dir: "inbound" | "outbound" | "ai";
-      text: string;
-      date: string;
-      sid?: string;
-      status?: string;
-    }
-  | {
-      type: "call";
-      id: string;
-      date: string;
-      durationSec?: number;
-      status?: string;
-      recordingUrl?: string;
-      summary?: string;
-      sentiment?: string;
-    }
+  | { type: "sms"; id: string; dir: "inbound" | "outbound" | "ai"; text: string; date: string; sid?: string; status?: string }
+  | { type: "call"; id: string; date: string; durationSec?: number; status?: string; recordingUrl?: string; summary?: string; sentiment?: string }
   | { type: "note"; id: string; date: string; text: string }
   | { type: "status"; id: string; date: string; to?: string };
 
@@ -35,7 +18,6 @@ function coerceDateISO(d?: any): string {
   const dt = d ? new Date(d) : new Date();
   return isNaN(dt.getTime()) ? new Date().toISOString() : dt.toISOString();
 }
-
 function parseBool(v: any): boolean {
   const s = String(v || "").toLowerCase();
   return s === "1" || s === "true" || s === "yes";
@@ -51,8 +33,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const leadId = String(req.query.id || "").trim();
   const limit = Math.min(Number(req.query.limit || 50), 200);
   const before = req.query.before ? new Date(String(req.query.before)) : null;
-
-  // NEW: default to texts/notes only; calls can be included via includeCalls=1 (not used by UI)
   const includeCalls = parseBool(req.query.includeCalls);
 
   if (!leadId) { res.status(400).json({ message: "Missing lead id" }); return; }
@@ -65,7 +45,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const events: ApiEvent[] = [];
   const cutoff = before || new Date();
 
-  // ---------- SMS (Message collection) ----------
+  // --- SMS strictly for this lead ---
   try {
     const msgQuery: any = { userEmail, leadId, createdAt: { $lte: cutoff } };
     const msgs: any[] = await Message.find(msgQuery).sort({ createdAt: -1 }).limit(limit).lean();
@@ -80,37 +60,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         status: m.status,
       });
     }
-  } catch {
-    // If Message model/collection isn't present, silently skip
-  }
+  } catch {}
 
-  // ---------- Calls (optional; disabled by default) ----------
+  // --- Calls for this lead (optional) ---
   if (includeCalls) {
     try {
       const idObj = Types.ObjectId.isValid(leadId) ? new Types.ObjectId(leadId) : null;
-      const timeOr = [
-        { startedAt: { $lte: cutoff } },
-        { completedAt: { $lte: cutoff } },
-        { createdAt: { $lte: cutoff } },
-      ];
-      // leadId-scoped only (no phone fallbacks)
-      const query: any = {
-        userEmail,
-        $or: [{ leadId }, ...(idObj ? [{ leadId: idObj }] : [])],
-        $orTime: timeOr,
-      };
-      // expand the pseudo key
-      const { $orTime, ...base } = query;
-      const mongoQuery = { ...base, $or: $orTime };
-
-      const calls: any[] = await Call.find(mongoQuery).sort({ createdAt: -1 }).limit(limit).lean();
+      const timeOr = [{ startedAt: { $lte: cutoff } }, { completedAt: { $lte: cutoff } }, { createdAt: { $lte: cutoff } }];
+      const query: any = { userEmail, $or: [{ leadId }, ...(idObj ? [{ leadId: idObj }] : [])] };
+      const calls: any[] = await Call.find({ ...query, $or: timeOr }).sort({ createdAt: -1 }).limit(limit).lean();
       for (const c of calls) {
         const when = c.startedAt || c.completedAt || c.createdAt;
         const dur = typeof c.duration === "number" ? c.duration : undefined;
         const talk = typeof c.talkTime === "number" ? c.talkTime : undefined;
         let status: string | undefined;
         if (c.completedAt) status = (talk ?? 0) > 0 ? "completed" : "no-answer";
-
         events.push({
           type: "call",
           id: String(c._id),
@@ -127,7 +91,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
   }
 
-  // ---------- Embedded transcripts as notes ----------
+  // --- Notes from Lead.history (pinned by UI later) ---
+  if (Array.isArray(leadDoc.history)) {
+    for (const h of leadDoc.history) {
+      if (!h) continue;
+      const t = String(h.type || "").toLowerCase();
+      if (t === "note") {
+        events.push({ type: "note", id: `${leadDoc._id}-hist-${String(h._id || Math.random())}`, date: coerceDateISO(h.timestamp), text: h.message || "" });
+      } else if (t === "disposition") {
+        events.push({ type: "status", id: `${leadDoc._id}-hist-${String(h._id || Math.random())}`, date: coerceDateISO(h.timestamp), to: h.message || "Updated" });
+      }
+    }
+  }
+
+  // --- Embedded transcripts as notes (legacy) ---
   if (Array.isArray(leadDoc.callTranscripts)) {
     for (const t of leadDoc.callTranscripts) {
       events.push({
@@ -139,7 +116,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
   }
 
-  // ---------- Current status marker ----------
+  // --- Current status snapshot (last) ---
   events.push({
     type: "status",
     id: `${leadDoc._id}-status`,
@@ -147,7 +124,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     to: leadDoc.status || "New",
   });
 
-  // Sort DESC and paginate
+  // Sort DESC by date, then slice
   events.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
   const sliced = events.slice(0, limit);
 
@@ -155,11 +132,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   res.status(200).json({
     lead: {
       _id: String(leadDoc._id),
-      firstName: leadDoc.firstName || leadDoc["First Name"] || leadDoc.FIRST_NAME || "",
-      lastName: leadDoc.lastName || leadDoc["Last Name"] || leadDoc.LAST_NAME || "",
-      phone: leadDoc.phone || leadDoc.Phone || leadDoc.PHONE || "",
-      email: leadDoc.email || leadDoc.Email || leadDoc.EMAIL || "",
-      state: leadDoc.state || leadDoc.State || leadDoc.STATE || "",
+      firstName: leadDoc.firstName || leadDoc["First Name"] || "",
+      lastName: leadDoc.lastName || leadDoc["Last Name"] || "",
+      phone: leadDoc.phone || leadDoc.Phone || "",
+      email: leadDoc.email || leadDoc.Email || "",
+      state: leadDoc.state || "",
       status: leadDoc.status || "New",
       folderId: leadDoc.folderId ? String(leadDoc.folderId) : null,
     },

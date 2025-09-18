@@ -130,7 +130,8 @@ export default function LeadProfileDial() {
     run();
   }, [id, fetchLeadById]);
 
-  // Center: texts/notes/status only
+  // Center: texts/notes/status only (per lead, newest-first). Notes appear at the very top because:
+  // 1) the API sorts newest-first and 2) when adding a new note we unshift() it locally.
   const loadHistory = useCallback(async () => {
     const key = resolvedId || (id ? String(id) : "");
     if (!key) return;
@@ -168,7 +169,7 @@ export default function LeadProfileDial() {
 
   useEffect(() => { loadHistory(); }, [loadHistory]);
 
-  // Right panel: real calls via /api/calls/by-lead
+  // Right panel: real calls via /api/calls/by-lead (per lead)
   const loadCalls = useCallback(async () => {
     const key = resolvedId || (id ? String(id) : "");
     if (!key) return;
@@ -198,13 +199,14 @@ export default function LeadProfileDial() {
         const j = await r.json().catch(() => ({}));
         throw new Error(j?.message || "Failed to save note");
       }
+      // Pin new note to top immediately
       setHistoryLines((prev) => [`📝 ${notes.trim()} • ${new Date().toLocaleString()}`, ...prev]);
       setNotes("");
       toast.success("✅ Note saved!");
     } catch (e: any) { toast.error(e?.message || "Failed to save note"); }
   };
 
-  // 🔧 Single source of truth for dispositions: /api/disposition-lead
+  // Move lead (disposition) — leaves “No Answer” as a no-op here
   const handleDisposition = async (newFolderName: string) => {
     if (!lead?.id) return;
     if (newFolderName === "No Answer") {
@@ -236,7 +238,7 @@ export default function LeadProfileDial() {
     }
   };
 
-  // ✅ Route to dialer for this exact lead
+  // Route to dialer for this exact lead
   const startCall = () => {
     if (!lead?.id) return toast.error("Lead not loaded");
     router.push({ pathname: "/dial-session", query: { leadId: lead.id } });
@@ -268,7 +270,7 @@ export default function LeadProfileDial() {
         </div>
 
         {Object.entries(lead || {})
-          .filter(([key]) => !["_id","id","Notes","First Name","Last Name","folderId","createdAt","ownerId"].includes(key))
+          .filter(([key]) => !["_id","id","Notes","First Name","Last Name","folderId","createdAt","ownerId","userEmail"].includes(key))
           .map(([key, value]) => {
             if (key === "Phone" || key.toLowerCase() === "phone") value = formatPhone(String(value || ""));
             return (
@@ -335,7 +337,7 @@ export default function LeadProfileDial() {
           </div>
 
           <div className="mt-4">
-            <button className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded">End Dial Session</button>
+            <button onClick={() => router.push("/leads")} className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded">Back to Leads</button>
           </div>
         </div>
       </div>

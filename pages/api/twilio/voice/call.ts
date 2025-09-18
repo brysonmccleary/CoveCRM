@@ -1,12 +1,63 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
-// ✅ correct relative path from /pages/api/twilio/voice/call.ts to /pages/api/auth/[...nextauth].ts
 import { authOptions } from "../../auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import Lead from "@/models/Lead";
 import { getUserByEmail } from "@/models/User";
 import Call from "@/models/Call";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
+import { DateTime } from "luxon";
+
+/* --- server-side tz helpers --- */
+const STATE_TZ: Record<string, string> = {
+  AL:"America/Chicago",AK:"America/Anchorage",AZ:"America/Phoenix",AR:"America/Chicago",CA:"America/Los_Angeles",
+  CO:"America/Denver",CT:"America/New_York",DC:"America/New_York",DE:"America/New_York",FL:"America/New_York",
+  GA:"America/New_York",HI:"Pacific/Honolulu",IA:"America/Chicago",ID:"America/Boise",IL:"America/Chicago",
+  IN:"America/Indiana/Indianapolis",KS:"America/Chicago",KY:"America/New_York",LA:"America/Chicago",MA:"America/New_York",
+  MD:"America/New_York",ME:"America/New_York",MI:"America/Detroit",MN:"America/Chicago",MO:"America/Chicago",
+  MS:"America/Chicago",MT:"America/Denver",NC:"America/New_York",ND:"America/Chicago",NE:"America/Chicago",
+  NH:"America/New_York",NJ:"America/New_York",NM:"America/Denver",NV:"America/Los_Angeles",NY:"America/New_York",
+  OH:"America/New_York",OK:"America/Chicago",OR:"America/Los_Angeles",PA:"America/New_York",RI:"America/New_York",
+  SC:"America/New_York",SD:"America/Chicago",TN:"America/Chicago",TX:"America/Chicago",UT:"America/Denver",
+  VA:"America/New_York",VT:"America/New_York",WA:"America/Los_Angeles",WI:"America/Chicago",WV:"America/New_York",WY:"America/Denver",
+};
+function pick(obj: any, keys: string[]): string {
+  for (const k of keys) {
+    const v = obj?.[k];
+    if (v !== undefined && v !== null && String(v).trim() !== "") return String(v).trim();
+  }
+  return "";
+}
+function normalizeState(val?: string): string | null {
+  if (!val) return null;
+  const s = String(val).trim().toUpperCase();
+  if (STATE_TZ[s]) return s;
+  const map: Record<string, string> = {
+    "ALABAMA":"AL","ALASKA":"AK","ARIZONA":"AZ","ARKANSAS":"AR","CALIFORNIA":"CA","COLORADO":"CO","CONNECTICUT":"CT","DELAWARE":"DE",
+    "DISTRICT OF COLUMBIA":"DC","WASHINGTON DC":"DC","FLORIDA":"FL","GEORGIA":"GA","HAWAII":"HI","IDAHO":"ID","ILLINOIS":"IL","INDIANA":"IN",
+    "IOWA":"IA","KANSAS":"KS","KENTUCKY":"KY","LOUISIANA":"LA","MAINE":"ME","MARYLAND":"MD","MASSACHUSETTS":"MA","MICHIGAN":"MI","MINNESOTA":"MN",
+    "MISSISSIPPI":"MS","MISSOURI":"MO","MONTANA":"MT","NEBRASKA":"NE","NEVADA":"NV","NEW HAMPSHIRE":"NH","NEW JERSEY":"NJ",
+    "NEW MEXICO":"NM","NEW YORK":"NY","NORTH CAROLINA":"NC","NORTH DAKOTA":"ND","OHIO":"OH","OKLAHOMA":"OK","OREGON":"OR","PENNSYLVANIA":"PA",
+    "RHODE ISLAND":"RI","SOUTH CAROLINA":"SC","SOUTH DAKOTA":"SD","TENNESSEE":"TN","TEXAS":"TX","UTAH":"UT","VERMONT":"VT","VIRGINIA":"VA",
+    "WASHINGTON":"WA","WEST VIRGINIA":"WV","WISCONSIN":"WI","WYOMING":"WY"
+  };
+  const full = map[s] || map[s.replace(/\./g, "")];
+  return full || null;
+}
+function resolveLeadTimezoneServer(lead: any): string | null {
+  const explicit = pick(lead, ["timezone","timeZone","tz","ianaTimezone"]);
+  if (explicit) return explicit;
+  const stateRaw = pick(lead, ["state","State","STATE","st","St","ST"]);
+  const abbr = normalizeState(stateRaw);
+  if (abbr && STATE_TZ[abbr]) return STATE_TZ[abbr];
+  return null;
+}
+function withinWindow(zone: string, startHour = 8, endHour = 21) {
+  const now = DateTime.now().setZone(zone || "UTC");
+  const hr = now.hour;
+  return hr >= startHour && hr < endHour;
+}
+/* ------------------------------------------ */
 
 const BASE_URL = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "").replace(/\/$/, "");
 const CALL_AI_SUMMARY_ENABLED = (process.env.CALL_AI_SUMMARY_ENABLED || "").toString() === "1";
@@ -75,6 +126,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const lead: any = await Lead.findOne({ _id: leadId, userEmail }).lean();
   if (!lead) return res.status(404).json({ message: "Lead not found" });
 
+  // Quiet-hours guard (8am–9pm in lead-local if known)
+  const zone = resolveLeadTimezoneServer(lead);
+  if (zone && !withinWindow(zone, 8, 21)) {
+    const now = DateTime.now().setZone(zone);
+    return res.status(423).json({
+      message: `Quiet hours: lead local time is ${now.toFormat("ccc L/d @ h:mm a")} ${now.offsetNameShort}`,
+      zone,
+    });
+  }
+
   const ownedNumbers: any[] = Array.isArray((user as any).numbers) ? (user as any).numbers : [];
   const fromNumber = e164(ownedNumbers?.[0]?.phoneNumber || process.env.TWILIO_CALLER_ID || "");
   if (!fromNumber) return res.status(400).json({ message: "No Twilio number on account (fromNumber)" });
@@ -116,7 +177,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       statusCallback: `${BASE_URL}/api/twilio/status-callback`,
       statusCallbackMethod: "POST",
       statusCallbackEvent: ["initiated", "ringing", "answered", "completed"],
-      timeout: 25, // a touch shorter so it doesn’t hop too fast
+      timeout: 25,
       machineDetection: "DetectMessageEnd",
       amdStatusCallback: `${BASE_URL}/api/twilio/amd-callback`,
       amdStatusCallbackMethod: "POST",

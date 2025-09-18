@@ -3,7 +3,7 @@ import { useRouter } from "next/router";
 import Sidebar from "@/components/Sidebar";
 import CallSummary from "@/components/CallSummary";
 import BookAppointmentModal from "@/components/BookAppointmentModal";
-import { isCallAllowed } from "@/utils/checkCallTime";
+import { isCallAllowed, isCallAllowedForLead, localTimeString } from "@/utils/checkCallTime";
 import { playRingback, stopRingback, primeAudioContext, ensureUnlocked } from "@/utils/ringAudio";
 import toast from "react-hot-toast";
 import { joinConference, leaveConference, setMuted as sdkSetMuted, getMuted as sdkGetMuted } from "@/utils/voiceClient";
@@ -26,7 +26,7 @@ export default function DialSession() {
     leadId: singleLeadIdParam,
     startIndex,
     progressKey,
-    serverProgressKey, // NEW: server-backed pointer key (per-folder)
+    serverProgressKey,
   } = router.query as {
     leads?: string;
     fromNumber?: string;
@@ -309,7 +309,7 @@ export default function DialSession() {
         if (valid.length) { setSessionStarted(true); setReadyToCall(true); setStatus("Ready"); }
         else { setStatus("Idle"); toast("No valid leads to dial"); }
 
-        // write initial LOCAL progress if key passed (your original)
+        // write initial LOCAL progress if key passed
         if (typeof progressKey === "string" && valid.length) {
           localStorage.setItem(progressKey, JSON.stringify({ index: start }));
         }
@@ -321,14 +321,15 @@ export default function DialSession() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [leadIdsParam, singleLeadIdParam, startIndex, progressKey, serverProgressKey]);
 
-  // Persist local progress on index change (your original)
+  // Persist local progress on index change
   useEffect(() => {
     if (typeof progressKey === "string" && leadQueue.length) {
       try { localStorage.setItem(progressKey, JSON.stringify({ index: currentLeadIndex })); } catch {}
     }
   }, [currentLeadIndex, progressKey, leadQueue.length]);
 
-  // Clear + load history for each lead (prevents cross-lead bleed)
+  // Clear + load history for each lead (per-lead only, newest-first, notes appear among events;
+  // we also push newly added notes to the top immediately in UI)
   useEffect(() => {
     const loadHistory = async () => {
       if (!lead?.id) { setHistory([]); return; }
@@ -346,11 +347,11 @@ export default function DialSession() {
         const rows: HistoryRow[] = [];
         for (const ev of (j?.events || [])) {
           const when = new Date((ev as any).date).toLocaleString();
-          if ((ev as any).type === "sms") {
+          if ((ev as any).type === "note") {
+            rows.push({ kind: "text", text: `📝 Note • ${when} — ${(ev as any).text}` });
+          } else if ((ev as any).type === "sms") {
             const sms = ev as any;
             rows.push({ kind: "text", text: `💬 ${sms.dir.toUpperCase()} • ${when} — ${sms.text}` });
-          } else if ((ev as any).type === "note") {
-            rows.push({ kind: "text", text: `📝 Note • ${when} — ${(ev as any).text}` });
           } else if ((ev as any).type === "status") {
             rows.push({ kind: "text", text: `📌 Status • ${when} — ${(ev as any).to || "-"}` });
           } else if ((ev as any).type === "call") {
@@ -372,9 +373,31 @@ export default function DialSession() {
     loadHistory();
   }, [lead?.id]);
 
+  // Auto-advance driver
   useEffect(() => {
     if (!numbersLoaded) { setStatus("Loading your numbers…"); return; }
-    if (leadQueue.length > 0 && readyToCall && !isPaused && sessionStarted && !sessionEndedRef.current && !placingCallRef.current && !callActive) {
+    if (
+      leadQueue.length > 0 &&
+      readyToCall &&
+      !isPaused &&
+      sessionStarted &&
+      !sessionEndedRef.current &&
+      !placingCallRef.current &&
+      !callActive
+    ) {
+      // Quiet-hours skip (lead time zone)
+      const { allowed, zone } = isCallAllowedForLead(leadQueue[currentLeadIndex] || {});
+      if (!allowed) {
+        const timeStr = localTimeString(zone);
+        setHistory((prev) => [
+          { kind: "text", text: `⏭️ Skipped (quiet hours) • ${timeStr}` },
+          ...prev,
+        ]);
+        serverPersist(currentLeadIndex);
+        setCurrentLeadIndex((i) => i + 1);
+        return;
+      }
+
       placingCallRef.current = true;
       setReadyToCall(false);
       callLead(leadQueue[currentLeadIndex]).finally(() => { placingCallRef.current = false; });
@@ -425,7 +448,7 @@ export default function DialSession() {
           }
         }
 
-        // Treat canceled/completed as a definitive disconnect (no gating).
+        // Treat canceled/completed as a definitive disconnect
         if (s === "canceled" || s === "completed") {
           clearStatusPoll();
           await markDisconnected(`status-${s}`);
@@ -454,9 +477,18 @@ export default function DialSession() {
     if (sessionEndedRef.current) return;
     if (!leadToCall?.id) { setStatus("Missing lead id"); return; }
 
+    // Global soft gate (optional—kept from your earlier logic)
     if (typeof isCallAllowed === "function" && !isCallAllowed()) {
       toast.error("Calls are restricted at this time.");
       setStatus("Blocked by schedule");
+      return;
+    }
+
+    // Strong per-lead quiet-hours gate (already checked in driver; keep here defensively)
+    const { allowed, zone } = isCallAllowedForLead(leadToCall);
+    if (!allowed) {
+      setStatus(`Quiet hours (${localTimeString(zone)})`);
+      scheduleNextLead();
       return;
     }
 
@@ -513,12 +545,12 @@ export default function DialSession() {
           safeOn("connect", connectedNow);
           safeOn("connected", connectedNow);
 
-          // Instant "Disconnected" on hangup events from either side.
+          // Disconnected events
           safeOn("disconnect", () => { markDisconnected("twilio-disconnect"); });
           safeOn("disconnected", () => { markDisconnected("twilio-disconnected"); });
           safeOn("hangup", () => { markDisconnected("twilio-hangup"); });
 
-          // Defensive cuts for non-success paths (not necessarily a hangup)
+          // Defensive cuts for non-success paths
           safeOn("cancel", () => stopRingback());
           safeOn("reject", () => stopRingback());
           safeOn("error", () => stopRingback());
@@ -559,7 +591,8 @@ export default function DialSession() {
         try { const j = await r.json(); if (j?.message) msg = j.message; } catch {}
         throw new Error(msg);
       }
-      setHistory((prev) => [{ kind: "text", text: `📝 Note: ${notes.trim()}` }, ...prev]);
+      // Pin new note to top of the visible history immediately
+      setHistory((prev) => [{ kind: "text", text: `📝 Note • ${new Date().toLocaleString()} — ${notes.trim()}` }, ...prev]);
       setNotes("");
       toast.success("✅ Note saved!");
     } catch (e: any) {
@@ -622,11 +655,11 @@ export default function DialSession() {
 
       if (label === "Booked Appointment") setShowBookModal(true);
 
-      if (!sessionEndedRef.current) scheduleNextLead(); // ✅ advance to next lead
+      if (!sessionEndedRef.current) scheduleNextLead(); // advance to next lead
     } catch (e: any) {
       console.error(e);
       toast.error(e?.message || "Failed to save disposition");
-      if (!sessionEndedRef.current) scheduleNextLead(); // ✅ still advance on error
+      if (!sessionEndedRef.current) scheduleNextLead(); // still advance on error
     } finally {
       dispositionBusyRef.current = false;
     }
@@ -638,7 +671,7 @@ export default function DialSession() {
     if (leadQueue.length <= 1) return showSessionSummary();
     const nextIndex = currentLeadIndex + 1;
     if (nextIndex >= leadQueue.length) return showSessionSummary();
-    // NEW: persist the just-finished index to server
+    // persist the just-finished index to server
     serverPersist(currentLeadIndex);
     setCurrentLeadIndex(nextIndex);
     setReadyToCall(true);
@@ -696,7 +729,7 @@ export default function DialSession() {
     if (typeof progressKey === "string") {
       try { localStorage.removeItem(progressKey); } catch {}
     }
-    // NEW: persist final index to server so Resume starts after it
+    // persist final index to server so Resume starts after it
     serverPersist(currentLeadIndex);
 
     showSessionSummary();

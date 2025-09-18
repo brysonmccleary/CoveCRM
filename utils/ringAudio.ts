@@ -48,7 +48,6 @@ export function ensureUnlocked(): Promise<void> {
 
         // Attempt a short play to satisfy gesture gating; immediately pause/reset.
         try {
-          // Some browsers require an audible start; keep volume as-is but cut immediately.
           const p = el.play();
           if (p && typeof (p as any).then === "function") {
             await (p as Promise<void>).catch(() => {});
