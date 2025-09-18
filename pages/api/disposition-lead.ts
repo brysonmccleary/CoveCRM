@@ -16,23 +16,25 @@ function normalizeName(s?: string) {
   return String(s ?? "").trim().replace(/\s+/g, " ");
 }
 
-// Map canonical -> official
+// Map canonical -> official system folder name
 const CANON_TO_OFFICIAL = new Map(
   SYSTEM_FOLDERS.map((n) => [canonicalizeName(n), n] as const)
 );
 
-function coerceToOfficialIfSystemLike(name: string): { finalName: string; isSystem: boolean } {
+function resolveTargetName(name: string): { finalName: string; isSystem: boolean } {
   const canon = canonicalizeName(name);
   const official = CANON_TO_OFFICIAL.get(canon);
-  if (official) return { finalName: official, isSystem: true };
-  return { finalName: normalizeName(name), isSystem: false };
+  return official
+    ? { finalName: official, isSystem: true }
+    : { finalName: normalizeName(name), isSystem: false };
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed" });
 
+  // Debug tag so we can prove which code is live
   res.setHeader("Cache-Control", "no-store");
-  res.setHeader("X-Disposition-Impl", "sys-v2");
+  res.setHeader("X-Disposition-Impl", "sys-v3");
 
   try {
     const session = await getServerSession(req, res, authOptions);
@@ -43,7 +45,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const rawName = normalizeName(newFolderName || "");
     if (!leadId || !rawName) return res.status(400).json({ message: "Missing required fields." });
 
-    // Validate ObjectId early
     let leadObjectId: mongoose.Types.ObjectId;
     try {
       leadObjectId = new mongoose.Types.ObjectId(leadId);
@@ -53,49 +54,44 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     await dbConnect();
 
-    // Make sure the lead belongs to this user
+    // Verify lead belongs to user
     const existing = await Lead.findOne({ _id: leadObjectId, userEmail })
       .select({ _id: 1, status: 1 })
       .lean<{ _id: any; status?: string } | null>();
     if (!existing) return res.status(404).json({ message: "Lead not found." });
 
-    const { finalName, isSystem } = coerceToOfficialIfSystemLike(rawName);
+    const { finalName, isSystem } = resolveTargetName(rawName);
 
-    // Resolve / create target folder
+    // Resolve/create target folder
+    const nameFilter = { $regex: `^\\s*${escapeRegex(finalName)}\\s*$`, $options: "i" as const };
     let targetFolderId: mongoose.Types.ObjectId | null = null;
 
     if (isSystem) {
-      // Bypass Mongoose validators/hooks: raw collection upsert scoped by userEmail + case-insensitive name
-      const filter = {
-        userEmail,
-        name: { $regex: `^\\s*${escapeRegex(finalName)}\\s*$`, $options: "i" },
-      };
-      const up = await Folder.collection.updateOne(
-        filter as any,
+      // Bypass Mongoose validators for system folders: use raw collection upsert
+      await Folder.collection.updateOne(
+        { userEmail, name: nameFilter } as any,
         { $setOnInsert: { userEmail, name: finalName, assignedDrips: [] } },
         { upsert: true }
       );
-
-      if ((up as any).upsertedId?. _id) {
-        targetFolderId = (up as any).upsertedId._id as mongoose.Types.ObjectId;
-      } else {
-        const f = await Folder.findOne(filter).select({ _id: 1 }).lean<{ _id: any } | null>();
-        if (!f) return res.status(500).json({ message: "Failed to resolve system folder." });
-        targetFolderId = f._id as any;
-      }
+      const f = await Folder.findOne({ userEmail, name: nameFilter })
+        .select({ _id: 1 })
+        .lean<{ _id: any } | null>();
+      if (!f) return res.status(500).json({ message: "Failed to resolve system folder." });
+      targetFolderId = f._id as any;
     } else {
-      // Non-system names: normal Mongoose upsert (validators allowed)
-      const nameRegex = new RegExp(`^${escapeRegex(finalName)}$`, "i");
+      // Non-system: normal guarded upsert is OK
       const f = await Folder.findOneAndUpdate(
-        { userEmail, name: nameRegex },
+        { userEmail, name: new RegExp(`^${escapeRegex(finalName)}$`, "i") },
         { $setOnInsert: { userEmail, name: finalName, assignedDrips: [] as string[] } },
         { new: true, upsert: true }
-      ).select({ _id: 1, name: 1 });
+      )
+        .select({ _id: 1 })
+        .lean<{ _id: any } | null>();
       if (!f) return res.status(500).json({ message: "Failed to resolve folder." });
       targetFolderId = f._id as any;
     }
 
-    // Move the lead (and set status only if moving into system folder)
+    // Move the lead; set status only if target is a system folder
     const setFields: Record<string, any> = {
       folderId: targetFolderId,
       folderName: finalName,
@@ -111,7 +107,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     );
     if (write.matchedCount === 0) return res.status(404).json({ message: "Lead not found on update." });
 
-    // Best-effort socket notify
+    // Best-effort socket emit
     try {
       let io = (res as any)?.socket?.server?.io;
       if (!io) io = initSocket(res as any);
@@ -122,7 +118,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         status: isSystem ? finalName : existing?.status,
         updatedAt: new Date(),
       });
-    } catch { /* non-fatal */ }
+    } catch {}
 
     return res.status(200).json({
       success: true,
