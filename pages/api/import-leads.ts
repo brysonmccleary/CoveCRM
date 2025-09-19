@@ -1,4 +1,3 @@
-// ... same imports as before
 import type { NextApiRequest, NextApiResponse } from "next";
 import formidable from "formidable";
 import fs from "fs";
@@ -37,7 +36,7 @@ function lc(str?: string | null) {
   return str ? String(str).trim().toLowerCase() : undefined;
 }
 
-// ---- state normalization
+// ---- state normalization (unchanged)
 const STATE_MAP: Record<string, string> = {
   AL: "AL", ALABAMA: "AL", AK: "AK", ALASKA: "AK", AZ: "AZ", ARIZONA: "AZ",
   AR: "AR", ARKANSAS: "AR", CA: "CA", CALIFORNIA: "CA", CO: "CO", COLORADO: "CO",
@@ -71,8 +70,8 @@ function normalizeState(input?: string | null): string | undefined {
 // ---------- JSON body reader (since bodyParser is off)
 type JsonPayload = {
   targetFolderId?: string;
-  folderName?: string;
-  newFolderName?: string;
+  folderName?: string;           // primary
+  newFolderName?: string;        // legacy aliases
   newFolder?: string;
   mapping?: Record<string, string>;
   rows?: Record<string, any>[];
@@ -94,7 +93,7 @@ async function readJsonBody(req: NextApiRequest): Promise<JsonPayload | null> {
   }
 }
 
-// ---------- System-folder guard
+// ---------- System-folder guard (belt & suspenders)
 const BLOCKED = new Set(
   ["sold", "not interested", "booked", "booked appointment"].map((s) => s.toLowerCase())
 );
@@ -146,7 +145,7 @@ async function resolveImportFolder(
   );
 }
 
-// ---------- Status normalization
+// ---------- Status (disposition) handling
 function sanitizeStatus(raw?: string | null): string | undefined {
   if (!raw) return undefined;
   const s = String(raw).trim();
@@ -175,7 +174,7 @@ function mapRow(row: Record<string, any>, mapping: Record<string, string>) {
   const notes = pick("notes");
   const source = pick("source");
   const leadTypeRaw = row["Lead Type"] || row["leadType"] || row["LeadType"];
-  const statusRaw = pick("status") ?? pick("disposition");
+  const statusRaw = pick("status") ?? pick("disposition"); // ← honor status/disposition if mapped
 
   const mergedNotes =
     source && notes
@@ -187,6 +186,7 @@ function mapRow(row: Record<string, any>, mapping: Record<string, string>) {
   const normalizedState = normalizeState(stateRaw);
   const emailLc = lcEmail(email);
   const phoneKey = last10(phone);
+
   const status = sanitizeStatus(statusRaw) || "New";
 
   return {
@@ -206,29 +206,40 @@ function mapRow(row: Record<string, any>, mapping: Record<string, string>) {
 
 // ---- dedupe helpers
 function buildFilter(userEmail: string, phoneKey?: string, emailKey?: string) {
-  if (phoneKey) return { userEmail, $or: [{ phoneLast10: phoneKey }, { normalizedPhone: phoneKey }] };
-  if (emailKey) return { userEmail, $or: [{ Email: emailKey }, { email: emailKey }] };
+  if (phoneKey) {
+    return { userEmail, $or: [{ phoneLast10: phoneKey }, { normalizedPhone: phoneKey }] };
+  }
+  if (emailKey) {
+    return { userEmail, $or: [{ Email: emailKey }, { email: emailKey }] };
+  }
   return null;
 }
 function applyIdentityFields(set: Record<string, any>, phoneKey?: string, emailKey?: string, phoneRaw?: any) {
   if (typeof phoneRaw !== "undefined") set["Phone"] = phoneRaw;
-  if (typeof phoneKey !== "undefined") { set["phoneLast10"] = phoneKey; set["normalizedPhone"] = phoneKey; }
-  if (typeof emailKey !== "undefined") { set["Email"] = emailKey; set["email"] = emailKey; }
+  if (typeof phoneKey !== "undefined") {
+    set["phoneLast10"] = phoneKey;
+    set["normalizedPhone"] = phoneKey;
+  }
+  if (typeof emailKey !== "undefined") {
+    set["Email"] = emailKey;
+    set["email"] = emailKey;
+  }
 }
 
-// --------- PRE-CLEAN helper: unset ownerEmail for a set of keys (one shot)
+// --------- PRE-CLEAN helpers (idempotent)
 async function preCleanOwnerEmail(userEmail: string, phoneKeys: string[], emailKeys: string[]) {
   const ors: any[] = [];
-  if (phoneKeys.length) {
-    ors.push({ phoneLast10: { $in: phoneKeys } });
-    ors.push({ normalizedPhone: { $in: phoneKeys } });
-  }
-  if (emailKeys.length) {
-    ors.push({ Email: { $in: emailKeys } });
-    ors.push({ email: { $in: emailKeys } });
-  }
+  if (phoneKeys.length) { ors.push({ phoneLast10: { $in: phoneKeys } }); ors.push({ normalizedPhone: { $in: phoneKeys } }); }
+  if (emailKeys.length) { ors.push({ Email: { $in: emailKeys } }); ors.push({ email: { $in: emailKeys } }); }
   if (!ors.length) return;
   await Lead.updateMany({ userEmail, $or: ors }, { $unset: { ownerEmail: "" } });
+}
+async function preCleanStatus(userEmail: string, phoneKeys: string[], emailKeys: string[]) {
+  const ors: any[] = [];
+  if (phoneKeys.length) { ors.push({ phoneLast10: { $in: phoneKeys } }); ors.push({ normalizedPhone: { $in: phoneKeys } }); }
+  if (emailKeys.length) { ors.push({ Email: { $in: emailKeys } }); ors.push({ email: { $in: emailKeys } }); }
+  if (!ors.length) return;
+  await Lead.updateMany({ userEmail, $or: ors }, { $unset: { status: "" } });
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -236,17 +247,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const session = await getServerSession(req, res, authOptions);
   if (!session?.user?.email) return res.status(401).json({ message: "Unauthorized" });
-  const userEmail = lc(session.user.email)!;
 
+  const userEmail = lc(session.user.email)!;
   await dbConnect();
 
   // ---------- JSON MODE ----------
   const json = await readJsonBody(req);
   if (json) {
     try {
-      const { targetFolderId, mapping, rows, skipExisting = false } = json;
+      const {
+        targetFolderId,
+        mapping,
+        rows,
+        skipExisting = false,
+      } = json;
+
       const folderName =
         (json.folderName || json.newFolderName || (json as any).newFolder || "").trim() || undefined;
+
       if (!mapping || !rows || !Array.isArray(rows)) {
         return res.status(400).json({ message: "Missing mapping or rows[]" });
       }
@@ -261,11 +279,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       const phoneKeys = Array.from(new Set(mapped.map((m) => m.phoneLast10).filter(Boolean) as string[]));
       const emailKeys = Array.from(new Set(mapped.map((m) => m.Email).filter(Boolean) as string[]));
+      const keysNeedingStatus = mapped
+        .filter((m) => !!m.status)
+        .map((m) => ({ p: m.phoneLast10 as string | undefined, e: (m.Email as string | undefined) || (m.email as string | undefined) }))
+        .reduce(
+          (acc, cur) => {
+            if (cur.p) acc.p.add(cur.p);
+            if (cur.e) acc.e.add(String(cur.e));
+            return acc;
+          },
+          { p: new Set<string>(), e: new Set<string>() }
+        );
 
-      // 1) PRE-CLEAN
+      // 1) PRE-CLEAN (ownerEmail + status for rows that set it)
       await preCleanOwnerEmail(userEmail, phoneKeys, emailKeys);
+      if (keysNeedingStatus.p.size || keysNeedingStatus.e.size) {
+        await preCleanStatus(userEmail, Array.from(keysNeedingStatus.p), Array.from(keysNeedingStatus.e));
+      }
 
-      // 2) Lookup existing for fast path (unchanged logic)
+      // 2) Lookup existing (unchanged)
       const ors: any[] = [];
       if (phoneKeys.length) { ors.push({ phoneLast10: { $in: phoneKeys } }); ors.push({ normalizedPhone: { $in: phoneKeys } }); }
       if (emailKeys.length) { ors.push({ Email: { $in: emailKeys } }); ors.push({ email: { $in: emailKeys } }); }
@@ -353,7 +385,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
       }
 
-      // ultra-small fallback
+      // ultra-small batches
       if (!ops.length && skipped === 0 && mapped.length > 0) {
         for (const m of mapped) {
           const phoneKey = m.phoneLast10 as string | undefined;
@@ -361,8 +393,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           const filter = buildFilter(userEmail, phoneKey, emailKey);
           if (!filter) continue;
 
-          // pre-clean just this doc (idempotent)
+          // pre-clean for this doc
           await Lead.updateMany(filter, { $unset: { ownerEmail: "" } });
+          if (m.status) await Lead.updateMany(filter, { $unset: { status: "" } });
 
           const setOnInsert: any = {
             userEmail,
@@ -472,9 +505,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         const phoneKeys = Array.from(new Set(rowsMapped.map((m) => m.phoneLast10).filter(Boolean) as string[]));
         const emailKeys = Array.from(new Set(rowsMapped.map((m) => m.Email).filter(Boolean) as string[]));
+        const keysNeedingStatus = rowsMapped
+          .filter((m) => !!m.status)
+          .map((m) => ({ p: m.phoneLast10 as string | undefined, e: (m.Email as string | undefined) || (m.email as string | undefined) }))
+          .reduce(
+            (acc, cur) => {
+              if (cur.p) acc.p.add(cur.p);
+              if (cur.e) acc.e.add(String(cur.e));
+              return acc;
+            },
+            { p: new Set<string>(), e: new Set<string>() }
+          );
 
         // PRE-CLEAN first
         await preCleanOwnerEmail(userEmail, phoneKeys, emailKeys);
+        if (keysNeedingStatus.p.size || keysNeedingStatus.e.size) {
+          await preCleanStatus(userEmail, Array.from(keysNeedingStatus.p), Array.from(keysNeedingStatus.e));
+        }
 
         // Lookup existing (unchanged)
         const ors: any[] = [];
@@ -516,7 +563,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             "Folder Name": String(folder.name),
             updatedAt: new Date(),
           };
-          if (m.status) base.status = m.status;
+          if (m.status) base.status = m.status; // ← honor status if present
 
           if (exists) {
             if (m["First Name"] !== undefined) base["First Name"] = m["First Name"];
@@ -573,6 +620,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
             // pre-clean just this doc
             await Lead.updateMany(filter, { $unset: { ownerEmail: "" } });
+            if (m.status) await Lead.updateMany(filter, { $unset: { status: "" } });
 
             const setOnInsert: any = {
               userEmail,
@@ -616,6 +664,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // ---------- Legacy path: folderName + CSV (no mapping provided)
     const folderName = folderNameField;
     if (!folderName) {
+      // create a safe default instead of rejecting
       const folder = await resolveImportFolder(userEmail, { folderName: "" });
       try {
         const buffer = await fs.promises.readFile(file.filepath);
@@ -639,7 +688,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           return res.status(400).json({ message: "No data rows found in CSV (empty file or header-only)." });
         }
 
-        // No mapping here; createLeadsFromCSV will strip any ownerEmail field on insert.
         const leadsToInsert = rawLeads.map((lead) => {
           const phoneKey = last10(lead["Phone"] || lead["phone"]);
           const emailKey = lcEmail(lead["Email"] || lead["email"]);
