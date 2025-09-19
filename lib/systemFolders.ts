@@ -1,54 +1,38 @@
-// Unified, strict system-folder detection with visual lookalike normalization.
-
+// /lib/systemFolders.ts
+// Canonical system folder names (UI-visible)
 export const SYSTEM_FOLDERS = [
   "Sold",
   "Not Interested",
-  "Booked",
   "Booked Appointment",
 ] as const;
 
 const LOWER = new Set(SYSTEM_FOLDERS.map((s) => s.toLowerCase()));
 
-function normalizeForCompare(name?: string | null): string {
-  return String(name ?? "")
-    .trim()
-    .toLowerCase()
-    .replace(/0/g, "o")        // zero → o
-    .replace(/[ıi]/g, "l")     // i-like → l (visual confusables)
-    .replace(/[^a-z]/g, "");   // letters only
-}
+export type SystemFolderName = (typeof SYSTEM_FOLDERS)[number];
 
-const BLOCKED_BASES = new Set(
-  Array.from(LOWER).map((n) =>
-    n
-      .replace(/\s+/g, "")         // collapse spaces
-      .replace(/[^a-z]/g, "")      // strip punctuation
-  )
-);
-
-/** Exact (case-insensitive) check, no lookalikes. */
+// Exact, case-insensitive match
 export function isSystemFolderName(name?: string | null): boolean {
   const n = String(name ?? "").trim().toLowerCase();
   return n.length > 0 && LOWER.has(n);
 }
 
-/** Strict check that also blocks visual lookalikes (S0LD, s_o-l.d, etc.). */
-export function isBlockedSystemName(name?: string | null): boolean {
+// Hardened "looks like" detector (blocks lookalikes such as s0ld, SOLD!, etc)
+function normFolder(name?: string | null) {
+  return String(name ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/0/g, "o")      // 0 → o
+    .replace(/[ıi]/g, "l")   // dotted i / i → l (visual confusion)
+    .replace(/[^a-z]/g, ""); // strip non-letters
+}
+
+const BLOCKED_BASENAMES = ["sold", "notinterested", "booked", "bookedappointment"];
+
+// Public guard used by both client and server
+export function isSystemish(name?: string | null): boolean {
   const raw = String(name ?? "").trim();
   if (!raw) return false;
   if (isSystemFolderName(raw)) return true;
-
-  const norm = normalizeForCompare(raw);
-  if (!norm) return false;
-
-  // Block exact or "startsWith" of canonical bases (e.g., "bookedappointment", "booked")
-  for (const base of BLOCKED_BASES) {
-    if (norm === base || norm.startsWith(base)) return true;
-  }
-  return false;
-}
-
-/** Utility exported for any caller needing the same normalization. */
-export function normalizeFolderNameForCompare(name?: string | null): string {
-  return normalizeForCompare(name);
+  const n = normFolder(raw);
+  return BLOCKED_BASENAMES.some((b) => n === b || n.startsWith(b));
 }

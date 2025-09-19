@@ -1,14 +1,14 @@
+// components/LeadImportPanel.tsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import Papa from "papaparse";
 import toast from "react-hot-toast";
-import { isBlockedSystemName } from "@/lib/systemFolders";
+import { isSystemFolderName as isSystemFolder, isSystemish } from "@/lib/systemFolders";
 
 type Folder = { _id: string; name: string };
 
 const LOCAL_KEY_MAPPING = "leadImport:mapping:v1";
 const LOCAL_KEY_FOLDER = "leadImport:lastFolderId";
 const LOCAL_KEY_SKIP = "leadImport:skipExisting";
-const LOCAL_KEY_MODE = "leadImport:folderMode"; // "existing" | "new" | "auto"
 
 const CANONICAL_FIELDS = [
   "First Name",
@@ -21,11 +21,15 @@ const CANONICAL_FIELDS = [
 ] as const;
 type Canonical = (typeof CANONICAL_FIELDS)[number];
 
-const EXTRA_FIELDS = ["Address", "City", "Zip", "DOB", "Age", "Coverage Amount", "Add Custom Field"] as const;
-
-const ALL_FIELDS: readonly (Canonical | (typeof EXTRA_FIELDS)[number])[] = [
+const systemFields = [
   ...CANONICAL_FIELDS,
-  ...EXTRA_FIELDS,
+  "Address",
+  "City",
+  "Zip",
+  "DOB",
+  "Age",
+  "Coverage Amount",
+  "Add Custom Field",
 ];
 
 function lc(s?: string) {
@@ -67,7 +71,7 @@ export default function LeadImportPanel({ onImportSuccess }: { onImportSuccess?:
 
   // Folders
   const [folders, setFolders] = useState<Folder[]>([]);
-  const [folderMode, setFolderMode] = useState<"existing" | "new" | "auto">("auto");
+  const [useExisting, setUseExisting] = useState(true);
   const [targetFolderId, setTargetFolderId] = useState<string>("");
   const [newFolderName, setNewFolderName] = useState("");
 
@@ -87,42 +91,34 @@ export default function LeadImportPanel({ onImportSuccess }: { onImportSuccess?:
         const r = await fetch("/api/get-folders");
         if (r.ok) {
           const data = await r.json();
-          const list: Folder[] = Array.isArray(data?.folders) ? data.folders : Array.isArray(data) ? data : [];
-          // Filter out system-ish folders from choices
-          setFolders(list.filter((f) => !isBlockedSystemName(f.name)));
+          if (Array.isArray(data?.folders)) setFolders(data.folders);
+          else if (Array.isArray(data)) setFolders(data as Folder[]);
         }
-      } catch {
-        /* no-op */
-      }
+      } catch { /* no-op */ }
+
       try {
-        const savedMap = localStorage.getItem(LOCAL_KEY_MAPPING);
-        if (savedMap) setMapping(JSON.parse(savedMap));
-        const savedFolder = localStorage.getItem(LOCAL_KEY_FOLDER);
-        if (savedFolder) setTargetFolderId(savedFolder);
+        const saved = localStorage.getItem(LOCAL_KEY_MAPPING);
+        if (saved) setMapping(JSON.parse(saved));
+
+        // Purge *any* stale saved folder id on mount; we’ll only re-save when user picks one.
+        localStorage.removeItem(LOCAL_KEY_FOLDER);
+
         const savedSkip = localStorage.getItem(LOCAL_KEY_SKIP);
         if (savedSkip != null) setSkipExisting(savedSkip === "true");
-        const savedMode = localStorage.getItem(LOCAL_KEY_MODE);
-        if (savedMode === "existing" || savedMode === "new" || savedMode === "auto") {
-          setFolderMode(savedMode);
-        } else {
-          setFolderMode("auto");
-        }
-      } catch {
-        /* ignore */
-      }
+      } catch { /* ignore */ }
     })();
   }, []);
 
-  // If a previously-saved folder id is no longer valid, drop it
+  // If a previously-saved system folder id sneaks in, drop it (extra hardening)
   useEffect(() => {
     if (!folders.length) return;
-    if (!folders.some((f) => f._id === targetFolderId)) {
+    const safe = folders.filter((f) => !isSystemFolder(f.name) && !isSystemish(f.name));
+    if (!safe.some((f) => f._id === targetFolderId)) {
       setTargetFolderId("");
-      try { localStorage.removeItem(LOCAL_KEY_FOLDER); } catch {}
     }
   }, [folders, targetFolderId]);
 
-  // Auto-open file picker on mount (kept behavior)
+  // Auto-open file picker on mount
   useEffect(() => {
     fileInputRef.current?.click();
   }, []);
@@ -168,7 +164,7 @@ export default function LeadImportPanel({ onImportSuccess }: { onImportSuccess?:
       .filter(([h]) => h !== currentHeader)
       .map(([, val]) => val)
       .filter((v) => v && v !== "Add Custom Field");
-    return ALL_FIELDS.filter((f) => !selected.includes(f) || f === mapping[currentHeader]);
+    return systemFields.filter((f) => !selected.includes(f) || f === mapping[currentHeader]);
   };
 
   const atLeastOneIdFieldChosen = useMemo(() => {
@@ -180,7 +176,7 @@ export default function LeadImportPanel({ onImportSuccess }: { onImportSuccess?:
     const result: Record<string, string> = {};
     for (const [header, fieldLabel] of Object.entries(mapping)) {
       if (!fieldLabel || skipHeader[header] || fieldLabel === "Add Custom Field") continue;
-      if ((CANONICAL_FIELDS as readonly string[]).includes(fieldLabel as Canonical)) {
+      if ((CANONICAL_FIELDS as readonly string[]).includes(fieldLabel)) {
         const apiKey = fieldKeyForApi[fieldLabel as Canonical];
         if (!result[apiKey]) result[apiKey] = header;
       }
@@ -195,31 +191,28 @@ export default function LeadImportPanel({ onImportSuccess }: { onImportSuccess?:
         return;
       }
 
-      // Validate folder choice
-      if (folderMode === "existing") {
+      // Folder validation
+      if (useExisting) {
         if (!targetFolderId) {
           toast.error("❌ Choose a folder to import into");
           return;
         }
         const selected = folders.find((f) => f._id === targetFolderId);
-        if (selected && isBlockedSystemName(selected.name)) {
+        if (selected && (isSystemFolder(selected.name) || isSystemish(selected.name))) {
           toast.error("Cannot import into system folders");
           return;
         }
-      } else if (folderMode === "new") {
+      } else {
         const name = newFolderName.trim();
         if (!name) {
-          toast.error("❌ Enter a new folder name");
-          return;
-        }
-        if (isBlockedSystemName(name)) {
+          // Auto mode: send *no* folder fields at all
+        } else if (isSystemFolder(name) || isSystemish(name)) {
           toast.error("Cannot import into system folders");
           return;
         }
       }
-      // folderMode === "auto" needs no extra validation
 
-      // Validate mapping
+      // Mapping validation
       if (!atLeastOneIdFieldChosen) {
         toast.error("❌ Map at least Phone or Email so we can de-dupe");
         return;
@@ -231,11 +224,10 @@ export default function LeadImportPanel({ onImportSuccess }: { onImportSuccess?:
         return;
       }
 
-      // Persist prefs
+      // Persist preferences (but never persist folder id automatically)
       localStorage.setItem(LOCAL_KEY_MAPPING, JSON.stringify(mapping));
       localStorage.setItem(LOCAL_KEY_SKIP, String(skipExisting));
-      localStorage.setItem(LOCAL_KEY_MODE, folderMode);
-      if (folderMode === "existing" && targetFolderId) {
+      if (useExisting && targetFolderId) {
         localStorage.setItem(LOCAL_KEY_FOLDER, targetFolderId);
       } else {
         localStorage.removeItem(LOCAL_KEY_FOLDER);
@@ -247,17 +239,18 @@ export default function LeadImportPanel({ onImportSuccess }: { onImportSuccess?:
       form.append("skipExisting", String(skipExisting));
       form.append("_ts", String(Date.now()));
 
-      if (folderMode === "existing") {
+      if (useExisting) {
         form.append("targetFolderId", targetFolderId);
-      } else if (folderMode === "new") {
+      } else {
         const name = newFolderName.trim();
-        // Send name under every legacy key the API might accept
-        form.append("folderName", name);
-        form.append("newFolderName", name);
-        form.append("newFolder", name);
-        form.append("name", name);
+        if (name) {
+          // Only pass names when user typed a non-empty custom name
+          form.append("folderName", name);
+          form.append("newFolderName", name);
+          form.append("newFolder", name);
+          form.append("name", name);
+        }
       }
-      // folderMode === "auto" → send neither name nor id (lets API create "Imports – YYYY-MM-DD")
 
       setIsUploading(true);
       setResultCounts(null);
@@ -265,9 +258,7 @@ export default function LeadImportPanel({ onImportSuccess }: { onImportSuccess?:
       const res = await fetch("/api/import-leads", { method: "POST", body: form });
       const data = await res.json();
 
-      if (!res.ok) {
-        throw new Error(data?.message || data?.error || "Import failed");
-      }
+      if (!res.ok) throw new Error(data?.message || data?.error || "Import failed");
 
       const inserted = data?.counts?.inserted ?? 0;
       const updated = data?.counts?.updated ?? 0;
@@ -287,7 +278,7 @@ export default function LeadImportPanel({ onImportSuccess }: { onImportSuccess?:
       setSkipHeader({});
       setCustomFieldNames({});
 
-      if (onImportSuccess) onImportSuccess();
+      onImportSuccess?.();
     } catch (e: any) {
       console.error("❌ Import error:", e);
       toast.error(`❌ ${e?.message || "An unexpected error occurred"}`);
@@ -302,76 +293,59 @@ export default function LeadImportPanel({ onImportSuccess }: { onImportSuccess?:
 
       {/* Folder selection */}
       <div className="space-y-2">
-        <div className="flex flex-col gap-2">
+        <div className="flex items-center gap-4">
           <label className="flex items-center gap-2">
             <input
               type="radio"
-              checked={folderMode === "auto"}
-              onChange={() => {
-                setFolderMode("auto");
-                setTargetFolderId("");
-                try { localStorage.setItem(LOCAL_KEY_MODE, "auto"); localStorage.removeItem(LOCAL_KEY_FOLDER); } catch {}
-              }}
-            />
-            <span>Use auto folder (Imports – YYYY-MM-DD)</span>
-          </label>
-
-          <label className="flex items-center gap-2">
-            <input
-              type="radio"
-              checked={folderMode === "existing"}
-              onChange={() => {
-                setFolderMode("existing");
-                try { localStorage.setItem(LOCAL_KEY_MODE, "existing"); } catch {}
-              }}
+              checked={useExisting}
+              onChange={() => setUseExisting(true)}
             />
             <span>Import into existing folder</span>
           </label>
+          <label className="flex items-center gap-2">
+            <input
+              type="radio"
+              checked={!useExisting}
+              onChange={() => {
+                setUseExisting(false);
+                setTargetFolderId("");
+                localStorage.removeItem(LOCAL_KEY_FOLDER);
+              }}
+            />
+            <span>Create new folder / Auto</span>
+          </label>
+        </div>
 
-          {folderMode === "existing" && (
-            <div>
-              <label className="block font-semibold mb-1">Add to Folder</label>
-              <select
-                value={targetFolderId}
-                onChange={(e) => setTargetFolderId(e.target.value)}
-                className="border p-2 rounded w-full"
-              >
-                <option value="">— Select a folder —</option>
-                {folders.map((f) => (
+        {useExisting ? (
+          <div>
+            <label className="block font-semibold mb-1">Add to Folder</label>
+            <select
+              value={targetFolderId}
+              onChange={(e) => setTargetFolderId(e.target.value)}
+              className="border p-2 rounded w-full"
+            >
+              <option value="">— Select a folder —</option>
+              {folders
+                .filter((f) => !isSystemFolder(f.name) && !isSystemish(f.name))
+                .map((f) => (
                   <option key={f._id} value={f._id}>
                     {f.name}
                   </option>
                 ))}
-              </select>
-            </div>
-          )}
-
-          <label className="flex items-center gap-2">
+            </select>
+          </div>
+        ) : (
+          <div>
+            <label className="block font-semibold mb-1">New Folder Name (leave blank for Auto)</label>
             <input
-              type="radio"
-              checked={folderMode === "new"}
-              onChange={() => {
-                setFolderMode("new");
-                setTargetFolderId("");
-                try { localStorage.setItem(LOCAL_KEY_MODE, "new"); localStorage.removeItem(LOCAL_KEY_FOLDER); } catch {}
-              }}
+              type="text"
+              value={newFolderName}
+              onChange={(e) => setNewFolderName(e.target.value)}
+              placeholder="(blank = Imports – YYYY-MM-DD)"
+              className="border p-2 rounded w-full"
             />
-            <span>Create new folder</span>
-          </label>
-
-          {folderMode === "new" && (
-            <div>
-              <label className="block font-semibold mb-1">New Folder Name</label>
-              <input
-                type="text"
-                value={newFolderName}
-                onChange={(e) => setNewFolderName(e.target.value)}
-                placeholder="e.g., Mortgage Leads 7/1"
-                className="border p-2 rounded w-full"
-              />
-            </div>
-          )}
-        </div>
+          </div>
+        )}
       </div>
 
       {/* Options */}
@@ -438,7 +412,7 @@ export default function LeadImportPanel({ onImportSuccess }: { onImportSuccess?:
                 disabled={!!skipHeader[header]}
               >
                 <option value="">Select Field</option>
-                {ALL_FIELDS.map((field) => (
+                {systemFields.map((field) => (
                   <option key={field} value={field}>
                     {field}
                   </option>
