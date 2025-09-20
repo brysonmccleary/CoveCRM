@@ -80,21 +80,11 @@ function sanitizeStatus(raw?: string | null): string | undefined {
     .join(" ");
 }
 
-/* ---- today folder name ---- */
-function todayName() {
-  const d = new Date();
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `Imports - ${y}-${m}-${day}`;
-}
-
 /* ------------------------------------------------------------------ */
-/*  Single, hardened folder resolver                                  */
-/*    - If an explicit NAME is provided and is systemish  -> 400       */
-/*    - If an explicit ID   is provided and is systemish  -> 400       */
-/*    - If nothing is provided -> create/find today’s safe folder      */
-/*    - Never returns a system folder                                  */
+/*  Single, hardened folder resolver (NO AUTO FALLBACK)               */
+/*    - If explicit NAME is systemish  -> 400                         */
+/*    - If explicit ID   is systemish  -> 400                         */
+/*    - If neither name nor id provided -> 400                        */
 /* ------------------------------------------------------------------ */
 async function selectImportFolder(
   userEmail: string,
@@ -102,7 +92,7 @@ async function selectImportFolder(
 ) {
   const byName = (opts.folderName || "").trim();
 
-  // 1) Explicit name wins (unless systemish)
+  // A) By name (create if missing) — block systemish
   if (byName) {
     if (isSystemish(byName)) {
       const msg = `Cannot import into system folders (blocked by NAME: "${byName}")`;
@@ -117,7 +107,7 @@ async function selectImportFolder(
     return { folder: f, selection: "byName" as const };
   }
 
-  // 2) Explicit id (must belong to user, and not systemish)
+  // B) By id — must belong to user; block systemish
   if (opts.targetFolderId) {
     const f = await Folder.findOne({ _id: opts.targetFolderId, userEmail });
     if (!f) {
@@ -137,20 +127,10 @@ async function selectImportFolder(
     return { folder: f, selection: "byId" as const };
   }
 
-  // 3) Auto: create/find a safe daily folder
-  const safe = todayName();
-  const f = await Folder.findOneAndUpdate(
-    { userEmail, name: safe },
-    { $setOnInsert: { userEmail, name: safe } },
-    { new: true, upsert: true }
-  );
-  // Defensive: should never be systemish; if it is, rename
-  if (isSystemish(f?.name)) {
-    const renamed = `${safe} (Safe)`;
-    await Folder.updateOne({ _id: f._id }, { $set: { name: renamed } });
-    (f as any).name = renamed;
-  }
-  return { folder: f, selection: "auto" as const };
+  // C) Nothing provided → hard fail
+  const msg = "A folder is required: provide folderName (creates if missing) or targetFolderId.";
+  console.warn("Import blocked: no folder provided", { userEmail });
+  throw Object.assign(new Error(msg), { status: 400 });
 }
 
 /* ---- JSON body reader (for JSON mode) ---- */
@@ -297,10 +277,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         folderName: folder.name,
       });
 
+      // Do NOT include ownerEmail here (avoid path conflict with $set/$setOnInsert)
       const mapped = rows.map((r) => ({
         ...mapRow(r, mapping),
         userEmail,
-        ownerEmail: userEmail,
         folderId: folder._id,
       }));
 
@@ -328,7 +308,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         : [];
 
       const byPhone = new Map<string, any>();
-      const byEmail = new Map<string, any>();
+      const byEmail = new Map<string, any>>();
       for (const l of existing) {
         const p1 = l.phoneLast10 && String(l.phoneLast10);
         const p2 = l.normalizedPhone && String(l.normalizedPhone);
@@ -353,7 +333,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (!filter) { skipped++; continue; }
 
         const base: any = {
-          ownerEmail: userEmail,
+          ownerEmail: userEmail, // write in $set only
           folderId: folder._id,
           folder_name: String(folder.name),
           "Folder Name": String(folder.name),
@@ -374,7 +354,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         } else {
           const setOnInsert: any = {
             userEmail,
-            ownerEmail: userEmail,
             status: m.status || "New",
             createdAt: new Date(),
           };
@@ -452,6 +431,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const folderNameField =
         (Array.isArray(rawName) ? rawName[0] : rawName)?.toString()?.trim() || "";
 
+      // Fast-fail: explicit requirement to choose a folder (no auto default)
+      if (!targetFolderId && !folderNameField) {
+        return res.status(400).json({
+          message: "Choose an existing folder or provide a new folder name.",
+        });
+      }
+
       const mappingStr =
         (Array.isArray(fields.mapping) ? fields.mapping[0] : fields.mapping)?.toString();
 
@@ -462,7 +448,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (!file?.filepath) return res.status(400).json({ message: "Missing file" });
 
       if (!mappingStr) {
-        // Legacy path (no mapping) -> still select a safe folder deterministically
+        // Legacy path (no mapping) — still requires explicit folder
         const { folder, selection } = await selectImportFolder(userEmail, {
           targetFolderId,
           folderName: folderNameField || undefined,
@@ -526,7 +512,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         });
       }
 
-      // New path (mapping provided)
+      // New path (mapping provided) — requires explicit folder
       const mapping = JSON.parse(mappingStr) as Record<string, string>;
 
       const { folder, selection } = await selectImportFolder(userEmail, {
@@ -562,10 +548,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return res.status(400).json({ message: "No data rows found in CSV (empty file or header-only)." });
       }
 
+      // Do NOT include ownerEmail in mapped row (avoid $set/$setOnInsert conflicts)
       const rowsMapped = rawRows.map((r) => ({
         ...mapRow(r, mapping),
         userEmail,
-        ownerEmail: userEmail,
         folderId: folder._id,
       }));
 
@@ -619,7 +605,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (!filter) { skipped++; continue; }
 
         const base: any = {
-          ownerEmail: userEmail,
+          ownerEmail: userEmail, // $set only
           folderId: folder._id,
           folder_name: String(folder.name),
           "Folder Name": String(folder.name),
@@ -641,7 +627,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         } else {
           const setOnInsert: any = {
             userEmail,
-            ownerEmail: userEmail,
             status: m.status || "New",
             createdAt: new Date(),
           };
@@ -678,8 +663,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           );
         }
       }
-
-      // Small-batch fallback not necessary; ops covers both insert & update with upsert.
 
       return res.status(200).json({
         message: "Leads imported successfully",
