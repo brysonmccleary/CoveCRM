@@ -308,7 +308,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         : [];
 
       const byPhone = new Map<string, any>();
-      const byEmail = new Map<string, any>>();
+      const byEmail = new Map<string, any>();
       for (const l of existing) {
         const p1 = l.phoneLast10 && String(l.phoneLast10);
         const p2 = l.normalizedPhone && String(l.normalizedPhone);
