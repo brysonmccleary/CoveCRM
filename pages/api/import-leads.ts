@@ -357,7 +357,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             status: m.status || "New",
             createdAt: new Date(),
           };
-
           applyIdentityFields(base, phoneKey, emailKey, m.Phone);
           if (m["First Name"] !== undefined) base["First Name"] = m["First Name"];
           if (m["Last Name"] !== undefined) base["Last Name"] = m["Last Name"];
@@ -365,14 +364,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           if (m.Notes !== undefined) base["Notes"] = m.Notes;
           if (m.leadType) base["leadType"] = m.leadType;
 
-          // Remove any fields that collide with $setOnInsert
-          const setDoc: any = { ...base };
-          delete setDoc.status;
-          delete setDoc.userEmail; // defensive
-
-          ops.push({
-            updateOne: { filter, update: { $set: setDoc, $setOnInsert: setOnInsert }, upsert: true }
-          });
+          ops.push({ updateOne: { filter, update: { $set: base, $setOnInsert: setOnInsert }, upsert: true } });
           processedFilters.push(filter);
         }
       }
@@ -587,7 +579,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         : [];
 
       const byPhone = new Map<string, any>();
-      const byEmail = new Map<string, any>>();
+      const byEmail = new Map<string, any>();
       for (const l of existing) {
         const p1 = l.phoneLast10 && String(l.phoneLast10);
         const p2 = l.normalizedPhone && String(l.normalizedPhone);
@@ -605,7 +597,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       for (const m of rowsMapped) {
         const phoneKey = m.phoneLast10 as string | undefined;
-        theEmail:
         const emailKey = (m.Email as string | undefined) || (m.email as string | undefined);
 
         const exists = (phoneKey && byPhone.get(phoneKey)) || (emailKey && byEmail.get(String(emailKey)));
@@ -647,14 +638,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
           applyIdentityFields(base, phoneKey, emailKey, m.Phone);
 
-          // Remove any fields that collide with $setOnInsert
-          const setDoc: any = { ...base };
-          delete setDoc.status;
-          delete setDoc.userEmail; // defensive
-
-          ops.push({
-            updateOne: { filter, update: { $set: setDoc, $setOnInsert: setOnInsert }, upsert: true }
-          });
+          ops.push({ updateOne: { filter, update: { $set: base, $setOnInsert: setOnInsert }, upsert: true } });
           processedFilters.push(filter);
         }
       }
