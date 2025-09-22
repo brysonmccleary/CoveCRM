@@ -136,6 +136,7 @@ type JsonPayload = {
   folderName?: string;
   newFolderName?: string;
   newFolder?: string;
+  name?: string;
   mapping?: Record<string, string>;
   rows?: Record<string, any>[];
   skipExisting?: boolean;
@@ -252,19 +253,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (json) {
     try {
       const { targetFolderId, mapping, rows, skipExisting = false } = json;
-      const folderName =
-        (json.folderName ||
-          json.newFolderName ||
-          (json as any).newFolder ||
-          "")?.toString().trim() || undefined;
+
+      // ✅ Prefer typed "new" name first; fall back to selected folderName
+      const preferredName =
+        (json.newFolderName || json.newFolder || json.name || "").toString().trim();
+      const fallbackSelected = (json.folderName || "").toString().trim();
+      const resolvedFolderName = preferredName || fallbackSelected || undefined;
 
       if (!mapping || !rows || !Array.isArray(rows)) {
         return res.status(400).json({ message: "Missing mapping or rows[]" });
       }
+      if (!targetFolderId && !resolvedFolderName) {
+        return res.status(400).json({
+          message: "Choose an existing folder or provide a new folder name.",
+        });
+      }
 
       const { folder, selection } = await selectImportFolder(userEmail, {
         targetFolderId,
-        folderName,
+        folderName: resolvedFolderName,
       });
 
       console.info("Import folder selected (json)", {
@@ -272,9 +279,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         selection,
         folderId: String(folder._id),
         folderName: folder.name,
+        provided: { preferredName, fallbackSelected },
       });
 
-      // mapped rows (do not set ownerEmail here; we control it in $set)
+      // mapped rows (do not set ownerEmail here; controlled in $set)
       const mapped = rows.map((r) => ({
         ...mapRow(r, mapping),
         userEmail,
@@ -350,21 +358,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (m.leadType) base["leadType"] = m.leadType;
 
         if (exists) {
-          // EXISTING: status lives ONLY in $set (if provided)
-          if (m.status) base.status = m.status;
-
+          if (m.status) base.status = m.status; // EXISTING → status only in $set
           ops.push({ updateOne: { filter, update: { $set: base }, upsert: false } });
           processedFilters.push(filter);
         } else {
-          // NEW: status lives ONLY in $setOnInsert; make sure it's NOT in $set
           const setOnInsert: any = {
             userEmail,
-            status: m.status || "New",
+            status: m.status || "New", // NEW → status only in $setOnInsert
             createdAt: new Date(),
           };
-          // ensure no accidental duplication
           if ("status" in base) delete base.status;
-
           ops.push({
             updateOne: { filter, update: { $set: base, $setOnInsert: setOnInsert }, upsert: true },
           });
@@ -378,8 +381,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (ops.length) {
         const result = await (Lead as any).bulkWrite(ops, { ordered: false });
         inserted = (result as any).upsertedCount || 0;
-
-        // consider existing ops as updates (even if no-op fields)
         const existedOps = processedFilters.length - inserted;
         updated = existedOps < 0 ? 0 : existedOps;
 
@@ -428,17 +429,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           ? fields.targetFolderId[0]
           : fields.targetFolderId)?.toString() || undefined;
 
-      const rawName =
-        (fields.folderName ??
-          (fields as any).newFolderName ??
-          (fields as any).newFolder ??
-          (fields as any).name) as unknown;
+      // ✅ Prefer typed "new" name first; fall back to selected folderName
+      const preferredNameRaw =
+        (fields as any).newFolderName ?? (fields as any).newFolder ?? (fields as any).name;
+      const preferredName = (Array.isArray(preferredNameRaw) ? preferredNameRaw[0] : preferredNameRaw)?.toString()?.trim() || "";
 
-      const folderNameField =
-        (Array.isArray(rawName) ? rawName[0] : rawName)?.toString()?.trim() || "";
+      const selectedNameRaw = fields.folderName;
+      const selectedName = (Array.isArray(selectedNameRaw) ? selectedNameRaw[0] : selectedNameRaw)?.toString()?.trim() || "";
 
-      // Fast-fail: explicit requirement to choose a folder (no auto default)
-      if (!targetFolderId && !folderNameField) {
+      const resolvedFolderName = (preferredName || selectedName) || undefined;
+
+      // Explicit requirement to choose a folder (no auto default)
+      if (!targetFolderId && !resolvedFolderName) {
         return res.status(400).json({
           message: "Choose an existing folder or provide a new folder name.",
         });
@@ -457,7 +459,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         // Legacy path (no mapping) — still requires explicit folder
         const { folder, selection } = await selectImportFolder(userEmail, {
           targetFolderId,
-          folderName: folderNameField || undefined,
+          folderName: resolvedFolderName,
         });
 
         console.info("Import folder selected (legacy)", {
@@ -465,6 +467,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           selection,
           folderId: String(folder._id),
           folderName: folder.name,
+          provided: { preferredName, selectedName },
         });
 
         const buffer = await fs.promises.readFile(file.filepath);
@@ -523,7 +526,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       const { folder, selection } = await selectImportFolder(userEmail, {
         targetFolderId,
-        folderName: folderNameField || undefined,
+        folderName: resolvedFolderName,
       });
 
       console.info("Import folder selected (multipart+mapping)", {
@@ -531,6 +534,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         selection,
         folderId: String(folder._id),
         folderName: folder.name,
+        provided: { preferredName, selectedName },
       });
 
       const buffer = await fs.promises.readFile(file.filepath);
@@ -554,7 +558,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return res.status(400).json({ message: "No data rows found in CSV (empty file or header-only)." });
       }
 
-      // Do NOT include ownerEmail in mapped row (avoid $set/$setOnInsert conflicts)
       const rowsMapped = rawRows.map((r) => ({
         ...mapRow(r, mapping),
         userEmail,
@@ -630,20 +633,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (m.leadType) base["leadType"] = m.leadType;
 
         if (exists) {
-          // EXISTING: status lives ONLY in $set (if provided)
-          if (m.status) base.status = m.status;
-
+          if (m.status) base.status = m.status; // EXISTING → status only in $set
           ops.push({ updateOne: { filter, update: { $set: base }, upsert: false } });
           processedFilters.push(filter);
         } else {
-          // NEW: status lives ONLY in $setOnInsert; ensure it's NOT in $set
           const setOnInsert: any = {
             userEmail,
-            status: m.status || "New",
+            status: m.status || "New", // NEW → status only in $setOnInsert
             createdAt: new Date(),
           };
           if ("status" in base) delete base.status;
-
           ops.push({ updateOne: { filter, update: { $set: base, $setOnInsert: setOnInsert }, upsert: true } });
           processedFilters.push(filter);
         }
@@ -655,7 +654,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (ops.length) {
         const result = await (Lead as any).bulkWrite(ops, { ordered: false });
         inserted = (result as any).upsertedCount || 0;
-
         const existedOps = processedFilters.length - inserted;
         updated = existedOps < 0 ? 0 : existedOps;
 
