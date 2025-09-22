@@ -82,9 +82,6 @@ function sanitizeStatus(raw?: string | null): string | undefined {
 
 /* ------------------------------------------------------------------ */
 /*  Single, hardened folder resolver (NO AUTO FALLBACK)               */
-/*    - If explicit NAME is systemish  -> 400                         */
-/*    - If explicit ID   is systemish  -> 400                         */
-/*    - If neither name nor id provided -> 400                        */
 /* ------------------------------------------------------------------ */
 async function selectImportFolder(
   userEmail: string,
@@ -139,6 +136,7 @@ type JsonPayload = {
   folderName?: string;
   newFolderName?: string;
   newFolder?: string;
+  name?: string;
   mapping?: Record<string, string>;
   rows?: Record<string, any>[];
   skipExisting?: boolean;
@@ -255,19 +253,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (json) {
     try {
       const { targetFolderId, mapping, rows, skipExisting = false } = json;
-      const folderName =
-        (json.folderName ||
-          json.newFolderName ||
-          (json as any).newFolder ||
-          "")?.toString().trim() || undefined;
+
+      // ✅ Prefer typed "new" name first; fall back to selected folderName
+      const preferredName =
+        (json.newFolderName || json.newFolder || json.name || "").toString().trim();
+      const fallbackSelected = (json.folderName || "").toString().trim();
+      const resolvedFolderName = preferredName || fallbackSelected || undefined;
 
       if (!mapping || !rows || !Array.isArray(rows)) {
         return res.status(400).json({ message: "Missing mapping or rows[]" });
       }
+      if (!targetFolderId && !resolvedFolderName) {
+        return res.status(400).json({
+          message: "Choose an existing folder or provide a new folder name.",
+        });
+      }
 
       const { folder, selection } = await selectImportFolder(userEmail, {
         targetFolderId,
-        folderName,
+        folderName: resolvedFolderName,
       });
 
       console.info("Import folder selected (json)", {
@@ -275,9 +279,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         selection,
         folderId: String(folder._id),
         folderName: folder.name,
+        provided: { preferredName, fallbackSelected },
       });
 
-      // Do NOT include ownerEmail here (avoid path conflict with $set/$setOnInsert)
+      // mapped rows (do not set ownerEmail here; controlled in $set)
       const mapped = rows.map((r) => ({
         ...mapRow(r, mapping),
         userEmail,
@@ -329,42 +334,43 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const emailKey = (m.Email as string | undefined) || (m.email as string | undefined);
         const exists = (phoneKey && byPhone.get(phoneKey)) || (emailKey && byEmail.get(String(emailKey)));
 
+        if (!phoneKey && !emailKey) { skipped++; continue; }
+        if (skipExisting && exists) { skipped++; continue; }
+
         const filter = buildFilter(userEmail, phoneKey, emailKey);
         if (!filter) { skipped++; continue; }
 
+        // base fields for $set (NEVER put status here on "new" path)
         const base: any = {
-          ownerEmail: userEmail, // write in $set only
+          ownerEmail: userEmail,
           folderId: folder._id,
           folder_name: String(folder.name),
           "Folder Name": String(folder.name),
           updatedAt: new Date(),
         };
-        if (m.status) base.status = m.status;
+
+        // identities & common fields live in $set
+        applyIdentityFields(base, phoneKey, emailKey, m.Phone);
+        if (m["First Name"] !== undefined) base["First Name"] = m["First Name"];
+        if (m["Last Name"] !== undefined) base["Last Name"] = m["Last Name"];
+        if (m.State !== undefined) base["State"] = m.State;
+        if (m.Notes !== undefined) base["Notes"] = m.Notes;
+        if (m.leadType) base["leadType"] = m.leadType;
 
         if (exists) {
-          applyIdentityFields(base, phoneKey, emailKey, m.Phone);
-          if (m["First Name"] !== undefined) base["First Name"] = m["First Name"];
-          if (m["Last Name"] !== undefined) base["Last Name"] = m["Last Name"];
-          if (m.State !== undefined) base["State"] = m.State;
-          if (m.Notes !== undefined) base["Notes"] = m.Notes;
-          if (m.leadType) base["leadType"] = m.leadType;
-
+          if (m.status) base.status = m.status; // EXISTING → status only in $set
           ops.push({ updateOne: { filter, update: { $set: base }, upsert: false } });
           processedFilters.push(filter);
         } else {
           const setOnInsert: any = {
             userEmail,
-            status: m.status || "New",
+            status: m.status || "New", // NEW → status only in $setOnInsert
             createdAt: new Date(),
           };
-          applyIdentityFields(base, phoneKey, emailKey, m.Phone);
-          if (m["First Name"] !== undefined) base["First Name"] = m["First Name"];
-          if (m["Last Name"] !== undefined) base["Last Name"] = m["Last Name"];
-          if (m.State !== undefined) base["State"] = m.State;
-          if (m.Notes !== undefined) base["Notes"] = m.Notes;
-          if (m.leadType) base["leadType"] = m.leadType;
-
-          ops.push({ updateOne: { filter, update: { $set: base, $setOnInsert: setOnInsert }, upsert: true } });
+          if ("status" in base) delete base.status;
+          ops.push({
+            updateOne: { filter, update: { $set: base, $setOnInsert: setOnInsert }, upsert: true },
+          });
           processedFilters.push(filter);
         }
       }
@@ -375,7 +381,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (ops.length) {
         const result = await (Lead as any).bulkWrite(ops, { ordered: false });
         inserted = (result as any).upsertedCount || 0;
-        updated = (result as any).modifiedCount || 0;
+        const existedOps = processedFilters.length - inserted;
+        updated = existedOps < 0 ? 0 : existedOps;
 
         if (processedFilters.length) {
           const orFilters = processedFilters.flatMap((f) =>
@@ -422,17 +429,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           ? fields.targetFolderId[0]
           : fields.targetFolderId)?.toString() || undefined;
 
-      const rawName =
-        (fields.folderName ??
-          (fields as any).newFolderName ??
-          (fields as any).newFolder ??
-          (fields as any).name) as unknown;
+      // ✅ Prefer typed "new" name first; fall back to selected folderName
+      const preferredNameRaw =
+        (fields as any).newFolderName ?? (fields as any).newFolder ?? (fields as any).name;
+      const preferredName = (Array.isArray(preferredNameRaw) ? preferredNameRaw[0] : preferredNameRaw)?.toString()?.trim() || "";
 
-      const folderNameField =
-        (Array.isArray(rawName) ? rawName[0] : rawName)?.toString()?.trim() || "";
+      const selectedNameRaw = fields.folderName;
+      const selectedName = (Array.isArray(selectedNameRaw) ? selectedNameRaw[0] : selectedNameRaw)?.toString()?.trim() || "";
 
-      // Fast-fail: explicit requirement to choose a folder (no auto default)
-      if (!targetFolderId && !folderNameField) {
+      const resolvedFolderName = (preferredName || selectedName) || undefined;
+
+      // Explicit requirement to choose a folder (no auto default)
+      if (!targetFolderId && !resolvedFolderName) {
         return res.status(400).json({
           message: "Choose an existing folder or provide a new folder name.",
         });
@@ -451,7 +459,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         // Legacy path (no mapping) — still requires explicit folder
         const { folder, selection } = await selectImportFolder(userEmail, {
           targetFolderId,
-          folderName: folderNameField || undefined,
+          folderName: resolvedFolderName,
         });
 
         console.info("Import folder selected (legacy)", {
@@ -459,6 +467,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           selection,
           folderId: String(folder._id),
           folderName: folder.name,
+          provided: { preferredName, selectedName },
         });
 
         const buffer = await fs.promises.readFile(file.filepath);
@@ -517,7 +526,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       const { folder, selection } = await selectImportFolder(userEmail, {
         targetFolderId,
-        folderName: folderNameField || undefined,
+        folderName: resolvedFolderName,
       });
 
       console.info("Import folder selected (multipart+mapping)", {
@@ -525,6 +534,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         selection,
         folderId: String(folder._id),
         folderName: folder.name,
+        provided: { preferredName, selectedName },
       });
 
       const buffer = await fs.promises.readFile(file.filepath);
@@ -548,7 +558,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return res.status(400).json({ message: "No data rows found in CSV (empty file or header-only)." });
       }
 
-      // Do NOT include ownerEmail in mapped row (avoid $set/$setOnInsert conflicts)
       const rowsMapped = rawRows.map((r) => ({
         ...mapRow(r, mapping),
         userEmail,
@@ -598,12 +607,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       for (const m of rowsMapped) {
         const phoneKey = m.phoneLast10 as string | undefined;
         const emailKey = (m.Email as string | undefined) || (m.email as string | undefined);
-
         const exists = (phoneKey && byPhone.get(phoneKey)) || (emailKey && byEmail.get(String(emailKey)));
+
+        if (!phoneKey && !emailKey) { skipped++; continue; }
+        if (skipExisting && exists) { skipped++; continue; }
 
         const filter = buildFilter(userEmail, phoneKey, emailKey);
         if (!filter) { skipped++; continue; }
 
+        // base fields for $set (NEVER put status here on "new" path)
         const base: any = {
           ownerEmail: userEmail, // $set only
           folderId: folder._id,
@@ -611,33 +623,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           "Folder Name": String(folder.name),
           updatedAt: new Date(),
         };
-        if (m.status) base.status = m.status;
+
+        // identities & common fields live in $set
+        applyIdentityFields(base, phoneKey, emailKey, m.Phone);
+        if (m["First Name"] !== undefined) base["First Name"] = m["First Name"];
+        if (m["Last Name"] !== undefined) base["Last Name"] = m["Last Name"];
+        if (m.State !== undefined) base["State"] = m.State;
+        if (m.Notes !== undefined) base["Notes"] = m.Notes;
+        if (m.leadType) base["leadType"] = m.leadType;
 
         if (exists) {
-          if (m["First Name"] !== undefined) base["First Name"] = m["First Name"];
-          if (m["Last Name"] !== undefined) base["Last Name"] = m["Last Name"];
-          if (m.State !== undefined) base["State"] = m.State;
-          if (m.Notes !== undefined) base["Notes"] = m.Notes;
-          if (m.leadType) base["leadType"] = m.leadType;
-
-          applyIdentityFields(base, phoneKey, emailKey, m.Phone);
-
+          if (m.status) base.status = m.status; // EXISTING → status only in $set
           ops.push({ updateOne: { filter, update: { $set: base }, upsert: false } });
           processedFilters.push(filter);
         } else {
           const setOnInsert: any = {
             userEmail,
-            status: m.status || "New",
+            status: m.status || "New", // NEW → status only in $setOnInsert
             createdAt: new Date(),
           };
-          if (m["First Name"] !== undefined) base["First Name"] = m["First Name"];
-          if (m["Last Name"] !== undefined) base["Last Name"] = m["Last Name"];
-          if (m.State !== undefined) base["State"] = m.State;
-          if (m.Notes !== undefined) base["Notes"] = m.Notes;
-          if (m.leadType) base["leadType"] = m.leadType;
-
-          applyIdentityFields(base, phoneKey, emailKey, m.Phone);
-
+          if ("status" in base) delete base.status;
           ops.push({ updateOne: { filter, update: { $set: base, $setOnInsert: setOnInsert }, upsert: true } });
           processedFilters.push(filter);
         }
@@ -649,7 +654,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (ops.length) {
         const result = await (Lead as any).bulkWrite(ops, { ordered: false });
         inserted = (result as any).upsertedCount || 0;
-        updated = (result as any).modifiedCount || 0;
+        const existedOps = processedFilters.length - inserted;
+        updated = existedOps < 0 ? 0 : existedOps;
 
         const orFilters = processedFilters.flatMap((f) =>
           (f.$or || []).map((clause: any) => ({ userEmail, ...clause }))
