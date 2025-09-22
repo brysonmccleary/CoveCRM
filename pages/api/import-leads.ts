@@ -82,9 +82,6 @@ function sanitizeStatus(raw?: string | null): string | undefined {
 
 /* ------------------------------------------------------------------ */
 /*  Single, hardened folder resolver (NO AUTO FALLBACK)               */
-/*    - If explicit NAME is systemish  -> 400                         */
-/*    - If explicit ID   is systemish  -> 400                         */
-/*    - If neither name nor id provided -> 400                        */
 /* ------------------------------------------------------------------ */
 async function selectImportFolder(
   userEmail: string,
@@ -277,7 +274,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         folderName: folder.name,
       });
 
-      // Do NOT include ownerEmail here (avoid path conflict with $set/$setOnInsert)
+      // mapped rows (do not set ownerEmail here; we control it in $set)
       const mapped = rows.map((r) => ({
         ...mapRow(r, mapping),
         userEmail,
@@ -329,42 +326,48 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const emailKey = (m.Email as string | undefined) || (m.email as string | undefined);
         const exists = (phoneKey && byPhone.get(phoneKey)) || (emailKey && byEmail.get(String(emailKey)));
 
+        if (!phoneKey && !emailKey) { skipped++; continue; }
+        if (skipExisting && exists) { skipped++; continue; }
+
         const filter = buildFilter(userEmail, phoneKey, emailKey);
         if (!filter) { skipped++; continue; }
 
+        // base fields for $set (NEVER put status here on "new" path)
         const base: any = {
-          ownerEmail: userEmail, // write in $set only
+          ownerEmail: userEmail,
           folderId: folder._id,
           folder_name: String(folder.name),
           "Folder Name": String(folder.name),
           updatedAt: new Date(),
         };
-        if (m.status) base.status = m.status;
+
+        // identities & common fields live in $set
+        applyIdentityFields(base, phoneKey, emailKey, m.Phone);
+        if (m["First Name"] !== undefined) base["First Name"] = m["First Name"];
+        if (m["Last Name"] !== undefined) base["Last Name"] = m["Last Name"];
+        if (m.State !== undefined) base["State"] = m.State;
+        if (m.Notes !== undefined) base["Notes"] = m.Notes;
+        if (m.leadType) base["leadType"] = m.leadType;
 
         if (exists) {
-          applyIdentityFields(base, phoneKey, emailKey, m.Phone);
-          if (m["First Name"] !== undefined) base["First Name"] = m["First Name"];
-          if (m["Last Name"] !== undefined) base["Last Name"] = m["Last Name"];
-          if (m.State !== undefined) base["State"] = m.State;
-          if (m.Notes !== undefined) base["Notes"] = m.Notes;
-          if (m.leadType) base["leadType"] = m.leadType;
+          // EXISTING: status lives ONLY in $set (if provided)
+          if (m.status) base.status = m.status;
 
           ops.push({ updateOne: { filter, update: { $set: base }, upsert: false } });
           processedFilters.push(filter);
         } else {
+          // NEW: status lives ONLY in $setOnInsert; make sure it's NOT in $set
           const setOnInsert: any = {
             userEmail,
             status: m.status || "New",
             createdAt: new Date(),
           };
-          applyIdentityFields(base, phoneKey, emailKey, m.Phone);
-          if (m["First Name"] !== undefined) base["First Name"] = m["First Name"];
-          if (m["Last Name"] !== undefined) base["Last Name"] = m["Last Name"];
-          if (m.State !== undefined) base["State"] = m.State;
-          if (m.Notes !== undefined) base["Notes"] = m.Notes;
-          if (m.leadType) base["leadType"] = m.leadType;
+          // ensure no accidental duplication
+          if ("status" in base) delete base.status;
 
-          ops.push({ updateOne: { filter, update: { $set: base, $setOnInsert: setOnInsert }, upsert: true } });
+          ops.push({
+            updateOne: { filter, update: { $set: base, $setOnInsert: setOnInsert }, upsert: true },
+          });
           processedFilters.push(filter);
         }
       }
@@ -375,7 +378,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (ops.length) {
         const result = await (Lead as any).bulkWrite(ops, { ordered: false });
         inserted = (result as any).upsertedCount || 0;
-        updated = (result as any).modifiedCount || 0;
+
+        // consider existing ops as updates (even if no-op fields)
+        const existedOps = processedFilters.length - inserted;
+        updated = existedOps < 0 ? 0 : existedOps;
 
         if (processedFilters.length) {
           const orFilters = processedFilters.flatMap((f) =>
@@ -598,12 +604,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       for (const m of rowsMapped) {
         const phoneKey = m.phoneLast10 as string | undefined;
         const emailKey = (m.Email as string | undefined) || (m.email as string | undefined);
-
         const exists = (phoneKey && byPhone.get(phoneKey)) || (emailKey && byEmail.get(String(emailKey)));
+
+        if (!phoneKey && !emailKey) { skipped++; continue; }
+        if (skipExisting && exists) { skipped++; continue; }
 
         const filter = buildFilter(userEmail, phoneKey, emailKey);
         if (!filter) { skipped++; continue; }
 
+        // base fields for $set (NEVER put status here on "new" path)
         const base: any = {
           ownerEmail: userEmail, // $set only
           folderId: folder._id,
@@ -611,32 +620,29 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           "Folder Name": String(folder.name),
           updatedAt: new Date(),
         };
-        if (m.status) base.status = m.status;
+
+        // identities & common fields live in $set
+        applyIdentityFields(base, phoneKey, emailKey, m.Phone);
+        if (m["First Name"] !== undefined) base["First Name"] = m["First Name"];
+        if (m["Last Name"] !== undefined) base["Last Name"] = m["Last Name"];
+        if (m.State !== undefined) base["State"] = m.State;
+        if (m.Notes !== undefined) base["Notes"] = m.Notes;
+        if (m.leadType) base["leadType"] = m.leadType;
 
         if (exists) {
-          if (m["First Name"] !== undefined) base["First Name"] = m["First Name"];
-          if (m["Last Name"] !== undefined) base["Last Name"] = m["Last Name"];
-          if (m.State !== undefined) base["State"] = m.State;
-          if (m.Notes !== undefined) base["Notes"] = m.Notes;
-          if (m.leadType) base["leadType"] = m.leadType;
-
-          applyIdentityFields(base, phoneKey, emailKey, m.Phone);
+          // EXISTING: status lives ONLY in $set (if provided)
+          if (m.status) base.status = m.status;
 
           ops.push({ updateOne: { filter, update: { $set: base }, upsert: false } });
           processedFilters.push(filter);
         } else {
+          // NEW: status lives ONLY in $setOnInsert; ensure it's NOT in $set
           const setOnInsert: any = {
             userEmail,
             status: m.status || "New",
             createdAt: new Date(),
           };
-          if (m["First Name"] !== undefined) base["First Name"] = m["First Name"];
-          if (m["Last Name"] !== undefined) base["Last Name"] = m["Last Name"];
-          if (m.State !== undefined) base["State"] = m.State;
-          if (m.Notes !== undefined) base["Notes"] = m.Notes;
-          if (m.leadType) base["leadType"] = m.leadType;
-
-          applyIdentityFields(base, phoneKey, emailKey, m.Phone);
+          if ("status" in base) delete base.status;
 
           ops.push({ updateOne: { filter, update: { $set: base, $setOnInsert: setOnInsert }, upsert: true } });
           processedFilters.push(filter);
@@ -649,7 +655,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (ops.length) {
         const result = await (Lead as any).bulkWrite(ops, { ordered: false });
         inserted = (result as any).upsertedCount || 0;
-        updated = (result as any).modifiedCount || 0;
+
+        const existedOps = processedFilters.length - inserted;
+        updated = existedOps < 0 ? 0 : existedOps;
 
         const orFilters = processedFilters.flatMap((f) =>
           (f.$or || []).map((clause: any) => ({ userEmail, ...clause }))
