@@ -81,7 +81,9 @@ function sanitizeStatus(raw?: string | null): string | undefined {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Single, hardened folder resolver (NO AUTO FALLBACK)               */
+/*  Folder resolver (NO AUTO FALLBACK)                                */
+/*   - Prefer typed new name > selected name                          */
+/*   - Block system folders by name or by id                          */
 /* ------------------------------------------------------------------ */
 async function selectImportFolder(
   userEmail: string,
@@ -89,10 +91,10 @@ async function selectImportFolder(
 ) {
   const byName = (opts.folderName || "").trim();
 
-  // A) By name (create if missing) — block systemish
+  // A) By name (create if missing) — block systemish first
   if (byName) {
     if (isSystemish(byName)) {
-      const msg = `Cannot import into system folders (blocked by NAME: "${byName}")`;
+      const msg = `Cannot import into system folders`;
       console.warn("Import blocked: system folder by NAME", { userEmail, byName });
       throw Object.assign(new Error(msg), { status: 400 });
     }
@@ -104,7 +106,7 @@ async function selectImportFolder(
     return { folder: f, selection: "byName" as const };
   }
 
-  // B) By id — must belong to user; block systemish
+  // B) By id — must belong to user; then block by actual name
   if (opts.targetFolderId) {
     const f = await Folder.findOne({ _id: opts.targetFolderId, userEmail });
     if (!f) {
@@ -113,7 +115,7 @@ async function selectImportFolder(
       throw Object.assign(new Error(msg), { status: 400 });
     }
     if (isSystemish(f.name)) {
-      const msg = `Cannot import into system folders (blocked by ID: "${f.name}")`;
+      const msg = `Cannot import into system folders`;
       console.warn("Import blocked: system folder by ID", {
         userEmail,
         folderId: String(f._id),
@@ -124,7 +126,6 @@ async function selectImportFolder(
     return { folder: f, selection: "byId" as const };
   }
 
-  // C) Nothing provided → hard fail
   const msg = "A folder is required: provide folderName (creates if missing) or targetFolderId.";
   console.warn("Import blocked: no folder provided", { userEmail });
   throw Object.assign(new Error(msg), { status: 400 });
@@ -254,11 +255,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     try {
       const { targetFolderId, mapping, rows, skipExisting = false } = json;
 
-      // ✅ Prefer typed "new" name first; fall back to selected folderName
+      // Prefer typed "new" name first; fall back to selected folderName
       const preferredName =
         (json.newFolderName || json.newFolder || json.name || "").toString().trim();
       const fallbackSelected = (json.folderName || "").toString().trim();
       const resolvedFolderName = preferredName || fallbackSelected || undefined;
+
+      // Debug log
+      console.info("Import request (json)", {
+        userEmail,
+        targetFolderId,
+        preferredName,
+        fallbackSelected,
+        resolvedFolderName,
+      });
 
       if (!mapping || !rows || !Array.isArray(rows)) {
         return res.status(400).json({ message: "Missing mapping or rows[]" });
@@ -273,6 +283,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         targetFolderId,
         folderName: resolvedFolderName,
       });
+
+      // 🔒 FINAL KILL-SWITCH: never allow system folders (even if something upstream went wrong)
+      if (isSystemish(folder.name)) {
+        console.warn("Final guard blocked system folder (json)", {
+          userEmail,
+          resolvedFolderName,
+          actualName: folder.name,
+          selection,
+        });
+        return res.status(400).json({ message: "Cannot import into system folders" });
+      }
 
       console.info("Import folder selected (json)", {
         userEmail,
@@ -429,7 +450,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           ? fields.targetFolderId[0]
           : fields.targetFolderId)?.toString() || undefined;
 
-      // ✅ Prefer typed "new" name first; fall back to selected folderName
+      // Prefer typed "new" name first; fall back to selected folderName
       const preferredNameRaw =
         (fields as any).newFolderName ?? (fields as any).newFolder ?? (fields as any).name;
       const preferredName = (Array.isArray(preferredNameRaw) ? preferredNameRaw[0] : preferredNameRaw)?.toString()?.trim() || "";
@@ -438,6 +459,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const selectedName = (Array.isArray(selectedNameRaw) ? selectedNameRaw[0] : selectedNameRaw)?.toString()?.trim() || "";
 
       const resolvedFolderName = (preferredName || selectedName) || undefined;
+
+      // Debug log
+      console.info("Import request (multipart)", {
+        userEmail,
+        targetFolderId,
+        preferredName,
+        selectedName,
+        resolvedFolderName,
+      });
 
       // Explicit requirement to choose a folder (no auto default)
       if (!targetFolderId && !resolvedFolderName) {
@@ -461,6 +491,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           targetFolderId,
           folderName: resolvedFolderName,
         });
+
+        // Final kill-switch
+        if (isSystemish(folder.name)) {
+          console.warn("Final guard blocked system folder (legacy)", {
+            userEmail,
+            resolvedFolderName,
+            actualName: folder.name,
+            selection,
+          });
+          return res.status(400).json({ message: "Cannot import into system folders" });
+        }
 
         console.info("Import folder selected (legacy)", {
           userEmail,
@@ -528,6 +569,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         targetFolderId,
         folderName: resolvedFolderName,
       });
+
+      // 🔒 FINAL KILL-SWITCH here too
+      if (isSystemish(folder.name)) {
+        console.warn("Final guard blocked system folder (multipart+mapping)", {
+          userEmail,
+          resolvedFolderName,
+          actualName: folder.name,
+          selection,
+        });
+        return res.status(400).json({ message: "Cannot import into system folders" });
+      }
 
       console.info("Import folder selected (multipart+mapping)", {
         userEmail,
