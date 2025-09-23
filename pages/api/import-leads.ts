@@ -10,9 +10,23 @@ import Lead from "@/models/Lead";
 import { getServerSession } from "next-auth";
 import { authOptions } from "./auth/[...nextauth]";
 import { sanitizeLeadType, createLeadsFromCSV } from "@/lib/mongo/leads";
-import { isSystemFolderName } from "@/lib/systemFolders";
 
 export const config = { api: { bodyParser: false } };
+
+/** ------------------------------------------------------------------
+ *  HARD WIRED system folders (exact, case-insensitive)
+ *  We inline this so the route cannot drift from helpers elsewhere.
+ * ------------------------------------------------------------------ */
+const SYSTEM_FOLDER_NAMES = new Set(
+  ["Sold", "Not Interested", "Booked Appointment", "Vet Leads"].map((s) =>
+    s.toLowerCase()
+  )
+);
+function isSystemName(name?: string | null): boolean {
+  if (!name) return false;
+  const n = String(name).trim().toLowerCase();
+  return !!n && SYSTEM_FOLDER_NAMES.has(n);
+}
 
 /* ---------------- tiny utils ---------------- */
 function bufferToStream(buffer: Buffer): Readable {
@@ -81,8 +95,8 @@ function sanitizeStatus(raw?: string | null): string | undefined {
 
 /* ------------------------------------------------------------------ */
 /*  Folder resolver (NO AUTO FALLBACK)                                */
-/*   - Prefer typed new name > selected name                          */
-/*   - Block system folders by name or by id (STRICT)                 */
+/*  - Prefer typed new name > selected name                           */
+/*  - Blocks system folders by name or by id                          */
 /* ------------------------------------------------------------------ */
 async function selectImportFolder(
   userEmail: string,
@@ -92,8 +106,8 @@ async function selectImportFolder(
 
   // A) By name (create if missing) — strict block first
   if (byName) {
-    if (isSystemFolderName(byName)) {
-      const msg = `Cannot import into system folders`;
+    if (isSystemName(byName)) {
+      const msg = "Cannot import into system folders";
       console.warn("Import blocked: system folder by NAME", { userEmail, byName });
       throw Object.assign(new Error(msg), { status: 400 });
     }
@@ -105,7 +119,7 @@ async function selectImportFolder(
     return { folder: f, selection: "byName" as const };
   }
 
-  // B) By id — must belong to user; then strict block by actual name
+  // B) By id — must belong to user; block by actual name
   if (opts.targetFolderId) {
     const f = await Folder.findOne({ _id: opts.targetFolderId, userEmail });
     if (!f) {
@@ -113,8 +127,8 @@ async function selectImportFolder(
       console.warn("Import blocked: bad ID", { userEmail, targetFolderId: opts.targetFolderId });
       throw Object.assign(new Error(msg), { status: 400 });
     }
-    if (isSystemFolderName(f.name)) {
-      const msg = `Cannot import into system folders`;
+    if (isSystemName(f.name)) {
+      const msg = "Cannot import into system folders";
       console.warn("Import blocked: system folder by ID", {
         userEmail,
         folderId: String(f._id),
@@ -248,7 +262,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     try {
       const { targetFolderId, mapping, rows, skipExisting = false } = json;
 
-      const preferredName = (json.newFolderName || json.newFolder || json.name || "").toString().trim();
+      const preferredName = (json.newFolderName || json.newFolder || json.name || "")
+        .toString()
+        .trim();
       const fallbackSelected = (json.folderName || "").toString().trim();
       const resolvedFolderName = preferredName || fallbackSelected || undefined;
 
@@ -262,18 +278,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (!targetFolderId && !resolvedFolderName) {
         return res.status(400).json({ message: "Choose an existing folder or provide a new folder name." });
       }
-      if (resolvedFolderName && isSystemFolderName(resolvedFolderName)) {
-        return res.status(400).json({ message: "Cannot import into system folders" });
-      }
 
       const { folder, selection } = await selectImportFolder(userEmail, {
         targetFolderId,
         folderName: resolvedFolderName,
       });
 
-      // Strict final check
-      if (isSystemFolderName(folder.name)) {
-        console.warn("Final guard (json) blocked", { userEmail, actualName: folder.name, resolvedFolderName, selection });
+      // Final kill-switch
+      if (isSystemName(folder.name)) {
+        console.warn("Final guard (json) blocked", {
+          userEmail, actualName: folder.name, resolvedFolderName, selection,
+        });
         return res.status(400).json({ message: "Cannot import into system folders" });
       }
 
@@ -331,6 +346,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const filter = buildFilter(userEmail, phoneKey, emailKey);
         if (!filter) { skipped++; continue; }
 
+        // $set base (NEVER duplicate fields into $setOnInsert)
         const base: any = {
           ownerEmail: userEmail,
           folderId: folder._id,
@@ -356,8 +372,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             status: m.status || "New", // NEW → status only in $setOnInsert
             createdAt: new Date(),
           };
+          // make sure status is NOT in $set for the new path
           if ("status" in base) delete base.status;
-          ops.push({ updateOne: { filter, update: { $set: base, $setOnInsert: setOnInsert }, upsert: true } });
+
+          ops.push({
+            updateOne: {
+              filter,
+              update: { $set: base, $setOnInsert: setOnInsert },
+              upsert: true,
+            },
+          });
           processedFilters.push(filter);
         }
       }
@@ -419,12 +443,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       // Prefer typed "new" name first; fall back to selected folderName
       const preferredNameRaw =
         (fields as any).newFolderName ?? (fields as any).newFolder ?? (fields as any).name;
-      const preferredName = (Array.isArray(preferredNameRaw) ? preferredNameRaw[0] : preferredNameRaw)?.toString()?.trim() || "";
+      const preferredName =
+        (Array.isArray(preferredNameRaw) ? preferredNameRaw[0] : preferredNameRaw)
+          ?.toString()
+          ?.trim() || "";
 
       const selectedNameRaw = fields.folderName;
-      const selectedName = (Array.isArray(selectedNameRaw) ? selectedNameRaw[0] : selectedNameRaw)?.toString()?.trim() || "";
+      const selectedName =
+        (Array.isArray(selectedNameRaw) ? selectedNameRaw[0] : selectedNameRaw)
+          ?.toString()
+          ?.trim() || "";
 
-      const resolvedFolderName = (preferredName || selectedName) || undefined;
+      const resolvedFolderName = preferredName || selectedName || undefined;
 
       console.info("Import request (multipart)", {
         userEmail, targetFolderId, preferredName, selectedName, resolvedFolderName,
@@ -433,9 +463,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       // Explicit requirement to choose a folder (no auto default)
       if (!targetFolderId && !resolvedFolderName) {
         return res.status(400).json({ message: "Choose an existing folder or provide a new folder name." });
-      }
-      if (resolvedFolderName && isSystemFolderName(resolvedFolderName)) {
-        return res.status(400).json({ message: "Cannot import into system folders" });
       }
 
       const mappingStr =
@@ -454,7 +481,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           folderName: resolvedFolderName,
         });
 
-        if (isSystemFolderName(folder.name)) {
+        if (isSystemName(folder.name)) {
           console.warn("Final guard blocked (legacy)", {
             userEmail, actualName: folder.name, resolvedFolderName, selection,
           });
@@ -525,7 +552,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         folderName: resolvedFolderName,
       });
 
-      if (isSystemFolderName(folder.name)) {
+      if (isSystemName(folder.name)) {
         console.warn("Final guard blocked (multipart+mapping)", {
           userEmail, actualName: folder.name, resolvedFolderName, selection,
         });
@@ -633,7 +660,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             createdAt: new Date(),
           };
           if ("status" in base) delete base.status;
-          ops.push({ updateOne: { filter, update: { $set: base, $setOnInsert: setOnInsert }, upsert: true } });
+
+          ops.push({
+            updateOne: {
+              filter,
+              update: { $set: base, $setOnInsert: setOnInsert },
+              upsert: true,
+            },
+          });
           processedFilters.push(filter);
         }
       }
