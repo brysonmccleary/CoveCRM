@@ -10,7 +10,7 @@ import Lead from "@/models/Lead";
 import { getServerSession } from "next-auth";
 import { authOptions } from "./auth/[...nextauth]";
 import { sanitizeLeadType, createLeadsFromCSV } from "@/lib/mongo/leads";
-import { isSystemish } from "@/lib/systemFolders";
+import { isSystemFolderName } from "@/lib/systemFolders";
 
 export const config = { api: { bodyParser: false } };
 
@@ -24,7 +24,6 @@ function bufferToStream(buffer: Buffer): Readable {
 function last10(phone?: string | null): string | undefined {
   if (!phone) return undefined;
   const digits = String(phone).replace(/\D+/g, "");
-  if (!digits) return undefined;
   const k = digits.slice(-10);
   return k || undefined;
 }
@@ -83,7 +82,7 @@ function sanitizeStatus(raw?: string | null): string | undefined {
 /* ------------------------------------------------------------------ */
 /*  Folder resolver (NO AUTO FALLBACK)                                */
 /*   - Prefer typed new name > selected name                          */
-/*   - Block system folders by name or by id                          */
+/*   - Block system folders by name or by id (STRICT)                 */
 /* ------------------------------------------------------------------ */
 async function selectImportFolder(
   userEmail: string,
@@ -91,9 +90,9 @@ async function selectImportFolder(
 ) {
   const byName = (opts.folderName || "").trim();
 
-  // A) By name (create if missing) — block systemish first
+  // A) By name (create if missing) — strict block first
   if (byName) {
-    if (isSystemish(byName)) {
+    if (isSystemFolderName(byName)) {
       const msg = `Cannot import into system folders`;
       console.warn("Import blocked: system folder by NAME", { userEmail, byName });
       throw Object.assign(new Error(msg), { status: 400 });
@@ -106,7 +105,7 @@ async function selectImportFolder(
     return { folder: f, selection: "byName" as const };
   }
 
-  // B) By id — must belong to user; then block by actual name
+  // B) By id — must belong to user; then strict block by actual name
   if (opts.targetFolderId) {
     const f = await Folder.findOne({ _id: opts.targetFolderId, userEmail });
     if (!f) {
@@ -114,7 +113,7 @@ async function selectImportFolder(
       console.warn("Import blocked: bad ID", { userEmail, targetFolderId: opts.targetFolderId });
       throw Object.assign(new Error(msg), { status: 400 });
     }
-    if (isSystemish(f.name)) {
+    if (isSystemFolderName(f.name)) {
       const msg = `Cannot import into system folders`;
       console.warn("Import blocked: system folder by ID", {
         userEmail,
@@ -207,16 +206,10 @@ function mapRow(row: Record<string, any>, mapping: Record<string, string>) {
 /* ---- dedupe helpers ---- */
 function buildFilter(userEmail: string, phoneKey?: string, emailKey?: string) {
   if (phoneKey) {
-    return {
-      userEmail,
-      $or: [{ phoneLast10: phoneKey }, { normalizedPhone: phoneKey }],
-    };
+    return { userEmail, $or: [{ phoneLast10: phoneKey }, { normalizedPhone: phoneKey }] };
   }
   if (emailKey) {
-    return {
-      userEmail,
-      $or: [{ Email: emailKey }, { email: emailKey }],
-    };
+    return { userEmail, $or: [{ Email: emailKey }, { email: emailKey }] };
   }
   return null;
 }
@@ -255,28 +248,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     try {
       const { targetFolderId, mapping, rows, skipExisting = false } = json;
 
-      // Prefer typed "new" name first; fall back to selected folderName
-      const preferredName =
-        (json.newFolderName || json.newFolder || json.name || "").toString().trim();
+      const preferredName = (json.newFolderName || json.newFolder || json.name || "").toString().trim();
       const fallbackSelected = (json.folderName || "").toString().trim();
       const resolvedFolderName = preferredName || fallbackSelected || undefined;
 
-      // Debug log
       console.info("Import request (json)", {
-        userEmail,
-        targetFolderId,
-        preferredName,
-        fallbackSelected,
-        resolvedFolderName,
+        userEmail, targetFolderId, preferredName, fallbackSelected, resolvedFolderName,
       });
 
       if (!mapping || !rows || !Array.isArray(rows)) {
         return res.status(400).json({ message: "Missing mapping or rows[]" });
       }
       if (!targetFolderId && !resolvedFolderName) {
-        return res.status(400).json({
-          message: "Choose an existing folder or provide a new folder name.",
-        });
+        return res.status(400).json({ message: "Choose an existing folder or provide a new folder name." });
+      }
+      if (resolvedFolderName && isSystemFolderName(resolvedFolderName)) {
+        return res.status(400).json({ message: "Cannot import into system folders" });
       }
 
       const { folder, selection } = await selectImportFolder(userEmail, {
@@ -284,53 +271,36 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         folderName: resolvedFolderName,
       });
 
-      // 🔒 FINAL KILL-SWITCH: never allow system folders (even if something upstream went wrong)
-      if (isSystemish(folder.name)) {
-        console.warn("Final guard blocked system folder (json)", {
-          userEmail,
-          resolvedFolderName,
-          actualName: folder.name,
-          selection,
-        });
+      // Strict final check
+      if (isSystemFolderName(folder.name)) {
+        console.warn("Final guard (json) blocked", { userEmail, actualName: folder.name, resolvedFolderName, selection });
         return res.status(400).json({ message: "Cannot import into system folders" });
       }
 
       console.info("Import folder selected (json)", {
-        userEmail,
-        selection,
-        folderId: String(folder._id),
-        folderName: folder.name,
+        userEmail, selection, folderId: String(folder._id), folderName: folder.name,
         provided: { preferredName, fallbackSelected },
       });
 
-      // mapped rows (do not set ownerEmail here; controlled in $set)
       const mapped = rows.map((r) => ({
         ...mapRow(r, mapping),
         userEmail,
         folderId: folder._id,
       }));
 
-      const phoneKeys = Array.from(
-        new Set(mapped.map((m) => m.phoneLast10).filter(Boolean) as string[])
-      );
-      const emailKeys = Array.from(
-        new Set(mapped.map((m) => m.Email).filter(Boolean) as string[])
-      );
+      const phoneKeys = Array.from(new Set(mapped.map((m) => m.phoneLast10).filter(Boolean) as string[]));
+      const emailKeys = Array.from(new Set(mapped.map((m) => m.Email).filter(Boolean) as string[]));
 
       const ors: any[] = [];
       if (phoneKeys.length) {
-        ors.push({ phoneLast10: { $in: phoneKeys } });
-        ors.push({ normalizedPhone: { $in: phoneKeys } });
+        ors.push({ phoneLast10: { $in: phoneKeys } }, { normalizedPhone: { $in: phoneKeys } });
       }
       if (emailKeys.length) {
-        ors.push({ Email: { $in: emailKeys } });
-        ors.push({ email: { $in: emailKeys } });
+        ors.push({ Email: { $in: emailKeys } }, { email: { $in: emailKeys } });
       }
 
       const existing = ors.length
-        ? await Lead.find({ userEmail, $or: ors }).select(
-            "_id phoneLast10 normalizedPhone Email email folderId"
-          )
+        ? await Lead.find({ userEmail, $or: ors }).select("_id phoneLast10 normalizedPhone Email email folderId")
         : [];
 
       const byPhone = new Map<string, any>();
@@ -361,7 +331,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const filter = buildFilter(userEmail, phoneKey, emailKey);
         if (!filter) { skipped++; continue; }
 
-        // base fields for $set (NEVER put status here on "new" path)
         const base: any = {
           ownerEmail: userEmail,
           folderId: folder._id,
@@ -370,7 +339,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           updatedAt: new Date(),
         };
 
-        // identities & common fields live in $set
         applyIdentityFields(base, phoneKey, emailKey, m.Phone);
         if (m["First Name"] !== undefined) base["First Name"] = m["First Name"];
         if (m["Last Name"] !== undefined) base["Last Name"] = m["Last Name"];
@@ -389,9 +357,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             createdAt: new Date(),
           };
           if ("status" in base) delete base.status;
-          ops.push({
-            updateOne: { filter, update: { $set: base, $setOnInsert: setOnInsert }, upsert: true },
-          });
+          ops.push({ updateOne: { filter, update: { $set: base, $setOnInsert: setOnInsert }, upsert: true } });
           processedFilters.push(filter);
         }
       }
@@ -460,20 +426,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       const resolvedFolderName = (preferredName || selectedName) || undefined;
 
-      // Debug log
       console.info("Import request (multipart)", {
-        userEmail,
-        targetFolderId,
-        preferredName,
-        selectedName,
-        resolvedFolderName,
+        userEmail, targetFolderId, preferredName, selectedName, resolvedFolderName,
       });
 
       // Explicit requirement to choose a folder (no auto default)
       if (!targetFolderId && !resolvedFolderName) {
-        return res.status(400).json({
-          message: "Choose an existing folder or provide a new folder name.",
-        });
+        return res.status(400).json({ message: "Choose an existing folder or provide a new folder name." });
+      }
+      if (resolvedFolderName && isSystemFolderName(resolvedFolderName)) {
+        return res.status(400).json({ message: "Cannot import into system folders" });
       }
 
       const mappingStr =
@@ -492,22 +454,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           folderName: resolvedFolderName,
         });
 
-        // Final kill-switch
-        if (isSystemish(folder.name)) {
-          console.warn("Final guard blocked system folder (legacy)", {
-            userEmail,
-            resolvedFolderName,
-            actualName: folder.name,
-            selection,
+        if (isSystemFolderName(folder.name)) {
+          console.warn("Final guard blocked (legacy)", {
+            userEmail, actualName: folder.name, resolvedFolderName, selection,
           });
           return res.status(400).json({ message: "Cannot import into system folders" });
         }
 
         console.info("Import folder selected (legacy)", {
-          userEmail,
-          selection,
-          folderId: String(folder._id),
-          folderName: folder.name,
+          userEmail, selection, folderId: String(folder._id), folderName: folder.name,
           provided: { preferredName, selectedName },
         });
 
@@ -570,22 +525,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         folderName: resolvedFolderName,
       });
 
-      // 🔒 FINAL KILL-SWITCH here too
-      if (isSystemish(folder.name)) {
-        console.warn("Final guard blocked system folder (multipart+mapping)", {
-          userEmail,
-          resolvedFolderName,
-          actualName: folder.name,
-          selection,
+      if (isSystemFolderName(folder.name)) {
+        console.warn("Final guard blocked (multipart+mapping)", {
+          userEmail, actualName: folder.name, resolvedFolderName, selection,
         });
         return res.status(400).json({ message: "Cannot import into system folders" });
       }
 
       console.info("Import folder selected (multipart+mapping)", {
-        userEmail,
-        selection,
-        folderId: String(folder._id),
-        folderName: folder.name,
+        userEmail, selection, folderId: String(folder._id), folderName: folder.name,
         provided: { preferredName, selectedName },
       });
 
@@ -616,27 +564,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         folderId: folder._id,
       }));
 
-      const phoneKeys = Array.from(
-        new Set(rowsMapped.map((m) => m.phoneLast10).filter(Boolean) as string[])
-      );
-      const emailKeys = Array.from(
-        new Set(rowsMapped.map((m) => m.Email).filter(Boolean) as string[])
-      );
+      const phoneKeys = Array.from(new Set(rowsMapped.map((m) => m.phoneLast10).filter(Boolean) as string[]));
+      const emailKeys = Array.from(new Set(rowsMapped.map((m) => m.Email).filter(Boolean) as string[]));
 
       const ors: any[] = [];
       if (phoneKeys.length) {
-        ors.push({ phoneLast10: { $in: phoneKeys } });
-        ors.push({ normalizedPhone: { $in: phoneKeys } });
+        ors.push({ phoneLast10: { $in: phoneKeys } }, { normalizedPhone: { $in: phoneKeys } });
       }
       if (emailKeys.length) {
-        ors.push({ Email: { $in: emailKeys } });
-        ors.push({ email: { $in: emailKeys } });
+        ors.push({ Email: { $in: emailKeys } }, { email: { $in: emailKeys } });
       }
 
       const existing = ors.length
-        ? await Lead.find({ userEmail, $or: ors }).select(
-            "_id phoneLast10 normalizedPhone Email email folderId"
-          )
+        ? await Lead.find({ userEmail, $or: ors }).select("_id phoneLast10 normalizedPhone Email email folderId")
         : [];
 
       const byPhone = new Map<string, any>();
@@ -667,16 +607,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const filter = buildFilter(userEmail, phoneKey, emailKey);
         if (!filter) { skipped++; continue; }
 
-        // base fields for $set (NEVER put status here on "new" path)
         const base: any = {
-          ownerEmail: userEmail, // $set only
+          ownerEmail: userEmail,
           folderId: folder._id,
           folder_name: String(folder.name),
           "Folder Name": String(folder.name),
           updatedAt: new Date(),
         };
 
-        // identities & common fields live in $set
         applyIdentityFields(base, phoneKey, emailKey, m.Phone);
         if (m["First Name"] !== undefined) base["First Name"] = m["First Name"];
         if (m["Last Name"] !== undefined) base["Last Name"] = m["Last Name"];
@@ -732,9 +670,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     } catch (e: any) {
       const status = e?.status === 400 ? 400 : 500;
-      console.error("❌ Multipart import error:", {
-        error: e?.message || String(e),
-      });
+      console.error("❌ Multipart import error:", { error: e?.message || String(e) });
       return res.status(status).json({ message: e?.message || "Import failed" });
     }
   });
