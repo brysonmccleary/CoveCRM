@@ -1,3 +1,4 @@
+// pages/lead/[id].tsx
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { useRouter } from "next/router";
 import Sidebar from "@/components/Sidebar";
@@ -216,6 +217,9 @@ export default function LeadProfileDial() {
     try {
       // Optimistic line
       setHistoryLines((prev) => [`✅ Disposition: ${newFolderName} • ${new Date().toLocaleString()}`, ...prev]);
+
+      // 🔍 One-line log so we can verify outgoing payload during QA
+      console.log("Profile disposition payload →", { leadId: lead.id, newFolderName });
 
       const res = await fetch("/api/disposition-lead", {
         method: "POST",

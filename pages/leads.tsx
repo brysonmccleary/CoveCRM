@@ -434,6 +434,9 @@ export default function LeadsPage() {
     if (disposition === "No Answer") return;
 
     try {
+      // 🔍 One-line log so we can verify outgoing payload during QA
+      console.log("UI disposition payload →", { leadId, newFolderName: disposition });
+
       const res = await fetch("/api/disposition-lead", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
