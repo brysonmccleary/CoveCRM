@@ -1,4 +1,4 @@
-// /pages/api/import-leads.ts
+// /pages/api/sheets/import-now.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import formidable from "formidable";
 import fs from "fs";
@@ -8,9 +8,9 @@ import dbConnect from "@/lib/mongooseConnect";
 import Folder from "@/models/Folder";
 import Lead from "@/models/Lead";
 import { getServerSession } from "next-auth";
-import { authOptions } from "./auth/[...nextauth]";
+import { authOptions } from "../auth/[...nextauth]"; // ← FIXED: one level up
 import { sanitizeLeadType, createLeadsFromCSV } from "@/lib/mongo/leads";
-import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders"; // ← unified guard
+import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders"; // unified guard
 
 export const config = { api: { bodyParser: false } };
 
@@ -270,8 +270,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         folderName: resolvedFolderName,
       });
 
-      // (Removed redundant final guard here)
-
       console.info("Import folder selected (json)", {
         userEmail, selection, folderId: String(folder._id), folderName: folder.name,
         provided: { preferredName, fallbackSelected },
@@ -461,8 +459,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           folderName: resolvedFolderName,
         });
 
-        // (Removed redundant final guard here)
-
         console.info("Import folder selected (legacy)", {
           userEmail, selection, folderId: String(folder._id), folderName: folder.name,
           provided: { preferredName, selectedName },
@@ -526,8 +522,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         targetFolderId,
         folderName: resolvedFolderName,
       });
-
-      // (Removed redundant final guard here)
 
       console.info("Import folder selected (multipart+mapping)", {
         userEmail, selection, folderId: String(folder._id), folderName: folder.name,
