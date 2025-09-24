@@ -7,12 +7,19 @@ import mongoose from "mongoose";
 import Lead from "@/models/Lead";
 import Folder from "@/models/Folder";
 import { initSocket } from "@/lib/socket";
-
-const SYSTEM = new Set(["not interested", "booked appointment", "sold", "resolved"]);
+import { folderNameForDisposition } from "@/lib/dispositionToFolder";
+import { isSystemFolderName } from "@/lib/systemFolders";
 
 function escapeRegex(s: string) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
+
+const ALLOW_STATUS_SET = new Set([
+  "sold",
+  "not interested",
+  "booked appointment",
+  "resolved",
+]);
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed" });
@@ -25,15 +32,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const rawName = String(newFolderName || "").trim();
   if (!leadId || !rawName) return res.status(400).json({ message: "Missing required fields." });
 
-  await dbConnect();
+  // Canonicalize disposition → pretty target name
+  const canonical = folderNameForDisposition(rawName); // "Sold" | "Not Interested" | "Booked Appointment" | "Resolved" | null
+  const desiredFolderName = canonical ?? rawName;
+  const desiredLower = desiredFolderName.toLowerCase();
 
+  await dbConnect();
   const mongoSession = await mongoose.startSession();
+
   try {
     let targetFolderId: mongoose.Types.ObjectId | null = null;
     let previousStatus: string | undefined;
+    let fromFolderName: string | undefined;
+    let toFolderName: string | undefined;
 
     await mongoSession.withTransaction(async () => {
-      // Verify lead belongs to user
       const existing = await Lead.findOne({ _id: leadId, userEmail })
         .select({ _id: 1, folderId: 1, status: 1 })
         .session(mongoSession)
@@ -42,25 +55,73 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       previousStatus = existing.status;
 
-      // Resolve destination folder (case-insensitive exact) or create
-      const nameRegex = new RegExp(`^${escapeRegex(rawName)}$`, "i");
-      const target = await Folder.findOneAndUpdate(
-        { userEmail, name: nameRegex },
-        { $setOnInsert: { userEmail, name: rawName, assignedDrips: [] as string[] } },
-        { new: true, upsert: true, session: mongoSession }
-      ).select({ _id: 1, name: 1 });
+      if (existing.folderId) {
+        const from = await Folder.findOne({ _id: existing.folderId, userEmail })
+          .select({ name: 1 })
+          .session(mongoSession)
+          .lean<{ name?: string } | null>();
+        fromFolderName = from?.name;
+      }
+
+      let target: { _id: mongoose.Types.ObjectId; name: string } | null = null;
+
+      if (isSystemFolderName(desiredFolderName)) {
+        // 🔒 Deterministic pick: fetch all system folders for the user, then match in code.
+        const SYSTEM_NAMES = ["Sold", "Not Interested", "Booked Appointment"];
+        const systemRows = await Folder.find({
+          userEmail,
+          name: { $in: SYSTEM_NAMES },
+        })
+          .select({ _id: 1, name: 1 })
+          .session(mongoSession)
+          .lean<{ _id: mongoose.Types.ObjectId; name: string }[]>();
+
+        const exact = systemRows.find((r) => String(r.name).toLowerCase() === desiredLower);
+        if (!exact) {
+          throw Object.assign(
+            new Error(`System folder "${desiredFolderName}" not found for user.`),
+            { status: 400 }
+          );
+        }
+        target = exact;
+      } else {
+        // Non-system: exact (case-insensitive) resolve or create
+        const nameRegex = new RegExp(`^${escapeRegex(desiredFolderName)}$`, "i");
+        const upserted = await Folder.findOneAndUpdate(
+          { userEmail, name: nameRegex },
+          { $setOnInsert: { userEmail, name: desiredFolderName, assignedDrips: [] as string[] } },
+          { new: true, upsert: true, session: mongoSession }
+        ).select({ _id: 1, name: 1 });
+
+        if (!upserted) throw new Error("Failed to resolve target folder.");
+        target = { _id: upserted._id as any, name: upserted.name as any };
+      }
 
       targetFolderId = target!._id as any;
+      toFolderName = target!.name;
 
-      // Move ONLY this lead (+ set status for system folders)
+      // Final assert for system moves (belt + suspenders)
+      if (isSystemFolderName(desiredFolderName)) {
+        if (String(toFolderName).toLowerCase() !== desiredLower) {
+          throw Object.assign(
+            new Error(
+              `Guard: about to move to wrong system folder (wanted "${desiredFolderName}", got "${toFolderName}")`
+            ),
+            { status: 500 }
+          );
+        }
+      }
+
       const setFields: Record<string, any> = {
         folderId: targetFolderId,
-        folderName: rawName,
-        ["Folder Name"]: rawName,
-        folder: rawName,
+        folderName: toFolderName,
+        ["Folder Name"]: toFolderName,
+        folder: toFolderName,
         updatedAt: new Date(),
       };
-      if (SYSTEM.has(rawName.toLowerCase())) setFields.status = rawName;
+      if (ALLOW_STATUS_SET.has(desiredLower)) {
+        setFields.status = desiredFolderName;
+      }
 
       const write = await Lead.updateOne(
         { _id: leadId, userEmail },
@@ -70,15 +131,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (write.matchedCount === 0) throw new Error("Lead not found after update.");
     });
 
-    // Socket notify (best-effort, out of transaction)
+    // Log (for acceptance criteria)
+    try {
+      console.log("disposition-lead", {
+        leadId,
+        userEmail,
+        fromFolder: fromFolderName || null,
+        toFolder: toFolderName || null,
+        statusBefore: previousStatus || null,
+        statusAfter: ALLOW_STATUS_SET.has(desiredLower) ? desiredFolderName : previousStatus || null,
+      });
+    } catch {}
+
+    // Socket notify (best-effort)
     try {
       let io = (res as any)?.socket?.server?.io;
       if (!io) io = initSocket(res as any);
       io?.to(userEmail).emit("lead:updated", {
         _id: String(leadId),
         folderId: String(targetFolderId),
-        folderName: rawName,
-        status: SYSTEM.has(rawName.toLowerCase()) ? rawName : previousStatus,
+        folderName: toFolderName,
+        status: ALLOW_STATUS_SET.has(desiredLower) ? desiredFolderName : previousStatus,
         updatedAt: new Date(),
       });
     } catch (e) {
@@ -89,10 +162,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       success: true,
       message: "Lead moved.",
       toFolderId: String(targetFolderId),
-      folderName: rawName,
-      status: SYSTEM.has(rawName.toLowerCase()) ? rawName : previousStatus,
+      folderName: toFolderName,
+      status: ALLOW_STATUS_SET.has(desiredLower) ? desiredFolderName : previousStatus,
     });
-  } catch (e) {
+  } catch (e: any) {
+    const code = e?.status && Number.isInteger(e.status) ? e.status : 500;
+    if (code !== 500) {
+      console.warn("disposition-lead guarded error:", e?.message);
+      return res.status(code).json({ message: e?.message || "Bad Request" });
+    }
     console.error("disposition-lead error:", e);
     return res.status(500).json({ message: "Internal server error." });
   } finally {
