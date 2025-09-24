@@ -1,53 +1,52 @@
-// /lib/systemFolders.ts
 // Canonical system folder names (UI-visible)
 export const SYSTEM_FOLDERS = [
   "Sold",
   "Not Interested",
   "Booked Appointment",
+  "Vet Leads",
 ] as const;
-
-const LOWER = new Set(SYSTEM_FOLDERS.map((s) => s.toLowerCase()));
 
 export type SystemFolderName = (typeof SYSTEM_FOLDERS)[number];
 
-// Normalize in a SAFE way (no character substitutions that change meaning)
+const CANONICAL_LOWER = new Set(SYSTEM_FOLDERS.map((s) => s.toLowerCase()));
+
+// Safe normalize: lower + collapse whitespace + trim punctuation to spaces.
+// NO character substitutions that change meaning.
 function safeNormalize(name?: string | null): string {
   return String(name ?? "")
     .trim()
     .toLowerCase()
-    .replace(/\s+/g, " ")     // collapse whitespace
-    .replace(/[._-]+/g, " "); // common punctuation to space
+    .replace(/[._-]+/g, " ")
+    .replace(/\s+/g, " ");
 }
 
-// Exact, case-insensitive match against canonical names
+// Strict check: only exact (case-insensitive) canonical names, plus a common shorthand.
 export function isSystemFolderName(name?: string | null): boolean {
   const n = safeNormalize(name);
-  // compare against canonical set after normalizing spaces (e.g., "not    interested")
   if (!n) return false;
-  if (LOWER.has(n)) return true;
-  // handle "booked" as a shorthand of "booked appointment"
+  if (CANONICAL_LOWER.has(n)) return true;
+  // Accept "booked" as shorthand of "Booked Appointment"
   if (n === "booked") return true;
   return false;
 }
 
-// Broader but STILL SAFE guard: allow minor spacing/punctuation variants only
+/**
+ * Optional, *softer* detector for client-side UX only.
+ * We keep it conservative to avoid false positives:
+ * - allow simple punctuation/spacing variations
+ * - recognize "sold(s)" and "booked"/"booked appointment" compact forms
+ * DO NOT use this to *block* on the server—use isSystemFolderName.
+ */
 export function isSystemish(name?: string | null): boolean {
   const n = safeNormalize(name);
   if (!n) return false;
-
-  // Exact system names
   if (isSystemFolderName(n)) return true;
 
-  // “Sold” with punctuation/plurals (e.g., "sold!", "sold.", "solds")
-  if (n.replace(/\s+/g, "") === "sold" || /^solds?$/.test(n.replace(/\s+/g, ""))) return true;
-
-  // “Not Interested” with flexible spacing/punctuation
-  if (n.replace(/\s+/g, "") === "notinterested") return true;
-
-  // “Booked” or “Booked Appointment” with flexible spacing/punctuation
   const compact = n.replace(/\s+/g, "");
+
+  if (compact === "sold" || compact === "solds") return true;
+  if (compact === "notinterested") return true;
   if (compact === "booked" || compact === "bookedappointment") return true;
 
-  // No deeper “lookalike” tricks — avoid false positives
   return false;
 }

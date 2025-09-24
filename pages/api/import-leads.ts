@@ -1,4 +1,3 @@
-// /pages/api/import-leads.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import formidable from "formidable";
 import fs from "fs";
@@ -10,23 +9,10 @@ import Lead from "@/models/Lead";
 import { getServerSession } from "next-auth";
 import { authOptions } from "./auth/[...nextauth]";
 import { sanitizeLeadType, createLeadsFromCSV } from "@/lib/mongo/leads";
+import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
+import mongoose from "mongoose";
 
 export const config = { api: { bodyParser: false } };
-
-/** ------------------------------------------------------------------
- *  HARD WIRED system folders (exact, case-insensitive)
- *  We inline this so the route cannot drift from helpers elsewhere.
- * ------------------------------------------------------------------ */
-const SYSTEM_FOLDER_NAMES = new Set(
-  ["Sold", "Not Interested", "Booked Appointment", "Vet Leads"].map((s) =>
-    s.toLowerCase()
-  )
-);
-function isSystemName(name?: string | null): boolean {
-  if (!name) return false;
-  const n = String(name).trim().toLowerCase();
-  return !!n && SYSTEM_FOLDER_NAMES.has(n);
-}
 
 /* ---------------- tiny utils ---------------- */
 function bufferToStream(buffer: Buffer): Readable {
@@ -97,6 +83,7 @@ function sanitizeStatus(raw?: string | null): string | undefined {
 /*  Folder resolver (NO AUTO FALLBACK)                                */
 /*  - Prefer typed new name > selected name                           */
 /*  - Blocks system folders by name or by id                          */
+/*  - Uses native driver for exact match (guaranteed, plugin-proof)   */
 /* ------------------------------------------------------------------ */
 async function selectImportFolder(
   userEmail: string,
@@ -106,17 +93,47 @@ async function selectImportFolder(
 
   // A) By name (create if missing) — strict block first
   if (byName) {
-    if (isSystemName(byName)) {
+    if (isSystemFolder(byName)) {
       const msg = "Cannot import into system folders";
       console.warn("Import blocked: system folder by NAME", { userEmail, byName });
       throw Object.assign(new Error(msg), { status: 400 });
     }
-    const f = await Folder.findOneAndUpdate(
-      { userEmail, name: byName },
-      { $setOnInsert: { userEmail, name: byName } },
-      { new: true, upsert: true }
-    );
-    return { folder: f, selection: "byName" as const };
+
+    // Use native driver for an exact equality (no collation, no plugins)
+    const coll = mongoose.connection.db.collection("folders");
+    const filter = { userEmail, name: byName };
+    const found = await coll.findOne(filter);
+    if (found) {
+      const f = await Folder.findById(found._id);
+      if (!f) {
+        const msg = "Folder lookup error";
+        throw Object.assign(new Error(msg), { status: 500 });
+      }
+      // Safety: block if it somehow points to a system folder
+      if (isSystemFolder(f.name)) {
+        const msg = "Cannot import into system folders";
+        console.warn("Import blocked: system folder by NAME (post-lookup)", {
+          userEmail, byName, actual: f.name, _id: String(f._id),
+        });
+        throw Object.assign(new Error(msg), { status: 400 });
+      }
+      return { folder: f, selection: "byName" as const };
+    }
+
+    // Not found: create explicitly with exact name
+    const now = new Date();
+    const insert = await coll.insertOne({
+      userEmail,
+      name: byName,
+      createdAt: now,
+      updatedAt: now,
+    });
+    const f = await Folder.findById(insert.insertedId);
+    if (!f) {
+      const msg = "Folder create error";
+      throw Object.assign(new Error(msg), { status: 500 });
+    }
+    return { folder: f, selection: "createdByName" as const };
   }
 
   // B) By id — must belong to user; block by actual name
@@ -127,7 +144,7 @@ async function selectImportFolder(
       console.warn("Import blocked: bad ID", { userEmail, targetFolderId: opts.targetFolderId });
       throw Object.assign(new Error(msg), { status: 400 });
     }
-    if (isSystemName(f.name)) {
+    if (isSystemFolder(f.name)) {
       const msg = "Cannot import into system folders";
       console.warn("Import blocked: system folder by ID", {
         userEmail,
@@ -283,14 +300,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         targetFolderId,
         folderName: resolvedFolderName,
       });
-
-      // Final kill-switch
-      if (isSystemName(folder.name)) {
-        console.warn("Final guard (json) blocked", {
-          userEmail, actualName: folder.name, resolvedFolderName, selection,
-        });
-        return res.status(400).json({ message: "Cannot import into system folders" });
-      }
 
       console.info("Import folder selected (json)", {
         userEmail, selection, folderId: String(folder._id), folderName: folder.name,
@@ -481,13 +490,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           folderName: resolvedFolderName,
         });
 
-        if (isSystemName(folder.name)) {
-          console.warn("Final guard blocked (legacy)", {
-            userEmail, actualName: folder.name, resolvedFolderName, selection,
-          });
-          return res.status(400).json({ message: "Cannot import into system folders" });
-        }
-
         console.info("Import folder selected (legacy)", {
           userEmail, selection, folderId: String(folder._id), folderName: folder.name,
           provided: { preferredName, selectedName },
@@ -551,13 +553,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         targetFolderId,
         folderName: resolvedFolderName,
       });
-
-      if (isSystemName(folder.name)) {
-        console.warn("Final guard blocked (multipart+mapping)", {
-          userEmail, actualName: folder.name, resolvedFolderName, selection,
-        });
-        return res.status(400).json({ message: "Cannot import into system folders" });
-      }
 
       console.info("Import folder selected (multipart+mapping)", {
         userEmail, selection, folderId: String(folder._id), folderName: folder.name,
