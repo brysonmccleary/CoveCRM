@@ -3,6 +3,7 @@ import formidable from "formidable";
 import fs from "fs";
 import csvParser from "csv-parser";
 import { Readable } from "stream";
+import mongoose from "mongoose";
 import dbConnect from "@/lib/mongooseConnect";
 import Folder from "@/models/Folder";
 import Lead from "@/models/Lead";
@@ -10,7 +11,6 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "./auth/[...nextauth]";
 import { sanitizeLeadType, createLeadsFromCSV } from "@/lib/mongo/leads";
 import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
-import mongoose from "mongoose";
 
 export const config = { api: { bodyParser: false } };
 
@@ -83,12 +83,14 @@ function sanitizeStatus(raw?: string | null): string | undefined {
 /*  Folder resolver (NO AUTO FALLBACK)                                */
 /*  - Prefer typed new name > selected name                           */
 /*  - Blocks system folders by name or by id                          */
-/*  - Uses native driver for exact match (guaranteed, plugin-proof)   */
+/*  - Uses native driver for exact name match (no collation/plugins)  */
 /* ------------------------------------------------------------------ */
 async function selectImportFolder(
   userEmail: string,
   opts: { targetFolderId?: string; folderName?: string }
 ) {
+  await dbConnect(); // ensure connected before using native driver
+
   const byName = (opts.folderName || "").trim();
 
   // A) By name (create if missing) — strict block first
@@ -100,40 +102,24 @@ async function selectImportFolder(
     }
 
     // Use native driver for an exact equality (no collation, no plugins)
-    const coll = mongoose.connection.db.collection("folders");
+    const coll = mongoose.connection.db!.collection("folders");
     const filter = { userEmail, name: byName };
     const found = await coll.findOne(filter);
+
     if (found) {
-      const f = await Folder.findById(found._id);
-      if (!f) {
-        const msg = "Folder lookup error";
-        throw Object.assign(new Error(msg), { status: 500 });
-      }
-      // Safety: block if it somehow points to a system folder
-      if (isSystemFolder(f.name)) {
-        const msg = "Cannot import into system folders";
-        console.warn("Import blocked: system folder by NAME (post-lookup)", {
-          userEmail, byName, actual: f.name, _id: String(f._id),
-        });
-        throw Object.assign(new Error(msg), { status: 400 });
-      }
-      return { folder: f, selection: "byName" as const };
+      return {
+        folder: { ...found, _id: found._id } as any,
+        selection: "foundByName" as const,
+      };
     }
 
-    // Not found: create explicitly with exact name
-    const now = new Date();
-    const insert = await coll.insertOne({
-      userEmail,
-      name: byName,
-      createdAt: now,
-      updatedAt: now,
-    });
-    const f = await Folder.findById(insert.insertedId);
-    if (!f) {
-      const msg = "Folder create error";
-      throw Object.assign(new Error(msg), { status: 500 });
-    }
-    return { folder: f, selection: "createdByName" as const };
+    const toInsert = { userEmail, name: byName, assignedDrips: [] };
+    const ins = await coll.insertOne(toInsert);
+    const created = await coll.findOne({ _id: ins.insertedId });
+    return {
+      folder: created as any,
+      selection: "createdByName" as const,
+    };
   }
 
   // B) By id — must belong to user; block by actual name
@@ -302,14 +288,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
 
       console.info("Import folder selected (json)", {
-        userEmail, selection, folderId: String(folder._id), folderName: folder.name,
+        userEmail, selection, folderId: String((folder as any)._id), folderName: (folder as any).name,
         provided: { preferredName, fallbackSelected },
       });
 
       const mapped = rows.map((r) => ({
         ...mapRow(r, mapping),
         userEmail,
-        folderId: folder._id,
+        folderId: (folder as any)._id,
       }));
 
       const phoneKeys = Array.from(new Set(mapped.map((m) => m.phoneLast10).filter(Boolean) as string[]));
@@ -358,9 +344,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         // $set base (NEVER duplicate fields into $setOnInsert)
         const base: any = {
           ownerEmail: userEmail,
-          folderId: folder._id,
-          folder_name: String(folder.name),
-          "Folder Name": String(folder.name),
+          folderId: (folder as any)._id,
+          folder_name: String((folder as any).name),
+          "Folder Name": String((folder as any).name),
           updatedAt: new Date(),
         };
 
@@ -412,7 +398,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           const ids = affected.map((d) => String(d._id));
           if (ids.length) {
             await Folder.updateOne(
-              { _id: folder._id, userEmail },
+              { _id: (folder as any)._id, userEmail },
               { $addToSet: { leadIds: { $each: ids } } }
             );
           }
@@ -421,8 +407,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       return res.status(200).json({
         message: "Import completed",
-        folderId: folder._id,
-        folderName: folder.name,
+        folderId: (folder as any)._id,
+        folderName: (folder as any).name,
         counts: { inserted, updated, skipped },
         mode: "json",
         skipExisting,
@@ -491,7 +477,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         });
 
         console.info("Import folder selected (legacy)", {
-          userEmail, selection, folderId: String(folder._id), folderName: folder.name,
+          userEmail, selection, folderId: String((folder as any)._id), folderName: (folder as any).name,
           provided: { preferredName, selectedName },
         });
 
@@ -522,9 +508,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           return {
             ...lead,
             userEmail,
-            folderId: folder._id,
-            folder_name: String(folder.name),
-            "Folder Name": String(folder.name),
+            folderId: (folder as any)._id,
+            folder_name: String((folder as any).name),
+            "Folder Name": String((folder as any).name),
             status: "New",
             Phone: lead["Phone"] ?? lead["phone"],
             phoneLast10: phoneKey,
@@ -535,13 +521,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           };
         });
 
-        await createLeadsFromCSV(leadsToInsert, userEmail, String(folder._id));
+        await createLeadsFromCSV(leadsToInsert, userEmail, String((folder as any)._id));
 
         return res.status(200).json({
           message: "Leads imported successfully",
           count: leadsToInsert.length,
-          folderId: folder._id,
-          folderName: folder.name,
+          folderId: (folder as any)._id,
+          folderName: (folder as any).name,
           mode: "multipart-legacy",
         });
       }
@@ -555,7 +541,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
 
       console.info("Import folder selected (multipart+mapping)", {
-        userEmail, selection, folderId: String(folder._id), folderName: folder.name,
+        userEmail, selection, folderId: String((folder as any)._id), folderName: (folder as any).name,
         provided: { preferredName, selectedName },
       });
 
@@ -583,7 +569,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const rowsMapped = rawRows.map((r) => ({
         ...mapRow(r, mapping),
         userEmail,
-        folderId: folder._id,
+        folderId: (folder as any)._id,
       }));
 
       const phoneKeys = Array.from(new Set(rowsMapped.map((m) => m.phoneLast10).filter(Boolean) as string[]));
@@ -631,9 +617,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         const base: any = {
           ownerEmail: userEmail,
-          folderId: folder._id,
-          folder_name: String(folder.name),
-          "Folder Name": String(folder.name),
+          folderId: (folder as any)._id,
+          folder_name: String((folder as any).name),
+          "Folder Name": String((folder as any).name),
           updatedAt: new Date(),
         };
 
@@ -683,7 +669,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const ids = affected.map((d) => String(d._id));
         if (ids.length) {
           await Folder.updateOne(
-            { _id: folder._id, userEmail },
+            { _id: (folder as any)._id, userEmail },
             { $addToSet: { leadIds: { $each: ids } } }
           );
         }
@@ -691,8 +677,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       return res.status(200).json({
         message: "Leads imported successfully",
-        folderId: folder._id,
-        folderName: folder.name,
+        folderId: (folder as any)._id,
+        folderName: (folder as any).name,
         counts: { inserted, updated, skipped },
         mode: "multipart+mapping",
         skipExisting,
