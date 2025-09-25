@@ -11,20 +11,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    const session = await getServerSession(req, res, authOptions as any);
+    // Cast to any to avoid TS complaining about `user` on Session | null in this codebase
+    const session = (await getServerSession(req, res, authOptions as any)) as any;
     if (!session?.user?.email) return res.status(401).json({ error: "Unauthorized" });
 
     const { active } = req.query;
     await dbConnect();
 
     const query: any = {};
-    // Optional: scope by user if campaigns are tenant-specific
-    // query.createdBy = session.user.email;
-
-    if (String(active) === "1") query.active = true;
+    if (String(active) === "1") query.isActive = true;
 
     const campaigns = await DripCampaign.find(query)
-      .select("_id name key active")
+      .select("_id name key isActive")
       .sort({ name: 1 })
       .lean();
 
