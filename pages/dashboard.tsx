@@ -79,7 +79,8 @@ function secsToHMS(s: number) {
 }
 
 function DashboardOverview() {
-  const [range, setRange] = useState<"today" | "thisWeek" | "last7" | "last30">("last30");
+  // Removed "thisWeek"; only Today / Last 7 / Last 30
+  const [range, setRange] = useState<"today" | "last7" | "last30">("last30");
   const [loading, setLoading] = useState(true);
   const [resp, setResp] = useState<ApiResponse | null>(null);
 
@@ -103,7 +104,7 @@ function DashboardOverview() {
   }, [range]);
 
   const k = resp?.kpis;
-  const dailyShort = (range === "last30" || range === "thisWeek") ? (resp as any)?.trends?.daily30 || [] : (resp as any)?.trends?.daily7 || [];
+  const dailySeries = range === "last30" ? (resp as any)?.trends?.daily30 || [] : (resp as any)?.trends?.daily7 || [];
 
   const kpiCards = [
     { label: "Dials", value: k?.dials ?? 0 },
@@ -116,13 +117,13 @@ function DashboardOverview() {
     <div className="p-6 space-y-6">
       {/* Range picker */}
       <div className="flex flex-wrap items-center gap-2">
-        {(["today", "thisWeek", "last7", "last30"] as const).map((opt) => (
+        {(["today", "last7", "last30"] as const).map((opt) => (
           <button
             key={opt}
             onClick={() => setRange(opt)}
             className={`px-3 py-1 rounded border ${range === opt ? "bg-[#111D35] text-white border-[#111D35]" : "bg-white text-gray-800 border-gray-300"} transition`}
           >
-            {opt === "last7" ? "Last 7" : opt === "last30" ? "Last 30" : opt === "thisWeek" ? "This Week" : "Today"}
+            {opt === "last7" ? "Last 7" : opt === "last30" ? "Last 30" : "Today"}
           </button>
         ))}
       </div>
@@ -141,14 +142,14 @@ function DashboardOverview() {
       <div className="bg-[#111D35] text-white p-6 rounded-lg shadow">
         <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
           <FaPhoneAlt className="text-pink-400" />
-          Call Performance — {range === "today" ? "Today" : range === "thisWeek" ? "This Week" : range === "last30" ? "Last 30 Days" : "Last 7 Days"}
+          {`Call Performance — ${range === "today" ? "Today" : range === "last30" ? "Last 30 Days" : "Last 7 Days"}`}
         </h2>
         <div className="h-80">
           {loading ? (
             <p className="text-gray-400">Loading chart...</p>
           ) : (
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={dailyShort}>
+              <LineChart data={dailySeries}>
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis dataKey="label" stroke="#D1D5DB" />
                 <YAxis stroke="#D1D5DB" allowDecimals={false} />
