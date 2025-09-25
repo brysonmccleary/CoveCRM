@@ -59,6 +59,9 @@ type HistoryEvent =
   | { type: "note"; id: string; date: string; text: string }
   | { type: "status"; id: string; date: string; from?: string; to?: string };
 
+// ---- Campaigns (UI-only)
+type UICampaign = { _id: string; name: string; key?: string; isActive?: boolean; active?: boolean };
+
 export default function LeadProfileDial() {
   const router = useRouter();
   const { id } = router.query;
@@ -73,18 +76,19 @@ export default function LeadProfileDial() {
 
   const userHasAI = true;
 
+  // ---- Drip enroll UI state
+  const [enrollOpen, setEnrollOpen] = useState(false);
+  const [campaigns, setCampaigns] = useState<UICampaign[]>([]);
+  const [campaignsLoading, setCampaignsLoading] = useState(false);
+  const [selectedCampaignId, setSelectedCampaignId] = useState<string>("");
+  const [startAtLocal, setStartAtLocal] = useState<string>("");
+  const [enrolling, setEnrolling] = useState(false);
+
   const formatPhone = (phone = "") => {
     const clean = String(phone).replace(/\D/g, "");
     if (clean.length === 10) return `${clean.slice(0, 3)}-${clean.slice(3, 6)}-${clean.slice(6)}`;
     if (clean.length === 11 && clean.startsWith("1")) return `${clean.slice(0, 1)}-${clean.slice(1, 4)}-${clean.slice(4, 7)}-${clean.slice(7)}`;
     return phone;
-  };
-  const fmtSecs = (n?: number) => {
-    if (!n && n !== 0) return "—";
-    const s = Math.max(0, Math.floor(n));
-    const m = Math.floor(s / 60);
-    const r = s % 60;
-    return m > 0 ? `${m}m ${r}s` : `${r}s`;
   };
   const fmtDateTime = (d?: string | Date) => {
     if (!d) return "—";
@@ -93,7 +97,6 @@ export default function LeadProfileDial() {
     return dt.toLocaleString();
   };
 
-  // Small helper so we can force-refresh after a disposition
   const fetchLeadById = useCallback(async (lookup: string) => {
     const r = await fetch(`/api/get-lead?id=${encodeURIComponent(lookup)}`, { cache: "no-store" });
     const j = await r.json().catch(() => ({} as any));
@@ -105,7 +108,6 @@ export default function LeadProfileDial() {
     return false;
   }, []);
 
-  // Load lead (id or phone fallback)
   useEffect(() => {
     const run = async () => {
       if (!id) return;
@@ -131,8 +133,6 @@ export default function LeadProfileDial() {
     run();
   }, [id, fetchLeadById]);
 
-  // Center: texts/notes/status only (per lead, newest-first). Notes appear at the very top because:
-  // 1) the API sorts newest-first and 2) when adding a new note we unshift() it locally.
   const loadHistory = useCallback(async () => {
     const key = resolvedId || (id ? String(id) : "");
     if (!key) return;
@@ -170,25 +170,6 @@ export default function LeadProfileDial() {
 
   useEffect(() => { loadHistory(); }, [loadHistory]);
 
-  // Right panel: real calls via /api/calls/by-lead (per lead)
-  const loadCalls = useCallback(async () => {
-    const key = resolvedId || (id ? String(id) : "");
-    if (!key) return;
-    try {
-      setCallsLoading(true);
-      const r = await fetch(`/api/calls/by-lead?leadId=${encodeURIComponent(key)}&page=1&pageSize=25`, { cache: "no-store" });
-      const j = await r.json();
-      if (!r.ok) throw new Error(j?.message || "Failed to load calls.");
-      setCalls(j.rows || []);
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setCallsLoading(false);
-    }
-  }, [resolvedId, id]);
-
-  useEffect(() => { loadCalls(); }, [loadCalls]);
-
   const handleSaveNote = async () => {
     if (!notes.trim() || !lead?.id) return toast.error("❌ Cannot save an empty note");
     try {
@@ -200,14 +181,12 @@ export default function LeadProfileDial() {
         const j = await r.json().catch(() => ({}));
         throw new Error(j?.message || "Failed to save note");
       }
-      // Pin new note to top immediately
       setHistoryLines((prev) => [`📝 ${notes.trim()} • ${new Date().toLocaleString()}`, ...prev]);
       setNotes("");
       toast.success("✅ Note saved!");
     } catch (e: any) { toast.error(e?.message || "Failed to save note"); }
   };
 
-  // Move lead (disposition) — leaves “No Answer” as a no-op here
   const handleDisposition = async (newFolderName: string) => {
     if (!lead?.id) return;
     if (newFolderName === "No Answer") {
@@ -215,10 +194,7 @@ export default function LeadProfileDial() {
       return;
     }
     try {
-      // Optimistic line
       setHistoryLines((prev) => [`✅ Disposition: ${newFolderName} • ${new Date().toLocaleString()}`, ...prev]);
-
-      // 🔍 One-line log so we can verify outgoing payload during QA
       console.log("Profile disposition payload →", { leadId: lead.id, newFolderName });
 
       const res = await fetch("/api/disposition-lead", {
@@ -227,14 +203,10 @@ export default function LeadProfileDial() {
         body: JSON.stringify({ leadId: lead.id, newFolderName }),
       });
       const data = await res.json().catch(() => ({} as any));
-      if (!res.ok || !data?.success) {
-        throw new Error(data?.message || "Failed to move lead");
-      }
+      if (!res.ok || !data?.success) throw new Error(data?.message || "Failed to move lead");
 
-      // Force-refresh from server so status/folderId are the source of truth
       await fetchLeadById(lead.id);
       loadHistory();
-
       toast.success(`✅ Lead moved to ${newFolderName}`);
     } catch (error: any) {
       console.error("Disposition error:", error);
@@ -242,7 +214,6 @@ export default function LeadProfileDial() {
     }
   };
 
-  // Route to dialer for this exact lead
   const startCall = () => {
     if (!lead?.id) return toast.error("Lead not loaded");
     router.push({ pathname: "/dial-session", query: { leadId: lead.id } });
@@ -261,16 +232,71 @@ export default function LeadProfileDial() {
     return formatPhone(p);
   }, [lead]);
 
+  // ---- Enroll modal open + load campaigns
+  const openEnrollModal = async () => {
+    if (!resolvedId) return toast.error("Lead not loaded");
+    setEnrollOpen(true);
+    if (campaigns.length === 0) {
+      try {
+        setCampaignsLoading(true);
+        const r = await fetch(`/api/drips/campaigns?active=1`, { cache: "no-store" });
+        const j = await r.json().catch(() => ({} as any));
+        if (!r.ok) throw new Error(j?.error || "Failed to load campaigns");
+        const list: UICampaign[] = Array.isArray(j?.campaigns) ? j.campaigns : [];
+        setCampaigns(list.filter((c) => (c?.isActive ?? c?.active ?? true)));
+      } catch (e: any) {
+        console.error(e);
+        toast.error(e?.message || "Failed to load campaigns");
+      } finally {
+        setCampaignsLoading(false);
+      }
+    }
+  };
+
+  const submitEnroll = async () => {
+    if (!lead?.id) return toast.error("Lead not loaded");
+    if (!selectedCampaignId) return toast.error("Pick a campaign");
+
+    try {
+      setEnrolling(true);
+      const body: any = { leadId: lead.id, campaignId: selectedCampaignId };
+      if (startAtLocal) {
+        const localDate = new Date(startAtLocal);
+        if (!Number.isNaN(localDate.getTime())) body.startAt = localDate.toISOString();
+      }
+
+      const r = await fetch(`/api/drips/enroll-lead`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const j = await r.json().catch(() => ({} as any));
+      if (!r.ok || !j?.success) throw new Error(j?.error || j?.message || "Failed to enroll lead");
+
+      const enrolledName = j?.campaign?.name || (campaigns.find((c) => c._id === selectedCampaignId)?.name ?? "campaign");
+      setHistoryLines((prev) => [`🔖 Status: Enrolled to ${enrolledName} • ${new Date().toLocaleString()}`, ...prev]);
+      loadHistory();
+
+      toast.success(`✅ Enrolled in ${enrolledName}`);
+      setEnrollOpen(false);
+      setSelectedCampaignId("");
+      setStartAtLocal("");
+    } catch (e: any) {
+      console.error(e);
+      toast.error(e?.message || "Enrollment failed");
+    } finally {
+      setEnrolling(false);
+    }
+  };
+
   return (
     <div className="flex bg-[#0f172a] text-white min-h-screen">
       <Sidebar />
 
-      {/* LEFT: Lead facts */}
+      {/* LEFT */}
       <div className="w-[320px] p-4 border-r border-gray-700 bg-[#1e293b] overflow-y-auto">
         <div className="mb-2">
           <h2 className="text-xl font-bold">{leadName}</h2>
-          {phoneDisplay ? (<div className="text-gray-300">{phoneDisplay}</div>) : null}
-          {lead?.status ? (<div className="text-xs mt-1 text-gray-400">Status: {lead.status}</div>) : null}
         </div>
 
         {Object.entries(lead || {})
@@ -288,7 +314,7 @@ export default function LeadProfileDial() {
         {lead?.Notes && (
           <div className="mt-2">
             <p className="text-sm font-semibold">Notes</p>
-            <textarea value={lead.Notes} onChange={() => {}} readOnly className="bg-[#0f172a] border border-white/10 rounded p-2 w-full mt-1 text-sm" rows={3}/>
+            <textarea value={lead.Notes} readOnly className="bg-[#0f172a] border border-white/10 rounded p-2 w-full mt-1 text-sm" rows={3}/>
             <hr className="border-gray-800 my-1" />
           </div>
         )}
@@ -307,6 +333,16 @@ export default function LeadProfileDial() {
           <div className="flex items-center gap-2 mb-4">
             <button onClick={handleSaveNote} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded">Save Note</button>
             <button type="button" onClick={startCall} className="bg-green-600 hover:bg-green-700 px-4 py-2 rounded">Call</button>
+
+            {/* NEW: Center toolbar entry to open the same modal */}
+            <button
+              type="button"
+              onClick={openEnrollModal}
+              disabled={!lead?.id}
+              className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 px-4 py-2 rounded"
+            >
+              Enroll in Drip
+            </button>
           </div>
 
           {userHasAI && calls.find((c) => c.aiSummary) ? (
@@ -348,6 +384,21 @@ export default function LeadProfileDial() {
 
       {/* RIGHT */}
       <div className="w-[400px] p-4 bg-[#0b1220] flex flex-col min-h-0">
+        {/* Enroll card (original placement) */}
+        <div className="mb-3 border border-white/10 rounded p-3 bg-[#0f172a]">
+          <div className="flex items-center justify-between">
+            <span className="font-semibold text-sm">Enroll in Drip</span>
+            <button
+              onClick={openEnrollModal}
+              disabled={!lead?.id}
+              className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 px-3 py-1 rounded text-sm"
+            >
+              Enroll
+            </button>
+          </div>
+          <p className="text-xs text-gray-400 mt-1">Enroll this lead into a specific campaign.</p>
+        </div>
+
         <div className="flex-1 min-h-0 overflow-y-auto">
           {lead?.id ? (
             <CallPanelClose
@@ -359,6 +410,71 @@ export default function LeadProfileDial() {
           ) : null}
         </div>
       </div>
+
+      {/* Enroll Modal */}
+      {enrollOpen ? (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/60" onClick={() => setEnrollOpen(false)} />
+          <div className="relative w-full max-w-md mx-4 rounded-lg border border-white/10 bg-[#0f172a] p-4 shadow-xl">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-lg font-bold">Enroll in Drip</h3>
+              <button onClick={() => setEnrollOpen(false)} className="text-gray-300 hover:text-white">✕</button>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label className="block text-sm text-gray-300 mb-1">Campaign</label>
+                <select
+                  value={selectedCampaignId}
+                  onChange={(e) => setSelectedCampaignId(e.target.value)}
+                  className="w-full bg-[#1e293b] text-white border border-white/10 rounded p-2"
+                >
+                  <option value="">{campaignsLoading ? "Loading…" : "-- Select a campaign --"}</option>
+                  {campaigns.map((c) => (
+                    <option key={c._id} value={c._id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm text-gray-300 mb-1">
+                  Optional Start Time <span className="text-gray-500">(local)</span>
+                </label>
+                <input
+                  type="datetime-local"
+                  value={startAtLocal}
+                  onChange={(e) => setStartAtLocal(e.target.value)}
+                  className="w-full bg-[#1e293b] text-white border border-white/10 rounded p-2"
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  Leave blank to start immediately; scheduler will handle timing.
+                </p>
+              </div>
+
+              <div className="border border-white/10 rounded p-2 bg-[#0b1220]">
+                <p className="text-xs text-gray-400">
+                  Preview of touches will appear here once enabled for this campaign.
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-4 flex items-center justify-end gap-2">
+              <button onClick={() => setEnrollOpen(false)} className="px-3 py-2 rounded bg-gray-700 hover:bg-gray-600">
+                Cancel
+              </button>
+              <button
+                onClick={submitEnroll}
+                disabled={enrolling || !selectedCampaignId}
+                className="px-4 py-2 rounded bg-green-600 hover:bg-green-700 disabled:opacity-50"
+              >
+                {enrolling ? "Enrolling…" : "Enroll"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

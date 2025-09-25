@@ -1,3 +1,4 @@
+// models/DripCampaign.ts
 import mongoose from "mongoose";
 
 const StepSchema = new mongoose.Schema({
@@ -24,18 +25,35 @@ const AnalyticsSchema = new mongoose.Schema({
 
 const DripCampaignSchema = new mongoose.Schema(
   {
+    // Display name for the campaign
     name: { type: String, required: true },
+
+    // Optional stable key/slug for referencing in UI/history (non-unique to avoid migrations)
+    // Example: "missed-appt-7d" or "birthday-sms"
+    key: { type: String, trim: true, index: true },
+
+    // Channel type
     type: { type: String, enum: ["sms", "email"], default: "sms" },
+
+    // Current activation flag (keep existing shape)
     isActive: { type: Boolean, default: true },
+
+    // Folders currently assigned to this campaign (existing behavior)
     assignedFolders: [{ type: String }],
+
+    // Campaign steps (existing shape)
     steps: [StepSchema],
+
+    // Rollup stats (existing shape)
     analytics: AnalyticsSchema,
+
+    // Metadata (existing fields)
     createdBy: { type: String, default: "admin" },
     comments: [CommentSchema],
-    user: { type: String }, // Tie to logged-in user (optional for global)
-    isGlobal: { type: Boolean, default: false }, // <-- NEW field
+    user: { type: String },              // Tenant/user scope (optional)
+    isGlobal: { type: Boolean, default: false }, // Global availability flag
   },
-  { timestamps: true },
+  { timestamps: true }
 );
 
 export default mongoose.models.DripCampaign ||
