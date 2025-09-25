@@ -1,7 +1,8 @@
+// pages/dial-session.tsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/router";
 import Sidebar from "@/components/Sidebar";
-import CallSummary from "@/components/CallSummary";
+// ❌ removed: import CallSummary from "@/components/CallSummary";
 import BookAppointmentModal from "@/components/BookAppointmentModal";
 import { isCallAllowed, isCallAllowedForLead, localTimeString } from "@/utils/checkCallTime";
 import { playRingback, stopRingback, primeAudioContext, ensureUnlocked } from "@/utils/ringAudio";
@@ -51,7 +52,7 @@ export default function DialSession() {
   const [sessionStartedCount, setSessionStartedCount] = useState(0);
 
   // UI
-  const [summaryCollapsed, setSummaryCollapsed] = useState(true);
+  // ❌ removed: const [summaryCollapsed, setSummaryCollapsed] = useState(true);
   const [showBookModal, setShowBookModal] = useState(false);
   const [notes, setNotes] = useState("");
   const [history, setHistory] = useState<HistoryRow[]>([]);
@@ -834,16 +835,10 @@ export default function DialSession() {
     <div className="flex bg-[#0f172a] text-white min-h-screen flex-col">
       <div className="bg-[#1e293b] p-4 border-b border-gray-700 flex justify-between items-center">
         <h1 className="text-xl font-bold">Dial Session</h1>
-        <button onClick={() => setSummaryCollapsed((s) => !s)} className="text-sm px-3 py-1 rounded bg-gray-700 hover:bg-gray-600">
-          {summaryCollapsed ? "Show Summary" : "Hide Summary"}
-        </button>
+        {/* ❌ removed summary toggle */}
       </div>
 
-      {!summaryCollapsed && (
-        <div className="bg-[#1e293b] text-white border-b border-gray-700 p-4">
-          <CallSummary lead={lead} />
-        </div>
-      )}
+      {/* ❌ removed CallSummary panel */}
 
       <div className="flex flex-1">
         <Sidebar />
