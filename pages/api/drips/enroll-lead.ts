@@ -27,16 +27,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     await dbConnect();
 
-    // Validate lead ownership/scope (adjust if your Lead doesn't have userEmail)
+    // Validate lead ownership/scope (adjust this if your Lead schema scopes differently)
     const lead = await Lead.findOne({ _id: leadId, userEmail: session.user.email }).select("_id").lean();
     if (!lead) return res.status(404).json({ error: "Lead not found" });
 
     // Validate campaign (isActive)
-    const campaign = await DripCampaign.findOne({ _id: campaignId })
+    const campaign = (await DripCampaign.findOne({ _id: campaignId })
       .select("_id name key isActive steps")
-      .lean();
+      .lean()) as any; // <-- cast to any to satisfy TS
     if (!campaign) return res.status(404).json({ error: "Campaign not found" });
-    if (campaign.isActive !== true) return res.status(400).json({ error: "Campaign is not active" });
+    if ((campaign as any).isActive !== true) {               // <-- guard via any
+      return res.status(400).json({ error: "Campaign is not active" });
+    }
 
     // Compute initial nextSendAt
     let nextSendAt: Date | undefined;
@@ -78,7 +80,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     return res.status(200).json({
       success: true,
-      enrollmentId: enrollment?._id,
+      enrollmentId: (enrollment as any)?._id,
       campaign: { id: String(campaign._id), name: campaign.name, key: campaign.key },
       nextSendAt,
       historyEntry,
