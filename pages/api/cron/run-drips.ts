@@ -11,6 +11,9 @@ import { prebuiltDrips } from "@/utils/prebuiltDrips";
 import { DateTime } from "luxon";
 import { acquireLock } from "@/lib/locks"; // 🔒 add lock
 
+// Bump serverless time budget
+export const config = { maxDuration: 60 }; // <-- NEW
+
 // --- Config ---
 const PT_ZONE = "America/Los_Angeles"; // 9:00 AM Pacific
 const SEND_HOUR_PT = 9;
@@ -54,7 +57,7 @@ function normalizeToE164Maybe(phone?: string): string | null {
   if (digits.startsWith("+")) return digits;
   const just = digits.replace(/\D/g, "");
   if (just.length === 10) return `+1${just}`;
-  if (just.length === 11 && just.startsWith("1")) return `+${just}`;
+  if (just.length === 11 && just.startsWith("1") ) return `+${just}`;
   return null;
 }
 
@@ -115,10 +118,7 @@ type DripCounters = {
 };
 
 type SkipMap = Record<string, number>;
-
-function bump(map: SkipMap, key: string) {
-  map[key] = (map[key] || 0) + 1;
-}
+function bump(map: SkipMap, key: string) { map[key] = (map[key] || 0) + 1; }
 
 // --- Handler ---
 export default async function handler(
@@ -228,7 +228,6 @@ export default async function handler(
           }
         } catch (e) {
           enrollFailed++;
-          // don't advance on error
           return;
         }
       }
@@ -241,7 +240,6 @@ export default async function handler(
         update.$set.status = "completed";
         update.$unset = { ...(update.$unset || {}), nextSendAt: 1 };
       } else {
-        // schedule next based on day labels
         const prevDay = parseStepDayNumber(step.day);
         const nextDay = parseStepDayNumber(steps[nextIndex].day);
         const base = DateTime.now().setZone(PT_ZONE).startOf("day");
@@ -260,7 +258,6 @@ export default async function handler(
 
     const nowPT2 = DateTime.now().setZone(PT_ZONE);
 
-    // Fetch leads with assigned drips; DO NOT require dripProgress here (we'll auto-init it)
     const leadQuery: any = {
       $and: [
         { unsubscribed: { $ne: true } },
@@ -284,27 +281,16 @@ export default async function handler(
     const leads = limit > 0 ? await leadsQ.limit(limit) : await leadsQ;
     console.log(`📋 Leads eligible: ${leads.length}`);
 
-    let checked = 0;
-    let candidates = 0;
-    let accepted = 0;
-    let scheduled = 0;
-    let suppressed = 0;
-    let failed = 0;
-    let initializedProgress = 0;
-    let wouldInitProgress = 0;
+    let checked = 0, candidates = 0, accepted = 0, scheduled = 0, suppressed = 0, failed = 0;
+    let initializedProgress = 0, wouldInitProgress = 0;
 
     const skippedByReason: SkipMap = {};
     const perDripCounters = new Map<string, DripCounters>();
 
     function bumpDrip(dripId: string, key: keyof DripCounters) {
-      const c =
-        perDripCounters.get(dripId) || {
-          considered: 0,
-          sentAccepted: 0,
-          scheduled: 0,
-          suppressed: 0,
-          failed: 0,
-        };
+      const c = perDripCounters.get(dripId) || {
+        considered: 0, sentAccepted: 0, scheduled: 0, suppressed: 0, failed: 0,
+      };
       c[key] = (c[key] as number) + 1;
       perDripCounters.set(dripId, c);
     }
@@ -316,95 +302,53 @@ export default async function handler(
       checked++;
 
       const to = normalizeToE164Maybe((lead as any).Phone);
-      if (!to) {
-        bump(skippedByReason, "invalidPhone");
-        if (skippedSample.length < 10) skippedSample.push({ leadId: String((lead as any)._id), reason: "invalidPhone" });
-        return;
-      }
+      if (!to) { bump(skippedByReason, "invalidPhone"); if (skippedSample.length < 10) skippedSample.push({ leadId: String((lead as any)._id), reason: "invalidPhone" }); return; }
 
       const user = await User.findOne({ email: (lead as any).userEmail })
         .select({ _id: 1, email: 1, name: 1 })
         .lean();
-      if (!user?._id) {
-        bump(skippedByReason, "userMissing");
-        if (skippedSample.length < 10) skippedSample.push({ leadId: String((lead as any)._id), reason: "userMissing" });
-        return;
-      }
+      if (!user?._id) { bump(skippedByReason, "userMissing"); if (skippedSample.length < 10) skippedSample.push({ leadId: String((lead as any)._id), reason: "userMissing" }); return; }
 
       const { first: agentFirst, last: agentLast } = splitName(user.name || "");
-      const agentCtx = {
-        name: user.name || null,
-        first_name: agentFirst,
-        last_name: agentLast,
-      };
+      const agentCtx = { name: user.name || null, first_name: agentFirst, last_name: agentLast };
 
       const firstName = (lead as any)["First Name"] || null;
-      const lastName = (lead as any)["Last Name"] || null;
-      const fullName = [firstName, lastName].filter(Boolean).join(" ") || null;
+      const lastName  = (lead as any)["Last Name"]  || null;
+      const fullName  = [firstName, lastName].filter(Boolean).join(" ") || null;
 
-      const assigned: string[] = Array.isArray((lead as any).assignedDrips)
-        ? (lead as any).assignedDrips
-        : [];
-      const progressArr: any[] = Array.isArray((lead as any).dripProgress)
-        ? (lead as any).dripProgress
-        : [];
+      const assigned: string[]   = Array.isArray((lead as any).assignedDrips) ? (lead as any).assignedDrips : [];
+      const progressArr: any[]   = Array.isArray((lead as any).dripProgress) ? (lead as any).dripProgress : [];
 
-      if (!assigned.length) {
-        bump(skippedByReason, "noAssignedDrips");
-        if (skippedSample.length < 10) skippedSample.push({ leadId: String((lead as any)._id), reason: "noAssignedDrips" });
-        return;
-      }
+      if (!assigned.length) { bump(skippedByReason, "noAssignedDrips"); if (skippedSample.length < 10) skippedSample.push({ leadId: String((lead as any)._id), reason: "noAssignedDrips" }); return; }
 
       for (const dripId of assigned) {
         const dripDoc: any = await resolveDrip(dripId);
-        if (!dripDoc) {
-          bump(skippedByReason, "dripMissing");
-          if (skippedSample.length < 10)
-            skippedSample.push({ leadId: String((lead as any)._id), dripId: String(dripId), reason: "dripMissing" });
-          continue;
-        }
-        if (dripDoc.type !== "sms") {
-          bump(skippedByReason, "dripNotSms");
-          continue;
-        }
+        if (!dripDoc) { bump(skippedByReason, "dripMissing"); if (skippedSample.length < 10) skippedSample.push({ leadId: String((lead as any)._id), dripId: String(dripId), reason: "dripMissing" }); continue; }
+        if (dripDoc.type !== "sms") { bump(skippedByReason, "dripNotSms"); continue; }
 
         const campaignId = getCanonicalDripId(dripDoc, String(dripId));
 
         const steps = ((): Array<{ text: string; day?: string }> => {
           const arr = Array.isArray(dripDoc?.steps) ? dripDoc.steps : [];
           if (arr.some((s: any) => s?.day)) {
-            const numeric = arr
-              .filter((s: any) => !isNaN(parseStepDayNumber(s?.day)))
-              .sort((a: any, b: any) => parseStepDayNumber(a?.day) - parseStepDayNumber(b?.day));
+            const numeric = arr.filter((s: any) => !isNaN(parseStepDayNumber(s?.day)))
+                               .sort((a: any, b: any) => parseStepDayNumber(a?.day) - parseStepDayNumber(b?.day));
             return numeric;
           }
           return arr;
         })();
 
-        if (!steps.length) {
-          bump(skippedByReason, "noSteps");
-          continue;
-        }
+        if (!steps.length) { bump(skippedByReason, "noSteps"); continue; }
 
-        let prog =
-          progressArr.find((p) => String(p.dripId) === String(campaignId)) ||
-          progressArr.find((p) => String(p.dripId) === String(dripId));
+        let prog = progressArr.find((p) => String(p.dripId) === String(campaignId))
+               || progressArr.find((p) => String(p.dripId) === String(dripId));
 
         if (!prog || !prog.startedAt) {
           if (dry) {
             wouldInitProgress++;
-            prog = {
-              dripId: String(campaignId),
-              startedAt: DateTime.now().setZone(PT_ZONE).toJSDate(),
-              lastSentIndex: -1,
-              _simulated: true,
-            };
+            prog = { dripId: String(campaignId), startedAt: DateTime.now().setZone(PT_ZONE).toJSDate(), lastSentIndex: -1, _simulated: true } as any;
           } else {
-            const init = {
-              dripId: String(campaignId),
-              startedAt: new Date(),
-              lastSentIndex: -1,
-            };
+            const init = { dripId: String(campaignId), startedAt: new Date(), lastSentIndex: -1 };
             await Lead.updateOne(
               { _id: (lead as any)._id, "dripProgress.dripId": { $ne: String(campaignId) } },
               { $push: { dripProgress: init } },
@@ -415,13 +359,8 @@ export default async function handler(
           }
         }
 
-        let nextIndex =
-          (typeof prog.lastSentIndex === "number" ? prog.lastSentIndex : -1) + 1;
-
-        if (nextIndex >= steps.length) {
-          bump(skippedByReason, "completed");
-          continue;
-        }
+        let nextIndex = (typeof prog.lastSentIndex === "number" ? prog.lastSentIndex : -1) + 1;
+        if (nextIndex >= steps.length) { bump(skippedByReason, "completed"); continue; }
 
         let advancedAtLeastOne = false;
 
@@ -430,76 +369,39 @@ export default async function handler(
 
           const step = steps[nextIndex];
           const dayNum = parseStepDayNumber(step.day);
-          const duePT = !isNaN(dayNum)
-            ? computeStepWhenPT(new Date(prog.startedAt), dayNum)
-            : nowPT2;
+          const duePT  = !isNaN(dayNum) ? computeStepWhenPT(new Date(prog.startedAt), dayNum) : nowPT2;
 
           const nowPTlocal = DateTime.now().setZone(PT_ZONE);
           if (nowPTlocal < duePT) {
             bump(skippedByReason, "notDue");
-            if (skippedSample.length < 10)
-              skippedSample.push({
-                leadId: String((lead as any)._id),
-                dripId: String(dripId),
-                reason: "notDue",
-                step: step.day || nextIndex,
-                duePT: duePT.toISO(),
-              });
+            if (skippedSample.length < 10) skippedSample.push({ leadId: String((lead as any)._id), dripId: String(dripId), reason: "notDue", step: step.day || nextIndex, duePT: duePT.toISO() });
             break;
           }
 
           const raw = String(step.text || "");
           const lower = raw.trim().toLowerCase();
           const optOutKeywords = ["stop", "unsubscribe", "end", "quit", "cancel"];
-          if (optOutKeywords.includes(lower)) {
-            bump(skippedByReason, "optoutKeywordStep");
-            nextIndex++;
-            continue;
-          }
+          if (optOutKeywords.includes(lower)) { bump(skippedByReason, "optoutKeywordStep"); nextIndex++; continue; }
 
           candidates++;
           bumpDrip(String(campaignId), "considered");
 
-          const rendered = renderTemplate(raw, {
-            contact: { first_name: firstName, last_name: lastName, full_name: fullName },
-            agent: agentCtx,
-          });
+          const rendered = renderTemplate(raw, { contact: { first_name: firstName, last_name: lastName, full_name: fullName }, agent: agentCtx });
           const finalBody = ensureOptOut(rendered);
 
-          if (dry) {
-            nextIndex++;
-            advancedAtLeastOne = true;
-            continue;
-          }
+          if (dry) { nextIndex++; advancedAtLeastOne = true; continue; }
 
           try {
             const stepKey = String(step?.day ?? nextIndex);
-            const ok = await acquireLock(
-              "drip",
-              `${String(user.email)}:${String((lead as any)._id)}:${String(campaignId)}:${stepKey}`,
-              600
-            );
+            const ok = await acquireLock("drip", `${String(user.email)}:${String((lead as any)._id)}:${String(campaignId)}:${stepKey}`, 600);
             if (!ok) break;
 
-            const result = await sendSms({
-              to,
-              body: finalBody,
-              userEmail: user.email,
-              leadId: String((lead as any)._id),
-            });
+            const result = await sendSms({ to, body: finalBody, userEmail: user.email, leadId: String((lead as any)._id) });
 
             if (result.sid) {
-              if (result.scheduledAt) {
-                scheduled++;
-                bumpDrip(String(campaignId), "scheduled");
-              } else {
-                accepted++;
-                bumpDrip(String(campaignId), "sentAccepted");
-              }
-            } else {
-              suppressed++;
-              bumpDrip(String(campaignId), "suppressed");
-            }
+              if (result.scheduledAt) { scheduled++; bumpDrip(String(campaignId), "scheduled"); }
+              else { accepted++; bumpDrip(String(campaignId), "sentAccepted"); }
+            } else { suppressed++; bumpDrip(String(campaignId), "suppressed"); }
 
             await Lead.updateOne(
               { _id: (lead as any)._id, "dripProgress.dripId": String(campaignId) },
@@ -522,11 +424,8 @@ export default async function handler(
     });
 
     const perCampaign: Record<string, DripCounters & { id: string }> = {};
-    console.log(
-      `🏁 run-drips done (enroll block) checked=${enrollChecked} ✅sent=${enrollSent} 🕘scheduled=${enrollScheduled} ⚠️suppressed=${enrollSuppressed} ❌failed=${enrollFailed} ✔️completed=${enrollCompleted}`
-    );
+    console.log(`🏁 run-drips done (enroll block) checked=${enrollChecked} ✅sent=${enrollSent} 🕘scheduled=${enrollScheduled} ⚠️suppressed=${enrollSuppressed} ❌failed=${enrollFailed} ✔️completed=${enrollCompleted}`);
 
-    // existing summary for legacy block will print later (unchanged)
   } catch (error) {
     console.error("❌ run-drips error:", error);
     return res.status(500).json({ message: "Server error" });
