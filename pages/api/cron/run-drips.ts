@@ -84,7 +84,6 @@ function sortDaySteps(drip: any): Array<{ text: string; day: string }> {
 
 /** Compute the scheduled DateTime in PT for a given step day number and a base (today). */
 function computeStepWhenPTFromBase(base: DateTime, targetDayNumber: number, prevDayNumber = 0): DateTime {
-  // Day numbers are 1-based; schedule delta from previous step's day number.
   const delta = Math.max(0, (isNaN(targetDayNumber) ? 1 : targetDayNumber) - (isNaN(prevDayNumber) ? 0 : prevDayNumber));
   return base
     .plus({ days: delta })
@@ -94,7 +93,7 @@ function computeStepWhenPTFromBase(base: DateTime, targetDayNumber: number, prev
 /** Compute the scheduled DateTime in PT for a given step day number and startedAt. */
 function computeStepWhenPT(startedAt: Date, dayNumber: number): DateTime {
   const startPT = DateTime.fromJSDate(startedAt, { zone: PT_ZONE }).startOf("day");
-  const offsetDays = Math.max(0, dayNumber - 1); // Day 1 => +0 days
+  const offsetDays = Math.max(0, dayNumber - 1);
   return startPT
     .plus({ days: offsetDays })
     .set({ hour: SEND_HOUR_PT, minute: 0, second: 0, millisecond: 0 });
@@ -175,12 +174,12 @@ export default async function handler(
       const [lead, user, campaign] = await Promise.all([
         Lead.findById(enr.leadId).select({ _id: 1, Phone: 1, "First Name": 1, "Last Name": 1, userEmail: 1 }).lean(),
         User.findOne({ email: enr.userEmail }).select({ _id: 1, email: 1, name: 1 }).lean(),
-        DripCampaign.findById(enr.campaignId).select({ _id: 1, name: 1, type: 1, isActive: 1, steps: 1 }).lean(),
+        DripCampaign.findById(enr.campaignId).select({ _id: 1, name: 1, type: 1, isActive: 1, steps: 1 }).lean() as any, // <-- cast
       ]);
 
       if (!lead) return;
       if (!user?._id) return;
-      if (!campaign || campaign.isActive !== true || campaign.type !== "sms") return;
+      if (!campaign || (campaign as any).isActive !== true || (campaign as any).type !== "sms") return; // <-- cast
 
       const to = normalizeToE164Maybe((lead as any).Phone);
       if (!to) return;
@@ -212,7 +211,7 @@ export default async function handler(
       if (!dry) {
         try {
           // lock: user + lead + campaign + stepIndex
-          const ok = await acquireLock("enroll", `${String(user.email)}:${String((lead as any)._id)}:${String(campaign._id)}:${String(idx)}`, 600);
+          const ok = await acquireLock("enroll", `${String(user.email)}:${String((lead as any)._id)}:${String((campaign as any)._id)}:${String(idx)}`, 600);
           if (!ok) return;
 
           const result = await sendSms({
@@ -265,7 +264,7 @@ export default async function handler(
     const leadQuery: any = {
       $and: [
         { unsubscribed: { $ne: true } },
-        { optOut: { $ne: true } }, // extra guard; sendSms will also suppress
+        { optOut: { $ne: true } },
         { assignedDrips: { $exists: true, $ne: [] } },
       ],
     };
@@ -323,7 +322,6 @@ export default async function handler(
         return;
       }
 
-      // Lookup agent/user for rendering context + A2P gating
       const user = await User.findOne({ email: (lead as any).userEmail })
         .select({ _id: 1, email: 1, name: 1 })
         .lean();
@@ -358,7 +356,6 @@ export default async function handler(
       }
 
       for (const dripId of assigned) {
-        // Resolve drip definition
         const dripDoc: any = await resolveDrip(dripId);
         if (!dripDoc) {
           bump(skippedByReason, "dripMissing");
@@ -371,12 +368,10 @@ export default async function handler(
           continue;
         }
 
-        // 🔑 Canonical campaign key used everywhere (progress, counters, locks)
         const campaignId = getCanonicalDripId(dripDoc, String(dripId));
 
         const steps = ((): Array<{ text: string; day?: string }> => {
           const arr = Array.isArray(dripDoc?.steps) ? dripDoc.steps : [];
-          // If steps have day labels, keep order by numeric day; otherwise, preserve original order
           if (arr.some((s: any) => s?.day)) {
             const numeric = arr
               .filter((s: any) => !isNaN(parseStepDayNumber(s?.day)))
@@ -391,8 +386,6 @@ export default async function handler(
           continue;
         }
 
-        // Find progress for this drip; if missing, initialize
-        // Prefer canonical (Mongo _id). For compatibility, also accept legacy slug.
         let prog =
           progressArr.find((p) => String(p.dripId) === String(campaignId)) ||
           progressArr.find((p) => String(p.dripId) === String(dripId));
@@ -400,7 +393,6 @@ export default async function handler(
         if (!prog || !prog.startedAt) {
           if (dry) {
             wouldInitProgress++;
-            // Simulate as if started now, so Day 1 is considered
             prog = {
               dripId: String(campaignId),
               startedAt: DateTime.now().setZone(PT_ZONE).toJSDate(),
@@ -418,7 +410,6 @@ export default async function handler(
               { $push: { dripProgress: init } },
             );
             initializedProgress++;
-            // Reflect locally so this run proceeds to send Day 1
             prog = init as any;
             progressArr.push(prog);
           }
@@ -434,7 +425,6 @@ export default async function handler(
 
         let advancedAtLeastOne = false;
 
-        // eslint-disable-next-line no-constant-condition
         while (true) {
           if (nextIndex >= steps.length) break;
 
@@ -442,10 +432,9 @@ export default async function handler(
           const dayNum = parseStepDayNumber(step.day);
           const duePT = !isNaN(dayNum)
             ? computeStepWhenPT(new Date(prog.startedAt), dayNum)
-            : nowPT2; // if unlabeled, treat as due now
+            : nowPT2;
 
           const nowPTlocal = DateTime.now().setZone(PT_ZONE);
-
           if (nowPTlocal < duePT) {
             bump(skippedByReason, "notDue");
             if (skippedSample.length < 10)
@@ -456,10 +445,9 @@ export default async function handler(
                 step: step.day || nextIndex,
                 duePT: duePT.toISO(),
               });
-            break; // future step; stop for this drip
+            break;
           }
 
-          // Safety: don't send raw opt-out keywords as a message
           const raw = String(step.text || "");
           const lower = raw.trim().toLowerCase();
           const optOutKeywords = ["stop", "unsubscribe", "end", "quit", "cancel"];
@@ -469,7 +457,6 @@ export default async function handler(
             continue;
           }
 
-          // Candidate is due
           candidates++;
           bumpDrip(String(campaignId), "considered");
 
@@ -480,24 +467,19 @@ export default async function handler(
           const finalBody = ensureOptOut(rendered);
 
           if (dry) {
-            // sample
             nextIndex++;
             advancedAtLeastOne = true;
             continue;
           }
 
           try {
-            // 🔒 Duplicate drip guard (10 min TTL) — use canonical campaignId
             const stepKey = String(step?.day ?? nextIndex);
             const ok = await acquireLock(
               "drip",
               `${String(user.email)}:${String((lead as any)._id)}:${String(campaignId)}:${stepKey}`,
               600
             );
-            if (!ok) {
-              // Do NOT advance progress here; the other runner will
-              break;
-            }
+            if (!ok) break;
 
             const result = await sendSms({
               to,
@@ -519,7 +501,6 @@ export default async function handler(
               bumpDrip(String(campaignId), "suppressed");
             }
 
-            // Advance progress index even if suppressed (so we don't loop forever)
             await Lead.updateOne(
               { _id: (lead as any)._id, "dripProgress.dripId": String(campaignId) },
               { $set: { "dripProgress.$.lastSentIndex": nextIndex } },
@@ -527,32 +508,25 @@ export default async function handler(
 
             nextIndex++;
             advancedAtLeastOne = true;
-          } catch (e: any) {
+          } catch {
             failed++;
             bumpDrip(String(campaignId), "failed");
-            // On failure, do not advance further steps for this drip on this run
             break;
           }
         }
 
         if (!advancedAtLeastOne && nextIndex < steps.length) {
-          // Nothing sent and we broke due to 'notDue'
+          // not due yet
         }
       }
     });
 
-    // Summarize per-campaign (now keyed by canonical campaignId)
     const perCampaign: Record<string, DripCounters & { id: string }> = {};
-    // (existing summary logs continue below)
-
     console.log(
       `🏁 run-drips done (enroll block) checked=${enrollChecked} ✅sent=${enrollSent} 🕘scheduled=${enrollScheduled} ⚠️suppressed=${enrollSuppressed} ❌failed=${enrollFailed} ✔️completed=${enrollCompleted}`
     );
 
-    // ---------- existing summary for legacy block will print later ----------
-
-    // ... (rest of your existing code below is unchanged)
-    // (the remainder of the file you pasted continues here unchanged)
+    // existing summary for legacy block will print later (unchanged)
   } catch (error) {
     console.error("❌ run-drips error:", error);
     return res.status(500).json({ message: "Server error" });
