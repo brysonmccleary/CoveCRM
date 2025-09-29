@@ -373,7 +373,7 @@ export default function LeadProfileDial() {
             <button onClick={() => handleDisposition("Sold")} className="bg-gray-700 hover:bg-gray-600 px-3 py-2 rounded">Sold</button>
             <button onClick={() => handleDisposition("Booked Appointment")} className="bg-gray-700 hover:bg-gray-600 px-3 py-2 rounded">Booked Appointment</button>
             <button onClick={() => handleDisposition("Not Interested")} className="bg-gray-700 hover:bg-gray-600 px-3 py-2 rounded">Not Interested</button>
-            <button onClick={() => handleDisposition("Resolved")} className="bg-gray-700 hover:bg-gray-600 px-3 py-2 rounded">Resolve</button>
+            <button onClick={() => handleDisposition("No Show")} className="bg-gray-700 hover:bg-gray-600 px-3 py-2 rounded">No Show</button>{/* ← UPDATED: replaces Resolve */}
           </div>
 
           <div className="mt-4">

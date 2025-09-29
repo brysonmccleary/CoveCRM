@@ -18,7 +18,7 @@ const ALLOW_STATUS_SET = new Set([
   "not interested",
   "booked appointment",
   "resolved",
-  "no show", // ← allow status to become "No Show" when user picks it
+  "no show", // ← NEW
 ]);
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -32,8 +32,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const rawName = String(newFolderName || "").trim();
   if (!leadId || !rawName) return res.status(400).json({ message: "Missing required fields." });
 
-  // Canonicalize disposition → pretty target name
-  const canonical = folderNameForDisposition(rawName); // includes "No Show"
+  // Canonicalize disposition → pretty target name (includes No Show)
+  const canonical = folderNameForDisposition(rawName); // "Sold" | "Not Interested" | "Booked Appointment" | "No Show" | "Resolved" | null
   const desiredFolderName = canonical ?? rawName;
   const desiredLower = desiredFolderName.toLowerCase();
 
@@ -66,29 +66,32 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       let target: { _id: mongoose.Types.ObjectId; name: string } | null = null;
 
       if (isSystemFolderName(desiredFolderName)) {
-        // 🔒 Deterministic pick: check current user's system folders; if missing, CREATE it.
-        const SYSTEM_NAMES = ["Sold", "Not Interested", "Booked Appointment", "No Show"]; // ← include No Show
-        const systemRows = await Folder.find({
-          userEmail,
-          name: { $in: SYSTEM_NAMES },
-        })
+        // 🔒 deterministically resolve system folder, creating if missing (covers first-time use)
+        const SYSTEM_NAMES = ["Sold", "Not Interested", "Booked Appointment", "No Show"];
+        const systemRows = await Folder.find({ userEmail, name: { $in: SYSTEM_NAMES } })
           .select({ _id: 1, name: 1 })
           .session(mongoSession)
           .lean<{ _id: mongoose.Types.ObjectId; name: string }[]>();
 
-        const exact = systemRows.find((r) => String(r.name).toLowerCase() === desiredLower);
+        let exact = systemRows.find((r) => String(r.name).toLowerCase() === desiredLower);
+
         if (!exact) {
-          // Auto-create the missing system folder for this user (idempotent)
-          const created = await Folder.findOneAndUpdate(
+          const upserted = await Folder.findOneAndUpdate(
             { userEmail, name: desiredFolderName },
-            { $setOnInsert: { userEmail, name: desiredFolderName } },
+            { $setOnInsert: { userEmail, name: desiredFolderName, assignedDrips: [] as string[] } },
             { new: true, upsert: true, session: mongoSession }
           ).select({ _id: 1, name: 1 });
-          if (!created) throw new Error(`Failed to create system folder "${desiredFolderName}".`);
-          target = { _id: created._id as any, name: created.name as any };
-        } else {
-          target = exact;
+
+          if (!upserted) {
+            throw Object.assign(
+              new Error(`System folder "${desiredFolderName}" not found for user.`),
+              { status: 400 }
+            );
+          }
+          exact = { _id: upserted._id as any, name: upserted.name as any };
         }
+
+        target = exact;
       } else {
         // Non-system: exact (case-insensitive) resolve or create
         const nameRegex = new RegExp(`^${escapeRegex(desiredFolderName)}$`, "i");
@@ -125,7 +128,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         updatedAt: new Date(),
       };
       if (ALLOW_STATUS_SET.has(desiredLower)) {
-        // pretty-case status for system ones
         setFields.status = desiredFolderName;
       }
 

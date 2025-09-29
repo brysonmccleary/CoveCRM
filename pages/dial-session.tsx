@@ -37,6 +37,7 @@ export default function DialSession() {
 
   // Queue & selection
   const [leadQueue, setLeadQueue] = useState<Lead[]>([]);
+  the
   const [currentLeadIndex, setCurrentLeadIndex] = useState(0);
   const lead = useMemo(() => leadQueue[currentLeadIndex] ?? null, [leadQueue, currentLeadIndex]);
 
@@ -588,7 +589,6 @@ export default function DialSession() {
         try { const j = await r.json(); if (j?.message) msg = j.message; } catch {}
         throw new Error(msg);
       }
-      // Pin new note to top of the visible history immediately
       setHistory((prev) => [{ kind: "text", text: `📝 Note • ${new Date().toLocaleString()} — ${notes.trim()}` }, ...prev]);
       setNotes("");
       toast.success("✅ Note saved!");
@@ -598,30 +598,11 @@ export default function DialSession() {
     }
   };
 
-  // Wire up the canonical disposition move for No Show; others remain unchanged
   const persistDisposition = async (leadId: string, label: string) => {
-    // Special case: "No Show" should move to the system folder via disposition-lead
-    if (label === "No Show") {
-      try {
-        const r = await fetch("/api/disposition-lead", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ leadId, newFolderName: "No Show" }),
-        });
-        if (!r.ok) {
-          let msg = "Failed to move to No Show";
-          try { const j = await r.json(); if (j?.message) msg = j.message; } catch {}
-          throw new Error(msg);
-        }
-      } catch (e) {
-        throw e;
-      }
-    }
-
-    // Best-effort: keep your historical writes the same as before
-    const candidates: Array<{ url: string; body: any; required?: boolean }> = [
-      { url: "/api/leads/set-disposition", body: { leadId, disposition: label } },
-      { url: "/api/leads/update", body: { leadId, update: { disposition: label } } },
+    const candidates: Array<{ url: string; body: any }> = [
+      { url: "/api/disposition-lead", body: { leadId, newFolderName: label } }, // ← canonical
+      { url: "/api/leads/set-disposition", body: { leadId, disposition: label } }, // legacy fallback
+      { url: "/api/leads/update", body: { leadId, update: { disposition: label } } }, // legacy fallback
     ];
     for (const c of candidates) {
       try {
@@ -639,9 +620,9 @@ export default function DialSession() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           leadId,
-          type: "disposition",
-          message: label,
-          meta: { disposition: label, ts: Date.now() },
+          type: "status",
+          to: label,
+          date: new Date().toISOString(),
         }),
       });
     } catch {}
@@ -690,7 +671,6 @@ export default function DialSession() {
     if (leadQueue.length <= 1) return showSessionSummary();
     const nextIndex = currentLeadIndex + 1;
     if (nextIndex >= leadQueue.length) return showSessionSummary();
-    // persist the just-finished index to server
     serverPersist(currentLeadIndex);
     setCurrentLeadIndex(nextIndex);
     setReadyToCall(true);
@@ -707,7 +687,6 @@ export default function DialSession() {
   };
 
   const handleHangUp = () => {
-    // Agent hangup should also show Disconnected immediately.
     markDisconnected("agent-hangup");
   };
 
@@ -720,7 +699,6 @@ export default function DialSession() {
       leaveIfJoined("pause");
       setStatus("Paused");
     } else {
-      // Ensure unlock so ringback starts instantly on resume
       ensureUnlocked();
       setReadyToCall(true);
       setStatus("Ready");
@@ -744,11 +722,9 @@ export default function DialSession() {
     setIsPaused(false);
     setStatus("Session ended");
 
-    // clear saved LOCAL progress if provided
     if (typeof progressKey === "string") {
       try { localStorage.removeItem(progressKey); } catch {}
     }
-    // persist final index to server so Resume starts after it
     serverPersist(currentLeadIndex);
 
     showSessionSummary();
@@ -828,7 +804,6 @@ export default function DialSession() {
               }
             }
 
-            // Completed/canceled => show Disconnected immediately.
             if (s === "completed" || s === "canceled") {
               await markDisconnected(`socket-${s}`);
             }
@@ -838,6 +813,7 @@ export default function DialSession() {
     })();
 
     return () => {
+      mounted = false;
       try { socketRef.current?.off?.("call:status"); socketRef.current?.disconnect?.(); } catch {}
       stopRingback();
       killAllTimers();
@@ -943,8 +919,7 @@ export default function DialSession() {
               <button onClick={() => handleDisposition("No Answer")} className="bg-gray-600 hover:bg-gray-700 px-3 py-2 rounded">No Answer</button>
               <button onClick={() => handleDisposition("Booked Appointment")} className="bg-gray-600 hover:bg-gray-700 px-3 py-2 rounded">Booked Appointment</button>
               <button onClick={() => handleDisposition("Not Interested")} className="bg-gray-600 hover:bg-gray-700 px-3 py-2 rounded">Not Interested</button>
-              {/* NEW: No Show button → moves to the "No Show" system folder */}
-              <button onClick={() => handleDisposition("No Show")} className="bg-gray-600 hover:bg-gray-700 px-3 py-2 rounded">No Show</button>
+              <button onClick={() => handleDisposition("No Show")} className="bg-gray-600 hover:bg-gray-700 px-3 py-2 rounded">No Show</button> {/* ← NEW */}
             </div>
 
             <div className="flex gap-2 mt-2">
