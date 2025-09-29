@@ -1,4 +1,3 @@
-// pages/leads/folder/[id].tsx
 import { useRouter } from "next/router";
 import { useEffect, useRef, useState } from "react";
 
@@ -18,6 +17,7 @@ export default function FolderPage() {
   const [leads, setLeads] = useState<Lead[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [actionBusyId, setActionBusyId] = useState<string | null>(null); // ← NEW (UI-only)
   const socketRef = useRef<any>(null);
   const currentFolderIdRef = useRef<string | null>(null);
 
@@ -45,6 +45,37 @@ export default function FolderPage() {
       setError(e?.message || "Failed to load leads");
     } finally {
       setLoading(false);
+    }
+  }
+
+  // Minimal disposition helper: move a lead to "No Show"
+  async function moveToNoShow(leadId: string) {
+    if (!leadId) return;
+    setActionBusyId(leadId);
+    try {
+      const r = await fetch("/api/disposition-lead", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ leadId, newFolderName: "No Show" }),
+      });
+      if (!r.ok) {
+        let msg = "Failed to disposition lead";
+        try {
+          const j = await r.json();
+          if (j?.message) msg = j.message;
+        } catch {}
+        throw new Error(msg);
+      }
+      // Refetch current folder to reflect changes immediately
+      const fid = currentFolderIdRef.current;
+      if (fid) await fetchFolder(fid);
+      // Optional tiny UX feedback:
+      try { console.log("Moved to No Show:", leadId); } catch {}
+    } catch (e: any) {
+      console.error(e);
+      alert(e?.message || "Failed to move to No Show");
+    } finally {
+      setActionBusyId(null);
     }
   }
 
@@ -91,7 +122,6 @@ export default function FolderPage() {
     })();
 
     return () => {
-      unmounted = true;
       try {
         socketRef.current?.off?.("lead:updated");
         socketRef.current?.disconnect?.();
@@ -131,11 +161,30 @@ export default function FolderPage() {
         <ul className="space-y-2">
           {leads.map((lead) => (
             <li key={lead._id} className="p-3 border border-gray-600 rounded hover:bg-gray-700">
-              <div className="font-medium">{lead.name || "(no name)"}</div>
-              <div className="text-sm text-gray-300">
-                {lead.phone || ""} {lead.email ? `• ${lead.email}` : ""}
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="font-medium">{lead.name || "(no name)"}</div>
+                  <div className="text-sm text-gray-300">
+                    {lead.phone || ""} {lead.email ? `• ${lead.email}` : ""}
+                  </div>
+                  {lead.status && <div className="text-xs opacity-70">Status: {lead.status}</div>}
+                </div>
+                <div className="flex items-center gap-2">
+                  {/* NEW: No Show disposition button */}
+                  <button
+                    onClick={() => moveToNoShow(lead._id)}
+                    disabled={actionBusyId === lead._id}
+                    className={`px-3 py-1 rounded ${
+                      actionBusyId === lead._id
+                        ? "bg-gray-600 cursor-not-allowed"
+                        : "bg-gray-700 hover:bg-gray-600"
+                    }`}
+                    title="Move this lead to the No Show folder"
+                  >
+                    {actionBusyId === lead._id ? "Working…" : "No Show"}
+                  </button>
+                </div>
               </div>
-              {lead.status && <div className="text-xs opacity-70">Status: {lead.status}</div>}
             </li>
           ))}
         </ul>

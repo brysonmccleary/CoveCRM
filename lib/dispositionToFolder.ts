@@ -1,6 +1,5 @@
-// lib/dispositionToFolder.ts
 // Deterministic mapping from a disposition/status label to the canonical system folder name.
-// Returns "Sold" | "Not Interested" | "Booked Appointment" for the known system dispositions,
+// Returns "Sold" | "Not Interested" | "Booked Appointment" | "No Show" for known system dispositions,
 // returns "Resolved" for that label (not a system folder), otherwise null.
 //
 // NOTE: Only use this for disposition→folder name decisions. Do not use this in the import path.
@@ -11,6 +10,19 @@ export function folderNameForDisposition(status: string): string | null {
   if (s === "sold") return "Sold";
   if (s === "not interested" || s === "notinterested") return "Not Interested";
   if (s === "booked appointment" || s === "booked") return "Booked Appointment";
+
+  // No Show aliases
+  if (
+    s === "no show" ||
+    s === "no-show" ||
+    s === "noshow" ||
+    s === "missed appointment" ||
+    s === "missed appt" ||
+    s === "missed"
+  ) {
+    return "No Show";
+  }
+
   if (s === "resolved") return "Resolved"; // not a system folder, but we keep pretty case for status/history
 
   return null; // unknown → no forced folder move

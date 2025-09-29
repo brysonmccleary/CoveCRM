@@ -1,4 +1,3 @@
-// pages/dial-session.tsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/router";
 import Sidebar from "@/components/Sidebar";
@@ -599,7 +598,27 @@ export default function DialSession() {
     }
   };
 
+  // Wire up the canonical disposition move for No Show; others remain unchanged
   const persistDisposition = async (leadId: string, label: string) => {
+    // Special case: "No Show" should move to the system folder via disposition-lead
+    if (label === "No Show") {
+      try {
+        const r = await fetch("/api/disposition-lead", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ leadId, newFolderName: "No Show" }),
+        });
+        if (!r.ok) {
+          let msg = "Failed to move to No Show";
+          try { const j = await r.json(); if (j?.message) msg = j.message; } catch {}
+          throw new Error(msg);
+        }
+      } catch (e) {
+        throw e;
+      }
+    }
+
+    // Best-effort: keep your historical writes the same as before
     const candidates: Array<{ url: string; body: any; required?: boolean }> = [
       { url: "/api/leads/set-disposition", body: { leadId, disposition: label } },
       { url: "/api/leads/update", body: { leadId, update: { disposition: label } } },
@@ -628,7 +647,9 @@ export default function DialSession() {
     } catch {}
   };
 
-  const handleDisposition = async (label: "Sold" | "No Answer" | "Booked Appointment" | "Not Interested") => {
+  const handleDisposition = async (
+    label: "Sold" | "No Answer" | "Booked Appointment" | "Not Interested" | "No Show" // ← added "No Show"
+  ) => {
     if (!lead?.id) {
       toast.error("No active lead to disposition");
       return;
@@ -817,7 +838,6 @@ export default function DialSession() {
     })();
 
     return () => {
-      mounted = false;
       try { socketRef.current?.off?.("call:status"); socketRef.current?.disconnect?.(); } catch {}
       stopRingback();
       killAllTimers();
@@ -923,6 +943,8 @@ export default function DialSession() {
               <button onClick={() => handleDisposition("No Answer")} className="bg-gray-600 hover:bg-gray-700 px-3 py-2 rounded">No Answer</button>
               <button onClick={() => handleDisposition("Booked Appointment")} className="bg-gray-600 hover:bg-gray-700 px-3 py-2 rounded">Booked Appointment</button>
               <button onClick={() => handleDisposition("Not Interested")} className="bg-gray-600 hover:bg-gray-700 px-3 py-2 rounded">Not Interested</button>
+              {/* NEW: No Show button → moves to the "No Show" system folder */}
+              <button onClick={() => handleDisposition("No Show")} className="bg-gray-600 hover:bg-gray-700 px-3 py-2 rounded">No Show</button>
             </div>
 
             <div className="flex gap-2 mt-2">

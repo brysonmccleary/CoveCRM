@@ -1,4 +1,3 @@
-// /pages/api/disposition-lead.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth";
 import { authOptions } from "./auth/[...nextauth]";
@@ -19,6 +18,7 @@ const ALLOW_STATUS_SET = new Set([
   "not interested",
   "booked appointment",
   "resolved",
+  "no show", // ← allow status to become "No Show" when user picks it
 ]);
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -33,7 +33,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!leadId || !rawName) return res.status(400).json({ message: "Missing required fields." });
 
   // Canonicalize disposition → pretty target name
-  const canonical = folderNameForDisposition(rawName); // "Sold" | "Not Interested" | "Booked Appointment" | "Resolved" | null
+  const canonical = folderNameForDisposition(rawName); // includes "No Show"
   const desiredFolderName = canonical ?? rawName;
   const desiredLower = desiredFolderName.toLowerCase();
 
@@ -66,8 +66,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       let target: { _id: mongoose.Types.ObjectId; name: string } | null = null;
 
       if (isSystemFolderName(desiredFolderName)) {
-        // 🔒 Deterministic pick: fetch all system folders for the user, then match in code.
-        const SYSTEM_NAMES = ["Sold", "Not Interested", "Booked Appointment"];
+        // 🔒 Deterministic pick: check current user's system folders; if missing, CREATE it.
+        const SYSTEM_NAMES = ["Sold", "Not Interested", "Booked Appointment", "No Show"]; // ← include No Show
         const systemRows = await Folder.find({
           userEmail,
           name: { $in: SYSTEM_NAMES },
@@ -78,12 +78,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         const exact = systemRows.find((r) => String(r.name).toLowerCase() === desiredLower);
         if (!exact) {
-          throw Object.assign(
-            new Error(`System folder "${desiredFolderName}" not found for user.`),
-            { status: 400 }
-          );
+          // Auto-create the missing system folder for this user (idempotent)
+          const created = await Folder.findOneAndUpdate(
+            { userEmail, name: desiredFolderName },
+            { $setOnInsert: { userEmail, name: desiredFolderName } },
+            { new: true, upsert: true, session: mongoSession }
+          ).select({ _id: 1, name: 1 });
+          if (!created) throw new Error(`Failed to create system folder "${desiredFolderName}".`);
+          target = { _id: created._id as any, name: created.name as any };
+        } else {
+          target = exact;
         }
-        target = exact;
       } else {
         // Non-system: exact (case-insensitive) resolve or create
         const nameRegex = new RegExp(`^${escapeRegex(desiredFolderName)}$`, "i");
@@ -120,6 +125,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         updatedAt: new Date(),
       };
       if (ALLOW_STATUS_SET.has(desiredLower)) {
+        // pretty-case status for system ones
         setFields.status = desiredFolderName;
       }
 
