@@ -6,7 +6,7 @@ import dbConnect from "@/lib/mongooseConnect";
 import Folder from "@/models/Folder";
 import Lead from "@/models/Lead";
 
-const SYSTEM_FOLDERS = ["Sold", "Not Interested", "Booked Appointment"] as const;
+const SYSTEM_FOLDERS = ["Sold", "Not Interested", "Booked Appointment", "No Show"] as const;
 
 type LeanFolder = {
   _id: string;
@@ -58,7 +58,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     await dbConnect();
 
-    // 1) Idempotently ensure the 3 system folders exist (match ignoring outer whitespace & case)
+    // 1) Idempotently ensure the 4 system folders exist (match ignoring outer whitespace & case)
     for (const name of SYSTEM_FOLDERS) {
       await Folder.findOneAndUpdate(
         { userEmail: email, name: { $regex: `^\\s*${escapeRegex(name)}\\s*$`, $options: "i" } },

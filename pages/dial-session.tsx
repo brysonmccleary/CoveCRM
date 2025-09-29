@@ -214,7 +214,6 @@ export default function DialSession() {
   /** bootstrap **/
   useEffect(() => {
     try {
-      // Prime AudioContext and arm one-time unlock listeners immediately.
       primeAudioContext();
       ensureUnlocked();
     } catch {}
@@ -308,11 +307,9 @@ export default function DialSession() {
         if (valid.length) { setSessionStarted(true); setReadyToCall(true); setStatus("Ready"); }
         else { setStatus("Idle"); toast("No valid leads to dial"); }
 
-        // write initial LOCAL progress if key passed
         if (typeof progressKey === "string" && valid.length) {
           localStorage.setItem(progressKey, JSON.stringify({ index: start }));
         }
-        // prime SERVER pointer so "last finished" is start-1 before first attempt
         await serverPersist(Math.max(start - 1, -1));
       } catch { setStatus("Idle"); toast.error("Failed to load leads"); }
     };
@@ -446,7 +443,6 @@ export default function DialSession() {
           }
         }
 
-        // Treat canceled/completed as a definitive disconnect
         if (s === "canceled" || s === "completed") {
           clearStatusPoll();
           await markDisconnected(`status-${s}`);
@@ -475,14 +471,12 @@ export default function DialSession() {
     if (sessionEndedRef.current) return;
     if (!leadToCall?.id) { setStatus("Missing lead id"); return; }
 
-    // Global soft gate (optional—kept from your earlier logic)
     if (typeof isCallAllowed === "function" && !isCallAllowed()) {
       toast.error("Calls are restricted at this time.");
       setStatus("Blocked by schedule");
       return;
     }
 
-    // Strong per-lead quiet-hours gate (already checked in driver; keep here defensively)
     const { allowed, zone } = isCallAllowedForLead(leadToCall);
     if (!allowed) {
       setStatus(`Quiet hours (${localTimeString(zone)})`);
@@ -497,7 +491,6 @@ export default function DialSession() {
       setStatus("Dialing…");
       setCallActive(true);
 
-      // Ensure audio is gesture-unlocked; then start ringback.
       ensureUnlocked();
       playRingback();
 
@@ -521,7 +514,6 @@ export default function DialSession() {
         try {
           joinedRef.current = true;
 
-          // Capture the returned call object and cut ringback on instant connect
           const callObj = await joinConference(activeConferenceRef.current);
 
           const safeOn = (ev: string, fn: (...args: any[]) => void) => {
@@ -538,17 +530,14 @@ export default function DialSession() {
             setStatus("Connected");
           };
 
-          // Twilio SDK variants
           safeOn("accept", connectedNow);
           safeOn("connect", connectedNow);
           safeOn("connected", connectedNow);
 
-          // Disconnected events
           safeOn("disconnect", () => { markDisconnected("twilio-disconnect"); });
           safeOn("disconnected", () => { markDisconnected("twilio-disconnected"); });
           safeOn("hangup", () => { markDisconnected("twilio-hangup"); });
 
-          // Defensive cuts for non-success paths
           safeOn("cancel", () => stopRingback());
           safeOn("reject", () => stopRingback());
           safeOn("error", () => stopRingback());
@@ -561,8 +550,6 @@ export default function DialSession() {
       beginStatusPolling(callSid);
 
       setSessionStartedCount((n) => n + 1);
-
-      // UI-only history line
       setHistory((prev) => [{ kind: "text", text: `📞 Call started (${new Date().toLocaleTimeString()})` }, ...prev]);
     } catch (err: any) {
       console.error(err);
@@ -579,17 +566,16 @@ export default function DialSession() {
   const handleSaveNote = async () => {
     if (!notes.trim() || !lead?.id) return toast.error("Cannot save an empty note");
     try {
-      const r = await fetch("/api/leads/add-note", {
+      const r = await fetch("/api/leads/add-history", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ leadId: lead.id, text: notes.trim() }),
+        body: JSON.stringify({ leadId: lead.id, type: "note", message: notes.trim() }),
       });
       if (!r.ok) {
         let msg = "Failed to save note";
         try { const j = await r.json(); if (j?.message) msg = j.message; } catch {}
         throw new Error(msg);
       }
-      // Pin new note to top of the visible history immediately
       setHistory((prev) => [{ kind: "text", text: `📝 Note • ${new Date().toLocaleString()} — ${notes.trim()}` }, ...prev]);
       setNotes("");
       toast.success("✅ Note saved!");
@@ -597,35 +583,6 @@ export default function DialSession() {
       console.error(e);
       toast.error(e?.message || "Failed to save note");
     }
-  };
-
-  const persistDisposition = async (leadId: string, label: string) => {
-    const candidates: Array<{ url: string; body: any; required?: boolean }> = [
-      { url: "/api/leads/set-disposition", body: { leadId, disposition: label } },
-      { url: "/api/leads/update", body: { leadId, update: { disposition: label } } },
-    ];
-    for (const c of candidates) {
-      try {
-        const r = await fetch(c.url, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(c.body),
-        });
-        if (r.ok) break;
-      } catch {}
-    }
-    try {
-      await fetch("/api/leads/add-history", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          leadId,
-          type: "disposition",
-          message: label,
-          meta: { disposition: label, ts: Date.now() },
-        }),
-      });
-    } catch {}
   };
 
   const handleDisposition = async (label: "Sold" | "No Answer" | "Booked Appointment" | "Not Interested" | "No Show") => {
@@ -645,7 +602,7 @@ export default function DialSession() {
       await leaveIfJoined(`disposition-${label.replace(/\s+/g, "-").toLowerCase()}`);
       setCallActive(false);
 
-      // Move to folder via server API (also updates status for known labels)
+      // Primary: move to folder & (for known labels) set status
       const res = await fetch("/api/disposition-lead", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -653,24 +610,28 @@ export default function DialSession() {
       });
 
       if (!res.ok) {
-        // fall back to lightweight history write so user still sees action
-        await persistDisposition(lead.id, label);
         const msg = (await res.json().catch(() => ({} as any)))?.message || "Server refused disposition";
-        console.warn("disposition-lead failed; wrote local history only:", msg);
-        setHistory((prev) => [{ kind: "text", text: `🏷️ Disposition (local): ${label}` }, ...prev]);
+        console.warn("disposition-lead failed:", msg);
         toast.error(msg);
+        // Minimal history breadcrumb even if move failed
+        try {
+          await fetch("/api/leads/add-history", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ leadId: lead.id, type: "status", message: label }),
+          });
+        } catch {}
       } else {
         setHistory((prev) => [{ kind: "text", text: `🏷️ Disposition: ${label}` }, ...prev]);
         toast.success(`Saved: ${label}`);
       }
 
       if (label === "Booked Appointment") setShowBookModal(true);
-
-      if (!sessionEndedRef.current) scheduleNextLead(); // advance to next lead
+      if (!sessionEndedRef.current) scheduleNextLead();
     } catch (e: any) {
       console.error(e);
       toast.error(e?.message || "Failed to save disposition");
-      if (!sessionEndedRef.current) scheduleNextLead(); // still advance on error
+      if (!sessionEndedRef.current) scheduleNextLead();
     } finally {
       dispositionBusyRef.current = false;
     }
@@ -682,7 +643,6 @@ export default function DialSession() {
     if (leadQueue.length <= 1) return showSessionSummary();
     const nextIndex = currentLeadIndex + 1;
     if (nextIndex >= leadQueue.length) return showSessionSummary();
-    // persist the just-finished index to server
     serverPersist(currentLeadIndex);
     setCurrentLeadIndex(nextIndex);
     setReadyToCall(true);
@@ -699,7 +659,6 @@ export default function DialSession() {
   };
 
   const handleHangUp = () => {
-    // Agent hangup should also show Disconnected immediately.
     markDisconnected("agent-hangup");
   };
 
@@ -712,7 +671,6 @@ export default function DialSession() {
       leaveIfJoined("pause");
       setStatus("Paused");
     } else {
-      // Ensure unlock so ringback starts instantly on resume
       ensureUnlocked();
       setReadyToCall(true);
       setStatus("Ready");
@@ -736,11 +694,9 @@ export default function DialSession() {
     setIsPaused(false);
     setStatus("Session ended");
 
-    // clear saved LOCAL progress if provided
     if (typeof progressKey === "string") {
       try { localStorage.removeItem(progressKey); } catch {}
     }
-    // persist final index to server so Resume starts after it
     serverPersist(currentLeadIndex);
 
     showSessionSummary();
@@ -820,7 +776,6 @@ export default function DialSession() {
               }
             }
 
-            // Completed/canceled => show Disconnected immediately.
             if (s === "completed" || s === "canceled") {
               await markDisconnected(`socket-${s}`);
             }
@@ -936,7 +891,6 @@ export default function DialSession() {
               <button onClick={() => handleDisposition("No Answer")} className="bg-gray-600 hover:bg-gray-700 px-3 py-2 rounded">No Answer</button>
               <button onClick={() => handleDisposition("Booked Appointment")} className="bg-gray-600 hover:bg-gray-700 px-3 py-2 rounded">Booked Appointment</button>
               <button onClick={() => handleDisposition("Not Interested")} className="bg-gray-600 hover:bg-gray-700 px-3 py-2 rounded">Not Interested</button>
-              {/* NEW */}
               <button onClick={() => handleDisposition("No Show")} className="bg-gray-600 hover:bg-gray-700 px-3 py-2 rounded">No Show</button>
             </div>
 
