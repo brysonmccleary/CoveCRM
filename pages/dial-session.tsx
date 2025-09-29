@@ -1,3 +1,4 @@
+// pages/dial-session.tsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/router";
 import Sidebar from "@/components/Sidebar";
@@ -37,7 +38,6 @@ export default function DialSession() {
 
   // Queue & selection
   const [leadQueue, setLeadQueue] = useState<Lead[]>([]);
-  the
   const [currentLeadIndex, setCurrentLeadIndex] = useState(0);
   const lead = useMemo(() => leadQueue[currentLeadIndex] ?? null, [leadQueue, currentLeadIndex]);
 
@@ -589,6 +589,7 @@ export default function DialSession() {
         try { const j = await r.json(); if (j?.message) msg = j.message; } catch {}
         throw new Error(msg);
       }
+      // Pin new note to top of the visible history immediately
       setHistory((prev) => [{ kind: "text", text: `📝 Note • ${new Date().toLocaleString()} — ${notes.trim()}` }, ...prev]);
       setNotes("");
       toast.success("✅ Note saved!");
@@ -599,10 +600,9 @@ export default function DialSession() {
   };
 
   const persistDisposition = async (leadId: string, label: string) => {
-    const candidates: Array<{ url: string; body: any }> = [
-      { url: "/api/disposition-lead", body: { leadId, newFolderName: label } }, // ← canonical
-      { url: "/api/leads/set-disposition", body: { leadId, disposition: label } }, // legacy fallback
-      { url: "/api/leads/update", body: { leadId, update: { disposition: label } } }, // legacy fallback
+    const candidates: Array<{ url: string; body: any; required?: boolean }> = [
+      { url: "/api/leads/set-disposition", body: { leadId, disposition: label } },
+      { url: "/api/leads/update", body: { leadId, update: { disposition: label } } },
     ];
     for (const c of candidates) {
       try {
@@ -620,17 +620,15 @@ export default function DialSession() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           leadId,
-          type: "status",
-          to: label,
-          date: new Date().toISOString(),
+          type: "disposition",
+          message: label,
+          meta: { disposition: label, ts: Date.now() },
         }),
       });
     } catch {}
   };
 
-  const handleDisposition = async (
-    label: "Sold" | "No Answer" | "Booked Appointment" | "Not Interested" | "No Show" // ← added "No Show"
-  ) => {
+  const handleDisposition = async (label: "Sold" | "No Answer" | "Booked Appointment" | "Not Interested" | "No Show") => {
     if (!lead?.id) {
       toast.error("No active lead to disposition");
       return;
@@ -647,11 +645,24 @@ export default function DialSession() {
       await leaveIfJoined(`disposition-${label.replace(/\s+/g, "-").toLowerCase()}`);
       setCallActive(false);
 
-      await persistDisposition(lead.id, label);
+      // Move to folder via server API (also updates status for known labels)
+      const res = await fetch("/api/disposition-lead", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ leadId: lead.id, newFolderName: label }),
+      });
 
-      setHistory((prev) => [{ kind: "text", text: `🏷️ Disposition: ${label}` }, ...prev]);
-      setStatus(`Disposition saved: ${label}`);
-      toast.success(`Saved: ${label}`);
+      if (!res.ok) {
+        // fall back to lightweight history write so user still sees action
+        await persistDisposition(lead.id, label);
+        const msg = (await res.json().catch(() => ({} as any)))?.message || "Server refused disposition";
+        console.warn("disposition-lead failed; wrote local history only:", msg);
+        setHistory((prev) => [{ kind: "text", text: `🏷️ Disposition (local): ${label}` }, ...prev]);
+        toast.error(msg);
+      } else {
+        setHistory((prev) => [{ kind: "text", text: `🏷️ Disposition: ${label}` }, ...prev]);
+        toast.success(`Saved: ${label}`);
+      }
 
       if (label === "Booked Appointment") setShowBookModal(true);
 
@@ -671,6 +682,7 @@ export default function DialSession() {
     if (leadQueue.length <= 1) return showSessionSummary();
     const nextIndex = currentLeadIndex + 1;
     if (nextIndex >= leadQueue.length) return showSessionSummary();
+    // persist the just-finished index to server
     serverPersist(currentLeadIndex);
     setCurrentLeadIndex(nextIndex);
     setReadyToCall(true);
@@ -687,6 +699,7 @@ export default function DialSession() {
   };
 
   const handleHangUp = () => {
+    // Agent hangup should also show Disconnected immediately.
     markDisconnected("agent-hangup");
   };
 
@@ -699,6 +712,7 @@ export default function DialSession() {
       leaveIfJoined("pause");
       setStatus("Paused");
     } else {
+      // Ensure unlock so ringback starts instantly on resume
       ensureUnlocked();
       setReadyToCall(true);
       setStatus("Ready");
@@ -722,9 +736,11 @@ export default function DialSession() {
     setIsPaused(false);
     setStatus("Session ended");
 
+    // clear saved LOCAL progress if provided
     if (typeof progressKey === "string") {
       try { localStorage.removeItem(progressKey); } catch {}
     }
+    // persist final index to server so Resume starts after it
     serverPersist(currentLeadIndex);
 
     showSessionSummary();
@@ -804,6 +820,7 @@ export default function DialSession() {
               }
             }
 
+            // Completed/canceled => show Disconnected immediately.
             if (s === "completed" || s === "canceled") {
               await markDisconnected(`socket-${s}`);
             }
@@ -919,7 +936,8 @@ export default function DialSession() {
               <button onClick={() => handleDisposition("No Answer")} className="bg-gray-600 hover:bg-gray-700 px-3 py-2 rounded">No Answer</button>
               <button onClick={() => handleDisposition("Booked Appointment")} className="bg-gray-600 hover:bg-gray-700 px-3 py-2 rounded">Booked Appointment</button>
               <button onClick={() => handleDisposition("Not Interested")} className="bg-gray-600 hover:bg-gray-700 px-3 py-2 rounded">Not Interested</button>
-              <button onClick={() => handleDisposition("No Show")} className="bg-gray-600 hover:bg-gray-700 px-3 py-2 rounded">No Show</button> {/* ← NEW */}
+              {/* NEW */}
+              <button onClick={() => handleDisposition("No Show")} className="bg-gray-600 hover:bg-gray-700 px-3 py-2 rounded">No Show</button>
             </div>
 
             <div className="flex gap-2 mt-2">
