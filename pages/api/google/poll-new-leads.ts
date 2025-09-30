@@ -1,4 +1,3 @@
-// /pages/api/google/poll-new-leads.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import dbConnect from "@/lib/dbConnect";
 import User from "@/models/User";
@@ -7,22 +6,35 @@ import Lead from "@/models/Lead";
 import { google } from "googleapis";
 import { sendInitialDrip } from "@/utils/sendInitialDrip";
 
-export default async function handler(
-  req: NextApiRequest,
-  res: NextApiResponse,
-) {
-  if (req.method !== "POST") {
-    return res.status(405).json({ message: "Method not allowed" });
-  }
+/** ---------- helpers ---------- */
+const norm = (s: any) =>
+  String(s ?? "").trim().toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ");
+const digits = (s: any) => String(s ?? "").replace(/\D+/g, "");
+const phoneLast10 = (s: any) => {
+  const d = digits(s);
+  return d ? d.slice(-10) : "";
+};
+const emailLc = (s: any) => {
+  const v = String(s ?? "").trim().toLowerCase();
+  return v || "";
+};
+
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed" });
 
   await dbConnect();
 
+  // pull users who have *either* array populated
   const users = await User.find({
     $or: [
-      { "googleSheets.syncedSheets": { $exists: true, $ne: [] } },
-      { "googleSheets.sheets": { $exists: true, $ne: [] } },
+      { "googleSheets.syncedSheets.0": { $exists: true } },
+      { "googleSheets.sheets.0": { $exists: true } },
     ],
-  });
+  }).select({ email: 1, googleSheets: 1, googleTokens: 1, name: 1 });
+
+  let imported = 0;
+  let updated = 0;
+  let skipped = 0;
 
   for (const user of users) {
     const refreshToken =
@@ -30,96 +42,174 @@ export default async function handler(
       (user as any).googleTokens?.refreshToken;
     if (!refreshToken) continue;
 
-    const oauth2Client = new google.auth.OAuth2(
+    const oauth2 = new google.auth.OAuth2(
       process.env.GOOGLE_CLIENT_ID!,
       process.env.GOOGLE_CLIENT_SECRET!,
-      process.env.GOOGLE_REDIRECT_URI!,
+      process.env.GOOGLE_REDIRECT_URI!
     );
-    oauth2Client.setCredentials({ refresh_token: refreshToken });
+    oauth2.setCredentials({ refresh_token: refreshToken });
+    const sheetsAPI = google.sheets({ version: "v4", auth: oauth2 });
 
-    const sheetsAPI = google.sheets({ version: "v4", auth: oauth2Client });
+    // Support both shapes you save in save-sheet-link.ts
+    const configs: any[] =
+      (user as any).googleSheets?.syncedSheets?.length
+        ? (user as any).googleSheets.syncedSheets
+        : (user as any).googleSheets?.sheets || [];
 
-    // ✅ Support both shapes
-    const configs =
-      (user as any).googleSheets?.syncedSheets ||
-      (user as any).googleSheets?.sheets ||
-      [];
-    if (!Array.isArray(configs)) continue;
+    if (!Array.isArray(configs) || !configs.length) continue;
 
-    for (const sync of configs) {
-      const { sheetId, folderId } = sync || {};
-      if (!sheetId || !folderId) continue;
+    for (const cfg of configs) {
+      // Two naming styles exist in your DB: { spreadsheetId, title, folderId } OR { sheetId, sheetName, folderId }
+      const spreadsheetId = (cfg as any).spreadsheetId || (cfg as any).sheetId;
+      const tabTitle = (cfg as any).title || (cfg as any).sheetName;
+      const folderId = (cfg as any).folderId;
 
-      try {
-        const response = await sheetsAPI.spreadsheets.values.get({
-          spreadsheetId: sheetId,
-          range: "A2:Z1000",
+      if (!spreadsheetId || !tabTitle || !folderId) {
+        continue; // minimal guard; don’t mutate schema here
+      }
+
+      // read header + all rows
+      const resp = await sheetsAPI.spreadsheets.values.get({
+        spreadsheetId,
+        range: `'${tabTitle.replace(/'/g, "''")}'!A1:ZZ`,
+        majorDimension: "ROWS",
+      });
+      const rows = (resp.data.values || []) as string[][];
+      if (rows.length < 2) continue; // header only
+
+      const headers = (rows[0] || []).map((h) => String(h ?? "").trim());
+      const headerIndex: Record<string, number> = {};
+      headers.forEach((h, i) => (headerIndex[norm(h)] = i));
+
+      // tolerant alias map: actual header -> canonical field
+      const aliasToField: Record<string, string> = {};
+      headers.forEach((h) => {
+        const n = norm(h);
+        if (!n) return;
+        if (["first name", "firstname"].includes(n)) aliasToField[h] = "First Name";
+        else if (["last name", "lastname"].includes(n)) aliasToField[h] = "Last Name";
+        else if (["phone", "phone number", "phonenumber", "phone1"].includes(n)) aliasToField[h] = "Phone";
+        else if (["email", "e-mail"].includes(n)) aliasToField[h] = "Email";
+        else if (["state"].includes(n)) aliasToField[h] = "State";
+        else if (["notes", "note"].includes(n)) aliasToField[h] = "Notes";
+        else if (["age"].includes(n)) aliasToField[h] = "Age";
+        else if (["beneficiary"].includes(n)) aliasToField[h] = "Beneficiary";
+        else if (["coverage amount", "coverage"].includes(n)) aliasToField[h] = "Coverage Amount";
+      });
+
+      const folder = await Folder.findById(folderId);
+      if (!folder) continue;
+
+      // process data rows (start at row 2)
+      for (let r = 1; r < rows.length; r++) {
+        const row = rows[r] || [];
+        const hasAny = row.some((c) => String(c ?? "").trim() !== "");
+        if (!hasAny) continue;
+
+        // build doc using the tolerant header mapping
+        const doc: Record<string, any> = {};
+        headers.forEach((actual, i) => {
+          const field = aliasToField[actual];
+          if (field) doc[field] = row[i] ?? "";
         });
 
-        const rows = response.data.values || [];
-        const existingLeads = await Lead.find({ folderId }).select(
-          "externalId",
-        );
-        const existingIds = new Set(
-          existingLeads.map((l: any) => l.externalId),
-        );
+        const firstName = String(doc["First Name"] ?? "").trim();
+        const lastName = String(doc["Last Name"] ?? "").trim();
+        const phoneRaw = String(doc["Phone"] ?? "");
+        const emailRaw = String(doc["Email"] ?? "");
 
-        const folder = await Folder.findById(folderId);
-        if (!folder) continue;
+        const p10 = phoneLast10(phoneRaw);
+        const e = emailLc(emailRaw);
 
-        for (const row of rows) {
-          const firstName = row[0]?.trim();
-          const lastName = row[1]?.trim();
-          const email = row[2]?.trim();
-          const phone = row[3]?.trim();
-          const notes = row[4]?.trim();
-          const state = row[5]?.trim();
-          const age = row[6]?.trim();
-          const beneficiary = row[7]?.trim();
-          const coverageAmount = row[8]?.trim();
-
-          if (!firstName || !phone) continue;
-
-          const fullName = `${firstName} ${lastName}`.trim();
-          const externalId = `${sheetId}-${phone}`;
-
-          if (existingIds.has(externalId)) continue;
-
-          const newLead = await Lead.create({
-            "First Name": firstName,
-            "Last Name": lastName,
-            name: fullName,
-            Email: email,
-            Phone: phone,
-            Notes: notes,
-            State: state,
-            Age: age,
-            Beneficiary: beneficiary,
-            "Coverage Amount": coverageAmount,
-            userEmail: user.email,
-            folderId,
-            externalId,
-            status: "New",
-          });
-
-          const dripReadyLead = {
-            ...newLead._doc,
-            name: fullName,
-            phone,
-            folderName: folder.name,
-            agentName: (folder as any).agentName || user.name || "your agent",
-            agentPhone: (folder as any).agentPhone || "N/A",
-          };
-
-          if ((folder as any).assignedDrip) {
-            await sendInitialDrip(dripReadyLead);
-          }
+        if (!p10 && !e) {
+          skipped++;
+          continue;
         }
-      } catch (err) {
-        console.error(`Error syncing sheet ${sheetId} for ${user.email}:`, err);
+
+        // dedupe: prefer phone, fall back to email; scope by user + folder
+        const filter: any = {
+          userEmail: user.email,
+          folderId,
+          $or: [
+            ...(p10 ? [{ phoneLast10: p10 }, { normalizedPhone: p10 }] : []),
+            ...(e ? [{ Email: e }, { email: e }] : []),
+          ],
+        };
+
+        const setOnInsert: any = {
+          createdAt: new Date(),
+          userEmail: user.email,
+          folderId,
+          status: "New",
+        };
+
+        const fullName = [firstName, lastName].filter(Boolean).join(" ").trim();
+
+        const set: any = {
+          // identity mirrors used across the app
+          Phone: phoneRaw,
+          normalizedPhone: p10 || undefined,
+          phoneLast10: p10 || undefined,
+          Email: e || undefined,
+          email: e || undefined,
+
+          "First Name": firstName,
+          "Last Name": lastName,
+          name: fullName || undefined,
+          Notes: doc["Notes"] ?? "",
+          State: doc["State"] ?? "",
+          Age: doc["Age"] ?? "",
+          Beneficiary: doc["Beneficiary"] ?? "",
+          "Coverage Amount": doc["Coverage Amount"] ?? "",
+          updatedAt: new Date(),
+
+          // provenance
+          source: "google-sheets",
+          sourceSpreadsheetId: spreadsheetId,
+          sourceTabTitle: tabTitle,
+          sourceRowIndex: r + 1,
+        };
+
+        // upsert
+        const result = await (Lead as any).updateOne(
+          filter,
+          { $set: set, $setOnInsert: setOnInsert },
+          { upsert: true }
+        );
+
+        const wasInsert =
+          (result?.upsertedCount || 0) > 0 ||
+          Boolean((result as any)?.upsertedId);
+        if (wasInsert) {
+          imported++;
+
+          // kick off initial drip IF folder has a drip configured (keeps your prior behavior)
+          try {
+            if ((folder as any).assignedDrip) {
+              const dripReadyLead = {
+                ...setOnInsert,
+                ...set,
+                folderName: (folder as any).name,
+                agentName: (folder as any).agentName || (user as any).name || "your agent",
+                agentPhone: (folder as any).agentPhone || "",
+              };
+              await sendInitialDrip(dripReadyLead as any);
+            }
+          } catch (e) {
+            // do not throw; keep loop robust
+            console.warn("sendInitialDrip failed:", (e as any)?.message || e);
+          }
+        } else {
+          updated++;
+        }
       }
     }
   }
 
-  return res.status(200).json({ message: "Google Sheets polling complete" });
+  return res.status(200).json({
+    message: "Google Sheets polling complete",
+    imported,
+    updated,
+    skipped,
+  });
 }
