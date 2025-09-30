@@ -1,4 +1,4 @@
-// /constants/prebuiltDrips.ts
+// /utils/prebuiltDrips.ts
 
 export interface Drip {
   id: string;
@@ -152,6 +152,21 @@ export const prebuiltDrips: Drip[] = [
       { text: appendOptOut("Hi {{ contact.first_name }}, no rush if now isn’t right. I’m here to help whenever you're ready."), day: "Day 14" },
       { text: appendOptOut("Hi {{ contact.first_name }}, even if now isn’t the right time, keep me in mind for the future or feel free to share my info with a friend who might benefit."), day: "Day 20" }
     ]
+  },
+
+  // >>> NEW: Missed Appointment / No-Show rebook drip <<<
+  {
+    id: "missed_appt_7d",
+    name: "Missed Appointment – 7 Day Rebook",
+    type: "sms",
+    messages: [
+      { text: appendOptOut("Hey {{ contact.first_name | default:\"there\" }}, it’s {{ agent.name }}. Sorry we missed each other. Want to grab a quick time to reschedule? I can do today or tomorrow."), day: "Day 1" },
+      { text: appendOptOut("Hi {{ contact.first_name }}, checking back in — I can hop on a quick call to go over everything. What time works best?"), day: "Day 2" },
+      { text: appendOptOut("Quick reminder: I’ve got openings later today and tomorrow. Would you like me to hold a spot for you?"), day: "Day 3" },
+      { text: appendOptOut("Still happy to help you get this done, {{ contact.first_name }}. 10 minutes max — want to try again?"), day: "Day 4" },
+      { text: appendOptOut("No worries if you’ve been busy. If you still want to review options, I can make it easy. When’s good?"), day: "Day 5" },
+      { text: appendOptOut("I can text you a quick calendar link or just book it for you — which do you prefer?"), day: "Day 6" },
+      { text: appendOptOut("Last nudge from me this week — want me to reserve a time? If not now, I’ll pause and you can text anytime."), day: "Day 7" }
+    ]
   }
 ];
-
