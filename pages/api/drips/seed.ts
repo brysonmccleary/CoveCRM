@@ -17,7 +17,7 @@ export default async function handler(
   res: NextApiResponse
 ) {
   try {
-    // Session typing fix: cast to a minimal shape we actually use
+    // Minimal, explicit typing so TS stays happy
     const session = (await getServerSession(
       req,
       res,
@@ -34,22 +34,19 @@ export default async function handler(
     const results: Array<{ name: string; status: "created" | "exists" }> = [];
 
     for (const drip of prebuiltDrips) {
-      // Use the prebuilt "id" as a stable key for idempotency
       const key = String(drip.id);
 
-      const existing = await DripCampaign.findOne({
-        user: userEmail,
-        key,
-      }).lean();
+      // Use "exists" to avoid ambiguous return types and speed up the check
+      const exists = await DripCampaign.exists({ user: userEmail, key });
 
-      if (existing) {
-        results.push({ name: existing.name, status: "exists" });
+      if (exists) {
+        results.push({ name: drip.name, status: "exists" });
         continue;
       }
 
       await DripCampaign.create({
         name: drip.name,
-        key, // <-- stable key so we can re-run safely
+        key, // stable key so we can re-run safely
         type: drip.type, // "sms" | "email"
         isActive: true,
         isGlobal: false, // per-user
