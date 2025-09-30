@@ -6,10 +6,9 @@ import { Readable } from "stream";
 import mongoose from "mongoose";
 import dbConnect from "@/lib/mongooseConnect";
 import Folder from "@/models/Folder";
-import Lead from "@/models/Lead";
+import Lead, { sanitizeLeadType, createLeadsFromCSV, autoEnrollNewLeads } from "@/lib/mongo/leads";
 import { getServerSession } from "next-auth";
 import { authOptions } from "./auth/[...nextauth]";
-import { sanitizeLeadType, createLeadsFromCSV } from "@/lib/mongo/leads";
 import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
 
 export const config = { api: { bodyParser: false } };
@@ -383,12 +382,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       let inserted = 0;
       let updated = 0;
+      let upsertedIds: string[] = [];
 
       if (ops.length) {
         const result = await (Lead as any).bulkWrite(ops, { ordered: false });
         inserted = (result as any).upsertedCount || 0;
         const existedOps = processedFilters.length - inserted;
         updated = existedOps < 0 ? 0 : existedOps;
+
+        // Collect true upserted ids from driver result
+        if ((result as any).upsertedIds) {
+          upsertedIds = Object.values((result as any).upsertedIds).map((v: any) => String(v));
+        } else if ((result as any).getUpsertedIds) {
+          upsertedIds = ((result as any).getUpsertedIds() || []).map((u: any) => String(u._id));
+        } else if ((result as any).result?.upserted) {
+          upsertedIds = ((result as any).result.upserted as any[]).map((u: any) => String(u._id));
+        }
 
         if (processedFilters.length) {
           const orFilters = processedFilters.flatMap((f) =>
@@ -401,6 +410,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               { _id: (folder as any)._id, userEmail },
               { $addToSet: { leadIds: { $each: ids } } }
             );
+          }
+        }
+
+        // 🔔 Auto-enroll ONLY the truly-new leads (upserts)
+        if (upsertedIds.length) {
+          try {
+            await autoEnrollNewLeads({
+              userEmail,
+              folderId: (folder as any)._id,
+              leadIds: upsertedIds,
+              source: "folder-bulk",
+            });
+          } catch (e) {
+            console.warn("import-leads (json): autoEnroll warning", (e as any)?.message || e);
           }
         }
       }
@@ -521,6 +544,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           };
         });
 
+        // Inserts + auto-enroll handled inside helper
         await createLeadsFromCSV(leadsToInsert, userEmail, String((folder as any)._id));
 
         return res.status(200).json({
@@ -655,12 +679,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       let inserted = 0;
       let updated = 0;
+      let upsertedIds: string[] = [];
 
       if (ops.length) {
         const result = await (Lead as any).bulkWrite(ops, { ordered: false });
         inserted = (result as any).upsertedCount || 0;
         const existedOps = processedFilters.length - inserted;
         updated = existedOps < 0 ? 0 : existedOps;
+
+        // Extract newly upserted IDs robustly
+        if ((result as any).upsertedIds) {
+          upsertedIds = Object.values((result as any).upsertedIds).map((v: any) => String(v));
+        } else if ((result as any).getUpsertedIds) {
+          upsertedIds = ((result as any).getUpsertedIds() || []).map((u: any) => String(u._id));
+        } else if ((result as any).result?.upserted) {
+          upsertedIds = ((result as any).result.upserted as any[]).map((u: any) => String(u._id));
+        }
 
         const orFilters = processedFilters.flatMap((f) =>
           (f.$or || []).map((clause: any) => ({ userEmail, ...clause }))
@@ -672,6 +706,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             { _id: (folder as any)._id, userEmail },
             { $addToSet: { leadIds: { $each: ids } } }
           );
+        }
+
+        // 🔔 Auto-enroll ONLY the new leads
+        if (upsertedIds.length) {
+          try {
+            await autoEnrollNewLeads({
+              userEmail,
+              folderId: (folder as any)._id,
+              leadIds: upsertedIds,
+              source: "folder-bulk",
+            });
+          } catch (e) {
+            console.warn("import-leads (multipart): autoEnroll warning", (e as any)?.message || e);
+          }
         }
       }
 

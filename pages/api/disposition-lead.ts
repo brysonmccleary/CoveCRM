@@ -1,3 +1,4 @@
+// pages/api/disposition-lead.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth";
 import { authOptions } from "./auth/[...nextauth]";
@@ -18,7 +19,8 @@ const ALLOW_STATUS_SET = new Set([
   "not interested",
   "booked appointment",
   "resolved",
-  "no show", // ← NEW
+  "no show",
+  "missed appointment", // synonym; mapper will canonicalize to "No Show"
 ]);
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -32,8 +34,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const rawName = String(newFolderName || "").trim();
   if (!leadId || !rawName) return res.status(400).json({ message: "Missing required fields." });
 
-  // Canonicalize disposition → pretty target name (includes No Show)
-  const canonical = folderNameForDisposition(rawName); // "Sold" | "Not Interested" | "Booked Appointment" | "No Show" | "Resolved" | null
+  // Canonicalize disposition → pretty target name (includes "No Show" mapping)
+  // Returns "Sold" | "Not Interested" | "Booked Appointment" | "No Show" | "Resolved" | null
+  const canonical = folderNameForDisposition(rawName);
   const desiredFolderName = canonical ?? rawName;
   const desiredLower = desiredFolderName.toLowerCase();
 
@@ -47,6 +50,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     let toFolderName: string | undefined;
 
     await mongoSession.withTransaction(async () => {
+      // 1) Load the lead
       const existing = await Lead.findOne({ _id: leadId, userEmail })
         .select({ _id: 1, folderId: 1, status: 1 })
         .session(mongoSession)
@@ -55,6 +59,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       previousStatus = existing.status;
 
+      // 2) Resolve current folder name (for logging)
       if (existing.folderId) {
         const from = await Folder.findOne({ _id: existing.folderId, userEmail })
           .select({ name: 1 })
@@ -63,11 +68,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         fromFolderName = from?.name;
       }
 
+      // 3) Resolve target folder, creating if needed
       let target: { _id: mongoose.Types.ObjectId; name: string } | null = null;
 
       if (isSystemFolderName(desiredFolderName)) {
-        // 🔒 deterministically resolve system folder, creating if missing (covers first-time use)
+        // Known system folders we support globally
         const SYSTEM_NAMES = ["Sold", "Not Interested", "Booked Appointment", "No Show"];
+
         const systemRows = await Folder.find({ userEmail, name: { $in: SYSTEM_NAMES } })
           .select({ _id: 1, name: 1 })
           .session(mongoSession)
@@ -75,6 +82,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         let exact = systemRows.find((r) => String(r.name).toLowerCase() === desiredLower);
 
+        // Create on first use
         if (!exact) {
           const upserted = await Folder.findOneAndUpdate(
             { userEmail, name: desiredFolderName },
@@ -108,7 +116,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       targetFolderId = target!._id as any;
       toFolderName = target!.name;
 
-      // Final assert for system moves (belt + suspenders)
+      // 4) Safety assert for system moves (belt + suspenders)
       if (isSystemFolderName(desiredFolderName)) {
         if (String(toFolderName).toLowerCase() !== desiredLower) {
           throw Object.assign(
@@ -120,6 +128,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
       }
 
+      // 5) Apply update (also mirror name into common fields some sheets use)
       const setFields: Record<string, any> = {
         folderId: targetFolderId,
         folderName: toFolderName,
@@ -128,6 +137,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         updatedAt: new Date(),
       };
       if (ALLOW_STATUS_SET.has(desiredLower)) {
+        // keep status aligned with the disposition
         setFields.status = desiredFolderName;
       }
 
@@ -139,7 +149,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (write.matchedCount === 0) throw new Error("Lead not found after update.");
     });
 
-    // Log (for acceptance criteria)
+    // 6) Log for debugging/acceptance
     try {
       console.log("disposition-lead", {
         leadId,
@@ -151,7 +161,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     } catch {}
 
-    // Socket notify (best-effort)
+    // 7) Notify live clients (best-effort)
     try {
       let io = (res as any)?.socket?.server?.io;
       if (!io) io = initSocket(res as any);
