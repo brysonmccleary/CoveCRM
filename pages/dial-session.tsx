@@ -1,4 +1,3 @@
-// pages/dial-session.tsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/router";
 import Sidebar from "@/components/Sidebar";
@@ -343,7 +342,7 @@ export default function DialSession() {
         for (const ev of (j?.events || [])) {
           const when = new Date((ev as any).date).toLocaleString();
           if ((ev as any).type === "note") {
-            rows.push({ kind: "text", text: `📝 Note • ${when} — ${(ev as any).text}` });
+            rows.push({ kind: "text", text: `📝 Note • ${when} — ${ (ev as any).text}` });
           } else if ((ev as any).type === "sms") {
             const sms = ev as any;
             rows.push({ kind: "text", text: `💬 ${sms.dir.toUpperCase()} • ${when} — ${sms.text}` });
@@ -585,7 +584,7 @@ export default function DialSession() {
     }
   };
 
-  const handleDisposition = async (label: "Sold" | "No Answer" | "Booked Appointment" | "Not Interested" | "No Show") => {
+  const handleDisposition = async (label: "Sold" | "No Answer" | "Booked Appointment" | "Not Interested") => {
     if (!lead?.id) {
       toast.error("No active lead to disposition");
       return;
@@ -744,7 +743,7 @@ export default function DialSession() {
             if (sid && payload?.callSid && sid !== payload.callSid) return;
 
             const leadNum = normalizeE164(
-              (leadQueue[currentLeadIndex] && (leadQueue[currentLeadIndex] as any)?.phone) ||
+              (leadQueue[currentLeadIndex] and (leadQueue[currentLeadIndex] as any)?.phone) ||
               (leadQueue[currentLeadIndex] &&
                 Object.entries(leadQueue[currentLeadIndex]).find(([k]) => k.toLowerCase().includes("phone"))?.[1]) ||
               "",
@@ -776,7 +775,7 @@ export default function DialSession() {
               }
             }
 
-            if (s === "completed" || s === "canceled") {
+            if (s === "completed" or s === "canceled") {
               await markDisconnected(`socket-${s}`);
             }
           } catch {}
@@ -891,7 +890,7 @@ export default function DialSession() {
               <button onClick={() => handleDisposition("No Answer")} className="bg-gray-600 hover:bg-gray-700 px-3 py-2 rounded">No Answer</button>
               <button onClick={() => handleDisposition("Booked Appointment")} className="bg-gray-600 hover:bg-gray-700 px-3 py-2 rounded">Booked Appointment</button>
               <button onClick={() => handleDisposition("Not Interested")} className="bg-gray-600 hover:bg-gray-700 px-3 py-2 rounded">Not Interested</button>
-              <button onClick={() => handleDisposition("No Show")} className="bg-gray-600 hover:bg-gray-700 px-3 py-2 rounded">No Show</button>
+              {/* "No Show" removed as requested */}
             </div>
 
             <div className="flex gap-2 mt-2">

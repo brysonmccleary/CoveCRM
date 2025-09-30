@@ -1,4 +1,3 @@
-// pages/lead/[id].tsx
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { useRouter } from "next/router";
 import Sidebar from "@/components/Sidebar";
@@ -373,7 +372,7 @@ export default function LeadProfileDial() {
             <button onClick={() => handleDisposition("Sold")} className="bg-gray-700 hover:bg-gray-600 px-3 py-2 rounded">Sold</button>
             <button onClick={() => handleDisposition("Booked Appointment")} className="bg-gray-700 hover:bg-gray-600 px-3 py-2 rounded">Booked Appointment</button>
             <button onClick={() => handleDisposition("Not Interested")} className="bg-gray-700 hover:bg-gray-600 px-3 py-2 rounded">Not Interested</button>
-            <button onClick={() => handleDisposition("No Show")} className="bg-gray-700 hover:bg-gray-600 px-3 py-2 rounded">No Show</button>{/* ← UPDATED: replaces Resolve */}
+            {/* "No Show" removed as requested */}
           </div>
 
           <div className="mt-4">
