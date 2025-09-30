@@ -178,7 +178,7 @@ function mapRow(row: Record<string, any>, mapping: Record<string, string>) {
   const mergedNotes =
     source && notes
       ? `${notes} | Source: ${source}`
-      : source && !otes
+      : source && !notes
       ? `Source: ${source}`
       : notes;
 
