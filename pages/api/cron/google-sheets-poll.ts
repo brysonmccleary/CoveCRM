@@ -6,6 +6,7 @@ import Lead from "@/models/Lead";
 import Folder from "@/models/Folder";
 import { google } from "googleapis";
 import mongoose from "mongoose";
+import { autoEnrollNewLeads } from "@/lib/mongo/leads";
 
 // --- Normalizers -------------------------------------------------------------
 const normPhone = (v: any) => String(v ?? "").replace(/\D+/g, "");
@@ -26,11 +27,11 @@ type SyncedSheetCfg = {
   title?: string;         // saved tab title at time of import
   sheetId?: number;       // <-- we will prefer this if present
   headerRow?: number;
-  mapping?: Record<string, string>;
-  skip?: Record<string, boolean>;
+  mapping?: Record<string, string>;   // (OPTIONAL) <sheet header> -> <field name>, e.g. "Phone" -> "phone"
+  skip?: Record<string, boolean>;     // headers to ignore (by EXACT header text)
   folderId?: string;
   folderName?: string;
-  lastRowImported?: number; // 1-based index of the LAST imported row
+  lastRowImported?: number;           // 1-based index of the LAST imported row
 };
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -118,7 +119,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           title,
           sheetId,
           headerRow = 1,
-          mapping = {},
+          mapping = {},   // NOTE: may be empty; we now have a safe fallback
           skip = {},
           folderId,
           folderName,
@@ -148,12 +149,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
         if (!title) continue; // still no title—skip safely
 
-        // Ensure folder exists
+        // Ensure folder exists (keep current behavior)
         let folderDoc: any = null;
         if (folderId) {
           try {
             folderDoc = await Folder.findOne({
               _id: new mongoose.Types.ObjectId(folderId),
+              userEmail,
             });
           } catch {
             /* noop */
@@ -185,11 +187,33 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const headerNormToActual = new Map<string, string>();
         rawHeaders.forEach((h) => headerNormToActual.set(normHeader(h), h));
 
-        // Normalize mapping keys once (so "First  Name", "first_name", "First-Name" all match)
+        // -------------- NEW: robust default mapping (if cfg.mapping is empty) --------------
+        // We accept common variants like "phone number", "phone1", etc.
+        const defaultMap: Record<string, string> = {};
+        for (const [norm, actual] of headerNormToActual.entries()) {
+          if (!norm) continue;
+          if (["first name", "firstname"].includes(norm)) defaultMap[actual] = "First Name";
+          else if (["last name", "lastname"].includes(norm)) defaultMap[actual] = "Last Name";
+          else if (["phone", "phone number", "phone1", "phonenumber"].includes(norm)) defaultMap[actual] = "phone";
+          else if (["email", "e-mail"].includes(norm)) defaultMap[actual] = "email";
+          else if (["state"].includes(norm)) defaultMap[actual] = "State";
+          else if (["notes", "note"].includes(norm)) defaultMap[actual] = "Notes";
+          // add more soft aliases here if you need them
+        }
+
+        // Normalize provided mapping: key = normalized header, value = field name
         const normalizedMapping: Record<string, string> = {};
         Object.entries(mapping || {}).forEach(([key, val]) => {
           normalizedMapping[normHeader(key)] = val;
         });
+
+        // Final mapping used by the poller: prefer explicit mapping, fallback to defaults
+        function resolveFieldName(actualHeader: string): string | undefined {
+          const byExplicit = normalizedMapping[normHeader(actualHeader)];
+          if (byExplicit) return byExplicit;
+          return defaultMap[actualHeader]; // default is keyed by ACTUAL header
+        }
+        // ------------------------------------------------------------------------------
 
         // Determine start/end using pointer (1-based last imported)
         const pointer = typeof lastRowImported === "number" ? lastRowImported : headerRow;
@@ -205,6 +229,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         let updated = 0;
         let skippedNoKey = 0;
         let lastProcessed = Number(pointer) - 1;
+        const newLeadIds: mongoose.Types.ObjectId[] = [];
 
         if (startIndex <= endIndex) {
           for (let r = startIndex; r <= endIndex; r++) {
@@ -213,13 +238,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             if (!hasAny) continue;
             lastProcessed = r;
 
-            // Build doc using tolerant mapping
+            // Build doc using tolerant mapping (explicit mapping first, fallback to defaults)
             const doc: Record<string, any> = {};
             rawHeaders.forEach((actualHeader, i) => {
-              const n = normHeader(actualHeader);
-              if (!n) return;
-              if (skip?.[actualHeader]) return; // honor skip only by actual header text
-              const fieldName = normalizedMapping[n];
+              const fieldName = resolveFieldName(actualHeader);
               if (!fieldName) return;
               doc[fieldName] = row[i] ?? "";
             });
@@ -240,25 +262,46 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             if (e) doc.email = e;
 
             const or: any[] = [];
-            if (p) or.push({ normalizedPhone: p });
-            if (e) or.push({ email: e });
+            if (p) or.push({ normalizedPhone: p }, { phoneLast10: p.slice(-10) });
+            if (e) or.push({ Email: e }, { email: e });
 
             const filter = { userEmail, ...(or.length ? { $or: or } : {}) };
             const existing = await Lead.findOne(filter).select("_id").lean<{ _id: mongoose.Types.ObjectId } | null>();
 
             if (!existing) {
               doc.folderId = targetFolderId;
-              if (!dryRun) await Lead.create(doc);
+              // also mirror identity fields the rest of the app expects
+              doc.Phone = String(doc.phone ?? doc.Phone ?? "");
+              doc.phoneLast10 = p ? p.slice(-10) : undefined;
+              doc.Email = e || undefined;
+
+              if (!dryRun) {
+                const created = await Lead.create(doc);
+                newLeadIds.push(created._id as mongoose.Types.ObjectId);
+              }
               imported++;
             } else {
               if (!dryRun) {
-                await Lead.updateOne({ _id: existing._id }, { $set: { ...doc, folderId: targetFolderId } });
+                await Lead.updateOne(
+                  { _id: existing._id },
+                  {
+                    $set: {
+                      ...doc,
+                      folderId: targetFolderId,
+                      Phone: String(doc.phone ?? doc.Phone ?? ""),
+                      phoneLast10: p ? p.slice(-10) : undefined,
+                      Email: e || undefined,
+                      updatedAt: new Date(),
+                    },
+                  }
+                );
               }
               updated++;
             }
           }
         }
 
+        // Save pointer best-effort (last processed -> next row index, 1-based)
         const newLast = Math.max(lastProcessed + 1, Number(pointer));
         if (!dryRun) {
           await User.updateOne(
@@ -281,6 +324,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           );
         }
 
+        // 🔔 NEW: auto-enroll *only* the newly created leads into active drips for that folder
+        if (!dryRun && newLeadIds.length) {
+          try {
+            await autoEnrollNewLeads({
+              userEmail,
+              folderId: targetFolderId,
+              leadIds: newLeadIds,
+              source: "sheet-bulk",
+            });
+          } catch (e) {
+            console.warn("google-sheets-poll: autoEnroll warning", (e as any)?.message || e);
+          }
+        }
+
         const detail: any = {
           userEmail,
           spreadsheetId,
@@ -299,9 +356,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         };
         if (debug) {
           detail.headers = rawHeaders;
-          detail.normalizedHeaders = rawHeaders.map(normHeader);
-          detail.mapping = mapping;
-          detail.mappingNormalized = normalizedMapping;
+          detail.mappingProvided = mapping;
+          detail.mappingDefaulted = defaultMap;
         }
         detailsAll.push(detail);
       }
