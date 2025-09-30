@@ -4,10 +4,7 @@ import { authOptions } from "../auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 
-export default async function handler(
-  req: NextApiRequest,
-  res: NextApiResponse,
-) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const session = await getServerSession(req, res, authOptions);
   if (!session?.user?.email) {
     return res.status(401).json({ message: "Unauthorized" });
@@ -27,8 +24,8 @@ export default async function handler(
   // ========== POST: Save/update a sheet-to-folder link ==========
   if (req.method === "POST") {
     const { sheetId, sheetName, folderId } = req.body as {
-      sheetId?: string;
-      sheetName?: string;
+      sheetId?: string;   // <- this is the Google "spreadsheetId" (string)
+      sheetName?: string; // <- tab title
       folderId?: string;
     };
 
@@ -37,7 +34,7 @@ export default async function handler(
     }
 
     try {
-      // Ensure googleSheets object exists and satisfies required fields for TS
+      // Ensure googleSheets container exists
       let gs: any = (user as any).googleSheets;
       if (!gs) {
         gs = {
@@ -58,26 +55,44 @@ export default async function handler(
             (user as any).googleSheets?.googleEmail ||
             session.user.email,
           sheets: [],
+          syncedSheets: [],
         };
         (user as any).googleSheets = gs;
       }
 
-      // Normalize array shape: support both .syncedSheets and .sheets
+      // Normalize to a single array and keep both properties in sync
       const arr: any[] = Array.isArray(gs.syncedSheets)
         ? gs.syncedSheets
         : Array.isArray(gs.sheets)
-          ? gs.sheets
-          : [];
+        ? gs.sheets
+        : [];
       gs.syncedSheets = arr;
       gs.sheets = arr;
 
-      const idx = arr.findIndex((s: any) => s.sheetId === sheetId);
-      const newSheetLink = { sheetId, sheetName, folderId };
+      // Store the fields the poller expects:
+      // - spreadsheetId (string)
+      // - title (tab title)
+      // Also keep legacy keys for back-compat: sheetId (string), sheetName
+      const payload = {
+        spreadsheetId: sheetId,  // <- REQUIRED by /api/cron/google-sheets-poll
+        title: sheetName,        // <- REQUIRED by /api/cron/google-sheets-poll (if no numeric gid)
+        folderId,
+        folderName: undefined,   // filled later once resolved, optional
+        // legacy/compat fields:
+        sheetId,                 // (string) spreadsheetId
+        sheetName,               // tab title
+      };
+
+      const idx = arr.findIndex(
+        (s: any) =>
+          s.spreadsheetId === sheetId ||
+          s.sheetId === sheetId // back-compat match
+      );
 
       if (idx !== -1) {
-        arr[idx] = newSheetLink;
+        arr[idx] = { ...arr[idx], ...payload };
       } else {
-        arr.push(newSheetLink);
+        arr.push(payload);
       }
 
       await user.save();
