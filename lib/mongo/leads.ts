@@ -94,6 +94,85 @@ export const sanitizeLeadType = (input: string): string => {
 
 const Lead = (models.Lead as mongoose.Model<any>) || model("Lead", LeadSchema);
 
+// ---- Auto-enroll helper (FIXED) ----
+import Folder from "@/models/Folder";
+import DripCampaign from "@/models/DripCampaign";
+import DripEnrollmentModel from "@/models/DripEnrollment";
+
+/**
+ * Enrolls freshly-created leads into active campaigns assigned to the folder.
+ * - Matches on folderId string OR folder name in DripCampaign.assignedFolders (string array).
+ * - Idempotent via DripEnrollment unique index (leadId,campaignId,status active|paused).
+ * - Sets nextSendAt=now so your scheduler can pick it up immediately.
+ */
+export async function autoEnrollNewLeads(params: {
+  userEmail: string;
+  folderId: string | Types.ObjectId;
+  leadIds: (string | Types.ObjectId)[];
+  source: "folder-bulk" | "sheet-bulk" | "manual-lead";
+}) {
+  if (!params.leadIds?.length) return;
+
+  const fid = params.folderId instanceof Types.ObjectId ? params.folderId : new Types.ObjectId(params.folderId);
+  const folder = await Folder.findOne({ _id: fid, userEmail: params.userEmail }).lean();
+  if (!folder) return;
+
+  const folderIdStr = String(fid);
+  const folderName = (folder as any).name as string | undefined;
+
+  // Build folder match ORs
+  const folderMatch: any[] = [{ assignedFolders: folderIdStr }];
+  if (folderName) folderMatch.push({ assignedFolders: folderName });
+
+  // Find active campaigns that (match folder) AND (belong to user OR are global)
+  const campaigns = await DripCampaign.find({
+    isActive: true,
+    $and: [
+      { $or: folderMatch },
+      { $or: [{ user: params.userEmail }, { isGlobal: true }] },
+    ],
+  }).lean();
+
+  if (!campaigns.length) return;
+
+  const now = new Date();
+  const bulkOps: any[] = [];
+
+  for (const leadId of params.leadIds) {
+    for (const c of campaigns) {
+      bulkOps.push({
+        updateOne: {
+          filter: { leadId, campaignId: c._id, status: { $in: ["active", "paused"] } },
+          update: {
+            $setOnInsert: {
+              leadId,
+              campaignId: c._id,
+              userEmail: params.userEmail,
+              status: "active",
+              cursorStep: 0,
+              nextSendAt: now,
+              source: params.source,
+              createdAt: now,
+              updatedAt: now,
+            },
+            $set: { updatedAt: now },
+          },
+          upsert: true,
+        },
+      });
+    }
+  }
+
+  if (bulkOps.length) {
+    try {
+      await (DripEnrollmentModel as any).bulkWrite(bulkOps, { ordered: false });
+    } catch (e) {
+      // Ignore duplicate key races; uniqueness is enforced by the index
+      console.warn("autoEnrollNewLeads(): bulkWrite warning", (e as any)?.message || e);
+    }
+  }
+}
+
 // ---- CRUD helpers ----
 export const getLeadById = async (leadId: string) => {
   return await Lead.findById(leadId);
@@ -144,7 +223,18 @@ export const createLeadsFromCSV = async (
     };
   });
 
-  return await Lead.insertMany(mapped, { ordered: false });
+  const inserted = await (models.Lead as mongoose.Model<any>).insertMany(mapped, { ordered: false });
+  try {
+    await autoEnrollNewLeads({
+      userEmail,
+      folderId: fid,
+      leadIds: inserted.map((d: any) => d._id),
+      source: "folder-bulk",
+    });
+  } catch (e) {
+    console.warn("createLeadsFromCSV(): autoEnroll warning", (e as any)?.message || e);
+  }
+  return inserted;
 };
 
 export const createLeadsFromGoogleSheet = async (
@@ -177,7 +267,18 @@ export const createLeadsFromGoogleSheet = async (
     };
   });
 
-  return await Lead.insertMany(parsed, { ordered: false });
+  const inserted = await (models.Lead as mongoose.Model<any>).insertMany(parsed, { ordered: false });
+  try {
+    await autoEnrollNewLeads({
+      userEmail,
+      folderId: fid,
+      leadIds: inserted.map((d: any) => d._id),
+      source: "sheet-bulk",
+    });
+  } catch (e) {
+    console.warn("createLeadsFromGoogleSheet(): autoEnroll warning", (e as any)?.message || e);
+  }
+  return inserted;
 };
 
 export default Lead;
