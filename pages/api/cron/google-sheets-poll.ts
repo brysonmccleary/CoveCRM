@@ -8,9 +8,19 @@ import { google } from "googleapis";
 import mongoose from "mongoose";
 import { autoEnrollNewLeads } from "@/lib/mongo/leads";
 
-/** ---------------- helpers ---------------- */
+/**
+ * This poller supports BOTH saved shapes:
+ *  A) new flow:   { spreadsheetId, title?, sheetId?, headerRow?, mapping?, skip?, folderId?, folderName?, lastRowImported? }
+ *  B) legacy flow: { sheetId (this is actually the spreadsheetId), sheetName, folderId? }
+ */
+
+// --- Normalizers -------------------------------------------------------------
 const normPhone = (v: any) => String(v ?? "").replace(/\D+/g, "");
-const normEmail = (v: any) => String(v ?? "").trim().toLowerCase();
+const normEmail = (v: any) => {
+  const s = String(v ?? "").trim().toLowerCase();
+  return s || "";
+};
+// normalize header keys for tolerant matching: trim, collapse space/_/-, lowercase
 const normHeader = (s: any) =>
   String(s ?? "")
     .trim()
@@ -18,44 +28,55 @@ const normHeader = (s: any) =>
     .replace(/[_-]+/g, " ")
     .replace(/\s+/g, " ");
 
-/** Config shape(s) we see in the wild:
- *  A) “new” import flow:
- *     { spreadsheetId: string, title?: string, sheetId?: number, headerRow?: number, mapping?: {...}, skip?: {...}, folderId?: string, folderName?: string, lastRowImported?: number }
- *  B) legacy link flow:
- *     { sheetId: string /* actually spreadsheetId */, sheetName: string, folderId?: string }
- */
-type AnySheetCfg = Record<string, any>;
+type SyncedSheetCfg = {
+  spreadsheetId: string;
+  title?: string;         // saved tab title at time of import
+  sheetId?: number;       // numeric Google "sheetId" (tab id)
+  headerRow?: number;
+  mapping?: Record<string, string>;   // optional: <sheet header> -> <field name>, e.g. "Phone" -> "phone"
+  skip?: Record<string, boolean>;     // headers to ignore (by EXACT header text)
+  folderId?: string;
+  folderName?: string;
+  lastRowImported?: number;           // 1-based index of the LAST imported row
+};
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "GET" && req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  // token: header or query
+  // Token via header or query
   const headerToken = Array.isArray(req.headers["x-cron-secret"])
     ? req.headers["x-cron-secret"][0]
     : (req.headers["x-cron-secret"] as string | undefined);
-  const queryToken = typeof req.query.token === "string" ? (req.query.token as string) : undefined;
-  if ((headerToken || queryToken) !== process.env.CRON_SECRET) {
+  const queryToken =
+    typeof req.query.token === "string" ? (req.query.token as string) : undefined;
+  const provided = headerToken || queryToken;
+  if (provided !== process.env.CRON_SECRET) {
     return res.status(401).json({ error: "Unauthorized" });
   }
 
-  // optional filters
+  // Optional debug/filters
   const onlyUserEmail =
-    typeof req.query.userEmail === "string" ? (req.query.userEmail as string).toLowerCase() : undefined;
+    typeof req.query.userEmail === "string"
+      ? (req.query.userEmail as string).toLowerCase()
+      : undefined;
   const onlySpreadsheetId =
-    typeof req.query.spreadsheetId === "string" ? (req.query.spreadsheetId as string) : undefined;
-  const onlyTitle = typeof req.query.title === "string" ? (req.query.title as string) : undefined;
+    typeof req.query.spreadsheetId === "string"
+      ? (req.query.spreadsheetId as string)
+      : undefined;
+  const onlyTitle =
+    typeof req.query.title === "string" ? (req.query.title as string) : undefined;
   const dryRun = req.query.dryRun === "1" || req.query.dryRun === "true";
   const debug = req.query.debug === "1" || req.query.debug === "true";
 
-  const MAX_USERS = Number(process.env.POLL_MAX_USERS || 50);
-  const MAX_ROWS_PER_SHEET = Number(process.env.POLL_MAX_ROWS || 1000);
+  const MAX_USERS = Number(process.env.POLL_MAX_USERS || 10);
+  const MAX_ROWS_PER_SHEET = Number(process.env.POLL_MAX_ROWS || 500);
 
   try {
     await dbConnect();
 
-    // Look at BOTH arrays: syncedSheets and sheets
+    // ✅ support both shapes (syncedSheets AND legacy sheets)
     const users = await User.find({
       ...(onlyUserEmail ? { email: onlyUserEmail } : {}),
       $or: [
@@ -63,7 +84,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         { "googleSheets.sheets.0": { $exists: true } },
       ],
     })
-      .select({ email: 1, googleSheets: 1, googleTokens: 1 })
       .limit(MAX_USERS)
       .lean();
 
@@ -71,6 +91,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     for (const user of users) {
       const userEmail = String((user as any).email || "").toLowerCase();
+
+      // token from googleSheets or legacy googleTokens
       const gs: any = (user as any).googleSheets || {};
       const legacy: any = (user as any).googleTokens || {};
       const tok = gs?.refreshToken ? gs : legacy?.refreshToken ? legacy : null;
@@ -79,7 +101,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         continue;
       }
 
-      const base = process.env.NEXTAUTH_URL || process.env.NEXT_PUBLIC_BASE_URL || "";
+      const base =
+        process.env.NEXTAUTH_URL || process.env.NEXT_PUBLIC_BASE_URL || "";
       const oauth2 = new google.auth.OAuth2(
         process.env.GOOGLE_CLIENT_ID!,
         process.env.GOOGLE_CLIENT_SECRET!,
@@ -94,73 +117,75 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const drive = google.drive({ version: "v3", auth: oauth2 });
       const sheetsApi = google.sheets({ version: "v4", auth: oauth2 });
 
-      // Merge both shapes into a uniform iterable
-      const listA: AnySheetCfg[] = Array.isArray(gs.syncedSheets) ? gs.syncedSheets : [];
-      const listB: AnySheetCfg[] = Array.isArray(gs.sheets) ? gs.sheets : [];
-      const configs: AnySheetCfg[] = [...listA, ...listB];
+      // Normalize config list across BOTH shapes
+      const rawNew = Array.isArray(gs?.syncedSheets) ? gs.syncedSheets : [];
+      const rawLegacy = Array.isArray(gs?.sheets) ? gs.sheets : [];
 
-      if (!configs.length) {
-        detailsAll.push({ userEmail, note: "No linked Sheets" });
+      const normalized: SyncedSheetCfg[] = [
+        // already in the right shape
+        ...rawNew,
+        // legacy -> normalized
+        ...rawLegacy.map((x: any) => ({
+          spreadsheetId: String(x.sheetId || ""),   // legacy stored spreadsheet id in "sheetId"
+          title: x.sheetName || undefined,
+          headerRow: 1,
+          folderId: x.folderId ? String(x.folderId) : undefined,
+        })),
+      ].filter((c) => c && c.spreadsheetId);
+
+      if (!normalized.length) {
+        detailsAll.push({ userEmail, note: "No syncedSheets or legacy sheets" });
         continue;
       }
 
-      for (const cfg of configs) {
-        // Harmonize fields
-        // spreadsheetId: prefer cfg.spreadsheetId; otherwise if cfg.sheetId is a STRING assume it's the spreadsheetId (legacy)
-        let spreadsheetId: string | undefined =
-          typeof cfg.spreadsheetId === "string" && cfg.spreadsheetId
-            ? cfg.spreadsheetId
-            : typeof cfg.sheetId === "string" && cfg.sheetId
-            ? cfg.sheetId
-            : undefined;
+      for (const cfg of normalized) {
+        let {
+          spreadsheetId,
+          title,
+          sheetId,
+          headerRow = 1,
+          mapping = {},   // may be empty; we have a safe fallback
+          skip = {},
+          folderId,
+          folderName,
+          lastRowImported,
+        } = cfg || {};
 
-        // tabTitle: prefer cfg.title; else cfg.sheetName (legacy)
-        let title: string | undefined = cfg.title || cfg.sheetName;
-
-        // numeric tab id, if present
-        const tabId: number | undefined =
-          typeof cfg.sheetId === "number" ? (cfg.sheetId as number) : undefined;
-
-        const headerRow: number = typeof cfg.headerRow === "number" ? cfg.headerRow : 1;
-        const mapping: Record<string, string> = (cfg.mapping as any) || {};
-        const skip: Record<string, boolean> = (cfg.skip as any) || {};
-        const lastRowImported: number | undefined =
-          typeof cfg.lastRowImported === "number" ? cfg.lastRowImported : undefined;
-        let folderId: string | undefined = cfg.folderId ? String(cfg.folderId) : undefined;
-        let folderName: string | undefined = cfg.folderName;
-
-        if (!spreadsheetId) continue; // cannot proceed without it
+        if (!spreadsheetId) continue;
         if (onlySpreadsheetId && spreadsheetId !== onlySpreadsheetId) continue;
+        if (onlyTitle && title && title !== onlyTitle) continue;
 
-        // Resolve current tab title if we have a numeric tabId
-        if (!title && tabId != null) {
+        // If we have a numeric sheetId (tab id), resolve current tab title (tab might be renamed)
+        if (typeof sheetId === "number") {
           try {
             const meta = await sheetsApi.spreadsheets.get({
               spreadsheetId,
               fields: "sheets(properties(sheetId,title))",
             });
-            const found = (meta.data.sheets || []).find((s) => s.properties?.sheetId === tabId);
-            title = found?.properties?.title || title;
+            const found = (meta.data.sheets || []).find(
+              (s) => s.properties?.sheetId === sheetId
+            );
+            if (found?.properties?.title) {
+              title = found.properties.title;
+            }
           } catch {
-            /* ignore */
+            // ignore and try title as-is
           }
         }
         if (!title) {
-          // As a last resort, use the first sheet title
+          // fall back to the first sheet title if none provided
           try {
             const meta = await sheetsApi.spreadsheets.get({
               spreadsheetId,
               fields: "sheets(properties(title))",
             });
-            title = meta.data.sheets?.[0]?.properties?.title;
+            title = meta.data.sheets?.[0]?.properties?.title || "Sheet1";
           } catch {
-            /* ignore */
+            continue; // no title resolvable
           }
         }
-        if (onlyTitle && title && title !== onlyTitle) continue;
-        if (!title) continue; // still no title—skip safely
 
-        // Ensure/resolve folder
+        // Ensure folder exists or create a default one if folderId unknown
         let folderDoc: any = null;
         if (folderId) {
           try {
@@ -173,31 +198,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
         }
         if (!folderDoc) {
-          // auto-name from Drive file + tab
-          try {
-            const meta = await drive.files.get({ fileId: spreadsheetId, fields: "name" });
-            const defaultName = folderName || `${meta.data.name || "Imported Leads"} — ${title}`;
-            folderDoc = await Folder.findOneAndUpdate(
-              { userEmail, name: defaultName },
-              { $setOnInsert: { userEmail, name: defaultName, source: "google-sheets" } },
-              { new: true, upsert: true }
-            );
-          } catch {
-            // fallback to a generic container
-            const defaultName = folderName || `Imported Leads — ${title}`;
-            folderDoc = await Folder.findOneAndUpdate(
-              { userEmail, name: defaultName },
-              { $setOnInsert: { userEmail, name: defaultName, source: "google-sheets" } },
-              { new: true, upsert: true }
-            );
-          }
+          const meta = await drive.files.get({ fileId: spreadsheetId, fields: "name" });
+          const defaultName =
+            folderName || `${meta.data.name || "Imported Leads"} — ${title}`;
+          folderDoc = await Folder.findOneAndUpdate(
+            { userEmail, name: defaultName },
+            { $setOnInsert: { userEmail, name: defaultName, source: "google-sheets" } },
+            { new: true, upsert: true }
+          );
         }
         const targetFolderId = folderDoc._id as mongoose.Types.ObjectId;
 
-        // Pull data
+        // Read values
         const resp = await sheetsApi.spreadsheets.values.get({
           spreadsheetId,
-          range: `'${title.replace(/'/g, "''")}'!A1:ZZ`,
+          range: `'${title}'!A1:ZZ`,
           majorDimension: "ROWS",
         });
         const values = (resp.data.values || []) as string[][];
@@ -210,7 +225,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             imported: 0,
             updated: 0,
             skippedNoKey: 0,
-            note: "No data",
+            newLastRowImported: headerRow,
+            dryRun,
+            note: "No data in sheet",
           });
           continue;
         }
@@ -218,36 +235,47 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const headerIdx = Math.max(0, headerRow - 1);
         const rawHeaders = (values[headerIdx] || []).map((h) => String(h ?? "").trim());
 
-        // tolerant header alias map
+        // Build a tolerant header index map
         const headerNormToActual = new Map<string, string>();
         rawHeaders.forEach((h) => headerNormToActual.set(normHeader(h), h));
 
-        // default mapping if none provided
+        // robust default mapping (if cfg.mapping is empty)
         const defaultMap: Record<string, string> = {};
         for (const [norm, actual] of headerNormToActual.entries()) {
           if (!norm) continue;
           if (["first name", "firstname"].includes(norm)) defaultMap[actual] = "First Name";
           else if (["last name", "lastname"].includes(norm)) defaultMap[actual] = "Last Name";
-          else if (["phone", "phone number", "phone1", "phonenumber", "mobile"].includes(norm))
-            defaultMap[actual] = "phone";
+          else if (["phone", "phone number", "phone1", "phonenumber"].includes(norm)) defaultMap[actual] = "phone";
           else if (["email", "e-mail"].includes(norm)) defaultMap[actual] = "email";
           else if (["state"].includes(norm)) defaultMap[actual] = "State";
           else if (["notes", "note"].includes(norm)) defaultMap[actual] = "Notes";
+          else if (["dob", "date of birth"].includes(norm)) defaultMap[actual] = "DOB";
+          else if (["coverage amount"].includes(norm)) defaultMap[actual] = "Coverage Amount";
+          else if (["beneficiary"].includes(norm)) defaultMap[actual] = "Beneficiary";
+          else if (["age"].includes(norm)) defaultMap[actual] = "Age";
         }
 
+        // Normalize provided mapping: key = normalized header, value = field name
         const normalizedMapping: Record<string, string> = {};
         Object.entries(mapping || {}).forEach(([key, val]) => {
           normalizedMapping[normHeader(key)] = val;
         });
 
-        const resolveFieldName = (actualHeader: string): string | undefined =>
-          normalizedMapping[normHeader(actualHeader)] || defaultMap[actualHeader];
+        // Final mapping used by the poller: prefer explicit mapping, fallback to defaults
+        function resolveFieldName(actualHeader: string): string | undefined {
+          const byExplicit = normalizedMapping[normHeader(actualHeader)];
+          if (byExplicit) return byExplicit;
+          return defaultMap[actualHeader]; // default is keyed by ACTUAL header
+        }
 
-        // figure start/end using pointer (stored as 1-based last imported)
+        // Determine start/end using pointer (1-based last imported)
         const pointer = typeof lastRowImported === "number" ? lastRowImported : headerRow;
-        const firstDataZero = headerIdx + 1;
+        const firstDataZero = headerIdx + 1; // 0-based
+        // Convert 1-based LAST imported -> next row (0-based) = max(firstDataZero, pointer)
         let startIndex = Math.max(firstDataZero, Number(pointer));
+        // If the sheet shrank or pointer drifted too far, clamp back to first data row
         if (startIndex > values.length - 1) startIndex = firstDataZero;
+
         const endIndex = Math.min(values.length - 1, startIndex + MAX_ROWS_PER_SHEET - 1);
 
         let imported = 0;
@@ -263,12 +291,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             if (!hasAny) continue;
             lastProcessed = r;
 
+            // Build doc using tolerant mapping (explicit mapping first, fallback to defaults)
             const doc: Record<string, any> = {};
             rawHeaders.forEach((actualHeader, i) => {
-              if (skip[actualHeader] === true) return;
-              const field = resolveFieldName(actualHeader);
-              if (!field) return;
-              doc[field] = row[i] ?? "";
+              if (skip?.[actualHeader]) return; // skip by exact header text if provided
+              const fieldName = resolveFieldName(actualHeader);
+              if (!fieldName) return;
+              doc[fieldName] = row[i] ?? "";
             });
 
             const p = normPhone(doc.phone ?? doc.Phone);
@@ -282,7 +311,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             doc.source = "google-sheets";
             doc.sourceSpreadsheetId = spreadsheetId;
             doc.sourceTabTitle = title;
-            doc.sourceRowIndex = r + 1;
+            doc.sourceRowIndex = r + 1; // 1-based
             doc.normalizedPhone = p || undefined;
             if (e) doc.email = e;
 
@@ -295,9 +324,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
             if (!existing) {
               doc.folderId = targetFolderId;
+              // also mirror identity fields the rest of the app expects
               doc.Phone = String(doc.phone ?? doc.Phone ?? "");
               doc.phoneLast10 = p ? p.slice(-10) : undefined;
               doc.Email = e || undefined;
+              doc.status = doc.status || "New";
 
               if (!dryRun) {
                 const created = await Lead.create(doc);
@@ -325,28 +356,32 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
         }
 
-        // Save pointer back to BOTH possible arrays (best-effort)
+        // Save pointer best-effort (last processed -> next row index, 1-based)
         const newLast = Math.max(lastProcessed + 1, Number(pointer));
         if (!dryRun) {
-          // update “syncedSheets”
           await User.updateOne(
             {
               email: userEmail,
-              "googleSheets.syncedSheets.spreadsheetId": spreadsheetId,
+              $or: [
+                { "googleSheets.syncedSheets.spreadsheetId": spreadsheetId, "googleSheets.syncedSheets.title": cfg.title ?? title },
+                { "googleSheets.sheets.sheetId": spreadsheetId, "googleSheets.sheets.sheetName": cfg.title ?? title },
+              ],
             },
             {
               $set: {
-                "googleSheets.syncedSheets.$.lastRowImported": newLast,
-                "googleSheets.syncedSheets.$.lastImportedAt": new Date(),
-                "googleSheets.syncedSheets.$.folderId": targetFolderId,
-                "googleSheets.syncedSheets.$.folderName": folderDoc.name,
-                ...(tabId != null ? { "googleSheets.syncedSheets.$.sheetId": tabId } : {}),
-                ...(title ? { "googleSheets.syncedSheets.$.title": title } : {}),
+                "googleSheets.syncedSheets.$[m].lastRowImported": newLast,
+                "googleSheets.syncedSheets.$[m].lastImportedAt": new Date(),
+                "googleSheets.syncedSheets.$[m].folderId": targetFolderId,
+                "googleSheets.syncedSheets.$[m].folderName": folderDoc.name,
+                ...(typeof sheetId === "number" ? { "googleSheets.syncedSheets.$[m].sheetId": sheetId } : {}),
               },
+              arrayFilters: [
+                { "m.spreadsheetId": spreadsheetId },
+              ],
             }
-          ).catch(() => {});
+          ).catch(() => {/* ignore if user only has legacy array */});
 
-          // update “sheets” (legacy) where sheetId was the spreadsheetId string
+          // legacy pointer write (best-effort)
           await User.updateOne(
             {
               email: userEmail,
@@ -355,17 +390,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             {
               $set: {
                 "googleSheets.sheets.$.folderId": targetFolderId,
-                "googleSheets.sheets.$.folderName": folderDoc.name,
-                // store pointer alongside legacy record so we never re-read old rows
-                "googleSheets.sheets.$.lastRowImported": newLast,
-                "googleSheets.sheets.$.lastImportedAt": new Date(),
-                ...(title ? { "googleSheets.sheets.$.sheetName": title } : {}),
-              } as any,
+              },
             }
           ).catch(() => {});
         }
 
-        // Auto-enroll newly created leads
+        // Auto-enroll only the newly created leads into active drips for that folder
         if (!dryRun && newLeadIds.length) {
           try {
             await autoEnrollNewLeads({
@@ -383,6 +413,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           userEmail,
           spreadsheetId,
           title,
+          sheetId,
           headerRow,
           pointerWas: pointer,
           startIndex,
@@ -397,7 +428,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (debug) {
           detail.headers = rawHeaders;
           detail.mappingProvided = mapping;
-          detail.mappingDefaulted = Object.keys(mapping || {}).length ? undefined : defaultMap;
+          detail.mappingDefaulted = defaultMap;
+          detail.folderResolved = { id: String(targetFolderId), name: folderDoc.name };
         }
         detailsAll.push(detail);
       }
