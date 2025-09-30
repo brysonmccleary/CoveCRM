@@ -7,46 +7,55 @@ import DripCampaign from "@/models/DripCampaign";
 import { prebuiltDrips } from "@/utils/prebuiltDrips";
 
 /**
- * Ensure that every user has all prebuilt drips automatically.
- * - Runs idempotently per userEmail (no duplicates).
- * - Never deletes other campaigns.
- * - Scopes each campaign to the user.
+ * Ensure all prebuilt drips exist for the current user.
+ * - Idempotent per user (no duplicates)
+ * - Never deletes other campaigns
+ * - Scopes to user via DripCampaign.user
  */
 export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse
 ) {
   try {
-    const session = await getServerSession(req, res, authOptions as any);
-    if (!session?.user?.email) {
+    // Session typing fix: cast to a minimal shape we actually use
+    const session = (await getServerSession(
+      req,
+      res,
+      authOptions as any
+    )) as { user?: { email?: string | null } } | null;
+
+    const userEmail = session?.user?.email || null;
+    if (!userEmail) {
       return res.status(401).json({ error: "Unauthorized" });
     }
 
     await dbConnect();
-    const userEmail = session.user.email;
 
-    const results: any[] = [];
+    const results: Array<{ name: string; status: "created" | "exists" }> = [];
 
     for (const drip of prebuiltDrips) {
+      // Use the prebuilt "id" as a stable key for idempotency
+      const key = String(drip.id);
+
       const existing = await DripCampaign.findOne({
         user: userEmail,
-        key: drip.id, // use the prebuilt id as a stable key
-      });
+        key,
+      }).lean();
 
       if (existing) {
-        results.push({ name: drip.name, status: "exists" });
+        results.push({ name: existing.name, status: "exists" });
         continue;
       }
 
-      const campaign = await DripCampaign.create({
+      await DripCampaign.create({
         name: drip.name,
-        key: drip.id,
-        type: drip.type,
+        key, // <-- stable key so we can re-run safely
+        type: drip.type, // "sms" | "email"
         isActive: true,
-        isGlobal: false, // scoped to user, not global
+        isGlobal: false, // per-user
         assignedFolders: [],
         steps: (drip.messages || []).map((msg: any) => ({
-          text: msg.text,
+          text: String(msg.text ?? ""),
           day: String(msg.day ?? ""),
           time: "9:00 AM",
           calendarLink: "",
@@ -59,7 +68,7 @@ export default async function handler(
         user: userEmail,
       });
 
-      results.push({ name: campaign.name, status: "created" });
+      results.push({ name: drip.name, status: "created" });
     }
 
     return res.status(200).json({
@@ -69,6 +78,8 @@ export default async function handler(
     });
   } catch (err: any) {
     console.error("seed error", err);
-    return res.status(500).json({ error: "Failed to seed drips", detail: err?.message });
+    return res
+      .status(500)
+      .json({ error: "Failed to seed drips", detail: err?.message });
   }
 }
