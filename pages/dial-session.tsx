@@ -743,10 +743,13 @@ export default function DialSession() {
             if (sid && payload?.callSid && sid !== payload.callSid) return;
 
             const leadNum = normalizeE164(
-              (leadQueue[currentLeadIndex] and (leadQueue[currentLeadIndex] as any)?.phone) ||
-              (leadQueue[currentLeadIndex] &&
-                Object.entries(leadQueue[currentLeadIndex]).find(([k]) => k.toLowerCase().includes("phone"))?.[1]) ||
-              "",
+              ((leadQueue[currentLeadIndex] as any)?.phone) ||
+              (
+                leadQueue[currentLeadIndex] &&
+                (Object.entries(leadQueue[currentLeadIndex])
+                  .find(([k]) => k.toLowerCase().includes("phone"))?.[1] as string)
+              ) ||
+              ""
             );
             const eventOther = normalizeE164(payload?.otherNumber || "");
             const ownerNum = normalizeE164(payload?.ownerNumber || "");
@@ -775,7 +778,7 @@ export default function DialSession() {
               }
             }
 
-            if (s === "completed" or s === "canceled") {
+            if (s === "completed" || s === "canceled") {
               await markDisconnected(`socket-${s}`);
             }
           } catch {}
