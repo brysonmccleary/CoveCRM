@@ -9,15 +9,15 @@ import { google } from "googleapis";
 import mongoose from "mongoose";
 
 type LegacyBody = {
-  sheetId?: string;       // <-- legacy param: actually the spreadsheetId
-  sheetName?: string;     // <-- legacy tab title
-  folderId?: string;      // <-- legacy target (power users)
+  sheetId?: string;       // legacy: actually spreadsheetId (or URL)
+  sheetName?: string;     // legacy: tab title
+  folderId?: string;      // optional power-user override
   headerRow?: number;
   mapping?: Record<string, string>;
   skip?: Record<string, boolean>;
 };
 
-const SYSTEM_FOLDERS = new Set(["Sold", "Not Interested", "Booked Appointment", "No Show"]);
+const SYSTEM_FOLDERS = new Set(["Sold","Not Interested","Booked Appointment","No Show"]);
 
 function parseSpreadsheetId(urlOrId: string) {
   if (!urlOrId) return "";
@@ -30,27 +30,22 @@ function parseSpreadsheetId(urlOrId: string) {
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const session = await getServerSession(req, res, authOptions);
-  if (!session?.user?.email) {
-    return res.status(401).json({ message: "Unauthorized" });
-  }
-  const userEmail = String(session.user.email).toLowerCase();
+  if (!session?.user?.email) return res.status(401).json({ message: "Unauthorized" });
 
+  const userEmail = String(session.user.email).toLowerCase();
   await dbConnect();
   const user = await User.findOne({ email: userEmail });
   if (!user) return res.status(404).json({ message: "User not found" });
 
-  // Legacy GET (debug/UI list)
+  // GET -> list saved links
   if (req.method === "GET") {
     const gs: any = (user as any).googleSheets || {};
-    const sheets: any[] = gs.syncedSheets || gs.sheets || [];
-    return res.status(200).json({ sheets });
+    return res.status(200).json({ sheets: gs.syncedSheets || gs.sheets || [] });
   }
 
-  if (req.method !== "POST") {
-    return res.status(405).json({ message: "Method not allowed" });
-  }
+  if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed" });
 
-  // ---- Normalize legacy body into the new shape ----
+  // Normalize legacy body
   const {
     sheetId: legacySheetId,
     sheetName: legacySheetName,
@@ -62,11 +57,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const spreadsheetId = parseSpreadsheetId(String(legacySheetId || ""));
   const requestedTitle = legacySheetName ? String(legacySheetName) : undefined;
-  if (!spreadsheetId || !requestedTitle) {
-    return res.status(400).json({ message: "Missing required fields" });
-  }
+  if (!spreadsheetId || !requestedTitle) return res.status(400).json({ message: "Missing required fields" });
 
-  // OAuth from saved tokens (support both .googleSheets and .googleTokens)
+  // OAuth credentials from user
   const gs: any = (user as any).googleSheets || {};
   const legacyTok: any = (user as any).googleTokens || {};
   const tok = gs?.refreshToken ? gs : legacyTok?.refreshToken ? legacyTok : null;
@@ -87,7 +80,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const sheetsApi = google.sheets({ version: "v4", auth: oauth2 });
   const drive = google.drive({ version: "v3", auth: oauth2 });
 
-  // Resolve tab metadata (sheetId <-> title)
+  // Resolve tab metadata
   let resolvedTitle: string | undefined = requestedTitle;
   let resolvedTabId: number | undefined = undefined;
   try {
@@ -106,35 +99,29 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   } catch {
     return res.status(400).json({ message: "Unable to read spreadsheet metadata" });
   }
-  if (!resolvedTitle) {
-    return res.status(400).json({ message: "Missing tab title and unable to resolve" });
-  }
+  if (!resolvedTitle) return res.status(400).json({ message: "Missing tab title and unable to resolve" });
 
-  // Determine canonical folder name (ALWAYS auto-generated)
+  // Canonical folder name (always auto)
   const driveMeta = await drive.files.get({ fileId: spreadsheetId, fields: "name" });
   const canonicalName = `Google Sheet — ${driveMeta.data.name} — ${resolvedTitle}`;
 
-  // Find/create Folder:
-  // - If explicit folderId is given, respect it verbatim (power users).
-  // - Otherwise, upsert to canonical non-system name; never auto-use system folders.
+  // Find/create folder (respect explicit folderId; otherwise canonical)
   let folderDoc: any = null;
-
   if (folderId) {
     try {
       folderDoc = await Folder.findOne({ _id: new mongoose.Types.ObjectId(folderId), userEmail });
     } catch { /* ignore */ }
   }
-
   if (!folderDoc) {
-    const nameToUse = SYSTEM_FOLDERS.has(canonicalName) ? `${canonicalName} (auto)` : canonicalName;
+    const safeName = SYSTEM_FOLDERS.has(canonicalName) ? `${canonicalName} (auto)` : canonicalName;
     folderDoc = await Folder.findOneAndUpdate(
-      { userEmail, name: nameToUse },
-      { $setOnInsert: { userEmail, name: nameToUse, source: "google-sheets" } },
+      { userEmail, name: safeName },
+      { $setOnInsert: { userEmail, name: safeName, source: "google-sheets" } },
       { new: true, upsert: true }
     );
   }
 
-  // Build normalized link (pointer starts at header row)
+  // Normalized link
   const link = {
     spreadsheetId,
     title: resolvedTitle,
@@ -148,7 +135,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     lastImportedAt: new Date(),
   };
 
-  // Ensure googleSheets structure and SAVE NORMALIZED ENTRY
+  // Ensure container
   if (!(user as any).googleSheets) {
     (user as any).googleSheets = {
       accessToken: tok.accessToken || "",
@@ -160,12 +147,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     };
   }
 
-  // De-dup: prefer normalized entries; remove legacy duplicates for same sheet+title
+  // Remove any legacy entries for this sheet/title; upsert normalized one
   const arr: any[] = Array.isArray((user as any).googleSheets.syncedSheets)
     ? (user as any).googleSheets.syncedSheets
     : [];
 
-  // Remove any legacy items that match this spreadsheetId+title
   const filtered = arr.filter((s: any) => {
     const isLegacy = s && typeof s.sheetId === "string" && s.sheetName;
     if (!isLegacy) return true;
@@ -174,7 +160,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return !(legacySpreadsheetId === spreadsheetId && legacyTitle === resolvedTitle);
   });
 
-  // Upsert normalized
   const ix = filtered.findIndex((s: any) =>
     s.spreadsheetId === spreadsheetId && (s.sheetId === resolvedTabId || s.title === resolvedTitle)
   );
@@ -182,9 +167,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   else filtered.push(link);
 
   (user as any).googleSheets.syncedSheets = filtered;
-
-  // Keep .sheets array in sync (legacy readers), but write NORMALIZED (not legacy)
-  (user as any).googleSheets.sheets = filtered;
+  (user as any).googleSheets.sheets = filtered; // keep legacy readers aligned
 
   await user.save();
   return res.status(200).json({ ok: true, link });
