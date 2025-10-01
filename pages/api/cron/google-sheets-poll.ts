@@ -30,14 +30,16 @@ type NewCfg = {
 };
 
 type LegacyCfg = {
-  sheetId: string;    // actually the spreadsheetId
-  sheetName: string;  // tab title
+  sheetId: string;         // actually the spreadsheetId
+  sheetName: string;       // tab title
   folderId?: string;
+  folderName?: string;     // legacy sometimes saved this too
 };
 
 type AnyCfg = Partial<NewCfg & LegacyCfg>;
 
 function resolveCfg(raw: AnyCfg): NewCfg | null {
+  // spreadsheetId
   const spreadsheetId =
     typeof raw.spreadsheetId === "string" && raw.spreadsheetId
       ? raw.spreadsheetId
@@ -45,6 +47,7 @@ function resolveCfg(raw: AnyCfg): NewCfg | null {
       ? raw.sheetId
       : undefined;
 
+  // title
   const title =
     typeof raw.title === "string" && raw.title
       ? raw.title
@@ -98,6 +101,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     await dbConnect();
 
+    // support users who have either .syncedSheets or legacy .sheets
     const users = await User.find({
       ...(onlyUserEmail ? { email: onlyUserEmail } : {}),
       $or: [
@@ -136,36 +140,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const drive = google.drive({ version: "v3", auth: oauth2 });
       const sheetsApi = google.sheets({ version: "v4", auth: oauth2 });
 
-      // Merge arrays then de-dup by spreadsheetId:title, prefer normalized entries
-      const merged: AnyCfg[] = [
+      // Merge both arrays and normalize
+      const rawCfgs: AnyCfg[] = [
         ...(Array.isArray(gs.syncedSheets) ? gs.syncedSheets : []),
         ...(Array.isArray(gs.sheets) ? gs.sheets : []),
       ];
-      if (!merged.length) {
+
+      if (!rawCfgs.length) {
         detailsAll.push({ userEmail, note: "No linked sheets" });
         continue;
       }
 
-      const byKey = new Map<string, AnyCfg>();
-      for (const raw of merged) {
-        const cfg = resolveCfg(raw);
-        if (!cfg) continue;
-        const key = `${cfg.spreadsheetId}:${cfg.title}`;
-        const isNormalized = !!(raw as any).spreadsheetId;
-        const existing = byKey.get(key);
-        if (!existing) byKey.set(key, raw);
-        else {
-          const existingIsNormalized = !!(existing as any).spreadsheetId;
-          if (isNormalized && !existingIsNormalized) byKey.set(key, raw);
-        }
-      }
-
-      const finalCfgs: AnyCfg[] = Array.from(byKey.values());
-
-      for (const raw of finalCfgs) {
+      for (const raw of rawCfgs) {
         const cfg = resolveCfg(raw);
         if (!cfg) continue;
 
+        // route filters
         if (onlySpreadsheetId && cfg.spreadsheetId !== onlySpreadsheetId) continue;
         if (onlyTitle && cfg.title && cfg.title !== onlyTitle) continue;
 
@@ -181,7 +171,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           lastRowImported,
         } = cfg;
 
-        // Resolve actual tab title if numeric sheetId (tabs can be renamed)
+        // Resolve actual tab title if we have a numeric sheetId (tabs can be renamed)
         if (typeof sheetId === "number") {
           try {
             const meta = await sheetsApi.spreadsheets.get({
@@ -194,32 +184,50 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
         if (!title) continue;
 
-        // ---------- Folder routing (with hard guard) ----------
-        // 1) Try the given folderId if present and valid.
+        // ---------- Canonical folder enforcement ----------
+        // If a saved folderName is a system folder (Sold, etc) we IGNORE it
+        // and always use the canonical Google Sheet folder
+        const gmeta = await drive.files.get({ fileId: spreadsheetId, fields: "name" });
+        const canonicalName = `Google Sheet — ${gmeta.data.name || "Imported Leads"} — ${title}`;
+
+        let forcedCanonical = false;
+
+        // (1) Try explicit folderId if present AND not a system folder by name
         let folderDoc: any = null;
         if (folderId) {
           try {
-            folderDoc = await Folder.findOne({
+            const existing = await Folder.findOne({
               _id: new mongoose.Types.ObjectId(folderId),
               userEmail,
-            });
-          } catch { /* ignore invalid ObjectId */ }
+            }).lean();
+            if (existing && !SYSTEM_FOLDERS.has(existing.name || "")) {
+              folderDoc = existing;
+            } else {
+              forcedCanonical = true;
+            }
+          } catch { /* ignore bad id */ }
         }
 
-        // 2) If no folder or it's a system folder (Sold, etc), force canonical folder
-        let usedCanonical = false;
-        if (!folderDoc || (folderDoc?.name && SYSTEM_FOLDERS.has(folderDoc.name))) {
-          const gmeta = await drive.files.get({ fileId: spreadsheetId, fields: "name" });
-          const canonicalName = `Google Sheet — ${gmeta.data.name || "Imported Leads"} — ${title}`;
-          folderDoc = await Folder.findOneAndUpdate(
-            { userEmail, name: canonicalName },
-            { $setOnInsert: { userEmail, name: canonicalName, source: "google-sheets" } },
-            { new: true, upsert: true }
-          );
-          usedCanonical = true;
+        // (2) If no valid folderDoc yet, and a saved folderName is a system folder, force canonical
+        if (!folderDoc) {
+          if (folderName && SYSTEM_FOLDERS.has(folderName)) {
+            forcedCanonical = true;
+          }
         }
+
+        // (3) Choose the folder name to materialize:
+        //     canonicalName ALWAYS wins when forcedCanonical is true or when the named folder doesn't exist.
+        const chosenName = forcedCanonical ? canonicalName : (folderName || canonicalName);
+
+        // (4) Find-or-create the chosen folder; if chosenName happens to be a system name, append " (auto)"
+        const safeName = SYSTEM_FOLDERS.has(chosenName) ? `${chosenName} (auto)` : chosenName;
+        folderDoc = await Folder.findOneAndUpdate(
+          { userEmail, name: safeName },
+          { $setOnInsert: { userEmail, name: safeName, source: "google-sheets" } },
+          { new: true, upsert: true }
+        );
+
         const targetFolderId = folderDoc._id as mongoose.Types.ObjectId;
-        const targetFolderName = folderDoc.name as string;
 
         // Pull rows
         const resp = await sheetsApi.spreadsheets.values.get({
@@ -235,7 +243,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const headerNormToActual = new Map<string, string>();
         rawHeaders.forEach((h) => headerNormToActual.set(normHeader(h), h));
 
-        // default soft mapping
+        // default soft mapping (works even when user didn’t save any mapping)
         const defaultMap: Record<string, string> = {};
         for (const [norm, actual] of headerNormToActual.entries()) {
           if (!norm) continue;
@@ -266,9 +274,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         let updated = 0;
         let skippedNoKey = 0;
         let lastProcessed = Number(pointer) - 1;
-
         const newLeadIds: mongoose.Types.ObjectId[] = [];
-        const touchedLeadIds: mongoose.Types.ObjectId[] = [];
 
         if (startIndex <= endIndex) {
           for (let r = startIndex; r <= endIndex; r++) {
@@ -301,7 +307,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             doc.sourceSpreadsheetId = spreadsheetId;
             doc.sourceTabTitle = title;
             doc.sourceRowIndex = r + 1;
-            doc.folderId = targetFolderId;
+            doc.folderId = targetFolderId; // <- always canonical/safe folder
 
             const or: any[] = [];
             if (p) or.push({ normalizedPhone: p }, { phoneLast10: p.slice(-10) });
@@ -309,29 +315,39 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
             const filter = { userEmail, ...(or.length ? { $or: or } : {}) };
 
-            const existing = await Lead.findOne(filter).select("_id").lean<{ _id: mongoose.Types.ObjectId } | null>();
+            const existing = await Lead.findOne(filter).select("_id folderId").lean<{ _id: mongoose.Types.ObjectId, folderId?: mongoose.Types.ObjectId } | null>();
             if (!existing) {
               if (!dryRun) {
                 const created = await Lead.create(doc);
                 newLeadIds.push(created._id as mongoose.Types.ObjectId);
-                touchedLeadIds.push(created._id as mongoose.Types.ObjectId);
               }
               imported++;
             } else {
-              touchedLeadIds.push(existing._id as mongoose.Types.ObjectId);
+              // If existing is in a system folder, move it to canonical/safe folder
               if (!dryRun) {
-                await Lead.updateOne(
-                  { _id: existing._id },
-                  { $set: { ...doc, updatedAt: new Date() } }
-                );
+                let $set: any = { ...doc, updatedAt: new Date() };
+                if (existing.folderId) {
+                  try {
+                    const f = await Folder.findById(existing.folderId).select("name").lean<{ name?: string } | null>();
+                    if (f?.name && SYSTEM_FOLDERS.has(f.name)) {
+                      $set.folderId = targetFolderId;
+                    }
+                  } catch { /* ignore */ }
+                } else {
+                  $set.folderId = targetFolderId;
+                }
+                await Lead.updateOne({ _id: existing._id }, { $set });
               }
               updated++;
             }
           }
         }
 
-        // pointer update — keep arrayFilters schema-safe
+        // pointer (best effort) — update both arrays with arrayFilters
         const newLast = Math.max(lastProcessed + 1, Number(pointer));
+
+        // IMPORTANT: Always persist canonical/safe folder back to the user link so we never
+        // regress to a system bucket on subsequent runs.
         if (!dryRun) {
           await User.updateOne(
             { email: userEmail },
@@ -340,17 +356,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 "googleSheets.syncedSheets.$[x].lastRowImported": newLast,
                 "googleSheets.syncedSheets.$[x].lastImportedAt": new Date(),
                 "googleSheets.syncedSheets.$[x].folderId": targetFolderId,
-                "googleSheets.syncedSheets.$[x].folderName": targetFolderName,
+                "googleSheets.syncedSheets.$[x].folderName": folderDoc.name,
                 "googleSheets.sheets.$[y].lastRowImported": newLast,
                 "googleSheets.sheets.$[y].lastImportedAt": new Date(),
                 "googleSheets.sheets.$[y].folderId": targetFolderId,
-                "googleSheets.sheets.$[y].folderName": targetFolderName,
+                "googleSheets.sheets.$[y].folderName": folderDoc.name,
               },
             },
             {
               arrayFilters: [
                 { "x.spreadsheetId": spreadsheetId, "x.title": title },
-                { "y.sheetId": spreadsheetId }, // legacy shape, no sheetName in schema
+                { "y.sheetId": spreadsheetId, /* legacy had no sheetName */ },
               ],
             }
           );
@@ -370,21 +386,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
         }
 
-        // --- FINAL ENFORCEMENT: pin folderId to canonical after all side-effects ---
-        if (!dryRun && touchedLeadIds.length) {
-          await Lead.updateMany(
-            { _id: { $in: touchedLeadIds } },
-            { $set: { folderId: targetFolderId } }
-          );
-        }
-
         const detail: any = {
           userEmail,
           spreadsheetId,
           title,
-          folderId: String(targetFolderId),
-          folderName: targetFolderName,
-          forcedCanonical: usedCanonical,
           imported,
           updated,
           skippedNoKey,
@@ -394,13 +399,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           rowCount: values.length,
           newLastRowImported: newLast,
           dryRun,
+          folderId: String(targetFolderId),
+          folderName: folderDoc.name,
         };
+        if (forcedCanonical) detail.forcedCanonical = true;
         if (debug) {
           detail.headers = rawHeaders;
           detail.mappingProvided = mapping;
-          detail.mappingDefaulted = Object.fromEntries(
-            Object.entries(defaultMap).map(([k, v]) => [k, v])
-          );
+          detail.mappingDefaulted = Object.fromEntries(Object.entries(defaultMap).map(([k, v]) => [k, v]));
         }
         detailsAll.push(detail);
       }
