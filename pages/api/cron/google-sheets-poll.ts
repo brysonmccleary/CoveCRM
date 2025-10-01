@@ -1,4 +1,3 @@
-// /pages/api/cron/google-sheets-poll.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
@@ -215,9 +214,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           { userEmail, name: safeName },
           { $setOnInsert: { userEmail, name: safeName, source: "google-sheets" } },
           { new: true, upsert: true }
-        ).select("_id name").lean<{ _id: mongoose.Types.ObjectId; name?: string }>();
+        ).select("_id name").lean<{ _id: mongoose.Types.ObjectId; name?: string } | null>();
+
+        if (!created) {
+          throw new Error("Failed to create or load canonical folder");
+        }
+
         folderDoc = created;
-        const targetFolderId = folderDoc._id as mongoose.Types.ObjectId;
+        const targetFolderId = created._id as mongoose.Types.ObjectId;
 
         // Pull rows
         const resp = await sheetsApi.spreadsheets.values.get({
@@ -306,8 +310,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             const existing = await Lead.findOne(filter).select("_id folderId").lean<{ _id: mongoose.Types.ObjectId, folderId?: mongoose.Types.ObjectId } | null>();
             if (!existing) {
               if (!dryRun) {
-                const created = await Lead.create(doc);
-                newLeadIds.push(created._id as mongoose.Types.ObjectId);
+                const createdLead = await Lead.create(doc);
+                newLeadIds.push(createdLead._id as mongoose.Types.ObjectId);
               }
               imported++;
             } else {
