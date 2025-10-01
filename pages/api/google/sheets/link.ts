@@ -1,7 +1,7 @@
 // /pages/api/google/sheets/link.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
-import { authOptions } from "../auth/[...nextauth]";
+import { authOptions } from "../../auth/[...nextauth]"; // <-- fixed path
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import Folder from "@/models/Folder";
@@ -141,7 +141,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     skip,
     folderId: folderDoc._id,
     folderName: folderDoc.name,
-    lastRowImported: headerRow, // pointer starts at header row; next run imports the first data row
+    lastRowImported: headerRow, // next import starts at first data row
     lastImportedAt: new Date(),
   };
 
