@@ -14,6 +14,8 @@ const normEmail = (v: any) => String(v ?? "").trim().toLowerCase();
 const normHeader = (s: any) =>
   String(s ?? "").trim().toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ");
 
+const SYSTEM_FOLDERS = new Set(["Sold", "Not Interested", "Booked Appointment", "No Show"]);
+
 // Accept both new + legacy link shapes
 type NewCfg = {
   spreadsheetId: string;
@@ -149,7 +151,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const cfg = resolveCfg(raw);
         if (!cfg) continue;
         const key = `${cfg.spreadsheetId}:${cfg.title}`;
-        const isNormalized = !!(raw as any).spreadsheetId; // presence of normalized field
+        const isNormalized = !!(raw as any).spreadsheetId;
         const existing = byKey.get(key);
         if (!existing) byKey.set(key, raw);
         else {
@@ -192,7 +194,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
         if (!title) continue;
 
-        // Folder: use provided folderId if valid, else create/find default
+        // ---------- Folder routing (with hard guard) ----------
+        // 1) Try the given folderId if present and valid.
         let folderDoc: any = null;
         if (folderId) {
           try {
@@ -200,18 +203,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               _id: new mongoose.Types.ObjectId(folderId),
               userEmail,
             });
-          } catch { /* ignore */ }
+          } catch { /* ignore invalid ObjectId */ }
         }
-        if (!folderDoc) {
+
+        // 2) If no folder or it's a system folder (Sold, etc), force canonical folder
+        let usedCanonical = false;
+        if (!folderDoc || (folderDoc?.name && SYSTEM_FOLDERS.has(folderDoc.name))) {
           const gmeta = await drive.files.get({ fileId: spreadsheetId, fields: "name" });
-          const defaultName = folderName || `${gmeta.data.name || "Imported Leads"} — ${title}`;
+          const canonicalName = `${"Google Sheet"} — ${gmeta.data.name || "Imported Leads"} — ${title}`;
           folderDoc = await Folder.findOneAndUpdate(
-            { userEmail, name: defaultName },
-            { $setOnInsert: { userEmail, name: defaultName, source: "google-sheets" } },
+            { userEmail, name: canonicalName },
+            { $setOnInsert: { userEmail, name: canonicalName, source: "google-sheets" } },
             { new: true, upsert: true }
           );
+          usedCanonical = true;
         }
         const targetFolderId = folderDoc._id as mongoose.Types.ObjectId;
+        const targetFolderName = folderDoc.name as string;
 
         // Pull rows
         const resp = await sheetsApi.spreadsheets.values.get({
@@ -318,7 +326,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
         }
 
-        // pointer update — IMPORTANT: remove y.sheetName from filters (schema has no such path)
+        // pointer update — keep arrayFilters schema-safe
         const newLast = Math.max(lastProcessed + 1, Number(pointer));
         if (!dryRun) {
           await User.updateOne(
@@ -328,16 +336,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 "googleSheets.syncedSheets.$[x].lastRowImported": newLast,
                 "googleSheets.syncedSheets.$[x].lastImportedAt": new Date(),
                 "googleSheets.syncedSheets.$[x].folderId": targetFolderId,
-                "googleSheets.syncedSheets.$[x].folderName": folderDoc.name,
+                "googleSheets.syncedSheets.$[x].folderName": targetFolderName,
                 "googleSheets.sheets.$[y].lastRowImported": newLast,
                 "googleSheets.sheets.$[y].lastImportedAt": new Date(),
                 "googleSheets.sheets.$[y].folderId": targetFolderId,
+                "googleSheets.sheets.$[y].folderName": targetFolderName,
               },
             },
             {
               arrayFilters: [
                 { "x.spreadsheetId": spreadsheetId, "x.title": title },
-                { "y.sheetId": spreadsheetId }, // <- no y.sheetName here (not in schema)
+                { "y.sheetId": spreadsheetId }, // legacy shape, no sheetName in schema
               ],
             }
           );
@@ -361,6 +370,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           userEmail,
           spreadsheetId,
           title,
+          folderId: String(targetFolderId),
+          folderName: targetFolderName,
+          forcedCanonical: usedCanonical,
           imported,
           updated,
           skippedNoKey,
