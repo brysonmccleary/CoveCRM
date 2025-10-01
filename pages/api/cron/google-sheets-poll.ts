@@ -28,9 +28,10 @@ type NewCfg = {
 };
 
 type LegacyCfg = {
-  sheetId: string;         // actually the spreadsheetId
-  sheetName: string;       // tab title
+  sheetId: string;         // actually the spreadsheetId (legacy)
+  sheetName: string;       // tab title (legacy)
   folderId?: string;
+  lastRowImported?: number;
 };
 
 type AnyCfg = Partial<NewCfg & LegacyCfg>;
@@ -38,26 +39,22 @@ type AnyCfg = Partial<NewCfg & LegacyCfg>;
 function resolveCfg(raw: AnyCfg): NewCfg | null {
   // spreadsheetId
   const spreadsheetId =
-    typeof raw.spreadsheetId === "string" && raw.spreadsheetId
-      ? raw.spreadsheetId
-      : typeof raw.sheetId === "string" && raw.sheetId
-      ? raw.sheetId
-      : undefined;
+    (typeof raw.spreadsheetId === "string" && raw.spreadsheetId) ? raw.spreadsheetId
+    : (typeof raw.sheetId === "string" && raw.sheetId) ? (raw.sheetId as unknown as string)
+    : undefined;
 
   // title
   const title =
-    typeof raw.title === "string" && raw.title
-      ? raw.title
-      : typeof (raw as any).sheetName === "string" && (raw as any).sheetName
-      ? (raw as any).sheetName
-      : undefined;
+    (typeof raw.title === "string" && raw.title) ? raw.title
+    : (typeof (raw as any).sheetName === "string" && (raw as any).sheetName) ? (raw as any).sheetName
+    : undefined;
 
-  if (!spreadsheetId || !title) return null;
+  if (!spreadsheetId && !title) return null; // must have at least spreadsheetId or title (will try resolve later)
 
   return {
-    spreadsheetId,
-    title,
-    sheetId: typeof raw.sheetId === "number" ? raw.sheetId : undefined,
+    spreadsheetId: spreadsheetId as string,
+    title, // may be resolved via sheetId later
+    sheetId: (typeof raw.sheetId === "number" ? raw.sheetId : undefined),
     headerRow: raw.headerRow ?? 1,
     mapping: raw.mapping || {},
     skip: raw.skip || {},
@@ -153,7 +150,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (!cfg) continue;
 
         // route filters
-        if (onlySpreadsheetId && cfg.spreadsheetId !== onlySpreadsheetId) continue;
+        if (onlySpreadsheetId && cfg.spreadsheetId && cfg.spreadsheetId !== onlySpreadsheetId) continue;
         if (onlyTitle && cfg.title && cfg.title !== onlyTitle) continue;
 
         let {
@@ -168,16 +165,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           lastRowImported,
         } = cfg;
 
-        // Resolve actual tab title if we have a numeric sheetId (tabs can be renamed)
-        if (typeof sheetId === "number") {
-          try {
-            const meta = await sheetsApi.spreadsheets.get({
-              spreadsheetId,
-              fields: "sheets(properties(sheetId,title))",
-            });
-            const found = (meta.data.sheets || []).find(s => s.properties?.sheetId === sheetId);
+        // Resolve tab: prefer sheetId (handles renames), then title
+        try {
+          const meta = await sheetsApi.spreadsheets.get({
+            spreadsheetId,
+            fields: "sheets(properties(sheetId,title))",
+          });
+          const tabs = meta.data.sheets || [];
+          if (typeof sheetId === "number") {
+            const found = tabs.find(s => s.properties?.sheetId === sheetId);
             if (found?.properties?.title) title = found.properties.title;
-          } catch { /* ignore */ }
+          } else if (title) {
+            const exists = tabs.some(s => s.properties?.title === title);
+            if (!exists && tabs[0]?.properties?.title) {
+              title = tabs[0].properties!.title!;
+            }
+          } else if (tabs[0]?.properties?.title) {
+            title = tabs[0].properties!.title!;
+          }
+        } catch {
+          // If meta fails, skip this link
+          detailsAll.push({ userEmail, spreadsheetId, title: title || null, error: "metadata_error" });
+          continue;
         }
         if (!title) continue;
 
@@ -202,14 +211,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
         const targetFolderId = folderDoc._id as mongoose.Types.ObjectId;
 
-        // Pull rows
-        const resp = await sheetsApi.spreadsheets.values.get({
-          spreadsheetId,
-          range: `'${title}'!A1:ZZ`,
-          majorDimension: "ROWS",
-        });
-        const values = (resp.data.values || []) as string[][];
+        // Pull rows (wide range, robust to wide sheets)
+        let values: string[][] = [];
+        try {
+          const resp = await sheetsApi.spreadsheets.values.get({
+            spreadsheetId,
+            range: `'${title}'!A1:ZZZ`,
+            majorDimension: "ROWS",
+          });
+          values = (resp.data.values || []) as string[][];
+        } catch {
+          detailsAll.push({ userEmail, spreadsheetId, title, error: "values_get_error" });
+          continue;
+        }
+
         const headerIdx = Math.max(0, headerRow - 1);
+        if (values.length <= headerIdx) {
+          // no header row present
+          detailsAll.push({ userEmail, spreadsheetId, title, info: "no_header_or_no_rows", rowCount: values.length });
+          continue;
+        }
         const rawHeaders = (values[headerIdx] || []).map((h) => String(h ?? "").trim());
 
         // tolerant header map
@@ -222,10 +243,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           if (!norm) continue;
           if (["first name", "firstname"].includes(norm)) defaultMap[actual] = "First Name";
           else if (["last name", "lastname"].includes(norm)) defaultMap[actual] = "Last Name";
-          else if (["phone", "phone number", "phonenumber", "phone1"].includes(norm)) defaultMap[actual] = "phone";
+          else if (["phone", "phone number", "phonenumber", "phone1", "mobile"].includes(norm)) defaultMap[actual] = "phone";
           else if (["email", "e-mail"].includes(norm)) defaultMap[actual] = "email";
           else if (["state"].includes(norm)) defaultMap[actual] = "State";
           else if (["notes", "note"].includes(norm)) defaultMap[actual] = "Notes";
+          else if (["city"].includes(norm)) defaultMap[actual] = "City";
+          else if (["address"].includes(norm)) defaultMap[actual] = "Address";
+          else if (["zip", "postal"].includes(norm)) defaultMap[actual] = "Zip";
+          else if (["lead type", "leadtype"].includes(norm)) defaultMap[actual] = "leadType";
         }
 
         // explicit mapping normalization
@@ -238,9 +263,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         // compute window based on pointer
         const pointer = typeof lastRowImported === "number" ? lastRowImported : headerRow;
-        const firstDataZero = headerIdx + 1;
-        let startIndex = Math.max(firstDataZero, Number(pointer));
-        if (startIndex > values.length - 1) startIndex = firstDataZero;
+        const firstDataZero = headerIdx + 1; // first row after header, 0-based
+        let startIndex = Math.max(firstDataZero, Number(pointer)); // pointer is 1-based; values[] is 0-based, but we store last processed row index (1-based)
+        // keep within bounds
+        if (startIndex > values.length - 1) {
+          // nothing new; keep pointer as is and continue
+          detailsAll.push({
+            userEmail, spreadsheetId, title,
+            imported: 0, updated: 0, skippedNoKey: 0,
+            headerRow, startIndex, endIndex: startIndex - 1, rowCount: values.length,
+            newLastRowImported: pointer, dryRun
+          });
+          continue;
+        }
         const endIndex = Math.min(values.length - 1, startIndex + MAX_ROWS_PER_SHEET - 1);
 
         let imported = 0;
@@ -279,19 +314,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             doc.source = "google-sheets";
             doc.sourceSpreadsheetId = spreadsheetId;
             doc.sourceTabTitle = title;
-            doc.sourceRowIndex = r + 1;
+            doc.sourceRowIndex = r + 1; // 1-based
             doc.folderId = targetFolderId;
 
             const or: any[] = [];
             if (p) or.push({ normalizedPhone: p }, { phoneLast10: p.slice(-10) });
             if (e) or.push({ Email: e }, { email: e });
 
-            const filter = { userEmail, ...(or.length ? { $or: or } : {}) };
+            const filter = { userEmail, folderId: targetFolderId, ...(or.length ? { $or: or } : {}) };
 
             const existing = await Lead.findOne(filter).select("_id").lean<{ _id: mongoose.Types.ObjectId } | null>();
             if (!existing) {
               if (!dryRun) {
-                const created = await Lead.create(doc);
+                const created = await Lead.create({ ...doc, createdAt: new Date(), updatedAt: new Date() });
                 newLeadIds.push(created._id as mongoose.Types.ObjectId);
               }
               imported++;
@@ -311,9 +346,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const newLast = Math.max(lastProcessed + 1, Number(pointer));
         if (!dryRun) {
           await User.updateOne(
-            {
-              email: userEmail,
-            },
+            { email: userEmail },
             {
               $set: {
                 "googleSheets.syncedSheets.$[x].lastRowImported": newLast,
@@ -331,7 +364,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 { "y.sheetId": spreadsheetId, "y.sheetName": title },
               ],
             }
-          );
+          ).catch(() => { /* ignore */ });
         }
 
         // auto-enroll only brand-new leads
@@ -352,6 +385,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           userEmail,
           spreadsheetId,
           title,
+          folderId: String(targetFolderId),
+          folderName: folderDoc?.name,
           imported,
           updated,
           skippedNoKey,
