@@ -29,16 +29,28 @@ type NewCfg = {
 
 type LegacyCfg = {
   sheetId: string;         // actually the spreadsheetId
-  sheetName: string;       // actually the tab title
+  sheetName: string;       // tab title
   folderId?: string;
 };
 
 type AnyCfg = Partial<NewCfg & LegacyCfg>;
 
 function resolveCfg(raw: AnyCfg): NewCfg | null {
-  // Start with whatever we have
-  let spreadsheetId = raw.spreadsheetId || (raw.sheetId as unknown as string);
-  let title = raw.title || (raw as LegacyCfg).sheetName;
+  // spreadsheetId
+  const spreadsheetId =
+    typeof raw.spreadsheetId === "string" && raw.spreadsheetId
+      ? raw.spreadsheetId
+      : typeof raw.sheetId === "string" && raw.sheetId
+      ? raw.sheetId
+      : undefined;
+
+  // title
+  const title =
+    typeof raw.title === "string" && raw.title
+      ? raw.title
+      : typeof (raw as any).sheetName === "string" && (raw as any).sheetName
+      ? (raw as any).sheetName
+      : undefined;
 
   if (!spreadsheetId || !title) return null;
 
@@ -86,7 +98,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     await dbConnect();
 
-    // ✅ support users who have either .syncedSheets or legacy .sheets
+    // support users who have either .syncedSheets or legacy .sheets
     const users = await User.find({
       ...(onlyUserEmail ? { email: onlyUserEmail } : {}),
       $or: [
@@ -157,7 +169,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         } = cfg;
 
         // Resolve actual tab title if we have a numeric sheetId (tabs can be renamed)
-        if (sheetId != null) {
+        if (typeof sheetId === "number") {
           try {
             const meta = await sheetsApi.spreadsheets.get({
               spreadsheetId,
@@ -295,18 +307,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
         }
 
-        // pointer (best effort)
+        // pointer (best effort) — update both arrays with arrayFilters
         const newLast = Math.max(lastProcessed + 1, Number(pointer));
         if (!dryRun) {
           await User.updateOne(
             {
               email: userEmail,
-              $or: [
-                { "googleSheets.syncedSheets.spreadsheetId": spreadsheetId, "googleSheets.syncedSheets.title": title },
-                // also allow legacy match by sheetId+sheetName to keep pointer for those entries
-                { "googleSheets.syncedSheets.sheetId": spreadsheetId, "googleSheets.syncedSheets.title": title },
-                { "googleSheets.sheets.sheetId": spreadsheetId, "googleSheets.sheets.sheetName": title },
-              ],
             },
             {
               $set: {
@@ -359,7 +365,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (debug) {
           detail.headers = rawHeaders;
           detail.mappingProvided = mapping;
-          // show a readable default map
           detail.mappingDefaulted = Object.fromEntries(Object.entries(defaultMap).map(([k, v]) => [k, v]));
         }
         detailsAll.push(detail);
