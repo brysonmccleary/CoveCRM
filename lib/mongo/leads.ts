@@ -39,7 +39,7 @@ const LeadSchema = new Schema(
 
     // Ownership / scoping
     userEmail: { type: String, required: true },
-    ownerEmail: { type: Schema.Types.Mixed }, // keep legacy docs readable; we no longer write to it
+    ownerEmail: { type: Schema.Types.Mixed }, // legacy; we don't write it anymore
 
     // Folder linkage (canonical)
     folderId: { type: Schema.Types.ObjectId, ref: "Folder" },
@@ -70,6 +70,9 @@ const LeadSchema = new Schema(
       enum: ["Final Expense", "Veteran", "Mortgage Protection", "IUL"],
       default: "Final Expense",
     },
+
+    // Source of creation (we rely on this guard)
+    source: { type: String }, // e.g. "google-sheets", "csv", "manual"
   },
   { timestamps: true, strict: false }
 );
@@ -78,27 +81,99 @@ const LeadSchema = new Schema(
 LeadSchema.index({ userEmail: 1, updatedAt: -1 }, { name: "lead_user_updated_desc" });
 LeadSchema.index({ userEmail: 1, Phone: 1 }, { name: "lead_user_phone_idx" });
 LeadSchema.index({ userEmail: 1, normalizedPhone: 1 }, { name: "lead_user_normalized_phone_idx" });
-LeadSchema.index({ ownerEmail: 1, Phone: 1 }, { name: "lead_owner_phone_idx" }); // legacy reads OK
+LeadSchema.index({ ownerEmail: 1, Phone: 1 }, { name: "lead_owner_phone_idx" }); // legacy
 LeadSchema.index({ userEmail: 1, folderId: 1 }, { name: "lead_user_folder_idx" });
 LeadSchema.index({ State: 1 }, { name: "lead_state_idx" });
 LeadSchema.index({ userEmail: 1, isAIEngaged: 1, updatedAt: -1 }, { name: "lead_ai_engaged_idx" });
 
-// -------- Utilities --------
-export const sanitizeLeadType = (input: string): string => {
-  const normalized = (input || "").toLowerCase().trim();
-  if (normalized.includes("veteran") || normalized === "vet") return "Veteran";
-  if (normalized.includes("mortgage")) return "Mortgage Protection";
-  if (normalized.includes("iul")) return "IUL";
-  return "Final Expense";
-};
-
-const Lead = (models.Lead as mongoose.Model<any>) || model("Lead", LeadSchema);
-
-// ---- Auto-enroll helper (FIXED) ----
+// -------- System folder guard (single choke-point) --------
 import Folder from "@/models/Folder";
 import DripCampaign from "@/models/DripCampaign";
 import DripEnrollmentModel from "@/models/DripEnrollment";
 
+const SYSTEM_NAMES = new Set([
+  "sold",
+  "not interested",
+  "booked appointment",
+  "no show",
+]);
+
+function isSystemFolderName(name?: string | null) {
+  const n = String(name ?? "").trim().toLowerCase();
+  if (!n) return false;
+  if (SYSTEM_NAMES.has(n)) return true;
+  if (n.startsWith("sold")) return true;
+  if (n.startsWith("not interested")) return true;
+  if (n.startsWith("booked appointment")) return true;
+  if (n.startsWith("no show")) return true;
+  return false;
+}
+
+/**
+ * If an update/save tries to move a Google Sheets lead into a system folder,
+ * drop that folder change (keep the current/canonical folder).
+ */
+async function stripSystemFolderForSheetsLead(this: any) {
+  // Query middleware (update* cases)
+  const update = typeof this.getUpdate === "function" ? this.getUpdate() : null;
+  if (!update) return;
+
+  const $set = update.$set || update;
+  const targetFolderId = $set?.folderId as Types.ObjectId | string | undefined;
+  if (!targetFolderId) return;
+
+  // Load the lead we are updating to check its source
+  const q = this.getQuery ? this.getQuery() : {};
+  const existing = await (models.Lead as mongoose.Model<any>).findOne(q).select("source folderId").lean();
+  if (!existing || existing.source !== "google-sheets") return;
+
+  // Peek the destination folder name
+  let dest: { name?: string } | null = null;
+  try {
+    const id = targetFolderId instanceof Types.ObjectId ? targetFolderId : new Types.ObjectId(String(targetFolderId));
+    dest = await (Folder as any).findById(id).select("name").lean();
+  } catch {
+    return; // bad id? ignore guard
+  }
+
+  if (dest?.name && isSystemFolderName(dest.name)) {
+    // Remove the attempted move; keep all other fields
+    if (update.$set && "folderId" in update.$set) delete update.$set.folderId;
+    if (!update.$set && "folderId" in update) delete (update as any).folderId;
+    this.setUpdate(update);
+  }
+}
+
+// Apply to common mutation paths
+LeadSchema.pre("findOneAndUpdate", stripSystemFolderForSheetsLead);
+LeadSchema.pre("updateOne", stripSystemFolderForSheetsLead);
+
+// Direct document save (e.g., new Lead() then save or findById().save())
+LeadSchema.pre("save", async function (next) {
+  try {
+    const doc = this as any;
+    if (doc?.source !== "google-sheets") return next();
+
+    if (doc.folderId) {
+      try {
+        const dest = await (Folder as any).findById(doc.folderId).select("name").lean();
+        if (dest?.name && isSystemFolderName(dest.name)) {
+          // drop the bad move
+          doc.folderId = undefined;
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+    next();
+  } catch (e) {
+    next(e as any);
+  }
+});
+
+const Lead = (models.Lead as mongoose.Model<any>) || model("Lead", LeadSchema);
+
+// ---- Auto-enroll helper (unchanged) ----
 /**
  * Enrolls freshly-created leads into active campaigns assigned to the folder.
  * - Matches on folderId string OR folder name in DripCampaign.assignedFolders (string array).
@@ -120,12 +195,10 @@ export async function autoEnrollNewLeads(params: {
   const folderIdStr = String(fid);
   const folderName = (folder as any).name as string | undefined;
 
-  // Build folder match ORs
   const folderMatch: any[] = [{ assignedFolders: folderIdStr }];
   if (folderName) folderMatch.push({ assignedFolders: folderName });
 
-  // Find active campaigns that (match folder) AND (belong to user OR are global)
-  const campaigns = await DripCampaign.find({
+  const campaigns = await (DripCampaign as any).find({
     isActive: true,
     $and: [
       { $or: folderMatch },
@@ -167,13 +240,13 @@ export async function autoEnrollNewLeads(params: {
     try {
       await (DripEnrollmentModel as any).bulkWrite(bulkOps, { ordered: false });
     } catch (e) {
-      // Ignore duplicate key races; uniqueness is enforced by the index
+      // Ignore duplicate key races
       console.warn("autoEnrollNewLeads(): bulkWrite warning", (e as any)?.message || e);
     }
   }
 }
 
-// ---- CRUD helpers ----
+// ---- CRUD helpers (unchanged) ----
 export const getLeadById = async (leadId: string) => {
   return await Lead.findById(leadId);
 };
@@ -186,12 +259,10 @@ export const deleteLeadById = async (leadId: string) => {
   return await Lead.findByIdAndDelete(leadId);
 };
 
-// Ensure ObjectId for folderId on any bulk creation path.
 function toObjectId(id: string | Types.ObjectId): Types.ObjectId {
   return id instanceof Types.ObjectId ? id : new Types.ObjectId(id);
 }
 
-// These helpers accept already-normalized rows; we only guarantee folderId typing & defaults here.
 export const createLeadsFromCSV = async (
   leads: any[],
   userEmail: string,
@@ -207,7 +278,6 @@ export const createLeadsFromCSV = async (
       lead.normalizedPhone ??
       (typeof lead.Phone === "string" ? lead.Phone.replace(/\D+/g, "") : undefined);
 
-    // never write ownerEmail in new docs
     const { ownerEmail, ...rest } = lead;
 
     return {
@@ -237,6 +307,14 @@ export const createLeadsFromCSV = async (
   return inserted;
 };
 
+export const sanitizeLeadType = (input: string): string => {
+  const normalized = (input || "").toLowerCase().trim();
+  if (normalized.includes("veteran") || normalized === "vet") return "Veteran";
+  if (normalized.includes("mortgage")) return "Mortgage Protection";
+  if (normalized.includes("iul")) return "IUL";
+  return "Final Expense";
+};
+
 export const createLeadsFromGoogleSheet = async (
   sheetLeads: any[],
   userEmail: string,
@@ -264,6 +342,7 @@ export const createLeadsFromGoogleSheet = async (
       Email: emailLower,
       email: emailLower2,
       leadType: sanitizeLeadType(lead.leadType || ""),
+      source: lead.source || "google-sheets",
     };
   });
 
@@ -281,4 +360,5 @@ export const createLeadsFromGoogleSheet = async (
   return inserted;
 };
 
+const Lead = (models.Lead as mongoose.Model<any>) || model("Lead", LeadSchema);
 export default Lead;
