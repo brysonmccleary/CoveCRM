@@ -1,7 +1,7 @@
 // /pages/api/google/sheets/link.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
-import { authOptions } from "../../auth/[...nextauth]"; // <-- fixed path
+import { authOptions } from "../../auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import Folder from "@/models/Folder";
@@ -16,9 +16,12 @@ type Body = {
   headerRow?: number;       // default 1
   mapping?: Record<string,string>;
   skip?: Record<string,boolean>;
-  folderName?: string;      // if absent, auto-name from Drive file + tab
-  folderId?: string;        // optional: link to existing folder
+  // NOTE: folderName is intentionally ignored unless folderId is provided (see below)
+  folderName?: string;
+  folderId?: string;        // explicit target; respected verbatim
 };
+
+const SYSTEM_FOLDERS = new Set(["Sold","Not Interested","Booked Appointment"]);
 
 function parseSpreadsheetId(urlOrId: string) {
   if (!urlOrId) return "";
@@ -42,7 +45,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const user = await User.findOne({ email: userEmail });
   if (!user) return res.status(404).json({ message: "User not found" });
 
-  // GET -> list saved links for UI/debug
+  // GET -> list saved links
   if (req.method === "GET") {
     const gs: any = (user as any).googleSheets || {};
     return res.status(200).json({ sheets: gs.syncedSheets || [] });
@@ -57,7 +60,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     headerRow = 1,
     mapping = {},
     skip = {},
-    folderName,
+    folderName: _ignoredFolderName,
     folderId,
   } = (req.body || {}) as Body;
 
@@ -108,30 +111,41 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
   if (!resolvedTitle) return res.status(400).json({ message: "Missing tab title and unable to resolve" });
 
-  // Ensure/create Folder
+  // Determine canonical folder name (ALWAYS auto-generated)
+  const driveMeta = await drive.files.get({ fileId: spreadsheetId, fields: "name" });
+  const canonicalName = `Google Sheet — ${driveMeta.data.name} — ${resolvedTitle}`;
+
+  // Find/create Folder:
+  // - If explicit folderId is given: use it verbatim (allows power users to target a system folder on purpose).
+  // - Otherwise: upsert to the canonical (non-system) name; never auto-use system folders.
   let folderDoc: any = null;
+
   if (folderId) {
     try {
-      folderDoc = await Folder.findOne({
-        _id: new mongoose.Types.ObjectId(folderId),
-        userEmail,
-      });
+      folderDoc = await Folder.findOne({ _id: new mongoose.Types.ObjectId(folderId), userEmail });
     } catch { /* ignore */ }
   }
+
   if (!folderDoc) {
-    let baseName = folderName;
-    if (!baseName) {
-      const f = await drive.files.get({ fileId: spreadsheetId, fields: "name" });
-      baseName = `Google Sheet — ${f.data.name} — ${resolvedTitle}`;
+    if (SYSTEM_FOLDERS.has(canonicalName)) {
+      // Shouldn't happen because the canonical format won't match system names,
+      // but guard anyway: append suffix to avoid collision.
+      const safeName = `${canonicalName} (auto)`;
+      folderDoc = await Folder.findOneAndUpdate(
+        { userEmail, name: safeName },
+        { $setOnInsert: { userEmail, name: safeName, source: "google-sheets" } },
+        { new: true, upsert: true }
+      );
+    } else {
+      folderDoc = await Folder.findOneAndUpdate(
+        { userEmail, name: canonicalName },
+        { $setOnInsert: { userEmail, name: canonicalName, source: "google-sheets" } },
+        { new: true, upsert: true }
+      );
     }
-    folderDoc = await Folder.findOneAndUpdate(
-      { userEmail, name: baseName },
-      { $setOnInsert: { userEmail, name: baseName, source: "google-sheets" } },
-      { new: true, upsert: true }
-    );
   }
 
-  // Build normalized link
+  // Build normalized link (pointer starts at header row)
   const link = {
     spreadsheetId,
     title: resolvedTitle,
@@ -141,11 +155,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     skip,
     folderId: folderDoc._id,
     folderName: folderDoc.name,
-    lastRowImported: headerRow, // next import starts at first data row
+    lastRowImported: headerRow,
     lastImportedAt: new Date(),
   };
 
-  // Ensure googleSheets object and save
+  // Ensure googleSheets structure and save
   if (!(user as any).googleSheets) {
     (user as any).googleSheets = {
       accessToken: tok.accessToken || "",
@@ -157,8 +171,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
   const arr: any[] = (user as any).googleSheets.syncedSheets || [];
   const ix = arr.findIndex((s: any) =>
-    s.spreadsheetId === spreadsheetId &&
-    (s.sheetId === resolvedSheetId || s.title === resolvedTitle)
+    s.spreadsheetId === spreadsheetId && (s.sheetId === resolvedSheetId || s.title === resolvedTitle)
   );
   if (ix >= 0) arr[ix] = { ...arr[ix], ...link };
   else arr.push(link);
