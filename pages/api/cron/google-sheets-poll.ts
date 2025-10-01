@@ -36,7 +36,6 @@ type LegacyCfg = {
 type AnyCfg = Partial<NewCfg & LegacyCfg>;
 
 function resolveCfg(raw: AnyCfg): NewCfg | null {
-  // spreadsheetId
   const spreadsheetId =
     typeof raw.spreadsheetId === "string" && raw.spreadsheetId
       ? raw.spreadsheetId
@@ -44,7 +43,6 @@ function resolveCfg(raw: AnyCfg): NewCfg | null {
       ? raw.sheetId
       : undefined;
 
-  // title
   const title =
     typeof raw.title === "string" && raw.title
       ? raw.title
@@ -66,6 +64,8 @@ function resolveCfg(raw: AnyCfg): NewCfg | null {
     lastRowImported: raw.lastRowImported,
   };
 }
+
+// ------------------------------------------------------------------------
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "GET" && req.method !== "POST") {
@@ -134,7 +134,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const drive = google.drive({ version: "v3", auth: oauth2 });
       const sheetsApi = google.sheets({ version: "v4", auth: oauth2 });
 
-      // Merge both arrays then de-dup by spreadsheetId:title, preferring normalized entries
+      // Merge arrays then de-dup by spreadsheetId:title, prefer normalized entries
       const merged: AnyCfg[] = [
         ...(Array.isArray(gs.syncedSheets) ? gs.syncedSheets : []),
         ...(Array.isArray(gs.sheets) ? gs.sheets : []),
@@ -151,11 +151,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const key = `${cfg.spreadsheetId}:${cfg.title}`;
         const isNormalized = !!(raw as any).spreadsheetId; // presence of normalized field
         const existing = byKey.get(key);
-        if (!existing) {
-          byKey.set(key, raw);
-        } else {
+        if (!existing) byKey.set(key, raw);
+        else {
           const existingIsNormalized = !!(existing as any).spreadsheetId;
-          // prefer normalized over legacy
           if (isNormalized && !existingIsNormalized) byKey.set(key, raw);
         }
       }
@@ -181,7 +179,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           lastRowImported,
         } = cfg;
 
-        // Resolve actual tab title if we have a numeric sheetId (tabs can be renamed)
+        // Resolve actual tab title if numeric sheetId (tabs can be renamed)
         if (typeof sheetId === "number") {
           try {
             const meta = await sheetsApi.spreadsheets.get({
@@ -194,7 +192,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
         if (!title) continue;
 
-        // Folder: use provided folderId if valid, else create/find a sane default
+        // Folder: use provided folderId if valid, else create/find default
         let folderDoc: any = null;
         if (folderId) {
           try {
@@ -320,13 +318,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
         }
 
-        // pointer update
+        // pointer update — IMPORTANT: remove y.sheetName from filters (schema has no such path)
         const newLast = Math.max(lastProcessed + 1, Number(pointer));
         if (!dryRun) {
           await User.updateOne(
-            {
-              email: userEmail,
-            },
+            { email: userEmail },
             {
               $set: {
                 "googleSheets.syncedSheets.$[x].lastRowImported": newLast,
@@ -341,7 +337,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             {
               arrayFilters: [
                 { "x.spreadsheetId": spreadsheetId, "x.title": title },
-                { "y.sheetId": spreadsheetId, "y.sheetName": title },
+                { "y.sheetId": spreadsheetId }, // <- no y.sheetName here (not in schema)
               ],
             }
           );
@@ -378,7 +374,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (debug) {
           detail.headers = rawHeaders;
           detail.mappingProvided = mapping;
-          detail.mappingDefaulted = Object.fromEntries(Object.entries(defaultMap).map(([k, v]) => [k, v]));
+          detail.mappingDefaulted = Object.fromEntries(
+            Object.entries(defaultMap).map(([k, v]) => [k, v])
+          );
         }
         detailsAll.push(detail);
       }
