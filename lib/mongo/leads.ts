@@ -39,7 +39,7 @@ const LeadSchema = new Schema(
 
     // Ownership / scoping
     userEmail: { type: String, required: true },
-    ownerEmail: { type: Schema.Types.Mixed }, // legacy reads OK; we don't write to it anymore
+    ownerEmail: { type: Schema.Types.Mixed }, // legacy; we don't write it anymore
 
     // Folder linkage (canonical)
     folderId: { type: Schema.Types.ObjectId, ref: "Folder" },
@@ -71,8 +71,8 @@ const LeadSchema = new Schema(
       default: "Final Expense",
     },
 
-    // Source of creation (used by guard)
-    source: { type: String }, // e.g. "google-sheets", "csv", "manual"
+    // Source of creation (used by our guard)
+    source: { type: String }, // e.g., "google-sheets", "csv", "manual"
   },
   { timestamps: true, strict: false }
 );
@@ -81,7 +81,7 @@ const LeadSchema = new Schema(
 LeadSchema.index({ userEmail: 1, updatedAt: -1 }, { name: "lead_user_updated_desc" });
 LeadSchema.index({ userEmail: 1, Phone: 1 }, { name: "lead_user_phone_idx" });
 LeadSchema.index({ userEmail: 1, normalizedPhone: 1 }, { name: "lead_user_normalized_phone_idx" });
-LeadSchema.index({ ownerEmail: 1, Phone: 1 }, { name: "lead_owner_phone_idx" }); // legacy reads OK
+LeadSchema.index({ ownerEmail: 1, Phone: 1 }, { name: "lead_owner_phone_idx" }); // legacy
 LeadSchema.index({ userEmail: 1, folderId: 1 }, { name: "lead_user_folder_idx" });
 LeadSchema.index({ State: 1 }, { name: "lead_state_idx" });
 LeadSchema.index({ userEmail: 1, isAIEngaged: 1, updatedAt: -1 }, { name: "lead_ai_engaged_idx" });
@@ -102,6 +102,7 @@ function isSystemFolderName(name?: string | null) {
   const n = String(name ?? "").trim().toLowerCase();
   if (!n) return false;
   if (SYSTEM_NAMES.has(n)) return true;
+  // be defensive about variations like "Sold Leads", "Sold - 2025"
   if (n.startsWith("sold")) return true;
   if (n.startsWith("not interested")) return true;
   if (n.startsWith("booked appointment")) return true;
@@ -114,38 +115,40 @@ function isSystemFolderName(name?: string | null) {
  * drop that folder change (keep the current/canonical folder).
  */
 async function stripSystemFolderForSheetsLead(this: any) {
-  // Query middleware (update paths)
-  const getUpdate = (typeof this.getUpdate === "function") ? this.getUpdate() : null;
-  if (!getUpdate) return;
+  const getUpdate = typeof this.getUpdate === "function" ? this.getUpdate.bind(this) : null;
+  const update = getUpdate ? getUpdate() : null;
+  if (!update) return;
 
-  const update: any = getUpdate;
-  const $set: any = update.$set || update;
+  const $set = update.$set || update;
   const targetFolderId = $set?.folderId as Types.ObjectId | string | undefined;
   if (!targetFolderId) return;
 
-  const q = (typeof this.getQuery === "function") ? this.getQuery() : {};
-  // Type-safe narrow: result can be doc OR array; we only continue if it's a single doc object
-  const existing = await (models.Lead as mongoose.Model<any>)
+  // Load the lead we are updating to check its source
+  const q = typeof this.getQuery === "function" ? this.getQuery() : {};
+  const existingRaw = await (models.Lead as mongoose.Model<any>)
     .findOne(q)
     .select("source folderId")
-    .lean<{ source?: string; folderId?: Types.ObjectId } | null>();
-
+    .lean();
+  const existing = (existingRaw || {}) as { source?: string; folderId?: Types.ObjectId };
   if (!existing || existing.source !== "google-sheets") return;
 
-  // Peek at destination folder name
+  // Peek the destination folder name
   let dest: { name?: string } | null = null;
   try {
-    const id = targetFolderId instanceof Types.ObjectId ? targetFolderId : new Types.ObjectId(String(targetFolderId));
-    dest = await (Folder as any).findById(id).select("name").lean<{ name?: string } | null>();
+    const id =
+      targetFolderId instanceof Types.ObjectId
+        ? targetFolderId
+        : new Types.ObjectId(String(targetFolderId));
+    dest = await (Folder as any).findById(id).select("name").lean();
   } catch {
-    return; // bad id -> ignore guard
+    return; // bad id? ignore guard
   }
 
   if (dest?.name && isSystemFolderName(dest.name)) {
-    // Remove only the folderId change; keep the rest
+    // Remove only the attempted move; keep all other updates intact
     if (update.$set && "folderId" in update.$set) delete update.$set.folderId;
     if (!update.$set && "folderId" in update) delete (update as any).folderId;
-    this.setUpdate(update);
+    if (typeof this.setUpdate === "function") this.setUpdate(update);
   }
 }
 
@@ -153,7 +156,7 @@ async function stripSystemFolderForSheetsLead(this: any) {
 LeadSchema.pre("findOneAndUpdate", stripSystemFolderForSheetsLead);
 LeadSchema.pre("updateOne", stripSystemFolderForSheetsLead);
 
-// Document save guard (create or save)
+// Direct document save (e.g., new Lead() then save or findById().save())
 LeadSchema.pre("save", async function (next) {
   try {
     const doc = this as any;
@@ -161,8 +164,9 @@ LeadSchema.pre("save", async function (next) {
 
     if (doc.folderId) {
       try {
-        const dest = await (Folder as any).findById(doc.folderId).select("name").lean<{ name?: string } | null>();
-        if (dest?.name && isSystemFolderName(dest.name)) {
+        const dest = await (Folder as any).findById(doc.folderId).select("name").lean();
+        const folder = (dest || {}) as { name?: string };
+        if (folder?.name && isSystemFolderName(folder.name)) {
           // drop the bad move
           doc.folderId = undefined;
         }
@@ -176,6 +180,7 @@ LeadSchema.pre("save", async function (next) {
   }
 });
 
+// -------- Model --------
 const Lead = (models.Lead as mongoose.Model<any>) || model("Lead", LeadSchema);
 
 // ---- Auto-enroll helper (unchanged) ----
@@ -193,13 +198,18 @@ export async function autoEnrollNewLeads(params: {
 }) {
   if (!params.leadIds?.length) return;
 
-  const fid = params.folderId instanceof Types.ObjectId ? params.folderId : new Types.ObjectId(params.folderId);
-  const folder = await Folder.findOne({ _id: fid, userEmail: params.userEmail }).lean();
+  const fid =
+    params.folderId instanceof Types.ObjectId
+      ? params.folderId
+      : new Types.ObjectId(params.folderId);
+  const folderRaw = await (Folder as any).findOne({ _id: fid, userEmail: params.userEmail }).lean();
+  const folder = (folderRaw || {}) as { name?: string; _id?: Types.ObjectId };
   if (!folder) return;
 
   const folderIdStr = String(fid);
-  const folderName = (folder as any).name as string | undefined;
+  const folderName = folder.name;
 
+  // Build folder match ORs
   const folderMatch: any[] = [{ assignedFolders: folderIdStr }];
   if (folderName) folderMatch.push({ assignedFolders: folderName });
 
@@ -264,6 +274,15 @@ export const deleteLeadById = async (leadId: string) => {
   return await Lead.findByIdAndDelete(leadId);
 };
 
+// Utilities
+export const sanitizeLeadType = (input: string): string => {
+  const normalized = (input || "").toLowerCase().trim();
+  if (normalized.includes("veteran") || normalized === "vet") return "Veteran";
+  if (normalized.includes("mortgage")) return "Mortgage Protection";
+  if (normalized.includes("iul")) return "IUL";
+  return "Final Expense";
+};
+
 function toObjectId(id: string | Types.ObjectId): Types.ObjectId {
   return id instanceof Types.ObjectId ? id : new Types.ObjectId(id);
 }
@@ -283,7 +302,6 @@ export const createLeadsFromCSV = async (
       lead.normalizedPhone ??
       (typeof lead.Phone === "string" ? lead.Phone.replace(/\D+/g, "") : undefined);
 
-    // never write ownerEmail in new docs
     const { ownerEmail, ...rest } = lead;
 
     return {
@@ -311,14 +329,6 @@ export const createLeadsFromCSV = async (
     console.warn("createLeadsFromCSV(): autoEnroll warning", (e as any)?.message || e);
   }
   return inserted;
-};
-
-export const sanitizeLeadType = (input: string): string => {
-  const normalized = (input || "").toLowerCase().trim();
-  if (normalized.includes("veteran") || normalized === "vet") return "Veteran";
-  if (normalized.includes("mortgage")) return "Mortgage Protection";
-  if (normalized.includes("iul")) return "IUL";
-  return "Final Expense";
 };
 
 export const createLeadsFromGoogleSheet = async (
