@@ -39,7 +39,7 @@ const LeadSchema = new Schema(
 
     // Ownership / scoping
     userEmail: { type: String, required: true },
-    ownerEmail: { type: Schema.Types.Mixed }, // legacy; we don't write it anymore
+    ownerEmail: { type: Schema.Types.Mixed }, // legacy reads OK; we don't write to it anymore
 
     // Folder linkage (canonical)
     folderId: { type: Schema.Types.ObjectId, ref: "Folder" },
@@ -71,7 +71,7 @@ const LeadSchema = new Schema(
       default: "Final Expense",
     },
 
-    // Source of creation (we rely on this guard)
+    // Source of creation (used by guard)
     source: { type: String }, // e.g. "google-sheets", "csv", "manual"
   },
   { timestamps: true, strict: false }
@@ -81,7 +81,7 @@ const LeadSchema = new Schema(
 LeadSchema.index({ userEmail: 1, updatedAt: -1 }, { name: "lead_user_updated_desc" });
 LeadSchema.index({ userEmail: 1, Phone: 1 }, { name: "lead_user_phone_idx" });
 LeadSchema.index({ userEmail: 1, normalizedPhone: 1 }, { name: "lead_user_normalized_phone_idx" });
-LeadSchema.index({ ownerEmail: 1, Phone: 1 }, { name: "lead_owner_phone_idx" }); // legacy
+LeadSchema.index({ ownerEmail: 1, Phone: 1 }, { name: "lead_owner_phone_idx" }); // legacy reads OK
 LeadSchema.index({ userEmail: 1, folderId: 1 }, { name: "lead_user_folder_idx" });
 LeadSchema.index({ State: 1 }, { name: "lead_state_idx" });
 LeadSchema.index({ userEmail: 1, isAIEngaged: 1, updatedAt: -1 }, { name: "lead_ai_engaged_idx" });
@@ -114,30 +114,35 @@ function isSystemFolderName(name?: string | null) {
  * drop that folder change (keep the current/canonical folder).
  */
 async function stripSystemFolderForSheetsLead(this: any) {
-  // Query middleware (update* cases)
-  const update = typeof this.getUpdate === "function" ? this.getUpdate() : null;
-  if (!update) return;
+  // Query middleware (update paths)
+  const getUpdate = (typeof this.getUpdate === "function") ? this.getUpdate() : null;
+  if (!getUpdate) return;
 
-  const $set = update.$set || update;
+  const update: any = getUpdate;
+  const $set: any = update.$set || update;
   const targetFolderId = $set?.folderId as Types.ObjectId | string | undefined;
   if (!targetFolderId) return;
 
-  // Load the lead we are updating to check its source
-  const q = this.getQuery ? this.getQuery() : {};
-  const existing = await (models.Lead as mongoose.Model<any>).findOne(q).select("source folderId").lean();
+  const q = (typeof this.getQuery === "function") ? this.getQuery() : {};
+  // Type-safe narrow: result can be doc OR array; we only continue if it's a single doc object
+  const existing = await (models.Lead as mongoose.Model<any>)
+    .findOne(q)
+    .select("source folderId")
+    .lean<{ source?: string; folderId?: Types.ObjectId } | null>();
+
   if (!existing || existing.source !== "google-sheets") return;
 
-  // Peek the destination folder name
+  // Peek at destination folder name
   let dest: { name?: string } | null = null;
   try {
     const id = targetFolderId instanceof Types.ObjectId ? targetFolderId : new Types.ObjectId(String(targetFolderId));
-    dest = await (Folder as any).findById(id).select("name").lean();
+    dest = await (Folder as any).findById(id).select("name").lean<{ name?: string } | null>();
   } catch {
-    return; // bad id? ignore guard
+    return; // bad id -> ignore guard
   }
 
   if (dest?.name && isSystemFolderName(dest.name)) {
-    // Remove the attempted move; keep all other fields
+    // Remove only the folderId change; keep the rest
     if (update.$set && "folderId" in update.$set) delete update.$set.folderId;
     if (!update.$set && "folderId" in update) delete (update as any).folderId;
     this.setUpdate(update);
@@ -148,7 +153,7 @@ async function stripSystemFolderForSheetsLead(this: any) {
 LeadSchema.pre("findOneAndUpdate", stripSystemFolderForSheetsLead);
 LeadSchema.pre("updateOne", stripSystemFolderForSheetsLead);
 
-// Direct document save (e.g., new Lead() then save or findById().save())
+// Document save guard (create or save)
 LeadSchema.pre("save", async function (next) {
   try {
     const doc = this as any;
@@ -156,7 +161,7 @@ LeadSchema.pre("save", async function (next) {
 
     if (doc.folderId) {
       try {
-        const dest = await (Folder as any).findById(doc.folderId).select("name").lean();
+        const dest = await (Folder as any).findById(doc.folderId).select("name").lean<{ name?: string } | null>();
         if (dest?.name && isSystemFolderName(dest.name)) {
           // drop the bad move
           doc.folderId = undefined;
@@ -278,6 +283,7 @@ export const createLeadsFromCSV = async (
       lead.normalizedPhone ??
       (typeof lead.Phone === "string" ? lead.Phone.replace(/\D+/g, "") : undefined);
 
+    // never write ownerEmail in new docs
     const { ownerEmail, ...rest } = lead;
 
     return {
@@ -362,3 +368,4 @@ export const createLeadsFromGoogleSheet = async (
 
 const Lead = (models.Lead as mongoose.Model<any>) || model("Lead", LeadSchema);
 export default Lead;
+export type ILead = any;
