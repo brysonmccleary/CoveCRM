@@ -180,8 +180,9 @@ LeadSchema.pre("save", async function (next) {
   }
 });
 
-// -------- Model --------
-const Lead = (models.Lead as mongoose.Model<any>) || model("Lead", LeadSchema);
+// -------- Model (single declaration) --------
+const Lead =
+  (models.Lead as mongoose.Model<any>) || model("Lead", LeadSchema);
 
 // ---- Auto-enroll helper (unchanged) ----
 /**
@@ -376,6 +377,5 @@ export const createLeadsFromGoogleSheet = async (
   return inserted;
 };
 
-const Lead = (models.Lead as mongoose.Model<any>) || model("Lead", LeadSchema);
 export default Lead;
 export type ILead = any;
