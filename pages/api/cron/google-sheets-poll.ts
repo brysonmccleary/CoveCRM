@@ -210,7 +210,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         let usedCanonical = false;
         if (!folderDoc || (folderDoc?.name && SYSTEM_FOLDERS.has(folderDoc.name))) {
           const gmeta = await drive.files.get({ fileId: spreadsheetId, fields: "name" });
-          const canonicalName = `${"Google Sheet"} — ${gmeta.data.name || "Imported Leads"} — ${title}`;
+          const canonicalName = `Google Sheet — ${gmeta.data.name || "Imported Leads"} — ${title}`;
           folderDoc = await Folder.findOneAndUpdate(
             { userEmail, name: canonicalName },
             { $setOnInsert: { userEmail, name: canonicalName, source: "google-sheets" } },
@@ -266,7 +266,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         let updated = 0;
         let skippedNoKey = 0;
         let lastProcessed = Number(pointer) - 1;
+
         const newLeadIds: mongoose.Types.ObjectId[] = [];
+        const touchedLeadIds: mongoose.Types.ObjectId[] = [];
 
         if (startIndex <= endIndex) {
           for (let r = startIndex; r <= endIndex; r++) {
@@ -312,9 +314,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               if (!dryRun) {
                 const created = await Lead.create(doc);
                 newLeadIds.push(created._id as mongoose.Types.ObjectId);
+                touchedLeadIds.push(created._id as mongoose.Types.ObjectId);
               }
               imported++;
             } else {
+              touchedLeadIds.push(existing._id as mongoose.Types.ObjectId);
               if (!dryRun) {
                 await Lead.updateOne(
                   { _id: existing._id },
@@ -364,6 +368,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           } catch (e: any) {
             console.warn("autoEnroll warning:", e?.message || e);
           }
+        }
+
+        // --- FINAL ENFORCEMENT: pin folderId to canonical after all side-effects ---
+        if (!dryRun && touchedLeadIds.length) {
+          await Lead.updateMany(
+            { _id: { $in: touchedLeadIds } },
+            { $set: { folderId: targetFolderId } }
+          );
         }
 
         const detail: any = {
