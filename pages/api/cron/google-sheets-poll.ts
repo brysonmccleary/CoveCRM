@@ -7,6 +7,8 @@ import { google } from "googleapis";
 import mongoose from "mongoose";
 import { autoEnrollNewLeads } from "@/lib/mongo/leads";
 
+const BUILD_TAG = "poll-canonlock-v5"; // <-- visible in response/header
+
 // --- helpers -------------------------------------------------------------
 const normPhone = (v: any) => String(v ?? "").replace(/\D+/g, "");
 const normEmail = (v: any) => String(v ?? "").trim().toLowerCase();
@@ -28,7 +30,7 @@ type NewCfg = {
 };
 
 type LegacyCfg = {
-  sheetId: string;   // legacy: actually spreadsheetId
+  sheetId: string;   // legacy: spreadsheetId
   sheetName: string; // legacy: tab title
   folderId?: string;
   folderName?: string;
@@ -69,8 +71,10 @@ function resolveCfg(raw: AnyCfg): NewCfg | null {
 // ------------------------------------------------------------------------
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  res.setHeader("x-poll-version", BUILD_TAG);
+
   if (req.method !== "GET" && req.method !== "POST") {
-    return res.status(405).json({ error: "Method not allowed" });
+    return res.status(405).json({ error: "Method not allowed", buildTag: BUILD_TAG });
   }
 
   // auth
@@ -79,7 +83,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     : (req.headers["x-cron-secret"] as string | undefined);
   const queryToken = typeof req.query.token === "string" ? (req.query.token as string) : undefined;
   if ((headerToken || queryToken) !== process.env.CRON_SECRET) {
-    return res.status(401).json({ error: "Unauthorized" });
+    return res.status(401).json({ error: "Unauthorized", buildTag: BUILD_TAG });
   }
 
   // filters
@@ -116,7 +120,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const legacyTok: any = (user as any).googleTokens || {};
       const tok = gs?.refreshToken ? gs : legacyTok?.refreshToken ? legacyTok : null;
       if (!tok?.refreshToken) {
-        detailsAll.push({ userEmail, note: "No Google refresh token" });
+        detailsAll.push({ userEmail, note: "No Google refresh token", buildTag: BUILD_TAG });
         continue;
       }
 
@@ -141,7 +145,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       ];
 
       if (!rawCfgs.length) {
-        detailsAll.push({ userEmail, note: "No linked sheets" });
+        detailsAll.push({ userEmail, note: "No linked sheets", buildTag: BUILD_TAG });
         continue;
       }
 
@@ -159,8 +163,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           headerRow = 1,
           mapping = {},
           skip = {},
-          folderId,
-          folderName,
           lastRowImported,
         } = cfg;
 
@@ -177,32 +179,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
         if (!title) continue;
 
-        // ---------- Canonical folder enforcement (strong) ----------
+        // ---------- HARD CANONICAL LOCK ----------
         // Always derive canonical from Drive spreadsheet name + tab title.
         const gmeta = await drive.files.get({ fileId: spreadsheetId, fields: "name" });
         const canonicalName = `Google Sheet — ${gmeta.data.name || "Imported Leads"} — ${title}`;
-
-        let useCanonical = false;
-
-        // If incoming mapping is missing OR points to a system folder, force canonical.
-        if (!folderId || !folderName || SYSTEM_FOLDERS.has(folderName)) {
-          useCanonical = true;
-        } else {
-          // Even if a folderId exists, verify it's not a system bucket.
-          try {
-            const existing = await Folder.findOne({
-              _id: new mongoose.Types.ObjectId(folderId),
-              userEmail,
-            }).select("name").lean<{ _id: mongoose.Types.ObjectId; name?: string } | null>();
-            if (!existing || SYSTEM_FOLDERS.has(existing.name ?? "")) {
-              useCanonical = true;
-            }
-          } catch {
-            useCanonical = true;
-          }
-        }
-
-        // Final target folder: the canonical one
         const safeName = SYSTEM_FOLDERS.has(canonicalName) ? `${canonicalName} (auto)` : canonicalName;
 
         const folderDoc = await Folder.findOneAndUpdate(
@@ -213,8 +193,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           .select("_id name")
           .lean<{ _id: mongoose.Types.ObjectId; name: string } | null>();
 
-        if (!folderDoc) {
-          throw new Error("Failed to create or load canonical folder");
+        if (!folderDoc) throw new Error("Failed to create/load canonical folder");
+        if (SYSTEM_FOLDERS.has(folderDoc.name)) {
+          // absolute stop: never write into system buckets
+          throw new Error(`Refusing to write into system folder: ${folderDoc.name}`);
         }
 
         const targetFolderId = folderDoc._id as mongoose.Types.ObjectId;
@@ -245,7 +227,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           else if (["notes", "note"].includes(norm)) defaultMap[actual] = "Notes";
         }
 
-        // explicit mapping normalization
+        // explicit mapping normalization (still honored)
         const normalizedMapping: Record<string, string> = {};
         Object.entries(mapping || {}).forEach(([k, v]) => {
           normalizedMapping[normHeader(k)] = v;
@@ -275,7 +257,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
             const doc: Record<string, any> = {};
             rawHeaders.forEach((actualHeader, i) => {
-              if ((skip as any)[actualHeader]) return;
+              if ((cfg.skip as any)?.[actualHeader]) return;
               const field = resolveFieldName(actualHeader);
               if (!field) return;
               doc[field] = row[i] ?? "";
@@ -370,6 +352,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
 
         const detail: any = {
+          buildTag: BUILD_TAG,
           userEmail,
           spreadsheetId,
           title,
@@ -384,22 +367,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           dryRun,
           folderId: String(targetFolderId),
           folderName: folderDoc.name,
-          canonicalName,
-          forcedCanonical: useCanonical ? true : undefined
+          canonicalName: safeName
         };
         if (debug) {
           detail.headers = rawHeaders;
-          detail.mappingProvided = mapping;
-          detail.mappingDefaulted = Object.fromEntries(Object.entries(defaultMap).map(([k, v]) => [k, v]));
         }
         detailsAll.push(detail);
       }
     }
 
-    if (debug) console.log("Sheets poll (debug) →", JSON.stringify(detailsAll, null, 2));
-    return res.status(200).json({ ok: true, details: detailsAll });
+    if (debug) console.log("Sheets poll (debug)", BUILD_TAG, JSON.stringify(detailsAll, null, 2));
+    return res.status(200).json({ ok: true, buildTag: BUILD_TAG, details: detailsAll });
   } catch (err: any) {
-    console.error("Sheets poll error:", err);
-    return res.status(500).json({ error: err?.message || "Cron poll failed" });
+    console.error("Sheets poll error", BUILD_TAG, err);
+    return res.status(500).json({ error: err?.message || "Cron poll failed", buildTag: BUILD_TAG });
   }
 }
