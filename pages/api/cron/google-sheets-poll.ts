@@ -178,7 +178,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (!title) continue;
 
         // ---------- Canonical folder enforcement (strong) ----------
-        // We always derive canonical from Drive spreadsheet name + tab title.
+        // Always derive canonical from Drive spreadsheet name + tab title.
         const gmeta = await drive.files.get({ fileId: spreadsheetId, fields: "name" });
         const canonicalName = `Google Sheet — ${gmeta.data.name || "Imported Leads"} — ${title}`;
 
@@ -204,11 +204,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         // Final target folder: the canonical one
         const safeName = SYSTEM_FOLDERS.has(canonicalName) ? `${canonicalName} (auto)` : canonicalName;
+
         const folderDoc = await Folder.findOneAndUpdate(
           { userEmail, name: safeName },
           { $setOnInsert: { userEmail, name: safeName, source: "google-sheets" } },
           { new: true, upsert: true }
-        ).select("_id name").lean<{ _id: mongoose.Types.ObjectId; name: string }>();
+        )
+          .select("_id name")
+          .lean<{ _id: mongoose.Types.ObjectId; name: string } | null>();
+
+        if (!folderDoc) {
+          throw new Error("Failed to create or load canonical folder");
+        }
 
         const targetFolderId = folderDoc._id as mongoose.Types.ObjectId;
 
@@ -377,7 +384,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           dryRun,
           folderId: String(targetFolderId),
           folderName: folderDoc.name,
-          canonicalName,              // <- for visibility in debug
+          canonicalName,
           forcedCanonical: useCanonical ? true : undefined
         };
         if (debug) {
