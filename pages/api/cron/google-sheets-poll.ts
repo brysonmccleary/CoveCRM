@@ -15,7 +15,6 @@ const normHeader = (s: any) =>
 
 const SYSTEM_FOLDERS = new Set(["Sold", "Not Interested", "Booked Appointment", "No Show"]);
 
-// Accept both new + legacy link shapes
 type NewCfg = {
   spreadsheetId: string;
   title?: string;
@@ -29,8 +28,8 @@ type NewCfg = {
 };
 
 type LegacyCfg = {
-  sheetId: string;         // actually the spreadsheetId
-  sheetName: string;       // tab title
+  sheetId: string;   // legacy: actually spreadsheetId
+  sheetName: string; // legacy: tab title
   folderId?: string;
   folderName?: string;
 };
@@ -42,7 +41,7 @@ function resolveCfg(raw: AnyCfg): NewCfg | null {
     typeof raw.spreadsheetId === "string" && raw.spreadsheetId
       ? raw.spreadsheetId
       : typeof raw.sheetId === "string" && raw.sheetId
-      ? raw.sheetId
+      ? (raw.sheetId as string)
       : undefined;
 
   const title =
@@ -57,13 +56,13 @@ function resolveCfg(raw: AnyCfg): NewCfg | null {
   return {
     spreadsheetId,
     title,
-    sheetId: typeof raw.sheetId === "number" ? raw.sheetId : undefined,
-    headerRow: raw.headerRow ?? 1,
-    mapping: raw.mapping || {},
-    skip: raw.skip || {},
-    folderId: raw.folderId,
-    folderName: raw.folderName,
-    lastRowImported: raw.lastRowImported,
+    sheetId: typeof raw.sheetId === "number" ? (raw.sheetId as number) : undefined,
+    headerRow: (raw.headerRow as number) ?? 1,
+    mapping: (raw.mapping as Record<string, string>) || {},
+    skip: (raw.skip as Record<string, boolean>) || {},
+    folderId: raw.folderId as string | undefined,
+    folderName: raw.folderName as string | undefined,
+    lastRowImported: raw.lastRowImported as number | undefined,
   };
 }
 
@@ -178,50 +177,40 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
         if (!title) continue;
 
-        // ---------- Canonical folder enforcement ----------
+        // ---------- Canonical folder enforcement (strong) ----------
+        // We always derive canonical from Drive spreadsheet name + tab title.
         const gmeta = await drive.files.get({ fileId: spreadsheetId, fields: "name" });
         const canonicalName = `Google Sheet — ${gmeta.data.name || "Imported Leads"} — ${title}`;
 
-        let forcedCanonical = false;
+        let useCanonical = false;
 
-        // (1) explicit folderId only if it exists and is NOT a system folder
-        let folderDoc: { _id: mongoose.Types.ObjectId; name?: string } | null = null;
-        if (folderId) {
+        // If incoming mapping is missing OR points to a system folder, force canonical.
+        if (!folderId || !folderName || SYSTEM_FOLDERS.has(folderName)) {
+          useCanonical = true;
+        } else {
+          // Even if a folderId exists, verify it's not a system bucket.
           try {
             const existing = await Folder.findOne({
               _id: new mongoose.Types.ObjectId(folderId),
               userEmail,
             }).select("name").lean<{ _id: mongoose.Types.ObjectId; name?: string } | null>();
-            if (existing && !SYSTEM_FOLDERS.has(existing.name ?? "")) {
-              folderDoc = existing;
-            } else {
-              forcedCanonical = true;
+            if (!existing || SYSTEM_FOLDERS.has(existing.name ?? "")) {
+              useCanonical = true;
             }
-          } catch { /* ignore bad id */ }
+          } catch {
+            useCanonical = true;
+          }
         }
 
-        // (2) if saved name is system bucket, force canonical
-        if (!folderDoc && folderName && SYSTEM_FOLDERS.has(folderName)) {
-          forcedCanonical = true;
-        }
-
-        // (3) choose name
-        const chosenName = forcedCanonical ? canonicalName : (folderName || canonicalName);
-
-        // (4) find/create folder; if name is a system bucket, suffix " (auto)"
-        const safeName = SYSTEM_FOLDERS.has(chosenName) ? `${chosenName} (auto)` : chosenName;
-        const created = await Folder.findOneAndUpdate(
+        // Final target folder: the canonical one
+        const safeName = SYSTEM_FOLDERS.has(canonicalName) ? `${canonicalName} (auto)` : canonicalName;
+        const folderDoc = await Folder.findOneAndUpdate(
           { userEmail, name: safeName },
           { $setOnInsert: { userEmail, name: safeName, source: "google-sheets" } },
           { new: true, upsert: true }
-        ).select("_id name").lean<{ _id: mongoose.Types.ObjectId; name?: string } | null>();
+        ).select("_id name").lean<{ _id: mongoose.Types.ObjectId; name: string }>();
 
-        if (!created) {
-          throw new Error("Failed to create or load canonical folder");
-        }
-
-        folderDoc = created;
-        const targetFolderId = created._id as mongoose.Types.ObjectId;
+        const targetFolderId = folderDoc._id as mongoose.Types.ObjectId;
 
         // Pull rows
         const resp = await sheetsApi.spreadsheets.values.get({
@@ -279,7 +268,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
             const doc: Record<string, any> = {};
             rawHeaders.forEach((actualHeader, i) => {
-              if (skip[actualHeader]) return;
+              if ((skip as any)[actualHeader]) return;
               const field = resolveFieldName(actualHeader);
               if (!field) return;
               doc[field] = row[i] ?? "";
@@ -321,7 +310,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                   try {
                     const f = await Folder.findById(existing.folderId).select("name").lean<{ name?: string } | null>();
                     if (f?.name && SYSTEM_FOLDERS.has(f.name)) {
-                      $set.folderId = targetFolderId;
+                      $set.folderId = targetFolderId; // pull out of system bucket
                     }
                   } catch { /* ignore */ }
                 } else {
@@ -388,8 +377,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           dryRun,
           folderId: String(targetFolderId),
           folderName: folderDoc.name,
+          canonicalName,              // <- for visibility in debug
+          forcedCanonical: useCanonical ? true : undefined
         };
-        if (forcedCanonical) detail.forcedCanonical = true;
         if (debug) {
           detail.headers = rawHeaders;
           detail.mappingProvided = mapping;
