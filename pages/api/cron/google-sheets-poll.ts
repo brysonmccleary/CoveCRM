@@ -7,7 +7,7 @@ import { google } from "googleapis";
 import mongoose from "mongoose";
 import { autoEnrollNewLeads } from "@/lib/mongo/leads";
 
-const BUILD_TAG = "poll-canonlock-v7"; // visible in response/header
+const BUILD_TAG = "poll-canonlock-v8"; // visible in response/header
 
 // --- helpers -------------------------------------------------------------
 const normPhone = (v: any) => String(v ?? "").replace(/\D+/g, "");
@@ -107,7 +107,7 @@ async function getCanonicalFolderId(opts: {
     return { folderId: byName._id as mongoose.Types.ObjectId, folderName: byName.name, source: "byName" as const, canonicalName: nameWanted };
   }
 
-  // 3) As a safety, create a brand-new unique canonical folder (never a system bucket)
+  // 3) Create a brand-new unique canonical folder (never a system bucket)
   const uniqueName = `${nameWanted} — ${spreadsheetId.slice(0, 6)}-${Date.now().toString(36)}`;
   const created = await Folder.create({
     userEmail,
@@ -359,27 +359,35 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         const newLast = Math.max(lastProcessed + 1, Number(pointer));
 
+        // ---------- SAFE UPDATE (handles missing legacy array) ----------
         if (!dryRun) {
+          const setFields: Record<string, any> = {
+            "googleSheets.syncedSheets.$[x].lastRowImported": newLast,
+            "googleSheets.syncedSheets.$[x].lastImportedAt": new Date(),
+            "googleSheets.syncedSheets.$[x].folderId": targetFolderId,
+            "googleSheets.syncedSheets.$[x].folderName": targetFolderName,
+          };
+
+          const arrayFilters: any[] = [
+            { "x.spreadsheetId": spreadsheetId, "x.title": title },
+          ];
+
+          // Only attempt legacy update if the path exists on the user document
+          const hasLegacyArrayPath =
+            gs && Object.prototype.hasOwnProperty.call(gs, "sheets");
+
+          if (hasLegacyArrayPath) {
+            setFields["googleSheets.sheets.$[y].lastRowImported"] = newLast;
+            setFields["googleSheets.sheets.$[y].lastImportedAt"] = new Date();
+            setFields["googleSheets.sheets.$[y].folderId"] = targetFolderId;
+            setFields["googleSheets.sheets.$[y].folderName"] = targetFolderName;
+            arrayFilters.push({ "y.sheetId": spreadsheetId });
+          }
+
           await User.updateOne(
             { email: userEmail },
-            {
-              $set: {
-                "googleSheets.syncedSheets.$[x].lastRowImported": newLast,
-                "googleSheets.syncedSheets.$[x].lastImportedAt": new Date(),
-                "googleSheets.syncedSheets.$[x].folderId": targetFolderId,
-                "googleSheets.syncedSheets.$[x].folderName": targetFolderName,
-                "googleSheets.sheets.$[y].lastRowImported": newLast,
-                "googleSheets.sheets.$[y].lastImportedAt": new Date(),
-                "googleSheets.sheets.$[y].folderId": targetFolderId,
-                "googleSheets.sheets.$[y].folderName": targetFolderName,
-              },
-            },
-            {
-              arrayFilters: [
-                { "x.spreadsheetId": spreadsheetId, "x.title": title },
-                { "y.sheetId": spreadsheetId },
-              ],
-            }
+            { $set: setFields },
+            { arrayFilters }
           );
         }
 
