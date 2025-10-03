@@ -7,7 +7,7 @@ import { google } from "googleapis";
 import mongoose from "mongoose";
 import { autoEnrollNewLeads } from "@/lib/mongo/leads";
 
-const BUILD_TAG = "poll-canonlock-v5"; // <-- visible in response/header
+const BUILD_TAG = "poll-canonlock-v6"; // visible in response/header
 
 // --- helpers -------------------------------------------------------------
 const normPhone = (v: any) => String(v ?? "").replace(/\D+/g, "");
@@ -183,20 +183,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         // Always derive canonical from Drive spreadsheet name + tab title.
         const gmeta = await drive.files.get({ fileId: spreadsheetId, fields: "name" });
         const canonicalName = `Google Sheet — ${gmeta.data.name || "Imported Leads"} — ${title}`;
-        const safeName = SYSTEM_FOLDERS.has(canonicalName) ? `${canonicalName} (auto)` : canonicalName;
+        const requestedName = SYSTEM_FOLDERS.has(canonicalName) ? `${canonicalName} (auto)` : canonicalName;
 
-        const folderDoc = await Folder.findOneAndUpdate(
-          { userEmail, name: safeName },
-          { $setOnInsert: { userEmail, name: safeName, source: "google-sheets" } },
+        // Try to load or create the canonical folder by name
+        let folderDoc = await Folder.findOneAndUpdate(
+          { userEmail, name: requestedName },
+          { $setOnInsert: { userEmail, name: requestedName, source: "google-sheets" } },
           { new: true, upsert: true }
         )
           .select("_id name")
           .lean<{ _id: mongoose.Types.ObjectId; name: string } | null>();
 
-        if (!folderDoc) throw new Error("Failed to create/load canonical folder");
-        if (SYSTEM_FOLDERS.has(folderDoc.name)) {
-          // absolute stop: never write into system buckets
-          throw new Error(`Refusing to write into system folder: ${folderDoc.name}`);
+        // If DB returned a system folder (shouldn't, but we’ve seen it), create a brand-new safe folder
+        if (!folderDoc || SYSTEM_FOLDERS.has(folderDoc.name)) {
+          const uniqueName = `${canonicalName} — ${spreadsheetId.slice(0, 6)}`;
+          folderDoc = await Folder.findOneAndUpdate(
+            { userEmail, name: uniqueName },
+            { $setOnInsert: { userEmail, name: uniqueName, source: "google-sheets" } },
+            { new: true, upsert: true }
+          )
+            .select("_id name")
+            .lean<{ _id: mongoose.Types.ObjectId; name: string } | null>();
+          if (!folderDoc) throw new Error("Failed to create/load canonical folder");
         }
 
         const targetFolderId = folderDoc._id as mongoose.Types.ObjectId;
@@ -257,7 +265,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
             const doc: Record<string, any> = {};
             rawHeaders.forEach((actualHeader, i) => {
-              if ((cfg.skip as any)?.[actualHeader]) return;
+              if ((skip as any)?.[actualHeader]) return;
               const field = resolveFieldName(actualHeader);
               if (!field) return;
               doc[field] = row[i] ?? "";
@@ -367,7 +375,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           dryRun,
           folderId: String(targetFolderId),
           folderName: folderDoc.name,
-          canonicalName: safeName
+          requestedName,
+          canonicalName,
+          debugFolderCheck: {
+            dbReturned: folderDoc.name
+          }
         };
         if (debug) {
           detail.headers = rawHeaders;
