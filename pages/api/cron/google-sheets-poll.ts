@@ -7,7 +7,7 @@ import { google } from "googleapis";
 import mongoose from "mongoose";
 import { autoEnrollNewLeads } from "@/lib/mongo/leads";
 
-const BUILD_TAG = "poll-canonlock-v6"; // visible in response/header
+const BUILD_TAG = "poll-canonlock-v7"; // visible in response/header
 
 // --- helpers -------------------------------------------------------------
 const normPhone = (v: any) => String(v ?? "").replace(/\D+/g, "");
@@ -66,6 +66,55 @@ function resolveCfg(raw: AnyCfg): NewCfg | null {
     folderName: raw.folderName as string | undefined,
     lastRowImported: raw.lastRowImported as number | undefined,
   };
+}
+
+async function getCanonicalFolderId(opts: {
+  userEmail: string;
+  spreadsheetId: string;
+  tabTitle: string;
+  cfgFolderId?: string;
+  cfgFolderName?: string;
+  driveSpreadsheetName: string;
+}) {
+  const { userEmail, spreadsheetId, tabTitle, cfgFolderId, cfgFolderName, driveSpreadsheetName } =
+    opts;
+
+  const canonicalName = `Google Sheet — ${driveSpreadsheetName || "Imported Leads"} — ${tabTitle}`;
+  const nameWanted = SYSTEM_FOLDERS.has(canonicalName) ? `${canonicalName} (auto)` : canonicalName;
+
+  // 1) Prefer a valid folderId from the user config if it exists and is NOT a system bucket
+  if (cfgFolderId) {
+    try {
+      const byId = await Folder.findOne({
+        _id: new mongoose.Types.ObjectId(cfgFolderId),
+        userEmail,
+      })
+        .select("_id name")
+        .lean<{ _id: mongoose.Types.ObjectId; name: string } | null>();
+      if (byId && !SYSTEM_FOLDERS.has(byId.name)) {
+        return { folderId: byId._id as mongoose.Types.ObjectId, folderName: byId.name, source: "cfgId" as const, canonicalName: nameWanted };
+      }
+    } catch {
+      // ignore bad ObjectId
+    }
+  }
+
+  // 2) Exact-name lookup for canonical name
+  const byName = await Folder.findOne({ userEmail, name: nameWanted })
+    .select("_id name")
+    .lean<{ _id: mongoose.Types.ObjectId; name: string } | null>();
+  if (byName && !SYSTEM_FOLDERS.has(byName.name)) {
+    return { folderId: byName._id as mongoose.Types.ObjectId, folderName: byName.name, source: "byName" as const, canonicalName: nameWanted };
+  }
+
+  // 3) As a safety, create a brand-new unique canonical folder (never a system bucket)
+  const uniqueName = `${nameWanted} — ${spreadsheetId.slice(0, 6)}-${Date.now().toString(36)}`;
+  const created = await Folder.create({
+    userEmail,
+    name: uniqueName,
+    source: "google-sheets",
+  });
+  return { folderId: created._id as mongoose.Types.ObjectId, folderName: created.name as string, source: "created" as const, canonicalName: nameWanted };
 }
 
 // ------------------------------------------------------------------------
@@ -163,6 +212,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           headerRow = 1,
           mapping = {},
           skip = {},
+          folderId,
+          folderName,
           lastRowImported,
         } = cfg;
 
@@ -179,35 +230,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
         if (!title) continue;
 
-        // ---------- HARD CANONICAL LOCK ----------
-        // Always derive canonical from Drive spreadsheet name + tab title.
-        const gmeta = await drive.files.get({ fileId: spreadsheetId, fields: "name" });
-        const canonicalName = `Google Sheet — ${gmeta.data.name || "Imported Leads"} — ${title}`;
-        const requestedName = SYSTEM_FOLDERS.has(canonicalName) ? `${canonicalName} (auto)` : canonicalName;
+        // ---------- CANONICAL FOLDER CHOICE (NO SYSTEM FALLBACKS) ----------
+        const driveMeta = await drive.files.get({ fileId: spreadsheetId, fields: "name" });
+        const driveSpreadsheetName = driveMeta.data.name || "Imported Leads";
 
-        // Try to load or create the canonical folder by name
-        let folderDoc = await Folder.findOneAndUpdate(
-          { userEmail, name: requestedName },
-          { $setOnInsert: { userEmail, name: requestedName, source: "google-sheets" } },
-          { new: true, upsert: true }
-        )
-          .select("_id name")
-          .lean<{ _id: mongoose.Types.ObjectId; name: string } | null>();
+        const folderChoice = await getCanonicalFolderId({
+          userEmail,
+          spreadsheetId,
+          tabTitle: title,
+          cfgFolderId: folderId,
+          cfgFolderName: folderName,
+          driveSpreadsheetName
+        });
 
-        // If DB returned a system folder (shouldn't, but we’ve seen it), create a brand-new safe folder
-        if (!folderDoc || SYSTEM_FOLDERS.has(folderDoc.name)) {
-          const uniqueName = `${canonicalName} — ${spreadsheetId.slice(0, 6)}`;
-          folderDoc = await Folder.findOneAndUpdate(
-            { userEmail, name: uniqueName },
-            { $setOnInsert: { userEmail, name: uniqueName, source: "google-sheets" } },
-            { new: true, upsert: true }
-          )
-            .select("_id name")
-            .lean<{ _id: mongoose.Types.ObjectId; name: string } | null>();
-          if (!folderDoc) throw new Error("Failed to create/load canonical folder");
-        }
-
-        const targetFolderId = folderDoc._id as mongoose.Types.ObjectId;
+        const targetFolderId = folderChoice.folderId;
+        const targetFolderName = folderChoice.folderName;
 
         // Pull rows
         const resp = await sheetsApi.spreadsheets.values.get({
@@ -330,11 +367,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 "googleSheets.syncedSheets.$[x].lastRowImported": newLast,
                 "googleSheets.syncedSheets.$[x].lastImportedAt": new Date(),
                 "googleSheets.syncedSheets.$[x].folderId": targetFolderId,
-                "googleSheets.syncedSheets.$[x].folderName": folderDoc.name,
+                "googleSheets.syncedSheets.$[x].folderName": targetFolderName,
                 "googleSheets.sheets.$[y].lastRowImported": newLast,
                 "googleSheets.sheets.$[y].lastImportedAt": new Date(),
                 "googleSheets.sheets.$[y].folderId": targetFolderId,
-                "googleSheets.sheets.$[y].folderName": folderDoc.name,
+                "googleSheets.sheets.$[y].folderName": targetFolderName,
               },
             },
             {
@@ -374,16 +411,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           newLastRowImported: newLast,
           dryRun,
           folderId: String(targetFolderId),
-          folderName: folderDoc.name,
-          requestedName,
-          canonicalName,
-          debugFolderCheck: {
-            dbReturned: folderDoc.name
-          }
+          folderName: targetFolderName,
+          canonicalName: folderChoice.canonicalName,
+          chosenSource: folderChoice.source
         };
-        if (debug) {
-          detail.headers = rawHeaders;
-        }
+        if (debug) detail.headers = rawHeaders;
         detailsAll.push(detail);
       }
     }
