@@ -62,6 +62,9 @@ type HistoryEvent =
 // ---- Campaigns (UI-only)
 type UICampaign = { _id: string; name: string; key?: string; isActive?: boolean; active?: boolean };
 
+// Canonical Leads destination
+const LEADS_URL = "/dashboard?tab=leads";
+
 export default function LeadProfileDial() {
   const router = useRouter();
   const { id } = router.query;
@@ -377,7 +380,18 @@ export default function LeadProfileDial() {
           </div>
 
           <div className="mt-4">
-            <button onClick={() => router.push("/leads")} className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded">Back to Leads</button>
+            <button
+              onClick={() => {
+                try {
+                  router.replace(LEADS_URL);
+                } catch {
+                  if (typeof window !== "undefined") window.location.replace(LEADS_URL);
+                }
+              }}
+              className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded"
+            >
+              Back to Leads
+            </button>
           </div>
         </div>
       </div>
