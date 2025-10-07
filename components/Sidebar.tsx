@@ -1,9 +1,12 @@
+// components/Sidebar.tsx
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { signOut } from "next-auth/react";
 import Image from "next/image";
+import { useSession } from "next-auth/react";
 
 export default function Sidebar() {
+  const { data: session } = useSession();
   const [unreadCount, setUnreadCount] = useState(0);
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
   const socketRef = useRef<any>(null);
@@ -12,54 +15,69 @@ export default function Sidebar() {
     try {
       const res = await fetch("/api/conversations/unread-count");
       const data = await res.json();
-      if (res.ok && typeof data.count === "number") {
-        setUnreadCount(data.count);
-      }
+      if (res.ok && typeof data.count === "number") setUnreadCount(data.count);
     } catch (err) {
       console.error("Failed to fetch unread count", err);
     }
   };
 
+  // Initial fetch + polling
   useEffect(() => {
-    // initial fetch + polling
     fetchUnread();
     intervalRef.current = setInterval(fetchUnread, 15000);
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+    };
+  }, []);
 
-    // live updates via socket.io
+  // Join per-user room and listen for updates
+  useEffect(() => {
+    const email = (session?.user?.email || "").toLowerCase();
+    if (!email) return;
+
     (async () => {
       try {
         const { io } = await import("socket.io-client");
-        const s = io({ path: "/api/socket" });
+        const s = io({ path: "/api/socket", transports: ["websocket"] });
         socketRef.current = s;
 
         const refetch = () => fetchUnread();
-        s.on("connect", refetch);
+
+        s.on("connect", () => {
+          // Multi-tenant isolation
+          s.emit("join", email);
+          refetch();
+        });
+
         s.on("message:new", refetch);
         s.on("message:read", refetch);
         s.on("conversation:updated", refetch);
+
+        s.on("disconnect", () => {
+          // keep polling fallback running; nothing to do here
+        });
       } catch (e) {
-        console.warn("socket setup failed (sidebar), falling back to polling only", e);
+        console.warn("socket setup failed (sidebar), using polling only", e);
       }
     })();
 
     return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
-      if (socketRef.current) {
-        try {
-          socketRef.current.off("message:new");
-          socketRef.current.off("message:read");
-          socketRef.current.off("conversation:updated");
-          socketRef.current.disconnect();
-        } catch {}
-      }
+      const s = socketRef.current;
+      if (!s) return;
+      try {
+        s.off("message:new");
+        s.off("message:read");
+        s.off("conversation:updated");
+        s.disconnect();
+      } catch {}
     };
-  }, []);
+  }, [session?.user?.email]);
 
   const badge = (count: number) =>
     count > 0 && (
       <span
         className="ml-2 inline-flex items-center justify-center text-xs font-bold bg-red-600 text-white rounded-full px-2 py-0.5"
-        aria-label={`${count} unread conversations`}
+        aria-label={`${count} unread messages`}
       >
         {count > 99 ? "99+" : count}
       </span>

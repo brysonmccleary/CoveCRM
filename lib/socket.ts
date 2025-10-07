@@ -70,3 +70,14 @@ export function initSocket(res: NextApiResponseWithSocket): SocketIOServer {
 
   return io;
 }
+
+/**
+ * ✅ Minimal, safe helper used by /api/messages/mark-read.
+ * No changes to init, transports, or dialer flows.
+ * No-op if the socket server hasn't been initialized yet.
+ */
+export function emitToUser(userEmail: string, event: string, payload?: any) {
+  if (!_io) return;
+  if (!userEmail || !event) return;
+  _io.to(userEmail).emit(event, payload);
+}
