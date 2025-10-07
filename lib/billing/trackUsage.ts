@@ -13,6 +13,27 @@ const TOPUP_AMOUNT_CENTS = TOPUP_AMOUNT_USD * 100;
 const A2P_APPROVAL_FEE_USD = 15;
 const A2P_APPROVAL_FEE_CENTS = A2P_APPROVAL_FEE_USD * 100;
 
+/** ========= Markup (configurable; defaults to +33%) ========= */
+/**
+ * Override with either multiplier or percent envs:
+ *  - USAGE_MARKUP_TWILIO=1.33         or USAGE_MARKUP_TWILIO_PERCENT=33
+ *  - USAGE_MARKUP_OPENAI=1.33         or USAGE_MARKUP_OPENAI_PERCENT=33
+ */
+function getMultiplier(multVar: string, percentVar: string, fallback = 1.33): number {
+  const p = process.env[percentVar];
+  if (p != null && p !== "" && !Number.isNaN(Number(p))) {
+    const mult = 1 + Number(p) / 100;
+    return mult > 0 ? mult : fallback;
+  }
+  const m = process.env[multVar];
+  if (m != null && m !== "" && !Number.isNaN(Number(m))) {
+    return Number(m) > 0 ? Number(m) : fallback;
+  }
+  return fallback;
+}
+const TWILIO_MARKUP = getMultiplier("USAGE_MARKUP_TWILIO", "USAGE_MARKUP_TWILIO_PERCENT", 1.33);
+const OPENAI_MARKUP = getMultiplier("USAGE_MARKUP_OPENAI", "USAGE_MARKUP_OPENAI_PERCENT", 1.33);
+
 /** ========= Admin allow-list ========= */
 function isAdminEmail(email?: string | null) {
   if (!email) return false;
@@ -115,7 +136,7 @@ export async function trackUsage({
   }
 
   // ---- Always record usage counters (analytics) ----
-  // twilioCost aggregates: "twilio" + "twilio-voice" + "twilio-self" (usually zero)
+  // Keep analytics at RAW provider cost (no markup) for accurate reporting.
   const addToTwilio =
     source === "twilio" || source === "twilio-voice" || source === "twilio-self";
   const addToOpenAI = source === "openai";
@@ -135,6 +156,14 @@ export async function trackUsage({
 
   // ---- Billing balance (platform-billed customers) ----
   // For self-billed sends you should pass amount=0 — which simply won't decrement balance.
+  // Compute billable amount with markup (Twilio/OpenAI only).
+  let billableAmount = amount;
+  if (source === "twilio" || source === "twilio-voice") {
+    billableAmount = roundMoney(amount * TWILIO_MARKUP);
+  } else if (source === "openai") {
+    billableAmount = roundMoney(amount * OPENAI_MARKUP);
+  }
+
   // Hard freeze if balance too negative
   if ((userDoc.usageBalance || 0) < -20) {
     console.warn(`⛔ Usage frozen for ${userDoc.email} — balance too negative.`);
@@ -145,7 +174,7 @@ export async function trackUsage({
   }
 
   // Subtract usage & update totals for non-admins
-  userDoc.usageBalance = (userDoc.usageBalance || 0) - amount;
+  userDoc.usageBalance = roundMoney((userDoc.usageBalance || 0) - billableAmount);
 
   const canBill = !!userDoc.stripeCustomerId && !(DEV_SKIP_BILLING && isProd);
 
@@ -170,7 +199,7 @@ export async function trackUsage({
         description: `Cove CRM usage top-up ($${TOPUP_AMOUNT_USD})`,
       });
 
-      userDoc.usageBalance += TOPUP_AMOUNT_USD;
+      userDoc.usageBalance = roundMoney(userDoc.usageBalance + TOPUP_AMOUNT_USD);
       console.log(
         `💰 Auto-topup: $${TOPUP_AMOUNT_USD} charged to ${userDoc.email}`
       );
@@ -184,6 +213,10 @@ export async function trackUsage({
   }
 
   await userDoc.save();
+}
+
+function roundMoney(v: number) {
+  return Math.round(Number(v || 0) * 100) / 100;
 }
 
 /**
