@@ -27,6 +27,13 @@ function getBaseUrl(req: NextApiRequest) {
   return `${proto}://${host}`.replace(/\/$/, "");
 }
 
+/** Treat "Call with" (optionally with phone emoji) as empty if no name follows */
+function isBareCallWithTitle(s?: string) {
+  const t = (s || "").trim();
+  // matches: "Call with", "📞 Call with", any capitalization, and optional trailing punctuation/spaces
+  return /^(\p{Emoji_Presentation}|\p{Emoji}\uFE0F|\p{Extended_Pictographic})?\s*call with\s*$/iu.test(t);
+}
+
 export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse,
@@ -129,8 +136,8 @@ export default async function handler(
     if (leadId) {
       leadDoc = await Lead.findById(leadId).lean();
       if (leadDoc) {
-        const first = leadDoc["First Name"] || leadDoc.firstName || "";
-        const last = leadDoc["Last Name"] || leadDoc.lastName || "";
+        const first = (leadDoc["First Name"] || leadDoc.firstName || "").toString().trim();
+        const last = (leadDoc["Last Name"] || leadDoc.lastName || "").toString().trim();
         const full = `${first} ${last}`.trim() || "Lead";
         const phone =
           leadDoc["Phone"] ||
@@ -148,15 +155,19 @@ export default async function handler(
           )?.[1] ||
           "";
 
-        finalTitle = title || `📞 Call with ${full}`;
+        // 🔒 If caller sent a bare "Call with", replace it with a safe computed title
+        if (!finalTitle || isBareCallWithTitle(finalTitle)) {
+          finalTitle = `📞 Call with ${full}`;
+        }
+
         const noteBlock =
-          description && description.trim().length > 0
-            ? description.trim()
+          description && String(description).trim().length > 0
+            ? String(description).trim()
             : leadDoc.Notes || leadDoc.notes || "";
         const crmLink = `${baseUrl}/lead/${leadDoc._id}`;
 
         finalDescription =
-          finalDescription && finalDescription.trim().length > 0
+          finalDescription && String(finalDescription).trim().length > 0
             ? finalDescription
             : [
                 phone ? `Phone: ${phone}` : null,
@@ -183,6 +194,11 @@ export default async function handler(
       }
     }
 
+    // If no leadDoc, still guard against bare "Call with"
+    if (!leadDoc && (!finalTitle || isBareCallWithTitle(finalTitle))) {
+      finalTitle = "📞 Call with Lead";
+    }
+
     // Attendees: owner + (optional) lead email
     attendees.push({ email: userEmail });
     if (leadEmail && typeof leadEmail === "string")
@@ -192,7 +208,6 @@ export default async function handler(
     const startIso = new Date(startStr).toISOString();
     const endIso = new Date(endStr).toISOString();
 
-    // ✅ No conflict checking here — overlapping events are allowed
     const requestBody: any = {
       summary: finalTitle,
       description: finalDescription || "",
@@ -201,7 +216,7 @@ export default async function handler(
       end: { dateTime: endIso, timeZone: tz },
       attendees,
       extendedProperties: { private: privateProps },
-      transparency: "opaque", // blocks time (default); remove if you want it to appear as "free"
+      transparency: "opaque",
     };
 
     const created = await calendar.events.insert({
@@ -258,7 +273,7 @@ export default async function handler(
     }
     // ================================================
 
-    // ✅ Email the agent (non-blocking)
+    // ✅ Email the agent (best-effort)
     try {
       const startDate = new Date(startStr);
       const tzLabel =
@@ -287,10 +302,7 @@ export default async function handler(
         eventUrl: created.data.htmlLink || undefined,
       });
     } catch (e) {
-      console.warn(
-        "Agent email (Dialer) failed (non-blocking):",
-        (e as any)?.message || e,
-      );
+      console.warn("Agent email (Dialer) failed (non-blocking):", (e as any)?.message || e);
     }
 
     res.setHeader("Cache-Control", "no-store");

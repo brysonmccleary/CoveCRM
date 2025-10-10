@@ -4,7 +4,14 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/pages/api/auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
+import Lead from "@/models/Lead";
 import { google } from "googleapis";
+
+/** Bare "Call with" detector (allows optional phone emoji) */
+function isBareCallWith(s?: string) {
+  const t = (s || "").trim();
+  return /^(\p{Emoji_Presentation}|\p{Emoji}\uFE0F|\p{Extended_Pictographic})?\s*call with\s*$/iu.test(t) || t === "";
+}
 
 /**
  * GET /api/calendar/events?start=ISO&end=ISO
@@ -26,7 +33,6 @@ export default async function handler(
   if (!start || !end)
     return res.status(400).json({ error: "Missing start/end ISO params" });
 
-  // Basic ISO validation
   const startDate = new Date(start);
   const endDate = new Date(end);
   if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
@@ -38,10 +44,9 @@ export default async function handler(
   const user = await User.findOne({ email });
   if (!user) return res.status(404).json({ error: "User not found" });
 
-  // Support legacy storage locations for tokens
   const tokens: any =
     (user as any).googleTokens ||
-    (user as any).googleCalendar || // some apps store refresh here
+    (user as any).googleCalendar ||
     (user as any).googleSheets ||
     null;
 
@@ -81,22 +86,48 @@ export default async function handler(
       timeMax: endDate.toISOString(),
       singleEvents: true,
       orderBy: "startTime",
-      maxResults: 250, // safe upper bound
+      maxResults: 250,
     });
 
-    const events =
-      (response.data.items || []).map((event) => ({
-        id: event.id || "",
-        summary: event.summary || "",
-        start: event.start?.dateTime || event.start?.date || "",
-        end: event.end?.dateTime || event.end?.date || "",
-        description: event.description || "",
-        location: event.location || "",
-        colorId: event.colorId || null,
-        attendees: (event.attendees || [])
-          .map((a) => a.email || "")
-          .filter(Boolean),
-      })) || [];
+    // Raw events from Google
+    const raw = (response.data.items || []).map((event) => ({
+      id: event.id || "",
+      summary: event.summary || "",
+      start: event.start?.dateTime || event.start?.date || "",
+      end: event.end?.dateTime || event.end?.date || "",
+      description: event.description || "",
+      location: event.location || "",
+      colorId: event.colorId || null,
+      attendees: (event.attendees || []).map((a) => a.email || "").filter(Boolean),
+    }));
+
+    // ---- Enrich weak titles ("Call with") from our CRM leads by eventId
+    const needsNameIds = raw.filter((e) => isBareCallWith(e.summary)).map((e) => e.id);
+    let nameByEventId: Record<string, string> = {};
+    if (needsNameIds.length > 0) {
+      const leads = await Lead.find(
+        { userEmail: email, calendarEventId: { $in: needsNameIds } },
+        { "First Name": 1, firstName: 1, "Last Name": 1, lastName: 1, calendarEventId: 1 },
+      ).lean();
+
+      for (const l of leads) {
+        const first = (l["First Name"] || (l as any).firstName || "").toString().trim();
+        const last = (l["Last Name"] || (l as any).lastName || "").toString().trim();
+        const full = `${first} ${last}`.trim() || "Lead";
+        if ((l as any).calendarEventId) {
+          nameByEventId[(l as any).calendarEventId] = full;
+        }
+      }
+    }
+
+    const events = raw.map((e) => {
+      let summary = e.summary || "";
+      if (isBareCallWith(summary)) {
+        const full = nameByEventId[e.id];
+        if (full) summary = `Call with ${full}`;
+      }
+      return { ...e, summary };
+    });
 
     (user as any).flags = {
       ...(user as any).flags,
@@ -120,10 +151,7 @@ export default async function handler(
         .json({ error: "invalid_grant", needsReconnect: true });
     }
 
-    console.error(
-      "❌ Google Calendar events error:",
-      err?.response?.data || msg,
-    );
+    console.error("❌ Google Calendar events error:", err?.response?.data || msg);
     return res.status(500).json({ error: "Failed to fetch events" });
   }
 }
