@@ -343,6 +343,13 @@ export default function DialSession() {
         }>(`/api/leads/history?id=${encodeURIComponent(lead.id)}&limit=50&includeCalls=1`);
 
         const rows: HistoryRow[] = [];
+
+        // 🔒 PINNED SAVED NOTES — always first in the dial-session history
+        const savedNotes = (lead as any)?.Notes;
+        if (typeof savedNotes === "string" && savedNotes.trim()) {
+          rows.push({ kind: "text", text: `📌 Saved Notes (Pinned) — ${savedNotes.trim()}` });
+        }
+
         for (const ev of (j?.events || [])) {
           const when = new Date((ev as any).date).toLocaleString();
           if ((ev as any).type === "note") {
