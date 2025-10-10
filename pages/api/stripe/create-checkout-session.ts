@@ -5,21 +5,10 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
-import Affiliate from "@/models/Affiliate";
+import Affiliate from "@/models/Affiliate"; // optional, used for metadata/fallback
 import { stripe } from "@/lib/stripe";
 
-/** Helpers */
-const safeUpper = (s?: string | null) => (s || "").trim().toUpperCase();
-
-/** Find a single Affiliate by promo code (case-insensitive). Returns a Mongoose doc or null. */
-async function findAffiliateByPromoCode(code?: string) {
-  const q = safeUpper(code);
-  if (!q) return null;
-  // Try exact (fast), then case-insensitive fallback
-  const exact = await Affiliate.findOne({ promoCode: q });
-  if (exact) return exact;
-  return await Affiliate.findOne({ promoCode: { $regex: `^${q}$`, $options: "i" } });
-}
+const upper = (s?: string | null) => (s || "").trim().toUpperCase();
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") return res.status(405).end("Method not allowed");
@@ -27,68 +16,108 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const session = await getServerSession(req, res, authOptions);
   if (!session?.user?.email) return res.status(401).end("Unauthorized");
 
+  const { wantsUpgrade, promoCode } = (req.body || {}) as {
+    wantsUpgrade?: boolean;
+    promoCode?: string; // plain-text code user entered (e.g., "JANE10")
+  };
+
   await dbConnect();
 
   const user = await User.findOne({ email: session.user.email });
   if (!user) return res.status(404).end("User not found");
 
-  const { wantsUpgrade, referralCode } = (req.body || {}) as {
-    wantsUpgrade?: boolean;
-    referralCode?: string; // optional code user typed during upgrade
-  };
-
-  // Your default prices (env overrides)
-  const BASE_PRICE = process.env.STRIPE_PRICE_ID_MONTHLY || "price_1RoAGJDF9aEsjVyJV2wARrFp";
-  const AI_PRICE = process.env.STRIPE_PRICE_ID_AI_MONTHLY || "price_1RoAK4DF9aEsjVyJeoR3w3RL";
+  // Price IDs (must be in the same Stripe mode as your keys: Test vs Live)
+  const BASE_PRICE = process.env.STRIPE_PRICE_ID_MONTHLY || "price_XXXXXXXXXXXX_base";
+  const AI_PRICE   = process.env.STRIPE_PRICE_ID_AI_MONTHLY || "price_XXXXXXXXXXXX_ai";
 
   const line_items: Stripe.Checkout.SessionCreateParams.LineItem[] = [
     { price: BASE_PRICE, quantity: 1 },
   ];
-
   if (wantsUpgrade) {
     line_items.push({ price: AI_PRICE, quantity: 1 });
   }
 
-  // Try to pre-apply a discount if we can resolve an affiliate promo/coupon now.
-  // Priority: explicit referralCode from request, else whatever was already on the user.referredBy
-  const codeMaybe = referralCode || (user as any)?.referredBy || undefined;
-  let discounts: Stripe.Checkout.SessionCreateParams.Discount[] | undefined;
-
-  if (codeMaybe) {
-    const aff: any = await findAffiliateByPromoCode(codeMaybe);
-    if (aff) {
-      if (aff.promotionCodeId) {
-        discounts = [{ promotion_code: aff.promotionCodeId as string }];
-      } else if (aff.couponId) {
-        discounts = [{ coupon: aff.couponId as string }];
-      }
-      // If neither is set, we'll still pass allow_promotion_codes below so the user can enter manually.
-    }
-  }
-
+  // Build success/cancel URLs
   const BASE_URL =
     process.env.NEXT_PUBLIC_BASE_URL ||
     process.env.BASE_URL ||
     process.env.NEXTAUTH_URL ||
     "http://localhost:3000";
 
+  // Resolve a Stripe promotion_code or coupon to attach as `discounts`
+  let discounts: Stripe.Checkout.SessionCreateParams.Discount[] | undefined = undefined;
+
+  // Helper: try to resolve a promotion code id directly from Stripe by CODE text.
+  async function resolveStripePromoByCodeText(codeText: string) {
+    try {
+      // list() supports filtering by exact code; returns active codes that match casing-insensitively
+      const list = await stripe.promotionCodes.list({ code: codeText, active: true, limit: 1 });
+      const pc = list.data?.[0];
+      if (pc?.id) {
+        return { promotion_code: pc.id } as Stripe.Checkout.SessionCreateParams.Discount;
+      }
+    } catch (e) {
+      // swallow—fall back to Affiliate or manual entry
+      console.warn("promo list failed:", (e as any)?.message || e);
+    }
+    return null;
+  }
+
+  // Optional: fallback to Affiliate store if you keep promo/coupon ids there
+  async function resolveFromAffiliateStore(codeText: string) {
+    try {
+      const aff = await Affiliate.findOne({
+        $or: [{ promoCode: upper(codeText) }, { promoCode: new RegExp(`^${upper(codeText)}$`, "i") }],
+      }).lean();
+      if (!aff) return null;
+
+      if ((aff as any).promotionCodeId) {
+        return { promotion_code: (aff as any).promotionCodeId } as Stripe.Checkout.SessionCreateParams.Discount;
+      }
+      if ((aff as any).couponId) {
+        return { coupon: (aff as any).couponId } as Stripe.Checkout.SessionCreateParams.Discount;
+      }
+    } catch (e) {
+      console.warn("affiliate lookup failed:", (e as any)?.message || e);
+    }
+    return null;
+  }
+
+  // If the caller passed a promo code, try to attach it
+  const enteredCode = upper(promoCode);
+  if (enteredCode) {
+    const viaStripe = await resolveStripePromoByCodeText(enteredCode);
+    if (viaStripe) {
+      discounts = [viaStripe];
+    } else {
+      const viaAffiliate = await resolveFromAffiliateStore(enteredCode);
+      if (viaAffiliate) discounts = [viaAffiliate];
+    }
+  }
+
+  // If no preattached discount, customers can still enter a code at checkout UI
+  const allow_promotion_codes = true;
+
   try {
     const checkoutSession = await stripe.checkout.sessions.create({
       mode: "subscription",
-      customer: user.stripeCustomerId || undefined,          // reuse existing customer if present
+      // Prefer existing customer to avoid dupes
+      customer: user.stripeCustomerId || undefined,
       customer_email: user.stripeCustomerId ? undefined : user.email,
       line_items,
-      // Let Stripe promo codes UI appear even if we pre-apply a discount
-      allow_promotion_codes: true,
-      // If we found a valid affiliate promo/coupon, pre-apply it
-      discounts,
+      allow_promotion_codes,
+      // If we successfully resolved the code, attach it explicitly here:
+      ...(discounts ? { discounts } : {}),
+
+      // (Optional) if you want to collect billing address for tax / invoices:
+      // billing_address_collection: "required",
+
       payment_method_types: ["card"],
       metadata: {
         userId: (user as any)?._id?.toString?.() || "",
         email: user.email,
         upgradeIncluded: wantsUpgrade ? "true" : "false",
-        // Persist what we tried to use — webhook will validate/credit on invoice events anyway.
-        referralCodeUsed: safeUpper(codeMaybe) || "none",
+        referralCodeUsed: enteredCode || (user as any)?.referredBy || "none",
       },
       success_url: `${BASE_URL}/success?paid=true`,
       cancel_url: `${BASE_URL}/upgrade`,
