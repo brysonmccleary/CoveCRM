@@ -1,14 +1,13 @@
-// /pages/api/stripe/webhook.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { buffer } from "micro";
-import { stripe } from "@/lib/stripe";
 import type Stripe from "stripe";
+import { stripe } from "@/lib/stripe";
 
 import dbConnect from "@/lib/mongooseConnect";
 import Affiliate from "@/models/Affiliate";
+import AffiliatePayout from "@/models/AffiliatePayout";
 import User from "@/models/User";
 import twilioClient from "@/lib/twilioClient";
-import AffiliatePayout from "@/models/AffiliatePayout";
 import { sendAffiliateApprovedEmail } from "@/lib/email";
 
 export const config = { api: { bodyParser: false } };
@@ -36,9 +35,7 @@ async function findAffiliateByPromoCode(code: string) {
   if (!q) return null;
   let a = await Affiliate.findOne({ promoCode: q });
   if (a) return a;
-  a = await Affiliate.findOne({
-    promoCode: { $regex: `^${q}$`, $options: "i" },
-  });
+  a = await Affiliate.findOne({ promoCode: { $regex: `^${q}$`, $options: "i" } });
   return a;
 }
 
@@ -53,7 +50,7 @@ interface CreditOnceOpts {
   note?: string;
 }
 
-/** idempotent credit: refuses to re-credit same invoice or same user on first invoice */
+/** Idempotent credit: refuses to re-credit the same invoice and avoids double first-commission per user/email. */
 async function creditAffiliateOnce(opts: CreditOnceOpts) {
   const {
     affiliate,
@@ -72,21 +69,16 @@ async function creditAffiliateOnce(opts: CreditOnceOpts) {
     (p: any) => p?.invoiceId && p.invoiceId === invoiceId,
   );
   if (alreadyByInvoice) {
-    console.log(
-      `[webhook] invoice ${invoiceId} already credited for ${affiliate.promoCode}`,
-    );
+    console.log(`[webhook] invoice ${invoiceId} already credited for ${affiliate.promoCode}`);
     return false;
   }
 
   if (isFirstInvoice && userEmail) {
     const alreadyByEmail = affiliate.payoutHistory.some(
-      (p: any) =>
-        p?.userEmail && p.userEmail.toLowerCase() === userEmail.toLowerCase(),
+      (p: any) => p?.userEmail && p.userEmail.toLowerCase() === userEmail.toLowerCase(),
     );
     if (alreadyByEmail) {
-      console.log(
-        `[webhook] first-invoice for ${userEmail} already credited for ${affiliate.promoCode}`,
-      );
+      console.log(`[webhook] first-invoice for ${userEmail} already credited for ${affiliate.promoCode}`);
       return false;
     }
   }
@@ -104,15 +96,13 @@ async function creditAffiliateOnce(opts: CreditOnceOpts) {
   affiliate.payoutDue = Number(affiliate.payoutDue || 0) + Number(amountUSD);
 
   await affiliate.save();
-  console.log(
-    `💰 credited $${amountUSD.toFixed(2)} to affiliate ${affiliate.promoCode} (invoice ${invoiceId})`,
-  );
+  console.log(`💰 credited $${amountUSD.toFixed(2)} to ${affiliate.promoCode} (invoice ${invoiceId})`);
   return true;
 }
 
 /**
  * Auto/queued payout when affiliate.payoutDue >= AFFILIATE_MIN_PAYOUT_USD.
- * - If AFFILIATE_AUTOPAY=1 and account is verified, create a Stripe transfer now.
+ * - If AFFILIATE_AUTOPAY=1 and account verified, create a Stripe transfer now.
  * - Else queue an AffiliatePayout row (status 'queued') for later manual send.
  * Uses idempotency via AffiliatePayout.idempotencyKey keyed by affiliate + invoiceId.
  */
@@ -127,12 +117,8 @@ async function maybeAutoPayout(affiliate: any, invoiceId: string, eventId?: stri
   const idempotencyKey = `${affiliate._id}:${invoiceId}`;
 
   const existing = await AffiliatePayout.findOne({ idempotencyKey }).lean();
-  if (existing) {
-    // Already queued/sent for this triggering invoice
-    return;
-  }
+  if (existing) return;
 
-  // If we can't autopay, just queue it
   const canAutopay =
     autopay &&
     affiliate.stripeConnectId &&
@@ -147,13 +133,10 @@ async function maybeAutoPayout(affiliate: any, invoiceId: string, eventId?: stri
       status: "queued",
       idempotencyKey,
     });
-    console.log(
-      `🧾 queued affiliate payout $${amountUSD.toFixed(2)} for ${affiliate.promoCode} (no autopay)`,
-    );
+    console.log(`🧾 queued affiliate payout $${amountUSD.toFixed(2)} for ${affiliate.promoCode} (no autopay)`);
     return;
   }
 
-  // Attempt Stripe transfer to connected account
   try {
     const transfer = await stripe.transfers.create({
       amount: toCents(amountUSD),
@@ -177,12 +160,9 @@ async function maybeAutoPayout(affiliate: any, invoiceId: string, eventId?: stri
     affiliate.lastPayoutDate = new Date();
     await affiliate.save();
 
-    console.log(
-      `✅ sent affiliate payout $${amountUSD.toFixed(2)} to ${affiliate.promoCode} (transfer ${transfer.id})`,
-    );
+    console.log(`✅ sent affiliate payout $${amountUSD.toFixed(2)} to ${affiliate.promoCode} (transfer ${transfer.id})`);
   } catch (e: any) {
     console.error("❌ Stripe transfer failed:", e?.message || e);
-    // If transfer failed, queue instead (idempotencyKey prevents dupes)
     await AffiliatePayout.create({
       affiliateId: String(affiliate._id),
       affiliateEmail: affiliate.email,
@@ -230,22 +210,13 @@ export default async function handler(
         const account = event.data.object as Stripe.Account;
 
         let connectedAccountStatus: string = "pending";
-        if (account.requirements?.currently_due?.length)
-          connectedAccountStatus = "incomplete";
-        if (account.requirements?.disabled_reason)
-          connectedAccountStatus = "restricted";
-        if (
-          account.charges_enabled &&
-          account.payouts_enabled &&
-          account.details_submitted
-        ) {
+        if (account.requirements?.currently_due?.length) connectedAccountStatus = "incomplete";
+        if (account.requirements?.disabled_reason) connectedAccountStatus = "restricted";
+        if (account.charges_enabled && account.payouts_enabled && account.details_submitted) {
           connectedAccountStatus = "verified";
         }
-
         const onboardingCompleted =
-          !!account.details_submitted &&
-          !!account.charges_enabled &&
-          !!account.payouts_enabled;
+          !!account.details_submitted && !!account.charges_enabled && !!account.payouts_enabled;
 
         await Affiliate.findOneAndUpdate(
           { stripeConnectId: account.id },
@@ -253,9 +224,7 @@ export default async function handler(
           { new: true },
         );
 
-        console.log(
-          `🔔 account.updated → ${account.id} status=${connectedAccountStatus}`,
-        );
+        console.log(`🔔 account.updated → ${account.id} status=${connectedAccountStatus}`);
         break;
       }
 
@@ -293,10 +262,7 @@ export default async function handler(
               dashboardUrl: dashboardUrl || undefined,
             });
           } catch (e: any) {
-            console.warn(
-              "⚠️ sendAffiliateApprovedEmail failed:",
-              e?.message || e,
-            );
+            console.warn("⚠️ sendAffiliateApprovedEmail failed:", e?.message || e);
           }
         }
         break;
@@ -318,11 +284,9 @@ export default async function handler(
 
         (user as any).isProUser = true;
 
-        // Immediate AI flag from checkout intent (final authority is sub.updated)
         const upgradeIncluded =
           (session.metadata?.upgradeIncluded || "false").toLowerCase() === "true";
 
-        // Admins always get AI for free
         user.hasAI = isAdminFree(email) ? true : upgradeIncluded;
 
         user.plan = "Pro";
@@ -335,30 +299,20 @@ export default async function handler(
         }
         await user.save();
 
-        // (Optional first-touch referral bookkeeping — real commissions are on invoice events)
+        // Optional: initial referral bookkeeping (real commissions are on invoice events)
         if (referralCodeUsed && referralCodeUsed !== "none") {
           const affiliate = await findAffiliateByPromoCode(referralCodeUsed);
           if (affiliate) {
-            const alreadyCredited = (affiliate as any).payoutHistory?.some(
-              (p: any) =>
-                p.userEmail &&
-                p.userEmail.toLowerCase() === email.toLowerCase(),
+            const already = (affiliate as any).payoutHistory?.some(
+              (p: any) => p.userEmail && p.userEmail.toLowerCase() === email.toLowerCase(),
             );
-            if (!alreadyCredited) {
-              const earned = Number(
-                process.env.AFFILIATE_DEFAULT_PAYOUT || 25,
-              );
-              (affiliate as any).totalReferrals =
-                Number(affiliate.totalReferrals || 0) + 1;
-              (affiliate as any).payoutDue =
-                Number(affiliate.payoutDue || 0) + earned;
+            if (!already) {
+              const earned = Number(process.env.AFFILIATE_DEFAULT_PAYOUT || 25);
+              (affiliate as any).totalReferrals = Number(affiliate.totalReferrals || 0) + 1;
+              (affiliate as any).payoutDue = Number(affiliate.payoutDue || 0) + earned;
               (affiliate as any).referrals = (affiliate as any).referrals || [];
-              (affiliate as any).referrals.push({
-                email,
-                joinedAt: new Date(),
-              });
-              (affiliate as any).payoutHistory =
-                (affiliate as any).payoutHistory || [];
+              (affiliate as any).referrals.push({ email, joinedAt: new Date() });
+              (affiliate as any).payoutHistory = (affiliate as any).payoutHistory || [];
               (affiliate as any).payoutHistory.push({
                 amount: earned,
                 userEmail: email,
@@ -377,16 +331,14 @@ export default async function handler(
         const invoice = event.data.object as Stripe.Invoice;
         const customerId = invoice.customer as string | undefined;
 
-        // Per your policy: pay $25 (or affiliate.flatPayoutAmount) EVERY paid invoice for active referrals (idempotent per invoice)
+        // If you want “first invoice only” logic, we still compute it:
         const isFirstInvoice =
           invoice.billing_reason === "subscription_create" ||
           (!!invoice.subscription && invoice.attempt_count === 1);
 
-        // Find referral code (promotion code on invoice or metadata on subscription/user)
+        // Try to resolve the promo code that was applied
         let promoCodeText: string | null = null;
-        const promoId = (invoice.discount as any)?.promotion_code as
-          | string
-          | undefined;
+        const promoId = (invoice.discount as any)?.promotion_code as string | undefined;
         if (promoId) {
           try {
             const pc = await stripe.promotionCodes.retrieve(promoId);
@@ -394,8 +346,8 @@ export default async function handler(
           } catch {}
         }
 
-        let subscriptionId: string | null =
-          (invoice.subscription as string) || null;
+        // Fallback to subscription/user metadata
+        let subscriptionId: string | null = (invoice.subscription as string) || null;
         if (!promoCodeText && subscriptionId) {
           try {
             const sub = await stripe.subscriptions.retrieve(subscriptionId);
@@ -413,8 +365,7 @@ export default async function handler(
             user.subscriptionStatus = "active";
             await user.save();
             userEmail = user.email;
-            if (!promoCodeText)
-              promoCodeText = safeUpper((user as any).referredBy);
+            if (!promoCodeText) promoCodeText = safeUpper((user as any).referredBy);
           }
         }
 
@@ -423,6 +374,7 @@ export default async function handler(
         const affiliate = await findAffiliateByPromoCode(promoCodeText);
         if (!affiliate) break;
 
+        // Flat payout per paid invoice (keep your existing policy)
         const payoutUSD =
           Number(affiliate.flatPayoutAmount || 0) ||
           Number(process.env.AFFILIATE_DEFAULT_PAYOUT || 25);
@@ -437,29 +389,23 @@ export default async function handler(
           userEmail,
           amountUSD: payoutUSD,
           isFirstInvoice,
-          note: promoCodeText
-            ? `commission for ${promoCodeText}`
-            : "invoice.payment_succeeded",
+          note: promoCodeText ? `commission for ${promoCodeText}` : "invoice.payment_succeeded",
         });
 
-        // Track gross revenue generated (USD)
+        // Track gross revenue generated
         const paidCents = Number(invoice.amount_paid || 0);
         (affiliate as any).totalRevenueGenerated =
           Number(affiliate.totalRevenueGenerated || 0) + paidCents / 100;
 
         // Maintain referral list on first invoice
         if (isFirstInvoice && userEmail) {
-          (affiliate as any).totalReferrals =
-            Number(affiliate.totalReferrals || 0) + 1;
+          (affiliate as any).totalReferrals = Number(affiliate.totalReferrals || 0) + 1;
           (affiliate as any).referrals = (affiliate as any).referrals || [];
           const already = (affiliate as any).referrals.some(
             (r: any) => r?.email?.toLowerCase() === userEmail!.toLowerCase(),
           );
           if (!already) {
-            (affiliate as any).referrals.push({
-              email: userEmail,
-              joinedAt: new Date(),
-            });
+            (affiliate as any).referrals.push({ email: userEmail, joinedAt: new Date() });
           }
         }
 
@@ -469,6 +415,71 @@ export default async function handler(
         if (credited) {
           await maybeAutoPayout(affiliate, invoiceIdSafe, event.id);
         }
+        break;
+      }
+
+      // Refund/credit reversals — create a negative commission entry based on credit note subtotal
+      case "credit_note.created": {
+        const note = event.data.object as Stripe.CreditNote;
+        const invoiceId = (note.invoice as string) || "";
+        if (!invoiceId) break;
+
+        // Pull invoice to resolve referral/affiliate again
+        let aff: any = null;
+        try {
+          const inv = await stripe.invoices.retrieve(invoiceId, { expand: ["discounts.promotion_code"] });
+          let code: string | null = null;
+
+          const promoId = (inv.discount as any)?.promotion_code as string | undefined;
+          if (promoId) {
+            try {
+              const pc = await stripe.promotionCodes.retrieve(promoId);
+              code = pc.code || null;
+            } catch {}
+          }
+          if (!code && inv.subscription) {
+            try {
+              const sub = await stripe.subscriptions.retrieve(inv.subscription as string);
+              code =
+                safeUpper(sub.metadata?.referralCodeUsed) ||
+                safeUpper(sub.metadata?.appliedPromoCode) ||
+                null;
+            } catch {}
+          }
+          if (!code && inv.customer) {
+            const u = await User.findOne({ stripeCustomerId: inv.customer as string });
+            if (u) code = safeUpper((u as any).referredBy);
+          }
+          if (code) aff = await findAffiliateByPromoCode(code);
+        } catch {}
+
+        if (!aff) break;
+
+        const refundBaseCents =
+          typeof note.subtotal === "number" ? note.subtotal :
+          typeof note.amount === "number" ? note.amount :
+          0;
+
+        if (refundBaseCents <= 0) break;
+
+        // Mirror your commission policy: flat or %.
+        // If you ever move to a percentage, compute from refundBaseCents here.
+        const flatUSD =
+          Number(aff.flatPayoutAmount || 0) ||
+          Number(process.env.AFFILIATE_DEFAULT_PAYOUT || 25);
+
+        const negativeCommission = -1 * flatUSD;
+
+        aff.payoutHistory = aff.payoutHistory || [];
+        aff.payoutHistory.push({
+          amount: negativeCommission,
+          userEmail: null,
+          date: new Date(),
+          invoiceId,
+          note: `refund reversal (credit_note ${note.id})`,
+        });
+        aff.payoutDue = Number(aff.payoutDue || 0) + negativeCommission;
+        await aff.save();
         break;
       }
 
@@ -484,12 +495,9 @@ export default async function handler(
           user.subscriptionStatus = isActiveLike ? "active" : "canceled";
 
           const AI_PRICE_ID = process.env.STRIPE_PRICE_ID_AI_MONTHLY || "";
-          const isAiPriceId = (id?: string | null) =>
-            !!id && !!AI_PRICE_ID && id === AI_PRICE_ID;
-          const hasAiItem =
-            !!sub.items?.data?.some((it) => isAiPriceId(it.price?.id));
+          const isAiPriceId = (id?: string | null) => !!id && !!AI_PRICE_ID && id === AI_PRICE_ID;
+          const hasAiItem = !!sub.items?.data?.some((it) => isAiPriceId(it.price?.id));
 
-          // Admins always keep AI regardless of subscription composition
           if (isAdminFree(user.email)) {
             user.hasAI = true;
           } else {
@@ -508,10 +516,7 @@ export default async function handler(
         const user = await User.findOne({ stripeCustomerId: customerId });
         if (user) {
           user.subscriptionStatus = "canceled";
-          // Do NOT remove AI for admin-comped users
-          if (!isAdminFree(user.email)) {
-            user.hasAI = false;
-          }
+          if (!isAdminFree(user.email)) user.hasAI = false;
           await user.save();
         }
         break;
@@ -522,9 +527,7 @@ export default async function handler(
         const subscriptionId = invoice.subscription as string;
 
         try {
-          const users = await User.find({
-            "numbers.subscriptionId": subscriptionId,
-          });
+          const users = await User.find({ "numbers.subscriptionId": subscriptionId });
           for (const user of users) {
             const number: any = (user as any).numbers?.find(
               (n: any) => n.subscriptionId === subscriptionId,
@@ -536,9 +539,7 @@ export default async function handler(
             } catch {}
 
             try {
-              await (twilioClient as any)
-                .incomingPhoneNumbers(number.sid)
-                .remove();
+              await (twilioClient as any).incomingPhoneNumbers(number.sid).remove();
             } catch {}
 
             (user as any).numbers = (user as any).numbers.filter(
