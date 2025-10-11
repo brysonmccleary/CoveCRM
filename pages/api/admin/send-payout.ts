@@ -53,16 +53,20 @@ export default async function handler(
     typeof session.user.email === "string" &&
     session.user.email.toLowerCase() === ADMIN_EMAIL;
 
-  const bearer =
-    req.headers.authorization?.replace(/^Bearer\s+/i, "") || "";
+  const bearer = req.headers.authorization?.replace(/^Bearer\s+/i, "") || "";
   const isTokenAuth = Boolean(INTERNAL_TOKEN) && bearer === INTERNAL_TOKEN;
 
   if (!isAdminSession && !isTokenAuth) {
     return res.status(403).json({ ok: false, message: "Unauthorized" });
   }
 
-  const { promoCode, affiliateId, amount, idempotencyKey, sendEmail = true } = (req.body ||
-    {}) as {
+  const {
+    promoCode,
+    affiliateId,
+    amount,
+    idempotencyKey,
+    sendEmail = true,
+  } = (req.body || {}) as {
     promoCode?: string;
     affiliateId?: string;
     amount?: number | string;
@@ -78,7 +82,10 @@ export default async function handler(
       (affiliateId && (await Affiliate.findById(affiliateId))) ||
       (promoCode &&
         (await Affiliate.findOne({
-          promoCode: { $regex: `^${String(promoCode).trim()}$`, $options: "i" },
+          promoCode: {
+            $regex: `^${String(promoCode).trim()}$`,
+            $options: "i",
+          },
         })));
 
     if (!affiliate) {
@@ -95,15 +102,15 @@ export default async function handler(
     }
     const status = String(affiliate.connectedAccountStatus || "pending");
     if (status !== "verified") {
-      return res
-        .status(400)
-        .json({ ok: false, message: `Affiliate account not verified (status: ${status})` });
+      return res.status(400).json({
+        ok: false,
+        message: `Affiliate account not verified (status: ${status})`,
+      });
     }
 
     // Determine amount: full payoutDue if not provided
-    const payoutDue = Number(affiliate.payoutDue ?? 0);
-    const amt =
-      amount != null ? Math.max(0, Number(amount)) : payoutDue;
+    const payoutDueNum = Number((affiliate as any).payoutDue ?? 0);
+    const amt = amount != null ? Math.max(0, Number(amount)) : payoutDueNum;
 
     if (!amt) {
       return res.status(400).json({ ok: false, message: "No payable balance." });
@@ -114,7 +121,7 @@ export default async function handler(
         message: `Amount must be at least $${MIN_PAYOUT.toFixed(2)}`,
       });
     }
-    if (payoutDue < amt) {
+    if (payoutDueNum < amt) {
       return res
         .status(400)
         .json({ ok: false, message: "Payout amount exceeds payout due." });
@@ -122,9 +129,10 @@ export default async function handler(
 
     // Idempotency: provided key or synthesize per affiliate+amount+day
     const day = new Date().toISOString().slice(0, 10);
+    const affiliateIdStr =
+      (affiliate as any)?._id?.toString?.() || String((affiliate as any)._id);
     const idemKey =
-      idempotencyKey ||
-      `send:${affiliate._id.toString()}:${amt.toFixed(2)}:${day}`;
+      idempotencyKey || `send:${affiliateIdStr}:${amt.toFixed(2)}:${day}`;
 
     const existing = await AffiliatePayout.findOne({
       idempotencyKey: idemKey,
@@ -142,16 +150,16 @@ export default async function handler(
       {
         amount: Math.round(amt * 100),
         currency: "usd",
-        destination: affiliate.stripeConnectId!,
-        description: `Affiliate payout (${affiliate.promoCode})`,
+        destination: (affiliate as any).stripeConnectId as string,
+        description: `Affiliate payout (${(affiliate as any).promoCode})`,
       },
       { idempotencyKey: idemKey },
     );
 
     // Log payout row
     await AffiliatePayout.create({
-      affiliateId: affiliate._id.toString(),
-      affiliateEmail: affiliate.email,
+      affiliateId: affiliateIdStr,
+      affiliateEmail: (affiliate as any).email,
       amount: amt,
       currency: "usd",
       stripeTransferId: transfer.id,
@@ -160,27 +168,28 @@ export default async function handler(
     });
 
     // Update affiliate totals
-    affiliate.totalPayoutsSent = Number(affiliate.totalPayoutsSent || 0) + amt;
-    affiliate.payoutDue = Math.max(0, payoutDue - amt);
-    affiliate.lastPayoutDate = new Date();
-    affiliate.payoutHistory = affiliate.payoutHistory || [];
-    affiliate.payoutHistory.push({
+    (affiliate as any).totalPayoutsSent =
+      Number((affiliate as any).totalPayoutsSent || 0) + amt;
+    (affiliate as any).payoutDue = Math.max(0, payoutDueNum - amt);
+    (affiliate as any).lastPayoutDate = new Date();
+    (affiliate as any).payoutHistory = (affiliate as any).payoutHistory || [];
+    (affiliate as any).payoutHistory.push({
       amount: amt,
       userEmail: "", // bulk payout not tied to a single referral
       date: new Date(),
       note: "automated payout",
-    } as any);
-    await affiliate.save();
+    });
+    await (affiliate as any).save();
 
     // Email receipt (optional)
     if (sendEmail && process.env.RESEND_API_KEY && process.env.EMAIL_COMMISSIONS) {
       try {
         await resend.emails.send({
           from: `"CoveCRM Commissions" <${process.env.EMAIL_COMMISSIONS}>`,
-          to: affiliate.email,
+          to: (affiliate as any).email,
           subject: "You’ve been paid! 💸",
           html: `
-            <p>Hi ${affiliate.name || "there"},</p>
+            <p>Hi ${(affiliate as any).name || "there"},</p>
             <p>Your affiliate payout of <strong>$${amt.toFixed(
               2,
             )}</strong> has been sent to your connected Stripe account.</p>
