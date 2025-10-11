@@ -1,6 +1,7 @@
 // pages/api/admin/send-payout.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
+import type { Session } from "next-auth";
 import { authOptions } from "../auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import Affiliate from "@/models/Affiliate";
@@ -31,31 +32,37 @@ const MIN_PAYOUT = Number(process.env.AFFILIATE_MIN_PAYOUT_USD || 50);
  *  - amount?: number      (USD)  -> if omitted, pays FULL payoutDue
  *  - idempotencyKey?: string     -> recommended for external schedulers
  *  - sendEmail?: boolean         -> default true
- *
- * Behavior:
- *  - Verifies Connect 'verified'
- *  - Enforces MIN_PAYOUT and balance
- *  - Creates Stripe transfer (destination = affiliate.stripeConnectId)
- *  - Logs AffiliatePayout & updates affiliate totals atomically
- *  - Sends email receipt via Resend (optional)
  */
-export default async function handler(req: NextApiRequest, res: NextApiResponse<Resp>) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse<Resp>,
+) {
   if (req.method !== "POST") {
     return res.status(405).json({ ok: false, message: "Method not allowed" });
   }
 
   // --- Auth: admin session OR bearer token ---
-  const session = await getServerSession(req, res, authOptions as any);
-  const isAdminSession = !!session?.user?.email && session.user.email.toLowerCase() === ADMIN_EMAIL;
+  const session = (await getServerSession(
+    req,
+    res,
+    authOptions as any,
+  )) as Session | null;
 
-  const bearer = req.headers.authorization?.replace(/^Bearer\s+/i, "") || "";
-  const isTokenAuth = INTERNAL_TOKEN && bearer === INTERNAL_TOKEN;
+  const isAdminSession =
+    !!session?.user &&
+    typeof session.user.email === "string" &&
+    session.user.email.toLowerCase() === ADMIN_EMAIL;
+
+  const bearer =
+    req.headers.authorization?.replace(/^Bearer\s+/i, "") || "";
+  const isTokenAuth = Boolean(INTERNAL_TOKEN) && bearer === INTERNAL_TOKEN;
 
   if (!isAdminSession && !isTokenAuth) {
     return res.status(403).json({ ok: false, message: "Unauthorized" });
   }
 
-  const { promoCode, affiliateId, amount, idempotencyKey, sendEmail = true } = (req.body || {}) as {
+  const { promoCode, affiliateId, amount, idempotencyKey, sendEmail = true } = (req.body ||
+    {}) as {
     promoCode?: string;
     affiliateId?: string;
     amount?: number | string;
@@ -75,41 +82,53 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
         })));
 
     if (!affiliate) {
-      return res.status(404).json({ ok: false, message: "Affiliate not found" });
+      return res
+        .status(404)
+        .json({ ok: false, message: "Affiliate not found" });
     }
 
-    // Must have verified Connect account
+    // Verified Connect account required
     if (!affiliate.stripeConnectId) {
-      return res.status(400).json({ ok: false, message: "Affiliate has no Stripe Connect account" });
+      return res
+        .status(400)
+        .json({ ok: false, message: "Affiliate has no Stripe Connect account" });
     }
     const status = String(affiliate.connectedAccountStatus || "pending");
     if (status !== "verified") {
-      return res.status(400).json({ ok: false, message: `Affiliate account not verified (status: ${status})` });
+      return res
+        .status(400)
+        .json({ ok: false, message: `Affiliate account not verified (status: ${status})` });
     }
 
     // Determine amount: full payoutDue if not provided
     const payoutDue = Number(affiliate.payoutDue ?? 0);
-    const amt = amount != null ? Math.max(0, Number(amount)) : payoutDue;
+    const amt =
+      amount != null ? Math.max(0, Number(amount)) : payoutDue;
 
     if (!amt) {
       return res.status(400).json({ ok: false, message: "No payable balance." });
     }
     if (amt < MIN_PAYOUT) {
-      return res
-        .status(400)
-        .json({ ok: false, message: `Amount must be at least $${MIN_PAYOUT.toFixed(2)}` });
+      return res.status(400).json({
+        ok: false,
+        message: `Amount must be at least $${MIN_PAYOUT.toFixed(2)}`,
+      });
     }
     if (payoutDue < amt) {
-      return res.status(400).json({ ok: false, message: "Payout amount exceeds payout due." });
+      return res
+        .status(400)
+        .json({ ok: false, message: "Payout amount exceeds payout due." });
     }
 
-    // Idempotency: use provided key or synthesize a stable one per affiliate+amount+date (day)
+    // Idempotency: provided key or synthesize per affiliate+amount+day
     const day = new Date().toISOString().slice(0, 10);
     const idemKey =
-      idempotencyKey || `send:${affiliate._id.toString()}:${amt.toFixed(2)}:${day}`;
+      idempotencyKey ||
+      `send:${affiliate._id.toString()}:${amt.toFixed(2)}:${day}`;
 
-    // If payout with this key already exists, return it
-    const existing = await AffiliatePayout.findOne({ idempotencyKey: idemKey }).lean();
+    const existing = await AffiliatePayout.findOne({
+      idempotencyKey: idemKey,
+    }).lean();
     if (existing?.stripeTransferId) {
       return res.status(200).json({
         ok: true,
@@ -118,7 +137,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       });
     }
 
-    // Create Stripe transfer
+    // Create Stripe transfer (Connect)
     const transfer = await stripe.transfers.create(
       {
         amount: Math.round(amt * 100),
@@ -129,7 +148,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       { idempotencyKey: idemKey },
     );
 
-    // Log payout
+    // Log payout row
     await AffiliatePayout.create({
       affiliateId: affiliate._id.toString(),
       affiliateEmail: affiliate.email,
@@ -147,7 +166,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     affiliate.payoutHistory = affiliate.payoutHistory || [];
     affiliate.payoutHistory.push({
       amount: amt,
-      userEmail: "", // not tied to a single referral for bulk send
+      userEmail: "", // bulk payout not tied to a single referral
       date: new Date(),
       note: "automated payout",
     } as any);
@@ -162,7 +181,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
           subject: "You’ve been paid! 💸",
           html: `
             <p>Hi ${affiliate.name || "there"},</p>
-            <p>Your affiliate payout of <strong>$${amt.toFixed(2)}</strong> has been sent to your connected Stripe account.</p>
+            <p>Your affiliate payout of <strong>$${amt.toFixed(
+              2,
+            )}</strong> has been sent to your connected Stripe account.</p>
             <p>Transfer ID: <code>${transfer.id}</code></p>
             <br />
             <p>Thanks for being part of CoveCRM!</p>
@@ -174,9 +195,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       }
     }
 
-    return res.status(200).json({ ok: true, transferId: transfer.id, amount: amt });
+    return res
+      .status(200)
+      .json({ ok: true, transferId: transfer.id, amount: amt });
   } catch (err: any) {
     console.error("send-payout error:", err?.message || err);
-    return res.status(500).json({ ok: false, message: err?.message || "Server error" });
+    return res
+      .status(500)
+      .json({ ok: false, message: err?.message || "Server error" });
   }
 }
