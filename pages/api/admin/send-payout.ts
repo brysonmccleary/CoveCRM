@@ -5,7 +5,7 @@ import type { Session } from "next-auth";
 import { authOptions } from "../auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import Affiliate from "@/models/Affiliate";
-import AffiliatePayout from "@/models/AffiliatePayout";
+import AffiliatePayout, { IAffiliatePayout } from "@/models/AffiliatePayout";
 import { stripe } from "@/lib/stripe";
 import { Resend } from "resend";
 
@@ -94,7 +94,8 @@ export default async function handler(
     }
 
     // Verified Connect account required
-    if (!(affiliate as any).stripeConnectId) {
+    const stripeConnectId = (affiliate as any).stripeConnectId as string | undefined;
+    if (!stripeConnectId) {
       return res
         .status(400)
         .json({ ok: false, message: "Affiliate has no Stripe Connect account" });
@@ -128,15 +129,19 @@ export default async function handler(
 
     // Idempotency: provided key or synthesize per affiliate+amount+day
     const day = new Date().toISOString().slice(0, 10);
-    // 👇 Avoid calling .toString() on unknown. Coerce safely.
     const affiliateIdStr =
       (affiliate as any)?._id?.toString?.() ??
       String((affiliate as any)?._id ?? "");
     const idemKey =
       idempotencyKey || `send:${affiliateIdStr}:${amt.toFixed(2)}:${day}`;
 
-    const existing = await AffiliatePayout.findOne({ idempotencyKey: idemKey }).lean();
-    if (existing?.stripeTransferId) {
+    // 👇 Explicitly type the lean result so TS knows it's a single doc or null.
+    const existing = (await AffiliatePayout.findOne({
+      idempotencyKey: idemKey,
+    })
+      .lean()) as IAffiliatePayout | null;
+
+    if (existing && existing.stripeTransferId) {
       return res.status(200).json({
         ok: true,
         transferId: existing.stripeTransferId,
@@ -149,7 +154,7 @@ export default async function handler(
       {
         amount: Math.round(amt * 100),
         currency: "usd",
-        destination: (affiliate as any).stripeConnectId as string,
+        destination: stripeConnectId,
         description: `Affiliate payout (${(affiliate as any).promoCode})`,
       },
       { idempotencyKey: idemKey },
