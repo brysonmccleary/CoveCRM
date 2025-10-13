@@ -19,14 +19,6 @@ const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || "").toLowerCase();
 const INTERNAL_TOKEN = process.env.INTERNAL_API_TOKEN || "";
 const MIN_PAYOUT = Number(process.env.AFFILIATE_MIN_PAYOUT_USD || 50);
 
-// Safe coercion helper for Mongoose IDs
-function idToString(x: any): string {
-  if (!x) return "";
-  if (typeof x === "string") return x;
-  if (typeof x.toString === "function") return x.toString();
-  try { return String(x); } catch { return ""; }
-}
-
 /**
  * Automated affiliate payout endpoint.
  * Auth (either):
@@ -136,8 +128,12 @@ export default async function handler(
 
     // Idempotency: provided key or synthesize per affiliate+amount+day
     const day = new Date().toISOString().slice(0, 10);
-    const affiliateIdStr = idToString((affiliate as any)?._id);
-    const idemKey = idempotencyKey || `send:${affiliateIdStr}:${amt.toFixed(2)}:${day}`;
+    // 👇 Avoid calling .toString() on unknown. Coerce safely.
+    const affiliateIdStr =
+      (affiliate as any)?._id?.toString?.() ??
+      String((affiliate as any)?._id ?? "");
+    const idemKey =
+      idempotencyKey || `send:${affiliateIdStr}:${amt.toFixed(2)}:${day}`;
 
     const existing = await AffiliatePayout.findOne({ idempotencyKey: idemKey }).lean();
     if (existing?.stripeTransferId) {
