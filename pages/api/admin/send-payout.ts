@@ -19,9 +19,16 @@ const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || "").toLowerCase();
 const INTERNAL_TOKEN = process.env.INTERNAL_API_TOKEN || "";
 const MIN_PAYOUT = Number(process.env.AFFILIATE_MIN_PAYOUT_USD || 50);
 
+// Safe coercion helper for Mongoose IDs
+function idToString(x: any): string {
+  if (!x) return "";
+  if (typeof x === "string") return x;
+  if (typeof x.toString === "function") return x.toString();
+  try { return String(x); } catch { return ""; }
+}
+
 /**
- * Automated-safe affiliate payout endpoint.
- *
+ * Automated affiliate payout endpoint.
  * Auth (either):
  *  - Logged-in admin (user.email === ADMIN_EMAIL)
  *  - Authorization: Bearer INTERNAL_API_TOKEN
@@ -95,12 +102,12 @@ export default async function handler(
     }
 
     // Verified Connect account required
-    if (!affiliate.stripeConnectId) {
+    if (!(affiliate as any).stripeConnectId) {
       return res
         .status(400)
         .json({ ok: false, message: "Affiliate has no Stripe Connect account" });
     }
-    const status = String(affiliate.connectedAccountStatus || "pending");
+    const status = String((affiliate as any).connectedAccountStatus || "pending");
     if (status !== "verified") {
       return res.status(400).json({
         ok: false,
@@ -129,14 +136,10 @@ export default async function handler(
 
     // Idempotency: provided key or synthesize per affiliate+amount+day
     const day = new Date().toISOString().slice(0, 10);
-    const affiliateIdStr =
-      (affiliate as any)?._id?.toString?.() || String((affiliate as any)._id);
-    const idemKey =
-      idempotencyKey || `send:${affiliateIdStr}:${amt.toFixed(2)}:${day}`;
+    const affiliateIdStr = idToString((affiliate as any)?._id);
+    const idemKey = idempotencyKey || `send:${affiliateIdStr}:${amt.toFixed(2)}:${day}`;
 
-    const existing = await AffiliatePayout.findOne({
-      idempotencyKey: idemKey,
-    }).lean();
+    const existing = await AffiliatePayout.findOne({ idempotencyKey: idemKey }).lean();
     if (existing?.stripeTransferId) {
       return res.status(200).json({
         ok: true,
