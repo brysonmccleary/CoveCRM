@@ -1,3 +1,4 @@
+// models/Affiliate.ts
 import mongoose, { Schema, Document, models } from "mongoose";
 
 export interface IReferral {
@@ -7,9 +8,9 @@ export interface IReferral {
 }
 
 export interface IPayoutEntry {
-  amount: number;                 // USD (can be negative for reversals)
-  userEmail?: string | null;      // may be null for refund reversals
-  date: Date;
+  amount: number;           // USD
+  userEmail: string;        // referred user's email (can be "" for bulk payouts)
+  date: Date;               // when credited
   invoiceId?: string | null;
   subscriptionId?: string | null;
   customerId?: string | null;
@@ -17,41 +18,39 @@ export interface IPayoutEntry {
 }
 
 export interface IAffiliate extends Document {
-  // Who (all optional so we can auto-create from Stripe promo webhooks)
-  userId?: mongoose.Types.ObjectId;
-  name?: string;
-  email?: string;
-
-  // The public code users type (UPPERCASE)
+  userId: mongoose.Types.ObjectId;
+  name: string;
+  email: string;
   promoCode: string;
 
-  // Stripe linking
-  promotionCodeId?: string; // promo_xxx
-  couponId?: string;        // N4cqydQm
+  // Stripe / onboarding
+  stripeConnectId?: string;
+  onboardingCompleted: boolean;
+  connectedAccountStatus: "pending" | "verified" | "incomplete" | "restricted";
 
-  // Stripe Connect / onboarding
-  stripeConnectId?: string; // acct_xxx
-  onboardingCompleted?: boolean;
-  connectedAccountStatus?: "pending" | "verified" | "incomplete" | "restricted";
-
-  // Program state
-  approved?: boolean;
+  // Program/admin state
+  approved: boolean;
   approvedAt?: Date;
 
-  // Optional metadata
+  // Optional metadata captured at apply time
   teamSize?: string;
 
-  // Payouts / metrics (USD)
-  flatPayoutAmount?: number;      // default payout per paid invoice
-  totalReferrals?: number;
-  totalRevenueGenerated?: number; // lifetime gross revenue attributed
-  totalPayoutsSent?: number;
-  payoutDue?: number;             // running balance owed
+  // Payouts/metrics (USD)
+  flatPayoutAmount: number;
+  totalReferrals: number;          // count of unique referred users (first invoice)
+  totalRedemptions: number;        // count of promo code redemptions (can exceed totalReferrals)
+  totalRevenueGenerated: number;   // dollars
+  totalPayoutsSent: number;        // dollars
+  payoutDue: number;               // dollars
   lastPayoutDate?: Date;
 
-  // Lists
-  referrals?: IReferral[];
-  payoutHistory?: IPayoutEntry[];
+  // Relations
+  referrals: IReferral[];
+  payoutHistory: IPayoutEntry[];
+
+  // Promo linkage
+  promotionCodeId?: string;
+  couponId?: string;
 
   createdAt: Date;
   updatedAt: Date;
@@ -69,7 +68,7 @@ const ReferralSchema = new Schema<IReferral>(
 const PayoutEntrySchema = new Schema<IPayoutEntry>(
   {
     amount: { type: Number, required: true },
-    userEmail: { type: String, default: null },
+    userEmail: { type: String, required: true },
     date: { type: Date, required: true },
     invoiceId: { type: String, default: null },
     subscriptionId: { type: String, default: null },
@@ -81,44 +80,42 @@ const PayoutEntrySchema = new Schema<IPayoutEntry>(
 
 const AffiliateSchema = new Schema<IAffiliate>(
   {
-    userId: { type: Schema.Types.ObjectId, ref: "User" },
-    name: { type: String },
-    email: { type: String, lowercase: true, trim: true },
+    userId: { type: Schema.Types.ObjectId, ref: "User", required: true },
+    name: { type: String, required: true },
+    email: { type: String, required: true, lowercase: true, trim: true },
+    promoCode: { type: String, required: true, unique: true, uppercase: true },
 
-    promoCode: { type: String, required: true, unique: true, uppercase: true, index: true },
-
-    promotionCodeId: { type: String, index: true },
-    couponId: { type: String },
-
-    stripeConnectId: { type: String, index: true },
+    // Stripe / onboarding
+    stripeConnectId: { type: String },
     onboardingCompleted: { type: Boolean, default: false },
-    connectedAccountStatus: {
-      type: String,
-      enum: ["pending", "verified", "incomplete", "restricted"],
-      default: "pending",
-    },
+    connectedAccountStatus: { type: String, default: "pending" }, // pending|verified|incomplete|restricted
 
+    // Program/admin state
     approved: { type: Boolean, default: false },
     approvedAt: { type: Date },
 
+    // Optional metadata captured at apply time
     teamSize: { type: String },
 
+    // Payouts/metrics (USD)
     flatPayoutAmount: { type: Number, default: 25.0 },
     totalReferrals: { type: Number, default: 0 },
+    totalRedemptions: { type: Number, default: 0 },  // <-- added
     totalRevenueGenerated: { type: Number, default: 0 },
     totalPayoutsSent: { type: Number, default: 0 },
     payoutDue: { type: Number, default: 0 },
     lastPayoutDate: { type: Date },
 
+    // Relations
     referrals: { type: [ReferralSchema], default: [] },
     payoutHistory: { type: [PayoutEntrySchema], default: [] },
+
+    // Promo linkage
+    promotionCodeId: { type: String },
+    couponId: { type: String },
   },
   { timestamps: true },
 );
 
-// Helpful indexes
-AffiliateSchema.index({ promoCode: 1 }, { unique: true });
-AffiliateSchema.index({ affiliateEmail: 1 }); // no-op if field absent on some docs
-
-export default (models.Affiliate as mongoose.Model<IAffiliate>) ||
+export default models.Affiliate ||
   mongoose.model<IAffiliate>("Affiliate", AffiliateSchema);
