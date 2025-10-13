@@ -28,7 +28,7 @@ type Lead = {
   phone?: string;
   Email?: string;
   email?: string;
-  Notes?: string;
+  Notes?: string; // ← pinned notes come from here
   status?: string;
   folderId?: string | null;
   [key: string]: any;
@@ -55,7 +55,6 @@ type CallRow = {
 type HistoryEvent =
   | { type: "sms"; id: string; dir: "inbound" | "outbound" | "ai"; text: string; date: string; sid?: string; status?: string }
   | { type: "call"; id: string; date: string; durationSec?: number; status?: string; recordingUrl?: string; summary?: string; sentiment?: string }
-  | { type: "booking"; id: string; date: string; title?: string; startsAt?: string; endsAt?: string; calendarId?: string }
   | { type: "note"; id: string; date: string; text: string }
   | { type: "status"; id: string; date: string; from?: string; to?: string };
 
@@ -198,7 +197,6 @@ export default function LeadProfileDial() {
     }
     try {
       setHistoryLines((prev) => [`✅ Disposition: ${newFolderName} • ${new Date().toLocaleString()}`, ...prev]);
-      console.log("Profile disposition payload →", { leadId: lead.id, newFolderName });
 
       const res = await fetch("/api/disposition-lead", {
         method: "POST",
@@ -212,7 +210,6 @@ export default function LeadProfileDial() {
       loadHistory();
       toast.success(`✅ Lead moved to ${newFolderName}`);
     } catch (error: any) {
-      console.error("Disposition error:", error);
       toast.error(error?.message || "Error moving lead");
     }
   };
@@ -236,6 +233,7 @@ export default function LeadProfileDial() {
   }, [lead]);
 
   // ---- Enroll modal open + load campaigns
+  const [enrollOpenState, setEnrollOpenState] = useState(enrollOpen);
   const openEnrollModal = async () => {
     if (!resolvedId) return toast.error("Lead not loaded");
     setEnrollOpen(true);
@@ -248,7 +246,6 @@ export default function LeadProfileDial() {
         const list: UICampaign[] = Array.isArray(j?.campaigns) ? j.campaigns : [];
         setCampaigns(list.filter((c) => (c?.isActive ?? c?.active ?? true)));
       } catch (e: any) {
-        console.error(e);
         toast.error(e?.message || "Failed to load campaigns");
       } finally {
         setCampaignsLoading(false);
@@ -285,7 +282,6 @@ export default function LeadProfileDial() {
       setSelectedCampaignId("");
       setStartAtLocal("");
     } catch (e: any) {
-      console.error(e);
       toast.error(e?.message || "Enrollment failed");
     } finally {
       setEnrolling(false);
@@ -314,9 +310,10 @@ export default function LeadProfileDial() {
             );
           })}
 
+        {/* Read-only display of the Saved Notes field */}
         {lead?.Notes && (
           <div className="mt-2">
-            <p className="text-sm font-semibold">Notes</p>
+            <p className="text-sm font-semibold">Saved Notes</p>
             <textarea value={lead.Notes} readOnly className="bg-[#0f172a] border border-white/10 rounded p-2 w-full mt-1 text-sm" rows={3}/>
             <hr className="border-gray-800 my-1" />
           </div>
@@ -327,7 +324,7 @@ export default function LeadProfileDial() {
       {/* CENTER */}
       <div className="flex-1 p-6 bg-[#0f172a] border-r border-gray-800 flex flex-col min-h-0">
         <div className="max-w-3xl flex flex-col min-h-0 flex-1">
-          <h3 className="text-lg font-bold mb-2">Notes</h3>
+          <h3 className="text-lg font-bold mb-2">Add a Note</h3>
 
           <div className="rounded-lg mb-2 bg-[#0f172a] border border-white/10">
             <textarea value={notes} onChange={(e) => setNotes(e.target.value)} className="w-full p-3 text-white rounded bg-transparent border-none focus:outline-none" rows={3} placeholder="Type notes here..." />
@@ -337,7 +334,6 @@ export default function LeadProfileDial() {
             <button onClick={handleSaveNote} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded">Save Note</button>
             <button type="button" onClick={startCall} className="bg-green-600 hover:bg-green-700 px-4 py-2 rounded">Call</button>
 
-            {/* NEW: Center toolbar entry to open the same modal */}
             <button
               type="button"
               onClick={openEnrollModal}
@@ -347,6 +343,16 @@ export default function LeadProfileDial() {
               Enroll in Drip
             </button>
           </div>
+
+          {/* 🔒 PINNED SAVED NOTES — always on top of history */}
+          {lead?.Notes ? (
+            <>
+              <h3 className="text-lg font-bold mb-2">Saved Notes (Pinned)</h3>
+              <div className="bg-[#0b1220] border border-white/10 rounded p-3 mb-4">
+                <pre className="whitespace-pre-wrap text-sm text-gray-200">{lead.Notes}</pre>
+              </div>
+            </>
+          ) : null}
 
           {userHasAI && calls.find((c) => c.aiSummary) ? (
             <>
