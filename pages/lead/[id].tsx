@@ -53,10 +53,28 @@ type CallRow = {
 };
 
 type HistoryEvent =
-  | { type: "sms"; id: string; dir: "inbound" | "outbound" | "ai"; text: string; date: string; sid?: string; status?: string }
-  | { type: "call"; id: string; date: string; durationSec?: number; status?: string; recordingUrl?: string; summary?: string; sentiment?: string }
+  | {
+      type: "sms";
+      id: string;
+      dir: "inbound" | "outbound" | "ai";
+      text: string;
+      date: string;
+      sid?: string;
+      status?: string;
+    }
+  | {
+    type: "call";
+    id: string;
+    date: string;
+    durationSec?: number;
+    status?: string;
+    recordingUrl?: string;
+    summary?: string;
+    sentiment?: string;
+  }
   | { type: "note"; id: string; date: string; text: string }
-  | { type: "status"; id: string; date: string; from?: string; to?: string };
+  | { type: "status"; id: string; date: string; from?: string; to?: string }
+  | { type: "booking"; id: string; date: string; title?: string; startsAt?: string };
 
 // ---- Campaigns (UI-only)
 type UICampaign = { _id: string; name: string; key?: string; isActive?: boolean; active?: boolean };
@@ -89,7 +107,8 @@ export default function LeadProfileDial() {
   const formatPhone = (phone = "") => {
     const clean = String(phone).replace(/\D/g, "");
     if (clean.length === 10) return `${clean.slice(0, 3)}-${clean.slice(3, 6)}-${clean.slice(6)}`;
-    if (clean.length === 11 && clean.startsWith("1")) return `${clean.slice(0, 1)}-${clean.slice(1, 4)}-${clean.slice(4, 7)}-${clean.slice(7)}`;
+    if (clean.length === 11 && clean.startsWith("1"))
+      return `${clean.slice(0, 1)}-${clean.slice(1, 4)}-${clean.slice(4, 7)}-${clean.slice(7)}`;
     return phone;
   };
   const fmtDateTime = (d?: string | Date) => {
@@ -150,15 +169,16 @@ export default function LeadProfileDial() {
         if (ev.type === "note") {
           lines.push(`📝 ${ev.text} • ${fmtDateTime(ev.date)}`);
         } else if (ev.type === "sms") {
-          const dir = ev.dir === "inbound" ? "⬅️ Inbound SMS" : ev.dir === "outbound" ? "➡️ Outbound SMS" : "🤖 AI SMS";
-          const status = (ev as any).status ? ` • ${(ev as any).status}` : "";
-          lines.push(`${dir}: ${(ev as any).text}${status} • ${fmtDateTime(ev.date)}`);
+          const dir =
+            ev.dir === "inbound" ? "⬅️ Inbound SMS" : ev.dir === "outbound" ? "➡️ Outbound SMS" : "🤖 AI SMS";
+          const status = ev.status ? ` • ${ev.status}` : "";
+          lines.push(`${dir}: ${ev.text}${status} • ${fmtDateTime(ev.date)}`);
         } else if (ev.type === "booking") {
-          const title = (ev as any).title || "Booked Appointment";
-          const when = (ev as any).startsAt ? fmtDateTime((ev as any).startsAt) : fmtDateTime(ev.date);
+          const title = ev.title || "Booked Appointment";
+          const when = ev.startsAt ? fmtDateTime(ev.startsAt) : fmtDateTime(ev.date);
           lines.push(`📅 ${title} • ${when}`);
         } else if (ev.type === "status") {
-          lines.push(`🔖 Status: ${(ev as any).to || "Updated"} • ${fmtDateTime(ev.date)}`);
+          lines.push(`🔖 Status: ${ev.to || "Updated"} • ${fmtDateTime(ev.date)}`);
         }
       });
 
@@ -170,13 +190,16 @@ export default function LeadProfileDial() {
     }
   }, [resolvedId, id]);
 
-  useEffect(() => { loadHistory(); }, [loadHistory]);
+  useEffect(() => {
+    loadHistory();
+  }, [loadHistory]);
 
   const handleSaveNote = async () => {
     if (!notes.trim() || !lead?.id) return toast.error("❌ Cannot save an empty note");
     try {
       const r = await fetch("/api/leads/add-history", {
-        method: "POST", headers: { "Content-Type": "application/json" },
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ leadId: lead.id, type: "note", message: notes.trim() }),
       });
       if (!r.ok) {
@@ -186,7 +209,9 @@ export default function LeadProfileDial() {
       setHistoryLines((prev) => [`📝 ${notes.trim()} • ${new Date().toLocaleString()}`, ...prev]);
       setNotes("");
       toast.success("✅ Note saved!");
-    } catch (e: any) { toast.error(e?.message || "Failed to save note"); }
+    } catch (e: any) {
+      toast.error(e?.message || "Failed to save note");
+    }
   };
 
   const handleDisposition = async (newFolderName: string) => {
@@ -221,9 +246,9 @@ export default function LeadProfileDial() {
 
   const leadName = useMemo(() => {
     const full =
-      `${lead?.firstName || lead?.["First Name"] || ""} ${lead?.lastName || lead?.["Last Name"] || ""}`.trim()
-      || lead?.name
-      || "";
+      `${lead?.firstName || lead?.["First Name"] || ""} ${lead?.lastName || lead?.["Last Name"] || ""}`.trim() ||
+      lead?.name ||
+      "";
     return full || "Lead";
   }, [lead]);
 
@@ -299,12 +324,18 @@ export default function LeadProfileDial() {
         </div>
 
         {Object.entries(lead || {})
-          .filter(([key]) => !["_id","id","Notes","First Name","Last Name","folderId","createdAt","ownerId","userEmail"].includes(key))
+          .filter(([key]) =>
+            !["_id", "id", "Notes", "First Name", "Last Name", "folderId", "createdAt", "ownerId", "userEmail"].includes(
+              key,
+            ),
+          )
           .map(([key, value]) => {
             if (key === "Phone" || key.toLowerCase() === "phone") value = formatPhone(String(value || ""));
             return (
               <div key={key}>
-                <p className="text-sm"><strong>{key.replace(/_/g, " ")}:</strong> {String(value)}</p>
+                <p className="text-sm">
+                  <strong>{key.replace(/_/g, " ")}:</strong> {String(value)}
+                </p>
                 <hr className="border-gray-800 my-1" />
               </div>
             );
@@ -314,7 +345,12 @@ export default function LeadProfileDial() {
         {lead?.Notes && (
           <div className="mt-2">
             <p className="text-sm font-semibold">Saved Notes</p>
-            <textarea value={lead.Notes} readOnly className="bg-[#0f172a] border border-white/10 rounded p-2 w-full mt-1 text-sm" rows={3}/>
+            <textarea
+              value={lead.Notes}
+              readOnly
+              className="bg-[#0f172a] border border-white/10 rounded p-2 w-full mt-1 text-sm"
+              rows={3}
+            />
             <hr className="border-gray-800 my-1" />
           </div>
         )}
@@ -327,12 +363,22 @@ export default function LeadProfileDial() {
           <h3 className="text-lg font-bold mb-2">Add a Note</h3>
 
           <div className="rounded-lg mb-2 bg-[#0f172a] border border-white/10">
-            <textarea value={notes} onChange={(e) => setNotes(e.target.value)} className="w-full p-3 text-white rounded bg-transparent border-none focus:outline-none" rows={3} placeholder="Type notes here..." />
+            <textarea
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              className="w-full p-3 text-white rounded bg-transparent border-none focus:outline-none"
+              rows={3}
+              placeholder="Type notes here..."
+            />
           </div>
 
           <div className="flex items-center gap-2 mb-4">
-            <button onClick={handleSaveNote} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded">Save Note</button>
-            <button type="button" onClick={startCall} className="bg-green-600 hover:bg-green-700 px-4 py-2 rounded">Call</button>
+            <button onClick={handleSaveNote} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded">
+              Save Note
+            </button>
+            <button type="button" onClick={startCall} className="bg-green-600 hover:bg-green-700 px-4 py-2 rounded">
+              Call
+            </button>
 
             <button
               type="button"
@@ -373,16 +419,32 @@ export default function LeadProfileDial() {
               <p className="text-gray-400">No interactions yet.</p>
             ) : (
               historyLines.map((item, idx) => (
-                <div key={idx} className="border-b border-white/10 py-2 text-sm">{item}</div>
+                <div key={idx} className="border-b border-white/10 py-2 text-sm">
+                  {item}
+                </div>
               ))
             )}
           </div>
 
           <div className="flex flex-wrap gap-2 mt-4">
-            <button onClick={() => handleDisposition("Sold")} className="bg-gray-700 hover:bg-gray-600 px-3 py-2 rounded">Sold</button>
-            <button onClick={() => handleDisposition("Booked Appointment")} className="bg-gray-700 hover:bg-gray-600 px-3 py-2 rounded">Booked Appointment</button>
-            <button onClick={() => handleDisposition("Not Interested")} className="bg-gray-700 hover:bg-gray-600 px-3 py-2 rounded">Not Interested</button>
-            <button onClick={() => handleDisposition("Resolved")} className="bg-gray-700 hover:bg-gray-600 px-3 py-2 rounded">Resolve</button>
+            <button onClick={() => handleDisposition("Sold")} className="bg-gray-700 hover:bg-gray-600 px-3 py-2 rounded">
+              Sold
+            </button>
+            <button
+              onClick={() => handleDisposition("Booked Appointment")}
+              className="bg-gray-700 hover:bg-gray-600 px-3 py-2 rounded"
+            >
+              Booked Appointment
+            </button>
+            <button
+              onClick={() => handleDisposition("Not Interested")}
+              className="bg-gray-700 hover:bg-gray-600 px-3 py-2 rounded"
+            >
+              Not Interested
+            </button>
+            <button onClick={() => handleDisposition("Resolved")} className="bg-gray-700 hover:bg-gray-600 px-3 py-2 rounded">
+              Resolve
+            </button>
           </div>
 
           <div className="mt-4">
@@ -438,7 +500,9 @@ export default function LeadProfileDial() {
           <div className="relative w-full max-w-md mx-4 rounded-lg border border-white/10 bg-[#0f172a] p-4 shadow-xl">
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-lg font-bold">Enroll in Drip</h3>
-              <button onClick={() => setEnrollOpen(false)} className="text-gray-300 hover:text-white">✕</button>
+              <button onClick={() => setEnrollOpen(false)} className="text-gray-300 hover:text-white">
+                ✕
+              </button>
             </div>
 
             <div className="space-y-3">
@@ -474,9 +538,7 @@ export default function LeadProfileDial() {
               </div>
 
               <div className="border border-white/10 rounded p-2 bg-[#0b1220]">
-                <p className="text-xs text-gray-400">
-                  Preview of touches will appear here once enabled for this campaign.
-                </p>
+                <p className="text-xs text-gray-400">Preview of touches will appear here once enabled for this campaign.</p>
               </div>
             </div>
 
