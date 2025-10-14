@@ -372,7 +372,8 @@ function computeContext(drips?: string[]) {
   if (d.includes("veteran")) return "veteran life insurance";
   if (d.includes("iul")) return "retirement income protection";
   if (d.includes("final_expense")) return "final expense insurance";
-  return "life insurance services";
+  // 🔁 Default updated for your requirement
+  return "life insurance and mortgage protection";
 }
 
 type ConvState = "idle" | "awaiting_time" | "scheduled" | "qa";
@@ -463,7 +464,98 @@ function historyToChatMessages(history: any[] = []) {
   return msgs.slice(-24);
 }
 
-// --- conversational reply
+// --- NEW: Deterministic matcher (pattern -> reply)
+// Every reply stays human, concise, and ends by nudging to a time.
+function buildDeterministicReply(textRaw: string, context: string): string | null {
+  const t = (textRaw || "").trim().toLowerCase();
+
+  const any = (...subs: string[]) => subs.some(s => t.includes(s));
+
+  // 1) Already have coverage
+  if (any("already have coverage", "i already have", "i'm covered", "im covered", "we're covered", "we are covered", "we’re covered", "already insured", "have life insurance", "have insurance already")) {
+    return "I can see that on my end, it looks like we can save you anywhere from $20-$50+ a month. When do you have five minutes to talk?";
+  }
+
+  // 2) Not interested
+  if (any("not interested", "no thanks", "no thank you", "pass", "stop texting") && !["stop","stopall","unsubscribe","cancel","end","quit"].includes(t)) {
+    return "Totally get it. Before I close it out, most folks still find $20–$50+ in savings in a 5-min check. Want me to hold a quick time later today or tomorrow?";
+  }
+
+  // 3) Price / cost
+  if (any("how much", "price", "rate", "rates", "cost", "quote")) {
+    return "Good question. Your exact monthly depends on a couple quick details—takes about 5 minutes. What time works later today or tomorrow for a quick call?";
+  }
+
+  // 4) Busy / later
+  if (any("busy", "can’t talk", "cant talk", "in a meeting", "later", "another time", "driving")) {
+    return "No problem—I’ll keep it to 5 minutes. What’s a quick window later today or tomorrow?";
+  }
+
+  // 5) Who is this / how got number
+  if (any("who is this", "who are you", "how did you get my number", "what company", "is this legit", "scam")) {
+    return "Hey there—this is the benefits team that handles life insurance and mortgage protection requests you asked about. It’s a quick 5-min review. What time works today or tomorrow?";
+  }
+
+  // 6) Remove me / wrong number (non-STOP phrasing)
+  if (any("remove me", "wrong number", "dont text", "don't text", "do not text")) {
+    return "Understood—I’ll update that. If you’re comparing options, we can check in 5 minutes. Want a quick time later today or tomorrow?";
+  }
+
+  // 7) Send info
+  if (any("send info", "send the info", "send details", "email me", "text me info", "mail the info", "just send it", "can you send it", "link", "website")) {
+    return "Unfortunately as of now there's nothing to send over without getting some information from you. When's a good time for a quick 5 minute call? After that we can send everything out.";
+  }
+
+  // 8) Already talked / my agent / already applied
+  if (any("already talked", "already applied", "my agent", "have an agent", "working with an agent")) {
+    return "Makes sense—this will be quick. We usually find $20–$50+ a month by checking carriers they didn’t quote. Want a fast 5-min look later today or tomorrow?";
+  }
+
+  // 9) Health / don’t qualify
+  if (any("don’t qualify", "dont qualify", "declined", "pre-existing", "preexisting", "health issues")) {
+    return "Some carriers are flexible on health—often people still qualify. Let’s take 5 minutes and check. What time works today or tomorrow?";
+  }
+
+  // 10) Age
+  if (any("too old", "too young", "age")) {
+    return "Age changes which carriers fit best, but there are options. A quick 5-min check answers it. What time works today or tomorrow?";
+  }
+
+  // 11) Cheapest only
+  if (any("cheapest", "lowest price", "best rate")) {
+    return "Got it—let’s run a fast apples-to-apples check for the lowest monthly. Takes about 5 minutes. What time works later today or tomorrow?";
+  }
+
+  // 12) Text only
+  if (any("text only", "don’t call", "dont call", "can we text")) {
+    return "We can text basics, but final numbers need a quick verbal to be accurate—it’s 5 minutes. What time works later today or tomorrow?";
+  }
+
+  // 13) Tomorrow / another day explicit
+  if (any("tomorrow")) {
+    return "Sounds good—what’s a quick 5-10 minute window tomorrow?";
+  }
+
+  // 14) Time/call length
+  if (any("how long", "time does it take", "length of call")) {
+    return "About 5 minutes to see exact monthly and options. What time works today or tomorrow?";
+  }
+
+  // 15) Spanish / español
+  if (/[áéíóúñ]|hablas|espanol|español/.test(t)) {
+    return "¡Sí! Podemos revisarlo en 5 minutos y ver si bajamos su pago $20–$50+ al mes. ¿Prefiere hoy o mañana para una llamada rápida?";
+  }
+
+  // 16) Profanity / hostile (non-STOP)
+  if (/\b(fuck|idiot|stupid|scam|bs|b\s*s)\b/i.test(textRaw) && !isOptOut(textRaw)) {
+    return "I hear you. If you want a real number later, it’s a quick 5-minute review and often saves $20–$50+ a month. What time works today or tomorrow?";
+  }
+
+  // Default: null → let LLM fallback handle it
+  return null;
+}
+
+// --- conversational reply (LLM fallback)
 async function generateConversationalReply(opts: {
   lead: any;
   userEmail: string;
@@ -535,7 +627,7 @@ function normalizeWhen(datetimeText: string | null, nowISO: string, tz: string) 
   return null;
 }
 
-/* --------- NEW: Only trust a previous outbound if that lead’s phone actually matches this inbound --------- */
+/* --------- Only trust a previous outbound if that lead’s phone actually matches this inbound --------- */
 function leadPhoneMatches(lead: any, fromDigits: string): boolean {
   if (!lead) return false;
   const cand: string[] = [];
@@ -991,12 +1083,16 @@ export default async function handler(
     };
 
     // ===== decide next reply =====
-    let aiReply = "When’s a good time today or tomorrow for a quick chat?";
     const stateCanon = normalizeStateInput(lead.State || (lead as any).state || "");
+    const context = computeContext(lead.assignedDrips);
 
-    // 1) deterministic parse
+    // 0) Deterministic intent replies (fast path)
+    let aiReply: string | null = buildDeterministicReply(body, context);
+
+    // 1) deterministic time parse from user text
     let requestedISO: string | null = extractRequestedISO(body, stateCanon);
-    // 2) “works” confirmations bind to last AI proposal
+
+    // 2) Confirmation language binds to last AI proposal
     if (!requestedISO && containsConfirmation(body)) {
       requestedISO =
         extractTimeFromLastAI(lead.interactionHistory || [], stateCanon) ||
@@ -1004,26 +1100,25 @@ export default async function handler(
         null;
     }
 
-    // 2.5) explicit info-request
+    // 2.5) explicit info-request (enforce your exact sentence)
     if (!requestedISO && isInfoRequest(body)) {
       aiReply = `Unfortunately as of now there's nothing to send over without getting some information from you. When's a good time for a quick 5 minute call? After that we can send everything out.`;
       memory.state = "qa";
     }
 
-    // 3) conversational fallback
-    if (!requestedISO && !isInfoRequest(body)) {
+    // 3) conversational fallback via LLM
+    if (!requestedISO && !aiReply) {
       try {
         const ex = await extractIntentAndTimeLLM({ text: body, nowISO, tz });
         const norm = normalizeWhen(ex.datetime_text, nowISO, tz);
         if (norm?.start) requestedISO = norm.start.toISO();
 
         if (!requestedISO) {
-          const context = computeContext(lead.assignedDrips);
           if (ex.intent === "ask_duration") {
             aiReply = `It’s quick—about 10–15 minutes. Would later today or tomorrow afternoon work?`;
             memory.state = "qa";
           } else if (ex.intent === "ask_cost") {
-            aiReply = `No cost at all—just a quick review of options. What’s better for you, today or tomorrow?`;
+            aiReply = `No cost at all—just a quick review. What’s better for you, today or tomorrow?`;
             memory.state = "qa";
           } else {
             aiReply = await generateConversationalReply({
@@ -1053,7 +1148,7 @@ export default async function handler(
       }
     }
 
-    // 4) If we have a concrete time now, confirm + book
+    // 4) If we have a concrete time now, confirm + (try to) book
     if (requestedISO) {
       const zone = tz;
       const clientTime = DateTime.fromISO(requestedISO, { zone }).set({
@@ -1140,6 +1235,11 @@ export default async function handler(
         memory.apptText = requestedISO;
         memory.lastConfirmAtISO = DateTime.utc().toISO();
       }
+    }
+
+    // Fallback copy if still empty
+    if (!aiReply) {
+      aiReply = "When’s a good time today or tomorrow for a quick 5-minute chat?";
     }
 
     memory.lastDraft = aiReply;
