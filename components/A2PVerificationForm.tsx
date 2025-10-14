@@ -4,6 +4,49 @@ import toast from "react-hot-toast";
 
 type UploadedFileResponse = { url: string; message?: string };
 
+// Twilio A2P use-case codes we support
+type UseCaseCode =
+  | "MIXED"
+  | "LOW_VOLUME"
+  | "MARKETING"
+  | "2FA"
+  | "ACCOUNT_NOTIFICATION"
+  | "CUSTOMER_CARE"
+  | "DELIVERY_NOTIFICATION"
+  | "FRAUD_ALERT"
+  | "HIGHER_EDUCATION"
+  | "POLLING_VOTING"
+  | "PUBLIC_SERVICE_ANNOUNCEMENT"
+  | "SECURITY_ALERT"
+  | "AGENTS_FRANCHISES"
+  | "CHARITY"
+  | "K12_EDUCATION"
+  | "PROXY"
+  | "EMERGENCY";
+
+const COMMON_USECASES: { value: UseCaseCode; label: string }[] = [
+  { value: "MIXED", label: "Mixed (most used)" },
+  { value: "LOW_VOLUME", label: "Low Volume (mixed)" },
+  { value: "MARKETING", label: "Marketing / Promotions" },
+  { value: "CUSTOMER_CARE", label: "Customer Care / Support" },
+  { value: "ACCOUNT_NOTIFICATION", label: "Account Notifications" },
+  { value: "2FA", label: "2FA / OTP" },
+];
+
+const ADVANCED_USECASES: { value: UseCaseCode; label: string }[] = [
+  { value: "DELIVERY_NOTIFICATION", label: "Delivery Notifications" },
+  { value: "FRAUD_ALERT", label: "Fraud / Spend Alerts" },
+  { value: "HIGHER_EDUCATION", label: "Higher Education" },
+  { value: "POLLING_VOTING", label: "Polling / Voting (non-political)" },
+  { value: "PUBLIC_SERVICE_ANNOUNCEMENT", label: "Public Service Announcement" },
+  { value: "SECURITY_ALERT", label: "Security Alerts" },
+  { value: "AGENTS_FRANCHISES", label: "Agents / Franchises (special)" },
+  { value: "CHARITY", label: "Charity 501(c)(3) (special)" },
+  { value: "K12_EDUCATION", label: "K-12 Education (special)" },
+  { value: "PROXY", label: "Proxy / P2P App (special)" },
+  { value: "EMERGENCY", label: "Emergency (special)" },
+];
+
 export default function A2PVerificationForm() {
   // ---------- Business ----------
   const [businessName, setBusinessName] = useState("");
@@ -13,10 +56,10 @@ export default function A2PVerificationForm() {
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
 
-  // ---------- Explicit link fields (front-and-center) ----------
-  const [landingOptInUrl, setLandingOptInUrl] = useState("");     // page that shows opt-in language + form
-  const [landingTosUrl, setLandingTosUrl] = useState("");         // Terms of Service link
-  const [landingPrivacyUrl, setLandingPrivacyUrl] = useState(""); // Privacy Policy link
+  // ---------- Explicit link fields ----------
+  const [landingOptInUrl, setLandingOptInUrl] = useState(""); // required
+  const [landingTosUrl, setLandingTosUrl] = useState(""); // optional (recommended)
+  const [landingPrivacyUrl, setLandingPrivacyUrl] = useState(""); // optional (recommended)
 
   // ---------- Contact ----------
   const [contactFirstName, setContactFirstName] = useState("");
@@ -34,7 +77,7 @@ export default function A2PVerificationForm() {
     `Hi {{first_name}}, just following up from your Facebook request for a life insurance quote. This is {{agent_name}} – can I call you real quick? Reply STOP to opt out.`
   );
 
-  // ---------- Opt-in Details (no template tokens, includes exclusivity) ----------
+  // ---------- Opt-in Details ----------
   const [optInDetails, setOptInDetails] = useState(
     `End users opt in by submitting their contact information through a TCPA-compliant lead form hosted on a vendor or agency landing page. The form collects full name, email, and phone number, and includes an electronic signature agreement directly above the “Confirm” button.
 
@@ -52,12 +95,16 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
   const [uploading, setUploading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
+  // ---------- Campaign Type ----------
+  const [useCase, setUseCase] = useState<UseCaseCode>("MIXED");
+
   // ---------- Helpers ----------
   const allMessages = [msg1, msg2, msg3].filter(Boolean).join("\n\n");
 
   const ensureHasStopLanguage = (text: string) =>
     /reply\s+stop/i.test(text) || /text\s+stop/i.test(text);
 
+  // Required fields: TOS & Privacy are optional (recommended)
   const requiredOk = () =>
     businessName &&
     ein &&
@@ -66,8 +113,6 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
     email &&
     phone &&
     landingOptInUrl &&
-    landingTosUrl &&
-    landingPrivacyUrl &&
     contactFirstName &&
     contactLastName &&
     msg1 &&
@@ -117,15 +162,15 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
       return;
     }
 
-    // Light guard to keep Twilio happy: each sample message should show STOP language
     if (![msg1, msg2, msg3].every(ensureHasStopLanguage)) {
-      toast.error("❌ Each sample message must include opt-out language (e.g., “Reply STOP to opt out”).");
+      toast.error('❌ Each sample message must include opt-out language (e.g., “Reply STOP to opt out”).');
       return;
     }
 
     setSubmitting(true);
     try {
-      const res = await fetch("/api/registerA2P", {
+      // 0) Back-compat: keep your existing endpoint
+      const legacyRes = await fetch("/api/registerA2P", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -139,10 +184,7 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
           contactLastName,
           contactTitle,
 
-          // Send as a single blob too, for your existing API
-          sampleMessages: allMessages,
-
-          // Or send individually if your API prefers
+          sampleMessages: allMessages,   // blob for old API
           sampleMessage1: msg1,
           sampleMessage2: msg2,
           sampleMessage3: msg3,
@@ -151,23 +193,69 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
           volume,
           optInScreenshotUrl,
 
-          // explicit link fields
+          // explicit links (old API may ignore; fine)
           landingOptInUrl,
           landingTosUrl,
           landingPrivacyUrl,
         }),
       });
+      const legacyData = await legacyRes.json().catch(() => ({}));
+      if (!legacyRes.ok) throw new Error(legacyData.message || "Legacy submit failed");
 
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        toast.error(`❌ ${data.message || "Submission failed"}`);
-        return;
-      }
+      // 1) New flow: create/ensure TrustHub + Brand + Messaging Service
+      const startRes = await fetch("/api/a2p/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          businessName,
+          ein,
+          website,
+          address,
+          email,
+          phone,
+          contactTitle,
+          contactFirstName,
+          contactLastName,
+          sampleMessages: [msg1, msg2, msg3],
+          optInDetails,
+          volume,
+          optInScreenshotUrl,
+          // helpful metadata for reviewers
+          landingPageUrl: landingOptInUrl,
+          termsUrl: landingTosUrl,
+          privacyUrl: landingPrivacyUrl,
+          usecaseCode: useCase,
+        }),
+      });
+      const startData = await startRes.json().catch(() => ({}));
+      if (!startRes.ok) throw new Error(startData.message || "Failed to start A2P");
 
-      toast.success("✅ Verification submitted! Awaiting Twilio approval.");
-    } catch (err) {
+      // 2) Submit/Update Campaign with selected use case
+      const hasLinks =
+        !!landingOptInUrl ||
+        [msg1, msg2, msg3].some((s) => /\bhttps?:\/\//i.test(s));
+
+      const campRes = await fetch("/api/a2p/submit-campaign", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          useCase,
+          messageFlow: optInDetails,
+          sampleMessages: [msg1, msg2, msg3],
+          hasEmbeddedLinks: hasLinks,
+          hasEmbeddedPhone: false,
+          subscriberOptIn: true,
+          ageGated: false,
+          directLending: false,
+        }),
+      });
+      const campData = await campRes.json().catch(() => ({}));
+      if (!campRes.ok) throw new Error(campData.message || "Failed to submit campaign");
+
+      toast.success("✅ Submitted! We’ll notify you when A2P is approved or if updates are needed.");
+    } catch (err: any) {
       console.error("Submission error:", err);
-      toast.error("❌ Error submitting verification");
+      toast.error(`❌ ${err?.message || "Error submitting verification"}`);
     } finally {
       setSubmitting(false);
     }
@@ -233,19 +321,23 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
         />
         <input
           type="url"
-          placeholder="Terms of Service URL"
+          placeholder="Terms of Service URL (optional)"
           value={landingTosUrl}
           onChange={(e) => setLandingTosUrl(e.target.value)}
           className="border p-2 rounded w-full"
         />
         <input
           type="url"
-          placeholder="Privacy Policy URL"
+          placeholder="Privacy Policy URL (optional)"
           value={landingPrivacyUrl}
           onChange={(e) => setLandingPrivacyUrl(e.target.value)}
           className="border p-2 rounded w-full md:col-span-2"
         />
       </div>
+      <p className="text-xs text-gray-500 -mt-2">
+        <span className="font-medium">Note:</span> Terms of Service and Privacy Policy links are
+        optional but strongly recommended. Your landing page URL is required and should show the opt-in language.
+      </p>
 
       {/* Contact */}
       <input
@@ -269,6 +361,27 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
         onChange={(e) => setContactTitle(e.target.value)}
         className="border p-2 rounded w-full"
       />
+
+      {/* Campaign Type */}
+      <div className="space-y-1">
+        <label className="text-sm text-gray-500">Campaign Type</label>
+        <select
+          value={useCase}
+          onChange={(e) => setUseCase(e.target.value as UseCaseCode)}
+          className="border p-2 rounded w-full bg-white text-black"
+        >
+          <optgroup label="Common">
+            {COMMON_USECASES.map((u) => (
+              <option key={u.value} value={u.value}>{u.label}</option>
+            ))}
+          </optgroup>
+          <optgroup label="Advanced / Special">
+            {ADVANCED_USECASES.map((u) => (
+              <option key={u.value} value={u.value}>{u.label}</option>
+            ))}
+          </optgroup>
+        </select>
+      </div>
 
       {/* Sample Messages – separate inputs */}
       <div className="space-y-3">
