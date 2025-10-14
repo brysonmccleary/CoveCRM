@@ -4,14 +4,14 @@ import toast from "react-hot-toast";
 
 type UploadedFileResponse = { url: string; message?: string };
 
-// Twilio A2P use-case codes we support
+// Twilio / TCR-approved use cases (the common ones first)
 type UseCaseCode =
-  | "MIXED"
   | "LOW_VOLUME"
+  | "MIXED"
   | "MARKETING"
-  | "2FA"
-  | "ACCOUNT_NOTIFICATION"
   | "CUSTOMER_CARE"
+  | "ACCOUNT_NOTIFICATION"
+  | "2FA"
   | "DELIVERY_NOTIFICATION"
   | "FRAUD_ALERT"
   | "HIGHER_EDUCATION"
@@ -25,15 +25,15 @@ type UseCaseCode =
   | "EMERGENCY";
 
 const COMMON_USECASES: { value: UseCaseCode; label: string }[] = [
-  { value: "MIXED", label: "Mixed (most used)" },
   { value: "LOW_VOLUME", label: "Low Volume (mixed)" },
+  { value: "MIXED", label: "Mixed" },
   { value: "MARKETING", label: "Marketing / Promotions" },
   { value: "CUSTOMER_CARE", label: "Customer Care / Support" },
   { value: "ACCOUNT_NOTIFICATION", label: "Account Notifications" },
   { value: "2FA", label: "2FA / OTP" },
 ];
 
-const ADVANCED_USECASES: { value: UseCaseCode; label: string }[] = [
+const ADVANCED_SPECIAL: { value: UseCaseCode; label: string }[] = [
   { value: "DELIVERY_NOTIFICATION", label: "Delivery Notifications" },
   { value: "FRAUD_ALERT", label: "Fraud / Spend Alerts" },
   { value: "HIGHER_EDUCATION", label: "Higher Education" },
@@ -56,15 +56,18 @@ export default function A2PVerificationForm() {
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
 
-  // ---------- Explicit link fields ----------
-  const [landingOptInUrl, setLandingOptInUrl] = useState(""); // required
-  const [landingTosUrl, setLandingTosUrl] = useState(""); // optional (recommended)
-  const [landingPrivacyUrl, setLandingPrivacyUrl] = useState(""); // optional (recommended)
+  // ---------- Explicit link fields (optional but recommended) ----------
+  const [landingOptInUrl, setLandingOptInUrl] = useState("");     // page that shows opt-in language + form
+  const [landingTosUrl, setLandingTosUrl] = useState("");         // Terms of Service link
+  const [landingPrivacyUrl, setLandingPrivacyUrl] = useState(""); // Privacy Policy link
 
   // ---------- Contact ----------
   const [contactFirstName, setContactFirstName] = useState("");
   const [contactLastName, setContactLastName] = useState("");
   const [contactTitle, setContactTitle] = useState("");
+
+  // ---------- Campaign type ----------
+  const [usecase, setUsecase] = useState<UseCaseCode>("LOW_VOLUME"); // default to Low Volume (mixed)
 
   // ---------- Sample Messages (separate boxes) ----------
   const [msg1, setMsg1] = useState(
@@ -77,7 +80,7 @@ export default function A2PVerificationForm() {
     `Hi {{first_name}}, just following up from your Facebook request for a life insurance quote. This is {{agent_name}} – can I call you real quick? Reply STOP to opt out.`
   );
 
-  // ---------- Opt-in Details ----------
+  // ---------- Opt-in Details (no template tokens, includes exclusivity) ----------
   const [optInDetails, setOptInDetails] = useState(
     `End users opt in by submitting their contact information through a TCPA-compliant lead form hosted on a vendor or agency landing page. The form collects full name, email, and phone number, and includes an electronic signature agreement directly above the “Confirm” button.
 
@@ -88,23 +91,19 @@ Before submission, users see a disclosure similar to:
 The form uses click-wrap consent and displays Privacy Policy and Terms & Conditions links on the same page as the form submission. This campaign is exclusive to me. Leads are never resold, reused, or shared with other agents or organizations. Vendors maintain timestamped proof of consent, IP address, and full submission metadata to ensure compliance.`
   );
 
-  // ---------- Volume + screenshot ----------
+  // ---------- Volume + screenshot (screenshot OPTIONAL) ----------
   const [volume, setVolume] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [optInScreenshotUrl, setOptInScreenshotUrl] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
-  // ---------- Campaign Type ----------
-  const [useCase, setUseCase] = useState<UseCaseCode>("MIXED");
-
   // ---------- Helpers ----------
   const allMessages = [msg1, msg2, msg3].filter(Boolean).join("\n\n");
-
   const ensureHasStopLanguage = (text: string) =>
     /reply\s+stop/i.test(text) || /text\s+stop/i.test(text);
 
-  // Required fields: TOS & Privacy are optional (recommended)
+  // Required (soften: links + screenshot are optional, but we warn if missing)
   const requiredOk = () =>
     businessName &&
     ein &&
@@ -112,24 +111,22 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
     website &&
     email &&
     phone &&
-    landingOptInUrl &&
     contactFirstName &&
     contactLastName &&
     msg1 &&
     msg2 &&
     msg3 &&
     optInDetails &&
-    volume &&
-    optInScreenshotUrl;
+    volume;
 
-  // ---------- Upload ----------
+  // ---------- Upload (optional) ----------
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files?.length) setFile(e.target.files[0]);
   };
 
   const handleUpload = async () => {
     if (!file) {
-      toast.error("❌ Please select a screenshot file first");
+      toast.error("Please choose a screenshot first.");
       return;
     }
     setUploading(true);
@@ -141,15 +138,15 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
       const data: UploadedFileResponse = await res.json();
 
       if (!res.ok) {
-        toast.error(`❌ Upload failed: ${data.message || res.statusText}`);
+        toast.error(data.message || "Upload failed");
         return;
       }
 
       setOptInScreenshotUrl(data.url);
-      toast.success("✅ Screenshot uploaded");
+      toast.success("Screenshot uploaded");
     } catch (err) {
       console.error("Upload error:", err);
-      toast.error("❌ Upload failed");
+      toast.error("Upload failed");
     } finally {
       setUploading(false);
     }
@@ -158,104 +155,80 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
   // ---------- Submit ----------
   const handleSubmit = async () => {
     if (!requiredOk()) {
-      toast.error("❌ Please complete all required fields and upload a screenshot");
+      toast.error("Please complete all required fields.");
       return;
     }
 
     if (![msg1, msg2, msg3].every(ensureHasStopLanguage)) {
-      toast.error('❌ Each sample message must include opt-out language (e.g., “Reply STOP to opt out”).');
+      toast.error('Each sample message must include opt-out language (e.g., "Reply STOP to opt out").');
       return;
+    }
+
+    // Soft warnings for optional-but-recommended artifacts
+    if (!landingOptInUrl) {
+      toast(
+        (t) => (
+          <span>
+            <b>Heads up:</b> A public opt-in page URL greatly improves approval speed.
+            You can submit now and add it later.
+            <button onClick={() => toast.dismiss(t.id)} className="ml-2 underline">
+              OK
+            </button>
+          </span>
+        ),
+        { duration: 6000 }
+      );
     }
 
     setSubmitting(true);
     try {
-      // 0) Back-compat: keep your existing endpoint
-      const legacyRes = await fetch("/api/registerA2P", {
+      const payload = {
+        businessName,
+        ein,
+        address,
+        website,
+        email,
+        phone,
+        contactFirstName,
+        contactLastName,
+        contactTitle,
+
+        // campaign type for both existing endpoints
+        usecaseCode: usecase, // /api/a2p/start expects this
+        useCase: usecase,     // /api/a2p/submit-campaign expects this
+
+        // messages
+        sampleMessages: allMessages,
+        sampleMessage1: msg1,
+        sampleMessage2: msg2,
+        sampleMessage3: msg3,
+
+        optInDetails,
+        volume,
+
+        // optional artifacts (included if provided)
+        optInScreenshotUrl: optInScreenshotUrl || undefined,
+        landingOptInUrl: landingOptInUrl || undefined,
+        landingTosUrl: landingTosUrl || undefined,
+        landingPrivacyUrl: landingPrivacyUrl || undefined,
+      };
+
+      const res = await fetch("/api/registerA2P", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          businessName,
-          ein,
-          address,
-          website,
-          email,
-          phone,
-          contactFirstName,
-          contactLastName,
-          contactTitle,
-
-          sampleMessages: allMessages,   // blob for old API
-          sampleMessage1: msg1,
-          sampleMessage2: msg2,
-          sampleMessage3: msg3,
-
-          optInDetails,
-          volume,
-          optInScreenshotUrl,
-
-          // explicit links (old API may ignore; fine)
-          landingOptInUrl,
-          landingTosUrl,
-          landingPrivacyUrl,
-        }),
+        body: JSON.stringify(payload),
       });
-      const legacyData = await legacyRes.json().catch(() => ({}));
-      if (!legacyRes.ok) throw new Error(legacyData.message || "Legacy submit failed");
 
-      // 1) New flow: create/ensure TrustHub + Brand + Messaging Service
-      const startRes = await fetch("/api/a2p/start", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          businessName,
-          ein,
-          website,
-          address,
-          email,
-          phone,
-          contactTitle,
-          contactFirstName,
-          contactLastName,
-          sampleMessages: [msg1, msg2, msg3],
-          optInDetails,
-          volume,
-          optInScreenshotUrl,
-          // helpful metadata for reviewers
-          landingPageUrl: landingOptInUrl,
-          termsUrl: landingTosUrl,
-          privacyUrl: landingPrivacyUrl,
-          usecaseCode: useCase,
-        }),
-      });
-      const startData = await startRes.json().catch(() => ({}));
-      if (!startRes.ok) throw new Error(startData.message || "Failed to start A2P");
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast.error(data.message || "Submission failed");
+        return;
+      }
 
-      // 2) Submit/Update Campaign with selected use case
-      const hasLinks =
-        !!landingOptInUrl ||
-        [msg1, msg2, msg3].some((s) => /\bhttps?:\/\//i.test(s));
-
-      const campRes = await fetch("/api/a2p/submit-campaign", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          useCase,
-          messageFlow: optInDetails,
-          sampleMessages: [msg1, msg2, msg3],
-          hasEmbeddedLinks: hasLinks,
-          hasEmbeddedPhone: false,
-          subscriberOptIn: true,
-          ageGated: false,
-          directLending: false,
-        }),
-      });
-      const campData = await campRes.json().catch(() => ({}));
-      if (!campRes.ok) throw new Error(campData.message || "Failed to submit campaign");
-
-      toast.success("✅ Submitted! We’ll notify you when A2P is approved or if updates are needed.");
-    } catch (err: any) {
+      toast.success("Verification submitted! We’ll notify you when it’s approved or if changes are needed.");
+    } catch (err) {
       console.error("Submission error:", err);
-      toast.error(`❌ ${err?.message || "Error submitting verification"}`);
+      toast.error("Error submitting verification");
     } finally {
       setSubmitting(false);
     }
@@ -310,11 +283,40 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
         className="border p-2 rounded w-full"
       />
 
-      {/* Links (prominent) */}
+      {/* Campaign Type */}
+      <div className="space-y-1">
+        <label className="text-sm text-gray-500">Campaign Type</label>
+        <select
+          className="border p-2 rounded w-full bg-white text-black"
+          value={usecase}
+          onChange={(e) => setUsecase(e.target.value as UseCaseCode)}
+        >
+          <optgroup label="Common">
+            {COMMON_USECASES.map((u) => (
+              <option key={u.value} value={u.value}>
+                {u.label}
+              </option>
+            ))}
+          </optgroup>
+          <optgroup label="Advanced / Special">
+            {ADVANCED_SPECIAL.map((u) => (
+              <option key={u.value} value={u.value}>
+                {u.label}
+              </option>
+            ))}
+          </optgroup>
+        </select>
+        <p className="text-xs text-gray-500">
+          “Low Volume (mixed)” is suitable for most small businesses sending a mix of conversational,
+          marketing, and informational messages at modest volumes.
+        </p>
+      </div>
+
+      {/* Links (optional but recommended) */}
       <div className="grid md:grid-cols-2 gap-3">
         <input
           type="url"
-          placeholder="Landing Page URL (with opt-in language)"
+          placeholder="Landing Page URL (shows opt-in language)"
           value={landingOptInUrl}
           onChange={(e) => setLandingOptInUrl(e.target.value)}
           className="border p-2 rounded w-full"
@@ -333,11 +335,11 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
           onChange={(e) => setLandingPrivacyUrl(e.target.value)}
           className="border p-2 rounded w-full md:col-span-2"
         />
+        <p className="md:col-span-2 text-xs text-gray-500">
+          These links are optional but strongly recommended. A public page showing how users opt in
+          significantly reduces review delays and declines.
+        </p>
       </div>
-      <p className="text-xs text-gray-500 -mt-2">
-        <span className="font-medium">Note:</span> Terms of Service and Privacy Policy links are
-        optional but strongly recommended. Your landing page URL is required and should show the opt-in language.
-      </p>
 
       {/* Contact */}
       <input
@@ -361,27 +363,6 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
         onChange={(e) => setContactTitle(e.target.value)}
         className="border p-2 rounded w-full"
       />
-
-      {/* Campaign Type */}
-      <div className="space-y-1">
-        <label className="text-sm text-gray-500">Campaign Type</label>
-        <select
-          value={useCase}
-          onChange={(e) => setUseCase(e.target.value as UseCaseCode)}
-          className="border p-2 rounded w-full bg-white text-black"
-        >
-          <optgroup label="Common">
-            {COMMON_USECASES.map((u) => (
-              <option key={u.value} value={u.value}>{u.label}</option>
-            ))}
-          </optgroup>
-          <optgroup label="Advanced / Special">
-            {ADVANCED_USECASES.map((u) => (
-              <option key={u.value} value={u.value}>{u.label}</option>
-            ))}
-          </optgroup>
-        </select>
-      </div>
 
       {/* Sample Messages – separate inputs */}
       <div className="space-y-3">
@@ -429,9 +410,12 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
         className="border p-2 rounded w-full"
       />
 
-      {/* Screenshot Upload */}
+      {/* Screenshot Upload (optional) */}
       <div className="space-y-2">
-        <label className="font-semibold block">Opt-in Screenshot (PNG or JPG)</label>
+        <label className="font-semibold block">Screenshot of opt-in language (optional)</label>
+        <p className="text-xs text-gray-500">
+          A screenshot of your opt-in form/page helps reviewers verify consent flow quickly.
+        </p>
 
         <label htmlFor="file-upload" className="cursor-pointer underline text-blue-700 hover:text-blue-900">
           Choose File
@@ -440,7 +424,7 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
 
         <button
           onClick={handleUpload}
-          disabled={uploading}
+          disabled={uploading || !file}
           className="bg-gray-700 hover:bg-gray-800 disabled:opacity-60 text-white px-4 py-1 rounded cursor-pointer"
         >
           {uploading ? "Uploading..." : "Upload Screenshot"}
@@ -448,7 +432,7 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
 
         {optInScreenshotUrl && (
           <p className="text-green-600 text-sm">
-            ✅ Uploaded:{" "}
+            Uploaded:{" "}
             <a href={optInScreenshotUrl} className="underline cursor-pointer" target="_blank" rel="noopener noreferrer">
               {optInScreenshotUrl}
             </a>
