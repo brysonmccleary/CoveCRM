@@ -22,10 +22,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const session = await getServerSession(req, res, authOptions);
   if (!session?.user?.email) return res.status(401).json({ message: "Unauthorized" });
 
-  const { phoneNumber } = (req.body || {}) as { phoneNumber?: string };
-  if (!phoneNumber) return res.status(400).json({ message: "Missing phone number" });
+  // Accept phone number from body OR query (DELETE may not include a body)
+  const pnFromBody = (req.body as any)?.phoneNumber;
+  const pnFromQuery = (req.query as any)?.phoneNumber;
+  const rawPhoneParam = Array.isArray(pnFromBody) ? pnFromBody[0] :
+                        pnFromBody ?? (Array.isArray(pnFromQuery) ? pnFromQuery[0] : pnFromQuery);
 
-  const normalized = normalizeE164(phoneNumber);
+  if (!rawPhoneParam) return res.status(400).json({ message: "Missing phone number" });
+
+  const normalized = normalizeE164(String(rawPhoneParam));
 
   try {
     await dbConnect();
@@ -34,14 +39,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!user) return res.status(404).json({ message: "User not found" });
 
     const entry = (user.numbers || []).find(
-      (n: any) => n.phoneNumber === normalized || n.phoneNumber === phoneNumber,
+      (n: any) => n.phoneNumber === normalized || n.phoneNumber === rawPhoneParam,
     );
     if (!entry) return res.status(404).json({ message: "Number not found in your account" });
 
     // Always act in THIS user’s Twilio account (platform or personal)
     const { client } = await getClientForUser(user.email);
 
-    // Resolve number SID (trust our stored SID, but double-check via Twilio)
+    // Resolve number SID (prefer stored SID; fall back to Twilio lookup)
     let numberSid: string | undefined = entry.sid;
     if (!numberSid) {
       const matches = await client.incomingPhoneNumbers.list({ phoneNumber: normalized, limit: 5 });
@@ -57,7 +62,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
-    // 2) Detach from Messaging Services in THIS account (idempotent, safe)
+    // 2) Detach from any Messaging Service in THIS account (idempotent)
     if (numberSid) {
       try {
         const services = await client.messaging.v1.services.list({ limit: 100 });
@@ -73,28 +78,41 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
-    // 3) Release from Twilio (this stops Twilio billing for personal users)
+    // 3) Release from Twilio (stops Twilio billing for personal/self-billed)
+    let released = false;
     try {
       if (numberSid) {
         await client.incomingPhoneNumbers(numberSid).remove();
+        released = true;
       } else {
         const matches = await client.incomingPhoneNumbers.list({ phoneNumber: normalized, limit: 5 });
-        if (matches.length > 0) await client.incomingPhoneNumbers(matches[0].sid).remove();
+        if (matches.length > 0) {
+          await client.incomingPhoneNumbers(matches[0].sid).remove();
+          released = true;
+        }
       }
     } catch (e) {
       console.warn("⚠️ Twilio release warning (continuing):", e);
+      // Optional: hook your alerting here (Sentry/LogTail/etc.)
+      // captureException(e, { extra: { phoneNumber: normalized, userEmail: user.email } });
+    }
+
+    if (!released) {
+      console.warn(
+        `⚠️ Twilio release could not confirm removal for ${normalized} (user=${user.email}). Continuing local cleanup.`,
+      );
     }
 
     // 4) Remove from user doc
     user.numbers = (user.numbers || []).filter(
-      (n: any) => n.phoneNumber !== normalized && n.phoneNumber !== phoneNumber,
+      (n: any) => n.phoneNumber !== normalized && n.phoneNumber !== String(rawPhoneParam),
     );
     await user.save();
 
     // 5) Tidy PhoneNumber doc
     try {
       await PhoneNumber.deleteOne({ userId: user._id, phoneNumber: normalized });
-      await PhoneNumber.deleteOne({ userId: user._id, phoneNumber }); // just in case
+      await PhoneNumber.deleteOne({ userId: user._id, phoneNumber: String(rawPhoneParam) }); // just in case
     } catch (e) {
       console.warn("⚠️ PhoneNumber delete warning:", e);
     }
