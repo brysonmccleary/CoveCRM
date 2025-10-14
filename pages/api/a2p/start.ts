@@ -1,4 +1,3 @@
-// pages/api/a2p/start.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
@@ -145,8 +144,12 @@ export default async function handler(
       sampleMessages, // string | string[]
       optInDetails, // string
       volume, // string
-      optInScreenshotUrl, // string
+      optInScreenshotUrl, // string (optional)
       usecaseCode, // string | undefined
+      // ✅ NEW optional links
+      landingOptInUrl,
+      landingTosUrl,
+      landingPrivacyUrl,
     } = (req.body || {}) as Record<string, unknown>;
 
     // Validate basics
@@ -196,9 +199,15 @@ export default async function handler(
       contactFirstName: String(contactFirstName),
       contactLastName: String(contactLastName),
       sampleMessages: samples.join("\n\n"),
+      sampleMessagesArr: samples, // keep array form too
       optInDetails: String(optInDetails),
       volume: (volume as string) || "Low",
       optInScreenshotUrl: (optInScreenshotUrl as string) || "",
+      // ✅ persist optional artifacts & campaign choice
+      landingOptInUrl: (landingOptInUrl as string) || "",
+      landingTosUrl: (landingTosUrl as string) || "",
+      landingPrivacyUrl: (landingPrivacyUrl as string) || "",
+      usecaseCode: (usecaseCode as string) || "LOW_VOLUME",
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
     };

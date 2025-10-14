@@ -1,4 +1,3 @@
-// /models/A2PProfile.ts
 import mongoose, { Schema, Document } from "mongoose";
 
 export type A2PRegistrationStatus =
@@ -30,7 +29,6 @@ export interface IA2PProfile extends Document {
 
   // ---- TrustHub/Profile ----
   profileSid: string; // Secondary Customer Profile (BU...)
-  // extra TrustHub artifacts used by /api/a2p/start.ts
   businessEndUserSid?: string;
   authorizedRepEndUserSid?: string;
   trustProductSid?: string; // TP...
@@ -46,6 +44,12 @@ export interface IA2PProfile extends Document {
   optInDetails: string;
   volume: string;
   optInScreenshotUrl: string;
+
+  // ✅ NEW optional artifacts & campaign choice
+  landingOptInUrl?: string;
+  landingTosUrl?: string;
+  landingPrivacyUrl?: string;
+  usecaseCode?: string;
 
   // -------------------- ISV automation fields --------------------
   brandSid?: string; // BNxxxxxxxx
@@ -103,7 +107,7 @@ const A2PProfileSchema = new Schema<IA2PProfile>({
   // TrustHub/Business profile (secondary)
   profileSid: { type: String, required: true },
 
-  // Extra TrustHub artifacts you create/attach in /api/a2p/start
+  // Extra TrustHub artifacts
   businessEndUserSid: { type: String },
   authorizedRepEndUserSid: { type: String },
   trustProductSid: { type: String },
@@ -118,7 +122,15 @@ const A2PProfileSchema = new Schema<IA2PProfile>({
   sampleMessagesArr: { type: [String], default: undefined },
   optInDetails: { type: String, required: true },
   volume: { type: String, required: true },
-  optInScreenshotUrl: { type: String, required: true },
+
+  // NOTE: screenshot now optional
+  optInScreenshotUrl: { type: String, required: false },
+
+  // ✅ NEW optional artifacts & campaign choice
+  landingOptInUrl: { type: String },
+  landingTosUrl: { type: String },
+  landingPrivacyUrl: { type: String },
+  usecaseCode: { type: String },
 
   // ISV artifacts
   brandSid: { type: String },
