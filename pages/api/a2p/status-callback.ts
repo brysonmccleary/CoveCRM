@@ -1,3 +1,4 @@
+// pages/api/a2p/status-callback.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import mongooseConnect from "@/lib/mongooseConnect";
 import A2PProfile from "@/models/A2PProfile";
@@ -7,12 +8,11 @@ import twilio from "twilio";
 // reuse your platform creds for mgmt events
 const client = twilio(process.env.TWILIO_ACCOUNT_SID!, process.env.TWILIO_AUTH_TOKEN!);
 
-// NOTE: these mailers live in the big helper file you shared.
-// If you moved them to a different module, adjust this import.
+// ✅ use the notifications shim you added
 import {
   sendA2PApprovedEmail,
   sendA2PDeclinedEmail,
-} from "@/lib/twilio/getClientForUser";
+} from "@/lib/a2p/notifications";
 
 const BASE_URL = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "").replace(/\/$/, "");
 

@@ -29,6 +29,7 @@ export interface IA2PProfile extends Document {
 
   // ---- TrustHub/Profile ----
   profileSid: string; // Secondary Customer Profile (BU...)
+  // extra TrustHub artifacts used by /api/a2p/start.ts
   businessEndUserSid?: string;
   authorizedRepEndUserSid?: string;
   trustProductSid?: string; // TP...
@@ -38,6 +39,9 @@ export interface IA2PProfile extends Document {
   // Optional legacy/use-case sid
   useCaseSid?: string;
 
+  // ✅ selected use case code (persisted for UX + /submit-campaign default)
+  usecaseCode?: string;
+
   // ---- Campaign content & consent ----
   sampleMessages: string; // legacy string
   sampleMessagesArr?: string[]; // modern array variant
@@ -45,11 +49,10 @@ export interface IA2PProfile extends Document {
   volume: string;
   optInScreenshotUrl: string;
 
-  // ✅ NEW optional artifacts & campaign choice
+  // ✅ Optional public links (for reviewer convenience)
   landingOptInUrl?: string;
   landingTosUrl?: string;
   landingPrivacyUrl?: string;
-  usecaseCode?: string;
 
   // -------------------- ISV automation fields --------------------
   brandSid?: string; // BNxxxxxxxx
@@ -107,7 +110,7 @@ const A2PProfileSchema = new Schema<IA2PProfile>({
   // TrustHub/Business profile (secondary)
   profileSid: { type: String, required: true },
 
-  // Extra TrustHub artifacts
+  // Extra TrustHub artifacts you create/attach in /api/a2p/start
   businessEndUserSid: { type: String },
   authorizedRepEndUserSid: { type: String },
   trustProductSid: { type: String },
@@ -117,20 +120,20 @@ const A2PProfileSchema = new Schema<IA2PProfile>({
   // Legacy/use-case
   useCaseSid: { type: String },
 
+  // ✅ Persisted selected use case
+  usecaseCode: { type: String },
+
   // Consent & messaging details
   sampleMessages: { type: String, required: true },
   sampleMessagesArr: { type: [String], default: undefined },
   optInDetails: { type: String, required: true },
   volume: { type: String, required: true },
+  optInScreenshotUrl: { type: String, required: true },
 
-  // NOTE: screenshot now optional
-  optInScreenshotUrl: { type: String, required: false },
-
-  // ✅ NEW optional artifacts & campaign choice
+  // ✅ Optional public links
   landingOptInUrl: { type: String },
   landingTosUrl: { type: String },
   landingPrivacyUrl: { type: String },
-  usecaseCode: { type: String },
 
   // ISV artifacts
   brandSid: { type: String },

@@ -1,9 +1,11 @@
+// pages/api/a2p/sync.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import twilio from "twilio";
 import mongooseConnect from "@/lib/mongooseConnect";
 import A2PProfile from "@/models/A2PProfile";
 import User from "@/models/User";
-import { sendA2PApprovedEmail, sendA2PDeclinedEmail } from "@/lib/twilio/getClientForUser";
+// ✅ use the notifications shim you added
+import { sendA2PApprovedEmail, sendA2PDeclinedEmail } from "@/lib/a2p/notifications";
 
 const client = twilio(process.env.TWILIO_ACCOUNT_SID!, process.env.TWILIO_AUTH_TOKEN!);
 const BASE_URL = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "").replace(/\/$/, "");
