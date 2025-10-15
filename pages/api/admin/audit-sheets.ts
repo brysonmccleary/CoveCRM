@@ -8,10 +8,14 @@ import mongoose from "mongoose";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "GET") return res.status(405).json({ error: "Method not allowed" });
+
   // simple shared-secret guard
-  if (req.headers["x-admin-secret"] !== process.env.ADMIN_SECRET) {
+  const hdr = req.headers["x-admin-secret"];
+  const provided = Array.isArray(hdr) ? hdr[0] : hdr;
+  if (provided !== process.env.ADMIN_SECRET) {
     return res.status(401).json({ error: "Unauthorized" });
   }
+
   await dbConnect();
 
   const out: any[] = [];
@@ -21,26 +25,34 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   for (const u of users) {
     const email = String((u as any).email || "").toLowerCase();
-    const sheets = (u as any)?.googleSheets?.syncedSheets || [];
+    const sheets = ((u as any)?.googleSheets?.syncedSheets || []) as any[];
+
     for (const s of sheets) {
-      const fid = s.folderId ? new mongoose.Types.ObjectId(String(s.folderId)) : null;
       let folderName: string | null = s.folderName || null;
 
-      if (fid) {
-        const f = await Folder.findOne({ _id: fid, userEmail: email }).lean();
-        folderName = f?.name || folderName;
+      // Only try to resolve folder by ID if it's a valid ObjectId
+      const fidRaw = s.folderId ? String(s.folderId) : "";
+      if (fidRaw && mongoose.Types.ObjectId.isValid(fidRaw)) {
+        const fid = new mongoose.Types.ObjectId(fidRaw);
+        const f = await Folder.findOne({ _id: fid, userEmail: email })
+          .select({ name: 1 }) // only what we use
+          .lean<{ _id: any; name?: string } | null>(); // TS-safe lean type
+
+        if (f?.name) folderName = f.name;
       }
+
       const bad = folderName ? isSystemFolder(folderName) : false;
+
       out.push({
         email,
-        spreadsheetId: s.spreadsheetId,
-        title: s.title,
-        folderId: s.folderId || null,
-        folderName: folderName,
+        spreadsheetId: s.spreadsheetId || null,
+        title: s.title || null,
+        folderId: fidRaw || null,
+        folderName,
         isSystem: !!bad,
       });
     }
   }
 
-  res.status(200).json({ ok: true, entries: out.filter(e => e.isSystem) });
+  return res.status(200).json({ ok: true, entries: out.filter((e) => e.isSystem) });
 }
