@@ -1,6 +1,6 @@
-// /components/ColumnMappingForm.tsx
 import { useEffect, useMemo, useState } from "react";
 import toast from "react-hot-toast";
+import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
 
 export type MappingSubmitPayload = {
   mapping: {
@@ -33,7 +33,7 @@ const CANONICAL_FIELDS = [
   "Source",
 ] as const;
 
-type Canonical = typeof CANONICAL_FIELDS[number];
+type Canonical = (typeof CANONICAL_FIELDS)[number];
 
 const apiKey: Record<Canonical, keyof MappingSubmitPayload["mapping"]> = {
   "First Name": "firstName",
@@ -97,7 +97,9 @@ export default function ColumnMappingForm({
         if (r.ok) {
           const data = await r.json();
           const list: Folder[] = Array.isArray(data?.folders) ? data.folders : data;
-          setFolders(list || []);
+          // Hide system folders from the dropdown
+          const visible = (list || []).filter((f) => !isSystemFolder(f.name));
+          setFolders(visible);
         }
       } catch {
         /* no-op */
@@ -135,7 +137,6 @@ export default function ColumnMappingForm({
   }, [headers]);
 
   const options = useMemo(() => ["", ...headers], [headers]);
-
   const atLeastOneId = useMemo(
     () => Boolean(mapSel.phone || mapSel.email),
     [mapSel.phone, mapSel.email]
@@ -155,6 +156,13 @@ export default function ColumnMappingForm({
       return;
     }
 
+    // If user typed a system folder name, auto-suffix to a safe name
+    let finalFolderName = folderName.trim();
+    if (!useExisting && finalFolderName && isSystemFolder(finalFolderName)) {
+      finalFolderName = `${finalFolderName} (Leads)`;
+      toast("“System” folder name detected — using: " + finalFolderName, { icon: "🛡️" });
+    }
+
     // persist prefs
     localStorage.setItem(LOCAL_KEY_MAPPING, JSON.stringify(mapSel));
     localStorage.setItem(LOCAL_KEY_SKIP, String(skipExisting));
@@ -163,7 +171,7 @@ export default function ColumnMappingForm({
     onSubmit({
       mapping: mapSel,
       targetFolderId: useExisting ? targetFolderId : undefined,
-      folderName: useExisting ? undefined : folderName.trim(),
+      folderName: useExisting ? undefined : finalFolderName,
       skipExisting,
     });
   };
@@ -215,6 +223,11 @@ export default function ColumnMappingForm({
                 </option>
               ))}
             </select>
+            {folders.length === 0 && (
+              <div className="text-xs text-gray-500 mt-1">
+                (System folders are hidden here. Create a new folder name below if needed.)
+              </div>
+            )}
           </div>
         ) : (
           <div>

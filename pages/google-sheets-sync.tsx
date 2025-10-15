@@ -1,4 +1,3 @@
-// /pages/google-sheets-sync.tsx
 import { useEffect, useRef, useState } from "react";
 import Sidebar from "@/components/Sidebar";
 import toast from "react-hot-toast";
@@ -171,10 +170,11 @@ export default function GoogleSheetsSyncPage() {
       return toast.error("Map at least Phone or Email");
     }
 
-    const intendedFolderName =
-      folderName || `${selectedFile.name} — ${selectedTab || "Sheet"}`;
+    // Auto-fix system folder names
+    let intendedFolderName = folderName || `${selectedFile.name} — ${selectedTab || "Sheet"}`;
     if (isSystemFolder(intendedFolderName)) {
-      return toast.error("Cannot import into system folders");
+      intendedFolderName = `${intendedFolderName} (Leads)`;
+      toast("“System” folder name detected — using: " + intendedFolderName, { icon: "🛡️" });
     }
 
     setImporting(true);
