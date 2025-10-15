@@ -8,7 +8,7 @@ import { google } from "googleapis";
 import mongoose from "mongoose";
 import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
 
-// Build breadcrumb (which deploy responded)
+// Build breadcrumb (helps confirm which deploy is serving)
 const buildRev =
   (process.env.VERCEL_GIT_COMMIT_SHA ||
     process.env.VERCEL_GITHUB_COMMIT_SHA ||
@@ -31,14 +31,14 @@ const normHeader = (s: any) =>
 
 type SyncedSheetCfg = {
   spreadsheetId: string;
-  title?: string;
-  sheetId?: number;
+  title?: string; // saved tab title at time of import
+  sheetId?: number; // preferred if present (tab renames handled)
   headerRow?: number;
   mapping?: Record<string, string>;
   skip?: Record<string, boolean>;
   folderId?: string;
   folderName?: string;
-  lastRowImported?: number;
+  lastRowImported?: number; // 1-based index of the LAST imported row
 };
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -46,7 +46,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  // Auth
+  // Cron auth
   const headerToken = Array.isArray(req.headers["x-cron-secret"])
     ? req.headers["x-cron-secret"][0]
     : (req.headers["x-cron-secret"] as string | undefined);
@@ -57,7 +57,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(401).json({ error: "Unauthorized" });
   }
 
-  // Filters & flags
+  // Optional filters/switches
   const onlyUserEmail =
     typeof req.query.userEmail === "string"
       ? (req.query.userEmail as string).toLowerCase()
@@ -68,6 +68,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       : undefined;
   const onlyTitle =
     typeof req.query.title === "string" ? (req.query.title as string) : undefined;
+
   const dryRun = req.query.dryRun === "1" || req.query.dryRun === "true";
   const debug = req.query.debug === "1" || req.query.debug === "true";
 
@@ -89,7 +90,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     for (const user of users) {
       const userEmail = String((user as any).email || "").toLowerCase();
 
-      // Load Google tokens (new or legacy)
+      // token from googleSheets or legacy googleTokens
       const gs: any = (user as any).googleSheets || {};
       const legacy: any = (user as any).googleTokens || {};
       const tok = gs?.refreshToken ? gs : legacy?.refreshToken ? legacy : null;
@@ -98,14 +99,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         continue;
       }
 
-      // Compute system folder id set for this user (ID-based guard)
-      const sysFolders = await Folder.find({ userEmail, isSystem: true })
-        .select({ _id: 1, name: 1 })
-        .lean();
-      const sysIdSet = new Set(sysFolders.map((f: any) => String(f._id)));
-      const sysNameSet = new Set(sysFolders.map((f: any) => String(f.name || "")));
-
-      // OAuth clients
       const base = process.env.NEXTAUTH_URL || process.env.NEXT_PUBLIC_BASE_URL || "";
       const oauth2 = new google.auth.OAuth2(
         process.env.GOOGLE_CLIENT_ID!,
@@ -144,7 +137,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (onlySpreadsheetId && spreadsheetId !== onlySpreadsheetId) continue;
         if (onlyTitle && title && title !== onlyTitle) continue;
 
-        // Resolve current tab title if we have sheetId
+        // Resolve current tab title if we have sheetId (tab might be renamed)
         if (sheetId != null) {
           try {
             const meta = await sheetsApi.spreadsheets.get({
@@ -154,42 +147,38 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             const found = (meta.data.sheets || []).find(
               (s) => s.properties?.sheetId === sheetId
             );
-            if (found?.properties?.title) {
-              title = found.properties.title;
-            }
-          } catch { /* ignore */ }
+            if (found?.properties?.title) title = found.properties.title;
+          } catch {
+            // ignore and proceed with saved title
+          }
         }
         if (!title) continue;
 
-        // --- Resolve/Correct destination folder (BLOCK system folders by ID and by Name) ---
+        // --- Resolve/Correct destination folder (BLOCK system folders) ---
         let folderDoc: any = null;
-        let reasonGuard = "";
+        let reasonGuard: string | undefined;
 
-        // If a folderId exists but is a system id -> wipe it
-        if (folderId && sysIdSet.has(String(folderId))) {
-          reasonGuard = "blocked-by-system-id";
-          folderDoc = null;
-        } else if (folderId) {
+        if (folderId) {
           try {
-            const f = await Folder.findOne({ _id: new mongoose.Types.ObjectId(folderId) }).lean();
-            if (f && (isSystemFolder(f.name) || sysIdSet.has(String(f._id)))) {
+            const f = (await Folder.findOne({
+              _id: new mongoose.Types.ObjectId(folderId),
+            })
+              .lean()) as any; // <-- TS: force Doc type
+            if (f && (isSystemFolder(f.name) || f.isSystem === true)) {
               reasonGuard = "blocked-by-system-name";
-              folderDoc = null;
+              folderDoc = null; // forbidden, force new safe folder below
             } else {
               folderDoc = f;
             }
           } catch {
-            folderDoc = null;
+            // bad id or not found; will create below
           }
         }
 
         if (!folderDoc) {
-          // Choose a safe default name
           const meta = await drive.files.get({ fileId: spreadsheetId, fields: "name" });
-          const candidate = (folderName || `${meta.data.name || "Imported Leads"} — ${title}`).trim();
-
-          const collideSystem = isSystemFolder(candidate) || sysNameSet.has(candidate);
-          const safeName = collideSystem ? `${candidate} (Leads)` : candidate;
+          const defaultName = (folderName || `${meta.data.name || "Imported Leads"} — ${title}`).trim();
+          const safeName = isSystemFolder(defaultName) ? `${defaultName} (Leads)` : defaultName;
 
           folderDoc = await Folder.findOneAndUpdate(
             { userEmail, name: safeName },
@@ -197,7 +186,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             { new: true, upsert: true }
           );
 
-          // Persist the corrected folder back to the link (only if not dryRun)
           if (!dryRun) {
             await User.updateOne(
               {
@@ -210,12 +198,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                   "googleSheets.syncedSheets.$.folderId": folderDoc._id,
                   "googleSheets.syncedSheets.$.folderName": folderDoc.name,
                 },
-                ...(reasonGuard
-                  ? {
-                      // optionally also record last guard reason for debugging
-                      $setOnInsert: {},
-                    }
-                  : {}),
               }
             );
           }
@@ -233,13 +215,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const headerIdx = Math.max(0, headerRow - 1);
         const rawHeaders = (values[headerIdx] || []).map((h) => String(h ?? "").trim());
 
+        // Normalize mapping keys once (tolerant to spacing/underscores/dashes)
         const normalizedMapping: Record<string, string> = {};
         Object.entries(mapping || {}).forEach(([key, val]) => {
           normalizedMapping[normHeader(key)] = val;
         });
 
+        // Determine start/end using pointer (1-based last imported)
         const pointer = typeof lastRowImported === "number" ? lastRowImported : headerRow;
-        const firstDataZero = headerIdx + 1;
+        const firstDataZero = headerIdx + 1; // 0-based
         let startIndex = Math.max(firstDataZero, Number(pointer));
         if (startIndex > values.length - 1) startIndex = firstDataZero;
         const endIndex = Math.min(values.length - 1, startIndex + MAX_ROWS_PER_SHEET - 1);
@@ -256,11 +240,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             if (!hasAny) continue;
             lastProcessed = r;
 
+            // Build doc using tolerant mapping
             const doc: Record<string, any> = {};
             rawHeaders.forEach((actualHeader, i) => {
               const n = normHeader(actualHeader);
               if (!n) return;
-              if (skip?.[actualHeader]) return;
+              if (skip?.[actualHeader]) return; // honor skip by actual text
               const fieldName = normalizedMapping[n];
               if (!fieldName) return;
               doc[fieldName] = row[i] ?? "";
@@ -277,7 +262,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             doc.source = "google-sheets";
             doc.sourceSpreadsheetId = spreadsheetId;
             doc.sourceTabTitle = title;
-            doc.sourceRowIndex = r + 1;
+            doc.sourceRowIndex = r + 1; // 1-based
             doc.normalizedPhone = p || undefined;
             if (e) doc.email = e;
 
@@ -286,13 +271,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             if (e) or.push({ email: e });
 
             const filter = { userEmail, ...(or.length ? { $or: or } : {}) };
-            const existing = await Lead.findOne(filter).select("_id").lean<{ _id: mongoose.Types.ObjectId } | null>();
+            const existing = await Lead.findOne(filter)
+              .select("_id")
+              .lean<{ _id: mongoose.Types.ObjectId } | null>();
 
             if (!existing) {
               if (!dryRun) await Lead.create({ ...doc, folderId: targetFolderId });
               imported++;
             } else {
-              if (!dryRun) await Lead.updateOne({ _id: existing._id }, { $set: { ...doc, folderId: targetFolderId } });
+              if (!dryRun)
+                await Lead.updateOne(
+                  { _id: existing._id },
+                  { $set: { ...doc, folderId: targetFolderId } }
+                );
               updated++;
             }
           }
@@ -304,7 +295,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             {
               email: userEmail,
               "googleSheets.syncedSheets.spreadsheetId": spreadsheetId,
-              "googleSheets.syncedSheets.title": cfg.title ?? title,
+              "googleSheets.syncedSheets.title": cfg.title ?? title, // match either saved or current title
             },
             {
               $set: {
@@ -319,7 +310,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           );
         }
 
-        detailsAll.push({
+        const detail: any = {
           userEmail,
           spreadsheetId,
           title,
@@ -335,25 +326,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           newLastRowImported: newLast,
           dryRun,
           resolvedFolder: {
-            id: String(folderDoc?._id || ""),
-            name: folderDoc?.name || "",
-            // both name-based and id-based view in the payload
-            isSystemByName: folderDoc ? isSystemFolder(folderDoc.name) : false,
-            isSystemById: folderDoc ? sysIdSet.has(String(folderDoc._id)) : false,
-            guardReason: reasonGuard || (isSystemFolder(folderName || "") ? "input-folderName-system" : ""),
+            id: String(folderDoc._id),
+            name: folderDoc.name,
+            isSystem: !!(folderDoc?.isSystem || isSystemFolder(folderDoc?.name)),
+            ...(reasonGuard ? { reasonGuard } : {}),
           },
-          ...(debug
-            ? {
-                headers: rawHeaders,
-                mapping,
-                systemFolderIds: Array.from(sysIdSet),
-                systemFolderNames: Array.from(sysNameSet),
-              }
-            : {}),
-        });
+        };
+        if (debug) {
+          detail.headers = rawHeaders;
+          detail.mapping = mapping;
+        }
+        detailsAll.push(detail);
       }
     }
 
+    if (debug) console.log("Sheets poll (debug) →", JSON.stringify(detailsAll, null, 2));
     return res.status(200).json({ ok: true, build: buildRev, details: detailsAll });
   } catch (err: any) {
     console.error("Sheets poll error:", err);
