@@ -74,43 +74,59 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       if (!spreadsheetId || !title) continue;
 
-      // Ensure folder exists for THIS user, and never a system folder
+      // --- Resolve/Correct destination folder (BLOCK system folders) ---
       let folderDoc: any = null;
+
       if (folderId) {
         try {
-          folderDoc = await Folder.findOne({
-            _id: new mongoose.Types.ObjectId(folderId),
-            userEmail, // 🔒 user-scoped
-          }).lean();
-          if (folderDoc && isSystemFolder(folderDoc.name)) {
-            details.push({
-              spreadsheetId,
-              title,
-              skipped: true,
-              reason: `target folder "${folderDoc.name}" is a system folder`,
-            });
-            // Skip this sheet entirely; do not import into resolution folders
-            continue;
-          }
-        } catch {
-          /* ignore; we'll fall back to name/default */
-        }
+          folderDoc = await Folder.findOne({ _id: new mongoose.Types.ObjectId(folderId), userEmail });
+        } catch { /* noop */ }
+      }
+      if (folderDoc && isSystemFolder(folderDoc.name)) {
+        // system target is forbidden: null out so we auto-create a safe folder below
+        folderDoc = null;
       }
 
       if (!folderDoc) {
+        // build a safe default name from Drive metadata + tab title
         const meta = await drive.files.get({ fileId: spreadsheetId, fields: "name" });
-        const defaultName = folderName || `${meta.data.name || "Imported Leads"} — ${title}`;
-        // defaultName will not equal a system folder name like "Sold", so safe to create
-        folderDoc = await Folder.findOneAndUpdate(
-          { userEmail, name: defaultName },
-          { $setOnInsert: { userEmail, name: defaultName, source: "google-sheets" } },
-          { new: true, upsert: true }
-        ).lean();
+        const defaultName = (folderName || `${meta.data.name || "Imported Leads"} — ${title}`).trim();
+
+        if (isSystemFolder(defaultName)) {
+          // if default name collides with system, suffix it safely
+          const safe = `${defaultName} (Leads)`;
+          folderDoc = await Folder.findOneAndUpdate(
+            { userEmail, name: safe },
+            { $setOnInsert: { userEmail, name: safe, source: "google-sheets" } },
+            { new: true, upsert: true }
+          );
+        } else {
+          folderDoc = await Folder.findOneAndUpdate(
+            { userEmail, name: defaultName },
+            { $setOnInsert: { userEmail, name: defaultName, source: "google-sheets" } },
+            { new: true, upsert: true }
+          );
+        }
+
+        // best-effort: persist the corrected folder back to the sheet link entry
+        await User.updateOne(
+          {
+            email: userEmail,
+            "googleSheets.syncedSheets.spreadsheetId": spreadsheetId,
+            "googleSheets.syncedSheets.title": title,
+          },
+          {
+            $set: {
+              "googleSheets.syncedSheets.$.folderId": folderDoc._id,
+              "googleSheets.syncedSheets.$.folderName": folderDoc.name,
+            },
+          }
+        );
       }
 
       const targetFolderId = folderDoc._id as mongoose.Types.ObjectId;
 
-      // Fetch values
+      // --- Fetch values ---
       const resp = await sheetsApi.spreadsheets.values.get({
         spreadsheetId,
         range: `'${title}'!A1:ZZ`,
@@ -135,10 +151,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         lastProcessed = r;
 
+        // Build doc using mapping/skip
         const doc: Record<string, any> = {};
         headers.forEach((h, i) => {
           if (!h) return;
-          if ((skip as any)[h]) return;
+          if (skip[h]) return;
           const fieldName = (mapping as any)[h];
           if (!fieldName) return;
           doc[fieldName] = row[i] ?? "";
@@ -164,7 +181,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (emailLower) or.push({ email: emailLower });
         const filter = { userEmail, ...(or.length ? { $or: or } : {}) };
 
-        // Existence check (id only)
         const existing = await Lead.findOne(filter).select("_id").lean<{ _id: mongoose.Types.ObjectId } | null>();
 
         if (!existing) {
@@ -172,15 +188,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           await Lead.create(doc);
           imported++;
         } else {
-          const update: any = { $set: { ...doc, folderId: targetFolderId } };
-          await Lead.updateOne({ _id: existing._id }, update);
+          await Lead.updateOne({ _id: existing._id }, { $set: { ...doc, folderId: targetFolderId } });
           updated++;
         }
       }
 
-      const newLast = Math.max(lastProcessed + 1, lastRowImported);
-      const positional = await User.updateOne(
-        { email: userEmail, "googleSheets.syncedSheets.spreadsheetId": spreadsheetId, "googleSheets.syncedSheets.title": title },
+      const newLast = Math.max(lastProcessed + 1, Number(lastRowImported));
+      await User.updateOne(
+        {
+          email: userEmail,
+          "googleSheets.syncedSheets.spreadsheetId": spreadsheetId,
+          "googleSheets.syncedSheets.title": title,
+        },
         {
           $set: {
             "googleSheets.syncedSheets.$.lastRowImported": newLast,

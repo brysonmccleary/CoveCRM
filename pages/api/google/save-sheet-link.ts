@@ -69,7 +69,6 @@ export default async function handler(
           ? gs.sheets
           : [];
       gs.syncedSheets = arr;
-      gs.sheets = arr;
 
       const idx = arr.findIndex((s: any) => s.sheetId === sheetId);
       const newSheetLink = { sheetId, sheetName, folderId };
