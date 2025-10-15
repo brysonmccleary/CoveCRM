@@ -8,7 +8,7 @@ import { google } from "googleapis";
 import mongoose from "mongoose";
 import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
 
-// --- Build breadcrumb (helps verify which deploy you're hitting) ----------
+// Build breadcrumb (which deploy responded)
 const buildRev =
   (process.env.VERCEL_GIT_COMMIT_SHA ||
     process.env.VERCEL_GITHUB_COMMIT_SHA ||
@@ -46,18 +46,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(405).json({ error: "Method not allowed" });
   }
 
+  // Auth
   const headerToken = Array.isArray(req.headers["x-cron-secret"])
     ? req.headers["x-cron-secret"][0]
     : (req.headers["x-cron-secret"] as string | undefined);
   const queryToken =
-    typeof req.query.token === "string"
-      ? (req.query.token as string)
-      : undefined;
+    typeof req.query.token === "string" ? (req.query.token as string) : undefined;
   const provided = headerToken || queryToken;
   if (provided !== process.env.CRON_SECRET) {
     return res.status(401).json({ error: "Unauthorized" });
   }
 
+  // Filters & flags
   const onlyUserEmail =
     typeof req.query.userEmail === "string"
       ? (req.query.userEmail as string).toLowerCase()
@@ -89,6 +89,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     for (const user of users) {
       const userEmail = String((user as any).email || "").toLowerCase();
 
+      // Load Google tokens (new or legacy)
       const gs: any = (user as any).googleSheets || {};
       const legacy: any = (user as any).googleTokens || {};
       const tok = gs?.refreshToken ? gs : legacy?.refreshToken ? legacy : null;
@@ -97,6 +98,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         continue;
       }
 
+      // Compute system folder id set for this user (ID-based guard)
+      const sysFolders = await Folder.find({ userEmail, isSystem: true })
+        .select({ _id: 1, name: 1 })
+        .lean();
+      const sysIdSet = new Set(sysFolders.map((f: any) => String(f._id)));
+      const sysNameSet = new Set(sysFolders.map((f: any) => String(f.name || "")));
+
+      // OAuth clients
       const base = process.env.NEXTAUTH_URL || process.env.NEXT_PUBLIC_BASE_URL || "";
       const oauth2 = new google.auth.OAuth2(
         process.env.GOOGLE_CLIENT_ID!,
@@ -152,29 +161,43 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
         if (!title) continue;
 
-        // --- Resolve/Correct destination folder (BLOCK system folders) ---
+        // --- Resolve/Correct destination folder (BLOCK system folders by ID and by Name) ---
         let folderDoc: any = null;
+        let reasonGuard = "";
 
-        if (folderId) {
+        // If a folderId exists but is a system id -> wipe it
+        if (folderId && sysIdSet.has(String(folderId))) {
+          reasonGuard = "blocked-by-system-id";
+          folderDoc = null;
+        } else if (folderId) {
           try {
-            folderDoc = await Folder.findOne({ _id: new mongoose.Types.ObjectId(folderId) });
-          } catch { /* noop */ }
-        }
-        if (folderDoc && isSystemFolder(folderDoc.name)) {
-          folderDoc = null; // forbidden
+            const f = await Folder.findOne({ _id: new mongoose.Types.ObjectId(folderId) }).lean();
+            if (f && (isSystemFolder(f.name) || sysIdSet.has(String(f._id)))) {
+              reasonGuard = "blocked-by-system-name";
+              folderDoc = null;
+            } else {
+              folderDoc = f;
+            }
+          } catch {
+            folderDoc = null;
+          }
         }
 
         if (!folderDoc) {
+          // Choose a safe default name
           const meta = await drive.files.get({ fileId: spreadsheetId, fields: "name" });
-          const defaultName = (folderName || `${meta.data.name || "Imported Leads"} — ${title}`).trim();
+          const candidate = (folderName || `${meta.data.name || "Imported Leads"} — ${title}`).trim();
 
-          const safeName = isSystemFolder(defaultName) ? `${defaultName} (Leads)` : defaultName;
+          const collideSystem = isSystemFolder(candidate) || sysNameSet.has(candidate);
+          const safeName = collideSystem ? `${candidate} (Leads)` : candidate;
+
           folderDoc = await Folder.findOneAndUpdate(
             { userEmail, name: safeName },
             { $setOnInsert: { userEmail, name: safeName, source: "google-sheets" } },
             { new: true, upsert: true }
           );
 
+          // Persist the corrected folder back to the link (only if not dryRun)
           if (!dryRun) {
             await User.updateOne(
               {
@@ -187,6 +210,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                   "googleSheets.syncedSheets.$.folderId": folderDoc._id,
                   "googleSheets.syncedSheets.$.folderName": folderDoc.name,
                 },
+                ...(reasonGuard
+                  ? {
+                      // optionally also record last guard reason for debugging
+                      $setOnInsert: {},
+                    }
+                  : {}),
               }
             );
           }
@@ -204,9 +233,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const headerIdx = Math.max(0, headerRow - 1);
         const rawHeaders = (values[headerIdx] || []).map((h) => String(h ?? "").trim());
 
-        const headerNormToActual = new Map<string, string>();
-        rawHeaders.forEach((h) => headerNormToActual.set(normHeader(h), h));
-
         const normalizedMapping: Record<string, string> = {};
         Object.entries(mapping || {}).forEach(([key, val]) => {
           normalizedMapping[normHeader(key)] = val;
@@ -216,7 +242,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const firstDataZero = headerIdx + 1;
         let startIndex = Math.max(firstDataZero, Number(pointer));
         if (startIndex > values.length - 1) startIndex = firstDataZero;
-
         const endIndex = Math.min(values.length - 1, startIndex + MAX_ROWS_PER_SHEET - 1);
 
         let imported = 0;
@@ -294,7 +319,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           );
         }
 
-        const detail: any = {
+        detailsAll.push({
           userEmail,
           spreadsheetId,
           title,
@@ -312,18 +337,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           resolvedFolder: {
             id: String(folderDoc?._id || ""),
             name: folderDoc?.name || "",
-            isSystem: folderDoc ? isSystemFolder(folderDoc.name) : false,
+            // both name-based and id-based view in the payload
+            isSystemByName: folderDoc ? isSystemFolder(folderDoc.name) : false,
+            isSystemById: folderDoc ? sysIdSet.has(String(folderDoc._id)) : false,
+            guardReason: reasonGuard || (isSystemFolder(folderName || "") ? "input-folderName-system" : ""),
           },
-        };
-        if (debug) {
-          detail.headers = rawHeaders;
-          detail.mapping = mapping;
-        }
-        detailsAll.push(detail);
+          ...(debug
+            ? {
+                headers: rawHeaders,
+                mapping,
+                systemFolderIds: Array.from(sysIdSet),
+                systemFolderNames: Array.from(sysNameSet),
+              }
+            : {}),
+        });
       }
     }
 
-    if (debug) console.log("Sheets poll (debug) →", JSON.stringify(detailsAll, null, 2));
     return res.status(200).json({ ok: true, build: buildRev, details: detailsAll });
   } catch (err: any) {
     console.error("Sheets poll error:", err);
