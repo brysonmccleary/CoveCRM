@@ -8,6 +8,7 @@ import Lead from "@/models/Lead";
 import Folder from "@/models/Folder";
 import { google } from "googleapis";
 import mongoose from "mongoose";
+import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
 
 function normalizePhone(input: any): string {
   return String(input || "").replace(/\D+/g, "");
@@ -73,23 +74,43 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       if (!spreadsheetId || !title) continue;
 
-      // Ensure folder exists
+      // Ensure folder exists for THIS user, and never a system folder
       let folderDoc: any = null;
       if (folderId) {
-        folderDoc = await Folder.findOne({ _id: new mongoose.Types.ObjectId(folderId) });
+        try {
+          folderDoc = await Folder.findOne({
+            _id: new mongoose.Types.ObjectId(folderId),
+            userEmail, // 🔒 user-scoped
+          }).lean();
+          if (folderDoc && isSystemFolder(folderDoc.name)) {
+            details.push({
+              spreadsheetId,
+              title,
+              skipped: true,
+              reason: `target folder "${folderDoc.name}" is a system folder`,
+            });
+            // Skip this sheet entirely; do not import into resolution folders
+            continue;
+          }
+        } catch {
+          /* ignore; we'll fall back to name/default */
+        }
       }
+
       if (!folderDoc) {
         const meta = await drive.files.get({ fileId: spreadsheetId, fields: "name" });
         const defaultName = folderName || `${meta.data.name || "Imported Leads"} — ${title}`;
+        // defaultName will not equal a system folder name like "Sold", so safe to create
         folderDoc = await Folder.findOneAndUpdate(
           { userEmail, name: defaultName },
           { $setOnInsert: { userEmail, name: defaultName, source: "google-sheets" } },
           { new: true, upsert: true }
-        );
+        ).lean();
       }
+
       const targetFolderId = folderDoc._id as mongoose.Types.ObjectId;
 
-      // Fetch all values
+      // Fetch values
       const resp = await sheetsApi.spreadsheets.values.get({
         spreadsheetId,
         range: `'${title}'!A1:ZZ`,
@@ -117,8 +138,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const doc: Record<string, any> = {};
         headers.forEach((h, i) => {
           if (!h) return;
-          if (skip[h]) return;
-          const fieldName = mapping[h];
+          if ((skip as any)[h]) return;
+          const fieldName = (mapping as any)[h];
           if (!fieldName) return;
           doc[fieldName] = row[i] ?? "";
         });
@@ -143,7 +164,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (emailLower) or.push({ email: emailLower });
         const filter = { userEmail, ...(or.length ? { $or: or } : {}) };
 
-        // Fetch only _id for existence check
+        // Existence check (id only)
         const existing = await Lead.findOne(filter).select("_id").lean<{ _id: mongoose.Types.ObjectId } | null>();
 
         if (!existing) {

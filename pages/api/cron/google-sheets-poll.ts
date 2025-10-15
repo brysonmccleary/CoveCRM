@@ -6,6 +6,7 @@ import Lead from "@/models/Lead";
 import Folder from "@/models/Folder";
 import { google } from "googleapis";
 import mongoose from "mongoose";
+import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
 
 // --- Normalizers -------------------------------------------------------------
 const normPhone = (v: any) => String(v ?? "").replace(/\D+/g, "");
@@ -148,27 +149,42 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
         if (!title) continue; // still no title—skip safely
 
-        // Ensure folder exists
+        // Ensure folder exists for this user; never use a system folder
         let folderDoc: any = null;
         if (folderId) {
           try {
             folderDoc = await Folder.findOne({
               _id: new mongoose.Types.ObjectId(folderId),
-            });
+              userEmail, // 🔒 user-scoped
+            }).lean();
+            if (folderDoc && isSystemFolder(folderDoc.name)) {
+              detailsAll.push({
+                userEmail,
+                spreadsheetId,
+                title,
+                skipped: true,
+                reason: `target folder "${folderDoc.name}" is a system folder`,
+              });
+              // Skip this sheet entirely; do not import into resolution folders
+              continue;
+            }
           } catch {
             /* noop */
           }
         }
+
         if (!folderDoc) {
           const meta = await drive.files.get({ fileId: spreadsheetId, fields: "name" });
           const defaultName =
             folderName || `${meta.data.name || "Imported Leads"} — ${title}`;
+          // defaultName is not a system folder name, so this is safe
           folderDoc = await Folder.findOneAndUpdate(
             { userEmail, name: defaultName },
             { $setOnInsert: { userEmail, name: defaultName, source: "google-sheets" } },
             { new: true, upsert: true }
-          );
+          ).lean();
         }
+
         const targetFolderId = folderDoc._id as mongoose.Types.ObjectId;
 
         // Read values
@@ -194,9 +210,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         // Determine start/end using pointer (1-based last imported)
         const pointer = typeof lastRowImported === "number" ? lastRowImported : headerRow;
         const firstDataZero = headerIdx + 1; // 0-based
-        // Convert 1-based LAST imported -> next row (0-based) = max(firstDataZero, pointer)
         let startIndex = Math.max(firstDataZero, Number(pointer));
-        // If the sheet shrank or pointer drifted too far, clamp back to first data row
         if (startIndex > values.length - 1) startIndex = firstDataZero;
 
         const endIndex = Math.min(values.length - 1, startIndex + MAX_ROWS_PER_SHEET - 1);
@@ -274,7 +288,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 "googleSheets.syncedSheets.$.folderId": targetFolderId,
                 "googleSheets.syncedSheets.$.folderName": folderDoc.name,
                 ...(sheetId != null ? { "googleSheets.syncedSheets.$.sheetId": sheetId } : {}),
-                // keep saved title in sync if it changed
                 ...(cfg.title !== title ? { "googleSheets.syncedSheets.$.title": title } : {}),
               },
             }
