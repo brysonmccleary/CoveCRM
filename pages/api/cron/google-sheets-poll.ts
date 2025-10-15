@@ -8,13 +8,20 @@ import { google } from "googleapis";
 import mongoose from "mongoose";
 import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
 
+// --- Build breadcrumb (helps verify which deploy you're hitting) ----------
+const buildRev =
+  (process.env.VERCEL_GIT_COMMIT_SHA ||
+    process.env.VERCEL_GITHUB_COMMIT_SHA ||
+    "")
+    .toString()
+    .slice(0, 8) || "local";
+
 // --- Normalizers -------------------------------------------------------------
 const normPhone = (v: any) => String(v ?? "").replace(/\D+/g, "");
 const normEmail = (v: any) => {
   const s = String(v ?? "").trim().toLowerCase();
   return s || "";
 };
-// normalize header keys for tolerant matching: trim, collapse space/_/-, lowercase
 const normHeader = (s: any) =>
   String(s ?? "")
     .trim()
@@ -24,14 +31,14 @@ const normHeader = (s: any) =>
 
 type SyncedSheetCfg = {
   spreadsheetId: string;
-  title?: string;         // saved tab title at time of import
-  sheetId?: number;       // <-- we will prefer this if present
+  title?: string;
+  sheetId?: number;
   headerRow?: number;
   mapping?: Record<string, string>;
   skip?: Record<string, boolean>;
   folderId?: string;
   folderName?: string;
-  lastRowImported?: number; // 1-based index of the LAST imported row
+  lastRowImported?: number;
 };
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -39,18 +46,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  // Token via header or query
   const headerToken = Array.isArray(req.headers["x-cron-secret"])
     ? req.headers["x-cron-secret"][0]
     : (req.headers["x-cron-secret"] as string | undefined);
   const queryToken =
-    typeof req.query.token === "string" ? (req.query.token as string) : undefined;
+    typeof req.query.token === "string"
+      ? (req.query.token as string)
+      : undefined;
   const provided = headerToken || queryToken;
   if (provided !== process.env.CRON_SECRET) {
     return res.status(401).json({ error: "Unauthorized" });
   }
 
-  // Optional debug/filters
   const onlyUserEmail =
     typeof req.query.userEmail === "string"
       ? (req.query.userEmail as string).toLowerCase()
@@ -82,7 +89,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     for (const user of users) {
       const userEmail = String((user as any).email || "").toLowerCase();
 
-      // token from googleSheets or legacy googleTokens
       const gs: any = (user as any).googleSheets || {};
       const legacy: any = (user as any).googleTokens || {};
       const tok = gs?.refreshToken ? gs : legacy?.refreshToken ? legacy : null;
@@ -91,8 +97,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         continue;
       }
 
-      const base =
-        process.env.NEXTAUTH_URL || process.env.NEXT_PUBLIC_BASE_URL || "";
+      const base = process.env.NEXTAUTH_URL || process.env.NEXT_PUBLIC_BASE_URL || "";
       const oauth2 = new google.auth.OAuth2(
         process.env.GOOGLE_CLIENT_ID!,
         process.env.GOOGLE_CLIENT_SECRET!,
@@ -130,7 +135,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (onlySpreadsheetId && spreadsheetId !== onlySpreadsheetId) continue;
         if (onlyTitle && title && title !== onlyTitle) continue;
 
-        // If we have a sheetId, resolve current title (tab might be renamed)
+        // Resolve current tab title if we have sheetId
         if (sheetId != null) {
           try {
             const meta = await sheetsApi.spreadsheets.get({
@@ -143,51 +148,53 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             if (found?.properties?.title) {
               title = found.properties.title;
             }
-          } catch {
-            // ignore and try title as-is
-          }
+          } catch { /* ignore */ }
         }
-        if (!title) continue; // still no title—skip safely
+        if (!title) continue;
 
-        // Ensure folder exists for this user; never use a system folder
+        // --- Resolve/Correct destination folder (BLOCK system folders) ---
         let folderDoc: any = null;
+
         if (folderId) {
           try {
-            folderDoc = await Folder.findOne({
-              _id: new mongoose.Types.ObjectId(folderId),
-              userEmail, // 🔒 user-scoped
-            }).lean();
-            if (folderDoc && isSystemFolder(folderDoc.name)) {
-              detailsAll.push({
-                userEmail,
-                spreadsheetId,
-                title,
-                skipped: true,
-                reason: `target folder "${folderDoc.name}" is a system folder`,
-              });
-              // Skip this sheet entirely; do not import into resolution folders
-              continue;
-            }
-          } catch {
-            /* noop */
-          }
+            folderDoc = await Folder.findOne({ _id: new mongoose.Types.ObjectId(folderId) });
+          } catch { /* noop */ }
+        }
+        if (folderDoc && isSystemFolder(folderDoc.name)) {
+          folderDoc = null; // forbidden
         }
 
         if (!folderDoc) {
           const meta = await drive.files.get({ fileId: spreadsheetId, fields: "name" });
-          const defaultName =
-            folderName || `${meta.data.name || "Imported Leads"} — ${title}`;
-          // defaultName is not a system folder name, so this is safe
+          const defaultName = (folderName || `${meta.data.name || "Imported Leads"} — ${title}`).trim();
+
+          const safeName = isSystemFolder(defaultName) ? `${defaultName} (Leads)` : defaultName;
           folderDoc = await Folder.findOneAndUpdate(
-            { userEmail, name: defaultName },
-            { $setOnInsert: { userEmail, name: defaultName, source: "google-sheets" } },
+            { userEmail, name: safeName },
+            { $setOnInsert: { userEmail, name: safeName, source: "google-sheets" } },
             { new: true, upsert: true }
-          ).lean();
+          );
+
+          if (!dryRun) {
+            await User.updateOne(
+              {
+                email: userEmail,
+                "googleSheets.syncedSheets.spreadsheetId": spreadsheetId,
+                "googleSheets.syncedSheets.title": cfg.title ?? title,
+              },
+              {
+                $set: {
+                  "googleSheets.syncedSheets.$.folderId": folderDoc._id,
+                  "googleSheets.syncedSheets.$.folderName": folderDoc.name,
+                },
+              }
+            );
+          }
         }
 
         const targetFolderId = folderDoc._id as mongoose.Types.ObjectId;
 
-        // Read values
+        // --- Read values ---
         const resp = await sheetsApi.spreadsheets.values.get({
           spreadsheetId,
           range: `'${title}'!A1:ZZ`,
@@ -197,19 +204,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const headerIdx = Math.max(0, headerRow - 1);
         const rawHeaders = (values[headerIdx] || []).map((h) => String(h ?? "").trim());
 
-        // Build a tolerant header index map
         const headerNormToActual = new Map<string, string>();
         rawHeaders.forEach((h) => headerNormToActual.set(normHeader(h), h));
 
-        // Normalize mapping keys once (so "First  Name", "first_name", "First-Name" all match)
         const normalizedMapping: Record<string, string> = {};
         Object.entries(mapping || {}).forEach(([key, val]) => {
           normalizedMapping[normHeader(key)] = val;
         });
 
-        // Determine start/end using pointer (1-based last imported)
         const pointer = typeof lastRowImported === "number" ? lastRowImported : headerRow;
-        const firstDataZero = headerIdx + 1; // 0-based
+        const firstDataZero = headerIdx + 1;
         let startIndex = Math.max(firstDataZero, Number(pointer));
         if (startIndex > values.length - 1) startIndex = firstDataZero;
 
@@ -227,12 +231,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             if (!hasAny) continue;
             lastProcessed = r;
 
-            // Build doc using tolerant mapping
             const doc: Record<string, any> = {};
             rawHeaders.forEach((actualHeader, i) => {
               const n = normHeader(actualHeader);
               if (!n) return;
-              if (skip?.[actualHeader]) return; // honor skip only by actual header text
+              if (skip?.[actualHeader]) return;
               const fieldName = normalizedMapping[n];
               if (!fieldName) return;
               doc[fieldName] = row[i] ?? "";
@@ -249,7 +252,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             doc.source = "google-sheets";
             doc.sourceSpreadsheetId = spreadsheetId;
             doc.sourceTabTitle = title;
-            doc.sourceRowIndex = r + 1; // 1-based
+            doc.sourceRowIndex = r + 1;
             doc.normalizedPhone = p || undefined;
             if (e) doc.email = e;
 
@@ -261,13 +264,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             const existing = await Lead.findOne(filter).select("_id").lean<{ _id: mongoose.Types.ObjectId } | null>();
 
             if (!existing) {
-              doc.folderId = targetFolderId;
-              if (!dryRun) await Lead.create(doc);
+              if (!dryRun) await Lead.create({ ...doc, folderId: targetFolderId });
               imported++;
             } else {
-              if (!dryRun) {
-                await Lead.updateOne({ _id: existing._id }, { $set: { ...doc, folderId: targetFolderId } });
-              }
+              if (!dryRun) await Lead.updateOne({ _id: existing._id }, { $set: { ...doc, folderId: targetFolderId } });
               updated++;
             }
           }
@@ -279,7 +279,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             {
               email: userEmail,
               "googleSheets.syncedSheets.spreadsheetId": spreadsheetId,
-              "googleSheets.syncedSheets.title": cfg.title ?? title, // match either saved or current title
+              "googleSheets.syncedSheets.title": cfg.title ?? title,
             },
             {
               $set: {
@@ -309,19 +309,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           skippedNoKey,
           newLastRowImported: newLast,
           dryRun,
+          resolvedFolder: {
+            id: String(folderDoc?._id || ""),
+            name: folderDoc?.name || "",
+            isSystem: folderDoc ? isSystemFolder(folderDoc.name) : false,
+          },
         };
         if (debug) {
           detail.headers = rawHeaders;
-          detail.normalizedHeaders = rawHeaders.map(normHeader);
           detail.mapping = mapping;
-          detail.mappingNormalized = normalizedMapping;
         }
         detailsAll.push(detail);
       }
     }
 
     if (debug) console.log("Sheets poll (debug) →", JSON.stringify(detailsAll, null, 2));
-    return res.status(200).json({ ok: true, details: detailsAll });
+    return res.status(200).json({ ok: true, build: buildRev, details: detailsAll });
   } catch (err: any) {
     console.error("Sheets poll error:", err);
     return res.status(500).json({ error: err?.message || "Cron poll failed" });
