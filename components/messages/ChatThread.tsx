@@ -28,6 +28,14 @@ export default function ChatThread({ leadId, socket }: ChatThreadProps) {
     const res = await axios.get(`/api/message/${leadId}`);
     setMessages(res.data);
     scrollToBottom();
+
+    // Mark inbound unread as read for this thread
+    try {
+      await axios.post("/api/messages/mark-read", { leadId });
+    } catch (e) {
+      // non-fatal; badge/polling will recover
+      console.warn("mark-read failed (fetch)", e);
+    }
   };
 
   useEffect(() => {
@@ -38,24 +46,25 @@ export default function ChatThread({ leadId, socket }: ChatThreadProps) {
   useEffect(() => {
     if (!socket) return;
 
-    // Existing local event used by our own outbound flow
     const handleNewMessage = (message: Message) => {
       if (message.leadId === leadId) {
         setMessages((prev) => [...prev, message]);
         scrollToBottom();
+        // If inbound, ensure we mark as read for this open thread
+        if (message.direction === "inbound") {
+          axios.post("/api/messages/mark-read", { leadId }).catch(() => {});
+        }
       }
     };
 
-    // NEW: Also react to server-emitted inbound event name
     const handleServerMessageNew = (payload: Partial<Message> & { leadId?: string }) => {
       if (payload?.leadId === leadId) {
-        // Re-fetch to guarantee parity with server formatting/state
         fetchMessages();
       }
     };
 
-    socket.on("newMessage", handleNewMessage);
-    socket.on("message:new", handleServerMessageNew);
+    socket.on("newMessage", handleNewMessage);     // local echo for outbound
+    socket.on("message:new", handleServerMessageNew); // server inbound
 
     return () => {
       socket.off("newMessage", handleNewMessage);
@@ -81,15 +90,14 @@ export default function ChatThread({ leadId, socket }: ChatThreadProps) {
 
   return (
     <div className="flex flex-col h-full bg-[#0f172a]">
-      {/* Make this a flex column so self-end works */}
       <div className="flex-1 overflow-y-auto p-4 space-y-3 flex flex-col">
         {messages.map((msg, idx) => {
           const isSent = msg.direction === "outbound" || msg.direction === "ai";
           const base =
             "px-4 py-2 rounded-2xl text-sm max-w-[75%] w-fit whitespace-pre-wrap break-words shadow";
           const alignment = isSent
-            ? "self-end ml-auto text-white bg-green-600" // sent → right & green
-            : "self-start text-white bg-[#334155]"; // received → left & slate
+            ? "self-end ml-auto text-white bg-green-600"
+            : "self-start text-white bg-[#334155]";
 
           return (
             <div key={idx} className={`${base} ${alignment}`}>

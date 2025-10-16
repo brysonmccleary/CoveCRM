@@ -30,7 +30,6 @@ type LeadType = {
   Age?: string;
 };
 
-// Safer in Next.js SSR: only set app element on the client
 if (typeof window !== "undefined") {
   Modal.setAppElement("#__next");
 }
@@ -50,16 +49,11 @@ const googleColorMap: Record<string, string> = {
 };
 
 const toISO = (d: Date) => new Date(d.getTime()).toISOString();
-const ymd = (date: Date) =>
-  `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(
-    date.getDate()
-  ).padStart(2, "0")}`;
 
-/** Week math using Sunday as the first day (RBC default unless customized) */
 function startOfWeek(d: Date) {
   const x = new Date(d);
   x.setHours(0, 0, 0, 0);
-  const day = x.getDay(); // 0..6 (Sun..Sat)
+  const day = x.getDay();
   x.setDate(x.getDate() - day);
   return x;
 }
@@ -70,17 +64,9 @@ function endOfWeek(d: Date) {
   e.setHours(23, 59, 59, 999);
   return e;
 }
-function startOfMonth(d: Date) {
-  const x = new Date(d.getFullYear(), d.getMonth(), 1, 0, 0, 0, 0);
-  return x;
-}
-function endOfMonth(d: Date) {
-  const x = new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59, 999);
-  return x;
-}
 function monthVisibleRange(date: Date) {
-  const mStart = startOfMonth(date);
-  const mEnd = endOfMonth(date);
+  const mStart = new Date(date.getFullYear(), date.getMonth(), 1, 0, 0, 0, 0);
+  const mEnd = new Date(date.getFullYear(), date.getMonth() + 1, 0, 23, 59, 59, 999);
   return { start: startOfWeek(mStart), end: endOfWeek(mEnd) };
 }
 function weekVisibleRange(date: Date) {
@@ -94,16 +80,14 @@ function dayVisibleRange(date: Date) {
   return { start: s, end: e };
 }
 
-/* ---------- helpers for phone extraction ---------- */
+/* helpers for phone extraction */
 function onlyDigits10(raw?: string) {
   const d = String(raw || "").replace(/\D+/g, "");
   return d.length >= 10 ? d.slice(-10) : "";
 }
 function extractPhoneFromEvent(e: { title?: string; description?: string; location?: string }) {
-  // Try description, then location, then title
   const hay = [e.description, e.location, e.title].filter(Boolean).join(" ");
   if (!hay) return "";
-  // First 10+ digit sequence (tolerates +1, spaces, dashes, periods)
   const match = hay.match(
     /(\+?1?[^0-9]*\d[^0-9]*\d[^0-9]*\d[^0-9]*\d[^0-9]*\d[^0-9]*\d[^0-9]*\d[^0-9]*\d[^0-9]*\d[^0-9]*\d)/
   );
@@ -150,7 +134,6 @@ export default function CalendarView() {
     })();
   }, []);
 
-  // Compute visible range for current (view, date)
   const computeRange = (v: View, d: Date) => {
     switch (v) {
       case Views.WEEK:
@@ -207,7 +190,7 @@ export default function CalendarView() {
     }, 120);
   };
 
-  // 3) RBC callbacks
+  // RBC callbacks
   const handleRangeChange = (range: Date[] | { start: Date; end: Date }) => {
     if (Array.isArray(range)) {
       const min = new Date(Math.min(...range.map((d) => +d)));
@@ -222,7 +205,6 @@ export default function CalendarView() {
   const handleNavigate = (date: Date) => {
     setCurrentDate(date);
     if (typeof window !== "undefined") localStorage.setItem("calendar:date", date.toISOString());
-    // update range immediately (avoid waiting for RBC onRangeChange)
     rangeRef.current = computeRange(view, date);
     scheduleFetch();
   };
@@ -230,22 +212,19 @@ export default function CalendarView() {
   const handleView = (nextView: View) => {
     setView(nextView);
     if (typeof window !== "undefined") localStorage.setItem("calendar:view", String(nextView));
-    // update range immediately
     rangeRef.current = computeRange(nextView, currentDate);
     scheduleFetch();
   };
 
-  // Day click → navigate (works for Month & Week)
-  const handleDrillDown = (date: Date /*, fromView: View */) => {
-    router.push(`/calendar/${ymd(date)}`);
+  // Day click / empty slot click → go to canonical calendar tab (no interim page)
+  const handleDrillDown = () => {
+    router.replace("/dashboard?tab=calendar");
+  };
+  const handleSelectSlot = () => {
+    router.replace("/dashboard?tab=calendar");
   };
 
-  // Also allow clicking empty day cells (requires selectable)
-  const handleSelectSlot = (slot: { start: Date }) => {
-    router.push(`/calendar/${ymd(slot.start)}`);
-  };
-
-  // Initial fetch: compute range ourselves and go
+  // Initial fetch
   useEffect(() => {
     if (!calendarConnected) return;
     rangeRef.current = computeRange(view, currentDate);
@@ -264,7 +243,7 @@ export default function CalendarView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [calendarConnected]);
 
-  // Modal / lead lookup (secure + silent on fail)
+  // Modal / lead lookup
   const handleEventClick = async (event: EventType) => {
     setSelectedEvent(event);
     setLead(null);
@@ -275,21 +254,19 @@ export default function CalendarView() {
       description: event.description,
       location: event.location,
     });
-    if (!l10) return; // no phone → just show event details
+    if (!l10) return;
 
     try {
       const resp = await axios.get(`/api/leads/by-phone/${l10}`, {
         withCredentials: true,
         headers: { "x-user-email": session?.user?.email ?? "" },
-        validateStatus: () => true, // never throw; we’ll check status
+        validateStatus: () => true,
       });
 
       if (resp.status === 200 && resp.data?.lead) {
         setLead(resp.data.lead);
       }
-      // else: keep modal open with "No matching lead found"
     } catch (err) {
-      // Silent: we don’t want runtime error overlays on 401/404
       console.warn("Lead lookup by phone failed:", err);
     }
   };
@@ -314,9 +291,7 @@ export default function CalendarView() {
             border-radius: 6px;
             box-shadow: none !important;
           }
-          /* Ensure day cells are clickable even if global CSS messes with pointer events */
           .rbc-month-view .rbc-date-cell, .rbc-month-view .rbc-day-bg { pointer-events: auto; }
-          /* Make the calendar grid tall */
           .rbc-calendar { min-height: 72vh; }
         `}
       </style>

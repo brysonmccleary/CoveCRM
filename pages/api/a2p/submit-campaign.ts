@@ -1,4 +1,4 @@
-// /pages/api/a2p/submit-campaign.ts
+// pages/api/a2p/submit-campaign.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
@@ -14,7 +14,7 @@ const client = twilio(accountSid, authToken);
 const APPROVED = new Set(["approved", "verified", "active", "in_use", "registered"]);
 
 type Body = {
-  useCase?: string; // e.g. "LOW_VOLUME" | "MIXED" | "MARKETING"
+  useCase?: string; // e.g. "LOW_VOLUME" | "MIXED" | "MARKETING" ...
   messageFlow?: string; // override flow text (else use optInDetails)
   sampleMessages?: string[]; // override samples (else use stored)
   hasEmbeddedLinks?: boolean;
@@ -49,7 +49,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // Resolve inputs or fall back to stored content
     const body = (req.body || {}) as Body;
-    const useCase = body.useCase || "LOW_VOLUME";
+
+    // ✅ prefer explicit, then stored selection from /api/a2p/start, else LOW_VOLUME
+    const useCase = body.useCase || a2p.usecaseCode || "LOW_VOLUME";
 
     const storedSamples =
       a2p.sampleMessagesArr && a2p.sampleMessagesArr.length
@@ -88,6 +90,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       directLending: typeof body.directLending === "boolean" ? body.directLending : false,
     };
 
+    // Persist chosen use case if changed (for dashboard visibility + consistency)
+    if (a2p.usecaseCode !== useCase) {
+      a2p.usecaseCode = useCase;
+      await a2p.save();
+    }
+
     // If a campaign exists, try to update; otherwise create
     let campaignSid = (a2p as any).usa2pSid || a2p.campaignSid;
 
@@ -114,6 +122,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           : "campaign_submitted";
         a2p.messagingReady = APPROVED.has(String(status).toLowerCase());
         a2p.lastSyncedAt = new Date();
+
+        // Keep samples in both forms for UI/API parity
+        a2p.sampleMessagesArr = messageSamples;
+        a2p.sampleMessages = messageSamples.join("\n\n");
         await a2p.save();
 
         return res.status(200).json({
@@ -147,6 +159,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             : "campaign_submitted",
           messagingReady: APPROVED.has(String(status).toLowerCase()),
           lastSyncedAt: new Date(),
+          // keep samples persisted in both forms
+          sampleMessagesArr: messageSamples,
+          sampleMessages: messageSamples.join("\n\n"),
+          // ensure stored use case is current
+          usecaseCode: useCase,
         },
       },
     );

@@ -78,7 +78,7 @@ async function pickFromNumberForThread(leadId: string, user: any): Promise<strin
   if (last) {
     // If last inbound, our Twilio number is in `to`; if outbound/ai, it's in `from`.
     const candidate =
-      last.direction === "inbound" ? (last as any).to : (last as any).from;
+      (last as any).direction === "inbound" ? (last as any).to : (last as any).from;
 
     if (candidate && userNums.includes(candidate)) {
       return candidate;
@@ -156,19 +156,19 @@ export async function handleAIResponse(
   // Base domain-specific framing
   const domainPromptMap: Record<string, string> = {
     "Final Expense": `
-You are ${aiName}, an appointment-setting assistant for Final Expense life insurance.
+You are ${aiName}, an appointment-setting assistant for Final Expense life insurance and mortgage protection.
 You are not a licensed agent—do not give quotes or policy details. Your job is to schedule a quick call with a licensed agent.
     `.trim(),
     Veteran: `
-You are ${aiName}, an appointment-setting assistant for life insurance options available to military/veterans.
+You are ${aiName}, an appointment-setting assistant for life insurance and mortgage protection options for military/veterans.
 You are not a licensed agent—avoid policy specifics. Your goal is to book a quick call with a licensed agent.
     `.trim(),
     "Mortgage Protection": `
-You are ${aiName}, an appointment-setting assistant for Mortgage Protection life insurance.
+You are ${aiName}, an appointment-setting assistant for Mortgage Protection (life insurance and mortgage protection).
 Do not discuss quotes. Your goal is to schedule a brief call with a licensed agent.
     `.trim(),
     IUL: `
-You are ${aiName}, an appointment-setting assistant for Indexed Universal Life (IUL).
+You are ${aiName}, an appointment-setting assistant for Indexed Universal Life (IUL) within life insurance and mortgage protection conversations.
 You are not a financial advisor. Avoid giving advice; focus on booking a quick call with a licensed agent.
     `.trim(),
   };
@@ -210,8 +210,11 @@ Only include the booking link if we've already sent at least ${MAX_AI_MESSAGES_B
 
   // Extra guard: if they explicitly asked to send info, short-circuit to the exact sentence
   if (isSendInfoRequest(incomingMessage)) {
-    const aiReply =
+    let aiReply =
       "Unfortunately as of now there's nothing to send over without getting some information from you, when's a good time for a quick 5 minute call and then we can send everything out";
+
+    // 🔒 Normalize “life insurance” → “life insurance and mortgage protection” when present
+    aiReply = normalizeLifeInsurancePhrase(aiReply);
 
     await persistAndSend({ lead, user, aiReply });
     return;
@@ -248,6 +251,9 @@ Only include the booking link if we've already sent at least ${MAX_AI_MESSAGES_B
   } catch (err) {
     console.error("OpenAI error:", err);
   }
+
+  // 🔒 Normalize “life insurance” → “life insurance and mortgage protection” when present
+  aiReply = normalizeLifeInsurancePhrase(aiReply);
 
   // Append booking link only if we haven't sent it and we've tried a couple times already
   if (!linkAlreadySent && pastAIReplies >= MAX_AI_MESSAGES_BEFORE_LINK) {
@@ -294,4 +300,23 @@ async function persistAndSend({
   lead.aiLastResponseAt = new Date();
 
   await lead.save();
+}
+
+/**
+ * Ensure that whenever a generated message mentions "life insurance",
+ * it reads "life insurance and mortgage protection" (without creating duplicates).
+ */
+function normalizeLifeInsurancePhrase(input: string): string {
+  if (!input) return input;
+  // Replace "life insurance" or "life-insurance" unless it already includes "and mortgage protection" after it
+  const replaced = input.replace(
+    /life[\s-]?insurance(?!\s+and\s+mortgage\s+protection)/gi,
+    "life insurance and mortgage protection"
+  );
+
+  // Avoid double wording if it already includes both terms elsewhere
+  return replaced.replace(
+    /life insurance and mortgage protection and mortgage protection/gi,
+    "life insurance and mortgage protection"
+  );
 }

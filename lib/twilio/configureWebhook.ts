@@ -1,31 +1,34 @@
-// lib/twilio/configureWebhook.ts
-import twilio from "twilio";
+// /lib/twilio/configureWebhook.ts
+import type { Twilio } from "twilio";
 
-const client = twilio(
-  process.env.TWILIO_ACCOUNT_SID!,
-  process.env.TWILIO_AUTH_TOKEN!,
-);
+type Targets = {
+  smsUrl?: string;
+  voiceUrl?: string;
+  smsMethod?: "POST" | "GET";
+  voiceMethod?: "POST" | "GET";
+};
 
-export async function configureTwilioWebhook(phoneNumber: string) {
-  const VOICE_WEBHOOK_URL = `${process.env.NEXT_PUBLIC_BASE_URL}/api/twilio/inbound-callback`;
+/** Ensure inbound webhooks on a specific number within the *provided* Twilio account. */
+export async function configureTwilioWebhookForNumber(
+  client: Twilio,
+  opts: { phoneNumber?: string; numberSid?: string } & Targets,
+) {
+  const { phoneNumber, numberSid, smsUrl, voiceUrl, smsMethod = "POST", voiceMethod = "POST" } = opts;
 
-  try {
-    // Find the phone number SID by number
-    const number = await client.incomingPhoneNumbers
-      .list({ phoneNumber, limit: 1 })
-      .then((results) => results[0]);
+  let sid = numberSid;
 
-    if (!number)
-      throw new Error(`Number ${phoneNumber} not found in Twilio account`);
-
-    // Update webhook
-    await client.incomingPhoneNumbers(number.sid).update({
-      voiceUrl: VOICE_WEBHOOK_URL,
-      voiceMethod: "POST",
-    });
-
-    console.log(`✅ Webhook set for ${phoneNumber}`);
-  } catch (error) {
-    console.error(`❌ Failed to set webhook for ${phoneNumber}:`, error);
+  if (!sid) {
+    if (!phoneNumber) throw new Error("Provide phoneNumber or numberSid");
+    const match = await client.incomingPhoneNumbers.list({ phoneNumber, limit: 1 });
+    if (!match.length) throw new Error(`Number ${phoneNumber} not found in this Twilio account`);
+    sid = match[0].sid;
   }
+
+  const update: any = {};
+  if (smsUrl) update.smsUrl = smsUrl, (update.smsMethod = smsMethod);
+  if (voiceUrl) update.voiceUrl = voiceUrl, (update.voiceMethod = voiceMethod);
+
+  if (Object.keys(update).length === 0) return;
+
+  await client.incomingPhoneNumbers(sid!).update(update);
 }

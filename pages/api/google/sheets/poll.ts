@@ -8,6 +8,8 @@ import Lead from "@/models/Lead";
 import Folder from "@/models/Folder";
 import { google } from "googleapis";
 import mongoose from "mongoose";
+import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
+import { ensureSafeFolder } from "@/lib/ensureSafeFolder";
 
 function normalizePhone(input: any): string {
   return String(input || "").replace(/\D+/g, "");
@@ -73,23 +75,37 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       if (!spreadsheetId || !title) continue;
 
-      // Ensure folder exists
-      let folderDoc: any = null;
-      if (folderId) {
-        folderDoc = await Folder.findOne({ _id: new mongoose.Types.ObjectId(folderId) });
-      }
-      if (!folderDoc) {
-        const meta = await drive.files.get({ fileId: spreadsheetId, fields: "name" });
-        const defaultName = folderName || `${meta.data.name || "Imported Leads"} — ${title}`;
-        folderDoc = await Folder.findOneAndUpdate(
-          { userEmail, name: defaultName },
-          { $setOnInsert: { userEmail, name: defaultName, source: "google-sheets" } },
-          { new: true, upsert: true }
-        );
-      }
+      // --- Resolve/Correct destination folder (CENTRALIZED via ensureSafeFolder) ---
+      // Build a deterministic, human-friendly default from Drive metadata + tab title.
+      const meta = await drive.files.get({ fileId: spreadsheetId, fields: "name" });
+      const defaultName = (folderName || `${meta.data.name || "Imported Leads"} — ${title}`).trim();
+
+      const folderDoc = await ensureSafeFolder({
+        userEmail,
+        folderId,
+        folderName,
+        defaultName,
+        source: "google-sheets",
+      });
+
+      // Persist the sanitized folder back to the sheet link entry (keeps DB clean)
+      await User.updateOne(
+        {
+          email: userEmail,
+          "googleSheets.syncedSheets.spreadsheetId": spreadsheetId,
+          "googleSheets.syncedSheets.title": title,
+        },
+        {
+          $set: {
+            "googleSheets.syncedSheets.$.folderId": folderDoc._id,
+            "googleSheets.syncedSheets.$.folderName": folderDoc.name,
+          },
+        }
+      );
+
       const targetFolderId = folderDoc._id as mongoose.Types.ObjectId;
 
-      // Fetch all values
+      // --- Fetch values ---
       const resp = await sheetsApi.spreadsheets.values.get({
         spreadsheetId,
         range: `'${title}'!A1:ZZ`,
@@ -114,11 +130,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         lastProcessed = r;
 
+        // Build doc using mapping/skip
         const doc: Record<string, any> = {};
         headers.forEach((h, i) => {
           if (!h) return;
           if (skip[h]) return;
-          const fieldName = mapping[h];
+          const fieldName = (mapping as any)[h];
           if (!fieldName) return;
           doc[fieldName] = row[i] ?? "";
         });
@@ -143,7 +160,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (emailLower) or.push({ email: emailLower });
         const filter = { userEmail, ...(or.length ? { $or: or } : {}) };
 
-        // Fetch only _id for existence check
         const existing = await Lead.findOne(filter).select("_id").lean<{ _id: mongoose.Types.ObjectId } | null>();
 
         if (!existing) {
@@ -151,15 +167,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           await Lead.create(doc);
           imported++;
         } else {
-          const update: any = { $set: { ...doc, folderId: targetFolderId } };
-          await Lead.updateOne({ _id: existing._id }, update);
+          await Lead.updateOne({ _id: existing._id }, { $set: { ...doc, folderId: targetFolderId } });
           updated++;
         }
       }
 
-      const newLast = Math.max(lastProcessed + 1, lastRowImported);
-      const positional = await User.updateOne(
-        { email: userEmail, "googleSheets.syncedSheets.spreadsheetId": spreadsheetId, "googleSheets.syncedSheets.title": title },
+      const newLast = Math.max(lastProcessed + 1, Number(lastRowImported));
+      await User.updateOne(
+        {
+          email: userEmail,
+          "googleSheets.syncedSheets.spreadsheetId": spreadsheetId,
+          "googleSheets.syncedSheets.title": title,
+        },
         {
           $set: {
             "googleSheets.syncedSheets.$.lastRowImported": newLast,

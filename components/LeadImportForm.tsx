@@ -1,6 +1,6 @@
-// /components/leadimportform.tsx
 import { useEffect, useRef, useState } from "react";
 import Papa from "papaparse";
+import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
 
 interface FieldOption { label: string; value: string; }
 interface DriveFile { id: string; name: string; modifiedTime?: string; owners?: { emailAddress?: string }[]; }
@@ -205,6 +205,12 @@ export default function LeadImportForm() {
     if (!csvHeaders.length) { setImportErr("Preview first so we can read headers"); return; }
     if (!folderName.trim()) { setImportErr("Enter a folder name"); return; }
 
+    // If a system folder name is typed, auto-suffix it
+    let finalFolderName = folderName.trim();
+    if (isSystemFolder(finalFolderName)) {
+      finalFolderName = `${finalFolderName} (Leads)`;
+    }
+
     setImportErr(null);
     setImporting(true);
     setImportSummary(null);
@@ -224,7 +230,7 @@ export default function LeadImportForm() {
           title: selectedTabTitle || undefined,
           sheetId: selectedSheetId ?? undefined,
           headerRow: headerRow || 1,
-          folderName: folderName.trim(),
+          folderName: finalFolderName,
           mapping: cleanMapping,
           skip: skipFields,
           createFolderIfMissing: true,

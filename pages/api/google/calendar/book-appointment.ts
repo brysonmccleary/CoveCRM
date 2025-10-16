@@ -1,3 +1,4 @@
+// pages/api/google/calendar/book-appointment.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/pages/api/auth/[...nextauth]";
@@ -13,12 +14,13 @@ import { google } from "googleapis";
 import { getTimezoneFromState } from "@/utils/timezone";
 import { DateTime } from "luxon";
 import { sendAppointmentBookedEmail } from "@/lib/email";
-import { sendSms } from "@/lib/twilio/sendSMS"; // ✅ use thread-sticky sender for CONFIRMATION
+import { sendSms } from "@/lib/twilio/sendSMS"; // thread-sticky sender for confirmation
 
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID!;
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET!;
 const GOOGLE_REDIRECT_URI = process.env.GOOGLE_REDIRECT_URI!;
 const INTERNAL_API_TOKEN = process.env.INTERNAL_API_TOKEN || "";
+const BOOKING_STUB = process.env.BOOKING_STUB === "1"; // ✅ dev bypass
 
 // Twilio scheduling works only with a Messaging Service SID
 const SHARED_MESSAGING_SERVICE_SID =
@@ -295,6 +297,98 @@ export default async function handler(
     return;
   }
 
+  // ===================== DEV STUB (no Google required) =====================
+  if (BOOKING_STUB && bearer && INTERNAL_API_TOKEN && bearer === INTERNAL_API_TOKEN) {
+    try {
+      await dbConnect();
+
+      const user = await User.findOne({ email: agentEmail });
+      if (!user) return res.status(404).json({ message: "Agent not found" });
+
+      const clientZone = zoneFromAnyState(state) || "America/New_York";
+      const clientStart = parseClientStartISO(String(time), clientZone);
+      if (!clientStart.isValid) {
+        res.status(400).json({ message: "Invalid time" });
+        return;
+      }
+      const dur = Math.max(15, Math.min(240, Number(durationMinutes || 30)));
+      const clientEnd = clientStart.plus({ minutes: dur });
+
+      const to = toE164(String(phone));
+      const last10 = to.slice(-10);
+
+      let lead =
+        (await Lead.findOne({
+          userEmail: user.email,
+          Phone: { $regex: last10 },
+        })) ||
+        (await Lead.findOne({
+          userEmail: user.email,
+          phone: { $regex: last10 },
+        }));
+
+      if (!lead) {
+        lead = await Lead.create({
+          "First Name": name,
+          Phone: to,
+          Email: email || "",
+          userEmail: user.email,
+          appointmentTime: clientStart.toJSDate(),
+          status: "Booked",
+          State: state,
+          Notes: notes ? `Booked via API (stub): ${notes}` : "Booked via API (stub)",
+        });
+      } else {
+        await Lead.updateOne(
+          { _id: lead._id },
+          {
+            $set: {
+              "First Name": (lead as any)["First Name"] || name,
+              Email: lead.Email || email || "",
+              appointmentTime: clientStart.toJSDate(),
+              status: "Booked",
+              State: (lead as any).State || (lead as any).state || state,
+            },
+          },
+        );
+      }
+
+      // Send confirmation via thread-sticky sender
+      const tzShort = clientStart.offsetNameShort;
+      const readable = clientStart.toFormat("ccc, MMM d 'at' h:mm a");
+      const confirmBody = withStopFooter(
+        `You're confirmed for ${readable} ${tzShort}. We'll call you then. Reply RESCHEDULE if you need to change it.`,
+      );
+      await sendSms({
+        to,
+        body: confirmBody,
+        userEmail: user.email,
+        leadId: String(lead._id),
+      });
+
+      // Fake a successful calendar response
+      res.status(200).json({
+        success: true,
+        eventId: "dev-stub-event",
+        htmlLink: "https://calendar.google.com/calendar/u/0/r",
+        clientStartISO: clientStart.toISO(),
+        clientEndISO: clientEnd.toISO(),
+        clientZone,
+        agentLocalStartISO: clientStart.toISO(),
+        agentLocalEndISO: clientEnd.toISO(),
+        agentZone: (user as any)?.bookingSettings?.timezone || "America/Los_Angeles",
+        leadId: lead._id,
+        stub: true,
+      });
+      return;
+    } catch (e: any) {
+      console.error("❌ Booking stub error:", e?.message || e);
+      res.status(500).json({ success: false, message: "Stub failed" });
+      return;
+    }
+  }
+  // ========================================================================
+
   await dbConnect();
 
   const user = await User.findOne({ email: agentEmail });
@@ -456,9 +550,7 @@ export default async function handler(
 
     const nowClient = DateTime.now().setZone(clientZone);
 
-    // ✅ 1) Confirmation NOW from the SAME THREAD NUMBER (sticky "from")
-    // Uses sendSms(), which looks at recent Message history for this leadId
-    // and forces the exact Twilio number the conversation used.
+    // 1) Confirmation NOW from the SAME THREAD NUMBER (sticky "from")
     if (leadId) {
       await sendSms({
         to,
@@ -467,7 +559,6 @@ export default async function handler(
         leadId: String(leadId),
       });
     } else {
-      // Fallback if no leadId (shouldn't happen here)
       const paramsBase = await getSendParams(String((user as any)._id), to);
       await twilioClient.messages.create({ ...paramsBase, body: confirmBody });
     }

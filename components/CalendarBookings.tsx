@@ -5,7 +5,7 @@
 // - Pane + calendar grid use the darker sidebar blue (#0f172a).
 // - Uniform event color (#3b82f6), selected event darker.
 // - Lead matching on click via phone detection from description/title/location.
-// - Month/Week/Day with persistence; Prev/Today/Next; click a day opens /calendar/YYYY-MM-DD.
+// - Month/Week/Day with persistence; Prev/Today/Next.
 // - Connect banner if not connected.
 // - Upcoming-in-15-min alert.
 // - Tall layout with RBC clickability fixes.
@@ -31,9 +31,6 @@ import axios from "axios";
 import { useRouter } from "next/router";
 import ConnectGoogleCalendarButton from "@/components/calendar/ConnectGoogleCalendarButton";
 
-// -----------------------------
-// Types
-// -----------------------------
 type EventType = {
   id: string;
   title: string;
@@ -56,65 +53,10 @@ type LeadType = {
   Age?: string;
 };
 
-// -----------------------------
-// Constants & helpers
-// -----------------------------
 Modal.setAppElement("#__next");
 
 const toISO = (d: Date) => new Date(d.getTime()).toISOString();
 
-const ymd = (date: Date) =>
-  `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(
-    date.getDate()
-  ).padStart(2, "0")}`;
-
-// Week math using Sunday as first day (RBC default)
-function startOfWeek(d: Date) {
-  const x = new Date(d);
-  x.setHours(0, 0, 0, 0);
-  const day = x.getDay(); // 0..6 (Sun..Sat)
-  x.setDate(x.getDate() - day);
-  return x;
-}
-function endOfWeek(d: Date) {
-  const s = startOfWeek(d);
-  const e = new Date(s);
-  e.setDate(s.getDate() + 6);
-  e.setHours(23, 59, 59, 999);
-  return e;
-}
-function startOfMonth(d: Date) {
-  return new Date(d.getFullYear(), d.getMonth(), 1, 0, 0, 0, 0);
-}
-function endOfMonth(d: Date) {
-  return new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59, 999);
-}
-function monthVisibleRange(date: Date) {
-  const mStart = startOfMonth(date);
-  const mEnd = endOfMonth(date);
-  return { start: startOfWeek(mStart), end: endOfWeek(mEnd) };
-}
-function weekVisibleRange(date: Date) {
-  return { start: startOfWeek(date), end: endOfWeek(date) };
-}
-function dayVisibleRange(date: Date) {
-  const s = new Date(date);
-  s.setHours(0, 0, 0, 0);
-  const e = new Date(date);
-  e.setHours(23, 59, 59, 999);
-  return { start: s, end: e };
-}
-
-// Extract a US phone number from free text (digits only)
-const extractPhone = (text?: string): string | null => {
-  if (!text) return null;
-  const match = text.match(/(?:\+?1[-.\s]?)?(\d{3})[-.\s]?(\d{3})[-.\s]?(\d{4})/);
-  return match ? match.slice(1).join("") : null;
-};
-
-// -----------------------------
-// Component
-// -----------------------------
 export default function CalendarBookings() {
   const router = useRouter();
 
@@ -154,9 +96,7 @@ export default function CalendarBookings() {
     return next || null;
   }, [events]);
 
-  // -----------------------------------
   // 1) Check calendar connection
-  // -----------------------------------
   useEffect(() => {
     (async () => {
       try {
@@ -170,9 +110,7 @@ export default function CalendarBookings() {
     })();
   }, []);
 
-  // -----------------------------------
   // 2) Fetch events for visible range
-  // -----------------------------------
   const fetchRange = async (start?: Date, end?: Date) => {
     if (!start || !end) return;
     setErrorMsg(null);
@@ -227,9 +165,51 @@ export default function CalendarBookings() {
     }, 120);
   };
 
-  // -----------------------------------
   // 3) Compute & track visible range
-  // -----------------------------------
+  const monthVisibleRange = (date: Date) => {
+    const mStart = new Date(date.getFullYear(), date.getMonth(), 1, 0, 0, 0, 0);
+    const mEnd = new Date(date.getFullYear(), date.getMonth() + 1, 0, 23, 59, 59, 999);
+    const startOfWeek = (d: Date) => {
+      const x = new Date(d);
+      x.setHours(0, 0, 0, 0);
+      const day = x.getDay();
+      x.setDate(x.getDate() - day);
+      return x;
+    };
+    const endOfWeek = (d: Date) => {
+      const s = startOfWeek(d);
+      const e = new Date(s);
+      e.setDate(s.getDate() + 6);
+      e.setHours(23, 59, 59, 999);
+      return e;
+    };
+    return { start: startOfWeek(mStart), end: endOfWeek(mEnd) };
+  };
+  const weekVisibleRange = (date: Date) => {
+    const startOfWeek = (d: Date) => {
+      const x = new Date(d);
+      x.setHours(0, 0, 0, 0);
+      const day = x.getDay();
+      x.setDate(x.getDate() - day);
+      return x;
+    };
+    const endOfWeek = (d: Date) => {
+      const s = startOfWeek(d);
+      const e = new Date(s);
+      e.setDate(s.getDate() + 6);
+      e.setHours(23, 59, 59, 999);
+      return e;
+    };
+    return { start: startOfWeek(date), end: endOfWeek(date) };
+  };
+  const dayVisibleRange = (date: Date) => {
+    const s = new Date(date);
+    s.setHours(0, 0, 0, 0);
+    const e = new Date(date);
+    e.setHours(23, 59, 59, 999);
+    return { start: s, end: e };
+  };
+
   const computeRange = (v: View, d: Date) => {
     switch (v) {
       case Views.WEEK:
@@ -290,16 +270,18 @@ export default function CalendarBookings() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [calendarConnected]);
 
-  // -----------------------------------
   // 4) Event modal + robust lead lookup
-  // -----------------------------------
+  const extractPhone = (text?: string): string | null => {
+    if (!text) return null;
+    const match = text.match(/(?:\+?1[-.\s]?)?(\d{3})[-.\s]?(\d{3})[-.\s]?(\d{4})/);
+    return match ? match.slice(1).join("") : null;
+  };
+
   const findLeadForEvent = async (event: EventType) => {
-    // Try description → title → location for a phone number
     const phone =
       extractPhone(event.description) ||
       extractPhone(event.title) ||
       extractPhone(event.location);
-
     if (!phone) return null;
 
     try {
@@ -332,19 +314,15 @@ export default function CalendarBookings() {
     }
   };
 
-  // -----------------------------------
-  // 5) Render
-  // -----------------------------------
   return (
     <div className="p-4">
       <style>
         {`
-          /* Use the darker sidebar blue throughout the calendar */
           .rbc-calendar,
           .rbc-month-view,
           .rbc-time-view,
           .rbc-agenda-view {
-            background-color: #0f172a !important; /* sidebar color */
+            background-color: #0f172a !important;
             color: #ffffff;
           }
           .rbc-toolbar,
@@ -362,16 +340,12 @@ export default function CalendarBookings() {
             box-shadow: none !important;
           }
           .rbc-event {
-            background-color: #3b82f6 !important; /* uniform blue */
+            background-color: #3b82f6 !important;
             color: #ffffff !important;
             border: none !important;
           }
-          .rbc-event.rbc-selected {
-            background-color: #2563eb !important; /* darker on select */
-          }
-          .rbc-slot-selection {
-            background: rgba(59, 130, 246, 0.25) !important;
-          }
+          .rbc-event.rbc-selected { background-color: #2563eb !important; }
+          .rbc-slot-selection { background: rgba(59,130,246,0.25) !important; }
           .rbc-time-content,
           .rbc-time-gutter,
           .rbc-timeslot-group,
@@ -380,27 +354,21 @@ export default function CalendarBookings() {
           .rbc-day-slot,
           .rbc-agenda-table,
           .rbc-month-view,
-          .rbc-time-view {
-            border-color: #1e293b !important;
-          }
+          .rbc-time-view { border-color: #1e293b !important; }
           .rbc-date-cell { color: #cbd5e1; }
-          /* Ensure day cells are clickable even if external CSS affects pointer events */
           .rbc-month-view .rbc-date-cell, .rbc-month-view .rbc-day-bg { pointer-events: auto; }
-          /* Make the calendar grid tall */
           .rbc-calendar { min-height: 72vh; }
         `}
       </style>
 
       <h2 className="text-2xl font-semibold mb-4 text-white">📅 Booking Calendar</h2>
 
-      {/* Connection banner */}
       {!loadingStatus && !calendarConnected && (
         <div className="mb-4">
           <ConnectGoogleCalendarButton />
         </div>
       )}
 
-      {/* Upcoming in 15 min alert */}
       {calendarConnected && upcoming && (
         <div className="bg-yellow-100 text-yellow-900 px-4 py-3 rounded mb-4 shadow">
           ⚠️ Upcoming appointment: <strong>{upcoming.title}</strong>{" "}
@@ -412,7 +380,6 @@ export default function CalendarBookings() {
         </div>
       )}
 
-      {/* Calendar (only when connected) */}
       {calendarConnected && (
         <div
           style={{ height: "calc(100vh - 12rem)" }}
@@ -429,9 +396,10 @@ export default function CalendarBookings() {
             popup
             selectable
             onSelectEvent={onEventClick}
-            onSelectSlot={(slot) => router.push(`/calendar/${ymd(slot.start as Date)}`)}
+            /* 👇 eliminate the interim day route; always go back to main calendar tab */
+            onSelectSlot={() => router.replace("/dashboard?tab=calendar")}
             drilldownView="day"
-            onDrillDown={(date /*, fromView*/) => router.push(`/calendar/${ymd(date)}`)}
+            onDrillDown={() => router.replace("/dashboard?tab=calendar")}
             onView={handleView}
             onNavigate={handleNavigate}
             onRangeChange={handleRangeChange}
@@ -472,7 +440,6 @@ export default function CalendarBookings() {
                 </div>
               ),
             }}
-            // Event color is uniform, but keep this in case RBC CSS changes
             eventPropGetter={() => ({
               style: {
                 backgroundColor: "#3b82f6",
@@ -486,14 +453,8 @@ export default function CalendarBookings() {
         </div>
       )}
 
-      {/* Errors */}
-      {errorMsg && (
-        <p className="text-red-500 mt-3">
-          {errorMsg}
-        </p>
-      )}
+      {errorMsg && <p className="text-red-500 mt-3">{errorMsg}</p>}
 
-      {/* Modal */}
       <Modal
         isOpen={modalOpen}
         onRequestClose={closeModal}
@@ -504,46 +465,23 @@ export default function CalendarBookings() {
         {selectedEvent && (
           <div className="text-white space-y-2">
             <h2 className="text-xl font-bold">{selectedEvent.title}</h2>
-            <p>
-              <strong>Start:</strong>{" "}
-              {selectedEvent.start.toLocaleString()}
-            </p>
-            <p>
-              <strong>End:</strong>{" "}
-              {selectedEvent.end.toLocaleString()}
-            </p>
-            {selectedEvent.location && (
-              <p>
-                <strong>Location:</strong> {selectedEvent.location}
-              </p>
-            )}
+            <p><strong>Start:</strong> {selectedEvent.start.toLocaleString()}</p>
+            <p><strong>End:</strong> {selectedEvent.end.toLocaleString()}</p>
+            {selectedEvent.location && <p><strong>Location:</strong> {selectedEvent.location}</p>}
             {selectedEvent.description && (
-              <p className="whitespace-pre-wrap">
-                <strong>Description:</strong> {selectedEvent.description}
-              </p>
+              <p className="whitespace-pre-wrap"><strong>Description:</strong> {selectedEvent.description}</p>
             )}
             {selectedEvent.attendeesEmails && selectedEvent.attendeesEmails.length > 0 && (
-              <p>
-                <strong>Attendee:</strong> {selectedEvent.attendeesEmails[0]}
-              </p>
+              <p><strong>Attendee:</strong> {selectedEvent.attendeesEmails[0]}</p>
             )}
 
             {lead ? (
               <>
                 <hr className="my-2 border-[#1e293b]" />
-                <p>
-                  <strong>Lead:</strong> {lead["First Name"]} {lead["Last Name"]}
-                </p>
-                <p>
-                  <strong>Email:</strong> {lead.Email}
-                </p>
-                <p>
-                  <strong>Phone:</strong> {lead.Phone}
-                </p>
-                <p>
-                  <strong>Notes:</strong> {lead.Notes || "—"}
-                </p>
-
+                <p><strong>Lead:</strong> {lead["First Name"]} {lead["Last Name"]}</p>
+                <p><strong>Email:</strong> {lead.Email}</p>
+                <p><strong>Phone:</strong> {lead.Phone}</p>
+                <p><strong>Notes:</strong> {lead.Notes || "—"}</p>
                 <button
                   onClick={callNow}
                   className="mt-4 px-4 py-2 bg-green-600 hover:bg-green-700 rounded text-white w-full"
@@ -552,16 +490,11 @@ export default function CalendarBookings() {
                 </button>
               </>
             ) : (
-              <p className="mt-3 italic text-sm text-gray-300">
-                No matching lead found for this event.
-              </p>
+              <p className="mt-3 italic text-sm text-gray-300">No matching lead found for this event.</p>
             )}
 
             <div className="mt-4 text-right">
-              <button
-                onClick={closeModal}
-                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded"
-              >
+              <button onClick={closeModal} className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded">
                 Close
               </button>
             </div>

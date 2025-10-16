@@ -1,3 +1,4 @@
+// models/Affiliate.ts
 import mongoose, { Schema, Document, models } from "mongoose";
 
 export interface IReferral {
@@ -8,7 +9,7 @@ export interface IReferral {
 
 export interface IPayoutEntry {
   amount: number;           // USD
-  userEmail: string;        // referred user's email
+  userEmail: string;        // referred user's email (can be "" for bulk payouts)
   date: Date;               // when credited
   invoiceId?: string | null;
   subscriptionId?: string | null;
@@ -36,10 +37,11 @@ export interface IAffiliate extends Document {
 
   // Payouts/metrics (USD)
   flatPayoutAmount: number;
-  totalReferrals: number;
-  totalRevenueGenerated: number;
-  totalPayoutsSent: number;
-  payoutDue: number;
+  totalReferrals: number;          // count of unique referred users (first invoice)
+  totalRedemptions: number;        // count of promo code redemptions (can exceed totalReferrals)
+  totalRevenueGenerated: number;   // dollars
+  totalPayoutsSent: number;        // dollars
+  payoutDue: number;               // dollars
   lastPayoutDate?: Date;
 
   // Relations
@@ -98,6 +100,7 @@ const AffiliateSchema = new Schema<IAffiliate>(
     // Payouts/metrics (USD)
     flatPayoutAmount: { type: Number, default: 25.0 },
     totalReferrals: { type: Number, default: 0 },
+    totalRedemptions: { type: Number, default: 0 },  // <-- added
     totalRevenueGenerated: { type: Number, default: 0 },
     totalPayoutsSent: { type: Number, default: 0 },
     payoutDue: { type: Number, default: 0 },

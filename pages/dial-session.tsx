@@ -13,6 +13,7 @@ type Json = Record<string, any>;
 
 const DIAL_DELAY_MS = 2000;
 const EARLY_STATUS_MS = 12000;
+const LEADS_URL = "/dashboard?tab=leads"; // ✅ canonical destination
 
 type HistoryRow =
   | { kind: "text"; text: string }
@@ -214,7 +215,6 @@ export default function DialSession() {
   /** bootstrap **/
   useEffect(() => {
     try {
-      // Prime AudioContext and arm one-time unlock listeners immediately.
       primeAudioContext();
       ensureUnlocked();
     } catch {}
@@ -343,6 +343,13 @@ export default function DialSession() {
         }>(`/api/leads/history?id=${encodeURIComponent(lead.id)}&limit=50&includeCalls=1`);
 
         const rows: HistoryRow[] = [];
+
+        // 🔒 PINNED SAVED NOTES — always first in the dial-session history
+        const savedNotes = (lead as any)?.Notes;
+        if (typeof savedNotes === "string" && savedNotes.trim()) {
+          rows.push({ kind: "text", text: `📌 Saved Notes (Pinned) — ${savedNotes.trim()}` });
+        }
+
         for (const ev of (j?.events || [])) {
           const when = new Date((ev as any).date).toLocaleString();
           if ((ev as any).type === "note") {
@@ -735,7 +742,13 @@ export default function DialSession() {
 
   const showSessionSummary = () => {
     alert(`✅ Session Complete!\nYou called ${sessionStartedCount} out of ${leadQueue.length} leads.`);
-    window.location.href = "/leads";
+    // ✅ Send to the canonical Leads view
+    try {
+      router.replace(LEADS_URL);
+    } catch {
+      // fallback if router isn't ready for any reason
+      if (typeof window !== "undefined") window.location.replace(LEADS_URL);
+    }
   };
 
   /** sockets **/
