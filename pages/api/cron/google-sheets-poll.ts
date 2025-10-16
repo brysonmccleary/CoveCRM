@@ -33,6 +33,8 @@ type SyncedSheetCfg = {
   lastRowImported?: number;
 };
 
+type LeanFolder = { _id: mongoose.Types.ObjectId; name?: string; userEmail?: string } | null;
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "GET" && req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
@@ -69,7 +71,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .lean();
 
     const detailsAll: any[] = [];
-    const build = (process.env.VERCEL_GIT_COMMIT_SHA || "").slice(0, 8) || undefined;
 
     for (const user of users) {
       const userEmail = String((user as any).email || "").toLowerCase();
@@ -120,7 +121,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (onlySpreadsheetId && spreadsheetId !== onlySpreadsheetId) continue;
         if (onlyTitle && title && title !== onlyTitle) continue;
 
-        // Resolve current tab title if we have sheetId (tab may have been renamed)
+        // Resolve current tab title if we have sheetId
         if (sheetId != null) {
           try {
             const meta = await sheetsApi.spreadsheets.get({
@@ -128,7 +129,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               fields: "sheets(properties(sheetId,title))",
             });
             const found = (meta.data.sheets || []).find((s) => s.properties?.sheetId === sheetId);
-            if (found?.properties?.title) title = found.properties.title;
+            if (found?.properties?.title) {
+              title = found.properties.title;
+            }
           } catch {
             /* ignore */
           }
@@ -136,20 +139,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (!title) continue;
 
         // --- Resolve/Correct destination folder (BLOCK system folders) ---
-        let folderDoc:
-          | (mongoose.Document<unknown, any, any> & { _id: mongoose.Types.ObjectId; name?: string })
-          | null = null;
+        let folderDoc: { _id: mongoose.Types.ObjectId; name?: string } | null = null;
         let reasonGuard: string | undefined;
 
         // 1) If a folderId is present, try to load it and check system-ness
         if (folderId) {
           try {
-            const f = await Folder.findOne({ _id: new mongoose.Types.ObjectId(folderId), userEmail }).lean();
+            const f = (await Folder.findOne({
+              _id: new mongoose.Types.ObjectId(folderId),
+              userEmail,
+            }).lean()) as LeanFolder;
+
             if (f && f.name && isSystemFolder(f.name)) {
               reasonGuard = "blocked-by-system-id";
               folderDoc = null; // force re-resolve
             } else if (f) {
-              // non-system id is fine
               folderDoc = f as any;
             }
           } catch {
@@ -160,7 +164,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         // 2) If no usable doc yet, compute a SAFE name and upsert the folder
         if (!folderDoc) {
-          // Base name: prefer user-provided folderName if not system; else DriveFileName — title
           const driveMeta = await drive.files.get({ fileId: spreadsheetId, fields: "name" });
           const proposedBase =
             folderName && !isSystemFolder(folderName)
@@ -175,7 +178,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             { new: true, upsert: true }
           ).lean();
 
-          folderDoc = up as any;
+          folderDoc = (up as any) || null;
 
           // Persist the corrected link back to the user doc (unless dry run)
           if (!dryRun && folderDoc?._id) {
@@ -196,7 +199,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
 
         // At this point, folderDoc is guaranteed to be non-system (by name) and exists.
-        const targetFolderId = (folderDoc!._id as mongoose.Types.ObjectId);
+        const targetFolderId = folderDoc!._id as mongoose.Types.ObjectId;
 
         // --- Read values ---
         const resp = await sheetsApi.spreadsheets.values.get({
