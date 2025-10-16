@@ -2,6 +2,8 @@ import mongoose from "mongoose";
 import Folder from "@/models/Folder";
 import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
 
+const FP = "ensureSafeFolder-v4"; // tracer fingerprint for logs
+
 type Opts = {
   userEmail: string;
   folderId?: string;
@@ -35,11 +37,12 @@ export async function ensureSafeFolder(opts: Opts) {
   // ---------- 1) If folderName provided, it wins (unless system) ----------
   if (byName) {
     const chosenName = isSystemFolder(byName) ? `${byName} (Leads)` : byName;
-    const doc = await upsertFolderByName(userEmail, chosenName, source);
+    let doc = await upsertFolderByName(userEmail, chosenName, source);
 
     // Final post-condition: never return a system folder
-    if (isSystemFolder(doc?.name)) {
+    if (!doc?.name || isSystemFolder(doc.name)) {
       const repaired = await upsertFolderByName(userEmail, defSafe, source);
+      console.log(`[${FP}] clamp:name provided`, { userEmail, in: byName, out: repaired?.name });
       return repaired;
     }
     return doc;
@@ -51,9 +54,10 @@ export async function ensureSafeFolder(opts: Opts) {
     const found = await Folder.findOne({ _id: fid, userEmail });
 
     if (found && !isSystemFolder(found.name)) {
-      // Final post-condition just in case
+      // Double-check post-condition
       if (isSystemFolder(found.name)) {
         const repaired = await upsertFolderByName(userEmail, defSafe, source);
+        console.log(`[${FP}] clamp:by id`, { userEmail, in: found?.name, out: repaired?.name });
         return repaired;
       }
       return found;
@@ -62,11 +66,12 @@ export async function ensureSafeFolder(opts: Opts) {
   }
 
   // ---------- 3) Default (never a system name) ----------
-  const defDoc = await upsertFolderByName(userEmail, defSafe, source);
+  let defDoc = await upsertFolderByName(userEmail, defSafe, source);
 
   // Final post-condition: absolutely never return a system folder
-  if (isSystemFolder(defDoc?.name)) {
+  if (!defDoc?.name || isSystemFolder(defDoc.name)) {
     const repaired = await upsertFolderByName(userEmail, `${defSafe} (Leads)`, source);
+    console.log(`[${FP}] clamp:default`, { userEmail, in: defBase, out: repaired?.name });
     return repaired;
   }
 
