@@ -9,6 +9,8 @@ import mongoose from "mongoose";
 import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
 import { ensureSafeFolder } from "@/lib/ensureSafeFolder";
 
+const FINGERPRINT = "centralized-v1";
+
 // --- Normalizers -------------------------------------------------------------
 const normPhone = (v: any) => String(v ?? "").replace(/\D+/g, "");
 const normEmail = (v: any) => {
@@ -40,9 +42,10 @@ type LeanFolder =
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "GET" && req.method !== "POST") {
-    return res.status(405).json({ error: "Method not allowed" });
+    return res.status(405).json({ error: "Method not allowed", fingerprint: FINGERPRINT });
   }
 
+  // Accept secret via header or query
   const headerToken = Array.isArray(req.headers["x-cron-secret"])
     ? req.headers["x-cron-secret"][0]
     : (req.headers["x-cron-secret"] as string | undefined);
@@ -50,9 +53,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     typeof req.query.token === "string" ? (req.query.token as string) : undefined;
   const provided = headerToken || queryToken;
   if (provided !== process.env.CRON_SECRET) {
-    return res.status(401).json({ error: "Unauthorized" });
+    return res.status(401).json({ error: "Unauthorized", fingerprint: FINGERPRINT });
   }
 
+  // Optional debug/filters
   const onlyUserEmail =
     typeof req.query.userEmail === "string"
       ? (req.query.userEmail as string).toLowerCase()
@@ -84,11 +88,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     for (const user of users) {
       const userEmail = String((user as any).email || "").toLowerCase();
 
+      // choose tokens from googleSheets or legacy googleTokens
       const gs: any = (user as any).googleSheets || {};
       const legacy: any = (user as any).googleTokens || {};
       const tok = gs?.refreshToken ? gs : legacy?.refreshToken ? legacy : null;
       if (!tok?.refreshToken) {
-        detailsAll.push({ userEmail, note: "No Google refresh token" });
+        detailsAll.push({ userEmail, note: "No Google refresh token", fingerprint: FINGERPRINT });
         continue;
       }
 
@@ -110,7 +115,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       const syncedSheets: SyncedSheetCfg[] = (gs?.syncedSheets || []) as any[];
       if (!syncedSheets?.length) {
-        detailsAll.push({ userEmail, note: "No syncedSheets" });
+        detailsAll.push({ userEmail, note: "No syncedSheets", fingerprint: FINGERPRINT });
         continue;
       }
 
@@ -131,7 +136,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (onlySpreadsheetId && spreadsheetId !== onlySpreadsheetId) continue;
         if (onlyTitle && title && title !== onlyTitle) continue;
 
-        // Resolve current tab title if we have sheetId
+        // Resolve current tab title if we have sheetId (tab may have been renamed)
         if (sheetId != null) {
           try {
             const meta = await sheetsApi.spreadsheets.get({
@@ -144,17 +149,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             if (found?.properties?.title) {
               title = found.properties.title;
             }
-          } catch {
-            /* ignore */
-          }
+          } catch { /* ignore */ }
         }
         if (!title) continue;
 
-        // --- CENTRALIZED folder safety via ensureSafeFolder ------------------
-        // Track reasonGuard for observability if incoming config is system-ish
+        // ---- CENTRALIZED safe folder resolution
+        // detect incoming system for observability only (reasonGuard in output)
         let reasonGuard: string | undefined;
-
-        // (optional) detect if provided values are system, for reporting
         if (folderName && isSystemFolder(folderName)) {
           reasonGuard = "blocked-by-system-name";
         } else if (folderId && mongoose.isValidObjectId(folderId)) {
@@ -163,19 +164,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               { _id: new mongoose.Types.ObjectId(folderId), userEmail },
               { name: 1 }
             ).lean()) as LeanFolder;
-            if (f?.name && isSystemFolder(f.name)) {
-              reasonGuard = "blocked-by-system-id";
-            }
-          } catch {
-            /* noop */
-          }
+            if (f?.name && isSystemFolder(f.name)) reasonGuard = "blocked-by-system-id";
+          } catch { /* noop */ }
         }
 
-        // Build a deterministic, human-friendly default from Drive + tab title
-        const driveMeta = await drive.files.get({
-          fileId: spreadsheetId,
-          fields: "name",
-        });
+        // Build a default name from Drive + tab title; pass raw inputs for sanitization
+        const driveMeta = await drive.files.get({ fileId: spreadsheetId, fields: "name" });
         const defaultName = (folderName || `${driveMeta.data.name || "Imported Leads"} — ${title}`).trim();
 
         const folderDoc = await ensureSafeFolder({
@@ -186,7 +180,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           source: "google-sheets",
         });
 
-        // Persist sanitized link back to the user doc (unless dry run)
+        // HARD GUARD: even if something regresses, never proceed with a system folder
+        if (isSystemFolder(folderDoc?.name)) {
+          throw new Error("ensureSafeFolder returned a system folder, aborting");
+        }
+
+        // Persist sanitized link (unless dry run)
         if (!dryRun) {
           await User.updateOne(
             {
@@ -219,9 +218,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         });
         const values = (resp.data.values || []) as string[][];
         const headerIdx = Math.max(0, headerRow - 1);
-        const rawHeaders = (values[headerIdx] || []).map((h) =>
-          String(h ?? "").trim()
-        );
+        const rawHeaders = (values[headerIdx] || []).map((h) => String(h ?? "").trim());
 
         // tolerant mapping: normalize header keys once
         const normalizedMapping: Record<string, string> = {};
@@ -229,16 +226,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           normalizedMapping[normHeader(key)] = val;
         });
 
-        const pointer =
-          typeof lastRowImported === "number" ? lastRowImported : headerRow;
+        const pointer = typeof lastRowImported === "number" ? lastRowImported : headerRow;
         const firstDataZero = headerIdx + 1; // 0-based first data row
         let startIndex = Math.max(firstDataZero, Number(pointer));
         if (startIndex > values.length - 1) startIndex = firstDataZero;
 
-        const endIndex = Math.min(
-          values.length - 1,
-          startIndex + MAX_ROWS_PER_SHEET - 1
-        );
+        const endIndex = Math.min(values.length - 1, startIndex + MAX_ROWS_PER_SHEET - 1);
 
         let imported = 0;
         let updated = 0;
@@ -265,10 +258,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
             const p = normPhone(doc.phone ?? (doc as any).Phone);
             const e = normEmail(doc.email ?? (doc as any).Email);
-            if (!p && !e) {
-              skippedNoKey++;
-              continue;
-            }
+            if (!p && !e) { skippedNoKey++; continue; }
 
             doc.userEmail = userEmail;
             doc.source = "google-sheets";
@@ -288,15 +278,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               .lean<{ _id: mongoose.Types.ObjectId } | null>();
 
             if (!existing) {
-              if (!dryRun)
-                await Lead.create({ ...doc, folderId: targetFolderId });
+              if (!dryRun) await Lead.create({ ...doc, folderId: targetFolderId });
               imported++;
             } else {
-              if (!dryRun)
-                await Lead.updateOne(
-                  { _id: existing._id },
-                  { $set: { ...doc, folderId: targetFolderId } }
-                );
+              if (!dryRun) await Lead.updateOne(
+                { _id: existing._id },
+                { $set: { ...doc, folderId: targetFolderId } }
+              );
               updated++;
             }
           }
@@ -315,7 +303,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 "googleSheets.syncedSheets.$.lastRowImported": newLast,
                 "googleSheets.syncedSheets.$.lastImportedAt": new Date(),
                 "googleSheets.syncedSheets.$.folderId": targetFolderId,
-                "googleSheets.syncedSheets.$.folderName": (folderDoc as any)?.name || "",
+                "googleSheets.syncedSheets.$.folderName": folderDoc.name,
                 ...(sheetId != null
                   ? { "googleSheets.syncedSheets.$.sheetId": sheetId }
                   : {}),
@@ -341,10 +329,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           skippedNoKey,
           newLastRowImported: newLast,
           dryRun,
+          fingerprint: FINGERPRINT,
           resolvedFolder: {
             id: String(targetFolderId),
-            name: (folderDoc as any)?.name || "",
-            isSystem: isSystemFolder((folderDoc as any)?.name || ""),
+            name: folderDoc.name || "",
+            isSystem: isSystemFolder(folderDoc.name || ""),
             ...(reasonGuard ? { reasonGuard } : {}),
           },
         };
@@ -360,9 +349,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       ok: true,
       build: (process.env.VERCEL_GIT_COMMIT_SHA || "").slice(0, 8) || undefined,
       details: detailsAll,
+      fingerprint: FINGERPRINT,
     });
   } catch (err: any) {
     console.error("Sheets poll error:", err);
-    return res.status(500).json({ error: err?.message || "Cron poll failed" });
+    return res.status(500).json({ error: err?.message || "Cron poll failed", fingerprint: FINGERPRINT });
   }
 }
