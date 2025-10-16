@@ -9,6 +9,7 @@ import Folder from "@/models/Folder";
 import { google } from "googleapis";
 import mongoose from "mongoose";
 import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
+import { ensureSafeFolder } from "@/lib/ensureSafeFolder";
 
 function normalizePhone(input: any): string {
   return String(input || "").replace(/\D+/g, "");
@@ -74,55 +75,33 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       if (!spreadsheetId || !title) continue;
 
-      // --- Resolve/Correct destination folder (BLOCK system folders) ---
-      let folderDoc: any = null;
+      // --- Resolve/Correct destination folder (CENTRALIZED via ensureSafeFolder) ---
+      // Build a deterministic, human-friendly default from Drive metadata + tab title.
+      const meta = await drive.files.get({ fileId: spreadsheetId, fields: "name" });
+      const defaultName = (folderName || `${meta.data.name || "Imported Leads"} — ${title}`).trim();
 
-      if (folderId) {
-        try {
-          folderDoc = await Folder.findOne({ _id: new mongoose.Types.ObjectId(folderId), userEmail });
-        } catch { /* noop */ }
-      }
-      if (folderDoc && isSystemFolder(folderDoc.name)) {
-        // system target is forbidden: null out so we auto-create a safe folder below
-        folderDoc = null;
-      }
+      const folderDoc = await ensureSafeFolder({
+        userEmail,
+        folderId,
+        folderName,
+        defaultName,
+        source: "google-sheets",
+      });
 
-      if (!folderDoc) {
-        // build a safe default name from Drive metadata + tab title
-        const meta = await drive.files.get({ fileId: spreadsheetId, fields: "name" });
-        const defaultName = (folderName || `${meta.data.name || "Imported Leads"} — ${title}`).trim();
-
-        if (isSystemFolder(defaultName)) {
-          // if default name collides with system, suffix it safely
-          const safe = `${defaultName} (Leads)`;
-          folderDoc = await Folder.findOneAndUpdate(
-            { userEmail, name: safe },
-            { $setOnInsert: { userEmail, name: safe, source: "google-sheets" } },
-            { new: true, upsert: true }
-          );
-        } else {
-          folderDoc = await Folder.findOneAndUpdate(
-            { userEmail, name: defaultName },
-            { $setOnInsert: { userEmail, name: defaultName, source: "google-sheets" } },
-            { new: true, upsert: true }
-          );
-        }
-
-        // best-effort: persist the corrected folder back to the sheet link entry
-        await User.updateOne(
-          {
-            email: userEmail,
-            "googleSheets.syncedSheets.spreadsheetId": spreadsheetId,
-            "googleSheets.syncedSheets.title": title,
+      // Persist the sanitized folder back to the sheet link entry (keeps DB clean)
+      await User.updateOne(
+        {
+          email: userEmail,
+          "googleSheets.syncedSheets.spreadsheetId": spreadsheetId,
+          "googleSheets.syncedSheets.title": title,
+        },
+        {
+          $set: {
+            "googleSheets.syncedSheets.$.folderId": folderDoc._id,
+            "googleSheets.syncedSheets.$.folderName": folderDoc.name,
           },
-          {
-            $set: {
-              "googleSheets.syncedSheets.$.folderId": folderDoc._id,
-              "googleSheets.syncedSheets.$.folderName": folderDoc.name,
-            },
-          }
-        );
-      }
+        }
+      );
 
       const targetFolderId = folderDoc._id as mongoose.Types.ObjectId;
 

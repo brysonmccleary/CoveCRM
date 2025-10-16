@@ -30,7 +30,7 @@ export async function ensureSafeFolder(opts: {
   }
 
   // 2) If folderId provided, validate ownership + non-system
-  if (folderId) {
+  if (folderId && mongoose.isValidObjectId(folderId)) {
     const fid = new mongoose.Types.ObjectId(folderId);
     const doc = await Folder.findOne({ _id: fid, userEmail });
     if (doc && !isSystemFolder(doc.name)) return doc;

@@ -3,90 +3,126 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "../auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
+import { ensureSafeFolder } from "@/lib/ensureSafeFolder";
 
-export default async function handler(
-  req: NextApiRequest,
-  res: NextApiResponse,
-) {
+/**
+ * Saves/updates a Google Sheet ↔ folder link for the current user.
+ * - Sanitizes folder resolution via ensureSafeFolder (never system folders).
+ * - Writes ONLY to googleSheets.syncedSheets (no legacy mirroring).
+ * - Backwards compatible request body:
+ *     Preferred: { spreadsheetId, title, folderId?, folderName? }
+ *     Legacy:    { sheetId, sheetName, folderId?, folderName? }
+ */
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const session = await getServerSession(req, res, authOptions);
   if (!session?.user?.email) {
     return res.status(401).json({ message: "Unauthorized" });
   }
+  const userEmail = session.user.email.toLowerCase();
 
   await dbConnect();
-  const user = await User.findOne({ email: session.user.email });
+  const user = await User.findOne({ email: userEmail });
   if (!user) return res.status(404).json({ message: "User not found" });
 
-  // ========== GET: Return all synced sheets for UI/debug ==========
+  // ---------- GET: Return synced sheets (UI/debug) ----------
   if (req.method === "GET") {
     const gs: any = (user as any).googleSheets || {};
-    const sheets: any[] = gs.syncedSheets || gs.sheets || [];
+    const sheets: any[] = Array.isArray(gs?.syncedSheets) ? gs.syncedSheets : [];
     return res.status(200).json({ sheets });
   }
 
-  // ========== POST: Save/update a sheet-to-folder link ==========
+  // ---------- POST: Save/update a sheet-to-folder link ----------
   if (req.method === "POST") {
-    const { sheetId, sheetName, folderId } = req.body as {
-      sheetId?: string;
-      sheetName?: string;
+    // Accept both current and legacy names from clients.
+    const {
+      spreadsheetId,
+      title,
+      folderId: rawFolderId,
+      folderName: rawFolderName,
+
+      // legacy fallbacks:
+      sheetId,
+      sheetName,
+    } = req.body as {
+      spreadsheetId?: string;
+      title?: string;
       folderId?: string;
+      folderName?: string;
+      sheetId?: string;   // legacy
+      sheetName?: string; // legacy
     };
 
-    if (!sheetId || !sheetName || !folderId) {
-      return res.status(400).json({ message: "Missing required fields" });
+    // Validate presence of identifiers (prefer spreadsheetId+title, else legacy sheetId).
+    const hasCanonical = Boolean(spreadsheetId && title);
+    const hasLegacy = Boolean(sheetId && sheetName);
+    if (!hasCanonical && !hasLegacy) {
+      return res.status(400).json({ message: "Missing required fields (need spreadsheetId+title or sheetId+sheetName)" });
     }
 
     try {
-      // Ensure googleSheets object exists and satisfies required fields for TS
-      let gs: any = (user as any).googleSheets;
-      if (!gs) {
-        gs = {
-          accessToken:
-            (user as any).googleTokens?.accessToken ||
-            (user as any).googleSheets?.accessToken ||
-            "",
-          refreshToken:
-            (user as any).googleTokens?.refreshToken ||
-            (user as any).googleSheets?.refreshToken ||
-            "",
-          expiryDate:
-            (user as any).googleTokens?.expiryDate ||
-            (user as any).googleSheets?.expiryDate ||
-            0,
-          googleEmail:
-            (user as any).googleTokens?.googleEmail ||
-            (user as any).googleSheets?.googleEmail ||
-            session.user.email,
-          sheets: [],
-        };
+      // Normalize the record shape we store in syncedSheets.
+      const normalized = hasCanonical
+        ? {
+            spreadsheetId: String(spreadsheetId),
+            title: String(title),
+            // default/fallback name for ensureSafeFolder (no Drive call here):
+            defaultName: `${String(spreadsheetId)} — ${String(title)}`, // unique-ish, replaced by actual safe folder name
+            keyPredicate: (s: any) => s.spreadsheetId === String(spreadsheetId) && s.title === String(title),
+            upsertBase: { spreadsheetId: String(spreadsheetId), title: String(title) },
+          }
+        : {
+            // Legacy mode: keep the sheetId/sheetName so old clients still work.
+            sheetId: String(sheetId),
+            sheetName: String(sheetName),
+            defaultName: `${String(sheetName)} — ${String(sheetId)}`,
+            keyPredicate: (s: any) => s.sheetId === String(sheetId),
+            upsertBase: { sheetId: String(sheetId), sheetName: String(sheetName) },
+          };
+
+      // Guarantee a non-system folder. If UI sent a system value, it will be coerced.
+      const safeFolder = await ensureSafeFolder({
+        userEmail,
+        folderId: rawFolderId,
+        folderName: rawFolderName,
+        defaultName: normalized.defaultName,
+        source: "google-sheets",
+      });
+
+      // Ensure googleSheets structure exists.
+      const gs: any = (user as any).googleSheets ?? {};
+      if (!(user as any).googleSheets) {
         (user as any).googleSheets = gs;
       }
 
-      // Normalize array shape: support both .syncedSheets and .sheets
-      const arr: any[] = Array.isArray(gs.syncedSheets)
-        ? gs.syncedSheets
-        : Array.isArray(gs.sheets)
-          ? gs.sheets
-          : [];
-      gs.syncedSheets = arr;
+      // Use ONLY syncedSheets (no mirroring to .sheets).
+      if (!Array.isArray(gs.syncedSheets)) gs.syncedSheets = [];
 
-      const idx = arr.findIndex((s: any) => s.sheetId === sheetId);
-      const newSheetLink = { sheetId, sheetName, folderId };
+      const arr: any[] = gs.syncedSheets;
+      const idx = arr.findIndex(normalized.keyPredicate);
+
+      const nextLink = {
+        ...normalized.upsertBase,
+        folderId: String(safeFolder._id),
+        folderName: String(safeFolder.name),
+      };
 
       if (idx !== -1) {
-        arr[idx] = newSheetLink;
+        arr[idx] = { ...arr[idx], ...nextLink };
       } else {
-        arr.push(newSheetLink);
+        arr.push(nextLink);
       }
 
       await user.save();
-      return res.status(200).json({ message: "Sheet linked successfully" });
+
+      return res.status(200).json({
+        message: "Sheet linked successfully",
+        sheet: nextLink,
+      });
     } catch (err) {
-      console.error("Save sheet link error:", err);
+      console.error("save-sheet-link error:", err);
       return res.status(500).json({ message: "Internal server error" });
     }
   }
 
-  // ========== Fallback ==========
   return res.status(405).json({ message: "Method not allowed" });
 }

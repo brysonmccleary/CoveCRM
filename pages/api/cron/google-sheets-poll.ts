@@ -7,6 +7,7 @@ import Folder from "@/models/Folder";
 import { google } from "googleapis";
 import mongoose from "mongoose";
 import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
+import { ensureSafeFolder } from "@/lib/ensureSafeFolder";
 
 // --- Normalizers -------------------------------------------------------------
 const normPhone = (v: any) => String(v ?? "").replace(/\D+/g, "");
@@ -149,99 +150,68 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
         if (!title) continue;
 
-        // --- Resolve/Correct destination folder (BLOCK system folders) ---
-        let folderDoc: { _id: mongoose.Types.ObjectId; name?: string } | null =
-          null;
+        // --- CENTRALIZED folder safety via ensureSafeFolder ------------------
+        // Track reasonGuard for observability if incoming config is system-ish
         let reasonGuard: string | undefined;
 
-        // (1) If a folderId is present, try to load it and check system-ness
-        if (folderId) {
+        // (optional) detect if provided values are system, for reporting
+        if (folderName && isSystemFolder(folderName)) {
+          reasonGuard = "blocked-by-system-name";
+        } else if (folderId && mongoose.isValidObjectId(folderId)) {
           try {
-            const f = (await Folder.findOne({
-              _id: new mongoose.Types.ObjectId(folderId),
-              userEmail,
-            }).lean()) as LeanFolder;
-
-            if (f && f.name && isSystemFolder(f.name)) {
-              // 🔴 Hard block: purge bad link so it can't reappear later
+            const f = (await Folder.findOne(
+              { _id: new mongoose.Types.ObjectId(folderId), userEmail },
+              { name: 1 }
+            ).lean()) as LeanFolder;
+            if (f?.name && isSystemFolder(f.name)) {
               reasonGuard = "blocked-by-system-id";
-              if (!dryRun) {
-                await User.updateOne(
-                  {
-                    email: userEmail,
-                    "googleSheets.syncedSheets.spreadsheetId": spreadsheetId,
-                    "googleSheets.syncedSheets.title": cfg.title ?? title,
-                  },
-                  {
-                    $set: {
-                      "googleSheets.syncedSheets.$.folderId": null,
-                      "googleSheets.syncedSheets.$.folderName": null,
-                    },
-                  }
-                );
-              }
-              folderDoc = null; // force re-resolve below
-            } else if (f) {
-              folderDoc = f as any;
             }
           } catch {
-            // fall through to re-resolve
-            folderDoc = null;
+            /* noop */
           }
         }
 
-        // (2) If no usable doc yet, compute a SAFE name and upsert the folder
-        if (!folderDoc) {
-          const driveMeta = await drive.files.get({
-            fileId: spreadsheetId,
-            fields: "name",
-          });
-          const proposedBase =
-            folderName && !isSystemFolder(folderName)
-              ? folderName
-              : `${driveMeta.data.name || "Imported Leads"} — ${title}`.trim();
+        // Build a deterministic, human-friendly default from Drive + tab title
+        const driveMeta = await drive.files.get({
+          fileId: spreadsheetId,
+          fields: "name",
+        });
+        const defaultName = (folderName || `${driveMeta.data.name || "Imported Leads"} — ${title}`).trim();
 
-          const safeName = isSystemFolder(proposedBase)
-            ? `${proposedBase} (Leads)`
-            : proposedBase;
+        const folderDoc = await ensureSafeFolder({
+          userEmail,
+          folderId,
+          folderName,
+          defaultName,
+          source: "google-sheets",
+        });
 
-          const up = await Folder.findOneAndUpdate(
-            { userEmail, name: safeName },
+        // Persist sanitized link back to the user doc (unless dry run)
+        if (!dryRun) {
+          await User.updateOne(
             {
-              $setOnInsert: {
-                userEmail,
-                name: safeName,
-                source: "google-sheets",
-              },
+              email: userEmail,
+              "googleSheets.syncedSheets.spreadsheetId": spreadsheetId,
+              "googleSheets.syncedSheets.title": cfg.title ?? title,
             },
-            { new: true, upsert: true }
-          ).lean();
-
-          folderDoc = (up as any) || null;
-
-          // Persist the corrected link back to the user doc (unless dry run)
-          if (!dryRun && folderDoc?._id) {
-            await User.updateOne(
-              {
-                email: userEmail,
-                "googleSheets.syncedSheets.spreadsheetId": spreadsheetId,
-                "googleSheets.syncedSheets.title": cfg.title ?? title,
+            {
+              $set: {
+                "googleSheets.syncedSheets.$.folderId": folderDoc._id,
+                "googleSheets.syncedSheets.$.folderName": folderDoc.name,
+                ...(sheetId != null
+                  ? { "googleSheets.syncedSheets.$.sheetId": sheetId }
+                  : {}),
+                ...(cfg.title !== title
+                  ? { "googleSheets.syncedSheets.$.title": title }
+                  : {}),
               },
-              {
-                $set: {
-                  "googleSheets.syncedSheets.$.folderId": folderDoc._id,
-                  "googleSheets.syncedSheets.$.folderName":
-                    (folderDoc as any)?.name || safeName,
-                },
-              }
-            );
-          }
+            }
+          );
         }
 
-        // At this point, folderDoc is guaranteed to be non-system (by name) and exists.
-        const targetFolderId = folderDoc!._id as mongoose.Types.ObjectId;
+        const targetFolderId = folderDoc._id as mongoose.Types.ObjectId;
 
-        // --- Read values ---
+        // --- Read values ----------------------------------------------------
         const resp = await sheetsApi.spreadsheets.values.get({
           spreadsheetId,
           range: `'${title}'!A1:ZZ`,
@@ -345,8 +315,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 "googleSheets.syncedSheets.$.lastRowImported": newLast,
                 "googleSheets.syncedSheets.$.lastImportedAt": new Date(),
                 "googleSheets.syncedSheets.$.folderId": targetFolderId,
-                "googleSheets.syncedSheets.$.folderName":
-                  (folderDoc as any)?.name || "",
+                "googleSheets.syncedSheets.$.folderName": (folderDoc as any)?.name || "",
                 ...(sheetId != null
                   ? { "googleSheets.syncedSheets.$.sheetId": sheetId }
                   : {}),
