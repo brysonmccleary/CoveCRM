@@ -9,7 +9,7 @@ import mongoose from "mongoose";
 import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
 import { ensureSafeFolder } from "@/lib/ensureSafeFolder";
 
-const FINGERPRINT = "centralized-v1";
+const FINGERPRINT = "diag-v2";
 
 // --- Normalizers -------------------------------------------------------------
 const normPhone = (v: any) => String(v ?? "").replace(/\D+/g, "");
@@ -68,7 +68,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const onlyTitle =
     typeof req.query.title === "string" ? (req.query.title as string) : undefined;
   const dryRun = req.query.dryRun === "1" || req.query.dryRun === "true";
-  const debug = req.query.debug === "1" || req.query.debug === "true";
+  const debug = true; // force diagnostics
 
   const MAX_USERS = Number(process.env.POLL_MAX_USERS || 10);
   const MAX_ROWS_PER_SHEET = Number(process.env.POLL_MAX_ROWS || 500);
@@ -88,7 +88,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     for (const user of users) {
       const userEmail = String((user as any).email || "").toLowerCase();
 
-      // choose tokens from googleSheets or legacy googleTokens
       const gs: any = (user as any).googleSheets || {};
       const legacy: any = (user as any).googleTokens || {};
       const tok = gs?.refreshToken ? gs : legacy?.refreshToken ? legacy : null;
@@ -153,24 +152,44 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
         if (!title) continue;
 
-        // ---- CENTRALIZED safe folder resolution
-        // detect incoming system for observability only (reasonGuard in output)
+        // ---- CENTRALIZED safe folder resolution with DIAGNOSTICS
         let reasonGuard: string | undefined;
+        let preIdName: string | undefined;
+
         if (folderName && isSystemFolder(folderName)) {
           reasonGuard = "blocked-by-system-name";
-        } else if (folderId && mongoose.isValidObjectId(folderId)) {
+        }
+
+        if (folderId && mongoose.isValidObjectId(folderId)) {
           try {
             const f = (await Folder.findOne(
               { _id: new mongoose.Types.ObjectId(folderId), userEmail },
               { name: 1 }
             ).lean()) as LeanFolder;
-            if (f?.name && isSystemFolder(f.name)) reasonGuard = "blocked-by-system-id";
+            preIdName = f?.name || undefined;
+            if (f?.name && isSystemFolder(f.name)) {
+              reasonGuard = "blocked-by-system-id";
+            }
           } catch { /* noop */ }
         }
 
-        // Build a default name from Drive + tab title; pass raw inputs for sanitization
         const driveMeta = await drive.files.get({ fileId: spreadsheetId, fields: "name" });
         const defaultName = (folderName || `${driveMeta.data.name || "Imported Leads"} — ${title}`).trim();
+
+        // DIAG before ensure
+        const diagBefore = {
+          incoming: {
+            folderId: folderId || null,
+            folderName: folderName || null,
+            folderIdNameFromDB: preIdName || null,
+            defaultName,
+          },
+          checks: {
+            isSystem_folderName: !!(folderName && isSystemFolder(folderName)),
+            isSystem_folderIdName: !!(preIdName && isSystemFolder(preIdName)),
+            isSystem_defaultName: isSystemFolder(defaultName),
+          },
+        };
 
         const folderDoc = await ensureSafeFolder({
           userEmail,
@@ -180,9 +199,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           source: "google-sheets",
         });
 
-        // HARD GUARD: even if something regresses, never proceed with a system folder
+        const diagAfter = {
+          returnedFolder: {
+            id: String(folderDoc?._id || ""),
+            name: String(folderDoc?.name || ""),
+            isSystem: isSystemFolder(String(folderDoc?.name || "")),
+          },
+        };
+
+        // HARD GUARD: if still system, return DIAG so we see everything
         if (isSystemFolder(folderDoc?.name)) {
-          throw new Error("ensureSafeFolder returned a system folder, aborting");
+          return res.status(500).json({
+            error: "ensureSafeFolder returned a system folder",
+            fingerprint: FINGERPRINT,
+            diag: { ...diagBefore, ...diagAfter },
+          });
         }
 
         // Persist sanitized link (unless dry run)
@@ -220,14 +251,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const headerIdx = Math.max(0, headerRow - 1);
         const rawHeaders = (values[headerIdx] || []).map((h) => String(h ?? "").trim());
 
-        // tolerant mapping: normalize header keys once
         const normalizedMapping: Record<string, string> = {};
         Object.entries(mapping || {}).forEach(([key, val]) => {
           normalizedMapping[normHeader(key)] = val;
         });
 
         const pointer = typeof lastRowImported === "number" ? lastRowImported : headerRow;
-        const firstDataZero = headerIdx + 1; // 0-based first data row
+        const firstDataZero = headerIdx + 1;
         let startIndex = Math.max(firstDataZero, Number(pointer));
         if (startIndex > values.length - 1) startIndex = firstDataZero;
 
@@ -245,12 +275,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             if (!hasAny) continue;
             lastProcessed = r;
 
-            // Build doc using tolerant mapping
             const doc: Record<string, any> = {};
             rawHeaders.forEach((actualHeader, i) => {
               const n = normHeader(actualHeader);
               if (!n) return;
-              if (skip?.[actualHeader]) return;
+              if ((skip || {})[actualHeader]) return;
               const fieldName = normalizedMapping[n];
               if (!fieldName) return;
               doc[fieldName] = row[i] ?? "";
@@ -264,7 +293,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             doc.source = "google-sheets";
             doc.sourceSpreadsheetId = spreadsheetId;
             doc.sourceTabTitle = title;
-            doc.sourceRowIndex = r + 1; // 1-based
+            doc.sourceRowIndex = r + 1;
             doc.normalizedPhone = p || undefined;
             if (e) doc.email = e;
 
@@ -281,10 +310,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               if (!dryRun) await Lead.create({ ...doc, folderId: targetFolderId });
               imported++;
             } else {
-              if (!dryRun) await Lead.updateOne(
-                { _id: existing._id },
-                { $set: { ...doc, folderId: targetFolderId } }
-              );
+              if (!dryRun)
+                await Lead.updateOne({ _id: existing._id }, { $set: { ...doc, folderId: targetFolderId } });
               updated++;
             }
           }
@@ -303,19 +330,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 "googleSheets.syncedSheets.$.lastRowImported": newLast,
                 "googleSheets.syncedSheets.$.lastImportedAt": new Date(),
                 "googleSheets.syncedSheets.$.folderId": targetFolderId,
-                "googleSheets.syncedSheets.$.folderName": folderDoc.name,
-                ...(sheetId != null
-                  ? { "googleSheets.syncedSheets.$.sheetId": sheetId }
-                  : {}),
-                ...(cfg.title !== title
-                  ? { "googleSheets.syncedSheets.$.title": title }
-                  : {}),
+                "googleSheets.syncedSheets.$.folderName": String((await Folder.findById(targetFolderId))?.name || folderName || ""),
+                ...(sheetId != null ? { "googleSheets.syncedSheets.$.sheetId": sheetId } : {}),
+                ...(cfg.title !== title ? { "googleSheets.syncedSheets.$.title": title } : {}),
               },
             }
           );
         }
 
-        const detail: any = {
+        detailsAll.push({
           userEmail,
           spreadsheetId,
           title,
@@ -332,16 +355,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           fingerprint: FINGERPRINT,
           resolvedFolder: {
             id: String(targetFolderId),
-            name: folderDoc.name || "",
-            isSystem: isSystemFolder(folderDoc.name || ""),
+            name: String((await Folder.findById(targetFolderId))?.name || ""),
+            isSystem: isSystemFolder(String((await Folder.findById(targetFolderId))?.name || "")),
             ...(reasonGuard ? { reasonGuard } : {}),
           },
-        };
-        if (debug) {
-          detail.mapping = mapping;
-          detail.headers = rawHeaders;
-        }
-        detailsAll.push(detail);
+          diag: { /* per-sheet high-level inputs to keep in success path too */
+            incoming: {
+              folderId: folderId || null,
+              folderName: folderName || null,
+              defaultName,
+            }
+          }
+        });
       }
     }
 
