@@ -9,7 +9,7 @@ import mongoose from "mongoose";
 import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
 import { ensureSafeFolder } from "@/lib/ensureSafeFolder";
 
-const FINGERPRINT = "diag-v2";
+const FINGERPRINT = "selfheal-v1";
 
 // --- Normalizers -------------------------------------------------------------
 const normPhone = (v: any) => String(v ?? "").replace(/\D+/g, "");
@@ -68,7 +68,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const onlyTitle =
     typeof req.query.title === "string" ? (req.query.title as string) : undefined;
   const dryRun = req.query.dryRun === "1" || req.query.dryRun === "true";
-  const debug = true; // force diagnostics
+  const debug = req.query.debug === "1" || req.query.debug === "true";
 
   const MAX_USERS = Number(process.env.POLL_MAX_USERS || 10);
   const MAX_ROWS_PER_SHEET = Number(process.env.POLL_MAX_ROWS || 500);
@@ -152,7 +152,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
         if (!title) continue;
 
-        // ---- CENTRALIZED safe folder resolution with DIAGNOSTICS
+        // ---- CENTRALIZED safe folder resolution (self-healing)
         let reasonGuard: string | undefined;
         let preIdName: string | undefined;
 
@@ -176,22 +176,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const driveMeta = await drive.files.get({ fileId: spreadsheetId, fields: "name" });
         const defaultName = (folderName || `${driveMeta.data.name || "Imported Leads"} — ${title}`).trim();
 
-        // DIAG before ensure
-        const diagBefore = {
-          incoming: {
-            folderId: folderId || null,
-            folderName: folderName || null,
-            folderIdNameFromDB: preIdName || null,
-            defaultName,
-          },
-          checks: {
-            isSystem_folderName: !!(folderName && isSystemFolder(folderName)),
-            isSystem_folderIdName: !!(preIdName && isSystemFolder(preIdName)),
-            isSystem_defaultName: isSystemFolder(defaultName),
-          },
-        };
-
-        const folderDoc = await ensureSafeFolder({
+        // 1) Ask centralized util
+        let folderDoc = await ensureSafeFolder({
           userEmail,
           folderId,
           folderName,
@@ -199,25 +185,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           source: "google-sheets",
         });
 
-        const diagAfter = {
-          returnedFolder: {
-            id: String(folderDoc?._id || ""),
-            name: String(folderDoc?.name || ""),
-            isSystem: isSystemFolder(String(folderDoc?.name || "")),
-          },
-        };
-
-        // HARD GUARD: if still system, return DIAG so we see everything
-        if (isSystemFolder(folderDoc?.name)) {
-          return res.status(500).json({
-            error: "ensureSafeFolder returned a system folder",
-            fingerprint: FINGERPRINT,
-            diag: { ...diagBefore, ...diagAfter },
-          });
+        // 2) Self-heal: if sanitizer still returns system (or nothing), repair and continue
+        if (!folderDoc || isSystemFolder(folderDoc?.name)) {
+          const baseName = isSystemFolder(defaultName) ? `${defaultName} (Leads)` : defaultName;
+          folderDoc = await Folder.findOneAndUpdate(
+            { userEmail, name: baseName },
+            { $setOnInsert: { userEmail, name: baseName, source: "google-sheets" } },
+            { new: true, upsert: true }
+          ).lean();
         }
 
         // Persist sanitized link (unless dry run)
-        if (!dryRun) {
+        if (!dryRun && folderDoc?._id) {
           await User.updateOne(
             {
               email: userEmail,
@@ -240,6 +219,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
 
         const targetFolderId = folderDoc._id as mongoose.Types.ObjectId;
+        const targetFolderName = String(folderDoc.name || "");
 
         // --- Read values ----------------------------------------------------
         const resp = await sheetsApi.spreadsheets.values.get({
@@ -307,11 +287,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               .lean<{ _id: mongoose.Types.ObjectId } | null>();
 
             if (!existing) {
-              if (!dryRun) await Lead.create({ ...doc, folderId: targetFolderId });
+              if (!dryRun) await Lead.create({ ...doc, folderId: targetFolderId, folder_name: targetFolderName, ["Folder Name"]: targetFolderName });
               imported++;
             } else {
               if (!dryRun)
-                await Lead.updateOne({ _id: existing._id }, { $set: { ...doc, folderId: targetFolderId } });
+                await Lead.updateOne(
+                  { _id: existing._id },
+                  { $set: { ...doc, folderId: targetFolderId, folder_name: targetFolderName, ["Folder Name"]: targetFolderName } }
+                );
               updated++;
             }
           }
@@ -330,9 +313,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 "googleSheets.syncedSheets.$.lastRowImported": newLast,
                 "googleSheets.syncedSheets.$.lastImportedAt": new Date(),
                 "googleSheets.syncedSheets.$.folderId": targetFolderId,
-                "googleSheets.syncedSheets.$.folderName": String((await Folder.findById(targetFolderId))?.name || folderName || ""),
-                ...(sheetId != null ? { "googleSheets.syncedSheets.$.sheetId": sheetId } : {}),
-                ...(cfg.title !== title ? { "googleSheets.syncedSheets.$.title": title } : {}),
+                "googleSheets.syncedSheets.$.folderName": targetFolderName,
+                ...(sheetId != null
+                  ? { "googleSheets.syncedSheets.$.sheetId": sheetId }
+                  : {}),
+                ...(cfg.title !== title
+                  ? { "googleSheets.syncedSheets.$.title": title }
+                  : {}),
               },
             }
           );
@@ -355,17 +342,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           fingerprint: FINGERPRINT,
           resolvedFolder: {
             id: String(targetFolderId),
-            name: String((await Folder.findById(targetFolderId))?.name || ""),
-            isSystem: isSystemFolder(String((await Folder.findById(targetFolderId))?.name || "")),
+            name: targetFolderName,
+            isSystem: isSystemFolder(targetFolderName),
             ...(reasonGuard ? { reasonGuard } : {}),
           },
-          diag: { /* per-sheet high-level inputs to keep in success path too */
-            incoming: {
-              folderId: folderId || null,
-              folderName: folderName || null,
-              defaultName,
-            }
-          }
+          ...(debug
+            ? {
+                diag: {
+                  incoming: {
+                    folderId: folderId || null,
+                    folderName: folderName || null,
+                    defaultName,
+                  },
+                },
+              }
+            : {}),
         });
       }
     }
