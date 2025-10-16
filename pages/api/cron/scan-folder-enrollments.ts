@@ -1,4 +1,4 @@
-// pages/api/cron/drips-folder-watch.ts
+// pages/api/cron/scan-folder-enrollments.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import dbConnect from "@/lib/mongooseConnect";
 import { DateTime } from "luxon";
@@ -12,6 +12,21 @@ export const config = { maxDuration: 60 };
 
 const PT_ZONE = "America/Los_Angeles";
 const SEND_HOUR_PT = 9;
+
+type Watcher = {
+  _id: any;
+  userEmail: string;
+  folderId: any;
+  campaignId: any;
+  startMode?: "immediate" | "nextWindow";
+  lastScanAt?: Date;
+};
+
+type CampaignLite = {
+  _id: any;
+  isActive?: boolean;
+  type?: string;
+};
 
 // Next 9:00am PT
 function nextWindowPT(): Date {
@@ -33,27 +48,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const watchers = await DripFolderEnrollment.find({ active: true })
       .select({ _id: 1, userEmail: 1, folderId: 1, campaignId: 1, startMode: 1, lastScanAt: 1 })
-      .lean();
+      .lean<Watcher[]>();
 
     let scanned = 0, newlyEnrolled = 0, deduped = 0;
 
     for (const w of watchers) {
       scanned++;
 
-      // One more lock per watcher to isolate parallel invocations
-      const wLock = await acquireLock("watch", `folder:${w._id}`, 45);
+      // Isolate each watcher (best-effort)
+      const wLock = await acquireLock("watch", `folder:${String(w._id)}`, 45);
       if (!wLock) continue;
 
-      // Campaign safety: only if SMS & active
-      const campaign = await DripCampaign.findOne({ _id: w.campaignId })
+      // Ensure campaign is SMS + active (TS-safe narrowing)
+      const campaign = (await DripCampaign.findById(w.campaignId)
         .select({ _id: 1, isActive: 1, type: 1 })
-        .lean();
+        .lean()) as CampaignLite | null;
+
       if (!campaign || campaign.type !== "sms" || campaign.isActive !== true) {
         await DripFolderEnrollment.updateOne({ _id: w._id }, { $set: { active: false } });
         continue;
       }
 
-      // Find leads in the folder that DON'T have an active/paused enrollment for this campaign
+      // Find leads in this folder that *do not* already have an active/paused enrollment for this campaign
       const leads = await Lead.aggregate([
         { $match: { userEmail: w.userEmail, folderId: w.folderId } },
         {
@@ -61,23 +77,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             from: "dripenrollments",
             let: { leadId: "$_id" },
             pipeline: [
-              { $match: {
-                $expr: {
-                  $and: [
-                    { $eq: ["$leadId", "$$leadId"] },
-                    { $eq: ["$campaignId", w.campaignId] },
-                    { $in: ["$status", ["active", "paused"]] },
-                  ]
-                }
-              } },
-              { $limit: 1 }
+              {
+                $match: {
+                  $expr: {
+                    $and: [
+                      { $eq: ["$leadId", "$$leadId"] },
+                      { $eq: ["$campaignId", w.campaignId] },
+                      { $in: ["$status", ["active", "paused"]] },
+                    ],
+                  },
+                },
+              },
+              { $limit: 1 },
             ],
-            as: "enr"
-          }
+            as: "enr",
+          },
         },
-        { $match: { enr: { $size: 0 } } }, // no active enrollment
+        { $match: { enr: { $size: 0 } } },
         { $project: { _id: 1 } },
-        { $limit: 2000 }, // safety max per tick
+        { $limit: 2000 }, // safety per tick
       ]);
 
       const nextSendAt = w.startMode === "nextWindow" ? nextWindowPT() : new Date();
@@ -88,7 +106,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           leadId: lead._id,
           campaignId: w.campaignId,
           status: { $in: ["active", "paused"] },
-        }).select({ _id: 1 }).lean();
+        })
+          .select({ _id: 1 })
+          .lean();
 
         if (before?._id) { deduped++; continue; }
 
@@ -120,13 +140,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     return res.status(200).json({
-      message: "drips-folder-watch complete",
+      message: "scan-folder-enrollments complete",
       scannedWatchers: scanned,
       newlyEnrolled,
       deduped,
     });
   } catch (err) {
-    console.error("❌ drips-folder-watch error:", err);
+    console.error("❌ scan-folder-enrollments error:", err);
     return res.status(500).json({ message: "Server error" });
   }
 }
