@@ -37,17 +37,11 @@ function nextWindowPT(): Date {
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "POST")
-    return res.status(405).json({ error: "Method Not Allowed" });
+  if (req.method !== "POST") return res.status(405).json({ error: "Method Not Allowed" });
 
   try {
-    const session = (await getServerSession(
-      req,
-      res,
-      authOptions as any
-    )) as any;
-    if (!session?.user?.email)
-      return res.status(401).json({ error: "Unauthorized" });
+    const session = (await getServerSession(req, res, authOptions as any)) as any;
+    if (!session?.user?.email) return res.status(401).json({ error: "Unauthorized" });
 
     const {
       folderId,
@@ -57,26 +51,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       limit,
     }: Body = (req.body || {}) as any;
 
-    if (!folderId || !campaignId)
-      return res
-        .status(400)
-        .json({ error: "folderId and campaignId are required" });
+    if (!folderId || !campaignId) {
+      return res.status(400).json({ error: "folderId and campaignId are required" });
+    }
 
     await dbConnect();
 
-    // Validate campaign (TS-safe)
+    // Validate campaign
     const campaign = await DripCampaign.findById(campaignId)
       .select("_id name isActive type steps")
       .lean<CampaignLite | null>();
 
-    if (!campaign)
-      return res.status(404).json({ error: "Campaign not found" });
-    if (campaign.type !== "sms")
-      return res.status(400).json({ error: "Campaign must be SMS type" });
-    if (campaign.isActive !== true)
-      return res.status(400).json({ error: "Campaign is not active" });
+    if (!campaign) return res.status(404).json({ error: "Campaign not found" });
+    if (campaign.type !== "sms") return res.status(400).json({ error: "Campaign must be SMS type" });
+    if (campaign.isActive !== true) return res.status(400).json({ error: "Campaign is not active" });
 
-    // Ensure/Upsert a watcher
+    // Ensure/Upsert a watcher (no conflict: startMode ONLY on insert)
     const watcher = await DripFolderEnrollment.findOneAndUpdate(
       { userEmail: session.user.email, folderId, campaignId, active: true },
       {
@@ -85,10 +75,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           folderId,
           campaignId,
           active: true,
-          startMode,
+          startMode,            // <- only here
           lastScanAt: new Date(0),
+          createdBy: session.user.email,
+          createdAt: new Date(),
         },
-        $set: { startMode },
+        $set: {
+          // keep watcher active and bump scan marker (but do NOT set startMode again)
+          active: true,
+        },
       },
       { upsert: true, new: true }
     ).lean();
@@ -102,11 +97,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .limit(Math.max(0, Number(limit) || 10000))
       .lean();
 
-    let created = 0,
-      deduped = 0;
+    let created = 0;
+    let deduped = 0;
 
-    const nextSendAt =
-      startMode === "nextWindow" ? nextWindowPT() : new Date();
+    const nextSendAt = startMode === "nextWindow" ? nextWindowPT() : new Date();
 
     for (const lead of leads) {
       if (dry) {
@@ -144,6 +138,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             cursorStep: 0,
             nextSendAt,
             source: "folder-bulk",
+            createdAt: new Date(),
           },
         },
         { upsert: true, new: true }
@@ -169,8 +164,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       nextSendAt,
     });
   } catch (err: any) {
-    return res
-      .status(500)
-      .json({ error: "Server error", detail: err?.message });
+    // Duplicate watcher? make it non-fatal
+    if (err?.code === 11000) {
+      return res.status(200).json({ success: true, deduped: true });
+    }
+    return res.status(500).json({ error: "Server error", detail: err?.message });
   }
 }
