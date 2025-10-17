@@ -5,6 +5,7 @@ import Lead from "@/models/Lead";
 import User from "@/models/User";
 import A2PProfile from "@/models/A2PProfile";
 import Message from "@/models/Message";
+import DripEnrollment from "@/models/DripEnrollment"; // ✅ NEW: for auto-pause on reply
 import twilio, { Twilio } from "twilio";
 import { OpenAI } from "openai";
 import { getTimezoneFromState } from "@/utils/timezone";
@@ -404,7 +405,7 @@ let _lastInboundUserEmailForBilling: string | null = null;
 async function extractIntentAndTimeLLM(input: {
   text: string;
   nowISO: string;
-  tz: string;
+	 tz: string;
 }) {
   const sys = `Extract intent for a brief SMS thread about booking a call.
 Return STRICT JSON with keys:
@@ -931,6 +932,34 @@ export default async function handler(
 
     if (io) io.to(user.email).emit("message:new", { leadId: lead._id, ...inboundEntry });
 
+    // ✅ NEW — Auto-pause any active DripEnrollment for this lead (tenant-scoped)
+    try {
+      const pauseRes: any = await DripEnrollment.updateMany(
+        { userEmail: user.email, leadId: lead._id, status: "active" },
+        {
+          $set: { status: "paused", paused: true, isPaused: true, processing: false },
+          $unset: { nextSendAt: 1, processingAt: 1 },
+        }
+      );
+      const paused = typeof pauseRes.modifiedCount === "number"
+        ? pauseRes.modifiedCount
+        : (pauseRes.nModified ?? 0);
+      if (paused > 0) {
+        const note = {
+          type: "system" as const,
+          text: `[system] Auto-paused ${paused} active drip enrollment(s) due to lead reply.`,
+          date: new Date(),
+        };
+        lead.interactionHistory.push(note);
+        await lead.save();
+        if (io) io.to(user.email).emit("message:new", { leadId: lead._id, ...note });
+        console.log(`⏸️ Auto-paused ${paused} active enrollment(s) for lead ${String(lead._id)}`);
+      }
+    } catch (e) {
+      console.warn("⚠️ Failed to auto-pause drips:", e);
+    }
+    // ======================= end auto-pause =======================
+
     /* =======================
        Agent email notify
        ======================= */
@@ -1065,7 +1094,7 @@ export default async function handler(
         .status(200)
         .json({ message: "Client retention reply — no AI engagement." });
 
-    // ✅ Cancel drips & engage AI
+    // ✅ Cancel drips & engage AI (legacy array-based)
     lead.assignedDrips = [];
     (lead as any).dripProgress = [];
     lead.isAIEngaged = true;
