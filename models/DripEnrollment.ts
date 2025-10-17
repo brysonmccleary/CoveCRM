@@ -44,10 +44,13 @@ const DripEnrollmentSchema = new Schema(
   { timestamps: true }
 );
 
-// Unique active/paused enrollment per (leadId, campaignId)
+// ✅ Unique active/paused enrollment PER TENANT for (leadId, campaignId)
 DripEnrollmentSchema.index(
-  { leadId: 1, campaignId: 1, status: 1 },
-  { unique: true, partialFilterExpression: { status: { $in: ["active", "paused"] } } }
+  { userEmail: 1, leadId: 1, campaignId: 1, status: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { status: { $in: ["active", "paused"] } },
+  }
 );
 
 // Fast scan for due items that are actually sendable

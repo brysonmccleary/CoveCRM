@@ -86,16 +86,22 @@ MessageSchema.index({ userEmail: 1, kind: 1, direction: 1, status: 1, createdAt:
 MessageSchema.index({ userEmail: 1, from: 1, to: 1, createdAt: -1 });
 
 // Unique Twilio SID
-MessageSchema.index({ sid: 1 }, {
-  unique: true,
-  partialFilterExpression: { sid: { $exists: true, $type: "string" } },
-});
+MessageSchema.index(
+  { sid: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { sid: { $exists: true, $type: "string" } },
+  }
+);
 
 // Idempotency — prevents duplicate drip sends
-MessageSchema.index({ idempotencyKey: 1 }, {
-  unique: true,
-  partialFilterExpression: { idempotencyKey: { $exists: true, $type: "string" } },
-});
+MessageSchema.index(
+  { idempotencyKey: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { idempotencyKey: { $exists: true, $type: "string" } },
+  }
+);
 
 export type MessageModel = mongoose.Model<IMessage>;
 export default (mongoose.models.Message as MessageModel) ||
