@@ -66,7 +66,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (campaign.type !== "sms") return res.status(400).json({ error: "Campaign must be SMS type" });
     if (campaign.isActive !== true) return res.status(400).json({ error: "Campaign is not active" });
 
-    // Ensure/Upsert a watcher (no conflict: startMode ONLY on insert)
+    // Ensure/Upsert a watcher (avoid path conflicts)
     const watcher = await DripFolderEnrollment.findOneAndUpdate(
       { userEmail: session.user.email, folderId, campaignId, active: true },
       {
@@ -74,15 +74,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           userEmail: session.user.email,
           folderId,
           campaignId,
-          active: true,
-          startMode,            // <- only here
+          active: true,          // only on insert
+          startMode,             // only on insert
           lastScanAt: new Date(0),
           createdBy: session.user.email,
           createdAt: new Date(),
         },
         $set: {
-          // keep watcher active and bump scan marker (but do NOT set startMode again)
-          active: true,
+          // keep it fresh on re-enrolls without touching fields set on insert
+          updatedAt: new Date(),
         },
       },
       { upsert: true, new: true }
@@ -164,7 +164,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       nextSendAt,
     });
   } catch (err: any) {
-    // Duplicate watcher? make it non-fatal
     if (err?.code === 11000) {
       return res.status(200).json({ success: true, deduped: true });
     }
