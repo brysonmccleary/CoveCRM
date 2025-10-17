@@ -1,3 +1,4 @@
+// /pages/api/cron/check-a2p-status.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import twilio from "twilio";
 import dbConnect from "@/lib/mongooseConnect";
@@ -22,7 +23,7 @@ type Json = Record<string, unknown>;
 
 function appBase(): string {
   const raw = (NEXT_PUBLIC_BASE_URL || BASE_URL || "").replace(/\/$/, "");
-  return raw || ""; // if empty, we still provision but skip webhook update
+  return raw || "";
 }
 
 function mapBrandStatus(s?: string): A2PRegistrationStatus | undefined {
@@ -47,7 +48,7 @@ function mapCampaignStatus(s?: string): { stage?: A2PRegistrationStatus; ready: 
   }
 }
 
-/** Get all E.164 numbers for a user from typical shapes we’ve seen. */
+/** Pull E.164 numbers from common shapes on the User record. */
 function extractUserNumbers(user: any): string[] {
   const nums: string[] = [];
   const arr = Array.isArray(user?.numbers) ? user.numbers : [];
@@ -58,12 +59,11 @@ function extractUserNumbers(user: any): string[] {
       nums.push(e164);
     }
   }
-  // Also consider top-level fields some apps store
   if (typeof user?.phone === "string" && user.phone.startsWith("+")) nums.push(user.phone);
   return [...new Set(nums)];
 }
 
-/** Find a PN SID by exact phone number (live lookup). */
+/** Find a PN SID by exact phone number (E.164). */
 async function lookupPnSidByNumber(e164: string): Promise<string | null> {
   if (!client) return null;
   const list = await client.incomingPhoneNumbers.list({ phoneNumber: e164, limit: 20 });
@@ -71,19 +71,18 @@ async function lookupPnSidByNumber(e164: string): Promise<string | null> {
   return exact?.sid || null;
 }
 
-/** Ensure a Messaging Service exists for the user; set inbound webhook. */
+/** Ensure a per-user Messaging Service exists and webhook is set. */
 async function ensureMessagingService(profile: IA2PProfile, user: any): Promise<string | null> {
   if (!client) return null;
 
   if (profile.messagingServiceSid) {
-    // Keep webhook fresh if we know our base URL
     const base = appBase();
     if (base) {
       try {
         await client.messaging.v1.services(profile.messagingServiceSid).update({
           inboundRequestUrl: `${base}/api/twilio/inbound-sms`,
         } as any);
-      } catch { /* don’t block on webhook */ }
+      } catch {/* non-fatal */}
     }
     return profile.messagingServiceSid;
   }
@@ -91,7 +90,6 @@ async function ensureMessagingService(profile: IA2PProfile, user: any): Promise<
   try {
     const svc = await client.messaging.v1.services.create({
       friendlyName: `MS for ${user?.email || profile.userId}`,
-      // Keep simple; we set webhook below
     } as any);
 
     const base = appBase();
@@ -111,11 +109,10 @@ async function ensureMessagingService(profile: IA2PProfile, user: any): Promise<
   }
 }
 
-/** Link the A2P campaign to the Messaging Service via USA2P compliance object. */
+/** Link the A2P campaign to the MS via USA2P (idempotent). */
 async function ensureUsa2pLinked(msid: string, campaignSid?: string | null): Promise<void> {
   if (!client || !msid || !campaignSid) return;
 
-  // Check existing
   const list: any[] = await (client as any).messaging.v1
     .services(msid)
     .compliance.usa2p.list({ limit: 50 });
@@ -123,7 +120,6 @@ async function ensureUsa2pLinked(msid: string, campaignSid?: string | null): Pro
   const linked = list.find((r: any) => r?.campaignSid === campaignSid);
   if (linked) return;
 
-  // Try create; if already exists (different resource), swallow 409
   try {
     await (client as any).messaging.v1
       .services(msid)
@@ -136,33 +132,46 @@ async function ensureUsa2pLinked(msid: string, campaignSid?: string | null): Pro
   }
 }
 
-/** Attach all of the user’s phone numbers to the Messaging Service (idempotent). */
-async function ensureNumbersAttached(msid: string, user: any): Promise<void> {
+/**
+ * Keep MS numbers in perfect sync with CRM (attach & detach).
+ * Fixes TS error by using properties present in Twilio typings:
+ * - list() returns instances with .sid (service-phone-number sid) and .phoneNumber (E.164).
+ */
+async function ensureNumbersSynced(msid: string, user: any): Promise<void> {
   if (!client || !msid) return;
-  const want = extractUserNumbers(user);
-  if (!want.length) return;
 
-  // Get already-attached numbers
+  const want = new Set(extractUserNumbers(user)); // E.164s desired
+  // Currently attached to the Messaging Service:
   const attached = await client.messaging.v1.services(msid).phoneNumbers.list({ limit: 1000 });
-  const attachedSet = new Set(attached.map((p) => p.phoneNumberSid));
+  const attachedByE164 = new Map<string, { spnSid: string }>(); // phoneNumber -> service-phone-number SID
+  for (const p of attached) {
+    // p.sid = Service Phone Number SID (mapping), p.phoneNumber = E.164
+    if (p.phoneNumber) attachedByE164.set(p.phoneNumber, { spnSid: p.sid });
+  }
 
+  // 1) DETACH numbers no longer present in CRM
+  for (const [e164, meta] of attachedByE164.entries()) {
+    if (!want.has(e164)) {
+      try {
+        await client.messaging.v1.services(msid).phoneNumbers(meta.spnSid).remove();
+      } catch (e: any) {
+        // Ignore 404/409; continue syncing
+      }
+    }
+  }
+
+  // 2) ATTACH new numbers the user now owns
   for (const e164 of want) {
-    try {
-      // If we already know the PN SID on the user object, prefer it
-      let pnSid: string | null = null;
-      const hit = (Array.isArray(user?.numbers) ? user.numbers : []).find(
-        (n: any) => n?.sid && (n?.phoneNumber === e164 || n?.value === e164 || n?.number === e164),
-      );
-      pnSid = hit?.sid || (await lookupPnSidByNumber(e164));
-      if (!pnSid) continue;
-      if (attachedSet.has(pnSid)) continue;
+    if (attachedByE164.has(e164)) continue; // already attached
 
+    try {
+      const pnSid = await lookupPnSidByNumber(e164);
+      if (!pnSid) continue;
       await client.messaging.v1.services(msid).phoneNumbers.create({ phoneNumberSid: pnSid });
-      attachedSet.add(pnSid);
     } catch (e: any) {
-      // If it's a duplicate/409, ignore; otherwise note but don’t throw
+      // Ignore duplicates/409; log others if desired
       if (e?.status !== 409) {
-        // Optional: log somewhere central
+        // optional: console.warn("attach failed", e);
       }
     }
   }
@@ -191,7 +200,7 @@ async function refreshStatus(profile: IA2PProfile): Promise<{ changed: boolean; 
     }
   }
 
-  // CAMPAIGN via USA2P listing on the service (if we have one)
+  // CAMPAIGN via USA2P list on the service (when we have one)
   if (client && profile.messagingServiceSid) {
     try {
       const list: any[] = await (client as any).messaging.v1
@@ -233,31 +242,30 @@ async function refreshStatus(profile: IA2PProfile): Promise<{ changed: boolean; 
   return { changed, approvedNow, details };
 }
 
-/** Full provisioning for a user when campaign gets approved (idempotent). */
+/** Provision per-user MS + link campaign + sync numbers (attach & detach). */
 async function provisionForUser(profile: IA2PProfile): Promise<void> {
   if (!client) return;
 
   const user = await User.findById(profile.userId).lean();
   if (!user?._id) return;
 
-  // 1) Ensure Messaging Service (create if needed) + webhook
+  // 1) Ensure MS + webhook
   const msid = await ensureMessagingService(profile, user);
   if (!msid) return;
 
-  // 2) Link the verified A2P campaign (if known) to the MS
+  // 2) Link verified campaign to MS (idempotent)
   if (profile.campaignSid) {
     try { await ensureUsa2pLinked(msid, profile.campaignSid); }
-    catch (e) { /* keep going; status poll will surface failures */ }
+    catch {/* non-fatal */}
   }
 
-  // 3) Attach all owned numbers (if any)
-  try { await ensureNumbersAttached(msid, user); }
-  catch { /* non-fatal */ }
+  // 3) Sync numbers exactly to CRM (attach & detach)
+  try { await ensureNumbersSynced(msid, user); }
+  catch {/* non-fatal */}
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
-    // Protect cron
     if (CRON_SECRET) {
       const token = (req.query.token || req.headers["x-cron-token"]) as string | undefined;
       if (token !== CRON_SECRET) return res.status(401).json({ ok: false, error: "Unauthorized" });
@@ -266,7 +274,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     await dbConnect();
 
-    // Profiles that aren’t fully ready, or had errors recently
     const profiles = await A2PProfile.find({
       $or: [
         { registrationStatus: { $ne: "ready" } },
@@ -283,7 +290,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     for (const profile of profiles) {
       const beforeReady = !!profile.messagingReady;
 
-      // Ensure service + linking + numbers (safe to run any time)
       try {
         await provisionForUser(profile as IA2PProfile);
         provisioned++;
@@ -291,19 +297,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         profile.lastError = `Provisioning failed: ${e?.message || String(e)}`;
       }
 
-      // Refresh status after provisioning attempt
       const { changed, approvedNow, details } = await refreshStatus(profile as IA2PProfile);
 
       if (changed) { await profile.save(); updated++; }
 
-      // Notify once when it flips to ready
       if (approvedNow && !beforeReady) {
         const user = await User.findById(profile.userId).lean();
         if (user?.email) {
           try {
             await sendA2PApprovedEmail({ to: user.email, name: user.name || user.firstName || undefined });
             approved++;
-          } catch { /* ignore email failure */ }
+          } catch {/* ignore email failure */}
         }
       }
 
