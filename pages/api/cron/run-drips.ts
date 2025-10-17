@@ -18,6 +18,9 @@ const SEND_HOUR_PT = 9;
 const PER_LEAD_CONCURRENCY =
   Math.max(1, parseInt(process.env.DRIP_CONCURRENCY || "10", 10)) || 10;
 
+// ✅ NEW: hard gate for the old 9AM legacy engine. Default OFF.
+const ENABLE_LEGACY = process.env.DRIPS_ENABLE_LEGACY === "1";
+
 function isValidObjectId(id: string) { return /^[a-f0-9]{24}$/i.test(id); }
 
 async function resolveDrip(dripId: string) {
@@ -33,7 +36,8 @@ function getCanonicalDripId(dripDoc: any, fallbackId: string): string {
 
 function parseStepDayNumber(dayField?: string): number {
   if (!dayField) return NaN;
-  const m = String(dayField).match(/(\d+)/); return m ? parseInt(m[1], 10) : NaN;
+  const m = String(dayField).match(/(\d+)/);
+  return m ? parseInt(m[1], 10) : NaN;
 }
 
 function normalizeToE164Maybe(phone?: string): string | null {
@@ -56,6 +60,7 @@ async function runBatched<T>(items: T[], batchSize: number, worker: (item: T, in
   }
 }
 
+// For “day-based” campaigns, compute the next step from the previous step’s day difference.
 function computeStepWhenPTFromBase(base: DateTime, targetDayNumber: number, prevDayNumber = 0): DateTime {
   const delta = Math.max(0, (isNaN(targetDayNumber) ? 1 : targetDayNumber) - (isNaN(prevDayNumber) ? 0 : prevDayNumber));
   return base.set({ hour: SEND_HOUR_PT, minute: 0, second: 0, millisecond: 0 }).plus({ days: delta });
@@ -103,7 +108,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const nowPT = DateTime.now().setZone(PT_ZONE);
     console.log(`🕘 run-drips start @ ${nowPT.toISO()} PT | force=${force} dry=${dry} limit=${limit || "∞"} due=${dueCount}`);
 
-    // -------- PER-ENROLLMENT FLOW (atomic claim) --------
+    // -------- NEW ENROLLMENT ENGINE (single-send safe) --------
     let enrollChecked = 0, enrollSent = 0, enrollScheduled = 0, enrollSuppressed = 0, enrollFailed = 0, enrollCompleted = 0, enrollClaimMiss = 0;
 
     const dueEnrollmentsQ = DripEnrollment.find({
@@ -121,7 +126,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     await runBatched(dueEnrollments, PER_LEAD_CONCURRENCY, async (enr) => {
       enrollChecked++;
 
-      // Atomic claim
+      // Atomic claim prevents double-processing
       const claim = await DripEnrollment.findOneAndUpdate(
         {
           _id: enr._id,
@@ -181,7 +186,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
       const finalBody = ensureOptOut(rendered);
 
-      // Build idempotency key (enrollment + step + scheduled ts if present)
+      // Unique idempotency key: prevents double inserts/sends
       const idKey = `${String(claim._id)}:${idx}:${new Date(claim.nextSendAt || Date.now()).toISOString()}`;
 
       if (!dry) {
@@ -215,6 +220,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         update.$set.status = "completed";
         update.$unset = { ...(update.$unset || {}), nextSendAt: 1 };
       } else {
+        // Schedule strictly by day numbers (e.g., Day 1 → Day 12 only)
         const prevDay = parseStepDayNumber(step.day);
         const nextDay = parseStepDayNumber(steps[nextIndex].day);
         const base = DateTime.now().setZone(PT_ZONE).startOf("day");
@@ -225,8 +231,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       await DripEnrollment.updateOne({ _id: claim._id, cursorStep: idx }, update);
     });
 
-    // -------- LEGACY BLOCK (kept, guarded by window) --------
-    const legacyAllowed = force || process.env.DRIPS_DEBUG_ALWAYS_RUN === "1" || shouldRunWindowPT();
+    // -------- LEGACY ENGINE (OFF unless DRIPS_ENABLE_LEGACY=1) --------
+    const legacyAllowed =
+      ENABLE_LEGACY &&
+      (force || process.env.DRIPS_DEBUG_ALWAYS_RUN === "1" || shouldRunWindowPT());
+
     let checked = 0, candidates = 0, accepted = 0, scheduled = 0, suppressed = 0, failed = 0;
     let initializedProgress = 0, wouldInitProgress = 0;
 
@@ -267,8 +276,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           const steps: Array<{ text?: string; day?: string }> = (() => {
             const arr = Array.isArray(dripDoc?.steps) ? dripDoc.steps : [];
             if (arr.some((s: any) => s?.day)) {
-              return arr.filter((s: any) => !isNaN(parseStepDayNumber(s?.day)))
-                        .sort((a: any, b: any) => parseStepDayNumber(a?.day) - parseStepDayNumber(b?.day));
+              return arr
+                .filter((s: any) => !isNaN(parseStepDayNumber(s?.day)))
+                .sort((a: any, b: any) => parseStepDayNumber(a?.day) - parseStepDayNumber(b?.day));
             }
             return arr;
           })();
@@ -325,8 +335,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       message: "run-drips complete",
       nowPT: DateTime.now().setZone(PT_ZONE).toISO(),
       forced: force, dryRun: dry, limit,
-      enrollSummary: { checked: enrollChecked, sent: enrollSent, scheduled: enrollScheduled, suppressed: enrollSuppressed, failed: enrollFailed, completed: enrollCompleted, claimMisses: enrollClaimMiss },
-      legacySummary: { leadsChecked: checked, candidates, accepted, scheduled, suppressed, failed, initializedProgress, wouldInitProgress },
+      enrollSummary: {
+        checked: enrollChecked,
+        sent: enrollSent,
+        scheduled: enrollScheduled,
+        suppressed: enrollSuppressed,
+        failed: enrollFailed,
+        completed: enrollCompleted,
+        claimMisses: enrollClaimMiss
+      },
+      legacySummary: ENABLE_LEGACY
+        ? { leadsChecked: checked, candidates, accepted, scheduled, suppressed, failed, initializedProgress, wouldInitProgress }
+        : { disabled: true }
     });
   } catch (error) {
     console.error("❌ run-drips error:", error);
