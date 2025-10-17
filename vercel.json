@@ -7,8 +7,8 @@
     { "path": "/api/affiliates/cron/autopayouts?token=@CRON_SECRET", "schedule": "0 16 * * 5" },
     { "path": "/api/cron", "schedule": "0 17 * * *" },
     { "path": "/api/cron/twilio-daily-sync", "schedule": "0 16 * * *" },
-    { "path": "/api/cron/scan-folder-enrollments", "schedule": "*/2 * * * *" },
-    { "path": "/api/cron/run-drips", "schedule": "*/5 * * * *" },
+    { "path": "/api/cron/scan-folder-enrollments", "schedule": "*/5 * * * *" },
+    { "path": "/api/cron/run-drips", "schedule": "*/10 * * * *" },
     { "path": "/api/cron/check-a2p-status", "schedule": "*/30 * * * *" },
     { "path": "/api/cron/google-sheets-poll?token=19283351239797", "schedule": "* * * * *" },
     { "path": "/api/admin/audit-sheets-cron?token=@CRON_SECRET", "schedule": "*/15 * * * *" }
