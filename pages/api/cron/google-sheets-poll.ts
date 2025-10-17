@@ -1,4 +1,3 @@
-// /pages/api/cron/google-sheets-poll.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
@@ -9,7 +8,7 @@ import mongoose from "mongoose";
 import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
 import { ensureSafeFolder } from "@/lib/ensureSafeFolder";
 
-const FINGERPRINT = "selfheal-v1";
+const FINGERPRINT = "selfheal-v2";
 
 // --- Normalizers -------------------------------------------------------------
 const normPhone = (v: any) => String(v ?? "").replace(/\D+/g, "");
@@ -153,30 +152,29 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (!title) continue;
 
         // ---- CENTRALIZED safe folder resolution (self-healing)
-        let reasonGuard: string | undefined;
-        let preIdName: string | undefined;
 
-        if (folderName && isSystemFolder(folderName)) {
-          reasonGuard = "blocked-by-system-name";
-        }
-
+        // 0) NEVER trust incoming system values
+        if (folderName && isSystemFolder(folderName)) folderName = undefined as any;
         if (folderId && mongoose.isValidObjectId(folderId)) {
           try {
             const f = (await Folder.findOne(
               { _id: new mongoose.Types.ObjectId(folderId), userEmail },
               { name: 1 }
             ).lean()) as LeanFolder;
-            preIdName = f?.name || undefined;
             if (f?.name && isSystemFolder(f.name)) {
-              reasonGuard = "blocked-by-system-id";
+              folderId = undefined;
             }
           } catch { /* noop */ }
         }
 
+        // 1) Build a default name from Drive file name + tab title ONLY
         const driveMeta = await drive.files.get({ fileId: spreadsheetId, fields: "name" });
-        const defaultName = (folderName || `${driveMeta.data.name || "Imported Leads"} — ${title}`).trim();
+        const computedDefault = `${driveMeta.data.name || "Imported Leads"} — ${title}`;
+        const defaultName = isSystemFolder(computedDefault)
+          ? `${computedDefault} (Leads)`
+          : computedDefault;
 
-        // 1) Ask centralized util
+        // 2) Ask centralized util
         let folderDoc = await ensureSafeFolder({
           userEmail,
           folderId,
@@ -185,12 +183,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           source: "google-sheets",
         });
 
-        // 2) Self-heal: if sanitizer still returns system (or nothing), repair and continue
-        if (!folderDoc || isSystemFolder(folderDoc?.name)) {
-          const baseName = isSystemFolder(defaultName) ? `${defaultName} (Leads)` : defaultName;
+        // 3) Final clamp: if anything slipped, suffix (Leads)
+        if (!folderDoc || !folderDoc.name || isSystemFolder(folderDoc.name)) {
+          const repairedName = isSystemFolder(defaultName) ? `${defaultName} (Leads)` : defaultName;
           folderDoc = await Folder.findOneAndUpdate(
-            { userEmail, name: baseName },
-            { $setOnInsert: { userEmail, name: baseName, source: "google-sheets" } },
+            { userEmail, name: repairedName },
+            { $setOnInsert: { userEmail, name: repairedName, source: "google-sheets" } },
             { new: true, upsert: true }
           ).lean();
         }
@@ -344,14 +342,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             id: String(targetFolderId),
             name: targetFolderName,
             isSystem: isSystemFolder(targetFolderName),
-            ...(reasonGuard ? { reasonGuard } : {}),
           },
           ...(debug
             ? {
                 diag: {
                   incoming: {
-                    folderId: folderId || null,
-                    folderName: folderName || null,
+                    folderId: cfg.folderId || null,
+                    folderName: cfg.folderName || null,
+                    computedDefault,
                     defaultName,
                   },
                 },
