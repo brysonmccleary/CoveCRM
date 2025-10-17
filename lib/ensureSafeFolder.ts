@@ -54,7 +54,7 @@ export async function ensureSafeFolder(opts: Opts) {
     const found = await Folder.findOne({ _id: fid, userEmail });
 
     if (found && !isSystemFolder(found.name)) {
-      // Double-check post-condition
+      // Double-check post-condition (paranoia)
       if (isSystemFolder(found.name)) {
         const repaired = await upsertFolderByName(userEmail, defSafe, source);
         console.log(`[${FP}] clamp:by id`, { userEmail, in: found?.name, out: repaired?.name });

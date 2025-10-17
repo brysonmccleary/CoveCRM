@@ -1,4 +1,3 @@
-// /pages/api/google/sheets/import.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../../auth/[...nextauth]";
@@ -40,7 +39,10 @@ function escapeA1Title(title: string) {
   return title.replace(/'/g, "''");
 }
 
-async function resolveFolder(userEmail: string, opts: { folderId?: string; folderName?: string; defaultName?: string; create?: boolean }) {
+async function resolveFolder(
+  userEmail: string,
+  opts: { folderId?: string; folderName?: string; defaultName?: string; create?: boolean }
+) {
   // If a name is provided, it WINS (and we create if needed)
   const byName = (opts.folderName || "").trim();
   if (byName) {
@@ -179,12 +181,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       fields: "name",
     });
     const defaultName = `${defaultNameMeta.data.name || "Imported Leads"} — ${tabTitle}`;
-    const folderDoc = await resolveFolder(userEmail, {
+    let folderDoc = await resolveFolder(userEmail, {
       folderId,
       folderName,
       defaultName,
       create: createFolderIfMissing,
     });
+
+    // FINAL GUARD: never allow system folders; if somehow system, repair to "<default> (Leads)"
+    if (!folderDoc || !folderDoc.name || isSystemFolder(folderDoc.name)) {
+      const repairedName = isSystemFolder(defaultName) ? `${defaultName} (Leads)` : defaultName;
+      folderDoc = await Folder.findOneAndUpdate(
+        { userEmail, name: repairedName },
+        { $setOnInsert: { userEmail, name: repairedName, source: "google-sheets" } },
+        { new: true, upsert: true }
+      );
+    }
     if (!folderDoc) return res.status(400).json({ error: "Folder not found/created" });
 
     let inserted = 0;
@@ -272,7 +284,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         sourceRowIndex: r + 1,
       };
 
-      const result = await (Lead as any).updateOne(filter, { $set: set, $setOnInsert: setOnInsert }, { upsert: true });
+      const result = await (Lead as any).updateOne(
+        filter,
+        { $set: set, $setOnInsert: setOnInsert },
+        { upsert: true }
+      );
       const upc = result?.upsertedCount || (result?.upsertedId ? 1 : 0) || 0;
       const mod = result?.modifiedCount || 0;
       const match = result?.matchedCount || 0;
