@@ -2,12 +2,11 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import Lead from "@/models/Lead";
-import Folder from "@/models/Folder";
-import { google } from "googleapis";
 import mongoose from "mongoose";
+import { google } from "googleapis";
 import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
 
-const FINGERPRINT = "selfheal-v4.1"; // hard clamp, no helpers; fixed typings
+const FINGERPRINT = "selfheal-v5"; // raw-driver folders only
 
 // --- Normalizers -------------------------------------------------------------
 const normPhone = (v: any) => String(v ?? "").replace(/\D+/g, "");
@@ -32,20 +31,57 @@ type SyncedSheetCfg = {
   lastRowImported?: number;
 };
 
-// Lean folder doc type for .lean()
-type FolderLean = {
+// Lean types for raw driver
+type FolderRaw = {
   _id: mongoose.Types.ObjectId;
   name?: string;
   userEmail?: string;
   source?: string;
 } | null;
 
+// ---------- RAW helpers (folders) ----------
+async function ensureNonSystemFolderRaw(
+  userEmail: string,
+  wantedName: string
+): Promise<NonNullable<FolderRaw>> {
+  const coll = mongoose.connection.db.collection("folders");
+
+  const baseName = isSystemFolder(wantedName) ? `${wantedName} (Leads)` : wantedName;
+
+  // 1) Try exact find (should not be system if name matches)
+  const existing = (await coll.findOne({ userEmail, name: baseName })) as FolderRaw;
+  if (existing && existing.name && !isSystemFolder(existing.name)) return existing as NonNullable<FolderRaw>;
+
+  // 2) Upsert exact name
+  const up = await coll.findOneAndUpdate(
+    { userEmail, name: baseName },
+    { $setOnInsert: { userEmail, name: baseName, source: "google-sheets" } },
+    { upsert: true, returnDocument: "after" }
+  );
+  const doc = up.value as FolderRaw;
+
+  // 3) Sanity: if somehow a system name came back, force a unique safe name and assert
+  if (!doc || !doc.name || isSystemFolder(doc.name)) {
+    const uniqueSafe = `${baseName} — ${Date.now()}`;
+    const ins = await coll.insertOne({ userEmail, name: uniqueSafe, source: "google-sheets" });
+    const fresh = (await coll.findOne({ _id: ins.insertedId })) as FolderRaw;
+    if (!fresh || !fresh.name || isSystemFolder(fresh.name)) {
+      throw new Error(
+        `Folder rewrite detected. Expected non-system '${uniqueSafe}', got '${fresh?.name}'.`
+      );
+    }
+    return fresh as NonNullable<FolderRaw>;
+  }
+
+  return doc as NonNullable<FolderRaw>;
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "GET" && req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed", fingerprint: FINGERPRINT });
   }
 
-  // Secret (header or query)
+  // Accept secret via header or query
   const headerToken = Array.isArray(req.headers["x-cron-secret"])
     ? req.headers["x-cron-secret"][0]
     : (req.headers["x-cron-secret"] as string | undefined);
@@ -56,7 +92,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(401).json({ error: "Unauthorized", fingerprint: FINGERPRINT });
   }
 
-  // Filters
+  // Optional debug/filters
   const onlyUserEmail =
     typeof req.query.userEmail === "string"
       ? (req.query.userEmail as string).toLowerCase()
@@ -132,7 +168,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (!spreadsheetId) continue;
         if (onlySpreadsheetId && spreadsheetId !== onlySpreadsheetId) continue;
 
-        // Resolve current tab title from sheetId if needed
+        // Resolve current tab title if we have sheetId (tab may have been renamed)
         if (sheetId != null) {
           try {
             const meta = await sheetsApi.spreadsheets.get({
@@ -142,47 +178,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             const found = (meta.data.sheets || []).find(
               (s) => s.properties?.sheetId === sheetId
             );
-            if (found?.properties?.title) title = found.properties.title;
+            if (found?.properties?.title) {
+              title = found.properties.title;
+            }
           } catch { /* ignore */ }
         }
         if (onlyTitle && title && title !== onlyTitle) continue;
         if (!title) continue;
 
-        // ---------------- HARD CLAMP DESTINATION (no helpers, ignore stored fields)
+        // ---- DESTINATION FOLDER (raw driver only, no helpers, no stored fields)
         const driveMeta = await drive.files.get({ fileId: spreadsheetId, fields: "name" });
         const computedDefault = `${driveMeta.data.name || "Imported Leads"} — ${title}`;
-        const forcedName = isSystemFolder(computedDefault)
-          ? `${computedDefault} (Leads)`
-          : computedDefault;
 
-        // Create/find EXACTLY this name for this user
-        let folderDoc: FolderLean = await Folder.findOneAndUpdate(
-          { userEmail, name: forcedName },
-          { $setOnInsert: { userEmail, name: forcedName, source: "google-sheets" } },
-          { new: true, upsert: true }
-        ).lean<FolderLean>();
-
-        // Sanity: if we somehow got a system folder back, create a suffixed name explicitly
-        if (!folderDoc || !folderDoc.name || isSystemFolder(folderDoc.name)) {
-          const repairedName = `${forcedName} (Leads)`;
-          folderDoc = await Folder.findOneAndUpdate(
-            { userEmail, name: repairedName },
-            { $setOnInsert: { userEmail, name: repairedName, source: "google-sheets" } },
-            { new: true, upsert: true }
-          ).lean<FolderLean>();
-        }
-
-        if (!folderDoc || !folderDoc._id || !folderDoc.name) {
-          detailsAll.push({
-            userEmail,
-            spreadsheetId,
-            title,
-            error: "Failed to resolve/create non-system folder",
-            fingerprint: FINGERPRINT,
-          });
-          continue;
-        }
-
+        // Hard-resolve a non-system folder via raw driver only
+        const folderDoc = await ensureNonSystemFolderRaw(userEmail, computedDefault);
         const targetFolderId = folderDoc._id as mongoose.Types.ObjectId;
         const targetFolderName = String(folderDoc.name || "");
 
@@ -209,7 +218,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           );
         }
 
-        // --- Pull values ----------------------------------------------------
+        // --- Read values ----------------------------------------------------
         const resp = await sheetsApi.spreadsheets.values.get({
           spreadsheetId,
           range: `'${title}'!A1:ZZ`,
@@ -228,6 +237,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const firstDataZero = headerIdx + 1;
         let startIndex = Math.max(firstDataZero, Number(pointer));
         if (startIndex > values.length - 1) startIndex = firstDataZero;
+
         const endIndex = Math.min(values.length - 1, startIndex + MAX_ROWS_PER_SHEET - 1);
 
         let imported = 0;
@@ -342,9 +352,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             ? {
                 diag: {
                   computedDefault,
-                  forcedName,
-                  folderDocId: String(targetFolderId),
-                  folderDocName: targetFolderName,
+                  rawBypassed: true,
                 },
               }
             : {}),
