@@ -6,7 +6,7 @@ import mongoose from "mongoose";
 import { google } from "googleapis";
 import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
 
-const FINGERPRINT = "selfheal-v5"; // raw-driver folders only
+const FINGERPRINT = "selfheal-v5a"; // raw-driver folders + db guard
 
 // --- Normalizers -------------------------------------------------------------
 const normPhone = (v: any) => String(v ?? "").replace(/\D+/g, "");
@@ -31,7 +31,6 @@ type SyncedSheetCfg = {
   lastRowImported?: number;
 };
 
-// Lean types for raw driver
 type FolderRaw = {
   _id: mongoose.Types.ObjectId;
   name?: string;
@@ -44,11 +43,13 @@ async function ensureNonSystemFolderRaw(
   userEmail: string,
   wantedName: string
 ): Promise<NonNullable<FolderRaw>> {
-  const coll = mongoose.connection.db.collection("folders");
+  const db = mongoose.connection.db;
+  if (!db) throw new Error("DB connection not ready");
+  const coll = db.collection("folders");
 
   const baseName = isSystemFolder(wantedName) ? `${wantedName} (Leads)` : wantedName;
 
-  // 1) Try exact find (should not be system if name matches)
+  // 1) Try exact find
   const existing = (await coll.findOne({ userEmail, name: baseName })) as FolderRaw;
   if (existing && existing.name && !isSystemFolder(existing.name)) return existing as NonNullable<FolderRaw>;
 
@@ -60,7 +61,7 @@ async function ensureNonSystemFolderRaw(
   );
   const doc = up.value as FolderRaw;
 
-  // 3) Sanity: if somehow a system name came back, force a unique safe name and assert
+  // 3) Sanity: if still system or missing, force a unique safe name
   if (!doc || !doc.name || isSystemFolder(doc.name)) {
     const uniqueSafe = `${baseName} — ${Date.now()}`;
     const ins = await coll.insertOne({ userEmail, name: uniqueSafe, source: "google-sheets" });
@@ -111,6 +112,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     await dbConnect();
+    const db = mongoose.connection.db;
+    if (!db) throw new Error("DB connection not ready (post-connect)");
 
     const users = await User.find({
       ...(onlyUserEmail ? { email: onlyUserEmail } : {}),
@@ -190,7 +193,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const driveMeta = await drive.files.get({ fileId: spreadsheetId, fields: "name" });
         const computedDefault = `${driveMeta.data.name || "Imported Leads"} — ${title}`;
 
-        // Hard-resolve a non-system folder via raw driver only
         const folderDoc = await ensureNonSystemFolderRaw(userEmail, computedDefault);
         const targetFolderId = folderDoc._id as mongoose.Types.ObjectId;
         const targetFolderName = String(folderDoc.name || "");
