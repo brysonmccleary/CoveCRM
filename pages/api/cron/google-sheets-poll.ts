@@ -6,7 +6,7 @@ import mongoose from "mongoose";
 import { google } from "googleapis";
 import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
 
-const FINGERPRINT = "selfheal-v5a"; // raw-driver folders + db guard
+const FINGERPRINT = "selfheal-v5b"; // raw-driver folders + db guard + safe up.value
 
 // --- Normalizers -------------------------------------------------------------
 const normPhone = (v: any) => String(v ?? "").replace(/\D+/g, "");
@@ -53,13 +53,13 @@ async function ensureNonSystemFolderRaw(
   const existing = (await coll.findOne({ userEmail, name: baseName })) as FolderRaw;
   if (existing && existing.name && !isSystemFolder(existing.name)) return existing as NonNullable<FolderRaw>;
 
-  // 2) Upsert exact name
+  // 2) Upsert exact name (safely extract value)
   const up = await coll.findOneAndUpdate(
     { userEmail, name: baseName },
     { $setOnInsert: { userEmail, name: baseName, source: "google-sheets" } },
     { upsert: true, returnDocument: "after" }
   );
-  const doc = up.value as FolderRaw;
+  const doc = (up && (up as any).value) as FolderRaw;
 
   // 3) Sanity: if still system or missing, force a unique safe name
   if (!doc || !doc.name || isSystemFolder(doc.name)) {
@@ -189,7 +189,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (onlyTitle && title && title !== onlyTitle) continue;
         if (!title) continue;
 
-        // ---- DESTINATION FOLDER (raw driver only, no helpers, no stored fields)
+        // ---- DESTINATION FOLDER (raw driver only)
         const driveMeta = await drive.files.get({ fileId: spreadsheetId, fields: "name" });
         const computedDefault = `${driveMeta.data.name || "Imported Leads"} — ${title}`;
 
