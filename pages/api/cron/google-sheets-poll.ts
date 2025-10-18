@@ -7,7 +7,7 @@ import { google } from "googleapis";
 import mongoose from "mongoose";
 import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
 
-const FINGERPRINT = "selfheal-v4"; // hard clamp, no helpers
+const FINGERPRINT = "selfheal-v4.1"; // hard clamp, no helpers; fixed typings
 
 // --- Normalizers -------------------------------------------------------------
 const normPhone = (v: any) => String(v ?? "").replace(/\D+/g, "");
@@ -32,12 +32,20 @@ type SyncedSheetCfg = {
   lastRowImported?: number;
 };
 
+// Lean folder doc type for .lean()
+type FolderLean = {
+  _id: mongoose.Types.ObjectId;
+  name?: string;
+  userEmail?: string;
+  source?: string;
+} | null;
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "GET" && req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed", fingerprint: FINGERPRINT });
   }
 
-  // Secret
+  // Secret (header or query)
   const headerToken = Array.isArray(req.headers["x-cron-secret"])
     ? req.headers["x-cron-secret"][0]
     : (req.headers["x-cron-secret"] as string | undefined);
@@ -140,7 +148,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (onlyTitle && title && title !== onlyTitle) continue;
         if (!title) continue;
 
-        // ---------------- HARD CLAMP DESTINATION (no helpers, no stored fields)
+        // ---------------- HARD CLAMP DESTINATION (no helpers, ignore stored fields)
         const driveMeta = await drive.files.get({ fileId: spreadsheetId, fields: "name" });
         const computedDefault = `${driveMeta.data.name || "Imported Leads"} — ${title}`;
         const forcedName = isSystemFolder(computedDefault)
@@ -148,11 +156,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           : computedDefault;
 
         // Create/find EXACTLY this name for this user
-        let folderDoc = await Folder.findOneAndUpdate(
+        let folderDoc: FolderLean = await Folder.findOneAndUpdate(
           { userEmail, name: forcedName },
           { $setOnInsert: { userEmail, name: forcedName, source: "google-sheets" } },
           { new: true, upsert: true }
-        ).lean();
+        ).lean<FolderLean>();
 
         // Sanity: if we somehow got a system folder back, create a suffixed name explicitly
         if (!folderDoc || !folderDoc.name || isSystemFolder(folderDoc.name)) {
@@ -161,11 +169,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             { userEmail, name: repairedName },
             { $setOnInsert: { userEmail, name: repairedName, source: "google-sheets" } },
             { new: true, upsert: true }
-          ).lean();
+          ).lean<FolderLean>();
         }
 
-        const targetFolderId = folderDoc!._id as mongoose.Types.ObjectId;
-        const targetFolderName = String(folderDoc!.name || "");
+        if (!folderDoc || !folderDoc._id || !folderDoc.name) {
+          detailsAll.push({
+            userEmail,
+            spreadsheetId,
+            title,
+            error: "Failed to resolve/create non-system folder",
+            fingerprint: FINGERPRINT,
+          });
+          continue;
+        }
+
+        const targetFolderId = folderDoc._id as mongoose.Types.ObjectId;
+        const targetFolderName = String(folderDoc.name || "");
 
         // Persist sanitized link (unless dry run)
         if (!dryRun) {
