@@ -6,9 +6,8 @@ import Folder from "@/models/Folder";
 import { google } from "googleapis";
 import mongoose from "mongoose";
 import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
-import { ensureSafeFolder } from "@/lib/ensureSafeFolder";
 
-const FINGERPRINT = "selfheal-v3"; // hard clamp: ignore stored folder every time
+const FINGERPRINT = "selfheal-v4"; // hard clamp, no helpers
 
 // --- Normalizers -------------------------------------------------------------
 const normPhone = (v: any) => String(v ?? "").replace(/\D+/g, "");
@@ -30,22 +29,15 @@ type SyncedSheetCfg = {
   headerRow?: number;
   mapping?: Record<string, string>;
   skip?: Record<string, boolean>;
-  // NOTE: we NO LONGER trust these; they are ignored (see below)
-  folderId?: string;
-  folderName?: string;
   lastRowImported?: number;
 };
-
-type LeanFolder =
-  | { _id: mongoose.Types.ObjectId; name?: string; userEmail?: string }
-  | null;
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "GET" && req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed", fingerprint: FINGERPRINT });
   }
 
-  // Accept secret via header or query
+  // Secret
   const headerToken = Array.isArray(req.headers["x-cron-secret"])
     ? req.headers["x-cron-secret"][0]
     : (req.headers["x-cron-secret"] as string | undefined);
@@ -56,7 +48,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(401).json({ error: "Unauthorized", fingerprint: FINGERPRINT });
   }
 
-  // Optional debug/filters
+  // Filters
   const onlyUserEmail =
     typeof req.query.userEmail === "string"
       ? (req.query.userEmail as string).toLowerCase()
@@ -131,6 +123,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         if (!spreadsheetId) continue;
         if (onlySpreadsheetId && spreadsheetId !== onlySpreadsheetId) continue;
+
+        // Resolve current tab title from sheetId if needed
         if (sheetId != null) {
           try {
             const meta = await sheetsApi.spreadsheets.get({
@@ -146,25 +140,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (onlyTitle && title && title !== onlyTitle) continue;
         if (!title) continue;
 
-        // ---------- HARD CLAMP: ignore any stored folderId/folderName ----------
-        // We compute a safe default ONLY from Drive filename + tab title.
+        // ---------------- HARD CLAMP DESTINATION (no helpers, no stored fields)
         const driveMeta = await drive.files.get({ fileId: spreadsheetId, fields: "name" });
         const computedDefault = `${driveMeta.data.name || "Imported Leads"} — ${title}`;
-        const defaultName = isSystemFolder(computedDefault)
+        const forcedName = isSystemFolder(computedDefault)
           ? `${computedDefault} (Leads)`
           : computedDefault;
 
-        // Centralized resolver with ONLY the default
-        let folderDoc = await ensureSafeFolder({
-          userEmail,
-          // deliberately NOT passing cfg.folderId / cfg.folderName
-          defaultName,
-          source: "google-sheets",
-        });
+        // Create/find EXACTLY this name for this user
+        let folderDoc = await Folder.findOneAndUpdate(
+          { userEmail, name: forcedName },
+          { $setOnInsert: { userEmail, name: forcedName, source: "google-sheets" } },
+          { new: true, upsert: true }
+        ).lean();
 
-        // Final clamp: suffix (Leads) if anything slipped
+        // Sanity: if we somehow got a system folder back, create a suffixed name explicitly
         if (!folderDoc || !folderDoc.name || isSystemFolder(folderDoc.name)) {
-          const repairedName = isSystemFolder(defaultName) ? `${defaultName} (Leads)` : defaultName;
+          const repairedName = `${forcedName} (Leads)`;
           folderDoc = await Folder.findOneAndUpdate(
             { userEmail, name: repairedName },
             { $setOnInsert: { userEmail, name: repairedName, source: "google-sheets" } },
@@ -172,8 +164,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           ).lean();
         }
 
+        const targetFolderId = folderDoc!._id as mongoose.Types.ObjectId;
+        const targetFolderName = String(folderDoc!.name || "");
+
         // Persist sanitized link (unless dry run)
-        if (!dryRun && folderDoc?._id) {
+        if (!dryRun) {
           await User.updateOne(
             {
               email: userEmail,
@@ -182,8 +177,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             },
             {
               $set: {
-                "googleSheets.syncedSheets.$.folderId": folderDoc._id,
-                "googleSheets.syncedSheets.$.folderName": folderDoc.name,
+                "googleSheets.syncedSheets.$.folderId": targetFolderId,
+                "googleSheets.syncedSheets.$.folderName": targetFolderName,
                 ...(sheetId != null
                   ? { "googleSheets.syncedSheets.$.sheetId": sheetId }
                   : {}),
@@ -195,10 +190,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           );
         }
 
-        const targetFolderId = folderDoc._id as mongoose.Types.ObjectId;
-        const targetFolderName = String(folderDoc.name || "");
-
-        // --- Read values ----------------------------------------------------
+        // --- Pull values ----------------------------------------------------
         const resp = await sheetsApi.spreadsheets.values.get({
           spreadsheetId,
           range: `'${title}'!A1:ZZ`,
@@ -302,12 +294,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 "googleSheets.syncedSheets.$.lastImportedAt": new Date(),
                 "googleSheets.syncedSheets.$.folderId": targetFolderId,
                 "googleSheets.syncedSheets.$.folderName": targetFolderName,
-                ...(sheetId != null
-                  ? { "googleSheets.syncedSheets.$.sheetId": sheetId }
-                  : {}),
-                ...(cfg.title !== title
-                  ? { "googleSheets.syncedSheets.$.title": title }
-                  : {}),
               },
             }
           );
@@ -336,9 +322,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           ...(debug
             ? {
                 diag: {
-                  incomingIgnored: true, // we ignore stored folder every time now
                   computedDefault,
-                  defaultName,
+                  forcedName,
+                  folderDocId: String(targetFolderId),
+                  folderDocName: targetFolderName,
                 },
               }
             : {}),
