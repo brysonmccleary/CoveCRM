@@ -8,7 +8,7 @@ import mongoose from "mongoose";
 import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
 import { ensureSafeFolder } from "@/lib/ensureSafeFolder";
 
-const FINGERPRINT = "selfheal-v2";
+const FINGERPRINT = "selfheal-v3"; // hard clamp: ignore stored folder every time
 
 // --- Normalizers -------------------------------------------------------------
 const normPhone = (v: any) => String(v ?? "").replace(/\D+/g, "");
@@ -30,6 +30,7 @@ type SyncedSheetCfg = {
   headerRow?: number;
   mapping?: Record<string, string>;
   skip?: Record<string, boolean>;
+  // NOTE: we NO LONGER trust these; they are ignored (see below)
   folderId?: string;
   folderName?: string;
   lastRowImported?: number;
@@ -125,16 +126,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           headerRow = 1,
           mapping = {},
           skip = {},
-          folderId,
-          folderName,
           lastRowImported,
         } = cfg || {};
 
         if (!spreadsheetId) continue;
         if (onlySpreadsheetId && spreadsheetId !== onlySpreadsheetId) continue;
-        if (onlyTitle && title && title !== onlyTitle) continue;
-
-        // Resolve current tab title if we have sheetId (tab may have been renamed)
         if (sheetId != null) {
           try {
             const meta = await sheetsApi.spreadsheets.get({
@@ -144,46 +140,29 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             const found = (meta.data.sheets || []).find(
               (s) => s.properties?.sheetId === sheetId
             );
-            if (found?.properties?.title) {
-              title = found.properties.title;
-            }
+            if (found?.properties?.title) title = found.properties.title;
           } catch { /* ignore */ }
         }
+        if (onlyTitle && title && title !== onlyTitle) continue;
         if (!title) continue;
 
-        // ---- CENTRALIZED safe folder resolution (self-healing)
-
-        // 0) NEVER trust incoming system values
-        if (folderName && isSystemFolder(folderName)) folderName = undefined as any;
-        if (folderId && mongoose.isValidObjectId(folderId)) {
-          try {
-            const f = (await Folder.findOne(
-              { _id: new mongoose.Types.ObjectId(folderId), userEmail },
-              { name: 1 }
-            ).lean()) as LeanFolder;
-            if (f?.name && isSystemFolder(f.name)) {
-              folderId = undefined;
-            }
-          } catch { /* noop */ }
-        }
-
-        // 1) Build a default name from Drive file name + tab title ONLY
+        // ---------- HARD CLAMP: ignore any stored folderId/folderName ----------
+        // We compute a safe default ONLY from Drive filename + tab title.
         const driveMeta = await drive.files.get({ fileId: spreadsheetId, fields: "name" });
         const computedDefault = `${driveMeta.data.name || "Imported Leads"} — ${title}`;
         const defaultName = isSystemFolder(computedDefault)
           ? `${computedDefault} (Leads)`
           : computedDefault;
 
-        // 2) Ask centralized util
+        // Centralized resolver with ONLY the default
         let folderDoc = await ensureSafeFolder({
           userEmail,
-          folderId,
-          folderName,
+          // deliberately NOT passing cfg.folderId / cfg.folderName
           defaultName,
           source: "google-sheets",
         });
 
-        // 3) Final clamp: if anything slipped, suffix (Leads)
+        // Final clamp: suffix (Leads) if anything slipped
         if (!folderDoc || !folderDoc.name || isSystemFolder(folderDoc.name)) {
           const repairedName = isSystemFolder(defaultName) ? `${defaultName} (Leads)` : defaultName;
           folderDoc = await Folder.findOneAndUpdate(
@@ -238,7 +217,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const firstDataZero = headerIdx + 1;
         let startIndex = Math.max(firstDataZero, Number(pointer));
         if (startIndex > values.length - 1) startIndex = firstDataZero;
-
         const endIndex = Math.min(values.length - 1, startIndex + MAX_ROWS_PER_SHEET - 1);
 
         let imported = 0;
@@ -285,13 +263,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               .lean<{ _id: mongoose.Types.ObjectId } | null>();
 
             if (!existing) {
-              if (!dryRun) await Lead.create({ ...doc, folderId: targetFolderId, folder_name: targetFolderName, ["Folder Name"]: targetFolderName });
+              if (!dryRun) await Lead.create({
+                ...doc,
+                folderId: targetFolderId,
+                folder_name: targetFolderName,
+                ["Folder Name"]: targetFolderName
+              });
               imported++;
             } else {
               if (!dryRun)
                 await Lead.updateOne(
                   { _id: existing._id },
-                  { $set: { ...doc, folderId: targetFolderId, folder_name: targetFolderName, ["Folder Name"]: targetFolderName } }
+                  {
+                    $set: {
+                      ...doc,
+                      folderId: targetFolderId,
+                      folder_name: targetFolderName,
+                      ["Folder Name"]: targetFolderName
+                    }
+                  }
                 );
               updated++;
             }
@@ -346,12 +336,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           ...(debug
             ? {
                 diag: {
-                  incoming: {
-                    folderId: cfg.folderId || null,
-                    folderName: cfg.folderName || null,
-                    computedDefault,
-                    defaultName,
-                  },
+                  incomingIgnored: true, // we ignore stored folder every time now
+                  computedDefault,
+                  defaultName,
                 },
               }
             : {}),
