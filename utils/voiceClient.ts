@@ -1,7 +1,7 @@
-// utils/voiceClient.ts
 // Browser-only helper for Twilio WebRTC (Voice JS SDK v2: @twilio/voice-sdk)
 // - Disables Twilio SDK sounds so we only hear our own ring.mp3
 // - Joins/leaves conference by name (defensive against SDK shape differences)
+// - HARD MUTE: toggles SDK mute and also disables local mic tracks as a fallback.
 
 let DeviceCtor: any | null = null;
 
@@ -53,14 +53,56 @@ function disableSdkSounds(dev: any) {
 }
 
 // Safe event attach that works whether the object exposes .on or .addListener
-function attach(call: any, evt: string, fn: (...args: any[]) => void) {
-  if (!call) return;
-  const maybeOn = (call as any)?.on;
-  const maybeAdd = (call as any)?.addListener;
-  if (typeof maybeOn === "function") return maybeOn.call(call, evt, fn);
-  if (typeof maybeAdd === "function") return maybeAdd.call(call, evt, fn);
-  // no-op if the SDK object doesn’t expose either
+function attach(emitter: any, evt: string, fn: (...args: any[]) => void) {
+  if (!emitter) return;
+  const maybeOn = (emitter as any)?.on;
+  const maybeAdd = (emitter as any)?.addListener;
+  if (typeof maybeOn === "function") return maybeOn.call(emitter, evt, fn);
+  if (typeof maybeAdd === "function") return maybeAdd.call(emitter, evt, fn);
 }
+
+// ---- Robust track control (best-effort across SDK builds) -------------------
+function setLocalTracksEnabled(call: any, enabled: boolean) {
+  try {
+    // Most common internal paths across SDK variants:
+    // 1) call._mediaStream (MediaStream)
+    // 2) call.mediaStream (MediaStream)
+    // 3) call['_publisher']?.stream (MediaStream)  <-- internal, best-effort
+    const streams: any[] = [];
+    const s1 = (call as any)?._mediaStream;
+    const s2 = (call as any)?.mediaStream;
+    const s3 = (call as any)?._publisher?.stream;
+    if (s1) streams.push(s1);
+    if (s2 && s2 !== s1) streams.push(s2);
+    if (s3 && s3 !== s1 && s3 !== s2) streams.push(s3);
+
+    for (const s of streams) {
+      try {
+        const tracks: MediaStreamTrack[] = (s.getAudioTracks?.() || []) as any;
+        for (const t of tracks) t.enabled = enabled;
+      } catch {}
+    }
+  } catch (e) {
+    console.warn("setLocalTracksEnabled failed:", (e as any)?.message || e);
+  }
+}
+
+function getLocalMutedState(call: any): boolean {
+  try {
+    // Prefer SDK’s truth if available
+    const sdkMuted = call?.isMuted?.();
+    if (typeof sdkMuted === "boolean") return !!sdkMuted;
+
+    // Otherwise infer from a track if we can see one
+    const s = (call as any)?._mediaStream || (call as any)?.mediaStream || (call as any)?._publisher?.stream;
+    const tracks: MediaStreamTrack[] | undefined = s?.getAudioTracks?.();
+    if (tracks && tracks.length) return tracks.every((t) => t.enabled === false);
+  } catch {}
+  // default to not muted if we can't tell
+  return false;
+}
+
+// -----------------------------------------------------------------------------
 
 async function ensureDevice(): Promise<void> {
   if (!isBrowser()) throw new Error("voiceClient must run in the browser");
@@ -130,10 +172,8 @@ export async function joinConference(conferenceName: string) {
   try { activeCall?.disconnect?.(); } catch {}
   activeCall = null;
 
-  const params = { conferenceName }; // forwarded to /api/voice/agent-join
+  const params = { conferenceName }; // forwarded to /api/voice/agent-join (your server)
 
-  // Some SDK builds return a Call (with .on), others expose a similar emitter API.
-  // We guard all accesses and never assume the shape.
   let call: any;
   try {
     const maybe = await device.connect({ params });
@@ -157,7 +197,6 @@ export async function joinConference(conferenceName: string) {
 
   attach(call, "error", (e: any) => console.warn("Call error:", e?.message || e));
 
-  // (Optional) If the SDK exposes 'accept', attach to it; otherwise we already set the timer.
   attach(call, "accept", () => startTokenTimer());
 
   activeCall = call;
@@ -170,9 +209,27 @@ export async function leaveConference() {
   if (tokenRefreshTimer) { clearTimeout(tokenRefreshTimer); tokenRefreshTimer = null; }
 }
 
+/**
+ * Hard mute: use SDK mute + disable local tracks as a fallback
+ * so the client cannot hear the agent until unmuted.
+ */
 export function setMuted(mute: boolean) {
-  try { activeCall?.mute?.(!!mute); } catch {}
+  try {
+    // 1) Ask SDK to stop upstream audio
+    try { activeCall?.mute?.(!!mute); } catch {}
+
+    // 2) Double-lock by disabling local tracks (if visible)
+    setLocalTracksEnabled(activeCall, !mute);
+  } catch (e) {
+    console.warn("setMuted failed:", (e as any)?.message || e);
+  }
 }
+
 export function getMuted(): boolean {
-  try { return !!activeCall?.isMuted?.(); } catch { return false; }
+  try {
+    // If SDK exposes isMuted, trust it; otherwise infer from tracks.
+    return !!getLocalMutedState(activeCall);
+  } catch {
+    return false;
+  }
 }

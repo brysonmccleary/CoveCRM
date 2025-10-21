@@ -18,6 +18,9 @@ type Tab = {
 
 type FieldOption = { label: string; value: string };
 
+// ---- NEW: special token for the “Add custom field…” option
+const ADD_CUSTOM_TOKEN = "__ADD_CUSTOM__";
+
 const defaultFields: FieldOption[] = [
   { label: "First Name", value: "firstName" },
   { label: "Last Name", value: "lastName" },
@@ -31,6 +34,20 @@ const defaultFields: FieldOption[] = [
   { label: "Age", value: "age" },
   { label: "Notes", value: "notes" },
 ];
+
+// ---- NEW: keep custom fields local to this import session
+function sanitizeFieldKey(input: string): string {
+  // Mongo restrictions: key cannot contain "." and cannot start with "$"
+  // Keep user intent; just make it safe.
+  let key = (input || "").trim();
+  // If they paste something like " Policy # ", keep spaces but they’ll be part of the key.
+  // Replace dots, normalize leading "$", and trim excess whitespace.
+  key = key.replace(/\./g, "_");
+  if (key.startsWith("$")) key = key.replace(/^\$+/, "");
+  // Collapse weird whitespace on the ends only (keep internal spaces as user typed)
+  key = key.trim();
+  return key;
+}
 
 export default function GoogleSheetsSyncPage() {
   // files/tabs
@@ -55,6 +72,11 @@ export default function GoogleSheetsSyncPage() {
   const [skipExisting, setSkipExisting] = useState<boolean>(false);
   const [importing, setImporting] = useState(false);
 
+  // ---- NEW: session-local custom fields + per-header input mode/value
+  const [customFields, setCustomFields] = useState<FieldOption[]>([]);
+  const [customMode, setCustomMode] = useState<Record<string, boolean>>({}); // header -> isAddingCustom?
+  const [customInput, setCustomInput] = useState<Record<string, string>>({}); // header -> current input
+
   // refs
   const mappingRef = useRef<HTMLDivElement | null>(null);
 
@@ -75,6 +97,10 @@ export default function GoogleSheetsSyncPage() {
     setSkip({});
     setFolderName("");
     setSkipExisting(false);
+    // ---- NEW: reset custom session state
+    setCustomFields([]);
+    setCustomMode({});
+    setCustomInput({});
 
     try {
       const r = await fetch("/api/sheets/list");
@@ -100,6 +126,10 @@ export default function GoogleSheetsSyncPage() {
     setSkip({});
     setFolderName(`${file.name} — `);
     setSkipExisting(false);
+    // ---- NEW: reset custom session state on file change
+    setCustomFields([]);
+    setCustomMode({});
+    setCustomInput({});
 
     try {
       setLoadingTabs(true);
@@ -248,6 +278,60 @@ export default function GoogleSheetsSyncPage() {
     "text-white font-medium px-4 py-2 rounded-md shadow-sm " +
     "focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-slate-500 " +
     "dark:focus:ring-offset-slate-900";
+
+  // ---- NEW: helpers to manage custom field add/confirm/cancel for a given header
+  function startAddCustomFor(header: string) {
+    setCustomMode((cm) => ({ ...cm, [header]: true }));
+    setCustomInput((ci) => ({ ...ci, [header]: "" }));
+    // Clear any previous mapping value while adding
+    setMapping((m) => ({ ...m, [header]: "" }));
+  }
+
+  function confirmAddCustomFor(header: string) {
+    const raw = customInput[header] || "";
+    const sanitized = sanitizeFieldKey(raw);
+
+    if (!sanitized) {
+      toast.error("Enter a field name");
+      return;
+    }
+    // Warn if bad prefix or we had to change something materially
+    if (raw !== sanitized) {
+      toast("Adjusted to a safe key: " + sanitized, { icon: "🛡️" });
+    }
+
+    // If the field already exists (default or previously added), just map to it.
+    const existsInDefault = defaultFields.some((f) => f.value === sanitized);
+    const existsInCustom = customFields.some((f) => f.value === sanitized);
+    let nextCustom = customFields;
+
+    if (!existsInDefault && !existsInCustom) {
+      nextCustom = [
+        ...customFields,
+        { label: raw.trim() || sanitized, value: sanitized },
+      ];
+      setCustomFields(nextCustom);
+    }
+
+    // Map this header → sanitized key
+    setMapping((m) => ({ ...m, [header]: sanitized }));
+
+    // Exit custom mode for this header
+    setCustomMode((cm) => ({ ...cm, [header]: false }));
+    setCustomInput((ci) => ({ ...ci, [header]: "" }));
+  }
+
+  function cancelAddCustomFor(header: string) {
+    setCustomMode((cm) => ({ ...cm, [header]: false }));
+    setCustomInput((ci) => ({ ...ci, [header]: "" }));
+    // leave whatever mapping it previously had alone (currently cleared on start)
+  }
+
+  // Combined field options for the select
+  const combinedOptions: FieldOption[] = [
+    ...defaultFields,
+    ...customFields,
+  ];
 
   return (
     <div className="flex min-h-screen bg-slate-50 dark:bg-slate-900">
@@ -407,6 +491,7 @@ export default function GoogleSheetsSyncPage() {
               const isSkipped = !!skip[h];
               const isMapped = !!mapping[h] && !isSkipped;
               const value = sampleRow[h] ?? "";
+              const inCustomMode = !!customMode[h];
 
               return (
                 <div
@@ -431,21 +516,57 @@ export default function GoogleSheetsSyncPage() {
                   </div>
 
                   <div className="py-2">
-                    <select
-                      value={mapping[h] || ""}
-                      disabled={isSkipped}
-                      onChange={(e) =>
-                        setMapping((m) => ({ ...m, [h]: e.target.value }))
-                      }
-                      className={selectBase}
-                    >
-                      <option value="">-- Select field --</option>
-                      {defaultFields.map((f) => (
-                        <option key={f.value} value={f.value}>
-                          {f.label}
-                        </option>
-                      ))}
-                    </select>
+                    {!inCustomMode ? (
+                      <select
+                        value={mapping[h] || ""}
+                        disabled={isSkipped}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          if (v === ADD_CUSTOM_TOKEN) {
+                            startAddCustomFor(h);
+                            return;
+                          }
+                          setMapping((m) => ({ ...m, [h]: v }));
+                        }}
+                        className={selectBase}
+                      >
+                        <option value="">-- Select field --</option>
+                        {combinedOptions.map((f) => (
+                          <option key={f.value} value={f.value}>
+                            {f.label}
+                          </option>
+                        ))}
+
+                        {/* ---- NEW: add custom field sentinel option */}
+                        <option value={ADD_CUSTOM_TOKEN}>➕ Add custom field…</option>
+                      </select>
+                    ) : (
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="text"
+                          className={inputBase}
+                          placeholder='e.g. "Beneficiary" or "Policy #"'
+                          value={customInput[h] || ""}
+                          onChange={(e) =>
+                            setCustomInput((ci) => ({ ...ci, [h]: e.target.value }))
+                          }
+                        />
+                        <button
+                          onClick={() => confirmAddCustomFor(h)}
+                          className={buttonPrimary}
+                          title="Confirm custom field name"
+                        >
+                          Add
+                        </button>
+                        <button
+                          onClick={() => cancelAddCustomFor(h)}
+                          className={buttonNeutral}
+                          title="Cancel"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    )}
                   </div>
 
                   <div className="py-2">
