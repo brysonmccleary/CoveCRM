@@ -20,6 +20,18 @@ const TranscriptSchema = new Schema(
   { _id: false }
 );
 
+// --- helpers ---
+function onlyDigits(v?: string | null) {
+  return (String(v || "")).replace(/\D+/g, "");
+}
+function last10(v?: string | null) {
+  const d = onlyDigits(v);
+  return d ? d.slice(-10) : undefined;
+}
+function lc(v?: string | null) {
+  return typeof v === "string" ? v.toLowerCase().trim() : v || undefined;
+}
+
 // -------- Main schema --------
 const LeadSchema = new Schema(
   {
@@ -39,7 +51,7 @@ const LeadSchema = new Schema(
 
     // Ownership / scoping
     userEmail: { type: String, required: true },
-    ownerEmail: { type: Schema.Types.Mixed }, // keep legacy docs readable; we no longer write to it
+    ownerEmail: { type: Schema.Types.Mixed }, // legacy only; we do not write to this anymore
 
     // Folder linkage (canonical)
     folderId: { type: Schema.Types.ObjectId, ref: "Folder" },
@@ -74,14 +86,33 @@ const LeadSchema = new Schema(
   { timestamps: true, strict: false }
 );
 
-// -------- Indexes --------
+// -------- Indexes (threading-critical) --------
 LeadSchema.index({ userEmail: 1, updatedAt: -1 }, { name: "lead_user_updated_desc" });
 LeadSchema.index({ userEmail: 1, Phone: 1 }, { name: "lead_user_phone_idx" });
 LeadSchema.index({ userEmail: 1, normalizedPhone: 1 }, { name: "lead_user_normalized_phone_idx" });
+LeadSchema.index({ userEmail: 1, phoneLast10: 1 }, { name: "lead_user_phone_last10_idx" });
 LeadSchema.index({ ownerEmail: 1, Phone: 1 }, { name: "lead_owner_phone_idx" }); // legacy reads OK
 LeadSchema.index({ userEmail: 1, folderId: 1 }, { name: "lead_user_folder_idx" });
 LeadSchema.index({ State: 1 }, { name: "lead_state_idx" });
 LeadSchema.index({ userEmail: 1, isAIEngaged: 1, updatedAt: -1 }, { name: "lead_ai_engaged_idx" });
+
+// -------- Normalization hooks (safe, additive) --------
+LeadSchema.pre("save", function preSave(next) {
+  const doc: any = this;
+
+  // Lowercase emails
+  if (doc.Email) doc.Email = lc(doc.Email);
+  if (doc.email) doc.email = lc(doc.email);
+
+  // Compute phone mirrors if missing or stale
+  const primary = doc.Phone || doc.phone;
+  const normalized = onlyDigits(doc.normalizedPhone || primary);
+  if (normalized) doc.normalizedPhone = normalized;
+  const tail = last10(doc.phoneLast10 || normalized || primary);
+  if (tail) doc.phoneLast10 = tail;
+
+  return next();
+});
 
 // -------- Utilities --------
 export const sanitizeLeadType = (input: string): string => {
@@ -125,10 +156,8 @@ export const createLeadsFromCSV = async (
     const emailLower2 =
       typeof lead.email === "string" ? lead.email.toLowerCase().trim() : lead.email;
     const normalizedPhone =
-      lead.normalizedPhone ??
-      (typeof lead.Phone === "string" ? lead.Phone.replace(/\D+/g, "") : undefined);
+      lead.normalizedPhone ?? (typeof lead.Phone === "string" ? lead.Phone.replace(/\D+/g, "") : undefined);
 
-    // never write ownerEmail in new docs
     const { ownerEmail, ...rest } = lead;
 
     return {
@@ -159,8 +188,7 @@ export const createLeadsFromGoogleSheet = async (
     const emailLower2 =
       typeof lead.email === "string" ? lead.email.toLowerCase().trim() : lead.email;
     const normalizedPhone =
-      lead.normalizedPhone ??
-      (typeof lead.Phone === "string" ? lead.Phone.replace(/\D+/g, "") : undefined);
+      lead.normalizedPhone ?? (typeof lead.Phone === "string" ? lead.Phone.replace(/\D+/g, "") : undefined);
 
     const { ownerEmail, ...rest } = lead;
 

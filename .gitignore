@@ -58,3 +58,4 @@ cookies.txt
 *.zip
 
 >>>>>>> feat/dynamic-caller-id
+.env*.local

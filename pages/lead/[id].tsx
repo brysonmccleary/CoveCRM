@@ -1,5 +1,5 @@
 // pages/lead/[id].tsx
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { useRouter } from "next/router";
 import Sidebar from "@/components/Sidebar";
 import toast from "react-hot-toast";
@@ -10,10 +10,7 @@ const CallPanelClose = dynamic<{
   userHasAI: boolean;
   defaultFromNumber?: string;
   onOpenCall?: (callId: string) => void;
-}>(() => import("@/components/CallPanelClose"), {
-  ssr: false,
-  loading: () => null,
-});
+}>(() => import("@/components/CallPanelClose"), { ssr: false, loading: () => null });
 
 type Lead = {
   id: string;
@@ -28,7 +25,7 @@ type Lead = {
   phone?: string;
   Email?: string;
   email?: string;
-  Notes?: string; // ← pinned notes come from here
+  Notes?: string;
   status?: string;
   folderId?: string | null;
   [key: string]: any;
@@ -53,34 +50,28 @@ type CallRow = {
 };
 
 type HistoryEvent =
-  | {
-      type: "sms";
-      id: string;
-      dir: "inbound" | "outbound" | "ai";
-      text: string;
-      date: string;
-      sid?: string;
-      status?: string;
-    }
-  | {
-    type: "call";
-    id: string;
-    date: string;
-    durationSec?: number;
-    status?: string;
-    recordingUrl?: string;
-    summary?: string;
-    sentiment?: string;
-  }
+  | { type: "sms"; id: string; dir: "inbound" | "outbound" | "ai"; text: string; date: string; sid?: string; status?: string }
+  | { type: "call"; id: string; date: string; durationSec?: number; status?: string; recordingUrl?: string; summary?: string; sentiment?: string }
   | { type: "note"; id: string; date: string; text: string }
   | { type: "status"; id: string; date: string; from?: string; to?: string }
   | { type: "booking"; id: string; date: string; title?: string; startsAt?: string };
 
-// ---- Campaigns (UI-only)
 type UICampaign = { _id: string; name: string; key?: string; isActive?: boolean; active?: boolean };
 
-// Canonical Leads destination
 const LEADS_URL = "/dashboard?tab=leads";
+
+const formatPhone = (phone = "") => {
+  const d = String(phone || "").replace(/\D/g, "");
+  if (d.length === 11 && d.startsWith("1")) return `+1 ${d.slice(1, 4)}-${d.slice(4, 7)}-${d.slice(7)}`;
+  if (d.length === 10) return `${d.slice(0, 3)}-${d.slice(3, 6)}-${d.slice(6)}`;
+  return phone || "";
+};
+const fmtDateTime = (d?: string | Date) => {
+  if (!d) return "—";
+  const dt = typeof d === "string" ? new Date(d) : d;
+  if (Number.isNaN(dt.getTime())) return "—";
+  return dt.toLocaleString();
+};
 
 export default function LeadProfileDial() {
   const router = useRouter();
@@ -91,10 +82,17 @@ export default function LeadProfileDial() {
   const [notes, setNotes] = useState("");
   const [historyLines, setHistoryLines] = useState<string[]>([]);
   const [calls, setCalls] = useState<CallRow[]>([]);
-  const [callsLoading, setCallsLoading] = useState(false);
   const [histLoading, setHistLoading] = useState(false);
 
   const userHasAI = true;
+
+  // === DRIPS (list + removal inline with Enroll)
+  type ActiveDrip = { _id: string; campaignId: string; campaignName: string; status: "active" | "paused"; nextSendAt?: string | null };
+  const [activeDrips, setActiveDrips] = useState<ActiveDrip[]>([]);
+  const [dripsLoading, setDripsLoading] = useState(false);
+  const [removeBusy, setRemoveBusy] = useState<string | null>(null);
+  const [removeOpen, setRemoveOpen] = useState(false);
+  const removeMenuRef = useRef<HTMLDivElement | null>(null);
 
   // ---- Drip enroll UI state
   const [enrollOpen, setEnrollOpen] = useState(false);
@@ -103,20 +101,6 @@ export default function LeadProfileDial() {
   const [selectedCampaignId, setSelectedCampaignId] = useState<string>("");
   const [startAtLocal, setStartAtLocal] = useState<string>("");
   const [enrolling, setEnrolling] = useState(false);
-
-  const formatPhone = (phone = "") => {
-    const clean = String(phone).replace(/\D/g, "");
-    if (clean.length === 10) return `${clean.slice(0, 3)}-${clean.slice(3, 6)}-${clean.slice(6)}`;
-    if (clean.length === 11 && clean.startsWith("1"))
-      return `${clean.slice(0, 1)}-${clean.slice(1, 4)}-${clean.slice(4, 7)}-${clean.slice(7)}`;
-    return phone;
-  };
-  const fmtDateTime = (d?: string | Date) => {
-    if (!d) return "—";
-    const dt = typeof d === "string" ? new Date(d) : d;
-    if (Number.isNaN(dt.getTime())) return "—";
-    return dt.toLocaleString();
-  };
 
   const fetchLeadById = useCallback(async (lookup: string) => {
     const r = await fetch(`/api/get-lead?id=${encodeURIComponent(lookup)}`, { cache: "no-store" });
@@ -133,10 +117,8 @@ export default function LeadProfileDial() {
     const run = async () => {
       if (!id) return;
       const idStr = Array.isArray(id) ? id[0] : String(id);
-
       if (await fetchLeadById(idStr)) return;
 
-      // fallback by phone if looks like a phone
       const digits = idStr.replace(/\D+/g, "");
       if (digits.length >= 10) {
         const r = await fetch(`/api/get-lead?phone=${encodeURIComponent(idStr)}`, { cache: "no-store" });
@@ -148,7 +130,6 @@ export default function LeadProfileDial() {
         }
       }
 
-      console.error("Error fetching lead");
       toast.error("Lead not found.");
     };
     run();
@@ -157,7 +138,6 @@ export default function LeadProfileDial() {
   const loadHistory = useCallback(async () => {
     const key = resolvedId || (id ? String(id) : "");
     if (!key) return;
-
     try {
       setHistLoading(true);
       const r = await fetch(`/api/leads/history?id=${encodeURIComponent(key)}&limit=50`, { cache: "no-store" });
@@ -169,8 +149,7 @@ export default function LeadProfileDial() {
         if (ev.type === "note") {
           lines.push(`📝 ${ev.text} • ${fmtDateTime(ev.date)}`);
         } else if (ev.type === "sms") {
-          const dir =
-            ev.dir === "inbound" ? "⬅️ Inbound SMS" : ev.dir === "outbound" ? "➡️ Outbound SMS" : "🤖 AI SMS";
+          const dir = ev.dir === "inbound" ? "⬅️ Inbound SMS" : ev.dir === "outbound" ? "➡️ Outbound SMS" : "🤖 AI SMS";
           const status = ev.status ? ` • ${ev.status}` : "";
           lines.push(`${dir}: ${ev.text}${status} • ${fmtDateTime(ev.date)}`);
         } else if (ev.type === "booking") {
@@ -184,15 +163,39 @@ export default function LeadProfileDial() {
 
       setHistoryLines(lines);
     } catch (e) {
-      console.error(e);
+      // noop
     } finally {
       setHistLoading(false);
     }
   }, [resolvedId, id]);
 
+  const loadActiveDrips = useCallback(async () => {
+    if (!resolvedId) return;
+    try {
+      setDripsLoading(true);
+      const r = await fetch(`/api/drips/active?leadId=${encodeURIComponent(resolvedId)}`, { cache: "no-store" });
+      const j = await r.json().catch(() => ({} as any));
+      if (!r.ok || !j?.success) throw new Error(j?.error || "Failed to load drips");
+      setActiveDrips(j.items || []);
+    } catch (e: any) {
+      toast.error(e?.message || "Failed to load drips");
+    } finally {
+      setDripsLoading(false);
+    }
+  }, [resolvedId]);
+
+  useEffect(() => { loadHistory(); }, [loadHistory]);
+  useEffect(() => { loadActiveDrips(); }, [loadActiveDrips]);
+
+  // close remove dropdown on outside click
   useEffect(() => {
-    loadHistory();
-  }, [loadHistory]);
+    const onDocClick = (e: MouseEvent) => {
+      if (!removeMenuRef.current) return;
+      if (!removeMenuRef.current.contains(e.target as Node)) setRemoveOpen(false);
+    };
+    if (removeOpen) document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, [removeOpen]);
 
   const handleSaveNote = async () => {
     if (!notes.trim() || !lead?.id) return toast.error("❌ Cannot save an empty note");
@@ -222,7 +225,6 @@ export default function LeadProfileDial() {
     }
     try {
       setHistoryLines((prev) => [`✅ Disposition: ${newFolderName} • ${new Date().toLocaleString()}`, ...prev]);
-
       const res = await fetch("/api/disposition-lead", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -245,11 +247,16 @@ export default function LeadProfileDial() {
   };
 
   const leadName = useMemo(() => {
-    const full =
-      `${lead?.firstName || lead?.["First Name"] || ""} ${lead?.lastName || lead?.["Last Name"] || ""}`.trim() ||
-      lead?.name ||
-      "";
-    return full || "Lead";
+    const first = lead?.firstName || lead?.["First Name"] || "";
+    const last = lead?.lastName || lead?.["Last Name"] || "";
+    const composed = `${first} ${last}`.trim();
+    const looksSmsLead = /^sms\s+lead$/i.test(composed) || /^sms\s+lead$/i.test(lead?.name || "");
+    if (!composed || looksSmsLead) {
+      const p = lead?.Phone || lead?.phone || "";
+      const pretty = formatPhone(p);
+      return pretty || "Lead";
+    }
+    return composed;
   }, [lead]);
 
   const phoneDisplay = useMemo(() => {
@@ -257,8 +264,7 @@ export default function LeadProfileDial() {
     return formatPhone(p);
   }, [lead]);
 
-  // ---- Enroll modal open + load campaigns
-  const [enrollOpenState, setEnrollOpenState] = useState(enrollOpen);
+  // ---- Enroll modal + campaigns
   const openEnrollModal = async () => {
     if (!resolvedId) return toast.error("Lead not loaded");
     setEnrollOpen(true);
@@ -300,7 +306,9 @@ export default function LeadProfileDial() {
 
       const enrolledName = j?.campaign?.name || (campaigns.find((c) => c._id === selectedCampaignId)?.name ?? "campaign");
       setHistoryLines((prev) => [`🔖 Status: Enrolled to ${enrolledName} • ${new Date().toLocaleString()}`, ...prev]);
-      loadHistory();
+
+      // refresh drips list
+      await loadActiveDrips();
 
       toast.success(`✅ Enrolled in ${enrolledName}`);
       setEnrollOpen(false);
@@ -313,6 +321,51 @@ export default function LeadProfileDial() {
     }
   };
 
+  // === DRIPS: removal handlers
+  const removeOne = async (campaignId: string) => {
+    if (!resolvedId) return;
+    try {
+      setRemoveBusy(campaignId);
+      const r = await fetch("/api/drips/unenroll", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ leadId: resolvedId, dripId: campaignId }),
+      });
+      const j = await r.json().catch(() => ({} as any));
+      if (!r.ok || !j?.success) throw new Error(j?.error || "Failed to remove from drip");
+      toast.success("Removed from drip.");
+      await loadActiveDrips();
+      await loadHistory();
+    } catch (e: any) {
+      toast.error(e?.message || "Failed to remove");
+    } finally {
+      setRemoveBusy(null);
+      setRemoveOpen(false);
+    }
+  };
+
+  const removeAll = async () => {
+    if (!resolvedId) return;
+    try {
+      setRemoveBusy("ALL");
+      const r = await fetch("/api/drips/unenroll", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ leadId: resolvedId, all: true }),
+      });
+      const j = await r.json().catch(() => ({} as any));
+      if (!r.ok || !j?.success) throw new Error(j?.error || "Failed to remove all");
+      toast.success("Removed from all drips.");
+      await loadActiveDrips();
+      await loadHistory();
+    } catch (e: any) {
+      toast.error(e?.message || "Failed to remove all");
+    } finally {
+      setRemoveBusy(null);
+      setRemoveOpen(false);
+    }
+  };
+
   return (
     <div className="flex bg-[#0f172a] text-white min-h-screen">
       <Sidebar />
@@ -321,13 +374,12 @@ export default function LeadProfileDial() {
       <div className="w-[320px] p-4 border-r border-gray-700 bg-[#1e293b] overflow-y-auto">
         <div className="mb-2">
           <h2 className="text-xl font-bold">{leadName}</h2>
+          {phoneDisplay ? <p className="text-sm text-gray-300">{phoneDisplay}</p> : null}
         </div>
 
         {Object.entries(lead || {})
           .filter(([key]) =>
-            !["_id", "id", "Notes", "First Name", "Last Name", "folderId", "createdAt", "ownerId", "userEmail"].includes(
-              key,
-            ),
+            !["_id", "id", "Notes", "First Name", "Last Name", "folderId", "createdAt", "ownerId", "userEmail"].includes(key)
           )
           .map(([key, value]) => {
             if (key === "Phone" || key.toLowerCase() === "phone") value = formatPhone(String(value || ""));
@@ -341,7 +393,6 @@ export default function LeadProfileDial() {
             );
           })}
 
-        {/* Read-only display of the Saved Notes field */}
         {lead?.Notes && (
           <div className="mt-2">
             <p className="text-sm font-semibold">Saved Notes</p>
@@ -379,32 +430,14 @@ export default function LeadProfileDial() {
             <button type="button" onClick={startCall} className="bg-green-600 hover:bg-green-700 px-4 py-2 rounded">
               Call
             </button>
-
-            <button
-              type="button"
-              onClick={openEnrollModal}
-              disabled={!lead?.id}
-              className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 px-4 py-2 rounded"
-            >
-              Enroll in Drip
-            </button>
           </div>
 
-          {/* 🔒 PINNED SAVED NOTES — always on top of history */}
+          {/* Pinned Notes */}
           {lead?.Notes ? (
             <>
               <h3 className="text-lg font-bold mb-2">Saved Notes (Pinned)</h3>
               <div className="bg-[#0b1220] border border-white/10 rounded p-3 mb-4">
                 <pre className="whitespace-pre-wrap text-sm text-gray-200">{lead.Notes}</pre>
-              </div>
-            </>
-          ) : null}
-
-          {userHasAI && calls.find((c) => c.aiSummary) ? (
-            <>
-              <h3 className="text-lg font-bold mb-2">AI Call Summary</h3>
-              <div className="bg-gray-800/60 border border-white/10 p-3 rounded mb-4">
-                <div className="text-sm text-gray-300">{calls.find((c) => c.aiSummary)?.aiSummary}</div>
               </div>
             </>
           ) : null}
@@ -450,11 +483,7 @@ export default function LeadProfileDial() {
           <div className="mt-4">
             <button
               onClick={() => {
-                try {
-                  router.replace(LEADS_URL);
-                } catch {
-                  if (typeof window !== "undefined") window.location.replace(LEADS_URL);
-                }
+                try { router.replace(LEADS_URL); } catch { if (typeof window !== "undefined") window.location.replace(LEADS_URL); }
               }}
               className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded"
             >
@@ -466,19 +495,80 @@ export default function LeadProfileDial() {
 
       {/* RIGHT */}
       <div className="w-[400px] p-4 bg-[#0b1220] flex flex-col min-h-0">
-        {/* Enroll card (original placement) */}
+        {/* Enroll + Remove from drip row */}
         <div className="mb-3 border border-white/10 rounded p-3 bg-[#0f172a]">
           <div className="flex items-center justify-between">
-            <span className="font-semibold text-sm">Enroll in Drip</span>
+            <span className="font-semibold text-sm">Drip Actions</span>
+          </div>
+
+          <div className="mt-2 flex items-center gap-2 relative" ref={removeMenuRef}>
             <button
               onClick={openEnrollModal}
               disabled={!lead?.id}
-              className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 px-3 py-1 rounded text-sm"
+              className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 px-3 py-2 rounded text-sm"
             >
               Enroll
             </button>
+
+            <button
+              type="button"
+              disabled={!lead?.id || dripsLoading}
+              onClick={() => setRemoveOpen((s) => !s)}
+              className="bg-red-600 hover:bg-red-700 disabled:opacity-50 px-3 py-2 rounded text-sm"
+            >
+              Remove from Drip
+            </button>
+
+            {/* dropdown */}
+            {removeOpen && (
+              <div className="absolute top-full left-0 mt-2 w-full min-w-[280px] z-10 rounded border border-white/10 bg-[#0b1220] shadow-xl">
+                <div className="p-2">
+                  {dripsLoading ? (
+                    <div className="text-xs text-gray-400 py-2 px-2">Loading…</div>
+                  ) : activeDrips.length === 0 ? (
+                    <div className="text-xs text-gray-400 py-2 px-2">No active drips.</div>
+                  ) : (
+                    <>
+                      <div className="max-h-60 overflow-auto">
+                        {activeDrips.map((d) => (
+                          <div key={d._id} className="flex items-center justify-between gap-2 py-1 px-2 rounded hover:bg-white/5">
+                            <div className="text-sm">
+                              <div className="font-medium">{d.campaignName}</div>
+                              <div className="text-xs text-gray-400">
+                                {d.status}{d.nextSendAt ? ` • next ${fmtDateTime(d.nextSendAt)}` : ""}
+                              </div>
+                            </div>
+                            <button
+                              onClick={() => removeOne(d.campaignId)}
+                              disabled={removeBusy === d.campaignId}
+                              className="text-xs px-2 py-1 rounded bg-red-600 hover:bg-red-700 disabled:opacity-50"
+                            >
+                              {removeBusy === d.campaignId ? "Removing…" : "Remove"}
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                      {activeDrips.length > 1 ? (
+                        <div className="border-t border-white/10 mt-2 pt-2">
+                          <button
+                            onClick={removeAll}
+                            disabled={removeBusy === "ALL"}
+                            className="w-full text-left text-xs px-2 py-2 rounded bg-red-700/20 hover:bg-red-700/30"
+                          >
+                            {removeBusy === "ALL" ? "Removing all…" : "Remove all drips"}
+                          </button>
+                        </div>
+                      ) : null}
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
-          <p className="text-xs text-gray-400 mt-1">Enroll this lead into a specific campaign.</p>
+
+          <p className="text-xs text-gray-400 mt-2">
+            Enroll a lead into a campaign or remove them from one/all current drips.
+          </p>
         </div>
 
         <div className="flex-1 min-h-0 overflow-y-auto">
@@ -500,9 +590,7 @@ export default function LeadProfileDial() {
           <div className="relative w-full max-w-md mx-4 rounded-lg border border-white/10 bg-[#0f172a] p-4 shadow-xl">
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-lg font-bold">Enroll in Drip</h3>
-              <button onClick={() => setEnrollOpen(false)} className="text-gray-300 hover:text-white">
-                ✕
-              </button>
+              <button onClick={() => setEnrollOpen(false)} className="text-gray-300 hover:text-white">✕</button>
             </div>
 
             <div className="space-y-3">
@@ -515,9 +603,7 @@ export default function LeadProfileDial() {
                 >
                   <option value="">{campaignsLoading ? "Loading…" : "-- Select a campaign --"}</option>
                   {campaigns.map((c) => (
-                    <option key={c._id} value={c._id}>
-                      {c.name}
-                    </option>
+                    <option key={c._id} value={c._id}>{c.name}</option>
                   ))}
                 </select>
               </div>
@@ -532,9 +618,7 @@ export default function LeadProfileDial() {
                   onChange={(e) => setStartAtLocal(e.target.value)}
                   className="w-full bg-[#1e293b] text-white border border-white/10 rounded p-2"
                 />
-                <p className="text-xs text-gray-500 mt-1">
-                  Leave blank to start immediately; scheduler will handle timing.
-                </p>
+                <p className="text-xs text-gray-500 mt-1">Leave blank to start immediately; scheduler will handle timing.</p>
               </div>
 
               <div className="border border-white/10 rounded p-2 bg-[#0b1220]">

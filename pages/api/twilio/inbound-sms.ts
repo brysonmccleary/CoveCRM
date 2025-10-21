@@ -946,7 +946,7 @@ export default async function handler(
         : (pauseRes.nModified ?? 0);
       if (paused > 0) {
         const note = {
-          type: "system" as const,
+          type: "status" as const,            // ← was "system"
           text: `[system] Auto-paused ${paused} active drip enrollment(s) due to lead reply.`,
           date: new Date(),
         };
@@ -1008,7 +1008,7 @@ export default async function handler(
       (lead as any).status = "Not Interested";
 
       const note = {
-        type: "system" as const,
+        type: "status" as const,            // ← was "system"
         text: "[system] Lead opted out — moved to Not Interested.",
         date: new Date(),
       };
@@ -1033,7 +1033,7 @@ export default async function handler(
 
     if (isHelp(body)) {
       const note = {
-        type: "system" as const,
+        type: "status" as const,            // ← was "system"
         text: "[system] HELP detected.",
         date: new Date(),
       };
@@ -1047,7 +1047,7 @@ export default async function handler(
       (lead as any).unsubscribed = false;
       (lead as any).optOut = false;
       const note = {
-        type: "system" as const,
+        type: "status" as const,            // ← was "system"
         text: "[system] START/UNSTOP detected — lead opted back in.",
         date: new Date(),
       };
@@ -1066,7 +1066,7 @@ export default async function handler(
       (a2p?.messagingReady && a2p?.messagingServiceSid);
     if (usConversation && !approved) {
       const note = {
-        type: "system" as const,
+        type: "status" as const,            // ← was "system"
         text: "[note] Auto-reply suppressed: A2P not approved yet.",
         date: new Date(),
       };
