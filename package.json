@@ -28,6 +28,7 @@
     "date-fns": "^3.6.0",
     "dotenv": "^17.2.0",
     "formidable": "^3.5.4",
+    "geoip-lite": "^1.4.10",
     "google-spreadsheet": "^4.1.4",
     "googleapis": "^153.0.0",
     "luxon": "^3.3.0",
