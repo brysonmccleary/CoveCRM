@@ -1,4 +1,3 @@
-// /pages/index.tsx
 import Head from "next/head";
 import Link from "next/link";
 import Image from "next/image";
@@ -78,9 +77,10 @@ export default function Home() {
                 "Lead Import + Smart Folders",
                 "Upload from CSV or Google Sheets. Automatically categorize leads by type.",
               ],
+              // ⬇️ REPLACED the last card
               [
-                "Call Summaries + Recording",
-                "Every call gets a smart AI summary plus optional audio recording.",
+                "Built-in Affiliate Program",
+                "Recruit partners and track referrals. Auto payouts via Stripe Connect.",
               ],
             ].map(([title, description], i) => (
               <div
@@ -104,13 +104,9 @@ export default function Home() {
             <p className="text-4xl font-bold mb-2">$199.99/mo</p>
             <p className="text-sm text-gray-500 mb-4">+ tax & call/SMS usage</p>
             <ul className="text-left text-gray-700 mb-6">
-              <li className="mb-2">
-                ✔ 1 Free Phone Number ($2/month each additional)
-              </li>
+              {/* ⬇️ REMOVED the “1 Free Phone Number …” line */}
               <li className="mb-2">✔ Unlimited users per account</li>
-              <li className="mb-2">
-                ✔ Includes dialer, texting, and lead management
-              </li>
+              <li className="mb-2">✔ Includes dialer, texting, and lead management</li>
               <li className="mb-2">✔ 7-day free trial included</li>
             </ul>
             <p className="text-lg font-medium mb-4">

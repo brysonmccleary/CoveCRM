@@ -4,17 +4,15 @@ export default function Document() {
   return (
     <Html lang="en">
       <Head>
-        {/* ✅ Favicon from /public/logo.png */}
-        <link rel="icon" href="/logo.png" type="image/png" />
-        {/* ✅ Optional tab styling + SEO support */}
+        {/* Favicon: use .ico for best cross-browser first-load support */}
+        <link rel="icon" href="/favicon.ico" />
+        {/* Apple touch icon (homescreen / iOS tabs) */}
+        <link rel="apple-touch-icon" href="/logo.png" />
+        {/* Basic meta */}
         <meta name="theme-color" content="#0f172a" />
-        <meta
-          name="description"
-          content="CRM Cove – The Ultimate Life Insurance Sales CRM"
-        />{" "}
-        {/* ✅ Updated brand name */}
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta name="description" content="CRM Cove – The Ultimate Life Insurance Sales CRM" />
         <meta charSet="utf-8" />
+        {/* Note: viewport belongs in _app or page Head; leaving as-is since your pages set it */}
       </Head>
       <body className="bg-[#f8fafc] text-gray-800">
         <Main />
