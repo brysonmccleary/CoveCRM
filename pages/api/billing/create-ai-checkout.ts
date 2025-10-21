@@ -11,6 +11,11 @@ const BASE_URL =
   process.env.NEXTAUTH_URL ||
   "http://localhost:3000";
 
+/**
+ * POST /api/billing/create-ai-checkout
+ * Creates a Stripe Checkout session for the **AI SMS Automation** add-on.
+ * Copy clarifies: "$50 monthly access fee + SMS usage" (no per-minute call fees).
+ */
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
@@ -34,12 +39,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       line_items: [{ price: AI_PRICE_ID, quantity: 1 }],
       allow_promotion_codes: true,
       payment_method_types: ["card"],
-      metadata: {
-        product: "ai",
-        userId: (user as any)?._id?.toString?.() || "",
-        email: user.email,
-        referralCodeUsed: (user as any)?.referredBy || "none",
+
+      // Make the positioning unambiguous in the hosted Checkout UI.
+      custom_text: {
+        submit: { message: "AI SMS Automation add-on will be enabled for this account." },
+        after_submit: {
+          message:
+            "Thanks! The AI SMS Automation add-on includes a $50 monthly access fee + pay-as-you-go SMS usage. No recorded-call per-minute fees.",
+        },
       },
+
+      // Attach metadata at the subscription level for downstream entitlement/webhooks.
+      subscription_data: {
+        metadata: {
+          product: "ai_sms_automation",
+          userId: (user as any)?._id?.toString?.() || "",
+          email: user.email,
+          referralCodeUsed: (user as any)?.referredBy || "none",
+          // Explicit copy we want the ops/CS team to see in Stripe:
+          copy: "AI SMS Automation — $50 monthly access fee + SMS usage (no per-minute recorded-call fees)",
+        },
+        // Optional: description can help in Stripe UI; uncomment if you want it visible there.
+        // description: "AI SMS Automation — $50 monthly access fee + SMS usage",
+      },
+
       success_url: `${BASE_URL}/dashboard?tab=settings&ai=on`,
       cancel_url: `${BASE_URL}/dashboard?tab=settings`,
     });

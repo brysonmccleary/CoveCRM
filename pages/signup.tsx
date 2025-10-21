@@ -2,13 +2,35 @@ import { useEffect, useState } from "react";
 import axios from "axios";
 import toast from "react-hot-toast";
 import { useRouter } from "next/router";
+import { z } from "zod";
+
+const SignupClientSchema = z.object({
+  name: z.string().min(1, "Please enter your name"),
+  email: z.string().email("Please enter a valid email"),
+  password: z.string().min(8, "Password must be at least 8 characters"),
+  confirmPassword: z.string(),
+  promoCode: z.string().optional(),
+  affiliateEmail: z.string().email().optional(),
+}).superRefine((val, ctx) => {
+  if (val.confirmPassword !== val.password) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["confirmPassword"],
+      message: "Passwords do not match.",
+    });
+  }
+});
 
 export default function SignUp() {
   const router = useRouter();
 
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
+
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [showPw, setShowPw] = useState(false);
+  const [showPw2, setShowPw2] = useState(false);
 
   const [promoCode, setPromoCode] = useState("");
   const [discountApplied, setDiscountApplied] = useState(false);
@@ -48,9 +70,26 @@ export default function SignUp() {
     }
   };
 
+  const passwordsMatch = password.length > 0 && password === confirmPassword;
+  const pwTooShort = password.length > 0 && password.length < 8;
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name || !email || !password) return toast.error("Please fill out all fields.");
+
+    // Client-side schema validation (friendly early errors)
+    const parsed = SignupClientSchema.safeParse({
+      name,
+      email,
+      password,
+      confirmPassword,
+      promoCode: promoCode.trim() || undefined,
+      affiliateEmail: affiliateEmail || undefined,
+    });
+    if (!parsed.success) {
+      const first = parsed.error.issues[0];
+      toast.error(first?.message || "Please check the form.");
+      return;
+    }
 
     setIsSubmitting(true);
     try {
@@ -58,6 +97,7 @@ export default function SignUp() {
         name,
         email,
         password,
+        confirmPassword, // also enforced server-side
         usedCode: promoCode.trim(),
         affiliateEmail,
       });
@@ -71,7 +111,9 @@ export default function SignUp() {
       toast.success("Account created! Redirecting to billing...");
       const total = finalPrice + (aiUpgrade ? aiAddOnPrice : 0);
       router.push(
-        `/billing?email=${encodeURIComponent(email)}&price=${total}&ai=${aiUpgrade ? 1 : 0}&trial=1`
+        `/billing?email=${encodeURIComponent(email)}&price=${total}&ai=${
+          aiUpgrade ? 1 : 0
+        }&trial=1`,
       );
     } catch (err: any) {
       const msg = err?.response?.data?.message || "Signup failed. Try again.";
@@ -106,13 +148,58 @@ export default function SignUp() {
             value={email}
             onChange={(e) => setEmail(e.target.value)}
           />
-          <input
-            type="password"
-            placeholder="Password"
-            className="w-full p-3 rounded bg-[#0f172a] border border-[#1e293b] text-white placeholder-gray-400"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-          />
+
+          {/* Password */}
+          <div className="relative">
+            <input
+              type={showPw ? "text" : "password"}
+              placeholder="Password (min 8 characters)"
+              className="w-full p-3 pr-24 rounded bg-[#0f172a] border border-[#1e293b] text-white placeholder-gray-400"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              autoComplete="new-password"
+            />
+            <button
+              type="button"
+              onClick={() => setShowPw((s) => !s)}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-sm px-2 py-1 rounded bg-gray-700 hover:bg-gray-600"
+            >
+              {showPw ? "Hide" : "Show"}
+            </button>
+            {pwTooShort && (
+              <p className="text-xs text-amber-300 mt-1">
+                Password must be at least 8 characters.
+              </p>
+            )}
+          </div>
+
+          {/* Confirm Password */}
+          <div className="relative">
+            <input
+              type={showPw2 ? "text" : "password"}
+              placeholder="Confirm Password"
+              className={`w-full p-3 pr-24 rounded bg-[#0f172a] border ${
+                confirmPassword.length > 0
+                  ? passwordsMatch
+                    ? "border-emerald-500"
+                    : "border-rose-500"
+                  : "border-[#1e293b]"
+              } text-white placeholder-gray-400`}
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              autoComplete="new-password"
+            />
+            <button
+              type="button"
+              onClick={() => setShowPw2((s) => !s)}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-sm px-2 py-1 rounded bg-gray-700 hover:bg-gray-600"
+            >
+              {showPw2 ? "Hide" : "Show"}
+            </button>
+            {confirmPassword.length > 0 && !passwordsMatch && (
+              <p className="text-xs text-rose-300 mt-1">Passwords do not match.</p>
+            )}
+          </div>
 
           <label className="block text-sm font-medium text-gray-300">
             Referral / Promo Code (optional)
@@ -147,7 +234,15 @@ export default function SignUp() {
 
           <button
             type="submit"
-            disabled={isSubmitting}
+            disabled={
+              isSubmitting ||
+              !name ||
+              !email ||
+              !password ||
+              !confirmPassword ||
+              pwTooShort ||
+              !passwordsMatch
+            }
             className="w-full py-3 rounded text-white font-semibold
                        bg-[var(--cove-accent)] hover:opacity-95 disabled:opacity-60"
           >

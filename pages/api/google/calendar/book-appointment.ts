@@ -9,7 +9,8 @@ import { google } from "googleapis";
 import { getTimezoneFromState } from "@/utils/timezone";
 import { DateTime } from "luxon";
 import { sendAppointmentBookedEmail } from "@/lib/email";
-import { sendSms } from "@/lib/twilio/sendSMS"; // thread-sticky sender + scheduling
+import { sendSms } from "@/lib/twilio/sendSMS";
+import { detectTimezoneFromReq } from "@/lib/ipTimezone";
 
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID!;
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET!;
@@ -80,22 +81,6 @@ function toE164(phone: string) {
   return `+1${last10}`;
 }
 
-/** Try to detect an IANA timezone for the AGENT from server-side request headers (IP-based). */
-function detectAgentTimezoneFromRequest(req: NextApiRequest): string | null {
-  const read = (k: string) => String(req.headers[k] || "").trim();
-  const cands = [
-    read("x-vercel-ip-timezone"),       // Vercel
-    read("cf-timezone"),                // Cloudflare
-    read("x-cloudflare-timezone"),      // Some proxies
-    read("fly-client-timezone"),        // Fly.io (custom setups)
-    read("x-geo-timezone"),             // Generic reverse proxies
-    read("x-timezone"),
-  ].filter(Boolean);
-
-  const ianaLike = cands.find((z) => /^[A-Za-z]+\/[A-Za-z0-9_\-]+$/.test(z));
-  return ianaLike || null;
-}
-
 /**
  * POST /api/google/calendar/book-appointment
  * Auth: session OR Authorization: Bearer ${INTERNAL_API_TOKEN}
@@ -131,18 +116,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const user = await User.findOne({ email: agentEmail });
       if (!user) return res.status(404).json({ message: "Agent not found" });
 
-      // ---- Agent TZ detection (IP → header)
-      const detectedAgentZone = detectAgentTimezoneFromRequest(req);
-      const storedAgentZone = (user as any)?.bookingSettings?.timezone || "America/Los_Angeles";
-      const agentZone = detectedAgentZone || storedAgentZone;
-
-      // Persist the detected zone if it's new (fully automated, per user/email)
-      if (detectedAgentZone && detectedAgentZone !== storedAgentZone) {
+      // --- Agent TZ auto-detect & persist (stub path too)
+      const detectedTz = await detectTimezoneFromReq(req);
+      const currentAgentTz = (user as any)?.bookingSettings?.timezone || null;
+      const agentZonePersist = detectedTz || currentAgentTz || "America/Los_Angeles";
+      if (!currentAgentTz && detectedTz) {
         await User.updateOne(
-          { email: user.email },
-          { $set: { "bookingSettings.timezone": detectedAgentZone } }
+          { _id: user._id },
+          { $set: { "bookingSettings.timezone": detectedTz } },
         );
-        console.log("booking: updated agent timezone", { email: user.email, timezone: detectedAgentZone });
+        console.log("[booking] persisted agent timezone", { agentEmail, detectedTz });
       }
 
       const clientZone = zoneFromAnyState(state) || "America/New_York";
@@ -176,7 +159,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         });
       }
 
-      // Confirmation (NOW) via thread-sticky sender
       const tzShort = clientStart.offsetNameShort;
       const readable = clientStart.toFormat("ccc, MMM d 'at' h:mm a");
       await sendSms({
@@ -186,10 +168,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         leadId: String(lead._id),
       });
 
-      // Agent-local echoes (for response alignment)
-      const agentLocalStart = clientStart.setZone(agentZone);
-      const agentLocalEnd = clientEnd.setZone(agentZone);
-
       res.status(200).json({
         success: true,
         eventId: "dev-stub-event",
@@ -197,9 +175,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         clientStartISO: clientStart.toISO(),
         clientEndISO: clientEnd.toISO(),
         clientZone,
-        agentLocalStartISO: agentLocalStart.toISO(),
-        agentLocalEndISO: agentLocalEnd.toISO(),
-        agentZone,
+        agentLocalStartISO: clientStart.setZone(agentZonePersist).toISO(),
+        agentLocalEndISO: clientEnd.setZone(agentZonePersist).toISO(),
+        agentZone: agentZonePersist,
         leadId: lead._id,
         stub: true,
       });
@@ -226,21 +204,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return;
   }
 
-  // ---- Detect agent timezone from IP (headers) and persist if new
-  const detectedAgentZone = detectAgentTimezoneFromRequest(req);
-  const storedAgentZone = (user as any)?.bookingSettings?.timezone || "America/Los_Angeles";
-  const agentZone = detectedAgentZone || storedAgentZone;
-
-  if (detectedAgentZone && detectedAgentZone !== storedAgentZone) {
-    await User.updateOne(
-      { email: user.email },
-      { $set: { "bookingSettings.timezone": detectedAgentZone } }
-    );
-    console.log("booking: updated agent timezone", { email: user.email, timezone: detectedAgentZone });
-  }
-
   // ---- Time zones
   const clientZone = zoneFromAnyState(state) || "America/New_York";
+
+  // Detect and persist agent TZ from IP (automatic, per user)
+  const detectedTz = await detectTimezoneFromReq(req);
+  const currentAgentTz = (user as any)?.bookingSettings?.timezone || null;
+  const agentZone = detectedTz || currentAgentTz || "America/Los_Angeles";
+
+  if (!currentAgentTz && detectedTz) {
+    await User.updateOne(
+      { _id: user._id },
+      { $set: { "bookingSettings.timezone": detectedTz } },
+    );
+    console.log("[booking] persisted agent timezone", { agentEmail, detectedTz });
+  }
 
   const clientStart = parseClientStartISO(String(time), clientZone);
   if (!clientStart.isValid) { res.status(400).json({ message: "Invalid time" }); return; }
@@ -323,7 +301,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       io.to(`user-${user.email}`).emit("calendarUpdated", { eventId: created.data.id });
     }
 
-    // ------------------ SMS: confirmation + reminders (via sendSms) ----------------------
+    // ------------------ SMS confirmations/reminders (unchanged) ----------------------
     const tzShort = clientStart.offsetNameShort;
     const readable = clientStart.toFormat("ccc, MMM d 'at' h:mm a");
 
@@ -340,17 +318,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       `Quick reminder: our call is in 15 minutes at ${clientStart.toFormat("h:mm a")} ${tzShort}.`
     );
 
-    // 1) Confirmation NOW (thread-sticky)
+    // 1) Confirmation NOW
     await sendSms({ to, body: confirmBody, userEmail: user.email, leadId: String(leadId) });
 
-    // Helper: ensure minimum lead time and return UTC ISO
+    // Ensure minimum lead time then schedule reminders in client's TZ
     const futureIsoOrNull = (dt: DateTime) => {
       const min = DateTime.now().setZone(clientZone).plus({ minutes: MIN_SCHEDULE_LEAD_MINUTES });
       if (dt <= min) return null;
       return dt.toUTC().toISO();
     };
 
-    // 2) Morning-of 9:00 local (only if on a later day)
     const nowClient = DateTime.now().setZone(clientZone);
     const isFutureDay = clientStart.startOf("day") > nowClient.startOf("day");
     if (isFutureDay) {
@@ -359,38 +336,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (iso) await sendSms({ to, body: morningBody, userEmail: user.email, leadId: String(leadId), sendAtISO: iso });
     }
 
-    // 3) 1-hour-before
     const oneHourBefore = clientStart.minus({ hours: 1 });
     {
       const iso = futureIsoOrNull(oneHourBefore);
       if (iso) await sendSms({ to, body: hourBody, userEmail: user.email, leadId: String(leadId), sendAtISO: iso });
     }
 
-    // 4) 15-min-before
     const fifteenBefore = clientStart.minus({ minutes: 15 });
     {
       const iso = futureIsoOrNull(fifteenBefore);
       if (iso) await sendSms({ to, body: fifteenBody, userEmail: user.email, leadId: String(leadId), sendAtISO: iso });
     }
 
-    // ✅ Email the agent a booking notice
-    try {
-      await sendAppointmentBookedEmail({
-        to: user.email,
-        agentName: (user as any)?.name || user.email.split("@")[0],
-        leadName: name,
-        phone: to,
-        state,
-        timeISO: clientStart.toISO()!,
-        timezone: tzShort,
-        source: bearer && bearer === INTERNAL_API_TOKEN ? "AI" : "Manual",
-        eventUrl: created.data.htmlLink || undefined,
-      });
-    } catch (e) {
-      console.warn("Email notice failed (non-blocking):", (e as any)?.message || e);
-    }
-
-    // Agent-local echoes (for response)—now using detected/stored agentZone
+    // Agent-local echoes (using detected-or-stored agentZone)
     const agentLocalStart = clientStart.setZone(agentZone);
     const agentLocalEnd = clientEnd.setZone(agentZone);
 

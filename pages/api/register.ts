@@ -1,16 +1,39 @@
-// /pages/api/register.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import mongoose from "mongoose";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import bcrypt from "bcryptjs";
+import { z } from "zod";
+
+/** Exported for unit tests */
+export const RegisterSchema = z.object({
+  name: z.string().min(1, "Name is required").max(200),
+  email: z.string().email("Valid email required").max(320),
+  password: z.string().min(8, "Password must be at least 8 characters"),
+  // confirmPassword stays OPTIONAL for backward compatibility with any legacy callers.
+  // If provided, it must match password.
+  confirmPassword: z
+    .string()
+    .optional()
+    .refine(() => true, "noop"), // placeholder so .superRefine always runs
+  usedCode: z.string().optional(),
+  affiliateEmail: z.string().email().optional(),
+}).superRefine((val, ctx) => {
+  if (typeof val.confirmPassword === "string" && val.confirmPassword !== val.password) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["confirmPassword"],
+      message: "Passwords do not match.",
+    });
+  }
+});
 
 /** Admin allow-list (comma-separated emails in Vercel env) */
 function isAdminEmail(email?: string | null) {
   if (!email) return false;
   const list = (process.env.ADMIN_EMAILS || "")
     .split(",")
-    .map(s => s.trim().toLowerCase())
+    .map((s) => s.trim().toLowerCase())
     .filter(Boolean);
   return list.includes(email.toLowerCase());
 }
@@ -23,21 +46,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       await dbConnect();
     }
 
-    const { name, email, password, usedCode, affiliateEmail } = (req.body || {}) as {
-      name?: string;
-      email?: string;
-      password?: string;
-      usedCode?: string;
-      affiliateEmail?: string;
-    };
-
-    const cleanEmail = String(email || "").trim().toLowerCase();
-    const cleanName = String(name || "").trim();
-    const pw = String(password || "");
-
-    if (!cleanName || !cleanEmail || !pw) {
-      return res.status(400).json({ message: "Missing name, email, or password" });
+    // Zod parse with clean 400s
+    const parsed = RegisterSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      const first = parsed.error.issues[0];
+      return res.status(400).json({ message: first?.message || "Invalid request" });
     }
+    const { name, email, password, usedCode, affiliateEmail } = parsed.data;
+
+    const cleanEmail = email.trim().toLowerCase();
+    const cleanName = name.trim();
 
     // Ensure not already registered
     const existing = await User.findOne({ email: cleanEmail }).lean();
@@ -46,7 +64,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     // Hash password
-    const hashed = await bcrypt.hash(pw, 10);
+    const hashed = await bcrypt.hash(password, 10);
 
     // Admins get role=admin and skip billing everywhere (handled by trackUsage/shouldBill)
     const admin = isAdminEmail(cleanEmail);
@@ -56,18 +74,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       email: cleanEmail,
       password: hashed,
       role: admin ? "admin" : "user",
-      // sensible defaults already exist in your schema; set a couple explicitly:
-      plan: admin ? "Pro" : "Free",        // label only; no charges for admins
+      plan: admin ? "Pro" : "Free", // label only; no charges for admins
       subscriptionStatus: "active",
       referredBy: affiliateEmail || undefined,
     });
 
     // Optional: record promo code used (display/analytics only)
     if (usedCode) {
-      await User.updateOne({ _id: user._id }, { $set: { referralCode: (usedCode || "").toUpperCase() } });
+      await User.updateOne(
+        { _id: user._id },
+        { $set: { referralCode: (usedCode || "").toUpperCase() } },
+      );
     }
 
-    // Done — client decides whether to go to billing. For admins we recommend skipping billing UI.
     return res.status(200).json({ ok: true, admin });
   } catch (err: any) {
     console.error("[/api/register] error:", err);
