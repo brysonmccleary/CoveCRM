@@ -80,6 +80,22 @@ function toE164(phone: string) {
   return `+1${last10}`;
 }
 
+/** Try to detect an IANA timezone for the AGENT from server-side request headers (IP-based). */
+function detectAgentTimezoneFromRequest(req: NextApiRequest): string | null {
+  const read = (k: string) => String(req.headers[k] || "").trim();
+  const cands = [
+    read("x-vercel-ip-timezone"),       // Vercel
+    read("cf-timezone"),                // Cloudflare
+    read("x-cloudflare-timezone"),      // Some proxies
+    read("fly-client-timezone"),        // Fly.io (custom setups)
+    read("x-geo-timezone"),             // Generic reverse proxies
+    read("x-timezone"),
+  ].filter(Boolean);
+
+  const ianaLike = cands.find((z) => /^[A-Za-z]+\/[A-Za-z0-9_\-]+$/.test(z));
+  return ianaLike || null;
+}
+
 /**
  * POST /api/google/calendar/book-appointment
  * Auth: session OR Authorization: Bearer ${INTERNAL_API_TOKEN}
@@ -114,6 +130,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       await dbConnect();
       const user = await User.findOne({ email: agentEmail });
       if (!user) return res.status(404).json({ message: "Agent not found" });
+
+      // ---- Agent TZ detection (IP → header)
+      const detectedAgentZone = detectAgentTimezoneFromRequest(req);
+      const storedAgentZone = (user as any)?.bookingSettings?.timezone || "America/Los_Angeles";
+      const agentZone = detectedAgentZone || storedAgentZone;
+
+      // Persist the detected zone if it's new (fully automated, per user/email)
+      if (detectedAgentZone && detectedAgentZone !== storedAgentZone) {
+        await User.updateOne(
+          { email: user.email },
+          { $set: { "bookingSettings.timezone": detectedAgentZone } }
+        );
+        console.log("booking: updated agent timezone", { email: user.email, timezone: detectedAgentZone });
+      }
 
       const clientZone = zoneFromAnyState(state) || "America/New_York";
       const clientStart = parseClientStartISO(String(time), clientZone);
@@ -156,6 +186,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         leadId: String(lead._id),
       });
 
+      // Agent-local echoes (for response alignment)
+      const agentLocalStart = clientStart.setZone(agentZone);
+      const agentLocalEnd = clientEnd.setZone(agentZone);
+
       res.status(200).json({
         success: true,
         eventId: "dev-stub-event",
@@ -163,9 +197,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         clientStartISO: clientStart.toISO(),
         clientEndISO: clientEnd.toISO(),
         clientZone,
-        agentLocalStartISO: clientStart.toISO(),
-        agentLocalEndISO: clientEnd.toISO(),
-        agentZone: (user as any)?.bookingSettings?.timezone || "America/Los_Angeles",
+        agentLocalStartISO: agentLocalStart.toISO(),
+        agentLocalEndISO: agentLocalEnd.toISO(),
+        agentZone,
         leadId: lead._id,
         stub: true,
       });
@@ -192,9 +226,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return;
   }
 
+  // ---- Detect agent timezone from IP (headers) and persist if new
+  const detectedAgentZone = detectAgentTimezoneFromRequest(req);
+  const storedAgentZone = (user as any)?.bookingSettings?.timezone || "America/Los_Angeles";
+  const agentZone = detectedAgentZone || storedAgentZone;
+
+  if (detectedAgentZone && detectedAgentZone !== storedAgentZone) {
+    await User.updateOne(
+      { email: user.email },
+      { $set: { "bookingSettings.timezone": detectedAgentZone } }
+    );
+    console.log("booking: updated agent timezone", { email: user.email, timezone: detectedAgentZone });
+  }
+
   // ---- Time zones
   const clientZone = zoneFromAnyState(state) || "America/New_York";
-  const agentZone = (user as any)?.bookingSettings?.timezone || "America/Los_Angeles";
 
   const clientStart = parseClientStartISO(String(time), clientZone);
   if (!clientStart.isValid) { res.status(400).json({ message: "Invalid time" }); return; }
@@ -344,7 +390,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       console.warn("Email notice failed (non-blocking):", (e as any)?.message || e);
     }
 
-    // Agent-local echoes (for response)
+    // Agent-local echoes (for response)—now using detected/stored agentZone
     const agentLocalStart = clientStart.setZone(agentZone);
     const agentLocalEnd = clientEnd.setZone(agentZone);
 
