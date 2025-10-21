@@ -130,6 +130,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const zone = resolveLeadTimezoneServer(lead);
   if (zone && !withinWindow(zone, 8, 21)) {
     const now = DateTime.now().setZone(zone);
+    // Minimal safe log for tracing
+    console.log("quiet-hours: server-block", {
+      leadId,
+      local: now.toFormat("ccc L/d @ h:mm a"),
+      zone,
+    });
     return res.status(423).json({
       message: `Quiet hours: lead local time is ${now.toFormat("ccc L/d @ h:mm a")} ${now.offsetNameShort}`,
       zone,
