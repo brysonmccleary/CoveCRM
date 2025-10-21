@@ -36,9 +36,9 @@ export default function SignIn({ csrfToken /* , googleEnabled */ }: Props) {
     <>
       <Head>
         <title>Sign In • CoveCRM</title>
-        {/* ensure tab icon matches site on first load */}
-        <link rel="icon" href="/favicon.ico?v=2" />
-        <link rel="apple-touch-icon" href="/logo.png" />
+        {/* keep favicon consistent with site and force refresh */}
+        <link rel="icon" href="/favicon.ico?v=3" />
+        <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
       </Head>
 
       <div className="min-h-screen w-full bg-gradient-to-br from-blue-950 via-blue-900 to-blue-700 text-white flex items-center justify-center px-4">
@@ -62,9 +62,7 @@ export default function SignIn({ csrfToken /* , googleEnabled */ }: Props) {
               />
 
               <div>
-                <label className="mb-1 block text-sm text-blue-100">
-                  Email
-                </label>
+                <label className="mb-1 block text-sm text-blue-100">Email</label>
                 <input
                   name="email"
                   type="email"
@@ -77,9 +75,7 @@ export default function SignIn({ csrfToken /* , googleEnabled */ }: Props) {
               </div>
 
               <div>
-                <label className="mb-1 block text-sm text-blue-100">
-                  Password
-                </label>
+                <label className="mb-1 block text-sm text-blue-100">Password</label>
                 <input
                   name="password"
                   type="password"
@@ -108,16 +104,7 @@ export default function SignIn({ csrfToken /* , googleEnabled */ }: Props) {
               </button>
             </form>
 
-            {/* Removed the divider and Google button */}
-            {/* 
-            <div className="my-4 flex items-center gap-3 text-blue-100/70">
-              <div className="h-px flex-1 bg-blue-300/20" />
-              <span className="text-xs uppercase tracking-wider">or</span>
-              <div className="h-px flex-1 bg-blue-300/20" />
-            </div>
-
-            <button ...>Continue with Google</button>
-            */}
+            {/* Google button removed */}
 
             <p className="mt-6 text-center text-xs text-blue-100/70">
               By continuing you agree to the{" "}
