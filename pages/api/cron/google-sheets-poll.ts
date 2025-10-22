@@ -6,7 +6,7 @@ import mongoose from "mongoose";
 import { google } from "googleapis";
 import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
 
-const FINGERPRINT = "selfheal-v5b"; // raw-driver folders + db guard + safe up.value
+const FINGERPRINT = "selfheal-v5c"; // +legacy-user-shape support (syncedSheets OR sheets)
 
 // --- Normalizers -------------------------------------------------------------
 const normPhone = (v: any) => String(v ?? "").replace(/\D+/g, "");
@@ -115,9 +115,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const db = mongoose.connection.db;
     if (!db) throw new Error("DB connection not ready (post-connect)");
 
+    // ⬇️ KEY FIX: include legacy shape users too (googleSheets.sheets)
     const users = await User.find({
       ...(onlyUserEmail ? { email: onlyUserEmail } : {}),
-      "googleSheets.syncedSheets.0": { $exists: true },
+      $or: [
+        { "googleSheets.syncedSheets.0": { $exists: true } },
+        { "googleSheets.sheets.0": { $exists: true } },
+      ],
     })
       .limit(MAX_USERS)
       .lean();
@@ -151,13 +155,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const drive = google.drive({ version: "v3", auth: oauth2 });
       const sheetsApi = google.sheets({ version: "v4", auth: oauth2 });
 
-      const syncedSheets: SyncedSheetCfg[] = (gs?.syncedSheets || []) as any[];
-      if (!syncedSheets?.length) {
-        detailsAll.push({ userEmail, note: "No syncedSheets", fingerprint: FINGERPRINT });
+      // ⬇️ KEY FIX: support both shapes here
+      const rawConfigs: any[] =
+        (gs?.syncedSheets && Array.isArray(gs.syncedSheets) && gs.syncedSheets.length
+          ? gs.syncedSheets
+          : (gs?.sheets && Array.isArray(gs.sheets) ? gs.sheets : [])) as any[];
+
+      if (!rawConfigs?.length) {
+        detailsAll.push({ userEmail, note: "No syncedSheets or sheets", fingerprint: FINGERPRINT });
         continue;
       }
 
-      for (const cfg of syncedSheets) {
+      for (const cfg of rawConfigs) {
+        // Normalize cfg fields across shapes:
+        // - new shape uses: { spreadsheetId, title, sheetId?, headerRow?, mapping?, skip?, lastRowImported? }
+        // - legacy shape may use: { sheetId: <spreadsheetId>, folderId, ... } and/or different field names
         let {
           spreadsheetId,
           title,
@@ -168,6 +180,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           lastRowImported,
         } = cfg || {};
 
+        // Legacy aliasing: some legacy lists used "sheetId" to mean the spreadsheetId string.
+        if (!spreadsheetId && typeof cfg?.sheetId === "string" && cfg.sheetId.length > 12) {
+          spreadsheetId = cfg.sheetId;
+          // keep numeric tab id (if any) in sheetId
+          sheetId = typeof cfg?.tabId === "number" ? cfg.tabId : sheetId;
+        }
+
+        // If we still don't have spreadsheetId, skip
         if (!spreadsheetId) continue;
         if (onlySpreadsheetId && spreadsheetId !== onlySpreadsheetId) continue;
 
@@ -202,22 +222,45 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           await User.updateOne(
             {
               email: userEmail,
-              "googleSheets.syncedSheets.spreadsheetId": spreadsheetId,
-              "googleSheets.syncedSheets.title": cfg.title ?? title,
+              $or: [
+                { "googleSheets.syncedSheets.spreadsheetId": spreadsheetId },
+                { "googleSheets.sheets.sheetId": spreadsheetId }, // legacy mapping
+              ],
             },
             {
               $set: {
-                "googleSheets.syncedSheets.$.folderId": targetFolderId,
-                "googleSheets.syncedSheets.$.folderName": targetFolderName,
-                ...(sheetId != null
-                  ? { "googleSheets.syncedSheets.$.sheetId": sheetId }
+                ...(cfg.title
+                  ? { "googleSheets.syncedSheets.$[t].title": title }
                   : {}),
-                ...(cfg.title !== title
-                  ? { "googleSheets.syncedSheets.$.title": title }
+                "googleSheets.syncedSheets.$[t].folderId": targetFolderId,
+                "googleSheets.syncedSheets.$[t].folderName": targetFolderName,
+                ...(sheetId != null
+                  ? { "googleSheets.syncedSheets.$[t].sheetId": sheetId }
                   : {}),
               },
+            },
+            {
+              arrayFilters: [
+                { "t.spreadsheetId": spreadsheetId },
+              ],
+              multi: true,
+              upsert: false,
             }
-          );
+          ).catch(() => {/* ignore if arrayFilters doesn't match legacy doc */});
+
+          // Legacy array shape write (best-effort)
+          await User.updateOne(
+            {
+              email: userEmail,
+              "googleSheets.sheets.sheetId": spreadsheetId,
+            },
+            {
+              $set: {
+                "googleSheets.sheets.$.folderId": targetFolderId,
+                "googleSheets.sheets.$.folderName": targetFolderName,
+              },
+            }
+          ).catch(() => {/* ignore if not legacy */});
         }
 
         // --- Read values ----------------------------------------------------
@@ -313,11 +356,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         const newLast = Math.max(lastProcessed + 1, Number(pointer));
         if (!dryRun) {
+          // Try to set pointer on both shapes (best-effort)
           await User.updateOne(
             {
               email: userEmail,
               "googleSheets.syncedSheets.spreadsheetId": spreadsheetId,
-              "googleSheets.syncedSheets.title": cfg.title ?? title,
             },
             {
               $set: {
@@ -327,7 +370,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 "googleSheets.syncedSheets.$.folderName": targetFolderName,
               },
             }
-          );
+          ).catch(() => {/* ignore if not present */});
+
+          await User.updateOne(
+            {
+              email: userEmail,
+              "googleSheets.sheets.sheetId": spreadsheetId,
+            },
+            {
+              $set: {
+                "googleSheets.sheets.$.lastRowImported": newLast,
+                "googleSheets.sheets.$.lastImportedAt": new Date(),
+                "googleSheets.sheets.$.folderId": targetFolderId,
+                "googleSheets.sheets.$.folderName": targetFolderName,
+              },
+            }
+          ).catch(() => {/* ignore if not present */});
         }
 
         detailsAll.push({
