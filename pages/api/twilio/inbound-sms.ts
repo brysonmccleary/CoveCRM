@@ -5,7 +5,7 @@ import Lead from "@/models/Lead";
 import User from "@/models/User";
 import A2PProfile from "@/models/A2PProfile";
 import Message from "@/models/Message";
-import DripEnrollment from "@/models/DripEnrollment"; // ✅ NEW: for auto-pause on reply
+import DripEnrollment from "@/models/DripEnrollment"; // ✅ for auto-pause on reply
 import twilio, { Twilio } from "twilio";
 import { OpenAI } from "openai";
 import { getTimezoneFromState } from "@/utils/timezone";
@@ -20,7 +20,7 @@ import {
 import { initSocket } from "@/lib/socket";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
 
-// ✅ NEW: billing imports
+// ✅ Billing imports
 import { trackUsage } from "@/lib/billing/trackUsage";
 import { priceOpenAIUsage } from "@/lib/billing/openaiPricing";
 import { estimateSmsChargeUSD } from "@/lib/billing/smsPricing";
@@ -33,7 +33,7 @@ const RAW_BASE_URL = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL |
 const SHARED_MESSAGING_SERVICE_SID = process.env.TWILIO_MESSAGING_SERVICE_SID || "";
 const INTERNAL_API_TOKEN = process.env.INTERNAL_API_TOKEN || "";
 const LEAD_ENTRY_PATH = (process.env.APP_LEAD_ENTRY_PATH || "/lead").replace(/\/?$/, "");
-const BUILD_TAG = "inbound-sms@2025-08-28T19:45Z";
+const BUILD_TAG = "inbound-sms@2025-10-22T17:00Z";
 console.log(`[inbound-sms] build=${BUILD_TAG}`);
 
 const STATUS_CALLBACK =
@@ -43,7 +43,7 @@ const STATUS_CALLBACK =
 const ALLOW_DEV_TWILIO_TEST =
   process.env.ALLOW_LOCAL_TWILIO_TEST === "1" && process.env.NODE_ENV !== "production";
 
-// ✅ Toggle whether to add separate OpenAI line items (default OFF; SMS covers it)
+// Whether to add separate OpenAI line items (default OFF; SMS covers it)
 const BILL_OPENAI_SEPARATELY = (process.env.BILL_OPENAI_SEPARATELY || "0") !== "0";
 
 // Human delay: 3–4 min; set AI_TEST_MODE=1 for 3–5s while testing
@@ -51,6 +51,11 @@ const AI_TEST_MODE = process.env.AI_TEST_MODE === "1";
 function humanDelayMs() {
   return AI_TEST_MODE ? 3000 + Math.random() * 2000 : 180000 + Math.random() * 60000;
 }
+
+// Env-driven cooldown (seconds). Test: 0. Prod: 120 recommended.
+const AI_COOLDOWN_SECONDS = Number.isFinite(parseInt(process.env.AI_COOLDOWN_SECONDS || "", 10))
+  ? parseInt(process.env.AI_COOLDOWN_SECONDS || "120", 10)
+  : 120;
 
 // ---------- quiet hours (lead-local) ----------
 const QUIET_START_HOUR = 21; // 9:00 PM
@@ -140,19 +145,9 @@ function computeQuietHoursScheduling(zone: string): {
 
   let target = nowLocal;
   if (hour < QUIET_END_HOUR) {
-    target = nowLocal.set({
-      hour: QUIET_END_HOUR,
-      minute: 0,
-      second: 0,
-      millisecond: 0,
-    });
+    target = nowLocal.set({ hour: QUIET_END_HOUR, minute: 0, second: 0, millisecond: 0 });
   } else {
-    target = nowLocal.plus({ days: 1 }).set({
-      hour: QUIET_END_HOUR,
-      minute: 0,
-      second: 0,
-      millisecond: 0,
-    });
+    target = nowLocal.plus({ days: 1 }).set({ hour: QUIET_END_HOUR, minute: 0, second: 0, millisecond: 0 });
   }
 
   const minUtc = DateTime.utc().plus({ minutes: MIN_SCHEDULE_LEAD_MINUTES });
@@ -167,6 +162,27 @@ function isUS(num: string) {
 }
 function normalizeDigits(p: string) {
   return (p || "").replace(/\D/g, "");
+}
+
+// Tone enforcement helpers
+function stripUrls(s: string) {
+  // remove http/https/www links
+  return s.replace(/\b(?:https?:\/\/|www\.)\S+\b/gi, "");
+}
+function stripEmojis(s: string) {
+  // remove most emoji symbols
+  return s.replace(
+    /([\u2700-\u27BF]|[\uE000-\uF8FF]|[\uD83C-\uDBFF][\uDC00-\uDFFF]|[\u2600-\u26FF])/g,
+    ""
+  );
+}
+function limitSentences(s: string, maxSentences = 2) {
+  const parts = s.replace(/\s+/g, " ").trim().split(/(?<=[.!?])\s+/);
+  return parts.slice(0, maxSentences).join(" ").trim();
+}
+function sanitizeSMS(s: string) {
+  const cleaned = limitSentences(stripEmojis(stripUrls(s)), 2).trim();
+  return cleaned.length > 240 ? cleaned.slice(0, 240).trim() : cleaned;
 }
 
 function isOptOut(text: string): boolean {
@@ -283,15 +299,7 @@ function extractRequestedISO(textIn: string, state?: string): string | null {
     }
   }
 
-  const weekdays = [
-    "sunday",
-    "monday",
-    "tuesday",
-    "wednesday",
-    "thursday",
-    "friday",
-    "saturday",
-  ];
+  const weekdays = ["sunday","monday","tuesday","wednesday","thursday","friday","saturday"];
   for (const w of weekdays) {
     if (text.includes(w)) {
       const m = text.match(timeRe);
@@ -330,15 +338,7 @@ function extractRequestedISO(textIn: string, state?: string): string | null {
         if (ap === "am" && h === 12) h = 0;
       }
       let dt = DateTime.fromObject(
-        {
-          year: now.year,
-          month,
-          day,
-          hour: h,
-          minute: min,
-          second: 0,
-          millisecond: 0,
-        },
+        { year: now.year, month, day, hour: h, minute: min, second: 0, millisecond: 0 },
         { zone },
       );
       if (dt.isValid && dt < now) dt = dt.plus({ years: 1 });
@@ -364,9 +364,7 @@ function extractRequestedISO(textIn: string, state?: string): string | null {
 }
 
 function extractTimeFromLastAI(history: any[], state?: string): string | null {
-  const lastAI = [...(history || [])]
-    .reverse()
-    .find((m: any) => m.type === "ai");
+  const lastAI = [...(history || [])].reverse().find((m: any) => m.type === "ai");
   if (!lastAI?.text) return null;
   return extractRequestedISO(String(lastAI.text), state);
 }
@@ -377,7 +375,6 @@ function computeContext(drips?: string[]) {
   if (d.includes("veteran")) return "veteran life insurance";
   if (d.includes("iul")) return "retirement income protection";
   if (d.includes("final_expense")) return "final expense insurance";
-  // 🔁 Default updated for your requirement
   return "life insurance and mortgage protection";
 }
 
@@ -401,16 +398,11 @@ function pushAsked(memory: LeadMemory, key: string) {
   memory.lastAsked = arr;
 }
 
-// ===== NEW =====
-// Minimal module-level scratch to know which user to bill for OpenAI usage
+// ===== Minimal module-level scratch to know which user to bill for OpenAI usage
 let _lastInboundUserEmailForBilling: string | null = null;
 
 // --- LLM helpers
-async function extractIntentAndTimeLLM(input: {
-  text: string;
-  nowISO: string;
-  tz: string;
-}) {
+async function extractIntentAndTimeLLM(input: { text: string; nowISO: string; tz: string }) {
   const sys = `Extract intent for a brief SMS thread about booking a call.
 Return STRICT JSON with keys:
 intent: one of [schedule, confirm, reschedule, ask_cost, ask_duration, cancel, smalltalk, unknown]
@@ -428,7 +420,7 @@ yesno: "yes"|"no"|"unknown"`;
     response_format: { type: "json_object" },
   });
 
-  // ✅ Bill OpenAI usage (raw cost; optional separate line item)
+  // ✅ Bill OpenAI usage
   try {
     const usage = (resp as any)?.usage || {};
     const raw = priceOpenAIUsage({
@@ -443,9 +435,7 @@ yesno: "yes"|"no"|"unknown"`;
         source: "openai",
       });
     }
-  } catch {
-    // never block on billing
-  }
+  } catch {}
 
   let data: any = {};
   try {
@@ -469,18 +459,18 @@ function historyToChatMessages(history: any[] = []) {
   return msgs.slice(-24);
 }
 
-// --- NEW: Deterministic matcher (pattern -> reply)
+// --- Deterministic matcher (pattern -> reply)
 function buildDeterministicReply(textRaw: string, context: string): string | null {
   const t = (textRaw || "").trim().toLowerCase();
-
   const any = (...subs: string[]) => subs.some(s => t.includes(s));
 
   // 1) Already have coverage
   if (any("already have coverage", "i already have", "i'm covered", "im covered", "we're covered", "we are covered", "we’re covered", "already insured", "have life insurance", "have insurance already")) {
     return "I can see that on my end, it looks like we can save you anywhere from $20-$50+ a month. When do you have five minutes to talk?";
+    // short, 1–2 sentences, no links/emojis
   }
 
-  // 2) Not interested
+  // 2) Not interested (non-STOP)
   if (any("not interested", "no thanks", "no thank you", "pass", "stop texting") && !["stop","stopall","unsubscribe","cancel","end","quit"].includes(t)) {
     return "Totally get it. Before I close it out, most folks still find $20–$50+ in savings in a 5-min check. Want me to hold a quick time later today or tomorrow?";
   }
@@ -535,7 +525,7 @@ function buildDeterministicReply(textRaw: string, context: string): string | nul
     return "We can text basics, but final numbers need a quick verbal to be accurate—it’s 5 minutes. What time works later today or tomorrow?";
   }
 
-  // 13) Tomorrow / another day explicit
+  // 13) Tomorrow explicit
   if (any("tomorrow")) {
     return "Sounds good—what’s a quick 5-10 minute window tomorrow?";
   }
@@ -601,7 +591,7 @@ You are a helpful human-like SMS assistant for an insurance agent.
     messages: [{ role: "system", content: sys }, ...chat],
   });
 
-  // ✅ Bill OpenAI usage (optional separate line)
+  // ✅ Bill OpenAI usage
   try {
     const usage = (resp as any)?.usage || {};
     const raw = priceOpenAIUsage({
@@ -619,9 +609,8 @@ You are a helpful human-like SMS assistant for an insurance agent.
   } catch {}
 
   const text = resp.choices?.[0]?.message?.content?.trim() || "";
-  if (!text)
-    return "Got it — what time works for a quick call today or tomorrow?";
-  return text.replace(/\s+/g, " ").trim();
+  if (!text) return "Got it — what time works for a quick call today or tomorrow?";
+  return sanitizeSMS(text);
 }
 
 function normalizeWhen(datetimeText: string | null, nowISO: string, tz: string) {
@@ -635,9 +624,7 @@ function normalizeWhen(datetimeText: string | null, nowISO: string, tz: string) 
 function leadPhoneMatches(lead: any, fromDigits: string): boolean {
   if (!lead) return false;
   const cand: string[] = [];
-  const push = (v: any) => {
-    if (v) cand.push(normalizeDigits(String(v)));
-  };
+  const push = (v: any) => { if (v) cand.push(normalizeDigits(String(v))); };
   push((lead as any).Phone);
   push((lead as any).phone);
   push((lead as any)["Phone Number"]);
@@ -653,10 +640,7 @@ function leadPhoneMatches(lead: any, fromDigits: string): boolean {
 // ----------------------------------------------------------------------------------------------------------
 
 // ---------- handler ----------
-export default async function handler(
-  req: NextApiRequest,
-  res: NextApiResponse,
-) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST")
     return res.status(405).json({ message: "Method not allowed." });
 
@@ -665,44 +649,30 @@ export default async function handler(
   const params = new URLSearchParams(raw);
 
   // Compute exact URL Twilio used (handles www vs apex & proxies)
-  const host =
-    (req.headers["x-forwarded-host"] as string) ||
-    (req.headers.host as string) ||
-    "";
+  const host = (req.headers["x-forwarded-host"] as string) || (req.headers.host as string) || "";
   const proto = (req.headers["x-forwarded-proto"] as string) || "https";
   const pathOnly = (req.url || "").split("?")[0] || "/api/twilio/inbound-sms";
   const ABS_BASE_URL = host ? `${proto}://${host}` : RAW_BASE_URL || "";
-  const absoluteUrl = host
-    ? `${proto}://${host}${pathOnly}`
-    : RAW_BASE_URL
-    ? `${RAW_BASE_URL}${pathOnly}`
-    : "";
+  const absoluteUrl = host ? `${proto}://${host}${pathOnly}` : RAW_BASE_URL ? `${RAW_BASE_URL}${pathOnly}` : "";
 
   // Verify Twilio signature (unless dev bypass)
   const signature = (req.headers["x-twilio-signature"] || "") as string;
 
-  // ✅ Prod-safe test bypass via Authorization: Bearer INTERNAL_API_TOKEN
+  // Prod-safe test bypass via Authorization: Bearer INTERNAL_API_TOKEN
   const hasAuthBypass =
     !!INTERNAL_API_TOKEN &&
     typeof req.headers.authorization === "string" &&
     req.headers.authorization === `Bearer ${INTERNAL_API_TOKEN}`;
 
   const valid = absoluteUrl
-    ? twilio.validateRequest(
-        AUTH_TOKEN,
-        signature,
-        absoluteUrl,
-        Object.fromEntries(params as any),
-      )
+    ? twilio.validateRequest(AUTH_TOKEN, signature, absoluteUrl, Object.fromEntries(params as any))
     : false;
 
   if (!valid) {
     if (ALLOW_DEV_TWILIO_TEST || hasAuthBypass) {
       console.warn("⚠️ Signature bypass enabled for inbound-sms (dev/test).");
     } else {
-      console.warn("❌ Invalid Twilio signature on inbound-sms", {
-        absoluteUrl,
-      });
+      console.warn("❌ Invalid Twilio signature on inbound-sms", { absoluteUrl });
       return res.status(403).send("Invalid signature");
     }
   }
@@ -719,47 +689,37 @@ export default async function handler(
     const numMedia = parseInt(params.get("NumMedia") || "0", 10);
 
     if (!fromNumber || !toNumber) {
-      return res
-        .status(200)
-        .json({ message: "Missing required fields, acknowledged." });
+      return res.status(200).json({ message: "Missing required fields, acknowledged." });
     }
 
     // Idempotency
     if (messageSid) {
       const existing = await Message.findOne({ sid: messageSid }).lean().exec();
       if (existing) {
-        return res
-          .status(200)
-          .json({ message: "Duplicate delivery (sid), acknowledged." });
+        return res.status(200).json({ message: "Duplicate delivery (sid), acknowledged." });
       }
     }
 
     console.log(
-      `📥 inbound sid=${messageSid || "n/a"} from=${fromNumber} -> to=${toNumber} text="${body.slice(0, 120)}${
-        body.length > 120 ? "…" : ""
-      }"`,
+      `📥 inbound sid=${messageSid || "n/a"} from=${fromNumber} -> to=${toNumber} text="${body.slice(0, 120)}${body.length > 120 ? "…" : ""}"`
     );
 
     // Map to the user by the inbound (owned) number
     const toDigits = normalizeDigits(toNumber);
     const user =
       (await User.findOne({ "numbers.phoneNumber": toNumber })) ||
-      (await User.findOne({
-        "numbers.phoneNumber": `+1${toDigits.slice(-10)}`,
-      })) ||
+      (await User.findOne({ "numbers.phoneNumber": `+1${toDigits.slice(-10)}` })) ||
       (await User.findOne({ "numbers.phoneNumber": `+${toDigits}` }));
 
     if (!user) {
       console.warn("⚠️ No user matched for To number:", toNumber);
-      return res
-        .status(200)
-        .json({ message: "No user found for this number." });
+      return res.status(200).json({ message: "No user found for this number." });
     }
 
-    // ✅ NEW: set billing context for OpenAI
+    // Set billing context for OpenAI
     _lastInboundUserEmailForBilling = (user.email || "").toLowerCase();
 
-    // ===================== FIXED: lead resolution =====================
+    // ===================== Lead resolution =====================
     const fromDigits = normalizeDigits(fromNumber);
     const last10 = fromDigits.slice(-10);
     const anchored = last10 ? new RegExp(`${last10}$`) : undefined;
@@ -772,8 +732,7 @@ export default async function handler(
       direction: "outbound",
       from: toNumber,
       $or: [{ to: fromNumber }, { to: `+1${last10}` }, ...(anchored ? [{ to: anchored }] : [])],
-    })
-      .sort({ sentAt: -1, createdAt: -1, _id: -1 });
+    }).sort({ sentAt: -1, createdAt: -1, _id: -1 });
 
     if (lastOutbound?.leadId) {
       const viaMsg = await Lead.findById(lastOutbound.leadId);
@@ -791,20 +750,11 @@ export default async function handler(
       lead =
         (await Lead.findOne({ userEmail: user.email, Phone: fromNumber })) ||
         (await Lead.findOne({ userEmail: user.email, phone: fromNumber })) ||
-        (await Lead.findOne({
-          userEmail: user.email,
-          ["Phone Number"]: fromNumber,
-        } as any)) ||
-        (await Lead.findOne({
-          userEmail: user.email,
-          PhoneNumber: fromNumber,
-        } as any)) ||
+        (await Lead.findOne({ userEmail: user.email, ["Phone Number"]: fromNumber } as any)) ||
+        (await Lead.findOne({ userEmail: user.email, PhoneNumber: fromNumber } as any)) ||
         (await Lead.findOne({ userEmail: user.email, Mobile: fromNumber } as any)) ||
         (await Lead.findOne({ userEmail: user.email, mobile: fromNumber } as any)) ||
-        (await Lead.findOne({
-          userEmail: user.email,
-          "phones.value": fromNumber,
-        } as any));
+        (await Lead.findOne({ userEmail: user.email, "phones.value": fromNumber } as any));
     }
 
     // (C) +1 last-10 equality
@@ -813,20 +763,11 @@ export default async function handler(
       lead =
         (await Lead.findOne({ userEmail: user.email, Phone: plus1 })) ||
         (await Lead.findOne({ userEmail: user.email, phone: plus1 })) ||
-        (await Lead.findOne({
-          userEmail: user.email,
-          ["Phone Number"]: plus1,
-        } as any)) ||
-        (await Lead.findOne({
-          userEmail: user.email,
-          PhoneNumber: plus1,
-        } as any)) ||
+        (await Lead.findOne({ userEmail: user.email, ["Phone Number"]: plus1 } as any)) ||
+        (await Lead.findOne({ userEmail: user.email, PhoneNumber: plus1 } as any)) ||
         (await Lead.findOne({ userEmail: user.email, Mobile: plus1 } as any)) ||
         (await Lead.findOne({ userEmail: user.email, mobile: plus1 } as any)) ||
-        (await Lead.findOne({
-          userEmail: user.email,
-          "phones.value": plus1,
-        } as any));
+        (await Lead.findOne({ userEmail: user.email, "phones.value": plus1 } as any));
     }
 
     // (D) Anchored last-10 regex
@@ -834,24 +775,15 @@ export default async function handler(
       lead =
         (await Lead.findOne({ userEmail: user.email, Phone: anchored })) ||
         (await Lead.findOne({ userEmail: user.email, phone: anchored })) ||
-        (await Lead.findOne({
-          userEmail: user.email,
-          ["Phone Number"]: anchored,
-        } as any)) ||
-        (await Lead.findOne({
-          userEmail: user.email,
-          PhoneNumber: anchored,
-        } as any)) ||
+        (await Lead.findOne({ userEmail: user.email, ["Phone Number"]: anchored } as any)) ||
+        (await Lead.findOne({ userEmail: user.email, PhoneNumber: anchored } as any)) ||
         (await Lead.findOne({ userEmail: user.email, Mobile: anchored } as any)) ||
         (await Lead.findOne({ userEmail: user.email, mobile: anchored } as any)) ||
-        (await Lead.findOne({
-          userEmail: user.email,
-          "phones.value": anchored,
-        } as any));
+        (await Lead.findOne({ userEmail: user.email, "phones.value": anchored } as any));
     }
-    // =================================================================
+    // ===========================================================
 
-    // 🔒 Final sanity
+    // Final sanity
     if (lead && last10 && !leadPhoneMatches(lead, fromDigits)) {
       console.warn(
         `[inbound-sms] Rejecting suspect lead match leadId=${String(lead._id)} — phone on lead does not end with ${last10}`,
@@ -879,18 +811,13 @@ export default async function handler(
     }
 
     if (!lead) {
-      return res
-        .status(200)
-        .json({ message: "Lead not found/created, acknowledged." });
+      return res.status(200).json({ message: "Lead not found/created, acknowledged." });
     }
 
-    console.log(
-      `[inbound-sms] RESOLVED leadId=${lead?._id || null} from=${fromNumber} to=${toNumber}`,
-    );
+    console.log(`[inbound-sms] RESOLVED leadId=${lead?._id || null} from=${fromNumber} to=${toNumber}`);
 
     const hadDrips =
-      Array.isArray((lead as any).assignedDrips) &&
-      (lead as any).assignedDrips.length > 0;
+      Array.isArray((lead as any).assignedDrips) && (lead as any).assignedDrips.length > 0;
 
     // ✅ Ensure Socket.IO exists (init if needed)
     let io = (res as any)?.socket?.server?.io;
@@ -935,18 +862,13 @@ export default async function handler(
 
     if (io) io.to(user.email).emit("message:new", { leadId: lead._id, ...inboundEntry });
 
-    // ✅ NEW — Auto-pause any active DripEnrollment for this lead (tenant-scoped)
+    // ✅ Auto-pause any active DripEnrollment for this lead
     try {
       const pauseRes: any = await DripEnrollment.updateMany(
         { userEmail: user.email, leadId: lead._id, status: "active" },
-        {
-          $set: { status: "paused", paused: true, isPaused: true, processing: false },
-          $unset: { nextSendAt: 1, processingAt: 1 },
-        }
+        { $set: { status: "paused", paused: true, isPaused: true, processing: false }, $unset: { nextSendAt: 1, processingAt: 1 } }
       );
-      const paused = typeof pauseRes.modifiedCount === "number"
-        ? pauseRes.modifiedCount
-        : (pauseRes.nModified ?? 0);
+      const paused = typeof pauseRes.modifiedCount === "number" ? pauseRes.modifiedCount : (pauseRes.nModified ?? 0);
       if (paused > 0) {
         const note = {
           type: "status" as const,
@@ -961,7 +883,6 @@ export default async function handler(
     } catch (e) {
       console.warn("⚠️ Failed to auto-pause drips:", e);
     }
-    // ======================= end auto-pause =======================
 
     /* =======================
        Agent email notify
@@ -1010,11 +931,7 @@ export default async function handler(
       (lead as any).optOut = true;
       (lead as any).status = "Not Interested";
 
-      const note = {
-        type: "status" as const,
-        text: "[system] Lead opted out — moved to Not Interested.",
-        date: new Date(),
-      };
+      const note = { type: "status" as const, text: "[system] Lead opted out — moved to Not Interested.", date: new Date() };
       lead.interactionHistory.push(note);
       await lead.save();
 
@@ -1029,17 +946,11 @@ export default async function handler(
       }
 
       console.log("🚫 Opt-out set & moved to Not Interested for", fromNumber);
-      return res
-        .status(200)
-        .json({ message: "Lead opted out; moved to Not Interested." });
+      return res.status(200).json({ message: "Lead opted out; moved to Not Interested." });
     }
 
     if (isHelp(body)) {
-      const note = {
-        type: "status" as const,
-        text: "[system] HELP detected.",
-        date: new Date(),
-      };
+      const note = { type: "status" as const, text: "[system] HELP detected.", date: new Date() };
       lead.interactionHistory.push(note);
       await lead.save();
       if (io) io.to(user.email).emit("message:new", { leadId: lead._id, ...note });
@@ -1049,11 +960,7 @@ export default async function handler(
     if (isStart(body)) {
       (lead as any).unsubscribed = false;
       (lead as any).optOut = false;
-      const note = {
-        type: "status" as const,
-        text: "[system] START/UNSTOP detected — lead opted back in.",
-        date: new Date(),
-      };
+      const note = { type: "status" as const, text: "[system] START/UNSTOP detected — lead opted back in.", date: new Date() };
       lead.interactionHistory.push(note);
       await lead.save();
       if (io) io.to(user.email).emit("message:new", { leadId: lead._id, ...note });
@@ -1064,22 +971,14 @@ export default async function handler(
     // A2P gate (shared MS counts as approved)
     const a2p = await A2PProfile.findOne({ userId: String(user._id) });
     const usConversation = isUS(fromNumber) || isUS(toNumber);
-    const approved =
-      SHARED_MESSAGING_SERVICE_SID ||
-      (a2p?.messagingReady && a2p?.messagingServiceSid);
+    const approved = SHARED_MESSAGING_SERVICE_SID || (a2p?.messagingReady && a2p?.messagingServiceSid);
     if (usConversation && !approved) {
-      const note = {
-        type: "status" as const,
-        text: "[note] Auto-reply suppressed: A2P not approved yet.",
-        date: new Date(),
-      };
+      const note = { type: "status" as const, text: "[note] Auto-reply suppressed: A2P not approved yet.", date: new Date() };
       lead.interactionHistory.push(note);
       await lead.save();
       if (io) io.to(user.email).emit("message:new", { leadId: lead._id, ...note });
       console.warn("⚠️ Auto-reply suppressed (A2P not approved)");
-      return res
-        .status(200)
-        .json({ message: "A2P not approved; no auto-reply sent." });
+      return res.status(200).json({ message: "A2P not approved; no auto-reply sent." });
     }
 
     if ((lead as any).unsubscribed || (lead as any).optOut) {
@@ -1093,9 +992,7 @@ export default async function handler(
       (id: any) => typeof id === "string" && id.includes("client_retention"),
     );
     if (isClientRetention)
-      return res
-        .status(200)
-        .json({ message: "Client retention reply — no AI engagement." });
+      return res.status(200).json({ message: "Client retention reply — no AI engagement." });
 
     // ✅ Cancel drips & engage AI (legacy array-based)
     lead.assignedDrips = [];
@@ -1135,6 +1032,7 @@ export default async function handler(
     // 2.5) explicit info-request (enforce your exact sentence)
     if (!requestedISO && isInfoRequest(body)) {
       aiReply = `Unfortunately as of now there's nothing to send over without getting some information from you. When's a good time for a quick 5 minute call? After that we can send everything out.`;
+      aiReply = sanitizeSMS(aiReply);
       memory.state = "qa";
     }
 
@@ -1147,10 +1045,10 @@ export default async function handler(
 
         if (!requestedISO) {
           if (ex.intent === "ask_duration") {
-            aiReply = `It’s quick—about 10–15 minutes. Would later today or tomorrow afternoon work?`;
+            aiReply = sanitizeSMS(`It’s quick—about 10–15 minutes. Would later today or tomorrow afternoon work?`);
             memory.state = "qa";
           } else if (ex.intent === "ask_cost") {
-            aiReply = `No cost at all—just a quick review. What’s better for you, today or tomorrow?`;
+            aiReply = sanitizeSMS(`No cost at all—just a quick review. What’s better for you, today or tomorrow?`);
             memory.state = "qa";
           } else {
             aiReply = await generateConversationalReply({
@@ -1161,40 +1059,31 @@ export default async function handler(
               inboundText: body,
               history: lead.interactionHistory || [],
             });
-            if (!askedRecently(memory, "chat_followup"))
-              pushAsked(memory, "chat_followup");
+            if (!askedRecently(memory, "chat_followup")) pushAsked(memory, "chat_followup");
             memory.state = "awaiting_time";
           }
         }
       } catch {
         memory.state = "awaiting_time";
-        const lastAI = [...(lead.interactionHistory || [])]
-          .reverse()
-          .find((m: any) => m.type === "ai");
-        const v =
-          `What time works for you—today or tomorrow? You can reply like “tomorrow 3:00 pm”.`;
-        aiReply =
-          lastAI?.text?.trim() === v
-            ? `Shoot me a time that works (e.g., “tomorrow 3:00 pm”) and I’ll text a confirmation.`
-            : v;
+        const lastAI = [...(lead.interactionHistory || [])].reverse().find((m: any) => m.type === "ai");
+        const v = sanitizeSMS(`What time works for you—today or tomorrow? You can reply like “tomorrow 3:00 pm”.`);
+        aiReply = lastAI?.text?.trim() === v
+          ? sanitizeSMS(`Shoot me a time that works (e.g., “tomorrow 3:00 pm”) and I’ll text a confirmation.`)
+          : v;
       }
     }
 
     // 4) If we have a concrete time now, confirm + (try to) book
     if (requestedISO) {
       const zone = tz;
-      const clientTime = DateTime.fromISO(requestedISO, { zone }).set({
-        second: 0,
-        millisecond: 0,
-      });
+      const clientTime = DateTime.fromISO(requestedISO, { zone }).set({ second: 0, millisecond: 0 });
 
       const alreadyConfirmedSame =
         (lead as any).aiLastConfirmedISO &&
-        DateTime.fromISO((lead as any).aiLastConfirmedISO).toISO() ===
-          clientTime.toISO();
+        DateTime.fromISO((lead as any).aiLastConfirmedISO).toISO() === clientTime.toISO();
 
       if (alreadyConfirmedSame) {
-        aiReply = `All set — you’re on my schedule. Talk soon!`;
+        aiReply = sanitizeSMS(`All set — you’re on my schedule. Talk soon!`);
       } else {
         try {
           const bookingPayload = {
@@ -1241,9 +1130,7 @@ export default async function handler(
                 timeISO: clientTime.toISO()!,
                 timezone: clientTime.offsetNameShort || undefined,
                 source: "AI",
-                eventUrl: (bookingRes.data?.event?.htmlLink ||
-                  bookingRes.data?.htmlLink ||
-                  "") as string | undefined,
+                eventUrl: (bookingRes.data?.event?.htmlLink || bookingRes.data?.htmlLink || "") as string | undefined,
               });
             } catch (e) {
               console.warn("Email send failed (appointment):", e);
@@ -1252,14 +1139,11 @@ export default async function handler(
             console.warn("⚠️ Booking API responded but not success:", bookingRes.data);
           }
         } catch (e) {
-          console.error(
-            "⚠️ Booking API failed (proceeding to confirm by SMS):",
-            (e as any)?.response?.data || e,
-          );
+          console.error("⚠️ Booking API failed (proceeding to confirm by SMS):", (e as any)?.response?.data || e);
         }
 
         const readable = clientTime.toFormat("ccc, MMM d 'at' h:mm a");
-        aiReply = `Perfect — I’ve got you down for ${readable} ${clientTime.offsetNameShort}. You’ll get a confirmation shortly. Reply RESCHEDULE if you need to change it.`;
+        aiReply = sanitizeSMS(`Perfect — I’ve got you down for ${readable} ${clientTime.offsetNameShort}. You’ll get a confirmation shortly. Reply RESCHEDULE if you need to change it.`);
         (lead as any).aiLastConfirmedISO = clientTime.toISO();
         (lead as any).aiLastProposedISO = clientTime.toISO();
         memory.state = "scheduled";
@@ -1271,13 +1155,12 @@ export default async function handler(
 
     // Fallback copy if still empty
     if (!aiReply) {
-      aiReply = "When’s a good time today or tomorrow for a quick 5-minute chat?";
+      aiReply = sanitizeSMS("When’s a good time today or tomorrow for a quick 5-minute chat?");
     }
 
     memory.lastDraft = aiReply;
-
     (lead as any).aiMemory = memory;
-    lead.aiLastResponseAt = new Date();
+    // ❗ Do NOT stamp aiLastResponseAt here — it would trigger cooldown skip before we actually send
     await lead.save();
 
     // Delayed AI reply (human-like), force FROM the exact inbound number
@@ -1288,41 +1171,41 @@ export default async function handler(
         const fresh = await Lead.findById(lead._id);
         if (!fresh) return;
 
-        if (
-          fresh.aiLastResponseAt &&
-          Date.now() - new Date(fresh.aiLastResponseAt).getTime() < 2 * 60 * 1000
-        ) {
-          console.log("⏳ Skipping AI reply (cool-down).");
-          return;
+        // Env-driven cooldown guard (skip if too soon since last AI send)
+        if (AI_COOLDOWN_SECONDS > 0 && fresh.aiLastResponseAt) {
+          const sinceMs = Date.now() - new Date(fresh.aiLastResponseAt).getTime();
+          if (sinceMs < AI_COOLDOWN_SECONDS * 1000) {
+            console.log(`⏳ Skipping AI reply (cool-down ${AI_COOLDOWN_SECONDS}s).`);
+            return;
+          }
         }
+
         if ((fresh as any).appointmentTime && !(fresh as any).aiLastConfirmedISO) {
           console.log("✅ Appointment already set; skipping nudge.");
           return;
         }
 
-        const lastAI = [...(fresh.interactionHistory || [])]
-          .reverse()
-          .find((m: any) => m.type === "ai");
-        const draft =
+        const lastAI = [...(fresh.interactionHistory || [])].reverse().find((m: any) => m.type === "ai");
+        const draft = sanitizeSMS(
           ((fresh as any).aiMemory?.lastDraft as string) ||
-          "When’s a good time today or tomorrow for a quick chat?";
-        if (lastAI && lastAI.text?.trim() === draft.trim()) {
+          "When’s a good time today or tomorrow for a quick chat?"
+        );
+        if (lastAI && sanitizeSMS(lastAI.text || "") === draft) {
           console.log("🔁 Same AI content as last time — not sending.");
+          // still stamp the time lightly to prevent rapid loops
+          fresh.aiLastResponseAt = new Date();
+          await fresh.save();
           return;
         }
 
         const zone = pickLeadZone(fresh);
         const { isQuiet, scheduledAt } = computeQuietHoursScheduling(zone);
 
-        const baseParams = await getSendParams(
-          String(user._id),
-          toNumber,
-          fromNumber,
-          { forceFrom: toNumber },
-        );
+        const baseParams = await getSendParams(String(user._id), toNumber, fromNumber, { forceFrom: toNumber });
         const paramsOut: Parameters<Twilio["messages"]["create"]>[0] = {
           ...baseParams,
           body: draft,
+          statusCallback: STATUS_CALLBACK,
         };
 
         const canSchedule = "messagingServiceSid" in paramsOut;
@@ -1330,15 +1213,14 @@ export default async function handler(
           (paramsOut as any).scheduleType = "fixed";
           (paramsOut as any).sendAt = scheduledAt.toISOString();
         } else if (isQuiet && !canSchedule) {
-          console.warn(
-            "⚠️ Quiet hours but cannot schedule when forcing a single From number. Sending immediately.",
-          );
+          console.warn("⚠️ Quiet hours but cannot schedule when forcing a single From number. Sending immediately.");
         }
 
+        // Persist AI message to lead history before network call, so UI reflects immediately
         const aiEntry = { type: "ai" as const, text: draft, date: new Date() };
         fresh.interactionHistory = fresh.interactionHistory || [];
         fresh.interactionHistory.push(aiEntry);
-        fresh.aiLastResponseAt = new Date();
+        fresh.aiLastResponseAt = new Date(); // stamp on actual attempt
         await fresh.save();
 
         const { client } = await getClientForUser(user.email);
@@ -1354,8 +1236,7 @@ export default async function handler(
           from: toNumber,
           sid: (twilioMsg as any)?.sid,
           status: (twilioMsg as any)?.status,
-          sentAt:
-            isQuiet && scheduledAt && canSchedule ? scheduledAt : new Date(),
+          sentAt: isQuiet && scheduledAt && canSchedule ? scheduledAt : new Date(),
           fromServiceSid: (paramsOut as any).messagingServiceSid,
         });
 
@@ -1390,14 +1271,10 @@ export default async function handler(
       }
     }, humanDelayMs());
 
-    return res
-      .status(200)
-      .json({ message: "Inbound received; AI reply scheduled." });
+    return res.status(200).json({ message: "Inbound received; AI reply scheduled." });
   } catch (error: any) {
     console.error("❌ SMS handler failed:", error);
-    return res
-      .status(200)
-      .json({ message: "Inbound SMS handled with internal error." });
+    return res.status(200).json({ message: "Inbound SMS handled with internal error." });
   }
 }
 
