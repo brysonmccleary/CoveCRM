@@ -1,12 +1,15 @@
+// /pages/api/cron/google-sheets-poll.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import Lead from "@/models/Lead";
+import Folder from "@/models/Folder";
 import mongoose from "mongoose";
 import { google } from "googleapis";
 import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
+import { sendInitialDrip } from "@/utils/sendInitialDrip";
 
-const FINGERPRINT = "selfheal-v5e"; // TS fixes: mapping cast; remove invalid `multi` on updateOne
+const FINGERPRINT = "selfheal-v5f"; // sheets poll + drip on new leads
 
 // --- Normalizers -------------------------------------------------------------
 const normPhone = (v: any) => String(v ?? "").replace(/\D+/g, "");
@@ -36,6 +39,9 @@ type FolderRaw = {
   name?: string;
   userEmail?: string;
   source?: string;
+  assignedDrip?: any;
+  agentName?: string;
+  agentPhone?: string;
 } | null;
 
 // ---------- RAW helpers (folders) ----------
@@ -53,7 +59,7 @@ async function ensureNonSystemFolderRaw(
   const existing = (await coll.findOne({ userEmail, name: baseName })) as FolderRaw;
   if (existing && existing.name && !isSystemFolder(existing.name)) return existing as NonNullable<FolderRaw>;
 
-  // 2) Upsert exact name (safely extract value)
+  // 2) Upsert exact name
   const up = await coll.findOneAndUpdate(
     { userEmail, name: baseName },
     { $setOnInsert: { userEmail, name: baseName, source: "google-sheets" } },
@@ -212,6 +218,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const folderDoc = await ensureNonSystemFolderRaw(userEmail, computedDefault);
         const targetFolderId = folderDoc._id as mongoose.Types.ObjectId;
         const targetFolderName = String(folderDoc.name || "");
+        const assignedDrip = (folderDoc as any)?.assignedDrip || null;
+        const agentName = (folderDoc as any)?.agentName || (user as any)?.name || "your agent";
+        const agentPhone = (folderDoc as any)?.agentPhone || (user as any)?.phoneNumber || "N/A";
 
         // Persist sanitized link (unless dry run)
         if (!dryRun) {
@@ -225,9 +234,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             },
             {
               $set: {
-                ...(cfg.title
-                  ? { "googleSheets.syncedSheets.$[t].title": title }
-                  : {}),
+                ...(cfg.title ? { "googleSheets.syncedSheets.$[t].title": title } : {}),
                 "googleSheets.syncedSheets.$[t].folderId": targetFolderId,
                 "googleSheets.syncedSheets.$[t].folderName": targetFolderName,
                 ...(sheetId != null
@@ -235,25 +242,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                   : {}),
               },
             },
-            {
-              arrayFilters: [{ "t.spreadsheetId": spreadsheetId }],
-              // NOTE: removed invalid `multi` flag; updateOne updates the first matching doc
-            }
-          ).catch(() => {/* ignore if arrayFilters doesn't match legacy doc */});
+            { arrayFilters: [{ "t.spreadsheetId": spreadsheetId }] }
+          ).catch(() => {});
 
           // Legacy array shape write (best-effort)
           await User.updateOne(
-            {
-              email: userEmail,
-              "googleSheets.sheets.sheetId": spreadsheetId,
-            },
+            { email: userEmail, "googleSheets.sheets.sheetId": spreadsheetId },
             {
               $set: {
                 "googleSheets.sheets.$.folderId": targetFolderId,
                 "googleSheets.sheets.$.folderName": targetFolderName,
               },
             }
-          ).catch(() => {/* ignore if not legacy */});
+          ).catch(() => {});
         }
 
         // --- Read values ----------------------------------------------------
@@ -267,7 +268,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const rawHeaders = (values[headerIdx] || []).map((h) => String(h ?? "").trim());
 
         const normalizedMapping: Record<string, string> = {};
-        // 🔧 TS fix: cast entries + guard val is string
         Object.entries(mapping as Record<string, unknown>).forEach(([key, val]) => {
           if (typeof val === "string" && val) {
             normalizedMapping[normHeader(key)] = val;
@@ -318,22 +318,49 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             const or: any[] = [];
             if (p) or.push({ normalizedPhone: p });
             if (e) or.push({ email: e });
-
             const filter = { userEmail, ...(or.length ? { $or: or } : {}) };
+
             const existing = await Lead.findOne(filter)
               .select("_id")
               .lean<{ _id: mongoose.Types.ObjectId } | null>();
 
             if (!existing) {
-              if (!dryRun) await Lead.create({
-                ...doc,
-                folderId: targetFolderId,
-                folder_name: targetFolderName,
-                ["Folder Name"]: targetFolderName
-              });
-              imported++;
+              if (!dryRun) {
+                const created = await Lead.create({
+                  ...doc,
+                  folderId: targetFolderId,
+                  folder_name: targetFolderName,
+                  ["Folder Name"]: targetFolderName,
+                  status: (doc as any).status || "New",
+                });
+                imported++;
+
+                // 🔔 If this folder has an assigned drip, fire the initial message now
+                if (assignedDrip) {
+                  try {
+                    const dripLead = {
+                      ...created.toObject?.() ?? (created as any),
+                      name:
+                        (doc["Full Name"] as string) ||
+                        (doc["Name"] as string) ||
+                        `${doc["First Name"] || ""} ${doc["Last Name"] || ""}`.trim() ||
+                        doc.name ||
+                        "",
+                      phone: p ? `+1${p.slice(-10)}` : (doc.phone || (doc as any).Phone || ""),
+                      folderName: targetFolderName,
+                      agentName,
+                      agentPhone,
+                    };
+                    await sendInitialDrip(dripLead);
+                  } catch (e) {
+                    console.warn("sendInitialDrip failed:", (e as any)?.message || e);
+                  }
+                }
+              } else {
+                imported++;
+              }
             } else {
-              if (!dryRun)
+              if (!dryRun) {
                 await Lead.updateOne(
                   { _id: existing._id },
                   {
@@ -341,10 +368,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                       ...doc,
                       folderId: targetFolderId,
                       folder_name: targetFolderName,
-                      ["Folder Name"]: targetFolderName
-                    }
+                      ["Folder Name"]: targetFolderName,
+                    },
                   }
                 );
+              }
               updated++;
             }
           }
@@ -354,10 +382,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (!dryRun) {
           // Try to set pointer on both shapes (best-effort)
           await User.updateOne(
-            {
-              email: userEmail,
-              "googleSheets.syncedSheets.spreadsheetId": spreadsheetId,
-            },
+            { email: userEmail, "googleSheets.syncedSheets.spreadsheetId": spreadsheetId },
             {
               $set: {
                 "googleSheets.syncedSheets.$.lastRowImported": newLast,
@@ -366,13 +391,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 "googleSheets.syncedSheets.$.folderName": targetFolderName,
               },
             }
-          ).catch(() => {/* ignore if not present */});
+          ).catch(() => {});
 
           await User.updateOne(
-            {
-              email: userEmail,
-              "googleSheets.sheets.sheetId": spreadsheetId,
-            },
+            { email: userEmail, "googleSheets.sheets.sheetId": spreadsheetId },
             {
               $set: {
                 "googleSheets.sheets.$.lastRowImported": newLast,
@@ -381,7 +403,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 "googleSheets.sheets.$.folderName": targetFolderName,
               },
             }
-          ).catch(() => {/* ignore if not present */});
+          ).catch(() => {});
         }
 
         detailsAll.push({
@@ -409,6 +431,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 diag: {
                   computedDefault,
                   rawBypassed: true,
+                  assignedDrip: !!assignedDrip,
                 },
               }
             : {}),
