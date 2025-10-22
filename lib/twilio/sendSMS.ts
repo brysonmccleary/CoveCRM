@@ -15,7 +15,18 @@ const STATUS_CALLBACK = process.env.A2P_STATUS_CALLBACK_URL || (BASE_URL ? `${BA
 const SHARED_MESSAGING_SERVICE_SID = process.env.TWILIO_MESSAGING_SERVICE_SID;
 const DEV_ALLOW_UNAPPROVED = process.env.DEV_ALLOW_UNAPPROVED === "1";
 const DEFAULT_MPS = Math.max(1, parseInt(process.env.TWILIO_DEFAULT_MPS || "1", 10) || 1);
-const SMS_COST = 0.0075;
+
+// === Pricing ===
+// Base Twilio SMS price you pay (per segment). Keep fallback aligned with your old constant.
+const SMS_BASE_COST = Number.isFinite(parseFloat(process.env.SMS_BASE_COST || ""))
+  ? parseFloat(process.env.SMS_BASE_COST as string)
+  : 0.0075;
+
+// Multiplier markup you charge your users (covers Twilio + OpenAI etc.).
+// Default = 2x as requested.
+const SMS_MARKUP_MULTIPLIER = Number.isFinite(parseFloat(process.env.SMS_MARKUP_MULTIPLIER || ""))
+  ? parseFloat(process.env.SMS_MARKUP_MULTIPLIER as string)
+  : 2.0;
 
 const QUIET_START_HOUR = 21;
 const QUIET_END_HOUR = 8;
@@ -112,14 +123,13 @@ type SendCoreParams = {
   from?: string | null;
   mediaUrls?: string[] | null;
 
-  // NEW: idempotency & drip metadata (ensures single send)
+  // Idempotency & drip metadata
   idempotencyKey?: string | null;
   enrollmentId?: string | null;
   campaignId?: string | null;
   stepIndex?: number | null;
 
-  // NEW: explicit schedule support (UTC ISO). If provided and using a Messaging Service,
-  // we will set scheduleType=fixed and sendAt accordingly.
+  // Explicit schedule (UTC ISO) — only with a Messaging Service
   sendAtISO?: string | null;
 };
 
@@ -141,6 +151,23 @@ function enforceMinLeadDT(dt: DateTime): DateTime {
   const minUtc = DateTime.utc().plus({ minutes: MIN_SCHEDULE_LEAD_MINUTES });
   const asUtc = dt.toUTC();
   return asUtc < minUtc ? minUtc : asUtc;
+}
+
+// === GSM-7 vs UCS-2 detection (rough but effective for pricing) ===
+const GSM7_REGEX = /^[\u0000-\u007F€£¥èéùìòÇØøÅåÄäÖöÑñÆæßÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖØÙÚÛÜÝÞàáâãäåæçèéêëìíîïðñòóôõöøùúûüýþ^{}\\[~]|[\u0000-\u001F]|[\u007F]]*$/;
+// Conservatively treat as UCS-2 if any char looks outside basic GSM-7
+function isGsm7(text: string): boolean {
+  if (!text) return true;
+  return GSM7_REGEX.test(text);
+}
+function estimateSegments(text: string): number {
+  if (!text) return 1;
+  const gsm = isGsm7(text);
+  const single = gsm ? 160 : 70;
+  const concat = gsm ? 153 : 67;
+  const len = text.length;
+  if (len <= single) return 1;
+  return Math.ceil(len / concat);
 }
 
 async function sendCore(paramsIn: SendCoreParams): Promise<{ sid?: string; serviceSid: string; messageId: string; scheduledAt?: string }> {
@@ -197,9 +224,7 @@ async function sendCore(paramsIn: SendCoreParams): Promise<{ sid?: string; servi
     return { serviceSid: messagingServiceSid || "", messageId: String(suppressed._id) };
   }
 
-  // Determine scheduling:
-  // - If explicit sendAtISO provided and we can use a Messaging Service, schedule for that time (with min lead).
-  // - Else, fall back to quiet-hours based scheduling.
+  // Determine scheduling
   let explicitSchedule: Date | undefined;
   if (paramsIn.sendAtISO) {
     const desired = DateTime.fromISO(paramsIn.sendAtISO);
@@ -211,7 +236,7 @@ async function sendCore(paramsIn: SendCoreParams): Promise<{ sid?: string; servi
   const zone = pickLeadZone(lead);
   const { isQuiet, scheduledAt: quietSchedule } = computeQuietHoursScheduling(zone);
 
-  // PRE-INSERT queued row with IDEMPOTENCY KEY (duplicate gate)
+  // PRE-INSERT queued row with IDEMPOTENCY KEY
   let preRow: any;
   try {
     preRow = await Message.create({
@@ -249,6 +274,7 @@ async function sendCore(paramsIn: SendCoreParams): Promise<{ sid?: string; servi
 
   // Ensure we have a Messaging Service if we need to schedule explicitly
   if (!forcedFrom && (!messagingServiceSid || (explicitSchedule && !messagingServiceSid))) {
+    const { usingPersonal } = await getClientForUser(user.email);
     if (!usingPersonal) {
       const msid = await ensureTenantMessagingService(String(user._id), user.name || user.email);
       messagingServiceSid = msid;
@@ -278,11 +304,17 @@ async function sendCore(paramsIn: SendCoreParams): Promise<{ sid?: string; servi
 
   try {
     const tw = await client.messages.create(twParams);
+
+    // === BILLING UPDATE: per-segment × base × multiplier ===
     if (usingPersonal || (user as any).billingMode === "self") {
+      // customer pays Twilio directly — do not double-charge
       await trackUsage({ user, amount: 0, source: "twilio-self" });
     } else {
-      await trackUsage({ user, amount: SMS_COST, source: "twilio" });
+      const segments = estimateSegments(paramsIn.body || "");
+      const perMessageCharge = Number((SMS_BASE_COST * SMS_MARKUP_MULTIPLIER * Math.max(1, segments)).toFixed(6));
+      await trackUsage({ user, amount: perMessageCharge, source: "twilio" });
     }
+
     const newStatus = (tw.status as string) || "accepted";
 
     const sentAt =
@@ -335,7 +367,7 @@ export async function sendSms(args: {
   to: string; body: string; userEmail: string; leadId?: string;
   messagingServiceSid?: string; from?: string; mediaUrls?: string[];
   idempotencyKey?: string; enrollmentId?: string; campaignId?: string; stepIndex?: number;
-  /** NEW: ISO timestamp (UTC) for Twilio fixed scheduling. */
+  /** ISO timestamp (UTC) for Twilio fixed scheduling. */
   sendAtISO?: string;
 }) {
   const user = await ensureUserDoc(args.userEmail);
@@ -354,121 +386,4 @@ export async function sendSms(args: {
     stepIndex: typeof args.stepIndex === "number" ? args.stepIndex : null,
     sendAtISO: args.sendAtISO || null,
   });
-}
-
-/* --------------- KEEPING EXISTING STATUS-CALLBACK CODE BELOW INTACT --------------- */
-/* (unchanged; included here exactly as in your current file) */
-import type { NextApiRequest, NextApiResponse } from "next";
-import { buffer } from "micro";
-import twilio from "twilio";
-import mongooseConnect from "@/lib/mongooseConnect";
-import { getUserByPhoneNumber } from "@/lib/getUserByPhoneNumber";
-import { trackUsage as trackUsage2 } from "@/lib/billing/trackUsage";
-import User2 from "@/models/User";
-import Message2 from "@/models/Message";
-import Call from "@/models/Call";
-
-export const config = { api: { bodyParser: false } };
-
-const CALL_COST_PER_SECOND = 0.000333;
-
-const PLATFORM_AUTH_TOKEN = (process.env.TWILIO_AUTH_TOKEN || "").trim();
-const RAW_BASE = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "").replace(/\/$/, "");
-const BASE_URL2 = RAW_BASE || "";
-const ALLOW_DEV_TWILIO_TEST = process.env.ALLOW_LOCAL_TWILIO_TEST === "1" && process.env.NODE_ENV !== "production";
-
-const TERMINAL_SMS_STATES = new Set(["delivered","failed","undelivered","canceled"]);
-const TERMINAL_VOICE_STATES = new Set(["completed","busy","failed","no-answer","canceled"]);
-
-function candidateUrls(path: string): string[] {
-  if (!BASE_URL2) return [];
-  const u = new URL(BASE_URL2);
-  const withWww = u.hostname.startsWith("www.") ? BASE_URL2 : `${u.protocol}//www.${u.hostname}${u.port ? ":" + u.port : ""}`;
-  const withoutWww = u.hostname.startsWith("www.") ? `${u.protocol}//${u.hostname.replace(/^www\./, "")}${u.port ? ":" + u.port : ""}` : BASE_URL2;
-  return [
-    `${BASE_URL2}${path}`,
-    `${withWww}${path}`,
-    `${withoutWww}${path}`,
-  ].filter((v, i, a) => !!v && a.indexOf(v) === i);
-}
-async function tryValidate(signature: string, params: Record<string, any>, urls: string[], tokens: (string | undefined)[]) {
-  for (const token of tokens) {
-    const t = (token || "").trim();
-    if (!t) continue;
-    for (const url of urls) {
-      if (twilio.validateRequest(t, signature, url, params)) return true;
-    }
-  }
-  return false;
-}
-
-// Helper: resolve which user owns a Twilio number
-async function resolveOwnerEmailByOwnedNumber(num: string): Promise<string | null> {
-  if (!num) return null;
-  const owner =
-    (await User2.findOne({ "numbers.phoneNumber": num })) ||
-    (await User2.findOne({ "numbers.messagingServiceSid": num }));
-  return owner?.email?.toLowerCase?.() || null;
-}
-
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "POST") { res.status(405).end("Method Not Allowed"); return; }
-
-  const raw = await buffer(req);
-  const bodyStr = raw.toString("utf8");
-  const params = new URLSearchParams(bodyStr);
-  const signature = (req.headers["x-twilio-signature"] || "") as string;
-  const urls = candidateUrls("/api/twilio/status-callback");
-  const paramsObj = Object.fromEntries(params as any);
-
-  await mongooseConnect();
-
-  // Try platform token first
-  let valid = await tryValidate(signature, paramsObj, urls, [PLATFORM_AUTH_TOKEN]);
-
-  // If invalid and not bypass, try the user's personal token when we can infer the owner
-  if (!valid && !ALLOW_DEV_TWILIO_TEST) {
-    const To = params.get("To") || params.get("Called") || "";
-    const From = params.get("From") || params.get("Caller") || "";
-    const CallSid = params.get("CallSid") || "";
-
-    const inboundOwner = To ? await getUserByPhoneNumber(To) : null;
-    const outboundOwner = From ? await getUserByPhoneNumber(From) : null;
-    const callDoc = CallSid ? await Call.findOne({ callSid: CallSid }) : null;
-
-    let personalToken: string | undefined;
-    const candidateEmails = [
-      inboundOwner?.email?.toLowerCase?.(),
-      outboundOwner?.email?.toLowerCase?.(),
-      (callDoc as any)?.userEmail?.toLowerCase?.(),
-    ].filter(Boolean) as string[];
-
-    for (const em of candidateEmails) {
-      const u = await User2.findOne({ email: em });
-      const tok = (u as any)?.twilio?.authToken as string | undefined;
-      if (tok) { personalToken = tok; break; }
-    }
-
-    if (personalToken) {
-      valid = await tryValidate(signature, paramsObj, urls, [personalToken]);
-    }
-  }
-
-  if (!valid && !ALLOW_DEV_TWILIO_TEST) {
-    console.warn("❌ Invalid Twilio signature on status-callback (all tokens/URLs failed)");
-    res.status(403).end("Invalid signature");
-    return;
-  }
-  if (!valid && ALLOW_DEV_TWILIO_TEST) {
-    console.warn("⚠️ Dev bypass: Twilio signature validation skipped (status-callback).");
-  }
-
-  try {
-    // (… remainder unchanged …)
-    res.status(200).end();
-    return;
-  } catch (err) {
-    console.error("❌ Twilio status callback error:", err);
-    res.status(200).end();
-  }
 }

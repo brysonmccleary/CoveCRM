@@ -23,6 +23,7 @@ import { getClientForUser } from "@/lib/twilio/getClientForUser";
 // ✅ NEW: billing imports
 import { trackUsage } from "@/lib/billing/trackUsage";
 import { priceOpenAIUsage } from "@/lib/billing/openaiPricing";
+import { estimateSmsChargeUSD } from "@/lib/billing/smsPricing";
 
 export const config = { api: { bodyParser: false } };
 
@@ -41,6 +42,9 @@ const STATUS_CALLBACK =
 
 const ALLOW_DEV_TWILIO_TEST =
   process.env.ALLOW_LOCAL_TWILIO_TEST === "1" && process.env.NODE_ENV !== "production";
+
+// ✅ Toggle whether to add separate OpenAI line items (default OFF; SMS covers it)
+const BILL_OPENAI_SEPARATELY = (process.env.BILL_OPENAI_SEPARATELY || "0") !== "0";
 
 // Human delay: 3–4 min; set AI_TEST_MODE=1 for 3–5s while testing
 const AI_TEST_MODE = process.env.AI_TEST_MODE === "1";
@@ -405,7 +409,7 @@ let _lastInboundUserEmailForBilling: string | null = null;
 async function extractIntentAndTimeLLM(input: {
   text: string;
   nowISO: string;
-	 tz: string;
+  tz: string;
 }) {
   const sys = `Extract intent for a brief SMS thread about booking a call.
 Return STRICT JSON with keys:
@@ -424,7 +428,7 @@ yesno: "yes"|"no"|"unknown"`;
     response_format: { type: "json_object" },
   });
 
-  // ✅ Bill OpenAI usage (raw cost; markup applied in trackUsage)
+  // ✅ Bill OpenAI usage (raw cost; optional separate line item)
   try {
     const usage = (resp as any)?.usage || {};
     const raw = priceOpenAIUsage({
@@ -432,7 +436,7 @@ yesno: "yes"|"no"|"unknown"`;
       promptTokens: usage?.prompt_tokens,
       completionTokens: usage?.completion_tokens,
     });
-    if (raw > 0 && _lastInboundUserEmailForBilling) {
+    if (BILL_OPENAI_SEPARATELY && raw > 0 && _lastInboundUserEmailForBilling) {
       await trackUsage({
         user: { email: _lastInboundUserEmailForBilling },
         amount: raw,
@@ -466,7 +470,6 @@ function historyToChatMessages(history: any[] = []) {
 }
 
 // --- NEW: Deterministic matcher (pattern -> reply)
-// Every reply stays human, concise, and ends by nudging to a time.
 function buildDeterministicReply(textRaw: string, context: string): string | null {
   const t = (textRaw || "").trim().toLowerCase();
 
@@ -598,7 +601,7 @@ You are a helpful human-like SMS assistant for an insurance agent.
     messages: [{ role: "system", content: sys }, ...chat],
   });
 
-  // ✅ Bill OpenAI usage
+  // ✅ Bill OpenAI usage (optional separate line)
   try {
     const usage = (resp as any)?.usage || {};
     const raw = priceOpenAIUsage({
@@ -606,7 +609,7 @@ You are a helpful human-like SMS assistant for an insurance agent.
       promptTokens: usage?.prompt_tokens,
       completionTokens: usage?.completion_tokens,
     });
-    if (raw > 0 && _lastInboundUserEmailForBilling) {
+    if (BILL_OPENAI_SEPARATELY && raw > 0 && _lastInboundUserEmailForBilling) {
       await trackUsage({
         user: { email: _lastInboundUserEmailForBilling },
         amount: raw,
@@ -946,7 +949,7 @@ export default async function handler(
         : (pauseRes.nModified ?? 0);
       if (paused > 0) {
         const note = {
-          type: "status" as const,            // ← was "system"
+          type: "status" as const,
           text: `[system] Auto-paused ${paused} active drip enrollment(s) due to lead reply.`,
           date: new Date(),
         };
@@ -1008,7 +1011,7 @@ export default async function handler(
       (lead as any).status = "Not Interested";
 
       const note = {
-        type: "status" as const,            // ← was "system"
+        type: "status" as const,
         text: "[system] Lead opted out — moved to Not Interested.",
         date: new Date(),
       };
@@ -1033,7 +1036,7 @@ export default async function handler(
 
     if (isHelp(body)) {
       const note = {
-        type: "status" as const,            // ← was "system"
+        type: "status" as const,
         text: "[system] HELP detected.",
         date: new Date(),
       };
@@ -1047,7 +1050,7 @@ export default async function handler(
       (lead as any).unsubscribed = false;
       (lead as any).optOut = false;
       const note = {
-        type: "status" as const,            // ← was "system"
+        type: "status" as const,
         text: "[system] START/UNSTOP detected — lead opted back in.",
         date: new Date(),
       };
@@ -1066,7 +1069,7 @@ export default async function handler(
       (a2p?.messagingReady && a2p?.messagingServiceSid);
     if (usConversation && !approved) {
       const note = {
-        type: "status" as const,            // ← was "system"
+        type: "status" as const,
         text: "[note] Auto-reply suppressed: A2P not approved yet.",
         date: new Date(),
       };
@@ -1356,6 +1359,20 @@ export default async function handler(
           fromServiceSid: (paramsOut as any).messagingServiceSid,
         });
 
+        // ✅ BILLING for AI outbound SMS (platform-billed users)
+        try {
+          const billUser = await User.findOne({ email: (user.email || "").toLowerCase() });
+          if (billUser && billUser.billingMode !== "self") {
+            const amount = estimateSmsChargeUSD({
+              body: draft || "",
+              mediaUrls: (paramsOut as any).mediaUrl || null,
+            });
+            await trackUsage({ user: billUser, amount, source: "twilio" });
+          }
+        } catch (e) {
+          console.warn("⚠️ Billing (AI outbound SMS) failed (non-fatal):", (e as any)?.message || e);
+        }
+
         let io2 = (res as any)?.socket?.server?.io;
         if (io2) io2.to(user.email).emit("message:new", { leadId: fresh._id, ...aiEntry });
 
@@ -1407,7 +1424,7 @@ async function getSendParams(
       messagingServiceSid: process.env.TWILIO_MESSAGING_SERVICE_SID,
       to: fromNumber,
     } as Parameters<Twilio["messages"]["create"]>[0];
-    }
+  }
 
   const a2p = await A2PProfile.findOne({ userId });
   if (a2p?.messagingServiceSid) {
