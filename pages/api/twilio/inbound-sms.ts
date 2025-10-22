@@ -46,7 +46,7 @@ const ALLOW_DEV_TWILIO_TEST =
 // Whether to add separate OpenAI line items (default OFF; SMS covers it)
 const BILL_OPENAI_SEPARATELY = (process.env.BILL_OPENAI_SEPARATELY || "0") !== "0";
 
-// Human delay: 3–4 min; set AI_TEST_MODE=1 for 3–5s while testing
+// Human delay knob (kept for compatibility; we now send inline)
 const AI_TEST_MODE = process.env.AI_TEST_MODE === "1";
 function humanDelayMs() {
   return AI_TEST_MODE ? 3000 + Math.random() * 2000 : 180000 + Math.random() * 60000;
@@ -56,6 +56,9 @@ function humanDelayMs() {
 const AI_COOLDOWN_SECONDS = Number.isFinite(parseInt(process.env.AI_COOLDOWN_SECONDS || "", 10))
   ? parseInt(process.env.AI_COOLDOWN_SECONDS || "120", 10)
   : 120;
+
+// Stub calendar booking in test environments
+const BOOKING_STUB = process.env.BOOKING_STUB === "1";
 
 // ---------- quiet hours (lead-local) ----------
 const QUIET_START_HOUR = 21; // 9:00 PM
@@ -166,11 +169,9 @@ function normalizeDigits(p: string) {
 
 // Tone enforcement helpers
 function stripUrls(s: string) {
-  // remove http/https/www links
   return s.replace(/\b(?:https?:\/\/|www\.)\S+\b/gi, "");
 }
 function stripEmojis(s: string) {
-  // remove most emoji symbols
   return s.replace(
     /([\u2700-\u27BF]|[\uE000-\uF8FF]|[\uD83C-\uDBFF][\uDC00-\uDFFF]|[\u2600-\u26FF])/g,
     ""
@@ -292,9 +293,7 @@ function extractRequestedISO(textIn: string, state?: string): string | null {
         if (ap === "pm" && h < 12) h += 12;
         if (ap === "am" && h === 12) h = 0;
       }
-      const dt = now
-        .plus({ days: 1 })
-        .set({ hour: h, minute: min, second: 0, millisecond: 0 });
+      const dt = now.plus({ days: 1 }).set({ hour: h, minute: min, second: 0, millisecond: 0 });
       return dt.isValid ? dt.toISO() : null;
     }
   }
@@ -328,8 +327,7 @@ function extractRequestedISO(textIn: string, state?: string): string | null {
   for (const re of patterns) {
     const m = text.match(re);
     if (m) {
-      const month = parseInt(m[1], 10),
-        day = parseInt(m[2], 10);
+      const month = parseInt(m[1], 10), day = parseInt(m[2], 10);
       let h = parseInt(m[3], 10);
       const min = parseInt(m[4], 10) || 0;
       const ap = m[5];
@@ -467,7 +465,6 @@ function buildDeterministicReply(textRaw: string, context: string): string | nul
   // 1) Already have coverage
   if (any("already have coverage", "i already have", "i'm covered", "im covered", "we're covered", "we are covered", "we’re covered", "already insured", "have life insurance", "have insurance already")) {
     return "I can see that on my end, it looks like we can save you anywhere from $20-$50+ a month. When do you have five minutes to talk?";
-    // short, 1–2 sentences, no links/emojis
   }
 
   // 2) Not interested (non-STOP)
@@ -1086,32 +1083,42 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         aiReply = sanitizeSMS(`All set — you’re on my schedule. Talk soon!`);
       } else {
         try {
-          const bookingPayload = {
-            agentEmail: (lead.userEmail || user.email || "").toLowerCase(),
-            name: resolveLeadDisplayName(lead) || "Client",
-            phone: lead.Phone || (lead as any).phone || fromNumber,
-            email: lead.Email || (lead as any).email || "",
-            time: clientTime.toISO(),
-            state: stateCanon || "AZ",
-            durationMinutes: 30,
-            notes: "Auto-booked via inbound SMS",
-          };
+          let bookingSuccess = false;
+          let eventLink: string | undefined;
 
-          console.log("📌 Booking payload ->", bookingPayload);
+          if (BOOKING_STUB) {
+            bookingSuccess = true;
+          } else {
+            const bookingPayload = {
+              agentEmail: (lead.userEmail || user.email || "").toLowerCase(),
+              name: resolveLeadDisplayName(lead) || "Client",
+              phone: lead.Phone || (lead as any).phone || fromNumber,
+              email: lead.Email || (lead as any).email || "",
+              time: clientTime.toISO(),
+              state: stateCanon || "AZ",
+              durationMinutes: 30,
+              notes: "Auto-booked via inbound SMS",
+            };
 
-          const bookingRes = await axios.post(
-            `${RAW_BASE_URL || ABS_BASE_URL}/api/google/calendar/book-appointment`,
-            { ...bookingPayload },
-            {
-              headers: {
-                Authorization: `Bearer ${INTERNAL_API_TOKEN}`,
-                "Content-Type": "application/json",
+            console.log("📌 Booking payload ->", bookingPayload);
+
+            const bookingRes = await axios.post(
+              `${RAW_BASE_URL || ABS_BASE_URL}/api/google/calendar/book-appointment`,
+              { ...bookingPayload },
+              {
+                headers: {
+                  Authorization: `Bearer ${INTERNAL_API_TOKEN}`,
+                  "Content-Type": "application/json",
+                },
+                timeout: 15000,
               },
-              timeout: 15000,
-            },
-          );
+            );
 
-          if ((bookingRes.data || {}).success) {
+            bookingSuccess = !!(bookingRes.data || {}).success;
+            eventLink = (bookingRes.data?.event?.htmlLink || bookingRes.data?.htmlLink || "") as string | undefined;
+          }
+
+          if (bookingSuccess) {
             (lead as any).status = "Booked";
             (lead as any).appointmentTime = clientTime.toJSDate();
 
@@ -1130,13 +1137,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 timeISO: clientTime.toISO()!,
                 timezone: clientTime.offsetNameShort || undefined,
                 source: "AI",
-                eventUrl: (bookingRes.data?.event?.htmlLink || bookingRes.data?.htmlLink || "") as string | undefined,
+                eventUrl: eventLink,
               });
             } catch (e) {
               console.warn("Email send failed (appointment):", e);
             }
           } else {
-            console.warn("⚠️ Booking API responded but not success:", bookingRes.data);
+            console.warn("⚠️ Booking API responded but not success.");
           }
         } catch (e) {
           console.error("⚠️ Booking API failed (proceeding to confirm by SMS):", (e as any)?.response?.data || e);
@@ -1158,120 +1165,90 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       aiReply = sanitizeSMS("When’s a good time today or tomorrow for a quick 5-minute chat?");
     }
 
+    // save the memory + draft
     memory.lastDraft = aiReply;
     (lead as any).aiMemory = memory;
-    // ❗ Do NOT stamp aiLastResponseAt here — it would trigger cooldown skip before we actually send
     await lead.save();
 
-    // Delayed AI reply (human-like), force FROM the exact inbound number
-    setTimeout(async () => {
-      try {
-        await mongooseConnect();
+    // =========================
+    // SEND THE AI MESSAGE NOW
+    // =========================
 
-        const fresh = await Lead.findById(lead._id);
-        if (!fresh) return;
-
-        // Env-driven cooldown guard (skip if too soon since last AI send)
-        if (AI_COOLDOWN_SECONDS > 0 && fresh.aiLastResponseAt) {
-          const sinceMs = Date.now() - new Date(fresh.aiLastResponseAt).getTime();
-          if (sinceMs < AI_COOLDOWN_SECONDS * 1000) {
-            console.log(`⏳ Skipping AI reply (cool-down ${AI_COOLDOWN_SECONDS}s).`);
-            return;
-          }
-        }
-
-        if ((fresh as any).appointmentTime && !(fresh as any).aiLastConfirmedISO) {
-          console.log("✅ Appointment already set; skipping nudge.");
-          return;
-        }
-
-        const lastAI = [...(fresh.interactionHistory || [])].reverse().find((m: any) => m.type === "ai");
-        const draft = sanitizeSMS(
-          ((fresh as any).aiMemory?.lastDraft as string) ||
-          "When’s a good time today or tomorrow for a quick chat?"
-        );
-        if (lastAI && sanitizeSMS(lastAI.text || "") === draft) {
-          console.log("🔁 Same AI content as last time — not sending.");
-          // still stamp the time lightly to prevent rapid loops
-          fresh.aiLastResponseAt = new Date();
-          await fresh.save();
-          return;
-        }
-
-        const zone = pickLeadZone(fresh);
-        const { isQuiet, scheduledAt } = computeQuietHoursScheduling(zone);
-
-        const baseParams = await getSendParams(String(user._id), toNumber, fromNumber, { forceFrom: toNumber });
-        const paramsOut: Parameters<Twilio["messages"]["create"]>[0] = {
-          ...baseParams,
-          body: draft,
-          statusCallback: STATUS_CALLBACK,
-        };
-
-        const canSchedule = "messagingServiceSid" in paramsOut;
-        if (isQuiet && scheduledAt && canSchedule) {
-          (paramsOut as any).scheduleType = "fixed";
-          (paramsOut as any).sendAt = scheduledAt.toISOString();
-        } else if (isQuiet && !canSchedule) {
-          console.warn("⚠️ Quiet hours but cannot schedule when forcing a single From number. Sending immediately.");
-        }
-
-        // Persist AI message to lead history before network call, so UI reflects immediately
-        const aiEntry = { type: "ai" as const, text: draft, date: new Date() };
-        fresh.interactionHistory = fresh.interactionHistory || [];
-        fresh.interactionHistory.push(aiEntry);
-        fresh.aiLastResponseAt = new Date(); // stamp on actual attempt
-        await fresh.save();
-
-        const { client } = await getClientForUser(user.email);
-        const twilioMsg = await client.messages.create(paramsOut);
-
-        await Message.create({
-          leadId: fresh._id,
-          userEmail: user.email,
-          direction: "outbound",
-          text: draft,
-          read: true,
-          to: fromNumber,
-          from: toNumber,
-          sid: (twilioMsg as any)?.sid,
-          status: (twilioMsg as any)?.status,
-          sentAt: isQuiet && scheduledAt && canSchedule ? scheduledAt : new Date(),
-          fromServiceSid: (paramsOut as any).messagingServiceSid,
-        });
-
-        // ✅ BILLING for AI outbound SMS (platform-billed users)
-        try {
-          const billUser = await User.findOne({ email: (user.email || "").toLowerCase() });
-          if (billUser && billUser.billingMode !== "self") {
-            const amount = estimateSmsChargeUSD({
-              body: draft || "",
-              mediaUrls: (paramsOut as any).mediaUrl || null,
-            });
-            await trackUsage({ user: billUser, amount, source: "twilio" });
-          }
-        } catch (e) {
-          console.warn("⚠️ Billing (AI outbound SMS) failed (non-fatal):", (e as any)?.message || e);
-        }
-
-        let io2 = (res as any)?.socket?.server?.io;
-        if (io2) io2.to(user.email).emit("message:new", { leadId: fresh._id, ...aiEntry });
-
-        if (isQuiet && scheduledAt && canSchedule) {
-          console.log(
-            `🕘 Quiet hours: scheduled AI reply to ${fromNumber} at ${scheduledAt.toISOString()} (${zone}) | SID: ${(twilioMsg as any)?.sid}`,
-          );
-        } else {
-          console.log(
-            `🤖 AI reply sent to ${fromNumber} FROM ${toNumber} | SID: ${(twilioMsg as any)?.sid}`,
-          );
-        }
-      } catch (err) {
-        console.error("❌ Delayed send failed:", err);
+    // Cooldown guard (skip if too soon since last AI send)
+    if (AI_COOLDOWN_SECONDS > 0 && (lead as any).aiLastResponseAt) {
+      const sinceMs = Date.now() - new Date((lead as any).aiLastResponseAt).getTime();
+      if (sinceMs < AI_COOLDOWN_SECONDS * 1000) {
+        console.log(`⏳ Skipping AI reply (cool-down ${AI_COOLDOWN_SECONDS}s).`);
+        return res.status(200).json({ message: "Inbound received; suppressed by cooldown." });
       }
-    }, humanDelayMs());
+    }
 
-    return res.status(200).json({ message: "Inbound received; AI reply scheduled." });
+    const zone = pickLeadZone(lead);
+    const { isQuiet, scheduledAt } = computeQuietHoursScheduling(zone);
+
+    // Prefer responding FROM the same number the lead texted
+    const baseParams = await getSendParams(String(user._id), toNumber, fromNumber, { forceFrom: toNumber });
+    const paramsOut: Parameters<Twilio["messages"]["create"]>[0] = {
+      ...baseParams,
+      body: aiReply,
+      statusCallback: STATUS_CALLBACK,
+    };
+
+    // Quiet hours schedule only works with Messaging Service
+    const canSchedule = "messagingServiceSid" in paramsOut;
+    if (isQuiet && scheduledAt && canSchedule) {
+      (paramsOut as any).scheduleType = "fixed";
+      (paramsOut as any).sendAt = scheduledAt.toISOString();
+    } else if (isQuiet && !canSchedule) {
+      console.warn("⚠️ Quiet hours but cannot schedule when forcing a single From number. Sending immediately.");
+    }
+
+    // Immediately reflect on UI before network call
+    const aiEntry = { type: "ai" as const, text: aiReply, date: new Date() };
+    lead.interactionHistory = lead.interactionHistory || [];
+    lead.interactionHistory.push(aiEntry);
+    (lead as any).aiLastResponseAt = new Date();
+    await lead.save();
+    if (io) io.to(user.email).emit("message:new", { leadId: lead._id, ...aiEntry });
+
+    const { client } = await getClientForUser(user.email);
+    const twilioMsg = await client.messages.create(paramsOut);
+
+    await Message.create({
+      leadId: lead._id,
+      userEmail: user.email,
+      direction: "outbound",
+      text: aiReply,
+      read: true,
+      to: fromNumber,
+      from: toNumber,
+      sid: (twilioMsg as any)?.sid,
+      status: (twilioMsg as any)?.status,
+      sentAt: isQuiet && scheduledAt && canSchedule ? scheduledAt : new Date(),
+      fromServiceSid: (paramsOut as any).messagingServiceSid,
+    });
+
+    // ✅ BILLING for AI outbound SMS (platform-billed users)
+    try {
+      const billUser = await User.findOne({ email: (user.email || "").toLowerCase() });
+      if (billUser && billUser.billingMode !== "self") {
+        const amount = estimateSmsChargeUSD({
+          body: aiReply || "",
+          mediaUrls: (paramsOut as any).mediaUrl || null,
+        });
+        await trackUsage({ user: billUser, amount, source: "twilio" });
+      }
+    } catch (e) {
+      console.warn("⚠️ Billing (AI outbound SMS) failed (non-fatal):", (e as any)?.message || e);
+    }
+
+    if (isQuiet && scheduledAt && canSchedule) {
+      console.log(`🕘 Quiet hours: scheduled AI reply to ${fromNumber} at ${scheduledAt.toISOString()} (${zone}) | SID: ${(twilioMsg as any)?.sid}`);
+    } else {
+      console.log(`🤖 AI reply sent to ${fromNumber} FROM ${toNumber} | SID: ${(twilioMsg as any)?.sid}`);
+    }
+
+    return res.status(200).json({ message: "Inbound received; AI reply sent (or scheduled)." });
   } catch (error: any) {
     console.error("❌ SMS handler failed:", error);
     return res.status(200).json({ message: "Inbound SMS handled with internal error." });
