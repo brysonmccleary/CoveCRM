@@ -6,7 +6,7 @@ import mongoose from "mongoose";
 import { google } from "googleapis";
 import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
 
-const FINGERPRINT = "selfheal-v5c"; // +legacy-user-shape support (syncedSheets OR sheets)
+const FINGERPRINT = "selfheal-v5d"; // +legacy-user-shape support; TS fix for mapping entries
 
 // --- Normalizers -------------------------------------------------------------
 const normPhone = (v: any) => String(v ?? "").replace(/\D+/g, "");
@@ -115,7 +115,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const db = mongoose.connection.db;
     if (!db) throw new Error("DB connection not ready (post-connect)");
 
-    // ⬇️ KEY FIX: include legacy shape users too (googleSheets.sheets)
+    // include legacy shape users too
     const users = await User.find({
       ...(onlyUserEmail ? { email: onlyUserEmail } : {}),
       $or: [
@@ -155,7 +155,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const drive = google.drive({ version: "v3", auth: oauth2 });
       const sheetsApi = google.sheets({ version: "v4", auth: oauth2 });
 
-      // ⬇️ KEY FIX: support both shapes here
+      // support both shapes
       const rawConfigs: any[] =
         (gs?.syncedSheets && Array.isArray(gs.syncedSheets) && gs.syncedSheets.length
           ? gs.syncedSheets
@@ -167,9 +167,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
 
       for (const cfg of rawConfigs) {
-        // Normalize cfg fields across shapes:
-        // - new shape uses: { spreadsheetId, title, sheetId?, headerRow?, mapping?, skip?, lastRowImported? }
-        // - legacy shape may use: { sheetId: <spreadsheetId>, folderId, ... } and/or different field names
+        // Normalize cfg fields across shapes
         let {
           spreadsheetId,
           title,
@@ -183,11 +181,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         // Legacy aliasing: some legacy lists used "sheetId" to mean the spreadsheetId string.
         if (!spreadsheetId && typeof cfg?.sheetId === "string" && cfg.sheetId.length > 12) {
           spreadsheetId = cfg.sheetId;
-          // keep numeric tab id (if any) in sheetId
           sheetId = typeof cfg?.tabId === "number" ? cfg.tabId : sheetId;
         }
 
-        // If we still don't have spreadsheetId, skip
         if (!spreadsheetId) continue;
         if (onlySpreadsheetId && spreadsheetId !== onlySpreadsheetId) continue;
 
@@ -274,8 +270,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const rawHeaders = (values[headerIdx] || []).map((h) => String(h ?? "").trim());
 
         const normalizedMapping: Record<string, string> = {};
-        Object.entries(mapping || {}).forEach(([key, val]) => {
-          normalizedMapping[normHeader(key)] = val;
+        // 🔧 TS fix: cast entries + guard val is string
+        Object.entries(mapping as Record<string, unknown>).forEach(([key, val]) => {
+          if (typeof val === "string" && val) {
+            normalizedMapping[normHeader(key)] = val;
+          }
         });
 
         const pointer = typeof lastRowImported === "number" ? lastRowImported : headerRow;
