@@ -6,7 +6,7 @@ import mongoose from "mongoose";
 import { google } from "googleapis";
 import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
 
-const FINGERPRINT = "selfheal-v5d"; // +legacy-user-shape support; TS fix for mapping entries
+const FINGERPRINT = "selfheal-v5e"; // TS fixes: mapping cast; remove invalid `multi` on updateOne
 
 // --- Normalizers -------------------------------------------------------------
 const normPhone = (v: any) => String(v ?? "").replace(/\D+/g, "");
@@ -236,11 +236,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               },
             },
             {
-              arrayFilters: [
-                { "t.spreadsheetId": spreadsheetId },
-              ],
-              multi: true,
-              upsert: false,
+              arrayFilters: [{ "t.spreadsheetId": spreadsheetId }],
+              // NOTE: removed invalid `multi` flag; updateOne updates the first matching doc
             }
           ).catch(() => {/* ignore if arrayFilters doesn't match legacy doc */});
 
