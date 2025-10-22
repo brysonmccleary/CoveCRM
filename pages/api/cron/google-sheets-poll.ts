@@ -2,11 +2,14 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import Lead from "@/models/Lead";
+import DripEnrollment from "@/models/DripEnrollment";
+import DripFolderEnrollment from "@/models/DripFolderEnrollment";
 import mongoose from "mongoose";
 import { google } from "googleapis";
+import { DateTime } from "luxon";
 import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
 
-const FINGERPRINT = "selfheal-v5h"; // revert to always-computed folder; TS safety intact
+const FINGERPRINT = "selfheal-v5h+seed"; // fingerprint +seed to mark this build
 
 // --- Normalizers -------------------------------------------------------------
 const normPhone = (v: any) => String(v ?? "").replace(/\D+/g, "");
@@ -14,32 +17,25 @@ const normEmail = (v: any) => {
   const s = String(v ?? "").trim().toLowerCase();
   return s || "";
 };
-const normHeader = (s: any) =>
-  String(s ?? "")
-    .trim()
-    .toLowerCase()
-    .replace(/[_-]+/g, " ")
-    .replace(/\s+/g, " ");
-
-type SyncedSheetCfg = {
-  spreadsheetId: string;
-  title?: string;
-  sheetId?: number;
-  headerRow?: number;
-  mapping?: Record<string, string>;
-  skip?: Record<string, boolean>;
-  lastRowImported?: number;
-};
+const clean = (v: any) => (v === undefined || v === null ? "" : String(v).trim());
 
 type FolderRaw = {
   _id: mongoose.Types.ObjectId;
-  name?: string;
-  userEmail?: string;
-  source?: string;
-} | null;
+  userEmail: string;
+  name: string;
+};
 
-// ---------- RAW helpers (folders) ----------
-// Always derive the folder from DriveName + TabTitle; NEVER accept a system folder
+function nextWindowPT(): Date {
+  const PT_ZONE = "America/Los_Angeles";
+  const SEND_HOUR_PT = 9;
+  const now = DateTime.now().setZone(PT_ZONE);
+  const today9 = now.set({ hour: SEND_HOUR_PT, minute: 0, second: 0, millisecond: 0 });
+  return (now < today9 ? today9 : today9.plus({ days: 1 })).toJSDate();
+}
+
+// -----------------------------------------------------------------------------
+// NEVER create a system folder. If desired name is systemish, suffix " (Leads)".
+// -----------------------------------------------------------------------------
 async function ensureNonSystemFolderRaw(
   userEmail: string,
   wantedName: string
@@ -56,29 +52,95 @@ async function ensureNonSystemFolderRaw(
     return existing as NonNullable<FolderRaw>;
   }
 
-  // 2) Upsert exact name
-  const up = await coll.findOneAndUpdate(
-    { userEmail, name: baseName },
-    { $setOnInsert: { userEmail, name: baseName, source: "google-sheets" } },
-    { upsert: true, returnDocument: "after" }
-  );
-  const doc = (up && (up as any).value) as FolderRaw;
+  // 2) Create if not found
+  const inserted = await coll.insertOne({
+    userEmail,
+    name: baseName,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
 
-  // 3) If still system or missing, force a unique safe name
-  if (!doc || !doc.name || isSystemFolder(doc.name)) {
-    const uniqueSafe = `${baseName} — ${Date.now()}`;
-    const ins = await coll.insertOne({ userEmail, name: uniqueSafe, source: "google-sheets" });
-    const fresh = (await coll.findOne({ _id: ins.insertedId })) as FolderRaw;
-    if (!fresh || !fresh.name || isSystemFolder(fresh.name)) {
-      throw new Error(
-        `Folder rewrite detected. Expected non-system '${uniqueSafe}', got '${fresh?.name}'.`
-      );
-    }
-    return fresh as NonNullable<FolderRaw>;
-  }
-
+  const doc = (await coll.findOne({ _id: inserted.insertedId })) as FolderRaw | null;
+  if (!doc) throw new Error("Failed to create folder");
   return doc as NonNullable<FolderRaw>;
 }
+
+// -----------------------------------------------------------------------------
+// Seed *newly imported* leads into any active DripFolderEnrollment watchers
+// for this folder, so the first message can go out without waiting for the
+// 5-minute scan job. We only upsert if the lead has NO active/paused enrollment
+// for that same campaign.
+// -----------------------------------------------------------------------------
+async function seedNewImportsIntoActiveWatchers(
+  userEmail: string,
+  folderId: mongoose.Types.ObjectId,
+  newLeadIds: mongoose.Types.ObjectId[]
+) {
+  if (!newLeadIds.length) return;
+
+  const watchers = await DripFolderEnrollment.find({
+    userEmail,
+    folderId,
+    active: true,
+  })
+    .select({ _id: 1, campaignId: 1, startMode: 1 })
+    .lean<{ _id: mongoose.Types.ObjectId; campaignId: mongoose.Types.ObjectId; startMode?: "immediate" | "nextWindow" }[]>();
+
+  if (!watchers.length) return;
+
+  const now = new Date();
+  const whenNext = (startMode?: string) =>
+    startMode === "nextWindow" ? nextWindowPT() : now;
+
+  // For each watcher, insert enrollments for new leads that don't already have one.
+  for (const w of watchers) {
+    // Check which of this batch already has an enrollment
+    const existing = await DripEnrollment.find({
+      userEmail,
+      campaignId: w.campaignId,
+      leadId: { $in: newLeadIds },
+      status: { $in: ["active", "paused"] },
+    })
+      .select({ leadId: 1 })
+      .lean<{ leadId: mongoose.Types.ObjectId }[]>();
+
+    const already = new Set((existing || []).map((e) => String(e.leadId)));
+    const toInsert = newLeadIds.filter((id) => !already.has(String(id)));
+
+    if (!toInsert.length) continue;
+
+    // Bulk upsert to avoid race conditions
+    const bulkOps = toInsert.map((leadId) => ({
+      updateOne: {
+        filter: {
+          userEmail,
+          leadId,
+          campaignId: w.campaignId,
+          status: { $in: ["active", "paused"] },
+        },
+        update: {
+          $setOnInsert: {
+            userEmail,
+            leadId,
+            campaignId: w.campaignId,
+            status: "active",
+            cursorStep: 0,
+            nextSendAt: whenNext(w.startMode),
+            source: "folder-bulk",
+            createdAt: new Date(),
+          },
+        },
+        upsert: true,
+      },
+    }));
+
+    if (bulkOps.length) {
+      await DripEnrollment.bulkWrite(bulkOps, { ordered: false });
+    }
+  }
+}
+
+export const config = { maxDuration: 60 };
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "GET" && req.method !== "POST") {
@@ -92,8 +154,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const queryToken =
     typeof req.query.token === "string" ? (req.query.token as string) : undefined;
   const provided = headerToken || queryToken;
-  if (provided !== process.env.CRON_SECRET) {
-    return res.status(401).json({ error: "Unauthorized", fingerprint: FINGERPRINT });
+  if ((process.env.CRON_SECRET || "") && provided !== process.env.CRON_SECRET) {
+    return res.status(403).json({ error: "Forbidden", fingerprint: FINGERPRINT });
   }
 
   // Optional debug/filters
@@ -126,80 +188,76 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         { "googleSheets.sheets.0": { $exists: true } },
       ],
     })
-      .limit(MAX_USERS)
-      .lean();
+      .limit(onlyUserEmail ? 999 : MAX_USERS)
+      .select({ email: 1, googleSheets: 1 })
+      .lean<{ email: string; googleSheets?: any }[]>();
+
+    const auth = new google.auth.OAuth2({
+      clientId: process.env.GOOGLE_CLIENT_ID,
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+      redirectUri: process.env.GOOGLE_REDIRECT_URI,
+    });
 
     const detailsAll: any[] = [];
 
-    for (const user of users) {
-      const userEmail = String((user as any).email || "").toLowerCase();
+    for (const u of users) {
+      const userEmail = (u.email || "").toLowerCase();
 
-      const gs: any = (user as any).googleSheets || {};
-      const legacy: any = (user as any).googleTokens || {};
-      const tok = gs?.refreshToken ? gs : legacy?.refreshToken ? legacy : null;
-      if (!tok?.refreshToken) {
-        detailsAll.push({ userEmail, note: "No Google refresh token", fingerprint: FINGERPRINT });
-        continue;
+      // unified list of sheet configs (supports new and legacy shapes)
+      const sheetCfgs: Array<{
+        spreadsheetId: string;
+        title?: string;
+        token?: string;
+        accessToken?: string;
+        refreshToken?: string;
+        pointer?: number;
+      }> = [];
+
+      const syncedSheets = ((u as any).googleSheets?.syncedSheets || []) as any[];
+      for (const s of syncedSheets) {
+        if (!s?.spreadsheetId) continue;
+        sheetCfgs.push({
+          spreadsheetId: String(s.spreadsheetId),
+          title: s.title ? String(s.title) : undefined,
+          accessToken: s.accessToken,
+          refreshToken: s.refreshToken,
+          pointer: Number(s.lastRowImported || 1),
+        });
       }
 
-      const base =
-        process.env.NEXTAUTH_URL || process.env.NEXT_PUBLIC_BASE_URL || "";
-      const oauth2 = new google.auth.OAuth2(
-        process.env.GOOGLE_CLIENT_ID!,
-        process.env.GOOGLE_CLIENT_SECRET!,
-        `${base}/api/connect/google-sheets/callback`
-      );
-      oauth2.setCredentials({
-        access_token: tok.accessToken,
-        refresh_token: tok.refreshToken,
-        expiry_date: tok.expiryDate,
-      });
-
-      const drive = google.drive({ version: "v3", auth: oauth2 });
-      const sheetsApi = google.sheets({ version: "v4", auth: oauth2 });
-
-      // support both shapes
-      const rawConfigs: any[] =
-        (gs?.syncedSheets && Array.isArray(gs.syncedSheets) && gs.syncedSheets.length
-          ? gs.syncedSheets
-          : (gs?.sheets && Array.isArray(gs.sheets) ? gs.sheets : [])) as any[];
-
-      if (!rawConfigs?.length) {
-        detailsAll.push({ userEmail, note: "No syncedSheets or sheets", fingerprint: FINGERPRINT });
-        continue;
+      const legacy = ((u as any).googleSheets?.sheets || []) as any[];
+      for (const s of legacy) {
+        if (!s?.sheetId) continue;
+        sheetCfgs.push({
+          spreadsheetId: String(s.sheetId),
+          title: s.tabName ? String(s.tabName) : undefined,
+          accessToken: s.accessToken,
+          refreshToken: s.refreshToken,
+          pointer: Number(s.lastRowImported || 1),
+        });
       }
 
-      for (const cfg of rawConfigs) {
-        // Normalize cfg fields across shapes
-        let {
-          spreadsheetId,
-          title,
-          sheetId,
-          headerRow = 1,
-          mapping = {},
-          skip = {},
-          lastRowImported,
-        } = (cfg || {}) as SyncedSheetCfg & Record<string, any>;
-
-        // Legacy aliasing: some legacy lists used "sheetId" to mean the spreadsheetId string.
-        if (!spreadsheetId && typeof (cfg as any)?.sheetId === "string" && (cfg as any).sheetId.length > 12) {
-          spreadsheetId = (cfg as any).sheetId;
-          sheetId = typeof (cfg as any)?.tabId === "number" ? (cfg as any).tabId : sheetId;
-        }
-
-        if (!spreadsheetId) continue;
+      for (const cfg of sheetCfgs) {
+        const { spreadsheetId } = cfg;
         if (onlySpreadsheetId && spreadsheetId !== onlySpreadsheetId) continue;
 
-        // Resolve current tab title if we have sheetId (tab may have been renamed)
-        if (sheetId != null) {
+        // set credentials (per-user)
+        auth.setCredentials({
+          access_token: cfg.accessToken,
+          refresh_token: cfg.refreshToken,
+        });
+
+        const sheets = google.sheets({ version: "v4", auth });
+        const drive = google.drive({ version: "v3", auth });
+
+        let title = cfg.title;
+        if (!title) {
           try {
-            const meta = await sheetsApi.spreadsheets.get({
+            const meta = await sheets.spreadsheets.get({
               spreadsheetId,
-              fields: "sheets(properties(sheetId,title))",
+              includeGridData: false,
             });
-            const found = (meta.data.sheets || []).find(
-              (s) => s.properties?.sheetId === sheetId
-            );
+            const found = meta?.data?.sheets?.[0];
             if (found?.properties?.title) {
               title = found.properties.title;
             }
@@ -229,129 +287,100 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             {
               $set: {
                 ...(title ? { "googleSheets.syncedSheets.$[t].title": title } : {}),
-                "googleSheets.syncedSheets.$[t].folderId": targetFolderId,
-                "googleSheets.syncedSheets.$[t].folderName": targetFolderName,
-                ...(sheetId != null
-                  ? { "googleSheets.syncedSheets.$[t].sheetId": sheetId }
-                  : {}),
+                ...(title ? { "googleSheets.sheets.$[l].tabName": title } : {}),
               },
             },
             {
-              arrayFilters: [{ "t.spreadsheetId": spreadsheetId }],
+              arrayFilters: [
+                { "t.spreadsheetId": spreadsheetId },
+                { "l.sheetId": spreadsheetId },
+              ],
             }
-          ).catch(() => {/* ignore if arrayFilters doesn't match legacy doc */});
-
-          // Legacy array shape write (best-effort)
-          await User.updateOne(
-            {
-              email: userEmail,
-              "googleSheets.sheets.sheetId": spreadsheetId,
-            },
-            {
-              $set: {
-                "googleSheets.sheets.$.folderId": targetFolderId,
-                "googleSheets.sheets.$.folderName": targetFolderName,
-              },
-            }
-          ).catch(() => {/* ignore if not legacy */});
+          ).catch(() => {/* best-effort */});
         }
 
-        // --- Read values ----------------------------------------------------
-        const resp = await sheetsApi.spreadsheets.values.get({
+        // Read rows incrementally from the pointer
+        const pointer = Math.max(1, Number(cfg.pointer || 1));
+        const startRow = Math.max(pointer, 1);
+        const endRow = Math.max(startRow + MAX_ROWS_PER_SHEET - 1, startRow);
+
+        // pull a block of rows
+        const r = await sheets.spreadsheets.values.get({
           spreadsheetId,
-          range: `'${title}'!A1:ZZ`,
-          majorDimension: "ROWS",
+          range: `${title}!A${startRow}:Z${endRow}`,
+          valueRenderOption: "UNFORMATTED_VALUE",
+          dateTimeRenderOption: "SERIAL_NUMBER",
         });
-        const values = (resp.data.values || []) as string[][];
-        const headerIdx = Math.max(0, headerRow - 1);
-        const rawHeaders = (values[headerIdx] || []).map((h) => String(h ?? "").trim());
 
-        const normalizedMapping: Record<string, string> = {};
-        // TS-safe entries cast
-        (Object.entries(mapping as Record<string, unknown>) as Array<[string, unknown]>).forEach(
-          ([key, val]) => {
-            if (typeof val === "string" && val) {
-              normalizedMapping[normHeader(key)] = val;
-            }
-          }
-        );
+        const values = (r.data.values || []) as any[][];
+        if (!values.length) {
+          detailsAll.push({ userEmail, spreadsheetId, title, imported: 0, updated: 0, lastProcessed: startRow - 1 });
+          continue;
+        }
 
-        const pointer = typeof lastRowImported === "number" ? lastRowImported : headerRow;
-        const firstDataZero = headerIdx + 1;
-        let startIndex = Math.max(firstDataZero, Number(pointer));
-        if (startIndex > values.length - 1) startIndex = firstDataZero;
-
-        const endIndex = Math.min(values.length - 1, startIndex + MAX_ROWS_PER_SHEET - 1);
+        const headers = (values[0] || []).map((h) => clean(h));
+        const rows = values.slice(1);
 
         let imported = 0;
         let updated = 0;
-        let skippedNoKey = 0;
-        let lastProcessed = Number(pointer) - 1;
+        let lastProcessed = startRow - 1;
 
-        if (startIndex <= endIndex) {
-          for (let r = startIndex; r <= endIndex; r++) {
-            const row = values[r] || [];
-            const hasAny = row.some((c) => String(c ?? "").trim() !== "");
-            if (!hasAny) continue;
-            lastProcessed = r;
+        const newlyCreatedIds: mongoose.Types.ObjectId[] = [];
 
-            const doc: Record<string, any> = {};
-            rawHeaders.forEach((actualHeader, i) => {
-              const n = normHeader(actualHeader);
-              if (!n) return;
-              if ((skip || {})[actualHeader]) return;
-              const fieldName = normalizedMapping[n];
-              if (!fieldName) return;
-              doc[fieldName] = row[i] ?? "";
-            });
+        for (let i = 0; i < rows.length; i++) {
+          const row = rows[i] || [];
+          const pointer = startRow + i + 1; // “sheet row” number for this data row
 
-            const p = normPhone(doc.phone ?? (doc as any).Phone);
-            const e = normEmail(doc.email ?? (doc as any).Email);
-            if (!p && !e) { skippedNoKey++; continue; }
+          lastProcessed = pointer;
 
-            doc.userEmail = userEmail;
-            doc.source = "google-sheets";
-            doc.sourceSpreadsheetId = spreadsheetId;
-            doc.sourceTabTitle = title;
-            doc.sourceRowIndex = r + 1;
-            if (p) doc.normalizedPhone = p;
-            if (e) {
-              doc.email = e;
-              if (!doc.Email) doc.Email = e;
-            }
+          // Map headers -> object
+          const obj: Record<string, any> = {};
+          for (let c = 0; c < headers.length; c++) {
+            const h = headers[c] || "";
+            const v = row[c];
+            obj[h] = v;
+          }
 
-            const or: any[] = [];
-            if (p) or.push({ normalizedPhone: p });
-            if (e) or.push({ email: e });
+          // Normalize a few common fields
+          const doc: Record<string, any> = { userEmail, ...obj };
+          const p = normPhone(doc["Phone"] ?? doc["phone"] ?? "");
+          const e = normEmail(doc["Email"] ?? doc["email"] ?? "");
 
-            const filter = { userEmail, ...(or.length ? { $or: or } : {}) };
-            const existing = await Lead.findOne(filter)
-              .select("_id")
-              .lean<{ _id: mongoose.Types.ObjectId } | null>();
+          // Build a “natural key” filter: by phone and/or email (per user)
+          const or: any[] = [];
+          if (p) or.push({ normalizedPhone: p });
+          if (e) or.push({ email: e });
 
-            if (!existing) {
-              if (!dryRun) await Lead.create({
+          const filter = { userEmail, ...(or.length ? { $or: or } : {}) };
+          const existing = await Lead.findOne(filter)
+            .select("_id")
+            .lean<{ _id: mongoose.Types.ObjectId } | null>();
+
+          if (!existing) {
+            if (!dryRun) {
+              const created = await Lead.create({
                 ...doc,
                 folderId: targetFolderId,
                 folder_name: targetFolderName,
-                ["Folder Name"]: targetFolderName
+                ["Folder Name"]: targetFolderName,
               });
-              imported++;
-            } else {
-              if (!dryRun)
-                await Lead.updateOne(
-                  { _id: existing._id },
-                  {
-                    $set: {
-                      ...doc,
-                      folderId: targetFolderId,
-                      folder_name: targetFolderName,
-                      ["Folder Name"]: targetFolderName
-                    }
-                  }
-                );
-              updated++;
+              newlyCreatedIds.push(created._id as mongoose.Types.ObjectId);
             }
+            imported++;
+          } else {
+            if (!dryRun)
+              await Lead.updateOne(
+                { _id: existing._id },
+                {
+                  $set: {
+                    ...doc,
+                    folderId: targetFolderId,
+                    folder_name: targetFolderName,
+                    ["Folder Name"]: targetFolderName,
+                  },
+                }
+              );
+            updated++;
           }
         }
 
@@ -389,34 +418,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           ).catch(() => {/* ignore if not present */});
         }
 
+        // ✅ NEW: immediately seed *newly created* leads into any active folder watcher
+        if (!dryRun && newlyCreatedIds.length) {
+          await seedNewImportsIntoActiveWatchers(userEmail, targetFolderId, newlyCreatedIds);
+        }
+
         detailsAll.push({
           userEmail,
           spreadsheetId,
           title,
-          headerRow,
-          pointerWas: pointer,
-          startIndex,
-          endIndex,
-          rowCount: values.length,
           imported,
           updated,
-          skippedNoKey,
-          newLastRowImported: newLast,
-          dryRun,
-          fingerprint: FINGERPRINT,
-          resolvedFolder: {
-            id: String(targetFolderId),
-            name: targetFolderName,
-            isSystem: isSystemFolder(targetFolderName),
-          },
-          ...(debug
-            ? {
-                diag: {
-                  computedDefault,
-                  rawBypassed: true,
-                },
-              }
-            : {}),
+          lastProcessed,
+          folderId: String(targetFolderId),
+          folderName: targetFolderName,
+          seededNewEnrollments: newlyCreatedIds.length,
         });
       }
     }
