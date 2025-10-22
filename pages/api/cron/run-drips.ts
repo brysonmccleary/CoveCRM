@@ -18,7 +18,7 @@ const SEND_HOUR_PT = 9;
 const PER_LEAD_CONCURRENCY =
   Math.max(1, parseInt(process.env.DRIP_CONCURRENCY || "10", 10)) || 10;
 
-// ✅ NEW: hard gate for the old 9AM legacy engine. Default OFF.
+// ✅ Hard gate for the old 9AM legacy engine. Default OFF.
 const ENABLE_LEGACY = process.env.DRIPS_ENABLE_LEGACY === "1";
 
 function isValidObjectId(id: string) { return /^[a-f0-9]{24}$/i.test(id); }
@@ -75,6 +75,16 @@ function shouldRunWindowPT(): boolean { return DateTime.now().setZone(PT_ZONE).h
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (process.env.DRIPS_HARD_STOP === "1") return res.status(204).end();
   if (req.method !== "GET") return res.status(405).json({ message: "Method not allowed" });
+
+  // 🔐 Minimal auth to match other cron endpoints (header or ?token=)
+  const headerToken = Array.isArray(req.headers["x-cron-secret"])
+    ? req.headers["x-cron-secret"][0]
+    : (req.headers["x-cron-secret"] as string | undefined);
+  const queryToken = typeof req.query.token === "string" ? (req.query.token as string) : undefined;
+  const provided = headerToken || queryToken;
+  if (provided !== process.env.CRON_SECRET) {
+    return res.status(403).send("Forbidden");
+  }
 
   const force = ["1","true","yes"].includes(String(req.query.force || "").toLowerCase());
   const dry   = ["1","true","yes"].includes(String(req.query.dry   || "").toLowerCase());
