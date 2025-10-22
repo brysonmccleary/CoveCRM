@@ -1,4 +1,3 @@
-// /pages/api/cron/google-sheets-poll.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
@@ -7,9 +6,10 @@ import Folder from "@/models/Folder";
 import mongoose from "mongoose";
 import { google } from "googleapis";
 import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
+import { ensureSafeFolder } from "@/lib/ensureSafeFolder";
 import { sendInitialDrip } from "@/utils/sendInitialDrip";
 
-const FINGERPRINT = "selfheal-v5f"; // sheets poll + drip on new leads
+const FINGERPRINT = "selfheal-v5f";
 
 // --- Normalizers -------------------------------------------------------------
 const normPhone = (v: any) => String(v ?? "").replace(/\D+/g, "");
@@ -25,103 +25,51 @@ const normHeader = (s: any) =>
     .replace(/\s+/g, " ");
 
 type SyncedSheetCfg = {
-  spreadsheetId: string;
-  title?: string;
-  sheetId?: number;
+  spreadsheetId?: string;   // new shape
+  sheetId?: number;         // tab id (optional)
+  title?: string;           // tab title
   headerRow?: number;
   mapping?: Record<string, string>;
   skip?: Record<string, boolean>;
   lastRowImported?: number;
+
+  // legacy shape aliasing:
+  // googleSheets.sheets[].sheetId === spreadsheetId (string)
+  // googleSheets.sheets[].tabId === sheetId (number)
 };
-
-type FolderRaw = {
-  _id: mongoose.Types.ObjectId;
-  name?: string;
-  userEmail?: string;
-  source?: string;
-  assignedDrip?: any;
-  agentName?: string;
-  agentPhone?: string;
-} | null;
-
-// ---------- RAW helpers (folders) ----------
-async function ensureNonSystemFolderRaw(
-  userEmail: string,
-  wantedName: string
-): Promise<NonNullable<FolderRaw>> {
-  const db = mongoose.connection.db;
-  if (!db) throw new Error("DB connection not ready");
-  const coll = db.collection("folders");
-
-  const baseName = isSystemFolder(wantedName) ? `${wantedName} (Leads)` : wantedName;
-
-  // 1) Try exact find
-  const existing = (await coll.findOne({ userEmail, name: baseName })) as FolderRaw;
-  if (existing && existing.name && !isSystemFolder(existing.name)) return existing as NonNullable<FolderRaw>;
-
-  // 2) Upsert exact name
-  const up = await coll.findOneAndUpdate(
-    { userEmail, name: baseName },
-    { $setOnInsert: { userEmail, name: baseName, source: "google-sheets" } },
-    { upsert: true, returnDocument: "after" }
-  );
-  const doc = (up && (up as any).value) as FolderRaw;
-
-  // 3) Sanity: if still system or missing, force a unique safe name
-  if (!doc || !doc.name || isSystemFolder(doc.name)) {
-    const uniqueSafe = `${baseName} — ${Date.now()}`;
-    const ins = await coll.insertOne({ userEmail, name: uniqueSafe, source: "google-sheets" });
-    const fresh = (await coll.findOne({ _id: ins.insertedId })) as FolderRaw;
-    if (!fresh || !fresh.name || isSystemFolder(fresh.name)) {
-      throw new Error(
-        `Folder rewrite detected. Expected non-system '${uniqueSafe}', got '${fresh?.name}'.`
-      );
-    }
-    return fresh as NonNullable<FolderRaw>;
-  }
-
-  return doc as NonNullable<FolderRaw>;
-}
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "GET" && req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed", fingerprint: FINGERPRINT });
   }
 
-  // Accept secret via header or query
+  // Auth via secret header or token query
   const headerToken = Array.isArray(req.headers["x-cron-secret"])
     ? req.headers["x-cron-secret"][0]
     : (req.headers["x-cron-secret"] as string | undefined);
-  const queryToken =
-    typeof req.query.token === "string" ? (req.query.token as string) : undefined;
+  const queryToken = typeof req.query.token === "string" ? (req.query.token as string) : undefined;
   const provided = headerToken || queryToken;
   if (provided !== process.env.CRON_SECRET) {
     return res.status(401).json({ error: "Unauthorized", fingerprint: FINGERPRINT });
   }
 
-  // Optional debug/filters
+  // Filters & flags
   const onlyUserEmail =
-    typeof req.query.userEmail === "string"
-      ? (req.query.userEmail as string).toLowerCase()
-      : undefined;
+    typeof req.query.userEmail === "string" ? (req.query.userEmail as string).toLowerCase() : undefined;
   const onlySpreadsheetId =
-    typeof req.query.spreadsheetId === "string"
-      ? (req.query.spreadsheetId as string)
-      : undefined;
-  const onlyTitle =
-    typeof req.query.title === "string" ? (req.query.title as string) : undefined;
-  const dryRun = req.query.dryRun === "1" || req.query.dryRun === "true";
-  const debug = req.query.debug === "1" || req.query.debug === "true";
+    typeof req.query.spreadsheetId === "string" ? (req.query.spreadsheetId as string) : undefined;
+  const onlyTitle = typeof req.query.title === "string" ? (req.query.title as string) : undefined;
+
+  const dryRun = ["1", "true", "yes"].includes(String(req.query.dryRun || "").toLowerCase());
+  const debug = ["1", "true", "yes"].includes(String(req.query.debug || "").toLowerCase());
 
   const MAX_USERS = Number(process.env.POLL_MAX_USERS || 10);
   const MAX_ROWS_PER_SHEET = Number(process.env.POLL_MAX_ROWS || 500);
 
   try {
     await dbConnect();
-    const db = mongoose.connection.db;
-    if (!db) throw new Error("DB connection not ready (post-connect)");
 
-    // include legacy shape users too
+    // users who actually have a connection + a configured sheet list (new or legacy)
     const users = await User.find({
       ...(onlyUserEmail ? { email: onlyUserEmail } : {}),
       $or: [
@@ -136,7 +84,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     for (const user of users) {
       const userEmail = String((user as any).email || "").toLowerCase();
-
       const gs: any = (user as any).googleSheets || {};
       const legacy: any = (user as any).googleTokens || {};
       const tok = gs?.refreshToken ? gs : legacy?.refreshToken ? legacy : null;
@@ -145,8 +92,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         continue;
       }
 
-      const base =
-        process.env.NEXTAUTH_URL || process.env.NEXT_PUBLIC_BASE_URL || "";
+      // OAuth setup
+      const base = process.env.NEXTAUTH_URL || process.env.NEXT_PUBLIC_BASE_URL || "";
       const oauth2 = new google.auth.OAuth2(
         process.env.GOOGLE_CLIENT_ID!,
         process.env.GOOGLE_CLIENT_SECRET!,
@@ -161,103 +108,92 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const drive = google.drive({ version: "v3", auth: oauth2 });
       const sheetsApi = google.sheets({ version: "v4", auth: oauth2 });
 
-      // support both shapes
-      const rawConfigs: any[] =
-        (gs?.syncedSheets && Array.isArray(gs.syncedSheets) && gs.syncedSheets.length
-          ? gs.syncedSheets
-          : (gs?.sheets && Array.isArray(gs.sheets) ? gs.sheets : [])) as any[];
+      // Normalize to a single list of configs
+      const rawConfigs: SyncedSheetCfg[] = (() => {
+        const modern = Array.isArray(gs?.syncedSheets) ? gs.syncedSheets : [];
+        const legacyArr = Array.isArray(gs?.sheets) ? gs.sheets : [];
+        if (modern.length) return modern as any[];
+        if (legacyArr.length) {
+          // adapt legacy items
+          return legacyArr.map((x: any) => ({
+            spreadsheetId: typeof x.sheetId === "string" ? x.sheetId : undefined,
+            sheetId: typeof x.tabId === "number" ? x.tabId : undefined,
+            title: x.title,
+            headerRow: x.headerRow,
+            mapping: x.mapping,
+            skip: x.skip,
+            lastRowImported: x.lastRowImported,
+          }));
+        }
+        return [];
+      })();
 
-      if (!rawConfigs?.length) {
-        detailsAll.push({ userEmail, note: "No syncedSheets or sheets", fingerprint: FINGERPRINT });
+      if (!rawConfigs.length) {
+        detailsAll.push({ userEmail, note: "No syncedSheets/sheets", fingerprint: FINGERPRINT });
         continue;
       }
 
       for (const cfg of rawConfigs) {
-        // Normalize cfg fields across shapes
-        let {
-          spreadsheetId,
-          title,
-          sheetId,
-          headerRow = 1,
-          mapping = {},
-          skip = {},
-          lastRowImported,
-        } = cfg || {};
-
-        // Legacy aliasing: some legacy lists used "sheetId" to mean the spreadsheetId string.
-        if (!spreadsheetId && typeof cfg?.sheetId === "string" && cfg.sheetId.length > 12) {
-          spreadsheetId = cfg.sheetId;
-          sheetId = typeof cfg?.tabId === "number" ? cfg.tabId : sheetId;
-        }
-
+        let { spreadsheetId, title, sheetId, headerRow = 1, mapping = {}, skip = {}, lastRowImported } = cfg || {};
         if (!spreadsheetId) continue;
         if (onlySpreadsheetId && spreadsheetId !== onlySpreadsheetId) continue;
 
-        // Resolve current tab title if we have sheetId (tab may have been renamed)
+        // If we know the tab id, fetch the live title (handles renames)
         if (sheetId != null) {
           try {
             const meta = await sheetsApi.spreadsheets.get({
               spreadsheetId,
               fields: "sheets(properties(sheetId,title))",
             });
-            const found = (meta.data.sheets || []).find(
-              (s) => s.properties?.sheetId === sheetId
-            );
-            if (found?.properties?.title) {
-              title = found.properties.title;
-            }
-          } catch { /* ignore */ }
+            const found = (meta.data.sheets || []).find((s) => s.properties?.sheetId === sheetId);
+            if (found?.properties?.title) title = found.properties.title;
+          } catch {/* ignore */}
         }
-        if (onlyTitle && title && title !== onlyTitle) continue;
         if (!title) continue;
+        if (onlyTitle && title !== onlyTitle) continue;
 
-        // ---- DESTINATION FOLDER (raw driver only)
-        const driveMeta = await drive.files.get({ fileId: spreadsheetId, fields: "name" });
-        const computedDefault = `${driveMeta.data.name || "Imported Leads"} — ${title}`;
+        // Resolve destination folder (safe/human-friendly)
+        const fileMeta = await drive.files.get({ fileId: spreadsheetId, fields: "name" });
+        const computedDefault = `${fileMeta.data.name || "Imported Leads"} — ${title}`;
+        const folderDoc = await ensureSafeFolder({
+          userEmail,
+          folderId: (cfg as any).folderId,   // keep any pinned folder if valid
+          folderName: (cfg as any).folderName,
+          defaultName: computedDefault,
+          source: "google-sheets",
+        });
 
-        const folderDoc = await ensureNonSystemFolderRaw(userEmail, computedDefault);
         const targetFolderId = folderDoc._id as mongoose.Types.ObjectId;
         const targetFolderName = String(folderDoc.name || "");
-        const assignedDrip = (folderDoc as any)?.assignedDrip || null;
-        const agentName = (folderDoc as any)?.agentName || (user as any)?.name || "your agent";
-        const agentPhone = (folderDoc as any)?.agentPhone || (user as any)?.phoneNumber || "N/A";
 
-        // Persist sanitized link (unless dry run)
+        // Persist sanitized link back to the user doc (best effort for both shapes)
         if (!dryRun) {
+          // modern
           await User.updateOne(
-            {
-              email: userEmail,
-              $or: [
-                { "googleSheets.syncedSheets.spreadsheetId": spreadsheetId },
-                { "googleSheets.sheets.sheetId": spreadsheetId }, // legacy mapping
-              ],
-            },
+            { email: userEmail, "googleSheets.syncedSheets.spreadsheetId": spreadsheetId },
             {
               $set: {
-                ...(cfg.title ? { "googleSheets.syncedSheets.$[t].title": title } : {}),
-                "googleSheets.syncedSheets.$[t].folderId": targetFolderId,
-                "googleSheets.syncedSheets.$[t].folderName": targetFolderName,
-                ...(sheetId != null
-                  ? { "googleSheets.syncedSheets.$[t].sheetId": sheetId }
-                  : {}),
+                "googleSheets.syncedSheets.$.folderId": targetFolderId,
+                "googleSheets.syncedSheets.$.folderName": targetFolderName,
+                ...(sheetId != null ? { "googleSheets.syncedSheets.$.sheetId": sheetId } : {}),
+                ...(title ? { "googleSheets.syncedSheets.$.title": title } : {}),
               },
-            },
-            { arrayFilters: [{ "t.spreadsheetId": spreadsheetId }] }
+            }
           ).catch(() => {});
-
-          // Legacy array shape write (best-effort)
+          // legacy
           await User.updateOne(
             { email: userEmail, "googleSheets.sheets.sheetId": spreadsheetId },
             {
               $set: {
                 "googleSheets.sheets.$.folderId": targetFolderId,
                 "googleSheets.sheets.$.folderName": targetFolderName,
+                ...(title ? { "googleSheets.sheets.$.title": title } : {}),
               },
             }
           ).catch(() => {});
         }
 
-        // --- Read values ----------------------------------------------------
+        // Read data
         const resp = await sheetsApi.spreadsheets.values.get({
           spreadsheetId,
           range: `'${title}'!A1:ZZ`,
@@ -267,24 +203,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const headerIdx = Math.max(0, headerRow - 1);
         const rawHeaders = (values[headerIdx] || []).map((h) => String(h ?? "").trim());
 
+        // Normalize column header mapping
         const normalizedMapping: Record<string, string> = {};
         Object.entries(mapping as Record<string, unknown>).forEach(([key, val]) => {
-          if (typeof val === "string" && val) {
-            normalizedMapping[normHeader(key)] = val;
-          }
+          if (typeof val === "string" && val) normalizedMapping[normHeader(key)] = val;
         });
 
         const pointer = typeof lastRowImported === "number" ? lastRowImported : headerRow;
         const firstDataZero = headerIdx + 1;
         let startIndex = Math.max(firstDataZero, Number(pointer));
         if (startIndex > values.length - 1) startIndex = firstDataZero;
-
         const endIndex = Math.min(values.length - 1, startIndex + MAX_ROWS_PER_SHEET - 1);
 
         let imported = 0;
         let updated = 0;
         let skippedNoKey = 0;
         let lastProcessed = Number(pointer) - 1;
+
+        // Pre-fetch folder to know if a drip is assigned
+        const fullFolder = await Folder.findById(targetFolderId).lean<any>();
+        const folderHasAssignedDrip =
+          !!((fullFolder as any)?.assignedDrip || (fullFolder as any)?.assignedDrips?.length);
 
         if (startIndex <= endIndex) {
           for (let r = startIndex; r <= endIndex; r++) {
@@ -293,6 +232,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             if (!hasAny) continue;
             lastProcessed = r;
 
+            // Build a doc per mapping/skip
             const doc: Record<string, any> = {};
             rawHeaders.forEach((actualHeader, i) => {
               const n = normHeader(actualHeader);
@@ -303,10 +243,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               doc[fieldName] = row[i] ?? "";
             });
 
+            // Keys
             const p = normPhone(doc.phone ?? (doc as any).Phone);
             const e = normEmail(doc.email ?? (doc as any).Email);
             if (!p && !e) { skippedNoKey++; continue; }
 
+            // Common fields we stamp
             doc.userEmail = userEmail;
             doc.source = "google-sheets";
             doc.sourceSpreadsheetId = spreadsheetId;
@@ -318,11 +260,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             const or: any[] = [];
             if (p) or.push({ normalizedPhone: p });
             if (e) or.push({ email: e });
-            const filter = { userEmail, ...(or.length ? { $or: or } : {}) };
 
-            const existing = await Lead.findOne(filter)
-              .select("_id")
-              .lean<{ _id: mongoose.Types.ObjectId } | null>();
+            const filter = { userEmail, ...(or.length ? { $or: or } : {}) };
+            const existing = await Lead.findOne(filter).select("_id").lean<{ _id: mongoose.Types.ObjectId } | null>();
 
             if (!existing) {
               if (!dryRun) {
@@ -331,33 +271,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                   folderId: targetFolderId,
                   folder_name: targetFolderName,
                   ["Folder Name"]: targetFolderName,
-                  status: (doc as any).status || "New",
+                  status: doc.status || "New",
                 });
                 imported++;
 
-                // 🔔 If this folder has an assigned drip, fire the initial message now
-                if (assignedDrip) {
-                  try {
-                    const dripLead = {
-                      ...created.toObject?.() ?? (created as any),
-                      name:
-                        (doc["Full Name"] as string) ||
-                        (doc["Name"] as string) ||
-                        `${doc["First Name"] || ""} ${doc["Last Name"] || ""}`.trim() ||
-                        doc.name ||
-                        "",
-                      phone: p ? `+1${p.slice(-10)}` : (doc.phone || (doc as any).Phone || ""),
-                      folderName: targetFolderName,
-                      agentName,
-                      agentPhone,
-                    };
-                    await sendInitialDrip(dripLead);
-                  } catch (e) {
-                    console.warn("sendInitialDrip failed:", (e as any)?.message || e);
-                  }
+                // 🚀 Initial drip if folder enrolled
+                if (folderHasAssignedDrip) {
+                  const agentName = (fullFolder as any)?.agentName || (user as any)?.name || "your agent";
+                  const agentPhone = (fullFolder as any)?.agentPhone || (user as any)?.phoneNumber || "N/A";
+                  const dripLead = {
+                    ...created.toObject(),
+                    name:
+                      created["First Name"] || created["Last Name"]
+                        ? [created["First Name"], created["Last Name"]].filter(Boolean).join(" ")
+                        : created.name || "",
+                    phone: created.Phone || created.phone,
+                    folderName: targetFolderName,
+                    agentName,
+                    agentPhone,
+                  };
+                  try { await sendInitialDrip(dripLead as any); } catch { /* non-fatal */ }
                 }
-              } else {
-                imported++;
               }
             } else {
               if (!dryRun) {
@@ -380,7 +314,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         const newLast = Math.max(lastProcessed + 1, Number(pointer));
         if (!dryRun) {
-          // Try to set pointer on both shapes (best-effort)
+          // modern pointer
           await User.updateOne(
             { email: userEmail, "googleSheets.syncedSheets.spreadsheetId": spreadsheetId },
             {
@@ -392,7 +326,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               },
             }
           ).catch(() => {});
-
+          // legacy pointer
           await User.updateOne(
             { email: userEmail, "googleSheets.sheets.sheetId": spreadsheetId },
             {
@@ -426,15 +360,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             name: targetFolderName,
             isSystem: isSystemFolder(targetFolderName),
           },
-          ...(debug
-            ? {
-                diag: {
-                  computedDefault,
-                  rawBypassed: true,
-                  assignedDrip: !!assignedDrip,
-                },
-              }
-            : {}),
+          ...(debug ? { diag: { computedDefault: computedDefault, rawBypassed: false, assignedDrip: !!folderHasAssignedDrip } } : {}),
         });
       }
     }
