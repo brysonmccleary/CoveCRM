@@ -1,3 +1,4 @@
+// /pages/api/google/save-sheet-link.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
@@ -60,7 +61,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const tok = gs?.refreshToken ? gs : legacy?.refreshToken ? legacy : null;
     if (!tok?.refreshToken) return res.status(400).json({ message: "Google not connected" });
 
-    // OAuth
+    // OAuth client (for Drive meta only)
     const base = process.env.NEXTAUTH_URL || process.env.NEXT_PUBLIC_BASE_URL || "";
     const oauth2 = new google.auth.OAuth2(
       process.env.GOOGLE_CLIENT_ID!,
@@ -78,7 +79,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const meta = await drive.files.get({ fileId: spreadsheetId, fields: "name" });
     const defaultName = `${meta.data.name || "Imported Leads"} — ${title}`.trim();
 
-    // Sanitize via centralized util (this is the whole point)
+    // Sanitize/resolve destination folder
     const folderDoc = await ensureSafeFolder({
       userEmail,
       folderId,
@@ -87,7 +88,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       source: "google-sheets",
     });
 
-    // Persist sanitized link ONLY to syncedSheets (no legacy mirror)
+    // ✅ Persist (or upsert) into googleSheets.syncedSheets WITH refreshToken
+    //    We match by spreadsheetId + title to preserve your existing behavior.
     const finder = {
       email: userEmail,
       "googleSheets.syncedSheets.spreadsheetId": spreadsheetId,
@@ -101,13 +103,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         "googleSheets.syncedSheets.$.headerRow": headerRow,
         "googleSheets.syncedSheets.$.mapping": mapping,
         "googleSheets.syncedSheets.$.skip": skip,
+        "googleSheets.syncedSheets.$.refreshToken": tok.refreshToken, // ✅ ensure refresh token is on the entry
         ...(typeof sheetId === "number" ? { "googleSheets.syncedSheets.$.sheetId": sheetId } : {}),
       },
     };
 
     const result = await User.updateOne(finder, update);
+
     if (result.matchedCount === 0) {
-      // upsert new entry
+      // First time linking this sheet/tab — push a brand-new entry
       await User.updateOne(
         { email: userEmail },
         {
@@ -121,10 +125,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               skip,
               folderId: folderDoc._id,
               folderName: folderDoc.name,
-              lastRowImported: headerRow,
+              lastRowImported: headerRow, // start pointer at headerRow
+              refreshToken: tok.refreshToken, // ✅ make poller-ready on day one
             },
           },
         }
+      );
+    } else {
+      // If we updated an existing entry but it somehow lacked a refreshToken, ensure it's set.
+      await User.updateOne(
+        { email: userEmail, "googleSheets.syncedSheets.spreadsheetId": spreadsheetId, "googleSheets.syncedSheets.title": title, "googleSheets.syncedSheets.refreshToken": { $in: [null, ""] } },
+        { $set: { "googleSheets.syncedSheets.$.refreshToken": tok.refreshToken } }
       );
     }
 

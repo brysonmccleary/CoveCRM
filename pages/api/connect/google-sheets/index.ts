@@ -46,7 +46,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     access_type: "offline",
     prompt: "consent",
     include_granted_scopes: true,
-    scope: SCOPES, // ✅ now mutable string[]
+    scope: SCOPES,
     state: encodeURIComponent(session.user.email),
   });
 

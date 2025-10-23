@@ -1,3 +1,4 @@
+// /pages/api/connect/google-sheets/callback.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../../auth/[...nextauth]";
@@ -19,15 +20,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const state = (req.query.state as string | undefined) || "";
   if (!code) return res.status(400).send("Missing code");
 
-  // Optional: basic CSRF check — we set state=email when starting OAuth
   try {
     const stateEmail = decodeURIComponent(state || "");
     if (stateEmail && stateEmail.toLowerCase() !== session.user.email.toLowerCase()) {
       return res.status(400).send("State mismatch");
     }
-  } catch {
-    // ignore malformed state
-  }
+  } catch { /* ignore malformed state */ }
 
   const redirectUri = `${baseUrl(req)}/api/connect/google-sheets/callback`;
   const oauth2 = new google.auth.OAuth2(
@@ -51,7 +49,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     .select("googleSheets googleTokens")
     .lean<any>();
 
-  // Preserve refresh_token if Google doesn't resend it
   const refreshToken =
     tokens.refresh_token ||
     existing?.googleSheets?.refreshToken ||
@@ -66,15 +63,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     { email },
     {
       $set: {
-        // Primary location our APIs read from
         googleSheets: { accessToken, refreshToken, expiryDate, scope },
-        // Back-compat with any older code paths
         googleTokens: { accessToken, refreshToken, expiryDate, scope },
         googleSheetsConnected: true,
       },
     }
   );
 
-  // Redirect to the sync page; it will auto-call /api/sheets/list when it sees this flag.
   return res.redirect("/google-sheets-sync?connected=google-sheets");
 }
