@@ -19,6 +19,15 @@ const normEmail = (v: any) => {
 };
 const clean = (v: any) => (v === undefined || v === null ? "" : String(v).trim());
 
+// NEW: make header keys Mongo-safe and skip empties
+const sanitizeKey = (k: any) => {
+  let s = clean(k);
+  if (!s) return "";           // <- signal to skip
+  s = s.replace(/\./g, "_");   // Mongo disallows dots in keys
+  s = s.replace(/^\$+/, "");   // disallow leading $
+  return s.trim();
+};
+
 type FolderRaw = {
   _id: mongoose.Types.ObjectId;
   userEmail: string;
@@ -67,6 +76,9 @@ async function ensureNonSystemFolderRaw(
 
 // -----------------------------------------------------------------------------
 // Seed *newly imported* leads into any active DripFolderEnrollment watchers
+// for this folder, so the first message can go out without waiting for the
+// 5-minute scan job. We only upsert if the lead has NO active/paused enrollment
+// for that same campaign.
 // -----------------------------------------------------------------------------
 async function seedNewImportsIntoActiveWatchers(
   userEmail: string,
@@ -162,8 +174,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       : undefined;
   const onlyTitle =
     typeof req.query.title === "string" ? (req.query.title as string) : undefined;
-
-  // NEW: allow setting header row when seeding a missing config (defaults to 1 → we’ll bump to 2 if headers look on row 2)
   const headerRowParam =
     typeof req.query.headerRow === "string" ? Math.max(1, parseInt(req.query.headerRow, 10) || 1) : undefined;
 
@@ -179,14 +189,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!db) throw new Error("DB connection not ready (post-connect)");
 
     // -------- USER DISCOVERY -------------------------------------------------
-    // ORIGINAL behavior (kept): users with syncedSheets[] or legacy sheets[]
-    // NEW self-heal: also include users who have a root googleSheets.refreshToken
     const userFilter: any = {
       ...(onlyUserEmail ? { email: onlyUserEmail } : {}),
       $or: [
         { "googleSheets.syncedSheets.0": { $exists: true } },
         { "googleSheets.sheets.0": { $exists: true } },
-        { "googleSheets.refreshToken": { $exists: true, $ne: "" } }, // <= self-heal
+        { "googleSheets.refreshToken": { $exists: true, $ne: "" } }, // self-heal path
       ],
     };
 
@@ -213,7 +221,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         accessToken?: string;
         refreshToken?: string;
         pointer?: number;
-        _selfSeed?: boolean; // NEW: indicates we seeded this on-the-fly
+        _selfSeed?: boolean; // indicates we seeded this on-the-fly
       }> = [];
 
       const syncedSheets = ((u as any).googleSheets?.syncedSheets || []) as any[];
@@ -241,22 +249,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
 
       // ---------- SELF-HEAL SEEDING -----------------------------------------
-      // If user has no sheet configs but DOES have a root refreshToken,
-      // and caller specifies ?spreadsheetId=..., seed a config on-the-fly.
       if (sheetCfgs.length === 0) {
         const rootRefresh = (u as any)?.googleSheets?.refreshToken || "";
         if (rootRefresh && onlySpreadsheetId) {
           sheetCfgs.push({
             spreadsheetId: onlySpreadsheetId,
-            title: onlyTitle, // may be undefined; we’ll resolve to first tab later
+            title: onlyTitle,
             refreshToken: rootRefresh,
-            pointer: Number(headerRowParam || 1), // we’ll bump to 2 automatically if needed
+            pointer: Number(headerRowParam || 1),
             _selfSeed: true,
           });
         }
       }
 
-      // If still nothing to do for this user, record a no-op in details (helpful debug) and continue
       if (sheetCfgs.length === 0) {
         if (debug) {
           detailsAll.push({
@@ -308,7 +313,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const targetFolderName = String(folderDoc.name || "");
 
         // Persist tab title best-effort
-        if (!dryRun) {
+        if (!dryRun && title) {
+          const setDoc: Record<string, any> = {
+            "googleSheets.syncedSheets.$[t].title": title,
+            "googleSheets.sheets.$[l].tabName": title,
+          };
           await User.updateOne(
             {
               email: userEmail,
@@ -317,24 +326,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 { "googleSheets.sheets.sheetId": spreadsheetId }, // legacy mapping
               ],
             },
-            {
-              $set: {
-                ...(title ? { "googleSheets.syncedSheets.$[t].title": title } : {}),
-                ...(title ? { "googleSheets.sheets.$[l].tabName": title } : {}),
-              },
-            },
-            {
-              arrayFilters: [
-                { "t.spreadsheetId": spreadsheetId },
-                { "l.sheetId": spreadsheetId },
-              ],
-            }
+            { $set: setDoc },
+            { arrayFilters: [{ "t.spreadsheetId": spreadsheetId }, { "l.sheetId": spreadsheetId }] }
           ).catch(() => {/* best-effort */});
         }
 
         // Read rows incrementally from the pointer
-        let pointer = Math.max(1, Number(cfg.pointer || 1));
-        // If pointer is 1 but sheet looks like headers on row 2, start from row 2.
+        const pointer = Math.max(1, Number(cfg.pointer || 1));
         const startRow = Math.max(pointer, 1);
         const endRow = Math.max(startRow + MAX_ROWS_PER_SHEET - 1, startRow);
 
@@ -351,12 +349,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           continue;
         }
 
-        const headers = (values[0] || []).map((h) => clean(h));
+        // SANITIZE HEADERS: skip blanks and unsafe keys
+        const rawHeaders = (values[0] || []) as any[];
+        const headers = rawHeaders.map(sanitizeKey).filter(Boolean); // <— critical fix
         const rows = values.slice(1);
 
-        // If we started at 1 and the first row has a bunch of non-empty header names,
-        // assume headers at row 1 and bump pointer accordingly next time.
-        // If you prefer row 2 headers (your screenshot), pass ?headerRow=2 when seeding.
         let imported = 0;
         let updated = 0;
         let lastProcessed = startRow - 1;
@@ -365,23 +362,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         for (let i = 0; i < rows.length; i++) {
           const row = rows[i] || [];
-          const sheetRowNumber = startRow + i + 1; // “sheet row” number for this data row
+          const sheetRowNumber = startRow + i + 1;
           lastProcessed = sheetRowNumber;
 
-          // Map headers -> object
+          // Build doc from sanitized headers only
           const obj: Record<string, any> = {};
           for (let c = 0; c < headers.length; c++) {
-            const h = headers[c] || "";
-            const v = row[c];
-            obj[h] = v;
+            const h = headers[c];        // already sanitized & non-empty
+            obj[h] = row[c];
           }
 
-          // Normalize
           const doc: Record<string, any> = { userEmail, ...obj };
           const p = normPhone(doc["Phone"] ?? doc["phone"] ?? "");
           const e = normEmail(doc["Email"] ?? doc["email"] ?? "");
 
-          // Natural key by phone/email (per user)
           const or: any[] = [];
           if (p) or.push({ normalizedPhone: p });
           if (e) or.push({ email: e });
@@ -403,7 +397,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             }
             imported++;
           } else {
-            if (!dryRun)
+            if (!dryRun) {
+              // $set document is safe because keys were sanitized & blanks dropped
               await Lead.updateOne(
                 { _id: existing._id },
                 {
@@ -415,6 +410,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                   },
                 }
               );
+            }
             updated++;
           }
         }
@@ -454,7 +450,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
           // If this config was self-seeded (user had only root token),
           // persist a proper syncedSheets entry so future runs are automatic.
-          if (cfg._selfSeed) {
+          if ((cfg as any)._selfSeed) {
             await User.updateOne(
               { email: userEmail, "googleSheets.syncedSheets.spreadsheetId": spreadsheetId, "googleSheets.syncedSheets.title": title },
               { $set: { "googleSheets.syncedSheets.$.refreshToken": cfg.refreshToken } }
