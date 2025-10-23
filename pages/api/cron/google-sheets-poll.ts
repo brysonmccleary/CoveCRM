@@ -10,7 +10,7 @@ import { google } from "googleapis";
 import { DateTime } from "luxon";
 import { ensureSafeFolder } from "@/lib/ensureSafeFolder";
 
-const FINGERPRINT = "sheets-poll-v5.1-sheetId-map+root-refresh-fallback";
+const FINGERPRINT = "sheets-poll-v5.2-sheetId-map+root-refresh+auto-rewind";
 
 // --- Normalizers -------------------------------------------------------------
 const normPhone = (v: any) => String(v ?? "").replace(/\D+/g, "");
@@ -145,8 +145,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     await dbConnect();
-    const db = mongoose.connection.db;
-    if (!db) throw new Error("DB connection not ready (post-connect)");
 
     // -------- USER DISCOVERY -------------------------------------------------
     const userFilter: any = {
@@ -183,9 +181,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         accessToken?: string;
         refreshToken?: string;
         pointer?: number;
-        _selfSeed?: boolean; // indicates we seeded this on-the-fly
-        folderId?: mongoose.Types.ObjectId; // optional
-        folderName?: string;                // optional
+        headerRow?: number;
+        _selfSeed?: boolean;
+        folderId?: mongoose.Types.ObjectId;
+        folderName?: string;
       }> = [];
 
       const syncedSheets = (rootGS.syncedSheets || []) as any[];
@@ -195,8 +194,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           spreadsheetId: String(s.spreadsheetId),
           title: s.title ? String(s.title) : undefined,
           accessToken: s.accessToken,
-          refreshToken: s.refreshToken || rootRefresh, // <-- FALLBACK to root refresh
+          refreshToken: s.refreshToken || rootRefresh, // FALLBACK
           pointer: Number(s.lastRowImported || 1),
+          headerRow: Number(s.headerRow || 1),
           folderId: s.folderId,
           folderName: s.folderName,
         });
@@ -209,57 +209,43 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           spreadsheetId: String(s.sheetId),
           title: s.tabName ? String(s.tabName) : undefined,
           accessToken: s.accessToken,
-          refreshToken: s.refreshToken || rootRefresh, // <-- FALLBACK to root refresh
+          refreshToken: s.refreshToken || rootRefresh, // FALLBACK
           pointer: Number(s.lastRowImported || 1),
+          headerRow: Number(s.headerRow || 1),
           folderId: s.folderId,
           folderName: s.folderName,
         });
       }
 
-      // ---------- SELF-HEAL SEEDING -----------------------------------------
       if (sheetCfgs.length === 0) {
         if (rootRefresh && onlySpreadsheetId) {
           sheetCfgs.push({
             spreadsheetId: onlySpreadsheetId,
             title: onlyTitle,
-            refreshToken: rootRefresh, // <— we seed with root token
+            refreshToken: rootRefresh,
             pointer: Number(headerRowParam || 1),
+            headerRow: Number(headerRowParam || 1),
             _selfSeed: true,
           });
+        } else {
+          if (debug) detailsAll.push({ userEmail, reason: "no-configs" });
+          continue;
         }
-      }
-
-      if (sheetCfgs.length === 0) {
-        if (debug) {
-          detailsAll.push({
-            userEmail,
-            reason: "no-configs",
-            note: "No syncedSheets/sheets and no spreadsheetId query to seed.",
-          });
-        }
-        continue;
       }
 
       // ---------- PROCESS EACH SHEET CONFIG ---------------------------------
       for (const cfg of sheetCfgs) {
         const { spreadsheetId } = cfg;
-
         if (onlySpreadsheetId && spreadsheetId !== onlySpreadsheetId) continue;
 
-        // REQUIRED: at least a refresh token (per-sheet or root)
         if (!cfg.refreshToken) {
-          detailsAll.push({
-            userEmail,
-            spreadsheetId,
-            title: cfg.title,
-            error: "missing-refresh-token",
-          });
+          detailsAll.push({ userEmail, spreadsheetId, title: cfg.title, error: "missing-refresh-token" });
           continue;
         }
 
         auth.setCredentials({
-          access_token: cfg.accessToken,     // may be undefined
-          refresh_token: cfg.refreshToken,   // guaranteed by fallback
+          access_token: cfg.accessToken,
+          refresh_token: cfg.refreshToken,
         });
 
         const sheets = google.sheets({ version: "v4", auth });
@@ -269,20 +255,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         let title = cfg.title;
         if (!title) {
           try {
-            const meta = await sheets.spreadsheets.get({
-              spreadsheetId,
-              includeGridData: false,
-            });
+            const meta = await sheets.spreadsheets.get({ spreadsheetId, includeGridData: false });
             const found = meta?.data?.sheets?.[0];
-            if (found?.properties?.title) {
-              title = found.properties.title;
-            }
+            if (found?.properties?.title) title = found.properties.title;
           } catch { /* ignore */ }
         }
         if (!title) title = "Sheet1";
         if (onlyTitle && title && title !== onlyTitle) continue;
 
-        // ---- DESTINATION FOLDER — STRICTLY keyed by sheetId
+        // DESTINATION FOLDER — STRICTLY by sheetId
         const driveMeta = await drive.files.get({ fileId: spreadsheetId, fields: "name" });
         const computedDefault = `${driveMeta.data.name || "Imported Leads"} — ${title}`.trim();
 
@@ -292,70 +273,81 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           folderName: cfg.folderName,
           defaultName: computedDefault,
           source: "google-sheets",
-          sheetId: spreadsheetId, // <- THE KEY
+          sheetId: spreadsheetId,
         });
 
         const targetFolderId = folderDoc._id as mongoose.Types.ObjectId;
         const targetFolderName = String(folderDoc.name || "");
 
-        // Persist back to user config (best-effort), including folder mapping
-        if (!dryRun && title) {
-          await User.updateOne(
-            {
-              email: userEmail,
-              $or: [
-                { "googleSheets.syncedSheets.spreadsheetId": spreadsheetId },
-                { "googleSheets.sheets.sheetId": spreadsheetId }, // legacy mapping
-              ],
-            },
-            {
-              $set: {
-                "googleSheets.syncedSheets.$[t].title": title,
-                "googleSheets.sheets.$[l].tabName": title,
-                "googleSheets.syncedSheets.$[t].folderId": targetFolderId,
-                "googleSheets.syncedSheets.$[t].folderName": targetFolderName,
-              },
-              $setOnInsert: {},
-            },
-            { arrayFilters: [{ "t.spreadsheetId": spreadsheetId }, { "l.sheetId": spreadsheetId }] }
-          ).catch(() => {/* best-effort */});
-        }
-
-        // Read rows incrementally from the pointer
-        const pointer = Math.max(1, Number(cfg.pointer || 1));
-        const startRow = Math.max(pointer, 1);
+        // --- Determine read window (with rewind if needed) ---
+        const headerRow = Math.max(1, Number(cfg.headerRow || 1));
+        let pointer = Math.max(1, Number(cfg.pointer || headerRow));
+        const startRow = Math.max(pointer, headerRow);
         const endRow = Math.max(startRow + MAX_ROWS_PER_SHEET - 1, startRow);
 
-        const r = await sheets.spreadsheets.values.get({
+        // Fetch rows in the window
+        let r = await sheets.spreadsheets.values.get({
           spreadsheetId,
           range: `${title}!A${startRow}:Z${endRow}`,
           valueRenderOption: "UNFORMATTED_VALUE",
           dateTimeRenderOption: "SERIAL_NUMBER",
         });
+        let values = (r.data.values || []) as any[][];
 
-        const values = (r.data.values || []) as any[][];
+        // AUTO-REWIND: If we got nothing beyond header, rewind to first data row
+        if (!values.length && startRow > headerRow + 1) {
+          pointer = headerRow + 1;
+          if (!dryRun) {
+            await User.updateMany(
+              { email: userEmail },
+              {
+                $set: {
+                  "googleSheets.syncedSheets.$[t].lastRowImported": pointer,
+                  "googleSheets.sheets.$[l].lastRowImported": pointer,
+                },
+              },
+              { arrayFilters: [{ "t.spreadsheetId": spreadsheetId }, { "l.sheetId": spreadsheetId }] }
+            ).catch(() => {});
+          }
+          // Re-fetch from the rewound pointer
+          r = await sheets.spreadsheets.values.get({
+            spreadsheetId,
+            range: `${title}!A${pointer}:Z${pointer + MAX_ROWS_PER_SHEET - 1}`,
+            valueRenderOption: "UNFORMATTED_VALUE",
+            dateTimeRenderOption: "SERIAL_NUMBER",
+          });
+          values = (r.data.values || []) as any[][];
+        }
+
+        // If still nothing, record and continue
         if (!values.length) {
-          detailsAll.push({ userEmail, spreadsheetId, title, imported: 0, updated: 0, lastProcessed: startRow - 1 });
+          detailsAll.push({
+            userEmail, spreadsheetId, title,
+            imported: 0, updated: 0,
+            lastProcessed: pointer - 1,
+            folderId: String(targetFolderId),
+            folderName: targetFolderName,
+            note: "no-rows-after-pointer"
+          });
           continue;
         }
 
-        // SANITIZE HEADERS: skip blanks and unsafe keys
+        // SANITIZE HEADERS (first row) + data rows
         const rawHeaders = (values[0] || []) as any[];
         const headers = rawHeaders.map(sanitizeKey).filter(Boolean);
         const rows = values.slice(1);
 
         let imported = 0;
         let updated = 0;
-        let lastProcessed = startRow - 1;
+        let lastProcessed = pointer - 1;
 
         const newlyCreatedIds: mongoose.Types.ObjectId[] = [];
 
         for (let i = 0; i < rows.length; i++) {
           const row = rows[i] || [];
-          const sheetRowNumber = startRow + i + 1;
+          const sheetRowNumber = pointer + i + 1; // first data row after header
           lastProcessed = sheetRowNumber;
 
-          // Build doc from sanitized headers only
           const obj: Record<string, any> = {};
           for (let c = 0; c < headers.length; c++) {
             const h = headers[c];
@@ -408,7 +400,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
         }
 
-        const newLast = Math.max(lastProcessed + 1, Number(pointer));
+        const newLast = Math.max(lastProcessed + 1, pointer);
         if (!dryRun) {
           await User.updateOne(
             {
@@ -423,7 +415,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 "googleSheets.syncedSheets.$.folderName": targetFolderName,
               },
             }
-          ).catch(() => {/* ignore if not present */});
+          ).catch(() => {});
 
           await User.updateOne(
             {
@@ -438,10 +430,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 "googleSheets.sheets.$.folderName": targetFolderName,
               },
             }
-          ).catch(() => {/* ignore if not present */});
+          ).catch(() => {});
         }
 
-        // Seed new leads into active folder watchers (drip) immediately
         if (!dryRun && newlyCreatedIds.length) {
           await seedNewImportsIntoActiveWatchers(userEmail, targetFolderId, newlyCreatedIds);
         }
