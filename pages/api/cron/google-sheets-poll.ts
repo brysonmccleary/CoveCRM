@@ -10,22 +10,20 @@ import { google } from "googleapis";
 import { DateTime } from "luxon";
 import { ensureSafeFolder } from "@/lib/ensureSafeFolder";
 
-const FINGERPRINT = "sheets-poll-v5.3-fix-headers-vs-pointer";
+const FINGERPRINT = "sheets-poll-v5.4-payload-standardized+row-errors";
 
-// --- Normalizers -------------------------------------------------------------
 const normPhone = (v: any) => String(v ?? "").replace(/\D+/g, "");
+const last10 = (p: string) => (p ? p.slice(-10) : "");
 const normEmail = (v: any) => {
   const s = String(v ?? "").trim().toLowerCase();
   return s || "";
 };
 const clean = (v: any) => (v === undefined || v === null ? "" : String(v).trim());
-
-// Make header keys Mongo-safe and skip empties
 const sanitizeKey = (k: any) => {
   let s = clean(k);
-  if (!s) return "";           // <- skip empty header
-  s = s.replace(/\./g, "_");   // Mongo disallows dots in keys
-  s = s.replace(/^\$+/, "");   // disallow leading $
+  if (!s) return "";
+  s = s.replace(/\./g, "_");
+  s = s.replace(/^\$+/, "");
   return s.trim();
 };
 
@@ -37,9 +35,6 @@ function nextWindowPT(): Date {
   return (now < today9 ? today9 : today9.plus({ days: 1 })).toJSDate();
 }
 
-// -----------------------------------------------------------------------------
-// Seed *newly imported* leads into any active DripFolderEnrollment watchers
-// -----------------------------------------------------------------------------
 async function seedNewImportsIntoActiveWatchers(
   userEmail: string,
   folderId: mongoose.Types.ObjectId,
@@ -58,8 +53,7 @@ async function seedNewImportsIntoActiveWatchers(
   if (!watchers.length) return;
 
   const now = new Date();
-  const whenNext = (startMode?: string) =>
-    startMode === "nextWindow" ? nextWindowPT() : now;
+  const whenNext = (startMode?: string) => (startMode === "nextWindow" ? nextWindowPT() : now);
 
   for (const w of watchers) {
     const existing = await DripEnrollment.find({
@@ -67,7 +61,9 @@ async function seedNewImportsIntoActiveWatchers(
       campaignId: w.campaignId,
       leadId: { $in: newLeadIds },
       status: { $in: ["active", "paused"] },
-    }).select({ leadId: 1 }).lean<{ leadId: mongoose.Types.ObjectId }[]>();
+    })
+      .select({ leadId: 1 })
+      .lean<{ leadId: mongoose.Types.ObjectId }[]>();
 
     const already = new Set((existing || []).map((e) => String(e.leadId)));
     const toInsert = newLeadIds.filter((id) => !already.has(String(id)));
@@ -108,28 +104,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(405).json({ error: "Method not allowed", fingerprint: FINGERPRINT });
   }
 
-  // Accept secret via header or query
   const headerToken = Array.isArray(req.headers["x-cron-secret"])
     ? req.headers["x-cron-secret"][0]
     : (req.headers["x-cron-secret"] as string | undefined);
-  const queryToken =
-    typeof req.query.token === "string" ? (req.query.token as string) : undefined;
+  const queryToken = typeof req.query.token === "string" ? (req.query.token as string) : undefined;
   const provided = headerToken || queryToken;
   if ((process.env.CRON_SECRET || "") && provided !== process.env.CRON_SECRET) {
     return res.status(403).json({ error: "Forbidden", fingerprint: FINGERPRINT });
   }
 
-  // Optional debug/filters
   const onlyUserEmail =
     typeof req.query.userEmail === "string"
       ? (req.query.userEmail as string).toLowerCase()
       : undefined;
   const onlySpreadsheetId =
-    typeof req.query.spreadsheetId === "string"
-      ? (req.query.spreadsheetId as string)
-      : undefined;
-  const onlyTitle =
-    typeof req.query.title === "string" ? (req.query.title as string) : undefined;
+    typeof req.query.spreadsheetId === "string" ? (req.query.spreadsheetId as string) : undefined;
+  const onlyTitle = typeof req.query.title === "string" ? (req.query.title as string) : undefined;
   const headerRowParam =
     typeof req.query.headerRow === "string" ? Math.max(1, parseInt(req.query.headerRow, 10) || 1) : undefined;
 
@@ -142,13 +132,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     await dbConnect();
 
-    // -------- USER DISCOVERY -------------------------------------------------
     const userFilter: any = {
       ...(onlyUserEmail ? { email: onlyUserEmail } : {}),
       $or: [
         { "googleSheets.syncedSheets.0": { $exists: true } },
         { "googleSheets.sheets.0": { $exists: true } },
-        { "googleSheets.refreshToken": { $exists: true, $ne: "" } }, // self-heal path
+        { "googleSheets.refreshToken": { $exists: true, $ne: "" } },
       ],
     };
 
@@ -167,45 +156,44 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     for (const u of users) {
       const userEmail = (u.email || "").toLowerCase();
-      const rootGS = (u as any).googleSheets || {};
-      const rootRefresh = rootGS.refreshToken || "";
+      const gs: any = (u as any).googleSheets || {};
+      const rootRefresh = gs.refreshToken || "";
 
-      // unified list of sheet configs (supports new and legacy shapes)
       const sheetCfgs: Array<{
         spreadsheetId: string;
         title?: string;
         accessToken?: string;
         refreshToken?: string;
-        pointer?: number;     // next data row to read
-        headerRow?: number;   // header row number (default 1)
+        pointer?: number;
+        headerRow?: number;
         _selfSeed?: boolean;
         folderId?: mongoose.Types.ObjectId;
         folderName?: string;
       }> = [];
 
-      const syncedSheets = (rootGS.syncedSheets || []) as any[];
+      const syncedSheets = (gs.syncedSheets || []) as any[];
       for (const s of syncedSheets) {
         if (!s?.spreadsheetId) continue;
         sheetCfgs.push({
           spreadsheetId: String(s.spreadsheetId),
           title: s.title ? String(s.title) : undefined,
           accessToken: s.accessToken,
-          refreshToken: s.refreshToken || rootRefresh, // FALLBACK
-          pointer: Number(s.lastRowImported || 2),     // default next row after header
+          refreshToken: s.refreshToken || rootRefresh,
+          pointer: Number(s.lastRowImported || 2),
           headerRow: Number(s.headerRow || 1),
           folderId: s.folderId,
           folderName: s.folderName,
         });
       }
 
-      const legacy = (rootGS.sheets || []) as any[];
+      const legacy = (gs.sheets || []) as any[];
       for (const s of legacy) {
         if (!s?.sheetId) continue;
         sheetCfgs.push({
           spreadsheetId: String(s.sheetId),
           title: s.tabName ? String(s.tabName) : undefined,
           accessToken: s.accessToken,
-          refreshToken: s.refreshToken || rootRefresh, // FALLBACK
+          refreshToken: s.refreshToken || rootRefresh,
           pointer: Number(s.lastRowImported || 2),
           headerRow: Number(s.headerRow || 1),
           folderId: s.folderId,
@@ -219,7 +207,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             spreadsheetId: onlySpreadsheetId,
             title: onlyTitle,
             refreshToken: rootRefresh,
-            pointer: Number((headerRowParam || 1)) + 1,
+            pointer: Number(headerRowParam || 1) + 1,
             headerRow: Number(headerRowParam || 1),
             _selfSeed: true,
           });
@@ -229,11 +217,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
       }
 
-      // ---------- PROCESS EACH SHEET CONFIG ---------------------------------
       for (const cfg of sheetCfgs) {
         const { spreadsheetId } = cfg;
         if (onlySpreadsheetId && spreadsheetId !== onlySpreadsheetId) continue;
-
         if (!cfg.refreshToken) {
           detailsAll.push({ userEmail, spreadsheetId, title: cfg.title, error: "missing-refresh-token" });
           continue;
@@ -245,9 +231,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         });
 
         const sheets = google.sheets({ version: "v4", auth });
-        const drive  = google.drive({  version: "v3", auth });
+        const drive = google.drive({ version: "v3", auth });
 
-        // Resolve title if missing
         let title = cfg.title;
         if (!title) {
           try {
@@ -259,10 +244,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (!title) title = "Sheet1";
         if (onlyTitle && title && title !== onlyTitle) continue;
 
-        // DESTINATION FOLDER — STRICTLY by sheetId
+        // Folder by sheetId (never system)
         const driveMeta = await drive.files.get({ fileId: spreadsheetId, fields: "name" });
         const computedDefault = `${driveMeta.data.name || "Imported Leads"} — ${title}`.trim();
-
         const folderDoc = await ensureSafeFolder({
           userEmail,
           folderId: cfg.folderId as any,
@@ -271,32 +255,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           source: "google-sheets",
           sheetId: spreadsheetId,
         });
-
-        const targetFolderId   = folderDoc._id as mongoose.Types.ObjectId;
+        const targetFolderId = folderDoc._id as mongoose.Types.ObjectId;
         const targetFolderName = String(folderDoc.name || "");
 
-        // --- Headers & window (CORRECTED LOGIC) ------------------------------
         const headerRow = Math.max(1, Number(cfg.headerRow || 1));
-        let pointer     = Math.max(headerRow + 1, Number(cfg.pointer || headerRow + 1)); // pointer = next DATA row
+        let pointer = Math.max(headerRow + 1, Number(cfg.pointer || headerRow + 1));
 
-        // Always fetch headers strictly from headerRow
+        // headers
         const headerResp = await sheets.spreadsheets.values.get({
           spreadsheetId,
           range: `${title}!A${headerRow}:Z${headerRow}`,
           valueRenderOption: "UNFORMATTED_VALUE",
           dateTimeRenderOption: "SERIAL_NUMBER",
         });
-        const sanitizedHeaders = (headerResp.data.values?.[0] || [])
-          .map(sanitizeKey)
-          .filter(Boolean);
-        if (!sanitizedHeaders.length) {
+        const headers = (headerResp.data.values?.[0] || []).map(sanitizeKey).filter(Boolean);
+        if (!headers.length) {
           detailsAll.push({ userEmail, spreadsheetId, title, error: "empty-headers" });
           continue;
         }
 
-        // Fetch data starting at *pointer* (not header)
+        // data
         const startRow = pointer;
-        const endRow   = Math.max(startRow + MAX_ROWS_PER_SHEET - 1, startRow);
+        const endRow = Math.max(startRow + MAX_ROWS_PER_SHEET - 1, startRow);
         let dataResp = await sheets.spreadsheets.values.get({
           spreadsheetId,
           range: `${title}!A${startRow}:Z${endRow}`,
@@ -305,7 +285,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         });
         let rows = (dataResp.data.values || []) as any[][];
 
-        // AUTO-REWIND if no rows after pointer
+        // auto-rewind if nothing after pointer
         if (!rows.length && startRow > headerRow + 1) {
           pointer = headerRow + 1;
           if (!dryRun) {
@@ -320,7 +300,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               { arrayFilters: [{ "t.spreadsheetId": spreadsheetId }, { "l.sheetId": spreadsheetId }] }
             ).catch(() => {});
           }
-          // Re-fetch from the rewound pointer
           dataResp = await sheets.spreadsheets.values.get({
             spreadsheetId,
             range: `${title}!A${pointer}:Z${pointer + MAX_ROWS_PER_SHEET - 1}`,
@@ -333,85 +312,98 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (!rows.length) {
           detailsAll.push({
             userEmail, spreadsheetId, title,
-            imported: 0, updated: 0,
-            lastProcessed: pointer - 1,
-            folderId: String(targetFolderId),
-            folderName: targetFolderName,
+            imported: 0, updated: 0, lastProcessed: pointer - 1,
+            folderId: String(targetFolderId), folderName: targetFolderName,
             note: "no-rows-after-pointer"
           });
           continue;
         }
 
         let imported = 0;
-        let updated  = 0;
+        let updated = 0;
         let lastProcessed = pointer - 1;
         const newlyCreatedIds: mongoose.Types.ObjectId[] = [];
+        const rowErrors: Array<{ row: number; message: string }> = [];
 
-        // Map each row using the fixed headers
         for (let i = 0; i < rows.length; i++) {
           const row = rows[i] || [];
           const sheetRowNumber = startRow + i;
           lastProcessed = sheetRowNumber;
 
           const obj: Record<string, any> = {};
-          for (let c = 0; c < sanitizedHeaders.length; c++) {
-            const h = sanitizedHeaders[c];
-            obj[h] = row[c];
+          for (let c = 0; c < headers.length; c++) obj[headers[c]] = row[c];
+
+          const phoneRaw = obj["Phone"] ?? obj["phone"] ?? "";
+          const p = normPhone(phoneRaw);
+          const p10 = last10(p);
+          const e = normEmail(obj["Email"] ?? obj["email"] ?? "");
+
+          if (!p && !e) {
+            // skip rows without identifiers
+            continue;
           }
 
-          const doc: Record<string, any> = { userEmail, ...obj };
-          const p = normPhone(doc["Phone"] ?? doc["phone"] ?? "");
-          const e = normEmail(doc["Email"] ?? doc["email"] ?? "");
+          // standardize payload fields (match your UI & other importers)
+          const baseDoc: Record<string, any> = {
+            userEmail,
+            status: "New",
+            // identity
+            Phone: phoneRaw ?? "",
+            phone: phoneRaw ?? "",
+            normalizedPhone: p || undefined,
+            phoneLast10: p10 || undefined,
+            Email: e || undefined,
+            email: e || undefined,
+            // folder
+            folderId: targetFolderId,
+            folder_name: targetFolderName,
+            ["Folder Name"]: targetFolderName,
+            // source
+            source: "google-sheets",
+            sourceSpreadsheetId: spreadsheetId,
+            sourceTabTitle: title,
+          };
+
+          // copy all sheet fields as-is (sanitized header names)
+          for (const k of Object.keys(obj)) {
+            if (obj[k] !== undefined) baseDoc[k] = obj[k];
+          }
 
           const or: any[] = [];
           if (p) or.push({ normalizedPhone: p });
           if (e) or.push({ email: e });
 
           const filter = { userEmail, ...(or.length ? { $or: or } : {}) };
-          const existing = await Lead.findOne(filter).select("_id").lean<{ _id: mongoose.Types.ObjectId } | null>();
 
-          if (!existing) {
-            if (!dryRun) {
-              const created = await Lead.create({
-                ...doc,
-                folderId: targetFolderId,
-                folder_name: targetFolderName,
-                ["Folder Name"]: targetFolderName,
-                source: "google-sheets",
-                sourceSpreadsheetId: spreadsheetId,
-                sourceTabTitle: title,
-              });
-              newlyCreatedIds.push(created._id as mongoose.Types.ObjectId);
+          try {
+            if (dryRun) {
+              // simulate branch: count would be insert if no match
+              const existing = await Lead.findOne(filter).select("_id").lean<{ _id: mongoose.Types.ObjectId } | null>();
+              if (!existing) {
+                imported++;
+              } else {
+                updated++;
+              }
+            } else {
+              const existing = await Lead.findOne(filter).select("_id").lean<{ _id: mongoose.Types.ObjectId } | null>();
+              if (!existing) {
+                const created = await Lead.create({ ...baseDoc, createdAt: new Date() });
+                newlyCreatedIds.push(created._id as mongoose.Types.ObjectId);
+                imported++;
+              } else {
+                await Lead.updateOne({ _id: existing._id }, { $set: { ...baseDoc, updatedAt: new Date() } });
+                updated++;
+              }
             }
-            imported++;
-          } else {
-            if (!dryRun) {
-              await Lead.updateOne(
-                { _id: existing._id },
-                {
-                  $set: {
-                    ...doc,
-                    folderId: targetFolderId,
-                    folder_name: targetFolderName,
-                    ["Folder Name"]: targetFolderName,
-                    source: "google-sheets",
-                    sourceSpreadsheetId: spreadsheetId,
-                    sourceTabTitle: title,
-                  },
-                }
-              );
-            }
-            updated++;
+          } catch (err: any) {
+            rowErrors.push({ row: sheetRowNumber, message: err?.message || String(err) });
           }
         }
 
         const newLast = Math.max(lastProcessed + 1, pointer);
         if (!dryRun) {
           await User.updateOne(
-            {
-              email: userEmail,
-              "googleSheets.syncedSheets.spreadsheetId": spreadsheetId,
-            },
+            { email: userEmail, "googleSheets.syncedSheets.spreadsheetId": spreadsheetId },
             {
               $set: {
                 "googleSheets.syncedSheets.$.lastRowImported": newLast,
@@ -421,12 +413,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               },
             }
           ).catch(() => {});
-
           await User.updateOne(
-            {
-              email: userEmail,
-              "googleSheets.sheets.sheetId": spreadsheetId,
-            },
+            { email: userEmail, "googleSheets.sheets.sheetId": spreadsheetId },
             {
               $set: {
                 "googleSheets.sheets.$.lastRowImported": newLast,
@@ -452,6 +440,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           folderId: String(targetFolderId),
           folderName: targetFolderName,
           seededNewEnrollments: newlyCreatedIds.length,
+          rowErrors,
         });
       }
     }
