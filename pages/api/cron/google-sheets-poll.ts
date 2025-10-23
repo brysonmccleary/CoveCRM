@@ -10,8 +10,9 @@ import { google } from "googleapis";
 import { DateTime } from "luxon";
 import { ensureSafeFolder } from "@/lib/ensureSafeFolder";
 
-const FINGERPRINT = "sheets-poll-v5.4-payload-standardized+row-errors";
+const FINGERPRINT = "sheets-poll-v5.4.1-auth-vercel-cron+payload-std";
 
+// --- helpers -------------------------------------------------------------
 const normPhone = (v: any) => String(v ?? "").replace(/\D+/g, "");
 const last10 = (p: string) => (p ? p.slice(-10) : "");
 const normEmail = (v: any) => {
@@ -22,7 +23,7 @@ const clean = (v: any) => (v === undefined || v === null ? "" : String(v).trim()
 const sanitizeKey = (k: any) => {
   let s = clean(k);
   if (!s) return "";
-  s = s.replace(/\./g, "_");
+  s = s.replace(/\./g, "_"); // Mongo key safety
   s = s.replace(/^\$+/, "");
   return s.trim();
 };
@@ -61,9 +62,7 @@ async function seedNewImportsIntoActiveWatchers(
       campaignId: w.campaignId,
       leadId: { $in: newLeadIds },
       status: { $in: ["active", "paused"] },
-    })
-      .select({ leadId: 1 })
-      .lean<{ leadId: mongoose.Types.ObjectId }[]>();
+    }).select({ leadId: 1 }).lean<{ leadId: mongoose.Types.ObjectId }[]>();
 
     const already = new Set((existing || []).map((e) => String(e.leadId)));
     const toInsert = newLeadIds.filter((id) => !already.has(String(id)));
@@ -71,12 +70,7 @@ async function seedNewImportsIntoActiveWatchers(
 
     const bulkOps = toInsert.map((leadId) => ({
       updateOne: {
-        filter: {
-          userEmail,
-          leadId,
-          campaignId: w.campaignId,
-          status: { $in: ["active", "paused"] },
-        },
+        filter: { userEmail, leadId, campaignId: w.campaignId, status: { $in: ["active", "paused"] } },
         update: {
           $setOnInsert: {
             userEmail,
@@ -92,7 +86,6 @@ async function seedNewImportsIntoActiveWatchers(
         upsert: true,
       },
     }));
-
     if (bulkOps.length) await DripEnrollment.bulkWrite(bulkOps, { ordered: false });
   }
 }
@@ -104,24 +97,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(405).json({ error: "Method not allowed", fingerprint: FINGERPRINT });
   }
 
+  // ---------- AUTH GATE ----------
+  // Allow: (a) vercel managed cron (UA contains "vercel-cron") OR (b) requests presenting the secret in header/query.
   const headerToken = Array.isArray(req.headers["x-cron-secret"])
     ? req.headers["x-cron-secret"][0]
     : (req.headers["x-cron-secret"] as string | undefined);
   const queryToken = typeof req.query.token === "string" ? (req.query.token as string) : undefined;
+
+  const ua = String(req.headers["user-agent"] || "");
+  const isVercelCron = /\bvercel-cron\b/i.test(ua);
+
   const provided = headerToken || queryToken;
-  if ((process.env.CRON_SECRET || "") && provided !== process.env.CRON_SECRET) {
+  const hasSecret = !!(process.env.CRON_SECRET || "");
+  if (hasSecret && !isVercelCron && provided !== process.env.CRON_SECRET) {
     return res.status(403).json({ error: "Forbidden", fingerprint: FINGERPRINT });
   }
+  // --------------------------------
 
+  // Optional debug/filters (used by manual curls; cron runs without them)
   const onlyUserEmail =
-    typeof req.query.userEmail === "string"
-      ? (req.query.userEmail as string).toLowerCase()
-      : undefined;
-  const onlySpreadsheetId =
-    typeof req.query.spreadsheetId === "string" ? (req.query.spreadsheetId as string) : undefined;
+    typeof req.query.userEmail === "string" ? (req.query.userEmail as string).toLowerCase() : undefined;
+  const onlySpreadsheetId = typeof req.query.spreadsheetId === "string" ? (req.query.spreadsheetId as string) : undefined;
   const onlyTitle = typeof req.query.title === "string" ? (req.query.title as string) : undefined;
   const headerRowParam =
-    typeof req.query.headerRow === "string" ? Math.max(1, parseInt(req.query.headerRow, 10) || 1) : undefined;
+    typeof req.query.headerRow === "string" ? Math.max(1, parseInt(req.query.headerRow as string, 10) || 1) : undefined;
 
   const dryRun = req.query.dryRun === "1" || req.query.dryRun === "true";
   const debug = req.query.debug === "1" || req.query.debug === "true";
@@ -132,12 +131,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     await dbConnect();
 
+    // discover users who have google sheets connected
     const userFilter: any = {
       ...(onlyUserEmail ? { email: onlyUserEmail } : {}),
       $or: [
         { "googleSheets.syncedSheets.0": { $exists: true } },
         { "googleSheets.sheets.0": { $exists: true } },
-        { "googleSheets.refreshToken": { $exists: true, $ne: "" } },
+        { "googleSheets.refreshToken": { $exists: true, $ne: "" } }, // fallback path
       ],
     };
 
@@ -159,16 +159,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const gs: any = (u as any).googleSheets || {};
       const rootRefresh = gs.refreshToken || "";
 
+      // unify configs across shapes
       const sheetCfgs: Array<{
         spreadsheetId: string;
         title?: string;
         accessToken?: string;
         refreshToken?: string;
-        pointer?: number;
-        headerRow?: number;
-        _selfSeed?: boolean;
+        pointer?: number;   // next DATA row
+        headerRow?: number; // header row index
         folderId?: mongoose.Types.ObjectId;
         folderName?: string;
+        _selfSeed?: boolean;
       }> = [];
 
       const syncedSheets = (gs.syncedSheets || []) as any[];
@@ -225,10 +226,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           continue;
         }
 
-        auth.setCredentials({
-          access_token: cfg.accessToken,
-          refresh_token: cfg.refreshToken,
-        });
+        auth.setCredentials({ access_token: cfg.accessToken, refresh_token: cfg.refreshToken });
 
         const sheets = google.sheets({ version: "v4", auth });
         const drive = google.drive({ version: "v3", auth });
@@ -244,7 +242,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (!title) title = "Sheet1";
         if (onlyTitle && title && title !== onlyTitle) continue;
 
-        // Folder by sheetId (never system)
+        // Folder strictly derived from sheetId (never system folders)
         const driveMeta = await drive.files.get({ fileId: spreadsheetId, fields: "name" });
         const computedDefault = `${driveMeta.data.name || "Imported Leads"} — ${title}`.trim();
         const folderDoc = await ensureSafeFolder({
@@ -253,15 +251,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           folderName: cfg.folderName,
           defaultName: computedDefault,
           source: "google-sheets",
+          // extra field is ignored by ensureSafeFolder if not used
           sheetId: spreadsheetId,
         });
         const targetFolderId = folderDoc._id as mongoose.Types.ObjectId;
         const targetFolderName = String(folderDoc.name || "");
 
         const headerRow = Math.max(1, Number(cfg.headerRow || 1));
-        let pointer = Math.max(headerRow + 1, Number(cfg.pointer || headerRow + 1));
+        let pointer = Math.max(headerRow + 1, Number(cfg.pointer || headerRow + 1)); // next DATA row
 
-        // headers
+        // 1) headers always from headerRow
         const headerResp = await sheets.spreadsheets.values.get({
           spreadsheetId,
           range: `${title}!A${headerRow}:Z${headerRow}`,
@@ -274,7 +273,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           continue;
         }
 
-        // data
+        // 2) data from pointer window
         const startRow = pointer;
         const endRow = Math.max(startRow + MAX_ROWS_PER_SHEET - 1, startRow);
         let dataResp = await sheets.spreadsheets.values.get({
@@ -285,18 +284,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         });
         let rows = (dataResp.data.values || []) as any[][];
 
-        // auto-rewind if nothing after pointer
+        // auto-rewind if nothing after pointer (safe due to dedupe)
         if (!rows.length && startRow > headerRow + 1) {
           pointer = headerRow + 1;
           if (!dryRun) {
             await User.updateMany(
               { email: userEmail },
-              {
-                $set: {
+              { $set: {
                   "googleSheets.syncedSheets.$[t].lastRowImported": pointer,
                   "googleSheets.sheets.$[l].lastRowImported": pointer,
-                },
-              },
+                } },
               { arrayFilters: [{ "t.spreadsheetId": spreadsheetId }, { "l.sheetId": spreadsheetId }] }
             ).catch(() => {});
           }
@@ -339,11 +336,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           const e = normEmail(obj["Email"] ?? obj["email"] ?? "");
 
           if (!p && !e) {
-            // skip rows without identifiers
-            continue;
+            continue; // skip rows without identifiers
           }
 
-          // standardize payload fields (match your UI & other importers)
+          // standardized payload (matches UI & other importers)
           const baseDoc: Record<string, any> = {
             userEmail,
             status: "New",
@@ -364,7 +360,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             sourceTabTitle: title,
           };
 
-          // copy all sheet fields as-is (sanitized header names)
+          // copy all sheet fields as-is
           for (const k of Object.keys(obj)) {
             if (obj[k] !== undefined) baseDoc[k] = obj[k];
           }
@@ -372,18 +368,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           const or: any[] = [];
           if (p) or.push({ normalizedPhone: p });
           if (e) or.push({ email: e });
-
           const filter = { userEmail, ...(or.length ? { $or: or } : {}) };
 
           try {
             if (dryRun) {
-              // simulate branch: count would be insert if no match
               const existing = await Lead.findOne(filter).select("_id").lean<{ _id: mongoose.Types.ObjectId } | null>();
-              if (!existing) {
-                imported++;
-              } else {
-                updated++;
-              }
+              if (!existing) imported++; else updated++;
             } else {
               const existing = await Lead.findOne(filter).select("_id").lean<{ _id: mongoose.Types.ObjectId } | null>();
               if (!existing) {
@@ -404,25 +394,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (!dryRun) {
           await User.updateOne(
             { email: userEmail, "googleSheets.syncedSheets.spreadsheetId": spreadsheetId },
-            {
-              $set: {
+            { $set: {
                 "googleSheets.syncedSheets.$.lastRowImported": newLast,
                 "googleSheets.syncedSheets.$.lastImportedAt": new Date(),
                 "googleSheets.syncedSheets.$.folderId": targetFolderId,
                 "googleSheets.syncedSheets.$.folderName": targetFolderName,
-              },
-            }
+            } }
           ).catch(() => {});
           await User.updateOne(
             { email: userEmail, "googleSheets.sheets.sheetId": spreadsheetId },
-            {
-              $set: {
+            { $set: {
                 "googleSheets.sheets.$.lastRowImported": newLast,
                 "googleSheets.sheets.$.lastImportedAt": new Date(),
                 "googleSheets.sheets.$.folderId": targetFolderId,
                 "googleSheets.sheets.$.folderName": targetFolderName,
-              },
-            }
+            } }
           ).catch(() => {});
         }
 
