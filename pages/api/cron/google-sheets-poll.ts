@@ -10,7 +10,7 @@ import { google } from "googleapis";
 import { DateTime } from "luxon";
 import { ensureSafeFolder } from "@/lib/ensureSafeFolder";
 
-const FINGERPRINT = "sheets-poll-v5-sheetId-map";
+const FINGERPRINT = "sheets-poll-v5.1-sheetId-map+root-refresh-fallback";
 
 // --- Normalizers -------------------------------------------------------------
 const normPhone = (v: any) => String(v ?? "").replace(/\D+/g, "");
@@ -20,11 +20,11 @@ const normEmail = (v: any) => {
 };
 const clean = (v: any) => (v === undefined || v === null ? "" : String(v).trim());
 
-// NEW: make header keys Mongo-safe and skip empties
+// Make header keys Mongo-safe and skip empties
 const sanitizeKey = (k: any) => {
   let s = clean(k);
-  if (!s) return "";           // <- signal to skip
-  s = s.replace(/\./g, "_");   // Mongo disallows dots in keys
+  if (!s) return "";           // <- skip empty header
+  s = s.replace(/\./g, "_");   // Mongo disallows dots
   s = s.replace(/^\$+/, "");   // disallow leading $
   return s.trim();
 };
@@ -173,6 +173,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     for (const u of users) {
       const userEmail = (u.email || "").toLowerCase();
+      const rootGS = (u as any).googleSheets || {};
+      const rootRefresh = rootGS.refreshToken || "";
 
       // unified list of sheet configs (supports new and legacy shapes)
       const sheetCfgs: Array<{
@@ -186,28 +188,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         folderName?: string;                // optional
       }> = [];
 
-      const syncedSheets = ((u as any).googleSheets?.syncedSheets || []) as any[];
+      const syncedSheets = (rootGS.syncedSheets || []) as any[];
       for (const s of syncedSheets) {
         if (!s?.spreadsheetId) continue;
         sheetCfgs.push({
           spreadsheetId: String(s.spreadsheetId),
           title: s.title ? String(s.title) : undefined,
           accessToken: s.accessToken,
-          refreshToken: s.refreshToken,
+          refreshToken: s.refreshToken || rootRefresh, // <-- FALLBACK to root refresh
           pointer: Number(s.lastRowImported || 1),
           folderId: s.folderId,
           folderName: s.folderName,
         });
       }
 
-      const legacy = ((u as any).googleSheets?.sheets || []) as any[];
+      const legacy = (rootGS.sheets || []) as any[];
       for (const s of legacy) {
         if (!s?.sheetId) continue;
         sheetCfgs.push({
           spreadsheetId: String(s.sheetId),
           title: s.tabName ? String(s.tabName) : undefined,
           accessToken: s.accessToken,
-          refreshToken: s.refreshToken,
+          refreshToken: s.refreshToken || rootRefresh, // <-- FALLBACK to root refresh
           pointer: Number(s.lastRowImported || 1),
           folderId: s.folderId,
           folderName: s.folderName,
@@ -216,12 +218,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       // ---------- SELF-HEAL SEEDING -----------------------------------------
       if (sheetCfgs.length === 0) {
-        const rootRefresh = (u as any)?.googleSheets?.refreshToken || "";
         if (rootRefresh && onlySpreadsheetId) {
           sheetCfgs.push({
             spreadsheetId: onlySpreadsheetId,
             title: onlyTitle,
-            refreshToken: rootRefresh,
+            refreshToken: rootRefresh, // <— we seed with root token
             pointer: Number(headerRowParam || 1),
             _selfSeed: true,
           });
@@ -245,9 +246,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         if (onlySpreadsheetId && spreadsheetId !== onlySpreadsheetId) continue;
 
+        // REQUIRED: at least a refresh token (per-sheet or root)
+        if (!cfg.refreshToken) {
+          detailsAll.push({
+            userEmail,
+            spreadsheetId,
+            title: cfg.title,
+            error: "missing-refresh-token",
+          });
+          continue;
+        }
+
         auth.setCredentials({
-          access_token: cfg.accessToken,
-          refresh_token: cfg.refreshToken,
+          access_token: cfg.accessToken,     // may be undefined
+          refresh_token: cfg.refreshToken,   // guaranteed by fallback
         });
 
         const sheets = google.sheets({ version: "v4", auth });
@@ -286,7 +298,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const targetFolderId = folderDoc._id as mongoose.Types.ObjectId;
         const targetFolderName = String(folderDoc.name || "");
 
-        // Persist back to user config (best-effort)
+        // Persist back to user config (best-effort), including folder mapping
         if (!dryRun && title) {
           await User.updateOne(
             {
@@ -302,9 +314,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 "googleSheets.sheets.$[l].tabName": title,
                 "googleSheets.syncedSheets.$[t].folderId": targetFolderId,
                 "googleSheets.syncedSheets.$[t].folderName": targetFolderName,
-                "googleSheets.sheets.$[l].folderId": targetFolderId,
-                "googleSheets.sheets.$[l].folderName": targetFolderName,
               },
+              $setOnInsert: {},
             },
             { arrayFilters: [{ "t.spreadsheetId": spreadsheetId }, { "l.sheetId": spreadsheetId }] }
           ).catch(() => {/* best-effort */});
