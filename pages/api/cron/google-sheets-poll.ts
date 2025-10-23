@@ -1,3 +1,4 @@
+// /pages/api/cron/google-sheets-poll.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
@@ -7,9 +8,9 @@ import DripFolderEnrollment from "@/models/DripFolderEnrollment";
 import mongoose from "mongoose";
 import { google } from "googleapis";
 import { DateTime } from "luxon";
-import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
+import { ensureSafeFolder } from "@/lib/ensureSafeFolder";
 
-const FINGERPRINT = "selfheal-v5h+seed"; // fingerprint +seed to mark this build
+const FINGERPRINT = "sheets-poll-v5-sheetId-map";
 
 // --- Normalizers -------------------------------------------------------------
 const normPhone = (v: any) => String(v ?? "").replace(/\D+/g, "");
@@ -28,12 +29,6 @@ const sanitizeKey = (k: any) => {
   return s.trim();
 };
 
-type FolderRaw = {
-  _id: mongoose.Types.ObjectId;
-  userEmail: string;
-  name: string;
-};
-
 function nextWindowPT(): Date {
   const PT_ZONE = "America/Los_Angeles";
   const SEND_HOUR_PT = 9;
@@ -43,42 +38,7 @@ function nextWindowPT(): Date {
 }
 
 // -----------------------------------------------------------------------------
-// NEVER create a system folder. If desired name is systemish, suffix " (Leads)".
-// -----------------------------------------------------------------------------
-async function ensureNonSystemFolderRaw(
-  userEmail: string,
-  wantedName: string
-): Promise<NonNullable<FolderRaw>> {
-  const db = mongoose.connection.db;
-  if (!db) throw new Error("DB connection not ready");
-  const coll = db.collection("folders");
-
-  const baseName = isSystemFolder(wantedName) ? `${wantedName} (Leads)` : wantedName;
-
-  // 1) Try exact find
-  const existing = (await coll.findOne({ userEmail, name: baseName })) as FolderRaw;
-  if (existing && existing.name && !isSystemFolder(existing.name)) {
-    return existing as NonNullable<FolderRaw>;
-  }
-
-  // 2) Create if not found
-  const inserted = await coll.insertOne({
-    userEmail,
-    name: baseName,
-    createdAt: new Date(),
-    updatedAt: new Date(),
-  });
-
-  const doc = (await coll.findOne({ _id: inserted.insertedId })) as FolderRaw | null;
-  if (!doc) throw new Error("Failed to create folder");
-  return doc as NonNullable<FolderRaw>;
-}
-
-// -----------------------------------------------------------------------------
 // Seed *newly imported* leads into any active DripFolderEnrollment watchers
-// for this folder, so the first message can go out without waiting for the
-// 5-minute scan job. We only upsert if the lead has NO active/paused enrollment
-// for that same campaign.
 // -----------------------------------------------------------------------------
 async function seedNewImportsIntoActiveWatchers(
   userEmail: string,
@@ -222,6 +182,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         refreshToken?: string;
         pointer?: number;
         _selfSeed?: boolean; // indicates we seeded this on-the-fly
+        folderId?: mongoose.Types.ObjectId; // optional
+        folderName?: string;                // optional
       }> = [];
 
       const syncedSheets = ((u as any).googleSheets?.syncedSheets || []) as any[];
@@ -233,6 +195,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           accessToken: s.accessToken,
           refreshToken: s.refreshToken,
           pointer: Number(s.lastRowImported || 1),
+          folderId: s.folderId,
+          folderName: s.folderName,
         });
       }
 
@@ -245,6 +209,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           accessToken: s.accessToken,
           refreshToken: s.refreshToken,
           pointer: Number(s.lastRowImported || 1),
+          folderId: s.folderId,
+          folderName: s.folderName,
         });
       }
 
@@ -304,20 +270,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (!title) title = "Sheet1";
         if (onlyTitle && title && title !== onlyTitle) continue;
 
-        // ---- DESTINATION FOLDER — ALWAYS computed, NEVER from cfg
+        // ---- DESTINATION FOLDER — STRICTLY keyed by sheetId
         const driveMeta = await drive.files.get({ fileId: spreadsheetId, fields: "name" });
-        const computedDefault = `${driveMeta.data.name || "Imported Leads"} — ${title}`;
+        const computedDefault = `${driveMeta.data.name || "Imported Leads"} — ${title}`.trim();
 
-        const folderDoc = await ensureNonSystemFolderRaw(userEmail, computedDefault);
+        const folderDoc = await ensureSafeFolder({
+          userEmail,
+          folderId: cfg.folderId as any,
+          folderName: cfg.folderName,
+          defaultName: computedDefault,
+          source: "google-sheets",
+          sheetId: spreadsheetId, // <- THE KEY
+        });
+
         const targetFolderId = folderDoc._id as mongoose.Types.ObjectId;
         const targetFolderName = String(folderDoc.name || "");
 
-        // Persist tab title best-effort
+        // Persist back to user config (best-effort)
         if (!dryRun && title) {
-          const setDoc: Record<string, any> = {
-            "googleSheets.syncedSheets.$[t].title": title,
-            "googleSheets.sheets.$[l].tabName": title,
-          };
           await User.updateOne(
             {
               email: userEmail,
@@ -326,7 +296,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 { "googleSheets.sheets.sheetId": spreadsheetId }, // legacy mapping
               ],
             },
-            { $set: setDoc },
+            {
+              $set: {
+                "googleSheets.syncedSheets.$[t].title": title,
+                "googleSheets.sheets.$[l].tabName": title,
+                "googleSheets.syncedSheets.$[t].folderId": targetFolderId,
+                "googleSheets.syncedSheets.$[t].folderName": targetFolderName,
+                "googleSheets.sheets.$[l].folderId": targetFolderId,
+                "googleSheets.sheets.$[l].folderName": targetFolderName,
+              },
+            },
             { arrayFilters: [{ "t.spreadsheetId": spreadsheetId }, { "l.sheetId": spreadsheetId }] }
           ).catch(() => {/* best-effort */});
         }
@@ -351,7 +330,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         // SANITIZE HEADERS: skip blanks and unsafe keys
         const rawHeaders = (values[0] || []) as any[];
-        const headers = rawHeaders.map(sanitizeKey).filter(Boolean); // <— critical fix
+        const headers = rawHeaders.map(sanitizeKey).filter(Boolean);
         const rows = values.slice(1);
 
         let imported = 0;
@@ -368,7 +347,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           // Build doc from sanitized headers only
           const obj: Record<string, any> = {};
           for (let c = 0; c < headers.length; c++) {
-            const h = headers[c];        // already sanitized & non-empty
+            const h = headers[c];
             obj[h] = row[c];
           }
 
@@ -381,9 +360,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           if (e) or.push({ email: e });
 
           const filter = { userEmail, ...(or.length ? { $or: or } : {}) };
-          const existing = await Lead.findOne(filter)
-            .select("_id")
-            .lean<{ _id: mongoose.Types.ObjectId } | null>();
+          const existing = await Lead.findOne(filter).select("_id").lean<{ _id: mongoose.Types.ObjectId } | null>();
 
           if (!existing) {
             if (!dryRun) {
@@ -392,13 +369,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 folderId: targetFolderId,
                 folder_name: targetFolderName,
                 ["Folder Name"]: targetFolderName,
+                source: "google-sheets",
+                sourceSpreadsheetId: spreadsheetId,
+                sourceTabTitle: title,
               });
               newlyCreatedIds.push(created._id as mongoose.Types.ObjectId);
             }
             imported++;
           } else {
             if (!dryRun) {
-              // $set document is safe because keys were sanitized & blanks dropped
               await Lead.updateOne(
                 { _id: existing._id },
                 {
@@ -407,6 +386,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                     folderId: targetFolderId,
                     folder_name: targetFolderName,
                     ["Folder Name"]: targetFolderName,
+                    source: "google-sheets",
+                    sourceSpreadsheetId: spreadsheetId,
+                    sourceTabTitle: title,
                   },
                 }
               );
@@ -417,7 +399,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         const newLast = Math.max(lastProcessed + 1, Number(pointer));
         if (!dryRun) {
-          // Try to set pointer on both shapes (best-effort)
           await User.updateOne(
             {
               email: userEmail,
@@ -447,33 +428,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               },
             }
           ).catch(() => {/* ignore if not present */});
-
-          // If this config was self-seeded (user had only root token),
-          // persist a proper syncedSheets entry so future runs are automatic.
-          if ((cfg as any)._selfSeed) {
-            await User.updateOne(
-              { email: userEmail, "googleSheets.syncedSheets.spreadsheetId": spreadsheetId, "googleSheets.syncedSheets.title": title },
-              { $set: { "googleSheets.syncedSheets.$.refreshToken": cfg.refreshToken } }
-            );
-            const matched = await User.findOne({ email: userEmail, "googleSheets.syncedSheets.spreadsheetId": spreadsheetId, "googleSheets.syncedSheets.title": title }).lean();
-            if (!matched) {
-              await User.updateOne(
-                { email: userEmail },
-                {
-                  $push: {
-                    "googleSheets.syncedSheets": {
-                      spreadsheetId,
-                      title,
-                      lastRowImported: newLast,
-                      refreshToken: cfg.refreshToken,
-                      folderId: targetFolderId,
-                      folderName: targetFolderName,
-                    },
-                  },
-                }
-              );
-            }
-          }
         }
 
         // Seed new leads into active folder watchers (drip) immediately

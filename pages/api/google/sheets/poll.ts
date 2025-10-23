@@ -5,10 +5,8 @@ import { authOptions } from "../../auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import Lead from "@/models/Lead";
-import Folder from "@/models/Folder";
 import { google } from "googleapis";
 import mongoose from "mongoose";
-import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
 import { ensureSafeFolder } from "@/lib/ensureSafeFolder";
 
 function normalizePhone(input: any): string {
@@ -75,20 +73,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       if (!spreadsheetId || !title) continue;
 
-      // --- Resolve/Correct destination folder (CENTRALIZED via ensureSafeFolder) ---
-      // Build a deterministic, human-friendly default from Drive metadata + tab title.
+      // Build default friendly name from Drive metadata + tab title
       const meta = await drive.files.get({ fileId: spreadsheetId, fields: "name" });
       const defaultName = (folderName || `${meta.data.name || "Imported Leads"} — ${title}`).trim();
 
+      // STRICTLY map by sheetId; attach sheetId to the folder if missing
       const folderDoc = await ensureSafeFolder({
         userEmail,
         folderId,
         folderName,
         defaultName,
         source: "google-sheets",
+        sheetId: spreadsheetId, // <- KEY
       });
 
-      // Persist the sanitized folder back to the sheet link entry (keeps DB clean)
+      // Persist the sanitized folder back to the sheet link entry
       await User.updateOne(
         {
           email: userEmail,
