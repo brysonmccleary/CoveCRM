@@ -26,17 +26,60 @@ type CampaignLite = {
   _id: any;
   isActive?: boolean;
   type?: string;
+  steps?: Array<{ day?: string }>;
 };
 
-// Next 9:00am PT
-function nextWindowPT(): Date {
+/** Parse "Day 1", "1", "day-3", etc → 1,3 ... returns NaN if missing. */
+function parseStepDayNumber(dayField?: string): number {
+  if (!dayField) return NaN;
+  const m = String(dayField).match(/(\d+)/);
+  return m ? parseInt(m[1], 10) : NaN;
+}
+
+/** Next 9:00 AM PT from *now*. */
+function nextWindowPT(): DateTime {
+  const now = DateTime.now().setZone(PT_ZONE);
+  const today9 = now.set({ hour: SEND_HOUR_PT, minute: 0, second: 0, millisecond: 0 });
+  return now < today9 ? today9 : today9.plus({ days: 1 });
+}
+
+/**
+ * Compute the initial nextSendAt for a new enrollment.
+ * - Looks at the campaign's *first* step day number.
+ * - "immediate": if Day 1 and it's already after 9 AM PT today → send now;
+ *                otherwise window to the proper 9 AM PT slot.
+ * - "nextWindow": always schedule at the next 9 AM PT, then add (day-1) days.
+ */
+function computeInitialNextSendAtPT(
+  startMode: "immediate" | "nextWindow",
+  campaign: CampaignLite
+): Date {
+  const steps = Array.isArray(campaign.steps) ? campaign.steps : [];
+  const first = steps[0];
+  const dayNum = parseStepDayNumber(first?.day) || 1;
+
   const nowPT = DateTime.now().setZone(PT_ZONE);
-  const base = nowPT.hour < SEND_HOUR_PT ? nowPT : nowPT.plus({ days: 1 });
-  return base.set({ hour: SEND_HOUR_PT, minute: 0, second: 0, millisecond: 0 }).toJSDate();
+  const today9 = nowPT.set({ hour: SEND_HOUR_PT, minute: 0, second: 0, millisecond: 0 });
+
+  if (startMode === "immediate") {
+    if (dayNum <= 1) {
+      // Day 1:
+      // - before 9am PT → today @ 9am PT
+      // - at/after 9am PT → now (eligible immediately)
+      return (nowPT >= today9 ? nowPT : today9).toJSDate();
+    }
+    // Day > 1 → anchor to the next 9am window, then offset (day-1)
+    const base = nextWindowPT();
+    return base.plus({ days: dayNum - 1 }).toJSDate();
+  }
+
+  // startMode === "nextWindow"
+  const base = nextWindowPT();
+  return base.plus({ days: Math.max(0, dayNum - 1) }).toJSDate();
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (process.env.DRIPS_HARD_STOP === "1") return res.status(204).end(); // safe pause
+  if (process.env.DRIPS_HARD_STOP === "1") return res.status(204).end();
   if (req.method !== "GET") return res.status(405).json({ message: "Method not allowed" });
 
   try {
@@ -50,7 +93,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .select({ _id: 1, userEmail: 1, folderId: 1, campaignId: 1, startMode: 1, lastScanAt: 1 })
       .lean<Watcher[]>();
 
-    let scanned = 0, newlyEnrolled = 0, deduped = 0;
+    let scanned = 0, newlyEnrolled = 0, deduped = 0, deactivated = 0;
 
     for (const w of watchers) {
       scanned++;
@@ -59,13 +102,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const wLock = await acquireLock("watch", `folder:${String(w._id)}`, 45);
       if (!wLock) continue;
 
-      // Ensure campaign is SMS + active (TS-safe narrowing)
+      // Ensure campaign is SMS + active and fetch first step day
       const campaign = (await DripCampaign.findById(w.campaignId)
-        .select({ _id: 1, isActive: 1, type: 1 })
+        .select({ _id: 1, isActive: 1, type: 1, steps: 1 })
         .lean()) as CampaignLite | null;
 
       if (!campaign || campaign.type !== "sms" || campaign.isActive !== true) {
         await DripFolderEnrollment.updateOne({ _id: w._id }, { $set: { active: false } });
+        deactivated++;
         continue;
       }
 
@@ -98,7 +142,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         { $limit: 2000 }, // safety per tick
       ]);
 
-      const nextSendAt = w.startMode === "nextWindow" ? nextWindowPT() : new Date();
+      // Compute initial schedule per watcher/campaign
+      const initialNext = computeInitialNextSendAtPT(w.startMode || "immediate", campaign);
 
       for (const lead of leads) {
         const before = await DripEnrollment.findOne({
@@ -126,7 +171,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               campaignId: w.campaignId,
               status: "active",
               cursorStep: 0,
-              nextSendAt,
+              nextSendAt: initialNext,
               source: "folder-bulk",
             },
           },
@@ -144,6 +189,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       scannedWatchers: scanned,
       newlyEnrolled,
       deduped,
+      deactivated,
     });
   } catch (err) {
     console.error("❌ scan-folder-enrollments error:", err);
