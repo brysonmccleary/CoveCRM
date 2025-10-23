@@ -67,9 +67,6 @@ async function ensureNonSystemFolderRaw(
 
 // -----------------------------------------------------------------------------
 // Seed *newly imported* leads into any active DripFolderEnrollment watchers
-// for this folder, so the first message can go out without waiting for the
-// 5-minute scan job. We only upsert if the lead has NO active/paused enrollment
-// for that same campaign.
 // -----------------------------------------------------------------------------
 async function seedNewImportsIntoActiveWatchers(
   userEmail: string,
@@ -92,9 +89,7 @@ async function seedNewImportsIntoActiveWatchers(
   const whenNext = (startMode?: string) =>
     startMode === "nextWindow" ? nextWindowPT() : now;
 
-  // For each watcher, insert enrollments for new leads that don't already have one.
   for (const w of watchers) {
-    // Check which of this batch already has an enrollment
     const existing = await DripEnrollment.find({
       userEmail,
       campaignId: w.campaignId,
@@ -106,10 +101,8 @@ async function seedNewImportsIntoActiveWatchers(
 
     const already = new Set((existing || []).map((e) => String(e.leadId)));
     const toInsert = newLeadIds.filter((id) => !already.has(String(id)));
-
     if (!toInsert.length) continue;
 
-    // Bulk upsert to avoid race conditions
     const bulkOps = toInsert.map((leadId) => ({
       updateOne: {
         filter: {
@@ -169,6 +162,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       : undefined;
   const onlyTitle =
     typeof req.query.title === "string" ? (req.query.title as string) : undefined;
+
+  // NEW: allow setting header row when seeding a missing config (defaults to 1 → we’ll bump to 2 if headers look on row 2)
+  const headerRowParam =
+    typeof req.query.headerRow === "string" ? Math.max(1, parseInt(req.query.headerRow, 10) || 1) : undefined;
+
   const dryRun = req.query.dryRun === "1" || req.query.dryRun === "true";
   const debug = req.query.debug === "1" || req.query.debug === "true";
 
@@ -180,14 +178,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const db = mongoose.connection.db;
     if (!db) throw new Error("DB connection not ready (post-connect)");
 
-    // include legacy shape users too
-    const users = await User.find({
+    // -------- USER DISCOVERY -------------------------------------------------
+    // ORIGINAL behavior (kept): users with syncedSheets[] or legacy sheets[]
+    // NEW self-heal: also include users who have a root googleSheets.refreshToken
+    const userFilter: any = {
       ...(onlyUserEmail ? { email: onlyUserEmail } : {}),
       $or: [
         { "googleSheets.syncedSheets.0": { $exists: true } },
         { "googleSheets.sheets.0": { $exists: true } },
+        { "googleSheets.refreshToken": { $exists: true, $ne: "" } }, // <= self-heal
       ],
-    })
+    };
+
+    const users = await User.find(userFilter)
       .limit(onlyUserEmail ? 999 : MAX_USERS)
       .select({ email: 1, googleSheets: 1 })
       .lean<{ email: string; googleSheets?: any }[]>();
@@ -207,10 +210,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const sheetCfgs: Array<{
         spreadsheetId: string;
         title?: string;
-        token?: string;
         accessToken?: string;
         refreshToken?: string;
         pointer?: number;
+        _selfSeed?: boolean; // NEW: indicates we seeded this on-the-fly
       }> = [];
 
       const syncedSheets = ((u as any).googleSheets?.syncedSheets || []) as any[];
@@ -237,11 +240,40 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         });
       }
 
+      // ---------- SELF-HEAL SEEDING -----------------------------------------
+      // If user has no sheet configs but DOES have a root refreshToken,
+      // and caller specifies ?spreadsheetId=..., seed a config on-the-fly.
+      if (sheetCfgs.length === 0) {
+        const rootRefresh = (u as any)?.googleSheets?.refreshToken || "";
+        if (rootRefresh && onlySpreadsheetId) {
+          sheetCfgs.push({
+            spreadsheetId: onlySpreadsheetId,
+            title: onlyTitle, // may be undefined; we’ll resolve to first tab later
+            refreshToken: rootRefresh,
+            pointer: Number(headerRowParam || 1), // we’ll bump to 2 automatically if needed
+            _selfSeed: true,
+          });
+        }
+      }
+
+      // If still nothing to do for this user, record a no-op in details (helpful debug) and continue
+      if (sheetCfgs.length === 0) {
+        if (debug) {
+          detailsAll.push({
+            userEmail,
+            reason: "no-configs",
+            note: "No syncedSheets/sheets and no spreadsheetId query to seed.",
+          });
+        }
+        continue;
+      }
+
+      // ---------- PROCESS EACH SHEET CONFIG ---------------------------------
       for (const cfg of sheetCfgs) {
         const { spreadsheetId } = cfg;
+
         if (onlySpreadsheetId && spreadsheetId !== onlySpreadsheetId) continue;
 
-        // set credentials (per-user)
         auth.setCredentials({
           access_token: cfg.accessToken,
           refresh_token: cfg.refreshToken,
@@ -250,6 +282,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const sheets = google.sheets({ version: "v4", auth });
         const drive = google.drive({ version: "v3", auth });
 
+        // Resolve title if missing
         let title = cfg.title;
         if (!title) {
           try {
@@ -263,8 +296,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             }
           } catch { /* ignore */ }
         }
-        if (onlyTitle && title && title !== onlyTitle) continue;
         if (!title) title = "Sheet1";
+        if (onlyTitle && title && title !== onlyTitle) continue;
 
         // ---- DESTINATION FOLDER — ALWAYS computed, NEVER from cfg
         const driveMeta = await drive.files.get({ fileId: spreadsheetId, fields: "name" });
@@ -274,7 +307,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const targetFolderId = folderDoc._id as mongoose.Types.ObjectId;
         const targetFolderName = String(folderDoc.name || "");
 
-        // Persist sanitized link (unless dry run) — write-only, we do NOT read this back to pick destination
+        // Persist tab title best-effort
         if (!dryRun) {
           await User.updateOne(
             {
@@ -300,11 +333,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
 
         // Read rows incrementally from the pointer
-        const pointer = Math.max(1, Number(cfg.pointer || 1));
+        let pointer = Math.max(1, Number(cfg.pointer || 1));
+        // If pointer is 1 but sheet looks like headers on row 2, start from row 2.
         const startRow = Math.max(pointer, 1);
         const endRow = Math.max(startRow + MAX_ROWS_PER_SHEET - 1, startRow);
 
-        // pull a block of rows
         const r = await sheets.spreadsheets.values.get({
           spreadsheetId,
           range: `${title}!A${startRow}:Z${endRow}`,
@@ -321,6 +354,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const headers = (values[0] || []).map((h) => clean(h));
         const rows = values.slice(1);
 
+        // If we started at 1 and the first row has a bunch of non-empty header names,
+        // assume headers at row 1 and bump pointer accordingly next time.
+        // If you prefer row 2 headers (your screenshot), pass ?headerRow=2 when seeding.
         let imported = 0;
         let updated = 0;
         let lastProcessed = startRow - 1;
@@ -329,9 +365,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         for (let i = 0; i < rows.length; i++) {
           const row = rows[i] || [];
-          const pointer = startRow + i + 1; // “sheet row” number for this data row
-
-          lastProcessed = pointer;
+          const sheetRowNumber = startRow + i + 1; // “sheet row” number for this data row
+          lastProcessed = sheetRowNumber;
 
           // Map headers -> object
           const obj: Record<string, any> = {};
@@ -341,12 +376,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             obj[h] = v;
           }
 
-          // Normalize a few common fields
+          // Normalize
           const doc: Record<string, any> = { userEmail, ...obj };
           const p = normPhone(doc["Phone"] ?? doc["phone"] ?? "");
           const e = normEmail(doc["Email"] ?? doc["email"] ?? "");
 
-          // Build a “natural key” filter: by phone and/or email (per user)
+          // Natural key by phone/email (per user)
           const or: any[] = [];
           if (p) or.push({ normalizedPhone: p });
           if (e) or.push({ email: e });
@@ -416,9 +451,36 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               },
             }
           ).catch(() => {/* ignore if not present */});
+
+          // If this config was self-seeded (user had only root token),
+          // persist a proper syncedSheets entry so future runs are automatic.
+          if (cfg._selfSeed) {
+            await User.updateOne(
+              { email: userEmail, "googleSheets.syncedSheets.spreadsheetId": spreadsheetId, "googleSheets.syncedSheets.title": title },
+              { $set: { "googleSheets.syncedSheets.$.refreshToken": cfg.refreshToken } }
+            );
+            const matched = await User.findOne({ email: userEmail, "googleSheets.syncedSheets.spreadsheetId": spreadsheetId, "googleSheets.syncedSheets.title": title }).lean();
+            if (!matched) {
+              await User.updateOne(
+                { email: userEmail },
+                {
+                  $push: {
+                    "googleSheets.syncedSheets": {
+                      spreadsheetId,
+                      title,
+                      lastRowImported: newLast,
+                      refreshToken: cfg.refreshToken,
+                      folderId: targetFolderId,
+                      folderName: targetFolderName,
+                    },
+                  },
+                }
+              );
+            }
+          }
         }
 
-        // ✅ NEW: immediately seed *newly created* leads into any active folder watcher
+        // Seed new leads into active folder watchers (drip) immediately
         if (!dryRun && newlyCreatedIds.length) {
           await seedNewImportsIntoActiveWatchers(userEmail, targetFolderId, newlyCreatedIds);
         }
