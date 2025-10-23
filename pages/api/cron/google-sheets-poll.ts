@@ -10,7 +10,7 @@ import { google } from "googleapis";
 import { DateTime } from "luxon";
 import { ensureSafeFolder } from "@/lib/ensureSafeFolder";
 
-const FINGERPRINT = "sheets-poll-v5.2-sheetId-map+root-refresh+auto-rewind";
+const FINGERPRINT = "sheets-poll-v5.3-fix-headers-vs-pointer";
 
 // --- Normalizers -------------------------------------------------------------
 const normPhone = (v: any) => String(v ?? "").replace(/\D+/g, "");
@@ -24,7 +24,7 @@ const clean = (v: any) => (v === undefined || v === null ? "" : String(v).trim()
 const sanitizeKey = (k: any) => {
   let s = clean(k);
   if (!s) return "";           // <- skip empty header
-  s = s.replace(/\./g, "_");   // Mongo disallows dots
+  s = s.replace(/\./g, "_");   // Mongo disallows dots in keys
   s = s.replace(/^\$+/, "");   // disallow leading $
   return s.trim();
 };
@@ -67,9 +67,7 @@ async function seedNewImportsIntoActiveWatchers(
       campaignId: w.campaignId,
       leadId: { $in: newLeadIds },
       status: { $in: ["active", "paused"] },
-    })
-      .select({ leadId: 1 })
-      .lean<{ leadId: mongoose.Types.ObjectId }[]>();
+    }).select({ leadId: 1 }).lean<{ leadId: mongoose.Types.ObjectId }[]>();
 
     const already = new Set((existing || []).map((e) => String(e.leadId)));
     const toInsert = newLeadIds.filter((id) => !already.has(String(id)));
@@ -99,9 +97,7 @@ async function seedNewImportsIntoActiveWatchers(
       },
     }));
 
-    if (bulkOps.length) {
-      await DripEnrollment.bulkWrite(bulkOps, { ordered: false });
-    }
+    if (bulkOps.length) await DripEnrollment.bulkWrite(bulkOps, { ordered: false });
   }
 }
 
@@ -180,8 +176,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         title?: string;
         accessToken?: string;
         refreshToken?: string;
-        pointer?: number;
-        headerRow?: number;
+        pointer?: number;     // next data row to read
+        headerRow?: number;   // header row number (default 1)
         _selfSeed?: boolean;
         folderId?: mongoose.Types.ObjectId;
         folderName?: string;
@@ -195,7 +191,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           title: s.title ? String(s.title) : undefined,
           accessToken: s.accessToken,
           refreshToken: s.refreshToken || rootRefresh, // FALLBACK
-          pointer: Number(s.lastRowImported || 1),
+          pointer: Number(s.lastRowImported || 2),     // default next row after header
           headerRow: Number(s.headerRow || 1),
           folderId: s.folderId,
           folderName: s.folderName,
@@ -210,7 +206,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           title: s.tabName ? String(s.tabName) : undefined,
           accessToken: s.accessToken,
           refreshToken: s.refreshToken || rootRefresh, // FALLBACK
-          pointer: Number(s.lastRowImported || 1),
+          pointer: Number(s.lastRowImported || 2),
           headerRow: Number(s.headerRow || 1),
           folderId: s.folderId,
           folderName: s.folderName,
@@ -223,7 +219,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             spreadsheetId: onlySpreadsheetId,
             title: onlyTitle,
             refreshToken: rootRefresh,
-            pointer: Number(headerRowParam || 1),
+            pointer: Number((headerRowParam || 1)) + 1,
             headerRow: Number(headerRowParam || 1),
             _selfSeed: true,
           });
@@ -249,7 +245,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         });
 
         const sheets = google.sheets({ version: "v4", auth });
-        const drive = google.drive({ version: "v3", auth });
+        const drive  = google.drive({  version: "v3", auth });
 
         // Resolve title if missing
         let title = cfg.title;
@@ -276,26 +272,41 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           sheetId: spreadsheetId,
         });
 
-        const targetFolderId = folderDoc._id as mongoose.Types.ObjectId;
+        const targetFolderId   = folderDoc._id as mongoose.Types.ObjectId;
         const targetFolderName = String(folderDoc.name || "");
 
-        // --- Determine read window (with rewind if needed) ---
+        // --- Headers & window (CORRECTED LOGIC) ------------------------------
         const headerRow = Math.max(1, Number(cfg.headerRow || 1));
-        let pointer = Math.max(1, Number(cfg.pointer || headerRow));
-        const startRow = Math.max(pointer, headerRow);
-        const endRow = Math.max(startRow + MAX_ROWS_PER_SHEET - 1, startRow);
+        let pointer     = Math.max(headerRow + 1, Number(cfg.pointer || headerRow + 1)); // pointer = next DATA row
 
-        // Fetch rows in the window
-        let r = await sheets.spreadsheets.values.get({
+        // Always fetch headers strictly from headerRow
+        const headerResp = await sheets.spreadsheets.values.get({
+          spreadsheetId,
+          range: `${title}!A${headerRow}:Z${headerRow}`,
+          valueRenderOption: "UNFORMATTED_VALUE",
+          dateTimeRenderOption: "SERIAL_NUMBER",
+        });
+        const sanitizedHeaders = (headerResp.data.values?.[0] || [])
+          .map(sanitizeKey)
+          .filter(Boolean);
+        if (!sanitizedHeaders.length) {
+          detailsAll.push({ userEmail, spreadsheetId, title, error: "empty-headers" });
+          continue;
+        }
+
+        // Fetch data starting at *pointer* (not header)
+        const startRow = pointer;
+        const endRow   = Math.max(startRow + MAX_ROWS_PER_SHEET - 1, startRow);
+        let dataResp = await sheets.spreadsheets.values.get({
           spreadsheetId,
           range: `${title}!A${startRow}:Z${endRow}`,
           valueRenderOption: "UNFORMATTED_VALUE",
           dateTimeRenderOption: "SERIAL_NUMBER",
         });
-        let values = (r.data.values || []) as any[][];
+        let rows = (dataResp.data.values || []) as any[][];
 
-        // AUTO-REWIND: If we got nothing beyond header, rewind to first data row
-        if (!values.length && startRow > headerRow + 1) {
+        // AUTO-REWIND if no rows after pointer
+        if (!rows.length && startRow > headerRow + 1) {
           pointer = headerRow + 1;
           if (!dryRun) {
             await User.updateMany(
@@ -310,17 +321,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             ).catch(() => {});
           }
           // Re-fetch from the rewound pointer
-          r = await sheets.spreadsheets.values.get({
+          dataResp = await sheets.spreadsheets.values.get({
             spreadsheetId,
             range: `${title}!A${pointer}:Z${pointer + MAX_ROWS_PER_SHEET - 1}`,
             valueRenderOption: "UNFORMATTED_VALUE",
             dateTimeRenderOption: "SERIAL_NUMBER",
           });
-          values = (r.data.values || []) as any[][];
+          rows = (dataResp.data.values || []) as any[][];
         }
 
-        // If still nothing, record and continue
-        if (!values.length) {
+        if (!rows.length) {
           detailsAll.push({
             userEmail, spreadsheetId, title,
             imported: 0, updated: 0,
@@ -332,25 +342,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           continue;
         }
 
-        // SANITIZE HEADERS (first row) + data rows
-        const rawHeaders = (values[0] || []) as any[];
-        const headers = rawHeaders.map(sanitizeKey).filter(Boolean);
-        const rows = values.slice(1);
-
         let imported = 0;
-        let updated = 0;
+        let updated  = 0;
         let lastProcessed = pointer - 1;
-
         const newlyCreatedIds: mongoose.Types.ObjectId[] = [];
 
+        // Map each row using the fixed headers
         for (let i = 0; i < rows.length; i++) {
           const row = rows[i] || [];
-          const sheetRowNumber = pointer + i + 1; // first data row after header
+          const sheetRowNumber = startRow + i;
           lastProcessed = sheetRowNumber;
 
           const obj: Record<string, any> = {};
-          for (let c = 0; c < headers.length; c++) {
-            const h = headers[c];
+          for (let c = 0; c < sanitizedHeaders.length; c++) {
+            const h = sanitizedHeaders[c];
             obj[h] = row[c];
           }
 
