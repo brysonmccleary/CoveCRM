@@ -20,15 +20,6 @@ type Body = {
   limit?: number; // optional cap when seeding (safety)
 };
 
-// Narrowed lean type so TS doesn't think it could be an array/union
-type CampaignLean = null | {
-  _id: any;
-  name?: string;
-  isActive?: boolean;
-  type?: string;
-  steps?: any;
-};
-
 function nextWindowPT(): Date {
   const nowPT = DateTime.now().setZone(PT_ZONE);
   const base = nowPT.hour < SEND_HOUR_PT ? nowPT : nowPT.plus({ days: 1 });
@@ -47,16 +38,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     await dbConnect();
 
-    // Validate campaign (narrow the type on the result)
+    // Validate campaign (narrow type to keep TS happy)
     const campaign = (await DripCampaign.findOne({ _id: campaignId })
       .select("_id name isActive type steps")
-      .lean()) as CampaignLean;
+      .lean()) as (null | { _id: any; name?: string; isActive?: boolean; type?: string });
 
     if (!campaign) return res.status(404).json({ error: "Campaign not found" });
     if (campaign.type !== "sms") return res.status(400).json({ error: "Campaign must be SMS type" });
     if (campaign.isActive !== true) return res.status(400).json({ error: "Campaign is not active" });
 
     // Create (or keep) the Folder watcher
+    // IMPORTANT: do NOT set the same field in both $setOnInsert and $set.
     const watcher = await DripFolderEnrollment.findOneAndUpdate(
       { userEmail: session.user.email, folderId, campaignId, active: true },
       {
@@ -65,28 +57,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           folderId,
           campaignId,
           active: true,
-          startMode,
           lastScanAt: new Date(0), // force an initial full scan below
         },
-        $set: { startMode },
+        $set: { startMode }, // safe: only here, not in $setOnInsert
       },
       { upsert: true, new: true }
     ).lean();
 
     // Seed enrollments for existing leads in the folder (idempotent)
-    // - Only leads that don't already have an active/paused enrollment for this campaign
-    const q: any = {
-      userEmail: session.user.email,
-      folderId,
-    };
-
-    const leads = await Lead.find(q)
-      .select({ _id: 1 })
+    const leads = await Lead.find(
+      { userEmail: session.user.email, folderId },
+      { _id: 1 }
+    )
       .limit(Math.max(0, Number(limit) || 10_000)) // safety cap for initial seed
       .lean();
 
     let created = 0, deduped = 0;
-
     const nextSendAt = startMode === "nextWindow" ? nextWindowPT() : new Date();
 
     for (const lead of leads) {
@@ -97,9 +83,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         leadId: lead._id,
         campaignId,
         status: { $in: ["active", "paused"] },
-      })
-        .select({ _id: 1 })
-        .lean();
+      }, { _id: 1 }).lean();
 
       if (before?._id) { deduped++; continue; }
 
@@ -116,8 +100,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             leadId: lead._id,
             campaignId,
             status: "active",
-            cursorStep: 0,            // initial text
-            nextSendAt,               // send once
+            cursorStep: 0,
+            nextSendAt,
             source: "folder-bulk",
           },
         },
@@ -128,7 +112,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     // Prime the watcher scan time so the cron won't re-seed immediately
-    if (!dry) {
+    if (!dry && watcher?._id) {
       await DripFolderEnrollment.updateOne(
         { _id: watcher._id },
         { $set: { lastScanAt: new Date() } }
@@ -137,7 +121,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     return res.status(200).json({
       success: true,
-      watcherId: watcher._id,
+      watcherId: watcher?._id,
       campaign: { id: String(campaign._id), name: campaign.name },
       seeded: { created, deduped },
       startMode,
