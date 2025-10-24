@@ -8,7 +8,7 @@ type Opts = {
   userEmail: string;
   folderId?: string;
   folderName?: string;
-  defaultName: string;   // required fallback (e.g., "<Drive Name> — <Tab Title>")
+  defaultName: string;   // e.g., "<Drive Name> — <Tab Title>"
   source?: string;       // e.g. "google-sheets"
 };
 
