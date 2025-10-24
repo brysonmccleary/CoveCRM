@@ -18,6 +18,23 @@ const SEND_HOUR_PT = 9;
 const PER_LEAD_CONCURRENCY =
   Math.max(1, parseInt(process.env.DRIP_CONCURRENCY || "10", 10)) || 10;
 
+// ---------- NEW: flexible cron authorization ----------
+function isCronAuthorized(req: NextApiRequest) {
+  const q = req.query?.token;
+  const tokenFromQuery =
+    typeof q === "string" ? q : Array.isArray(q) ? q[0] : undefined;
+  const tokenFromHeader = (req.headers["x-cron-key"] as string) || undefined;
+  const isVercelCron = !!req.headers["x-vercel-cron"]; // Vercel Scheduler
+
+  const secret = process.env.CRON_SECRET;
+  return (
+    (tokenFromQuery && secret && tokenFromQuery === secret) ||
+    (tokenFromHeader && secret && tokenFromHeader === secret) ||
+    isVercelCron
+  );
+}
+// ------------------------------------------------------
+
 function isValidObjectId(id: string) { return /^[a-f0-9]{24}$/i.test(id); }
 
 async function resolveDrip(dripId: string) {
@@ -69,11 +86,21 @@ function shouldRunWindowPT(): boolean { return DateTime.now().setZone(PT_ZONE).h
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (process.env.DRIPS_HARD_STOP === "1") return res.status(204).end();
-  if (req.method !== "GET") return res.status(405).json({ message: "Method not allowed" });
 
-  const force = ["1","true","yes"].includes(String(req.query.force || "").toLowerCase());
-  const dry   = ["1","true","yes"].includes(String(req.query.dry   || "").toLowerCase());
-  const limit = Math.max(0, parseInt((req.query.limit as string) || "", 10) || 0);
+  // Allow both GET and POST (Vercel uses GET); reject others
+  if (req.method !== "GET" && req.method !== "POST") {
+    return res.status(405).json({ message: "Method not allowed" });
+  }
+
+  // NEW: authorize early
+  if (!isCronAuthorized(req)) {
+    return res.status(403).send("Forbidden");
+  }
+
+  const force = ["1","true","yes"].includes(String((req.method === "GET" ? req.query.force : (req.body?.force ?? "")) || "").toLowerCase());
+  const dry   = ["1","true","yes"].includes(String((req.method === "GET" ? req.query.dry   : (req.body?.dry   ?? "")) || "").toLowerCase());
+  const limitRaw = String(req.method === "GET" ? req.query.limit : (req.body?.limit ?? ""));
+  const limit = Math.max(0, parseInt(limitRaw || "", 10) || 0);
 
   try {
     await dbConnect();
