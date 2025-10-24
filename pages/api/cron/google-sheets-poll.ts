@@ -1,4 +1,3 @@
-// /pages/api/cron/google-sheets-poll.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
@@ -9,7 +8,7 @@ import mongoose from "mongoose";
 import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
 import { ensureSafeFolder } from "@/lib/ensureSafeFolder";
 
-const FINGERPRINT = "selfheal-v1";
+const FINGERPRINT = "selfheal-v2-per-sheet";
 
 // --- Normalizers -------------------------------------------------------------
 const normPhone = (v: any) => String(v ?? "").replace(/\D+/g, "");
@@ -31,8 +30,11 @@ type SyncedSheetCfg = {
   headerRow?: number;
   mapping?: Record<string, string>;
   skip?: Record<string, boolean>;
+
+  // NOTE: legacy, now ignored for routing (we always use per-sheet folder)
   folderId?: string;
   folderName?: string;
+
   lastRowImported?: number;
 };
 
@@ -126,14 +128,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           headerRow = 1,
           mapping = {},
           skip = {},
-          folderId,
-          folderName,
+          // legacy (ignored for routing — see below)
+          // folderId,
+          // folderName,
           lastRowImported,
         } = cfg || {};
 
         if (!spreadsheetId) continue;
         if (onlySpreadsheetId && spreadsheetId !== onlySpreadsheetId) continue;
-        if (onlyTitle && title && title !== onlyTitle) continue;
 
         // Resolve current tab title if we have sheetId (tab may have been renamed)
         if (sheetId != null) {
@@ -151,43 +153,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           } catch { /* ignore */ }
         }
         if (!title) continue;
+        if (onlyTitle && title !== onlyTitle) continue;
 
-        // ---- CENTRALIZED safe folder resolution (self-healing)
-        let reasonGuard: string | undefined;
-        let preIdName: string | undefined;
-
-        if (folderName && isSystemFolder(folderName)) {
-          reasonGuard = "blocked-by-system-name";
-        }
-
-        if (folderId && mongoose.isValidObjectId(folderId)) {
-          try {
-            const f = (await Folder.findOne(
-              { _id: new mongoose.Types.ObjectId(folderId), userEmail },
-              { name: 1 }
-            ).lean()) as LeanFolder;
-            preIdName = f?.name || undefined;
-            if (f?.name && isSystemFolder(f.name)) {
-              reasonGuard = "blocked-by-system-id";
-            }
-          } catch { /* noop */ }
-        }
-
+        // ---- FORCE per-sheet folder name (ignore any saved folderId/folderName) ----
         const driveMeta = await drive.files.get({ fileId: spreadsheetId, fields: "name" });
-        const defaultName = (folderName || `${driveMeta.data.name || "Imported Leads"} — ${title}`).trim();
+        const rawBaseName = `${driveMeta.data.name || "Imported Leads"} — ${title}`;
+        const forcedName = isSystemFolder(rawBaseName) ? `${rawBaseName} (Leads)` : rawBaseName;
 
-        // 1) Ask centralized util
+        // We pass ONLY defaultName; do NOT pass cfg.folderId/folderName.
+        // This guarantees every sheet has its own safe, non-system folder.
         let folderDoc = await ensureSafeFolder({
           userEmail,
-          folderId,
-          folderName,
-          defaultName,
+          defaultName: forcedName,
           source: "google-sheets",
         });
 
-        // 2) Self-heal: if sanitizer still returns system (or nothing), repair and continue
+        // Self-heal belt & suspenders
         if (!folderDoc || isSystemFolder(folderDoc?.name)) {
-          const baseName = isSystemFolder(defaultName) ? `${defaultName} (Leads)` : defaultName;
+          const baseName = isSystemFolder(forcedName) ? `${forcedName} (Leads)` : forcedName;
           folderDoc = await Folder.findOneAndUpdate(
             { userEmail, name: baseName },
             { $setOnInsert: { userEmail, name: baseName, source: "google-sheets" } },
@@ -195,7 +178,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           ).lean();
         }
 
-        // Persist sanitized link (unless dry run)
+        // Persist enforced per-sheet folder (overwriting any legacy Sold/NI/etc.)
         if (!dryRun && folderDoc?._id) {
           await User.updateOne(
             {
@@ -214,12 +197,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                   ? { "googleSheets.syncedSheets.$.title": title }
                   : {}),
               },
+              // NOTE: do NOT $unset anything else here
             }
           );
         }
 
-        const targetFolderId = folderDoc._id as mongoose.Types.ObjectId;
-        const targetFolderName = String(folderDoc.name || "");
+        const targetFolderId = folderDoc!._id as mongoose.Types.ObjectId;
+        const targetFolderName = String(folderDoc!.name || "");
 
         // --- Read values ----------------------------------------------------
         const resp = await sheetsApi.spreadsheets.values.get({
@@ -287,7 +271,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               .lean<{ _id: mongoose.Types.ObjectId } | null>();
 
             if (!existing) {
-              if (!dryRun) await Lead.create({ ...doc, folderId: targetFolderId, folder_name: targetFolderName, ["Folder Name"]: targetFolderName });
+              if (!dryRun) await Lead.create({ ...doc, folderId: targetFolderId, folder_name: targetFolderName, ["Folder Name"]: targetFolderName, status: "New" });
               imported++;
             } else {
               if (!dryRun)
@@ -344,16 +328,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             id: String(targetFolderId),
             name: targetFolderName,
             isSystem: isSystemFolder(targetFolderName),
-            ...(reasonGuard ? { reasonGuard } : {}),
           },
           ...(debug
             ? {
                 diag: {
-                  incoming: {
-                    folderId: folderId || null,
-                    folderName: folderName || null,
-                    defaultName,
-                  },
+                  enforcedFolderName: forcedName,
                 },
               }
             : {}),
