@@ -5,10 +5,11 @@ import A2PProfile from "@/models/A2PProfile";
 import PhoneNumber from "@/models/PhoneNumber";
 import User from "@/models/User";
 import twilio from "twilio";
+
 // reuse your platform creds for mgmt events
 const client = twilio(process.env.TWILIO_ACCOUNT_SID!, process.env.TWILIO_AUTH_TOKEN!);
 
-// ✅ use the notifications shim you added
+// ✅ notifications shim
 import {
   sendA2PApprovedEmail,
   sendA2PDeclinedEmail,
@@ -21,26 +22,30 @@ const DECLINED_MATCH = /(reject|denied|failed)/i;
 
 /** Ensure tenant Messaging Service exists & is webhook-configured. Returns SID. */
 async function ensureTenantMessagingService(userId: string, friendlyNameHint?: string): Promise<string> {
-  let a2p = await A2PProfile.findOne({ userId });
+  const a2p = await A2PProfile.findOne({ userId }, { messagingServiceSid: 1 }).lean();
   if (a2p?.messagingServiceSid) {
-    await client.messaging.v1.services(a2p.messagingServiceSid).update({
-      friendlyName: `CoveCRM – ${friendlyNameHint || userId}`,
-      inboundRequestUrl: `${BASE_URL}/api/twilio/inbound-sms`,
-      statusCallback: `${BASE_URL}/api/twilio/status-callback`,
-    });
+    try {
+      await client.messaging.v1.services(a2p.messagingServiceSid).update({
+        friendlyName: `CoveCRM – ${friendlyNameHint || userId}`,
+        inboundRequestUrl: `${BASE_URL}/api/twilio/inbound-sms`,
+        statusCallback: `${BASE_URL}/api/twilio/status-callback`,
+      });
+    } catch {}
     return a2p.messagingServiceSid;
   }
+
   const svc = await client.messaging.v1.services.create({
     friendlyName: `CoveCRM – ${friendlyNameHint || userId}`,
     inboundRequestUrl: `${BASE_URL}/api/twilio/inbound-sms`,
     statusCallback: `${BASE_URL}/api/twilio/status-callback`,
   });
-  if (a2p) {
-    a2p.messagingServiceSid = svc.sid;
-    await a2p.save();
-  } else {
-    await A2PProfile.create({ userId, messagingServiceSid: svc.sid });
-  }
+
+  await A2PProfile.updateOne(
+    { userId },
+    { $set: { messagingServiceSid: svc.sid } },
+    { upsert: true }
+  );
+
   return svc.sid;
 }
 
@@ -67,7 +72,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     await mongooseConnect();
 
-    // Twilio sends form-encoded by default; Next will parse into req.body
+    // Twilio posts application/x-www-form-urlencoded; Next exposes as req.body object
     const body: any = req.body || {};
 
     const anySid: string | undefined =
@@ -85,7 +90,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         { usa2pSid: anySid },
         { messagingServiceSid: anySid },
       ],
-    });
+    }).lean();
     if (!a2p) return res.status(200).json({ ok: true });
 
     const statusRaw = String(body.Status || body.status || "").toLowerCase();
@@ -93,42 +98,55 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // APPROVED FLOW
     if (statusRaw && APPROVED.has(statusRaw)) {
-      const user = await User.findById(a2p.userId);
+      const user = await User.findById(a2p.userId).lean();
       if (user) {
         const msSid = await ensureTenantMessagingService(String(user._id), user.name || user.email);
 
         // attach all owned numbers (idempotent)
-        const owned = await PhoneNumber.find({ userId: user._id });
+        const owned = await PhoneNumber.find({ userId: user._id }, { twilioSid: 1, phoneNumber: 1 }).lean();
         for (const num of owned) {
           const numSid = (num as any).twilioSid as string | undefined;
           if (!numSid) continue;
           try {
             await addNumberToMessagingService(msSid, numSid);
-            if ((num as any).messagingServiceSid !== msSid) {
-              (num as any).messagingServiceSid = msSid;
-              await (num as any).save();
-            }
+            // update PhoneNumber doc without triggering validation
+            await PhoneNumber.updateOne(
+              { _id: (num as any)._id },
+              { $set: { messagingServiceSid: msSid } }
+            );
           } catch (e) {
-            console.warn(`Attach failed for ${num.phoneNumber} → ${msSid}:`, e);
+            console.warn(`Attach failed for ${(num as any).phoneNumber} → ${msSid}:`, e);
           }
         }
       }
 
-      // update profile status
-      a2p.messagingReady = true;
-      a2p.applicationStatus = "approved";
-      a2p.declinedReason = undefined;
-      a2p.approvalHistory = [...(a2p.approvalHistory || []), { stage: "campaign_approved", at: new Date() }];
-      a2p.registrationStatus =
-        a2p.registrationStatus === "brand_submitted" ? "brand_approved" :
-        a2p.registrationStatus === "campaign_submitted" ? "campaign_approved" :
-        "ready";
-      a2p.lastSyncedAt = new Date();
+      const now = new Date();
+
+      // update A2PProfile (targeted write, no full validation)
+      await A2PProfile.updateOne(
+        { _id: a2p._id },
+        {
+          $set: {
+            messagingReady: true,
+            applicationStatus: "approved",
+            declinedReason: undefined,
+            registrationStatus:
+              a2p.registrationStatus === "brand_submitted" ? "brand_approved" :
+              a2p.registrationStatus === "campaign_submitted" ? "campaign_approved" :
+              "ready",
+            lastSyncedAt: now,
+            updatedAt: now,
+          },
+          $push: {
+            approvalHistory: { stage: "campaign_approved", at: now },
+          },
+        }
+      );
 
       // notify once
       if (!a2p.approvalNotifiedAt) {
         try {
-          const user2 = await User.findById(a2p.userId);
+          const user2 = await User.findById(a2p.userId).lean();
           if (user2?.email) {
             await sendA2PApprovedEmail({
               to: user2.email,
@@ -136,33 +154,48 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               dashboardUrl: `${BASE_URL}/settings/messaging`,
             });
           }
-          a2p.approvalNotifiedAt = new Date();
+          await A2PProfile.updateOne(
+            { _id: a2p._id },
+            { $set: { approvalNotifiedAt: new Date() } }
+          );
         } catch (e) {
           console.warn("A2P approved email failed:", (e as any)?.message || e);
         }
       }
 
-      await a2p.save();
       return res.status(200).json({ ok: true, messagingReady: true });
     }
 
     // DECLINED / FAILED FLOW
     if (DECLINED_MATCH.test(statusRaw)) {
-      a2p.messagingReady = false;
-      a2p.registrationStatus = "rejected";
-      a2p.applicationStatus = "declined";
-      a2p.declinedReason = reason || "Rejected by reviewers";
-      a2p.approvalHistory = [...(a2p.approvalHistory || []), { stage: "rejected", at: new Date(), note: a2p.declinedReason }];
-      a2p.lastSyncedAt = new Date();
+      const now = new Date();
+      const declinedReason = reason || "Rejected by reviewers";
+
+      await A2PProfile.updateOne(
+        { _id: a2p._id },
+        {
+          $set: {
+            messagingReady: false,
+            registrationStatus: "rejected",
+            applicationStatus: "declined",
+            declinedReason,
+            lastSyncedAt: now,
+            updatedAt: now,
+          },
+          $push: {
+            approvalHistory: { stage: "rejected", at: now, note: declinedReason },
+          },
+        }
+      );
 
       // notify (no throttle—Twilio typically sends one terminal event)
       try {
-        const user = await User.findById(a2p.userId);
+        const user = await User.findById(a2p.userId).lean();
         if (user?.email) {
           await sendA2PDeclinedEmail({
             to: user.email,
             name: user.name || undefined,
-            reason: a2p.declinedReason,
+            reason: declinedReason,
             helpUrl: `${BASE_URL}/help/a2p-checklist`,
           });
         }
@@ -170,13 +203,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         console.warn("A2P declined email failed:", (e as any)?.message || e);
       }
 
-      await a2p.save();
       return res.status(200).json({ ok: true, messagingReady: false });
     }
 
-    // Intermediate/update states
-    a2p.lastSyncedAt = new Date();
-    await a2p.save();
+    // Intermediate/update states — just refresh lastSyncedAt without validating doc
+    await A2PProfile.updateOne(
+      { _id: a2p._id },
+      { $set: { lastSyncedAt: new Date(), updatedAt: new Date() } }
+    );
     return res.status(200).json({ ok: true });
   } catch (err) {
     console.error("A2P status-callback error:", err);
