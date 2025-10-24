@@ -20,6 +20,15 @@ type Body = {
   limit?: number; // optional cap when seeding (safety)
 };
 
+// Narrowed lean type so TS doesn't think it could be an array/union
+type CampaignLean = null | {
+  _id: any;
+  name?: string;
+  isActive?: boolean;
+  type?: string;
+  steps?: any;
+};
+
 function nextWindowPT(): Date {
   const nowPT = DateTime.now().setZone(PT_ZONE);
   const base = nowPT.hour < SEND_HOUR_PT ? nowPT : nowPT.plus({ days: 1 });
@@ -38,10 +47,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     await dbConnect();
 
-    // Validate campaign
-    const campaign = await DripCampaign.findOne({ _id: campaignId })
+    // Validate campaign (narrow the type on the result)
+    const campaign = (await DripCampaign.findOne({ _id: campaignId })
       .select("_id name isActive type steps")
-      .lean();
+      .lean()) as CampaignLean;
+
     if (!campaign) return res.status(404).json({ error: "Campaign not found" });
     if (campaign.type !== "sms") return res.status(400).json({ error: "Campaign must be SMS type" });
     if (campaign.isActive !== true) return res.status(400).json({ error: "Campaign is not active" });
@@ -77,17 +87,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     let created = 0, deduped = 0;
 
-    const nextSendAt =
-      startMode === "nextWindow" ? nextWindowPT() : new Date();
+    const nextSendAt = startMode === "nextWindow" ? nextWindowPT() : new Date();
 
     for (const lead of leads) {
       if (dry) { created++; continue; }
+
       const before = await DripEnrollment.findOne({
         userEmail: session.user.email,
         leadId: lead._id,
         campaignId,
         status: { $in: ["active", "paused"] },
-      }).select({ _id: 1 }).lean();
+      })
+        .select({ _id: 1 })
+        .lean();
 
       if (before?._id) { deduped++; continue; }
 
