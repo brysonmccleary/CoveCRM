@@ -1,4 +1,4 @@
-// pages/api/cron/drips-folder-watch.ts
+// pages/api/drips/drips-folder-watch.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import dbConnect from "@/lib/mongooseConnect";
 import { DateTime } from "luxon";
@@ -40,15 +40,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     for (const w of watchers) {
       scanned++;
 
-      // One more lock per watcher to isolate parallel invocations
+      // Isolate per-watcher
       const wLock = await acquireLock("watch", `folder:${w._id}`, 45);
       if (!wLock) continue;
 
-      // Campaign safety: only if SMS & active
-      const campaign = await DripCampaign.findOne({ _id: w.campaignId })
+      // Fetch exactly one campaign (avoid TS union/array)
+      const campaign = (await DripCampaign.findById(w.campaignId)
         .select({ _id: 1, isActive: 1, type: 1 })
-        .lean();
-      if (!campaign || campaign.type !== "sms" || campaign.isActive !== true) {
+        .lean()) as null | { _id: any; isActive?: boolean; type?: string };
+
+      const isSmsActive = !!campaign && campaign.type === "sms" && campaign.isActive === true;
+
+      if (!isSmsActive) {
         await DripFolderEnrollment.updateOne({ _id: w._id }, { $set: { active: false } });
         continue;
       }
@@ -75,7 +78,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             as: "enr"
           }
         },
-        { $match: { enr: { $size: 0 } } }, // no active enrollment
+        { $match: { enr: { $size: 0 } } }, // no active/paused enrollment
         { $project: { _id: 1 } },
         { $limit: 2000 }, // safety max per tick
       ]);
