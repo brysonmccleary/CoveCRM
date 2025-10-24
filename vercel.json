@@ -2,20 +2,19 @@
   "version": 2,
   "regions": ["iad1"],
   "crons": [
-    { "path": "/api/poll-new-lead",                          "schedule": "* * * * *" },
-    { "path": "/api/cron/schedule-sms-reminders",            "schedule": "*/15 * * * *" },
+    { "path": "/api/poll-new-lead",                                   "schedule": "* * * * *" },
+    { "path": "/api/cron/schedule-sms-reminders",                     "schedule": "*/15 * * * *" },
 
-    { "path": "/api/affiliates/cron/autopayouts?token=@CRON_SECRET", "schedule": "0 16 * * 5" },
-    { "path": "/api/cron",                                   "schedule": "0 17 * * *" },
-    { "path": "/api/cron/twilio-daily-sync",                 "schedule": "0 16 * * *" },
+    { "path": "/api/affiliates/cron/autopayouts?token=@CRON_SECRET",  "schedule": "0 16 * * 5" },
+    { "path": "/api/cron",                                            "schedule": "0 17 * * *" },
+    { "path": "/api/cron/twilio-daily-sync",                          "schedule": "0 16 * * *" },
 
-    { "path": "/api/drips/drips-folder-watch",               "schedule": "*/2 * * * *" },
-    { "path": "/api/cron/run-drips",                         "schedule": "*/5 * * * *" },
+    { "path": "/api/drips/drips-folder-watch",                        "schedule": "*/2 * * * *" },
+    { "path": "/api/cron/run-drips?token=@CRON_SECRET",               "schedule": "*/5 * * * *" },
 
-    { "path": "/api/cron/check-a2p-status",                  "schedule": "*/30 * * * *" },
-    { "path": "/api/a2p/sync-status?token=@CRON_SECRET",     "schedule": "*/15 * * * *" },
+    { "path": "/api/a2p/sync-status?token=@CRON_SECRET",              "schedule": "*/15 * * * *" },
 
-    { "path": "/api/cron/google-sheets-poll?token=@CRON_SECRET", "schedule": "* * * * *" },
-    { "path": "/api/admin/audit-sheets-cron?token=@CRON_SECRET",  "schedule": "*/15 * * * *" }
+    { "path": "/api/cron/google-sheets-poll?token=@CRON_SECRET",      "schedule": "* * * * *" },
+    { "path": "/api/admin/audit-sheets-cron?token=@CRON_SECRET",      "schedule": "*/15 * * * *" }
   ]
 }
