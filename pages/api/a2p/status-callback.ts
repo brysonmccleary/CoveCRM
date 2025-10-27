@@ -11,38 +11,33 @@ import {
 } from "@/lib/a2p/notifications";
 
 const client = twilio(process.env.TWILIO_ACCOUNT_SID!, process.env.TWILIO_AUTH_TOKEN!);
-
 const BASE_URL = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "").replace(/\/$/, "");
 
 const APPROVED = new Set(["approved","verified","active","in_use","registered","campaign_approved"]);
 const DECLINED_MATCH = /(reject|denied|declined|failed|error)/i;
 
-function lc(v: any) {
-  return typeof v === "string" ? v.toLowerCase() : String(v ?? "").toLowerCase();
-}
+const lc = (v: any) => (typeof v === "string" ? v.toLowerCase() : String(v ?? "").toLowerCase());
 
-/** Ensure tenant Messaging Service exists for THIS A2P PROFILE. Never creates a new A2PProfile. */
-async function ensureTenantMessagingServiceForProfile(a2p: any, friendlyNameHint?: string): Promise<string> {
-  if (a2p?.messagingServiceSid) {
-    await client.messaging.v1.services(a2p.messagingServiceSid).update({
-      friendlyName: `CoveCRM – ${friendlyNameHint || a2p.userId}`,
+/** Ensure Messaging Service exists for THIS profile. Uses updateOne (no .save / no validation). */
+async function ensureTenantMessagingServiceForProfile(a2pId: string, userLabel: string | undefined, existingMsSid?: string) {
+  if (existingMsSid) {
+    await client.messaging.v1.services(existingMsSid).update({
+      friendlyName: `CoveCRM – ${userLabel || a2pId}`,
       inboundRequestUrl: `${BASE_URL}/api/twilio/inbound-sms`,
       statusCallback: `${BASE_URL}/api/twilio/status-callback`,
     });
-    return a2p.messagingServiceSid;
+    return existingMsSid;
   }
   const svc = await client.messaging.v1.services.create({
-    friendlyName: `CoveCRM – ${friendlyNameHint || a2p.userId}`,
+    friendlyName: `CoveCRM – ${userLabel || a2pId}`,
     inboundRequestUrl: `${BASE_URL}/api/twilio/inbound-sms`,
     statusCallback: `${BASE_URL}/api/twilio/status-callback`,
   });
-  // only update this existing profile — do NOT create a new one
-  a2p.messagingServiceSid = svc.sid;
-  await a2p.save();
+  await A2PProfile.updateOne({ _id: a2pId }, { $set: { messagingServiceSid: svc.sid } }); // no validation
   return svc.sid;
 }
 
-/** Add a number to a Messaging Service sender pool. Handles 21712 (unlink/reattach). */
+/** Add number to a Messaging Service. Handles 21712 unlink/reattach. */
 async function addNumberToMessagingService(serviceSid: string, numberSid: string) {
   try {
     await client.messaging.v1.services(serviceSid).phoneNumbers.create({ phoneNumberSid: numberSid });
@@ -79,8 +74,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (debugEnabled) {
       debug.parsed = {
-        ...("Status" in body ? { Status: body.Status } : {}),
-        ...("status" in body ? { status: body.status } : {}),
+        ...(body.Status ? { Status: body.Status } : {}),
+        ...(body.status ? { status: body.status } : {}),
         ...(eventType ? { EventType: eventType } : {}),
         ...(anySid ? { anySid } : {}),
         ...(body.campaignSid ? { campaignSid: body.campaignSid } : {}),
@@ -95,7 +90,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(200).json({ ok: true, ...(debugEnabled ? { debug } : {}) });
     }
 
-    // Find the existing A2P profile by any known SID
+    // Find the existing A2P profile by any SID we recognize
     const a2p = await A2PProfile.findOne({
       $or: [
         { profileSid: anySid },
@@ -105,28 +100,32 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         { usa2pSid: anySid },
         { messagingServiceSid: anySid },
       ],
-    });
+    }).lean();
+
     if (!a2p) {
       return res.status(200).json({ ok: true, ...(debugEnabled ? { debug } : {}) });
     }
 
-    // APPROVED FLOW
+    // === APPROVED ===
     if (statusRaw && APPROVED.has(statusRaw)) {
       try {
-        const user = await User.findById(a2p.userId);
-        if (user) {
-          const msSid = await ensureTenantMessagingServiceForProfile(a2p, user.name || user.email);
+        const user = a2p.userId ? await User.findById(a2p.userId).lean() : null;
+        const msSid = await ensureTenantMessagingServiceForProfile(
+          String(a2p._id),
+          user?.name || user?.email,
+          a2p.messagingServiceSid
+        );
 
-          // Attach all owned numbers to MS (idempotent/best effort)
-          const owned = await PhoneNumber.find({ userId: user._id });
+        // Attach all owned numbers (best effort)
+        if (user?._id && msSid) {
+          const owned = await PhoneNumber.find({ userId: user._id }).lean();
           for (const num of owned) {
             const numSid = (num as any).twilioSid as string | undefined;
             if (!numSid) continue;
             try {
               await addNumberToMessagingService(msSid, numSid);
               if ((num as any).messagingServiceSid !== msSid) {
-                (num as any).messagingServiceSid = msSid;
-                await (num as any).save();
+                await PhoneNumber.updateOne({ _id: (num as any)._id }, { $set: { messagingServiceSid: msSid } });
               }
             } catch (e) {
               console.warn(`Attach failed for ${num.phoneNumber} → ${msSid}:`, e);
@@ -134,23 +133,31 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
         }
       } catch (e) {
-        console.warn("ensureTenantMessagingServiceForProfile failed (non-fatal):", (e as any)?.message || e);
+        console.warn("MS ensure/attach failed (non-fatal):", (e as any)?.message || e);
       }
 
-      // Flip status on THIS profile
-      a2p.messagingReady = true;
-      a2p.applicationStatus = "approved";
-      a2p.declinedReason = undefined;
-      a2p.approvalHistory = [...(a2p.approvalHistory || []), { stage: "campaign_approved", at: new Date() }];
-      a2p.registrationStatus =
-        a2p.registrationStatus === "brand_submitted" ? "brand_approved" :
-        a2p.registrationStatus === "campaign_submitted" ? "campaign_approved" :
-        "ready";
-      a2p.lastSyncedAt = new Date();
+      // Flip flags WITHOUT validation
+      await A2PProfile.updateOne(
+        { _id: a2p._id },
+        {
+          $set: {
+            messagingReady: true,
+            applicationStatus: "approved",
+            registrationStatus:
+              a2p.registrationStatus === "brand_submitted" ? "brand_approved" :
+              a2p.registrationStatus === "campaign_submitted" ? "campaign_approved" :
+              "ready",
+            lastSyncedAt: new Date(),
+          },
+          $unset: { lastError: 1, declinedReason: 1 },
+          $push: { approvalHistory: { stage: "campaign_approved", at: new Date() } },
+        }
+      );
 
-      if (!a2p.approvalNotifiedAt) {
-        try {
-          const user2 = await User.findById(a2p.userId);
+      // Notify once (best effort)
+      try {
+        if (!a2p.approvalNotifiedAt) {
+          const user2 = a2p.userId ? await User.findById(a2p.userId).lean() : null;
           if (user2?.email) {
             await sendA2PApprovedEmail({
               to: user2.email,
@@ -158,51 +165,58 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               dashboardUrl: `${BASE_URL}/settings/messaging`,
             });
           }
-          a2p.approvalNotifiedAt = new Date();
-        } catch (e) {
-          console.warn("A2P approved email failed:", (e as any)?.message || e);
+          await A2PProfile.updateOne({ _id: a2p._id }, { $set: { approvalNotifiedAt: new Date() } });
         }
+      } catch (e) {
+        console.warn("A2P approved email failed:", (e as any)?.message || e);
+        await A2PProfile.updateOne({ _id: a2p._id }, { $set: { lastError: `notify: ${(e as any)?.message || e}` } });
       }
 
-      await a2p.save();
       const payload: any = { ok: true, messagingReady: true };
       if (debugEnabled) payload.debug = debug;
       return res.status(200).json(payload);
     }
 
-    // DECLINED / FAILED FLOW
+    // === DECLINED / FAILED ===
     if (DECLINED_MATCH.test(statusRaw)) {
-      a2p.messagingReady = false;
-      a2p.registrationStatus = "rejected";
-      a2p.applicationStatus = "declined";
-      a2p.declinedReason = String(body.Reason || body.reason || body.Error || "Rejected by reviewers");
-      a2p.approvalHistory = [...(a2p.approvalHistory || []), { stage: "rejected", at: new Date(), note: a2p.declinedReason }];
-      a2p.lastSyncedAt = new Date();
+      const declinedReason = String(body.Reason || body.reason || body.Error || "Rejected by reviewers");
+
+      await A2PProfile.updateOne(
+        { _id: a2p._id },
+        {
+          $set: {
+            messagingReady: false,
+            applicationStatus: "declined",
+            registrationStatus: "rejected",
+            declinedReason,
+            lastSyncedAt: new Date(),
+          },
+          $push: { approvalHistory: { stage: "rejected", at: new Date(), note: declinedReason } },
+        }
+      );
 
       try {
-        const user = await User.findById(a2p.userId);
+        const user = a2p.userId ? await User.findById(a2p.userId).lean() : null;
         if (user?.email) {
           await sendA2PDeclinedEmail({
             to: user.email,
             name: user.name || undefined,
-            reason: a2p.declinedReason,
+            reason: declinedReason,
             helpUrl: `${BASE_URL}/help/a2p-checklist`,
           });
         }
       } catch (e) {
         console.warn("A2P declined email failed:", (e as any)?.message || e);
+        await A2PProfile.updateOne({ _id: a2p._id }, { $set: { lastError: `notify: ${(e as any)?.message || e}` } });
       }
 
-      await a2p.save();
       const payload: any = { ok: true, messagingReady: false };
       if (debugEnabled) payload.debug = debug;
       return res.status(200).json(payload);
     }
 
-    // Intermediate/update states
-    a2p.lastSyncedAt = new Date();
-    await a2p.save();
-
+    // === INTERMEDIATE ===
+    await A2PProfile.updateOne({ _id: a2p._id }, { $set: { lastSyncedAt: new Date() } });
     const payload: any = { ok: true };
     if (debugEnabled) payload.debug = debug;
     return res.status(200).json(payload);
