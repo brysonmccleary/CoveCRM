@@ -1,4 +1,4 @@
-// pages/api/a2p/sync.ts
+// /pages/api/a2p/sync.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import mongooseConnect from "@/lib/mongooseConnect";
 import A2PProfile from "@/models/A2PProfile";
@@ -22,25 +22,16 @@ const DECLINED_MATCH = /(reject|denied|declined|failed|error)/i;
 
 type AnyDoc = Record<string, any>;
 
-function bool(v: any): boolean {
-  return v === true || String(v).toLowerCase() === "true" || v === 1 || v === "1";
-}
-
 function classifyFromDoc(p: AnyDoc) {
-  // Trust webhook / internal state if already marked approved
   const docState = String(p?.state || "").toLowerCase();
   const appStatus = String(p?.applicationStatus || "").toLowerCase();
-  if (docState === "approved" || appStatus === "approved") {
-    return { state: "approved" as const };
-  }
-  if (docState === "declined" || appStatus === "declined") {
-    return { state: "declined" as const };
-  }
+  if (docState === "approved" || appStatus === "approved") return { state: "approved" as const };
+  if (docState === "declined" || appStatus === "declined") return { state: "declined" as const };
   return { state: "pending" as const };
 }
 
 function listMissingSids(p: AnyDoc) {
-  // Support either field naming: {campaignSid} or {usa2pSid}
+  // Accept campaignSid or usa2pSid as the "campaign" identifier
   const required = [
     ["profileSid", p?.profileSid],
     ["brandSid", p?.brandSid],
@@ -59,16 +50,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   await mongooseConnect();
 
-  // Only sync ones that aren't fully live yet (or recently changed)
-  const candidates: AnyDoc[] = await A2PProfile.find({
-    $or: [
-      { applicationStatus: { $in: [null, "pending"] } },
-      { state: { $in: [null, "pending"] } },
-      { messagingReady: { $ne: true } },
-    ],
-  })
-    .limit(200)
-    .lean();
+  // --- Audit/debug switches ---------------------------------------------------
+  const includeApproved = String(req.query.includeApproved ?? "") === "1";
+  const userIdFilter = typeof req.query.userId === "string" && req.query.userId.trim() ? String(req.query.userId).trim() : null;
+  const limit = Math.min(200, Math.max(1, Number(req.query.limit ?? 200) || 200));
+
+  const baseQuery = includeApproved
+    ? {}
+    : {
+        $or: [
+          { applicationStatus: { $in: [null, "pending"] } },
+          { state: { $in: [null, "pending"] } },
+          { messagingReady: { $ne: true } },
+        ],
+      };
+
+  const finalQuery = userIdFilter ? { ...baseQuery, userId: userIdFilter } : baseQuery;
+
+  const candidates: AnyDoc[] = await A2PProfile.find(finalQuery).limit(limit).lean();
 
   const results: AnyDoc[] = [];
 
@@ -76,7 +75,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const id = String(doc._id);
     const userId = doc.userId ? String(doc.userId) : null;
 
-    // Normalize field names we might encounter
+    // Normalize known fields
     const profileSid = doc.profileSid || null;
     const brandSid = doc.brandSid || null;
     const trustProductSid = doc.trustProductSid || null;
@@ -86,7 +85,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const missing = listMissingSids(doc);
     const baseClass = classifyFromDoc(doc); // trust webhook if set
 
-    // If already approved by webhook/state, mark ready and skip Twilio
+    // Fast-path: already approved by webhook/state
     if (baseClass.state === "approved") {
       try {
         await A2PProfile.updateOne(
@@ -102,103 +101,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
         );
 
-        // send email once
-        if (!doc.approvalNotifiedAt) {
-          const user = userId ? await User.findById(userId).lean() : null;
-          if (user?.email) {
-            try {
-              await sendA2PApprovedEmail({
-                to: user.email,
-                name: user.name || undefined,
-                dashboardUrl: `${BASE_URL}/settings/messaging`,
-              });
-              await A2PProfile.updateOne({ _id: doc._id }, { $set: { approvalNotifiedAt: new Date() } });
-            } catch (e: any) {
-              // keep syncing even if email fails
-              await A2PProfile.updateOne({ _id: doc._id }, { $set: { lastError: `notify: ${e?.message || e}` } });
-            }
-          }
-        }
-      } catch (e: any) {
-        results.push({
-          id,
-          userId,
-          profileSid,
-          brandSid,
-          trustProductSid,
-          campaignSid,
-          messagingServiceSid,
-          state: "error",
-          error: e?.message || String(e),
-          missing,
-        });
-        continue;
-      }
-
-      results.push({
-        id,
-        userId,
-        profileSid,
-        brandSid,
-        trustProductSid,
-        campaignSid,
-        messagingServiceSid,
-        state: "approved",
-        applicationStatus: "approved",
-        registrationStatus: doc.registrationStatus || "campaign_approved",
-        missing,
-        lastSyncedAt: new Date().toISOString(),
-      });
-      continue;
-    }
-
-    // Otherwise, try to query Twilio if we can
-    let brandStatus: string | undefined;
-    let campStatus: string | undefined;
-
-    try {
-      if (twilioClient && brandSid) {
-        const brand = await twilioClient.messaging.v1.brandRegistrations(brandSid).fetch();
-        brandStatus = (brand as any)?.status || (brand as any)?.state;
-      }
-    } catch {
-      // ignore: we still classify
-    }
-
-    try {
-      if (twilioClient && campaignSid && messagingServiceSid) {
-        const usA2p = await twilioClient.messaging.v1
-          .services(messagingServiceSid)
-          .usAppToPerson(campaignSid)
-          .fetch();
-        campStatus = (usA2p as any)?.status || (usA2p as any)?.state;
-      }
-    } catch {
-      // ignore
-    }
-
-    const statusStrings = [brandStatus, campStatus].filter(Boolean).map((s) => String(s).toLowerCase());
-    const isApproved = statusStrings.some((s) => APPROVED.has(s));
-    const isDeclined = statusStrings.some((s) => DECLINED_MATCH.test(s));
-
-    try {
-      if (isApproved) {
-        await A2PProfile.updateOne(
-          { _id: doc._id },
-          {
-            $set: {
-              messagingReady: true,
-              applicationStatus: "approved",
-              registrationStatus: statusStrings.some((s) => s === "campaign_approved" || s === "in_use" || s === "registered")
-                ? "campaign_approved"
-                : "ready",
-              lastSyncedAt: new Date(),
-            },
-            $unset: { lastError: 1 },
-          }
-        );
-
-        // notify once
+        // one-time notification
         if (!doc.approvalNotifiedAt) {
           const user = userId ? await User.findById(userId).lean() : null;
           if (user?.email) {
@@ -224,6 +127,81 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           campaignSid,
           messagingServiceSid,
           state: "approved",
+          applicationStatus: "approved",
+          registrationStatus: doc.registrationStatus || "campaign_approved",
+          missing,
+          lastSyncedAt: new Date().toISOString(),
+        });
+      } catch (e: any) {
+        results.push({
+          id, userId, profileSid, brandSid, trustProductSid, campaignSid, messagingServiceSid,
+          state: "error", error: e?.message || String(e), missing,
+        });
+      }
+      continue;
+    }
+
+    // Otherwise query Twilio when possible
+    let brandStatus: string | undefined;
+    let campStatus: string | undefined;
+
+    try {
+      if (twilioClient && brandSid) {
+        const brand = await twilioClient.messaging.v1.brandRegistrations(brandSid).fetch();
+        brandStatus = (brand as any)?.status || (brand as any)?.state;
+      }
+    } catch {/* ignore; still classify */}
+
+    try {
+      if (twilioClient && campaignSid && messagingServiceSid) {
+        const usA2p = await twilioClient.messaging.v1
+          .services(messagingServiceSid)
+          .usAppToPerson(campaignSid)
+          .fetch();
+        campStatus = (usA2p as any)?.status || (usA2p as any)?.state;
+      }
+    } catch {/* ignore */}
+
+    const statusStrings = [brandStatus, campStatus].filter(Boolean).map((s) => String(s).toLowerCase());
+    const isApproved = statusStrings.some((s) => APPROVED.has(s));
+    const isDeclined = statusStrings.some((s) => DECLINED_MATCH.test(s));
+
+    try {
+      if (isApproved) {
+        await A2PProfile.updateOne(
+          { _id: doc._id },
+          {
+            $set: {
+              messagingReady: true,
+              applicationStatus: "approved",
+              registrationStatus: statusStrings.some((s) => s === "campaign_approved" || s === "in_use" || s === "registered")
+                ? "campaign_approved"
+                : "ready",
+              lastSyncedAt: new Date(),
+            },
+            $unset: { lastError: 1 },
+          }
+        );
+
+        if (!doc.approvalNotifiedAt) {
+          const user = userId ? await User.findById(userId).lean() : null;
+          if (user?.email) {
+            try {
+              await sendA2PApprovedEmail({
+                to: user.email,
+                name: user.name || undefined,
+                dashboardUrl: `${BASE_URL}/settings/messaging`,
+              });
+              await A2PProfile.updateOne({ _id: doc._id }, { $set: { approvalNotifiedAt: new Date() } });
+            } catch (e: any) {
+              await A2PProfile.updateOne({ _id: doc._id }, { $set: { lastError: `notify: ${e?.message || e}` } });
+            }
+          }
+        }
+
+        results.push({
+          id, userId, profileSid, brandSid, trustProductSid, campaignSid, messagingServiceSid,
+          state: "approved",
           brandStatus: brandStatus || null,
           campaignStatus: campStatus || null,
           missing,
@@ -245,7 +223,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
         );
 
-        // notify (best effort)
         const user = userId ? await User.findById(userId).lean() : null;
         if (user?.email) {
           try {
@@ -261,13 +238,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
 
         results.push({
-          id,
-          userId,
-          profileSid,
-          brandSid,
-          trustProductSid,
-          campaignSid,
-          messagingServiceSid,
+          id, userId, profileSid, brandSid, trustProductSid, campaignSid, messagingServiceSid,
           state: "declined",
           brandStatus: brandStatus || null,
           campaignStatus: campStatus || null,
@@ -281,13 +252,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       await A2PProfile.updateOne({ _id: doc._id }, { $set: { lastSyncedAt: new Date() } });
 
       results.push({
-        id,
-        userId,
-        profileSid,
-        brandSid,
-        trustProductSid,
-        campaignSid,
-        messagingServiceSid,
+        id, userId, profileSid, brandSid, trustProductSid, campaignSid, messagingServiceSid,
         state: "pending",
         brandStatus: brandStatus || null,
         campaignStatus: campStatus || null,
@@ -296,13 +261,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     } catch (e: any) {
       results.push({
-        id,
-        userId,
-        profileSid,
-        brandSid,
-        trustProductSid,
-        campaignSid,
-        messagingServiceSid,
+        id, userId, profileSid, brandSid, trustProductSid, campaignSid, messagingServiceSid,
         state: "error",
         error: e?.message || String(e),
         missing,
