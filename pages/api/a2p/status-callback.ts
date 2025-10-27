@@ -1,6 +1,5 @@
 // pages/api/a2p/status-callback.ts
 import type { NextApiRequest, NextApiResponse } from "next";
-import { buffer } from "micro";
 import mongooseConnect from "@/lib/mongooseConnect";
 import A2PProfile from "@/models/A2PProfile";
 import PhoneNumber from "@/models/PhoneNumber";
@@ -11,8 +10,9 @@ import {
   sendA2PDeclinedEmail,
 } from "@/lib/a2p/notifications";
 
+// Use Next's default body parser so x-www-form-urlencoded comes in as req.body
 export const config = {
-  api: { bodyParser: false },
+  api: { bodyParser: true },
 };
 
 const BASE_URL = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "").replace(/\/$/, "");
@@ -23,41 +23,23 @@ const DECLINED_MATCH = /(reject|rejected|deny|denied|fail|failed|decline|decline
 
 // ---------- helpers ----------------------------------------------------------
 
-async function parseIncomingBody(req: NextApiRequest): Promise<Record<string, any>> {
-  const raw = await buffer(req);
-  const ctype = (req.headers["content-type"] || "").toLowerCase();
-
-  // If raw is empty (some runtimes pre-consume the stream), trust req.body
-  if (!raw?.length && (req as any).body && typeof (req as any).body === "object") {
-    return (req as any).body as Record<string, any>;
-  }
-
-  // Handle form-encoded (Twilio default)
-  if (ctype.includes("application/x-www-form-urlencoded") || ctype.includes("multipart/form-data")) {
-    const params = new URLSearchParams(raw.toString("utf8"));
-    const obj: Record<string, any> = {};
-    for (const [k, v] of params.entries()) obj[k] = v;
-    return obj;
-  }
-
-  // Handle JSON
-  if (ctype.includes("application/json")) {
+function toObjectFromMaybeString(body: any): Record<string, any> {
+  if (body && typeof body === "object") return body as Record<string, any>;
+  if (typeof body === "string") {
+    // Try JSON first
     try {
-      return JSON.parse(raw.toString("utf8") || "{}");
-    } catch {
-      return {};
-    }
+      const parsed = JSON.parse(body);
+      if (parsed && typeof parsed === "object") return parsed;
+    } catch {}
+    // Then urlencoded
+    try {
+      const params = new URLSearchParams(body);
+      const obj: Record<string, any> = {};
+      for (const [k, v] of params.entries()) obj[k] = v;
+      if (Object.keys(obj).length) return obj;
+    } catch {}
   }
-
-  // Fallback: try to parse as querystring
-  try {
-    const params = new URLSearchParams(raw.toString("utf8"));
-    const obj: Record<string, any> = {};
-    for (const [k, v] of params.entries()) obj[k] = v;
-    return obj;
-  } catch {
-    return {};
-  }
+  return {};
 }
 
 function pickAnySid(body: Record<string, any>): string | undefined {
@@ -79,7 +61,7 @@ function pickAnySid(body: Record<string, any>): string | undefined {
 }
 
 function pickStatus(body: Record<string, any>): string {
-  // Prefer explicit Status/status; fall back to EventType
+  // Prefer explicit Status/status; fall back to EventType (e.g., campaign_approved)
   const s =
     body.Status ??
     body.status ??
@@ -139,13 +121,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     await mongooseConnect();
 
-    const body = await parseIncomingBody(req);
+    const body = toObjectFromMaybeString((req as any).body);
     const anySid = pickAnySid(body);
+    const statusRaw = pickStatus(body);
+    const reason = body.Reason || body.reason || body.Error || "";
 
-    if (!anySid) {
-      // No SID → do nothing but 200 to avoid Twilio retry storms
-      return res.status(200).json({ ok: true });
+    // Debug echo (no writes)
+    if (String(req.query.debug) === "1") {
+      return res.status(200).json({
+        ok: true,
+        parsed: body,
+        anySid,
+        statusRaw,
+      });
     }
+
+    // No SID → do nothing but 200 to avoid Twilio retry storms
+    if (!anySid) return res.status(200).json({ ok: true });
 
     const a2p = await A2PProfile.findOne({
       $or: [
@@ -169,9 +161,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
       return res.status(200).json({ ok: true });
     }
-
-    const statusRaw = pickStatus(body); // <- NEW robust status extraction
-    const reason = body.Reason || body.reason || body.Error || "";
 
     // APPROVED FLOW
     if (statusRaw && (APPROVED.has(statusRaw) || statusRaw.includes("approved"))) {
