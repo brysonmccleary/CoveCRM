@@ -16,9 +16,20 @@ export const config = {
 };
 
 const BASE_URL = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "").replace(/\/$/, "");
-const client = twilio(process.env.TWILIO_ACCOUNT_SID!, process.env.TWILIO_AUTH_TOKEN!);
+const HAS_TWILIO =
+  Boolean(process.env.TWILIO_ACCOUNT_SID) && Boolean(process.env.TWILIO_AUTH_TOKEN);
+const client = HAS_TWILIO
+  ? twilio(process.env.TWILIO_ACCOUNT_SID!, process.env.TWILIO_AUTH_TOKEN!)
+  : null;
 
-const APPROVED = new Set(["approved", "verified", "active", "in_use", "registered", "campaign_approved"]);
+const APPROVED = new Set([
+  "approved",
+  "verified",
+  "active",
+  "in_use",
+  "registered",
+  "campaign_approved",
+]);
 const DECLINED_MATCH = /(reject|rejected|deny|denied|fail|failed|decline|declined|error)/i;
 
 // ---------- helpers ----------------------------------------------------------
@@ -26,12 +37,10 @@ const DECLINED_MATCH = /(reject|rejected|deny|denied|fail|failed|decline|decline
 function toObjectFromMaybeString(body: any): Record<string, any> {
   if (body && typeof body === "object") return body as Record<string, any>;
   if (typeof body === "string") {
-    // Try JSON first
     try {
       const parsed = JSON.parse(body);
       if (parsed && typeof parsed === "object") return parsed;
     } catch {}
-    // Then urlencoded
     try {
       const params = new URLSearchParams(body);
       const obj: Record<string, any> = {};
@@ -61,7 +70,6 @@ function pickAnySid(body: Record<string, any>): string | undefined {
 }
 
 function pickStatus(body: Record<string, any>): string {
-  // Prefer explicit Status/status; fall back to EventType (e.g., campaign_approved)
   const s =
     body.Status ??
     body.status ??
@@ -73,7 +81,12 @@ function pickStatus(body: Record<string, any>): string {
   return String(s).toLowerCase();
 }
 
-async function ensureTenantMessagingService(userId: string, friendlyNameHint?: string): Promise<string> {
+async function ensureTenantMessagingService(
+  userId: string,
+  friendlyNameHint?: string
+): Promise<string | null> {
+  if (!HAS_TWILIO || !client) return null;
+
   let a2p = await A2PProfile.findOne({ userId });
   if (a2p?.messagingServiceSid) {
     await client.messaging.v1.services(a2p.messagingServiceSid).update({
@@ -98,13 +111,16 @@ async function ensureTenantMessagingService(userId: string, friendlyNameHint?: s
 }
 
 async function addNumberToMessagingService(serviceSid: string, numberSid: string) {
+  if (!HAS_TWILIO || !client) return;
   try {
     await client.messaging.v1.services(serviceSid).phoneNumbers.create({ phoneNumberSid: numberSid });
   } catch (err: any) {
     if (err?.code === 21712) {
       const services = await client.messaging.v1.services.list({ limit: 100 });
       for (const svc of services) {
-        try { await client.messaging.v1.services(svc.sid).phoneNumbers(numberSid).remove(); } catch {}
+        try {
+          await client.messaging.v1.services(svc.sid).phoneNumbers(numberSid).remove();
+        } catch {}
       }
       await client.messaging.v1.services(serviceSid).phoneNumbers.create({ phoneNumberSid: numberSid });
     } else {
@@ -133,10 +149,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         parsed: body,
         anySid,
         statusRaw,
+        hasTwilio: HAS_TWILIO,
       });
     }
 
-    // No SID → do nothing but 200 to avoid Twilio retry storms
+    // No SID → noop (200 to stop Twilio retries)
     if (!anySid) return res.status(200).json({ ok: true });
 
     const a2p = await A2PProfile.findOne({
@@ -151,7 +168,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
 
     if (!a2p) {
-      // If Twilio explicitly sent a campaignSid, bump lastSyncedAt for any that match it.
       const explicitCampaign = body.campaignSid || body.campaignsid || body.ResourceSid || body.resourcesid;
       if (explicitCampaign) {
         await A2PProfile.updateOne(
@@ -162,27 +178,35 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(200).json({ ok: true });
     }
 
-    // APPROVED FLOW
+    // ---------------- APPROVED FLOW ----------------
     if (statusRaw && (APPROVED.has(statusRaw) || statusRaw.includes("approved"))) {
-      const user = await User.findById(a2p.userId);
-      if (user) {
-        const msSid = await ensureTenantMessagingService(String(user._id), user.name || user.email);
-        const owned = await PhoneNumber.find({ userId: user._id });
-        for (const num of owned) {
-          const numSid = (num as any).twilioSid as string | undefined;
-          if (!numSid) continue;
-          try {
-            await addNumberToMessagingService(msSid, numSid);
-            if ((num as any).messagingServiceSid !== msSid) {
-              (num as any).messagingServiceSid = msSid;
-              await (num as any).save();
+      // Best-effort Twilio wiring; never block approval on errors
+      try {
+        const user = await User.findById(a2p.userId);
+        if (user) {
+          const msSid = await ensureTenantMessagingService(String(user._id), user.name || user.email);
+          if (msSid) {
+            const owned = await PhoneNumber.find({ userId: user._id });
+            for (const num of owned) {
+              const numSid = (num as any).twilioSid as string | undefined;
+              if (!numSid) continue;
+              try {
+                await addNumberToMessagingService(msSid, numSid);
+                if ((num as any).messagingServiceSid !== msSid) {
+                  (num as any).messagingServiceSid = msSid;
+                  await (num as any).save();
+                }
+              } catch (e) {
+                console.warn(`Attach failed for ${num.phoneNumber} → ${msSid}:`, e);
+              }
             }
-          } catch (e) {
-            console.warn(`Attach failed for ${num.phoneNumber} → ${msSid}:`, e);
           }
         }
+      } catch (twerr) {
+        console.warn("Twilio side-effects failed (ignored):", (twerr as any)?.message || twerr);
       }
 
+      // Persist approval regardless of Twilio side-effects outcome
       a2p.messagingReady = true;
       a2p.applicationStatus = "approved";
       a2p.declinedReason = undefined;
@@ -198,6 +222,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           : "ready";
       a2p.lastSyncedAt = new Date();
 
+      // Notify once (best effort, never blocks)
       if (!a2p.approvalNotifiedAt) {
         try {
           const user2 = await User.findById(a2p.userId);
@@ -210,7 +235,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
           a2p.approvalNotifiedAt = new Date();
         } catch (e) {
-          console.warn("A2P approved email failed:", (e as any)?.message || e);
+          console.warn("A2P approved email failed (ignored):", (e as any)?.message || e);
         }
       }
 
@@ -218,7 +243,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(200).json({ ok: true, messagingReady: true });
     }
 
-    // DECLINED FLOW
+    // ---------------- DECLINED FLOW ----------------
     if (statusRaw && DECLINED_MATCH.test(statusRaw)) {
       a2p.messagingReady = false;
       a2p.registrationStatus = "rejected";
@@ -230,6 +255,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       ];
       a2p.lastSyncedAt = new Date();
 
+      // Best-effort notify
       try {
         const user = await User.findById(a2p.userId);
         if (user?.email) {
@@ -241,7 +267,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           });
         }
       } catch (e) {
-        console.warn("A2P declined email failed:", (e as any)?.message || e);
+        console.warn("A2P declined email failed (ignored):", (e as any)?.message || e);
       }
 
       await a2p.save();
