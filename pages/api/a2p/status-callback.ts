@@ -21,28 +21,24 @@ function lc(v: any) {
   return typeof v === "string" ? v.toLowerCase() : String(v ?? "").toLowerCase();
 }
 
-/** Ensure tenant Messaging Service exists & is webhook-configured. Returns SID. */
-async function ensureTenantMessagingService(userId: string, friendlyNameHint?: string): Promise<string> {
-  let a2p = await A2PProfile.findOne({ userId });
+/** Ensure tenant Messaging Service exists for THIS A2P PROFILE. Never creates a new A2PProfile. */
+async function ensureTenantMessagingServiceForProfile(a2p: any, friendlyNameHint?: string): Promise<string> {
   if (a2p?.messagingServiceSid) {
     await client.messaging.v1.services(a2p.messagingServiceSid).update({
-      friendlyName: `CoveCRM – ${friendlyNameHint || userId}`,
+      friendlyName: `CoveCRM – ${friendlyNameHint || a2p.userId}`,
       inboundRequestUrl: `${BASE_URL}/api/twilio/inbound-sms`,
       statusCallback: `${BASE_URL}/api/twilio/status-callback`,
     });
     return a2p.messagingServiceSid;
   }
   const svc = await client.messaging.v1.services.create({
-    friendlyName: `CoveCRM – ${friendlyNameHint || userId}`,
+    friendlyName: `CoveCRM – ${friendlyNameHint || a2p.userId}`,
     inboundRequestUrl: `${BASE_URL}/api/twilio/inbound-sms`,
     statusCallback: `${BASE_URL}/api/twilio/status-callback`,
   });
-  if (a2p) {
-    a2p.messagingServiceSid = svc.sid;
-    await a2p.save();
-  } else {
-    await A2PProfile.create({ userId, messagingServiceSid: svc.sid });
-  }
+  // only update this existing profile — do NOT create a new one
+  a2p.messagingServiceSid = svc.sid;
+  await a2p.save();
   return svc.sid;
 }
 
@@ -64,11 +60,9 @@ async function addNumberToMessagingService(serviceSid: string, numberSid: string
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  // Twilio posts form-encoded. We accept POST only.
   if (req.method !== "POST") return res.status(405).send("Method not allowed");
 
   const debugEnabled = String(req.query.debug ?? "") === "1";
-
   const debug: Record<string, any> = {
     hasTwilio: Boolean(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN),
   };
@@ -76,7 +70,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     await mongooseConnect();
 
-    // Normalize fields from Twilio
     const body: any = req.body || {};
     const statusRaw = lc(body.Status || body.status || "");
     const eventType = String(body.EventType || body.Event || body.Type || "");
@@ -102,7 +95,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(200).json({ ok: true, ...(debugEnabled ? { debug } : {}) });
     }
 
-    // Find matching A2P profile by ANY of the SIDs we might receive
+    // Find the existing A2P profile by any known SID
     const a2p = await A2PProfile.findOne({
       $or: [
         { profileSid: anySid },
@@ -113,19 +106,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         { messagingServiceSid: anySid },
       ],
     });
-
     if (!a2p) {
       return res.status(200).json({ ok: true, ...(debugEnabled ? { debug } : {}) });
     }
 
     // APPROVED FLOW
     if (statusRaw && APPROVED.has(statusRaw)) {
-      // Provision/ensure tenant messaging service and attach numbers (best effort)
       try {
         const user = await User.findById(a2p.userId);
         if (user) {
-          const msSid = await ensureTenantMessagingService(String(user._id), user.name || user.email);
-          // Attach all owned numbers to MS (idempotent)
+          const msSid = await ensureTenantMessagingServiceForProfile(a2p, user.name || user.email);
+
+          // Attach all owned numbers to MS (idempotent/best effort)
           const owned = await PhoneNumber.find({ userId: user._id });
           for (const num of owned) {
             const numSid = (num as any).twilioSid as string | undefined;
@@ -142,11 +134,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
         }
       } catch (e) {
-        // non-fatal; continue approval flip
-        console.warn("ensureTenantMessagingService failed (non-fatal):", (e as any)?.message || e);
+        console.warn("ensureTenantMessagingServiceForProfile failed (non-fatal):", (e as any)?.message || e);
       }
 
-      // Flip status in A2PProfile
+      // Flip status on THIS profile
       a2p.messagingReady = true;
       a2p.applicationStatus = "approved";
       a2p.declinedReason = undefined;
@@ -157,7 +148,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         "ready";
       a2p.lastSyncedAt = new Date();
 
-      // Notify once
       if (!a2p.approvalNotifiedAt) {
         try {
           const user2 = await User.findById(a2p.userId);
@@ -175,7 +165,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
 
       await a2p.save();
-
       const payload: any = { ok: true, messagingReady: true };
       if (debugEnabled) payload.debug = debug;
       return res.status(200).json(payload);
@@ -205,13 +194,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
 
       await a2p.save();
-
       const payload: any = { ok: true, messagingReady: false };
       if (debugEnabled) payload.debug = debug;
       return res.status(200).json(payload);
     }
 
-    // Intermediate/update states: record a heartbeat
+    // Intermediate/update states
     a2p.lastSyncedAt = new Date();
     await a2p.save();
 
@@ -220,7 +208,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(200).json(payload);
   } catch (err) {
     console.error("A2P status-callback error:", err);
-    // Always 200 to avoid Twilio retry storms
     const payload: any = { ok: true, error: (err as any)?.message || String(err) };
     if (debugEnabled) payload.debug = debug;
     return res.status(200).json(payload);
