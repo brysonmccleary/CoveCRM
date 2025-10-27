@@ -6,14 +6,11 @@ import A2PProfile from "@/models/A2PProfile";
 import PhoneNumber from "@/models/PhoneNumber";
 import User from "@/models/User";
 import twilio from "twilio";
-
 import {
   sendA2PApprovedEmail,
   sendA2PDeclinedEmail,
 } from "@/lib/a2p/notifications";
 
-// Important: Twilio posts form-encoded by default.
-// Disable Next's default body parsing so we can handle form bodies cleanly.
 export const config = {
   api: { bodyParser: false },
 };
@@ -21,16 +18,21 @@ export const config = {
 const BASE_URL = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "").replace(/\/$/, "");
 const client = twilio(process.env.TWILIO_ACCOUNT_SID!, process.env.TWILIO_AUTH_TOKEN!);
 
-const APPROVED = new Set(["approved", "verified", "active", "in_use", "registered"]);
-const DECLINED_MATCH = /(reject|rejected|deny|denied|fail|failed|decline|declined)/i;
+const APPROVED = new Set(["approved", "verified", "active", "in_use", "registered", "campaign_approved"]);
+const DECLINED_MATCH = /(reject|rejected|deny|denied|fail|failed|decline|declined|error)/i;
 
-// ---- Helpers ----------------------------------------------------------------
+// ---------- helpers ----------------------------------------------------------
 
 async function parseIncomingBody(req: NextApiRequest): Promise<Record<string, any>> {
   const raw = await buffer(req);
   const ctype = (req.headers["content-type"] || "").toLowerCase();
 
-  // Form-encoded (Twilio default)
+  // If raw is empty (some runtimes pre-consume the stream), trust req.body
+  if (!raw?.length && (req as any).body && typeof (req as any).body === "object") {
+    return (req as any).body as Record<string, any>;
+  }
+
+  // Handle form-encoded (Twilio default)
   if (ctype.includes("application/x-www-form-urlencoded") || ctype.includes("multipart/form-data")) {
     const params = new URLSearchParams(raw.toString("utf8"));
     const obj: Record<string, any> = {};
@@ -38,7 +40,7 @@ async function parseIncomingBody(req: NextApiRequest): Promise<Record<string, an
     return obj;
   }
 
-  // JSON
+  // Handle JSON
   if (ctype.includes("application/json")) {
     try {
       return JSON.parse(raw.toString("utf8") || "{}");
@@ -47,7 +49,7 @@ async function parseIncomingBody(req: NextApiRequest): Promise<Record<string, an
     }
   }
 
-  // Fallback: try URLSearchParams, then empty
+  // Fallback: try to parse as querystring
   try {
     const params = new URLSearchParams(raw.toString("utf8"));
     const obj: Record<string, any> = {};
@@ -76,6 +78,19 @@ function pickAnySid(body: Record<string, any>): string | undefined {
   return undefined;
 }
 
+function pickStatus(body: Record<string, any>): string {
+  // Prefer explicit Status/status; fall back to EventType
+  const s =
+    body.Status ??
+    body.status ??
+    body.EventType ??
+    body.eventtype ??
+    body.Event ??
+    body.event ??
+    "";
+  return String(s).toLowerCase();
+}
+
 async function ensureTenantMessagingService(userId: string, friendlyNameHint?: string): Promise<string> {
   let a2p = await A2PProfile.findOne({ userId });
   if (a2p?.messagingServiceSid) {
@@ -95,8 +110,6 @@ async function ensureTenantMessagingService(userId: string, friendlyNameHint?: s
     a2p.messagingServiceSid = svc.sid;
     await a2p.save();
   } else {
-    // Do NOT attempt to create a brand-new A2PProfile here (schema has required business fields)
-    // Only attach the service if we found an existing profile-less record (rare).
     await A2PProfile.updateOne({ userId }, { $set: { messagingServiceSid: svc.sid } });
   }
   return svc.sid;
@@ -109,9 +122,7 @@ async function addNumberToMessagingService(serviceSid: string, numberSid: string
     if (err?.code === 21712) {
       const services = await client.messaging.v1.services.list({ limit: 100 });
       for (const svc of services) {
-        try {
-          await client.messaging.v1.services(svc.sid).phoneNumbers(numberSid).remove();
-        } catch {}
+        try { await client.messaging.v1.services(svc.sid).phoneNumbers(numberSid).remove(); } catch {}
       }
       await client.messaging.v1.services(serviceSid).phoneNumbers.create({ phoneNumberSid: numberSid });
     } else {
@@ -120,7 +131,7 @@ async function addNumberToMessagingService(serviceSid: string, numberSid: string
   }
 }
 
-// ---- Handler ----------------------------------------------------------------
+// ---------- handler ----------------------------------------------------------
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") return res.status(405).send("Method not allowed");
@@ -131,10 +142,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const body = await parseIncomingBody(req);
     const anySid = pickAnySid(body);
 
-    // Nothing to do without a SID hint — still 200 to stop Twilio retry storms
-    if (!anySid) return res.status(200).json({ ok: true });
+    if (!anySid) {
+      // No SID → do nothing but 200 to avoid Twilio retry storms
+      return res.status(200).json({ ok: true });
+    }
 
-    // Find the profile by any known SID field
     const a2p = await A2PProfile.findOne({
       $or: [
         { profileSid: anySid },
@@ -146,9 +158,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       ],
     });
 
-    // If we didn't match but Twilio sent a campaignSid explicitly,
-    // try matching on that value as a secondary fallback.
     if (!a2p) {
+      // If Twilio explicitly sent a campaignSid, bump lastSyncedAt for any that match it.
       const explicitCampaign = body.campaignSid || body.campaignsid || body.ResourceSid || body.resourcesid;
       if (explicitCampaign) {
         await A2PProfile.updateOne(
@@ -159,16 +170,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(200).json({ ok: true });
     }
 
-    const statusRaw = String(body.Status || body.status || "").toLowerCase();
+    const statusRaw = pickStatus(body); // <- NEW robust status extraction
     const reason = body.Reason || body.reason || body.Error || "";
 
     // APPROVED FLOW
-    if (statusRaw && APPROVED.has(statusRaw)) {
+    if (statusRaw && (APPROVED.has(statusRaw) || statusRaw.includes("approved"))) {
       const user = await User.findById(a2p.userId);
       if (user) {
         const msSid = await ensureTenantMessagingService(String(user._id), user.name || user.email);
-
-        // Attach all owned numbers (idempotent)
         const owned = await PhoneNumber.find({ userId: user._id });
         for (const num of owned) {
           const numSid = (num as any).twilioSid as string | undefined;
@@ -185,7 +194,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
       }
 
-      // Update A2P profile
       a2p.messagingReady = true;
       a2p.applicationStatus = "approved";
       a2p.declinedReason = undefined;
@@ -201,7 +209,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           : "ready";
       a2p.lastSyncedAt = new Date();
 
-      // Notify once
       if (!a2p.approvalNotifiedAt) {
         try {
           const user2 = await User.findById(a2p.userId);
@@ -252,13 +259,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(200).json({ ok: true, messagingReady: false });
     }
 
-    // Intermediate/update states → just refresh lastSyncedAt
+    // Intermediate/unknown → just record activity
     a2p.lastSyncedAt = new Date();
     await a2p.save();
     return res.status(200).json({ ok: true });
   } catch (err) {
     console.error("A2P status-callback error:", err);
-    // Always 200 to avoid Twilio retry storms
     return res.status(200).json({ ok: true });
   }
 }
