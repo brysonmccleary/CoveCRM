@@ -56,7 +56,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     await dbConnect();
 
-    // Fetch separately to avoid TS tuple/union widening
+    // Fetch separately (clean TS) and validate scope
     const lead = await Lead.findOne({ _id: leadId, userEmail: session.user.email })
       .select("_id Phone `First Name` `Last Name` userEmail")
       .lean();
@@ -77,12 +77,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ error: "Campaign is not an active SMS campaign" });
     }
 
-    const user = await User.findOne({ email: session.user.email })
-      .select("_id email name")
-      .lean();
+    const user = await User.findOne({ email: session.user.email }).select("_id email name").lean();
     if (!user?._id) return res.status(404).json({ error: "User not found" });
 
-    // Compute initial nextSendAt
+    // Compute initial nextSendAt (immediate if unspecified)
     let nextSendAt: Date | undefined;
     if (startAt) {
       const parsed = new Date(startAt);
@@ -90,14 +88,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
     if (!nextSendAt) nextSendAt = new Date();
 
-    // Upsert with rawResult so we know if it was newly created
-    const up = await DripEnrollment.findOneAndUpdate(
-      {
-        leadId,
-        campaignId,
-        status: { $in: ["active", "paused"] },
-        userEmail: session.user.email,
-      },
+    // Upsert (insert on first time only), then fetch to get the enrollment doc
+    const filter = {
+      leadId,
+      campaignId,
+      status: { $in: ["active", "paused"] },
+      userEmail: session.user.email,
+    };
+
+    const up = await DripEnrollment.updateOne(
+      filter as any,
       {
         $setOnInsert: {
           leadId,
@@ -109,13 +109,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           source: "manual-lead",
         },
       },
-      { new: true, upsert: true, rawResult: true }
+      { upsert: true }
     );
 
-    const enrollment = up.value as any;
-    const wasUpserted = Boolean((up.lastErrorObject as any)?.upserted);
+    const wasUpserted = Boolean((up as any).upsertedCount || (up as any).upsertedId);
+    const enrollment = await DripEnrollment.findOne(filter as any).lean();
 
-    // History (for your UI feed)
+    // History entry (for UI)
     const historyEntry = {
       type: "status",
       subType: "drip-enrolled",
@@ -125,7 +125,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     };
 
     // ---- Immediate first-step send (only NEW enrollments) ----
-    if (wasUpserted) {
+    if (wasUpserted && enrollment) {
       const steps = Array.isArray(campaign.steps) ? campaign.steps : [];
       const firstStep = steps[0];
 
@@ -145,7 +145,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
           const idKey = `${String(enrollment._id)}:0:${new Date(enrollment.nextSendAt || Date.now()).toISOString()}`;
 
-          // Same lock pattern as cron
+          // Same lock pattern as cron to avoid double-sends
           const locked = await acquireLock(
             "enroll",
             `${String(user.email)}:${String(lead._id)}:${String(campaign._id)}:0`,
@@ -165,7 +165,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 stepIndex: 0,
               });
 
-              // Advance cursor + schedule next step if any
+              // Advance cursor + schedule next step (if any)
               const nextIndex = 1;
               const update: any = { $set: { cursorStep: nextIndex, lastSentAt: new Date() } };
               if (steps.length > 1) {
@@ -178,7 +178,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               }
               await DripEnrollment.updateOne({ _id: enrollment._id, cursorStep: 0 }, update);
             } catch {
-              // Leave enrollment for cron to retry later
+              // If SMS send fails, leave enrollment; cron will retry later.
             }
           }
         }
