@@ -68,7 +68,7 @@ function computeStepWhenPT(startedAt: Date, dayNumber: number): DateTime {
 function shouldRunWindowPT(): boolean { return DateTime.now().setZone(PT_ZONE).hour === SEND_HOUR_PT; }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  // ---------- AUTH SHIM (keeps tests simple and explicit) ----------
+  // ---------- AUTH SHIM ----------
   if (!["GET", "POST"].includes(req.method || "")) {
     res.setHeader("x-run-drips-auth", "bad-method");
     return res.status(405).json({ message: "Method not allowed" });
@@ -131,7 +131,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const nowPT = DateTime.now().setZone(PT_ZONE);
     console.log(`🕘 run-drips start @ ${nowPT.toISO()} PT | force=${force} dry=${dry} limit=${limit || "∞"} due=${dueCount}`);
 
-    // -------- PER-ENROLLMENT FLOW (atomic claim) --------
+    // -------- PRIMARY: ENROLLMENT ENGINE (unchanged) --------
     let enrollChecked = 0, enrollSent = 0, enrollScheduled = 0, enrollSuppressed = 0, enrollFailed = 0, enrollCompleted = 0, enrollClaimMiss = 0;
 
     const dueEnrollmentsQ = DripEnrollment.find({
@@ -209,7 +209,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
       const finalBody = ensureOptOut(rendered);
 
-      // Build idempotency key (enrollment + step + scheduled ts if present)
+      // Idempotency key matches enrollment engine convention
       const idKey = `${String(claim._id)}:${idx}:${new Date(claim.nextSendAt || Date.now()).toISOString()}`;
 
       try {
@@ -253,108 +253,112 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       await DripEnrollment.updateOne({ _id: claim._id, cursorStep: idx }, update);
     });
 
-    // -------- LEGACY BLOCK (kept, guarded by window) --------
-    const legacyAllowed = force || process.env.DRIPS_DEBUG_ALWAYS_RUN === "1" || shouldRunWindowPT();
+    // -------- LEGACY BLOCK (kept but gated) --------
+    const legacyEnabled = process.env.DRIPS_LEGACY_ENABLED === "1";
     let checked = 0, candidates = 0, accepted = 0, scheduled = 0, suppressed = 0, failed = 0;
     let initializedProgress = 0, wouldInitProgress = 0;
 
-    if (legacyAllowed) {
-      const nowPT2 = DateTime.now().setZone(PT_ZONE);
-      const leadsQ = Lead.find({
-        $and: [
-          { unsubscribed: { $ne: true } },
-          { optOut: { $ne: true } },
-          { assignedDrips: { $exists: true, $ne: [] } },
-        ],
-      }).select({ _id: 1, userEmail: 1, Phone: 1, "First Name": 1, "Last Name": 1, assignedDrips: 1, dripProgress: 1 }).lean();
+    if (legacyEnabled) {
+      const legacyAllowed = force || process.env.DRIPS_DEBUG_ALWAYS_RUN === "1" || shouldRunWindowPT();
 
-      const leads = limit > 0 ? await leadsQ.limit(limit) : await leadsQ;
-      await runBatched(leads, PER_LEAD_CONCURRENCY, async (lead) => {
-        checked++;
-        const to = normalizeToE164Maybe((lead as any).Phone);
-        if (!to) return;
+      if (legacyAllowed) {
+        const nowPT2 = DateTime.now().setZone(PT_ZONE);
+        const leadsQ = Lead.find({
+          $and: [
+            { unsubscribed: { $ne: true } },
+            { optOut: { $ne: true } },
+            { assignedDrips: { $exists: true, $ne: [] } },
+          ],
+        }).select({ _id: 1, userEmail: 1, Phone: 1, "First Name": 1, "Last Name": 1, assignedDrips: 1, dripProgress: 1 }).lean();
 
-        const user = await User.findOne({ email: (lead as any).userEmail }).select({ _id: 1, email: 1, name: 1 }).lean();
-        if (!user?._id) return;
+        const leads = limit > 0 ? await leadsQ.limit(limit) : await leadsQ;
+        // (INTACT) — legacy loop content remains unchanged ...
+        await runBatched(leads, PER_LEAD_CONCURRENCY, async (lead) => {
+          checked++;
+          const to = normalizeToE164Maybe((lead as any).Phone);
+          if (!to) return;
 
-        const { first: agentFirst, last: agentLast } = splitName(user.name || "");
-        const agentCtx = { name: user.name || null, first_name: agentFirst, last_name: agentLast };
-        const firstName = (lead as any)["First Name"] || null;
-        const lastName  = (lead as any)["Last Name"]  || null;
-        const fullName  = [firstName, lastName].filter(Boolean).join(" ") || null;
+          const user = await User.findOne({ email: (lead as any).userEmail }).select({ _id: 1, email: 1, name: 1 }).lean();
+          if (!user?._id) return;
 
-        const assigned: string[] = Array.isArray((lead as any).assignedDrips) ? (lead as any).assignedDrips : [];
-        const progressArr: any[] = Array.isArray((lead as any).dripProgress) ? (lead as any).dripProgress : [];
-        if (!assigned.length) return;
+          const { first: agentFirst, last: agentLast } = splitName(user.name || "");
+          const agentCtx = { name: user.name || null, first_name: agentFirst, last_name: agentLast };
+          const firstName = (lead as any)["First Name"] || null;
+          const lastName  = (lead as any)["Last Name"]  || null;
+          const fullName  = [firstName, lastName].filter(Boolean).join(" ") || null;
 
-        for (const dripId of assigned) {
-          const dripDoc: any = await resolveDrip(dripId);
-          if (!dripDoc || dripDoc.type !== "sms") continue;
-          const campaignId = getCanonicalDripId(dripDoc, String(dripId));
+          const assigned: string[] = Array.isArray((lead as any).assignedDrips) ? (lead as any).assignedDrips : [];
+          const progressArr: any[] = Array.isArray((lead as any).dripProgress) ? (lead as any).dripProgress : [];
+          if (!assigned.length) return;
 
-          const steps: Array<{ text?: string; day?: string }> = (() => {
-            const arr = Array.isArray(dripDoc?.steps) ? dripDoc.steps : [];
-            if (arr.some((s: any) => s?.day)) {
-              return arr.filter((s: any) => !isNaN(parseStepDayNumber(s?.day)))
-                        .sort((a: any, b: any) => parseStepDayNumber(a?.day) - parseStepDayNumber(b?.day));
+          for (const dripId of assigned) {
+            const dripDoc: any = await resolveDrip(dripId);
+            if (!dripDoc || dripDoc.type !== "sms") continue;
+            const campaignId = getCanonicalDripId(dripDoc, String(dripId));
+
+            const steps: Array<{ text?: string; day?: string }> = (() => {
+              const arr = Array.isArray(dripDoc?.steps) ? dripDoc.steps : [];
+              if (arr.some((s: any) => s?.day)) {
+                return arr.filter((s: any) => !isNaN(parseStepDayNumber(s?.day)))
+                          .sort((a: any, b: any) => parseStepDayNumber(a?.day) - parseStepDayNumber(b?.day));
+              }
+              return arr;
+            })();
+            if (!steps.length) continue;
+
+            let prog = progressArr.find((p) => String(p.dripId) === String(campaignId)) ||
+                       progressArr.find((p) => String(p.dripId) === String(dripId));
+
+            if (!prog || !prog.startedAt) {
+              if (dry) { wouldInitProgress++; prog = { dripId: String(campaignId), startedAt: new Date(), lastSentIndex: -1 } as any; }
+              else {
+                const init = { dripId: String(campaignId), startedAt: new Date(), lastSentIndex: -1 };
+                await Lead.updateOne({ _id: (lead as any)._id, "dripProgress.dripId": { $ne: String(campaignId) } }, { $push: { dripProgress: init } });
+                initializedProgress++; prog = init as any; progressArr.push(prog);
+              }
             }
-            return arr;
-          })();
-          if (!steps.length) continue;
 
-          let prog = progressArr.find((p) => String(p.dripId) === String(campaignId)) ||
-                     progressArr.find((p) => String(p.dripId) === String(dripId));
+            let nextIndex = (typeof prog.lastSentIndex === "number" ? prog.lastSentIndex : -1) + 1;
+            if (nextIndex >= steps.length) continue;
 
-          if (!prog || !prog.startedAt) {
-            if (dry) { wouldInitProgress++; prog = { dripId: String(campaignId), startedAt: new Date(), lastSentIndex: -1 } as any; }
-            else {
-              const init = { dripId: String(campaignId), startedAt: new Date(), lastSentIndex: -1 };
-              await Lead.updateOne({ _id: (lead as any)._id, "dripProgress.dripId": { $ne: String(campaignId) } }, { $push: { dripProgress: init } });
-              initializedProgress++; prog = init as any; progressArr.push(prog);
+            while (true) {
+              if (nextIndex >= steps.length) break;
+              const step = steps[nextIndex];
+              const dayNum = parseStepDayNumber(step.day);
+              const duePT  = !isNaN(dayNum) ? computeStepWhenPT(new Date(prog.startedAt), dayNum) : nowPT2;
+              if (DateTime.now().setZone(PT_ZONE) < duePT) break;
+
+              candidates++;
+              const rendered = renderTemplate(String(step.text || ""), { contact: { first_name: firstName, last_name: lastName, full_name: fullName }, agent: agentCtx });
+              const finalBody = ensureOptOut(rendered);
+
+              if (dry) { nextIndex++; continue; }
+
+              try {
+                const stepKey = String(step?.day ?? nextIndex);
+                const ok = await acquireLock("drip", `${String(user.email)}:${String((lead as any)._id)}:${String(campaignId)}:${stepKey}`, 600);
+                if (!ok) break;
+
+                const idKey = `legacy:${String(lead._id)}:${String(campaignId)}:${nextIndex}`;
+                const result = await sendSms({ to, body: finalBody, userEmail: user.email, leadId: String((lead as any)._id),
+                  idempotencyKey: idKey, campaignId: String(campaignId), stepIndex: nextIndex });
+
+                if (result?.scheduledAt) scheduled++; else if (result?.sid) accepted++; else suppressed++;
+
+                await Lead.updateOne({ _id: (lead as any)._id, "dripProgress.dripId": String(campaignId) }, { $set: { "dripProgress.$.lastSentIndex": nextIndex } });
+                nextIndex++;
+              } catch { failed++; break; }
             }
           }
-
-          let nextIndex = (typeof prog.lastSentIndex === "number" ? prog.lastSentIndex : -1) + 1;
-          if (nextIndex >= steps.length) continue;
-
-          while (true) {
-            if (nextIndex >= steps.length) break;
-            const step = steps[nextIndex];
-            const dayNum = parseStepDayNumber(step.day);
-            const duePT  = !isNaN(dayNum) ? computeStepWhenPT(new Date(prog.startedAt), dayNum) : nowPT2;
-            if (DateTime.now().setZone(PT_ZONE) < duePT) break;
-
-            candidates++;
-            const rendered = renderTemplate(String(step.text || ""), { contact: { first_name: firstName, last_name: lastName, full_name: fullName }, agent: agentCtx });
-            const finalBody = ensureOptOut(rendered);
-
-            if (dry) { nextIndex++; continue; }
-
-            try {
-              const stepKey = String(step?.day ?? nextIndex);
-              const ok = await acquireLock("drip", `${String(user.email)}:${String((lead as any)._id)}:${String(campaignId)}:${stepKey}`, 600);
-              if (!ok) break;
-
-              const idKey = `legacy:${String(lead._id)}:${String(campaignId)}:${nextIndex}`;
-              const result = await sendSms({ to, body: finalBody, userEmail: user.email, leadId: String((lead as any)._id),
-                idempotencyKey: idKey, campaignId: String(campaignId), stepIndex: nextIndex });
-
-              if (result?.scheduledAt) scheduled++; else if (result?.sid) accepted++; else suppressed++;
-
-              await Lead.updateOne({ _id: (lead as any)._id, "dripProgress.dripId": String(campaignId) }, { $set: { "dripProgress.$.lastSentIndex": nextIndex } });
-              nextIndex++;
-            } catch { failed++; break; }
-          }
-        }
-      });
+        });
+      }
     }
 
     return res.status(200).json({
       message: "run-drips complete",
       nowPT: DateTime.now().setZone(PT_ZONE).toISO(),
       forced: force, dryRun: dry, limit,
-      enrollSummary: { /* redacted counts for brevity in this snippet */ },
-      legacySummary: { /* redacted counts for brevity in this snippet */ },
+      // (summaries elided to keep payload small)
     });
   } catch (error) {
     console.error("❌ run-drips error:", error);
