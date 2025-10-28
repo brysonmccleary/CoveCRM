@@ -56,24 +56,31 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     await dbConnect();
 
-    // Scope checks
-    const [lead, campaign, user] = await Promise.all([
-      Lead.findOne({ _id: leadId, userEmail: session.user.email })
-        .select("_id Phone `First Name` `Last Name` userEmail")
-        .lean(),
-      DripCampaign.findOne({ _id: campaignId })
-        .select("_id name key isActive type steps")
-        .lean(),
-      User.findOne({ email: session.user.email })
-        .select("_id email name")
-        .lean(),
-    ]);
-
+    // Fetch separately to avoid TS tuple/union widening
+    const lead = await Lead.findOne({ _id: leadId, userEmail: session.user.email })
+      .select("_id Phone `First Name` `Last Name` userEmail")
+      .lean();
     if (!lead) return res.status(404).json({ error: "Lead not found" });
+
+    const campaign = (await DripCampaign.findOne({ _id: campaignId })
+      .select("_id name key isActive type steps")
+      .lean()) as unknown as {
+        _id: any;
+        name: string;
+        key?: string;
+        isActive?: boolean;
+        type?: string;
+        steps?: Array<{ text?: string; day?: string }>;
+      } | null;
     if (!campaign) return res.status(404).json({ error: "Campaign not found" });
     if (campaign.isActive !== true || campaign.type !== "sms") {
       return res.status(400).json({ error: "Campaign is not an active SMS campaign" });
     }
+
+    const user = await User.findOne({ email: session.user.email })
+      .select("_id email name")
+      .lean();
+    if (!user?._id) return res.status(404).json({ error: "User not found" });
 
     // Compute initial nextSendAt
     let nextSendAt: Date | undefined;
@@ -108,7 +115,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const enrollment = up.value as any;
     const wasUpserted = Boolean((up.lastErrorObject as any)?.upserted);
 
-    // Build history entry for UI (unchanged semantics)
+    // History (for your UI feed)
     const historyEntry = {
       type: "status",
       subType: "drip-enrolled",
@@ -117,14 +124,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       at: new Date().toISOString(),
     };
 
-    // ---- Immediate first-step send (only for NEW enrollments) ----
+    // ---- Immediate first-step send (only NEW enrollments) ----
     if (wasUpserted) {
-      const steps: Array<{ text?: string; day?: string }> = Array.isArray(campaign.steps) ? campaign.steps : [];
+      const steps = Array.isArray(campaign.steps) ? campaign.steps : [];
       const firstStep = steps[0];
 
       if (firstStep) {
         const to = normalizeToE164Maybe((lead as any).Phone);
-        if (to && user?._id) {
+        if (to) {
           const { first: agentFirst, last: agentLast } = splitName(user.name || "");
           const leadFirst = (lead as any)["First Name"] || null;
           const leadLast  = (lead as any)["Last Name"]  || null;
@@ -138,7 +145,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
           const idKey = `${String(enrollment._id)}:0:${new Date(enrollment.nextSendAt || Date.now()).toISOString()}`;
 
-          // Acquire the same lock shape as the cron to avoid any race/double
+          // Same lock pattern as cron
           const locked = await acquireLock(
             "enroll",
             `${String(user.email)}:${String(lead._id)}:${String(campaign._id)}:0`,
@@ -147,7 +154,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
           if (locked) {
             try {
-              const result = await sendSms({
+              await sendSms({
                 to,
                 body: finalBody,
                 userEmail: user.email,
@@ -158,7 +165,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 stepIndex: 0,
               });
 
-              // Advance cursor + schedule next step (if any)
+              // Advance cursor + schedule next step if any
               const nextIndex = 1;
               const update: any = { $set: { cursorStep: nextIndex, lastSentAt: new Date() } };
               if (steps.length > 1) {
@@ -170,11 +177,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 update.$unset = { nextSendAt: 1 };
               }
               await DripEnrollment.updateOne({ _id: enrollment._id, cursorStep: 0 }, update);
-
-              // optional: you can attach info into response (not required by your UI)
-            } catch (e) {
-              // If send fails, keep enrollment active but do not advance cursor
-              // (run-drips will retry when nextSendAt is due)
+            } catch {
+              // Leave enrollment for cron to retry later
             }
           }
         }
