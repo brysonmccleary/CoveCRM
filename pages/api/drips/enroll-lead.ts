@@ -115,6 +115,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const wasUpserted = Boolean((up as any).upsertedCount || (up as any).upsertedId);
     const enrollment = await DripEnrollment.findOne(filter as any).lean();
 
+    // Safe string ids for TS (avoid tuple/union widening complaints)
+    const leadIdStr = String((lead as any)._id);
+    const campaignIdStr = String((campaign as any)._id);
+
     // History entry (for UI)
     const historyEntry = {
       type: "status",
@@ -148,7 +152,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           // Same lock pattern as cron to avoid double-sends
           const locked = await acquireLock(
             "enroll",
-            `${String(user.email)}:${String(lead._id)}:${String(campaign._id)}:0`,
+            `${String(user.email)}:${leadIdStr}:${campaignIdStr}:0`,
             600
           );
 
@@ -158,10 +162,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 to,
                 body: finalBody,
                 userEmail: user.email,
-                leadId: String(lead._id),
+                leadId: leadIdStr,
                 idempotencyKey: idKey,
                 enrollmentId: String(enrollment._id),
-                campaignId: String(campaign._id),
+                campaignId: campaignIdStr,
                 stepIndex: 0,
               });
 
@@ -188,7 +192,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(200).json({
       success: true,
       enrollmentId: String(enrollment?._id),
-      campaign: { id: String(campaign._id), name: campaign.name, key: campaign.key },
+      campaign: { id: campaignIdStr, name: campaign.name, key: campaign.key },
       nextSendAt,
       wasUpserted,
       historyEntry,
