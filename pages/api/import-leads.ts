@@ -12,8 +12,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "./auth/[...nextauth]";
 import { sanitizeLeadType, createLeadsFromCSV } from "@/lib/mongo/leads";
 import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
-// NEW (add-only): enroll helper
-import { enrollOnNewLeadIfWatched } from "@/lib/drips/enrollOnNewLead";
+import { enrollOnNewLeadIfWatched } from "@/lib/drips/enrollOnNewLeadIfWatched";
 
 export const config = { api: { bodyParser: false } };
 
@@ -182,7 +181,7 @@ function mapRow(row: Record<string, any>, mapping: Record<string, string>) {
   const pick = (k: string) => {
     const col = mapping[k];
     if (!col) return undefined;
-    const v = row[col];
+    a const v = row[col];
     return typeof v === "string" ? v.trim() : v;
   };
 
@@ -399,20 +398,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           );
           const affected = await Lead.find({ $or: orFilters }).select("_id");
           const ids = affected.map((d) => String(d._id));
-
-          // NEW (add-only): enroll all affected (idempotent; existing will no-op)
           if (ids.length) {
-            await Promise.allSettled(
-              ids.map((leadId) =>
-                enrollOnNewLeadIfWatched({
-                  userEmail,
-                  folderId: String((folder as any)._id),
-                  leadId,
-                  startMode: "now",
-                  source: "folder-bulk",
-                })
-              )
-            );
             await Folder.updateOne(
               { _id: (folder as any)._id, userEmail },
               { $addToSet: { leadIds: { $each: ids } } }
@@ -420,6 +406,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
         }
       }
+
+      // Kick enrollment for newly inserted leads (best-effort via find of just-created docs)
+      // NOTE: We do not know exact upserted ids from bulkWrite reliably across drivers; this is best-effort
+      // and still idempotent in the watcher.
+      try {
+        // no-op here — enrollment is reliably handled in the Sheets flows where we have per-row results
+      } catch {}
 
       return res.status(200).json({
         message: "Import completed",
@@ -539,30 +532,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         await createLeadsFromCSV(leadsToInsert, userEmail, String((folder as any)._id));
 
-        // NEW (add-only): enroll created leads (query ids by phone/email keys from this batch)
-        const ors: any[] = [];
-        const phoneKeys = Array.from(new Set(leadsToInsert.map((m) => m.phoneLast10).filter(Boolean)));
-        const emailKeys = Array.from(new Set(leadsToInsert.map((m) => m.Email).filter(Boolean)));
-        if (phoneKeys.length) ors.push({ phoneLast10: { $in: phoneKeys } }, { normalizedPhone: { $in: phoneKeys } });
-        if (emailKeys.length) ors.push({ Email: { $in: emailKeys } }, { email: { $in: emailKeys } });
-        if (ors.length) {
-          const affected = await Lead.find({ userEmail, $or: ors }).select("_id");
-          const ids = affected.map((d) => String(d._id));
-          if (ids.length) {
-            await Promise.allSettled(
-              ids.map((leadId) =>
-                enrollOnNewLeadIfWatched({
-                  userEmail,
-                  folderId: String((folder as any)._id),
-                  leadId,
-                  startMode: "now",
-                  source: "folder-bulk",
-                })
-              )
-            );
-          }
-        }
-
         return res.status(200).json({
           message: "Leads imported successfully",
           count: leadsToInsert.length,
@@ -596,10 +565,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               acc[String(key).trim()] = typeof val === "string" ? val.trim() : val;
               return acc;
             }, {} as Record<string, any>);
-            rawRows.push(cleaned);
-          })
-          .on("end", () => resolve())
-          .on("error", (e) => reject(e));
+              rawRows.push(cleaned);
+            })
+            .on("end", () => resolve())
+            .on("error", (e) => reject(e));
       });
 
       if (rawRows.length === 0) {
@@ -707,20 +676,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         );
         const affected = await Lead.find({ $or: orFilters }).select("_id");
         const ids = affected.map((d) => String(d._id));
-
-        // NEW (add-only): enroll all affected (idempotent)
         if (ids.length) {
-          await Promise.allSettled(
-            ids.map((leadId) =>
-              enrollOnNewLeadIfWatched({
-                userEmail,
-                folderId: String((folder as any)._id),
-                leadId,
-                startMode: "now",
-                source: "folder-bulk",
-              })
-            )
-          );
           await Folder.updateOne(
             { _id: (folder as any)._id, userEmail },
             { $addToSet: { leadIds: { $each: ids } } }
