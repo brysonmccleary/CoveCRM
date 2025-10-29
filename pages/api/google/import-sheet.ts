@@ -1,4 +1,4 @@
-// /pages/api/google/import-sheet.ts
+// pages/api/google/import-sheet.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
@@ -7,7 +7,8 @@ import User from "@/models/User";
 import Lead from "@/models/Lead";
 import { google } from "googleapis";
 import { ensureSafeFolder } from "@/lib/ensureSafeFolder";
-import { enrollOnNewLeadIfWatched } from "@/lib/drips/enrollOnNewLead"; // ← added (safe, idempotent)
+import mongoose from "mongoose";
+import { enrollOnNewLeadIfWatched } from "@/lib/drips/enrollOnNewLead";
 
 type ImportBody = {
   spreadsheetId: string;
@@ -20,7 +21,7 @@ type ImportBody = {
   folderName?: string;
   mapping: Record<string, string>;
   skip?: Record<string, boolean>;
-  createFolderIfMissing?: boolean; // still honored, but we *always* prevent system folders
+  createFolderIfMissing?: boolean; // honored, but we *always* prevent system folders
   skipExisting?: boolean;
 };
 
@@ -86,13 +87,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
     const values = (valueResp.data.values || []) as string[][];
     if (!values.length) {
-      return res.status(200).json({ ok: true, inserted: 0, updated: 0, skippedNoKey: 0, skippedExisting: 0, rowCount: 0, lastRowImported: 0, note: "No data in sheet." });
+      return res.status(200).json({
+        ok: true,
+        inserted: 0,
+        updated: 0,
+        skippedNoKey: 0,
+        skippedExisting: 0,
+        rowCount: 0,
+        lastRowImported: 0,
+        note: "No data in sheet."
+      });
     }
 
     const headerIdx = Math.max(0, headerRow - 1);
     const headers = (values[headerIdx] || []).map(h => String(h || "").trim());
     const firstDataRowIndex = typeof startRow === "number" ? Math.max(1, startRow) - 1 : headerIdx + 1;
-    const lastRowIndex = typeof endRow === "number" ? Math.min(values.length, Math.max(endRow, firstDataRowIndex + 1)) - 1 : values.length - 1;
+    const lastRowIndex = typeof endRow === "number"
+      ? Math.min(values.length, Math.max(endRow, firstDataRowIndex + 1)) - 1
+      : values.length - 1;
 
     // Build safe default folder name and lock the folder to a NON-system folder
     const meta = await drive.files.get({ fileId: spreadsheetId, fields: "name" });
@@ -112,7 +124,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       headers.forEach((h, i) => {
         if (!h) return;
         if (skip[h]) return;
-        const fieldName = mapping[h];
+        const fieldName = (mapping as Record<string, string>)[h];
         if (!fieldName) return;
         doc[fieldName] = row[i] ?? "";
       });
@@ -171,33 +183,35 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         { $set: set, $setOnInsert: setOnInsert },
         { upsert: true }
       );
+
       const upc = result?.upsertedCount || (result?.upsertedId ? 1 : 0) || 0;
       const mod = result?.modifiedCount || 0;
       const match = result?.matchedCount || 0;
+      if (upc > 0) inserted += upc; else if (mod > 0 || match > 0) updated += 1;
 
-      if (upc > 0) {
-        inserted += upc;
-
-        // --- enroll only the NEW upserts
-        try {
-          const leadId =
-            (result as any)?.upsertedId ??
-            (await Lead.findOne(filter).select("_id").lean())?._id;
-          if (leadId) {
-            await enrollOnNewLeadIfWatched({
-              userEmail,
-              folderId: String(folderDoc._id),
-              leadId: String(leadId),
-              startMode: "now",
-              source: "sheet-row",
-            });
-          }
-        } catch (e) {
-          console.warn("Enroll-on-insert (google/import-sheet) skipped:", (e as any)?.message || e);
-        }
-      } else if (mod > 0 || match > 0) {
-        updated += 1;
+      // ------- NEW LEAD ENROLL (idempotent) -------
+      // Prefer upsertedId when present; otherwise fetch the _id with safe typing
+      let leadId: string | undefined;
+      const upsertedId = (result as any)?.upsertedId;
+      if (upsertedId) {
+        leadId = String(upsertedId);
+      } else {
+        const docId = await Lead.findOne(filter)
+          .select({ _id: 1 })
+          .lean<{ _id: mongoose.Types.ObjectId } | null>();
+        leadId = docId?._id ? String(docId._id) : undefined;
       }
+
+      if (leadId) {
+        // startMode: "immediate" keeps behavior => nextSendAt = now
+        await enrollOnNewLeadIfWatched({
+          userEmail,
+          folderId: String(folderDoc._id),
+          leadId,
+          startMode: "immediate",
+        });
+      }
+      // --------------------------------------------
     }
 
     // Persist pointer & canonical folder on the user doc
