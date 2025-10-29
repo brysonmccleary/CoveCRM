@@ -32,7 +32,7 @@ const QUIET_END   = Number(process.env.DRIPS_QUIET_END_HOUR_PT   ?? 8);  //  8 =
 
 function isQuietHoursPT(now = DateTime.now().setZone(PT_ZONE)) {
   const h = now.hour;
-  // Handle ranges that cross midnight (default 21→08):
+  // Handles windows that cross midnight (default 21→08)
   return QUIET_START > QUIET_END ? (h >= QUIET_START || h < QUIET_END)
                                  : (h >= QUIET_START && h < QUIET_END);
 }
@@ -47,7 +47,8 @@ function computeNextWindowPT(now = DateTime.now().setZone(PT_ZONE)): Date {
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed" });
 
-  const session = await getServerSession(req, res, authOptions as any);
+  // EXPLICIT CAST to avoid TS inferring {} and erroring on `.user`
+  const session: any = await getServerSession(req, res, authOptions as any);
   if (!session?.user?.email) return res.status(401).json({ message: "Unauthorized" });
 
   const { dripId, folderId } = (req.body || {}) as { dripId?: string; folderId?: string };
@@ -97,29 +98,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const nowPT = DateTime.now().setZone(PT_ZONE);
     const effectiveWhen = isQuietHoursPT(nowPT) ? computeNextWindowPT(nowPT) : nowPT.toJSDate();
 
-    // Only select the fields we need
     const leads = await Lead.find({ userEmail, folderId: new ObjectId(folderId) })
       .select({ _id: 1, unsubscribed: 1, Phone: 1 })
       .lean();
 
     let considered = 0, created = 0, activated = 0, skippedAlreadySent = 0;
 
-    // Process in small batches to avoid write pressure
     const BATCH = 200;
     for (let i = 0; i < leads.length; i += BATCH) {
       const slice = leads.slice(i, i + BATCH);
       await Promise.all(slice.map(async (lead: any) => {
         considered++;
-        if (lead.unsubscribed) return; // honor unsubscribed
+        if (lead.unsubscribed) return;
 
-        // Try to find an active/paused enrollment first
         const existing = await DripEnrollment.findOne({
           userEmail, leadId: lead._id, campaignId: new ObjectId(campaignId),
           status: { $in: ["active", "paused"] }
         }).select({ _id: 1, sentAtByIndex: 1, status: 1, nextSendAt: 1 }).lean();
 
         if (!existing) {
-          // Insert brand-new enrollment
           await DripEnrollment.findOneAndUpdate(
             {
               userEmail,
@@ -147,7 +144,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           return;
         }
 
-        // If Day 1 already marked sent, skip
         const day0Sent =
           (existing as any)?.sentAtByIndex &&
           (existing as any).sentAtByIndex.get?.("0");
@@ -156,7 +152,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           return;
         }
 
-        // Otherwise, make sure it is active and scheduled to fire imminently (or next 9am if quiet)
         await DripEnrollment.updateOne(
           { _id: existing._id },
           {
