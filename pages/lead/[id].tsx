@@ -31,7 +31,7 @@ type Lead = {
   Notes?: string;
   status?: string;
   folderId?: string | null;
-  assignedDrips?: string[]; // may be present on some leads
+  assignedDrips?: string[];
   dripProgress?: { dripId: string; startedAt?: string; lastSentIndex?: number }[];
   [key: string]: any;
 };
@@ -75,12 +75,11 @@ export default function LeadProfileDial() {
   const [notes, setNotes] = useState("");
   const [historyLines, setHistoryLines] = useState<string[]>([]);
   const [calls, setCalls] = useState<CallRow[]>([]);
-  const [callsLoading, setCallsLoading] = useState(false);
   const [histLoading, setHistLoading] = useState(false);
 
   const userHasAI = true;
 
-  // ---- Drip enroll UI state
+  // ---- Enroll modal UI state
   const [enrollOpen, setEnrollOpen] = useState(false);
   const [campaigns, setCampaigns] = useState<UICampaign[]>([]);
   const [campaignsLoading, setCampaignsLoading] = useState(false);
@@ -88,12 +87,14 @@ export default function LeadProfileDial() {
   const [startAtLocal, setStartAtLocal] = useState<string>("");
   const [enrolling, setEnrolling] = useState(false);
 
-  // ---- Remove-from-drip UI state
+  // ---- Unenroll modal UI state
+  const [unenrollOpen, setUnenrollOpen] = useState(false);
   const [activeDripIds, setActiveDripIds] = useState<string[]>([]);
   const [activeDripsLoading, setActiveDripsLoading] = useState(false);
   const [removeCampaignId, setRemoveCampaignId] = useState<string>("");
   const [removing, setRemoving] = useState(false);
 
+  // ---------- helpers ----------
   const formatPhone = (phone = "") => {
     const clean = String(phone).replace(/\D/g, "");
     if (clean.length === 10) return `${clean.slice(0, 3)}-${clean.slice(3, 6)}-${clean.slice(6)}`;
@@ -183,6 +184,28 @@ export default function LeadProfileDial() {
     loadHistory();
   }, [loadHistory]);
 
+  // ---------- Save note (restored) ----------
+  const handleSaveNote = async () => {
+    if (!notes.trim() || !lead?.id) return toast.error("❌ Cannot save an empty note");
+    try {
+      const r = await fetch("/api/leads/add-history", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ leadId: lead.id, type: "note", message: notes.trim() }),
+      });
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        throw new Error(j?.message || "Failed to save note");
+      }
+      setHistoryLines((prev) => [`📝 ${notes.trim()} • ${new Date().toLocaleString()}`, ...prev]);
+      setNotes("");
+      toast.success("✅ Note saved!");
+    } catch (e: any) {
+      toast.error(e?.message || "Failed to save note");
+    }
+  };
+
+  // ---------- call ----------
   const startCall = () => {
     if (!lead?.id) return toast.error("Lead not loaded");
     router.push({ pathname: "/dial-session", query: { leadId: lead.id } });
@@ -196,12 +219,7 @@ export default function LeadProfileDial() {
     return full || "Lead";
   }, [lead]);
 
-  const phoneDisplay = useMemo(() => {
-    const p = lead?.Phone || lead?.phone || "";
-    return formatPhone(p);
-  }, [lead]);
-
-  // ---- Load ALL campaigns once (so we can resolve names for active drips list)
+  // ---------- Campaigns list (for names + enroll modal) ----------
   useEffect(() => {
     const loadAllCampaigns = async () => {
       try {
@@ -220,13 +238,13 @@ export default function LeadProfileDial() {
     loadAllCampaigns();
   }, []);
 
-  // ---- Load ACTIVE drips for this lead (server preferred; fallback to lead.assignedDrips/dripProgress)
+  // ---------- Load active drips for UNENROLL modal only ----------
   const loadActiveForLead = useCallback(async () => {
     if (!resolvedId) return;
     try {
       setActiveDripsLoading(true);
 
-      // Preferred: dedicated API if present
+      // Preferred: /api/drips/enrollments
       const resp = await fetch(`/api/drips/enrollments?leadId=${encodeURIComponent(resolvedId)}`, { cache: "no-store" });
       if (resp.ok) {
         const data = await resp.json().catch(() => ({} as any));
@@ -237,31 +255,27 @@ export default function LeadProfileDial() {
                 .map((e: any) => String(e.campaignId))
             : [];
         setActiveDripIds([...new Set(ids)]);
-        // default selection
         setRemoveCampaignId((cur) => (cur && ids.includes(cur) ? cur : ids[0] || ""));
         return;
       }
 
-      // Fallback 1: use lead.assignedDrips (if present)
-      if (lead?.assignedDrips && Array.isArray(lead.assignedDrips) && lead.assignedDrips.length) {
-        setActiveDripIds([...new Set(lead.assignedDrips.map(String))]);
-        setRemoveCampaignId((cur) =>
-          cur && lead.assignedDrips!.includes(cur) ? cur : String(lead.assignedDrips![0] || "")
-        );
+      // Fallbacks
+      if (lead?.assignedDrips?.length) {
+        const ids = [...new Set(lead.assignedDrips.map(String))];
+        setActiveDripIds(ids);
+        setRemoveCampaignId((cur) => (cur && ids.includes(cur) ? cur : ids[0] || ""));
         return;
       }
-
-      // Fallback 2: infer from dripProgress
-      if (lead?.dripProgress && Array.isArray(lead.dripProgress) && lead.dripProgress.length) {
-        const ids = lead.dripProgress.map((p) => String(p.dripId));
-        setActiveDripIds([...new Set(ids)]);
+      if (lead?.dripProgress?.length) {
+        const ids = [...new Set(lead.dripProgress.map((p) => String(p.dripId)))];
+        setActiveDripIds(ids);
         setRemoveCampaignId((cur) => (cur && ids.includes(cur) ? cur : ids[0] || ""));
         return;
       }
 
       setActiveDripIds([]);
       setRemoveCampaignId("");
-    } catch (e) {
+    } catch {
       setActiveDripIds([]);
       setRemoveCampaignId("");
     } finally {
@@ -269,18 +283,24 @@ export default function LeadProfileDial() {
     }
   }, [resolvedId, lead]);
 
-  // Initial and when lead changes
-  useEffect(() => {
-    loadActiveForLead();
-  }, [loadActiveForLead]);
+  const campaignNameById = useCallback(
+    (id: string) => campaigns.find((c) => String(c._id) === String(id))?.name || id,
+    [campaigns]
+  );
 
-  // ---- Open enroll modal
-  const openEnrollModal = async () => {
+  // ---------- Open modals ----------
+  const openEnrollModal = () => {
     if (!resolvedId) return toast.error("Lead not loaded");
     setEnrollOpen(true);
   };
 
-  // ---- Enroll submit
+  const openUnenrollModal = async () => {
+    if (!resolvedId) return toast.error("Lead not loaded");
+    await loadActiveForLead();
+    setUnenrollOpen(true);
+  };
+
+  // ---------- Enroll submit ----------
   const submitEnroll = async () => {
     if (!lead?.id) return toast.error("Lead not loaded");
     if (!selectedCampaignId) return toast.error("Pick a campaign");
@@ -309,9 +329,6 @@ export default function LeadProfileDial() {
       setEnrollOpen(false);
       setSelectedCampaignId("");
       setStartAtLocal("");
-
-      // refresh active list
-      await loadActiveForLead();
     } catch (e: any) {
       toast.error(e?.message || "Enrollment failed");
     } finally {
@@ -319,7 +336,7 @@ export default function LeadProfileDial() {
     }
   };
 
-  // ---- Unenroll submit
+  // ---------- Unenroll submit ----------
   const submitUnenroll = async () => {
     if (!lead?.id) return toast.error("Lead not loaded");
     if (!removeCampaignId) return toast.error("Select a drip to remove");
@@ -334,24 +351,15 @@ export default function LeadProfileDial() {
       if (!r.ok || !j?.success) throw new Error(j?.error || j?.message || "Failed to remove");
 
       toast.success("✅ Removed from drip");
-      // update active list locally
-      setActiveDripIds((prev) => prev.filter((id) => id !== removeCampaignId));
-      setRemoveCampaignId((cur) => {
-        const list = activeDripIds.filter((id) => id !== cur);
-        return list[0] || "";
-      });
+      setUnenrollOpen(false);
+      // optional: update recent history feed
+      setHistoryLines((prev) => [`🔖 Status: Removed from ${campaignNameById(removeCampaignId)} • ${new Date().toLocaleString()}`, ...prev]);
     } catch (e: any) {
       toast.error(e?.message || "Failed to remove");
     } finally {
       setRemoving(false);
     }
   };
-
-  // ---- helpers: names for active drip IDs
-  const campaignNameById = useCallback(
-    (id: string) => campaigns.find((c) => String(c._id) === String(id))?.name || id,
-    [campaigns]
-  );
 
   return (
     <div className="flex bg-[#0f172a] text-white min-h-screen">
@@ -379,7 +387,6 @@ export default function LeadProfileDial() {
             );
           })}
 
-        {/* Read-only display of the Saved Notes field */}
         {lead?.Notes && (
           <div className="mt-2">
             <p className="text-sm font-semibold">Saved Notes</p>
@@ -426,27 +433,18 @@ export default function LeadProfileDial() {
             >
               Enroll in Drip
             </button>
+
+            <button
+              type="button"
+              onClick={openUnenrollModal}
+              disabled={!lead?.id}
+              className="bg-rose-600 hover:bg-rose-700 disabled:opacity-50 px-4 py-2 rounded"
+            >
+              Remove from Drip
+            </button>
           </div>
 
-          {/* 🔒 PINNED SAVED NOTES — always on top of history */}
-          {lead?.Notes ? (
-            <>
-              <h3 className="text-lg font-bold mb-2">Saved Notes (Pinned)</h3>
-              <div className="bg-[#0b1220] border border-white/10 rounded p-3 mb-4">
-                <pre className="whitespace-pre-wrap text-sm text-gray-200">{lead.Notes}</pre>
-              </div>
-            </>
-          ) : null}
-
-          {userHasAI && calls.find((c) => c.aiSummary) ? (
-            <>
-              <h3 className="text-lg font-bold mb-2">AI Call Summary</h3>
-              <div className="bg-gray-800/60 border border-white/10 p-3 rounded mb-4">
-                <div className="text-sm text-gray-300">{calls.find((c) => c.aiSummary)?.aiSummary}</div>
-              </div>
-            </>
-          ) : null}
-
+          {/* History */}
           <div className="flex items-center justify-between">
             <h3 className="text-lg font-bold mb-2">Interaction History</h3>
             {histLoading ? <span className="text-xs text-gray-400">Loading…</span> : null}
@@ -462,27 +460,6 @@ export default function LeadProfileDial() {
                 </div>
               ))
             )}
-          </div>
-
-          <div className="flex flex-wrap gap-2 mt-4">
-            <button onClick={() => handleDisposition("Sold")} className="bg-gray-700 hover:bg-gray-600 px-3 py-2 rounded">
-              Sold
-            </button>
-            <button
-              onClick={() => handleDisposition("Booked Appointment")}
-              className="bg-gray-700 hover:bg-gray-600 px-3 py-2 rounded"
-            >
-              Booked Appointment
-            </button>
-            <button
-              onClick={() => handleDisposition("Not Interested")}
-              className="bg-gray-700 hover:bg-gray-600 px-3 py-2 rounded"
-            >
-              Not Interested
-            </button>
-            <button onClick={() => handleDisposition("Resolved")} className="bg-gray-700 hover:bg-gray-600 px-3 py-2 rounded">
-              Resolve
-            </button>
           </div>
 
           <div className="mt-4">
@@ -504,72 +481,7 @@ export default function LeadProfileDial() {
 
       {/* RIGHT */}
       <div className="w-[400px] p-4 bg-[#0b1220] flex flex-col min-h-0">
-        {/* Enroll card */}
-        <div className="mb-3 border border-white/10 rounded p-3 bg-[#0f172a]">
-          <div className="flex items-center justify-between gap-2">
-            <span className="font-semibold text-sm">Enroll in Drip</span>
-            <button
-              onClick={openEnrollModal}
-              disabled={!lead?.id}
-              className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 px-3 py-1 rounded text-sm"
-            >
-              Enroll
-            </button>
-          </div>
-          <p className="text-xs text-gray-400 mt-1">Enroll this lead into a specific campaign.</p>
-        </div>
-
-        {/* Active Drips + Remove */}
-        <div className="mb-3 border border-white/10 rounded p-3 bg-[#0f172a]">
-          <div className="flex items-center justify-between">
-            <span className="font-semibold text-sm">Active Drips</span>
-            <button
-              onClick={loadActiveForLead}
-              className="px-2 py-1 rounded text-[11px] bg-gray-700 hover:bg-gray-600"
-            >
-              Refresh
-            </button>
-          </div>
-
-          <div className="mt-2">
-            {activeDripsLoading ? (
-              <p className="text-xs text-gray-400">Loading…</p>
-            ) : activeDripIds.length === 0 ? (
-              <p className="text-xs text-gray-400">No active drips for this lead.</p>
-            ) : (
-              <ul className="text-xs text-gray-300 list-disc ml-4">
-                {activeDripIds.map((cid) => (
-                  <li key={cid}>{campaignNameById(cid)}</li>
-                ))}
-              </ul>
-            )}
-          </div>
-
-          <div className="mt-3 space-y-2">
-            <label className="block text-xs text-gray-300">Select a drip to remove</label>
-            <select
-              value={removeCampaignId}
-              onChange={(e) => setRemoveCampaignId(e.target.value)}
-              className="w-full bg-[#1e293b] text-white border border-white/10 rounded p-2 text-sm"
-            >
-              <option value="">{activeDripsLoading ? "Loading…" : "-- Select active drip --"}</option>
-              {activeDripIds.map((cid) => (
-                <option key={cid} value={cid}>
-                  {campaignNameById(cid)}
-                </option>
-              ))}
-            </select>
-
-            <button
-              onClick={submitUnenroll}
-              disabled={!removeCampaignId || removing}
-              className="bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white px-3 py-2 rounded text-sm w-full"
-            >
-              {removing ? "Removing…" : "Remove from Drip"}
-            </button>
-          </div>
-        </div>
-
+        {/* Keep the call panel only */}
         <div className="flex-1 min-h-0 overflow-y-auto">
           {lead?.id ? (
             <CallPanelClose
@@ -589,9 +501,7 @@ export default function LeadProfileDial() {
           <div className="relative w-full max-w-md mx-4 rounded-lg border border-white/10 bg-[#0f172a] p-4 shadow-xl">
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-lg font-bold">Enroll in Drip</h3>
-              <button onClick={() => setEnrollOpen(false)} className="text-gray-300 hover:text-white">
-                ✕
-              </button>
+              <button onClick={() => setEnrollOpen(false)} className="text-gray-300 hover:text-white">✕</button>
             </div>
 
             <div className="space-y-3">
@@ -604,9 +514,7 @@ export default function LeadProfileDial() {
                 >
                   <option value="">{campaignsLoading ? "Loading…" : "-- Select a campaign --"}</option>
                   {campaigns.map((c) => (
-                    <option key={c._id} value={c._id}>
-                      {c.name}
-                    </option>
+                    <option key={c._id} value={c._id}>{c.name}</option>
                   ))}
                 </select>
               </div>
@@ -621,26 +529,63 @@ export default function LeadProfileDial() {
                   onChange={(e) => setStartAtLocal(e.target.value)}
                   className="w-full bg-[#1e293b] text-white border border-white/10 rounded p-2"
                 />
-                <p className="text-xs text-gray-500 mt-1">
-                  Leave blank to start immediately; scheduler will handle timing.
-                </p>
-              </div>
-
-              <div className="border border-white/10 rounded p-2 bg-[#0b1220]">
-                <p className="text-xs text-gray-400">Preview of touches will appear here once enabled for this campaign.</p>
+                <p className="text-xs text-gray-500 mt-1">Leave blank to start immediately; scheduler will handle timing.</p>
               </div>
             </div>
 
             <div className="mt-4 flex items-center justify-end gap-2">
-              <button onClick={() => setEnrollOpen(false)} className="px-3 py-2 rounded bg-gray-700 hover:bg-gray-600">
-                Cancel
-              </button>
+              <button onClick={() => setEnrollOpen(false)} className="px-3 py-2 rounded bg-gray-700 hover:bg-gray-600">Cancel</button>
               <button
                 onClick={submitEnroll}
                 disabled={enrolling || !selectedCampaignId}
                 className="px-4 py-2 rounded bg-green-600 hover:bg-green-700 disabled:opacity-50"
               >
                 {enrolling ? "Enrolling…" : "Enroll"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {/* Unenroll Modal (mirror of Enroll) */}
+      {unenrollOpen ? (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/60" onClick={() => setUnenrollOpen(false)} />
+          <div className="relative w-full max-w-md mx-4 rounded-lg border border-white/10 bg-[#0f172a] p-4 shadow-xl">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-lg font-bold">Remove from Drip</h3>
+              <button onClick={() => setUnenrollOpen(false)} className="text-gray-300 hover:text-white">✕</button>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label className="block text-sm text-gray-300 mb-1">Active Campaign</label>
+                <select
+                  value={removeCampaignId}
+                  onChange={(e) => setRemoveCampaignId(e.target.value)}
+                  className="w-full bg-[#1e293b] text-white border border-white/10 rounded p-2"
+                >
+                  <option value="">
+                    {activeDripsLoading ? "Loading…" : activeDripIds.length ? "-- Select a campaign --" : "No active drips"}
+                  </option>
+                  {activeDripIds.map((cid) => (
+                    <option key={cid} value={cid}>
+                      {campaignNameById(cid)}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-xs text-gray-500 mt-1">Only campaigns this lead is currently enrolled in are shown.</p>
+              </div>
+            </div>
+
+            <div className="mt-4 flex items-center justify-end gap-2">
+              <button onClick={() => setUnenrollOpen(false)} className="px-3 py-2 rounded bg-gray-700 hover:bg-gray-600">Cancel</button>
+              <button
+                onClick={submitUnenroll}
+                disabled={removing || !removeCampaignId}
+                className="px-4 py-2 rounded bg-rose-600 hover:bg-rose-700 disabled:opacity-50"
+              >
+                {removing ? "Removing…" : "Confirm Remove"}
               </button>
             </div>
           </div>
