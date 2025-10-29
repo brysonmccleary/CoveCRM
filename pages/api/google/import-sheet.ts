@@ -7,6 +7,7 @@ import User from "@/models/User";
 import Lead from "@/models/Lead";
 import { google } from "googleapis";
 import { ensureSafeFolder } from "@/lib/ensureSafeFolder";
+import { enrollOnNewLeadIfWatched } from "@/lib/drips/enrollOnNewLead"; // ← added (safe, idempotent)
 
 type ImportBody = {
   spreadsheetId: string;
@@ -165,11 +166,38 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         sourceRowIndex: r + 1,
       };
 
-      const result = await (Lead as any).updateOne(filter, { $set: set, $setOnInsert: setOnInsert }, { upsert: true });
+      const result = await (Lead as any).updateOne(
+        filter,
+        { $set: set, $setOnInsert: setOnInsert },
+        { upsert: true }
+      );
       const upc = result?.upsertedCount || (result?.upsertedId ? 1 : 0) || 0;
       const mod = result?.modifiedCount || 0;
       const match = result?.matchedCount || 0;
-      if (upc > 0) inserted += upc; else if (mod > 0 || match > 0) updated += 1;
+
+      if (upc > 0) {
+        inserted += upc;
+
+        // --- enroll only the NEW upserts
+        try {
+          const leadId =
+            (result as any)?.upsertedId ??
+            (await Lead.findOne(filter).select("_id").lean())?._id;
+          if (leadId) {
+            await enrollOnNewLeadIfWatched({
+              userEmail,
+              folderId: String(folderDoc._id),
+              leadId: String(leadId),
+              startMode: "now",
+              source: "sheet-row",
+            });
+          }
+        } catch (e) {
+          console.warn("Enroll-on-insert (google/import-sheet) skipped:", (e as any)?.message || e);
+        }
+      } else if (mod > 0 || match > 0) {
+        updated += 1;
+      }
     }
 
     // Persist pointer & canonical folder on the user doc

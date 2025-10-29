@@ -11,6 +11,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "../auth/[...nextauth]"; // ← FIXED: one level up
 import { sanitizeLeadType, createLeadsFromCSV } from "@/lib/mongo/leads";
 import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders"; // unified guard
+import { enrollOnNewLeadIfWatched } from "@/lib/drips/enrollOnNewLead"; // ← added (no import logic changes)
 
 export const config = { api: { bodyParser: false } };
 
@@ -373,18 +374,39 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const existedOps = processedFilters.length - inserted;
         updated = existedOps < 0 ? 0 : existedOps;
 
-        if (processedFilters.length) {
-          const orFilters = processedFilters.flatMap((f) =>
-            (f.$or || []).map((clause: any) => ({ userEmail, ...clause }))
+        // Maintain folder.leadIds (existing behavior)
+        const orFilters = processedFilters.flatMap((f) =>
+          (f.$or || []).map((clause: any) => ({ userEmail, ...clause }))
+        );
+        const affected = await Lead.find({ $or: orFilters }).select("_id");
+        const ids = affected.map((d) => String(d._id));
+        if (ids.length) {
+          await Folder.updateOne(
+            { _id: folder._id, userEmail },
+            { $addToSet: { leadIds: { $each: ids } } }
           );
-          const affected = await Lead.find({ $or: orFilters }).select("_id");
-          const ids = affected.map((d) => String(d._id));
-          if (ids.length) {
-            await Folder.updateOne(
-              { _id: folder._id, userEmail },
-              { $addToSet: { leadIds: { $each: ids } } }
-            );
+        }
+
+        // --- NEW: enroll only the truly NEW upserts (idempotent, safe) -----
+        try {
+          const upsertedIds: string[] =
+            result?.upsertedIds
+              ? Object.values(result.upsertedIds).map((v: any) => String(v))
+              : [];
+
+          if (upsertedIds.length) {
+            for (const leadId of upsertedIds) {
+              await enrollOnNewLeadIfWatched({
+                userEmail,
+                folderId: String(folder._id),
+                leadId: String(leadId),
+                startMode: "now",
+                source: "sheet-bulk",
+              });
+            }
           }
+        } catch (e) {
+          console.warn("Enroll-on-insert (sheet-bulk) skipped:", (e as any)?.message || e);
         }
       }
 
@@ -655,6 +677,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             { _id: folder._id, userEmail },
             { $addToSet: { leadIds: { $each: ids } } }
           );
+        }
+
+        // --- NEW: enroll only the truly NEW upserts (idempotent, safe) -----
+        try {
+          const upsertedIds: string[] =
+            result?.upsertedIds
+              ? Object.values(result.upsertedIds).map((v: any) => String(v))
+              : [];
+
+          if (upsertedIds.length) {
+            for (const leadId of upsertedIds) {
+              await enrollOnNewLeadIfWatched({
+                userEmail,
+                folderId: String(folder._id),
+                leadId: String(leadId),
+                startMode: "now",
+                source: "sheet-bulk",
+              });
+            }
+          }
+        } catch (e) {
+          console.warn("Enroll-on-insert (sheet-bulk) skipped:", (e as any)?.message || e);
         }
       }
 
