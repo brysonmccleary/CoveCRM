@@ -12,7 +12,6 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "./auth/[...nextauth]";
 import { sanitizeLeadType, createLeadsFromCSV } from "@/lib/mongo/leads";
 import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
-import { enrollOnNewLeadIfWatched } from "@/lib/drips/enrollOnNewLeadIfWatched";
 
 export const config = { api: { bodyParser: false } };
 
@@ -181,7 +180,7 @@ function mapRow(row: Record<string, any>, mapping: Record<string, string>) {
   const pick = (k: string) => {
     const col = mapping[k];
     if (!col) return undefined;
-    a const v = row[col];
+    const v = row[col];
     return typeof v === "string" ? v.trim() : v;
   };
 
@@ -407,13 +406,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
       }
 
-      // Kick enrollment for newly inserted leads (best-effort via find of just-created docs)
-      // NOTE: We do not know exact upserted ids from bulkWrite reliably across drivers; this is best-effort
-      // and still idempotent in the watcher.
-      try {
-        // no-op here — enrollment is reliably handled in the Sheets flows where we have per-row results
-      } catch {}
-
       return res.status(200).json({
         message: "Import completed",
         folderId: (folder as any)._id,
@@ -565,10 +557,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               acc[String(key).trim()] = typeof val === "string" ? val.trim() : val;
               return acc;
             }, {} as Record<string, any>);
-              rawRows.push(cleaned);
-            })
-            .on("end", () => resolve())
-            .on("error", (e) => reject(e));
+            rawRows.push(cleaned);
+          })
+          .on("end", () => resolve())
+          .on("error", (e) => reject(e));
       });
 
       if (rawRows.length === 0) {
