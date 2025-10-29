@@ -1,4 +1,4 @@
-// pages/api/google/import-sheet.ts
+// /pages/api/google/import-sheet.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
@@ -112,7 +112,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       headers.forEach((h, i) => {
         if (!h) return;
         if (skip[h]) return;
-        const fieldName = mapping[h];
+        const fieldName = (mapping as Record<string, string>)[h];
         if (!fieldName) return;
         doc[fieldName] = row[i] ?? "";
       });
@@ -166,26 +166,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         sourceRowIndex: r + 1,
       };
 
-      const result = await (Lead as any).updateOne(filter, { $set: set, $setOnInsert: setOnInsert }, { upsert: true });
-      const upc = result?.upsertedCount || (result?.upsertedId ? 1 : 0) || 0;
-      const mod = result?.modifiedCount || 0;
-      const match = result?.matchedCount || 0;
-      const leadId =
-        (result as any)?.upsertedId ??
-        ((await Lead.findOne(filter).select("_id").lean())?._id);
+      // Upsert and capture leadId in a TS-safe way
+      const result = await (Lead as any).updateOne(
+        filter,
+        { $set: set, $setOnInsert: setOnInsert },
+        { upsert: true }
+      );
 
-      if (upc > 0) {
-        inserted += upc;
-        // NEW LEAD — trigger enrollment watcher (default start mode)
-        if (leadId) {
-          await enrollOnNewLeadIfWatched({
-            userEmail,
-            folderId: String(folderDoc._id),
-            leadId,
-          });
-        }
-      } else if (mod > 0 || match > 0) {
-        updated += 1;
+      const upc = (result?.upsertedCount || (result?.upsertedId ? 1 : 0) || 0) as number;
+
+      // 👉 Type-safe `_id` retrieval for the updated/matched path:
+      const found = await Lead.findOne(filter).select("_id").lean<{ _id: any } | null>();
+      const leadId: string | undefined =
+        (result as any)?.upsertedId ?? (found?._id ? String(found._id) : undefined);
+
+      if (upc > 0) inserted += upc;
+      else if ((result?.modifiedCount || 0) > 0 || (result?.matchedCount || 0) > 0) updated += 1;
+
+      // If this folder has assigned drips, flag for immediate enrollment
+      if (leadId) {
+        await enrollOnNewLeadIfWatched({
+          userEmail,
+          folderId: String(folderDoc._id),
+          leadId,
+        });
       }
     }
 
