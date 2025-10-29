@@ -1,5 +1,4 @@
-// pages/api/cron/google-sheets-poll.ts
-import type { NextApiRequest, NextApiResponse } from "next";
+ import type { NextApiRequest, NextApiResponse } from "next";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import Lead from "@/models/Lead";
@@ -22,18 +21,6 @@ const normHeader = (s: any) =>
     .replace(/[_-]+/g, " ")
     .replace(/\s+/g, " ");
 
-// --- Folder name canonicalizer (prevents dup folders from tiny differences) --
-const DASH_CLASS = /[\-\u2010\u2011\u2012\u2013\u2014\u2015]/g; // -, ‐, -, ‒, –, —, ―
-function normalizeFolderName(raw: string): string {
-  const s = String(raw ?? "")
-    .normalize("NFKC")                  // unicode normalize
-    .replace(/\s+/g, " ")               // collapse spaces
-    .replace(/\s*[\u2013\u2014-]\s*/g, " — ") // unify any dash with spacing to em dash
-    .trim();
-  // lower-casing only for the normalized key; original case kept in display Name
-  return s.toLowerCase();
-}
-
 type SyncedSheetCfg = {
   spreadsheetId: string;
   title?: string;
@@ -49,7 +36,6 @@ type FolderRaw = {
   name?: string;
   userEmail?: string;
   source?: string;
-  normalizedName?: string;
 } | null;
 
 // ---------- RAW helpers (folders) ----------
@@ -64,64 +50,28 @@ async function ensureNonSystemFolderRaw(
 
   const baseName = isSystemFolder(wantedName) ? `${wantedName} (Leads)` : wantedName;
 
-  // Canonical key used ONLY for dedupe/upsert. We still keep/display original case in 'name'.
-  const key = normalizeFolderName(baseName);
-
-  // 0) Try exact hit on normalizedName (new logic)
-  const existingByKey = (await coll.findOne({
-    userEmail,
-    normalizedName: key,
-  })) as FolderRaw;
-
-  if (existingByKey && existingByKey.name && !isSystemFolder(existingByKey.name)) {
-    return existingByKey as NonNullable<FolderRaw>;
+  // 1) Try exact find
+  const existing = (await coll.findOne({ userEmail, name: baseName })) as FolderRaw;
+  if (existing && existing.name && !isSystemFolder(existing.name)) {
+    return existing as NonNullable<FolderRaw>;
   }
 
-  // 1) Back-compat: find an older doc that matches by raw name (from earlier builds)
-  const existingByName = (await coll.findOne({
-    userEmail,
-    name: baseName,
-  })) as FolderRaw;
-
-  if (existingByName && existingByName._id) {
-    // Patch it forward with normalizedName so future runs won't create a duplicate
-    await coll.updateOne(
-      { _id: existingByName._id },
-      { $set: { normalizedName: key, source: existingByName.source || "google-sheets" } }
-    );
-    return (await coll.findOne({ _id: existingByName._id })) as NonNullable<FolderRaw>;
-  }
-
-  // 2) Atomic upsert by (userEmail, normalizedName) — prevents duplicate rows/runs
+  // 2) Upsert exact name
   const up = await coll.findOneAndUpdate(
-    { userEmail, normalizedName: key },
-    {
-      $setOnInsert: {
-        userEmail,
-        name: baseName,           // keep the nice, human-friendly case
-        normalizedName: key,      // canonicalized key for dedupe
-        source: "google-sheets",
-      },
-    },
+    { userEmail, name: baseName },
+    { $setOnInsert: { userEmail, name: baseName, source: "google-sheets" } },
     { upsert: true, returnDocument: "after" }
   );
-
   const doc = (up && (up as any).value) as FolderRaw;
 
-  // 3) If for some reason we still don't have a safe doc, force a unique non-system name
+  // 3) If still system or missing, force a unique safe name
   if (!doc || !doc.name || isSystemFolder(doc.name)) {
-    const uniqueSafeBase = `${baseName} — ${Date.now()}`;
-    const uniqueKey = normalizeFolderName(uniqueSafeBase);
-    const ins = await coll.insertOne({
-      userEmail,
-      name: uniqueSafeBase,
-      normalizedName: uniqueKey,
-      source: "google-sheets",
-    });
+    const uniqueSafe = `${baseName} — ${Date.now()}`;
+    const ins = await coll.insertOne({ userEmail, name: uniqueSafe, source: "google-sheets" });
     const fresh = (await coll.findOne({ _id: ins.insertedId })) as FolderRaw;
     if (!fresh || !fresh.name || isSystemFolder(fresh.name)) {
       throw new Error(
-        `Folder rewrite detected. Expected non-system '${uniqueSafeBase}', got '${fresh?.name}'.`
+        `Folder rewrite detected. Expected non-system '${uniqueSafe}', got '${fresh?.name}'.`
       );
     }
     return fresh as NonNullable<FolderRaw>;
@@ -317,6 +267,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const rawHeaders = (values[headerIdx] || []).map((h) => String(h ?? "").trim());
 
         const normalizedMapping: Record<string, string> = {};
+        // TS-safe entries cast
         (Object.entries(mapping as Record<string, unknown>) as Array<[string, unknown]>).forEach(
           ([key, val]) => {
             if (typeof val === "string" && val) {
@@ -481,3 +432,4 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: err?.message || "Cron poll failed", fingerprint: FINGERPRINT });
   }
 }
+
