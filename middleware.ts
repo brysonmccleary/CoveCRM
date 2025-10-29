@@ -17,7 +17,12 @@ function isCronAuthorized(req: NextRequest) {
   const secret = process.env.CRON_SECRET || "";
   const url = new URL(req.url);
   const token = url.searchParams.get("token") || "";
-  const headerToken = req.headers.get("x-cron-key") || "";
+
+  // ✅ Accept either header name
+  const headerKey = req.headers.get("x-cron-key") || "";
+  const headerSecret = req.headers.get("x-cron-secret") || "";
+  const headerToken = headerKey || headerSecret;
+
   const isVercelCron = !!req.headers.get("x-vercel-cron");
 
   const ok = (secret && (token === secret || headerToken === secret)) || isVercelCron;
@@ -27,8 +32,10 @@ function isCronAuthorized(req: NextRequest) {
     path: url.pathname,
     queryTokenPresent: token !== "",
     queryTokenLen: token.length,
-    headerTokenPresent: headerToken !== "",
-    headerTokenLen: headerToken.length,
+    headerKeyPresent: headerKey !== "",
+    headerKeyLen: headerKey.length,
+    headerSecretPresent: headerSecret !== "",
+    headerSecretLen: headerSecret.length,
     vercelCronHeader: isVercelCron,
     secretLenServer: secret.length,
   };
@@ -51,8 +58,10 @@ export function middleware(req: NextRequest) {
         "x-cron-path": String(dbg.path || pathname),
         "x-cron-query-token-present": String(!!dbg.queryTokenPresent),
         "x-cron-query-token-len": String(dbg.queryTokenLen ?? 0),
-        "x-cron-header-token-present": String(!!dbg.headerTokenPresent),
-        "x-cron-header-token-len": String(dbg.headerTokenLen ?? 0),
+        "x-cron-header-key-present": String(!!dbg.headerKeyPresent),
+        "x-cron-header-key-len": String(dbg.headerKeyLen ?? 0),
+        "x-cron-header-secret-present": String(!!dbg.headerSecretPresent),
+        "x-cron-header-secret-len": String(dbg.headerSecretLen ?? 0),
         "x-cron-vercel-header": String(!!dbg.vercelCronHeader),
         "x-cron-secret-len": String(dbg.secretLenServer ?? 0),
       },

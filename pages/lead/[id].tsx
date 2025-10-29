@@ -28,9 +28,11 @@ type Lead = {
   phone?: string;
   Email?: string;
   email?: string;
-  Notes?: string; // ← pinned notes come from here
+  Notes?: string;
   status?: string;
   folderId?: string | null;
+  assignedDrips?: string[]; // may be present on some leads
+  dripProgress?: { dripId: string; startedAt?: string; lastSentIndex?: number }[];
   [key: string]: any;
 };
 
@@ -53,25 +55,8 @@ type CallRow = {
 };
 
 type HistoryEvent =
-  | {
-      type: "sms";
-      id: string;
-      dir: "inbound" | "outbound" | "ai";
-      text: string;
-      date: string;
-      sid?: string;
-      status?: string;
-    }
-  | {
-    type: "call";
-    id: string;
-    date: string;
-    durationSec?: number;
-    status?: string;
-    recordingUrl?: string;
-    summary?: string;
-    sentiment?: string;
-  }
+  | { type: "sms"; id: string; dir: "inbound" | "outbound" | "ai"; text: string; date: string; sid?: string; status?: string }
+  | { type: "call"; id: string; date: string; durationSec?: number; status?: string; recordingUrl?: string; summary?: string; sentiment?: string }
   | { type: "note"; id: string; date: string; text: string }
   | { type: "status"; id: string; date: string; from?: string; to?: string }
   | { type: "booking"; id: string; date: string; title?: string; startsAt?: string };
@@ -79,7 +64,6 @@ type HistoryEvent =
 // ---- Campaigns (UI-only)
 type UICampaign = { _id: string; name: string; key?: string; isActive?: boolean; active?: boolean };
 
-// Canonical Leads destination
 const LEADS_URL = "/dashboard?tab=leads";
 
 export default function LeadProfileDial() {
@@ -103,6 +87,12 @@ export default function LeadProfileDial() {
   const [selectedCampaignId, setSelectedCampaignId] = useState<string>("");
   const [startAtLocal, setStartAtLocal] = useState<string>("");
   const [enrolling, setEnrolling] = useState(false);
+
+  // ---- Remove-from-drip UI state
+  const [activeDripIds, setActiveDripIds] = useState<string[]>([]);
+  const [activeDripsLoading, setActiveDripsLoading] = useState(false);
+  const [removeCampaignId, setRemoveCampaignId] = useState<string>("");
+  const [removing, setRemoving] = useState(false);
 
   const formatPhone = (phone = "") => {
     const clean = String(phone).replace(/\D/g, "");
@@ -169,8 +159,7 @@ export default function LeadProfileDial() {
         if (ev.type === "note") {
           lines.push(`📝 ${ev.text} • ${fmtDateTime(ev.date)}`);
         } else if (ev.type === "sms") {
-          const dir =
-            ev.dir === "inbound" ? "⬅️ Inbound SMS" : ev.dir === "outbound" ? "➡️ Outbound SMS" : "🤖 AI SMS";
+          const dir = ev.dir === "inbound" ? "⬅️ Inbound SMS" : ev.dir === "outbound" ? "➡️ Outbound SMS" : "🤖 AI SMS";
           const status = ev.status ? ` • ${ev.status}` : "";
           lines.push(`${dir}: ${ev.text}${status} • ${fmtDateTime(ev.date)}`);
         } else if (ev.type === "booking") {
@@ -194,51 +183,6 @@ export default function LeadProfileDial() {
     loadHistory();
   }, [loadHistory]);
 
-  const handleSaveNote = async () => {
-    if (!notes.trim() || !lead?.id) return toast.error("❌ Cannot save an empty note");
-    try {
-      const r = await fetch("/api/leads/add-history", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ leadId: lead.id, type: "note", message: notes.trim() }),
-      });
-      if (!r.ok) {
-        const j = await r.json().catch(() => ({}));
-        throw new Error(j?.message || "Failed to save note");
-      }
-      setHistoryLines((prev) => [`📝 ${notes.trim()} • ${new Date().toLocaleString()}`, ...prev]);
-      setNotes("");
-      toast.success("✅ Note saved!");
-    } catch (e: any) {
-      toast.error(e?.message || "Failed to save note");
-    }
-  };
-
-  const handleDisposition = async (newFolderName: string) => {
-    if (!lead?.id) return;
-    if (newFolderName === "No Answer") {
-      toast("No change for 'No Answer'");
-      return;
-    }
-    try {
-      setHistoryLines((prev) => [`✅ Disposition: ${newFolderName} • ${new Date().toLocaleString()}`, ...prev]);
-
-      const res = await fetch("/api/disposition-lead", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ leadId: lead.id, newFolderName }),
-      });
-      const data = await res.json().catch(() => ({} as any));
-      if (!res.ok || !data?.success) throw new Error(data?.message || "Failed to move lead");
-
-      await fetchLeadById(lead.id);
-      loadHistory();
-      toast.success(`✅ Lead moved to ${newFolderName}`);
-    } catch (error: any) {
-      toast.error(error?.message || "Error moving lead");
-    }
-  };
-
   const startCall = () => {
     if (!lead?.id) return toast.error("Lead not loaded");
     router.push({ pathname: "/dial-session", query: { leadId: lead.id } });
@@ -257,27 +201,86 @@ export default function LeadProfileDial() {
     return formatPhone(p);
   }, [lead]);
 
-  // ---- Enroll modal open + load campaigns
-  const [enrollOpenState, setEnrollOpenState] = useState(enrollOpen);
-  const openEnrollModal = async () => {
-    if (!resolvedId) return toast.error("Lead not loaded");
-    setEnrollOpen(true);
-    if (campaigns.length === 0) {
+  // ---- Load ALL campaigns once (so we can resolve names for active drips list)
+  useEffect(() => {
+    const loadAllCampaigns = async () => {
       try {
         setCampaignsLoading(true);
-        const r = await fetch(`/api/drips/campaigns?active=1`, { cache: "no-store" });
+        const r = await fetch(`/api/drips/campaigns`, { cache: "no-store" });
         const j = await r.json().catch(() => ({} as any));
         if (!r.ok) throw new Error(j?.error || "Failed to load campaigns");
         const list: UICampaign[] = Array.isArray(j?.campaigns) ? j.campaigns : [];
-        setCampaigns(list.filter((c) => (c?.isActive ?? c?.active ?? true)));
+        setCampaigns(list);
       } catch (e: any) {
         toast.error(e?.message || "Failed to load campaigns");
       } finally {
         setCampaignsLoading(false);
       }
+    };
+    loadAllCampaigns();
+  }, []);
+
+  // ---- Load ACTIVE drips for this lead (server preferred; fallback to lead.assignedDrips/dripProgress)
+  const loadActiveForLead = useCallback(async () => {
+    if (!resolvedId) return;
+    try {
+      setActiveDripsLoading(true);
+
+      // Preferred: dedicated API if present
+      const resp = await fetch(`/api/drips/enrollments?leadId=${encodeURIComponent(resolvedId)}`, { cache: "no-store" });
+      if (resp.ok) {
+        const data = await resp.json().catch(() => ({} as any));
+        const ids: string[] =
+          Array.isArray(data?.enrollments)
+            ? data.enrollments
+                .filter((e: any) => e?.status === "active" || e?.status === "paused")
+                .map((e: any) => String(e.campaignId))
+            : [];
+        setActiveDripIds([...new Set(ids)]);
+        // default selection
+        setRemoveCampaignId((cur) => (cur && ids.includes(cur) ? cur : ids[0] || ""));
+        return;
+      }
+
+      // Fallback 1: use lead.assignedDrips (if present)
+      if (lead?.assignedDrips && Array.isArray(lead.assignedDrips) && lead.assignedDrips.length) {
+        setActiveDripIds([...new Set(lead.assignedDrips.map(String))]);
+        setRemoveCampaignId((cur) =>
+          cur && lead.assignedDrips!.includes(cur) ? cur : String(lead.assignedDrips![0] || "")
+        );
+        return;
+      }
+
+      // Fallback 2: infer from dripProgress
+      if (lead?.dripProgress && Array.isArray(lead.dripProgress) && lead.dripProgress.length) {
+        const ids = lead.dripProgress.map((p) => String(p.dripId));
+        setActiveDripIds([...new Set(ids)]);
+        setRemoveCampaignId((cur) => (cur && ids.includes(cur) ? cur : ids[0] || ""));
+        return;
+      }
+
+      setActiveDripIds([]);
+      setRemoveCampaignId("");
+    } catch (e) {
+      setActiveDripIds([]);
+      setRemoveCampaignId("");
+    } finally {
+      setActiveDripsLoading(false);
     }
+  }, [resolvedId, lead]);
+
+  // Initial and when lead changes
+  useEffect(() => {
+    loadActiveForLead();
+  }, [loadActiveForLead]);
+
+  // ---- Open enroll modal
+  const openEnrollModal = async () => {
+    if (!resolvedId) return toast.error("Lead not loaded");
+    setEnrollOpen(true);
   };
 
+  // ---- Enroll submit
   const submitEnroll = async () => {
     if (!lead?.id) return toast.error("Lead not loaded");
     if (!selectedCampaignId) return toast.error("Pick a campaign");
@@ -298,20 +301,57 @@ export default function LeadProfileDial() {
       const j = await r.json().catch(() => ({} as any));
       if (!r.ok || !j?.success) throw new Error(j?.error || j?.message || "Failed to enroll lead");
 
-      const enrolledName = j?.campaign?.name || (campaigns.find((c) => c._id === selectedCampaignId)?.name ?? "campaign");
+      const enrolledName =
+        j?.campaign?.name || (campaigns.find((c) => c._id === selectedCampaignId)?.name ?? "campaign");
       setHistoryLines((prev) => [`🔖 Status: Enrolled to ${enrolledName} • ${new Date().toLocaleString()}`, ...prev]);
-      loadHistory();
 
       toast.success(`✅ Enrolled in ${enrolledName}`);
       setEnrollOpen(false);
       setSelectedCampaignId("");
       setStartAtLocal("");
+
+      // refresh active list
+      await loadActiveForLead();
     } catch (e: any) {
       toast.error(e?.message || "Enrollment failed");
     } finally {
       setEnrolling(false);
     }
   };
+
+  // ---- Unenroll submit
+  const submitUnenroll = async () => {
+    if (!lead?.id) return toast.error("Lead not loaded");
+    if (!removeCampaignId) return toast.error("Select a drip to remove");
+    try {
+      setRemoving(true);
+      const r = await fetch(`/api/drips/unenroll-lead`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ leadId: lead.id, campaignId: removeCampaignId }),
+      });
+      const j = await r.json().catch(() => ({} as any));
+      if (!r.ok || !j?.success) throw new Error(j?.error || j?.message || "Failed to remove");
+
+      toast.success("✅ Removed from drip");
+      // update active list locally
+      setActiveDripIds((prev) => prev.filter((id) => id !== removeCampaignId));
+      setRemoveCampaignId((cur) => {
+        const list = activeDripIds.filter((id) => id !== cur);
+        return list[0] || "";
+      });
+    } catch (e: any) {
+      toast.error(e?.message || "Failed to remove");
+    } finally {
+      setRemoving(false);
+    }
+  };
+
+  // ---- helpers: names for active drip IDs
+  const campaignNameById = useCallback(
+    (id: string) => campaigns.find((c) => String(c._id) === String(id))?.name || id,
+    [campaigns]
+  );
 
   return (
     <div className="flex bg-[#0f172a] text-white min-h-screen">
@@ -325,9 +365,7 @@ export default function LeadProfileDial() {
 
         {Object.entries(lead || {})
           .filter(([key]) =>
-            !["_id", "id", "Notes", "First Name", "Last Name", "folderId", "createdAt", "ownerId", "userEmail"].includes(
-              key,
-            ),
+            !["_id", "id", "Notes", "First Name", "Last Name", "folderId", "createdAt", "ownerId", "userEmail"].includes(key)
           )
           .map(([key, value]) => {
             if (key === "Phone" || key.toLowerCase() === "phone") value = formatPhone(String(value || ""));
@@ -466,9 +504,9 @@ export default function LeadProfileDial() {
 
       {/* RIGHT */}
       <div className="w-[400px] p-4 bg-[#0b1220] flex flex-col min-h-0">
-        {/* Enroll card (original placement) */}
+        {/* Enroll card */}
         <div className="mb-3 border border-white/10 rounded p-3 bg-[#0f172a]">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-2">
             <span className="font-semibold text-sm">Enroll in Drip</span>
             <button
               onClick={openEnrollModal}
@@ -479,6 +517,57 @@ export default function LeadProfileDial() {
             </button>
           </div>
           <p className="text-xs text-gray-400 mt-1">Enroll this lead into a specific campaign.</p>
+        </div>
+
+        {/* Active Drips + Remove */}
+        <div className="mb-3 border border-white/10 rounded p-3 bg-[#0f172a]">
+          <div className="flex items-center justify-between">
+            <span className="font-semibold text-sm">Active Drips</span>
+            <button
+              onClick={loadActiveForLead}
+              className="px-2 py-1 rounded text-[11px] bg-gray-700 hover:bg-gray-600"
+            >
+              Refresh
+            </button>
+          </div>
+
+          <div className="mt-2">
+            {activeDripsLoading ? (
+              <p className="text-xs text-gray-400">Loading…</p>
+            ) : activeDripIds.length === 0 ? (
+              <p className="text-xs text-gray-400">No active drips for this lead.</p>
+            ) : (
+              <ul className="text-xs text-gray-300 list-disc ml-4">
+                {activeDripIds.map((cid) => (
+                  <li key={cid}>{campaignNameById(cid)}</li>
+                ))}
+              </ul>
+            )}
+          </div>
+
+          <div className="mt-3 space-y-2">
+            <label className="block text-xs text-gray-300">Select a drip to remove</label>
+            <select
+              value={removeCampaignId}
+              onChange={(e) => setRemoveCampaignId(e.target.value)}
+              className="w-full bg-[#1e293b] text-white border border-white/10 rounded p-2 text-sm"
+            >
+              <option value="">{activeDripsLoading ? "Loading…" : "-- Select active drip --"}</option>
+              {activeDripIds.map((cid) => (
+                <option key={cid} value={cid}>
+                  {campaignNameById(cid)}
+                </option>
+              ))}
+            </select>
+
+            <button
+              onClick={submitUnenroll}
+              disabled={!removeCampaignId || removing}
+              className="bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white px-3 py-2 rounded text-sm w-full"
+            >
+              {removing ? "Removing…" : "Remove from Drip"}
+            </button>
+          </div>
         </div>
 
         <div className="flex-1 min-h-0 overflow-y-auto">
