@@ -184,7 +184,7 @@ export default function LeadProfileDial() {
     loadHistory();
   }, [loadHistory]);
 
-  // ---------- Save note (restored) ----------
+  // ---------- Save note ----------
   const handleSaveNote = async () => {
     if (!notes.trim() || !lead?.id) return toast.error("❌ Cannot save an empty note");
     try {
@@ -352,7 +352,6 @@ export default function LeadProfileDial() {
 
       toast.success("✅ Removed from drip");
       setUnenrollOpen(false);
-      // optional: update recent history feed
       setHistoryLines((prev) => [`🔖 Status: Removed from ${campaignNameById(removeCampaignId)} • ${new Date().toLocaleString()}`, ...prev]);
     } catch (e: any) {
       toast.error(e?.message || "Failed to remove");
@@ -417,11 +416,19 @@ export default function LeadProfileDial() {
             />
           </div>
 
+          {/* Compact, symmetrical button row */}
           <div className="flex items-center gap-2 mb-4">
-            <button onClick={handleSaveNote} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded">
+            <button
+              onClick={handleSaveNote}
+              className="text-sm bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-md"
+            >
               Save Note
             </button>
-            <button type="button" onClick={startCall} className="bg-green-600 hover:bg-green-700 px-4 py-2 rounded">
+            <button
+              type="button"
+              onClick={startCall}
+              className="text-sm bg-green-600 hover:bg-green-700 text-white px-3 py-1.5 rounded-md"
+            >
               Call
             </button>
 
@@ -429,7 +436,7 @@ export default function LeadProfileDial() {
               type="button"
               onClick={openEnrollModal}
               disabled={!lead?.id}
-              className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 px-4 py-2 rounded"
+              className="text-sm bg-indigo-600 hover:bg-indigo-700 text-white disabled:opacity-50 px-3 py-1.5 rounded-md"
             >
               Enroll in Drip
             </button>
@@ -438,13 +445,12 @@ export default function LeadProfileDial() {
               type="button"
               onClick={openUnenrollModal}
               disabled={!lead?.id}
-              className="bg-rose-600 hover:bg-rose-700 disabled:opacity-50 px-4 py-2 rounded"
+              className="text-sm bg-rose-600 hover:bg-rose-700 text-white disabled:opacity-50 px-3 py-1.5 rounded-md"
             >
               Remove from Drip
             </button>
           </div>
 
-          {/* History */}
           <div className="flex items-center justify-between">
             <h3 className="text-lg font-bold mb-2">Interaction History</h3>
             {histLoading ? <span className="text-xs text-gray-400">Loading…</span> : null}
@@ -481,7 +487,6 @@ export default function LeadProfileDial() {
 
       {/* RIGHT */}
       <div className="w-[400px] p-4 bg-[#0b1220] flex flex-col min-h-0">
-        {/* Keep the call panel only */}
         <div className="flex-1 min-h-0 overflow-y-auto">
           {lead?.id ? (
             <CallPanelClose
@@ -547,7 +552,7 @@ export default function LeadProfileDial() {
         </div>
       ) : null}
 
-      {/* Unenroll Modal (mirror of Enroll) */}
+      {/* Unenroll Modal */}
       {unenrollOpen ? (
         <div className="fixed inset-0 z-[70] flex items-center justify-center">
           <div className="absolute inset-0 bg-black/60" onClick={() => setUnenrollOpen(false)} />
