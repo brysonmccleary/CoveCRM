@@ -1,4 +1,3 @@
-// models/DripEnrollment.ts
 import mongoose, { Schema, InferSchemaType, models, model } from "mongoose";
 
 const DripEnrollmentSchema = new Schema(
@@ -19,6 +18,14 @@ const DripEnrollmentSchema = new Schema(
     nextSendAt: { type: Date, index: true },
     startedAt: { type: Date, default: () => new Date() },
     lastSentAt: { type: Date },
+
+    // NEW: durable once-only markers (key = step index as string, value = Date sent)
+    // This is intentionally a simple object so we can $set "sentAtByIndex.<idx>": now atomically.
+    sentAtByIndex: {
+      type: Map,
+      of: Date,
+      default: undefined,
+    },
 
     // Safety flags (all honored by cron)
     active: { type: Boolean, default: true },

@@ -28,9 +28,11 @@ type Lead = {
   phone?: string;
   Email?: string;
   email?: string;
-  Notes?: string; // ← pinned notes come from here
+  Notes?: string;
   status?: string;
   folderId?: string | null;
+  assignedDrips?: string[];
+  dripProgress?: { dripId: string; startedAt?: string; lastSentIndex?: number }[];
   [key: string]: any;
 };
 
@@ -53,25 +55,8 @@ type CallRow = {
 };
 
 type HistoryEvent =
-  | {
-      type: "sms";
-      id: string;
-      dir: "inbound" | "outbound" | "ai";
-      text: string;
-      date: string;
-      sid?: string;
-      status?: string;
-    }
-  | {
-    type: "call";
-    id: string;
-    date: string;
-    durationSec?: number;
-    status?: string;
-    recordingUrl?: string;
-    summary?: string;
-    sentiment?: string;
-  }
+  | { type: "sms"; id: string; dir: "inbound" | "outbound" | "ai"; text: string; date: string; sid?: string; status?: string }
+  | { type: "call"; id: string; date: string; durationSec?: number; status?: string; recordingUrl?: string; summary?: string; sentiment?: string }
   | { type: "note"; id: string; date: string; text: string }
   | { type: "status"; id: string; date: string; from?: string; to?: string }
   | { type: "booking"; id: string; date: string; title?: string; startsAt?: string };
@@ -79,7 +64,6 @@ type HistoryEvent =
 // ---- Campaigns (UI-only)
 type UICampaign = { _id: string; name: string; key?: string; isActive?: boolean; active?: boolean };
 
-// Canonical Leads destination
 const LEADS_URL = "/dashboard?tab=leads";
 
 export default function LeadProfileDial() {
@@ -91,12 +75,11 @@ export default function LeadProfileDial() {
   const [notes, setNotes] = useState("");
   const [historyLines, setHistoryLines] = useState<string[]>([]);
   const [calls, setCalls] = useState<CallRow[]>([]);
-  const [callsLoading, setCallsLoading] = useState(false);
   const [histLoading, setHistLoading] = useState(false);
 
   const userHasAI = true;
 
-  // ---- Drip enroll UI state
+  // ---- Enroll modal UI state
   const [enrollOpen, setEnrollOpen] = useState(false);
   const [campaigns, setCampaigns] = useState<UICampaign[]>([]);
   const [campaignsLoading, setCampaignsLoading] = useState(false);
@@ -104,6 +87,14 @@ export default function LeadProfileDial() {
   const [startAtLocal, setStartAtLocal] = useState<string>("");
   const [enrolling, setEnrolling] = useState(false);
 
+  // ---- Unenroll modal UI state
+  const [unenrollOpen, setUnenrollOpen] = useState(false);
+  const [activeDripIds, setActiveDripIds] = useState<string[]>([]);
+  const [activeDripsLoading, setActiveDripsLoading] = useState(false);
+  const [removeCampaignId, setRemoveCampaignId] = useState<string>("");
+  const [removing, setRemoving] = useState(false);
+
+  // ---------- helpers ----------
   const formatPhone = (phone = "") => {
     const clean = String(phone).replace(/\D/g, "");
     if (clean.length === 10) return `${clean.slice(0, 3)}-${clean.slice(3, 6)}-${clean.slice(6)}`;
@@ -169,8 +160,7 @@ export default function LeadProfileDial() {
         if (ev.type === "note") {
           lines.push(`📝 ${ev.text} • ${fmtDateTime(ev.date)}`);
         } else if (ev.type === "sms") {
-          const dir =
-            ev.dir === "inbound" ? "⬅️ Inbound SMS" : ev.dir === "outbound" ? "➡️ Outbound SMS" : "🤖 AI SMS";
+          const dir = ev.dir === "inbound" ? "⬅️ Inbound SMS" : ev.dir === "outbound" ? "➡️ Outbound SMS" : "🤖 AI SMS";
           const status = ev.status ? ` • ${ev.status}` : "";
           lines.push(`${dir}: ${ev.text}${status} • ${fmtDateTime(ev.date)}`);
         } else if (ev.type === "booking") {
@@ -194,6 +184,7 @@ export default function LeadProfileDial() {
     loadHistory();
   }, [loadHistory]);
 
+  // ---------- Save note ----------
   const handleSaveNote = async () => {
     if (!notes.trim() || !lead?.id) return toast.error("❌ Cannot save an empty note");
     try {
@@ -214,31 +205,7 @@ export default function LeadProfileDial() {
     }
   };
 
-  const handleDisposition = async (newFolderName: string) => {
-    if (!lead?.id) return;
-    if (newFolderName === "No Answer") {
-      toast("No change for 'No Answer'");
-      return;
-    }
-    try {
-      setHistoryLines((prev) => [`✅ Disposition: ${newFolderName} • ${new Date().toLocaleString()}`, ...prev]);
-
-      const res = await fetch("/api/disposition-lead", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ leadId: lead.id, newFolderName }),
-      });
-      const data = await res.json().catch(() => ({} as any));
-      if (!res.ok || !data?.success) throw new Error(data?.message || "Failed to move lead");
-
-      await fetchLeadById(lead.id);
-      loadHistory();
-      toast.success(`✅ Lead moved to ${newFolderName}`);
-    } catch (error: any) {
-      toast.error(error?.message || "Error moving lead");
-    }
-  };
-
+  // ---------- call ----------
   const startCall = () => {
     if (!lead?.id) return toast.error("Lead not loaded");
     router.push({ pathname: "/dial-session", query: { leadId: lead.id } });
@@ -252,32 +219,88 @@ export default function LeadProfileDial() {
     return full || "Lead";
   }, [lead]);
 
-  const phoneDisplay = useMemo(() => {
-    const p = lead?.Phone || lead?.phone || "";
-    return formatPhone(p);
-  }, [lead]);
-
-  // ---- Enroll modal open + load campaigns
-  const [enrollOpenState, setEnrollOpenState] = useState(enrollOpen);
-  const openEnrollModal = async () => {
-    if (!resolvedId) return toast.error("Lead not loaded");
-    setEnrollOpen(true);
-    if (campaigns.length === 0) {
+  // ---------- Campaigns list (for names + enroll modal) ----------
+  useEffect(() => {
+    const loadAllCampaigns = async () => {
       try {
         setCampaignsLoading(true);
-        const r = await fetch(`/api/drips/campaigns?active=1`, { cache: "no-store" });
+        const r = await fetch(`/api/drips/campaigns`, { cache: "no-store" });
         const j = await r.json().catch(() => ({} as any));
         if (!r.ok) throw new Error(j?.error || "Failed to load campaigns");
         const list: UICampaign[] = Array.isArray(j?.campaigns) ? j.campaigns : [];
-        setCampaigns(list.filter((c) => (c?.isActive ?? c?.active ?? true)));
+        setCampaigns(list);
       } catch (e: any) {
         toast.error(e?.message || "Failed to load campaigns");
       } finally {
         setCampaignsLoading(false);
       }
+    };
+    loadAllCampaigns();
+  }, []);
+
+  // ---------- Load active drips for UNENROLL modal only ----------
+  const loadActiveForLead = useCallback(async () => {
+    if (!resolvedId) return;
+    try {
+      setActiveDripsLoading(true);
+
+      // Preferred: /api/drips/enrollments
+      const resp = await fetch(`/api/drips/enrollments?leadId=${encodeURIComponent(resolvedId)}`, { cache: "no-store" });
+      if (resp.ok) {
+        const data = await resp.json().catch(() => ({} as any));
+        const ids: string[] =
+          Array.isArray(data?.enrollments)
+            ? data.enrollments
+                .filter((e: any) => e?.status === "active" || e?.status === "paused")
+                .map((e: any) => String(e.campaignId))
+            : [];
+        setActiveDripIds([...new Set(ids)]);
+        setRemoveCampaignId((cur) => (cur && ids.includes(cur) ? cur : ids[0] || ""));
+        return;
+      }
+
+      // Fallbacks
+      if (lead?.assignedDrips?.length) {
+        const ids = [...new Set(lead.assignedDrips.map(String))];
+        setActiveDripIds(ids);
+        setRemoveCampaignId((cur) => (cur && ids.includes(cur) ? cur : ids[0] || ""));
+        return;
+      }
+      if (lead?.dripProgress?.length) {
+        const ids = [...new Set(lead.dripProgress.map((p) => String(p.dripId)))];
+        setActiveDripIds(ids);
+        setRemoveCampaignId((cur) => (cur && ids.includes(cur) ? cur : ids[0] || ""));
+        return;
+      }
+
+      setActiveDripIds([]);
+      setRemoveCampaignId("");
+    } catch {
+      setActiveDripIds([]);
+      setRemoveCampaignId("");
+    } finally {
+      setActiveDripsLoading(false);
     }
+  }, [resolvedId, lead]);
+
+  const campaignNameById = useCallback(
+    (id: string) => campaigns.find((c) => String(c._id) === String(id))?.name || id,
+    [campaigns]
+  );
+
+  // ---------- Open modals ----------
+  const openEnrollModal = () => {
+    if (!resolvedId) return toast.error("Lead not loaded");
+    setEnrollOpen(true);
   };
 
+  const openUnenrollModal = async () => {
+    if (!resolvedId) return toast.error("Lead not loaded");
+    await loadActiveForLead();
+    setUnenrollOpen(true);
+  };
+
+  // ---------- Enroll submit ----------
   const submitEnroll = async () => {
     if (!lead?.id) return toast.error("Lead not loaded");
     if (!selectedCampaignId) return toast.error("Pick a campaign");
@@ -298,9 +321,9 @@ export default function LeadProfileDial() {
       const j = await r.json().catch(() => ({} as any));
       if (!r.ok || !j?.success) throw new Error(j?.error || j?.message || "Failed to enroll lead");
 
-      const enrolledName = j?.campaign?.name || (campaigns.find((c) => c._id === selectedCampaignId)?.name ?? "campaign");
+      const enrolledName =
+        j?.campaign?.name || (campaigns.find((c) => c._id === selectedCampaignId)?.name ?? "campaign");
       setHistoryLines((prev) => [`🔖 Status: Enrolled to ${enrolledName} • ${new Date().toLocaleString()}`, ...prev]);
-      loadHistory();
 
       toast.success(`✅ Enrolled in ${enrolledName}`);
       setEnrollOpen(false);
@@ -310,6 +333,30 @@ export default function LeadProfileDial() {
       toast.error(e?.message || "Enrollment failed");
     } finally {
       setEnrolling(false);
+    }
+  };
+
+  // ---------- Unenroll submit ----------
+  const submitUnenroll = async () => {
+    if (!lead?.id) return toast.error("Lead not loaded");
+    if (!removeCampaignId) return toast.error("Select a drip to remove");
+    try {
+      setRemoving(true);
+      const r = await fetch(`/api/drips/unenroll-lead`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ leadId: lead.id, campaignId: removeCampaignId }),
+      });
+      const j = await r.json().catch(() => ({} as any));
+      if (!r.ok || !j?.success) throw new Error(j?.error || j?.message || "Failed to remove");
+
+      toast.success("✅ Removed from drip");
+      setUnenrollOpen(false);
+      setHistoryLines((prev) => [`🔖 Status: Removed from ${campaignNameById(removeCampaignId)} • ${new Date().toLocaleString()}`, ...prev]);
+    } catch (e: any) {
+      toast.error(e?.message || "Failed to remove");
+    } finally {
+      setRemoving(false);
     }
   };
 
@@ -325,9 +372,7 @@ export default function LeadProfileDial() {
 
         {Object.entries(lead || {})
           .filter(([key]) =>
-            !["_id", "id", "Notes", "First Name", "Last Name", "folderId", "createdAt", "ownerId", "userEmail"].includes(
-              key,
-            ),
+            !["_id", "id", "Notes", "First Name", "Last Name", "folderId", "createdAt", "ownerId", "userEmail"].includes(key)
           )
           .map(([key, value]) => {
             if (key === "Phone" || key.toLowerCase() === "phone") value = formatPhone(String(value || ""));
@@ -341,7 +386,6 @@ export default function LeadProfileDial() {
             );
           })}
 
-        {/* Read-only display of the Saved Notes field */}
         {lead?.Notes && (
           <div className="mt-2">
             <p className="text-sm font-semibold">Saved Notes</p>
@@ -372,11 +416,19 @@ export default function LeadProfileDial() {
             />
           </div>
 
+          {/* Compact, symmetrical button row */}
           <div className="flex items-center gap-2 mb-4">
-            <button onClick={handleSaveNote} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded">
+            <button
+              onClick={handleSaveNote}
+              className="text-sm bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-md"
+            >
               Save Note
             </button>
-            <button type="button" onClick={startCall} className="bg-green-600 hover:bg-green-700 px-4 py-2 rounded">
+            <button
+              type="button"
+              onClick={startCall}
+              className="text-sm bg-green-600 hover:bg-green-700 text-white px-3 py-1.5 rounded-md"
+            >
               Call
             </button>
 
@@ -384,30 +436,20 @@ export default function LeadProfileDial() {
               type="button"
               onClick={openEnrollModal}
               disabled={!lead?.id}
-              className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 px-4 py-2 rounded"
+              className="text-sm bg-indigo-600 hover:bg-indigo-700 text-white disabled:opacity-50 px-3 py-1.5 rounded-md"
             >
               Enroll in Drip
             </button>
+
+            <button
+              type="button"
+              onClick={openUnenrollModal}
+              disabled={!lead?.id}
+              className="text-sm bg-rose-600 hover:bg-rose-700 text-white disabled:opacity-50 px-3 py-1.5 rounded-md"
+            >
+              Remove from Drip
+            </button>
           </div>
-
-          {/* 🔒 PINNED SAVED NOTES — always on top of history */}
-          {lead?.Notes ? (
-            <>
-              <h3 className="text-lg font-bold mb-2">Saved Notes (Pinned)</h3>
-              <div className="bg-[#0b1220] border border-white/10 rounded p-3 mb-4">
-                <pre className="whitespace-pre-wrap text-sm text-gray-200">{lead.Notes}</pre>
-              </div>
-            </>
-          ) : null}
-
-          {userHasAI && calls.find((c) => c.aiSummary) ? (
-            <>
-              <h3 className="text-lg font-bold mb-2">AI Call Summary</h3>
-              <div className="bg-gray-800/60 border border-white/10 p-3 rounded mb-4">
-                <div className="text-sm text-gray-300">{calls.find((c) => c.aiSummary)?.aiSummary}</div>
-              </div>
-            </>
-          ) : null}
 
           <div className="flex items-center justify-between">
             <h3 className="text-lg font-bold mb-2">Interaction History</h3>
@@ -424,27 +466,6 @@ export default function LeadProfileDial() {
                 </div>
               ))
             )}
-          </div>
-
-          <div className="flex flex-wrap gap-2 mt-4">
-            <button onClick={() => handleDisposition("Sold")} className="bg-gray-700 hover:bg-gray-600 px-3 py-2 rounded">
-              Sold
-            </button>
-            <button
-              onClick={() => handleDisposition("Booked Appointment")}
-              className="bg-gray-700 hover:bg-gray-600 px-3 py-2 rounded"
-            >
-              Booked Appointment
-            </button>
-            <button
-              onClick={() => handleDisposition("Not Interested")}
-              className="bg-gray-700 hover:bg-gray-600 px-3 py-2 rounded"
-            >
-              Not Interested
-            </button>
-            <button onClick={() => handleDisposition("Resolved")} className="bg-gray-700 hover:bg-gray-600 px-3 py-2 rounded">
-              Resolve
-            </button>
           </div>
 
           <div className="mt-4">
@@ -466,21 +487,6 @@ export default function LeadProfileDial() {
 
       {/* RIGHT */}
       <div className="w-[400px] p-4 bg-[#0b1220] flex flex-col min-h-0">
-        {/* Enroll card (original placement) */}
-        <div className="mb-3 border border-white/10 rounded p-3 bg-[#0f172a]">
-          <div className="flex items-center justify-between">
-            <span className="font-semibold text-sm">Enroll in Drip</span>
-            <button
-              onClick={openEnrollModal}
-              disabled={!lead?.id}
-              className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 px-3 py-1 rounded text-sm"
-            >
-              Enroll
-            </button>
-          </div>
-          <p className="text-xs text-gray-400 mt-1">Enroll this lead into a specific campaign.</p>
-        </div>
-
         <div className="flex-1 min-h-0 overflow-y-auto">
           {lead?.id ? (
             <CallPanelClose
@@ -500,9 +506,7 @@ export default function LeadProfileDial() {
           <div className="relative w-full max-w-md mx-4 rounded-lg border border-white/10 bg-[#0f172a] p-4 shadow-xl">
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-lg font-bold">Enroll in Drip</h3>
-              <button onClick={() => setEnrollOpen(false)} className="text-gray-300 hover:text-white">
-                ✕
-              </button>
+              <button onClick={() => setEnrollOpen(false)} className="text-gray-300 hover:text-white">✕</button>
             </div>
 
             <div className="space-y-3">
@@ -515,9 +519,7 @@ export default function LeadProfileDial() {
                 >
                   <option value="">{campaignsLoading ? "Loading…" : "-- Select a campaign --"}</option>
                   {campaigns.map((c) => (
-                    <option key={c._id} value={c._id}>
-                      {c.name}
-                    </option>
+                    <option key={c._id} value={c._id}>{c.name}</option>
                   ))}
                 </select>
               </div>
@@ -532,26 +534,63 @@ export default function LeadProfileDial() {
                   onChange={(e) => setStartAtLocal(e.target.value)}
                   className="w-full bg-[#1e293b] text-white border border-white/10 rounded p-2"
                 />
-                <p className="text-xs text-gray-500 mt-1">
-                  Leave blank to start immediately; scheduler will handle timing.
-                </p>
-              </div>
-
-              <div className="border border-white/10 rounded p-2 bg-[#0b1220]">
-                <p className="text-xs text-gray-400">Preview of touches will appear here once enabled for this campaign.</p>
+                <p className="text-xs text-gray-500 mt-1">Leave blank to start immediately; scheduler will handle timing.</p>
               </div>
             </div>
 
             <div className="mt-4 flex items-center justify-end gap-2">
-              <button onClick={() => setEnrollOpen(false)} className="px-3 py-2 rounded bg-gray-700 hover:bg-gray-600">
-                Cancel
-              </button>
+              <button onClick={() => setEnrollOpen(false)} className="px-3 py-2 rounded bg-gray-700 hover:bg-gray-600">Cancel</button>
               <button
                 onClick={submitEnroll}
                 disabled={enrolling || !selectedCampaignId}
                 className="px-4 py-2 rounded bg-green-600 hover:bg-green-700 disabled:opacity-50"
               >
                 {enrolling ? "Enrolling…" : "Enroll"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {/* Unenroll Modal */}
+      {unenrollOpen ? (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/60" onClick={() => setUnenrollOpen(false)} />
+          <div className="relative w-full max-w-md mx-4 rounded-lg border border-white/10 bg-[#0f172a] p-4 shadow-xl">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-lg font-bold">Remove from Drip</h3>
+              <button onClick={() => setUnenrollOpen(false)} className="text-gray-300 hover:text-white">✕</button>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label className="block text-sm text-gray-300 mb-1">Active Campaign</label>
+                <select
+                  value={removeCampaignId}
+                  onChange={(e) => setRemoveCampaignId(e.target.value)}
+                  className="w-full bg-[#1e293b] text-white border border-white/10 rounded p-2"
+                >
+                  <option value="">
+                    {activeDripsLoading ? "Loading…" : activeDripIds.length ? "-- Select a campaign --" : "No active drips"}
+                  </option>
+                  {activeDripIds.map((cid) => (
+                    <option key={cid} value={cid}>
+                      {campaignNameById(cid)}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-xs text-gray-500 mt-1">Only campaigns this lead is currently enrolled in are shown.</p>
+              </div>
+            </div>
+
+            <div className="mt-4 flex items-center justify-end gap-2">
+              <button onClick={() => setUnenrollOpen(false)} className="px-3 py-2 rounded bg-gray-700 hover:bg-gray-600">Cancel</button>
+              <button
+                onClick={submitUnenroll}
+                disabled={removing || !removeCampaignId}
+                className="px-4 py-2 rounded bg-rose-600 hover:bg-rose-700 disabled:opacity-50"
+              >
+                {removing ? "Removing…" : "Confirm Remove"}
               </button>
             </div>
           </div>

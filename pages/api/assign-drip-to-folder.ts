@@ -6,262 +6,172 @@ import dbConnect from "@/lib/mongooseConnect";
 import Folder from "@/models/Folder";
 import Lead from "@/models/Lead";
 import DripCampaign from "@/models/DripCampaign";
+import DripFolderEnrollment from "@/models/DripFolderEnrollment";
+import DripEnrollment from "@/models/DripEnrollment";
 import User from "@/models/User";
-import { sendSMS } from "@/lib/twilio/sendSMS";
-import { acquireLock } from "@/lib/locks"; // 🔒 add lock
 import { ObjectId } from "mongodb";
 import { prebuiltDrips } from "@/utils/prebuiltDrips";
-import {
-  renderTemplate,
-  ensureOptOut,
-  splitName,
-} from "@/utils/renderTemplate";
+import { DateTime } from "luxon";
 
-// ----- helpers -----
+// ---------- helpers ----------
 function isValidObjectId(id: string) {
   return /^[a-f0-9]{24}$/i.test(id);
 }
 
-// Resolve a drip by either Mongo _id or by prebuilt slug -> name
 async function resolveDrip(dripId: string) {
-  if (isValidObjectId(dripId)) {
-    return await DripCampaign.findById(dripId).lean();
-  }
+  if (isValidObjectId(dripId)) return await DripCampaign.findById(dripId).lean();
   const def = prebuiltDrips.find((d) => d.id === dripId);
   if (!def) return null;
   return await DripCampaign.findOne({ isGlobal: true, name: def.name }).lean();
 }
 
-function normalizeToE164Maybe(phone?: string): string | null {
-  if (!phone) return null;
-  const digits = (phone || "").replace(/\D/g, "");
-  if (!digits) return null;
-  if (digits.length === 10) return `+1${digits}`;
-  if (digits.length === 11 && digits.startsWith("1")) return `+${digits}`;
-  if ((phone || "").startsWith("+")) return phone!;
-  return null;
+const PT_ZONE = "America/Los_Angeles";
+const SEND_HOUR_PT = 9;
+const QUIET_START = Number(process.env.DRIPS_QUIET_START_HOUR_PT ?? 21); // 21 = 9pm
+const QUIET_END   = Number(process.env.DRIPS_QUIET_END_HOUR_PT   ?? 8);  //  8 = 8am
+
+function isQuietHoursPT(now = DateTime.now().setZone(PT_ZONE)) {
+  const h = now.hour;
+  // Handles windows that cross midnight (default 21→08)
+  return QUIET_START > QUIET_END ? (h >= QUIET_START || h < QUIET_END)
+                                 : (h >= QUIET_START && h < QUIET_END);
 }
 
-async function runBatched<T>(
-  items: T[],
-  batchSize: number,
-  worker: (item: T, index: number) => Promise<void>,
-) {
-  let i = 0;
-  while (i < items.length) {
-    const batch = items.slice(i, i + batchSize);
-    await Promise.allSettled(batch.map((item, idx) => worker(item, i + idx)));
-    i += batchSize;
-  }
+function computeNextWindowPT(now = DateTime.now().setZone(PT_ZONE)): Date {
+  const today9 = now.set({ hour: SEND_HOUR_PT, minute: 0, second: 0, millisecond: 0 });
+  const when = now < today9 ? today9 : today9.plus({ days: 1 });
+  return when.toJSDate();
 }
 
-// ----- handler -----
-export default async function handler(
-  req: NextApiRequest,
-  res: NextApiResponse,
-) {
-  if (req.method !== "POST")
-    return res.status(405).json({ message: "Method not allowed" });
+// ---------- handler ----------
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed" });
 
-  const session = await getServerSession(req, res, authOptions);
-  if (!session?.user?.email)
-    return res.status(401).json({ message: "Unauthorized" });
+  // EXPLICIT CAST to avoid TS inferring {} and erroring on `.user`
+  const session: any = await getServerSession(req, res, authOptions as any);
+  if (!session?.user?.email) return res.status(401).json({ message: "Unauthorized" });
 
-  const { dripId, folderId } = req.body as {
-    dripId?: string;
-    folderId?: string;
-  };
-  if (!dripId || !folderId)
-    return res.status(400).json({ message: "Missing dripId or folderId" });
+  const { dripId, folderId } = (req.body || {}) as { dripId?: string; folderId?: string };
+  if (!dripId || !folderId) return res.status(400).json({ message: "Missing dripId or folderId" });
 
   try {
     await dbConnect();
     const userEmail = String(session.user.email).toLowerCase();
 
-    const user = await User.findOne({ email: userEmail })
-      .select({ _id: 1, email: 1, name: 1 })
-      .lean();
+    // 1) Validate user & folder
+    const user = await User.findOne({ email: userEmail }).select({ _id: 1, email: 1, name: 1 }).lean();
     if (!user?._id) return res.status(404).json({ message: "User not found" });
 
-    // 1) Validate folder belongs to this user
-    const folder = await Folder.findOne({
-      _id: new ObjectId(folderId),
-      userEmail,
-    });
+    const folder = await Folder.findOne({ _id: new ObjectId(folderId), userEmail })
+      .select({ _id: 1, assignedDrips: 1 })
+      .lean();
     if (!folder) return res.status(404).json({ message: "Folder not found" });
 
-    // 2) Save assignment on folder (idempotent)
-    const set = new Set(folder.assignedDrips || []);
-    set.add(dripId);
-    if (set.size !== (folder.assignedDrips || []).length) {
-      folder.assignedDrips = Array.from(set);
-      await folder.save();
+    // 2) Resolve drip campaign (must be SMS with steps)
+    const dripDoc: any = await resolveDrip(dripId);
+    if (!dripDoc || dripDoc.type !== "sms" || !Array.isArray(dripDoc.steps) || dripDoc.steps.length === 0) {
+      // Still attach the watcher so NEW leads get enrolled later
+      await DripFolderEnrollment.updateOne(
+        { userEmail, folderId: new ObjectId(folderId), campaignId: new ObjectId(dripId), active: true },
+        { $set: { active: true, startMode: "immediate" } },
+        { upsert: true }
+      );
+      return res.status(200).json({ message: "Drip assigned (non-SMS or no steps). No backfill performed." });
     }
 
-    // 3) Enroll existing leads (idempotent)
-    await Lead.updateMany(
-      { userEmail, folderId: new ObjectId(folderId) },
-      { $addToSet: { assignedDrips: dripId } },
+    const campaignId = String(dripDoc._id || dripId);
+
+    // 3) Attach/ensure watcher (idempotent; immediate start by default)
+    await DripFolderEnrollment.updateOne(
+      { userEmail, folderId: new ObjectId(folderId), campaignId: new ObjectId(campaignId), active: true },
+      { $set: { active: true, startMode: "immediate" } },
+      { upsert: true }
     );
 
-    // 4) Send first step immediately (only for SMS drips)
-    const raw = await resolveDrip(dripId);
-    const drip: any = Array.isArray(raw) ? raw[0] : raw;
-    if (
-      !drip ||
-      drip?.type !== "sms" ||
-      !Array.isArray(drip?.steps) ||
-      drip?.steps.length === 0
-    ) {
-      return res.status(200).json({
-        message: "Drip assigned. No immediate SMS sent (non-SMS or no steps).",
-        modifiedLeads: 0,
-        sent: 0,
-        failed: 0,
-      });
-    }
-
-    const stepsSorted = [...(drip.steps as any[])].sort(
-      (a: any, b: any) =>
-        (parseInt(a?.day ?? "0", 10) || 0) - (parseInt(b?.day ?? "0", 10) || 0),
+    // 4) Add the drip to the folder metadata (idempotent)
+    await Folder.updateOne(
+      { _id: new ObjectId(folderId), userEmail },
+      { $addToSet: { assignedDrips: campaignId } }
     );
-    const firstTextRaw: string = stepsSorted[0]?.text?.trim?.() || "";
-    if (!firstTextRaw) {
-      return res.status(200).json({
-        message: "Drip assigned. First step empty, nothing sent.",
-        modifiedLeads: 0,
-        sent: 0,
-        failed: 0,
-      });
-    }
 
-    // 🚫 Safety: don't send explicit opt-out keywords as an outbound drip
-    const lower = firstTextRaw.toLowerCase();
-    const optOutKeywords = ["stop", "unsubscribe", "end", "quit", "cancel"];
-    if (optOutKeywords.includes(lower)) {
-      return res
-        .status(400)
-        .json({ message: "First step is an opt-out keyword. Not sending." });
-    }
+    // 5) Backfill existing leads into DripEnrollment, Day 1 exactly once
+    const nowPT = DateTime.now().setZone(PT_ZONE);
+    const effectiveWhen = isQuietHoursPT(nowPT) ? computeNextWindowPT(nowPT) : nowPT.toJSDate();
 
-    // Prepare agent context once
-    const { first: agentFirst, last: agentLast } = splitName(user.name || "");
-    const agentCtx = {
-      name: user.name || null,
-      first_name: agentFirst,
-      last_name: agentLast,
-    };
-
-    // Canonical drip id for progress tracking
-    const canonicalDripId = String((drip as any)?._id || dripId);
-    const now = new Date();
-
-    const leads = await Lead.find({
-      userEmail,
-      folderId: new ObjectId(folderId),
-    })
-      .select({
-        _id: 1,
-        Phone: 1,
-        "First Name": 1,
-        "Last Name": 1,
-        unsubscribed: 1,
-      })
+    const leads = await Lead.find({ userEmail, folderId: new ObjectId(folderId) })
+      .select({ _id: 1, unsubscribed: 1, Phone: 1 })
       .lean();
 
-    let sent = 0;
-    let failed = 0;
+    let considered = 0, created = 0, activated = 0, skippedAlreadySent = 0;
 
-    await runBatched(leads, 25, async (lead) => {
-      const to = normalizeToE164Maybe((lead as any).Phone);
-      if (!to || (lead as any).unsubscribed) {
-        failed++;
-        return;
-      }
-      try {
-        // Build contact context
-        const firstName = (lead as any)["First Name"] || null;
-        const lastName = (lead as any)["Last Name"] || null;
-        const fullName =
-          [firstName, lastName]
-            .filter((x) => x && String(x).trim().length > 0)
-            .join(" ") || null;
+    const BATCH = 200;
+    for (let i = 0; i < leads.length; i += BATCH) {
+      const slice = leads.slice(i, i + BATCH);
+      await Promise.all(slice.map(async (lead: any) => {
+        considered++;
+        if (lead.unsubscribed) return;
 
-        const rendered = renderTemplate(firstTextRaw, {
-          contact: {
-            first_name: firstName,
-            last_name: lastName,
-            full_name: fullName,
-          },
-          agent: agentCtx,
-        });
+        const existing = await DripEnrollment.findOne({
+          userEmail, leadId: lead._id, campaignId: new ObjectId(campaignId),
+          status: { $in: ["active", "paused"] }
+        }).select({ _id: 1, sentAtByIndex: 1, status: 1, nextSendAt: 1 }).lean();
 
-        // Ensure compliant opt-out tag even if missing in a custom/user drip
-        const finalBody = ensureOptOut(rendered);
-
-        // 🔒 Duplicate drip guard for initial step (10 min TTL)
-        let actuallySent = false;
-        {
-          const stepKey = String(stepsSorted[0]?.day ?? 1);
-          const ok = await acquireLock(
-            "drip",
-            `${userEmail}:${String((lead as any)._id)}:${String(canonicalDripId)}:${stepKey}`,
-            600
-          );
-          if (!ok) {
-            console.log("Duplicate drip suppressed", {
-              userEmail,
-              leadId: String((lead as any)._id),
-              campaignId: String(canonicalDripId),
-              stepId: stepKey,
-            });
-          } else {
-            await sendSMS(to, finalBody, String(user._id));
-            actuallySent = true;
-          }
-        }
-
-        // ✅ Initialize/Update dripProgress for this lead (Day 1 has been sent -> index 0)
-        if (actuallySent) {
-          const matched = await Lead.updateOne(
-            { _id: (lead as any)._id, "dripProgress.dripId": canonicalDripId },
+        if (!existing) {
+          await DripEnrollment.findOneAndUpdate(
             {
-              $set: {
-                "dripProgress.$.startedAt": now,
-                "dripProgress.$.lastSentIndex": 0,
+              userEmail,
+              leadId: lead._id,
+              campaignId: new ObjectId(campaignId),
+              status: { $in: ["active", "paused"] },
+            },
+            {
+              $setOnInsert: {
+                userEmail,
+                leadId: lead._id,
+                campaignId: new ObjectId(campaignId),
+                status: "active",
+                active: true, isActive: true, enabled: true,
+                paused: false, isPaused: false, stopAll: false,
+                cursorStep: 0,
+                nextSendAt: effectiveWhen,   // now unless quiet hours → next 9am PT
+                startedAt: new Date(),
+                source: "folder-bulk",
               },
             },
-          );
-
-          if (matched.matchedCount === 0) {
-            await Lead.updateOne(
-              { _id: (lead as any)._id },
-              {
-                $push: {
-                  dripProgress: {
-                    dripId: canonicalDripId,
-                    startedAt: now,
-                    lastSentIndex: 0,
-                  },
-                },
-              },
-            );
-          }
-
-          sent++;
+            { upsert: true, new: false }
+          ).lean();
+          created++;
+          return;
         }
-      } catch (e) {
-        failed++;
-        console.error("Immediate drip send failed:", e);
-      }
-    });
+
+        const day0Sent =
+          (existing as any)?.sentAtByIndex &&
+          (existing as any).sentAtByIndex.get?.("0");
+        if (day0Sent) {
+          skippedAlreadySent++;
+          return;
+        }
+
+        await DripEnrollment.updateOne(
+          { _id: existing._id },
+          {
+            $set: {
+              status: "active",
+              active: true, isActive: true, enabled: true,
+              paused: false, isPaused: false, stopAll: false,
+              nextSendAt: effectiveWhen,
+            },
+            $setOnInsert: { cursorStep: 0, startedAt: new Date(), source: "folder-bulk" },
+          }
+        );
+        activated++;
+      }));
+    }
 
     return res.status(200).json({
-      message:
-        "Drip assigned, leads enrolled, and first step sent (rendered with names + opt-out). Progress initialized.",
-      modifiedLeads: leads.length,
-      sent,
-      failed,
+      message: "Drip assigned; watcher active; existing leads backfilled idempotently via DripEnrollment.",
+      considered, created, activated, skippedAlreadySent,
+      nextWindowUsedForQuietHours: isQuietHoursPT(nowPT),
     });
   } catch (error) {
     console.error("Error assigning drip:", error);

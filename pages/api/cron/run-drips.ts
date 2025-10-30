@@ -1,4 +1,3 @@
-// /pages/api/cron/run-drips.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import dbConnect from "@/lib/mongooseConnect";
 import Lead from "@/models/Lead";
@@ -131,8 +130,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const nowPT = DateTime.now().setZone(PT_ZONE);
     console.log(`🕘 run-drips start @ ${nowPT.toISO()} PT | force=${force} dry=${dry} limit=${limit || "∞"} due=${dueCount}`);
 
-    // -------- PRIMARY: ENROLLMENT ENGINE (unchanged) --------
-    let enrollChecked = 0, enrollSent = 0, enrollScheduled = 0, enrollSuppressed = 0, enrollFailed = 0, enrollCompleted = 0, enrollClaimMiss = 0;
+    // -------- PRIMARY: ENROLLMENT ENGINE (with idempotency markers) --------
+    let enrollChecked = 0, enrollSent = 0, enrollScheduled = 0, enrollSuppressed = 0, enrollFailed = 0, enrollCompleted = 0, enrollClaimMiss = 0, enrollAlreadySent = 0;
 
     const dueEnrollmentsQ = DripEnrollment.find({
       status: "active",
@@ -142,7 +141,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         { $or: [{ paused: { $ne: true } }, { isPaused: { $ne: true } }] },
         { stopAll: { $ne: true } },
       ],
-    }).select({ _id: 1, leadId: 1, campaignId: 1, userEmail: 1, cursorStep: 1, nextSendAt: 1 }).lean();
+    }).select({ _id: 1, leadId: 1, campaignId: 1, userEmail: 1, cursorStep: 1, nextSendAt: 1, sentAtByIndex: 1 }).lean();
 
     const dueEnrollments = limit > 0 ? await dueEnrollmentsQ.limit(limit) : await dueEnrollmentsQ;
 
@@ -203,14 +202,44 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return;
       }
 
+      // --- Durable once-only: skip if this step already marked sent ---
+      const alreadySent = (claim as any)?.sentAtByIndex && (claim as any).sentAtByIndex.get?.(String(idx));
+      if (alreadySent) {
+        // Advance cursor without sending again.
+        const nextIndex = idx + 1;
+        const update: any = { $set: { cursorStep: nextIndex, processing: false }, $unset: { processingAt: 1 } };
+        if (nextIndex >= steps.length) {
+          update.$set.status = "completed";
+          update.$unset = { ...(update.$unset || {}), nextSendAt: 1 };
+        } else {
+          const prevDay = parseStepDayNumber(step.day);
+          const nextDay = parseStepDayNumber(steps[nextIndex].day);
+          const base = DateTime.now().setZone(PT_ZONE).startOf("day");
+          const nextWhen = computeStepWhenPTFromBase(base, nextDay, prevDay);
+          update.$set.nextSendAt = nextWhen.toJSDate();
+          update.$set.lastSentAt = new Date();
+        }
+        await DripEnrollment.updateOne({ _id: claim._id, cursorStep: idx }, update);
+        enrollAlreadySent++;
+        return;
+      }
+
       const rendered = renderTemplate(String(step.text || ""), {
         contact: { first_name: firstName, last_name: lastName, full_name: fullName },
         agent: agentCtx,
       });
       const finalBody = ensureOptOut(rendered);
 
-      // Idempotency key matches enrollment engine convention
+      // Idempotency key (transport-level)
       const idKey = `${String(claim._id)}:${idx}:${new Date(claim.nextSendAt || Date.now()).toISOString()}`;
+
+      // --- Double-check "still active" right before send (remove correctness) ---
+      const fresh = await DripEnrollment.findById(claim._id).select({ status: 1, stopAll: 1, paused: 1, isPaused: 1 }).lean();
+      if (!fresh || fresh.status !== "active" || fresh.stopAll === true || fresh.paused === true || fresh.isPaused === true) {
+        // Someone canceled or paused during processing—bail without sending.
+        await DripEnrollment.updateOne({ _id: claim._id }, { $set: { processing: false }, $unset: { processingAt: 1 } });
+        return;
+      }
 
       try {
         if (!dry) {
@@ -238,7 +267,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
 
       const nextIndex = idx + 1;
-      const update: any = { $set: { cursorStep: nextIndex, processing: false }, $unset: { processingAt: 1 } };
+      const update: any = {
+        $set: {
+          cursorStep: nextIndex,
+          processing: false,
+          [`sentAtByIndex.${idx}`]: new Date(), // <-- durable once-only marker
+        },
+        $unset: { processingAt: 1 },
+      };
       if (nextIndex >= steps.length) {
         update.$set.status = "completed";
         update.$unset = { ...(update.$unset || {}), nextSendAt: 1 };
@@ -358,7 +394,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       message: "run-drips complete",
       nowPT: DateTime.now().setZone(PT_ZONE).toISO(),
       forced: force, dryRun: dry, limit,
-      // (summaries elided to keep payload small)
     });
   } catch (error) {
     console.error("❌ run-drips error:", error);
