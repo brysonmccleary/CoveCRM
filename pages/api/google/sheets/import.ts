@@ -1,365 +1,180 @@
 // /pages/api/google/sheets/import.ts
 import type { NextApiRequest, NextApiResponse } from "next";
-import { getServerSession } from "next-auth/next";
-import { authOptions } from "../../auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
-import User from "@/models/User";
+import { getServerSession } from "next-auth";
+import { authOptions } from "../../auth/[...nextauth]";
 import Lead from "@/models/Lead";
 import Folder from "@/models/Folder";
-import { google } from "googleapis";
 import mongoose from "mongoose";
 import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
-import { enrollOnNewLeadIfWatched } from "@/lib/drips/enrollOnNewLeadIfWatched";
 
-type ImportBody = {
-  spreadsheetId: string;
-  title?: string;
-  sheetId?: number;
-  headerRow?: number;
-  startRow?: number;
-  endRow?: number;
-  folderId?: string;
-  folderName?: string;
-  mapping: Record<string, string>;
-  skip?: Record<string, boolean>;
-  createFolderIfMissing?: boolean;
-  skipExisting?: boolean;
+const FINGERPRINT = "selfheal-v5h+gsi";
+
+// ------------ helpers ------------
+const lc = (s?: string | null) => (s ? String(s).trim().toLowerCase() : "");
+const digits = (s?: string | null) => (s ? String(s).replace(/\D+/g, "") : "");
+const last10 = (s?: string | null) => {
+  const d = digits(s);
+  return d ? d.slice(-10) : "";
 };
 
-function digits(s: any) { return String(s ?? "").replace(/\D+/g, ""); }
-function last10(s?: string) { const d = digits(s); return d.slice(-10) || ""; }
-function lcEmail(s: any) { const v = String(s ?? "").trim().toLowerCase(); return v || ""; }
-function escapeA1Title(title: string) { return title.replace(/'/g, "''"); }
+async function ensureNonSystemFolder(
+  userEmail: string,
+  name: string
+) {
+  if (!name) throw new Error("Folder name required");
+  if (isSystemFolder(name)) throw new Error("Cannot import into system folders");
 
-async function resolveFolder(userEmail: string, opts: { folderId?: string; folderName?: string; defaultName?: string; create?: boolean }) {
-  const byName = (opts.folderName || "").trim();
-  if (byName) {
-    if (isSystemFolder(byName)) throw new Error("Cannot import into system folders");
-    const doc = await Folder.findOneAndUpdate(
-      { userEmail, name: byName },
-      { $setOnInsert: { userEmail, name: byName, source: "google-sheets" } },
-      { new: true, upsert: !!opts.create }
-    );
-    if (!doc) throw new Error("Folder not found/created");
-    return doc;
-  }
-
-  if (opts.folderId) {
-    const doc = await Folder.findOne({ _id: new mongoose.Types.ObjectId(opts.folderId), userEmail });
-    if (!doc) throw new Error("Folder not found or not owned by user");
-    if (isSystemFolder(doc.name)) throw new Error("Cannot import into system folders");
-    return doc;
-  }
-
-  const def = (opts.defaultName || "").trim();
-  if (!def) throw new Error("Missing target folder");
-  if (isSystemFolder(def)) throw new Error("Cannot import into system folders");
-  const doc = await Folder.findOneAndUpdate(
-    { userEmail, name: def },
-    { $setOnInsert: { userEmail, name: def, source: "google-sheets" } },
+  const f = await Folder.findOneAndUpdate(
+    { userEmail, name },
+    { $setOnInsert: { userEmail, name, source: "google-sheets" } },
     { new: true, upsert: true }
   );
-  return doc;
+  if (!f) throw new Error("Failed to resolve folder");
+  if (isSystemFolder(f.name)) throw new Error("Resolved a system folder unexpectedly");
+  return f;
 }
 
+type ImportRow = Record<string, any>;
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
+  if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed" });
 
   const session = await getServerSession(req, res, authOptions);
-  if (!session?.user?.email) return res.status(401).json({ error: "Unauthorized" });
-  const userEmail = session.user.email.toLowerCase();
+  if (!session?.user?.email) return res.status(401).json({ message: "Unauthorized" });
 
-  const {
-    spreadsheetId,
-    title,
-    sheetId,
-    headerRow = 1,
-    startRow,
-    endRow,
-    folderId,
-    folderName,
-    mapping = {},
-    skip = {},
-    createFolderIfMissing = true,
-    skipExisting = false,
-  } = (req.body || {}) as ImportBody;
-
-  if (!spreadsheetId) return res.status(400).json({ error: "Missing spreadsheetId" });
-  if (!title && typeof sheetId !== "number") return res.status(400).json({ error: "Provide sheet 'title' or numeric 'sheetId'" });
-  if (folderName && isSystemFolder(folderName)) return res.status(400).json({ error: "Cannot import into system folders" });
+  const userEmail = lc(session.user.email)!;
 
   try {
     await dbConnect();
-    const user = await User.findOne({ email: userEmail }).lean<any>();
-    const gs = user?.googleSheets || user?.googleTokens;
-    if (!gs?.refreshToken) return res.status(400).json({ error: "Google not connected" });
 
-    const base =
-      process.env.NEXTAUTH_URL ||
-      process.env.NEXT_PUBLIC_BASE_URL ||
-      `https://${req.headers["x-forwarded-host"] || req.headers.host}`;
-
-    const redirectUri =
-      process.env.GOOGLE_REDIRECT_URI_SHEETS ||
-      `${base}/api/connect/google-sheets/callback`;
-
-    const oauth2 = new google.auth.OAuth2(
-      process.env.GOOGLE_CLIENT_ID!,
-      process.env.GOOGLE_CLIENT_SECRET!,
-      redirectUri
-    );
-    oauth2.setCredentials({
-      access_token: gs.accessToken,
-      refresh_token: gs.refreshToken,
-      expiry_date: gs.expiryDate,
-    });
-
-    const sheets = google.sheets({ version: "v4", auth: oauth2 });
-
-    // Resolve tab title if only sheetId passed
-    let tabTitle = title;
-    if (!tabTitle && typeof sheetId === "number") {
-      const meta = await sheets.spreadsheets.get({
-        spreadsheetId,
-        fields: "sheets(properties(sheetId,title))",
+    // Accept a JSON body with either:
+    // 1) { folderName, rows: [{... already mapped field names ...}] }
+    // or
+    // 2) { targetFolderId, rows: [...] }
+    const { folderName, targetFolderId, rows } = (await (async () => {
+      const chunks: Buffer[] = [];
+      await new Promise<void>((resolve, reject) => {
+        req.on("data", (c) => chunks.push(Buffer.from(c)));
+        req.on("end", () => resolve());
+        req.on("error", (e) => reject(e));
       });
-      const found = (meta.data.sheets || []).find((s) => s.properties?.sheetId === sheetId);
-      tabTitle = found?.properties?.title || undefined;
-      if (!tabTitle) return res.status(400).json({ error: "sheetId not found" });
-    }
-    const safeTitle = escapeA1Title(tabTitle!);
+      const json = chunks.length ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : {};
+      return json;
+    })()) as {
+      folderName?: string;
+      targetFolderId?: string;
+      rows?: ImportRow[];
+    };
 
-    // Pull values
-    const valueResp = await sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range: `'${safeTitle}'!A1:ZZ`,
-      majorDimension: "ROWS",
-      valueRenderOption: "UNFORMATTED_VALUE",
-      dateTimeRenderOption: "FORMATTED_STRING",
-    });
-    const values = (valueResp.data.values || []) as string[][];
-    if (!values.length) {
-      return res.status(200).json({
-        ok: true,
-        inserted: 0,
-        updated: 0,
-        skippedNoKey: 0,
-        skippedExisting: 0,
-        rowCount: 0,
-        lastRowImported: 0,
-        note: "No data in sheet.",
-      });
+    if (!Array.isArray(rows) || rows.length === 0) {
+      return res.status(400).json({ message: "rows[] required" });
     }
 
-    const headerIdx = Math.max(0, headerRow - 1);
-    const headers = (values[headerIdx] || []).map((h) => String(h || "").trim());
-
-    const firstDataRowIndex =
-      typeof startRow === "number" ? Math.max(1, startRow) - 1 : headerIdx + 1;
-    const lastRowIndex =
-      typeof endRow === "number"
-        ? Math.min(values.length, Math.max(endRow, firstDataRowIndex + 1)) - 1
-        : values.length - 1;
-
-    // Resolve destination folder (name wins > id > default)
-    const defaultNameMeta = await google.drive({ version: "v3", auth: oauth2 }).files.get({
-      fileId: spreadsheetId,
-      fields: "name",
-    });
-    const defaultName = `${defaultNameMeta.data.name || "Imported Leads"} — ${tabTitle}`;
-    const folderDoc = await resolveFolder(userEmail, {
-      folderId,
-      folderName,
-      defaultName,
-      create: createFolderIfMissing,
-    });
-    if (!folderDoc) return res.status(400).json({ error: "Folder not found/created" });
-
-    // Extra guard
-    if (isSystemFolder(String(folderDoc.name))) {
-      return res.status(400).json({ error: "Cannot import into system folders" });
+    let folderDoc: any = null;
+    if (targetFolderId) {
+      folderDoc = await Folder.findOne({ _id: targetFolderId, userEmail });
+      if (!folderDoc) return res.status(400).json({ message: "Folder not found or not owned" });
+      if (isSystemFolder(folderDoc.name)) {
+        return res.status(400).json({ message: "Cannot import into system folders" });
+      }
+    } else if (folderName) {
+      folderDoc = await ensureNonSystemFolder(userEmail, String(folderName));
+    } else {
+      return res.status(400).json({ message: "Provide targetFolderId or folderName" });
     }
 
+    const targetFolderIdObj = folderDoc._id as mongoose.Types.ObjectId;
+    const targetFolderName = String(folderDoc.name);
+
+    const ops: any[] = [];
     let inserted = 0;
     let updated = 0;
     let skippedNoKey = 0;
-    let skippedExistingCount = 0;
-    let lastNonEmptyRow = headerIdx;
 
-    for (let r = firstDataRowIndex; r <= lastRowIndex; r++) {
-      const row = values[r] || [];
-      const hasAny = row.some((cell) => String(cell ?? "").trim() !== "");
-      if (!hasAny) continue;
+    for (const raw of rows) {
+      // Normalize identities
+      const email = lc(raw.email ?? raw.Email);
+      const phone10 = last10(raw.phone ?? raw.Phone);
 
-      lastNonEmptyRow = r;
-
-      // Build doc using header->field mapping, skipping configured headers
-      const doc: Record<string, any> = {};
-      headers.forEach((h, i) => {
-        if (!h) return;
-        if (skip[h]) return;
-        const fieldName = (mapping as Record<string, string>)[h];
-        if (!fieldName) return;
-        doc[fieldName] = row[i] ?? "";
-      });
-
-      // 🚫 Strip any sheet-provided status/disposition before writing
-      delete doc.status;
-      delete (doc as any).Status;
-      delete (doc as any).Disposition;
-      delete (doc as any)["Disposition"];
-      delete (doc as any)["Status"];
-
-      const normalizedPhone = digits(doc.phone ?? doc.Phone ?? "");
-      const phoneKey = last10(normalizedPhone);
-      const emailLower = lcEmail(doc.email ?? doc.Email ?? "");
-
-      if (!phoneKey && !emailLower) {
+      if (!email && !phone10) {
         skippedNoKey++;
         continue;
       }
 
-      // Optionally skip existing without moving them
-      if (skipExisting) {
-        const exists = await Lead.findOne({
-          userEmail,
-          $or: [
-            ...(phoneKey ? [{ phoneLast10: phoneKey }, { normalizedPhone: phoneKey }] : []),
-            ...(emailLower ? [{ Email: emailLower }, { email: emailLower }] : []),
-          ],
-        })
-          .select("_id")
-          .lean();
-        if (exists) {
-          skippedExistingCount++;
-          continue;
-        }
-      }
+      const filter: any = { userEmail };
+      const or: any[] = [];
+      if (email) or.push({ email }, { Email: email });
+      if (phone10) or.push({ normalizedPhone: phone10 }, { phoneLast10: phone10 });
+      if (or.length) filter.$or = or;
 
-      // Build upsert
-      const filter: any = {
-        userEmail,
-        $or: [
-          ...(phoneKey ? [{ phoneLast10: phoneKey }, { normalizedPhone: phoneKey }] : []),
-          ...(emailLower ? [{ Email: emailLower }, { email: emailLower }] : []),
-        ],
-      };
-
-      const setOnInsert: any = { createdAt: new Date(), status: "New" };
-      const set: any = {
-        userEmail,
+      const set: Record<string, any> = {
         ownerEmail: userEmail,
-        folderId: folderDoc._id,
-        folder_name: String(folderDoc.name),
-        "Folder Name": String(folderDoc.name),
-        status: "New", // ⛔ force New on import updates too
-        // identity mirrors
-        Email: emailLower || undefined,
-        email: emailLower || undefined,
-        Phone: String(doc.phone ?? doc.Phone ?? ""),
-        normalizedPhone: phoneKey || undefined,
-        phoneLast10: phoneKey || undefined,
-        // optional mapped fields
-        "First Name": doc.firstName ?? doc["First Name"],
-        "Last Name": doc.lastName ?? doc["Last Name"],
-        State: doc.state ?? doc.State,
-        Notes: doc.notes ?? doc.Notes,
-        Age: doc.Age ?? doc.age,
+        folderId: targetFolderIdObj,
+        folder_name: targetFolderName,
+        ["Folder Name"]: targetFolderName,
         updatedAt: new Date(),
-        source: "google-sheets",
-        sourceSpreadsheetId: spreadsheetId,
-        sourceTabTitle: tabTitle,
-        sourceRowIndex: r + 1,
       };
 
-      // Upsert (no logic change), TS-safe capture of leadId
-      const result = await (Lead as any).updateOne(
-        filter,
-        { $set: set, $setOnInsert: setOnInsert },
-        { upsert: true }
-      );
-
-      const upc = (result?.upsertedCount || (result?.upsertedId ? 1 : 0) || 0) as number;
-
-      // capture leadId for drip-enroll
-      const found = await Lead.findOne(filter).select("_id").lean<{ _id: any } | null>();
-      const leadId: string | undefined =
-        (result as any)?.upsertedId ?? (found?._id ? String(found._id) : undefined);
-
-      if (upc > 0) inserted += upc;
-      else if ((result?.modifiedCount || 0) > 0 || (result?.matchedCount || 0) > 0) updated += 1;
-
-      // If this folder is watched by a drip, enroll immediately
-      if (leadId) {
-        await enrollOnNewLeadIfWatched({
-          userEmail,
-          folderId: String(folderDoc._id),
-          leadId,
-        });
-      }
-    }
-
-    // Update sync pointer on the user doc (best-effort)
-    try {
-      const positional = await User.updateOne(
-        {
-          email: userEmail,
-          "googleSheets.syncedSheets.spreadsheetId": spreadsheetId,
-          "googleSheets.syncedSheets.title": tabTitle,
-        },
-        {
-          $set: {
-            "googleSheets.syncedSheets.$.folderId": folderDoc._id,
-            "googleSheets.syncedSheets.$.folderName": folderDoc.name,
-            "googleSheets.syncedSheets.$.headerRow": headerRow,
-            "googleSheets.syncedSheets.$.mapping": mapping,
-            "googleSheets.syncedSheets.$.skip": skip,
-            "googleSheets.syncedSheets.$.lastRowImported": lastNonEmptyRow + 1,
-            "googleSheets.syncedSheets.$.lastImportedAt": new Date(),
-            ...(typeof sheetId === "number" ? { "googleSheets.syncedSheets.$.sheetId": sheetId } : {}),
-          },
+      // Never touch status; copy common fields if present
+      const copyIf = (kIn: string, kOut: string = kIn) => {
+        if (raw[kIn] !== undefined && raw[kIn] !== null && String(raw[kIn]).trim() !== "") {
+          set[kOut] = raw[kIn];
         }
-      );
-      if (positional.matchedCount === 0) {
-        await User.updateOne(
-          { email: userEmail },
-          {
-            $push: {
-              "googleSheets.syncedSheets": {
-                spreadsheetId,
-                title: tabTitle,
-                ...(typeof sheetId === "number" ? { sheetId } : {}),
-                folderId: folderDoc._id,
-                folderName: folderDoc.name,
-                headerRow,
-                mapping,
-                skip,
-                lastRowImported: lastNonEmptyRow + 1,
-                lastImportedAt: new Date(),
-              },
+      };
+
+      // Standard fields
+      copyIf("First Name");
+      copyIf("Last Name");
+      copyIf("firstName", "First Name");
+      copyIf("lastName", "Last Name");
+      copyIf("State");
+      copyIf("state", "State");
+      copyIf("Notes");
+      copyIf("notes", "Notes");
+      copyIf("leadType");
+
+      // identity mirrors
+      if (email) { set["email"] = email; set["Email"] = email; }
+      if (phone10) {
+        set["normalizedPhone"] = phone10;
+        set["phoneLast10"] = phone10;
+        set["Phone"] = raw.Phone ?? raw.phone ?? phone10;
+      }
+
+      ops.push({
+        updateOne: {
+          filter,
+          update: {
+            $set: set,
+            $setOnInsert: {
+              userEmail,
+              status: "New",
+              createdAt: new Date(),
             },
           },
-          { strict: false }
-        );
-      }
-    } catch {
-      // ignore pointer errors
+          upsert: true,
+        },
+      });
+    }
+
+    if (ops.length) {
+      const result = await (Lead as any).bulkWrite(ops, { ordered: false });
+      const upserts = (result as any).upsertedCount || 0;
+      const total = ops.length;
+      inserted = upserts;
+      updated = Math.max(0, total - upserts - skippedNoKey);
     }
 
     return res.status(200).json({
       ok: true,
-      inserted,
-      updated,
-      skippedNoKey,
-      skippedExisting: skipExisting ? skippedExistingCount : 0,
-      rowCount: values.length,
-      headerRow,
-      lastRowImported: lastNonEmptyRow + 1,
-      folderId: String(folderDoc._id),
-      folderName: folderDoc.name,
+      fingerprint: FINGERPRINT,
+      folderId: String(targetFolderIdObj),
+      folderName: targetFolderName,
+      counts: { inserted, updated, skippedNoKey, attempted: rows.length },
     });
   } catch (err: any) {
-    const message = err?.errors?.[0]?.message || err?.message || "Import failed";
-    return res.status(500).json({ error: message });
+    console.error("google/sheets/import error:", err);
+    return res.status(500).json({ ok: false, message: err?.message || "Import failed", fingerprint: FINGERPRINT });
   }
 }

@@ -1,4 +1,4 @@
- import type { NextApiRequest, NextApiResponse } from "next";
+import type { NextApiRequest, NextApiResponse } from "next";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import Lead from "@/models/Lead";
@@ -267,7 +267,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const rawHeaders = (values[headerIdx] || []).map((h) => String(h ?? "").trim());
 
         const normalizedMapping: Record<string, string> = {};
-        // TS-safe entries cast
         (Object.entries(mapping as Record<string, unknown>) as Array<[string, unknown]>).forEach(
           ([key, val]) => {
             if (typeof val === "string" && val) {
@@ -295,6 +294,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             if (!hasAny) continue;
             lastProcessed = r;
 
+            // ---- map by provided mapping; IGNORE any status/disposition entirely
             const doc: Record<string, any> = {};
             rawHeaders.forEach((actualHeader, i) => {
               const n = normHeader(actualHeader);
@@ -309,47 +309,86 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             const e = normEmail(doc.email ?? (doc as any).Email);
             if (!p && !e) { skippedNoKey++; continue; }
 
+            // standardize identities + metadata
             doc.userEmail = userEmail;
             doc.source = "google-sheets";
             doc.sourceSpreadsheetId = spreadsheetId;
             doc.sourceTabTitle = title;
             doc.sourceRowIndex = r + 1;
-            if (p) doc.normalizedPhone = p;
+            if (p) {
+              doc.normalizedPhone = p;
+              doc.phoneLast10 = p.slice(-10); // keep mirror (many screens use this)
+              doc.Phone = doc.Phone ?? doc.phone ?? p;
+            }
             if (e) {
               doc.email = e;
-              if (!doc.Email) doc.Email = e;
+              doc.Email = doc.Email ?? e;
             }
 
             const or: any[] = [];
-            if (p) or.push({ normalizedPhone: p });
-            if (e) or.push({ email: e });
+            if (p) or.push({ $or: [{ normalizedPhone: p }, { phoneLast10: p.slice(-10) }] });
+            if (e) or.push({ $or: [{ email: e }, { Email: e }] });
 
-            const filter = { userEmail, ...(or.length ? { $or: or } : {}) };
-            const existing = await Lead.findOne(filter)
-              .select("_id")
-              .lean<{ _id: mongoose.Types.ObjectId } | null>();
+            // Filter requires at least one identity
+            const filter = { userEmail, ...(or.length ? { $or: or.flat() } : {}) };
 
+            const setBase: Record<string, any> = {
+              ownerEmail: userEmail,
+              folderId: targetFolderId,
+              folder_name: String(targetFolderName),
+              ["Folder Name"]: String(targetFolderName),
+              updatedAt: new Date(),
+            };
+
+            // Copy selected fields (never status)
+            const copyIf = (kIn: string, kOut: string = kIn) => {
+              if (doc[kIn] !== undefined && doc[kIn] !== null && String(doc[kIn]).trim() !== "") {
+                setBase[kOut] = doc[kIn];
+              }
+            };
+            copyIf("First Name");
+            copyIf("Last Name");
+            copyIf("firstName", "First Name");
+            copyIf("lastName", "Last Name");
+            copyIf("State");
+            copyIf("state", "State");
+            copyIf("Notes");
+            copyIf("notes", "Notes");
+            copyIf("leadType");
+
+            // identity mirrors
+            if (doc.Phone !== undefined) setBase["Phone"] = doc.Phone;
+            if (doc.phoneLast10 !== undefined) setBase["phoneLast10"] = doc.phoneLast10;
+            if (doc.normalizedPhone !== undefined) setBase["normalizedPhone"] = doc.normalizedPhone;
+            if (doc.Email !== undefined) setBase["Email"] = doc.Email;
+            if (doc.email !== undefined) setBase["email"] = doc.email;
+
+            // Upsert with strict status handling
+            const existing = await Lead.findOne(filter).select("_id").lean<{ _id: any } | null>();
             if (!existing) {
-              if (!dryRun) await Lead.create({
-                ...doc,
-                folderId: targetFolderId,
-                folder_name: targetFolderName,
-                ["Folder Name"]: targetFolderName
-              });
+              if (!dryRun) {
+                await Lead.updateOne(
+                  filter,
+                  {
+                    $set: setBase,
+                    $setOnInsert: {
+                      userEmail,
+                      status: "New",
+                      createdAt: new Date(),
+                    },
+                  },
+                  { upsert: true }
+                );
+              }
               imported++;
             } else {
-              if (!dryRun)
+              if (!dryRun) {
                 await Lead.updateOne(
                   { _id: existing._id },
-                  {
-                    $set: {
-                      ...doc,
-                      folderId: targetFolderId,
-                      folder_name: targetFolderName,
-                      ["Folder Name"]: targetFolderName
-                    }
-                  }
+                  { $set: setBase }, // NEVER set status on updates
+                  { upsert: false }
                 );
+              }
               updated++;
             }
           }
@@ -386,7 +425,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 "googleSheets.sheets.$.folderName": targetFolderName,
               },
             }
-          ).catch(() => {/* ignore if not present */});
+          ).catch(() => {/* ignore if not legacy */});
         }
 
         detailsAll.push({
@@ -432,4 +471,3 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: err?.message || "Cron poll failed", fingerprint: FINGERPRINT });
   }
 }
-
