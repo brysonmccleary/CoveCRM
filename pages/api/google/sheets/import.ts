@@ -10,16 +10,15 @@ import { google } from "googleapis";
 import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
 import { enrollOnNewLeadIfWatched } from "@/lib/drips/enrollOnNewLeadIfWatched";
 
-const FINGERPRINT = "sheets-hardlock-2025-10-30-1538PDT";
+const FINGERPRINT = "sheets-canonical-2025-10-30-1548PDT";
 
 type ImportBody = {
   spreadsheetId: string;
   title?: string;      // tab title
-  sheetId?: number;    // alternative to title
+  sheetId?: number;    // alt to title
   headerRow?: number;  // default 1
   startRow?: number;
   endRow?: number;
-  // NOTE: Any folderId/folderName provided will be IGNORED by design.
   mapping: Record<string, string>;
   skip?: Record<string, boolean>;
   skipExisting?: boolean;
@@ -31,40 +30,43 @@ function lcEmail(s: any) { const v = String(s ?? "").trim().toLowerCase(); retur
 function escapeA1Title(title: string) { return title.replace(/'/g, "''"); }
 
 const SYSTEM_NAMES = new Set([
-  "Sold", "Not Interested", "Booked Appointment", "No Show",
-  "New", "Hot", "Warm", "Cold" // add any others you treat as system
+  "Sold","Not Interested","Booked Appointment","No Show","New","Hot","Warm","Cold"
 ]);
 
-/** Generate a canonical, NON-SYSTEM folder name for a given Drive file and tab title. */
-function buildCanonicalName(driveName: string, tabTitle: string) {
-  let base = `${(driveName || "Imported Leads").trim()} — ${(tabTitle || "Sheet1").trim()}`;
-  // if somehow equals a system name, keep suffixing until it's safe
+/** Build a unique, non-system canonical name for this sheet/tab. */
+function canonicalName(driveName: string, tabTitle: string, spreadsheetId: string) {
+  const tail = (spreadsheetId || "").slice(-6) || "sheet";
+  let base = `Sheets • ${driveName.trim()} • ${tabTitle.trim()} • ${tail}`;
+  // If any guard still thinks it's a system folder, keep suffixing.
   while (isSystemFolder(base) || SYSTEM_NAMES.has(base)) {
-    base = `${base} — Leads`;
+    base = `${base} • Leads`;
   }
   return base;
 }
 
-async function resolveCanonicalFolder(userEmail: string, driveName: string, tabTitle: string) {
-  const name = buildCanonicalName(driveName, tabTitle);
+async function resolveCanonicalFolder(
+  userEmail: string,
+  driveName: string,
+  tabTitle: string,
+  spreadsheetId: string
+) {
+  const name = canonicalName(driveName, tabTitle, spreadsheetId);
   const doc = await Folder.findOneAndUpdate(
     { userEmail, name },
     { $setOnInsert: { userEmail, name, source: "google-sheets" } },
     { new: true, upsert: true }
   );
   if (!doc) throw new Error("Failed to resolve canonical folder");
-  // Final hard assertion
-  if (isSystemFolder(String(doc.name)) || SYSTEM_NAMES.has(String(doc.name))) {
-    throw new Error("Hardlock: resolved a system folder; aborting");
-  }
   return doc;
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed", fingerprint: FINGERPRINT });
+  if (req.method !== "POST")
+    return res.status(405).json({ error: "Method not allowed", fingerprint: FINGERPRINT });
 
   const session = await getServerSession(req, res, authOptions);
-  if (!session?.user?.email) return res.status(401).json({ error: "Unauthorized", fingerprint: FINGERPRINT });
+  if (!session?.user?.email)
+    return res.status(401).json({ error: "Unauthorized", fingerprint: FINGERPRINT });
   const userEmail = session.user.email.toLowerCase();
 
   const {
@@ -79,7 +81,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     skipExisting = false,
   } = (req.body || {}) as ImportBody;
 
-  if (!spreadsheetId) return res.status(400).json({ error: "Missing spreadsheetId", fingerprint: FINGERPRINT });
+  if (!spreadsheetId)
+    return res.status(400).json({ error: "Missing spreadsheetId", fingerprint: FINGERPRINT });
   if (!title && typeof sheetId !== "number")
     return res.status(400).json({ error: "Provide sheet 'title' or numeric 'sheetId'", fingerprint: FINGERPRINT });
 
@@ -87,15 +90,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     await dbConnect();
     const user = await User.findOne({ email: userEmail }).lean<any>();
     const gs = user?.googleSheets || user?.googleTokens;
-    if (!gs?.refreshToken) return res.status(400).json({ error: "Google not connected", fingerprint: FINGERPRINT });
+    if (!gs?.refreshToken)
+      return res.status(400).json({ error: "Google not connected", fingerprint: FINGERPRINT });
 
     // OAuth2
     const base =
       process.env.NEXTAUTH_URL ||
       process.env.NEXT_PUBLIC_BASE_URL ||
       `https://${req.headers["x-forwarded-host"] || req.headers.host}`;
-    const redirectUri = process.env.GOOGLE_REDIRECT_URI_SHEETS || `${base}/api/connect/google-sheets/callback`;
-    const oauth2 = new google.auth.OAuth2(process.env.GOOGLE_CLIENT_ID!, process.env.GOOGLE_CLIENT_SECRET!, redirectUri);
+    const redirectUri =
+      process.env.GOOGLE_REDIRECT_URI_SHEETS ||
+      `${base}/api/connect/google-sheets/callback`;
+
+    const oauth2 = new google.auth.OAuth2(
+      process.env.GOOGLE_CLIENT_ID!,
+      process.env.GOOGLE_CLIENT_SECRET!,
+      redirectUri
+    );
     oauth2.setCredentials({
       access_token: gs.accessToken,
       refresh_token: gs.refreshToken,
@@ -143,7 +154,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const headerIdx = Math.max(0, headerRow - 1);
     const headers = (values[headerIdx] || []).map((h) => String(h || "").trim());
-
     const firstDataRowIndex =
       typeof startRow === "number" ? Math.max(1, startRow) - 1 : headerIdx + 1;
     const lastRowIndex =
@@ -151,18 +161,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         ? Math.min(values.length, Math.max(endRow, firstDataRowIndex + 1)) - 1
         : values.length - 1;
 
-    // Compute canonical folder ***IGNORING ANY PROVIDED FOLDER PARAMS***
+    // Compute canonical folder (IGNORE any provided folder params)
     const driveMeta = await google.drive({ version: "v3", auth: oauth2 }).files.get({
       fileId: spreadsheetId,
       fields: "name",
     });
     const driveName = driveMeta.data.name || "Imported Leads";
-    const folderDoc = await resolveCanonicalFolder(userEmail, driveName, tabTitle!);
-
-    // Extra immutable guard: never allow a system name here
-    if (isSystemFolder(String(folderDoc.name)) || SYSTEM_NAMES.has(String(folderDoc.name))) {
-      return res.status(500).json({ error: "Hardlock violation: system folder selected", fingerprint: FINGERPRINT });
-    }
+    const folderDoc = await resolveCanonicalFolder(userEmail, driveName, tabTitle!, spreadsheetId);
 
     let inserted = 0;
     let updated = 0;
@@ -198,10 +203,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const phoneKey = last10(normalizedPhone);
       const emailLower = lcEmail(doc.email ?? doc.Email ?? "");
 
-      if (!phoneKey && !emailLower) {
-        skippedNoKey++;
-        continue;
-      }
+      if (!phoneKey && !emailLower) { skippedNoKey++; continue; }
 
       if (skipExisting) {
         const exists = await Lead.findOne({
@@ -253,11 +255,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       );
 
       const upc = (result?.upsertedCount || (result?.upsertedId ? 1 : 0) || 0) as number;
-
       if (upc > 0) inserted += upc;
       else if ((result?.modifiedCount || 0) > 0 || (result?.matchedCount || 0) > 0) updated += 1;
 
-      // Enroll instantly on NEW only
+      // Enroll to drips ONLY on brand-new insert
       if (upc > 0) {
         const found = await Lead.findOne(filter).select("_id").lean<{ _id: any } | null>();
         const leadId = found?._id ? String(found._id) : undefined;
@@ -267,7 +268,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
-    // Best-effort pointer update; **force** canonical folder in the pointer
+    // Best-effort pointer update; force canonical folder info
     try {
       await User.updateOne(
         {
@@ -287,10 +288,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           },
         }
       );
-    } catch { /* ignore */ }
+    } catch {}
 
     return res.status(200).json({
       ok: true,
+      fingerprint: FINGERPRINT,
       inserted,
       updated,
       skippedNoKey,
@@ -300,7 +302,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       lastRowImported: lastNonEmptyRow + 1,
       folderId: String(folderDoc._id),
       folderName: folderDoc.name,
-      fingerprint: FINGERPRINT,
     });
   } catch (err: any) {
     const message = err?.errors?.[0]?.message || err?.message || "Import failed";
