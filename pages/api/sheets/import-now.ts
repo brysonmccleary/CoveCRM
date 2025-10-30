@@ -11,7 +11,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "../auth/[...nextauth]";
 import { sanitizeLeadType, createLeadsFromCSV } from "@/lib/mongo/leads";
 import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
-import { enrollOnNewLeadIfWatched } from "@/lib/drips/enrollOnNewLeadIfWatched";
+// import { enrollOnNewLeadIfWatched } from "@/lib/drips/enrollOnNewLeadIfWatched"; // not touched
 
 export const config = { api: { bodyParser: false } };
 
@@ -67,61 +67,47 @@ function normalizeState(input?: string | null): string | undefined {
   const key = String(input).trim().toUpperCase();
   return STATE_MAP[key] || STATE_MAP[key.replace(/\s+/g, "_")] || undefined;
 }
-
-/* ---- status formatting ---- */
 function sanitizeStatus(raw?: string | null): string | undefined {
   if (!raw) return undefined;
   const s = String(raw).trim();
   if (!s) return undefined;
-  return s
-    .toLowerCase()
-    .split(/\s+/)
-    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-    .join(" ");
+  return s.toLowerCase().split(/\s+/).map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
 }
 
 /* ------------------------------------------------------------------ */
-/*  Folder resolver: STRICT “NEW FOLDER ONLY”                          */
-/*  - Ignores targetFolderId entirely                                  */
-/*  - Requires a folderName-like value                                 */
-/*  - If provided name is a system folder, rewrite the NAME string      */
-/*    to a safe, non-system name, then UPSERT exactly once              */
+/*  NEW-FOLDER-ONLY resolver (NO throws for system)                   */
+/*  - Ignores targetFolderId entirely                                 */
+/*  - If missing/invalid/system → auto-safe name                      */
 /* ------------------------------------------------------------------ */
+function makeSafeName(sourceHint?: string, requested?: string) {
+  const base =
+    (sourceHint && String(sourceHint).trim()) ||
+    (requested && String(requested).trim()) ||
+    `Google Sheet — ${new Date().toISOString().slice(0, 10)}`;
+  const cleaned = base.replace(/\s+/g, " ").trim();
+  return isSystemFolder(cleaned) ? `Google Sheet — ${cleaned}` : cleaned;
+}
+
 async function selectImportFolder(
   userEmail: string,
-  opts: { targetFolderId?: string; folderName?: string }
+  opts: { folderName?: string; sourceHint?: string }
 ) {
-  const requested = (opts.folderName || "").trim();
-  if (!requested) {
-    const msg = "A new folder name is required for import.";
-    console.warn("Import blocked: no new folder name provided", { userEmail });
-    throw Object.assign(new Error(msg), { status: 400 });
-  }
-
-  // NEVER use system folders; rewrite the *name string* to a safe one.
-  // Canonical: "Google Sheet — <Requested Name>"
-  const safeName = isSystemFolder(requested)
-    ? `Google Sheet — ${requested}`
-    : requested;
-
-  // Upsert by exact name to avoid duplicate folders (creates once, reuses thereafter)
+  const safeName = makeSafeName(opts.sourceHint, opts.folderName);
   const folder = await Folder.findOneAndUpdate(
     { userEmail, name: safeName },
     { $setOnInsert: { userEmail, name: safeName } },
     { new: true, upsert: true }
   );
-
-  return { folder, selection: "newFolderOnly" as const, requested, safeName };
+  return { folder, safeName };
 }
 
 /* ---- JSON body reader ---- */
 type JsonPayload = {
-  // NOTE: targetFolderId is IGNORED by design in this route
-  targetFolderId?: string;
-  folderName?: string;       // required (new folder only)
-  newFolderName?: string;    // accepted alias
-  newFolder?: string;        // accepted alias
-  name?: string;             // accepted alias
+  // targetFolderId is intentionally ignored
+  folderName?: string;
+  newFolderName?: string;
+  newFolder?: string;
+  name?: string;
   mapping?: Record<string, string>;
   rows?: Record<string, any>[];
   skipExisting?: boolean;
@@ -158,9 +144,9 @@ function mapRow(row: Record<string, any>, mapping: Record<string, string>) {
   const statusRaw = pick("status") ?? pick("disposition");
 
   const mergedNotes =
-    source && notes ? `${notes} | Source: ${source}`
-    : source && !notes ? `Source: ${source}`
-    : notes;
+    source && notes ? `${notes} | Source: ${source}` :
+    source && !notes ? `Source: ${source}` :
+    notes;
 
   const normalizedState = normalizeState(stateRaw);
   const emailLc = lcEmail(email);
@@ -209,19 +195,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (json) {
     try {
       const { mapping, rows, skipExisting = false } = json;
-
-      // Resolve folderName exclusively from name fields; targetFolderId is ignored
-      const preferred = (json.newFolderName || json.newFolder || json.name || json.folderName || "")
-        .toString()
-        .trim();
+      const providedName = (json.newFolderName || json.newFolder || json.name || json.folderName || "").toString().trim();
 
       if (!mapping || !rows || !Array.isArray(rows)) {
         return res.status(400).json({ message: "Missing mapping or rows[]" });
       }
 
-      const { folder, safeName } = await selectImportFolder(userEmail, {
-        folderName: preferred,
-      });
+      const { folder, safeName } = await selectImportFolder(userEmail, { folderName: providedName });
 
       const mapped = rows.map((r) => ({ ...mapRow(r, mapping), userEmail, folderId: folder._id }));
 
@@ -325,9 +305,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         skipExisting,
       });
     } catch (e: any) {
-      const code = e?.status === 400 ? 400 : 500;
       console.error("❌ JSON import error:", { userEmail, error: e?.message || String(e) });
-      return res.status(code).json({ message: e?.message || "Import failed" });
+      return res.status(500).json({ message: "Import failed" });
     }
   }
 
@@ -341,78 +320,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     try {
-      // IGNORE targetFolderId entirely per your rule
-      const preferredNameRaw =
+      // INTENTIONALLY ignore targetFolderId
+      const providedNameRaw =
         (fields as any).newFolderName ?? (fields as any).newFolder ?? (fields as any).name ?? fields.folderName;
-      const preferredName =
-        (Array.isArray(preferredNameRaw) ? preferredNameRaw[0] : preferredNameRaw)?.toString()?.trim() || "";
+      const providedName =
+        (Array.isArray(providedNameRaw) ? providedNameRaw[0] : providedNameRaw)?.toString()?.trim() || "";
+
+      const file = Array.isArray(files.file) ? files.file[0] : files.file;
+      if (!file?.filepath) return res.status(400).json({ message: "Missing file" });
 
       const mappingStr = (Array.isArray(fields.mapping) ? fields.mapping[0] : fields.mapping)?.toString();
       const skipExisting =
         (Array.isArray(fields.skipExisting) ? fields.skipExisting[0] : fields.skipExisting)?.toString() === "true";
 
-      const file = Array.isArray(files.file) ? files.file[0] : files.file;
-      if (!file?.filepath) return res.status(400).json({ message: "Missing file" });
-
-      if (!mappingStr) {
-        // LEGACY path: still requires a NEW folder name
-        const { folder, safeName } = await selectImportFolder(userEmail, { folderName: preferredName });
-
-        const buffer = await fs.promises.readFile(file.filepath);
-        const rawLeads: any[] = [];
-
-        await new Promise<void>((resolve, reject) => {
-          bufferToStream(buffer)
-            .pipe(csvParser())
-            .on("data", (row) => {
-              const cleaned = Object.entries(row).reduce((acc, [key, val]) => {
-                acc[String(key).trim()] = typeof val === "string" ? val.trim() : val;
-                return acc;
-              }, {} as Record<string, any>);
-              rawLeads.push(cleaned);
-            })
-            .on("end", () => resolve())
-            .on("error", (e) => reject(e));
-        });
-
-        if (rawLeads.length === 0) {
-          return res.status(400).json({ message: "No data rows found in CSV (empty file or header-only)." });
-        }
-
-        const leadsToInsert = rawLeads.map((lead) => {
-          const phoneKey = last10(lead["Phone"] || lead["phone"]);
-          const emailKey = lcEmail(lead["Email"] || lead["email"]);
-          return {
-            ...lead,
-            userEmail,
-            folderId: folder._id,
-            folder_name: String(folder.name),
-            "Folder Name": String(folder.name),
-            status: "New",
-            Phone: lead["Phone"] ?? lead["phone"],
-            phoneLast10: phoneKey,
-            normalizedPhone: phoneKey,
-            Email: emailKey,
-            email: emailKey,
-            leadType: sanitizeLeadType(lead["Lead Type"] || ""),
-          };
-        });
-
-        await createLeadsFromCSV(leadsToInsert, userEmail, String(folder._id));
-
-        return res.status(200).json({
-          message: "Leads imported successfully",
-          count: leadsToInsert.length,
-          folderId: folder._id,
-          folderName: folder.name,
-          safeName,
-          mode: "multipart-legacy-new-folder-only",
-        });
-      }
-
-      // MAPPING path: NEW FOLDER ONLY
-      const mapping = JSON.parse(mappingStr) as Record<string, string>;
-      const { folder, safeName } = await selectImportFolder(userEmail, { folderName: preferredName });
+      const sourceHint = file.originalFilename || providedName;
+      const { folder, safeName } = await selectImportFolder(userEmail, {
+        folderName: providedName,
+        sourceHint,
+      });
 
       const buffer = await fs.promises.readFile(file.filepath);
       const rawRows: any[] = [];
@@ -435,6 +360,40 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return res.status(400).json({ message: "No data rows found in CSV (empty file or header-only)." });
       }
 
+      if (!mappingStr) {
+        // Legacy straight-insert (no mapping UI)
+        const leadsToInsert = rawRows.map((lead) => {
+          const phoneKey = last10(lead["Phone"] || lead["phone"]);
+          const emailKey = lcEmail(lead["Email"] || lead["email"]);
+          return {
+            ...lead,
+            userEmail,
+            folderId: folder._id,
+            folder_name: String(folder.name),
+            "Folder Name": String(folder.name),
+            status: "New",
+            Phone: lead["Phone"] ?? lead["phone"],
+            phoneLast10: phoneKey,
+            normalizedPhone: phoneKey,
+            Email: emailKey,
+            email: emailKey,
+            leadType: sanitizeLeadType(lead["Lead Type"] || ""),
+          };
+        });
+
+        await createLeadsFromCSV(leadsToInsert, userEmail, String(folder._id));
+        return res.status(200).json({
+          message: "Leads imported successfully",
+          count: leadsToInsert.length,
+          folderId: folder._id,
+          folderName: folder.name,
+          safeName,
+          mode: "multipart-legacy-new-folder-only",
+        });
+      }
+
+      // Mapping path
+      const mapping = JSON.parse(mappingStr) as Record<string, string>;
       const rowsMapped = rawRows.map((r) => ({ ...mapRow(r, mapping), userEmail, folderId: folder._id }));
 
       const phoneKeys = Array.from(new Set(rowsMapped.map((m) => m.phoneLast10).filter(Boolean) as string[]));
@@ -535,9 +494,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         skipExisting,
       });
     } catch (e: any) {
-      const status = e?.status === 400 ? 400 : 500;
       console.error("❌ Multipart import error:", { error: e?.message || String(e) });
-      return res.status(status).json({ message: e?.message || "Import failed" });
+      return res.status(500).json({ message: "Import failed" });
     }
   });
 }
