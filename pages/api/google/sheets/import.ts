@@ -20,29 +20,18 @@ type ImportBody = {
   endRow?: number;
   folderId?: string;
   folderName?: string;
-  mapping: Record<string, string>;     // CSVHeader -> CanonicalField
-  skip?: Record<string, boolean>;      // headers to ignore
+  mapping: Record<string, string>;
+  skip?: Record<string, boolean>;
   createFolderIfMissing?: boolean;
-  skipExisting?: boolean;              // if true, do NOT move/update existing
+  skipExisting?: boolean;
 };
 
-function digits(s: any) {
-  return String(s ?? "").replace(/\D+/g, "");
-}
-function last10(s?: string) {
-  const d = digits(s);
-  return d.slice(-10) || "";
-}
-function lcEmail(s: any) {
-  const v = String(s ?? "").trim().toLowerCase();
-  return v || "";
-}
-function escapeA1Title(title: string) {
-  return title.replace(/'/g, "''");
-}
+function digits(s: any) { return String(s ?? "").replace(/\D+/g, ""); }
+function last10(s?: string) { const d = digits(s); return d.slice(-10) || ""; }
+function lcEmail(s: any) { const v = String(s ?? "").trim().toLowerCase(); return v || ""; }
+function escapeA1Title(title: string) { return title.replace(/'/g, "''"); }
 
 async function resolveFolder(userEmail: string, opts: { folderId?: string; folderName?: string; defaultName?: string; create?: boolean }) {
-  // If a name is provided, it WINS (and we create if needed)
   const byName = (opts.folderName || "").trim();
   if (byName) {
     if (isSystemFolder(byName)) throw new Error("Cannot import into system folders");
@@ -55,7 +44,6 @@ async function resolveFolder(userEmail: string, opts: { folderId?: string; folde
     return doc;
   }
 
-  // Else by ID
   if (opts.folderId) {
     const doc = await Folder.findOne({ _id: new mongoose.Types.ObjectId(opts.folderId), userEmail });
     if (!doc) throw new Error("Folder not found or not owned by user");
@@ -63,7 +51,6 @@ async function resolveFolder(userEmail: string, opts: { folderId?: string; folde
     return doc;
   }
 
-  // Else fallback to default
   const def = (opts.defaultName || "").trim();
   if (!def) throw new Error("Missing target folder");
   if (isSystemFolder(def)) throw new Error("Cannot import into system folders");
@@ -188,6 +175,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
     if (!folderDoc) return res.status(400).json({ error: "Folder not found/created" });
 
+    // Extra guard
+    if (isSystemFolder(String(folderDoc.name))) {
+      return res.status(400).json({ error: "Cannot import into system folders" });
+    }
+
     let inserted = 0;
     let updated = 0;
     let skippedNoKey = 0;
@@ -206,10 +198,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       headers.forEach((h, i) => {
         if (!h) return;
         if (skip[h]) return;
-        const fieldName = mapping[h];
+        const fieldName = (mapping as Record<string, string>)[h];
         if (!fieldName) return;
         doc[fieldName] = row[i] ?? "";
       });
+
+      // 🚫 Strip any sheet-provided status/disposition before writing
+      delete doc.status;
+      delete (doc as any).Status;
+      delete (doc as any).Disposition;
+      delete (doc as any)["Disposition"];
+      delete (doc as any)["Status"];
 
       const normalizedPhone = digits(doc.phone ?? doc.Phone ?? "");
       const phoneKey = last10(normalizedPhone);
@@ -246,14 +245,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         ],
       };
 
-      const setOnInsert: any = { createdAt: new Date() };
+      const setOnInsert: any = { createdAt: new Date(), status: "New" };
       const set: any = {
         userEmail,
         ownerEmail: userEmail,
         folderId: folderDoc._id,
         folder_name: String(folderDoc.name),
         "Folder Name": String(folderDoc.name),
-        status: "New",
+        status: "New", // ⛔ force New on import updates too
         // identity mirrors
         Email: emailLower || undefined,
         email: emailLower || undefined,
@@ -282,10 +281,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       const upc = (result?.upsertedCount || (result?.upsertedId ? 1 : 0) || 0) as number;
 
-      // ✅ Type-safe `_id` retrieval (handles both upsert and match/modify paths)
-      const found = await Lead.findOne(filter)
-        .select("_id")
-        .lean<{ _id: any } | null>();
+      // capture leadId for drip-enroll
+      const found = await Lead.findOne(filter).select("_id").lean<{ _id: any } | null>();
       const leadId: string | undefined =
         (result as any)?.upsertedId ?? (found?._id ? String(found._id) : undefined);
 

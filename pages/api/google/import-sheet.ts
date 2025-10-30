@@ -8,6 +8,7 @@ import Lead from "@/models/Lead";
 import { google } from "googleapis";
 import { ensureSafeFolder } from "@/lib/ensureSafeFolder";
 import { enrollOnNewLeadIfWatched } from "@/lib/drips/enrollOnNewLeadIfWatched";
+import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
 
 type ImportBody = {
   spreadsheetId: string;
@@ -101,6 +102,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       userEmail, folderId, folderName, defaultName, source: "google-sheets"
     });
 
+    // Extra belt-and-suspenders: never allow system folder here
+    if (isSystemFolder(String(folderDoc.name))) {
+      return res.status(400).json({ error: "Cannot import into system folders" });
+    }
+
     let inserted = 0, updated = 0, skippedNoKey = 0, skippedExistingCount = 0, lastNonEmptyRow = headerIdx;
 
     for (let r = firstDataRowIndex; r <= lastRowIndex; r++) {
@@ -116,6 +122,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (!fieldName) return;
         doc[fieldName] = row[i] ?? "";
       });
+
+      // 🚫 Strip any sheet-provided status/disposition before writing
+      delete doc.status;
+      delete (doc as any).Status;
+      delete (doc as any).Disposition;
+      delete (doc as any)["Disposition"];
+      delete (doc as any)["Status"];
 
       const phoneKey = last10(doc.phone ?? doc.Phone ?? "");
       const emailLower = lcEmail(doc.email ?? doc.Email ?? "");
@@ -147,6 +160,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         folderId: folderDoc._id,
         folder_name: String(folderDoc.name),
         "Folder Name": String(folderDoc.name),
+        status: "New", // ⛔ force New on import updates too
         // identity mirrors
         Email: emailLower || undefined,
         email: emailLower || undefined,
@@ -166,7 +180,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         sourceRowIndex: r + 1,
       };
 
-      // Upsert and capture leadId in a TS-safe way
+      // Upsert and capture leadId (TS-safe)
       const result = await (Lead as any).updateOne(
         filter,
         { $set: set, $setOnInsert: setOnInsert },
@@ -175,7 +189,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       const upc = (result?.upsertedCount || (result?.upsertedId ? 1 : 0) || 0) as number;
 
-      // 👉 Type-safe `_id` retrieval for the updated/matched path:
       const found = await Lead.findOne(filter).select("_id").lean<{ _id: any } | null>();
       const leadId: string | undefined =
         (result as any)?.upsertedId ?? (found?._id ? String(found._id) : undefined);
@@ -183,7 +196,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (upc > 0) inserted += upc;
       else if ((result?.modifiedCount || 0) > 0 || (result?.matchedCount || 0) > 0) updated += 1;
 
-      // If this folder has assigned drips, flag for immediate enrollment
       if (leadId) {
         await enrollOnNewLeadIfWatched({
           userEmail,
