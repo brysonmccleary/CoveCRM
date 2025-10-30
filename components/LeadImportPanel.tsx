@@ -88,7 +88,7 @@ export default function LeadImportPanel({ onImportSuccess }: { onImportSuccess?:
   useEffect(() => {
     (async () => {
       try {
-        const r = await fetch("/api/get-folders");
+        const r = await fetch("/api/get-folders", { credentials: "include" });
         if (r.ok) {
           const data = await r.json();
           if (Array.isArray(data?.folders)) setFolders(data.folders);
@@ -255,14 +255,24 @@ export default function LeadImportPanel({ onImportSuccess }: { onImportSuccess?:
       setIsUploading(true);
       setResultCounts(null);
 
-      const res = await fetch("/api/import-leads", { method: "POST", body: form });
-      const data = await res.json();
+      const res = await fetch("/api/import-leads", {
+        method: "POST",
+        body: form,
+        credentials: "include", // << IMPORTANT: send NextAuth cookie
+      });
 
-      if (!res.ok) throw new Error(data?.message || data?.error || "Import failed");
+      const text = await res.text();
+      let data: any = {};
+      try { data = text ? JSON.parse(text) : {}; } catch { data = { message: text || "" }; }
+
+      if (!res.ok) {
+        const msg = data?.message || data?.error || `HTTP ${res.status}`;
+        throw new Error(msg);
+      }
 
       const inserted = data?.counts?.inserted ?? 0;
       const updated = data?.counts?.updated ?? 0;
-      const skipped = data?.counts?.skipped ?? 0;
+      const skipped = data?.counts?.skipped ?? data?.counts?.skippedNoKey ?? 0;
 
       if (data?.counts) {
         setResultCounts({ inserted, updated, skipped });
@@ -281,7 +291,7 @@ export default function LeadImportPanel({ onImportSuccess }: { onImportSuccess?:
       onImportSuccess?.();
     } catch (e: any) {
       console.error("❌ Import error:", e);
-      toast.error(`❌ ${e?.message || "An unexpected error occurred"}`);
+      toast.error(`❌ ${e?.message || "Import failed"}`);
     } finally {
       setIsUploading(false);
     }
