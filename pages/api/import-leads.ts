@@ -81,49 +81,40 @@ function sanitizeStatus(raw?: string | null): string | undefined {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Folder resolver (NO AUTO FALLBACK)                                */
+/*  Folder resolver (AUTO-SAFE)                                       */
 /*  - Prefer typed new name > selected name                           */
-/*  - Blocks system folders by name or by id                          */
-/*  - Uses native driver for exact name match (no collation/plugins)  */
+/*  - If name/ID is a system folder, REWRITE to "<Name> — Leads"      */
+/*  - Uses native driver for exact name match when creating            */
 /* ------------------------------------------------------------------ */
 async function selectImportFolder(
   userEmail: string,
   opts: { targetFolderId?: string; folderName?: string }
 ) {
-  await dbConnect(); // ensure connected before using native driver
+  await dbConnect(); // ensure connected before native driver ops
 
   const byName = (opts.folderName || "").trim();
+  const safeNameFrom = (n: string) => `${n} — Leads`;
 
-  // A) By name (create if missing) — strict block first
+  // A) By name (create if missing) — rewrite if system
   if (byName) {
-    if (isSystemFolder(byName)) {
-      const msg = "Cannot import into system folders";
-      console.warn("Import blocked: system folder by NAME", { userEmail, byName });
-      throw Object.assign(new Error(msg), { status: 400 });
-    }
+    const targetName = isSystemFolder(byName) ? safeNameFrom(byName) : byName;
 
-    // Use native driver for an exact equality (no collation, no plugins)
+    // Use native driver for exact equality (no collation/plugins)
     const coll = mongoose.connection.db!.collection("folders");
-    const filter = { userEmail, name: byName };
+    const filter = { userEmail, name: targetName };
     const found = await coll.findOne(filter);
 
     if (found) {
-      return {
-        folder: { ...found, _id: found._id } as any,
-        selection: "foundByName" as const,
-      };
+      return { folder: { ...found, _id: found._id } as any, selection: isSystemFolder(byName) ? "rewroteSystemByName" as const : "foundByName" as const };
     }
 
-    const toInsert = { userEmail, name: byName, assignedDrips: [] };
+    const toInsert = { userEmail, name: targetName, source: "import" as const };
     const ins = await coll.insertOne(toInsert);
     const created = await coll.findOne({ _id: ins.insertedId });
-    return {
-      folder: created as any,
-      selection: "createdByName" as const,
-    };
+    return { folder: created as any, selection: "createdByName" as const };
   }
 
-  // B) By id — must belong to user; block by actual name
+  // B) By id — must belong to user; rewrite to safe sibling if system
   if (opts.targetFolderId) {
     const f = await Folder.findOne({ _id: opts.targetFolderId, userEmail });
     if (!f) {
@@ -132,13 +123,13 @@ async function selectImportFolder(
       throw Object.assign(new Error(msg), { status: 400 });
     }
     if (isSystemFolder(f.name)) {
-      const msg = "Cannot import into system folders";
-      console.warn("Import blocked: system folder by ID", {
-        userEmail,
-        folderId: String(f._id),
-        folderName: f.name,
-      });
-      throw Object.assign(new Error(msg), { status: 400 });
+      const targetName = safeNameFrom(f.name);
+      const safe = await Folder.findOneAndUpdate(
+        { userEmail, name: targetName },
+        { $setOnInsert: { userEmail, name: targetName, source: "import" } },
+        { new: true, upsert: true }
+      );
+      return { folder: safe, selection: "rewroteSystemById" as const };
     }
     return { folder: f, selection: "byId" as const };
   }

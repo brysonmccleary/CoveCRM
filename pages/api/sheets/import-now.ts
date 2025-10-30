@@ -8,9 +8,9 @@ import dbConnect from "@/lib/mongooseConnect";
 import Folder from "@/models/Folder";
 import Lead from "@/models/Lead";
 import { getServerSession } from "next-auth";
-import { authOptions } from "../auth/[...nextauth]"; // ← FIXED: one level up
+import { authOptions } from "../auth/[...nextauth]"; // ← one level up (correct for /sheets/)
 import { sanitizeLeadType, createLeadsFromCSV } from "@/lib/mongo/leads";
-import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders"; // unified guard
+import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
 import { enrollOnNewLeadIfWatched } from "@/lib/drips/enrollOnNewLeadIfWatched";
 
 export const config = { api: { bodyParser: false } };
@@ -81,32 +81,30 @@ function sanitizeStatus(raw?: string | null): string | undefined {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Folder resolver (NO AUTO FALLBACK)                                */
+/*  Folder resolver (AUTO-SAFE)                                       */
 /*  - Prefer typed new name > selected name                           */
-/*  - Blocks system folders by name or by id                          */
+/*  - If name/ID is a system folder, REWRITE to "<Name> — Leads"      */
+/*  - Creates the safe folder if needed                               */
 /* ------------------------------------------------------------------ */
 async function selectImportFolder(
   userEmail: string,
   opts: { targetFolderId?: string; folderName?: string }
 ) {
   const byName = (opts.folderName || "").trim();
+  const safeNameFrom = (n: string) => `${n} — Leads`;
 
-  // A) By name (create if missing) — strict block first
+  // A) By name (create if missing) — rewrite if system
   if (byName) {
-    if (isSystemFolder(byName)) {
-      const msg = "Cannot import into system folders";
-      console.warn("Import blocked: system folder by NAME", { userEmail, byName });
-      throw Object.assign(new Error(msg), { status: 400 });
-    }
+    const targetName = isSystemFolder(byName) ? safeNameFrom(byName) : byName;
     const f = await Folder.findOneAndUpdate(
-      { userEmail, name: byName },
-      { $setOnInsert: { userEmail, name: byName } },
+      { userEmail, name: targetName },
+      { $setOnInsert: { userEmail, name: targetName, source: "import" } },
       { new: true, upsert: true }
     );
-    return { folder: f, selection: "byName" as const };
+    return { folder: f, selection: isSystemFolder(byName) ? "rewroteSystemByName" as const : "byName" as const };
   }
 
-  // B) By id — must belong to user; block by actual name
+  // B) By id — must belong to user; rewrite to safe sibling if system
   if (opts.targetFolderId) {
     const f = await Folder.findOne({ _id: opts.targetFolderId, userEmail });
     if (!f) {
@@ -115,13 +113,13 @@ async function selectImportFolder(
       throw Object.assign(new Error(msg), { status: 400 });
     }
     if (isSystemFolder(f.name)) {
-      const msg = "Cannot import into system folders";
-      console.warn("Import blocked: system folder by ID", {
-        userEmail,
-        folderId: String(f._id),
-        folderName: f.name,
-      });
-      throw Object.assign(new Error(msg), { status: 400 });
+      const targetName = safeNameFrom(f.name);
+      const safe = await Folder.findOneAndUpdate(
+        { userEmail, name: targetName },
+        { $setOnInsert: { userEmail, name: targetName, source: "import" } },
+        { new: true, upsert: true }
+      );
+      return { folder: safe, selection: "rewroteSystemById" as const };
     }
     return { folder: f, selection: "byId" as const };
   }
@@ -540,10 +538,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               acc[String(key).trim()] = typeof val === "string" ? val.trim() : val;
               return acc;
             }, {} as Record<string, any>);
-              rawRows.push(cleaned);
-            })
-            .on("end", () => resolve())
-            .on("error", (e) => reject(e));
+            rawRows.push(cleaned);
+          })
+          .on("end", () => resolve())
+          .on("error", (e) => reject(e));
       });
 
       if (rawRows.length === 0) {
