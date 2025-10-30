@@ -8,9 +8,9 @@ import dbConnect from "@/lib/mongooseConnect";
 import Folder from "@/models/Folder";
 import Lead from "@/models/Lead";
 import { getServerSession } from "next-auth";
-import { authOptions } from "../auth/[...nextauth]"; // ← FIXED: one level up
+import { authOptions } from "../auth/[...nextauth]";
 import { sanitizeLeadType, createLeadsFromCSV } from "@/lib/mongo/leads";
-import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders"; // unified guard
+import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
 
 export const config = { api: { bodyParser: false } };
 
@@ -80,9 +80,7 @@ function sanitizeStatus(raw?: string | null): string | undefined {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Folder resolver (NO AUTO FALLBACK)                                */
-/*  - Prefer typed new name > selected name                           */
-/*  - Blocks system folders by name or by id                          */
+/*  Folder resolver (explicit, non-system)                            */
 /* ------------------------------------------------------------------ */
 async function selectImportFolder(
   userEmail: string,
@@ -90,7 +88,7 @@ async function selectImportFolder(
 ) {
   const byName = (opts.folderName || "").trim();
 
-  // A) By name (create if missing) — strict block first
+  // Prefer byName (create if missing) — block system names
   if (byName) {
     if (isSystemFolder(byName)) {
       const msg = "Cannot import into system folders";
@@ -105,7 +103,7 @@ async function selectImportFolder(
     return { folder: f, selection: "byName" as const };
   }
 
-  // B) By id — must belong to user; block by actual name
+  // Or by id if it belongs to user and is not a system folder
   if (opts.targetFolderId) {
     const f = await Folder.findOne({ _id: opts.targetFolderId, userEmail });
     if (!f) {
@@ -125,12 +123,12 @@ async function selectImportFolder(
     return { folder: f, selection: "byId" as const };
   }
 
-  const msg = "A folder is required: provide folderName (creates if missing) or targetFolderId.";
+  const msg = "Choose an existing folder or provide a new folder name.";
   console.warn("Import blocked: no folder provided", { userEmail });
   throw Object.assign(new Error(msg), { status: 400 });
 }
 
-/* ---- JSON body reader (for JSON mode) ---- */
+/* ---- JSON body reader ---- */
 type JsonPayload = {
   targetFolderId?: string;
   folderName?: string;
@@ -254,10 +252,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const fallbackSelected = (json.folderName || "").toString().trim();
       const resolvedFolderName = preferredName || fallbackSelected || undefined;
 
-      console.info("Import request (json)", {
-        userEmail, targetFolderId, preferredName, fallbackSelected, resolvedFolderName,
-      });
-
       if (!mapping || !rows || !Array.isArray(rows)) {
         return res.status(400).json({ message: "Missing mapping or rows[]" });
       }
@@ -265,14 +259,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return res.status(400).json({ message: "Choose an existing folder or provide a new folder name." });
       }
 
-      const { folder, selection } = await selectImportFolder(userEmail, {
+      const { folder } = await selectImportFolder(userEmail, {
         targetFolderId,
         folderName: resolvedFolderName,
-      });
-
-      console.info("Import folder selected (json)", {
-        userEmail, selection, folderId: String(folder._id), folderName: folder.name,
-        provided: { preferredName, fallbackSelected },
       });
 
       const mapped = rows.map((r) => ({
@@ -324,7 +313,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const filter = buildFilter(userEmail, phoneKey, emailKey);
         if (!filter) { skipped++; continue; }
 
-        // $set base (NEVER duplicate fields into $setOnInsert)
+        // $set base (do NOT set status here for inserts)
         const base: any = {
           ownerEmail: userEmail,
           folderId: folder._id,
@@ -341,7 +330,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (m.leadType) base["leadType"] = m.leadType;
 
         if (exists) {
-          if (m.status) base.status = m.status; // EXISTING → status only in $set
+          if (m.status) base.status = m.status; // EXISTING → allow explicit status in set
           ops.push({ updateOne: { filter, update: { $set: base }, upsert: false } });
           processedFilters.push(filter);
         } else {
@@ -350,7 +339,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             status: m.status || "New", // NEW → status only in $setOnInsert
             createdAt: new Date(),
           };
-          // make sure status is NOT in $set for the new path
           if ("status" in base) delete base.status;
 
           ops.push({
@@ -418,7 +406,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           ? fields.targetFolderId[0]
           : fields.targetFolderId)?.toString() || undefined;
 
-      // Prefer typed "new" name first; fall back to selected folderName
       const preferredNameRaw =
         (fields as any).newFolderName ?? (fields as any).newFolder ?? (fields as any).name;
       const preferredName =
@@ -434,11 +421,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       const resolvedFolderName = preferredName || selectedName || undefined;
 
-      console.info("Import request (multipart)", {
-        userEmail, targetFolderId, preferredName, selectedName, resolvedFolderName,
-      });
-
-      // Explicit requirement to choose a folder (no auto default)
       if (!targetFolderId && !resolvedFolderName) {
         return res.status(400).json({ message: "Choose an existing folder or provide a new folder name." });
       }
@@ -454,14 +436,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       if (!mappingStr) {
         // Legacy path (no mapping) — still requires explicit folder
-        const { folder, selection } = await selectImportFolder(userEmail, {
+        const { folder } = await selectImportFolder(userEmail, {
           targetFolderId,
           folderName: resolvedFolderName,
-        });
-
-        console.info("Import folder selected (legacy)", {
-          userEmail, selection, folderId: String(folder._id), folderName: folder.name,
-          provided: { preferredName, selectedName },
         });
 
         const buffer = await fs.promises.readFile(file.filepath);
@@ -518,14 +495,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       // New path (mapping provided) — requires explicit folder
       const mapping = JSON.parse(mappingStr) as Record<string, string>;
 
-      const { folder, selection } = await selectImportFolder(userEmail, {
+      const { folder } = await selectImportFolder(userEmail, {
         targetFolderId,
         folderName: resolvedFolderName,
-      });
-
-      console.info("Import folder selected (multipart+mapping)", {
-        userEmail, selection, folderId: String(folder._id), folderName: folder.name,
-        provided: { preferredName, selectedName },
       });
 
       const buffer = await fs.promises.readFile(file.filepath);
