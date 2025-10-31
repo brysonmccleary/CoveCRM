@@ -1,31 +1,40 @@
 // /lib/systemFolders.ts
-// Central definition so both API and UI use the same guard logic.
+// Single source of truth for reserved/system folders and helpers.
 
 const SYSTEM_FOLDERS_RAW = [
   "Sold",
   "Not Interested",
   "Booked Appointment",
   "No Show",
-  // add any other locked system folders here, and ONLY here
 ] as const;
 
 export const SYSTEM_FOLDERS = SYSTEM_FOLDERS_RAW.map((n) => n.toLowerCase());
 
 function norm(s: string) {
-  return s.trim().toLowerCase();
+  return String(s || "").trim().toLowerCase();
 }
 
 /**
- * Returns true if a folder name is one of the reserved/system folders.
- * Matching is case-insensitive.
+ * Case-insensitive check for reserved/system folders.
  */
 export function isSystemFolderName(name: string | undefined | null): boolean {
   if (!name) return false;
-  return SYSTEM_FOLDERS.includes(norm(String(name)));
+  return SYSTEM_FOLDERS.includes(norm(name));
 }
 
 /**
- * Back-compat alias used by older UI code.
- * Keep this export so imports like `{ isSystemish }` continue to work.
+ * Back-compat alias kept for older UI code.
+ * Some components still import `{ isSystemish }`.
  */
 export const isSystemish = isSystemFolderName;
+
+/**
+ * Produces a folder name that is guaranteed to be NON-system.
+ * If the incoming name is one of the reserved names, suffix " (Leads)".
+ * If name is empty/whitespace, falls back to "Imported Leads".
+ */
+export function safeFolderName(name: string | undefined | null): string {
+  const base = String(name || "").trim();
+  if (!base) return "Imported Leads";
+  return isSystemFolderName(base) ? `${base} (Leads)` : base;
+}
