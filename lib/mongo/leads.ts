@@ -24,7 +24,7 @@ const LEAD_TYPES = [
   "Generic",
 ] as const;
 
-// NOTE: Localize the alias to avoid duplicate identifier collisions with shims/models.
+// NOTE: local alias to avoid collisions with shims/models
 type LeadTypeLocal = (typeof LEAD_TYPES)[number];
 
 export function sanitizeLeadType(input: any): string {
@@ -55,7 +55,7 @@ export async function createLeadsFromCSV(
   if (!Array.isArray(rows) || !rows.length) return { inserted: 0, updated: 0, affectedIds: [] };
 
   // Normalize identity fields on each row
-  const prepared = rows.map((r) => {
+  const prepared: Array<Record<string, any>> = rows.map((r) => {
     const phoneRaw = r["Phone"] ?? r["phone"] ?? r.phone;
     const emailRaw = r["Email"] ?? r["email"] ?? r.email;
 
@@ -66,11 +66,13 @@ export async function createLeadsFromCSV(
       ...r,
       userEmail,
       folderId: new mongoose.Types.ObjectId(folderId),
+      // identity mirrors
+      Phone: phoneRaw,               // <-- ensure Phone exists on prepared rows
       phoneLast10: phoneKey,
       normalizedPhone: phoneKey,
       Email: emailKey,
       email: emailKey,
-    };
+    } as Record<string, any>;
   });
 
   const phoneKeys = Array.from(new Set(prepared.map((m) => m.phoneLast10).filter(Boolean) as string[]));
@@ -138,7 +140,7 @@ export async function createLeadsFromCSV(
     if (m["First Name"] !== undefined) base["First Name"] = m["First Name"];
     if (m["Last Name"] !== undefined) base["Last Name"] = m["Last Name"];
     if (m.State !== undefined) base["State"] = m.State;
-    if (m.Notes !== undefined) base["Notes"] = m.Notes;
+    if (m.Notes !== undefined) base["Notes"] = m["Notes"];
     if (m.leadType) base["leadType"] = sanitizeLeadType(m.leadType);
 
     if (exists) {
