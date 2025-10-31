@@ -1,3 +1,4 @@
+// /lib/mongo/leads.ts
 import mongoose from "mongoose";
 import Lead from "@/models/Lead";
 import Folder from "@/models/Folder";
@@ -24,20 +25,27 @@ const LEAD_TYPES = [
   "Generic",
 ] as const;
 
-// NOTE: local alias to avoid collisions with shims/models
+// Local alias to avoid collisions with other ambient LeadType declarations
 type LeadTypeLocal = (typeof LEAD_TYPES)[number];
 
-export function sanitizeLeadType(input: any): string {
+export function sanitizeLeadType(input: any): LeadTypeLocal {
   const s = String(input ?? "").trim().toLowerCase();
   const match =
     LEAD_TYPES.find((t) => t.toLowerCase() === s) ||
-    (s.includes("mortgage") ? "Mortgage Protection" :
-     s.includes("final") ? "Final Expense" :
-     s.includes("iul") ? "IUL" :
-     s.includes("medicare") ? "Medicare" :
-     s.includes("term") ? "Term Life" :
-     s.includes("whole") ? "Whole Life" : "Generic");
-  return match as string;
+    (s.includes("mortgage")
+      ? "Mortgage Protection"
+      : s.includes("final")
+      ? "Final Expense"
+      : s.includes("iul")
+      ? "IUL"
+      : s.includes("medicare")
+      ? "Medicare"
+      : s.includes("term")
+      ? "Term Life"
+      : s.includes("whole")
+      ? "Whole Life"
+      : "Generic");
+  return match as LeadTypeLocal;
 }
 
 /**
@@ -67,7 +75,7 @@ export async function createLeadsFromCSV(
       userEmail,
       folderId: new mongoose.Types.ObjectId(folderId),
       // identity mirrors
-      Phone: phoneRaw,               // <-- ensure Phone exists on prepared rows
+      Phone: phoneRaw, // ensure Phone exists on prepared rows
       phoneLast10: phoneKey,
       normalizedPhone: phoneKey,
       Email: emailKey,
@@ -181,8 +189,8 @@ export async function createLeadsFromCSV(
     const orFilters = processedFilters.flatMap((f) =>
       (f.$or || []).map((clause: any) => ({ ...clause, userEmail }))
     );
-    const docs = await Lead.find({ $or: orFilters }).select("_id").lean();
-    affectedIds = docs.map((d) => String(d._id));
+    const docs: Array<{ _id: any }> = await Lead.find({ $or: orFilters }).select("_id").lean();
+    affectedIds = docs.map((d: { _id: any }) => String(d._id));
   }
 
   if (affectedIds.length) {
