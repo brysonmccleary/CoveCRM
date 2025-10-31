@@ -1,40 +1,31 @@
-// Canonical system folder names visible in the UI
-export const SYSTEM_FOLDERS = [
+// /lib/systemFolders.ts
+// Central definition so both API and UI use the same guard logic.
+
+const SYSTEM_FOLDERS_RAW = [
   "Sold",
   "Not Interested",
   "Booked Appointment",
-  "Vet Leads",
+  "No Show",
+  // add any other locked system folders here, and ONLY here
 ] as const;
 
-export type SystemFolderName = (typeof SYSTEM_FOLDERS)[number];
+export const SYSTEM_FOLDERS = SYSTEM_FOLDERS_RAW.map((n) => n.toLowerCase());
 
-const CANONICAL_LOWER = new Set(SYSTEM_FOLDERS.map((s) => s.toLowerCase()));
-
-function safeNormalize(name?: string | null): string {
-  return String(name ?? "")
-    .trim()
-    .toLowerCase()
-    .replace(/[._-]+/g, " ")
-    .replace(/\s+/g, " ");
+function norm(s: string) {
+  return s.trim().toLowerCase();
 }
 
-/** Strict server-side check. Only exact canonical names (case-insensitive) + “booked” shorthand. */
-export function isSystemFolderName(name?: string | null): boolean {
-  const n = safeNormalize(name);
-  if (!n) return false;
-  if (CANONICAL_LOWER.has(n)) return true;
-  if (n === "booked") return true; // shorthand for “Booked Appointment”
-  return false;
+/**
+ * Returns true if a folder name is one of the reserved/system folders.
+ * Matching is case-insensitive.
+ */
+export function isSystemFolderName(name: string | undefined | null): boolean {
+  if (!name) return false;
+  return SYSTEM_FOLDERS.includes(norm(String(name)));
 }
 
-/** Softer, UX-only heuristic. Do NOT use for server blocking. */
-export function isSystemish(name?: string | null): boolean {
-  const n = safeNormalize(name);
-  if (!n) return false;
-  if (isSystemFolderName(n)) return true;
-  const compact = n.replace(/\s+/g, "");
-  if (compact === "sold" || compact === "solds") return true;
-  if (compact === "notinterested") return true;
-  if (compact === "booked" || compact === "bookedappointment") return true;
-  return false;
-}
+/**
+ * Back-compat alias used by older UI code.
+ * Keep this export so imports like `{ isSystemish }` continue to work.
+ */
+export const isSystemish = isSystemFolderName;
