@@ -7,8 +7,6 @@ import User from "@/models/User";
 import Lead from "@/models/Lead";
 import { google } from "googleapis";
 import { ensureSafeFolder } from "@/lib/ensureSafeFolder";
-import { enrollOnNewLeadIfWatched } from "@/lib/drips/enrollOnNewLeadIfWatched";
-import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
 
 type ImportBody = {
   spreadsheetId: string;
@@ -21,7 +19,7 @@ type ImportBody = {
   folderName?: string;
   mapping: Record<string, string>;
   skip?: Record<string, boolean>;
-  createFolderIfMissing?: boolean;
+  createFolderIfMissing?: boolean; // still honored, but we *always* prevent system folders
   skipExisting?: boolean;
 };
 
@@ -32,17 +30,6 @@ const lcEmail = (s: any) => {
   return v || "";
 };
 const escapeA1Title = (t: string) => t.replace(/'/g, "''");
-
-function sanitizeStatus(raw?: any): string | undefined {
-  if (!raw) return undefined;
-  const s = String(raw).trim();
-  if (!s) return undefined;
-  return s
-    .toLowerCase()
-    .split(/\s+/)
-    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-    .join(" ");
-}
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
@@ -98,10 +85,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
     const values = (valueResp.data.values || []) as string[][];
     if (!values.length) {
-      return res.status(200).json({
-        ok: true, inserted: 0, updated: 0, skippedNoKey: 0, skippedExisting: 0,
-        rowCount: 0, lastRowImported: 0, note: "No data in sheet."
-      });
+      return res.status(200).json({ ok: true, inserted: 0, updated: 0, skippedNoKey: 0, skippedExisting: 0, rowCount: 0, lastRowImported: 0, note: "No data in sheet." });
     }
 
     const headerIdx = Math.max(0, headerRow - 1);
@@ -109,16 +93,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const firstDataRowIndex = typeof startRow === "number" ? Math.max(1, startRow) - 1 : headerIdx + 1;
     const lastRowIndex = typeof endRow === "number" ? Math.min(values.length, Math.max(endRow, firstDataRowIndex + 1)) - 1 : values.length - 1;
 
-    // Build safe default folder name and lock to NON-system folder
+    // Build safe default folder name and lock the folder to a NON-system folder
     const meta = await drive.files.get({ fileId: spreadsheetId, fields: "name" });
     const defaultName = `${meta.data.name || "Imported Leads"} — ${tabTitle}`;
     const folderDoc = await ensureSafeFolder({
       userEmail, folderId, folderName, defaultName, source: "google-sheets"
     });
-
-    if (isSystemFolder(String(folderDoc.name))) {
-      return res.status(400).json({ error: "Cannot import into system folders" });
-    }
 
     let inserted = 0, updated = 0, skippedNoKey = 0, skippedExistingCount = 0, lastNonEmptyRow = headerIdx;
 
@@ -127,19 +107,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (!row.some(cell => String(cell ?? "").trim() !== "")) continue;
       lastNonEmptyRow = r;
 
-      // Build doc using header->field mapping, skipping configured headers
       const doc: Record<string, any> = {};
       headers.forEach((h, i) => {
         if (!h) return;
         if (skip[h]) return;
-        const fieldName = (mapping as Record<string, string>)[h];
+        const fieldName = mapping[h];
         if (!fieldName) return;
         doc[fieldName] = row[i] ?? "";
       });
-
-      // Compute a mapped status (if user mapped status/disposition), then strip raw sheet fields
-      const mappedStatus = sanitizeStatus(doc.status ?? doc.Status ?? doc.disposition);
-      delete doc.status; delete (doc as any).Status; delete (doc as any).disposition;
 
       const phoneKey = last10(doc.phone ?? doc.Phone ?? "");
       const emailLower = lcEmail(doc.email ?? doc.Email ?? "");
@@ -164,11 +139,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         ],
       };
 
-      // IMPORTANT:
-      // - $setOnInsert sets status: "New" for brand-new leads ONLY.
-      // - $set NEVER sets status unless there is an explicit mappedStatus.
-      const $setOnInsert: any = { createdAt: new Date(), status: "New" };
-      const $set: any = {
+      const setOnInsert: any = { createdAt: new Date(), status: "New" };
+      const set: any = {
         userEmail,
         ownerEmail: userEmail,
         folderId: folderDoc._id,
@@ -192,32 +164,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         sourceTabTitle: tabTitle,
         sourceRowIndex: r + 1,
       };
-      if (mappedStatus) $set.status = mappedStatus;
 
-      const result = await (Lead as any).updateOne(
-        filter,
-        { $set: $set, $setOnInsert: $setOnInsert },
-        { upsert: true }
-      );
-
-      const upc = (result?.upsertedCount || (result?.upsertedId ? 1 : 0) || 0) as number;
-      const found = await Lead.findOne(filter).select("_id").lean<{ _id: any } | null>();
-      const leadId: string | undefined = (result as any)?.upsertedId ?? (found?._id ? String(found._id) : undefined);
-
-      if (upc > 0) inserted += upc;
-      else if ((result?.modifiedCount || 0) > 0 || (result?.matchedCount || 0) > 0) updated += 1;
-
-      // Immediate drip enrollment for new/updated leads in watched folders
-      if (leadId) {
-        await enrollOnNewLeadIfWatched({
-          userEmail,
-          folderId: String(folderDoc._id),
-          leadId,
-        });
-      }
+      const result = await (Lead as any).updateOne(filter, { $set: set, $setOnInsert: setOnInsert }, { upsert: true });
+      const upc = result?.upsertedCount || (result?.upsertedId ? 1 : 0) || 0;
+      const mod = result?.modifiedCount || 0;
+      const match = result?.matchedCount || 0;
+      if (upc > 0) inserted += upc; else if (mod > 0 || match > 0) updated += 1;
     }
 
-    // Persist pointer & canonical folder on the user doc (best-effort)
+    // Persist pointer & canonical folder on the user doc
     await User.updateOne(
       { email: userEmail, "googleSheets.syncedSheets.spreadsheetId": spreadsheetId, "googleSheets.syncedSheets.title": tabTitle },
       {
@@ -232,7 +187,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         },
       },
       { strict: false }
-    ).catch(() => { /* ignore pointer write errors */ });
+    );
 
     return res.status(200).json({
       ok: true,
