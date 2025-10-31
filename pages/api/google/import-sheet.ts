@@ -4,6 +4,7 @@ import { authOptions } from "../auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import Lead from "@/models/Lead";
+import mongoose from "mongoose";
 import { google } from "googleapis";
 import { ensureNonSystemFolderId } from "@/lib/folders/ensureNonSystemFolderId";
 
@@ -24,7 +25,10 @@ type ImportBody = {
 
 const digits = (s: any) => String(s ?? "").replace(/\D+/g, "");
 const last10 = (s?: string) => digits(s).slice(-10) || "";
-const lcEmail = (s: any) => { const v = String(s ?? "").trim().toLowerCase(); return v || ""; };
+const lcEmail = (s: any) => {
+  const v = String(s ?? "").trim().toLowerCase();
+  return v || "";
+};
 const escapeA1Title = (t: string) => t.replace(/'/g, "''");
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -69,7 +73,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const oauth2 = new google.auth.OAuth2(
       process.env.GOOGLE_CLIENT_ID!,
       process.env.GOOGLE_CLIENT_SECRET!,
-      redirectUri,
+      redirectUri
     );
     oauth2.setCredentials({
       access_token: gs.accessToken,
@@ -129,29 +133,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const meta = await drive.files.get({ fileId: spreadsheetId, fields: "name" });
     const defaultName = `${meta.data.name || "Imported Leads"} — ${tabTitle}`;
 
-    // We may receive a system folder id/name from the client; resolve it, then force-safe.
-    // Create or reuse the name given by client (or default) upstream in UI—doesn't matter:
-    // we always end with a safe id/name for writes.
-    let folderIdToCheck: string | undefined = folderId;
-    let folderNameToCheck: string | undefined = folderName || defaultName;
+    // Candidate (name or id), then guarantee a real _id before ensureNonSystemFolderId
+    const folders = mongoose.connection.db!.collection("folders");
+    const baseName = (folderName && folderName.trim()) || defaultName;
 
-    // If we have neither a valid id nor a name, just use defaultName to create/locate.
-    if (!folderIdToCheck && !folderNameToCheck) folderNameToCheck = defaultName;
-
-    // Try to look up/create the folder candidate quickly (write-only best-effort).
-    // We do NOT trust the candidate; we immediately pass it through ensureNonSystemFolderId.
-    const candidate = await User.db!.collection("folders").findOneAndUpdate(
-      { userEmail, name: folderNameToCheck },
-      { $setOnInsert: { userEmail, name: folderNameToCheck, source: "google-sheets" } },
+    // Upsert by name (best-effort)
+    const up: any = await folders.findOneAndUpdate(
+      { userEmail, name: baseName },
+      { $setOnInsert: { userEmail, name: baseName, source: "google-sheets" } },
       { upsert: true, returnDocument: "after" }
     );
-    const candidateId = (candidate.value?._id as any) || folderIdToCheck;
 
-    const safe = await ensureNonSystemFolderId(
-      userEmail,
-      candidateId as any,
-      folderNameToCheck || defaultName
-    );
+    let candidateId: any = up?.value?._id || folderId; // TS-safe
+    if (!candidateId) {
+      // Extremely defensive fallback (shouldn't happen, but silences TS and runtime edge)
+      const ins = await folders.insertOne({ userEmail, name: baseName, source: "google-sheets" });
+      candidateId = ins.insertedId;
+    }
+
+    // Now force a non-system destination
+    const safe = await ensureNonSystemFolderId(userEmail, candidateId as any, baseName);
     const safeFolderId = safe.folderId;
     const safeFolderName = safe.folderName;
 
@@ -170,7 +171,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       headers.forEach((h, i) => {
         if (!h) return;
         if (skip[h]) return;
-        const fieldName = mapping[h];
+        const fieldName = (mapping as Record<string, string>)[h];
         if (!fieldName) return;
         doc[fieldName] = row[i] ?? "";
       });
