@@ -19,14 +19,11 @@ type ImportBody = {
   headerRow?: number;
   startRow?: number;
   endRow?: number;
-  // NOTE: We will ignore folderId entirely to hard-guarantee "new folder per import".
-  folderId?: string;
-  // If provided, we’ll still use it as the *base* for the new folder’s name.
-  folderName?: string;
+  folderId?: string; // ignored (we always create a new folder)
+  folderName?: string; // optional base name; we still create a new, unique doc
   mapping: Record<string, string>;
   skip?: Record<string, boolean>;
-  // Kept for API compatibility; we always create a new folder.
-  createFolderIfMissing?: boolean;
+  createFolderIfMissing?: boolean; // ignored; kept for API compatibility
   skipExisting?: boolean;
 };
 
@@ -37,12 +34,11 @@ function last10(s?: string) { const d = digits(s); return d.slice(-10) || ""; }
 function lcEmail(s: any) { const v = String(s ?? "").trim().toLowerCase(); return v || ""; }
 function escapeA1Title(title: string) { return title.replace(/'/g, "''"); }
 function nowStamp() {
-  // short unique suffix to ensure no collisions
   return new Date().toISOString().replace(/[:.TZ]/g, "").slice(0, 14) + "-" + crypto.randomBytes(2).toString("hex");
 }
 
 /**
- * Create a brand-new folder document every time.
+ * Create a brand-new folder document every time and return {_id, name}.
  * Never reuses an existing folder.
  */
 async function createNewFolder(userEmail: string, baseName: string) {
@@ -50,7 +46,6 @@ async function createNewFolder(userEmail: string, baseName: string) {
   if (!name) throw new Error("Folder base name required");
   if (isSystemFolder(name)) throw new Error("Cannot import into system folders");
 
-  // Always ensure uniqueness with a suffix; this avoids any chance of matching.
   const uniqueName = `${name} — ${nowStamp()}`;
 
   const _id = new mongoose.Types.ObjectId();
@@ -63,16 +58,20 @@ async function createNewFolder(userEmail: string, baseName: string) {
     updatedAt: new Date(),
   });
 
-  // sanity double-check
-  const fresh = await Folder.findOne({ _id, userEmail }).lean();
+  // Strictly fetch only what we need and type it.
+  const fresh = await Folder.findOne(
+    { _id, userEmail },
+    { _id: 1, name: 1 }
+  ).lean<{ _id: mongoose.Types.ObjectId; name: string } | null>();
+
   if (!fresh) throw new Error("Failed to create destination folder");
 
+  // Ultra-guard (should never happen unless baseName was bad)
   if (isSystemFolder(fresh.name)) {
-    // Ultra-guard (should never happen unless baseName was bad)
     throw new Error("Hardlock: resolved a system folder; aborting");
   }
 
-  return fresh as { _id: mongoose.Types.ObjectId; name: string };
+  return fresh; // {_id, name}
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -89,7 +88,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     headerRow = 1,
     startRow,
     endRow,
-    // folderId is intentionally ignored
+    // folderId intentionally ignored to guarantee "new folder per import"
     folderName,
     mapping = {},
     skip = {},
@@ -169,12 +168,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    // Compute the **base** folder name:
-    // 1) If request provided folderName, use it as base.
-    // 2) Otherwise: "<Drive File Name> — <Tab Title>"
+    // Compute the base folder name (still ALWAYS creating a new folder)
     const drive = google.drive({ version: "v3", auth: oauth2 });
     let baseFolderName = (folderName || "").trim();
-
     if (!baseFolderName) {
       const defaultNameMeta = await drive.files.get({
         fileId: spreadsheetId,
@@ -183,15 +179,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const fileName = (defaultNameMeta.data.name || "Imported Leads").toString().trim();
       baseFolderName = `${fileName} — ${tabTitle}`;
     }
-
     if (isSystemFolder(baseFolderName)) {
       return res.status(400).json({ error: "Cannot import into system folders" });
     }
 
-    // **Always create a brand new folder**
+    // ALWAYS create a new folder (fresh doc) — never reuse
     const folderDoc = await createNewFolder(userEmail, baseFolderName);
 
-    // Continue with import
     const headerIdx = Math.max(0, headerRow - 1);
     const headers = (values[headerIdx] || []).map((h) => String(h || "").trim());
 
@@ -314,7 +308,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
-    // Update pointer so your UI shows the latest run’s folder (optional but useful)
+    // Update pointer for UI convenience (non-critical)
     try {
       const positional = await User.updateOne(
         {
@@ -356,7 +350,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         );
       }
     } catch {
-      // non-fatal
+      // ignore
     }
 
     return res.status(200).json({
@@ -374,7 +368,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   } catch (err: any) {
     const message = err?.errors?.[0]?.message || err?.message || "Import failed";
-    // Preserve the explicit hardlock message so you see it in UI if ever hit
     const code = /Hardlock/i.test(message) ? 400 : 500;
     return res.status(code).json({ error: message, fingerprint: FINGERPRINT });
   }
