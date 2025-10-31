@@ -1,6 +1,6 @@
 // pages/api/sheets/import-now.ts
 import type { NextApiRequest, NextApiResponse } from "next";
-import { getServerSession } from "next-auth/next"; // ✅ correct import for API routes
+import { getServerSession } from "next-auth/next";
 import formidable from "formidable";
 import fs from "fs";
 import csvParser from "csv-parser";
@@ -11,7 +11,6 @@ import Lead from "@/models/Lead";
 import { authOptions } from "../auth/[...nextauth]";
 import { sanitizeLeadType, createLeadsFromCSV } from "@/lib/mongo/leads";
 import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
-// NOTE: enrollOnNewLeadIfWatched intentionally not used here unless you want it; CSV path is unchanged.
 
 export const config = { api: { bodyParser: false } };
 
@@ -181,7 +180,6 @@ function applyIdentityFields(set: Record<string, any>, phoneKey?: string, emailK
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed" });
 
-  // ✅ Fix typing: explicitly cast to a safe shape before accessing .user?.email
   const session = (await getServerSession(req, res, authOptions as any)) as
     | { user?: { email?: string | null } | null }
     | null;
@@ -218,7 +216,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         : [];
 
       const byPhone = new Map<string, any>();
-      const byEmail = new Map<string, any>>();
+      const byEmail = new Map<string, any>(); // ✅ fixed
       for (const l of existing) {
         const p1 = l.phoneLast10 && String(l.phoneLast10);
         const p2 = l.normalizedPhone && String(l.normalizedPhone);
@@ -460,7 +458,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             status: m.status || "New",
             createdAt: new Date(),
           };
-          if ("status" in base) delete base.status; // avoid $set + $setOnInsert status conflict
+          if ("status" in base) delete base.status;
 
           ops.push({ updateOne: { filter, update: { $set: base, $setOnInsert: setOnInsert }, upsert: true } });
           processedFilters.push(filter);
