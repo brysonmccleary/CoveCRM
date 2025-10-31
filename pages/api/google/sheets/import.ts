@@ -1,4 +1,4 @@
-// /pages/api/google/sheets/import.ts
+// pages/api/google/sheets/import.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../../auth/[...nextauth]";
@@ -18,47 +18,48 @@ type ImportBody = {
   headerRow?: number;
   startRow?: number;
   endRow?: number;
-  folderId?: string;
-  folderName?: string;
+
+  // ⚠️ These are now ignored to prevent system-folder accidents:
+  // folderId?: string;
+  // folderName?: string;
+
   mapping: Record<string, string>;
   skip?: Record<string, boolean>;
-  createFolderIfMissing?: boolean;
+  createFolderIfMissing?: boolean; // ignored; we always create the canonical folder
   skipExisting?: boolean;
 };
+
+const FINGERPRINT = "sheets-canonical-2025-10-30-1548PDT";
 
 function digits(s: any) { return String(s ?? "").replace(/\D+/g, ""); }
 function last10(s?: string) { const d = digits(s); return d.slice(-10) || ""; }
 function lcEmail(s: any) { const v = String(s ?? "").trim().toLowerCase(); return v || ""; }
 function escapeA1Title(title: string) { return title.replace(/'/g, "''"); }
 
-async function resolveFolder(userEmail: string, opts: { folderId?: string; folderName?: string; defaultName?: string; create?: boolean }) {
-  const byName = (opts.folderName || "").trim();
-  if (byName) {
-    if (isSystemFolder(byName)) throw new Error("Cannot import into system folders");
-    const doc = await Folder.findOneAndUpdate(
-      { userEmail, name: byName },
-      { $setOnInsert: { userEmail, name: byName, source: "google-sheets" } },
-      { new: true, upsert: !!opts.create }
-    );
-    if (!doc) throw new Error("Folder not found/created");
-    return doc;
+/** Always resolve to the canonical non-system folder:
+ * "<Spreadsheet Name> — <Tab Title>"
+ * Ignores any incoming folderId/folderName and rejects system names.
+ */
+async function resolveCanonicalFolder(userEmail: string, oauth2: any, spreadsheetId: string, tabTitle: string) {
+  // Get the spreadsheet file name for canonical naming
+  const fileMeta = await google.drive({ version: "v3", auth: oauth2 }).files.get({
+    fileId: spreadsheetId,
+    fields: "name",
+  });
+  const spreadsheetName = fileMeta.data.name || "Imported Leads";
+  const canonicalName = `${spreadsheetName} — ${tabTitle}`.trim();
+
+  if (isSystemFolder(canonicalName)) {
+    // In practice the canonical name will be based on user sheet/tab and should never collide
+    throw new Error("Hardlock: canonical name resolves to a system folder");
   }
 
-  if (opts.folderId) {
-    const doc = await Folder.findOne({ _id: new mongoose.Types.ObjectId(opts.folderId), userEmail });
-    if (!doc) throw new Error("Folder not found or not owned by user");
-    if (isSystemFolder(doc.name)) throw new Error("Cannot import into system folders");
-    return doc;
-  }
-
-  const def = (opts.defaultName || "").trim();
-  if (!def) throw new Error("Missing target folder");
-  if (isSystemFolder(def)) throw new Error("Cannot import into system folders");
   const doc = await Folder.findOneAndUpdate(
-    { userEmail, name: def },
-    { $setOnInsert: { userEmail, name: def, source: "google-sheets" } },
+    { userEmail, name: canonicalName },
+    { $setOnInsert: { userEmail, name: canonicalName, source: "google-sheets", createdAt: new Date() } },
     { new: true, upsert: true }
   );
+  if (!doc) throw new Error("Failed to resolve canonical folder");
   return doc;
 }
 
@@ -67,7 +68,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const session = await getServerSession(req, res, authOptions);
   if (!session?.user?.email) return res.status(401).json({ error: "Unauthorized" });
-  const userEmail = session.user.email.toLowerCase();
+  const userEmail = String(session.user.email).toLowerCase();
 
   const {
     spreadsheetId,
@@ -76,20 +77,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     headerRow = 1,
     startRow,
     endRow,
-    folderId,
-    folderName,
+    // folderId, folderName,   // deliberately ignored
     mapping = {},
     skip = {},
-    createFolderIfMissing = true,
+    // createFolderIfMissing = true, // ignored; we always create canonical
     skipExisting = false,
   } = (req.body || {}) as ImportBody;
 
   if (!spreadsheetId) return res.status(400).json({ error: "Missing spreadsheetId" });
   if (!title && typeof sheetId !== "number") return res.status(400).json({ error: "Provide sheet 'title' or numeric 'sheetId'" });
-  if (folderName && isSystemFolder(folderName)) return res.status(400).json({ error: "Cannot import into system folders" });
 
   try {
     await dbConnect();
+
     const user = await User.findOne({ email: userEmail }).lean<any>();
     const gs = user?.googleSheets || user?.googleTokens;
     if (!gs?.refreshToken) return res.status(400).json({ error: "Google not connected" });
@@ -141,14 +141,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!values.length) {
       return res.status(200).json({
         ok: true,
+        fingerprint: FINGERPRINT,
         inserted: 0,
         updated: 0,
         skippedNoKey: 0,
         skippedExisting: 0,
         rowCount: 0,
+        headerRow,
         lastRowImported: 0,
         note: "No data in sheet.",
       });
+    }
+
+    // ☑️ ALWAYS resolve canonical, user-specific, non-system folder
+    const folderDoc = await resolveCanonicalFolder(userEmail, oauth2, spreadsheetId, tabTitle!);
+    if (!folderDoc) return res.status(400).json({ error: "Folder resolution failed" });
+    if (isSystemFolder(String(folderDoc.name))) {
+      // Extra guard; practically unreachable with canonical naming
+      return res.status(400).json({ error: "Hardlock: resolved a system folder; aborting", fingerprint: "sheets-hardlock-2025-10-30-1548PDT" });
     }
 
     const headerIdx = Math.max(0, headerRow - 1);
@@ -160,25 +170,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       typeof endRow === "number"
         ? Math.min(values.length, Math.max(endRow, firstDataRowIndex + 1)) - 1
         : values.length - 1;
-
-    // Resolve destination folder (name wins > id > default)
-    const defaultNameMeta = await google.drive({ version: "v3", auth: oauth2 }).files.get({
-      fileId: spreadsheetId,
-      fields: "name",
-    });
-    const defaultName = `${defaultNameMeta.data.name || "Imported Leads"} — ${tabTitle}`;
-    const folderDoc = await resolveFolder(userEmail, {
-      folderId,
-      folderName,
-      defaultName,
-      create: createFolderIfMissing,
-    });
-    if (!folderDoc) return res.status(400).json({ error: "Folder not found/created" });
-
-    // Extra guard
-    if (isSystemFolder(String(folderDoc.name))) {
-      return res.status(400).json({ error: "Cannot import into system folders" });
-    }
 
     let inserted = 0;
     let updated = 0;
@@ -236,7 +227,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
       }
 
-      // Build upsert
       const filter: any = {
         userEmail,
         $or: [
@@ -252,14 +242,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         folderId: folderDoc._id,
         folder_name: String(folderDoc.name),
         "Folder Name": String(folderDoc.name),
-        status: "New", // ⛔ force New on import updates too
-        // identity mirrors
+        status: "New", // force New on import updates too
         Email: emailLower || undefined,
         email: emailLower || undefined,
         Phone: String(doc.phone ?? doc.Phone ?? ""),
         normalizedPhone: phoneKey || undefined,
         phoneLast10: phoneKey || undefined,
-        // optional mapped fields
         "First Name": doc.firstName ?? doc["First Name"],
         "Last Name": doc.lastName ?? doc["Last Name"],
         State: doc.state ?? doc.State,
@@ -272,7 +260,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         sourceRowIndex: r + 1,
       };
 
-      // Upsert (no logic change), TS-safe capture of leadId
       const result = await (Lead as any).updateOne(
         filter,
         { $set: set, $setOnInsert: setOnInsert },
@@ -289,7 +276,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (upc > 0) inserted += upc;
       else if ((result?.modifiedCount || 0) > 0 || (result?.matchedCount || 0) > 0) updated += 1;
 
-      // If this folder is watched by a drip, enroll immediately
+      // Enroll immediately if this folder is watched
       if (leadId) {
         await enrollOnNewLeadIfWatched({
           userEmail,
@@ -299,7 +286,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
-    // Update sync pointer on the user doc (best-effort)
+    // Update/record the canonical pointer so the UI shows the right folder going forward
     try {
       const positional = await User.updateOne(
         {
@@ -343,11 +330,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         );
       }
     } catch {
-      // ignore pointer errors
+      // best-effort only
     }
 
     return res.status(200).json({
       ok: true,
+      fingerprint: FINGERPRINT,
       inserted,
       updated,
       skippedNoKey,
@@ -360,6 +348,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   } catch (err: any) {
     const message = err?.errors?.[0]?.message || err?.message || "Import failed";
-    return res.status(500).json({ error: message });
+    return res.status(500).json({ error: message, fingerprint: FINGERPRINT });
   }
 }
