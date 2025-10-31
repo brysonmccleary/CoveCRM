@@ -26,7 +26,7 @@ export default async function handler(
     });
 
     const formattedLeads = leads.map((lead) => ({
-      id: lead._id.toString(),
+    id: (typeof (lead as any)._id === "string" ? (lead as any)._id : ((lead as any)._id as any)?.toString?.() ?? ""),
       ...lead.toObject(),
     }));
 
