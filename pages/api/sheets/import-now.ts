@@ -11,7 +11,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "../auth/[...nextauth]";
 import { sanitizeLeadType, createLeadsFromCSV } from "@/lib/mongo/leads";
 import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
-// import { enrollOnNewLeadIfWatched } from "@/lib/drips/enrollOnNewLeadIfWatched"; // not touched
+// NOTE: enrollOnNewLeadIfWatched intentionally not used here unless you want it; CSV path is unchanged.
 
 export const config = { api: { bodyParser: false } };
 
@@ -76,8 +76,6 @@ function sanitizeStatus(raw?: string | null): string | undefined {
 
 /* ------------------------------------------------------------------ */
 /*  NEW-FOLDER-ONLY resolver (NO throws for system)                   */
-/*  - Ignores targetFolderId entirely                                 */
-/*  - If missing/invalid/system → auto-safe name                      */
 /* ------------------------------------------------------------------ */
 function makeSafeName(sourceHint?: string, requested?: string) {
   const base =
@@ -103,7 +101,6 @@ async function selectImportFolder(
 
 /* ---- JSON body reader ---- */
 type JsonPayload = {
-  // targetFolderId is intentionally ignored
   folderName?: string;
   newFolderName?: string;
   newFolder?: string;
@@ -184,7 +181,7 @@ function applyIdentityFields(set: Record<string, any>, phoneKey?: string, emailK
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed" });
 
-  const session = await getServerSession(req, res, authOptions);
+  const session = await getServerSession(req, res, authOptions as any);
   if (!session?.user?.email) return res.status(401).json({ message: "Unauthorized" });
 
   const userEmail = lc(session.user.email)!;
@@ -260,7 +257,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (m.leadType) base["leadType"] = m.leadType;
 
         if (exists) {
-          if (m.status) base.status = m.status;
+          if (m.status) base.status = m.status; // status only when provided on update
           ops.push({ updateOne: { filter, update: { $set: base }, upsert: false } });
           processedFilters.push(filter);
         } else {
@@ -269,7 +266,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             status: m.status || "New",
             createdAt: new Date(),
           };
-          if ("status" in base) delete base.status;
+          if ("status" in base) delete base.status; // avoid $set + $setOnInsert status conflict
 
           ops.push({ updateOne: { filter, update: { $set: base, $setOnInsert: setOnInsert }, upsert: true } });
           processedFilters.push(filter);
@@ -320,7 +317,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     try {
-      // INTENTIONALLY ignore targetFolderId
       const providedNameRaw =
         (fields as any).newFolderName ?? (fields as any).newFolder ?? (fields as any).name ?? fields.folderName;
       const providedName =
@@ -451,7 +447,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (m.leadType) base["leadType"] = m.leadType;
 
         if (exists) {
-          if (m.status) base.status = m.status;
+          if (m.status) base.status = m.status; // update status only when explicitly provided
           ops.push({ updateOne: { filter, update: { $set: base }, upsert: false } });
           processedFilters.push(filter);
         } else {
@@ -460,7 +456,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             status: m.status || "New",
             createdAt: new Date(),
           };
-          if ("status" in base) delete base.status;
+          if ("status" in base) delete base.status; // avoid $set + $setOnInsert status conflict
 
           ops.push({ updateOne: { filter, update: { $set: base, $setOnInsert: setOnInsert }, upsert: true } });
           processedFilters.push(filter);
