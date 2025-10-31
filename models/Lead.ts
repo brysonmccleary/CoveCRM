@@ -1,7 +1,7 @@
 // /models/Lead.ts
 import mongoose, { Schema, Model, models } from "mongoose";
 
-// Keep typing permissive so API routes can set arbitrary fields safely.
+// Strict document type for actual Mongo docs
 export type LeadDoc = mongoose.Document & {
   userEmail?: string;
   folderId?: mongoose.Types.ObjectId;
@@ -17,7 +17,6 @@ export type LeadDoc = mongoose.Document & {
 
 const LeadSchema = new Schema<LeadDoc>(
   {
-    // Allow flexible fields; we still define common identifiers for indexes
     userEmail: { type: String, index: true },
     folderId: { type: Schema.Types.ObjectId, ref: "Folder", index: true },
     phoneLast10: { type: String, index: true },
@@ -27,7 +26,7 @@ const LeadSchema = new Schema<LeadDoc>(
     status: { type: String, default: "New" },
   },
   {
-    strict: false, // accept arbitrary columns from CSV/Sheets (e.g., "First Name")
+    strict: false, // accept arbitrary CSV/Sheets columns (e.g., "First Name")
     timestamps: { createdAt: "createdAt", updatedAt: "updatedAt" },
   }
 );
@@ -38,8 +37,16 @@ LeadSchema.index({ userEmail: 1, normalizedPhone: 1 });
 LeadSchema.index({ userEmail: 1, Email: 1 });
 LeadSchema.index({ userEmail: 1, email: 1 });
 
-// Model reuse on hot reloads
-const Lead: Model<LeadDoc> = (models.Lead as Model<LeadDoc>) || mongoose.model<LeadDoc>("Lead", LeadSchema);
+// Reuse model in dev/hot-reload
+const Lead: Model<LeadDoc> =
+  (models.Lead as Model<LeadDoc>) || mongoose.model<LeadDoc>("Lead", LeadSchema);
 
 export default Lead;
-export type { LeadDoc as ILead };
+
+// ---- Exports for typing ----
+// Back-compat: many places annotate plain objects as `ILead` before saving.
+// Keep `ILead` as a permissive POJO type so object literals are assignable.
+export type ILead = Record<string, any>;
+
+// If any file needs the strict Mongoose doc, import { LeadDoc } explicitly.
+export type { LeadDoc };
