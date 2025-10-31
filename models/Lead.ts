@@ -47,6 +47,3 @@ export default Lead;
 // Back-compat: many places annotate plain objects as `ILead` before saving.
 // Keep `ILead` as a permissive POJO type so object literals are assignable.
 export type ILead = Record<string, any>;
-
-// If any file needs the strict Mongoose doc, import { LeadDoc } explicitly.
-export type { LeadDoc };
