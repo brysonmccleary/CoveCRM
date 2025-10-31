@@ -1,4 +1,3 @@
-// /pages/api/sheets/import-now.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import formidable from "formidable";
 import fs from "fs";
@@ -8,9 +7,11 @@ import dbConnect from "@/lib/mongooseConnect";
 import Folder from "@/models/Folder";
 import Lead from "@/models/Lead";
 import { getServerSession } from "next-auth";
-import { authOptions } from "../auth/[...nextauth]"; // ← FIXED: one level up
+import { authOptions } from "../auth/[...nextauth]"; // one level up
 import { sanitizeLeadType, createLeadsFromCSV } from "@/lib/mongo/leads";
-import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders"; // unified guard
+import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
+import mongoose from "mongoose";
+import { ensureNonSystemFolderId } from "@/lib/folders/ensureNonSystemFolderId";
 
 export const config = { api: { bodyParser: false } };
 
@@ -51,15 +52,15 @@ const STATE_MAP: Record<string, string> = {
   NJ: "NJ", NEW_JERSEY: "NJ", "NEW JERSEY": "NJ", NM: "NM", NEW_MEXICO: "NM",
   "NEW MEXICO": "NM", NY: "NY", NEW_YORK: "NY", "NEW YORK": "NY", NC: "NC",
   NORTH_CAROLINA: "NC", "NORTH CAROLINA": "NC", ND: "ND", NORTH_DAKOTA: "ND",
-  "NORTH DAKOTA": "ND", OH: "OH", OHIO: "OH", OK: "OK", OKLAHOMA: "OK",
-  OR: "OR", OREGON: "OR", PA: "PA", PENNSYLVANIA: "PA", RI: "RI",
-  RHODE_ISLAND: "RI", "RHODE ISLAND": "RI", SC: "SC", SOUTH_CAROLINA: "SC",
-  "SOUTH CAROLINA": "SC", SD: "SD", SOUTH_DAKOTA: "SD", "SOUTH DAKOTA": "SD",
-  TN: "TN", TENNESSEE: "TN", TX: "TX", TEXAS: "TX", UT: "UT", UTAH: "UT",
-  VT: "VT", VERMONT: "VT", VA: "VA", VIRGINIA: "VA", WA: "WA", WASHINGTON: "WA",
-  WV: "WV", WEST_VIRGINIA: "WV", "WEST VIRGINIA": "WV", WI: "WI",
-  WISCONSIN: "WI", WY: "WY", WYOMING: "WY", DC: "DC",
-  "DISTRICT OF COLUMBIA": "DC", DISTRICT_OF_COLUMBIA: "DC",
+  "NORTH DAKOTA": "ND", OH: "OH", OHIO: "OH", OK: "OK", OKLAHOMA: "OK", OR: "OR",
+  OREGON: "OR", PA: "PA", PENNSYLVANIA: "PA", RI: "RI", RHODE_ISLAND: "RI",
+  "RHODE ISLAND": "RI", SC: "SC", SOUTH_CAROLINA: "SC", "SOUTH CAROLINA": "SC",
+  SD: "SD", SOUTH_DAKOTA: "SD", "SOUTH DAKOTA": "SD", TN: "TN", TENNESSEE: "TN",
+  TX: "TX", TEXAS: "TX", UT: "UT", UTAH: "UT", VT: "VT", VERMONT: "VT",
+  VA: "VA", VIRGINIA: "VA", WA: "WA", WASHINGTON: "WA", WV: "WV",
+  WEST_VIRGINIA: "WV", "WEST VIRGINIA": "WV", WI: "WI", WISCONSIN: "WI",
+  WY: "WY", WYOMING: "WY", DC: "DC", "DISTRICT OF COLUMBIA": "DC",
+  DISTRICT_OF_COLUMBIA: "DC",
 };
 function normalizeState(input?: string | null): string | undefined {
   if (!input) return undefined;
@@ -80,9 +81,7 @@ function sanitizeStatus(raw?: string | null): string | undefined {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Folder resolver (NO AUTO FALLBACK)                                */
-/*  - Prefer typed new name > selected name                           */
-/*  - Blocks system folders by name or by id                          */
+/* Folder resolver (NO AUTO FALLBACK)                                 */
 /* ------------------------------------------------------------------ */
 async function selectImportFolder(
   userEmail: string,
@@ -125,36 +124,10 @@ async function selectImportFolder(
     return { folder: f, selection: "byId" as const };
   }
 
-  const msg = "A folder is required: provide folderName (creates if missing) or targetFolderId.";
+  const msg =
+    "A folder is required: provide folderName (creates if missing) or targetFolderId.";
   console.warn("Import blocked: no folder provided", { userEmail });
   throw Object.assign(new Error(msg), { status: 400 });
-}
-
-/* ---- JSON body reader (for JSON mode) ---- */
-type JsonPayload = {
-  targetFolderId?: string;
-  folderName?: string;
-  newFolderName?: string;
-  newFolder?: string;
-  name?: string;
-  mapping?: Record<string, string>;
-  rows?: Record<string, any>[];
-  skipExisting?: boolean;
-};
-async function readJsonBody(req: NextApiRequest): Promise<JsonPayload | null> {
-  if (!req.headers["content-type"]?.includes("application/json")) return null;
-  const chunks: Buffer[] = [];
-  await new Promise<void>((resolve, reject) => {
-    req.on("data", (c) => chunks.push(Buffer.from(c)));
-    req.on("end", () => resolve());
-    req.on("error", (e) => reject(e));
-  });
-  if (!chunks.length) return {};
-  try {
-    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
-  } catch {
-    return {};
-  }
 }
 
 /* ---- CSV mapping ---- */
@@ -203,209 +176,17 @@ function mapRow(row: Record<string, any>, mapping: Record<string, string>) {
   };
 }
 
-/* ---- dedupe helpers ---- */
-function buildFilter(userEmail: string, phoneKey?: string, emailKey?: string) {
-  if (phoneKey) {
-    return { userEmail, $or: [{ phoneLast10: phoneKey }, { normalizedPhone: phoneKey }] };
-  }
-  if (emailKey) {
-    return { userEmail, $or: [{ Email: emailKey }, { email: emailKey }] };
-  }
-  return null;
-}
-function applyIdentityFields(
-  set: Record<string, any>,
-  phoneKey?: string,
-  emailKey?: string,
-  phoneRaw?: any
-) {
-  if (phoneRaw !== undefined) set["Phone"] = phoneRaw;
-  if (phoneKey !== undefined) {
-    set["phoneLast10"] = phoneKey;
-    set["normalizedPhone"] = phoneKey;
-  }
-  if (emailKey !== undefined) {
-    set["Email"] = emailKey;
-    set["email"] = emailKey;
-  }
-}
-
-/* =========================  ROUTE HANDLER  ========================= */
+/* ========================= ROUTE HANDLER ========================= */
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "POST")
-    return res.status(405).json({ message: "Method not allowed" });
+  if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed" });
 
   const session = await getServerSession(req, res, authOptions);
-  if (!session?.user?.email)
-    return res.status(401).json({ message: "Unauthorized" });
-
+  if (!session?.user?.email) return res.status(401).json({ message: "Unauthorized" });
   const userEmail = lc(session.user.email)!;
+
   await dbConnect();
 
-  /* ---------- JSON MODE ---------- */
-  const json = await readJsonBody(req);
-  if (json) {
-    try {
-      const { targetFolderId, mapping, rows, skipExisting = false } = json;
-
-      const preferredName = (json.newFolderName || json.newFolder || json.name || "")
-        .toString()
-        .trim();
-      const fallbackSelected = (json.folderName || "").toString().trim();
-      const resolvedFolderName = preferredName || fallbackSelected || undefined;
-
-      console.info("Import request (json)", {
-        userEmail, targetFolderId, preferredName, fallbackSelected, resolvedFolderName,
-      });
-
-      if (!mapping || !rows || !Array.isArray(rows)) {
-        return res.status(400).json({ message: "Missing mapping or rows[]" });
-      }
-      if (!targetFolderId && !resolvedFolderName) {
-        return res.status(400).json({ message: "Choose an existing folder or provide a new folder name." });
-      }
-
-      const { folder, selection } = await selectImportFolder(userEmail, {
-        targetFolderId,
-        folderName: resolvedFolderName,
-      });
-
-      console.info("Import folder selected (json)", {
-        userEmail, selection, folderId: String(folder._id), folderName: folder.name,
-        provided: { preferredName, fallbackSelected },
-      });
-
-      const mapped = rows.map((r) => ({
-        ...mapRow(r, mapping),
-        userEmail,
-        folderId: folder._id,
-      }));
-
-      const phoneKeys = Array.from(new Set(mapped.map((m) => m.phoneLast10).filter(Boolean) as string[]));
-      const emailKeys = Array.from(new Set(mapped.map((m) => m.Email).filter(Boolean) as string[]));
-
-      const ors: any[] = [];
-      if (phoneKeys.length) {
-        ors.push({ phoneLast10: { $in: phoneKeys } }, { normalizedPhone: { $in: phoneKeys } });
-      }
-      if (emailKeys.length) {
-        ors.push({ Email: { $in: emailKeys } }, { email: { $in: emailKeys } });
-      }
-
-      const existing = ors.length
-        ? await Lead.find({ userEmail, $or: ors }).select("_id phoneLast10 normalizedPhone Email email folderId")
-        : [];
-
-      const byPhone = new Map<string, any>();
-      const byEmail = new Map<string, any>();
-      for (const l of existing) {
-        const p1 = l.phoneLast10 && String(l.phoneLast10);
-        const p2 = l.normalizedPhone && String(l.normalizedPhone);
-        const e1 = l.Email && String(l.Email).toLowerCase();
-        const e2 = l.email && String(l.email).toLowerCase();
-        if (p1) byPhone.set(p1, l);
-        if (p2) byPhone.set(p2, l);
-        if (e1) byEmail.set(e1, l);
-        if (e2) byEmail.set(e2, l);
-      }
-
-      const ops: any[] = [];
-      const processedFilters: any[] = [];
-      let skipped = 0;
-
-      for (const m of mapped) {
-        const phoneKey = m.phoneLast10 as string | undefined;
-        const emailKey = (m.Email as string | undefined) || (m.email as string | undefined);
-        const exists = (phoneKey && byPhone.get(phoneKey)) || (emailKey && byEmail.get(String(emailKey)));
-
-        if (!phoneKey && !emailKey) { skipped++; continue; }
-        if (skipExisting && exists) { skipped++; continue; }
-
-        const filter = buildFilter(userEmail, phoneKey, emailKey);
-        if (!filter) { skipped++; continue; }
-
-        // $set base (NEVER duplicate fields into $setOnInsert)
-        const base: any = {
-          ownerEmail: userEmail,
-          folderId: folder._id,
-          folder_name: String(folder.name),
-          "Folder Name": String(folder.name),
-          updatedAt: new Date(),
-        };
-
-        applyIdentityFields(base, phoneKey, emailKey, m.Phone);
-        if (m["First Name"] !== undefined) base["First Name"] = m["First Name"];
-        if (m["Last Name"] !== undefined) base["Last Name"] = m["Last Name"];
-        if (m.State !== undefined) base["State"] = m.State;
-        if (m.Notes !== undefined) base["Notes"] = m.Notes;
-        if (m.leadType) base["leadType"] = m.leadType;
-
-        if (exists) {
-          if (m.status) base.status = m.status; // EXISTING → status only in $set
-          ops.push({ updateOne: { filter, update: { $set: base }, upsert: false } });
-          processedFilters.push(filter);
-        } else {
-          const setOnInsert: any = {
-            userEmail,
-            status: m.status || "New", // NEW → status only in $setOnInsert
-            createdAt: new Date(),
-          };
-          // make sure status is NOT in $set for the new path
-          if ("status" in base) delete base.status;
-
-          ops.push({
-            updateOne: {
-              filter,
-              update: { $set: base, $setOnInsert: setOnInsert },
-              upsert: true,
-            },
-          });
-          processedFilters.push(filter);
-        }
-      }
-
-      let inserted = 0;
-      let updated = 0;
-
-      if (ops.length) {
-        const result = await (Lead as any).bulkWrite(ops, { ordered: false });
-        inserted = (result as any).upsertedCount || 0;
-        const existedOps = processedFilters.length - inserted;
-        updated = existedOps < 0 ? 0 : existedOps;
-
-        if (processedFilters.length) {
-          const orFilters = processedFilters.flatMap((f) =>
-            (f.$or || []).map((clause: any) => ({ userEmail, ...clause }))
-          );
-          const affected = await Lead.find({ $or: orFilters }).select("_id");
-          const ids = affected.map((d) => String(d._id));
-          if (ids.length) {
-            await Folder.updateOne(
-              { _id: folder._id, userEmail },
-              { $addToSet: { leadIds: { $each: ids } } }
-            );
-          }
-        }
-      }
-
-      return res.status(200).json({
-        message: "Import completed",
-        folderId: folder._id,
-        folderName: folder.name,
-        counts: { inserted, updated, skipped },
-        mode: "json",
-        skipExisting,
-      });
-    } catch (e: any) {
-      const code = e?.status === 400 ? 400 : 500;
-      console.error("❌ JSON import error:", { userEmail, error: e?.message || String(e) });
-      return res.status(code).json({ message: e?.message || "Import failed" });
-    }
-  }
-
-  /* ---------- MULTIPART MODE (CSV upload) ---------- */
   const form = formidable({ multiples: false });
-
   form.parse(req, async (err, fields, files) => {
     if (err) {
       console.error("❌ Form parse error:", err);
@@ -414,59 +195,49 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     try {
       const targetFolderId =
-        (Array.isArray(fields.targetFolderId)
-          ? fields.targetFolderId[0]
-          : fields.targetFolderId)?.toString() || undefined;
+        (Array.isArray(fields.targetFolderId) ? fields.targetFolderId[0] : fields.targetFolderId)
+          ?.toString() || undefined;
 
-      // Prefer typed "new" name first; fall back to selected folderName
       const preferredNameRaw =
         (fields as any).newFolderName ?? (fields as any).newFolder ?? (fields as any).name;
       const preferredName =
-        (Array.isArray(preferredNameRaw) ? preferredNameRaw[0] : preferredNameRaw)
-          ?.toString()
-          ?.trim() || "";
-
+        (Array.isArray(preferredNameRaw) ? preferredNameRaw[0] : preferredNameRaw)?.toString()?.trim() || "";
       const selectedNameRaw = fields.folderName;
       const selectedName =
-        (Array.isArray(selectedNameRaw) ? selectedNameRaw[0] : selectedNameRaw)
-          ?.toString()
-          ?.trim() || "";
-
+        (Array.isArray(selectedNameRaw) ? selectedNameRaw[0] : selectedNameRaw)?.toString()?.trim() || "";
       const resolvedFolderName = preferredName || selectedName || undefined;
 
-      console.info("Import request (multipart)", {
-        userEmail, targetFolderId, preferredName, selectedName, resolvedFolderName,
-      });
-
-      // Explicit requirement to choose a folder (no auto default)
       if (!targetFolderId && !resolvedFolderName) {
-        return res.status(400).json({ message: "Choose an existing folder or provide a new folder name." });
+        return res
+          .status(400)
+          .json({ message: "Choose an existing folder or provide a new folder name." });
       }
 
-      const mappingStr =
-        (Array.isArray(fields.mapping) ? fields.mapping[0] : fields.mapping)?.toString();
-
+      const mappingStr = (Array.isArray(fields.mapping) ? fields.mapping[0] : fields.mapping)?.toString();
       const skipExisting =
         (Array.isArray(fields.skipExisting) ? fields.skipExisting[0] : fields.skipExisting)?.toString() === "true";
 
       const file = Array.isArray(files.file) ? files.file[0] : files.file;
       if (!file?.filepath) return res.status(400).json({ message: "Missing file" });
 
+      // Resolve folder selection
+      const { folder } = await selectImportFolder(userEmail, {
+        targetFolderId,
+        folderName: resolvedFolderName,
+      });
+
+      // 🔒 FINAL GUARD (cannot be bypassed)
+      const { folderId: safeFolderId, folderName: safeFolderName } =
+        await ensureNonSystemFolderId(
+          userEmail,
+          new mongoose.Types.ObjectId((folder as any)._id),
+          (folder as any).name
+        );
+
+      // Legacy path (no mapping)
       if (!mappingStr) {
-        // Legacy path (no mapping) — still requires explicit folder
-        const { folder, selection } = await selectImportFolder(userEmail, {
-          targetFolderId,
-          folderName: resolvedFolderName,
-        });
-
-        console.info("Import folder selected (legacy)", {
-          userEmail, selection, folderId: String(folder._id), folderName: folder.name,
-          provided: { preferredName, selectedName },
-        });
-
         const buffer = await fs.promises.readFile(file.filepath);
         const rawLeads: any[] = [];
-
         await new Promise<void>((resolve, reject) => {
           bufferToStream(buffer)
             .pipe(csvParser())
@@ -482,7 +253,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         });
 
         if (rawLeads.length === 0) {
-          return res.status(400).json({ message: "No data rows found in CSV (empty file or header-only)." });
+          return res
+            .status(400)
+            .json({ message: "No data rows found in CSV (empty file or header-only)." });
         }
 
         const leadsToInsert = rawLeads.map((lead) => {
@@ -491,9 +264,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           return {
             ...lead,
             userEmail,
-            folderId: folder._id,
-            folder_name: String(folder.name),
-            "Folder Name": String(folder.name),
+            folderId: safeFolderId,
+            folder_name: String(safeFolderName),
+            ["Folder Name"]: String(safeFolderName),
             status: "New",
             Phone: lead["Phone"] ?? lead["phone"],
             phoneLast10: phoneKey,
@@ -504,33 +277,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           };
         });
 
-        await createLeadsFromCSV(leadsToInsert, userEmail, String(folder._id));
+        await createLeadsFromCSV(leadsToInsert, userEmail, String(safeFolderId));
 
         return res.status(200).json({
           message: "Leads imported successfully",
           count: leadsToInsert.length,
-          folderId: folder._id,
-          folderName: folder.name,
+          folderId: safeFolderId,
+          folderName: safeFolderName,
           mode: "multipart-legacy",
         });
       }
 
-      // New path (mapping provided) — requires explicit folder
+      // Mapping path
       const mapping = JSON.parse(mappingStr) as Record<string, string>;
-
-      const { folder, selection } = await selectImportFolder(userEmail, {
-        targetFolderId,
-        folderName: resolvedFolderName,
-      });
-
-      console.info("Import folder selected (multipart+mapping)", {
-        userEmail, selection, folderId: String(folder._id), folderName: folder.name,
-        provided: { preferredName, selectedName },
-      });
-
       const buffer = await fs.promises.readFile(file.filepath);
       const rawRows: any[] = [];
-
       await new Promise<void>((resolve, reject) => {
         bufferToStream(buffer)
           .pipe(csvParser())
@@ -546,17 +307,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
 
       if (rawRows.length === 0) {
-        return res.status(400).json({ message: "No data rows found in CSV (empty file or header-only)." });
+        return res
+          .status(400)
+          .json({ message: "No data rows found in CSV (empty file or header-only)." });
       }
 
       const rowsMapped = rawRows.map((r) => ({
         ...mapRow(r, mapping),
         userEmail,
-        folderId: folder._id,
+        folderId: safeFolderId,
       }));
 
-      const phoneKeys = Array.from(new Set(rowsMapped.map((m) => m.phoneLast10).filter(Boolean) as string[]));
-      const emailKeys = Array.from(new Set(rowsMapped.map((m) => m.Email).filter(Boolean) as string[]));
+      const phoneKeys = Array.from(
+        new Set(rowsMapped.map((m) => m.phoneLast10).filter(Boolean) as string[])
+      );
+      const emailKeys = Array.from(
+        new Set(rowsMapped.map((m) => m.Email).filter(Boolean) as string[])
+      );
 
       const ors: any[] = [];
       if (phoneKeys.length) {
@@ -567,7 +334,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
 
       const existing = ors.length
-        ? await Lead.find({ userEmail, $or: ors }).select("_id phoneLast10 normalizedPhone Email email folderId")
+        ? await Lead.find({ userEmail, $or: ors }).select(
+            "_id phoneLast10 normalizedPhone Email email folderId"
+          )
         : [];
 
       const byPhone = new Map<string, any>();
@@ -592,21 +361,35 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const emailKey = (m.Email as string | undefined) || (m.email as string | undefined);
         const exists = (phoneKey && byPhone.get(phoneKey)) || (emailKey && byEmail.get(String(emailKey)));
 
-        if (!phoneKey && !emailKey) { skipped++; continue; }
-        if (skipExisting && exists) { skipped++; continue; }
+        if (!phoneKey && !emailKey) {
+          skipped++;
+          continue;
+        }
+        if ((skipExisting as boolean) && exists) {
+          skipped++;
+          continue;
+        }
 
-        const filter = buildFilter(userEmail, phoneKey, emailKey);
-        if (!filter) { skipped++; continue; }
+        const filter = phoneKey
+          ? { userEmail, $or: [{ phoneLast10: phoneKey }, { normalizedPhone: phoneKey }] }
+          : { userEmail, $or: [{ Email: emailKey }, { email: emailKey }] };
 
         const base: any = {
           ownerEmail: userEmail,
-          folderId: folder._id,
-          folder_name: String(folder.name),
-          "Folder Name": String(folder.name),
+          folderId: safeFolderId,
+          folder_name: String(safeFolderName),
+          ["Folder Name"]: String(safeFolderName),
           updatedAt: new Date(),
         };
-
-        applyIdentityFields(base, phoneKey, emailKey, m.Phone);
+        if ((m as any).Phone !== undefined) base["Phone"] = (m as any).Phone;
+        if (phoneKey !== undefined) {
+          base["phoneLast10"] = phoneKey;
+          base["normalizedPhone"] = phoneKey;
+        }
+        if (emailKey !== undefined) {
+          base["Email"] = emailKey;
+          base["email"] = emailKey;
+        }
         if (m["First Name"] !== undefined) base["First Name"] = m["First Name"];
         if (m["Last Name"] !== undefined) base["Last Name"] = m["Last Name"];
         if (m.State !== undefined) base["State"] = m.State;
@@ -614,17 +397,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (m.leadType) base["leadType"] = m.leadType;
 
         if (exists) {
-          if (m.status) base.status = m.status; // EXISTING → status only in $set
+          if (m.status) base.status = m.status;
           ops.push({ updateOne: { filter, update: { $set: base }, upsert: false } });
           processedFilters.push(filter);
         } else {
           const setOnInsert: any = {
             userEmail,
-            status: m.status || "New", // NEW → status only in $setOnInsert
+            status: (m as any).status || "New",
             createdAt: new Date(),
           };
           if ("status" in base) delete base.status;
-
           ops.push({
             updateOne: {
               filter,
@@ -638,37 +420,38 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       let inserted = 0;
       let updated = 0;
-
       if (ops.length) {
         const result = await (Lead as any).bulkWrite(ops, { ordered: false });
         inserted = (result as any).upsertedCount || 0;
         const existedOps = processedFilters.length - inserted;
         updated = existedOps < 0 ? 0 : existedOps;
 
-        const orFilters = processedFilters.flatMap((f) =>
-          (f.$or || []).map((clause: any) => ({ userEmail, ...clause }))
-        );
-        const affected = await Lead.find({ $or: orFilters }).select("_id");
-        const ids = affected.map((d) => String(d._id));
-        if (ids.length) {
-          await Folder.updateOne(
-            { _id: folder._id, userEmail },
-            { $addToSet: { leadIds: { $each: ids } } }
+        if (processedFilters.length) {
+          const orFilters = processedFilters.flatMap((f) =>
+            (f.$or || []).map((clause: any) => ({ userEmail, ...clause }))
           );
+          const affected = await Lead.find({ $or: orFilters }).select("_id");
+          const ids = affected.map((d) => String(d._id));
+          if (ids.length) {
+            await Folder.updateOne(
+              { _id: safeFolderId, userEmail },
+              { $addToSet: { leadIds: { $each: ids } } }
+            );
+          }
         }
       }
 
       return res.status(200).json({
         message: "Leads imported successfully",
-        folderId: folder._id,
-        folderName: folder.name,
+        folderId: safeFolderId,
+        folderName: safeFolderName,
         counts: { inserted, updated, skipped },
         mode: "multipart+mapping",
         skipExisting,
       });
     } catch (e: any) {
       const status = e?.status === 400 ? 400 : 500;
-      console.error("❌ Multipart import error:", { error: e?.message || String(e) });
+      console.error("❌ /sheets/import-now error:", { error: e?.message || String(e) });
       return res.status(status).json({ message: e?.message || "Import failed" });
     }
   });
