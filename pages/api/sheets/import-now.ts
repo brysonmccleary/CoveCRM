@@ -1,5 +1,6 @@
 // pages/api/sheets/import-now.ts
 import type { NextApiRequest, NextApiResponse } from "next";
+import { getServerSession } from "next-auth/next"; // ✅ correct import for API routes
 import formidable from "formidable";
 import fs from "fs";
 import csvParser from "csv-parser";
@@ -7,7 +8,6 @@ import { Readable } from "stream";
 import dbConnect from "@/lib/mongooseConnect";
 import Folder from "@/models/Folder";
 import Lead from "@/models/Lead";
-import { getServerSession } from "next-auth";
 import { authOptions } from "../auth/[...nextauth]";
 import { sanitizeLeadType, createLeadsFromCSV } from "@/lib/mongo/leads";
 import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
@@ -181,7 +181,11 @@ function applyIdentityFields(set: Record<string, any>, phoneKey?: string, emailK
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed" });
 
-  const session = await getServerSession(req, res, authOptions as any);
+  // ✅ Fix typing: explicitly cast to a safe shape before accessing .user?.email
+  const session = (await getServerSession(req, res, authOptions as any)) as
+    | { user?: { email?: string | null } | null }
+    | null;
+
   if (!session?.user?.email) return res.status(401).json({ message: "Unauthorized" });
 
   const userEmail = lc(session.user.email)!;
@@ -214,7 +218,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         : [];
 
       const byPhone = new Map<string, any>();
-      const byEmail = new Map<string, any>();
+      const byEmail = new Map<string, any>>();
       for (const l of existing) {
         const p1 = l.phoneLast10 && String(l.phoneLast10);
         const p2 = l.normalizedPhone && String(l.normalizedPhone);
