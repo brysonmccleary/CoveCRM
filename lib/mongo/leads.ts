@@ -1,183 +1,194 @@
-import mongoose, { Schema, model, models, Types } from "mongoose";
+import mongoose from "mongoose";
+import Lead from "@/models/Lead";
+import Folder from "@/models/Folder";
 
-// -------- Subdocuments --------
-const InteractionSchema = new Schema(
-  {
-    type: { type: String, enum: ["inbound", "outbound", "ai", "status"], required: true },
-    text: { type: String },
-    from: { type: String },
-    to: { type: String },
-    date: { type: Date, default: Date.now },
-  },
-  { _id: false }
-);
-
-const TranscriptSchema = new Schema(
-  {
-    text: { type: String, required: true },
-    createdAt: { type: Date, default: Date.now },
-  },
-  { _id: false }
-);
-
-// -------- Main schema --------
-const LeadSchema = new Schema(
-  {
-    // Common lead fields
-    State: { type: String },
-    "First Name": { type: String },
-    "Last Name": { type: String },
-    Email: { type: String },
-    email: { type: String }, // lowercase mirror
-    Phone: { type: String },
-    phoneLast10: { type: String },
-    normalizedPhone: { type: String },
-    Notes: { type: String },
-    Age: { type: String },
-    Beneficiary: { type: String },
-    "Coverage Amount": { type: String },
-
-    // Ownership / scoping
-    userEmail: { type: String, required: true },
-    ownerEmail: { type: Schema.Types.Mixed }, // keep legacy docs readable; we no longer write to it
-
-    // Folder linkage (canonical)
-    folderId: { type: Schema.Types.ObjectId, ref: "Folder" },
-
-    // Status / automation
-    assignedDrips: { type: [String], default: [] },
-    status: { type: String, default: "New" },
-
-    // Engagement / transcripts
-    interactionHistory: { type: [InteractionSchema], default: [] },
-    callTranscripts: { type: [TranscriptSchema], default: [] },
-    isAIEngaged: { type: Boolean, default: false },
-    appointmentTime: { type: Date },
-    aiLastResponseAt: { type: Date },
-
-    remindersSent: {
-      type: {
-        morning: { type: Boolean, default: false },
-        oneHour: { type: Boolean, default: false },
-        fifteenMin: { type: Boolean, default: false },
-      },
-      default: {},
-    },
-
-    // Lead type used by AI
-    leadType: {
-      type: String,
-      enum: ["Final Expense", "Veteran", "Mortgage Protection", "IUL"],
-      default: "Final Expense",
-    },
-  },
-  { timestamps: true, strict: false }
-);
-
-// -------- Indexes --------
-LeadSchema.index({ userEmail: 1, updatedAt: -1 }, { name: "lead_user_updated_desc" });
-LeadSchema.index({ userEmail: 1, Phone: 1 }, { name: "lead_user_phone_idx" });
-LeadSchema.index({ userEmail: 1, normalizedPhone: 1 }, { name: "lead_user_normalized_phone_idx" });
-LeadSchema.index({ ownerEmail: 1, Phone: 1 }, { name: "lead_owner_phone_idx" }); // legacy reads OK
-LeadSchema.index({ userEmail: 1, folderId: 1 }, { name: "lead_user_folder_idx" });
-LeadSchema.index({ State: 1 }, { name: "lead_state_idx" });
-LeadSchema.index({ userEmail: 1, isAIEngaged: 1, updatedAt: -1 }, { name: "lead_ai_engaged_idx" });
-
-// -------- Utilities --------
-export const sanitizeLeadType = (input: string): string => {
-  const normalized = (input || "").toLowerCase().trim();
-  if (normalized.includes("veteran") || normalized === "vet") return "Veteran";
-  if (normalized.includes("mortgage")) return "Mortgage Protection";
-  if (normalized.includes("iul")) return "IUL";
-  return "Final Expense";
+const DIGITS = (s: any) => String(s ?? "").replace(/\D+/g, "");
+const last10 = (v?: string | null) => {
+  if (!v) return undefined;
+  const k = DIGITS(v).slice(-10);
+  return k || undefined;
+};
+const lcEmail = (v?: string | null) => {
+  if (v == null) return undefined;
+  const s = String(v).trim().toLowerCase();
+  return s || undefined;
 };
 
-const Lead = (models.Lead as mongoose.Model<any>) || model("Lead", LeadSchema);
+const LEAD_TYPES = [
+  "Mortgage Protection",
+  "Final Expense",
+  "IUL",
+  "Term Life",
+  "Whole Life",
+  "Medicare",
+  "Generic",
+] as const;
 
-// ---- CRUD helpers ----
-export const getLeadById = async (leadId: string) => {
-  return await Lead.findById(leadId);
-};
+// NOTE: Localize the alias to avoid duplicate identifier collisions with shims/models.
+type LeadTypeLocal = (typeof LEAD_TYPES)[number];
 
-export const updateLeadById = async (leadId: string, update: any) => {
-  return await Lead.findByIdAndUpdate(leadId, update, { new: true });
-};
-
-export const deleteLeadById = async (leadId: string) => {
-  return await Lead.findByIdAndDelete(leadId);
-};
-
-// Ensure ObjectId for folderId on any bulk creation path.
-function toObjectId(id: string | Types.ObjectId): Types.ObjectId {
-  return id instanceof Types.ObjectId ? id : new Types.ObjectId(id);
+export function sanitizeLeadType(input: any): string {
+  const s = String(input ?? "").trim().toLowerCase();
+  const match =
+    LEAD_TYPES.find((t) => t.toLowerCase() === s) ||
+    (s.includes("mortgage") ? "Mortgage Protection" :
+     s.includes("final") ? "Final Expense" :
+     s.includes("iul") ? "IUL" :
+     s.includes("medicare") ? "Medicare" :
+     s.includes("term") ? "Term Life" :
+     s.includes("whole") ? "Whole Life" : "Generic");
+  return match as string;
 }
 
-// These helpers accept already-normalized rows; we only guarantee folderId typing & defaults here.
-export const createLeadsFromCSV = async (
-  leads: any[],
+/**
+ * Bulk create/update leads from CSV rows (already mapped & decorated by caller).
+ * - rows must already include userEmail, folderId, status (for new), and normalized keys if available.
+ * - We dedupe on phoneLast10/normalizedPhone OR Email/email.
+ * - For NEW docs: setOnInsert { userEmail, status: 'New', createdAt }
+ * - For EXISTING: only $set non-identity fields; status is *not* overwritten unless caller intends to.
+ */
+export async function createLeadsFromCSV(
+  rows: Array<Record<string, any>>,
   userEmail: string,
-  folderId: string | Types.ObjectId
-) => {
-  const fid = toObjectId(folderId);
-  const mapped = leads.map((lead) => {
-    const emailLower =
-      typeof lead.Email === "string" ? lead.Email.toLowerCase().trim() : lead.Email;
-    const emailLower2 =
-      typeof lead.email === "string" ? lead.email.toLowerCase().trim() : lead.email;
-    const normalizedPhone =
-      lead.normalizedPhone ??
-      (typeof lead.Phone === "string" ? lead.Phone.replace(/\D+/g, "") : undefined);
+  folderId: string
+): Promise<{ inserted: number; updated: number; affectedIds: string[] }> {
+  if (!Array.isArray(rows) || !rows.length) return { inserted: 0, updated: 0, affectedIds: [] };
 
-    // never write ownerEmail in new docs
-    const { ownerEmail, ...rest } = lead;
+  // Normalize identity fields on each row
+  const prepared = rows.map((r) => {
+    const phoneRaw = r["Phone"] ?? r["phone"] ?? r.phone;
+    const emailRaw = r["Email"] ?? r["email"] ?? r.email;
+
+    const phoneKey = r["phoneLast10"] ?? last10(phoneRaw);
+    const emailKey = r["Email"] ? lcEmail(r["Email"]) : lcEmail(emailRaw);
 
     return {
-      ...rest,
+      ...r,
       userEmail,
-      folderId: fid,
-      status: lead.status ?? "New",
-      phoneLast10: lead.phoneLast10 ?? normalizedPhone?.slice(-10),
-      normalizedPhone,
-      Email: emailLower,
-      email: emailLower2,
-      leadType: sanitizeLeadType(lead.leadType || ""),
+      folderId: new mongoose.Types.ObjectId(folderId),
+      phoneLast10: phoneKey,
+      normalizedPhone: phoneKey,
+      Email: emailKey,
+      email: emailKey,
     };
   });
 
-  return await Lead.insertMany(mapped, { ordered: false });
-};
+  const phoneKeys = Array.from(new Set(prepared.map((m) => m.phoneLast10).filter(Boolean) as string[]));
+  const emailKeys = Array.from(new Set(prepared.map((m) => m.Email).filter(Boolean) as string[]));
 
-export const createLeadsFromGoogleSheet = async (
-  sheetLeads: any[],
-  userEmail: string,
-  folderId: string | Types.ObjectId
-) => {
-  const fid = toObjectId(folderId);
-  const parsed = sheetLeads.map((lead) => {
-    const emailLower =
-      typeof lead.Email === "string" ? lead.Email.toLowerCase().trim() : lead.Email;
-    const emailLower2 =
-      typeof lead.email === "string" ? lead.email.toLowerCase().trim() : lead.email;
-    const normalizedPhone =
-      lead.normalizedPhone ??
-      (typeof lead.Phone === "string" ? lead.Phone.replace(/\D+/g, "") : undefined);
+  const ors: any[] = [];
+  if (phoneKeys.length) {
+    ors.push({ phoneLast10: { $in: phoneKeys } }, { normalizedPhone: { $in: phoneKeys } });
+  }
+  if (emailKeys.length) {
+    ors.push({ Email: { $in: emailKeys } }, { email: { $in: emailKeys } });
+  }
 
-    const { ownerEmail, ...rest } = lead;
+  const existing = ors.length
+    ? await Lead.find({ userEmail, $or: ors }).select("_id phoneLast10 normalizedPhone Email email").lean()
+    : [];
 
-    return {
-      ...rest,
-      userEmail,
-      folderId: fid,
-      status: lead.status ?? "New",
-      phoneLast10: lead.phoneLast10 ?? normalizedPhone?.slice(-10),
-      normalizedPhone,
-      Email: emailLower,
-      email: emailLower2,
-      leadType: sanitizeLeadType(lead.leadType || ""),
+  const byPhone = new Map<string, any>();
+  const byEmail = new Map<string, any>();
+  for (const l of existing) {
+    const p1 = l.phoneLast10 && String(l.phoneLast10);
+    const p2 = l.normalizedPhone && String(l.normalizedPhone);
+    const e1 = l.Email && String(l.Email).toLowerCase();
+    const e2 = l.email && String(l.email).toLowerCase();
+    if (p1) byPhone.set(p1, l);
+    if (p2) byPhone.set(p2, l);
+    if (e1) byEmail.set(e1, l);
+    if (e2) byEmail.set(e2, l);
+  }
+
+  const ops: any[] = [];
+  const processedFilters: any[] = [];
+
+  for (const m of prepared) {
+    const phoneKey = m.phoneLast10 as string | undefined;
+    const emailKey = m.Email as string | undefined;
+
+    if (!phoneKey && !emailKey) continue;
+
+    const exists = (phoneKey && byPhone.get(phoneKey)) || (emailKey && byEmail.get(String(emailKey)));
+
+    // identity filter
+    const filter = phoneKey
+      ? { userEmail, $or: [{ phoneLast10: phoneKey }, { normalizedPhone: phoneKey }] }
+      : { userEmail, $or: [{ Email: emailKey }, { email: emailKey }] };
+
+    const base: Record<string, any> = {
+      ownerEmail: userEmail,
+      folderId: new mongoose.Types.ObjectId(folderId),
+      updatedAt: new Date(),
     };
-  });
 
-  return await Lead.insertMany(parsed, { ordered: false });
-};
+    // keep identity mirrors updated
+    if (m.Phone !== undefined) base["Phone"] = m.Phone;
+    if (phoneKey !== undefined) {
+      base["phoneLast10"] = phoneKey;
+      base["normalizedPhone"] = phoneKey;
+    }
+    if (emailKey !== undefined) {
+      base["Email"] = emailKey;
+      base["email"] = emailKey;
+    }
 
-export default Lead;
+    // soft fields
+    if (m["First Name"] !== undefined) base["First Name"] = m["First Name"];
+    if (m["Last Name"] !== undefined) base["Last Name"] = m["Last Name"];
+    if (m.State !== undefined) base["State"] = m.State;
+    if (m.Notes !== undefined) base["Notes"] = m.Notes;
+    if (m.leadType) base["leadType"] = sanitizeLeadType(m.leadType);
+
+    if (exists) {
+      // do NOT override status for existing unless caller put it in base intentionally
+      ops.push({ updateOne: { filter, update: { $set: base }, upsert: false } });
+    } else {
+      const setOnInsert: any = {
+        userEmail,
+        status: m.status || "New",
+        createdAt: new Date(),
+      };
+      // ensure we don't set status in $set for new path
+      if ("status" in base) delete base.status;
+
+      ops.push({
+        updateOne: {
+          filter,
+          update: { $set: base, $setOnInsert: setOnInsert },
+          upsert: true,
+        },
+      });
+    }
+
+    processedFilters.push(filter);
+  }
+
+  let inserted = 0;
+  let updated = 0;
+  let affectedIds: string[] = [];
+
+  if (ops.length) {
+    const result = await (Lead as any).bulkWrite(ops, { ordered: false });
+    inserted = (result as any).upsertedCount || 0;
+    const existedOps = processedFilters.length - inserted;
+    updated = existedOps < 0 ? 0 : existedOps;
+
+    // Collect affected IDs to sync onto Folder.leadIds (best-effort)
+    const orFilters = processedFilters.flatMap((f) =>
+      (f.$or || []).map((clause: any) => ({ ...clause, userEmail }))
+    );
+    const docs = await Lead.find({ $or: orFilters }).select("_id").lean();
+    affectedIds = docs.map((d) => String(d._id));
+  }
+
+  if (affectedIds.length) {
+    await Folder.updateOne(
+      { _id: new mongoose.Types.ObjectId(folderId), userEmail },
+      { $addToSet: { leadIds: { $each: affectedIds } } }
+    );
+  }
+
+  return { inserted, updated, affectedIds };
+}
