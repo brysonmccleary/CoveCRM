@@ -4,10 +4,8 @@ import { authOptions } from "../../auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import Lead from "@/models/Lead";
-import Folder from "@/models/Folder";
-import { google } from "googleapis";
 import mongoose from "mongoose";
-import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
+import { google } from "googleapis";
 import { ensureNonSystemFolderId } from "@/lib/folders/ensureNonSystemFolderId";
 
 type ImportBody = {
@@ -19,53 +17,16 @@ type ImportBody = {
   endRow?: number;
   folderId?: string;
   folderName?: string;
-  mapping: Record<string, string>; // CSVHeader -> CanonicalField
-  skip?: Record<string, boolean>;   // headers to ignore
-  createFolderIfMissing?: boolean;
-  skipExisting?: boolean; // if true, do NOT move/update existing
+  mapping: Record<string, string>;        // CSVHeader -> CanonicalField
+  skip?: Record<string, boolean>;         // headers to ignore
+  createFolderIfMissing?: boolean;        // ignored for destination choice, but ok to keep
+  skipExisting?: boolean;                  // do NOT move/update existing if true
 };
 
-function digits(s: any) { return String(s ?? "").replace(/\D+/g, ""); }
-function last10(s?: string) { const d = digits(s); return d.slice(-10) || ""; }
-function lcEmail(s: any) { const v = String(s ?? "").trim().toLowerCase(); return v || ""; }
-function escapeA1Title(title: string) { return title.replace(/'/g, "''"); }
-
-async function resolveFolder(
-  userEmail: string,
-  opts: { folderId?: string; folderName?: string; defaultName?: string; create?: boolean }
-) {
-  // If a name is provided, it WINS (and we create if needed)
-  const byName = (opts.folderName || "").trim();
-  if (byName) {
-    if (isSystemFolder(byName)) throw new Error("Cannot import into system folders");
-    const doc = await Folder.findOneAndUpdate(
-      { userEmail, name: byName },
-      { $setOnInsert: { userEmail, name: byName, source: "google-sheets" } },
-      { new: true, upsert: !!opts.create }
-    );
-    if (!doc) throw new Error("Folder not found/created");
-    return doc;
-  }
-
-  // Else by ID (must belong to user; block if system)
-  if (opts.folderId) {
-    const doc = await Folder.findOne({ _id: new mongoose.Types.ObjectId(opts.folderId), userEmail });
-    if (!doc) throw new Error("Folder not found or not owned by user");
-    if (isSystemFolder(doc.name)) throw new Error("Cannot import into system folders");
-    return doc;
-  }
-
-  // Else fallback to default
-  const def = (opts.defaultName || "").trim();
-  if (!def) throw new Error("Missing target folder");
-  if (isSystemFolder(def)) throw new Error("Cannot import into system folders");
-  const doc = await Folder.findOneAndUpdate(
-    { userEmail, name: def },
-    { $setOnInsert: { userEmail, name: def, source: "google-sheets" } },
-    { new: true, upsert: true }
-  );
-  return doc;
-}
+const digits = (s: any) => String(s ?? "").replace(/\D+/g, "");
+const last10 = (s?: string) => digits(s).slice(-10) || "";
+const lcEmail = (s: any) => String(s ?? "").trim().toLowerCase() || "";
+const escapeA1Title = (t: string) => t.replace(/'/g, "''");
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
@@ -85,15 +46,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     folderName,
     mapping = {},
     skip = {},
-    createFolderIfMissing = true,
     skipExisting = false,
   } = (req.body || {}) as ImportBody;
 
   if (!spreadsheetId) return res.status(400).json({ error: "Missing spreadsheetId" });
-  if (!title && typeof sheetId !== "number")
+  if (!title && typeof sheetId !== "number") {
     return res.status(400).json({ error: "Provide sheet 'title' or numeric 'sheetId'" });
-  if (folderName && isSystemFolder(folderName))
-    return res.status(400).json({ error: "Cannot import into system folders" });
+  }
 
   try {
     await dbConnect();
@@ -112,7 +71,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const oauth2 = new google.auth.OAuth2(
       process.env.GOOGLE_CLIENT_ID!,
       process.env.GOOGLE_CLIENT_SECRET!,
-      redirectUri,
+      redirectUri
     );
     oauth2.setCredentials({
       access_token: gs.accessToken,
@@ -123,7 +82,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const sheets = google.sheets({ version: "v4", auth: oauth2 });
     const drive = google.drive({ version: "v3", auth: oauth2 });
 
-    // Resolve tab title if only sheetId passed
+    // Resolve tab title if only sheetId provided
     let tabTitle = title;
     if (!tabTitle && typeof sheetId === "number") {
       const meta = await sheets.spreadsheets.get({
@@ -145,7 +104,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       dateTimeRenderOption: "FORMATTED_STRING",
     });
     const values = (valueResp.data.values || []) as string[][];
-
     if (!values.length) {
       return res.status(200).json({
         ok: true,
@@ -159,6 +117,35 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
+    // ---- Destination folder: ALWAYS non-system, computed safely ----
+    const driveMeta = await drive.files.get({ fileId: spreadsheetId, fields: "name" });
+    const defaultName = `${driveMeta.data.name || "Imported Leads"} — ${tabTitle}`;
+    const nameCandidate = (folderName ?? "").trim() || defaultName;
+
+    // Upsert a folder by *name* so users can type a nice name, then enforce non-system
+    const foldersColl = mongoose.connection.db!.collection("folders");
+    const up = await foldersColl.findOneAndUpdate(
+      { userEmail, name: nameCandidate },
+      { $setOnInsert: { userEmail, name: nameCandidate, source: "google-sheets" } },
+      { upsert: true, returnDocument: "after" }
+    );
+
+    let candidateId: any = up?.value?._id || folderId;
+    if (!candidateId) {
+      const ins = await foldersColl.insertOne({
+        userEmail,
+        name: nameCandidate,
+        source: "google-sheets",
+      });
+      candidateId = ins.insertedId;
+    }
+
+    // This is the key line: rewrite to a guaranteed non-system folder
+    const safe = await ensureNonSystemFolderId(userEmail, candidateId as any, nameCandidate);
+    const targetFolderId = safe.folderId;
+    const targetFolderName = safe.folderName;
+
+    // ---- Import rows
     const headerIdx = Math.max(0, headerRow - 1);
     const headers = (values[headerIdx] || []).map((h) => String(h || "").trim());
     const firstDataRowIndex =
@@ -168,21 +155,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         ? Math.min(values.length, Math.max(endRow, firstDataRowIndex + 1)) - 1
         : values.length - 1;
 
-    // Resolve destination (name > id > default)
-    const driveMeta = await drive.files.get({ fileId: spreadsheetId, fields: "name" });
-    const defaultName = `${driveMeta.data.name || "Imported Leads"} — ${tabTitle}`;
-    const folderDoc = await resolveFolder(userEmail, {
-      folderId,
-      folderName,
-      defaultName,
-      create: createFolderIfMissing,
-    });
-
-    // **Force non-system folder** (critical)
-    const safe = await ensureNonSystemFolderId(userEmail, folderDoc._id as any, folderDoc.name);
-    const safeFolderId = safe.folderId;
-    const safeFolderName = safe.folderName;
-
     let inserted = 0;
     let updated = 0;
     let skippedNoKey = 0;
@@ -191,21 +163,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     for (let r = firstDataRowIndex; r <= lastRowIndex; r++) {
       const row = values[r] || [];
-      const hasAny = row.some((cell) => String(cell ?? "").trim() !== "");
-      if (!hasAny) continue;
+      if (!row.some((cell) => String(cell ?? "").trim() !== "")) continue;
       lastNonEmptyRow = r;
 
       const doc: Record<string, any> = {};
       headers.forEach((h, i) => {
         if (!h) return;
         if (skip[h]) return;
-        const fieldName = mapping[h];
+        const fieldName = (mapping as Record<string, string>)[h];
         if (!fieldName) return;
         doc[fieldName] = row[i] ?? "";
       });
 
-      const normalizedPhone = digits(doc.phone ?? doc.Phone ?? "");
-      const phoneKey = last10(normalizedPhone);
+      const phoneKey = last10(doc.phone ?? doc.Phone ?? "");
       const emailLower = lcEmail(doc.email ?? doc.Email ?? "");
       if (!phoneKey && !emailLower) {
         skippedNoKey++;
@@ -240,21 +210,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const set: any = {
         userEmail,
         ownerEmail: userEmail,
-        folderId: safeFolderId,
-        folder_name: String(safeFolderName),
-        ["Folder Name"]: String(safeFolderName),
-        // identity mirrors
+        folderId: targetFolderId,
+        folder_name: String(targetFolderName),
+        ["Folder Name"]: String(targetFolderName),
+
         Email: emailLower || undefined,
         email: emailLower || undefined,
         Phone: String(doc.phone ?? doc.Phone ?? ""),
         normalizedPhone: phoneKey || undefined,
         phoneLast10: phoneKey || undefined,
-        // optional mapped fields
+
         "First Name": doc.firstName ?? doc["First Name"],
         "Last Name": doc.lastName ?? doc["Last Name"],
         State: doc.state ?? doc.State,
         Notes: doc.notes ?? doc.Notes,
         Age: doc.Age ?? doc.age,
+
         updatedAt: new Date(),
         source: "google-sheets",
         sourceSpreadsheetId: spreadsheetId,
@@ -265,7 +236,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const result = await (Lead as any).updateOne(
         filter,
         { $set: set, $setOnInsert: setOnInsert },
-        { upsert: true },
+        { upsert: true }
       );
       const upc = (result?.upsertedCount || (result?.upsertedId ? 1 : 0) || 0) as number;
       const mod = (result?.modifiedCount || 0) as number;
@@ -275,31 +246,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       else if (mod > 0 || match > 0) updated += 1;
     }
 
-    // Persist pointer & canonical folder on the user doc (best-effort)
-    try {
-      await User.updateOne(
-        {
-          email: userEmail,
-          "googleSheets.syncedSheets.spreadsheetId": spreadsheetId,
-          "googleSheets.syncedSheets.title": tabTitle,
+    // Persist pointer & canonical folder name on the user doc
+    await User.updateOne(
+      {
+        email: userEmail,
+        "googleSheets.syncedSheets.spreadsheetId": spreadsheetId,
+        "googleSheets.syncedSheets.title": tabTitle,
+      },
+      {
+        $set: {
+          "googleSheets.syncedSheets.$.folderId": targetFolderId,
+          "googleSheets.syncedSheets.$.folderName": targetFolderName,
+          "googleSheets.syncedSheets.$.headerRow": headerRow,
+          "googleSheets.syncedSheets.$.mapping": mapping,
+          "googleSheets.syncedSheets.$.skip": skip,
+          "googleSheets.syncedSheets.$.lastRowImported": lastNonEmptyRow + 1,
+          "googleSheets.syncedSheets.$.lastImportedAt": new Date(),
         },
-        {
-          $set: {
-            "googleSheets.syncedSheets.$.folderId": safeFolderId,
-            "googleSheets.syncedSheets.$.folderName": safeFolderName,
-            "googleSheets.syncedSheets.$.headerRow": headerRow,
-            "googleSheets.syncedSheets.$.mapping": mapping,
-            "googleSheets.syncedSheets.$.skip": skip,
-            "googleSheets.syncedSheets.$.lastRowImported": lastNonEmptyRow + 1,
-            "googleSheets.syncedSheets.$.lastImportedAt": new Date(),
-            ...(typeof sheetId === "number" ? { "googleSheets.syncedSheets.$.sheetId": sheetId } : {}),
-          },
-        },
-        { strict: false },
-      ).catch(() => {});
-    } catch {
-      /* ignore pointer errors */
-    }
+      },
+      { strict: false }
+    ).catch(() => {});
 
     return res.status(200).json({
       ok: true,
@@ -310,8 +276,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       rowCount: values.length,
       headerRow,
       lastRowImported: lastNonEmptyRow + 1,
-      folderId: String(safeFolderId),
-      folderName: String(safeFolderName),
+      folderId: String(targetFolderId),
+      folderName: String(targetFolderName),
     });
   } catch (err: any) {
     const message = err?.errors?.[0]?.message || err?.message || "Import failed";
