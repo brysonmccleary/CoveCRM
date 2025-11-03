@@ -16,24 +16,22 @@ let _io: SocketIOServer | undefined;
  * Safe to call from any API route. Idempotent. No dialer logic touched.
  */
 export function initSocket(res: NextApiResponseWithSocket): SocketIOServer {
-  // Reuse instance already attached to the HTTP server (hot/cold starts)
   if (res.socket?.server?.io) {
     _io = res.socket.server.io;
     return _io!;
   }
-
-  // Reuse in-process singleton if present
   if (_io) return _io;
 
   const io = new SocketIOServer(res.socket.server, {
     // IMPORTANT: trailing slash to match Next's redirect behavior
     path: "/api/socket/",
     cors: {
-      origin: "*", // tighten if you want to restrict to your domain
+      origin: "*",
       methods: ["GET", "POST"],
       credentials: true,
     },
-    transports: ["websocket"], // prefer websocket (matches your client)
+    // allow polling -> websocket upgrade
+    transports: ["polling", "websocket"],
   });
 
   res.socket.server.io = io;
@@ -50,7 +48,6 @@ export function initSocket(res: NextApiResponseWithSocket): SocketIOServer {
       console.log(`🔌 Socket connected ${socket.id}`);
     }
 
-    // Per-user room join
     socket.on("join", (userEmail: string) => {
       if (!userEmail) return;
       socket.join(userEmail);
@@ -71,10 +68,7 @@ export function initSocket(res: NextApiResponseWithSocket): SocketIOServer {
   return io;
 }
 
-/**
- * Helper to emit to a user's room by email.
- * No-op if the socket server hasn't been initialized yet.
- */
+/** Emit to a user's room by email (no-op if server not initialized). */
 export function emitToUser(userEmail: string, event: string, payload?: any) {
   if (!_io) return;
   if (!userEmail || !event) return;
