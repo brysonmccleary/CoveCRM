@@ -1,123 +1,101 @@
-// lib/folders/ensureNonSystemFolderId.ts
 import mongoose from "mongoose";
 import Folder from "@/models/Folder";
 import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
 
 /**
- * Normalize visible names in a stable, idempotent way so we don't create
- * multiple nearly-identical folders (trailing spaces, duplicated dashes, etc.).
+ * Resolve a NON-system folder and return its id+name.
+ * - If `wantedId` is provided, it must belong to the user and not be a system folder.
+ * - Otherwise, `wantedName` is required:
+ *   - If it exists (non-system), return it.
+ *   - Else upsert it (non-system), and return the created doc.
+ * All branches include explicit null checks to satisfy TS.
  */
-function normalizeVisibleName(raw: string): string {
-  let s = String(raw ?? "")
-    .replace(/\u2014/g, "—")          // normalize em-dash
-    .replace(/\s+/g, " ")             // collapse whitespace
-    .replace(/\s*—\s*/g, " — ")       // normalize dash spacing
-    .trim();
-
-  // Remove dangling separators at the end: "-", "—", ",", etc.
-  s = s.replace(/(?:[—\-:,])\s*$/g, "").trim();
-
-  // Avoid empty
-  if (!s) s = "Imported Leads";
-  return s;
-}
-
-/**
- * If the chosen name is a system folder, rewrite deterministically to "<Name> (Leads)".
- * This keeps the same result every time (no timestamp suffix), preventing dupes.
- */
-function toStableNonSystemName(name: string): string {
-  const n = normalizeVisibleName(name);
-  if (!isSystemFolder(n)) return n;
-  // Example: "Sold" -> "Sold (Leads)"
-  const rewritten = `${n} (Leads)`;
-  // If that itself is somehow considered system in the project rules, fall back once more:
-  return isSystemFolder(rewritten) ? `${n} (Imported Leads)` : rewritten;
-}
-
-/**
- * Ensure a single, non-system folder exists for this user, returning its id + name.
- * Tries: exact normalized match -> upsert -> final fallback (rare).
- */
-export async function ensureNonSystemFolderId(
+export default async function ensureNonSystemFolderId(
   userEmail: string,
-  desiredNameOrId?: { byId?: mongoose.Types.ObjectId | string; byName?: string },
+  wantedId?: mongoose.Types.ObjectId | string | null,
+  wantedName?: string | null,
 ): Promise<{ folderId: mongoose.Types.ObjectId; folderName: string }> {
+  // ---- Branch A: Resolve by explicit ID
+  if (wantedId) {
+    const f = await Folder.findOne({ _id: wantedId, userEmail })
+      .select("_id name userEmail")
+      .lean<{ _id: mongoose.Types.ObjectId; name?: string; userEmail: string } | null>();
+
+    if (!f) {
+      throw new Error("Folder not found or not owned by user");
+    }
+    if (!f.name || isSystemFolder(f.name)) {
+      throw new Error("Cannot import into system folders");
+    }
+    return { folderId: f._id, folderName: String(f.name) };
+  }
+
+  // ---- Branch B: Resolve by NAME (create if missing)
+  const byName = String(wantedName ?? "").trim();
+  if (!byName) {
+    throw new Error("A folder name is required when no folderId is provided");
+  }
+  if (isSystemFolder(byName)) {
+    throw new Error("Cannot import into system folders");
+  }
+
+  // Prefer native driver for exact equality w/o collation side-effects
   const db = mongoose.connection.db;
   if (!db) throw new Error("DB connection not ready");
 
   const coll = db.collection("folders");
 
-  // 1) If folder ID provided, prefer it (but still enforce non-system name).
-  if (desiredNameOrId?.byId) {
-    const wantedId =
-      typeof desiredNameOrId.byId === "string"
-        ? new mongoose.Types.ObjectId(desiredNameOrId.byId)
-        : (desiredNameOrId.byId as mongoose.Types.ObjectId);
+  // Try to find an existing non-system doc first
+  const existing = await coll.findOne({
+    userEmail,
+    name: byName,
+  });
 
-    const f = (await coll.findOne({ _id: wantedId, userEmail })) as
-      | { _id: mongoose.Types.ObjectId; name?: string }
-      | null;
-
-    if (!f) throw new Error("Folder not found or not owned by user");
-
-    const visible = normalizeVisibleName(f.name || "");
-    if (!isSystemFolder(visible)) {
-      return { folderId: f._id, folderName: visible };
-    }
-    // Deterministic rewrite
-    const stable = toStableNonSystemName(visible);
-    const up = await coll.findOneAndUpdate(
-      { _id: f._id, userEmail },
-      { $set: { name: stable } },
-      { returnDocument: "after" },
-    );
-    const v = up.value!;
-    return { folderId: v._id as any, folderName: String(v.name) };
-  }
-
-  // 2) If by name, normalize, rewrite if system, then upsert by exact name.
-  const rawName = desiredNameOrId?.byName || "Imported Leads";
-  const safeName = toStableNonSystemName(rawName);
-
-  // Try exact match first
-  const foundExact = await coll.findOne({ userEmail, name: safeName });
-  if (foundExact) {
+  if (existing && typeof (existing as any).name === "string" && !isSystemFolder((existing as any).name)) {
     return {
-      folderId: (foundExact as any)._id as any,
-      folderName: String((foundExact as any).name),
+      folderId: (existing as any)._id as mongoose.Types.ObjectId,
+      folderName: String((existing as any).name),
     };
   }
 
-  // Upsert exact name (no timestamp suffixes, deterministic)
-  const created = await coll.findOneAndUpdate(
-    { userEmail, name: safeName },
-    {
-      $setOnInsert: {
-        userEmail,
-        name: safeName,
-        source: "google-sheets",
-        createdAt: new Date(),
-        lastActivityAt: new Date(),
-      },
-    },
-    { upsert: true, returnDocument: "after" },
+  // Upsert a non-system doc
+  const up = await coll.findOneAndUpdate(
+    { userEmail, name: byName },
+    { $setOnInsert: { userEmail, name: byName, source: "google-sheets" } },
+    { upsert: true, returnDocument: "after" }
   );
 
-  const v = created.value!;
-  // Final safety: if (for any reason) it's still system, do a one-time fallback.
-  const finalName = normalizeVisibleName(v.name || safeName);
-  if (!isSystemFolder(finalName)) {
-    return { folderId: v._id as any, folderName: finalName };
+  // TS/Runtime safety: handle null-ish result defensively
+  const upValue = (up && (up as any).value) || null;
+
+  if (upValue && typeof (upValue as any).name === "string" && !isSystemFolder((upValue as any).name)) {
+    return {
+      folderId: (upValue as any)._id as mongoose.Types.ObjectId,
+      folderName: String((upValue as any).name),
+    };
   }
 
-  const fallback = toStableNonSystemName(finalName);
-  const fixed = await coll.findOneAndUpdate(
-    { _id: v._id, userEmail },
-    { $set: { name: fallback } },
-    { returnDocument: "after" },
-  );
-  return { folderId: (fixed.value as any)._id as any, folderName: String((fixed.value as any).name) };
-}
+  // Fallback: force a unique, safe non-system name
+  const uniqueSafe = `${byName} — ${Date.now()}`;
+  if (isSystemFolder(uniqueSafe)) {
+    // Practically impossible, but guard anyway
+    throw new Error("Unexpected system-folder rewrite; aborting for safety");
+  }
 
-export default ensureNonSystemFolderId;
+  const ins = await coll.insertOne({
+    userEmail,
+    name: uniqueSafe,
+    source: "google-sheets",
+  });
+
+  const fresh = await coll.findOne({ _id: ins.insertedId });
+
+  if (!fresh || typeof (fresh as any).name !== "string" || isSystemFolder((fresh as any).name)) {
+    throw new Error("Folder rewrite detected; could not ensure a non-system folder");
+  }
+
+  return {
+    folderId: (fresh as any)._id as mongoose.Types.ObjectId,
+    folderName: String((fresh as any).name),
+  };
+}
