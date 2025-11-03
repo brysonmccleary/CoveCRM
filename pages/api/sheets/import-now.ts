@@ -11,7 +11,7 @@ import { authOptions } from "../auth/[...nextauth]"; // one level up
 import { sanitizeLeadType, createLeadsFromCSV } from "@/lib/mongo/leads";
 import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
 import mongoose from "mongoose";
-import { ensureNonSystemFolderId } from "@/lib/folders/ensureNonSystemFolderId";
+import ensureNonSystemFolderId from "@/lib/folders/ensureNonSystemFolderId";
 
 export const config = { api: { bodyParser: false } };
 
@@ -226,12 +226,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         folderName: resolvedFolderName,
       });
 
-      // 🔒 FINAL GUARD (cannot be bypassed)
+      // 🔒 FINAL GUARD (cannot be bypassed) — UPDATED to args-object signature
       const { folderId: safeFolderId, folderName: safeFolderName } =
         await ensureNonSystemFolderId(
           userEmail,
-          new mongoose.Types.ObjectId((folder as any)._id),
-          (folder as any).name
+          { byId: (folder as any)._id, computedDefault: String((folder as any).name || "") }
         );
 
       // Legacy path (no mapping)
