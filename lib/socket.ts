@@ -1,4 +1,3 @@
-// /lib/socket.ts
 import { Server as NetServer } from "http";
 import { Server as SocketIOServer, Socket } from "socket.io";
 import type { NextApiResponse } from "next";
@@ -12,8 +11,9 @@ type NextApiResponseWithSocket = NextApiResponse & {
 let _io: SocketIOServer | undefined;
 
 /**
- * Initializes (or reuses) a singleton Socket.IO server bound to /api/socket.
- * Safe to call from any API route. Idempotent.
+ * Initializes (or reuses) a singleton Socket.IO server bound to **/api/socket/**.
+ * We bind to the *trailing-slash* path to avoid Next.js 308 redirects causing 400s.
+ * Safe to call from any API route. Idempotent. No dialer logic touched.
  */
 export function initSocket(res: NextApiResponseWithSocket): SocketIOServer {
   // Reuse instance already attached to the HTTP server (hot/cold starts)
@@ -26,8 +26,8 @@ export function initSocket(res: NextApiResponseWithSocket): SocketIOServer {
   if (_io) return _io;
 
   const io = new SocketIOServer(res.socket.server, {
-    path: "/api/socket",
-    addTrailingSlash: false,
+    // IMPORTANT: trailing slash to match Next's redirect behavior
+    path: "/api/socket/",
     cors: {
       origin: "*", // tighten if you want to restrict to your domain
       methods: ["GET", "POST"],
@@ -72,7 +72,7 @@ export function initSocket(res: NextApiResponseWithSocket): SocketIOServer {
 }
 
 /**
- * ✅ Minimal, safe helper used by /api/messages/mark-read.
+ * ✅ Minimal, safe helper used by server routes to notify a user.
  * No changes to init, transports, or dialer flows.
  * No-op if the socket server hasn't been initialized yet.
  */
