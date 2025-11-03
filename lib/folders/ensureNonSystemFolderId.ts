@@ -3,99 +3,138 @@ import Folder from "@/models/Folder";
 import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
 
 /**
- * Resolve a NON-system folder and return its id+name.
- * - If `wantedId` is provided, it must belong to the user and not be a system folder.
- * - Otherwise, `wantedName` is required:
- *   - If it exists (non-system), return it.
- *   - Else upsert it (non-system), and return the created doc.
- * All branches include explicit null checks to satisfy TS.
+ * Input variants:
+ *  - string | ObjectId                        -> treated as { byId }
+ *  - { byId?: string; byName?: string; computedDefault?: string }
+ */
+export type EnsureFolderArgs =
+  | mongoose.Types.ObjectId
+  | string
+  | {
+      byId?: string | mongoose.Types.ObjectId | null | undefined;
+      byName?: string | null | undefined;
+      /** Only used if byName is not provided; helps compute a safe default name */
+      computedDefault?: string | null | undefined;
+    };
+
+export type EnsureFolderResult = {
+  folderId: mongoose.Types.ObjectId;
+  folderName: string;
+};
+
+/**
+ * Ensures a NON-system folder for a user and returns its id+name.
+ * Rules:
+ *  - If byId is provided: it must belong to user and not be a system folder.
+ *  - Else use byName if provided; upsert exact name after blocking system names.
+ *  - Else use computedDefault (required in that branch); block system names; upsert.
+ *  - If a provided/derived name is a system name, we create a safe unique variant: "<name> — <epoch>".
+ *  - Never returns a system folder.
  */
 export default async function ensureNonSystemFolderId(
   userEmail: string,
-  wantedId?: mongoose.Types.ObjectId | string | null,
-  wantedName?: string | null,
-): Promise<{ folderId: mongoose.Types.ObjectId; folderName: string }> {
-  // ---- Branch A: Resolve by explicit ID
-  if (wantedId) {
-    const f = await Folder.findOne({ _id: wantedId, userEmail })
-      .select("_id name userEmail")
-      .lean<{ _id: mongoose.Types.ObjectId; name?: string; userEmail: string } | null>();
+  arg?: EnsureFolderArgs
+): Promise<EnsureFolderResult> {
+  // Normalize arg to a simple shape
+  let byId: mongoose.Types.ObjectId | undefined;
+  let byName: string | undefined;
+  let computedDefault: string | undefined;
 
-    if (!f) {
-      throw new Error("Folder not found or not owned by user");
+  if (!arg) {
+    // no-op; will require computedDefault later
+  } else if (
+    typeof arg === "string" ||
+    arg instanceof mongoose.Types.ObjectId
+  ) {
+    // Treat primitive or ObjectId as byId
+    byId =
+      typeof arg === "string"
+        ? new mongoose.Types.ObjectId(arg)
+        : (arg as mongoose.Types.ObjectId);
+  } else {
+    // options object
+    if (arg.byId) {
+      byId =
+        typeof arg.byId === "string"
+          ? new mongoose.Types.ObjectId(arg.byId)
+          : (arg.byId as mongoose.Types.ObjectId);
     }
-    if (!f.name || isSystemFolder(f.name)) {
-      throw new Error("Cannot import into system folders");
+    if (arg.byName) byName = String(arg.byName).trim();
+    if (arg.computedDefault) computedDefault = String(arg.computedDefault).trim();
+  }
+
+  // A) byId path — must belong to user and not be a system folder
+  if (byId) {
+    const f = await Folder.findOne({ _id: byId, userEmail })
+      .select<{ _id: mongoose.Types.ObjectId; name?: string }>("_id name")
+      .lean();
+    if (!f) throw new Error("Folder not found or not owned by user");
+    if (f.name && isSystemFolder(f.name)) {
+      throw new Error("Cannot import into system folders (by id)");
     }
-    return { folderId: f._id, folderName: String(f.name) };
+    return { folderId: f._id, folderName: String(f.name || "") };
   }
 
-  // ---- Branch B: Resolve by NAME (create if missing)
-  const byName = String(wantedName ?? "").trim();
-  if (!byName) {
-    throw new Error("A folder name is required when no folderId is provided");
-  }
-  if (isSystemFolder(byName)) {
-    throw new Error("Cannot import into system folders");
-  }
-
-  // Prefer native driver for exact equality w/o collation side-effects
-  const db = mongoose.connection.db;
-  if (!db) throw new Error("DB connection not ready");
-
-  const coll = db.collection("folders");
-
-  // Try to find an existing non-system doc first
-  const existing = await coll.findOne({
-    userEmail,
-    name: byName,
-  });
-
-  if (existing && typeof (existing as any).name === "string" && !isSystemFolder((existing as any).name)) {
-    return {
-      folderId: (existing as any)._id as mongoose.Types.ObjectId,
-      folderName: String((existing as any).name),
-    };
-  }
-
-  // Upsert a non-system doc
-  const up = await coll.findOneAndUpdate(
-    { userEmail, name: byName },
-    { $setOnInsert: { userEmail, name: byName, source: "google-sheets" } },
-    { upsert: true, returnDocument: "after" }
-  );
-
-  // TS/Runtime safety: handle null-ish result defensively
-  const upValue = (up && (up as any).value) || null;
-
-  if (upValue && typeof (upValue as any).name === "string" && !isSystemFolder((upValue as any).name)) {
-    return {
-      folderId: (upValue as any)._id as mongoose.Types.ObjectId,
-      folderName: String((upValue as any).name),
-    };
-  }
-
-  // Fallback: force a unique, safe non-system name
-  const uniqueSafe = `${byName} — ${Date.now()}`;
-  if (isSystemFolder(uniqueSafe)) {
-    // Practically impossible, but guard anyway
-    throw new Error("Unexpected system-folder rewrite; aborting for safety");
-  }
-
-  const ins = await coll.insertOne({
-    userEmail,
-    name: uniqueSafe,
-    source: "google-sheets",
-  });
-
-  const fresh = await coll.findOne({ _id: ins.insertedId });
-
-  if (!fresh || typeof (fresh as any).name !== "string" || isSystemFolder((fresh as any).name)) {
-    throw new Error("Folder rewrite detected; could not ensure a non-system folder");
-  }
-
-  return {
-    folderId: (fresh as any)._id as mongoose.Types.ObjectId,
-    folderName: String((fresh as any).name),
+  // Helper: make a name safe (never system)
+  const toSafeName = (name: string): string => {
+    const base = name.trim();
+    if (!base) return `Imported Leads — ${Date.now()}`;
+    if (!isSystemFolder(base)) return base;
+    return `${base} — ${Date.now()}`;
   };
+
+  // B) byName path — upsert exact match after blocking system names
+  if (byName && byName.trim()) {
+    const safeName = toSafeName(byName);
+    const up = await Folder.findOneAndUpdate(
+      { userEmail, name: safeName },
+      { $setOnInsert: { userEmail, name: safeName, source: "google-sheets" } },
+      { upsert: true, new: true }
+    )
+      .select<{ _id: mongoose.Types.ObjectId; name?: string }>("_id name")
+      .lean();
+
+    if (!up) throw new Error("Failed to create/find destination folder");
+    // Extra guard (should never trip because toSafeName avoids system names)
+    if (up.name && isSystemFolder(up.name)) {
+      const uniqueSafe = `${safeName} — ${Date.now()}`;
+      const ins = await Folder.findOneAndUpdate(
+        { userEmail, name: uniqueSafe },
+        { $setOnInsert: { userEmail, name: uniqueSafe, source: "google-sheets" } },
+        { upsert: true, new: true }
+      )
+        .select<{ _id: mongoose.Types.ObjectId; name?: string }>("_id name")
+        .lean();
+      if (!ins) throw new Error("Failed to create safe destination folder");
+      return { folderId: ins._id, folderName: String(ins.name || "") };
+    }
+
+    return { folderId: up._id, folderName: String(up.name || "") };
+  }
+
+  // C) computed default path — required if no byId and no byName
+  const baseName = toSafeName(computedDefault || "");
+  const up = await Folder.findOneAndUpdate(
+    { userEmail, name: baseName },
+    { $setOnInsert: { userEmail, name: baseName, source: "google-sheets" } },
+    { upsert: true, new: true }
+  )
+    .select<{ _id: mongoose.Types.ObjectId; name?: string }>("_id name")
+    .lean();
+
+  if (!up) throw new Error("Failed to compute destination folder");
+  if (up.name && isSystemFolder(up.name)) {
+    const uniqueSafe = `${baseName} — ${Date.now()}`;
+    const ins = await Folder.findOneAndUpdate(
+      { userEmail, name: uniqueSafe },
+      { $setOnInsert: { userEmail, name: uniqueSafe, source: "google-sheets" } },
+      { upsert: true, new: true }
+    )
+      .select<{ _id: mongoose.Types.ObjectId; name?: string }>("_id name")
+      .lean();
+    if (!ins) throw new Error("Failed to create non-system folder");
+    return { folderId: ins._id, folderName: String(ins.name || "") };
+  }
+
+  return { folderId: up._id, folderName: String(up.name || "") };
 }
