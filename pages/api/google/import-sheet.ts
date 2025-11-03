@@ -8,7 +8,6 @@ import mongoose from "mongoose";
 import { google } from "googleapis";
 import ensureNonSystemFolderId from "@/lib/folders/ensureNonSystemFolderId";
 
-
 type ImportBody = {
   spreadsheetId: string;
   title?: string;
@@ -152,8 +151,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       candidateId = ins.insertedId;
     }
 
-    // Now force a non-system destination
-    const safe = await ensureNonSystemFolderId(userEmail, candidateId as any, baseName);
+    // Now force a non-system destination (UPDATED to new args signature)
+    const safe = await ensureNonSystemFolderId(
+      userEmail,
+      candidateId
+        ? { byId: candidateId, computedDefault: baseName }
+        : { byName: baseName, computedDefault: baseName }
+    );
     const safeFolderId = safe.folderId;
     const safeFolderName = safe.folderName;
 
