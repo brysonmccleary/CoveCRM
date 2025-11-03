@@ -765,7 +765,7 @@ export default function DialSession() {
         const { io } = mod as any;
 
         const socket = io(undefined, {
-          path: "/api/socket",
+          path: "/api/socket/",
           transports: ["websocket"],
           withCredentials: false,
         });

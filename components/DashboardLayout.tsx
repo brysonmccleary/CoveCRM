@@ -38,7 +38,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     (async () => {
       try {
         const { io } = await import("socket.io-client");
-        const s = io({ path: "/api/socket" });
+        const s = io({ path: "/api/socket/" });
         socketRef.current = s;
 
         const refetch = () => fetchUnread();

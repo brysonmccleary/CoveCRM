@@ -71,7 +71,7 @@ export default function CalendarPage() {
       typeof window !== "undefined"
     ) {
       if (!socketRef.current) {
-        socketRef.current = io(undefined, { path: "/api/socket" });
+        socketRef.current = io(undefined, { path: "/api/socket/" });
       }
 
       const socket = socketRef.current;

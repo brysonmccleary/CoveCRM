@@ -70,7 +70,7 @@ export default function FoldersList({ onRefetchReady, onFolderSelect }: FoldersL
         const { io } = mod as any;
 
         const socket = io(undefined, {
-          path: "/api/socket",
+          path: "/api/socket/",
           transports: ["websocket"],
           withCredentials: false,
         });

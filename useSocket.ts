@@ -10,7 +10,7 @@ export function useSocket(userEmail: string, onMessage: (data: any) => void) {
     if (!userEmail || initialized.current) return;
 
     socket = io(undefined, {
-      path: "/api/socket",
+      path: "/api/socket/",
     });
 
     socket.on("connect", () => {

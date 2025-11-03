@@ -65,7 +65,7 @@ export default function FolderPage() {
         const { io } = mod as any;
 
         const s = io(undefined, {
-          path: "/api/socket",
+          path: "/api/socket/",
           transports: ["websocket"],
           withCredentials: false,
         });
