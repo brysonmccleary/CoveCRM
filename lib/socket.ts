@@ -11,8 +11,8 @@ type NextApiResponseWithSocket = NextApiResponse & {
 let _io: SocketIOServer | undefined;
 
 /**
- * Initializes (or reuses) a singleton Socket.IO server bound to **/api/socket/**.
- * We bind to the *trailing-slash* path to avoid Next.js 308 redirects causing 400s.
+ * Initializes (or reuses) a singleton Socket.IO server bound to the trailing-slash path "/api/socket/".
+ * We bind to "/api/socket/" to avoid Next.js 308 redirects causing 400s on the handshake.
  * Safe to call from any API route. Idempotent. No dialer logic touched.
  */
 export function initSocket(res: NextApiResponseWithSocket): SocketIOServer {
@@ -72,8 +72,7 @@ export function initSocket(res: NextApiResponseWithSocket): SocketIOServer {
 }
 
 /**
- * ✅ Minimal, safe helper used by server routes to notify a user.
- * No changes to init, transports, or dialer flows.
+ * Helper to emit to a user's room by email.
  * No-op if the socket server hasn't been initialized yet.
  */
 export function emitToUser(userEmail: string, event: string, payload?: any) {
