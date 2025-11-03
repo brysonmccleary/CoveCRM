@@ -1,39 +1,25 @@
+// pages/api/google/sheets/import.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../../auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import Lead from "@/models/Lead";
-import mongoose from "mongoose";
+import Folder from "@/models/Folder";
 import { google } from "googleapis";
-import { ensureNonSystemFolderId } from "@/lib/folders/ensureNonSystemFolderId";
+import mongoose from "mongoose";
+import ensureNonSystemFolderId from "@/lib/folders/ensureNonSystemFolderId";
+import { bumpFolderActivity } from "@/lib/folders/bumpActivity";
+import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
 
-type ImportBody = {
-  spreadsheetId: string;
-  title?: string;
-  sheetId?: number;
-  headerRow?: number;
-  startRow?: number;
-  endRow?: number;
-  folderId?: string;
-  folderName?: string;
-  mapping: Record<string, string>;        // CSVHeader -> CanonicalField
-  skip?: Record<string, boolean>;         // headers to ignore
-  createFolderIfMissing?: boolean;        // ignored for destination choice, but ok to keep
-  skipExisting?: boolean;                  // do NOT move/update existing if true
-};
-
-const digits = (s: any) => String(s ?? "").replace(/\D+/g, "");
-const last10 = (s?: string) => digits(s).slice(-10) || "";
-const lcEmail = (s: any) => String(s ?? "").trim().toLowerCase() || "";
-const escapeA1Title = (t: string) => t.replace(/'/g, "''");
+// ... keep your existing small helpers (digits, last10, lcEmail, escapeA1Title)
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
   const session = await getServerSession(req, res, authOptions);
   if (!session?.user?.email) return res.status(401).json({ error: "Unauthorized" });
-  const userEmail = session.user.email.toLowerCase();
+  const userEmail = String(session.user.email).toLowerCase();
 
   const {
     spreadsheetId,
@@ -47,16 +33,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     mapping = {},
     skip = {},
     skipExisting = false,
-  } = (req.body || {}) as ImportBody;
+  } = (req.body || {}) as any;
 
   if (!spreadsheetId) return res.status(400).json({ error: "Missing spreadsheetId" });
-  if (!title && typeof sheetId !== "number") {
+  if (!title && typeof sheetId !== "number")
     return res.status(400).json({ error: "Provide sheet 'title' or numeric 'sheetId'" });
-  }
 
   try {
     await dbConnect();
-
     const user = await User.findOne({ email: userEmail }).lean<any>();
     const gs = user?.googleSheets || user?.googleTokens;
     if (!gs?.refreshToken) return res.status(400).json({ error: "Google not connected" });
@@ -64,14 +48,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const base =
       process.env.NEXTAUTH_URL ||
       process.env.NEXT_PUBLIC_BASE_URL ||
-      `https://${(req.headers["x-forwarded-host"] as string) || req.headers.host}`;
+      `https://${req.headers["x-forwarded-host"] || req.headers.host}`;
     const redirectUri =
       process.env.GOOGLE_REDIRECT_URI_SHEETS || `${base}/api/connect/google-sheets/callback`;
 
     const oauth2 = new google.auth.OAuth2(
       process.env.GOOGLE_CLIENT_ID!,
       process.env.GOOGLE_CLIENT_SECRET!,
-      redirectUri
+      redirectUri,
     );
     oauth2.setCredentials({
       access_token: gs.accessToken,
@@ -82,8 +66,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const sheets = google.sheets({ version: "v4", auth: oauth2 });
     const drive = google.drive({ version: "v3", auth: oauth2 });
 
-    // Resolve tab title if only sheetId provided
-    let tabTitle = title;
+    // Resolve tab title if only sheetId passed
+    let tabTitle = title as string | undefined;
     if (!tabTitle && typeof sheetId === "number") {
       const meta = await sheets.spreadsheets.get({
         spreadsheetId,
@@ -93,9 +77,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       tabTitle = found?.properties?.title || undefined;
       if (!tabTitle) return res.status(400).json({ error: "sheetId not found" });
     }
-    const safeTitle = escapeA1Title(tabTitle!);
 
-    // Pull values
+    // Pull headers+rows
+    const safeTitle = (tabTitle || "Sheet1").replace(/'/g, "''");
     const valueResp = await sheets.spreadsheets.values.get({
       spreadsheetId,
       range: `'${safeTitle}'!A1:ZZ`,
@@ -117,35 +101,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    // ---- Destination folder: ALWAYS non-system, computed safely ----
-    const driveMeta = await drive.files.get({ fileId: spreadsheetId, fields: "name" });
-    const defaultName = `${driveMeta.data.name || "Imported Leads"} — ${tabTitle}`;
-    const nameCandidate = (folderName ?? "").trim() || defaultName;
-
-    // Upsert a folder by *name* so users can type a nice name, then enforce non-system
-    const foldersColl = mongoose.connection.db!.collection("folders");
-    const up = await foldersColl.findOneAndUpdate(
-      { userEmail, name: nameCandidate },
-      { $setOnInsert: { userEmail, name: nameCandidate, source: "google-sheets" } },
-      { upsert: true, returnDocument: "after" }
-    );
-
-    let candidateId: any = up?.value?._id || folderId;
-    if (!candidateId) {
-      const ins = await foldersColl.insertOne({
-        userEmail,
-        name: nameCandidate,
-        source: "google-sheets",
-      });
-      candidateId = ins.insertedId;
-    }
-
-    // This is the key line: rewrite to a guaranteed non-system folder
-    const safe = await ensureNonSystemFolderId(userEmail, candidateId as any, nameCandidate);
-    const targetFolderId = safe.folderId;
-    const targetFolderName = safe.folderName;
-
-    // ---- Import rows
     const headerIdx = Math.max(0, headerRow - 1);
     const headers = (values[headerIdx] || []).map((h) => String(h || "").trim());
     const firstDataRowIndex =
@@ -155,28 +110,41 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         ? Math.min(values.length, Math.max(endRow, firstDataRowIndex + 1)) - 1
         : values.length - 1;
 
+    // Compute deterministic default name from Drive meta + tab title
+    const defaultNameMeta = await drive.files.get({ fileId: spreadsheetId, fields: "name" });
+    const computedDefault = `${defaultNameMeta.data.name || "Imported Leads"} — ${tabTitle}`;
+
+    // Resolve ONE safe, non-system folder: prefer provided folderId/folderName; else computedDefault
+    const { folderId: destId, folderName: destName } = await ensureNonSystemFolderId(userEmail, {
+      byId: folderId,
+      byName: folderName || computedDefault,
+    });
+
     let inserted = 0;
     let updated = 0;
     let skippedNoKey = 0;
-    let skippedExistingCount = 0;
     let lastNonEmptyRow = headerIdx;
 
     for (let r = firstDataRowIndex; r <= lastRowIndex; r++) {
       const row = values[r] || [];
-      if (!row.some((cell) => String(cell ?? "").trim() !== "")) continue;
+      const hasAny = row.some((cell) => String(cell ?? "").trim() !== "");
+      if (!hasAny) continue;
       lastNonEmptyRow = r;
 
+      // Build doc based on mapping
       const doc: Record<string, any> = {};
       headers.forEach((h, i) => {
         if (!h) return;
         if (skip[h]) return;
-        const fieldName = (mapping as Record<string, string>)[h];
+        const fieldName = mapping[h];
         if (!fieldName) return;
         doc[fieldName] = row[i] ?? "";
       });
 
-      const phoneKey = last10(doc.phone ?? doc.Phone ?? "");
-      const emailLower = lcEmail(doc.email ?? doc.Email ?? "");
+      const normalizedPhone = String(doc.phone ?? doc.Phone ?? "").replace(/\D+/g, "");
+      const phoneKey = normalizedPhone.slice(-10);
+      const emailLower = String(doc.email ?? doc.Email ?? "").trim().toLowerCase();
+
       if (!phoneKey && !emailLower) {
         skippedNoKey++;
         continue;
@@ -192,10 +160,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         })
           .select("_id")
           .lean();
-        if (exists) {
-          skippedExistingCount++;
-          continue;
-        }
+        if (exists) continue;
       }
 
       const filter: any = {
@@ -210,22 +175,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const set: any = {
         userEmail,
         ownerEmail: userEmail,
-        folderId: targetFolderId,
-        folder_name: String(targetFolderName),
-        ["Folder Name"]: String(targetFolderName),
-
+        folderId: destId,
+        folder_name: String(destName),
+        "Folder Name": String(destName),
         Email: emailLower || undefined,
         email: emailLower || undefined,
         Phone: String(doc.phone ?? doc.Phone ?? ""),
         normalizedPhone: phoneKey || undefined,
         phoneLast10: phoneKey || undefined,
-
         "First Name": doc.firstName ?? doc["First Name"],
         "Last Name": doc.lastName ?? doc["Last Name"],
         State: doc.state ?? doc.State,
         Notes: doc.notes ?? doc.Notes,
         Age: doc.Age ?? doc.age,
-
         updatedAt: new Date(),
         source: "google-sheets",
         sourceSpreadsheetId: spreadsheetId,
@@ -236,17 +198,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const result = await (Lead as any).updateOne(
         filter,
         { $set: set, $setOnInsert: setOnInsert },
-        { upsert: true }
+        { upsert: true },
       );
-      const upc = (result?.upsertedCount || (result?.upsertedId ? 1 : 0) || 0) as number;
-      const mod = (result?.modifiedCount || 0) as number;
-      const match = (result?.matchedCount || 0) as number;
-
+      const upc = result?.upsertedCount || (result?.upsertedId ? 1 : 0) || 0;
+      const mod = result?.modifiedCount || 0;
+      const match = result?.matchedCount || 0;
       if (upc > 0) inserted += upc;
       else if (mod > 0 || match > 0) updated += 1;
     }
 
-    // Persist pointer & canonical folder name on the user doc
+    // Pointer bookkeeping (best effort)
+    const pointerRow = lastNonEmptyRow + 1;
     await User.updateOne(
       {
         email: userEmail,
@@ -255,29 +217,33 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       },
       {
         $set: {
-          "googleSheets.syncedSheets.$.folderId": targetFolderId,
-          "googleSheets.syncedSheets.$.folderName": targetFolderName,
+          "googleSheets.syncedSheets.$.folderId": destId,
+          "googleSheets.syncedSheets.$.folderName": destName,
           "googleSheets.syncedSheets.$.headerRow": headerRow,
           "googleSheets.syncedSheets.$.mapping": mapping,
           "googleSheets.syncedSheets.$.skip": skip,
-          "googleSheets.syncedSheets.$.lastRowImported": lastNonEmptyRow + 1,
+          "googleSheets.syncedSheets.$.lastRowImported": pointerRow,
           "googleSheets.syncedSheets.$.lastImportedAt": new Date(),
+          ...(typeof sheetId === "number" ? { "googleSheets.syncedSheets.$.sheetId": sheetId } : {}),
         },
       },
-      { strict: false }
+      { strict: false },
     ).catch(() => {});
+
+    // Bump folder activity so it shows on top
+    await bumpFolderActivity(userEmail, destId);
 
     return res.status(200).json({
       ok: true,
       inserted,
       updated,
       skippedNoKey,
-      skippedExisting: skipExisting ? skippedExistingCount : 0,
+      skippedExisting: skipExisting ? undefined : 0,
       rowCount: values.length,
       headerRow,
-      lastRowImported: lastNonEmptyRow + 1,
-      folderId: String(targetFolderId),
-      folderName: String(targetFolderName),
+      lastRowImported: pointerRow,
+      folderId: String(destId),
+      folderName: destName,
     });
   } catch (err: any) {
     const message = err?.errors?.[0]?.message || err?.message || "Import failed";
