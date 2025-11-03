@@ -115,12 +115,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const computedDefault = `${defaultNameMeta.data.name || "Imported Leads"} — ${tabTitle}`;
 
     // Resolve ONE safe, non-system folder: prefer provided folderId/folderName; else computedDefault
+    const nameInput = (folderName || computedDefault) || "";
     const { folderId: destId, folderName: destName } = await ensureNonSystemFolderId(
-  userEmail,
-  folderId ? new mongoose.Types.ObjectId(folderId) : null,
-  (folderName || computedDefault)
-);
-
+      userEmail,
+      folderId
+        ? { byId: folderId, computedDefault: nameInput }
+        : { byName: nameInput, computedDefault: nameInput }
+    );
 
     let inserted = 0;
     let updated = 0;
