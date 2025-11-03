@@ -6,7 +6,8 @@ import User from "@/models/User";
 import Lead from "@/models/Lead";
 import mongoose from "mongoose";
 import { google } from "googleapis";
-import { ensureNonSystemFolderId } from "@/lib/folders/ensureNonSystemFolderId";
+import ensureNonSystemFolderId from "@/lib/folders/ensureNonSystemFolderId";
+
 
 type ImportBody = {
   spreadsheetId: string;
