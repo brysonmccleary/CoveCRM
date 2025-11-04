@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "next lint",
     "jest": "jest",
-    "create-indexes": "tsx scripts/create-indexes.ts"
+    "create-indexes": "tsx scripts/create-indexes.ts",
+    "socket": "node server/socket-server.ts"
   },
   "dependencies": {
     "@next-auth/mongodb-adapter": "^1.1.3",
