@@ -1,7 +1,8 @@
 // /pages/api/twilio/voice/token.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
-import { authOptions } from "../../auth/[...nextauth]";
+// Use absolute alias to avoid relative resolution pitfalls in pages router:
+import { authOptions } from "@/pages/api/auth/[...nextauth]";
 import twilio from "twilio";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
 
@@ -15,14 +16,14 @@ import { getClientForUser } from "@/lib/twilio/getClientForUser";
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "GET") return res.status(405).json({ message: "Method not allowed" });
 
-  const session = await getServerSession(req, res, authOptions);
+  const session = await getServerSession(req, res, authOptions as any);
   const identity = (session?.user?.email || session?.user?.name || "").trim();
   if (!identity) return res.status(401).json({ message: "Unauthorized" });
 
   try {
     // Resolve which Twilio account + credentials to use (per-user or platform)
     const resolved = await getClientForUser(identity);
-    const { accountSid, usingPersonal, user } = resolved;
+    const { accountSid, usingPersonal, user } = resolved || ({} as any);
 
     // API Key pair (NOT auth token)
     const apiKeySid =
@@ -36,11 +37,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (!accountSid || !apiKeySid || !apiKeySecret) {
       return res.status(500).json({
-        message: "Twilio Voice is not configured",
+        message: "Twilio Voice is not fully configured",
         detail: {
           accountSidPresent: !!accountSid,
           apiKeySidPresent: !!apiKeySid,
           apiKeySecretPresent: !!apiKeySecret,
+          hint: "AccessToken must use API Key SID/Secret, not the Auth Token.",
         },
       });
     }
@@ -61,16 +63,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     token.addGrant(grant);
 
-    res.status(200).json({
+    return res.status(200).json({
       token: token.toJwt(),
       identity,
       account: mask(accountSid),
-      usingPersonal,
+      usingPersonal: !!usingPersonal,
       hasOutgoingApp: !!outgoingAppSid,
     });
   } catch (err: any) {
-    console.error("❌ voice/token error:", err);
-    return res.status(500).json({ message: "Unable to generate token" });
+    // Bubble up the real reason so we can fix it quickly
+    console.error("❌ /api/twilio/voice/token error:", err);
+    return res.status(500).json({
+      message: "Unable to generate token",
+      error: String(err?.message || err),
+    });
   }
 }
 
