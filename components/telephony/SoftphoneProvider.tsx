@@ -35,14 +35,17 @@ function normalizeE164(raw?: string) {
 }
 
 async function fetchToken(): Promise<{ token: string; identity: string }> {
-  const r = await fetch("/api/twilio/voice/token");
+  // include credentials so session cookies are sent in all browsers
+  const r = await fetch("/api/twilio/voice/token", { credentials: "include" });
   if (!r.ok) throw new Error("Unable to obtain voice token");
   return r.json();
 }
 
 async function fetchLeadPreviewByNumber(num: string) {
   try {
-    const r = await fetch(`/api/leads/search?q=${encodeURIComponent(num)}`);
+    const r = await fetch(`/api/leads/search?q=${encodeURIComponent(num)}`, {
+      credentials: "include",
+    });
     const j = await r.json();
     const first = Array.isArray(j?.results) ? j.results[0] : null;
     if (!first) return null;
@@ -76,6 +79,23 @@ export default function SoftphoneProvider({ children }: Props) {
   const [incomingMeta, setIncomingMeta] = useState<any | null>(null);
   const tokenRef = useRef<string | null>(null);
   const identityRef = useRef<string | null>(null);
+  const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const scheduleFallbackRefresh = useCallback((minutes = 50) => {
+    if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+    refreshTimerRef.current = setTimeout(async () => {
+      try {
+        const dev = deviceRef.current;
+        if (!dev) return;
+        const { token: newToken } = await fetchToken();
+        tokenRef.current = newToken;
+        await (dev as any).updateToken?.(newToken);
+        // re-arm
+        scheduleFallbackRefresh(minutes);
+        // eslint-disable-next-line no-empty
+      } catch {}
+    }, minutes * 60 * 1000);
+  }, []);
 
   // Boot + register the Device once
   useEffect(() => {
@@ -92,26 +112,40 @@ export default function SoftphoneProvider({ children }: Props) {
           // Keep logs quiet in prod
           logLevel: process.env.NODE_ENV === "production" ? "error" : "warn",
           // Prefer Opus in modern browsers; fallback PCMU
-          // TS note: DOM's WebCodecs defines a `Codec` type that can collide with the SDK's.
-          // Casting avoids the name clash during type-checking.
           codecPreferences: ["opus", "pcmu"] as unknown as any,
           // Allow incoming events to reach this client
           allowIncomingWhileBusy: false,
         });
         deviceRef.current = dev;
 
-        dev.on("registered", () => setReady(true));
+        dev.on("registered", () => {
+          setReady(true);
+          scheduleFallbackRefresh(50); // ~50min safety refresh before 1h TTL
+        });
         dev.on("unregistered", () => setReady(false));
-        dev.on("error", (e: any) => {
-          console.warn("[Twilio Device error]", e?.message || e);
+        dev.on("error", async (e: any) => {
+          const msg = String(e?.message || e);
+          console.warn("[Twilio Device error]", msg);
+          // If token expired/invalid, refresh immediately
+          if (msg.includes("AccessToken") || msg.includes("expired") || (e && e.code === 31205)) {
+            try {
+              const { token: newToken } = await fetchToken();
+              tokenRef.current = newToken;
+              await (dev as any).updateToken?.(newToken);
+              scheduleFallbackRefresh(50);
+            } catch (err) {
+              console.warn("Error-triggered Twilio token refresh failed:", err);
+            }
+          }
         });
 
-        // Refresh token when expiring
+        // Refresh token when expiring (SDK signal)
         dev.on("tokenWillExpire", async () => {
           try {
             const { token: newToken } = await fetchToken();
             tokenRef.current = newToken;
-            await dev.updateToken(newToken);
+            await (dev as any).updateToken?.(newToken);
+            scheduleFallbackRefresh(50);
           } catch (e) {
             console.warn("Failed refreshing Twilio token", e);
           }
@@ -135,6 +169,7 @@ export default function SoftphoneProvider({ children }: Props) {
           setActiveCall(conn);
           setIncomingCall(undefined);
           setIncomingMeta(null);
+          scheduleFallbackRefresh(50);
         });
 
         dev.on("disconnect", () => {
@@ -149,11 +184,12 @@ export default function SoftphoneProvider({ children }: Props) {
     return () => {
       mounted = false;
       try {
+        if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
         deviceRef.current?.unregister();
         deviceRef.current?.destroy();
       } catch {}
     };
-  }, []);
+  }, [scheduleFallbackRefresh]);
 
   const startCall = useCallback(async (toE164: string, fromTwilio: string) => {
     const dev = deviceRef.current;
@@ -161,7 +197,7 @@ export default function SoftphoneProvider({ children }: Props) {
     if (!toE164 || !fromTwilio) throw new Error("Missing To/From");
     const To = normalizeE164(toE164);
     const From = normalizeE164(fromTwilio);
-    const conn = await dev.connect({ params: { To, From } }); // TwiML answer.ts handles bridge
+    const conn = await (dev as any).connect?.({ params: { To, From } }); // TwiML answer.ts handles bridge
     setActiveCall(conn);
   }, []);
 
