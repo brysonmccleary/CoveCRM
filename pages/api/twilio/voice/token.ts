@@ -1,39 +1,47 @@
 // /pages/api/twilio/voice/token.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
-// Use absolute import so pages router resolves correctly
 import { authOptions } from "@/pages/api/auth/[...nextauth]";
 import twilio from "twilio";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
 
 /**
- * Twilio Voice Access Token for the Twilio Voice JS SDK.
- * - MUST use (accountSid, apiKeySid, apiKeySecret) — not the Auth Token
+ * Twilio Voice Access Token (for Twilio Voice JS SDK).
+ * - MUST use (accountSid, apiKeySid, apiKeySecret) — not Auth Token
  * - Adds VoiceGrant (incomingAllow + optional outgoingApplicationSid)
  * - identity = authenticated user's email (fallback: name)
+ * - If user-specific API keys are missing, falls back to platform envs.
  */
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "GET") return res.status(405).json({ message: "Method not allowed" });
 
   const session = await getServerSession(req, res, authOptions as any);
-  const s = session as any; // avoid TS inference to {}
+  const s = session as any;
   const identity = (s?.user?.email || s?.user?.name || "").trim();
   if (!identity) return res.status(401).json({ message: "Unauthorized" });
 
   try {
-    // Resolve per-user or platform Twilio credentials
+    // Resolve per-user or platform Account SID
     const resolved = (await getClientForUser(identity)) as any;
-    const { accountSid, usingPersonal, user } = resolved || {};
+    const usingPersonal = !!resolved?.usingPersonal;
+    const user = resolved?.user || {};
+    const accountSid: string =
+      (resolved?.accountSid as string) ||
+      process.env.TWILIO_ACCOUNT_SID ||
+      "";
 
-    // API Key pair (NOT auth token)
-    const apiKeySid =
-      (usingPersonal ? user?.twilioApiKeySid : process.env.TWILIO_API_KEY_SID) || "";
-    const apiKeySecret =
-      (usingPersonal ? user?.twilioApiKeySecret : process.env.TWILIO_API_KEY_SECRET) || "";
+    // Prefer user keys when present, otherwise fall back to platform envs.
+    const envApiKeySid = process.env.TWILIO_API_KEY_SID || "";
+    const envApiKeySecret = process.env.TWILIO_API_KEY_SECRET || "";
 
-    // Optional TwiML App SID for client -> PSTN dialing
-    const outgoingAppSid =
-      (usingPersonal ? user?.twimlAppSid : process.env.TWILIO_TWIML_APP_SID) || undefined;
+    const apiKeySid: string =
+      (usingPersonal && user?.twilioApiKeySid) ? user.twilioApiKeySid : envApiKeySid;
+    const apiKeySecret: string =
+      (usingPersonal && user?.twilioApiKeySecret) ? user.twilioApiKeySecret : envApiKeySecret;
+
+    // Optional TwiML App SID for client -> PSTN
+    const outgoingAppSid: string | undefined =
+      (usingPersonal && user?.twimlAppSid) ? user.twimlAppSid : (process.env.TWILIO_TWIML_APP_SID || undefined);
 
     if (!accountSid || !apiKeySid || !apiKeySecret) {
       return res.status(500).json({
@@ -42,7 +50,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           accountSidPresent: !!accountSid,
           apiKeySidPresent: !!apiKeySid,
           apiKeySecretPresent: !!apiKeySecret,
-          hint: "AccessToken must use API Key SID/Secret (not the Auth Token).",
+          hint: "AccessToken must use API Key SID/Secret (not the Auth Token). Ensure envs are set for the current deployment environment.",
         },
       });
     }
@@ -60,7 +68,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       incomingAllow: true,
       outgoingApplicationSid: outgoingAppSid,
     });
-
     token.addGrant(grant);
 
     return res.status(200).json({
@@ -69,6 +76,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       account: mask(accountSid),
       usingPersonal: !!usingPersonal,
       hasOutgoingApp: !!outgoingAppSid,
+      keySource: (usingPersonal && user?.twilioApiKeySid && user?.twilioApiKeySecret) ? "user" : "env",
     });
   } catch (err: any) {
     console.error("❌ /api/twilio/voice/token error:", err);
