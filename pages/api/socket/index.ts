@@ -2,11 +2,13 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { initSocket } from "@/lib/socket";
 
-/** Force Node runtime and disable body parsing so Engine.IO can upgrade cleanly on Vercel. */
+/**
+ * For pages/api routes, keep config simple and DO NOT use `as const` or `runtime` here.
+ * We only need bodyParser disabled so Engine.IO can upgrade cleanly.
+ */
 export const config = {
   api: { bodyParser: false },
-  runtime: "nodejs",
-} as const;
+};
 
 export default function handler(req: NextApiRequest, res: NextApiResponse) {
   // Initialize or reuse the Socket.IO server instance.
