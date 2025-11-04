@@ -1,14 +1,15 @@
+// /components/Sidebar.tsx
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { signOut } from "next-auth/react";
 import Image from "next/image";
 import { useSession } from "next-auth/react";
+import { connectAndJoin, getSocket } from "@/lib/socketClient";
 
 export default function Sidebar() {
   const { data: session } = useSession();
   const [unreadCount, setUnreadCount] = useState(0);
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
-  const socketRef = useRef<any>(null);
 
   const fetchUnread = async () => {
     try {
@@ -34,35 +35,22 @@ export default function Sidebar() {
     const email = (session?.user?.email || "").toLowerCase();
     if (!email) return;
 
-    (async () => {
-      try {
-        const { io } = await import("socket.io-client");
-        const s = io({ path: "/api/socket/", transports: ["polling"] }); // force polling
-        socketRef.current = s;
+    const s = connectAndJoin(email);
+    const refetch = () => fetchUnread();
 
-        const refetch = () => fetchUnread();
-
-        s.on("connect", () => {
-          s.emit("join", email);
-          refetch();
-        });
-
-        s.on("message:new", refetch);
-        s.on("message:read", refetch);
-        s.on("conversation:updated", refetch);
-      } catch (e) {
-        console.warn("socket setup failed (sidebar), using polling only", e);
-      }
-    })();
+    if (s) {
+      s.on("message:new", refetch);
+      s.on("message:read", refetch);
+      s.on("conversation:updated", refetch);
+    }
 
     return () => {
-      const s = socketRef.current;
-      if (!s) return;
+      const sock = getSocket();
+      if (!sock) return;
       try {
-        s.off("message:new");
-        s.off("message:read");
-        s.off("conversation:updated");
-        s.disconnect();
+        sock.off("message:new", refetch);
+        sock.off("message:read", refetch);
+        sock.off("conversation:updated", refetch);
       } catch {}
     };
   }, [session?.user?.email]);

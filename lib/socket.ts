@@ -1,3 +1,4 @@
+// /lib/socket.ts
 import { Server as NetServer } from "http";
 import { Server as SocketIOServer, Socket } from "socket.io";
 import type { NextApiResponse } from "next";
@@ -11,31 +12,26 @@ type NextApiResponseWithSocket = NextApiResponse & {
 let _io: SocketIOServer | undefined;
 
 /**
- * Initializes (or reuses) a singleton Socket.IO server bound to the path
- * "/api/socket/" (note the trailing slash). Matching the client path avoids
- * Next.js 308 redirects. Safe to call from any API route. Idempotent.
- * No dialer logic is touched.
+ * Initializes (or reuses) a singleton Socket.IO server bound to the path (/api/socket/).
+ * Matching the client path (including the trailing slash) avoids Next.js redirect quirks.
+ * Safe to call from any API route. Idempotent. No dialer logic touched.
  */
 export function initSocket(res: NextApiResponseWithSocket): SocketIOServer {
-  // Reuse instance already attached to the HTTP server (hot/cold starts)
+  // Reuse instance if already attached (hot/cold starts)
   if (res.socket?.server?.io) {
     _io = res.socket.server.io;
     return _io!;
   }
 
-  // Reuse in-process singleton if present
   if (_io) return _io;
 
   const io = new SocketIOServer(res.socket.server, {
-    path: "/api/socket/",            // <- trailing slash
+    path: "/api/socket/",            // <— trailing slash
     addTrailingSlash: true,
-    cors: {
-      origin: true,                  // reflect requester
-      methods: ["GET", "POST"],
-      credentials: true,
-    },
-    // Keep both so the browser can fall back to long-polling on Vercel
+    cors: { origin: "*", methods: ["GET", "POST"], credentials: true },
+    // Allow polling so it works reliably on Vercel; Socket.IO will try to upgrade when possible.
     transports: ["polling", "websocket"],
+    allowEIO3: false,
   });
 
   res.socket.server.io = io;
@@ -73,7 +69,10 @@ export function initSocket(res: NextApiResponseWithSocket): SocketIOServer {
   return io;
 }
 
-/** Emit to a user-scoped room; no-op if server not initialized. */
+/**
+ * Small helper to emit to a user's room.
+ * No-op if server isn't initialized yet.
+ */
 export function emitToUser(userEmail: string, event: string, payload?: any) {
   if (!_io) return;
   if (!userEmail || !event) return;

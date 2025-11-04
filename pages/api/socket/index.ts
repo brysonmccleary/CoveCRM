@@ -1,17 +1,21 @@
+// /pages/api/socket/index.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { initSocket } from "@/lib/socket";
 
-// Keep bodyParser off for long-polling requests
 export const config = {
-  api: { bodyParser: false },
+  api: {
+    bodyParser: false, // keep raw for socket handshake
+  },
 };
 
 export default function handler(req: NextApiRequest, res: NextApiResponse) {
-  // Initialize (idempotent). This attaches io to the underlying server.
+  // Initialize (idempotent)
   initSocket(res as any);
-  // Return a tiny OK so /api/socket/ is a valid GET for health checks.
+  // Health check for GETs in logs/Network tab
   if (req.method === "GET") {
-    return res.status(200).json({ ok: true });
+    res.status(200).json({ ok: true, route: "/api/socket/", ts: Date.now() });
+    return;
   }
-  return res.status(200).end();
+  // Socket.IO will hijack the underlying socket; still return 200 for non-GET
+  res.status(200).end();
 }

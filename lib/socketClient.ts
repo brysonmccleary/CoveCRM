@@ -1,3 +1,4 @@
+// /lib/socketClient.ts
 // Browser Socket.IO client (pairs with server at /api/socket/)
 import { io, Socket } from "socket.io-client";
 
@@ -14,8 +15,9 @@ function isBrowser() {
 
 function createClient(): Socket {
   return io(undefined, {
-    path: "/api/socket/",          // <- trailing slash to match server
-    transports: ["polling"],       // force polling; avoids websocket timeouts on Vercel
+    path: "/api/socket/",           // <— trailing slash matches server
+    // IMPORTANT: allow polling so it works on Vercel, Safari, corporate proxies, etc.
+    transports: ["polling", "websocket"],
     autoConnect: false,
     withCredentials: true,
     reconnection: true,
@@ -29,7 +31,6 @@ export function getSocket(): Socket | null {
   if (!global.__crm_socket__) {
     const s = createClient();
 
-    // Re-join on connect/reconnect using the last known email
     const rejoin = () => {
       const email = (global.__crm_socket_email__ || "").toLowerCase();
       if (email) s.emit("join", email);
@@ -37,8 +38,12 @@ export function getSocket(): Socket | null {
     s.on("connect", rejoin);
     s.on("reconnect", rejoin);
 
-    s.on("connect_error", (err) => console.warn("[socket] connect_error:", err?.message || err));
-    s.on("error", (err) => console.warn("[socket] error:", err));
+    s.on("connect_error", (err) => {
+      console.warn("[socket] connect_error:", err?.message || err);
+    });
+    s.on("error", (err) => {
+      console.warn("[socket] error:", err);
+    });
 
     global.__crm_socket__ = s;
   }
