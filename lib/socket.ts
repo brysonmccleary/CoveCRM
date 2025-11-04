@@ -11,9 +11,10 @@ type NextApiResponseWithSocket = NextApiResponse & {
 let _io: SocketIOServer | undefined;
 
 /**
- * Initializes (or reuses) a singleton Socket.IO server bound to **/api/socket/**
- * (note the trailing slash). Matching the client path avoids Next.js 308 redirects.
- * Safe to call from any API route. Idempotent. No dialer logic touched.
+ * Initializes (or reuses) a singleton Socket.IO server bound to the path
+ * "/api/socket/" (note the trailing slash). Matching the client path avoids
+ * Next.js 308 redirects. Safe to call from any API route. Idempotent.
+ * No dialer logic is touched.
  */
 export function initSocket(res: NextApiResponseWithSocket): SocketIOServer {
   // Reuse instance already attached to the HTTP server (hot/cold starts)
@@ -26,14 +27,14 @@ export function initSocket(res: NextApiResponseWithSocket): SocketIOServer {
   if (_io) return _io;
 
   const io = new SocketIOServer(res.socket.server, {
-    path: "/api/socket/",             // <-- trailing slash
-    addTrailingSlash: true,           // be explicit
+    path: "/api/socket/",            // <- trailing slash
+    addTrailingSlash: true,
     cors: {
-      origin: true,                   // reflect request origin
+      origin: true,                  // reflect requester
       methods: ["GET", "POST"],
       credentials: true,
     },
-    // Keep both; client is set to polling only for stability on Vercel
+    // Keep both so the browser can fall back to long-polling on Vercel
     transports: ["polling", "websocket"],
   });
 
@@ -72,10 +73,7 @@ export function initSocket(res: NextApiResponseWithSocket): SocketIOServer {
   return io;
 }
 
-/**
- * Minimal helper to emit to a user-scoped room.
- * No-op if server not initialized.
- */
+/** Emit to a user-scoped room; no-op if server not initialized. */
 export function emitToUser(userEmail: string, event: string, payload?: any) {
   if (!_io) return;
   if (!userEmail || !event) return;

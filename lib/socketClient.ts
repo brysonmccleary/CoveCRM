@@ -2,10 +2,8 @@
 import { io, Socket } from "socket.io-client";
 
 declare global {
-  // Preserve a single instance across hot reloads
   // eslint-disable-next-line no-var
   var __crm_socket__: Socket | undefined;
-  // Keep last joined email so reconnects can rejoin room
   // eslint-disable-next-line no-var
   var __crm_socket_email__: string | null | undefined;
 }
@@ -15,12 +13,10 @@ function isBrowser() {
 }
 
 function createClient(): Socket {
-  // IMPORTANT:
-  // - path must include trailing slash to avoid Next 308 redirect issues
-  // - force transports=["polling"] to avoid WS upgrade flakiness on Vercel
-  return io({
-    path: "/api/socket/",
-    transports: ["polling"],
+  return io(undefined, {
+    path: "/api/socket/",          // <- trailing slash to match server
+    transports: ["polling"],       // force polling; avoids websocket timeouts on Vercel
+    autoConnect: false,
     withCredentials: true,
     reconnection: true,
   });
@@ -33,24 +29,16 @@ export function getSocket(): Socket | null {
   if (!global.__crm_socket__) {
     const s = createClient();
 
+    // Re-join on connect/reconnect using the last known email
     const rejoin = () => {
       const email = (global.__crm_socket_email__ || "").toLowerCase();
       if (email) s.emit("join", email);
     };
-
-    // Re-join on connect/reconnect using the last known email
     s.on("connect", rejoin);
     s.on("reconnect", rejoin);
 
-    // Light diagnostics (safe to remove)
-    s.on("connect_error", (err) => {
-      // eslint-disable-next-line no-console
-      console.warn("[socket] connect_error:", err?.message || err);
-    });
-    s.on("error", (err) => {
-      // eslint-disable-next-line no-console
-      console.warn("[socket] error:", err);
-    });
+    s.on("connect_error", (err) => console.warn("[socket] connect_error:", err?.message || err));
+    s.on("error", (err) => console.warn("[socket] error:", err));
 
     global.__crm_socket__ = s;
   }

@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { signOut } from "next-auth/react";
 import Image from "next/image";
-import { getSocket } from "@/lib/socketClient";
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const [unreadCount, setUnreadCount] = useState(0);
@@ -36,18 +35,21 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     intervalRef.current = setInterval(fetchUnread, 15000);
 
     // socket live updates
-    try {
-      const s = getSocket();
-      socketRef.current = s;
+    (async () => {
+      try {
+        const { io } = await import("socket.io-client");
+        const s = io({ path: "/api/socket/", transports: ["polling"] });
+        socketRef.current = s;
 
-      const refetch = () => fetchUnread();
-      s?.on("connect", refetch);
-      s?.on("message:new", refetch);
-      s?.on("message:read", refetch);
-      s?.on("conversation:updated", refetch);
-    } catch (e) {
-      console.warn("socket setup failed (layout), polling only", e);
-    }
+        const refetch = () => fetchUnread();
+        s.on("connect", refetch);
+        s.on("message:new", refetch);
+        s.on("message:read", refetch);
+        s.on("conversation:updated", refetch);
+      } catch (e) {
+        console.warn("socket setup failed (layout), polling only", e);
+      }
+    })();
 
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
@@ -73,7 +75,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     <div className="flex min-h-screen text-white">
       <div className="w-60 p-4 bg-[#0f172a] flex flex-col justify-between border-r border-[#1e293b]">
         <div>
-          {/* Logo and title row */}
           <div className="flex items-center gap-2 mb-6">
             <Image
               src="/logo.png"
@@ -110,10 +111,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         </div>
       </div>
 
-      <main
-        className="flex-1 px-6 py-8 overflow-y-auto"
-        style={{ backgroundColor: "#1e293b", color: "#ffffff" }}
-      >
+      <main className="flex-1 px-6 py-8 overflow-y-auto" style={{ backgroundColor: "#1e293b", color: "#ffffff" }}>
         {children}
       </main>
     </div>
