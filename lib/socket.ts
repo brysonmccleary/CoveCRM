@@ -1,10 +1,7 @@
 // /lib/socket.ts
-// Socket.IO server singleton for API routes.
-// Back-compatible: exports `initSocket` so older imports keep working.
-
-import type { NextApiResponse } from "next";
 import { Server as NetServer } from "http";
-import { Server as SocketIOServer, Socket } from "socket.io";
+import { Server as SocketIOServer, type Socket } from "socket.io";
+import type { NextApiResponse } from "next";
 
 type NextApiResponseWithSocket = NextApiResponse & {
   socket: {
@@ -12,82 +9,70 @@ type NextApiResponseWithSocket = NextApiResponse & {
   };
 };
 
-let _io: SocketIOServer | undefined;
+let _io: SocketIOServer | null = null;
 
-/** Create and bind a Socket.IO server to Next's HTTP server (once). */
+/** Create a Socket.IO server bound to our Next.js Node server under /api/socket/. */
 function createIo(res: NextApiResponseWithSocket): SocketIOServer {
   const io = new SocketIOServer(res.socket.server, {
-    path: "/api/socket/",           // NOTE: must match client (trailing slash)
-    addTrailingSlash: true,
-    cors: { origin: "*", methods: ["GET", "POST"], credentials: true },
-    // Let client choose transports (polling → ws). Do not force here.
+    path: "/api/socket", // we force no trailing slash; client mirrors this
+    addTrailingSlash: true, // accept /api/socket/ too
+    transports: ["websocket", "polling"],
+    cors: {
+      origin: true,
+      credentials: true,
+      methods: ["GET", "POST", "OPTIONS"],
+    },
+    allowEIO3: false,
   });
 
   io.on("connection", (socket: Socket) => {
     try {
       const ip =
         (socket.handshake.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() ||
-        socket.handshake.address ||
+        (socket.handshake.address as any) ||
         "unknown";
-      console.log(`🔌 socket connected ${socket.id} from ${ip}`);
-    } catch {
-      console.log(`🔌 socket connected ${socket.id}`);
+
+      // Clients call socket.emit("join", email)
+      socket.on("join", (room: string) => {
+        if (!room) return;
+        socket.join(room);
+      });
+
+      socket.on("ping", () => {
+        socket.emit("pong", Date.now());
+      });
+
+      socket.on("disconnect", () => {
+        // no-op; rooms are auto-learned by Socket.IO
+      });
+    } catch (e) {
+      // swallow to avoid tearing down the whole server
+      console.error("socket connection handler error:", e);
     }
-
-    socket.on("join", (userEmail: string) => {
-      if (!userEmail) return;
-      const room = String(userEmail).toLowerCase();
-      socket.join(room);
-      console.log(`👥 ${socket.id} joined room: ${room}`);
-    });
-
-    socket.on("disconnect", (reason) => {
-      console.log(`⚪︎ ${socket.id} disconnected: ${reason}`);
-    });
-    socket.on("error", (err) => {
-      console.warn(`⚠️ ${socket.id} error:`, err);
-    });
-    socket.on("connect_error", (err) => {
-      console.warn(`⚠️ ${socket.id} connect_error:`, (err as any)?.message || err);
-    });
   });
 
   return io;
 }
 
-/**
- * Return the singleton instance. If it's not created yet, use `res` to create it.
- * This function is typed to ALWAYS return a SocketIOServer (never undefined),
- * fixing the previous build error.
- */
-export function getIO(res?: NextApiResponseWithSocket): SocketIOServer {
-  // If we already have a process-level singleton, return it.
+/** Initialize (or reuse) the singleton Socket.IO server. Safe to call on every request. */
+export function initSocket(res: NextApiResponseWithSocket): SocketIOServer {
   if (_io) return _io;
-
-  // If Vercel hot/cold start left one attached to the HTTP server, reuse it.
-  if (res?.socket?.server?.io) {
-    _io = res.socket.server.io as SocketIOServer;
-    return _io;
+  const srv = res?.socket?.server as NetServer & { io?: SocketIOServer };
+  if (srv && !srv.io) {
+    srv.io = createIo(res);
   }
+  _io = srv.io as SocketIOServer;
+  return _io!;
+}
 
-  // Otherwise, we must have `res` to create it right now.
-  if (!res) {
-    throw new Error("Socket.IO not initialized yet (no response object provided).");
-  }
-
-  _io = createIo(res);
-  res.socket.server.io = _io;
+/** Optional getter. Will be null until initSocket has run at least once. */
+export function getIO(): SocketIOServer | null {
   return _io;
 }
 
-/** Back-compat alias for existing imports in other files. */
-export function initSocket(res: NextApiResponseWithSocket): SocketIOServer {
-  return getIO(res);
-}
-
-/** Emit to a user's room (no-op if the server hasn't been created yet). */
+/** Helper to emit to a specific user/email "room". */
 export function emitToUser(userEmail: string, event: string, payload?: any) {
   if (!_io) return;
   if (!userEmail || !event) return;
-  _io.to(String(userEmail).toLowerCase()).emit(event, payload);
+  _io.to(userEmail).emit(event, payload);
 }
