@@ -1,123 +1,94 @@
+// /pages/api/twilio/voice/token.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
-import { authOptions } from "../../auth/[...nextauth]";
+import { authOptions } from "@/pages/api/auth/[...nextauth]";
 import twilio from "twilio";
-import dbConnect from "@/lib/mongooseConnect";
-import User from "@/models/User";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
 
-const { AccessToken } = (twilio.jwt as any);
-const { VoiceGrant } = AccessToken;
-
+/**
+ * Twilio Voice Access Token (for Twilio Voice JS SDK).
+ * - MUST use (accountSid, apiKeySid, apiKeySecret) — not Auth Token
+ * - Adds VoiceGrant (incomingAllow + optional outgoingApplicationSid)
+ * - identity = authenticated user's email (fallback: name)
+ * - If user-specific API keys are missing, falls back to platform envs.
+ */
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "GET") return res.status(405).json({ message: "Method not allowed" });
 
-  const session = await getServerSession(req, res, authOptions);
-  if (!session?.user?.email) {
-    console.error("❌ voice/token: Unauthorized (no session)");
-    return res.status(401).json({ message: "Unauthorized" });
-  }
-
-  const email = session.user.email.toLowerCase();
+  const session = await getServerSession(req, res, authOptions as any);
+  const s = session as any;
+  const identity = (s?.user?.email || s?.user?.name || "").trim();
+  if (!identity) return res.status(401).json({ message: "Unauthorized" });
 
   try {
-    await dbConnect();
+    // Resolve per-user or platform Account SID
+    const resolved = (await getClientForUser(identity)) as any;
+    const usingPersonal = !!resolved?.usingPersonal;
+    const user = resolved?.user || {};
+    const accountSid: string =
+      (resolved?.accountSid as string) ||
+      process.env.TWILIO_ACCOUNT_SID ||
+      "";
 
-    // Determine which Twilio account to use (personal vs platform)
-    const { usingPersonal, accountSid } = await getClientForUser(email);
+    // Prefer user keys when present, otherwise fall back to platform envs.
+    const envApiKeySid = process.env.TWILIO_API_KEY_SID || "";
+    const envApiKeySecret = process.env.TWILIO_API_KEY_SECRET || "";
 
-    // Collect credentials
-    let ACCOUNT_SID: string | undefined;
-    let API_KEY_SID: string | undefined;
-    let API_KEY_SECRET: string | undefined;
-    let OUTGOING_APP_SID: string | undefined;
+    const apiKeySid: string =
+      (usingPersonal && user?.twilioApiKeySid) ? user.twilioApiKeySid : envApiKeySid;
+    const apiKeySecret: string =
+      (usingPersonal && user?.twilioApiKeySecret) ? user.twilioApiKeySecret : envApiKeySecret;
 
-    if (usingPersonal) {
-      // Per-user creds from DB
-      const user = await User.findOne({ email }).lean<any>();
-      ACCOUNT_SID = user?.twilio?.accountSid;
-      API_KEY_SID = user?.twilio?.apiKeySid;
-      API_KEY_SECRET = user?.twilio?.apiKeySecret;
+    // Optional TwiML App SID for client -> PSTN
+    const outgoingAppSid: string | undefined =
+      (usingPersonal && user?.twimlAppSid) ? user.twimlAppSid : (process.env.TWILIO_TWIML_APP_SID || undefined);
 
-      // Prefer a per-user app SID, but FALL BACK to env (so browser can route to /api/voice/agent-join)
-      OUTGOING_APP_SID =
-        user?.twilio?.voiceAppSid ||
-        process.env.TWILIO_VOICE_APP_SID ||
-        process.env.OUTGOING_APP_SID ||
-        process.env.TWILIO_APP_SID ||
-        process.env.TWILIO_TWIML_APP_SID ||
-        undefined;
-    } else {
-      // Platform envs
-      ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID;
-      API_KEY_SID = process.env.TWILIO_API_KEY_SID || process.env.TWILIO_API_KEY;
-      API_KEY_SECRET = process.env.TWILIO_API_KEY_SECRET;
-      OUTGOING_APP_SID =
-        process.env.TWILIO_VOICE_APP_SID ||
-        process.env.OUTGOING_APP_SID ||
-        process.env.TWILIO_APP_SID ||
-        process.env.TWILIO_TWIML_APP_SID ||
-        undefined;
+    if (!accountSid || !apiKeySid || !apiKeySecret) {
+      return res.status(500).json({
+        message: "Twilio Voice is not fully configured",
+        detail: {
+          accountSidPresent: !!accountSid,
+          apiKeySidPresent: !!apiKeySid,
+          apiKeySecretPresent: !!apiKeySecret,
+          hint: "AccessToken must use API Key SID/Secret (not the Auth Token). Ensure envs are set for the current deployment environment.",
+        },
+      });
     }
 
-    // Minimal requirements for a JWT
-    if (!ACCOUNT_SID || !API_KEY_SID || !API_KEY_SECRET) {
-      console.error(
-        "❌ voice/token: Missing credentials for AccessToken",
-        JSON.stringify({
-          email,
-          usingPersonal,
-          resolvedAccountSidMasked: maskSid(accountSid),
-          hasAccountSid: !!ACCOUNT_SID,
-          hasApiKeySid: !!API_KEY_SID,
-          hasApiKeySecret: !!API_KEY_SECRET,
-        })
-      );
-      return res.status(500).json({ message: "Server voice config missing" });
-    }
+    const { jwt } = twilio as any;
+    const AccessToken = jwt.AccessToken;
+    const VoiceGrant = AccessToken.VoiceGrant;
 
-    const identity = email;
-    const token = new AccessToken(ACCOUNT_SID, API_KEY_SID, API_KEY_SECRET, {
+    const token = new AccessToken(accountSid, apiKeySid, apiKeySecret, {
       identity,
       ttl: 3600,
     });
 
-    // Build the Voice grant
-    const grantOptions: Record<string, any> = { incomingAllow: true };
-    if (OUTGOING_APP_SID) {
-      grantOptions.outgoingApplicationSid = OUTGOING_APP_SID;
-    } else {
-      console.warn(
-        JSON.stringify({
-          msg: "voice/token: OUTGOING_APP_SID not set; Device.connect() will not reach /api/voice/agent-join",
-          email,
-          usingPersonal,
-          accountSidMasked: maskSid(ACCOUNT_SID),
-        })
-      );
-    }
+    const grant = new VoiceGrant({
+      incomingAllow: true,
+      outgoingApplicationSid: outgoingAppSid,
+    });
+    token.addGrant(grant);
 
-    const voiceGrant = new VoiceGrant(grantOptions);
-    token.addGrant(voiceGrant);
-
-    // Return token + the app SID so we can verify easily
     return res.status(200).json({
       token: token.toJwt(),
       identity,
-      usingPersonal,
-      accountSid,
-      outgoingAppSid: OUTGOING_APP_SID || null,
+      account: mask(accountSid),
+      usingPersonal: !!usingPersonal,
+      hasOutgoingApp: !!outgoingAppSid,
+      keySource: (usingPersonal && user?.twilioApiKeySid && user?.twilioApiKeySecret) ? "user" : "env",
     });
   } catch (err: any) {
-    console.error("❌ voice/token error:", err);
-    return res.status(500).json({ message: "Unable to generate token" });
+    console.error("❌ /api/twilio/voice/token error:", err);
+    return res.status(500).json({
+      message: "Unable to generate token",
+      error: String(err?.message || err),
+    });
   }
 }
 
-// small helper for logs
-function maskSid(sid?: string | null) {
-  if (!sid) return null;
-  const s = String(sid);
-  if (s.length <= 8) return s;
-  return `${s.slice(0, 4)}…${s.slice(-4)}`;
+function mask(s?: string | null) {
+  if (!s) return null;
+  const v = String(s);
+  return v.length > 8 ? `${v.slice(0, 4)}…${v.slice(-4)}` : v;
 }

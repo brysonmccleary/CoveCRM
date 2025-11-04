@@ -1,10 +1,10 @@
 // /lib/socketClient.ts
 // Browser Socket.IO client (pairs with server at /api/socket/)
-import { io, Socket } from "socket.io-client";
+import { io, type Socket } from "socket.io-client";
 
 declare global {
   // eslint-disable-next-line no-var
-  var __crm_socket__: Socket | undefined;
+  var __crm_socket__: Socket | null | undefined;
   // eslint-disable-next-line no-var
   var __crm_socket_email__: string | null | undefined;
 }
@@ -14,63 +14,63 @@ function isBrowser() {
 }
 
 function createClient(): Socket {
-  return io(undefined, {
-    path: "/api/socket/",           // <— trailing slash matches server
-    // IMPORTANT: allow polling so it works on Vercel, Safari, corporate proxies, etc.
-    transports: ["polling", "websocket"],
-    autoConnect: false,
+  const base =
+    (typeof window !== "undefined" && window.location.origin) ||
+    (process.env.NEXT_PUBLIC_BASE_URL || "").replace(/\/$/, "");
+
+  const socket = io(base, {
+    path: "/api/socket", // must match server
     withCredentials: true,
-    reconnection: true,
+    transports: ["websocket", "polling"],
+    forceNew: false,
+    autoConnect: false,
   });
+
+  // Optional: console diagnostics
+  socket.on("connect_error", (err: any) => {
+    console.error("[socket] connect_error:", err?.message || err);
+  });
+  socket.on("error", (err: any) => {
+    console.error("[socket] error:", err);
+  });
+  socket.on("connect", () => {
+    // Re-join room if identity was known
+    const email = (global as any).__crm_socket_email__;
+    if (email) {
+      socket.emit("join", String(email).toLowerCase());
+    }
+  });
+
+  return socket;
 }
 
-/** Singleton getter (browser only). */
+/** Get or build the singleton client instance (browser only). Returns null (not undefined) when unavailable. */
 export function getSocket(): Socket | null {
   if (!isBrowser()) return null;
-
   if (!global.__crm_socket__) {
-    const s = createClient();
-
-    const rejoin = () => {
-      const email = (global.__crm_socket_email__ || "").toLowerCase();
-      if (email) s.emit("join", email);
-    };
-    s.on("connect", rejoin);
-    s.on("reconnect", rejoin);
-
-    s.on("connect_error", (err) => {
-      console.warn("[socket] connect_error:", err?.message || err);
-    });
-    s.on("error", (err) => {
-      console.warn("[socket] error:", err);
-    });
-
-    global.__crm_socket__ = s;
+    global.__crm_socket__ = createClient();
   }
-
-  return global.__crm_socket__!;
+  return (global.__crm_socket__ as Socket) ?? null;
 }
 
-/** Connect (if needed) and join the per-user room by email. */
-export function connectAndJoin(email: string): Socket | null {
+/** Connect and join the user's email room. Safe to call repeatedly. Returns null until available. */
+export function connectAndJoin(userEmail?: string | null): Socket | null {
   const s = getSocket();
   if (!s) return null;
-
-  const normalized = (email || "").toLowerCase();
-  global.__crm_socket_email__ = normalized;
-
+  const normalized = (userEmail || "").trim().toLowerCase();
+  (global as any).__crm_socket_email__ = normalized || null;
   if (!s.connected) s.connect();
   if (normalized) s.emit("join", normalized);
-
   return s;
 }
 
 /** Optional: cleanly disconnect (e.g., on sign-out). */
 export function disconnectSocket() {
   const s = getSocket();
-  if (!s) return;
-  s.removeAllListeners();
-  s.disconnect();
-  global.__crm_socket__ = undefined;
-  global.__crm_socket_email__ = null;
+  if (s) {
+    s.removeAllListeners();
+    s.disconnect();
+  }
+  (global as any).__crm_socket__ = null;
+  (global as any).__crm_socket_email__ = null;
 }

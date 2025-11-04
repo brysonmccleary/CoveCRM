@@ -2,20 +2,17 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { initSocket } from "@/lib/socket";
 
+/**
+ * For pages/api routes, keep config simple and DO NOT use `as const` or `runtime` here.
+ * We only need bodyParser disabled so Engine.IO can upgrade cleanly.
+ */
 export const config = {
-  api: {
-    bodyParser: false, // keep raw for socket handshake
-  },
+  api: { bodyParser: false },
 };
 
 export default function handler(req: NextApiRequest, res: NextApiResponse) {
-  // Initialize (idempotent)
+  // Initialize or reuse the Socket.IO server instance.
   initSocket(res as any);
-  // Health check for GETs in logs/Network tab
-  if (req.method === "GET") {
-    res.status(200).json({ ok: true, route: "/api/socket/", ts: Date.now() });
-    return;
-  }
-  // Socket.IO will hijack the underlying socket; still return 200 for non-GET
-  res.status(200).end();
+  // Health OK. Engine.IO endpoints are served behind this path automatically.
+  res.status(200).json({ ok: true, route: "/api/socket/", ts: Date.now() });
 }

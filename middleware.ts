@@ -27,7 +27,7 @@ function isCronAuthorized(req: NextRequest) {
 
   const ok = (secret && (token === secret || headerToken === secret)) || isVercelCron;
 
-  // Attach debug headers to the request so we can surface them on 403
+  // Attach debug headers so we can surface them on 403
   (req as any)._cron_dbg = {
     path: url.pathname,
     queryTokenPresent: token !== "",
@@ -45,6 +45,11 @@ function isCronAuthorized(req: NextRequest) {
 
 export function middleware(req: NextRequest) {
   const { pathname } = new URL(req.url);
+
+  // 🔒 Critical: never let middleware touch websocket upgrade paths.
+  if (pathname === "/api/socket" || pathname.startsWith("/api/socket/")) {
+    return NextResponse.next();
+  }
 
   if (openCronPaths.has(pathname)) {
     if (isCronAuthorized(req)) {
@@ -71,6 +76,7 @@ export function middleware(req: NextRequest) {
   return NextResponse.next();
 }
 
+// ✅ Keep matcher simple; exclusions are handled above.
 export const config = {
   matcher: ["/api/:path*"],
 };

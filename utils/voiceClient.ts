@@ -25,7 +25,7 @@ function isBrowser() {
 }
 
 async function fetchToken(): Promise<string> {
-  const r = await fetch("/api/twilio/voice/token");
+  const r = await fetch("/api/twilio/voice/token", { credentials: "include" });
   if (!r.ok) throw new Error("Failed to fetch voice token");
   const j = (await r.json()) as TokenResponse;
   if (!j?.token) throw new Error("Voice token missing");
@@ -85,12 +85,41 @@ async function ensureDevice(): Promise<void> {
     // Immediately disable built-in tones
     disableSdkSounds(device);
 
-    device.on?.("error", (e: any) => console.warn("Twilio Device error:", e?.message || e));
-    device.on?.("registered", () => { registered = true; disableSdkSounds(device); });
+    device.on?.("error", async (e: any) => {
+      const msg = String(e?.message || e);
+      console.warn("Twilio Device error:", msg);
+      // If token expired/invalid, refresh immediately
+      if (msg.includes("AccessToken") || msg.includes("expired") || (e && e.code === 31205)) {
+        try {
+          const t = await fetchToken();
+          await device.updateToken?.(t);
+          startTokenTimer();
+        } catch (err) {
+          console.warn("error-triggered token refresh failed:", err);
+        }
+      }
+    });
+
+    device.on?.("registered", () => {
+      registered = true;
+      disableSdkSounds(device);
+      startTokenTimer(); // schedule ~45-50 min fallback refresh
+    });
     device.on?.("unregistered", () => { registered = false; });
 
     // No inbound in this app
     device.on?.("incoming", (call: any) => { try { call.reject?.(); } catch {} });
+
+    // Refresh before expiry via SDK event
+    device.on?.("tokenWillExpire", async () => {
+      try {
+        const t = await fetchToken();
+        await device.updateToken?.(t);
+        startTokenTimer();
+      } catch (err) {
+        console.warn("tokenWillExpire refresh failed:", err);
+      }
+    });
   } else {
     try {
       await device.updateToken(token);
@@ -119,7 +148,7 @@ async function refreshTokenSoon() {
 
 function startTokenTimer() {
   if (tokenRefreshTimer) clearTimeout(tokenRefreshTimer);
-  // 45 minutes after a successful connect is plenty
+  // ~45 minutes after register/connect; server TTL is 60 minutes
   tokenRefreshTimer = setTimeout(refreshTokenSoon, 45 * 60 * 1000);
 }
 
@@ -132,8 +161,6 @@ export async function joinConference(conferenceName: string) {
 
   const params = { conferenceName }; // forwarded to /api/voice/agent-join
 
-  // Some SDK builds return a Call (with .on), others expose a similar emitter API.
-  // We guard all accesses and never assume the shape.
   let call: any;
   try {
     const maybe = await device.connect({ params });
@@ -146,18 +173,15 @@ export async function joinConference(conferenceName: string) {
   // Just in case the SDK re-enabled tones on connect:
   disableSdkSounds(device);
 
-  // Start token refresh regardless of event availability
+  // ensure we have a refresh pending even if no events fire
   startTokenTimer();
 
-  // Attach listeners defensively
   attach(call, "disconnect", () => {
     if (activeCall === call) activeCall = null;
     if (tokenRefreshTimer) { clearTimeout(tokenRefreshTimer); tokenRefreshTimer = null; }
   });
 
   attach(call, "error", (e: any) => console.warn("Call error:", e?.message || e));
-
-  // (Optional) If the SDK exposes 'accept', attach to it; otherwise we already set the timer.
   attach(call, "accept", () => startTokenTimer());
 
   activeCall = call;

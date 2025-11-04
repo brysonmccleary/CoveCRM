@@ -1,10 +1,9 @@
-// /components/Sidebar.tsx
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { signOut } from "next-auth/react";
 import Image from "next/image";
 import { useSession } from "next-auth/react";
-import { connectAndJoin, getSocket } from "@/lib/socketClient";
+import { connectAndJoin } from "@/lib/socketClient";
 
 export default function Sidebar() {
   const { data: session } = useSession();
@@ -30,7 +29,7 @@ export default function Sidebar() {
     };
   }, []);
 
-  // Join per-user room and listen for updates
+  // Live updates via socket
   useEffect(() => {
     const email = (session?.user?.email || "").toLowerCase();
     if (!email) return;
@@ -38,20 +37,14 @@ export default function Sidebar() {
     const s = connectAndJoin(email);
     const refetch = () => fetchUnread();
 
-    if (s) {
-      s.on("message:new", refetch);
-      s.on("message:read", refetch);
-      s.on("conversation:updated", refetch);
-    }
+    s?.on("message:new", refetch);
+    s?.on("message:read", refetch);
+    s?.on("conversation:updated", refetch);
 
     return () => {
-      const sock = getSocket();
-      if (!sock) return;
-      try {
-        sock.off("message:new", refetch);
-        sock.off("message:read", refetch);
-        sock.off("conversation:updated", refetch);
-      } catch {}
+      s?.off("message:new", refetch);
+      s?.off("message:read", refetch);
+      s?.off("conversation:updated", refetch);
     };
   }, [session?.user?.email]);
 
