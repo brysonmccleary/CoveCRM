@@ -1,17 +1,17 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { initSocket } from "@/lib/socket";
 
+// Keep bodyParser off for long-polling requests
 export const config = {
   api: { bodyParser: false },
 };
 
 export default function handler(req: NextApiRequest, res: NextApiResponse) {
-  // Ensure Socket.IO is attached at /api/socket/ (with trailing slash)
-  // @ts-ignore - Next augments res.socket
+  // Initialize (idempotent). This attaches io to the underlying server.
   initSocket(res as any);
-
-  // Engine.IO requests include EIO=... and will be handled by socket.io.
-  if (!req.url?.includes("EIO=")) {
-    res.status(200).end();
+  // Return a tiny OK so /api/socket/ is a valid GET for health checks.
+  if (req.method === "GET") {
+    return res.status(200).json({ ok: true });
   }
+  return res.status(200).end();
 }

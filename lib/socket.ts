@@ -11,26 +11,29 @@ type NextApiResponseWithSocket = NextApiResponse & {
 let _io: SocketIOServer | undefined;
 
 /**
- * Initializes (or reuses) a singleton Socket.IO server bound to the trailing-slash path "/api/socket/".
- * We bind to "/api/socket/" to avoid Next.js 308 redirects causing 400s on the handshake.
+ * Initializes (or reuses) a singleton Socket.IO server bound to **/api/socket/**
+ * (note the trailing slash). Matching the client path avoids Next.js 308 redirects.
  * Safe to call from any API route. Idempotent. No dialer logic touched.
  */
 export function initSocket(res: NextApiResponseWithSocket): SocketIOServer {
+  // Reuse instance already attached to the HTTP server (hot/cold starts)
   if (res.socket?.server?.io) {
     _io = res.socket.server.io;
     return _io!;
   }
+
+  // Reuse in-process singleton if present
   if (_io) return _io;
 
   const io = new SocketIOServer(res.socket.server, {
-    // IMPORTANT: trailing slash to match Next's redirect behavior
-    path: "/api/socket/",
+    path: "/api/socket/",             // <-- trailing slash
+    addTrailingSlash: true,           // be explicit
     cors: {
-      origin: "*",
+      origin: true,                   // reflect request origin
       methods: ["GET", "POST"],
       credentials: true,
     },
-    // allow polling -> websocket upgrade
+    // Keep both; client is set to polling only for stability on Vercel
     transports: ["polling", "websocket"],
   });
 
@@ -48,6 +51,7 @@ export function initSocket(res: NextApiResponseWithSocket): SocketIOServer {
       console.log(`🔌 Socket connected ${socket.id}`);
     }
 
+    // Per-user room join
     socket.on("join", (userEmail: string) => {
       if (!userEmail) return;
       socket.join(userEmail);
@@ -68,7 +72,10 @@ export function initSocket(res: NextApiResponseWithSocket): SocketIOServer {
   return io;
 }
 
-/** Emit to a user's room by email (no-op if server not initialized). */
+/**
+ * Minimal helper to emit to a user-scoped room.
+ * No-op if server not initialized.
+ */
 export function emitToUser(userEmail: string, event: string, payload?: any) {
   if (!_io) return;
   if (!userEmail || !event) return;
