@@ -14,36 +14,48 @@ let _io: SocketIOServer | null = null;
 /** Create a Socket.IO server bound to our Next.js Node server under /api/socket/. */
 function createIo(res: NextApiResponseWithSocket): SocketIOServer {
   const io = new SocketIOServer(res.socket.server, {
-    path: "/api/socket", // we force no trailing slash; client mirrors this
-    addTrailingSlash: true, // accept /api/socket/ too
+    // IMPORTANT: client uses wss://.../api/socket/?EIO=4&transport=websocket
+    // Accept both with/without trailing slash
+    path: "/api/socket",
     transports: ["websocket", "polling"],
     cors: {
       origin: true,
       credentials: true,
       methods: ["GET", "POST", "OPTIONS"],
     },
+    // Make the WS more tolerant for Safari / proxies that delay frames
+    pingTimeout: 30000,          // default 20000 — increase
+    pingInterval: 25000,         // default 25000 — keep
+    connectTimeout: 45000,       // help initial handshake across slow paths
     allowEIO3: false,
+    perMessageDeflate: true,
+    // If client reconnects quickly (tab sleep), let it resume room state
+    connectionStateRecovery: { maxDisconnectionDuration: 2 * 60 * 1000 },
   });
 
   io.on("connection", (socket: Socket) => {
     try {
-      const ip =
-        (socket.handshake.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() ||
-        (socket.handshake.address as any) ||
-        "unknown";
-
-      // Clients call socket.emit("join", email)
+      // Rooms: clients call socket.emit("join", email)
       socket.on("join", (room: string) => {
         if (!room) return;
         socket.join(room);
       });
 
+      // Optional RPC pong (client may send .emit("ping"))
       socket.on("ping", () => {
         socket.emit("pong", Date.now());
       });
 
+      // --- Gentle heartbeat to keep intermediaries from idling the connection ---
+      // Socket.IO already pings, but some stacks (Safari + certain CDNs) benefit from
+      // a user-space event to keep the data path alive.
+      const hb = setInterval(() => {
+        // tiny, infrequent message; won’t flood
+        socket.emit("hb", Date.now());
+      }, 20000);
+
       socket.on("disconnect", () => {
-        // no-op; rooms are auto-learned by Socket.IO
+        clearInterval(hb);
       });
     } catch (e) {
       // swallow to avoid tearing down the whole server
