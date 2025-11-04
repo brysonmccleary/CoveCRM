@@ -1,29 +1,29 @@
 // /pages/api/twilio/voice/token.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
-// Use absolute alias to avoid relative resolution pitfalls in pages router:
+// Use absolute import so pages router resolves correctly
 import { authOptions } from "@/pages/api/auth/[...nextauth]";
 import twilio from "twilio";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
 
 /**
- * Returns a Twilio Voice Access Token suitable for the Twilio Voice JS SDK.
- * Critical rules:
- *  - Construct AccessToken with (accountSid, apiKeySid, apiKeySecret). DO NOT use authToken here.
- *  - Add a VoiceGrant with either incomingAllow or outgoingApplicationSid (TwiML App SID).
- *  - Set a stable identity (we use the authenticated user's email).
+ * Twilio Voice Access Token for the Twilio Voice JS SDK.
+ * - MUST use (accountSid, apiKeySid, apiKeySecret) — not the Auth Token
+ * - Adds VoiceGrant (incomingAllow + optional outgoingApplicationSid)
+ * - identity = authenticated user's email (fallback: name)
  */
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "GET") return res.status(405).json({ message: "Method not allowed" });
 
   const session = await getServerSession(req, res, authOptions as any);
-  const identity = (session?.user?.email || session?.user?.name || "").trim();
+  const s = session as any; // avoid TS inference to {}
+  const identity = (s?.user?.email || s?.user?.name || "").trim();
   if (!identity) return res.status(401).json({ message: "Unauthorized" });
 
   try {
-    // Resolve which Twilio account + credentials to use (per-user or platform)
-    const resolved = await getClientForUser(identity);
-    const { accountSid, usingPersonal, user } = resolved || ({} as any);
+    // Resolve per-user or platform Twilio credentials
+    const resolved = (await getClientForUser(identity)) as any;
+    const { accountSid, usingPersonal, user } = resolved || {};
 
     // API Key pair (NOT auth token)
     const apiKeySid =
@@ -31,7 +31,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const apiKeySecret =
       (usingPersonal ? user?.twilioApiKeySecret : process.env.TWILIO_API_KEY_SECRET) || "";
 
-    // Optional: TwiML App SID if you're using client -> PSTN via <Dial>
+    // Optional TwiML App SID for client -> PSTN dialing
     const outgoingAppSid =
       (usingPersonal ? user?.twimlAppSid : process.env.TWILIO_TWIML_APP_SID) || undefined;
 
@@ -42,7 +42,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           accountSidPresent: !!accountSid,
           apiKeySidPresent: !!apiKeySid,
           apiKeySecretPresent: !!apiKeySecret,
-          hint: "AccessToken must use API Key SID/Secret, not the Auth Token.",
+          hint: "AccessToken must use API Key SID/Secret (not the Auth Token).",
         },
       });
     }
@@ -53,11 +53,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const token = new AccessToken(accountSid, apiKeySid, apiKeySecret, {
       identity,
-      ttl: 3600, // 1 hour
+      ttl: 3600,
     });
 
     const grant = new VoiceGrant({
-      incomingAllow: true, // allow Twilio Client to receive calls
+      incomingAllow: true,
       outgoingApplicationSid: outgoingAppSid,
     });
 
@@ -71,7 +71,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       hasOutgoingApp: !!outgoingAppSid,
     });
   } catch (err: any) {
-    // Bubble up the real reason so we can fix it quickly
     console.error("❌ /api/twilio/voice/token error:", err);
     return res.status(500).json({
       message: "Unable to generate token",
