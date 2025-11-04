@@ -27,7 +27,7 @@ function isCronAuthorized(req: NextRequest) {
 
   const ok = (secret && (token === secret || headerToken === secret)) || isVercelCron;
 
-  // Attach debug headers to the request so we can surface them on 403
+  // Attach debug headers so we can surface them on 403
   (req as any)._cron_dbg = {
     path: url.pathname,
     queryTokenPresent: token !== "",
@@ -46,8 +46,7 @@ function isCronAuthorized(req: NextRequest) {
 export function middleware(req: NextRequest) {
   const { pathname } = new URL(req.url);
 
-  // 🔒 IMPORTANT: Never run middleware on WebSocket upgrade paths.
-  // Even a no-op middleware can break Engine.IO/Twilio Client upgrades on Vercel.
+  // 🔒 Critical: never let middleware touch websocket upgrade paths.
   if (pathname === "/api/socket" || pathname.startsWith("/api/socket/")) {
     return NextResponse.next();
   }
@@ -77,8 +76,7 @@ export function middleware(req: NextRequest) {
   return NextResponse.next();
 }
 
-// ✅ Exclude /api/socket (and any subpath) from middleware entirely.
-// This avoids the middleware’s edge runtime touching WebSocket upgrades.
+// ✅ Keep matcher simple; exclusions are handled above.
 export const config = {
-  matcher: ["/api/(?!socket).*"],
+  matcher: ["/api/:path*"],
 };
