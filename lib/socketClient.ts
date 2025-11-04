@@ -1,10 +1,8 @@
-// /lib/socketClient.ts
-// Browser Socket.IO client (pairs with server at /api/socket)
-
+// Browser Socket.IO client (pairs with server at /api/socket/)
 import { io, Socket } from "socket.io-client";
 
 declare global {
-  // Preserve a single instance across hot-reloads
+  // Preserve a single instance across hot reloads
   // eslint-disable-next-line no-var
   var __crm_socket__: Socket | undefined;
   // Keep last joined email so reconnects can rejoin room
@@ -17,16 +15,14 @@ function isBrowser() {
 }
 
 function createClient(): Socket {
-  return io(undefined, {
+  // IMPORTANT:
+  // - path must include trailing slash to avoid Next 308 redirect issues
+  // - force transports=["polling"] to avoid WS upgrade flakiness on Vercel
+  return io({
     path: "/api/socket/",
-    transports: ["websocket"],
-    autoConnect: false,
+    transports: ["polling"],
     withCredentials: true,
     reconnection: true,
-    // (optional) tweak backoff if desired:
-    // reconnectionAttempts: Infinity,
-    // reconnectionDelay: 500,
-    // reconnectionDelayMax: 5000,
   });
 }
 
@@ -37,11 +33,12 @@ export function getSocket(): Socket | null {
   if (!global.__crm_socket__) {
     const s = createClient();
 
-    // Re-join on connect/reconnect using the last known email
     const rejoin = () => {
       const email = (global.__crm_socket_email__ || "").toLowerCase();
       if (email) s.emit("join", email);
     };
+
+    // Re-join on connect/reconnect using the last known email
     s.on("connect", rejoin);
     s.on("reconnect", rejoin);
 

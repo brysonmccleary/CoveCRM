@@ -1,9 +1,9 @@
-// components/Sidebar.tsx
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { signOut } from "next-auth/react";
 import Image from "next/image";
 import { useSession } from "next-auth/react";
+import { connectAndJoin } from "@/lib/socketClient";
 
 export default function Sidebar() {
   const { data: session } = useSession();
@@ -35,31 +35,19 @@ export default function Sidebar() {
     const email = (session?.user?.email || "").toLowerCase();
     if (!email) return;
 
-    (async () => {
-      try {
-        const { io } = await import("socket.io-client");
-        const s = io({ path: "/api/socket/", transports: ["websocket"] });
-        socketRef.current = s;
+    try {
+      const s = connectAndJoin(email);
+      socketRef.current = s;
 
-        const refetch = () => fetchUnread();
+      const refetch = () => fetchUnread();
 
-        s.on("connect", () => {
-          // Multi-tenant isolation
-          s.emit("join", email);
-          refetch();
-        });
-
-        s.on("message:new", refetch);
-        s.on("message:read", refetch);
-        s.on("conversation:updated", refetch);
-
-        s.on("disconnect", () => {
-          // keep polling fallback running; nothing to do here
-        });
-      } catch (e) {
-        console.warn("socket setup failed (sidebar), using polling only", e);
-      }
-    })();
+      s?.on("connect", refetch);
+      s?.on("message:new", refetch);
+      s?.on("message:read", refetch);
+      s?.on("conversation:updated", refetch);
+    } catch (e) {
+      console.warn("socket setup failed (sidebar), using polling only", e);
+    }
 
     return () => {
       const s = socketRef.current;

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { signOut } from "next-auth/react";
 import Image from "next/image";
+import { getSocket } from "@/lib/socketClient";
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const [unreadCount, setUnreadCount] = useState(0);
@@ -35,21 +36,18 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     intervalRef.current = setInterval(fetchUnread, 15000);
 
     // socket live updates
-    (async () => {
-      try {
-        const { io } = await import("socket.io-client");
-        const s = io({ path: "/api/socket/" });
-        socketRef.current = s;
+    try {
+      const s = getSocket();
+      socketRef.current = s;
 
-        const refetch = () => fetchUnread();
-        s.on("connect", refetch);
-        s.on("message:new", refetch);
-        s.on("message:read", refetch);
-        s.on("conversation:updated", refetch);
-      } catch (e) {
-        console.warn("socket setup failed (layout), polling only", e);
-      }
-    })();
+      const refetch = () => fetchUnread();
+      s?.on("connect", refetch);
+      s?.on("message:new", refetch);
+      s?.on("message:read", refetch);
+      s?.on("conversation:updated", refetch);
+    } catch (e) {
+      console.warn("socket setup failed (layout), polling only", e);
+    }
 
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
