@@ -4,7 +4,7 @@ import { io, type Socket } from "socket.io-client";
 
 declare global {
   // eslint-disable-next-line no-var
-  var __crm_socket__: Socket | undefined;
+  var __crm_socket__: Socket | null | undefined;
   // eslint-disable-next-line no-var
   var __crm_socket_email__: string | null | undefined;
 }
@@ -37,26 +37,26 @@ function createClient(): Socket {
     // Re-join room if identity was known
     const email = (global as any).__crm_socket_email__;
     if (email) {
-      socket.emit("join", email.toLowerCase());
+      socket.emit("join", String(email).toLowerCase());
     }
   });
 
   return socket;
 }
 
-/** Get or build the singleton client instance (browser only). */
-export function getSocket(): Socket | undefined {
-  if (!isBrowser()) return undefined;
+/** Get or build the singleton client instance (browser only). Returns null (not undefined) when unavailable. */
+export function getSocket(): Socket | null {
+  if (!isBrowser()) return null;
   if (!global.__crm_socket__) {
     global.__crm_socket__ = createClient();
   }
-  return global.__crm_socket__;
+  return (global.__crm_socket__ as Socket) ?? null;
 }
 
-/** Connect and join the user's email room. Safe to call repeatedly. */
-export function connectAndJoin(userEmail?: string | null): Socket | undefined {
+/** Connect and join the user's email room. Safe to call repeatedly. Returns null until available. */
+export function connectAndJoin(userEmail?: string | null): Socket | null {
   const s = getSocket();
-  if (!s) return undefined;
+  if (!s) return null;
   const normalized = (userEmail || "").trim().toLowerCase();
   (global as any).__crm_socket_email__ = normalized || null;
   if (!s.connected) s.connect();
@@ -67,9 +67,10 @@ export function connectAndJoin(userEmail?: string | null): Socket | undefined {
 /** Optional: cleanly disconnect (e.g., on sign-out). */
 export function disconnectSocket() {
   const s = getSocket();
-  if (!s) return;
-  s.removeAllListeners();
-  s.disconnect();
-  (global as any).__crm_socket__ = undefined;
+  if (s) {
+    s.removeAllListeners();
+    s.disconnect();
+  }
+  (global as any).__crm_socket__ = null;
   (global as any).__crm_socket_email__ = null;
 }
