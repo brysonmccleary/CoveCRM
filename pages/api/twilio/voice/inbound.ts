@@ -6,9 +6,21 @@ import twilio from "twilio";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import Lead from "@/models/Lead";
-import PhoneNumber from "@/models/PhoneNumber";
 import InboundCall from "@/models/InboundCall";
-import { initSocket, emitToUser } from "@/lib/socket";
+
+// We will try both possible number models gracefully.
+let PhoneNumberModel: any = null;
+let NumberModel: any = null;
+try {
+  // If you have /models/PhoneNumber.ts
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  PhoneNumberModel = require("@/models/PhoneNumber")?.default ?? null;
+} catch {}
+try {
+  // If you have /models/Number.ts (provided)
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  NumberModel = require("@/models/Number")?.default ?? null;
+} catch {}
 
 const { validateRequest } = twilio;
 
@@ -36,7 +48,6 @@ function last10(raw?: string): string {
 
 function resolveFullUrl(req: NextApiRequest): string {
   // Build the exact URL Twilio hit for signature validation
-  // Prefer X-Forwarded-* when behind Vercel/Proxies
   const proto =
     (req.headers["x-forwarded-proto"] as string) ||
     (process.env.NEXT_PUBLIC_BASE_URL?.startsWith("https") ? "https" : "http") ||
@@ -49,7 +60,6 @@ function resolveFullUrl(req: NextApiRequest): string {
 }
 
 function pickLeadName(lead: any): string | undefined {
-  // Try common field variants without changing schema
   const keys = [
     "name",
     "Name",
@@ -64,22 +74,92 @@ function pickLeadName(lead: any): string | undefined {
     const v = lead?.[k];
     if (typeof v === "string" && v.trim()) return v.trim();
   }
-  // fallback: from email local part or phone
   if (typeof lead?.email === "string" && lead.email) {
     return lead.email.split("@")[0];
   }
   return undefined;
 }
 
+async function mapDidToOwnerEmail(toE164: string): Promise<string | undefined> {
+  if (!toE164) return undefined;
+
+  // 1) Check PhoneNumber model (fields can vary: phoneNumber | number, userEmail | userId)
+  if (PhoneNumberModel) {
+    const pn =
+      (await PhoneNumberModel.findOne(
+        { $or: [{ phoneNumber: toE164 }, { number: toE164 }] },
+        null,
+        { lean: true }
+      )) || null;
+
+    if (pn?.userEmail) return String(pn.userEmail).toLowerCase();
+
+    if (pn?.userId) {
+      const owner = await User.findById(pn.userId).lean();
+      if (owner?.email) return String(owner.email).toLowerCase();
+    }
+  }
+
+  // 2) Check Number model you provided (/models/Number.ts)
+  if (NumberModel) {
+    const n =
+      (await NumberModel.findOne({ phoneNumber: toE164 }, null, {
+        lean: true,
+      })) || null;
+    if (n?.userEmail) return String(n.userEmail).toLowerCase();
+  }
+
+  // 3) Fallback: embedded numbers[] inside User
+  const owner = await User.findOne({ "numbers.phoneNumber": toE164 }).lean();
+  if (owner?.email) return String(owner.email).toLowerCase();
+
+  return undefined;
+}
+
+async function findOrCreateLeadForOwner(
+  ownerEmail: string,
+  fromE164: string,
+  fromLast10: string
+) {
+  // Prefer existing lead scoped to owner
+  let lead =
+    (await Lead.findOne(
+      { userEmail: ownerEmail, phoneLast10: fromLast10 },
+      null,
+      { lean: true }
+    )) ||
+    (await Lead.findOne(
+      { userEmail: ownerEmail, normalizedPhone: fromE164 },
+      null,
+      { lean: true }
+    )) ||
+    (await Lead.findOne(
+      { userEmail: ownerEmail, Phone: fromE164 }, // legacy field compat
+      null,
+      { lean: true }
+    ));
+
+  if (lead) return lead;
+
+  // Create a minimal placeholder (does not touch drips/folders)
+  const now = new Date();
+  const doc = await (Lead as any).create({
+    userEmail: ownerEmail,
+    normalizedPhone: fromE164,
+    phoneLast10: fromLast10,
+    source: "inbound-call",
+    status: "New",
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  // Return as plain object to keep consistency with lean()
+  return JSON.parse(JSON.stringify(doc));
+}
+
 // ---- Handler ----------------------------------------------------------------
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") return res.status(405).send("Method Not Allowed");
-
-  // Ensure socket server exists (idempotent, no side effects to dialer)
-  try {
-    // @ts-ignore next line augments res type in our util
-    initSocket(res);
-  } catch {}
 
   // Read raw body exactly as Twilio sent it
   const rawBody = await microBuffer(req);
@@ -120,55 +200,29 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const to = normalizeE164(toRaw);
   const fromLast10 = last10(from);
 
-  console.log(`📞 Inbound call (ringing): From ${from || fromRaw} → To ${to || toRaw} (CallSid=${callSid})`);
+  console.log(
+    `📞 Inbound call (ringing): From ${from || fromRaw} → To ${to || toRaw} (CallSid=${callSid})`
+  );
 
-  // ---- Map DID -> ownerEmail, then find lead (scoped to owner) --------------
+  // ---- Map DID -> ownerEmail, then find or create lead ----------------------
   let ownerEmail: string | undefined;
   let leadDoc: any | null = null;
 
   try {
     await dbConnect();
 
-    // (a) Prefer explicit PhoneNumber mapping (single-owner per DID)
-    const pn = to ? await PhoneNumber.findOne({ phoneNumber: to }).lean() : null;
-    if (pn?.userId) {
-      const owner = await User.findById(pn.userId).lean();
-      ownerEmail = owner?.email?.toLowerCase();
-    }
-
-    // (b) Fallback to embedded numbers[] on User
-    if (!ownerEmail && to) {
-      const owner = await User.findOne({ "numbers.phoneNumber": to }).lean();
-      ownerEmail = owner?.email?.toLowerCase();
-    }
-
+    ownerEmail = await mapDidToOwnerEmail(to);
     if (!ownerEmail) {
       console.warn(`⚠️ No owner mapped for DID: ${to}`);
     } else if (fromLast10) {
-      // Scoped lead lookup for that owner
-      leadDoc =
-        (await Lead.findOne(
-          { userEmail: ownerEmail, phoneLast10: fromLast10 },
-          null,
-          { lean: true },
-        )) ||
-        (await Lead.findOne(
-          { userEmail: ownerEmail, normalizedPhone: from },
-          null,
-          { lean: true },
-        )) ||
-        (await Lead.findOne(
-          { userEmail: ownerEmail, Phone: from }, // legacy field compat
-          null,
-          { lean: true },
-        ));
+      leadDoc = await findOrCreateLeadForOwner(ownerEmail, from, fromLast10);
     }
   } catch (e) {
-    console.error("❌ DB mapping error:", e);
+    console.error("❌ DB mapping/upsert error:", e);
   }
 
-  // ---- Upsert short-lived InboundCall (idempotent on callSid) ---------------
-  let payload: {
+  // ---- Persist short-lived InboundCall (idempotent on callSid) --------------
+  const payload: {
     callSid: string;
     from: string;
     to: string;
@@ -192,34 +246,64 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           ownerEmail: ownerEmail || null,
           leadId: leadId || null,
           state: "ringing",
-          // expire in 2 minutes by default (UI banner window)
+          // expire in 2 minutes (UI banner window)
           expiresAt: new Date(Date.now() + 2 * 60 * 1000),
         },
-        { upsert: true, new: true, setDefaultsOnInsert: true },
+        { upsert: true, new: true, setDefaultsOnInsert: true }
       );
     }
   } catch (e) {
     console.error("❌ InboundCall upsert error:", e);
   }
 
-  // ---- Emit event to correct user channel (no UI here, just server emit) ----
+  // ---- Emit to Render socket service (authoritative path) -------------------
   try {
     if (ownerEmail) {
-      emitToUser(ownerEmail, "inbound_call:ringing", payload);
-      console.log(`📡 Emitted inbound_call:ringing to ${ownerEmail}`, payload);
+      const EMIT_URL =
+        process.env.RENDER_EMIT_URL ||
+        "https://covecrm.onrender.com/emit/call-incoming";
+      const secret = process.env.EMIT_BEARER_SECRET;
+      if (!secret) {
+        console.error("❌ Missing EMIT_BEARER_SECRET env");
+      } else {
+        const resp = await fetch(EMIT_URL, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${secret}`,
+          },
+          body: JSON.stringify({
+            email: ownerEmail,
+            leadId: payload.leadId,
+            leadName: payload.leadName,
+            phone: from,
+          }),
+        });
+        if (!resp.ok) {
+          const text = await resp.text().catch(() => "");
+          console.error(
+            `❌ Render emit failed (${resp.status}): ${text || resp.statusText}`
+          );
+        } else {
+          console.log(`📡 Emitted call:incoming to ${ownerEmail}`, {
+            email: ownerEmail,
+            leadId: payload.leadId,
+            leadName: payload.leadName,
+            phone: from,
+          });
+        }
+      }
     } else {
       console.warn("⚠️ Skipping emit: ownerEmail not resolved");
     }
   } catch (e) {
-    console.error("❌ Socket emit error:", e);
+    console.error("❌ Render emit error:", e);
   }
 
-  // ---- Respond to Twilio (no behavior changes to your dialer flow) ----------
-  // Step 1 acceptance: we're only notifying server-side; keep a minimal response.
-  // Keeping a tiny message is harmless while we wire the banner in Step 2.
+  // ---- Respond TwiML: short silent hold (no Twilio default ring) ------------
   const vr = new twilio.twiml.VoiceResponse();
-  vr.pause({ length: 1 }); // brief pause keeps webhook valid without altering your dialer logic
-  // (No conference/dial here. We will control answer/decline via new endpoints in Step 3.)
+  // brief silent pause to give the UI time to show the banner
+  vr.pause({ length: 5 }); // 5s hold; adjust if you want a longer window
   res.setHeader("Content-Type", "text/xml");
   return res.status(200).send(vr.toString());
 }
