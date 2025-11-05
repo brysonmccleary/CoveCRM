@@ -1,5 +1,7 @@
 // /lib/socketClient.ts
-// Browser Socket.IO client (pairs with server at /api/socket/)
+// Browser Socket.IO client. Uses Render in production by default, with env overrides.
+// No changes to call sites; connectAndJoin() stays the same.
+
 import { io, type Socket } from "socket.io-client";
 
 declare global {
@@ -13,20 +15,42 @@ function isBrowser() {
   return typeof window !== "undefined" && typeof document !== "undefined";
 }
 
-function createClient(): Socket {
+function resolveEndpoint() {
+  // ---- 1) Env overrides (preferred) ----
+  const envBase = (process.env.NEXT_PUBLIC_SOCKET_URL || "").trim().replace(/\/$/, "");
+  // IMPORTANT: server path is '/socket/' (with trailing slash)
+  const envPathRaw = (process.env.NEXT_PUBLIC_SOCKET_PATH || "").trim();
+  const envPath = envPathRaw ? (envPathRaw.endsWith("/") ? envPathRaw : envPathRaw + "/") : "";
+
+  if (envBase) {
+    return { base: envBase, path: envPath || "/socket/" };
+  }
+
+  // ---- 2) Safe default in PRODUCTION: always use Render service ----
+  // This guarantees correctness even if envs are missing or a cached bundle is served.
+  if (process.env.NODE_ENV === "production") {
+    return { base: "https://covecrm.onrender.com", path: "/socket/" };
+  }
+
+  // ---- 3) Dev fallback: same-origin (works locally) ----
   const base =
     (typeof window !== "undefined" && window.location.origin) ||
     (process.env.NEXT_PUBLIC_BASE_URL || "").replace(/\/$/, "");
+  return { base, path: "/api/socket" };
+}
+
+function createClient(): Socket {
+  const { base, path } = resolveEndpoint();
 
   const socket = io(base, {
-    path: "/api/socket", // must match server
+    path,
     withCredentials: true,
-    transports: ["websocket", "polling"],
+    transports: ["websocket", "polling"], // websocket first, polling as fallback
     forceNew: false,
     autoConnect: false,
   });
 
-  // Optional: console diagnostics
+  // Diagnostics (quiet unless there is an issue)
   socket.on("connect_error", (err: any) => {
     console.error("[socket] connect_error:", err?.message || err);
   });
@@ -34,17 +58,14 @@ function createClient(): Socket {
     console.error("[socket] error:", err);
   });
   socket.on("connect", () => {
-    // Re-join room if identity was known
     const email = (global as any).__crm_socket_email__;
-    if (email) {
-      socket.emit("join", String(email).toLowerCase());
-    }
+    if (email) socket.emit("join", String(email).toLowerCase());
   });
 
   return socket;
 }
 
-/** Get or build the singleton client instance (browser only). Returns null (not undefined) when unavailable. */
+/** Get or build the singleton client instance (browser only). */
 export function getSocket(): Socket | null {
   if (!isBrowser()) return null;
   if (!global.__crm_socket__) {
@@ -53,7 +74,7 @@ export function getSocket(): Socket | null {
   return (global.__crm_socket__ as Socket) ?? null;
 }
 
-/** Connect and join the user's email room. Safe to call repeatedly. Returns null until available. */
+/** Connect and join the user's email room. Safe to call repeatedly. */
 export function connectAndJoin(userEmail?: string | null): Socket | null {
   const s = getSocket();
   if (!s) return null;
