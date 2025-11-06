@@ -56,10 +56,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     await dbConnect();
     if (!conferenceName && callSid) {
       const ic = await InboundCall.findOne({ callSid }).lean();
-      if (ic?.conferenceName) conferenceName = ic.conferenceName;
+      // TS: lean() strips methods & typings; the field exists but isn't in the type. Cast for read.
+      const icAny = ic as any;
+      if (icAny?.conferenceName) conferenceName = String(icAny.conferenceName);
     }
-  } catch (e) {
-    // If DB lookup fails, we still return valid TwiML with a fallback conference
+  } catch {
+    // If DB lookup fails, still return valid TwiML with a fallback conference
   }
   if (!conferenceName) {
     conferenceName = `inb-${(callSid || "unknown").slice(-10)}-${Date.now().toString(36)}`;
@@ -73,8 +75,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       beep: "false",
       startConferenceOnEnter: true,
       endConferenceOnExit: false,
-      // (optional) You could add a custom waitUrl if you want music instead of silence.
-      // waitUrl: "https://twimlets.com/holdmusic?Bucket=com.twilio.music.ambient",
+      // waitUrl: "" // optional: add custom wait music if desired
     },
     conferenceName
   );
