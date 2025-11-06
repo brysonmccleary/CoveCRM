@@ -1,4 +1,3 @@
-// pages/api/twilio/calls/answer.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../../auth/[...nextauth]";
@@ -26,7 +25,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     await dbConnect();
 
-    // Most recent active inbound for this user (optionally filtered by caller)
+    // find the live inbound
     const q: any = { ownerEmail, state: "ringing", expiresAt: { $gt: new Date() } };
     if (phone) q.from = phone;
     const ic = await InboundCall.findOne(q).sort({ _id: -1 }).lean();
@@ -35,21 +34,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(200).json({ ok: true, message: "No active inbound call found" });
     }
 
-    // Create or reuse a conference name and persist it (TS: cast for optional field on the lean doc)
+    // create/reuse a conference name and persist it
     const conferenceName =
       (ic as any).conferenceName || `inb-${String(ic._id)}-${Date.now().toString(36)}`;
 
     await InboundCall.updateOne(
       { callSid: ic.callSid },
-      { $set: { state: "bridging", conferenceName } },
-      { upsert: false }
+      { $set: { state: "bridging", conferenceName } }
     );
 
-    // Redirect the live inbound call to our continue TwiML, which forwards into your existing flow
-    const continueUrl = `${BASE}/api/twilio/calls/continue`;
+    // send the live leg to /calls/continue with the conferenceName encoded
+    const continueUrl = `${BASE}/api/twilio/calls/continue?conference=${encodeURIComponent(
+      conferenceName
+    )}&callSid=${encodeURIComponent(ic.callSid)}`;
+
     await client.calls(ic.callSid).update({ url: continueUrl, method: "POST" });
 
-    return res.status(200).json({ ok: true });
+    return res.status(200).json({ ok: true, conferenceName });
   } catch (e: any) {
     console.error("answer error:", e);
     return res.status(500).json({ ok: false, error: e?.message || "Internal error" });

@@ -487,42 +487,59 @@ export default function DialSession() {
     }
   };
 
-  // 🔻🔻🔻 TINY, ISOLATED INBOUND HOOK (adds inbound join, touches nothing else) 🔻🔻🔻
-  // In pages/dial-session.tsx, add this effect (no other logic touched)
+  // 🔻🔻🔻 TINY, ISOLATED INBOUND HOOK (supports ?conf= or ?conference=) 🔻🔻🔻
   useEffect(() => {
-    const { inbound, conf } = (router.query as any) || {};
-    if (inbound !== "1" || !conf || joinedRef.current || callActive) return;
+    const q = (router.query as any) || {};
+    const inboundRaw = String(q?.inbound ?? "").toLowerCase();
+    const inbound =
+      inboundRaw === "1" || inboundRaw === "true" || inboundRaw === "yes";
+    const conf =
+      (typeof q?.conf === "string" && q.conf) ||
+      (typeof q?.conference === "string" && q.conference) ||
+      "";
+
+    if (!inbound || !conf) return;
+    if (joinedRef.current || callActive) return;
 
     (async () => {
       try {
         setStatus("Connecting…");
-        const callObj = await joinConference(String(conf));
-        joinedRef.current = true;
         setCallActive(true);
+        ensureUnlocked();
 
-        const safeOn = (ev: string, fn: (...args: any[]) => void) => {
+        const callObj = await joinConference(String(conf));
+
+        const safeOn = (ev: string, fn: (...a: any[]) => void) => {
           try {
             if ((callObj as any)?.on) (callObj as any).on(ev, fn);
             else if ((callObj as any)?.addListener) (callObj as any).addListener(ev, fn);
           } catch {}
         };
 
-        const connectedNow = () => setStatus("Connected");
+        const connectedNow = () => {
+          stopRingback();
+          clearWatchdog();
+          setStatus("Connected");
+          hasConnectedRef.current = true;
+        };
+
         safeOn("accept", connectedNow);
         safeOn("connect", connectedNow);
         safeOn("connected", connectedNow);
+        safeOn("disconnect", () => markDisconnected("twilio-disconnect"));
+        safeOn("disconnected", () => markDisconnected("twilio-disconnected"));
+        safeOn("hangup", () => markDisconnected("twilio-hangup"));
 
-        const onGone = () => markDisconnected("inbound-ended");
-        safeOn("disconnect", onGone);
-        safeOn("disconnected", onGone);
-        safeOn("hangup", onGone);
+        joinedRef.current = true;
+        activeConferenceRef.current = String(conf);
       } catch (e) {
-        console.warn("Inbound join failed:", e);
-        setStatus("Failed to connect");
+        console.error("inbound join failed:", e);
+        setStatus("Failed to join");
+        setCallActive(false);
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [router.query?.inbound, router.query?.conf]);
+  }, [router.query?.inbound, router.query?.conf, router.query?.conference]);
   // 🔺🔺🔺 END INBOUND HOOK 🔺🔺🔺
 
   const callLead = async (leadToCall: Lead) => {
