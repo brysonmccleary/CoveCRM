@@ -37,6 +37,12 @@ export default function DialSession() {
     serverProgressKey?: string;
   };
 
+  // 🔒 NEW: inbound Answer flag from URL (?inbound=1|true|yes)
+  const inboundMode = useMemo(() => {
+    const v = String((router.query as any)?.inbound ?? "").toLowerCase();
+    return v === "1" || v === "true" || v === "yes";
+  }, [router.query]);
+
   // Queue & selection
   const [leadQueue, setLeadQueue] = useState<Lead[]>([]);
   const [currentLeadIndex, setCurrentLeadIndex] = useState(0);
@@ -261,7 +267,7 @@ export default function DialSession() {
     };
     loadNumbers();
     return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-comments, react-hooks/exhaustive-deps
   }, [fromNumberParam]);
 
   // Load leads list + support startIndex/progressKey + SERVER resume
@@ -380,6 +386,9 @@ export default function DialSession() {
 
   // Auto-advance driver
   useEffect(() => {
+    // 🔒 NEW: if we arrived from an inbound "Answer", NEVER auto-start an outbound call
+    if (inboundMode) return;
+
     if (!numbersLoaded) { setStatus("Loading your numbers…"); return; }
     if (
       leadQueue.length > 0 &&
@@ -408,7 +417,7 @@ export default function DialSession() {
       callLead(leadQueue[currentLeadIndex]).finally(() => { placingCallRef.current = false; });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [numbersLoaded, leadQueue, readyToCall, isPaused, sessionStarted, currentLeadIndex, callActive]);
+  }, [inboundMode, numbersLoaded, leadQueue, readyToCall, isPaused, sessionStarted, currentLeadIndex, callActive]);
 
   /** calling **/
   const startOutboundCall = async (leadId: string): Promise<{ callSid: string; conferenceName: string }> => {
