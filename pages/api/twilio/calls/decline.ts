@@ -1,7 +1,7 @@
 // pages/api/twilio/calls/decline.ts
 import type { NextApiRequest, NextApiResponse } from "next";
-import { getServerSession } from "next-auth";
-import { authOptions } from "../auth/[...nextauth]";
+import { getServerSession } from "next-auth/next";
+import { authOptions } from "../../auth/[...nextauth]";
 import twilio from "twilio";
 import dbConnect from "@/lib/mongooseConnect";
 import InboundCall from "@/models/InboundCall";
@@ -24,13 +24,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     await dbConnect();
 
-    // Find the most recent ringing call for this user, still within the 2-minute window we set
-    const now = new Date();
-    const q: any = { ownerEmail, state: "ringing", expiresAt: { $gt: now } };
-    if (phone) {
-      // narrow by caller if provided
-      q.from = phone;
-    }
+    // Find the most recent ringing call for this user, still within the 2-minute window we set in the inbound handler
+    const q: any = { ownerEmail, state: "ringing", expiresAt: { $gt: new Date() } };
+    if (phone) q.from = phone;
+
     const ic = await InboundCall.findOne(q).sort({ _id: -1 }).lean();
 
     if (!ic?.callSid) {
@@ -39,7 +36,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // End the call on Twilio
     await client.calls(ic.callSid).update({ status: "completed" });
-    // Best-effort mark ended (ignore errors)
+
+    // Best-effort mark ended
     try {
       await InboundCall.updateOne({ callSid: ic.callSid }, { $set: { state: "ended" } });
     } catch {}
