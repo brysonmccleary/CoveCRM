@@ -26,7 +26,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     await dbConnect();
 
-    // Most recent active inbound for this user (optionally filtered by caller)
     const q: any = { ownerEmail, state: "ringing", expiresAt: { $gt: new Date() } };
     if (phone) q.from = phone;
     const ic = await InboundCall.findOne(q).sort({ _id: -1 }).lean();
@@ -35,16 +34,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(200).json({ ok: true, message: "No active inbound call found" });
     }
 
-    // Redirect the live call to our continue TwiML, which then forwards to your existing voice-answer flow
-    const continueUrl = `${BASE}/api/twilio/calls/continue`; // ← matches your current file path
+    // Create or reuse a conference name and persist it
+    const conferenceName =
+      ic.conferenceName || `inb-${String(ic._id)}-${Date.now().toString(36)}`;
+    await InboundCall.updateOne(
+      { callSid: ic.callSid },
+      { $set: { state: "bridging", conferenceName } }
+    );
+
+    // Redirect the live PSTN leg to the TwiML that drops it into the conference
+    const continueUrl = `${BASE}/api/twilio/calls/continue?conf=${encodeURIComponent(conferenceName)}`;
     await client.calls(ic.callSid).update({ url: continueUrl, method: "POST" });
 
-    // Best-effort mark as bridging
-    try {
-      await InboundCall.updateOne({ callSid: ic.callSid }, { $set: { state: "bridging" } });
-    } catch {}
-
-    return res.status(200).json({ ok: true });
+    return res.status(200).json({
+      ok: true,
+      conferenceName,
+      leadId: ic.leadId || null,
+    });
   } catch (e: any) {
     console.error("answer error:", e);
     return res.status(500).json({ ok: false, error: e?.message || "Internal error" });

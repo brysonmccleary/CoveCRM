@@ -487,6 +487,44 @@ export default function DialSession() {
     }
   };
 
+  // 🔻🔻🔻 TINY, ISOLATED INBOUND HOOK (adds inbound join, touches nothing else) 🔻🔻🔻
+  // In pages/dial-session.tsx, add this effect (no other logic touched)
+  useEffect(() => {
+    const { inbound, conf } = (router.query as any) || {};
+    if (inbound !== "1" || !conf || joinedRef.current || callActive) return;
+
+    (async () => {
+      try {
+        setStatus("Connecting…");
+        const callObj = await joinConference(String(conf));
+        joinedRef.current = true;
+        setCallActive(true);
+
+        const safeOn = (ev: string, fn: (...args: any[]) => void) => {
+          try {
+            if ((callObj as any)?.on) (callObj as any).on(ev, fn);
+            else if ((callObj as any)?.addListener) (callObj as any).addListener(ev, fn);
+          } catch {}
+        };
+
+        const connectedNow = () => setStatus("Connected");
+        safeOn("accept", connectedNow);
+        safeOn("connect", connectedNow);
+        safeOn("connected", connectedNow);
+
+        const onGone = () => markDisconnected("inbound-ended");
+        safeOn("disconnect", onGone);
+        safeOn("disconnected", onGone);
+        safeOn("hangup", onGone);
+      } catch (e) {
+        console.warn("Inbound join failed:", e);
+        setStatus("Failed to connect");
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [router.query?.inbound, router.query?.conf]);
+  // 🔺🔺🔺 END INBOUND HOOK 🔺🔺🔺
+
   const callLead = async (leadToCall: Lead) => {
     if (sessionEndedRef.current) return;
     if (!leadToCall?.id) { setStatus("Missing lead id"); return; }
