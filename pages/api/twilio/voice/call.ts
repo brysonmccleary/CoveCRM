@@ -1,3 +1,4 @@
+// pages/api/twilio/voice/call.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../../auth/[...nextauth]";
@@ -6,9 +7,10 @@ import Lead from "@/models/Lead";
 import { getUserByEmail } from "@/models/User";
 import Call from "@/models/Call";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
+import twilio, { Twilio } from "twilio";
 import { DateTime } from "luxon";
 
-/* --- server-side tz helpers --- */
+/* --- server-side tz helpers (kept verbatim) --- */
 const STATE_TZ: Record<string, string> = {
   AL:"America/Chicago",AK:"America/Anchorage",AZ:"America/Phoenix",AR:"America/Chicago",CA:"America/Los_Angeles",
   CO:"America/Denver",CT:"America/New_York",DC:"America/New_York",DE:"America/New_York",FL:"America/New_York",
@@ -92,19 +94,16 @@ function extractLeadPhones(lead: any): string[] {
       val.forEach(pushIfPhone);
     }
   };
-
   const priority = [
     "phone","Phone","mobile","Mobile","cell","Cell",
     "workPhone","homePhone","Phone Number","phone_number",
     "primaryPhone","contactNumber"
   ];
   priority.forEach((k) => pushIfPhone(lead?.[k]));
-
   Object.entries(lead || {}).forEach(([k, v]) => {
     const kl = k.toLowerCase();
     if (kl.includes("phone") || kl.includes("mobile") || kl.includes("cell") || kl.includes("number")) pushIfPhone(v);
   });
-
   return uniq(out);
 }
 
@@ -145,9 +144,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const rawCandidates = extractLeadPhones(lead).map(e164);
   const filtered = rawCandidates.filter((n) => !excludedSet.has(n));
-
   const allowOverride = Boolean(allowSelfDial) || process.env.ALLOW_SELF_DIAL === "1";
-
   const finalCandidates = filtered.length > 0 ? filtered : (allowOverride ? rawCandidates : []);
   if (finalCandidates.length === 0) {
     console.warn("🚫 Refusing to dial: all candidate numbers are excluded (Twilio-owned).", {
@@ -167,6 +164,31 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const conferenceName = `ds-${leadId}-${Date.now().toString(36)}`;
   const aiActiveForThisUser = Boolean((user as any)?.hasAI) && CALL_AI_SUMMARY_ENABLED;
 
+  // ---------- AUTH: force SID+AUTH for platform; use personal only if truly configured ----------
+  let client: Twilio;
+  let authMode = "platform_sid_auth";
+
+  const hasPersonal =
+    user?.billingMode === "self" &&
+    user?.twilio?.accountSid &&
+    user?.twilio?.apiKeySid &&
+    user?.twilio?.apiKeySecret;
+
+  if (hasPersonal) {
+    // use your existing helper for personal mode
+    const r = await getClientForUser(userEmail);
+    client = r.client;
+    authMode = "personal_api_key";
+  } else {
+    const sid = process.env.TWILIO_ACCOUNT_SID || "";
+    const token = process.env.TWILIO_AUTH_TOKEN || "";
+    if (!sid || !token) {
+      console.error("❌ Platform Twilio creds missing", { sidPresent: !!sid, tokenPresent: !!token });
+      return res.status(500).json({ message: "Server misconfigured (Twilio creds)" });
+    }
+    client = twilio(sid, token, { accountSid: sid });
+  }
+
   try {
     const twimlUrl = `${BASE_URL}/api/voice/lead-join?conferenceName=${encodeURIComponent(conferenceName)}`;
 
@@ -184,7 +206,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       asyncAmd: "true",
     };
 
-    const { client } = await getClientForUser(userEmail);
     const call = await client.calls.create(createOpts);
 
     await Call.updateOne(
@@ -209,8 +230,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       { upsert: true },
     );
 
-    console.log("📞 voice/call placed (conference lead-only)", {
-      from: fromNumber, toLead, callSid: call.sid, conferenceName,
+    console.log("📞 voice/call placed", {
+      from: fromNumber, toLead, callSid: call.sid, conferenceName, authMode,
     });
 
     return res.status(200).json({
@@ -221,7 +242,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       conferenceName,
     });
   } catch (err: any) {
-    console.error("❌ voice/call error:", err?.message || err);
-    return res.status(500).json({ message: "Failed to initiate call", error: err?.message });
+    // Surface Twilio error details if present
+    const detail = {
+      message: err?.message,
+      code: err?.code,
+      status: err?.status,
+      moreInfo: err?.moreInfo,
+      authMode,
+    };
+    console.error("❌ voice/call error:", detail);
+    return res.status(500).json({ message: "Failed to initiate call", error: detail });
   }
 }
