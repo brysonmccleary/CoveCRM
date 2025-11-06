@@ -59,6 +59,17 @@ function resolveFullUrl(req: NextApiRequest): string {
   return `${proto}://${host}${path}`;
 }
 
+function resolveOrigin(req: NextApiRequest): string {
+  const proto =
+    (req.headers["x-forwarded-proto"] as string) ||
+    (process.env.NEXT_PUBLIC_BASE_URL?.startsWith("https") ? "https" : "http") ||
+    "https";
+  const host =
+    (req.headers["x-forwarded-host"] as string) ||
+    (req.headers.host as string);
+  return `${proto}://${host}`;
+}
+
 function pickLeadName(lead: any): string | undefined {
   const keys = [
     "name",
@@ -300,10 +311,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     console.error("❌ Render emit error:", e);
   }
 
-  // ---- Respond TwiML: short silent hold (no Twilio default ring) ------------
+  // ---- Respond TwiML: KEEP CALL IN-PROGRESS with your ringback --------------
+  // We must give Twilio an **absolute** URL for the audio asset.
+  const origin = resolveOrigin(req);
+  const ringbackUrl = `${origin}/ringback.mp3`;
+
   const vr = new twilio.twiml.VoiceResponse();
-  // brief silent pause to give the UI time to show the banner
-  vr.pause({ length: 5 }); // 5s hold; adjust if you want a longer window
+  // Optional tiny pause to ensure banner render before audio starts
+  vr.pause({ length: 1 });
+  // Loop your custom MP3 so the call stays "in-progress" until Answer/Decline/timeout.
+  vr.play({ loop: 99 }, ringbackUrl);
+
   res.setHeader("Content-Type", "text/xml");
   return res.status(200).send(vr.toString());
 }
