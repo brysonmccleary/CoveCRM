@@ -12,7 +12,7 @@ export type ResolvedTwilioClient = {
 
 function maskSid(sid?: string): string | null {
   if (!sid) return null;
-  if (sid.length <= 6) return sid;
+  if (sid.length <= 8) return sid;
   return `${sid.slice(0, 4)}…${sid.slice(-4)}`;
 }
 
@@ -36,13 +36,17 @@ function buildTwilioClient(params: {
 }): Twilio {
   const { accountSid, apiKeySid, apiKeySecret, authTokenFallback } = params;
 
+  // Prefer classic SID+AUTH when provided (most reliable / least confusing)
+  if (authTokenFallback) {
+    return twilio(accountSid, authTokenFallback, { accountSid });
+  }
+
+  // Else use API key pair (must both be present)
   if (apiKeySid && apiKeySecret) {
     return twilio(apiKeySid, apiKeySecret, { accountSid });
   }
-  if (!authTokenFallback) {
-    throw new Error("Missing Twilio auth credentials: no API key pair and no AUTH TOKEN fallback.");
-  }
-  return twilio(accountSid, authTokenFallback, { accountSid });
+
+  throw new Error("Missing Twilio credentials: need AUTH TOKEN or API Key pair.");
 }
 
 export async function getClientForUser(email: string): Promise<ResolvedTwilioClient> {
@@ -51,16 +55,15 @@ export async function getClientForUser(email: string): Promise<ResolvedTwilioCli
   const normalizedEmail = (email || "").toLowerCase().trim();
   const user = await User.findOne({ email: normalizedEmail }).lean<any>();
 
-  const usingPersonal = isSelfBilledWithPersonalCreds(user);
-
-  if (usingPersonal) {
+  // ---------- PERSONAL (self-billed) ----------
+  if (isSelfBilledWithPersonalCreds(user)) {
     const rawAccountSid = user.twilio.accountSid as string;
     const rawApiKeySid = user.twilio.apiKeySid as string | undefined;
     const rawApiKeySecret = user.twilio.apiKeySecret as string | undefined;
 
     const accountSid = sanitizeId(rawAccountSid);
     const apiKeySid = sanitizeId(rawApiKeySid);
-    const apiKeySecret = rawApiKeySecret?.trim(); // secrets can have symbols; just trim whitespace
+    const apiKeySecret = rawApiKeySecret?.trim();
 
     if (!accountSid || !accountSid.startsWith("AC")) {
       throw new Error("User personal Twilio accountSid is invalid or missing.");
@@ -76,7 +79,7 @@ export async function getClientForUser(email: string): Promise<ResolvedTwilioCli
     });
 
     console.log(JSON.stringify({
-      msg: "getClientForUser: using PERSONAL Twilio",
+      msg: "getClientForUser: PERSONAL Twilio (API Key)",
       email: normalizedEmail,
       accountSidMasked: maskSid(accountSid),
       billingMode: user?.billingMode,
@@ -85,7 +88,7 @@ export async function getClientForUser(email: string): Promise<ResolvedTwilioCli
     return { client, accountSid, usingPersonal: true, user };
   }
 
-  // PLATFORM PATH
+  // ---------- PLATFORM (our shared account) ----------
   const rawPlatformAccount = process.env.TWILIO_ACCOUNT_SID || "";
   const rawPlatformApiKeySid = process.env.TWILIO_API_KEY_SID || "";
   const rawPlatformApiKeySecret = process.env.TWILIO_API_KEY_SECRET || "";
@@ -96,22 +99,23 @@ export async function getClientForUser(email: string): Promise<ResolvedTwilioCli
   const platformApiKeySecret = rawPlatformApiKeySecret?.trim();
   const platformAuthToken = rawAuthToken?.trim();
 
-  if (!platformAccountSid) {
-    throw new Error("Missing TWILIO_ACCOUNT_SID for platform.");
+  if (!platformAccountSid || !platformAccountSid.startsWith("AC")) {
+    throw new Error("Missing or invalid TWILIO_ACCOUNT_SID for platform.");
   }
 
+  // IMPORTANT: Prefer classic SID + AUTH TOKEN (avoids 401s when API Keys aren’t fully configured)
   const client = buildTwilioClient({
     accountSid: platformAccountSid,
-    apiKeySid: platformApiKeySid || undefined,
-    apiKeySecret: platformApiKeySecret || undefined,
     authTokenFallback: platformAuthToken || undefined,
+    apiKeySid: platformAuthToken ? undefined : (platformApiKeySid || undefined),
+    apiKeySecret: platformAuthToken ? undefined : (platformApiKeySecret || undefined),
   });
 
   console.log(JSON.stringify({
-    msg: "getClientForUser: using PLATFORM Twilio",
+    msg: "getClientForUser: PLATFORM Twilio",
     email: normalizedEmail,
     accountSidMasked: maskSid(platformAccountSid),
-    userBillingMode: user?.billingMode ?? null,
+    mode: platformAuthToken ? "SID+AUTH_TOKEN" : "API_KEY_PAIR",
   }));
 
   return {
