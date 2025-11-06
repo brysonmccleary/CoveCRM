@@ -19,7 +19,8 @@ const BASE_URL = (
 ).replace(/\/$/, "");
 const INBOUND_SMS_WEBHOOK = `${BASE_URL}/api/twilio/inbound-sms`;
 const STATUS_CALLBACK = `${BASE_URL}/api/twilio/status-callback`;
-const VOICE_URL = `${BASE_URL}/api/twilio/voice-answer`;
+// ✅ minimal change: point voice to inbound-banner webhook
+const VOICE_URL = `${BASE_URL}/api/twilio/voice/inbound`;
 
 /** Normalize to E.164 (+1XXXXXXXXXX) */
 function normalizeE164(p: string) {
@@ -248,6 +249,7 @@ export default async function handler(
         phoneNumber: requestedNumber,
         smsUrl: INBOUND_SMS_WEBHOOK, // fine even if you attach to a Messaging Service
         voiceUrl: VOICE_URL,
+        voiceMethod: "POST", // ✅ explicit
       });
     } else {
       const areaCodeNum =
@@ -277,6 +279,7 @@ export default async function handler(
         phoneNumber: available[0].phoneNumber!,
         smsUrl: INBOUND_SMS_WEBHOOK,
         voiceUrl: VOICE_URL,
+        voiceMethod: "POST", // ✅ explicit
       });
     }
     purchasedSid = purchased.sid;
