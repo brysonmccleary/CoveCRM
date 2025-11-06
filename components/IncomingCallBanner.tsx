@@ -1,12 +1,10 @@
-// components/IncomingCallBanner.tsx
 import React, { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/router";
 
 type Payload = {
   leadId?: string;
-  /** Full name if known; we’ll display exactly what we get (e.g., "Mike Jones") */
-  leadName?: string;
-  phone: string; // E.164
+  leadName?: string; // already includes first + last on your server emit
+  phone: string;     // E.164
 };
 
 function formatPhone(p?: string) {
@@ -30,16 +28,13 @@ export default function IncomingCallBanner() {
     const onIncoming = (data: any) => {
       const next: Payload = {
         leadId: data?.leadId || undefined,
-        // server now sends "leadName" as "First Last" when available
         leadName: data?.leadName || undefined,
         phone: data?.phone || "",
       };
       setPayload(next);
       setVisible(true);
 
-      try {
-        chimeRef.current?.play().catch(() => {});
-      } catch {}
+      try { chimeRef.current?.play().catch(() => {}); } catch {}
 
       if (hideTimer.current) clearTimeout(hideTimer.current);
       hideTimer.current = setTimeout(() => setVisible(false), 10_000);
@@ -53,31 +48,31 @@ export default function IncomingCallBanner() {
   }, []);
 
   if (!visible || !payload) {
-    return (
-      <>
-        <audio ref={chimeRef} src="/incoming-soft.mp3" preload="auto" />
-      </>
-    );
+    return <audio ref={chimeRef} src="/incoming-soft.mp3" preload="auto" />;
   }
 
   const title = payload.leadName || "Incoming call";
   const subtitle = payload.leadName ? formatPhone(payload.phone) : (payload.phone ? formatPhone(payload.phone) : "");
 
   const onAnswer = async () => {
+    let conf = "";
     try {
-      await fetch("/api/twilio/calls/answer", {
+      const r = await fetch("/api/twilio/calls/answer", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ phone: payload.phone }),
       });
+      const j = await r.json().catch(() => ({}));
+      if (j?.conferenceName) conf = j.conferenceName;
     } catch {}
+
     setVisible(false);
-    if (payload.leadId) {
-      // include inbound=1 flag so dial-session does NOT auto-dial (no other changes made)
-      router.push(`/dial-session?leadId=${encodeURIComponent(payload.leadId)}&inbound=1`);
-    } else {
-      router.push(`/leads?search=${encodeURIComponent(payload.phone)}`);
-    }
+    const params = new URLSearchParams();
+    params.set("inbound", "1");
+    if (conf) params.set("conference", conf);
+    if (payload.leadId) params.set("leadId", payload.leadId);
+
+    router.push(`/dial-session?${params.toString()}`);
   };
 
   const onDecline = async () => {
@@ -94,11 +89,7 @@ export default function IncomingCallBanner() {
   return (
     <>
       <audio ref={chimeRef} src="/incoming-soft.mp3" preload="auto" />
-      <div
-        className="fixed top-4 inset-x-0 z-[5000] flex justify-center px-4"
-        role="status"
-        aria-live="polite"
-      >
+      <div className="fixed top-4 inset-x-0 z-[5000] flex justify-center px-4" role="status" aria-live="polite">
         <div className="max-w-2xl w-full rounded-2xl shadow-xl bg-neutral-900/95 text-white border border-neutral-800 backdrop-blur p-4">
           <div className="flex items-center gap-3">
             <div className="shrink-0 h-10 w-10 rounded-full bg-emerald-600/20 flex items-center justify-center">
@@ -109,16 +100,10 @@ export default function IncomingCallBanner() {
               {subtitle ? <div className="text-sm text-neutral-300">{subtitle}</div> : null}
             </div>
             <div className="flex gap-2">
-              <button
-                onClick={onDecline}
-                className="px-3 py-2 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-sm"
-              >
+              <button onClick={onDecline} className="px-3 py-2 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-sm">
                 Decline
               </button>
-              <button
-                onClick={onAnswer}
-                className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-sm text-white"
-              >
+              <button onClick={onAnswer} className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-sm text-white">
                 Answer
               </button>
             </div>
