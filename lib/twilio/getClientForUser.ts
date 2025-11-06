@@ -16,35 +16,28 @@ function maskSid(sid?: string): string | null {
   return `${sid.slice(0, 4)}…${sid.slice(-4)}`;
 }
 
-/** Remove any non-alphanumeric (handles U+2028 etc.) and trim. */
 function sanitizeId(value?: string | null): string {
   if (!value) return "";
   return String(value).replace(/[^A-Za-z0-9]/g, "").trim();
 }
 
-function isSelfBilledWithPersonalCreds(u: any): boolean {
-  const hasPersonal =
-    !!(u?.twilio?.accountSid && u?.twilio?.apiKeySid && u?.twilio?.apiKeySecret);
-  return u?.billingMode === "self" && hasPersonal;
+function hasPersonalCreds(u: any): boolean {
+  return Boolean(u?.twilio?.accountSid && u?.twilio?.apiKeySid && u?.twilio?.apiKeySecret);
 }
 
 function buildTwilioClient(params: {
   accountSid: string;
   apiKeySid?: string;
   apiKeySecret?: string;
-  authTokenFallback?: string;
+  authToken?: string;
 }): Twilio {
-  const { accountSid, apiKeySid, apiKeySecret, authTokenFallback } = params;
+  const { accountSid, apiKeySid, apiKeySecret, authToken } = params;
 
-  // Prefer classic SID+AUTH when provided (most reliable / least confusing)
-  if (authTokenFallback) {
-    return twilio(accountSid, authTokenFallback, { accountSid });
-  }
+  // Prefer classic SID+AUTH when provided (most robust)
+  if (authToken) return twilio(accountSid, authToken, { accountSid });
 
-  // Else use API key pair (must both be present)
-  if (apiKeySid && apiKeySecret) {
-    return twilio(apiKeySid, apiKeySecret, { accountSid });
-  }
+  // Else use API key pair
+  if (apiKeySid && apiKeySecret) return twilio(apiKeySid, apiKeySecret, { accountSid });
 
   throw new Error("Missing Twilio credentials: need AUTH TOKEN or API Key pair.");
 }
@@ -55,22 +48,20 @@ export async function getClientForUser(email: string): Promise<ResolvedTwilioCli
   const normalizedEmail = (email || "").toLowerCase().trim();
   const user = await User.findOne({ email: normalizedEmail }).lean<any>();
 
+  // --- Global kill switch to bypass all personal creds (for now) -------------
+  const FORCE_PLATFORM = (process.env.TWILIO_FORCE_PLATFORM || "") === "1";
+
   // ---------- PERSONAL (self-billed) ----------
-  if (isSelfBilledWithPersonalCreds(user)) {
-    const rawAccountSid = user.twilio.accountSid as string;
-    const rawApiKeySid = user.twilio.apiKeySid as string | undefined;
-    const rawApiKeySecret = user.twilio.apiKeySecret as string | undefined;
+  const personalEligible =
+    !FORCE_PLATFORM && user?.billingMode === "self" && hasPersonalCreds(user);
 
-    const accountSid = sanitizeId(rawAccountSid);
-    const apiKeySid = sanitizeId(rawApiKeySid);
-    const apiKeySecret = rawApiKeySecret?.trim();
+  if (personalEligible) {
+    const accountSid = sanitizeId(user.twilio.accountSid);
+    const apiKeySid = sanitizeId(user.twilio.apiKeySid);
+    const apiKeySecret = String(user.twilio.apiKeySecret || "").trim();
 
-    if (!accountSid || !accountSid.startsWith("AC")) {
-      throw new Error("User personal Twilio accountSid is invalid or missing.");
-    }
-    if (!apiKeySid || !apiKeySid.startsWith("SK") || !apiKeySecret) {
-      throw new Error("User personal Twilio API Key SID/Secret are invalid or missing.");
-    }
+    if (!accountSid.startsWith("AC")) throw new Error("User personal accountSid invalid.");
+    if (!apiKeySid.startsWith("SK") || !apiKeySecret) throw new Error("User personal API key invalid.");
 
     const client = buildTwilioClient({
       accountSid,
@@ -88,25 +79,20 @@ export async function getClientForUser(email: string): Promise<ResolvedTwilioCli
     return { client, accountSid, usingPersonal: true, user };
   }
 
-  // ---------- PLATFORM (our shared account) ----------
-  const rawPlatformAccount = process.env.TWILIO_ACCOUNT_SID || "";
-  const rawPlatformApiKeySid = process.env.TWILIO_API_KEY_SID || "";
-  const rawPlatformApiKeySecret = process.env.TWILIO_API_KEY_SECRET || "";
-  const rawAuthToken = process.env.TWILIO_AUTH_TOKEN || "";
+  // ---------- PLATFORM (shared account) ----------
+  const platformAccountSid = sanitizeId(process.env.TWILIO_ACCOUNT_SID || "");
+  const platformAuthToken = String(process.env.TWILIO_AUTH_TOKEN || "").trim();
+  const platformApiKeySid = sanitizeId(process.env.TWILIO_API_KEY_SID || "");
+  const platformApiKeySecret = String(process.env.TWILIO_API_KEY_SECRET || "").trim();
 
-  const platformAccountSid = sanitizeId(rawPlatformAccount);
-  const platformApiKeySid = sanitizeId(rawPlatformApiKeySid);
-  const platformApiKeySecret = rawPlatformApiKeySecret?.trim();
-  const platformAuthToken = rawAuthToken?.trim();
-
-  if (!platformAccountSid || !platformAccountSid.startsWith("AC")) {
-    throw new Error("Missing or invalid TWILIO_ACCOUNT_SID for platform.");
+  if (!platformAccountSid.startsWith("AC")) {
+    throw new Error("Missing/invalid TWILIO_ACCOUNT_SID for platform.");
   }
 
-  // IMPORTANT: Prefer classic SID + AUTH TOKEN (avoids 401s when API Keys aren’t fully configured)
+  // Prefer SID+AUTH; fall back to API key pair only if no auth token
   const client = buildTwilioClient({
     accountSid: platformAccountSid,
-    authTokenFallback: platformAuthToken || undefined,
+    authToken: platformAuthToken || undefined,
     apiKeySid: platformAuthToken ? undefined : (platformApiKeySid || undefined),
     apiKeySecret: platformAuthToken ? undefined : (platformApiKeySecret || undefined),
   });
@@ -116,12 +102,9 @@ export async function getClientForUser(email: string): Promise<ResolvedTwilioCli
     email: normalizedEmail,
     accountSidMasked: maskSid(platformAccountSid),
     mode: platformAuthToken ? "SID+AUTH_TOKEN" : "API_KEY_PAIR",
+    forcePlatform: FORCE_PLATFORM,
+    userBillingMode: user?.billingMode ?? null,
   }));
 
-  return {
-    client,
-    accountSid: platformAccountSid,
-    usingPersonal: false,
-    user,
-  };
+  return { client, accountSid: platformAccountSid, usingPersonal: false, user };
 }
