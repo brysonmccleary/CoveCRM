@@ -6,7 +6,6 @@ type Payload = {
   leadId?: string;
   leadName?: string;
   phone: string;           // E.164
-  // (callSid is not in the socket payload; decline endpoint resolves it server-side)
 };
 
 function formatPhone(p?: string) {
@@ -23,9 +22,7 @@ export default function IncomingCallBanner() {
   const hideTimer = useRef<NodeJS.Timeout | null>(null);
   const chimeRef = useRef<HTMLAudioElement>(null);
 
-  // Attach socket listener once
   useEffect(() => {
-    // the socket singleton created in your app: window.__crm_socket__
     const sock: any = (globalThis as any).__crm_socket__;
     if (!sock) return;
 
@@ -38,38 +35,41 @@ export default function IncomingCallBanner() {
       setPayload(next);
       setVisible(true);
 
-      // play subtle audio if available (place a soft mp3 at /sounds/incoming-soft.mp3)
       try {
         chimeRef.current?.play().catch(() => {});
       } catch {}
 
-      // auto-hide after 10s if no action (does not alter any Twilio flow)
       if (hideTimer.current) clearTimeout(hideTimer.current);
       hideTimer.current = setTimeout(() => setVisible(false), 10_000);
     };
 
-    // Render service broadcasts "call:incoming" to the user channel
     sock.on?.("call:incoming", onIncoming);
-
     return () => {
       sock.off?.("call:incoming", onIncoming);
       if (hideTimer.current) clearTimeout(hideTimer.current);
     };
   }, []);
 
-  if (!visible || !payload) return (
-    <>
-      {/* preload audio quietly to avoid delay on first play */}
-      <audio ref={chimeRef} src="/sounds/incoming-soft.mp3" preload="auto" />
-    </>
-  );
+  if (!visible || !payload) {
+    return (
+      <>
+        {/* preload audio quietly to avoid delay on first play */}
+        <audio ref={chimeRef} src="/incoming-soft.mp3" preload="auto" /> {/* ← path matches your file */}
+      </>
+    );
+  }
 
   const title = payload.leadName || "Incoming call";
   const subtitle = payload.leadName ? formatPhone(payload.phone) : (payload.phone ? formatPhone(payload.phone) : "");
 
   const onAnswer = async () => {
-    // Per your rule: do not change dialer logic — just route to the existing dial session
-    // If there is no leadId yet, route to /leads and let user search by phone.
+    try {
+      await fetch("/api/twilio/calls/answer", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phone: payload.phone }),
+      });
+    } catch {}
     setVisible(false);
     if (payload.leadId) {
       router.push(`/dial-session?leadId=${encodeURIComponent(payload.leadId)}`);
@@ -91,7 +91,7 @@ export default function IncomingCallBanner() {
 
   return (
     <>
-      <audio ref={chimeRef} src="/sounds/incoming-soft.mp3" preload="auto" />
+      <audio ref={chimeRef} src="/incoming-soft.mp3" preload="auto" />
       <div
         className="fixed top-4 inset-x-0 z-[5000] flex justify-center px-4"
         role="status"
@@ -100,7 +100,6 @@ export default function IncomingCallBanner() {
         <div className="max-w-2xl w-full rounded-2xl shadow-xl bg-neutral-900/95 text-white border border-neutral-800 backdrop-blur p-4">
           <div className="flex items-center gap-3">
             <div className="shrink-0 h-10 w-10 rounded-full bg-emerald-600/20 flex items-center justify-center">
-              {/* phone icon (emoji to avoid extra deps) */}
               <span className="text-xl">📞</span>
             </div>
             <div className="flex-1">
