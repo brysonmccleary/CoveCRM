@@ -4,8 +4,12 @@ import { useRouter } from "next/router";
 
 type Payload = {
   leadId?: string;
-  leadName?: string;
-  phone: string;           // E.164
+  // Back-compat and forward-compat name fields:
+  leadName?: string;          // may contain first or full name (existing)
+  leadFirstName?: string;     // optional future server field
+  leadLastName?: string;      // optional future server field
+  leadFullName?: string;      // optional future server field
+  phone: string;              // E.164
 };
 
 function formatPhone(p?: string) {
@@ -30,6 +34,9 @@ export default function IncomingCallBanner() {
       const next: Payload = {
         leadId: data?.leadId || undefined,
         leadName: data?.leadName || undefined,
+        leadFirstName: data?.leadFirstName || undefined,
+        leadLastName: data?.leadLastName || undefined,
+        leadFullName: data?.leadFullName || undefined,
         phone: data?.phone || "",
       };
       setPayload(next);
@@ -54,13 +61,20 @@ export default function IncomingCallBanner() {
     return (
       <>
         {/* preload audio quietly to avoid delay on first play */}
-        <audio ref={chimeRef} src="/incoming-soft.mp3" preload="auto" /> {/* ← path matches your file */}
+        <audio ref={chimeRef} src="/incoming-soft.mp3" preload="auto" />
       </>
     );
   }
 
-  const title = payload.leadName || "Incoming call";
-  const subtitle = payload.leadName ? formatPhone(payload.phone) : (payload.phone ? formatPhone(payload.phone) : "");
+  // Prefer full name → first+last → legacy leadName
+  const displayName =
+    payload.leadFullName?.trim() ||
+    [payload.leadFirstName, payload.leadLastName].filter(Boolean).join(" ").trim() ||
+    payload.leadName ||
+    "";
+
+  const title = displayName || "Incoming call";
+  const subtitle = formatPhone(payload.phone || "");
 
   const onAnswer = async () => {
     try {
@@ -71,11 +85,14 @@ export default function IncomingCallBanner() {
       });
     } catch {}
     setVisible(false);
+
     if (payload.leadId) {
-      router.push(`/dial-session?leadId=${encodeURIComponent(payload.leadId)}`);
-    } else {
-      router.push(`/leads?search=${encodeURIComponent(payload.phone)}`);
+      // Important: add inbound=1 so dial-session does NOT auto-dial
+      const url = `/dial-session?leadId=${encodeURIComponent(payload.leadId)}&inbound=1`;
+      return router.push(url);
     }
+    // No lead match yet—fall back to leads search
+    return router.push(`/leads?search=${encodeURIComponent(payload.phone)}`);
   };
 
   const onDecline = async () => {
@@ -103,7 +120,9 @@ export default function IncomingCallBanner() {
               <span className="text-xl">📞</span>
             </div>
             <div className="flex-1">
-              <div className="text-base font-semibold leading-tight">{title}</div>
+              <div className="text-base font-semibold leading-tight">
+                {title}
+              </div>
               {subtitle ? (
                 <div className="text-sm text-neutral-300">{subtitle}</div>
               ) : null}
