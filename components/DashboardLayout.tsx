@@ -1,8 +1,10 @@
+// components/DashboardLayout.tsx
 import { useEffect, useRef, useState } from "react";
 import { signOut } from "next-auth/react";
 import Image from "next/image";
 import { useSession } from "next-auth/react";
 import { connectAndJoin } from "@/lib/socketClient";
+import IncomingCallBanner from "@/components/IncomingCallBanner"; // ← NEW
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const { data: session } = useSession();
@@ -66,6 +68,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
   return (
     <div className="flex min-h-screen text-white">
+      {/* Incoming Call Banner overlay (fixed; safe anywhere) */}
+      <IncomingCallBanner />
+
       <div className="w-60 p-4 bg-[#0f172a] flex flex-col justify-between border-r border-[#1e293b]">
         <div>
           <div className="flex items-center gap-2 mb-6">
