@@ -62,9 +62,11 @@ async function ensureSubaccount(master: Twilio, email: string) {
 }
 
 async function ensureApiKeyForSub(master: Twilio, subAccountSid: string) {
-  // Use master creds but scope to the subaccount for the call.
-  const subScoped = twilio(PLATFORM_ACCOUNT_SID, PLATFORM_AUTH_TOKEN, { accountSid: subAccountSid });
-  const key = await subScoped.api.keys.create({ friendlyName: "covecrm-subaccount-key" });
+  // ✅ Correct subaccount-scoped path for API Key creation
+  // (Some twilio typings don’t expose api.keys.create() directly.)
+  const key = await master.api.v2010
+    .accounts(subAccountSid)
+    .keys.create({ friendlyName: "covecrm-subaccount-key" });
   return key; // { sid: 'SK...', secret: '****' }
 }
 
