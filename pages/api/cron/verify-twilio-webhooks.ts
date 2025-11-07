@@ -1,8 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import twilio from "twilio";
-
-const REQ_HEADER = "authorization";
-const CRON_SECRET = process.env.CRON_SECRET || "";
+import { checkCronAuth } from "@/lib/cronAuth";
 
 const ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID!;
 const AUTH_TOKEN   = process.env.TWILIO_AUTH_TOKEN!;
@@ -17,9 +15,8 @@ const VOICE_STATUS = `${BASE}/api/twilio/voice-status`;
 type Fix = { sid: string; phoneNumber?: string | null; changed: string[] };
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  // Auth gate
-  const auth = String(req.headers[REQ_HEADER] || "");
-  if (!CRON_SECRET || auth !== `Bearer ${CRON_SECRET}`) {
+  // ✅ Auth gate (Bearer header OR ?token)
+  if (!checkCronAuth(req)) {
     return res.status(401).json({ ok: false, error: "Unauthorized" });
   }
 

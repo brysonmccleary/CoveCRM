@@ -1,18 +1,14 @@
-// /pages/api/cron/ensure-twilio-provision.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import { provisionUserTwilio } from "@/lib/twilio/provision";
-
-const AUTH = process.env.CRON_SECRET || "";
+import { checkCronAuth } from "@/lib/cronAuth";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  // Simple bearer guard so only your scheduler can call it
-  const okAuth =
-    AUTH &&
-    typeof req.headers.authorization === "string" &&
-    req.headers.authorization === `Bearer ${AUTH}`;
-  if (!okAuth) return res.status(401).json({ ok: false, message: "Unauthorized" });
+  // ✅ Auth gate (Bearer header OR ?token)
+  if (!checkCronAuth(req)) {
+    return res.status(401).json({ ok: false, message: "Unauthorized" });
+  }
 
   try {
     await dbConnect();
@@ -45,6 +41,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(200).json({ ok: true, processed });
   } catch (err: any) {
     console.error("ensure-twilio-provision error:", err?.message || err);
+    // Always 200 so schedulers don't retry-storm
     return res.status(200).json({ ok: false, message: err?.message || "error" });
   }
 }
