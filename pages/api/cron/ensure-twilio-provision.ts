@@ -1,0 +1,50 @@
+// /pages/api/cron/ensure-twilio-provision.ts
+import type { NextApiRequest, NextApiResponse } from "next";
+import dbConnect from "@/lib/mongooseConnect";
+import User from "@/models/User";
+import { provisionUserTwilio } from "@/lib/twilio/provision";
+
+const AUTH = process.env.CRON_SECRET || "";
+
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  // Simple bearer guard so only your scheduler can call it
+  const okAuth =
+    AUTH &&
+    typeof req.headers.authorization === "string" &&
+    req.headers.authorization === `Bearer ${AUTH}`;
+  if (!okAuth) return res.status(401).json({ ok: false, message: "Unauthorized" });
+
+  try {
+    await dbConnect();
+
+    // Find users missing any of: subaccount, api key, phone number
+    const cursor = User.find({
+      $or: [
+        { "twilio.accountSid": { $in: [null, ""] } },
+        { "twilio.apiKeySid": { $in: [null, ""] } },
+        { numbers: { $exists: false } },
+        { numbers: { $size: 0 } },
+      ],
+    })
+      .select({ email: 1, twilio: 1, numbers: 1 })
+      .lean()
+      .cursor();
+
+    let processed = 0;
+    for await (const u of cursor as any) {
+      const email = String(u.email || "").toLowerCase();
+      try {
+        const r = await provisionUserTwilio(email);
+        processed++;
+        console.log(`[ensure-twilio] ${email} -> ${r.ok ? "ok" : `fail: ${r.message}`}`);
+      } catch (e: any) {
+        console.warn(`[ensure-twilio] ${email} error:`, e?.message || e);
+      }
+    }
+
+    return res.status(200).json({ ok: true, processed });
+  } catch (err: any) {
+    console.error("ensure-twilio-provision error:", err?.message || err);
+    return res.status(200).json({ ok: false, message: err?.message || "error" });
+  }
+}
