@@ -51,7 +51,7 @@ async function generateUniqueReferralCode(): Promise<string> {
 async function findPromotionCodeInsensitive(code: string) {
   if (!stripe) return null;
 
-  // 1) First try direct (exact) filter – fastest
+  // 1) Try direct (exact) filter
   try {
     const exact = await stripe.promotionCodes.list({
       code,
@@ -62,7 +62,7 @@ async function findPromotionCodeInsensitive(code: string) {
     if (exact.data?.[0]) return exact.data[0];
   } catch {}
 
-  // 2) Fallback: scan first page and match .code case-insensitively
+  // 2) Scan a page and match case-insensitively
   const page = await stripe.promotionCodes.list({
     active: true,
     limit: 100,
@@ -83,51 +83,77 @@ async function findCouponByIdOrName(code: string) {
     if (byId && (byId as any).id) return byId;
   } catch {}
 
-  // Scan page by name (case-insensitive)
+  // Scan by name
   const page = await stripe.coupons.list({ limit: 100 });
   const lc = code.trim().toLowerCase();
   const found = page.data.find((c) => (c.name || "").trim().toLowerCase() === lc);
   return found || null;
 }
 
-/** Attach discount to a customer; prefer promotion_code, fallback to coupon. */
+/* ---------- Attach discount helpers (SDK + raw HTTPS fallback) ---------- */
+
+/** Use SDK if available, then raw HTTPS POST to /v1/customers/{id}/discount as fallback. */
 async function attachCustomerDiscount(opts: {
   customerId: string;
   promotionCodeId?: string;
   couponId?: string;
-}): Promise<{ ok: boolean; via?: "promotion_code" | "coupon" }> {
-  if (!stripe) return { ok: false };
+}): Promise<{ ok: boolean; via?: "promotion_code" | "coupon"; error?: string }> {
+  if (!stripe || !stripeKey) return { ok: false, error: "Stripe not configured" };
 
   const { customerId, promotionCodeId, couponId } = opts;
 
-  // Helper: try createDiscount, then fallback to update
-  async function tryAttach(kind: "promotion_code" | "coupon", value: string) {
+  async function trySdk(kind: "promotion_code" | "coupon", value: string) {
     try {
-      // @ts-ignore newer helper
-      await stripe.customers.createDiscount(customerId, { [kind]: value });
-      return true;
-    } catch (e) {
-      // fallback – some SDK versions support setting via update()
-      try {
-        // @ts-ignore allow untyped props on update
-        await stripe.customers.update(customerId, { [kind]: value });
+      // @ts-ignore: createDiscount may not be typed in older SDKs
+      if (stripe.customers.createDiscount) {
+        // Prefer official helper when present
+        await (stripe.customers as any).createDiscount(customerId, { [kind]: value });
         return true;
-      } catch (e2) {
-        console.error(`[register] attach ${kind} failed:`, e2);
-        return false;
       }
+    } catch (e) {
+      // fall through to raw
+    }
+    return false;
+  }
+
+  async function tryRaw(kind: "promotion_code" | "coupon", value: string) {
+    const body = new URLSearchParams({ [kind]: value });
+    const resp = await fetch(`https://api.stripe.com/v1/customers/${customerId}/discount`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${stripeKey}`,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body,
+    });
+    if (resp.ok) return true;
+
+    const text = await resp.text();
+    console.error(`[register] raw ${kind} attach failed:`, resp.status, text);
+    return false;
+  }
+
+  // Try promotion_code first
+  if (promotionCodeId) {
+    if (await trySdk("promotion_code", promotionCodeId)) {
+      return { ok: true, via: "promotion_code" };
+    }
+    if (await tryRaw("promotion_code", promotionCodeId)) {
+      return { ok: true, via: "promotion_code" };
     }
   }
 
-  if (promotionCodeId) {
-    const ok = await tryAttach("promotion_code", promotionCodeId);
-    if (ok) return { ok: true, via: "promotion_code" };
-  }
+  // Fallback to coupon
   if (couponId) {
-    const ok = await tryAttach("coupon", couponId);
-    if (ok) return { ok: true, via: "coupon" };
+    if (await trySdk("coupon", couponId)) {
+      return { ok: true, via: "coupon" };
+    }
+    if (await tryRaw("coupon", couponId)) {
+      return { ok: true, via: "coupon" };
+    }
   }
-  return { ok: false };
+
+  return { ok: false, error: "All attach attempts failed" };
 }
 
 /* ---------- Stripe customer creation + discount logic ---------- */
@@ -168,6 +194,7 @@ async function ensureStripeCustomerWithDiscount(params: {
   let couponId: string | undefined;
   let appliedDiscount = false;
   let appliedVia: "promotion_code" | "coupon" | undefined;
+  let stripeError: string | undefined;
 
   if (usedCode) {
     const promo = await findPromotionCodeInsensitive(usedCode);
@@ -187,6 +214,7 @@ async function ensureStripeCustomerWithDiscount(params: {
       });
       appliedDiscount = attach.ok;
       appliedVia = attach.via;
+      if (!attach.ok) stripeError = attach.error;
     }
   }
 
@@ -196,7 +224,7 @@ async function ensureStripeCustomerWithDiscount(params: {
     couponId,
     appliedDiscount,
     appliedVia,
-    stripeError: undefined as string | undefined,
+    stripeError,
   };
 }
 
@@ -264,7 +292,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const admin = isAdminEmail(cleanEmail);
     const myReferralCode = await generateUniqueReferralCode();
 
-    // Stripe customer + discount (robust)
+    // Stripe customer + discount
     let stripeCustomerId: string | undefined;
     let stripePromotionCodeId: string | undefined;
     let stripeCouponId: string | undefined;
