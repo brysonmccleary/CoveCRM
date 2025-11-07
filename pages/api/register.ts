@@ -7,17 +7,15 @@ import bcrypt from "bcryptjs";
 /** Stripe */
 import Stripe from "stripe";
 const stripeKey = process.env.STRIPE_SECRET_KEY || "";
-const stripe =
-  stripeKey
-    ? new Stripe(stripeKey, { apiVersion: "2023-10-16" })
-    : null;
+// Do not pin apiVersion here to avoid TS mismatch with installed stripe typings
+const stripe = stripeKey ? new Stripe(stripeKey) : null;
 
 /** Admin allow-list (comma-separated emails in Vercel env) */
 function isAdminEmail(email?: string | null) {
   if (!email) return false;
   const list = (process.env.ADMIN_EMAILS || "")
     .split(",")
-    .map(s => s.trim().toLowerCase())
+    .map((s) => s.trim().toLowerCase())
     .filter(Boolean);
   return list.includes(email.toLowerCase());
 }
@@ -29,7 +27,7 @@ function escapeRegex(s: string) {
 const HOUSE_CODES = new Set(
   (process.env.HOUSE_CODES || "COVE50")
     .split(",")
-    .map(s => s.trim().toLowerCase())
+    .map((s) => s.trim().toLowerCase())
     .filter(Boolean)
 );
 
@@ -51,7 +49,6 @@ async function generateUniqueReferralCode(): Promise<string> {
  */
 async function findActivePromotionCode(code: string) {
   if (!stripe) return null;
-  // Stripe supports exact code filtering; we still normalize case here.
   const promos = await stripe.promotionCodes.list({
     code,
     limit: 1,
@@ -87,7 +84,6 @@ async function ensureStripeCustomerWithDiscount(params: {
 
   const { email, name, usedCode, isHouse, referredByUserId } = params;
 
-  // Create a Stripe Customer (idempotent by email; if you create elsewhere, it's fine to create again—Stripe dedupes by email on your side of business logic)
   const customer = await stripe.customers.create({
     email,
     name,
@@ -95,7 +91,6 @@ async function ensureStripeCustomerWithDiscount(params: {
       usedCode: usedCode || "",
       isHouseCode: String(isHouse),
       referredByUserId: referredByUserId || "",
-      // Keep a breadcrumb for support/search
       source: "covecrm-register",
     },
   });
@@ -110,18 +105,14 @@ async function ensureStripeCustomerWithDiscount(params: {
       promotionCodeId = promo.id;
       couponId = typeof promo.coupon === "string" ? promo.coupon : promo.coupon?.id;
 
-      // Attach discount at the CUSTOMER level so it auto-applies later.
-      // New API style: create a customer discount via promotion_code.
       try {
-        // @ts-ignore - types may lag behind newest endpoint helper; this maps to POST /v1/customers/{id}/discount
+        // Newer helper; typings may lag, so keep ts-ignore to avoid build break
+        // @ts-ignore
         await stripe.customers.createDiscount(customer.id, {
           promotion_code: promotionCodeId,
         });
         appliedDiscount = true;
       } catch (e) {
-        // As a fallback (older API shapes), try using the discounts API directly
-        // If it still fails, we swallow to avoid blocking registration
-        // console.error kept for debugging.
         console.error("[register] failed to attach customer discount:", e);
       }
     }
@@ -183,7 +174,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const affiliateOwner = await User.findOne({
         affiliateCode: new RegExp(`^${escapeRegex(codeInput)}$`, "i"),
         affiliateApproved: true,
-      }).select({ _id: 1, affiliateCode: 1 }).lean();
+      })
+        .select({ _id: 1, affiliateCode: 1 })
+        .lean();
 
       if (!affiliateOwner && !isHouse) {
         return res.status(400).json({ message: "Invalid referral code" });
