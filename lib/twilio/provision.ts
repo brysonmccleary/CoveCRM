@@ -3,105 +3,70 @@ import twilio, { Twilio } from "twilio";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 
-/**
- * Idempotent Twilio provisioning for a single user:
- * - Create (or reuse) a Subaccount
- * - Create API Key/Secret (scoped to subaccount)
- * - Purchase a Voice+SMS US local number
- * - Apply webhooks (voice inbound, voice status, inbound SMS)
- * - Persist everything into user.twilio + user.numbers[]
- *
- * ZERO side-effects to any other logic.
- */
-
 const PLATFORM_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID || "";
 const PLATFORM_AUTH_TOKEN  = process.env.TWILIO_AUTH_TOKEN  || "";
 const BASE_URL = (process.env.NEXT_PUBLIC_BASE_URL || "https://www.covecrm.com").replace(/\/$/, "");
-
-// Optional: try to bias an area code first, fallback to any US local
 const DEFAULT_AREA_CODE = (process.env.TWILIO_DEFAULT_AREA_CODE || "").trim();
 
 if (!PLATFORM_ACCOUNT_SID || !PLATFORM_AUTH_TOKEN) {
   throw new Error("Missing TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN envs.");
 }
 
-type ProvisionResult = {
-  ok: true;
-  message: string;
-  data: {
-    subaccountSid: string;
-    apiKeySid: string;
-    phoneSid: string;
-    phoneNumber: string;
-  };
-} | {
-  ok: false;
-  message: string;
-  error?: string;
-};
-
-function mask(s?: string) {
-  if (!s) return "";
-  return s.length <= 8 ? s : `${s.slice(0, 4)}…${s.slice(-4)}`;
-}
+type ProvisionResult =
+  | {
+      ok: true;
+      message: string;
+      data: { subaccountSid: string; apiKeySid: string; phoneSid: string; phoneNumber: string };
+    }
+  | { ok: false; message: string; error?: string };
 
 function buildStatusCallback(email: string) {
-  // We append ?userEmail= for your /api/twilio/voice-status.ts to bill correctly.
   return `${BASE_URL}/api/twilio/voice-status?userEmail=${encodeURIComponent(email)}`;
 }
 
 async function ensureSubaccount(master: Twilio, email: string) {
-  // Reuse by name if it already exists (best-effort)
   const friendlyName = `CoveCRM - ${email}`;
   try {
     const subs = await master.api.accounts.list({ friendlyName, limit: 1 });
     if (subs?.[0]?.sid) return subs[0];
   } catch {}
-  // Create fresh
   return await master.api.accounts.create({ friendlyName });
 }
 
+// === TS-safe subaccount API Key creation ===
 async function ensureApiKeyForSub(master: Twilio, subAccountSid: string) {
-  // ✅ Correct subaccount-scoped path for API Key creation
-  // (Some twilio typings don’t expose api.keys.create() directly.)
-  const key = await master.api.v2010
-    .accounts(subAccountSid)
-    .keys.create({ friendlyName: "covecrm-subaccount-key" });
-  return key; // { sid: 'SK...', secret: '****' }
+  // Twilio Node supports this at runtime; the type defs don’t. Use a narrow, local any-cast.
+  const m: any = master;
+  const key = await m.api.v2010.accounts(subAccountSid).keys.create({
+    friendlyName: "covecrm-subaccount-key",
+  });
+  return key as { sid: string; secret: string };
 }
 
 async function findOrBuyNumber(
   subScoped: Twilio,
   email: string,
 ): Promise<{ phoneSid: string; phoneNumber: string }> {
-  // 1) Already have one?
   const existing = await subScoped.incomingPhoneNumbers.list({ limit: 1 });
   if (existing?.[0]?.sid && existing[0].phoneNumber) {
     return { phoneSid: (existing[0] as any).sid, phoneNumber: (existing[0] as any).phoneNumber };
   }
 
-  // 2) Search availability
   let candidate: any = null;
-
   if (DEFAULT_AREA_CODE) {
     const list = await subScoped
       .availablePhoneNumbers("US")
       .local.list({ areaCode: DEFAULT_AREA_CODE, smsEnabled: true, voiceEnabled: true, limit: 1 });
     candidate = list?.[0] || null;
   }
-
   if (!candidate) {
     const list = await subScoped
       .availablePhoneNumbers("US")
       .local.list({ smsEnabled: true, voiceEnabled: true, limit: 1 });
     candidate = list?.[0] || null;
   }
+  if (!candidate?.phoneNumber) throw new Error("No US local Voice+SMS numbers available right now.");
 
-  if (!candidate?.phoneNumber) {
-    throw new Error("No US local Voice+SMS numbers available right now.");
-  }
-
-  // 3) Purchase
   const bought = await subScoped.incomingPhoneNumbers.create({
     phoneNumber: candidate.phoneNumber,
     smsUrl: `${BASE_URL}/api/twilio/inbound-sms`,
@@ -113,17 +78,10 @@ async function findOrBuyNumber(
     friendlyName: `CoveCRM - ${email}`,
   });
 
-  return {
-    phoneSid: (bought as any).sid,
-    phoneNumber: (bought as any).phoneNumber,
-  };
+  return { phoneSid: (bought as any).sid, phoneNumber: (bought as any).phoneNumber };
 }
 
-async function applyWebhooks(
-  subScoped: Twilio,
-  phoneSid: string,
-  email: string
-) {
+async function applyWebhooks(subScoped: Twilio, phoneSid: string, email: string) {
   await subScoped.incomingPhoneNumbers(phoneSid).update({
     smsUrl: `${BASE_URL}/api/twilio/inbound-sms`,
     smsMethod: "POST",
@@ -142,7 +100,7 @@ export async function provisionUserTwilio(email: string): Promise<ProvisionResul
 
     const master = twilio(PLATFORM_ACCOUNT_SID, PLATFORM_AUTH_TOKEN);
 
-    // ===== 1) SUBACCOUNT =====
+    // 1) Subaccount
     let subSid = user?.twilio?.accountSid || "";
     if (!subSid) {
       const sub = await ensureSubaccount(master, user.email);
@@ -152,31 +110,30 @@ export async function provisionUserTwilio(email: string): Promise<ProvisionResul
       await user.save();
     }
 
-    // Scoped client to the subaccount using master creds
+    // Client scoped to subaccount (using master creds)
     const subScoped = twilio(PLATFORM_ACCOUNT_SID, PLATFORM_AUTH_TOKEN, { accountSid: subSid });
 
-    // ===== 2) API KEY =====
+    // 2) API Key
     let keySid = user?.twilio?.apiKeySid || "";
     let keySecret = user?.twilio?.apiKeySecret || "";
     if (!keySid || !keySecret) {
       const key = await ensureApiKeyForSub(master, subSid);
-      keySid    = (key as any).sid;
-      keySecret = (key as any).secret; // one-time visible
+      keySid = key.sid;
+      keySecret = key.secret; // one-time visible
       user.twilio = user.twilio || {};
       user.twilio.apiKeySid = keySid;
       user.twilio.apiKeySecret = keySecret;
       await user.save();
     }
 
-    // ===== 3) NUMBER (buy if none) =====
+    // 3) Number (buy if none)
     let phoneSid = "";
     let phoneNumber = "";
 
-    // Reuse an existing user.numbers[] if it belongs to this subaccount
     if (Array.isArray(user.numbers) && user.numbers.length) {
       const found = await subScoped.incomingPhoneNumbers.list({ limit: 20 });
       const ownedSids = new Set(found.map((p: any) => p.sid));
-      const match = user.numbers.find(n => n.sid && ownedSids.has(n.sid));
+      const match = user.numbers.find((n) => n.sid && ownedSids.has(n.sid));
       if (match?.sid && match.phoneNumber) {
         phoneSid = match.sid;
         phoneNumber = match.phoneNumber;
@@ -188,8 +145,7 @@ export async function provisionUserTwilio(email: string): Promise<ProvisionResul
       phoneSid = bought.phoneSid;
       phoneNumber = bought.phoneNumber;
 
-      // persist into user.numbers[] (idempotent push)
-      const exists = (user.numbers || []).some(n => n.sid === phoneSid);
+      const exists = (user.numbers || []).some((n) => n.sid === phoneSid);
       if (!exists) {
         user.numbers = user.numbers || [];
         user.numbers.push({
@@ -203,7 +159,7 @@ export async function provisionUserTwilio(email: string): Promise<ProvisionResul
       }
     }
 
-    // ===== 4) WEBHOOKS (repair/ensure) =====
+    // 4) Webhooks
     await applyWebhooks(subScoped, phoneSid, user.email);
 
     return {
