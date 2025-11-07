@@ -104,10 +104,11 @@ async function attachCustomerDiscount(opts: {
 
   async function trySdk(kind: "promotion_code" | "coupon", value: string) {
     try {
+      // TS can’t narrow `stripe` inside this closure; cast to non-null local.
+      const s = stripe as Stripe;
       // @ts-ignore: createDiscount may not be typed in older SDKs
-      if (stripe.customers.createDiscount) {
-        // Prefer official helper when present
-        await (stripe.customers as any).createDiscount(customerId, { [kind]: value });
+      if ((s.customers as any).createDiscount) {
+        await (s.customers as any).createDiscount(customerId, { [kind]: value });
         return true;
       }
     } catch (e) {
