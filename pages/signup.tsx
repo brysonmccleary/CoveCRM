@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+// pages/signup.tsx
+import { useEffect, useMemo, useState } from "react";
 import axios from "axios";
 import toast from "react-hot-toast";
 import { useRouter } from "next/router";
@@ -9,6 +10,7 @@ export default function SignUp() {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
 
   const [promoCode, setPromoCode] = useState("");
   const [discountApplied, setDiscountApplied] = useState(false);
@@ -27,6 +29,11 @@ export default function SignUp() {
       setPromoCode(router.query.code);
     }
   }, [router.query.code]);
+
+  const pwMismatch = useMemo(
+    () => confirmPassword.length > 0 && password !== confirmPassword,
+    [password, confirmPassword]
+  );
 
   const handleCodeBlur = async () => {
     if (!promoCode.trim()) return;
@@ -50,7 +57,13 @@ export default function SignUp() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name || !email || !password) return toast.error("Please fill out all fields.");
+
+    if (!name || !email || !password) {
+      return toast.error("Please fill out all fields.");
+    }
+    if (pwMismatch) {
+      return toast.error("Passwords do not match.");
+    }
 
     setIsSubmitting(true);
     try {
@@ -58,20 +71,39 @@ export default function SignUp() {
         name,
         email,
         password,
+        confirmPassword, // API supports it; enables server-side guard too
         usedCode: promoCode.trim(),
-        affiliateEmail,
+        affiliateEmail, // harmless if ignored by API
       });
 
       const isAdmin = !!res.data?.admin;
+      const isHouse = !!res.data?.isHouse;
+      const appliedDiscount = !!res.data?.appliedDiscount;
+
+      // Post-register toasts for codes (purely informational)
+      if (promoCode.trim()) {
+        if (isHouse) {
+          toast.success(
+            `Promo applied (non-commission)${appliedDiscount ? " — Stripe discount attached." : "."}`
+          );
+        } else {
+          toast.success(
+            `Code applied${appliedDiscount ? " — Stripe discount attached." : "."}`
+          );
+        }
+      }
+
       if (isAdmin) {
         toast.success("Account created! You’re all set (admin — no billing).");
-        return router.push("/");
+        return router.push("/dashboard");
       }
 
       toast.success("Account created! Redirecting to billing...");
       const total = finalPrice + (aiUpgrade ? aiAddOnPrice : 0);
       router.push(
-        `/billing?email=${encodeURIComponent(email)}&price=${total}&ai=${aiUpgrade ? 1 : 0}&trial=1`
+        `/billing?email=${encodeURIComponent(email)}&price=${total}&ai=${
+          aiUpgrade ? 1 : 0
+        }&trial=1`
       );
     } catch (err: any) {
       const msg = err?.response?.data?.message || "Signup failed. Try again.";
@@ -83,10 +115,14 @@ export default function SignUp() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center px-4
-                    bg-gradient-to-b from-[var(--cove-bg-dark)] to-[var(--cove-bg)]">
-      <div className="max-w-md w-full p-6 rounded-2xl shadow-xl
-                      bg-[var(--cove-card)] text-white border border-[#1e293b]">
+    <div
+      className="min-h-screen flex items-center justify-center px-4
+                    bg-gradient-to-b from-[var(--cove-bg-dark)] to-[var(--cove-bg)]"
+    >
+      <div
+        className="max-w-md w-full p-6 rounded-2xl shadow-xl
+                      bg-[var(--cove-card)] text-white border border-[#1e293b]"
+      >
         <h1 className="text-3xl font-bold mb-6 text-center">
           Create Your CRM Cove Account
         </h1>
@@ -113,6 +149,20 @@ export default function SignUp() {
             value={password}
             onChange={(e) => setPassword(e.target.value)}
           />
+          <div>
+            <input
+              type="password"
+              placeholder="Confirm Password"
+              className={`w-full p-3 rounded bg-[#0f172a] border text-white placeholder-gray-400 ${
+                pwMismatch ? "border-red-500" : "border-[#1e293b]"
+              }`}
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+            />
+            {pwMismatch && (
+              <p className="text-xs text-red-400 mt-1">Passwords do not match.</p>
+            )}
+          </div>
 
           <label className="block text-sm font-medium text-gray-300">
             Referral / Promo Code (optional)
@@ -125,7 +175,9 @@ export default function SignUp() {
             onChange={(e) => setPromoCode(e.target.value)}
             onBlur={handleCodeBlur}
           />
-          {checkingCode && <p className="text-sm text-blue-300 mt-1">Checking code...</p>}
+          {checkingCode && (
+            <p className="text-sm text-blue-300 mt-1">Checking code...</p>
+          )}
           {discountApplied && (
             <p className="text-green-400 text-sm mt-1">
               ✅ Code applied! Your new base price is ${finalPrice}/month.
@@ -147,7 +199,7 @@ export default function SignUp() {
 
           <button
             type="submit"
-            disabled={isSubmitting}
+            disabled={isSubmitting || pwMismatch}
             className="w-full py-3 rounded text-white font-semibold
                        bg-[var(--cove-accent)] hover:opacity-95 disabled:opacity-60"
           >
