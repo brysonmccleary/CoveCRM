@@ -33,9 +33,8 @@ async function ensureSubaccount(master: Twilio, email: string) {
   return await master.api.accounts.create({ friendlyName });
 }
 
-// === TS-safe subaccount API Key creation ===
+// TS-safe subaccount API Key creation (types don’t expose it directly)
 async function ensureApiKeyForSub(master: Twilio, subAccountSid: string) {
-  // Twilio Node supports this at runtime; the type defs don’t. Use a narrow, local any-cast.
   const m: any = master;
   const key = await m.api.v2010.accounts(subAccountSid).keys.create({
     friendlyName: "covecrm-subaccount-key",
@@ -47,26 +46,47 @@ async function findOrBuyNumber(
   subScoped: Twilio,
   email: string,
 ): Promise<{ phoneSid: string; phoneNumber: string }> {
+  // Reuse existing if present
   const existing = await subScoped.incomingPhoneNumbers.list({ limit: 1 });
   if (existing?.[0]?.sid && existing[0].phoneNumber) {
     return { phoneSid: (existing[0] as any).sid, phoneNumber: (existing[0] as any).phoneNumber };
   }
 
+  // Search availability
   let candidate: any = null;
-  if (DEFAULT_AREA_CODE) {
-    const list = await subScoped
+
+  // Parse area code to number if provided
+  const AREA_CODE_NUM = Number(DEFAULT_AREA_CODE);
+  const hasArea = Number.isFinite(AREA_CODE_NUM) && AREA_CODE_NUM > 0;
+
+  if (hasArea) {
+    const opts: any = {
+      areaCode: AREA_CODE_NUM, // <-- number, not string
+      smsEnabled: true,
+      voiceEnabled: true,
+      limit: 1,
+    };
+    const list = await (subScoped as any)
       .availablePhoneNumbers("US")
-      .local.list({ areaCode: DEFAULT_AREA_CODE, smsEnabled: true, voiceEnabled: true, limit: 1 });
+      .local.list(opts);
     candidate = list?.[0] || null;
   }
+
   if (!candidate) {
-    const list = await subScoped
+    const opts: any = {
+      smsEnabled: true,
+      voiceEnabled: true,
+      limit: 1,
+    };
+    const list = await (subScoped as any)
       .availablePhoneNumbers("US")
-      .local.list({ smsEnabled: true, voiceEnabled: true, limit: 1 });
+      .local.list(opts);
     candidate = list?.[0] || null;
   }
+
   if (!candidate?.phoneNumber) throw new Error("No US local Voice+SMS numbers available right now.");
 
+  // Buy it
   const bought = await subScoped.incomingPhoneNumbers.create({
     phoneNumber: candidate.phoneNumber,
     smsUrl: `${BASE_URL}/api/twilio/inbound-sms`,
@@ -110,7 +130,7 @@ export async function provisionUserTwilio(email: string): Promise<ProvisionResul
       await user.save();
     }
 
-    // Client scoped to subaccount (using master creds)
+    // Scoped client to subaccount using master creds
     const subScoped = twilio(PLATFORM_ACCOUNT_SID, PLATFORM_AUTH_TOKEN, { accountSid: subSid });
 
     // 2) API Key
@@ -119,7 +139,7 @@ export async function provisionUserTwilio(email: string): Promise<ProvisionResul
     if (!keySid || !keySecret) {
       const key = await ensureApiKeyForSub(master, subSid);
       keySid = key.sid;
-      keySecret = key.secret; // one-time visible
+      keySecret = key.secret;
       user.twilio = user.twilio || {};
       user.twilio.apiKeySid = keySid;
       user.twilio.apiKeySecret = keySecret;
