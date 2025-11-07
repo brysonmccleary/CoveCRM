@@ -5,10 +5,24 @@ import User from "@/models/User";
 const PLAN_PRICE = 199.99;
 const COMMISSION_PER_USER = 25;
 
+function normalizeCode(s: string) {
+  return s.trim().toUpperCase();
+}
+
+function getHouseSet() {
+  return new Set(
+    (process.env.HOUSE_CODES || "COVE50")
+      .split(",")
+      .map(s => s.trim().toUpperCase())
+      .filter(Boolean)
+  );
+}
+
 /**
  * Groups by the effective code a user used:
  * 1) preferred: referredByCode (new)
  * 2) fallback: legacy string in referredBy
+ * All grouping keys are normalized to UPPERCASE to avoid dup rows.
  */
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
@@ -23,38 +37,38 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     type Bucket = { users: any[]; activeCount: number };
     const grouped: Record<string, Bucket> = {};
+    const houseSet = getHouseSet();
 
     for (const user of allUsers) {
-      const code =
+      const rawCode =
         (typeof user.referredByCode === "string" && user.referredByCode) ||
         (typeof user.referredBy === "string" && user.referredBy) ||
-        // if legacy referredBy was an ObjectId at some point, ignore it for grouping
         "";
 
-      if (!code) continue;
+      if (!rawCode) continue;
 
-      if (!grouped[code]) grouped[code] = { users: [], activeCount: 0 };
-      grouped[code].users.push(user);
-      if (user.subscriptionStatus === "active") grouped[code].activeCount++;
+      const key = normalizeCode(rawCode); // 🔑 normalize to avoid cove50/COVE50 split
+
+      if (!grouped[key]) grouped[key] = { users: [], activeCount: 0 };
+      grouped[key].users.push(user);
+      if (user.subscriptionStatus === "active") grouped[key].activeCount++;
     }
 
     const affiliateStats = await Promise.all(
-      Object.entries(grouped).map(async ([code, data]) => {
-        // Owner is someone whose personal referralCode equals this code
-        const owner = await User.findOne({ referralCode: code }).select({ name: 1, email: 1 }).lean();
+      Object.entries(grouped).map(async ([key, data]) => {
+        // Owner: someone whose personal referralCode equals this key (case-insensitive)
+        const owner = await User.findOne({
+          referralCode: new RegExp(`^${key}$`, "i"),
+        })
+          .select({ name: 1, email: 1 })
+          .lean();
 
-        // House code handling — optional name override
-        const isHouse =
-          (process.env.HOUSE_CODES || "COVE50")
-            .split(",")
-            .map(s => s.trim().toLowerCase())
-            .filter(Boolean)
-            .includes(code.toLowerCase());
+        const isHouse = houseSet.has(key);
 
         return {
           name: isHouse ? "House" : owner?.name || "Unknown",
           email: isHouse ? "N/A"    : owner?.email || "N/A",
-          promoCode: code,
+          promoCode: key, // present normalized code consistently
           totalRedemptions: data.users.length,
           totalRevenueGenerated: Number((data.activeCount * PLAN_PRICE).toFixed(2)),
           payoutDue: isHouse ? 0 : data.activeCount * COMMISSION_PER_USER,
