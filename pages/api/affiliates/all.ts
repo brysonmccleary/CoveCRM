@@ -7,6 +7,14 @@ import User from "@/models/User";
 const PLAN_PRICE = 199.99;
 const COMMISSION_PER_USER = 25;
 
+// Comma-separated list of non-commissionable promo codes (house codes)
+const HOUSE_CODES = new Set(
+  (process.env.HOUSE_CODES || "")
+    .split(",")
+    .map(s => s.trim().toLowerCase())
+    .filter(Boolean)
+);
+
 type GroupBucket = {
   users: any[];
   activeCount: number;
@@ -16,7 +24,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     await mongooseConnect();
 
-    // pull only what we need
     const allUsers = await User.find(
       { referredBy: { $exists: true, $ne: null } },
       { referredBy: 1, subscriptionStatus: 1, name: 1, email: 1, plan: 1 }
@@ -25,38 +32,42 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const grouped: Record<string, GroupBucket> = {};
 
     allUsers.forEach((user: any) => {
-      // Normalize key so it’s always a string
       const code = String(user.referredBy || "");
       if (!code) return;
+      const key = code.toLowerCase();
 
-      if (!grouped[code]) grouped[code] = { users: [], activeCount: 0 };
-      grouped[code].users.push(user);
+      if (!grouped[key]) grouped[key] = { users: [], activeCount: 0 };
+      grouped[key].users.push(user);
       if (user.subscriptionStatus === "active") {
-        grouped[code].activeCount++;
+        grouped[key].activeCount++;
       }
     });
 
     const affiliateStats = await Promise.all(
-      Object.entries(grouped).map(async ([code, data]) => {
-        // Try to resolve the owner by referralCode first; if not found and code looks like an ObjectId, try _id
+      Object.entries(grouped).map(async ([key, data]) => {
+        // Resolve owner by referralCode first; if not found and key looks like ObjectId, try _id
         let owner =
-          (await User.findOne({ referralCode: code }, { name: 1, email: 1 }).lean()) ||
-          (mongoose.isValidObjectId(code)
-            ? await User.findById(code, { name: 1, email: 1 }).lean()
+          (await User.findOne({ referralCode: new RegExp(`^${escapeRegex(key)}$`, "i") }, { name: 1, email: 1 }).lean()) ||
+          (mongoose.isValidObjectId(key)
+            ? await User.findById(key, { name: 1, email: 1 }).lean()
             : null);
 
+        const isHouse = HOUSE_CODES.has(key);
+
+        const totalRevenueGenerated = Number((data.activeCount * PLAN_PRICE).toFixed(2));
+        const payoutDue = isHouse ? 0 : data.activeCount * COMMISSION_PER_USER;
+
         return {
-          name: owner?.name || "Unknown",
-          email: owner?.email || "N/A",
-          promoCode: code,
+          name: isHouse ? "House" : (owner?.name || "Unknown"),
+          email: isHouse ? "N/A" : (owner?.email || "N/A"),
+          promoCode: key,
           totalRedemptions: data.users.length,
-          totalRevenueGenerated: Number((data.activeCount * PLAN_PRICE).toFixed(2)),
-          payoutDue: data.activeCount * COMMISSION_PER_USER,
+          totalRevenueGenerated,
+          payoutDue,
         };
       })
     );
 
-    // Sort by total redemptions, desc
     affiliateStats.sort((a, b) => b.totalRedemptions - a.totalRedemptions);
 
     return res.status(200).json(affiliateStats);
@@ -64,4 +75,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     console.error("Affiliate summary error:", err);
     return res.status(500).json({ error: "Failed to load affiliate data." });
   }
+}
+
+function escapeRegex(s: string) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
