@@ -7,8 +7,10 @@ import bcrypt from "bcryptjs";
 /** Stripe */
 import Stripe from "stripe";
 const stripeKey = process.env.STRIPE_SECRET_KEY || "";
-// Do not pin apiVersion to avoid TS mismatches with installed typings
 const stripe = stripeKey ? new Stripe(stripeKey) : null;
+const STRIPE_MODE: "live" | "test" | undefined = stripeKey
+  ? (stripeKey.startsWith("sk_live_") ? "live" : "test")
+  : undefined;
 
 /** Admin allow-list (comma-separated emails in Vercel env) */
 function isAdminEmail(email?: string | null) {
@@ -43,50 +45,93 @@ async function generateUniqueReferralCode(): Promise<string> {
   return Math.random().toString(36).slice(2, 8).toUpperCase();
 }
 
-/** Look up an active Promotion Code by its literal code (case-insensitive). */
-async function findActivePromotionCode(code: string) {
+/* ---------- Stripe lookups (robust) ---------- */
+
+/** Case-insensitive promotion code lookup. */
+async function findPromotionCodeInsensitive(code: string) {
   if (!stripe) return null;
-  const promos = await stripe.promotionCodes.list({
-    code,
-    limit: 1,
+
+  // 1) First try direct (exact) filter – fastest
+  try {
+    const exact = await stripe.promotionCodes.list({
+      code,
+      active: true,
+      limit: 1,
+      expand: ["data.coupon"],
+    });
+    if (exact.data?.[0]) return exact.data[0];
+  } catch {}
+
+  // 2) Fallback: scan first page and match .code case-insensitively
+  const page = await stripe.promotionCodes.list({
     active: true,
+    limit: 100,
     expand: ["data.coupon"],
   });
-  const pc = promos.data?.[0] || null;
-  if (!pc || !pc.active) return null;
-  return pc;
+  const lc = code.trim().toLowerCase();
+  const found = page.data.find((p) => (p.code || "").trim().toLowerCase() === lc);
+  return found || null;
 }
 
-/**
- * Fallback: find a Coupon by ID==code or by Name==code (case-insensitive).
- * Stripe doesn't support searching by name server-side, so we scan the first page.
- */
-async function findCouponByCodeOrName(code: string) {
+/** Find a coupon by id==code or name==code (case-insensitive). */
+async function findCouponByIdOrName(code: string) {
   if (!stripe) return null;
 
-  // 1) Try coupon id = code (common when codes are created as coupon ids)
+  // Try by ID
   try {
     const byId = await stripe.coupons.retrieve(code);
     if (byId && (byId as any).id) return byId;
-  } catch {
-    // ignore 404
-  }
+  } catch {}
 
-  // 2) Scan a page of coupons and match by name (case-insensitive).
-  // Limit 100 is a reasonable single page; adjust later if you have >100.
+  // Scan page by name (case-insensitive)
   const page = await stripe.coupons.list({ limit: 100 });
-  const match = page.data.find((c) => {
-    const nm = (c.name || "").trim().toLowerCase();
-    return nm && nm === code.trim().toLowerCase();
-  });
-  return match || null;
+  const lc = code.trim().toLowerCase();
+  const found = page.data.find((c) => (c.name || "").trim().toLowerCase() === lc);
+  return found || null;
 }
 
-/**
- * Create Stripe Customer and attach a discount:
- * 1) Prefer promotion_code.
- * 2) Fallback to coupon (by id==code or name==code).
- */
+/** Attach discount to a customer; prefer promotion_code, fallback to coupon. */
+async function attachCustomerDiscount(opts: {
+  customerId: string;
+  promotionCodeId?: string;
+  couponId?: string;
+}): Promise<{ ok: boolean; via?: "promotion_code" | "coupon" }> {
+  if (!stripe) return { ok: false };
+
+  const { customerId, promotionCodeId, couponId } = opts;
+
+  // Helper: try createDiscount, then fallback to update
+  async function tryAttach(kind: "promotion_code" | "coupon", value: string) {
+    try {
+      // @ts-ignore newer helper
+      await stripe.customers.createDiscount(customerId, { [kind]: value });
+      return true;
+    } catch (e) {
+      // fallback – some SDK versions support setting via update()
+      try {
+        // @ts-ignore allow untyped props on update
+        await stripe.customers.update(customerId, { [kind]: value });
+        return true;
+      } catch (e2) {
+        console.error(`[register] attach ${kind} failed:`, e2);
+        return false;
+      }
+    }
+  }
+
+  if (promotionCodeId) {
+    const ok = await tryAttach("promotion_code", promotionCodeId);
+    if (ok) return { ok: true, via: "promotion_code" };
+  }
+  if (couponId) {
+    const ok = await tryAttach("coupon", couponId);
+    if (ok) return { ok: true, via: "coupon" };
+  }
+  return { ok: false };
+}
+
+/* ---------- Stripe customer creation + discount logic ---------- */
+
 async function ensureStripeCustomerWithDiscount(params: {
   email: string;
   name: string;
@@ -115,6 +160,7 @@ async function ensureStripeCustomerWithDiscount(params: {
       isHouseCode: String(isHouse),
       referredByUserId: referredByUserId || "",
       source: "covecrm-register",
+      stripeMode: STRIPE_MODE || "",
     },
   });
 
@@ -124,40 +170,23 @@ async function ensureStripeCustomerWithDiscount(params: {
   let appliedVia: "promotion_code" | "coupon" | undefined;
 
   if (usedCode) {
-    // Try promotion code first
-    const promo = await findActivePromotionCode(usedCode);
+    const promo = await findPromotionCodeInsensitive(usedCode);
     if (promo) {
       promotionCodeId = promo.id;
       couponId = typeof promo.coupon === "string" ? promo.coupon : promo.coupon?.id;
-
-      try {
-        // @ts-ignore: helper exists even if typings lag
-        await stripe.customers.createDiscount(customer.id, {
-          promotion_code: promotionCodeId,
-        });
-        appliedDiscount = true;
-        appliedVia = "promotion_code";
-      } catch (e) {
-        console.error("[register] attach discount via promotion_code failed:", e);
-      }
+    } else {
+      const coupon = await findCouponByIdOrName(usedCode);
+      if (coupon) couponId = coupon.id;
     }
 
-    // Fallback to coupon if no promo attached
-    if (!appliedDiscount) {
-      const coupon = await findCouponByCodeOrName(usedCode);
-      if (coupon && coupon.id) {
-        couponId = coupon.id;
-        try {
-          // @ts-ignore: createDiscount accepts `coupon` as well
-          await stripe.customers.createDiscount(customer.id, {
-            coupon: coupon.id,
-          });
-          appliedDiscount = true;
-          appliedVia = "coupon";
-        } catch (e) {
-          console.error("[register] attach discount via coupon failed:", e);
-        }
-      }
+    if (promotionCodeId || couponId) {
+      const attach = await attachCustomerDiscount({
+        customerId: customer.id,
+        promotionCodeId,
+        couponId,
+      });
+      appliedDiscount = attach.ok;
+      appliedVia = attach.via;
     }
   }
 
@@ -170,6 +199,8 @@ async function ensureStripeCustomerWithDiscount(params: {
     stripeError: undefined as string | undefined,
   };
 }
+
+/* --------------------------- API handler --------------------------- */
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed" });
@@ -204,7 +235,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(409).json({ message: "Email already registered" });
     }
 
-    // Decide referral interpretation without touching legacy `referredBy`
+    // Referral context (do not write legacy referredBy)
     let referredByCode: string | undefined;
     let referredByUserId: any | undefined;
     let isHouse = false;
@@ -214,7 +245,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const codeInput = codeInputRaw.toUpperCase();
       isHouse = HOUSE_CODES.has(codeInput.toLowerCase());
 
-      // Try affiliate first (approved & exact code match, case-insensitive)
       const affiliateOwner = await User.findOne({
         affiliateCode: new RegExp(`^${escapeRegex(codeInput)}$`, "i"),
         affiliateApproved: true,
@@ -234,7 +264,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const admin = isAdminEmail(cleanEmail);
     const myReferralCode = await generateUniqueReferralCode();
 
-    // 1) Create Stripe Customer and attach discount (promo preferred, coupon fallback)
+    // Stripe customer + discount (robust)
     let stripeCustomerId: string | undefined;
     let stripePromotionCodeId: string | undefined;
     let stripeCouponId: string | undefined;
@@ -261,7 +291,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       stripeError = e?.message || "Stripe setup failed";
     }
 
-    // 2) Create the app user (persist stripe + referral context)
     await User.create({
       name: cleanName,
       email: cleanEmail,
@@ -269,12 +298,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       role: admin ? "admin" : "user",
       plan: admin ? "Pro" : "Free",
       subscriptionStatus: "active",
-
       referralCode: myReferralCode,
       referredByCode,
       referredByUserId,
-
-      // Stripe linkage & discount context
       stripeCustomerId,
       stripePromotionCodeId,
       stripeCouponId,
@@ -290,6 +316,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       appliedDiscount,
       appliedVia,
       stripeLinked: Boolean(stripeCustomerId),
+      stripeMode: STRIPE_MODE,
       stripeError: stripeError || undefined,
     });
   } catch (err: any) {
