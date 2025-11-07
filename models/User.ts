@@ -69,8 +69,15 @@ export interface IUser {
 
   aiAssistantName?: string;
 
+  /** Each user’s personal code (unique) */
   referralCode?: string;
-  referredBy?: string;
+
+  /** Who referred this user (attribution) */
+  referredBy?: string | mongoose.Types.ObjectId;
+
+  /** The code the user *entered* at signup (non-unique, for attribution/analytics) */
+  appliedReferralCode?: string;
+
   affiliateCode?: string;
   affiliateApproved?: boolean;
   commissionEarned?: number;
@@ -206,8 +213,13 @@ const UserSchema = new Schema<IUser>({
 
   aiAssistantName: { type: String, default: "Assistant" },
 
+  // Personal, unique share code for *this* user
   referralCode: { type: String, unique: true, sparse: true },
-  referredBy: String,
+
+  // Attribution at signup
+  referredBy: { type: Schema.Types.ObjectId, ref: "User", sparse: true },
+  appliedReferralCode: { type: String }, // non-unique
+
   affiliateCode: String,
   affiliateApproved: { type: Boolean, default: false },
   commissionEarned: { type: Number, default: 0 },
@@ -260,6 +272,8 @@ UserSchema.index({ "numbers.phoneNumber": 1 }, { name: "user_numbers_phone_idx" 
 UserSchema.index({ "numbers.messagingServiceSid": 1 }, { name: "user_numbers_msid_idx", sparse: true });
 UserSchema.index({ "a2p.messagingServiceSid": 1 }, { name: "user_a2p_msid_idx", sparse: true });
 UserSchema.index({ "dialProgress.key": 1 }, { name: "user_dial_progress_key_idx", sparse: true });
+UserSchema.index({ referredBy: 1 }, { name: "user_referred_by_idx", sparse: true });
+UserSchema.index({ appliedReferralCode: 1 }, { name: "user_applied_ref_code_idx", sparse: true });
 
 const User =
   (mongoose.models.User as mongoose.Model<IUser>) ||
