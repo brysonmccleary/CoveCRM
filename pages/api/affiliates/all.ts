@@ -1,82 +1,71 @@
-// /pages/api/affiliates/all.ts
 import type { NextApiRequest, NextApiResponse } from "next";
-import mongoose from "mongoose";
 import mongooseConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 
 const PLAN_PRICE = 199.99;
 const COMMISSION_PER_USER = 25;
 
-// Comma-separated list of non-commissionable promo codes (house codes)
-const HOUSE_CODES = new Set(
-  (process.env.HOUSE_CODES || "")
-    .split(",")
-    .map(s => s.trim().toLowerCase())
-    .filter(Boolean)
-);
-
-type GroupBucket = {
-  users: any[];
-  activeCount: number;
-};
-
+/**
+ * Groups by the effective code a user used:
+ * 1) preferred: referredByCode (new)
+ * 2) fallback: legacy string in referredBy
+ */
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
     await mongooseConnect();
 
-    const allUsers = await User.find(
-      { referredBy: { $exists: true, $ne: null } },
-      { referredBy: 1, subscriptionStatus: 1, name: 1, email: 1, plan: 1 }
-    ).lean();
+    const allUsers = await User.find({
+      $or: [
+        { referredByCode: { $exists: true, $ne: null } },
+        { referredBy: { $exists: true, $ne: null } },
+      ],
+    }).lean();
 
-    const grouped: Record<string, GroupBucket> = {};
+    type Bucket = { users: any[]; activeCount: number };
+    const grouped: Record<string, Bucket> = {};
 
-    allUsers.forEach((user: any) => {
-      const code = String(user.referredBy || "");
-      if (!code) return;
-      const key = code.toLowerCase();
+    for (const user of allUsers) {
+      const code =
+        (typeof user.referredByCode === "string" && user.referredByCode) ||
+        (typeof user.referredBy === "string" && user.referredBy) ||
+        // if legacy referredBy was an ObjectId at some point, ignore it for grouping
+        "";
 
-      if (!grouped[key]) grouped[key] = { users: [], activeCount: 0 };
-      grouped[key].users.push(user);
-      if (user.subscriptionStatus === "active") {
-        grouped[key].activeCount++;
-      }
-    });
+      if (!code) continue;
+
+      if (!grouped[code]) grouped[code] = { users: [], activeCount: 0 };
+      grouped[code].users.push(user);
+      if (user.subscriptionStatus === "active") grouped[code].activeCount++;
+    }
 
     const affiliateStats = await Promise.all(
-      Object.entries(grouped).map(async ([key, data]) => {
-        // Resolve owner by referralCode first; if not found and key looks like ObjectId, try _id
-        let owner =
-          (await User.findOne({ referralCode: new RegExp(`^${escapeRegex(key)}$`, "i") }, { name: 1, email: 1 }).lean()) ||
-          (mongoose.isValidObjectId(key)
-            ? await User.findById(key, { name: 1, email: 1 }).lean()
-            : null);
+      Object.entries(grouped).map(async ([code, data]) => {
+        // Owner is someone whose personal referralCode equals this code
+        const owner = await User.findOne({ referralCode: code }).select({ name: 1, email: 1 }).lean();
 
-        const isHouse = HOUSE_CODES.has(key);
-
-        const totalRevenueGenerated = Number((data.activeCount * PLAN_PRICE).toFixed(2));
-        const payoutDue = isHouse ? 0 : data.activeCount * COMMISSION_PER_USER;
+        // House code handling — optional name override
+        const isHouse =
+          (process.env.HOUSE_CODES || "COVE50")
+            .split(",")
+            .map(s => s.trim().toLowerCase())
+            .filter(Boolean)
+            .includes(code.toLowerCase());
 
         return {
-          name: isHouse ? "House" : (owner?.name || "Unknown"),
-          email: isHouse ? "N/A" : (owner?.email || "N/A"),
-          promoCode: key,
+          name: isHouse ? "House" : owner?.name || "Unknown",
+          email: isHouse ? "N/A"    : owner?.email || "N/A",
+          promoCode: code,
           totalRedemptions: data.users.length,
-          totalRevenueGenerated,
-          payoutDue,
+          totalRevenueGenerated: Number((data.activeCount * PLAN_PRICE).toFixed(2)),
+          payoutDue: isHouse ? 0 : data.activeCount * COMMISSION_PER_USER,
         };
       })
     );
 
     affiliateStats.sort((a, b) => b.totalRedemptions - a.totalRedemptions);
-
     return res.status(200).json(affiliateStats);
   } catch (err) {
     console.error("Affiliate summary error:", err);
     return res.status(500).json({ error: "Failed to load affiliate data." });
   }
-}
-
-function escapeRegex(s: string) {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

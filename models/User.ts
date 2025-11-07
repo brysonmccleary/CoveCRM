@@ -69,14 +69,14 @@ export interface IUser {
 
   aiAssistantName?: string;
 
-  /** Each user’s personal code (unique) */
   referralCode?: string;
 
-  /** Who referred this user (attribution) */
-  referredBy?: string | mongoose.Types.ObjectId;
+  /** 🔹 New, explicit referral fields */
+  referredByCode?: string; // what user typed (house or affiliate code)
+  referredByUserId?: mongoose.Types.ObjectId; // affiliate owner, when applicable
 
-  /** The code the user *entered* at signup (non-unique, for attribution/analytics) */
-  appliedReferralCode?: string;
+  /** (legacy) keep present if other code still reads it; don’t use for new writes */
+  referredBy?: any;
 
   affiliateCode?: string;
   affiliateApproved?: boolean;
@@ -119,11 +119,11 @@ export interface IUser {
 
   numbersLastSyncedAt?: Date;
 
-  /** ⬇️ NEW: per-user dial progress */
+  /** ⬇️ per-user dial progress */
   dialProgress?: {
-    key: string;          // session key (e.g., hash of lead ids list)
-    lastIndex: number;    // 0-based index
-    total?: number;       // optional: total leads when saved
+    key: string;
+    lastIndex: number;
+    total?: number;
     updatedAt: Date;
   }[];
 }
@@ -213,12 +213,14 @@ const UserSchema = new Schema<IUser>({
 
   aiAssistantName: { type: String, default: "Assistant" },
 
-  // Personal, unique share code for *this* user
   referralCode: { type: String, unique: true, sparse: true },
 
-  // Attribution at signup
-  referredBy: { type: Schema.Types.ObjectId, ref: "User", sparse: true },
-  appliedReferralCode: { type: String }, // non-unique
+  /** 🔹 New, explicit referral fields */
+  referredByCode: { type: String, index: true, sparse: true },
+  referredByUserId: { type: Schema.Types.ObjectId, ref: "User", index: true, sparse: true },
+
+  /** (legacy) keep, but don’t write new values here */
+  referredBy: { type: Schema.Types.Mixed },
 
   affiliateCode: String,
   affiliateApproved: { type: Boolean, default: false },
@@ -272,8 +274,6 @@ UserSchema.index({ "numbers.phoneNumber": 1 }, { name: "user_numbers_phone_idx" 
 UserSchema.index({ "numbers.messagingServiceSid": 1 }, { name: "user_numbers_msid_idx", sparse: true });
 UserSchema.index({ "a2p.messagingServiceSid": 1 }, { name: "user_a2p_msid_idx", sparse: true });
 UserSchema.index({ "dialProgress.key": 1 }, { name: "user_dial_progress_key_idx", sparse: true });
-UserSchema.index({ referredBy: 1 }, { name: "user_referred_by_idx", sparse: true });
-UserSchema.index({ appliedReferralCode: 1 }, { name: "user_applied_ref_code_idx", sparse: true });
 
 const User =
   (mongoose.models.User as mongoose.Model<IUser>) ||

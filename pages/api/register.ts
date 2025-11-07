@@ -29,7 +29,6 @@ async function generateUniqueReferralCode(): Promise<string> {
   const ALPHANUM = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
   const make = () =>
     Array.from({ length: 6 }, () => ALPHANUM[Math.floor(Math.random() * ALPHANUM.length)]).join("");
-
   for (let i = 0; i < 6; i++) {
     const code = make();
     const exists = await User.findOne({ referralCode: code }).lean();
@@ -51,8 +50,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       email?: string;
       password?: string;
       confirmPassword?: string;
-      /** OPTIONAL referral/affiliate or house code */
-      usedCode?: string;
+      usedCode?: string; // optional
     };
 
     const cleanEmail = String(email || "").trim().toLowerCase();
@@ -72,22 +70,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(409).json({ message: "Email already registered" });
     }
 
-    // If a code is provided, it must be valid; if omitted, we skip validation.
-    let referredByToStore: string | undefined = undefined;
+    // Decide referral interpretation without touching legacy `referredBy`
+    let referredByCode: string | undefined;
+    let referredByUserId: any | undefined;
+
     const codeInputRaw = (usedCode ?? "").trim();
     if (codeInputRaw) {
       const codeInput = codeInputRaw.toUpperCase();
       const isHouse = HOUSE_CODES.has(codeInput.toLowerCase());
 
+      // Try affiliate first (approved & exact code match, case-insensitive)
       const affiliateOwner = await User.findOne({
         affiliateCode: new RegExp(`^${escapeRegex(codeInput)}$`, "i"),
         affiliateApproved: true,
-      }).lean();
+      }).select({ _id: 1, affiliateCode: 1 }).lean();
 
       if (!affiliateOwner && !isHouse) {
         return res.status(400).json({ message: "Invalid referral code" });
       }
-      referredByToStore = codeInput; // store exactly what they typed (canonicalized)
+
+      referredByCode = codeInput;
+      referredByUserId = affiliateOwner ? affiliateOwner._id : undefined;
     }
 
     const hashed = await bcrypt.hash(pw, 10);
@@ -101,11 +104,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       role: admin ? "admin" : "user",
       plan: admin ? "Pro" : "Free",
       subscriptionStatus: "active",
-      referralCode: myReferralCode,     // their own code (for future promos if you need)
-      referredBy: referredByToStore,    // optional, only set if a valid code was provided
+      referralCode: myReferralCode,
+      referredByCode,
+      referredByUserId,
+      // do NOT write legacy `referredBy` anymore
     });
 
-    // Client can redirect to CRM after this returns ok:true
     return res.status(200).json({ ok: true, admin, referralCode: myReferralCode });
   } catch (err: any) {
     console.error("[/api/register] error:", err);
