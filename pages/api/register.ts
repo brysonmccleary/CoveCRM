@@ -45,192 +45,6 @@ async function generateUniqueReferralCode(): Promise<string> {
   return Math.random().toString(36).slice(2, 8).toUpperCase();
 }
 
-/* ---------- Stripe lookups (robust) ---------- */
-
-/** Case-insensitive promotion code lookup. */
-async function findPromotionCodeInsensitive(code: string) {
-  if (!stripe) return null;
-
-  // 1) Try direct (exact) filter
-  try {
-    const exact = await stripe.promotionCodes.list({
-      code,
-      active: true,
-      limit: 1,
-      expand: ["data.coupon"],
-    });
-    if (exact.data?.[0]) return exact.data[0];
-  } catch {}
-
-  // 2) Scan a page and match case-insensitively
-  const page = await stripe.promotionCodes.list({
-    active: true,
-    limit: 100,
-    expand: ["data.coupon"],
-  });
-  const lc = code.trim().toLowerCase();
-  const found = page.data.find((p) => (p.code || "").trim().toLowerCase() === lc);
-  return found || null;
-}
-
-/** Find a coupon by id==code or name==code (case-insensitive). */
-async function findCouponByIdOrName(code: string) {
-  if (!stripe) return null;
-
-  // Try by ID
-  try {
-    const byId = await stripe.coupons.retrieve(code);
-    if (byId && (byId as any).id) return byId;
-  } catch {}
-
-  // Scan by name
-  const page = await stripe.coupons.list({ limit: 100 });
-  const lc = code.trim().toLowerCase();
-  const found = page.data.find((c) => (c.name || "").trim().toLowerCase() === lc);
-  return found || null;
-}
-
-/* ---------- Attach discount helpers (SDK + raw HTTPS fallback) ---------- */
-
-/** Use SDK if available, then raw HTTPS POST to /v1/customers/{id}/discount as fallback. */
-async function attachCustomerDiscount(opts: {
-  customerId: string;
-  promotionCodeId?: string;
-  couponId?: string;
-}): Promise<{ ok: boolean; via?: "promotion_code" | "coupon"; error?: string }> {
-  if (!stripe || !stripeKey) return { ok: false, error: "Stripe not configured" };
-
-  const { customerId, promotionCodeId, couponId } = opts;
-
-  async function trySdk(kind: "promotion_code" | "coupon", value: string) {
-    try {
-      // TS can’t narrow `stripe` inside this closure; cast to non-null local.
-      const s = stripe as Stripe;
-      // @ts-ignore: createDiscount may not be typed in older SDKs
-      if ((s.customers as any).createDiscount) {
-        await (s.customers as any).createDiscount(customerId, { [kind]: value });
-        return true;
-      }
-    } catch (e) {
-      // fall through to raw
-    }
-    return false;
-  }
-
-  async function tryRaw(kind: "promotion_code" | "coupon", value: string) {
-    const body = new URLSearchParams({ [kind]: value });
-    const resp = await fetch(`https://api.stripe.com/v1/customers/${customerId}/discount`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${stripeKey}`,
-        "Content-Type": "application/x-www-form-urlencoded",
-      },
-      body,
-    });
-    if (resp.ok) return true;
-
-    const text = await resp.text();
-    console.error(`[register] raw ${kind} attach failed:`, resp.status, text);
-    return false;
-  }
-
-  // Try promotion_code first
-  if (promotionCodeId) {
-    if (await trySdk("promotion_code", promotionCodeId)) {
-      return { ok: true, via: "promotion_code" };
-    }
-    if (await tryRaw("promotion_code", promotionCodeId)) {
-      return { ok: true, via: "promotion_code" };
-    }
-  }
-
-  // Fallback to coupon
-  if (couponId) {
-    if (await trySdk("coupon", couponId)) {
-      return { ok: true, via: "coupon" };
-    }
-    if (await tryRaw("coupon", couponId)) {
-      return { ok: true, via: "coupon" };
-    }
-  }
-
-  return { ok: false, error: "All attach attempts failed" };
-}
-
-/* ---------- Stripe customer creation + discount logic ---------- */
-
-async function ensureStripeCustomerWithDiscount(params: {
-  email: string;
-  name: string;
-  usedCode?: string;
-  isHouse: boolean;
-  referredByUserId?: string;
-}) {
-  if (!stripe) {
-    return {
-      customerId: undefined as string | undefined,
-      promotionCodeId: undefined as string | undefined,
-      couponId: undefined as string | undefined,
-      appliedDiscount: false,
-      appliedVia: undefined as "promotion_code" | "coupon" | undefined,
-      stripeError: "Stripe not configured",
-    };
-  }
-
-  const { email, name, usedCode, isHouse, referredByUserId } = params;
-
-  const customer = await stripe.customers.create({
-    email,
-    name,
-    metadata: {
-      usedCode: usedCode || "",
-      isHouseCode: String(isHouse),
-      referredByUserId: referredByUserId || "",
-      source: "covecrm-register",
-      stripeMode: STRIPE_MODE || "",
-    },
-  });
-
-  let promotionCodeId: string | undefined;
-  let couponId: string | undefined;
-  let appliedDiscount = false;
-  let appliedVia: "promotion_code" | "coupon" | undefined;
-  let stripeError: string | undefined;
-
-  if (usedCode) {
-    const promo = await findPromotionCodeInsensitive(usedCode);
-    if (promo) {
-      promotionCodeId = promo.id;
-      couponId = typeof promo.coupon === "string" ? promo.coupon : promo.coupon?.id;
-    } else {
-      const coupon = await findCouponByIdOrName(usedCode);
-      if (coupon) couponId = coupon.id;
-    }
-
-    if (promotionCodeId || couponId) {
-      const attach = await attachCustomerDiscount({
-        customerId: customer.id,
-        promotionCodeId,
-        couponId,
-      });
-      appliedDiscount = attach.ok;
-      appliedVia = attach.via;
-      if (!attach.ok) stripeError = attach.error;
-    }
-  }
-
-  return {
-    customerId: customer.id,
-    promotionCodeId,
-    couponId,
-    appliedDiscount,
-    appliedVia,
-    stripeError,
-  };
-}
-
-/* --------------------------- API handler --------------------------- */
-
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed" });
 
@@ -293,31 +107,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const admin = isAdminEmail(cleanEmail);
     const myReferralCode = await generateUniqueReferralCode();
 
-    // Stripe customer + discount
+    // Create Stripe customer (metadata only). Discount is applied later at checkout/subscription.
     let stripeCustomerId: string | undefined;
-    let stripePromotionCodeId: string | undefined;
-    let stripeCouponId: string | undefined;
-    let appliedDiscount = false;
-    let appliedVia: "promotion_code" | "coupon" | undefined;
-    let stripeError: string | undefined;
-
     try {
-      const stripeResult = await ensureStripeCustomerWithDiscount({
-        email: cleanEmail,
-        name: cleanName,
-        usedCode: codeInputRaw || undefined,
-        isHouse,
-        referredByUserId: referredByUserId ? String(referredByUserId) : undefined,
-      });
-      stripeCustomerId = stripeResult.customerId;
-      stripePromotionCodeId = stripeResult.promotionCodeId;
-      stripeCouponId = stripeResult.couponId;
-      appliedDiscount = stripeResult.appliedDiscount;
-      appliedVia = stripeResult.appliedVia;
-      stripeError = stripeResult.stripeError;
+      if (stripe) {
+        const customer = await stripe.customers.create({
+          email: cleanEmail,
+          name: cleanName,
+          metadata: {
+            usedCode: codeInputRaw || "",
+            isHouseCode: String(isHouse),
+            referredByUserId: referredByUserId ? String(referredByUserId) : "",
+            source: "covecrm-register",
+            stripeMode: STRIPE_MODE || "",
+          },
+        });
+        stripeCustomerId = customer.id;
+      }
     } catch (e: any) {
-      console.error("[/api/register] Stripe setup failed:", e?.message || e);
-      stripeError = e?.message || "Stripe setup failed";
+      console.error("[/api/register] Stripe customer create failed:", e?.message || e);
+      // Non-fatal: proceed; subscription API will create customer if missing.
     }
 
     await User.create({
@@ -331,8 +140,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       referredByCode,
       referredByUserId,
       stripeCustomerId,
-      stripePromotionCodeId,
-      stripeCouponId,
       usedCode: codeInputRaw || undefined,
       isHouseCode: isHouse,
     });
@@ -342,11 +149,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       admin,
       referralCode: myReferralCode,
       isHouse,
-      appliedDiscount,
-      appliedVia,
+      // registration no longer attaches discounts at customer level:
+      appliedDiscount: false,
+      appliedVia: null,
       stripeLinked: Boolean(stripeCustomerId),
       stripeMode: STRIPE_MODE,
-      stripeError: stripeError || undefined,
     });
   } catch (err: any) {
     console.error("[/api/register] error:", err);

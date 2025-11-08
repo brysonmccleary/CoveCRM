@@ -1,4 +1,3 @@
-// pages/api/stripe/create-checkout-session.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import type Stripe from "stripe";
 import type { Session } from "next-auth";
@@ -42,50 +41,60 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     process.env.NEXTAUTH_URL ||
     "http://localhost:3000";
 
-  // Attempt to pre-attach a discount if a valid code was provided
-  let discounts: Stripe.Checkout.SessionCreateParams.Discount[] | undefined;
+  // ---------- Robust discount resolver (promo preferred, coupon fallback) ----------
+  async function resolvePromotionCodeId(codeText: string): Promise<string | null> {
+    // 1) Fast exact filter
+    const exact = await stripe.promotionCodes.list({ code: codeText, active: true, limit: 1 });
+    if (exact.data?.[0]?.id) return exact.data[0].id;
 
-  // Helper: try Stripe by code text (active, exact match)
-  async function resolveStripePromoByCodeText(codeText: string) {
-    try {
-      const list = await stripe.promotionCodes.list({ code: codeText, active: true, limit: 1 });
-      const pc = list.data?.[0];
-      if (pc?.id) return { promotion_code: pc.id } as Stripe.Checkout.SessionCreateParams.Discount;
-    } catch (e) {
-      console.warn("promo list failed:", (e as any)?.message || e);
-    }
-    return null;
+    // 2) Case-insensitive scan (first page)
+    const page = await stripe.promotionCodes.list({ active: true, limit: 100 });
+    const lc = codeText.toLowerCase();
+    const found = page.data.find(p => (p.code || "").toLowerCase() === lc);
+    return found?.id || null;
   }
 
-  // Fallback: your Affiliate store may already have the linkage
-  async function resolveFromAffiliateStore(codeText: string) {
+  async function resolveCouponId(codeText: string): Promise<string | null> {
+    // 1) Try coupon id == code
+    try {
+      const byId = await stripe.coupons.retrieve(codeText);
+      if ((byId as any)?.id) return byId.id;
+    } catch { /* ignore */ }
+
+    // 2) Case-insensitive by name (single page scan)
+    const page = await stripe.coupons.list({ limit: 100 });
+    const lc = codeText.toLowerCase();
+    const found = page.data.find(c => (c.name || "").toLowerCase() === lc);
+    return found?.id || null;
+  }
+
+  async function resolveDiscount(codeText: string): Promise<Stripe.Checkout.SessionCreateParams.Discount | null> {
+    // Prefer a live promotion code
+    const promoId = await resolvePromotionCodeId(codeText);
+    if (promoId) return { promotion_code: promoId };
+
+    // Fallback to coupon
+    const couponId = await resolveCouponId(codeText);
+    if (couponId) return { coupon: couponId };
+
+    // As a last resort, check your Affiliate store mapping (if you saved ids there)
     try {
       const aff = await Affiliate.findOne({
         $or: [{ promoCode: upper(codeText) }, { promoCode: new RegExp(`^${upper(codeText)}$`, "i") }],
       }).lean();
-      if (!aff) return null;
+      if (aff?.promotionCodeId) return { promotion_code: aff.promotionCodeId as string };
+      if (aff?.couponId) return { coupon: aff.couponId as string };
+    } catch { /* ignore */ }
 
-      if ((aff as any).promotionCodeId) {
-        return { promotion_code: (aff as any).promotionCodeId } as Stripe.Checkout.SessionCreateParams.Discount;
-      }
-      if ((aff as any).couponId) {
-        return { coupon: (aff as any).couponId } as Stripe.Checkout.SessionCreateParams.Discount;
-      }
-    } catch (e) {
-      console.warn("affiliate lookup failed:", (e as any)?.message || e);
-    }
     return null;
   }
 
-  const enteredCode = upper(promoCode);
+  const enteredCode = upper(promoCode) || upper((user as any)?.usedCode) || upper((user as any)?.referredByCode);
+  let discounts: Stripe.Checkout.SessionCreateParams.Discount[] | undefined;
+
   if (enteredCode) {
-    const viaStripe = await resolveStripePromoByCodeText(enteredCode);
-    if (viaStripe) {
-      discounts = [viaStripe];
-    } else {
-      const viaAffiliate = await resolveFromAffiliateStore(enteredCode);
-      if (viaAffiliate) discounts = [viaAffiliate];
-    }
+    const discountObj = await resolveDiscount(enteredCode);
+    if (discountObj) discounts = [discountObj];
   }
 
   try {
@@ -102,7 +111,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         userId: (user as any)?._id?.toString?.() || "",
         email: user.email,
         upgradeIncluded: wantsUpgrade ? "true" : "false",
-        referralCodeUsed: enteredCode || (user as any)?.referredBy || "none",
+        referralCodeUsed: enteredCode || "none",
       },
       success_url: `${BASE_URL}/success?paid=true`,
       cancel_url: `${BASE_URL}/upgrade`,

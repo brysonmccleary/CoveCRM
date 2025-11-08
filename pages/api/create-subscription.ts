@@ -42,17 +42,27 @@ async function ensureStripeCustomer(userDoc: any, email: string): Promise<string
   return created.id;
 }
 
-async function resolveActivePromotionCodeId(input?: string | null): Promise<string | null> {
-  if (!input) return null;
-  const raw = input.trim();
-  if (!raw) return null;
+// ---------- Robust discount resolvers ----------
+async function resolvePromotionCodeId(codeText: string): Promise<string | null> {
+  const exact = await stripe.promotionCodes.list({ code: codeText, active: true, limit: 1 });
+  if (exact.data?.[0]?.id) return exact.data[0].id;
 
-  const exact = await stripe.promotionCodes.list({ code: raw, active: true, limit: 1 });
-  if (exact.data[0]) return exact.data[0].id;
+  const page = await stripe.promotionCodes.list({ active: true, limit: 100 });
+  const lc = codeText.toLowerCase();
+  const found = page.data.find((p) => (p.code || "").toLowerCase() === lc);
+  return found?.id || null;
+}
 
-  const list = await stripe.promotionCodes.list({ active: true, limit: 100 });
-  const pc = list.data.find((p) => p.code.toLowerCase() === raw.toLowerCase());
-  return pc ? pc.id : null;
+async function resolveCouponId(codeText: string): Promise<string | null> {
+  try {
+    const byId = await stripe.coupons.retrieve(codeText);
+    if ((byId as any)?.id) return byId.id;
+  } catch { /* ignore */ }
+
+  const page = await stripe.coupons.list({ limit: 100 });
+  const lc = codeText.toLowerCase();
+  const found = page.data.find((c) => (c.name || "").toLowerCase() === lc);
+  return found?.id || null;
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -78,14 +88,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const totalBeforeDiscount = BASE_PRICE + (aiUpgrade ? AI_ADDON_PRICE : 0);
 
-    let promotionCodeId: string | undefined = undefined;
-    if (promoCode && promoCode.trim()) {
-      const resolved = await resolveActivePromotionCodeId(promoCode);
-      if (!resolved) return res.status(400).json({ error: "Not a valid code." });
-      promotionCodeId = resolved;
+    // Prefer the promoCode passed from UI, otherwise fall back to user’s stored code
+    const enteredCode = (promoCode || (userDoc as any)?.usedCode || (userDoc as any)?.referredByCode || "").trim();
+
+    // Resolve discount object for the subscription
+    let promotionCodeId: string | undefined;
+    let couponId: string | undefined;
+
+    if (enteredCode) {
+      const pcId = await resolvePromotionCodeId(enteredCode);
+      if (pcId) {
+        promotionCodeId = pcId;
+      } else {
+        const cId = await resolveCouponId(enteredCode);
+        if (cId) couponId = cId;
+      }
     }
 
-    // Compute display discount
+    // Compute display discount for response (best-effort)
     let discountAmount = 0;
     let discountLabel: string | null = null;
     if (promotionCodeId) {
@@ -98,7 +118,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         discountAmount = totalBeforeDiscount * ((coupon as any).percent_off / 100);
         discountLabel = `${(coupon as any).percent_off}% off`;
       }
+    } else if (couponId) {
+      const coupon = await stripe.coupons.retrieve(couponId);
+      if ((coupon as any).amount_off) {
+        discountAmount = (coupon as any).amount_off / 100;
+        discountLabel = `$${discountAmount.toFixed(2)} off`;
+      } else if ((coupon as any).percent_off) {
+        discountAmount = totalBeforeDiscount * ((coupon as any).percent_off / 100);
+        discountLabel = `${(coupon as any).percent_off}% off`;
+      }
     }
+
     const totalAfterDiscount = Math.max(totalBeforeDiscount - discountAmount, 0);
 
     if (!BASE_PRICE_ID) return res.status(500).json({ error: "Missing STRIPE_PRICE_ID_MONTHLY env." });
@@ -106,7 +136,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const items: Stripe.SubscriptionCreateParams.Item[] = [{ price: BASE_PRICE_ID, quantity: 1 }];
     if (aiUpgrade && AI_ADDON_PRICE_ID) items.push({ price: AI_ADDON_PRICE_ID, quantity: 1 });
 
-    const referralCodeUsed = promoCode ? String(promoCode).toUpperCase() : "none";
+    const referralCodeUsed = enteredCode ? enteredCode.toUpperCase() : "none";
     const userIdMeta = userDoc?._id?.toString() || "";
 
     const params: Stripe.SubscriptionCreateParams = {
@@ -118,12 +148,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         referralCodeUsed,
         affiliateEmail: affiliateEmail || "",
         aiUpgrade: aiUpgrade ? "true" : "false",
-        appliedPromoCode: promoCode || "",
+        appliedPromoCode: enteredCode || "",
       },
       expand: ["latest_invoice.payment_intent"],
     };
+
+    // Attach discount at subscription-time (Stripe-preferred, works with product-restricted coupons)
     if (promotionCodeId) {
       params.discounts = [{ promotion_code: promotionCodeId }];
+    } else if (couponId) {
+      params.discounts = [{ coupon: couponId }];
     }
 
     const subscription = await stripe.subscriptions.create(params);
@@ -136,7 +170,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       clientSecret,
       discount: discountLabel,
       discountAmount,
-      promoCode: promoCode || null,
+      promoCode: enteredCode || null,
       totalBeforeDiscount,
       totalAfterDiscount,
       subscriptionId: subscription.id,
