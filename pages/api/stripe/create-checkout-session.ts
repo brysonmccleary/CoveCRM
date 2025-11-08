@@ -79,11 +79,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // As a last resort, check your Affiliate store mapping (if you saved ids there)
     try {
-      const aff = await Affiliate.findOne({
+      const aff = (await Affiliate.findOne({
         $or: [{ promoCode: upper(codeText) }, { promoCode: new RegExp(`^${upper(codeText)}$`, "i") }],
-      }).lean();
-      if (aff?.promotionCodeId) return { promotion_code: aff.promotionCodeId as string };
-      if (aff?.couponId) return { coupon: aff.couponId as string };
+      }).lean()) as any | null;
+
+      if (aff?.promotionCodeId) return { promotion_code: String(aff.promotionCodeId) };
+      if (aff?.couponId) return { coupon: String(aff.couponId) };
     } catch { /* ignore */ }
 
     return null;
