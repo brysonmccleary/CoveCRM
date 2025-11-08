@@ -66,8 +66,9 @@ async function markRedemptionOnce(affId: string, sessionId: string) {
   const aff = await Affiliate.findById(affId);
   if (!aff) return;
 
+  // 🛠️ TS fix: explicitly type callback param
   const already = (aff.payoutHistory || []).some(
-    (p) => p?.note === `redemption:session:${sessionId}`,
+    (p: any) => p?.note === `redemption:session:${sessionId}`,
   );
   if (already) return;
 
@@ -335,7 +336,7 @@ export default async function handler(
         if (referralCodeUsed) (user as any).referredBy = referralCodeUsed;
         await user.save();
 
-        // Ensure the affiliate record exists for the code used
+        // Ensure the affiliate record exists for the code used + count redemption once
         if (referralCodeUsed) {
           try {
             const list = await stripe.promotionCodes.list({
@@ -345,7 +346,6 @@ export default async function handler(
             const pc = list.data[0];
             if (pc) {
               const aff = await upsertAffiliateFromPromo(pc);
-              // 🔐 Count redemption once per session (idempotent)
               if (aff && s.id) await markRedemptionOnce(String((aff as any)._id), s.id);
             }
           } catch {}
@@ -369,11 +369,11 @@ export default async function handler(
           | string
           | undefined;
         if (promoId) {
-            try {
-              const pc = await stripe.promotionCodes.retrieve(promoId);
-              codeText = pc.code || null;
-              if (pc) await upsertAffiliateFromPromo(pc);
-            } catch {}
+          try {
+            const pc = await stripe.promotionCodes.retrieve(promoId);
+            codeText = pc.code || null;
+            if (pc) await upsertAffiliateFromPromo(pc);
+          } catch {}
         }
 
         let subscriptionId: string | null =
