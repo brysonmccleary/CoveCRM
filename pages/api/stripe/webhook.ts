@@ -36,7 +36,6 @@ async function upsertAffiliateFromPromo(
   const couponId =
     typeof pc.coupon === "string" ? pc.coupon : pc.coupon?.id || undefined;
 
-  // Use .lean<IAffiliate>() to return a plain object with known fields
   const aff = await Affiliate.findOneAndUpdate(
     { promoCode: code },
     {
@@ -60,6 +59,32 @@ async function findAffiliateByPromoCode(
   const q = U(code);
   if (!q) return null;
   return Affiliate.findOne({ promoCode: q }).lean<IAffiliate | null>();
+}
+
+/** Mark a single checkout redemption once using payoutHistory as a zero-amount marker (idempotent on sessionId). */
+async function markRedemptionOnce(affId: string, sessionId: string) {
+  const aff = await Affiliate.findById(affId);
+  if (!aff) return;
+
+  const already = (aff.payoutHistory || []).some(
+    (p) => p?.note === `redemption:session:${sessionId}`,
+  );
+  if (already) return;
+
+  aff.totalRedemptions = Number(aff.totalRedemptions || 0) + 1;
+  aff.payoutHistory = [
+    ...(aff.payoutHistory || []),
+    {
+      amount: 0,
+      userEmail: "",
+      date: new Date(),
+      invoiceId: null,
+      subscriptionId: null,
+      customerId: null,
+      note: `redemption:session:${sessionId}`,
+    } as any,
+  ];
+  await aff.save();
 }
 
 interface CreditOnceOpts {
@@ -121,7 +146,6 @@ async function creditAffiliateOnce(opts: CreditOnceOpts) {
 }
 
 async function maybeAutoPayout(affiliateInput: IAffiliate, invoiceId: string) {
-  // Re-fetch a fresh doc since upsert/find usage above often returns lean objects
   const affiliate =
     (await Affiliate.findById((affiliateInput as any)._id)) || null;
   if (!affiliate) return;
@@ -257,12 +281,11 @@ export default async function handler(
       case "promotion_code.updated": {
         const promo = event.data.object as Stripe.PromotionCode;
 
-        // Before/after check needs typing so .approved is recognized
         const before = await Affiliate.findOne({
           promoCode: U(promo.code),
         }).lean<IAffiliate | null>();
 
-        const aff = await upsertAffiliateFromPromo(promo); // already returns IAffiliate|null
+        const aff = await upsertAffiliateFromPromo(promo);
 
         if (!before?.approved && !!aff?.approved) {
           try {
@@ -319,7 +342,12 @@ export default async function handler(
               code: referralCodeUsed,
               limit: 1,
             });
-            if (list.data[0]) await upsertAffiliateFromPromo(list.data[0]);
+            const pc = list.data[0];
+            if (pc) {
+              const aff = await upsertAffiliateFromPromo(pc);
+              // 🔐 Count redemption once per session (idempotent)
+              if (aff && s.id) await markRedemptionOnce(String((aff as any)._id), s.id);
+            }
           } catch {}
         }
         break;
@@ -341,11 +369,11 @@ export default async function handler(
           | string
           | undefined;
         if (promoId) {
-          try {
-            const pc = await stripe.promotionCodes.retrieve(promoId);
-            codeText = pc.code || null;
-            if (pc) await upsertAffiliateFromPromo(pc);
-          } catch {}
+            try {
+              const pc = await stripe.promotionCodes.retrieve(promoId);
+              codeText = pc.code || null;
+              if (pc) await upsertAffiliateFromPromo(pc);
+            } catch {}
         }
 
         let subscriptionId: string | null =
@@ -402,7 +430,7 @@ export default async function handler(
         // revenue tracking
         const cents = Number(inv.amount_paid || 0);
         const newRevenue =
-          Number(aff.totalRevenueGenerated || 0) + cents / 100;
+          Number((aff as any).totalRevenueGenerated || 0) + cents / 100;
 
         // Maintain referral list on first invoice
         const updates: Partial<IAffiliate> & { [k: string]: any } = {
@@ -410,15 +438,15 @@ export default async function handler(
         };
 
         if (isFirst && userEmail) {
-          const referrals = (aff.referrals || []).slice();
+          const referrals = ((aff as any).referrals || []).slice();
           if (
             !referrals.some(
-              (r) => r?.email?.toLowerCase() === userEmail!.toLowerCase(),
+              (r: any) => r?.email?.toLowerCase() === userEmail!.toLowerCase(),
             )
           ) {
             referrals.push({ email: userEmail, joinedAt: new Date() });
           }
-          updates.totalReferrals = Number(aff.totalReferrals || 0) + 1;
+          updates.totalReferrals = Number((aff as any).totalReferrals || 0) + 1;
           (updates as any).referrals = referrals;
         }
 
@@ -472,7 +500,7 @@ export default async function handler(
 
         // Flat reversal (mirrors your flat-commission policy)
         const flatUSD =
-          Number(aff.flatPayoutAmount || 0) ||
+          Number((aff as any).flatPayoutAmount || 0) ||
           Number(process.env.AFFILIATE_DEFAULT_PAYOUT || 25);
         const negative = -1 * flatUSD;
 
