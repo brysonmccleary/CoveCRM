@@ -10,10 +10,10 @@ import { isCallAllowedForLead } from "@/utils/checkCallTime";
 
 const BASE = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "http://localhost:3000").replace(/\/$/, "");
 
-// TwiML handler that joins the callee into a named conference
-const VOICE_ANSWER_PATH = "/api/twilio/calls/answer";
-const voiceAnswerUrl = (conference: string) =>
-  `${BASE}${VOICE_ANSWER_PATH}?conference=${encodeURIComponent(conference)}`;
+// ✅ Use the bulletproof TwiML handler we created
+const VOICE_CONTINUE_PATH = "/api/twiml/voice/continue";
+const voiceContinueUrl = (conference: string) =>
+  `${BASE}${VOICE_CONTINUE_PATH}?conference=${encodeURIComponent(conference)}`;
 
 // Include the userEmail so we can attribute usage/billing
 const voiceStatusUrl = (email: string) =>
@@ -84,9 +84,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const call = await client.calls.create({
       to,
       from,
-      url: voiceAnswerUrl(conferenceName),          // TwiML instructs callee to join this conference
-      statusCallback: voiceStatusUrl(email),        // usage/billing hook
-      statusCallbackEvent: ["completed"],
+      url: voiceContinueUrl(conferenceName),  // ⬅️ join callee to conference via our safe TwiML
+      statusCallback: voiceStatusUrl(email),  // billing/usage hook
+      statusCallbackEvent: ["initiated", "ringing", "answered", "completed"],
       record: false,
     });
 
