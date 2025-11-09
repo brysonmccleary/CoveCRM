@@ -1,4 +1,3 @@
-// pages/dial-session.tsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/router";
 import Sidebar from "@/components/Sidebar";
@@ -264,6 +263,16 @@ export default function DialSession() {
       } catch {}
 
       if (!cancelled) setNumbersLoaded(true);
+
+      // ✅ ADDITIVE: override display with Twilio’s authoritative "from" number for this user
+      try {
+        const j = await fetchJson<{ from: string | null }>("/api/twilio/current-from");
+        if (!cancelled && j?.from) {
+          setFromNumber(j.from);
+          localStorage.setItem("selectedDialNumber", j.from);
+        }
+      } catch {}
+
     };
     loadNumbers();
     return () => { cancelled = true; };
