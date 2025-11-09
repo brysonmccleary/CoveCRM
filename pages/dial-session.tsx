@@ -525,11 +525,11 @@ export default function DialSession() {
           } catch {}
         };
 
+        // ✅ FIX: agent leg joined — don't flip to Connected here
         const connectedNow = () => {
-          stopRingback();
-          clearWatchdog();
-          setStatus("Connected");
           hasConnectedRef.current = true;
+          // leave ringback + status changes to socket/polling when far leg answers
+          clearWatchdog();
         };
 
         safeOn("accept", connectedNow);
@@ -601,7 +601,7 @@ export default function DialSession() {
         try {
           joinedRef.current = true;
 
-          // Capture the returned call object and cut ringback on instant connect
+          // Capture the returned call object
           const callObj = await joinConference(activeConferenceRef.current);
 
           const safeOn = (ev: string, fn: (...args: any[]) => void) => {
@@ -611,11 +611,10 @@ export default function DialSession() {
             } catch {}
           };
 
+          // ✅ FIX: agent leg join — don't set Connected or stop ringback here
           const connectedNow = () => {
             hasConnectedRef.current = true;
-            stopRingback();
             clearWatchdog();
-            setStatus("Connected");
           };
 
           // Twilio SDK variants
