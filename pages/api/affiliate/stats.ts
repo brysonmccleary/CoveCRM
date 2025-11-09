@@ -1,5 +1,4 @@
 // /pages/api/affiliate/stats.ts
-
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
@@ -7,6 +6,8 @@ import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import Affiliate from "@/models/Affiliate";
 import { stripe } from "@/lib/stripe";
+
+const U = (s?: string | null) => (s || "").trim().toUpperCase();
 
 export default async function handler(
   req: NextApiRequest,
@@ -29,9 +30,7 @@ export default async function handler(
     (await Affiliate.findOne({ userId: String(user._id) })) ||
     (await Affiliate.findOne({ email: user.email })) ||
     (user.referralCode
-      ? await Affiliate.findOne({
-          promoCode: String(user.referralCode).toUpperCase(),
-        })
+      ? await Affiliate.findOne({ promoCode: U(user.referralCode) })
       : null);
 
   // If no affiliate yet → tell UI to show the application form
@@ -52,8 +51,8 @@ export default async function handler(
     });
   }
 
-  // Ensure user's referralCode mirrors the affiliate's
-  if (user.referralCode?.toUpperCase() !== affiliate.promoCode) {
+  // Ensure user's referralCode mirrors the affiliate's (normalized)
+  if (U(user.referralCode) !== U(affiliate.promoCode)) {
     user.referralCode = affiliate.promoCode;
     await user.save().catch(() => {});
   }
@@ -72,7 +71,7 @@ export default async function handler(
         !!acct.charges_enabled &&
         !!acct.payouts_enabled;
 
-      let uiStatus = "pending";
+      let uiStatus: "pending" | "incomplete" | "restricted" | "verified" = "pending";
       if (acct.requirements?.currently_due?.length) uiStatus = "incomplete";
       if (acct.requirements?.disabled_reason) uiStatus = "restricted";
       if (freshComplete) uiStatus = "verified";
@@ -94,32 +93,55 @@ export default async function handler(
     }
   }
 
-  // Referrals to display (recent list)
-  const referredUsers = await User.find({ referredBy: affiliate.promoCode })
-    .select("name email createdAt")
-    .sort({ createdAt: -1 })
-    .limit(20)
-    .lean();
+  // Referrals list: prefer Affiliate.referrals (populated by webhook on first invoice),
+  // fallback to Users referred by this code for legacy scenarios.
+  let referrals =
+    Array.isArray(affiliate.referrals) && affiliate.referrals.length
+      ? affiliate.referrals
+          .slice()
+          .sort((a: any, b: any) => +new Date(b.joinedAt || b.date || 0) - +new Date(a.joinedAt || a.date || 0))
+          .slice(0, 20)
+          .map((r: any) => ({
+            name: r.name || "Unnamed",
+            email: r.email,
+            joinedAt: r.joinedAt || r.date || new Date(),
+          }))
+      : [];
 
-  const referrals = referredUsers.map((r) => ({
-    name: r.name || "Unnamed",
-    email: r.email,
-    joinedAt: r.createdAt || new Date(),
-  }));
+  if (referrals.length === 0) {
+    // Fallback for older signups that don't exist in Affiliate.referrals
+    const referredUsers = await User.find({
+      $or: [
+        { referredBy: U(affiliate.promoCode) },
+        { referredByCode: U(affiliate.promoCode) },
+      ],
+    })
+      .select("name email createdAt")
+      .sort({ createdAt: -1 })
+      .limit(20)
+      .lean();
 
-  // Counts / totals
+    referrals = referredUsers.map((r) => ({
+      name: r.name || "Unnamed",
+      email: r.email,
+      joinedAt: r.createdAt || new Date(),
+    }));
+  }
+
+  // Counts / totals (source of truth = Affiliate doc)
   const signups =
     typeof affiliate.totalReferrals === "number"
       ? affiliate.totalReferrals
-      : referredUsers.length;
+      : referrals.length;
 
-  const payoutDue = affiliate.payoutDue || 0;
-  const totalPayoutsSent = affiliate.totalPayoutsSent || 0;
-  const totalCommission = payoutDue + totalPayoutsSent;
+  const payoutDue = Number(affiliate.payoutDue || 0);
+  const totalPayoutsSent = Number(affiliate.totalPayoutsSent || 0);
+  const totalCommission = Number((payoutDue + totalPayoutsSent).toFixed(2));
 
+  // Response
   res.setHeader("Cache-Control", "no-store");
   return res.status(200).json({
-    code: affiliate.promoCode, // what your panel shows as “Your Referral Code”
+    code: affiliate.promoCode, // “Your Referral Code”
     signups,
     referrals,
     totalCommission,
@@ -129,7 +151,7 @@ export default async function handler(
     stripeConnectId: affiliate.stripeConnectId || null,
     onboardingCompleted,
     connectedAccountStatus,
-    approved: !!affiliate.approved, // “Program Approval” in UI
+    approved: !!affiliate.approved,
     approvedAt: affiliate.approvedAt || null,
   });
 }
