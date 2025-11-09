@@ -1,83 +1,74 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import mongooseConnect from "@/lib/mongooseConnect";
+import Affiliate from "@/models/Affiliate";
 import User from "@/models/User";
 
-const PLAN_PRICE = 199.99;
-const COMMISSION_PER_USER = 25;
-
-function normalizeCode(s: string) {
-  return s.trim().toUpperCase();
-}
-
+// House codes (e.g., "COVE50") never accrue commission dollars
 function getHouseSet() {
   return new Set(
-    (process.env.HOUSE_CODES || "COVE50")
+    (process.env.HOUSE_CODES || process.env.AFFILIATE_HOUSE_CODE || "COVE50")
       .split(",")
-      .map(s => s.trim().toUpperCase())
+      .map((s) => s.trim().toUpperCase())
       .filter(Boolean)
   );
 }
 
-/**
- * Groups by the effective code a user used:
- * 1) preferred: referredByCode (new)
- * 2) fallback: legacy string in referredBy
- * All grouping keys are normalized to UPPERCASE to avoid dup rows.
- */
+function U(s?: string | null) {
+  return (s || "").trim().toUpperCase();
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
     await mongooseConnect();
 
-    const allUsers = await User.find({
-      $or: [
-        { referredByCode: { $exists: true, $ne: null } },
-        { referredBy: { $exists: true, $ne: null } },
-      ],
-    }).lean();
+    // Pull from Affiliate as the single source of truth (webhook updates this)
+    const affiliates = await Affiliate.find({})
+      .select({
+        name: 1,
+        email: 1,
+        promoCode: 1,
+        totalRedemptions: 1,
+        totalRevenueGenerated: 1,
+        payoutDue: 1,
+      })
+      .lean();
 
-    type Bucket = { users: any[]; activeCount: number };
-    const grouped: Record<string, Bucket> = {};
-    const houseSet = getHouseSet();
+    const house = getHouseSet();
 
-    for (const user of allUsers) {
-      const rawCode =
-        (typeof user.referredByCode === "string" && user.referredByCode) ||
-        (typeof user.referredBy === "string" && user.referredBy) ||
-        "";
+    // For each affiliate, prefer its own name/email; if missing, try to resolve
+    // from a User who owns the same referralCode (case-insensitive).
+    const results = await Promise.all(
+      (affiliates || []).map(async (a: any) => {
+        const code = U(a.promoCode);
+        let name = a.name || "";
+        let email = a.email || "";
+        if (!name || !email) {
+          const owner = await User.findOne({
+            referralCode: new RegExp(`^${code}$`, "i"),
+          })
+            .select({ name: 1, email: 1 })
+            .lean();
+          if (!name) name = owner?.name || "";
+          if (!email) email = owner?.email || "";
+        }
 
-      if (!rawCode) continue;
-
-      const key = normalizeCode(rawCode); // 🔑 normalize to avoid cove50/COVE50 split
-
-      if (!grouped[key]) grouped[key] = { users: [], activeCount: 0 };
-      grouped[key].users.push(user);
-      if (user.subscriptionStatus === "active") grouped[key].activeCount++;
-    }
-
-    const affiliateStats = await Promise.all(
-      Object.entries(grouped).map(async ([key, data]) => {
-        // Owner: someone whose personal referralCode equals this key (case-insensitive)
-        const owner = await User.findOne({
-          referralCode: new RegExp(`^${key}$`, "i"),
-        })
-          .select({ name: 1, email: 1 })
-          .lean();
-
-        const isHouse = houseSet.has(key);
+        const isHouse = house.has(code);
 
         return {
-          name: isHouse ? "House" : owner?.name || "Unknown",
-          email: isHouse ? "N/A"    : owner?.email || "N/A",
-          promoCode: key, // present normalized code consistently
-          totalRedemptions: data.users.length,
-          totalRevenueGenerated: Number((data.activeCount * PLAN_PRICE).toFixed(2)),
-          payoutDue: isHouse ? 0 : data.activeCount * COMMISSION_PER_USER,
+          name: isHouse ? "House" : name || "Unknown",
+          email: isHouse ? "N/A" : email || "N/A",
+          promoCode: code,
+          totalRedemptions: Number(a.totalRedemptions || 0),
+          // Real revenue accumulated from invoice events (not estimate)
+          totalRevenueGenerated: Number(a.totalRevenueGenerated || 0),
+          // Payout due is live from Affiliate doc, but force 0 for house codes
+          payoutDue: isHouse ? 0 : Number(a.payoutDue || 0),
         };
       })
     );
 
-    affiliateStats.sort((a, b) => b.totalRedemptions - a.totalRedemptions);
-    return res.status(200).json(affiliateStats);
+    results.sort((a, b) => b.totalRedemptions - a.totalRedemptions);
+    return res.status(200).json(results);
   } catch (err) {
     console.error("Affiliate summary error:", err);
     return res.status(500).json({ error: "Failed to load affiliate data." });
