@@ -446,23 +446,25 @@ export default function DialSession() {
     return { callSid: j.callSid, conferenceName: j.conferenceName };
   };
 
+  // 🔁 REPLACED PER YOUR REQUEST — minimal patch only
   const beginStatusPolling = (sid: string) => {
     clearStatusPoll();
     statusPollRef.current = setInterval(async () => {
       try {
-        const j = await fetchJson<{ status: string }>(`/api/twilio/calls/status?sid=${encodeURIComponent(sid)}`);
-        const s = (j?.status || "").toLowerCase();
+        const j = await fetch(`/api/twilio/calls/status?sid=${encodeURIComponent(sid)}`).then(r => r.json());
+        const s = String(j?.status || "").toLowerCase();
 
         if (s === "in-progress" || s === "answered") {
+          // ✅ Keep polling; do NOT clear here
           setStatus("Connected");
           stopRingback();
           clearWatchdog();
-          clearStatusPoll();
+          hasConnectedRef.current = true;
         }
 
         if (s === "busy" || s === "failed" || s === "no-answer") {
           if (s === "no-answer" && tooEarly()) return;
-          stopRingback(); clearWatchdog(); clearStatusPoll();
+          stopRingback(); clearWatchdog();
           await hangupActiveCall(`status-${s}`); await leaveIfJoined(`status-${s}`);
           if (!advanceScheduledRef.current && !sessionEndedRef.current) {
             advanceScheduledRef.current = true;
@@ -471,8 +473,8 @@ export default function DialSession() {
           }
         }
 
-        // Treat canceled/completed as a definitive disconnect
-        if (s === "canceled" || s === "completed") {
+        // Terminal states → disconnect UI and stop polling
+        if (s === "completed" || s === "canceled") {
           clearStatusPoll();
           await markDisconnected(`status-${s}`);
         }
