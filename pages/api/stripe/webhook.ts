@@ -5,7 +5,7 @@ import { stripe } from "@/lib/stripe";
 
 import dbConnect from "@/lib/mongooseConnect";
 import Affiliate from "@/models/Affiliate";
-import type { IAffiliate } from "@/models/Affiliate"; // ✅ typing fix
+import type { IAffiliate } from "@/models/Affiliate";
 import AffiliatePayout from "@/models/AffiliatePayout";
 import User from "@/models/User";
 import twilioClient from "@/lib/twilioClient";
@@ -13,19 +13,44 @@ import { sendAffiliateApprovedEmail } from "@/lib/email";
 
 export const config = { api: { bodyParser: false } };
 
+/* ──────────────────────────────────────────────────────────────────────────── */
+/* small utils (kept local; no behavior change elsewhere)                      */
+/* ──────────────────────────────────────────────────────────────────────────── */
+
 const U = (s?: string | null) => (s || "").trim().toUpperCase();
+const L = (s?: string | null) => (s || "").trim().toLowerCase();
+
 const envBool = (n: string, d = false) => {
   const v = process.env[n];
   if (v == null) return d;
   return v === "1" || v.toLowerCase() === "true";
 };
+
 const ADMIN_FREE_AI_EMAILS: string[] = (process.env.ADMIN_FREE_AI_EMAILS || "")
   .split(",")
   .map((s) => s.trim().toLowerCase())
   .filter(Boolean);
+
 const isAdminFree = (email?: string | null) =>
-  !!email && ADMIN_FREE_AI_EMAILS.includes(email.toLowerCase());
+  !!email && ADMIN_FREE_AI_EMAILS.includes(L(email));
+
 const toCents = (usd: number) => Math.round(Number(usd || 0) * 100);
+
+// House code exclusion (defaults to COVE50 if env unset)
+const HOUSE_CODE = U(process.env.AFFILIATE_HOUSE_CODE || "COVE50");
+const isHouseCode = (code?: string | null) => !!code && U(code) === HOUSE_CODE;
+
+// slim audit logger
+const audit = (msg: string, extra?: Record<string, unknown>) => {
+  try {
+    // keep logs terse; no PII
+    console.info(`[stripe-webhook] ${msg}`, extra || {});
+  } catch {}
+};
+
+/* ──────────────────────────────────────────────────────────────────────────── */
+/* Affiliate helpers (existing behavior preserved; targeted adjustments only)   */
+/* ──────────────────────────────────────────────────────────────────────────── */
 
 /** Upsert an Affiliate document from a Stripe PromotionCode (typed) */
 async function upsertAffiliateFromPromo(
@@ -66,7 +91,6 @@ async function markRedemptionOnce(affId: string, sessionId: string) {
   const aff = await Affiliate.findById(affId);
   if (!aff) return;
 
-  // 🛠️ TS fix: explicitly type callback param
   const already = (aff.payoutHistory || []).some(
     (p: any) => p?.note === `redemption:session:${sessionId}`,
   );
@@ -110,18 +134,19 @@ async function creditAffiliateOnce(opts: CreditOnceOpts) {
     note,
   } = opts;
 
+  // 🚫 NEW: never pay on first invoice (renewals only)
+  if (isFirstInvoice) {
+    audit("skip credit (first invoice)", {
+      affiliateId: String((affiliate as any)._id || ""),
+      invoiceId,
+    });
+    return false;
+  }
+
   (affiliate as any).payoutHistory = (affiliate as any).payoutHistory || [];
 
+  // idempotency on invoice
   if ((affiliate as any).payoutHistory.some((p: any) => p?.invoiceId === invoiceId)) return false;
-  if (isFirstInvoice && userEmail) {
-    if (
-      (affiliate as any).payoutHistory.some(
-        (p: any) => p?.userEmail?.toLowerCase() === userEmail.toLowerCase(),
-      )
-    ) {
-      return false;
-    }
-  }
 
   (affiliate as any).payoutHistory.push({
     invoiceId,
@@ -134,6 +159,7 @@ async function creditAffiliateOnce(opts: CreditOnceOpts) {
   });
   (affiliate as any).payoutDue =
     Number((affiliate as any).payoutDue || 0) + Number(amountUSD);
+
   await (Affiliate as any).updateOne(
     { _id: (affiliate as any)._id },
     {
@@ -206,7 +232,8 @@ async function maybeAutoPayout(affiliateInput: IAffiliate, invoiceId: string) {
       Number(affiliate.totalPayoutsSent || 0) + amountUSD;
     affiliate.lastPayoutDate = new Date();
     await affiliate.save();
-  } catch {
+  } catch (e) {
+    audit("autopayout failed", { affiliateId: String(affiliate._id), invoiceId });
     await AffiliatePayout.create({
       affiliateId: String(affiliate._id),
       affiliateEmail: affiliate.email,
@@ -217,6 +244,10 @@ async function maybeAutoPayout(affiliateInput: IAffiliate, invoiceId: string) {
     });
   }
 }
+
+/* ──────────────────────────────────────────────────────────────────────────── */
+/* Webhook handler                                                             */
+/* ──────────────────────────────────────────────────────────────────────────── */
 
 export default async function handler(
   req: NextApiRequest,
@@ -346,10 +377,17 @@ export default async function handler(
             const pc = list.data[0];
             if (pc) {
               const aff = await upsertAffiliateFromPromo(pc);
-              if (aff && s.id) await markRedemptionOnce(String((aff as any)._id), s.id);
+              if (aff && s.id)
+                await markRedemptionOnce(String((aff as any)._id), s.id);
             }
           } catch {}
         }
+
+        audit("checkout.session.completed", {
+          userId,
+          customerId: s.customer,
+          referral: referralCodeUsed || null,
+        });
         break;
       }
 
@@ -406,7 +444,54 @@ export default async function handler(
           }
         }
 
-        if (!codeText) break;
+        // Always record revenue; payouts may be skipped below
+        if (codeText) {
+          const affForRevenue = await findAffiliateByPromoCode(codeText);
+          if (affForRevenue) {
+            const cents = Number(inv.amount_paid || 0);
+            const newRevenue =
+              Number((affForRevenue as any).totalRevenueGenerated || 0) +
+              cents / 100;
+
+            const updates: Partial<IAffiliate> & { [k: string]: any } = {
+              totalRevenueGenerated: newRevenue,
+            };
+
+            if (isFirst && userEmail) {
+              const referrals = ((affForRevenue as any).referrals || []).slice();
+              if (
+                !referrals.some(
+                  (r: any) => r?.email?.toLowerCase() === L(userEmail!),
+                )
+              ) {
+                referrals.push({ email: userEmail, joinedAt: new Date() });
+              }
+              updates.totalReferrals =
+                Number((affForRevenue as any).totalReferrals || 0) + 1;
+              (updates as any).referrals = referrals;
+            }
+
+            await Affiliate.updateOne(
+              { _id: (affForRevenue as any)._id },
+              { $set: updates },
+            );
+          }
+        }
+
+        // Payouts: only if non-house code AND not first invoice
+        if (!codeText || isHouseCode(codeText) || isFirst) {
+          audit("skip payout", {
+            reason: !codeText
+              ? "no code"
+              : isHouseCode(codeText)
+              ? "house code"
+              : "first invoice",
+            invoiceId: inv.id,
+            code: codeText || null,
+          });
+          break;
+        }
+
         const aff = await findAffiliateByPromoCode(codeText);
         if (!aff) break;
 
@@ -421,38 +506,19 @@ export default async function handler(
           customerId: customerId || null,
           userEmail,
           amountUSD: payoutUSD,
-          isFirstInvoice: isFirst,
-          note: codeText
-            ? `commission for ${codeText}`
-            : "invoice.payment_succeeded",
+          isFirstInvoice: isFirst, // guarded inside
+          note: `commission for ${codeText}`,
         });
 
-        // revenue tracking
-        const cents = Number(inv.amount_paid || 0);
-        const newRevenue =
-          Number((aff as any).totalRevenueGenerated || 0) + cents / 100;
-
-        // Maintain referral list on first invoice
-        const updates: Partial<IAffiliate> & { [k: string]: any } = {
-          totalRevenueGenerated: newRevenue,
-        };
-
-        if (isFirst && userEmail) {
-          const referrals = ((aff as any).referrals || []).slice();
-          if (
-            !referrals.some(
-              (r: any) => r?.email?.toLowerCase() === userEmail!.toLowerCase(),
-            )
-          ) {
-            referrals.push({ email: userEmail, joinedAt: new Date() });
-          }
-          updates.totalReferrals = Number((aff as any).totalReferrals || 0) + 1;
-          (updates as any).referrals = referrals;
-        }
-
-        await Affiliate.updateOne({ _id: (aff as any)._id }, { $set: updates });
-
         if (credited) await maybeAutoPayout(aff, String(inv.id || ""));
+
+        audit("invoice.payment_succeeded processed", {
+          invoiceId: inv.id,
+          subscriptionId,
+          customerId,
+          code: codeText,
+          credited,
+        });
         break;
       }
 
@@ -519,6 +585,7 @@ export default async function handler(
             },
           },
         );
+        audit("credit_note reversal", { invoiceId, affiliateId: String((aff as any)._id) });
         break;
       }
 
@@ -535,9 +602,7 @@ export default async function handler(
           const hasAi = !!sub.items?.data?.some(
             (it) => it.price?.id === AI_PRICE_ID,
           );
-          user.hasAI = isAdminFree(user.email)
-            ? true
-            : activeLike && hasAi;
+          user.hasAI = isAdminFree(user.email) ? true : activeLike && hasAi;
           await user.save();
         }
         break;
