@@ -4,22 +4,21 @@ import type { Session } from "next-auth";
 import { authOptions } from "@/pages/api/auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import Lead from "@/models/Lead";
+import Call from "@/models/Call";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
 import { pickFromNumberForUser } from "@/lib/twilio/pickFromNumber";
 import { isCallAllowedForLead } from "@/utils/checkCallTime";
 
 const BASE = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "http://localhost:3000").replace(/\/$/, "");
 
-// ✅ Use the bulletproof TwiML handler we created
+// TwiML join endpoint (already working)
 const VOICE_CONTINUE_PATH = "/api/twiml/voice/continue";
 const voiceContinueUrl = (conference: string) =>
   `${BASE}${VOICE_CONTINUE_PATH}?conference=${encodeURIComponent(conference)}`;
 
-// Include the userEmail so we can attribute usage/billing
 const voiceStatusUrl = (email: string) =>
   `${BASE}/api/twilio/voice-status?userEmail=${encodeURIComponent(email.toLowerCase())}`;
 
-// Tiny helper
 function normalizeE164(p?: string) {
   const raw = String(p || "");
   const d = raw.replace(/\D/g, "");
@@ -29,7 +28,6 @@ function normalizeE164(p?: string) {
   return raw.startsWith("+") ? raw : `+${d}`;
 }
 
-// Simple, unique-enough conference name
 function makeConferenceName(email: string) {
   const slug = email.replace(/[^a-z0-9]+/gi, "_").toLowerCase().slice(0, 24);
   const rand = Math.random().toString(36).slice(2, 8);
@@ -49,11 +47,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     await dbConnect();
 
-    // Scope lead to the current user
     const leadDoc: any = await Lead.findOne({ _id: leadId, userEmail: email }).lean();
     if (!leadDoc) return res.status(404).json({ message: "Lead not found or access denied" });
 
-    // Enforce quiet hours (8am–9pm in the lead’s local tz)
     const { allowed, zone } = isCallAllowedForLead(leadDoc);
     if (!allowed) {
       return res.status(409).json({
@@ -62,7 +58,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    // Resolve callee phone
     const candidates = [
       leadDoc.phone,
       leadDoc.Phone,
@@ -74,21 +69,40 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const to = normalizeE164(candidates[0]);
     if (!to) return res.status(400).json({ message: "Lead has no valid phone number" });
 
-    // Twilio client + from number
     const { client } = await getClientForUser(email);
     const from = await pickFromNumberForUser(email);
     if (!from) return res.status(400).json({ message: "No outbound caller ID configured. Buy a number first." });
 
-    // Create unique conference and place the PSTN leg
     const conferenceName = makeConferenceName(email);
+
     const call = await client.calls.create({
       to,
       from,
-      url: voiceContinueUrl(conferenceName),  // ⬅️ join callee to conference via our safe TwiML
-      statusCallback: voiceStatusUrl(email),  // billing/usage hook
+      url: voiceContinueUrl(conferenceName),
+      statusCallback: voiceStatusUrl(email),
       statusCallbackEvent: ["initiated", "ringing", "answered", "completed"],
       record: false,
     });
+
+    // ✅ Upsert a Call row immediately so the dashboard has something to aggregate
+    const now = new Date();
+    await Call.findOneAndUpdate(
+      { callSid: call.sid },
+      {
+        $setOnInsert: {
+          userEmail: email,
+          leadId,
+          callSid: call.sid,
+          direction: "outbound",
+          to,
+          from,
+          createdAt: now,
+          startedAt: now, // treat placement as "started" for metrics
+        },
+        $set: { lastStatus: "initiated" },
+      },
+      { upsert: true, new: true }
+    );
 
     return res.status(200).json({
       success: true,
