@@ -1,8 +1,9 @@
+// pages/dial-session.tsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/router";
 import Sidebar from "@/components/Sidebar";
 import BookAppointmentModal from "@/components/BookAppointmentModal";
-import { isCallAllowed, isCallAllowedForLead, localTimeString } from "@/utils/checkCallTime";
+import { isCallAllowedForLead, localTimeString } from "@/utils/checkCallTime";
 import { playRingback, stopRingback, primeAudioContext, ensureUnlocked } from "@/utils/ringAudio";
 import toast from "react-hot-toast";
 import { joinConference, leaveConference, setMuted as sdkSetMuted, getMuted as sdkGetMuted } from "@/utils/voiceClient";
@@ -446,25 +447,23 @@ export default function DialSession() {
     return { callSid: j.callSid, conferenceName: j.conferenceName };
   };
 
-  // 🔁 REPLACED PER YOUR REQUEST — minimal patch only
   const beginStatusPolling = (sid: string) => {
     clearStatusPoll();
     statusPollRef.current = setInterval(async () => {
       try {
-        const j = await fetch(`/api/twilio/calls/status?sid=${encodeURIComponent(sid)}`).then(r => r.json());
-        const s = String(j?.status || "").toLowerCase();
+        const j = await fetchJson<{ status: string }>(`/api/twilio/calls/status?sid=${encodeURIComponent(sid)}`);
+        const s = (j?.status || "").toLowerCase();
 
         if (s === "in-progress" || s === "answered") {
-          // ✅ Keep polling; do NOT clear here
           setStatus("Connected");
           stopRingback();
           clearWatchdog();
-          hasConnectedRef.current = true;
+          clearStatusPoll();
         }
 
         if (s === "busy" || s === "failed" || s === "no-answer") {
           if (s === "no-answer" && tooEarly()) return;
-          stopRingback(); clearWatchdog();
+          stopRingback(); clearWatchdog(); clearStatusPoll();
           await hangupActiveCall(`status-${s}`); await leaveIfJoined(`status-${s}`);
           if (!advanceScheduledRef.current && !sessionEndedRef.current) {
             advanceScheduledRef.current = true;
@@ -473,8 +472,8 @@ export default function DialSession() {
           }
         }
 
-        // Terminal states → disconnect UI and stop polling
-        if (s === "completed" || s === "canceled") {
+        // Treat canceled/completed as a definitive disconnect
+        if (s === "canceled" || s === "completed") {
           clearStatusPoll();
           await markDisconnected(`status-${s}`);
         }
@@ -527,11 +526,11 @@ export default function DialSession() {
           } catch {}
         };
 
-        // ✅ FIX: agent leg joined — don't flip to Connected here
         const connectedNow = () => {
-          hasConnectedRef.current = true;
-          // leave ringback + status changes to socket/polling when far leg answers
+          stopRingback();
           clearWatchdog();
+          setStatus("Connected");
+          hasConnectedRef.current = true;
         };
 
         safeOn("accept", connectedNow);
@@ -557,14 +556,8 @@ export default function DialSession() {
     if (sessionEndedRef.current) return;
     if (!leadToCall?.id) { setStatus("Missing lead id"); return; }
 
-    // Global soft gate (optional—kept from your earlier logic)
-    if (typeof isCallAllowed === "function" && !isCallAllowed()) {
-      toast.error("Calls are restricted at this time.");
-      setStatus("Blocked by schedule");
-      return;
-    }
-
-    // Strong per-lead quiet-hours gate (already checked in driver; keep here defensively)
+    // ✅ REMOVED the global gate (isCallAllowed). We rely only on per-lead quiet hours.
+    // Strong per-lead quiet-hours gate
     const { allowed, zone } = isCallAllowedForLead(leadToCall);
     if (!allowed) {
       setStatus(`Quiet hours (${localTimeString(zone)})`);
@@ -603,7 +596,7 @@ export default function DialSession() {
         try {
           joinedRef.current = true;
 
-          // Capture the returned call object
+          // Capture the returned call object and cut ringback on instant connect
           const callObj = await joinConference(activeConferenceRef.current);
 
           const safeOn = (ev: string, fn: (...args: any[]) => void) => {
@@ -613,10 +606,11 @@ export default function DialSession() {
             } catch {}
           };
 
-          // ✅ FIX: agent leg join — don't set Connected or stop ringback here
           const connectedNow = () => {
             hasConnectedRef.current = true;
+            stopRingback();
             clearWatchdog();
+            setStatus("Connected");
           };
 
           // Twilio SDK variants
