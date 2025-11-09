@@ -1,106 +1,104 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
-import { authOptions } from "../../auth/[...nextauth]";
+import type { Session } from "next-auth";
+import { authOptions } from "@/pages/api/auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import Lead from "@/models/Lead";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
 import { pickFromNumberForUser } from "@/lib/twilio/pickFromNumber";
-import { isCallAllowedForLead, localTimeString } from "@/utils/checkCallTime";
+import { isCallAllowedForLead } from "@/utils/checkCallTime";
 
-// === URLs used by your existing voice flow ===
 const BASE = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "http://localhost:3000").replace(/\/$/, "");
-const VOICE_ANSWER_URL = `${BASE}/api/twilio/voice-answer`;
-const STATUS_URL = `${BASE}/api/twilio/voice-status`;
 
-function normalizeE164(raw?: string): string {
-  if (!raw) return "";
-  const d = raw.replace(/\D+/g, "");
+// TwiML handler that joins the callee into a named conference
+const VOICE_ANSWER_PATH = "/api/twilio/calls/answer";
+const voiceAnswerUrl = (conference: string) =>
+  `${BASE}${VOICE_ANSWER_PATH}?conference=${encodeURIComponent(conference)}`;
+
+// Include the userEmail so we can attribute usage/billing
+const voiceStatusUrl = (email: string) =>
+  `${BASE}/api/twilio/voice-status?userEmail=${encodeURIComponent(email.toLowerCase())}`;
+
+// Tiny helper
+function normalizeE164(p?: string) {
+  const raw = String(p || "");
+  const d = raw.replace(/\D/g, "");
   if (!d) return "";
   if (d.length === 11 && d.startsWith("1")) return `+${d}`;
   if (d.length === 10) return `+1${d}`;
-  return raw.startsWith("+") ? raw.trim() : `+${d}`;
+  return raw.startsWith("+") ? raw : `+${d}`;
 }
 
-function extractLeadPhone(lead: any): string | null {
-  const candidates = [
-    lead?.phone, lead?.Phone, lead?.mobile, lead?.Mobile, lead?.cell, lead?.Cell,
-    lead?.primaryPhone, lead?.PrimaryPhone, lead?.phoneNumber, lead?.PhoneNumber,
-  ].filter(Boolean);
-  if (candidates.length) return String(candidates[0]);
-  // Deep scan (last resort)
-  const scan = (o: any): string | null => {
-    if (!o || typeof o !== "object") return null;
-    for (const [k, v] of Object.entries(o)) {
-      if (typeof v === "string" && k.toLowerCase().includes("phone")) return v;
-      if (typeof v === "object") { const found = scan(v); if (found) return found; }
-    }
-    return null;
-  };
-  return scan(lead);
+// Simple, unique-enough conference name
+function makeConferenceName(email: string) {
+  const slug = email.replace(/[^a-z0-9]+/gi, "_").toLowerCase().slice(0, 24);
+  const rand = Math.random().toString(36).slice(2, 8);
+  return `cove_${slug}_${Date.now().toString(36)}_${rand}`;
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") return res.status(405).json({ message: "Method Not Allowed" });
 
-  const session = await getServerSession(req, res, authOptions as any);
-  const email = (session?.user?.email || "").toLowerCase();
+  const session = (await getServerSession(req, res, authOptions as any)) as Session | null;
+  const email = String(session?.user?.email ?? "").toLowerCase();
   if (!email) return res.status(401).json({ message: "Unauthorized" });
 
   const { leadId } = (req.body || {}) as { leadId?: string };
   if (!leadId) return res.status(400).json({ message: "Missing leadId" });
 
-  await dbConnect();
-
-  // Load the lead, scoped to the signed-in user
-  const lead = await Lead.findOne({ _id: leadId, userEmail: email }).lean<any>();
-  if (!lead) return res.status(404).json({ message: "Lead not found or access denied" });
-
-  // Server-side quiet-hours guard (per lead)
-  const { allowed, zone } = isCallAllowedForLead(lead);
-  if (!allowed) {
-    return res.status(409).json({
-      message: `Quiet hours — ${localTimeString(zone)}`,
-      allowed: false,
-      zone,
-    });
-  }
-
-  // Resolve numbers
-  const toRaw = extractLeadPhone(lead);
-  const to = normalizeE164(toRaw || "");
-  if (!to) return res.status(400).json({ message: "Lead has no valid phone number" });
-
-  const { client } = await getClientForUser(email);
-  const from = await pickFromNumberForUser(email);
-  if (!from) return res.status(400).json({ message: "No outbound caller ID configured. Buy a number first." });
-
-  // A simple, unique conference name per call; your TwiML uses this to bridge.
-  const conferenceName = `conf:${email}:${leadId}:${Date.now()}`;
-
-  // We include userEmail on status URL so your billing/metrics can attribute properly.
-  const statusCallback = `${STATUS_URL}?userEmail=${encodeURIComponent(email)}`;
-
   try {
-    const call = await (client as any).calls.create({
+    await dbConnect();
+
+    // Scope lead to the current user
+    const leadDoc: any = await Lead.findOne({ _id: leadId, userEmail: email }).lean();
+    if (!leadDoc) return res.status(404).json({ message: "Lead not found or access denied" });
+
+    // Enforce quiet hours (8am–9pm in the lead’s local tz)
+    const { allowed, zone } = isCallAllowedForLead(leadDoc);
+    if (!allowed) {
+      return res.status(409).json({
+        message: "Quiet hours — local time for this lead is outside 8am–9pm",
+        zone: zone || null,
+      });
+    }
+
+    // Resolve callee phone
+    const candidates = [
+      leadDoc.phone,
+      leadDoc.Phone,
+      leadDoc.mobile,
+      leadDoc.Mobile,
+      leadDoc.primaryPhone,
+      leadDoc["Primary Phone"],
+    ].filter(Boolean);
+    const to = normalizeE164(candidates[0]);
+    if (!to) return res.status(400).json({ message: "Lead has no valid phone number" });
+
+    // Twilio client + from number
+    const { client } = await getClientForUser(email);
+    const from = await pickFromNumberForUser(email);
+    if (!from) return res.status(400).json({ message: "No outbound caller ID configured. Buy a number first." });
+
+    // Create unique conference and place the PSTN leg
+    const conferenceName = makeConferenceName(email);
+    const call = await client.calls.create({
       to,
       from,
-      url: VOICE_ANSWER_URL,      // your TwiML entrypoint (unchanged)
-      statusCallback,
-      statusCallbackEvent: ["completed", "answered", "no-answer", "busy", "failed"],
-      // If your /voice-answer reads conferenceName from query/string, include it there too:
-      // machineDetection, record, timeout, etc. — leave defaults you already rely on.
+      url: voiceAnswerUrl(conferenceName),          // TwiML instructs callee to join this conference
+      statusCallback: voiceStatusUrl(email),        // usage/billing hook
+      statusCallbackEvent: ["completed"],
+      record: false,
     });
 
-    // Return the shape your UI expects
     return res.status(200).json({
       success: true,
       callSid: call.sid,
       conferenceName,
       from,
       to,
-      zone,
     });
   } catch (e: any) {
+    console.error("voice/call error:", e?.message || e);
     return res.status(500).json({ message: e?.message || "Call failed" });
   }
 }
