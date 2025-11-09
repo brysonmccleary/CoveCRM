@@ -3,7 +3,7 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import Twilio from "twilio";
 
 export const config = {
-  api: { bodyParser: false }, // Twilio posts/gets without JSON; we only read query
+  api: { bodyParser: false },
 };
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -23,17 +23,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     dial.conference(
       {
-        endConferenceOnExit: true, // ✅ When callee leaves, end the conference
-        beep: false,
-        // (optional) you can add statusCallback + events here if you want,
-        // but not required for the UI fix.
+        endConferenceOnExit: true, // end the room when this leg exits
+        beep: "false",             // <- string, not boolean
       },
       String(conference)
     );
 
     res.setHeader("Content-Type", "text/xml");
     res.status(200).send(twiml.toString());
-  } catch (e) {
+  } catch {
     res.setHeader("Content-Type", "text/xml");
     res.status(200).send(`<Response><Say>Application error.</Say><Hangup/></Response>`);
   }
