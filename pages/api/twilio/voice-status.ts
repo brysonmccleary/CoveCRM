@@ -1,3 +1,4 @@
+// pages/api/twilio/voice-status.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
@@ -15,6 +16,17 @@ function ceilMinutesFromSeconds(secondsStr?: string) {
   const s = Number(secondsStr || "0");
   if (!isFinite(s) || s <= 0) return 0;
   return Math.ceil(s / 60);
+}
+
+function emitSocketStatus(res: NextApiResponse, room: string, payload: any) {
+  try {
+    const io = (res as any)?.socket?.server?.io;
+    if (!io || !room) return;
+    // Emit to multiple common room names to match your client joins
+    io.to(room).emit("call:status", payload);
+    io.to(room.toLowerCase()).emit("call:status", payload);
+    io.to(room.toUpperCase()).emit("call:status", payload);
+  } catch { /* best-effort only */ }
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -60,12 +72,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         ...(status === "answered" || status === "in-progress"
           ? { $set: { startedAt: now } }
           : {}),
-        ...(status === "completed"
+        ...(status === "completed" || status === "busy" || status === "failed" || status === "no-answer" || status === "canceled"
           ? {
               $set: {
                 completedAt: now,
                 duration: Number(durationSec || 0),
-                talkTime: Number(durationSec || 0), // your stats use talkTime/ duration
+                talkTime: Number(durationSec || 0), // keep alignment with your dashboard usage
                 recordingUrl: recordingUrl || undefined,
               },
             }
@@ -73,6 +85,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       },
       { upsert: true, new: true }
     );
+
+    // 🔔 Realtime UI: emit socket status so Dial Session can react instantly
+    if (email) {
+      emitSocketStatus(res, email, {
+        status,
+        callSid,
+        otherNumber: to,
+        ownerNumber: from,
+        duration: Number(durationSec || 0) || undefined,
+        recordingUrl: recordingUrl || undefined,
+      });
+    }
 
     // ✅ Billing (unchanged logic, just kept here)
     if (email) {
