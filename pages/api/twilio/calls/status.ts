@@ -1,13 +1,15 @@
 // /pages/api/twilio/calls/status.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
+import type { Session } from "next-auth";
 import { authOptions } from "../../auth/[...nextauth]";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "GET") return res.status(405).json({ error: "Method not allowed" });
 
-  const session = await getServerSession(req, res, authOptions as any);
+  // Make the type explicit so TS knows session?.user exists
+  const session = (await getServerSession(req, res, authOptions as any)) as Session | null;
   const email = String(session?.user?.email || "");
   if (!email) return res.status(401).json({ error: "Unauthorized" });
 
@@ -32,7 +34,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       from: c.from,
     });
   } catch (e: any) {
-    // Return 200 so the front-end poller doesn't treat this as a fatal error.
+    // Keep 200 so the poller isn’t fatal on transient errors
     return res.status(200).json({ sid, status: "unknown", error: e?.message || "fetch failed" });
   }
 }
