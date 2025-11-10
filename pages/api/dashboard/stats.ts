@@ -94,55 +94,41 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   ];
 
   try {
-    // === KPIs (dedupe by callSid) ===
+    // KPIs
     const kpiAgg = await (Call as any).aggregate([
       { $match: { userEmail, $or: callTimeOr } },
-      // Normalize talk time as a strict number
       {
         $addFields: {
-          _talkSrc: {
+          _talkTime: {
             $cond: [
               { $and: [{ $ne: ["$talkTime", null] }, { $ne: ["$talkTime", undefined] }] },
               "$talkTime",
               { $cond: [{ $and: [{ $ne: ["$duration", null] }, { $ne: ["$duration", undefined] }] }, "$duration", 0] },
             ],
           },
-        },
-      },
-      { $addFields: { _talkTimeNum: { $toDouble: "$_talkSrc" } } },
-      {
-        $addFields: {
-          _connectedByTalk: { $gte: ["$_talkTimeNum", connectThreshold] },
+          _connectedByTalk: { $gte: ["$_talkTime", connectThreshold] },
           _connectedByAMD: { $regexMatch: { input: { $toString: "$amd.answeredBy" }, regex: /human/i } },
+
+          // 🔧 COUNT ONLY THE EXTERNAL OUTBOUND LEG
           _isDial: {
-            $or: [
+            $and: [
               { $eq: ["$direction", "outbound"] },
-              { $and: [{ $ifNull: ["$direction", ""] }, { $ne: ["$direction", "inbound"] }] },
+              { $gt: [{ $strLenCP: { $ifNull: ["$otherNumber", ""] } }, 0] }, // must have a real external number
             ],
           },
         },
       },
-      // --- collapse to one row per call ---
-      {
-        $group: {
-          _id: "$callSid",
-          isDial: { $max: { $cond: ["$_isDial", 1, 0] } },
-          connected: { $max: { $cond: [{ $or: ["$_connectedByTalk", "$_connectedByAMD"] }, 1, 0] } },
-          talkTime: { $max: "$_talkTimeNum" },
-        },
-      },
-      // --- totals ---
       {
         $group: {
           _id: null,
-          dials: { $sum: "$isDial" },
-          connects: { $sum: "$connected" },
-          totalTalkSec: { $sum: "$talkTime" },
-          longestTalkSec: { $max: "$talkTime" },
-          sampleCountForAvg: { $sum: { $cond: [{ $gt: ["$talkTime", 0] }, 1, 0] } },
+          dials: { $sum: { $cond: ["$_isDial", 1, 0] } },
+          connects: { $sum: { $cond: [{ $or: ["$_connectedByTalk", "$_connectedByAMD"] }, 1, 0] } },
+          totalTalkSec: { $sum: "$_talkTime" },
+          longestTalkSec: { $max: "$_talkTime" },
+          sampleCountForAvg: { $sum: { $cond: [{ $gt: ["$_talkTime", 0] }, 1, 0] } },
         },
       },
-      { $project: { _id: 0, dials: 1, connects: 1, totalTalkSec: 1, longestTalkSec: 1, sampleCountForAvg: 1 } },
+      { $project: { _id: 0, dials: 1, connects: 1, totalTalkSec: { $ifNull: ["$totalTalkSec", 0] }, longestTalkSec: { $ifNull: ["$longestTalkSec", 0] }, sampleCountForAvg: 1 } },
     ]);
 
     const k = (kpiAgg?.[0] as any) || { dials: 0, connects: 0, totalTalkSec: 0, longestTalkSec: 0, sampleCountForAvg: 0 };
@@ -158,7 +144,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       contactRate,
     };
 
-    // === Dispositions ===
+    // Dispositions (unchanged)
     const dispAgg = await (Lead as any).aggregate([
       { $match: { userEmail } },
       { $unwind: "$history" },
@@ -187,46 +173,32 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       dispositions.noAnswer = noAns || 0;
     } catch {}
 
-    // === Hourly today (dedupe by callSid within hour) ===
+    // Hourly today
     const todayFrom = startOfTodayUTC(tz);
     const todayTo = addDaysUTC(todayFrom, 1);
     const hourlyAgg = await (Call as any).aggregate([
       { $match: { userEmail, $or: [{ startedAt: { $gte: todayFrom, $lt: todayTo } }, { completedAt: { $gte: todayFrom, $lt: todayTo } }, { createdAt: { $gte: todayFrom, $lt: todayTo } }] } },
       {
         $addFields: {
-          _talkSrc: {
+          _talkTime: {
             $cond: [
               { $and: [{ $ne: ["$talkTime", null] }, { $ne: ["$talkTime", undefined] }] },
               "$talkTime",
               { $cond: [{ $and: [{ $ne: ["$duration", null] }, { $ne: ["$duration", undefined] }] }, "$duration", 0] },
             ],
           },
-        },
-      },
-      { $addFields: { _talkTimeNum: { $toDouble: "$_talkSrc" } } },
-      {
-        $addFields: {
-          _connectedByTalk: { $gte: ["$_talkTimeNum", connectThreshold] },
+          _connectedByTalk: { $gte: ["$_talkTime", connectThreshold] },
           _connectedByAMD: { $regexMatch: { input: { $toString: "$amd.answeredBy" }, regex: /human/i } },
           _isDial: {
-            $or: [
+            $and: [
               { $eq: ["$direction", "outbound"] },
-              { $and: [{ $ifNull: ["$direction", ""] }, { $ne: ["$direction", "inbound"] }] },
+              { $gt: [{ $strLenCP: { $ifNull: ["$otherNumber", ""] } }, 0] },
             ],
           },
           _bucket: { $dateToString: { format: "%H:00", date: { $ifNull: ["$startedAt", { $ifNull: ["$completedAt", "$createdAt"] }] }, timezone: tz } },
         },
       },
-      // one row per callSid per hour bucket
-      {
-        $group: {
-          _id: { callSid: "$callSid", bucket: "$_bucket" },
-          isDial: { $max: { $cond: ["$_isDial", 1, 0] } },
-          connected: { $max: { $cond: [{ $or: ["$_connectedByTalk", "$_connectedByAMD"] }, 1, 0] } },
-        },
-      },
-      // final sums per hour bucket
-      { $group: { _id: "$_id.bucket", dials: { $sum: "$isDial" }, connects: { $sum: "$connected" } } },
+      { $group: { _id: "$_bucket", dials: { $sum: { $cond: ["$_isDial", 1, 0] } }, connects: { $sum: { $cond: [{ $or: ["$_connectedByTalk", "$_connectedByAMD"] }, 1, 0] } } } },
       { $sort: { _id: 1 } },
     ]);
     const hourlyToday: TrendPoint[] = Array.from({ length: 24 }, (_, h) => {
@@ -235,7 +207,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return { hour: label, label, dials: f?.dials || 0, connects: f?.connects || 0 };
     });
 
-    // === Daily series (7 & 30) — dedupe by callSid within day ===
+    // Daily helpers (7 & 30)
     async function dailyAgg(days: number): Promise<TrendPoint[]> {
       const end = addDaysUTC(todayFrom, 1);
       const start = addDaysUTC(end, -days);
@@ -243,39 +215,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         { $match: { userEmail, $or: [{ startedAt: { $gte: start, $lt: end } }, { completedAt: { $gte: start, $lt: end } }, { createdAt: { $gte: start, $lt: end } }] } },
         {
           $addFields: {
-            _talkSrc: {
+            _talkTime: {
               $cond: [
                 { $and: [{ $ne: ["$talkTime", null] }, { $ne: ["$talkTime", undefined] }] },
                 "$talkTime",
                 { $cond: [{ $and: [{ $ne: ["$duration", null] }, { $ne: ["$duration", undefined] }] }, "$duration", 0] },
               ],
             },
-          },
-        },
-        { $addFields: { _talkTimeNum: { $toDouble: "$_talkSrc" } } },
-        {
-          $addFields: {
-            _connectedByTalk: { $gte: ["$_talkTimeNum", connectThreshold] },
+            _connectedByTalk: { $gte: ["$_talkTime", connectThreshold] },
             _connectedByAMD: { $regexMatch: { input: { $toString: "$amd.answeredBy" }, regex: /human/i } },
             _isDial: {
-              $or: [
+              $and: [
                 { $eq: ["$direction", "outbound"] },
-                { $and: [{ $ifNull: ["$direction", ""] }, { $ne: ["$direction", "inbound"] }] },
+                { $gt: [{ $strLenCP: { $ifNull: ["$otherNumber", ""] } }, 0] },
               ],
             },
             _day: { $dateToString: { format: "%Y-%m-%d", date: { $ifNull: ["$startedAt", { $ifNull: ["$completedAt", "$createdAt"] }] }, timezone: tz } },
           },
         },
-        // one row per callSid per day
-        {
-          $group: {
-            _id: { callSid: "$callSid", day: "$_day" },
-            isDial: { $max: { $cond: ["$_isDial", 1, 0] } },
-            connected: { $max: { $cond: [{ $or: ["$_connectedByTalk", "$_connectedByAMD"] }, 1, 0] } },
-          },
-        },
-        // final sums per day
-        { $group: { _id: "$_id.day", dials: { $sum: "$isDial" }, connects: { $sum: "$connected" } } },
+        { $group: { _id: "$_day", dials: { $sum: { $cond: ["$_isDial", 1, 0] } }, connects: { $sum: { $cond: [{ $or: ["$_connectedByTalk", "$_connectedByAMD"] }, 1, 0] } } } },
         { $sort: { _id: 1 } },
       ]);
 
@@ -292,7 +250,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const [daily7, daily30] = await Promise.all([dailyAgg(7), dailyAgg(30)]);
 
-    // === Recent activity ===
+    // Recent activity (unchanged)
     const recentCalls = await (Call as any)
       .find({ userEmail, $or: callTimeOr })
       .sort({ createdAt: -1 })

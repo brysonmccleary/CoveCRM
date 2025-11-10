@@ -447,39 +447,50 @@ export default function DialSession() {
     return { callSid: j.callSid, conferenceName: j.conferenceName };
   };
 
+  // --- REPLACED: tightened status polling (no early Connected; clean terminal handling)
   const beginStatusPolling = (sid: string) => {
     clearStatusPoll();
+
+    const interpret = (raw: any) => String(raw || "").toLowerCase();
+
     statusPollRef.current = setInterval(async () => {
       try {
-        const j = await fetchJson<{ status: string }>(`/api/twilio/calls/status?sid=${encodeURIComponent(sid)}`);
-        const s = (j?.status || "").toLowerCase();
+        const j = await fetch(`/api/twilio/calls/status?sid=${encodeURIComponent(sid)}`, { cache: "no-store" }).then(r => r.json());
+        const s = interpret(j?.status);
+        // queued | ringing | in-progress | completed | busy | failed | no-answer | canceled
 
-        // ✅ Only treat ANSWERED as a real connection; ignore in-progress for ringback cut
-        if (s === "answered") {
-          setStatus("Connected");
+        // UI copy — do not say Connected until we truly are
+        if (s === "queued" || s === "ringing") {
+          setStatus("Ringing…");               // keep ringback on
+          return;
+        }
+
+        if (s === "in-progress") {
+          // TRUE bridge — stop ringback & timers, mark connected, keep polling
           stopRingback();
           clearWatchdog();
-          clearStatusPoll();
+          hasConnectedRef.current = true;
+          setStatus("Connected");
+          return;
         }
 
-        if (s === "busy" || s === "failed" || s === "no-answer") {
-          if (s === "no-answer" && tooEarly()) return;
-          stopRingback(); clearWatchdog(); clearStatusPoll();
-          await hangupActiveCall(`status-${s}`); await leaveIfJoined(`status-${s}`);
-          if (!advanceScheduledRef.current && !sessionEndedRef.current) {
-            advanceScheduledRef.current = true;
-            setStatus(s === "no-answer" ? "No answer" : s.charAt(0).toUpperCase() + s.slice(1));
-            scheduleAdvance();
-          }
-        }
-
-        // Treat canceled/completed as a definitive disconnect
-        if (s === "canceled" || s === "completed") {
+        // terminal states: stop all audio/timers
+        if (s === "completed" || s === "busy" || s === "failed" || s === "no-answer" || s === "canceled") {
+          stopRingback();
+          clearWatchdog();
+          // don't auto-hangup here; Dial Session buttons control lifecycle
+          // set a friendly status:
+          const label =
+            s === "completed" ? "Completed" :
+            s === "busy"      ? "Busy" :
+            s === "no-answer" ? "No Answer" :
+            s === "failed"    ? "Failed" : "Ended";
+          setStatus(label);
           clearStatusPoll();
-          await markDisconnected(`status-${s}`);
+          return;
         }
       } catch {
-        // ignore transient errors
+        // network hiccup? keep polling a bit longer
       }
     }, 1000);
   };
