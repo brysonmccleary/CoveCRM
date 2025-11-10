@@ -527,16 +527,14 @@ export default function DialSession() {
           } catch {}
         };
 
-        const connectedNow = () => {
-          stopRingback();
-          clearWatchdog();
-          setStatus("Connected");
-          hasConnectedRef.current = true;
+        // 🔁 Agent leg bridged — do NOT mark Connected or stop ringback here.
+        const agentLegBridged = () => {
+          hasConnectedRef.current = hasConnectedRef.current || false;
         };
+        safeOn("accept", agentLegBridged);
+        safeOn("connect", agentLegBridged);
+        safeOn("connected", agentLegBridged);
 
-        safeOn("accept", connectedNow);
-        safeOn("connect", connectedNow);
-        safeOn("connected", connectedNow);
         safeOn("disconnect", () => markDisconnected("twilio-disconnect"));
         safeOn("disconnected", () => markDisconnected("twilio-disconnected"));
         safeOn("hangup", () => markDisconnected("twilio-hangup"));
@@ -597,7 +595,7 @@ export default function DialSession() {
         try {
           joinedRef.current = true;
 
-          // Capture the returned call object and cut ringback on instant connect
+          // Capture the returned call object
           const callObj = await joinConference(activeConferenceRef.current);
 
           const safeOn = (ev: string, fn: (...args: any[]) => void) => {
@@ -607,17 +605,13 @@ export default function DialSession() {
             } catch {}
           };
 
-          const connectedNow = () => {
-            hasConnectedRef.current = true;
-            stopRingback();
-            clearWatchdog();
-            setStatus("Connected");
+          // 🔁 Agent leg bridged — do NOT mark Connected or stop ringback here.
+          const agentLegBridged = () => {
+            hasConnectedRef.current = hasConnectedRef.current || false;
           };
-
-          // Twilio SDK variants
-          safeOn("accept", connectedNow);
-          safeOn("connect", connectedNow);
-          safeOn("connected", connectedNow);
+          safeOn("accept", agentLegBridged);
+          safeOn("connect", agentLegBridged);
+          safeOn("connected", agentLegBridged);
 
           // Disconnected events
           safeOn("disconnect", () => { markDisconnected("twilio-disconnect"); });
