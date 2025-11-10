@@ -1,7 +1,7 @@
 // /pages/api/twilio/calls/status.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
-import { authOptions } from "../auth/[...nextauth]";
+import { authOptions } from "../../auth/[...nextauth]";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -32,6 +32,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       from: c.from,
     });
   } catch (e: any) {
+    // Return 200 so the front-end poller doesn't treat this as a fatal error.
     return res.status(200).json({ sid, status: "unknown", error: e?.message || "fetch failed" });
   }
 }
