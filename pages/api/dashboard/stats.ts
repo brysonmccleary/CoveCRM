@@ -80,7 +80,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   await dbConnect();
 
-  const session = await getServerSession(req, res, authOptions as any);
+  // ✅ Safe explicit type so TS stops complaining
+  const session = (await getServerSession(req, res, authOptions as any)) as
+    | { user?: { email?: string | null } }
+    | null;
+
   if (!session?.user?.email) return res.status(401).json({ error: "Unauthorized" });
   const userEmail = String(session.user.email).toLowerCase();
 
