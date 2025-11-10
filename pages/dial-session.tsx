@@ -454,7 +454,8 @@ export default function DialSession() {
         const j = await fetchJson<{ status: string }>(`/api/twilio/calls/status?sid=${encodeURIComponent(sid)}`);
         const s = (j?.status || "").toLowerCase();
 
-        if (s === "in-progress" || s === "answered") {
+        // ✅ Only treat ANSWERED as a real connection; ignore in-progress for ringback cut
+        if (s === "answered") {
           setStatus("Connected");
           stopRingback();
           clearWatchdog();
@@ -731,7 +732,7 @@ export default function DialSession() {
       if (!sessionEndedRef.current) scheduleNextLead(); // advance to next lead
     } catch (e: any) {
       console.error(e);
-      toast.error(e?.message || "Failed to save disposition");
+      toast.error(e?.message || "Failed to save note");
       if (!sessionEndedRef.current) scheduleNextLead(); // still advance on error
     } finally {
       dispositionBusyRef.current = false;
@@ -870,7 +871,8 @@ export default function DialSession() {
             if (s === "initiated") setStatus("Dial initiated…");
             if (s === "ringing") setStatus("Ringing…");
 
-            if (s === "answered" || s === "in-progress") {
+            // ✅ Only treat ANSWERED as a real connection; ignore in-progress
+            if (s === "answered") {
               setStatus("Connected");
               stopRingback();
               clearWatchdog();
