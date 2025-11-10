@@ -18,6 +18,7 @@ type KPI = {
 type TrendPoint = { date?: string; hour?: string; label: string; dials: number; connects: number };
 
 const DEFAULT_TZ = "America/Phoenix";
+const CONNECT_THRESHOLD_DEFAULT = 2; // count connects with >=2s talk time by default
 
 function parseYMD(s: string) {
   const [y, m, d] = s.split("-").map((n) => parseInt(n, 10));
@@ -79,12 +80,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   await dbConnect();
 
-  const session = await getServerSession(req, res, authOptions);
+  const session = await getServerSession(req, res, authOptions as any);
   if (!session?.user?.email) return res.status(401).json({ error: "Unauthorized" });
   const userEmail = String(session.user.email).toLowerCase();
 
   const tz = typeof req.query.tz === "string" && req.query.tz ? req.query.tz : DEFAULT_TZ;
-  const connectThreshold = Math.max(0, parseInt(String(req.query.connectThreshold || "10"), 10) || 10);
+  const connectThreshold =
+    Math.max(0, parseInt(String(req.query.connectThreshold || CONNECT_THRESHOLD_DEFAULT), 10) || CONNECT_THRESHOLD_DEFAULT);
+
   const { from, to } = rangeFromQuery(req, tz);
 
   const callTimeOr = [
@@ -94,7 +97,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   ];
 
   try {
-    // KPIs
+    // ---------- KPIs ----------
     const kpiAgg = await (Call as any).aggregate([
       { $match: { userEmail, $or: callTimeOr } },
       {
@@ -106,15 +109,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               { $cond: [{ $and: [{ $ne: ["$duration", null] }, { $ne: ["$duration", undefined] }] }, "$duration", 0] },
             ],
           },
+          // Treat any call that is NOT explicitly inbound as a dial (covers missing/empty direction)
+          _isDial: { $ne: ["$direction", "inbound"] },
           _connectedByTalk: { $gte: ["$_talkTime", connectThreshold] },
-          _connectedByAMD: { $regexMatch: { input: { $toString: "$amd.answeredBy" }, regex: /human/i } },
-
-          // 🔧 COUNT ONLY THE EXTERNAL OUTBOUND LEG
-          _isDial: {
-            $and: [
-              { $eq: ["$direction", "outbound"] },
-              { $gt: [{ $strLenCP: { $ifNull: ["$otherNumber", ""] } }, 0] }, // must have a real external number
-            ],
+          _connectedByAMD: {
+            $regexMatch: {
+              input: { $ifNull: [{ $toString: "$amd.answeredBy" }, ""] },
+              regex: /human/i,
+            },
           },
         },
       },
@@ -144,7 +146,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       contactRate,
     };
 
-    // Dispositions (unchanged)
+    // ---------- Dispositions (from Lead.history) ----------
     const dispAgg = await (Lead as any).aggregate([
       { $match: { userEmail } },
       { $unwind: "$history" },
@@ -173,7 +175,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       dispositions.noAnswer = noAns || 0;
     } catch {}
 
-    // Hourly today
+    // ---------- Hourly (today) ----------
     const todayFrom = startOfTodayUTC(tz);
     const todayTo = addDaysUTC(todayFrom, 1);
     const hourlyAgg = await (Call as any).aggregate([
@@ -187,18 +189,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               { $cond: [{ $and: [{ $ne: ["$duration", null] }, { $ne: ["$duration", undefined] }] }, "$duration", 0] },
             ],
           },
+          _isDial: { $ne: ["$direction", "inbound"] },
           _connectedByTalk: { $gte: ["$_talkTime", connectThreshold] },
-          _connectedByAMD: { $regexMatch: { input: { $toString: "$amd.answeredBy" }, regex: /human/i } },
-          _isDial: {
-            $and: [
-              { $eq: ["$direction", "outbound"] },
-              { $gt: [{ $strLenCP: { $ifNull: ["$otherNumber", ""] } }, 0] },
-            ],
+          _connectedByAMD: {
+            $regexMatch: {
+              input: { $ifNull: [{ $toString: "$amd.answeredBy" }, ""] },
+              regex: /human/i,
+            },
           },
-          _bucket: { $dateToString: { format: "%H:00", date: { $ifNull: ["$startedAt", { $ifNull: ["$completedAt", "$createdAt"] }] }, timezone: tz } },
+          _bucket: {
+            $dateToString: {
+              format: "%H:00",
+              date: { $ifNull: ["$startedAt", { $ifNull: ["$completedAt", "$createdAt"] }] },
+              timezone: tz,
+            },
+          },
         },
       },
-      { $group: { _id: "$_bucket", dials: { $sum: { $cond: ["$_isDial", 1, 0] } }, connects: { $sum: { $cond: [{ $or: ["$_connectedByTalk", "$_connectedByAMD"] }, 1, 0] } } } },
+      {
+        $group: {
+          _id: "$_bucket",
+          dials: { $sum: { $cond: ["$_isDial", 1, 0] } },
+          connects: { $sum: { $cond: [{ $or: ["$_connectedByTalk", "$_connectedByAMD"] }, 1, 0] } },
+        },
+      },
       { $sort: { _id: 1 } },
     ]);
     const hourlyToday: TrendPoint[] = Array.from({ length: 24 }, (_, h) => {
@@ -207,7 +221,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return { hour: label, label, dials: f?.dials || 0, connects: f?.connects || 0 };
     });
 
-    // Daily helpers (7 & 30)
+    // ---------- Daily (7 & 30) ----------
     async function dailyAgg(days: number): Promise<TrendPoint[]> {
       const end = addDaysUTC(todayFrom, 1);
       const start = addDaysUTC(end, -days);
@@ -222,18 +236,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 { $cond: [{ $and: [{ $ne: ["$duration", null] }, { $ne: ["$duration", undefined] }] }, "$duration", 0] },
               ],
             },
+            _isDial: { $ne: ["$direction", "inbound"] },
             _connectedByTalk: { $gte: ["$_talkTime", connectThreshold] },
-            _connectedByAMD: { $regexMatch: { input: { $toString: "$amd.answeredBy" }, regex: /human/i } },
-            _isDial: {
-              $and: [
-                { $eq: ["$direction", "outbound"] },
-                { $gt: [{ $strLenCP: { $ifNull: ["$otherNumber", ""] } }, 0] },
-              ],
+            _connectedByAMD: {
+              $regexMatch: {
+                input: { $ifNull: [{ $toString: "$amd.answeredBy" }, ""] },
+                regex: /human/i,
+              },
             },
-            _day: { $dateToString: { format: "%Y-%m-%d", date: { $ifNull: ["$startedAt", { $ifNull: ["$completedAt", "$createdAt"] }] }, timezone: tz } },
+            _day: {
+              $dateToString: {
+                format: "%Y-%m-%d",
+                date: { $ifNull: ["$startedAt", { $ifNull: ["$completedAt", "$createdAt"] }] },
+                timezone: tz,
+              },
+            },
           },
         },
-        { $group: { _id: "$_day", dials: { $sum: { $cond: ["$_isDial", 1, 0] } }, connects: { $sum: { $cond: [{ $or: ["$_connectedByTalk", "$_connectedByAMD"] }, 1, 0] } } } },
+        {
+          $group: {
+            _id: "$_day",
+            dials: { $sum: { $cond: ["$_isDial", 1, 0] } },
+            connects: { $sum: { $cond: [{ $or: ["$_connectedByTalk", "$_connectedByAMD"] }, 1, 0] } },
+          },
+        },
         { $sort: { _id: 1 } },
       ]);
 
@@ -250,7 +276,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const [daily7, daily30] = await Promise.all([dailyAgg(7), dailyAgg(30)]);
 
-    // Recent activity (unchanged)
+    // ---------- Recent activity ----------
     const recentCalls = await (Call as any)
       .find({ userEmail, $or: callTimeOr })
       .sort({ createdAt: -1 })
