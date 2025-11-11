@@ -31,7 +31,7 @@ const RAW_BASE_URL = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL |
 const SHARED_MESSAGING_SERVICE_SID = process.env.TWILIO_MESSAGING_SERVICE_SID || "";
 const INTERNAL_API_TOKEN = process.env.INTERNAL_API_TOKEN || "";
 const LEAD_ENTRY_PATH = (process.env.APP_LEAD_ENTRY_PATH || "/lead").replace(/\/?$/, "");
-const BUILD_TAG = "inbound-sms@2025-08-28T19:45Z";
+const BUILD_TAG = "inbound-sms@2025-11-11T20:50Z";
 console.log(`[inbound-sms] build=${BUILD_TAG}`);
 
 const STATUS_CALLBACK =
@@ -191,65 +191,20 @@ function isStart(text: string): boolean {
 function containsConfirmation(text: string) {
   const t = (text || "").toLowerCase();
   return [
-    "that works",
-    "works for me",
-    "sounds good",
-    "sounds great",
-    "perfect",
-    "let's do",
-    "lets do",
-    "confirm",
-    "confirmed",
-    "book it",
-    "schedule it",
-    "set it",
-    "lock it in",
-    "we can do",
-    "we could do",
-    "3 works",
-    "works",
+    "that works","works for me","sounds good","sounds great","perfect","let's do","lets do","confirm","confirmed","book it","schedule it","set it","lock it in","we can do","we could do","3 works","works",
   ].some((p) => t.includes(p));
 }
 function isInfoRequest(text: string): boolean {
   const t = (text || "").toLowerCase();
   const phrases = [
-    "send the info",
-    "send info",
-    "send details",
-    "send me info",
-    "send me the info",
-    "email the info",
-    "email me the info",
-    "email details",
-    "email me details",
-    "just email me",
-    "text the info",
-    "text me the info",
-    "text details",
-    "text it",
-    "can you text it",
-    "mail the info",
-    "mail me the info",
-    "mail details",
-    "just send it",
-    "can you send it",
-    "do you have something you can send",
-    "do you have anything you can send",
-    "link",
-    "website",
+    "send the info","send info","send details","send me info","send me the info","email the info","email me the info","email details","email me details","just email me","text the info","text me the info","text details","text it","can you text it","mail the info","mail me the info","mail details","just send it","can you send it","do you have something you can send","do you have anything you can send","link","website",
   ];
   return phrases.some((p) => t.includes(p));
 }
 
 const TZ_ABBR: Record<string, string> = {
-  est: "America/New_York",
-  edt: "America/New_York",
-  cst: "America/Chicago",
-  cdt: "America/Chicago",
-  mst: "America/Denver",
-  mdt: "America/Denver",
-  pst: "America/Los_Angeles",
-  pdt: "America/Los_Angeles",
+  est: "America/New_York", edt: "America/New_York", cst: "America/Chicago", cdt: "America/Chicago",
+  mst: "America/Denver", mdt: "America/Denver", pst: "America/Los_Angeles", pdt: "America/Los_Angeles",
 };
 
 function extractRequestedISO(textIn: string, state?: string): string | null {
@@ -271,22 +226,12 @@ function extractRequestedISO(textIn: string, state?: string): string | null {
         if (ap === "pm" && h < 12) h += 12;
         if (ap === "am" && h === 12) h = 0;
       }
-      const dt = now
-        .plus({ days: 1 })
-        .set({ hour: h, minute: min, second: 0, millisecond: 0 });
+      const dt = now.plus({ days: 1 }).set({ hour: h, minute: min, second: 0, millisecond: 0 });
       return dt.isValid ? dt.toISO() : null;
     }
   }
 
-  const weekdays = [
-    "sunday",
-    "monday",
-    "tuesday",
-    "wednesday",
-    "thursday",
-    "friday",
-    "saturday",
-  ];
+  const weekdays = ["sunday","monday","tuesday","wednesday","thursday","friday","saturday"];
   for (const w of weekdays) {
     if (text.includes(w)) {
       const m = text.match(timeRe);
@@ -315,8 +260,7 @@ function extractRequestedISO(textIn: string, state?: string): string | null {
   for (const re of patterns) {
     const m = text.match(re);
     if (m) {
-      const month = parseInt(m[1], 10),
-        day = parseInt(m[2], 10);
+      const month = parseInt(m[1], 10), day = parseInt(m[2], 10);
       let h = parseInt(m[3], 10);
       const min = parseInt(m[4], 10) || 0;
       const ap = m[5];
@@ -324,18 +268,7 @@ function extractRequestedISO(textIn: string, state?: string): string | null {
         if (ap === "pm" && h < 12) h += 12;
         if (ap === "am" && h === 12) h = 0;
       }
-      let dt = DateTime.fromObject(
-        {
-          year: now.year,
-          month,
-          day,
-          hour: h,
-          minute: min,
-          second: 0,
-          millisecond: 0,
-        },
-        { zone },
-      );
+      let dt = DateTime.fromObject({ year: now.year, month, day, hour: h, minute: min, second: 0, millisecond: 0 }, { zone });
       if (dt.isValid && dt < now) dt = dt.plus({ years: 1 });
       return dt.isValid ? dt.toISO() : null;
     }
@@ -359,9 +292,7 @@ function extractRequestedISO(textIn: string, state?: string): string | null {
 }
 
 function extractTimeFromLastAI(history: any[], state?: string): string | null {
-  const lastAI = [...(history || [])]
-    .reverse()
-    .find((m: any) => m.type === "ai");
+  const lastAI = [...(history || [])].reverse().find((m: any) => m.type === "ai");
   if (!lastAI?.text) return null;
   return extractRequestedISO(String(lastAI.text), state);
 }
@@ -397,15 +328,10 @@ function pushAsked(memory: LeadMemory, key: string) {
 }
 
 // ===== NEW =====
-// Minimal module-level scratch to know which user to bill for OpenAI usage
 let _lastInboundUserEmailForBilling: string | null = null;
 
 // --- LLM helpers
-async function extractIntentAndTimeLLM(input: {
-  text: string;
-  nowISO: string;
-  tz: string;
-}) {
+async function extractIntentAndTimeLLM(input: { text: string; nowISO: string; tz: string; }) {
   const sys = `Extract intent for a brief SMS thread about booking a call.
 Return STRICT JSON with keys:
 intent: one of [schedule, confirm, reschedule, ask_cost, ask_duration, cancel, smalltalk, unknown]
@@ -416,14 +342,10 @@ yesno: "yes"|"no"|"unknown"`;
   const resp = await openai.chat.completions.create({
     model: "gpt-4o-mini",
     temperature: 0,
-    messages: [
-      { role: "system", content: sys },
-      { role: "user", content: user },
-    ],
+    messages: [{ role: "system", content: sys }, { role: "user", content: user }],
     response_format: { type: "json_object" },
   });
 
-  // ✅ Bill OpenAI usage (raw cost; markup applied in trackUsage)
   try {
     const usage = (resp as any)?.usage || {};
     const raw = priceOpenAIUsage({
@@ -432,24 +354,13 @@ yesno: "yes"|"no"|"unknown"`;
       completionTokens: usage?.completion_tokens,
     });
     if (raw > 0 && _lastInboundUserEmailForBilling) {
-      await trackUsage({
-        user: { email: _lastInboundUserEmailForBilling },
-        amount: raw,
-        source: "openai",
-      });
+      await trackUsage({ user: { email: _lastInboundUserEmailForBilling }, amount: raw, source: "openai" });
     }
-  } catch {
-    // never block on billing
-  }
+  } catch {}
 
   let data: any = {};
-  try {
-    data = JSON.parse(resp.choices[0].message.content || "{}");
-  } catch {}
-  return {
-    intent: (data.intent as string) || "unknown",
-    datetime_text: (data.datetime_text as string) || null,
-  };
+  try { data = JSON.parse(resp.choices[0].message.content || "{}"); } catch {}
+  return { intent: (data.intent as string) || "unknown", datetime_text: (data.datetime_text as string) || null };
 }
 
 // --- chat history for LLM (user/assistant roles)
@@ -458,104 +369,68 @@ function historyToChatMessages(history: any[] = []) {
   for (const m of history) {
     if (!m?.text) continue;
     if (m.type === "inbound") msgs.push({ role: "user", content: String(m.text) });
-    else if (m.type === "ai" || m.type === "outbound")
-      msgs.push({ role: "assistant", content: String(m.text) });
+    else if (m.type === "ai" || m.type === "outbound") msgs.push({ role: "assistant", content: String(m.text) });
   }
   return msgs.slice(-24);
 }
 
-// --- NEW: Deterministic matcher (pattern -> reply)
-// Every reply stays human, concise, and ends by nudging to a time.
+// --- Deterministic reply shortcuts (compliance + non-repetition)
 function buildDeterministicReply(textRaw: string, context: string): string | null {
   const t = (textRaw || "").trim().toLowerCase();
-
   const any = (...subs: string[]) => subs.some(s => t.includes(s));
 
-  // 1) Already have coverage
-  if (any("already have coverage", "i already have", "i'm covered", "im covered", "we're covered", "we are covered", "we’re covered", "already insured", "have life insurance", "have insurance already")) {
+  if (any("already have coverage","i already have","i'm covered","im covered","we're covered","we are covered","we’re covered","already insured","have life insurance","have insurance already")) {
     return "I can see that on my end, it looks like we can save you anywhere from $20-$50+ a month. When do you have five minutes to talk?";
   }
-
-  // 2) Not interested
-  if (any("not interested", "no thanks", "no thank you", "pass", "stop texting") && !["stop","stopall","unsubscribe","cancel","end","quit"].includes(t)) {
+  if (any("not interested","no thanks","no thank you","pass","stop texting") && !["stop","stopall","unsubscribe","cancel","end","quit"].includes(t)) {
     return "Totally get it. Before I close it out, most folks still find $20–$50+ in savings in a 5-min check. Want me to hold a quick time later today or tomorrow?";
   }
-
-  // 3) Price / cost
-  if (any("how much", "price", "rate", "rates", "cost", "quote")) {
+  if (any("how much","price","rate","rates","cost","quote")) {
     return "Good question. Your exact monthly depends on a couple quick details—takes about 5 minutes. What time works later today or tomorrow for a quick call?";
   }
-
-  // 4) Busy / later
-  if (any("busy", "can’t talk", "cant talk", "in a meeting", "later", "another time", "driving")) {
+  if (any("busy","can’t talk","cant talk","in a meeting","later","another time","driving")) {
     return "No problem—I’ll keep it to 5 minutes. What’s a quick window later today or tomorrow?";
   }
-
-  // 5) Who is this / how got number
-  if (any("who is this", "who are you", "how did you get my number", "what company", "is this legit", "scam")) {
+  if (any("who is this","who are you","how did you get my number","what company","is this legit","scam")) {
     return "Hey there—this is the benefits team that handles life insurance and mortgage protection requests you asked about. It’s a quick 5-min review. What time works today or tomorrow?";
   }
-
-  // 6) Remove me / wrong number (non-STOP phrasing)
-  if (any("remove me", "wrong number", "dont text", "don't text", "do not text")) {
+  if (any("remove me","wrong number","dont text","don't text","do not text")) {
     return "Understood—I’ll update that. If you’re comparing options, we can check in 5 minutes. Want a quick time later today or tomorrow?";
   }
-
-  // 7) Send info
-  if (any("send info", "send the info", "send details", "email me", "text me info", "mail the info", "just send it", "can you send it", "link", "website")) {
+  if (any("send info","send the info","send details","email me","text me info","mail the info","just send it","can you send it","link","website")) {
     return "Unfortunately as of now there's nothing to send over without getting some information from you. When's a good time for a quick 5 minute call? After that we can send everything out.";
   }
-
-  // 8) Already talked / my agent / already applied
-  if (any("already talked", "already applied", "my agent", "have an agent", "working with an agent")) {
+  if (any("already talked","already applied","my agent","have an agent","working with an agent")) {
     return "Makes sense—this will be quick. We usually find $20–$50+ a month by checking carriers they didn’t quote. Want a fast 5-min look later today or tomorrow?";
   }
-
-  // 9) Health / don’t qualify
-  if (any("don’t qualify", "dont qualify", "declined", "pre-existing", "preexisting", "health issues")) {
+  if (any("don’t qualify","dont qualify","declined","pre-existing","preexisting","health issues")) {
     return "Some carriers are flexible on health—often people still qualify. Let’s take 5 minutes and check. What time works today or tomorrow?";
   }
-
-  // 10) Age
-  if (any("too old", "too young", "age")) {
+  if (any("too old","too young","age")) {
     return "Age changes which carriers fit best, but there are options. A quick 5-min check answers it. What time works today or tomorrow?";
   }
-
-  // 11) Cheapest only
-  if (any("cheapest", "lowest price", "best rate")) {
+  if (any("cheapest","lowest price","best rate")) {
     return "Got it—let’s run a fast apples-to-apples check for the lowest monthly. Takes about 5 minutes. What time works later today or tomorrow?";
   }
-
-  // 12) Text only
-  if (any("text only", "don’t call", "dont call", "can we text")) {
+  if (any("text only","don’t call","dont call","can we text")) {
     return "We can text basics, but final numbers need a quick verbal to be accurate—it’s 5 minutes. What time works later today or tomorrow?";
   }
-
-  // 13) Tomorrow / another day explicit
   if (any("tomorrow")) {
     return "Sounds good—what’s a quick 5-10 minute window tomorrow?";
   }
-
-  // 14) Time/call length
-  if (any("how long", "time does it take", "length of call")) {
+  if (any("how long","time does it take","length of call")) {
     return "About 5 minutes to see exact monthly and options. What time works today or tomorrow?";
   }
-
-  // 15) Spanish / español
   if (/[áéíóúñ]|hablas|espanol|español/.test(t)) {
     return "¡Sí! Podemos revisarlo en 5 minutos y ver si bajamos su pago $20–$50+ al mes. ¿Prefiere hoy o mañana para una llamada rápida?";
   }
-
-  // 16) Profanity / hostile (non-STOP)
   if (/\b(fuck|idiot|stupid|scam|bs|b\s*s)\b/i.test(textRaw) && !isOptOut(textRaw)) {
     return "I hear you. If you want a real number later, it’s a quick 5-minute review and often saves $20–$50+ a month. What time works today or tomorrow?";
   }
-
-  // Default: null → let LLM fallback handle it
   return null;
 }
 
-// --- conversational reply (LLM fallback)
+// --- conversational reply (LLM fallback, Jeremy Lee Minor-inspired consultative tone)
 async function generateConversationalReply(opts: {
   lead: any;
   userEmail: string;
@@ -576,9 +451,10 @@ async function generateConversationalReply(opts: {
   const sys = `
 You are a helpful human-like SMS assistant for an insurance agent.
 - Speak like a real person texting: friendly, concise, natural (1–2 sentences, ~240 chars max).
+- Use a Jeremy Lee Minor–style consultative tone: ask one precise question to uncover motivation or timing, isolate objections, and move to a call.
 - No names/signatures. No links. No emojis.
-- You can acknowledge their message briefly (one clause), then pivot toward ${context} and time booking.
-- Ask exactly ONE specific follow-up each turn.
+- Acknowledge their message briefly, then pivot toward ${context} and a specific time window.
+- Ask exactly ONE focused, non-repetitive follow-up each turn.
 - Vary phrasing—avoid repeating any of these: ${banned.join(" | ") || "(none)"}.
 - If they ask about cost or time commitment, answer briefly then ask for a time.
 - Keep momentum: suggest two choices when helpful (e.g., “later today or tomorrow afternoon?”).
@@ -597,7 +473,6 @@ You are a helpful human-like SMS assistant for an insurance agent.
     messages: [{ role: "system", content: sys }, ...chat],
   });
 
-  // ✅ Bill OpenAI usage
   try {
     const usage = (resp as any)?.usage || {};
     const raw = priceOpenAIUsage({
@@ -606,17 +481,12 @@ You are a helpful human-like SMS assistant for an insurance agent.
       completionTokens: usage?.completion_tokens,
     });
     if (raw > 0 && _lastInboundUserEmailForBilling) {
-      await trackUsage({
-        user: { email: _lastInboundUserEmailForBilling },
-        amount: raw,
-        source: "openai",
-      });
+      await trackUsage({ user: { email: _lastInboundUserEmailForBilling }, amount: raw, source: "openai" });
     }
   } catch {}
 
   const text = resp.choices?.[0]?.message?.content?.trim() || "";
-  if (!text)
-    return "Got it — what time works for a quick call today or tomorrow?";
+  if (!text) return "Got it — what time works for a quick call today or tomorrow?";
   return text.replace(/\s+/g, " ").trim();
 }
 
@@ -631,9 +501,7 @@ function normalizeWhen(datetimeText: string | null, nowISO: string, tz: string) 
 function leadPhoneMatches(lead: any, fromDigits: string): boolean {
   if (!lead) return false;
   const cand: string[] = [];
-  const push = (v: any) => {
-    if (v) cand.push(normalizeDigits(String(v)));
-  };
+  const push = (v: any) => { if (v) cand.push(normalizeDigits(String(v))); };
   push((lead as any).Phone);
   push((lead as any).phone);
   push((lead as any)["Phone Number"]);
@@ -648,31 +516,19 @@ function leadPhoneMatches(lead: any, fromDigits: string): boolean {
 }
 // ----------------------------------------------------------------------------------------------------------
 
-// ---------- handler ----------
-export default async function handler(
-  req: NextApiRequest,
-  res: NextApiResponse,
-) {
-  if (req.method !== "POST")
-    return res.status(405).json({ message: "Method not allowed." });
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed." });
 
   // Read raw body for signature verification
   const raw = (await buffer(req)).toString();
   const params = new URLSearchParams(raw);
 
   // Compute exact URL Twilio used (handles www vs apex & proxies)
-  const host =
-    (req.headers["x-forwarded-host"] as string) ||
-    (req.headers.host as string) ||
-    "";
+  const host = (req.headers["x-forwarded-host"] as string) || (req.headers.host as string) || "";
   const proto = (req.headers["x-forwarded-proto"] as string) || "https";
   const pathOnly = (req.url || "").split("?")[0] || "/api/twilio/inbound-sms";
   const ABS_BASE_URL = host ? `${proto}://${host}` : RAW_BASE_URL || "";
-  const absoluteUrl = host
-    ? `${proto}://${host}${pathOnly}`
-    : RAW_BASE_URL
-    ? `${RAW_BASE_URL}${pathOnly}`
-    : "";
+  const absoluteUrl = host ? `${proto}://${host}${pathOnly}` : RAW_BASE_URL ? `${RAW_BASE_URL}${pathOnly}` : "";
 
   // Verify Twilio signature (unless dev bypass)
   const signature = (req.headers["x-twilio-signature"] || "") as string;
@@ -684,21 +540,14 @@ export default async function handler(
     req.headers.authorization === `Bearer ${INTERNAL_API_TOKEN}`;
 
   const valid = absoluteUrl
-    ? twilio.validateRequest(
-        AUTH_TOKEN,
-        signature,
-        absoluteUrl,
-        Object.fromEntries(params as any),
-      )
+    ? twilio.validateRequest(AUTH_TOKEN, signature, absoluteUrl, Object.fromEntries(params as any))
     : false;
 
   if (!valid) {
     if (ALLOW_DEV_TWILIO_TEST || hasAuthBypass) {
       console.warn("⚠️ Signature bypass enabled for inbound-sms (dev/test).");
     } else {
-      console.warn("❌ Invalid Twilio signature on inbound-sms", {
-        absoluteUrl,
-      });
+      console.warn("❌ Invalid Twilio signature on inbound-sms", { absoluteUrl });
       return res.status(403).send("Invalid signature");
     }
   }
@@ -715,41 +564,29 @@ export default async function handler(
     const numMedia = parseInt(params.get("NumMedia") || "0", 10);
 
     if (!fromNumber || !toNumber) {
-      return res
-        .status(200)
-        .json({ message: "Missing required fields, acknowledged." });
+      return res.status(200).json({ message: "Missing required fields, acknowledged." });
     }
 
     // Idempotency
     if (messageSid) {
       const existing = await Message.findOne({ sid: messageSid }).lean().exec();
       if (existing) {
-        return res
-          .status(200)
-          .json({ message: "Duplicate delivery (sid), acknowledged." });
+        return res.status(200).json({ message: "Duplicate delivery (sid), acknowledged." });
       }
     }
 
-    console.log(
-      `📥 inbound sid=${messageSid || "n/a"} from=${fromNumber} -> to=${toNumber} text="${body.slice(0, 120)}${
-        body.length > 120 ? "…" : ""
-      }"`,
-    );
+    console.log(`📥 inbound sid=${messageSid || "n/a"} from=${fromNumber} -> to=${toNumber} text="${body.slice(0, 120)}${body.length > 120 ? "…" : ""}"`);
 
     // Map to the user by the inbound (owned) number
     const toDigits = normalizeDigits(toNumber);
     const user =
       (await User.findOne({ "numbers.phoneNumber": toNumber })) ||
-      (await User.findOne({
-        "numbers.phoneNumber": `+1${toDigits.slice(-10)}`,
-      })) ||
+      (await User.findOne({ "numbers.phoneNumber": `+1${toDigits.slice(-10)}` })) ||
       (await User.findOne({ "numbers.phoneNumber": `+${toDigits}` }));
 
     if (!user) {
       console.warn("⚠️ No user matched for To number:", toNumber);
-      return res
-        .status(200)
-        .json({ message: "No user found for this number." });
+      return res.status(200).json({ message: "No user found for this number." });
     }
 
     // ✅ NEW: set billing context for OpenAI
@@ -762,96 +599,60 @@ export default async function handler(
 
     let lead: any = null;
 
-    // (A) Consider last outbound ONLY if that lead’s saved phone matches this inbound
+    // (A) last outbound (phone must match)
     const lastOutbound = await Message.findOne({
       userEmail: user.email,
       direction: "outbound",
       from: toNumber,
       $or: [{ to: fromNumber }, { to: `+1${last10}` }, ...(anchored ? [{ to: anchored }] : [])],
-    })
-      .sort({ sentAt: -1, createdAt: -1, _id: -1 });
+    }).sort({ sentAt: -1, createdAt: -1, _id: -1 });
 
     if (lastOutbound?.leadId) {
       const viaMsg = await Lead.findById(lastOutbound.leadId);
-      if (viaMsg && leadPhoneMatches(viaMsg, fromDigits)) {
-        lead = viaMsg;
-      } else if (viaMsg) {
-        console.warn(
-          `↪︎ Ignoring lastOutbound lead (${String(viaMsg._id)}) — phone on lead does not match inbound ${fromNumber}`,
-        );
-      }
+      if (viaMsg && leadPhoneMatches(viaMsg, fromDigits)) lead = viaMsg;
+      else if (viaMsg) console.warn(`↪︎ Ignoring lastOutbound lead (${String(viaMsg._id)}) — phone on lead does not match inbound ${fromNumber}`);
     }
 
-    // (B) Exact E.164 match on common fields
+    // (B) E.164 fields
     if (!lead) {
       lead =
         (await Lead.findOne({ userEmail: user.email, Phone: fromNumber })) ||
         (await Lead.findOne({ userEmail: user.email, phone: fromNumber })) ||
-        (await Lead.findOne({
-          userEmail: user.email,
-          ["Phone Number"]: fromNumber,
-        } as any)) ||
-        (await Lead.findOne({
-          userEmail: user.email,
-          PhoneNumber: fromNumber,
-        } as any)) ||
+        (await Lead.findOne({ userEmail: user.email, ["Phone Number"]: fromNumber } as any)) ||
+        (await Lead.findOne({ userEmail: user.email, PhoneNumber: fromNumber } as any)) ||
         (await Lead.findOne({ userEmail: user.email, Mobile: fromNumber } as any)) ||
         (await Lead.findOne({ userEmail: user.email, mobile: fromNumber } as any)) ||
-        (await Lead.findOne({
-          userEmail: user.email,
-          "phones.value": fromNumber,
-        } as any));
+        (await Lead.findOne({ userEmail: user.email, "phones.value": fromNumber } as any));
     }
 
-    // (C) +1 last-10 equality
+    // (C) +1 last-10
     if (!lead && last10) {
       const plus1 = `+1${last10}`;
       lead =
         (await Lead.findOne({ userEmail: user.email, Phone: plus1 })) ||
         (await Lead.findOne({ userEmail: user.email, phone: plus1 })) ||
-        (await Lead.findOne({
-          userEmail: user.email,
-          ["Phone Number"]: plus1,
-        } as any)) ||
-        (await Lead.findOne({
-          userEmail: user.email,
-          PhoneNumber: plus1,
-        } as any)) ||
+        (await Lead.findOne({ userEmail: user.email, ["Phone Number"]: plus1 } as any)) ||
+        (await Lead.findOne({ userEmail: user.email, PhoneNumber: plus1 } as any)) ||
         (await Lead.findOne({ userEmail: user.email, Mobile: plus1 } as any)) ||
         (await Lead.findOne({ userEmail: user.email, mobile: plus1 } as any)) ||
-        (await Lead.findOne({
-          userEmail: user.email,
-          "phones.value": plus1,
-        } as any));
+        (await Lead.findOne({ userEmail: user.email, "phones.value": plus1 } as any));
     }
 
-    // (D) Anchored last-10 regex
+    // (D) anchored regex
     if (!lead && anchored) {
       lead =
         (await Lead.findOne({ userEmail: user.email, Phone: anchored })) ||
         (await Lead.findOne({ userEmail: user.email, phone: anchored })) ||
-        (await Lead.findOne({
-          userEmail: user.email,
-          ["Phone Number"]: anchored,
-        } as any)) ||
-        (await Lead.findOne({
-          userEmail: user.email,
-          PhoneNumber: anchored,
-        } as any)) ||
+        (await Lead.findOne({ userEmail: user.email, ["Phone Number"]: anchored } as any)) ||
+        (await Lead.findOne({ userEmail: user.email, PhoneNumber: anchored } as any)) ||
         (await Lead.findOne({ userEmail: user.email, Mobile: anchored } as any)) ||
         (await Lead.findOne({ userEmail: user.email, mobile: anchored } as any)) ||
-        (await Lead.findOne({
-          userEmail: user.email,
-          "phones.value": anchored,
-        } as any));
+        (await Lead.findOne({ userEmail: user.email, "phones.value": anchored } as any));
     }
     // =================================================================
 
-    // 🔒 Final sanity
     if (lead && last10 && !leadPhoneMatches(lead, fromDigits)) {
-      console.warn(
-        `[inbound-sms] Rejecting suspect lead match leadId=${String(lead._id)} — phone on lead does not end with ${last10}`,
-      );
+      console.warn(`[inbound-sms] Rejecting suspect lead match leadId=${String(lead._id)} — phone on lead does not end with ${last10}`);
       lead = null;
     }
 
@@ -875,20 +676,15 @@ export default async function handler(
     }
 
     if (!lead) {
-      return res
-        .status(200)
-        .json({ message: "Lead not found/created, acknowledged." });
+      return res.status(200).json({ message: "Lead not found/created, acknowledged." });
     }
 
-    console.log(
-      `[inbound-sms] RESOLVED leadId=${lead?._id || null} from=${fromNumber} to=${toNumber}`,
-    );
+    console.log(`[inbound-sms] RESOLVED leadId=${lead?._id || null} from=${fromNumber} to=${toNumber}`);
 
     const hadDrips =
       Array.isArray((lead as any).assignedDrips) &&
       (lead as any).assignedDrips.length > 0;
 
-    // ✅ Ensure Socket.IO exists (init if needed)
     let io = (res as any)?.socket?.server?.io;
     try {
       if (!io) {
@@ -917,11 +713,7 @@ export default async function handler(
     });
 
     // Update lead interaction history
-    const inboundEntry = {
-      type: "inbound" as const,
-      text: body || (numMedia ? "[media]" : ""),
-      date: new Date(),
-    };
+    const inboundEntry = { type: "inbound" as const, text: body || (numMedia ? "[media]" : ""), date: new Date() };
     lead.interactionHistory = lead.interactionHistory || [];
     lead.interactionHistory.push(inboundEntry);
     lead.lastInboundAt = new Date();
@@ -931,22 +723,15 @@ export default async function handler(
 
     if (io) io.to(user.email).emit("message:new", { leadId: lead._id, ...inboundEntry });
 
-    /* =======================
-       Agent email notify
-       ======================= */
+    /* Agent email notify */
     try {
       const emailEnabled = user?.notifications?.emailOnInboundSMS !== false;
       if (emailEnabled) {
-        const leadDisplayName = resolveLeadDisplayName(
-          lead,
-          lead.Phone || (lead as any).phone || fromNumber,
-        );
-
+        const leadDisplayName = resolveLeadDisplayName(lead, lead.Phone || (lead as any).phone || fromNumber);
         const snippet = body.length > 60 ? `${body.slice(0, 60)}…` : body;
         const dripTag = hadDrips ? "[drip] " : "";
         const deepLink = `${ABS_BASE_URL}${LEAD_ENTRY_PATH}/${lead._id}`;
-        const subjectWho =
-          leadDisplayName || (lead.Phone || (lead as any).phone || fromNumber);
+        const subjectWho = leadDisplayName || (lead.Phone || (lead as any).phone || fromNumber);
 
         await sendLeadReplyNotificationEmail({
           to: user.email,
@@ -955,10 +740,7 @@ export default async function handler(
           leadName: leadDisplayName || undefined,
           leadPhone: lead.Phone || (lead as any).phone || fromNumber,
           leadEmail: lead.Email || (lead as any).email || "",
-          folder:
-            (lead as any).folder ||
-            (lead as any).Folder ||
-            (lead as any)["Folder Name"],
+          folder: (lead as any).folder || (lead as any).Folder || (lead as any)["Folder Name"],
           status: (lead as any).status || (lead as any).Status,
           message: body || (numMedia ? "[media]" : ""),
           receivedAtISO: new Date().toISOString(),
@@ -969,7 +751,7 @@ export default async function handler(
       console.warn("⚠️ Inbound reply email failed (non-fatal):", (e as any)?.message || e);
     }
 
-    // === Keyword handling (no auto-reply here, just flags) ===
+    // === Keyword handling (flags only)
     if (isOptOut(body)) {
       lead.assignedDrips = [];
       (lead as any).dripProgress = [];
@@ -977,37 +759,19 @@ export default async function handler(
       (lead as any).unsubscribed = true;
       (lead as any).optOut = true;
       (lead as any).status = "Not Interested";
-
-      const note = {
-        type: "system" as const,
-        text: "[system] Lead opted out — moved to Not Interested.",
-        date: new Date(),
-      };
+      const note = { type: "system" as const, text: "[system] Lead opted out — moved to Not Interested.", date: new Date() };
       lead.interactionHistory.push(note);
       await lead.save();
-
       if (io) {
-        io.to(user.email).emit("lead:updated", {
-          _id: lead._id,
-          status: "Not Interested",
-          unsubscribed: true,
-          optOut: true,
-        });
+        io.to(user.email).emit("lead:updated", { _id: lead._id, status: "Not Interested", unsubscribed: true, optOut: true });
         io.to(user.email).emit("message:new", { leadId: lead._id, ...note });
       }
-
       console.log("🚫 Opt-out set & moved to Not Interested for", fromNumber);
-      return res
-        .status(200)
-        .json({ message: "Lead opted out; moved to Not Interested." });
+      return res.status(200).json({ message: "Lead opted out; moved to Not Interested." });
     }
 
     if (isHelp(body)) {
-      const note = {
-        type: "system" as const,
-        text: "[system] HELP detected.",
-        date: new Date(),
-      };
+      const note = { type: "system" as const, text: "[system] HELP detected.", date: new Date() };
       lead.interactionHistory.push(note);
       await lead.save();
       if (io) io.to(user.email).emit("message:new", { leadId: lead._id, ...note });
@@ -1017,11 +781,7 @@ export default async function handler(
     if (isStart(body)) {
       (lead as any).unsubscribed = false;
       (lead as any).optOut = false;
-      const note = {
-        type: "system" as const,
-        text: "[system] START/UNSTOP detected — lead opted back in.",
-        date: new Date(),
-      };
+      const note = { type: "system" as const, text: "[system] START/UNSTOP detected — lead opted back in.", date: new Date() };
       lead.interactionHistory.push(note);
       await lead.save();
       if (io) io.to(user.email).emit("message:new", { leadId: lead._id, ...note });
@@ -1029,25 +789,17 @@ export default async function handler(
       return res.status(200).json({ message: "Start handled." });
     }
 
-    // A2P gate (shared MS counts as approved)
+    // A2P gate
     const a2p = await A2PProfile.findOne({ userId: String(user._id) });
     const usConversation = isUS(fromNumber) || isUS(toNumber);
-    const approved =
-      SHARED_MESSAGING_SERVICE_SID ||
-      (a2p?.messagingReady && a2p?.messagingServiceSid);
+    const approved = SHARED_MESSAGING_SERVICE_SID || (a2p?.messagingReady && a2p?.messagingServiceSid);
     if (usConversation && !approved) {
-      const note = {
-        type: "system" as const,
-        text: "[note] Auto-reply suppressed: A2P not approved yet.",
-        date: new Date(),
-      };
+      const note = { type: "system" as const, text: "[note] Auto-reply suppressed: A2P not approved yet.", date: new Date() };
       lead.interactionHistory.push(note);
       await lead.save();
       if (io) io.to(user.email).emit("message:new", { leadId: lead._id, ...note });
       console.warn("⚠️ Auto-reply suppressed (A2P not approved)");
-      return res
-        .status(200)
-        .json({ message: "A2P not approved; no auto-reply sent." });
+      return res.status(200).json({ message: "A2P not approved; no auto-reply sent." });
     }
 
     if ((lead as any).unsubscribed || (lead as any).optOut) {
@@ -1057,13 +809,8 @@ export default async function handler(
 
     // Do not engage AI for retention campaigns
     const assignedDrips = (lead as any).assignedDrips || [];
-    const isClientRetention = (assignedDrips as any[]).some(
-      (id: any) => typeof id === "string" && id.includes("client_retention"),
-    );
-    if (isClientRetention)
-      return res
-        .status(200)
-        .json({ message: "Client retention reply — no AI engagement." });
+    const isClientRetention = (assignedDrips as any[]).some((id: any) => typeof id === "string" && id.includes("client_retention"));
+    if (isClientRetention) return res.status(200).json({ message: "Client retention reply — no AI engagement." });
 
     // ✅ Cancel drips & engage AI
     lead.assignedDrips = [];
@@ -1072,7 +819,7 @@ export default async function handler(
 
     const tz = pickLeadZone(lead);
     const nowISO = DateTime.utc().toISO();
-    const memory: LeadMemory = {
+    const memory = {
       state: ((lead as any).aiMemory?.state as ConvState) || "idle",
       lastAsked: (lead as any).aiMemory?.lastAsked || [],
       apptISO: (lead as any).aiMemory?.apptISO || null,
@@ -1080,33 +827,27 @@ export default async function handler(
       tz,
       lastConfirmAtISO: (lead as any).aiMemory?.lastConfirmAtISO || null,
       lastDraft: (lead as any).aiMemory?.lastDraft || null,
-    };
+    } as any;
 
-    // ===== decide next reply =====
     const stateCanon = normalizeStateInput(lead.State || (lead as any).state || "");
     const context = computeContext(lead.assignedDrips);
 
-    // 0) Deterministic intent replies (fast path)
+    // 0) Deterministic reply
     let aiReply: string | null = buildDeterministicReply(body, context);
-
-    // 1) deterministic time parse from user text
+    // 1) Parse time from text
     let requestedISO: string | null = extractRequestedISO(body, stateCanon);
-
-    // 2) Confirmation language binds to last AI proposal
+    // 2) Confirmation language
     if (!requestedISO && containsConfirmation(body)) {
       requestedISO =
         extractTimeFromLastAI(lead.interactionHistory || [], stateCanon) ||
-        (lead as any).aiLastProposedISO ||
-        null;
+        (lead as any).aiLastProposedISO || null;
     }
-
-    // 2.5) explicit info-request (enforce your exact sentence)
+    // 2.5) Info request (exact phrasing)
     if (!requestedISO && isInfoRequest(body)) {
       aiReply = `Unfortunately as of now there's nothing to send over without getting some information from you. When's a good time for a quick 5 minute call? After that we can send everything out.`;
       memory.state = "qa";
     }
-
-    // 3) conversational fallback via LLM
+    // 3) LLM fallback
     if (!requestedISO && !aiReply) {
       try {
         const ex = await extractIntentAndTimeLLM({ text: body, nowISO, tz });
@@ -1129,37 +870,28 @@ export default async function handler(
               inboundText: body,
               history: lead.interactionHistory || [],
             });
-            if (!askedRecently(memory, "chat_followup"))
-              pushAsked(memory, "chat_followup");
+            if (!askedRecently(memory, "chat_followup")) pushAsked(memory, "chat_followup");
             memory.state = "awaiting_time";
           }
         }
       } catch {
         memory.state = "awaiting_time";
-        const lastAI = [...(lead.interactionHistory || [])]
-          .reverse()
-          .find((m: any) => m.type === "ai");
-        const v =
-          `What time works for you—today or tomorrow? You can reply like “tomorrow 3:00 pm”.`;
-        aiReply =
-          lastAI?.text?.trim() === v
-            ? `Shoot me a time that works (e.g., “tomorrow 3:00 pm”) and I’ll text a confirmation.`
-            : v;
+        const lastAI = [...(lead.interactionHistory || [])].reverse().find((m: any) => m.type === "ai");
+        const v = `What time works for you—today or tomorrow? You can reply like “tomorrow 3:00 pm”.`;
+        aiReply = lastAI?.text?.trim() === v
+          ? `Shoot me a time that works (e.g., “tomorrow 3:00 pm”) and I’ll text a confirmation.`
+          : v;
       }
     }
 
-    // 4) If we have a concrete time now, confirm + (try to) book
+    // 4) Convert concrete time into booking + confirm copy
     if (requestedISO) {
       const zone = tz;
-      const clientTime = DateTime.fromISO(requestedISO, { zone }).set({
-        second: 0,
-        millisecond: 0,
-      });
+      const clientTime = DateTime.fromISO(requestedISO, { zone }).set({ second: 0, millisecond: 0 });
 
       const alreadyConfirmedSame =
         (lead as any).aiLastConfirmedISO &&
-        DateTime.fromISO((lead as any).aiLastConfirmedISO).toISO() ===
-          clientTime.toISO();
+        DateTime.fromISO((lead as any).aiLastConfirmedISO).toISO() === clientTime.toISO();
 
       if (alreadyConfirmedSame) {
         aiReply = `All set — you’re on my schedule. Talk soon!`;
@@ -1182,10 +914,7 @@ export default async function handler(
             `${RAW_BASE_URL || ABS_BASE_URL}/api/google/calendar/book-appointment`,
             { ...bookingPayload },
             {
-              headers: {
-                Authorization: `Bearer ${INTERNAL_API_TOKEN}`,
-                "Content-Type": "application/json",
-              },
+              headers: { Authorization: `Bearer ${INTERNAL_API_TOKEN}`, "Content-Type": "application/json" },
               timeout: 15000,
             },
           );
@@ -1195,11 +924,7 @@ export default async function handler(
             (lead as any).appointmentTime = clientTime.toJSDate();
 
             try {
-              const fullName = resolveLeadDisplayName(
-                lead,
-                lead.Phone || (lead as any).phone || fromNumber,
-              );
-
+              const fullName = resolveLeadDisplayName(lead, lead.Phone || (lead as any).phone || fromNumber);
               await sendAppointmentBookedEmail({
                 to: (lead.userEmail || user.email || "").toLowerCase(),
                 agentName: (user as any)?.name || user.email,
@@ -1209,9 +934,7 @@ export default async function handler(
                 timeISO: clientTime.toISO()!,
                 timezone: clientTime.offsetNameShort || undefined,
                 source: "AI",
-                eventUrl: (bookingRes.data?.event?.htmlLink ||
-                  bookingRes.data?.htmlLink ||
-                  "") as string | undefined,
+                eventUrl: (bookingRes.data?.event?.htmlLink || bookingRes.data?.htmlLink || "") as string | undefined,
               });
             } catch (e) {
               console.warn("Email send failed (appointment):", e);
@@ -1220,10 +943,7 @@ export default async function handler(
             console.warn("⚠️ Booking API responded but not success:", bookingRes.data);
           }
         } catch (e) {
-          console.error(
-            "⚠️ Booking API failed (proceeding to confirm by SMS):",
-            (e as any)?.response?.data || e,
-          );
+          console.error("⚠️ Booking API failed (proceeding to confirm by SMS):", (e as any)?.response?.data || e);
         }
 
         const readable = clientTime.toFormat("ccc, MMM d 'at' h:mm a");
@@ -1237,29 +957,56 @@ export default async function handler(
       }
     }
 
-    // Fallback copy if still empty
-    if (!aiReply) {
-      aiReply = "When’s a good time today or tomorrow for a quick 5-minute chat?";
-    }
+    if (!aiReply) aiReply = "When’s a good time today or tomorrow for a quick 5-minute chat?";
 
     memory.lastDraft = aiReply;
-
     (lead as any).aiMemory = memory;
     lead.aiLastResponseAt = new Date();
     await lead.save();
 
-    // Delayed AI reply (human-like), force FROM the exact inbound number
-    setTimeout(async () => {
+    // === NEW: ENQUEUE FIRST, THEN SEND LATER ===
+    const zone = pickLeadZone(lead);
+    const humanDelay = humanDelayMs();
+    const { isQuiet, scheduledAt: quietAt } = computeQuietHoursScheduling(zone);
+    const plannedAt = isQuiet && quietAt ? quietAt : new Date(Date.now() + humanDelay);
+
+    // Create a queued Message row now (visible immediately)
+    const queued = await Message.create({
+      leadId: lead._id,
+      userEmail: user.email,
+      direction: "outbound",
+      text: aiReply,            // draft text we intend to send
+      read: true,
+      to: fromNumber,
+      from: toNumber,
+      status: "queued",
+      queuedAt: new Date(),
+      scheduledAt: plannedAt,
+      fromServiceSid: undefined,
+      reason: isQuiet ? "scheduled_quiet_hours" : "delayed_human_like",
+      aiPlanned: true,
+    } as any);
+
+    if (io) {
+      io.to(user.email).emit("message:queued", {
+        leadId: lead._id,
+        _id: queued._id,
+        direction: "outbound",
+        text: aiReply,
+        status: "queued",
+        scheduledAt: plannedAt,
+      });
+    }
+
+    // Now schedule the actual send (delay or quiet-hour schedule)
+    const fire = async () => {
       try {
         await mongooseConnect();
-
         const fresh = await Lead.findById(lead._id);
         if (!fresh) return;
 
-        if (
-          fresh.aiLastResponseAt &&
-          Date.now() - new Date(fresh.aiLastResponseAt).getTime() < 2 * 60 * 1000
-        ) {
+        // basic cooldown
+        if (fresh.aiLastResponseAt && Date.now() - new Date(fresh.aiLastResponseAt).getTime() < 2 * 60 * 1000) {
           console.log("⏳ Skipping AI reply (cool-down).");
           return;
         }
@@ -1268,90 +1015,79 @@ export default async function handler(
           return;
         }
 
-        const lastAI = [...(fresh.interactionHistory || [])]
-          .reverse()
-          .find((m: any) => m.type === "ai");
-        const draft =
-          ((fresh as any).aiMemory?.lastDraft as string) ||
-          "When’s a good time today or tomorrow for a quick chat?";
+        const lastAI = [...(fresh.interactionHistory || [])].reverse().find((m: any) => m.type === "ai");
+        const draft = ((fresh as any).aiMemory?.lastDraft as string) || aiReply;
         if (lastAI && lastAI.text?.trim() === draft.trim()) {
           console.log("🔁 Same AI content as last time — not sending.");
           return;
         }
 
-        const zone = pickLeadZone(fresh);
-        const { isQuiet, scheduledAt } = computeQuietHoursScheduling(zone);
-
-        const baseParams = await getSendParams(
-          String(user._id),
-          toNumber,
-          fromNumber,
-          { forceFrom: toNumber },
-        );
         const paramsOut: Parameters<Twilio["messages"]["create"]>[0] = {
-          ...baseParams,
+          statusCallback: STATUS_CALLBACK,
+          from: toNumber,     // force from the exact inbound number
+          to: fromNumber,
           body: draft,
         };
 
-        const canSchedule = "messagingServiceSid" in paramsOut;
-        if (isQuiet && scheduledAt && canSchedule) {
-          (paramsOut as any).scheduleType = "fixed";
-          (paramsOut as any).sendAt = scheduledAt.toISOString();
-        } else if (isQuiet && !canSchedule) {
-          console.warn(
-            "⚠️ Quiet hours but cannot schedule when forcing a single From number. Sending immediately.",
-          );
-        }
+        // If quiet hours and MSID path were available we could use Twilio scheduling,
+        // but we are forcing From to the exact number (compliance + thread stickiness),
+        // so we send now and rely on our queued row to have shown the schedule.
+        const { client } = await getClientForUser(user.email);
+        const twilioMsg = await client.messages.create(paramsOut);
 
+        // Persist to lead history now that it's actually sent
         const aiEntry = { type: "ai" as const, text: draft, date: new Date() };
         fresh.interactionHistory = fresh.interactionHistory || [];
         fresh.interactionHistory.push(aiEntry);
         fresh.aiLastResponseAt = new Date();
         await fresh.save();
 
-        const { client } = await getClientForUser(user.email);
-        const twilioMsg = await client.messages.create(paramsOut);
-
-        await Message.create({
-          leadId: fresh._id,
-          userEmail: user.email,
-          direction: "outbound",
-          text: draft,
-          read: true,
-          to: fromNumber,
-          from: toNumber,
-          sid: (twilioMsg as any)?.sid,
-          status: (twilioMsg as any)?.status,
-          sentAt:
-            isQuiet && scheduledAt && canSchedule ? scheduledAt : new Date(),
-          fromServiceSid: (paramsOut as any).messagingServiceSid,
-        });
+        // Update the queued message → real send details
+        await Message.findByIdAndUpdate(queued._id, {
+          $set: {
+            sid: (twilioMsg as any)?.sid,
+            status: (twilioMsg as any)?.status || "accepted",
+            sentAt: new Date(),
+            fromServiceSid: undefined,
+            aiPlanned: false,
+          },
+        }).exec();
 
         let io2 = (res as any)?.socket?.server?.io;
-        if (io2) io2.to(user.email).emit("message:new", { leadId: fresh._id, ...aiEntry });
-
-        if (isQuiet && scheduledAt && canSchedule) {
-          console.log(
-            `🕘 Quiet hours: scheduled AI reply to ${fromNumber} at ${scheduledAt.toISOString()} (${zone}) | SID: ${(twilioMsg as any)?.sid}`,
-          );
-        } else {
-          console.log(
-            `🤖 AI reply sent to ${fromNumber} FROM ${toNumber} | SID: ${(twilioMsg as any)?.sid}`,
-          );
+        if (io2) {
+          io2.to(user.email).emit("message:new", { leadId: fresh._id, ...aiEntry });
+          io2.to(user.email).emit("message:sent", { _id: queued._id, sid: (twilioMsg as any)?.sid, status: (twilioMsg as any)?.status || "accepted" });
         }
+
+        console.log(`🤖 AI reply sent to ${fromNumber} FROM ${toNumber} | SID: ${(twilioMsg as any)?.sid}`);
       } catch (err) {
         console.error("❌ Delayed send failed:", err);
+        try {
+          await Message.findByIdAndUpdate(queued._id, {
+            $set: { status: "error", failedAt: new Date(), errorMessage: (err as any)?.message || "send_failed" },
+          }).exec();
+        } catch {}
       }
-    }, humanDelayMs());
+    };
 
-    return res
-      .status(200)
-      .json({ message: "Inbound received; AI reply scheduled." });
+    // If quiet hours defer to morning; else natural 2–3 min delay
+    if (isQuiet && quietAt) {
+      const ms = Math.max(0, quietAt.getTime() - Date.now());
+      setTimeout(fire, ms);
+      console.log(`🕘 Queued AI reply until quiet-hours end (${quietAt.toISOString()})`);
+    } else {
+      setTimeout(fire, Math.max(0, humanDelay));
+      console.log(`⏱️ Queued AI reply for ~${Math.round(humanDelay / 1000)}s`);
+    }
+
+    return res.status(200).json({
+      message: "Inbound received; AI reply scheduled.",
+      queuedMessageId: String(queued._id),
+      scheduledAt: plannedAt.toISOString(),
+    });
   } catch (error: any) {
     console.error("❌ SMS handler failed:", error);
-    return res
-      .status(200)
-      .json({ message: "Inbound SMS handled with internal error." });
+    return res.status(200).json({ message: "Inbound SMS handled with internal error." });
   }
 }
 
@@ -1365,33 +1101,17 @@ async function getSendParams(
   const base: any = { statusCallback: STATUS_CALLBACK };
 
   if (opts?.forceFrom) {
-    return {
-      ...base,
-      from: opts.forceFrom,
-      to: fromNumber,
-    } as Parameters<Twilio["messages"]["create"]>[0];
+    return { ...base, from: opts.forceFrom, to: fromNumber } as Parameters<Twilio["messages"]["create"]>[0];
   }
 
   if (process.env.TWILIO_MESSAGING_SERVICE_SID) {
-    return {
-      ...base,
-      messagingServiceSid: process.env.TWILIO_MESSAGING_SERVICE_SID,
-      to: fromNumber,
-    } as Parameters<Twilio["messages"]["create"]>[0];
-    }
+    return { ...base, messagingServiceSid: process.env.TWILIO_MESSAGING_SERVICE_SID, to: fromNumber } as Parameters<Twilio["messages"]["create"]>[0];
+  }
 
   const a2p = await A2PProfile.findOne({ userId });
   if (a2p?.messagingServiceSid) {
-    return {
-      ...base,
-      messagingServiceSid: a2p.messagingServiceSid,
-      to: fromNumber,
-    } as Parameters<Twilio["messages"]["create"]>[0];
+    return { ...base, messagingServiceSid: a2p.messagingServiceSid, to: fromNumber } as Parameters<Twilio["messages"]["create"]>[0];
   }
 
-  return {
-    ...base,
-    from: toNumber,
-    to: fromNumber,
-  } as Parameters<Twilio["messages"]["create"]>[0];
+  return { ...base, from: toNumber, to: fromNumber } as Parameters<Twilio["messages"]["create"]>[0];
 }
