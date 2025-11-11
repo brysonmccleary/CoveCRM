@@ -1,86 +1,114 @@
-// /pages/api/twilio/voice-status.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import dbConnect from "@/lib/mongooseConnect";
 import Call from "@/models/Call";
 
-type Body = {
-  callSid?: string;
-  status?: string; // queued | ringing | in-progress | completed | busy | failed | no-answer | canceled
-  direction?: "outbound" | "inbound";
-  from?: string;
-  to?: string;
-  userEmail?: string;          // optional; client may send
-  startTime?: string | Date;   // optional ISO
-  endTime?: string | Date;     // optional ISO
-  duration?: number;           // seconds
-  talkTime?: number;           // optional seconds (if you send it from client)
-  amd?: { answeredBy?: string }; // "human" | "machine_*" etc
-};
-
-function toDate(v: string | Date | undefined): Date | undefined {
+// Normalize different payload shapes (client JSON vs Twilio form posts)
+function pick(s: any, ...keys: string[]) {
+  const out: Record<string, any> = {};
+  for (const k of keys) if (s?.[k] !== undefined) out[k] = s[k];
+  return out;
+}
+function firstDefined<T = any>(...vals: T[]): T | undefined {
+  for (const v of vals) if (v !== undefined && v !== null && v !== "") return v;
+  return undefined;
+}
+function toDate(v: any): Date | undefined {
   if (!v) return undefined;
   const d = v instanceof Date ? v : new Date(v);
   return isNaN(d.getTime()) ? undefined : d;
 }
-
 function prune<T extends Record<string, any>>(obj: T): T {
   const out: Record<string, any> = {};
   for (const [k, v] of Object.entries(obj)) {
     if (v === undefined) continue;
-    // drop empty nested objects too
     if (v && typeof v === "object" && !Array.isArray(v)) {
       const nested = prune(v as any);
       if (Object.keys(nested).length === 0) continue;
       out[k] = nested;
-    } else {
-      out[k] = v;
-    }
+    } else out[k] = v;
   }
   return out as T;
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
+  if (req.method !== "POST" && req.method !== "PUT") {
+    return res.status(200).json({ ok: false, ignored: true, reason: "method" });
+  }
+
   await dbConnect();
 
-  const b = (req.body || {}) as Body;
-  const callSid = String(b.callSid || "").trim();
-  if (!callSid) return res.status(400).json({ error: "Missing callSid" });
+  // Accept JSON, x-www-form-urlencoded, or querystring
+  const b = req.body || {};
+  const q = req.query || {};
 
-  // Normalize inputs
-  const callStatus = (b.status || "").toLowerCase();
-  const direction = (b.direction as any) === "inbound" ? "inbound" : "outbound";
-  const startedAt = toDate(b.startTime);
-  const completedAt = toDate(b.endTime);
-  const duration = typeof b.duration === "number" ? b.duration : undefined;
-  const talkTime = typeof b.talkTime === "number" ? b.talkTime : undefined;
-  const from = b.from;
-  const to = b.to;
-  const answeredBy = b.amd?.answeredBy;
+  const callSid = String(
+    firstDefined(b.callSid, b.CallSid, q.callSid, q.CallSid) || ""
+  ).trim();
+
+  if (!callSid) {
+    // Return 200 so Twilio doesn’t retry, but mark invalid
+    return res.status(200).json({ ok: false, error: "missing_callSid" });
+  }
+
+  const rawStatus = String(
+    firstDefined(b.status, b.CallStatus, q.status, q.CallStatus) || ""
+  ).toLowerCase();
+
+  const rawDirection = String(
+    firstDefined(b.direction, b.Direction, q.direction, q.Direction) || ""
+  ).toLowerCase();
+
+  const direction: "outbound" | "inbound" =
+    rawDirection === "inbound" ? "inbound" : "outbound";
+
+  const from = firstDefined(b.from, b.From, q.from, q.From) as string | undefined;
+  const to = firstDefined(b.to, b.To, q.to, q.To) as string | undefined;
+
+  const answeredBy = firstDefined(
+    b.answeredBy,
+    b.AnsweredBy,
+    q.answeredBy,
+    q.AnsweredBy
+  ) as string | undefined;
+
   const isVoicemail =
     typeof answeredBy === "string" ? /machine/i.test(answeredBy) : undefined;
 
-  // Build $setOnInsert ONLY for fields that should not conflict later
+  // Optional timing fields the client may send (Twilio may not)
+  const duration =
+    typeof b.duration === "number" ? b.duration :
+    typeof (b?.Duration as any) === "number" ? (b.Duration as number) :
+    undefined;
+
+  const talkTime =
+    typeof b.talkTime === "number" ? b.talkTime : undefined;
+
+  const startedAt = toDate(firstDefined(b.startTime, b.StartTime));
+  const completedAt = toDate(firstDefined(b.endTime, b.EndTime));
+
+  const userEmail =
+    typeof b.userEmail === "string" ? b.userEmail.toLowerCase() : undefined;
+
+  // Build atomic update without path conflicts
   const setOnInsert = prune({
     callSid,
-    userEmail: b.userEmail, // if you send it; safe here only
-    direction,              // direction is fixed at insert time
+    direction,           // fixed at creation
+    userEmail,           // if client provided; harmless on insert
     createdAt: new Date(),
     kind: "call",
   });
 
-  // Build $set for everything that may change over time
   const set = prune({
-    status: callStatus || undefined,
+    status: rawStatus || undefined,
+    from,
+    to,
+    ownerNumber: from,
+    otherNumber: to,
     startedAt,
     completedAt,
     duration,
     durationSec: duration,
     talkTime,
-    from,
-    to,
-    ownerNumber: from,
-    otherNumber: to,
     amd: answeredBy ? { answeredBy } : undefined,
     isVoicemail,
     updatedAt: new Date(),
@@ -94,10 +122,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     );
   } catch (err: any) {
     console.error("[voice-status] upsert error", err?.message || err);
-    // Return 200 so Twilio/clients don’t retry; log is enough for us.
+    // Still return 200 to avoid retries; dashboard can proceed on next event
     return res.status(200).json({ ok: false, error: "upsert_failed" });
   }
 
   res.setHeader("Cache-Control", "no-store");
-  return res.status(200).json({ ok: true, callSid, status: callStatus });
+  return res.status(200).json({ ok: true, callSid, status: rawStatus });
 }
