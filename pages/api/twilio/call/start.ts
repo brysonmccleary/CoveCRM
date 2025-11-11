@@ -9,14 +9,19 @@ import { getClientForUser } from "@/lib/twilio/getClientForUser";
 import { pickFromNumberForUser } from "@/lib/twilio/pickFromNumber";
 import { isCallAllowedForLead } from "@/utils/checkCallTime";
 
-const BASE = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "http://localhost:3000").replace(/\/$/, "");
-const VOICE_ANSWER_URL = `${BASE}/api/twilio/voice-answer`;
-
-function voiceStatusUrl(email: string) {
-  const encoded = encodeURIComponent(email.toLowerCase());
-  return `${BASE}/api/twilio/voice-status?userEmail=${encoded}`;
+/** Build callback base from the actual request so Twilio always hits the right host */
+function runtimeBase(req: NextApiRequest) {
+  const proto = (req.headers["x-forwarded-proto"] as string) || "https";
+  const host = (req.headers["x-forwarded-host"] as string) || req.headers.host || "";
+  return `${proto}://${host}`.replace(/\/+$/, "");
 }
-
+function voiceAnswerUrl(req: NextApiRequest) {
+  return `${runtimeBase(req)}/api/twilio/voice-answer`;
+}
+function voiceStatusUrl(req: NextApiRequest, email: string) {
+  const encoded = encodeURIComponent(email.toLowerCase());
+  return `${runtimeBase(req)}/api/twilio/voice-status?userEmail=${encoded}`;
+}
 function normalizeE164(p?: string) {
   const raw = String(p || "");
   const d = raw.replace(/\D/g, "");
@@ -29,6 +34,7 @@ function normalizeE164(p?: string) {
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
+  // Auth
   const session = (await getServerSession(req, res, authOptions as any)) as Session | null;
   const userEmail = String(session?.user?.email ?? "").toLowerCase();
   if (!userEmail) return res.status(401).json({ error: "Unauthorized" });
@@ -67,18 +73,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const from = await pickFromNumberForUser(userEmail);
     if (!from) return res.status(400).json({ error: "No outbound caller ID configured. Buy a number first." });
 
-    // 1) PLACE THE CALL WITH FULL STATUS CALLBACKS
+    // Place the call with correct runtime URLs + full callback events
     const call = await client.calls.create({
       to: toNumber,
       from,
-      url: VOICE_ANSWER_URL,
-      statusCallback: voiceStatusUrl(userEmail),
+      url: voiceAnswerUrl(req),
+      statusCallback: voiceStatusUrl(req, userEmail),
       statusCallbackEvent: ["initiated", "ringing", "answered", "completed"],
       record: false,
     });
 
-    // 2) GUARANTEE A SEEDED ROW RIGHT NOW (counts as a dial)
-    //    - so dashboard has a doc with userEmail + outbound + timestamps
+    // Seed the Call row immediately so the dashboard shows a Dial right away
     const now = new Date();
     await (Call as any).updateOne(
       { callSid: call.sid },
@@ -95,13 +100,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           otherNumber: toNumber,
           from,
           to: toNumber,
-          startedAt: now, // mark the attempt start so "Today" range always includes it
+          startedAt: now,   // ensures it's in today's window
           updatedAt: now,
         },
       },
       { upsert: true }
     );
 
+    res.setHeader("Cache-Control", "no-store");
     return res.status(200).json({
       ok: true,
       success: true,
