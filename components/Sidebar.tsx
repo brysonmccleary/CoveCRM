@@ -107,6 +107,7 @@ export default function Sidebar() {
         <button
           onClick={() => signOut({ callbackUrl: "/" })}
           className="block text-red-500 hover:underline"
+          aria-label="Log out and return to Home"
         >
           Log Out
         </button>

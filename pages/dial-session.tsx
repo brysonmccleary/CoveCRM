@@ -19,6 +19,40 @@ type HistoryRow =
   | { kind: "text"; text: string }
   | { kind: "link"; text: string; href: string; download?: boolean };
 
+/** ---------- UI helpers (display-only; no flow changes) ---------- **/
+const toTitle = (s: string) =>
+  s
+    .replace(/[_\-]+/g, " ")
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\w\S*/g, (w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase());
+
+const normalizeKeyLabel = (k: string) => {
+  const lk = k.toLowerCase().trim();
+  if (["firstname", "first name", "first_name", "first-name", "first"].includes(lk)) return "First Name";
+  if (["lastname", "last name", "last_name", "last-name", "last"].includes(lk)) return "Last Name";
+  return toTitle(k);
+};
+
+const isEmptyDisplay = (v: any) => {
+  if (v === null || v === undefined) return true;
+  if (typeof v === "string") {
+    const t = v.trim();
+    if (!t) return true;
+    const lowered = t.toLowerCase();
+    if (["-", "n/a", "na", "null", "undefined"].includes(lowered)) return true;
+    return false;
+  }
+  if (Array.isArray(v)) return v.length === 0;
+  if (typeof v === "object") return Object.keys(v).length === 0;
+  return false;
+};
+
+const looksLikePhoneKey = (k: string) => /phone|mobile|cell|number/i.test(k);
+
+/** --------------------------------------------------------------- **/
+
 export default function DialSession() {
   const router = useRouter();
   const {
@@ -916,6 +950,20 @@ export default function DialSession() {
   }, [currentLeadIndex, leadQueue.length, fromNumber]);
 
   /** render **/
+  // Derive best-effort First/Last Name from any common variants on the lead
+  const firstName =
+    (lead as any)?.["First Name"] ??
+    (lead as any)?.first_name ??
+    (lead as any)?.firstname ??
+    (lead as any)?.firstName ??
+    "";
+  const lastName =
+    (lead as any)?.["Last Name"] ??
+    (lead as any)?.last_name ??
+    (lead as any)?.lastname ??
+    (lead as any)?.lastName ??
+    "";
+
   return (
     <div className="flex bg-[#0f172a] text-white min-h-screen flex-col">
       <div className="bg-[#1e293b] p-4 border-b border-gray-700 flex justify-between items-center">
@@ -926,25 +974,68 @@ export default function DialSession() {
         <Sidebar />
 
         <div className="w-1/4 p-4 border-r border-gray-600 bg-[#1e293b] overflow-y-auto">
-          <p className="text-green-400">Calling from: {fromNumber ? formatPhone(fromNumber) : "Resolving…"}</p>
+          <p className="text-green-400">
+            Calling from: {fromNumber ? formatPhone(fromNumber) : "Resolving…"}
+          </p>
           <p className="text-yellow-500 mb-2">Status: {status}</p>
 
           <p className="text-sm text-gray-400 mb-2">
             Lead {Math.min(currentLeadIndex + 1, Math.max(leadQueue.length, 1))} of {leadQueue.length || 1}
           </p>
 
+          {/* Top-name block with correct spacing */}
+          {(firstName || lastName) && (
+            <div className="mb-3">
+              {firstName && (
+                <p>
+                  <strong>First Name:</strong> {firstName}
+                </p>
+              )}
+              {lastName && (
+                <p>
+                  <strong>Last Name:</strong> {lastName}
+                </p>
+              )}
+              <hr className="border-gray-700 my-2" />
+            </div>
+          )}
+
+          {/* Dynamic fields — show ALL imported/custom fields that have values; hide empties */}
           {lead &&
-            Object.entries(lead).map(([key, value]) => {
-              if (["_id", "id", "Notes", "First Name", "Last Name", "folderId", "createdAt", "ownerId", "userEmail"].includes(key)) return null;
-              const showVal =
-                typeof value === "string" && key.toLowerCase().includes("phone") ? formatPhone(value) : String(value ?? "-");
-              return (
-                <div key={key}>
-                  <p><strong>{key.replace(/_/g, " ")}:</strong> {showVal}</p>
-                  <hr className="border-gray-700 my-1" />
-                </div>
-              );
-            })}
+            Object.entries(lead)
+              .filter(([key]) => {
+                // hide internal/system keys and ones we show elsewhere
+                const banned = [
+                  "_id", "id", "folderId", "createdAt", "ownerId", "userEmail",
+                  "Notes",
+                  "First Name", "first_name", "firstname", "firstName",
+                  "Last Name", "last_name", "lastname", "lastName",
+                ];
+                return !banned.includes(key);
+              })
+              .filter(([, value]) => !isEmptyDisplay(value))
+              .map(([key, value]) => {
+                const label = normalizeKeyLabel(key);
+                let display: string = "";
+
+                if (typeof value === "string") {
+                  display = looksLikePhoneKey(key) ? formatPhone(value) : value;
+                } else if (typeof value === "number" || typeof value === "boolean") {
+                  display = String(value);
+                } else {
+                  // Avoid dumping JSON blobs; skip objects/arrays entirely for left panel
+                  return null;
+                }
+
+                return (
+                  <div key={key}>
+                    <p>
+                      <strong>{label}:</strong> {display}
+                    </p>
+                    <hr className="border-gray-700 my-1" />
+                  </div>
+                );
+              })}
 
           <div className="flex flex-col space-y-2 mt-4">
             <button
