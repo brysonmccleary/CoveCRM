@@ -1,109 +1,100 @@
+// /pages/api/twilio/voice-status.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import dbConnect from "@/lib/mongooseConnect";
 import Call from "@/models/Call";
 
-/**
- * Twilio status callback hits this endpoint multiple times during a call:
- *  - ringing | in-progress | completed | busy | failed | no-answer | canceled
- * We upsert the Call by CallSid and only use $set / $setOnInsert to avoid
- * any MongoDB path conflicts (no top-level fields in the update document).
- */
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
+type Body = {
+  callSid?: string;
+  status?: string; // queued | ringing | in-progress | completed | busy | failed | no-answer | canceled
+  direction?: "outbound" | "inbound";
+  from?: string;
+  to?: string;
+  userEmail?: string;          // optional; client may send
+  startTime?: string | Date;   // optional ISO
+  endTime?: string | Date;     // optional ISO
+  duration?: number;           // seconds
+  talkTime?: number;           // optional seconds (if you send it from client)
+  amd?: { answeredBy?: string }; // "human" | "machine_*" etc
+};
 
-  try {
-    await dbConnect();
-  } catch (e) {
-    // Continue; Mongoose may already be connected in the pool
-  }
+function toDate(v: string | Date | undefined): Date | undefined {
+  if (!v) return undefined;
+  const d = v instanceof Date ? v : new Date(v);
+  return isNaN(d.getTime()) ? undefined : d;
+}
 
-  // Twilio sends x-www-form-urlencoded; Next parses req.body into an object.
-  // Accept both Twilio/Express field names and safe fallbacks.
-  const b: any = req.body || {};
-
-  // From start.ts we pass ?userEmail=... on the callback URL.
-  const userEmail = String((req.query.userEmail || "") as string).toLowerCase() || null;
-
-  // Twilio core fields
-  const callSid = String(b.CallSid || b.CallSid || "").trim();
-  const callStatus = String(b.CallStatus || b.CallStatus || "").toLowerCase(); // in-progress | completed | ...
-  const from = String(b.From || b.Caller || "").trim();
-  const to = String(b.To || b.Called || "").trim();
-
-  // Twilio direction can be "outbound-api", "inbound", "outbound-dial", etc.
-  const twilioDirection = String(b.Direction || b.CallDirection || "").toLowerCase();
-  const mappedDirection: "outbound" | "inbound" =
-    twilioDirection.includes("inbound") ? "inbound" : "outbound";
-
-  // Optional AMD field if enabled later (won't break if missing)
-  const answeredBy =
-    typeof b.AnsweredBy === "string" && b.AnsweredBy ? String(b.AnsweredBy) : null;
-
-  if (!callSid) {
-    // Nothing we can do; log and exit
-    console.error("[voice-status] missing CallSid", { callStatus, from, to });
-    return res.status(200).json({ ok: true, ignored: true });
-  }
-
-  // Build a conflict-free upsert
-  const now = new Date();
-
-  // Always-set fields (safe to overwrite repeatedly)
-  const baseSet: Record<string, any> = {
-    // ownership + addressing
-    userEmail: userEmail || undefined, // keep consistent casing
-    from,
-    to,
-    ownerNumber: from || undefined,
-    otherNumber: to || undefined,
-
-    // normalize your schema direction
-    direction: mappedDirection,
-
-    // keep last-seen status & metadata for debugging
-    recordingStatus: undefined, // don't touch unless you populate elsewhere
-  };
-
-  // Status-specific fields (merge into $set below)
-  if (callStatus === "in-progress" || callStatus === "answered") {
-    baseSet.startedAt = baseSet.startedAt || now; // first connect moment
-  }
-
-  if (callStatus === "completed" || callStatus === "busy" || callStatus === "failed" || callStatus === "no-answer" || callStatus === "canceled") {
-    baseSet.completedAt = now;
-
-    // Twilio supplies CallDuration in seconds on completed callbacks
-    const durRaw = b.CallDuration ?? b.Duration ?? b.RecordingDuration;
-    const dur = Number(durRaw);
-    if (!Number.isNaN(dur) && dur >= 0) {
-      baseSet.duration = dur;
-      baseSet.durationSec = dur;
-      // If you don't compute "talkTime" elsewhere, let stats fall back to duration.
-      // (Your stats.ts already uses _talkTime = talkTime ?? duration)
-      // baseSet.talkTime = baseSet.talkTime ?? dur; // Uncomment if you want to equate talk to total.
+function prune<T extends Record<string, any>>(obj: T): T {
+  const out: Record<string, any> = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (v === undefined) continue;
+    // drop empty nested objects too
+    if (v && typeof v === "object" && !Array.isArray(v)) {
+      const nested = prune(v as any);
+      if (Object.keys(nested).length === 0) continue;
+      out[k] = nested;
+    } else {
+      out[k] = v;
     }
   }
+  return out as T;
+}
 
-  if (answeredBy) {
-    // Persist AMD hint in a subdocument—stats.ts expects amd.answeredBy later
-    baseSet["amd"] = { answeredBy };
-  }
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
+  await dbConnect();
 
-  // Only ever use $set / $setOnInsert to avoid "path conflict" errors
-  const update = {
-    $set: baseSet,
-    $setOnInsert: {
-      callSid,
-      createdAt: now,
-      kind: "call",
-    },
-  };
+  const b = (req.body || {}) as Body;
+  const callSid = String(b.callSid || "").trim();
+  if (!callSid) return res.status(400).json({ error: "Missing callSid" });
+
+  // Normalize inputs
+  const callStatus = (b.status || "").toLowerCase();
+  const direction = (b.direction as any) === "inbound" ? "inbound" : "outbound";
+  const startedAt = toDate(b.startTime);
+  const completedAt = toDate(b.endTime);
+  const duration = typeof b.duration === "number" ? b.duration : undefined;
+  const talkTime = typeof b.talkTime === "number" ? b.talkTime : undefined;
+  const from = b.from;
+  const to = b.to;
+  const answeredBy = b.amd?.answeredBy;
+  const isVoicemail =
+    typeof answeredBy === "string" ? /machine/i.test(answeredBy) : undefined;
+
+  // Build $setOnInsert ONLY for fields that should not conflict later
+  const setOnInsert = prune({
+    callSid,
+    userEmail: b.userEmail, // if you send it; safe here only
+    direction,              // direction is fixed at insert time
+    createdAt: new Date(),
+    kind: "call",
+  });
+
+  // Build $set for everything that may change over time
+  const set = prune({
+    status: callStatus || undefined,
+    startedAt,
+    completedAt,
+    duration,
+    durationSec: duration,
+    talkTime,
+    from,
+    to,
+    ownerNumber: from,
+    otherNumber: to,
+    amd: answeredBy ? { answeredBy } : undefined,
+    isVoicemail,
+    updatedAt: new Date(),
+  });
 
   try {
-    await (Call as any).updateOne({ callSid }, update, { upsert: true });
+    await (Call as any).updateOne(
+      { callSid },
+      { $set: set, $setOnInsert: setOnInsert },
+      { upsert: true }
+    );
   } catch (err: any) {
     console.error("[voice-status] upsert error", err?.message || err);
-    // Return 200 so Twilio doesn't retry forever; log is enough for us.
+    // Return 200 so Twilio/clients don’t retry; log is enough for us.
     return res.status(200).json({ ok: false, error: "upsert_failed" });
   }
 
