@@ -1,3 +1,4 @@
+// /pages/api/twilio/call/start.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import type { Session } from "next-auth";
@@ -28,21 +29,14 @@ function normalizeE164(p?: string) {
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
-  // ✅ Type-safe session
   const session = (await getServerSession(req, res, authOptions as any)) as Session | null;
   const email = String(session?.user?.email ?? "").toLowerCase();
   if (!email) return res.status(401).json({ error: "Unauthorized" });
 
-  const body = (req.body || {}) as {
-    leadId?: string;
-    to?: string; // backward-compat
-  };
-
+  const body = (req.body || {}) as { leadId?: string; to?: string };
   try {
     await dbConnect();
-  } catch {
-    /* getClientForUser also ensures a connection; continue */
-  }
+  } catch {}
 
   // --- Resolve lead + enforce quiet hours (8am–9pm local) ---
   let toNumber = "";
@@ -64,7 +58,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     ].filter(Boolean);
     toNumber = normalizeE164(candidates[0]);
   } else {
-    // Back-compat: accept raw "to" and allow if tz unknown
     toNumber = normalizeE164(body.to);
   }
 
@@ -80,7 +73,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       from,
       url: VOICE_ANSWER_URL,
       statusCallback: voiceStatusUrl(email),
-      statusCallbackEvent: ["completed"],
+      statusCallbackEvent: ["initiated", "ringing", "answered", "completed"], // <- important
       record: false,
     });
 
