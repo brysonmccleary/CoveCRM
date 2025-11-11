@@ -1,4 +1,3 @@
-// /pages/api/dashboard/stats.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
@@ -81,6 +80,20 @@ function rangeFromQuery(req: NextApiRequest, tz: string): { from: Date; to: Date
   }
 }
 
+/** Case-insensitive userEmail match you can reuse in all pipelines */
+function userEmailMatchCI(userEmailLower: string, timeOr: any[]) {
+  return {
+    $and: [
+      { $or: timeOr },
+      {
+        $expr: {
+          $eq: [{ $toLower: "$userEmail" }, userEmailLower],
+        },
+      },
+    ],
+  };
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "GET") return res.status(405).json({ error: "Method not allowed" });
 
@@ -150,7 +163,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     // ---------- KPIs ----------
     const kpiAgg = await (Call as any).aggregate([
-      { $match: { userEmail, $or: callTimeOr } },
+      { $match: userEmailMatchCI(userEmail, callTimeOr) },
       ...addDerivedFieldsStage,
       {
         $group: {
@@ -196,7 +209,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // ---------- Dispositions ----------
     const dispAgg = await (Lead as any).aggregate([
-      { $match: { userEmail } },
+      { $match: { userEmail } }, // Lead docs already stored lower-case by your code; keep as-is
       { $unwind: "$history" },
       {
         $project: {
@@ -248,14 +261,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const todayTo = addDaysUTC(todayFrom, 1);
     const hourlyAgg = await (Call as any).aggregate([
       {
-        $match: {
-          userEmail,
-          $or: [
-            { startedAt: { $gte: todayFrom, $lt: todayTo } },
-            { completedAt: { $gte: todayFrom, $lt: todayTo } },
-            { createdAt: { $gte: todayFrom, $lt: todayTo } },
-          ],
-        },
+        $match: userEmailMatchCI(userEmail, [
+          { startedAt: { $gte: todayFrom, $lt: todayTo } },
+          { completedAt: { $gte: todayFrom, $lt: todayTo } },
+          { createdAt: { $gte: todayFrom, $lt: todayTo } },
+        ]),
       },
       ...addDerivedFieldsStage,
       {
@@ -292,14 +302,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const start = addDaysUTC(end, -days);
       const rows = await (Call as any).aggregate([
         {
-          $match: {
-            userEmail,
-            $or: [
-              { startedAt: { $gte: start, $lt: end } },
-              { completedAt: { $gte: start, $lt: end } },
-              { createdAt: { $gte: start, $lt: end } },
-            ],
-          },
+          $match: userEmailMatchCI(userEmail, [
+            { startedAt: { $gte: start, $lt: end } },
+            { completedAt: { $gte: start, $lt: end } },
+            { createdAt: { $gte: start, $lt: end } },
+          ]),
         },
         ...addDerivedFieldsStage,
         {
@@ -339,11 +346,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const [daily7, daily30] = await Promise.all([dailyAgg(7), dailyAgg(30)]);
 
     // ---------- Recent ----------
-    const recentCalls = await (Call as any)
-      .find({ userEmail, $or: callTimeOr })
-      .sort({ createdAt: -1 })
-      .limit(15)
-      .lean();
+    // Use aggregate here as well so the same case-insensitive match applies
+    const recentRows = await (Call as any).aggregate([
+      { $match: userEmailMatchCI(userEmail, callTimeOr) },
+      { $sort: { createdAt: -1 } },
+      { $limit: 15 },
+    ]);
 
     const recentDispos = await (Lead as any).aggregate([
       { $match: { userEmail } },
@@ -367,7 +375,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     ]);
 
     const recent = [
-      ...recentCalls.map((c: any) => ({
+      ...recentRows.map((c: any) => ({
         type: "call" as const,
         at: (c.startedAt || c.completedAt || c.createdAt || new Date()).toISOString(),
         callSid: c.callSid,
