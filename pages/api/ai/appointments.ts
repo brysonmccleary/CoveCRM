@@ -16,7 +16,6 @@ const INTERNAL_API_TOKEN = process.env.INTERNAL_API_TOKEN || "";
 
 // ——— Utilities ———
 function pickLeadZone(lead: any): string {
-  // prefer lead.State if present; default Eastern as before
   const s = String(lead?.State || (lead as any)?.state || "").trim();
   const byState: Record<string, string> = {
     AZ: "America/Phoenix",
@@ -48,7 +47,14 @@ function formatConfirmCopy(dtISO: string, zone: string) {
   const dt = DateTime.fromISO(dtISO, { zone }).set({ second: 0, millisecond: 0 });
   const readable = dt.toFormat("ccc, MMM d 'at' h:mm a");
   const offset = dt.offsetNameShort;
-  return `Perfect — I’ve got you down for ${readable} ${offset}. You’ll get a confirmation shortly. Reply RESCHEDULE if you need to change it.`;
+  return {
+    text: `Perfect — I’ve got you down for ${readable} ${offset}. You’ll get a confirmation shortly. Reply RESCHEDULE if you need to change it.`,
+    readable, // used for de-dupe search
+  };
+}
+
+function escapeRegExp(s: string) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 /** choose a thread-sticky "from" number if possible */
@@ -88,7 +94,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const userEmail = (lead.userEmail || agentEmail || "").toLowerCase();
     const zone = pickLeadZone(lead);
 
-    // 1) Book via the existing Google Calendar endpoint
+    // 1) Book via the existing Google Calendar endpoint (which may already send confirm+reminders)
     const bookingUrl = `${BASE_URL}/api/google/calendar/book-appointment`;
     const bookResp = await axios.post(
       bookingUrl,
@@ -108,38 +114,56 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       },
     );
 
-    const ok = (bookResp.data && (bookResp.data.success === true || bookResp.status >= 200 && bookResp.status < 300));
+    const ok = (bookResp.data && (bookResp.data.success === true || (bookResp.status >= 200 && bookResp.status < 300)));
     if (!ok) {
       return res.status(500).json({ message: "Booking failed", detail: bookResp.data });
     }
 
-    // 2) Mark lead status and appointment time
+    // 2) Persist basic booking flags on the lead
     lead.status = "Booked";
     (lead as any).appointmentTime = DateTime.fromISO(timeISO).toJSDate();
     (lead as any).aiLastConfirmedISO = DateTime.fromISO(timeISO).toISO();
-    await lead.save();
 
-    // 3) Send confirmation SMS from thread-sticky number (quiet hours logic handled in sendSms)
-    const fromOverride = await pickFromNumberForThread(String(lead._id), userEmail);
-    const confirmCopy = formatConfirmCopy(timeISO, zone);
+    // 3) De-dupe: if a confirmation containing the formatted local time
+    //    was already sent in the last 15 minutes, skip our own confirm.
+    const { text: confirmText, readable } = formatConfirmCopy(timeISO, zone);
+    const since = new Date(Date.now() - 15 * 60 * 1000);
+    const timePhrase = escapeRegExp(readable); // "Wed, Nov 12 at 8:00 PM"
 
-    await sendSms({
-      to: lead.Phone || (lead as any).phone || "",
-      body: confirmCopy,
+    const alreadySent = await Message.findOne({
+      leadId: lead._id,
       userEmail,
-      leadId: String(lead._id),
-      from: fromOverride || undefined, // if undefined, Messaging Service path is used
-    });
+      direction: "outbound",
+      createdAt: { $gte: since },
+      text: { $regex: timePhrase, $options: "i" },
+    }).lean();
 
-    // 4) Mirror into interactionHistory as an AI entry (for UI)
-    lead.interactionHistory = Array.isArray(lead.interactionHistory) ? lead.interactionHistory : [];
-    lead.interactionHistory.push({ type: "ai", text: confirmCopy, date: new Date() } as any);
+    let confirmationSent = false;
+
+    if (!alreadySent) {
+      // 4) Send confirmation SMS from the thread-sticky number
+      const fromOverride = await pickFromNumberForThread(String(lead._id), userEmail);
+      await sendSms({
+        to: lead.Phone || (lead as any).phone || "",
+        body: confirmText,
+        userEmail,
+        leadId: String(lead._id),
+        from: fromOverride || undefined,
+      });
+
+      // mirror into interactionHistory as an AI entry
+      lead.interactionHistory = Array.isArray(lead.interactionHistory) ? lead.interactionHistory : [];
+      lead.interactionHistory.push({ type: "ai", text: confirmText, date: new Date() } as any);
+      confirmationSent = true;
+    }
+
     await lead.save();
 
     return res.status(200).json({
       success: true,
       event: bookResp.data?.event || bookResp.data,
-      confirmationSent: true,
+      confirmationSent,
+      skippedBecauseRecent: Boolean(alreadySent),
     });
   } catch (err: any) {
     console.error("[ai/appointments] error:", err?.response?.data || err);
