@@ -1,4 +1,4 @@
-// pages/api/google/sheets/import.ts
+// /pages/api/google/sheets/import.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../../auth/[...nextauth]";
@@ -7,8 +7,8 @@ import User from "@/models/User";
 import Lead from "@/models/Lead";
 import Folder from "@/models/Folder";
 import { google } from "googleapis";
+import mongoose from "mongoose";
 import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
-import { enrollOnNewLeadIfWatched } from "@/lib/drips/enrollOnNewLeadIfWatched";
 
 type ImportBody = {
   spreadsheetId: string;
@@ -17,53 +17,61 @@ type ImportBody = {
   headerRow?: number;
   startRow?: number;
   endRow?: number;
-  // We ignore incoming folder hints to avoid system-folder accidents
-  // folderId?: string;
-  // folderName?: string;
-  mapping: Record<string, string>;
-  skip?: Record<string, boolean>;
-  skipExisting?: boolean;
+  folderId?: string;
+  folderName?: string;
+  mapping: Record<string, string>;     // CSVHeader -> CanonicalField
+  skip?: Record<string, boolean>;      // headers to ignore
+  createFolderIfMissing?: boolean;
+  skipExisting?: boolean;              // if true, do NOT move/update existing
 };
 
-const FINGERPRINT = "sheets-import-safe-restore—2025-11-12";
-
-const digits = (s: any) => String(s ?? "").replace(/\D+/g, "");
-const last10 = (s?: string) => (digits(s).slice(-10) || "");
-const lcEmail = (s: any) => {
+function digits(s: any) {
+  return String(s ?? "").replace(/\D+/g, "");
+}
+function last10(s?: string) {
+  const d = digits(s);
+  return d.slice(-10) || "";
+}
+function lcEmail(s: any) {
   const v = String(s ?? "").trim().toLowerCase();
   return v || "";
-};
-const escapeA1Title = (t: string) => t.replace(/'/g, "''");
-
-async function resolveCanonicalFolder(userEmail: string, oauth2: any, spreadsheetId: string, tabTitle: string) {
-  const drive = google.drive({ version: "v3", auth: oauth2 });
-  const fileMeta = await drive.files.get({ fileId: spreadsheetId, fields: "name" });
-  const spreadsheetName = fileMeta.data.name || "Imported Leads";
-  const canonicalName = `${spreadsheetName} — ${tabTitle}`.trim();
-
-  if (isSystemFolder(canonicalName)) {
-    throw new Error("Hardlock: canonical name resolves to a system folder");
-  }
-
-  const doc = await Folder.findOneAndUpdate(
-    { userEmail, name: canonicalName },
-    { $setOnInsert: { userEmail, name: canonicalName, source: "google-sheets", createdAt: new Date() } },
-    { new: true, upsert: true }
-  );
-  if (!doc) throw new Error("Failed to resolve canonical folder");
-  return doc;
+}
+function escapeA1Title(title: string) {
+  return title.replace(/'/g, "''");
 }
 
-// Title-case sanitizer for status/disposition
-function sanitizeStatus(v?: string) {
-  if (!v) return undefined;
-  const s = String(v).trim();
-  if (!s) return undefined;
-  return s
-    .toLowerCase()
-    .split(/\s+/)
-    .map(w => (w ? w[0].toUpperCase() + w.slice(1) : ""))
-    .join(" ");
+async function resolveFolder(userEmail: string, opts: { folderId?: string; folderName?: string; defaultName?: string; create?: boolean }) {
+  // If a name is provided, it WINS (and we create if needed)
+  const byName = (opts.folderName || "").trim();
+  if (byName) {
+    if (isSystemFolder(byName)) throw new Error("Cannot import into system folders");
+    const doc = await Folder.findOneAndUpdate(
+      { userEmail, name: byName },
+      { $setOnInsert: { userEmail, name: byName, source: "google-sheets" } },
+      { new: true, upsert: !!opts.create }
+    );
+    if (!doc) throw new Error("Folder not found/created");
+    return doc;
+  }
+
+  // Else by ID
+  if (opts.folderId) {
+    const doc = await Folder.findOne({ _id: new mongoose.Types.ObjectId(opts.folderId), userEmail });
+    if (!doc) throw new Error("Folder not found or not owned by user");
+    if (isSystemFolder(doc.name)) throw new Error("Cannot import into system folders");
+    return doc;
+  }
+
+  // Else fallback to default
+  const def = (opts.defaultName || "").trim();
+  if (!def) throw new Error("Missing target folder");
+  if (isSystemFolder(def)) throw new Error("Cannot import into system folders");
+  const doc = await Folder.findOneAndUpdate(
+    { userEmail, name: def },
+    { $setOnInsert: { userEmail, name: def, source: "google-sheets" } },
+    { new: true, upsert: true }
+  );
+  return doc;
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -71,7 +79,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const session = await getServerSession(req, res, authOptions);
   if (!session?.user?.email) return res.status(401).json({ error: "Unauthorized" });
-  const userEmail = String(session.user.email).toLowerCase();
+  const userEmail = session.user.email.toLowerCase();
 
   const {
     spreadsheetId,
@@ -80,19 +88,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     headerRow = 1,
     startRow,
     endRow,
+    folderId,
+    folderName,
     mapping = {},
     skip = {},
+    createFolderIfMissing = true,
     skipExisting = false,
   } = (req.body || {}) as ImportBody;
 
   if (!spreadsheetId) return res.status(400).json({ error: "Missing spreadsheetId" });
-  if (!title && typeof sheetId !== "number") {
-    return res.status(400).json({ error: "Provide sheet 'title' or numeric 'sheetId'" });
-  }
+  if (!title && typeof sheetId !== "number") return res.status(400).json({ error: "Provide sheet 'title' or numeric 'sheetId'" });
+  if (folderName && isSystemFolder(folderName)) return res.status(400).json({ error: "Cannot import into system folders" });
 
   try {
     await dbConnect();
-
     const user = await User.findOne({ email: userEmail }).lean<any>();
     const gs = user?.googleSheets || user?.googleTokens;
     if (!gs?.refreshToken) return res.status(400).json({ error: "Google not connected" });
@@ -101,6 +110,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       process.env.NEXTAUTH_URL ||
       process.env.NEXT_PUBLIC_BASE_URL ||
       `https://${req.headers["x-forwarded-host"] || req.headers.host}`;
+
     const redirectUri =
       process.env.GOOGLE_REDIRECT_URI_SHEETS ||
       `${base}/api/connect/google-sheets/callback`;
@@ -118,20 +128,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const sheets = google.sheets({ version: "v4", auth: oauth2 });
 
-    // Resolve tab title if only sheetId
+    // Resolve tab title if only sheetId passed
     let tabTitle = title;
     if (!tabTitle && typeof sheetId === "number") {
       const meta = await sheets.spreadsheets.get({
         spreadsheetId,
         fields: "sheets(properties(sheetId,title))",
       });
-      const found = (meta.data.sheets || []).find(s => s.properties?.sheetId === sheetId);
+      const found = (meta.data.sheets || []).find((s) => s.properties?.sheetId === sheetId);
       tabTitle = found?.properties?.title || undefined;
       if (!tabTitle) return res.status(400).json({ error: "sheetId not found" });
     }
     const safeTitle = escapeA1Title(tabTitle!);
 
-    // Read values
+    // Pull values
     const valueResp = await sheets.spreadsheets.values.get({
       spreadsheetId,
       range: `'${safeTitle}'!A1:ZZ`,
@@ -143,32 +153,39 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!values.length) {
       return res.status(200).json({
         ok: true,
-        fingerprint: FINGERPRINT,
         inserted: 0,
         updated: 0,
         skippedNoKey: 0,
         skippedExisting: 0,
         rowCount: 0,
-        headerRow,
         lastRowImported: 0,
         note: "No data in sheet.",
       });
     }
 
-    // Resolve the canonical, non-system folder
-    const folderDoc = await resolveCanonicalFolder(userEmail, oauth2, spreadsheetId, tabTitle!);
-    if (isSystemFolder(String(folderDoc.name))) {
-      return res.status(400).json({ error: "Hardlock: resolved a system folder; aborting", fingerprint: FINGERPRINT });
-    }
-
     const headerIdx = Math.max(0, headerRow - 1);
-    const headers = (values[headerIdx] || []).map(h => String(h || "").trim());
+    const headers = (values[headerIdx] || []).map((h) => String(h || "").trim());
 
-    const firstDataRowIndex = typeof startRow === "number" ? Math.max(1, startRow) - 1 : headerIdx + 1;
+    const firstDataRowIndex =
+      typeof startRow === "number" ? Math.max(1, startRow) - 1 : headerIdx + 1;
     const lastRowIndex =
       typeof endRow === "number"
         ? Math.min(values.length, Math.max(endRow, firstDataRowIndex + 1)) - 1
         : values.length - 1;
+
+    // Resolve destination folder (name wins > id > default)
+    const defaultNameMeta = await google.drive({ version: "v3", auth: oauth2 }).files.get({
+      fileId: spreadsheetId,
+      fields: "name",
+    });
+    const defaultName = `${defaultNameMeta.data.name || "Imported Leads"} — ${tabTitle}`;
+    const folderDoc = await resolveFolder(userEmail, {
+      folderId,
+      folderName,
+      defaultName,
+      create: createFolderIfMissing,
+    });
+    if (!folderDoc) return res.status(400).json({ error: "Folder not found/created" });
 
     let inserted = 0;
     let updated = 0;
@@ -178,31 +195,31 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     for (let r = firstDataRowIndex; r <= lastRowIndex; r++) {
       const row = values[r] || [];
-      const hasAny = row.some(cell => String(cell ?? "").trim() !== "");
+      const hasAny = row.some((cell) => String(cell ?? "").trim() !== "");
       if (!hasAny) continue;
+
       lastNonEmptyRow = r;
 
-      // Build doc from mapping
+      // Build doc using header->field mapping, skipping configured headers
       const doc: Record<string, any> = {};
       headers.forEach((h, i) => {
         if (!h) return;
         if (skip[h]) return;
-        const fieldName = (mapping as Record<string, string>)[h];
+        const fieldName = mapping[h];
         if (!fieldName) return;
         doc[fieldName] = row[i] ?? "";
       });
-
-      // Infer optional incoming status/disposition only if mapped
-      const incomingStatus = sanitizeStatus(
-        (doc.status as string | undefined) ?? (doc.disposition as string | undefined)
-      );
 
       const normalizedPhone = digits(doc.phone ?? doc.Phone ?? "");
       const phoneKey = last10(normalizedPhone);
       const emailLower = lcEmail(doc.email ?? doc.Email ?? "");
 
-      if (!phoneKey && !emailLower) { skippedNoKey++; continue; }
+      if (!phoneKey && !emailLower) {
+        skippedNoKey++;
+        continue;
+      }
 
+      // Optionally skip existing without moving them
       if (skipExisting) {
         const exists = await Lead.findOne({
           userEmail,
@@ -210,10 +227,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             ...(phoneKey ? [{ phoneLast10: phoneKey }, { normalizedPhone: phoneKey }] : []),
             ...(emailLower ? [{ Email: emailLower }, { email: emailLower }] : []),
           ],
-        }).select("_id").lean();
-        if (exists) { skippedExistingCount++; continue; }
+        })
+          .select("_id")
+          .lean();
+        if (exists) {
+          skippedExistingCount++;
+          continue;
+        }
       }
 
+      // Build upsert
       const filter: any = {
         userEmail,
         $or: [
@@ -222,17 +245,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         ],
       };
 
-      const setOnInsert: any = {
-        createdAt: new Date(),
-        status: incomingStatus || "New",
-      };
-
+      const setOnInsert: any = { createdAt: new Date() };
       const set: any = {
         userEmail,
         ownerEmail: userEmail,
         folderId: folderDoc._id,
         folder_name: String(folderDoc.name),
         "Folder Name": String(folderDoc.name),
+        status: "New",
         // identity mirrors
         Email: emailLower || undefined,
         email: emailLower || undefined,
@@ -252,33 +272,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         sourceRowIndex: r + 1,
       };
 
-      // Only update status on existing lead if the sheet explicitly provided one
-      if (incomingStatus) {
-        set.status = incomingStatus;
-      }
+      const result = await (Lead as any).updateOne(filter, { $set: set, $setOnInsert: setOnInsert }, { upsert: true });
+      const upc = result?.upsertedCount || (result?.upsertedId ? 1 : 0) || 0;
+      const mod = result?.modifiedCount || 0;
+      const match = result?.matchedCount || 0;
 
-      const result = await (Lead as any).updateOne(
-        filter,
-        { $set: set, $setOnInsert: setOnInsert },
-        { upsert: true }
-      );
-
-      const upc = (result?.upsertedCount || (result?.upsertedId ? 1 : 0) || 0) as number;
       if (upc > 0) inserted += upc;
-      else if ((result?.modifiedCount || 0) > 0 || (result?.matchedCount || 0) > 0) updated += 1;
-
-      // Enroll if folder is watched
-      try {
-        const found = await Lead.findOne(filter).select("_id").lean<{ _id: any } | null>();
-        const leadId: string | undefined =
-          (result as any)?.upsertedId ?? (found?._id ? String(found._id) : undefined);
-        if (leadId) {
-          await enrollOnNewLeadIfWatched({ userEmail, folderId: String(folderDoc._id), leadId });
-        }
-      } catch {}
+      else if (mod > 0 || match > 0) updated += 1;
     }
 
-    // Persist pointer for UI
+    // Update sync pointer on the user doc (best-effort)
     try {
       const positional = await User.updateOne(
         {
@@ -295,6 +298,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             "googleSheets.syncedSheets.$.skip": skip,
             "googleSheets.syncedSheets.$.lastRowImported": lastNonEmptyRow + 1,
             "googleSheets.syncedSheets.$.lastImportedAt": new Date(),
+            ...(typeof sheetId === "number" ? { "googleSheets.syncedSheets.$.sheetId": sheetId } : {}),
           },
         }
       );
@@ -306,6 +310,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               "googleSheets.syncedSheets": {
                 spreadsheetId,
                 title: tabTitle,
+                ...(typeof sheetId === "number" ? { sheetId } : {}),
                 folderId: folderDoc._id,
                 folderName: folderDoc.name,
                 headerRow,
@@ -320,12 +325,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         );
       }
     } catch {
-      // best-effort
+      // ignore pointer errors
     }
 
     return res.status(200).json({
       ok: true,
-      fingerprint: FINGERPRINT,
       inserted,
       updated,
       skippedNoKey,
@@ -338,6 +342,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   } catch (err: any) {
     const message = err?.errors?.[0]?.message || err?.message || "Import failed";
-    return res.status(500).json({ error: message, fingerprint: FINGERPRINT });
+    return res.status(500).json({ error: message });
   }
 }

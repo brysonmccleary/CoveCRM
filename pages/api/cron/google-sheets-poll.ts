@@ -32,14 +32,12 @@ type SyncedSheetCfg = {
   lastRowImported?: number;
 };
 
-type FolderRaw =
-  | {
-      _id: mongoose.Types.ObjectId;
-      name?: string;
-      userEmail?: string;
-      source?: string;
-    }
-  | null;
+type FolderRaw = {
+  _id: mongoose.Types.ObjectId;
+  name?: string;
+  userEmail?: string;
+  source?: string;
+} | null;
 
 // ---------- RAW helpers (folders) ----------
 // Always derive the folder from DriveName + TabTitle; NEVER accept a system folder
@@ -88,7 +86,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(405).json({ error: "Method not allowed", fingerprint: FINGERPRINT });
   }
 
-  // Accept secret via header or query (old behavior)
+  // Accept secret via header or query
   const headerToken = Array.isArray(req.headers["x-cron-secret"])
     ? req.headers["x-cron-secret"][0]
     : (req.headers["x-cron-secret"] as string | undefined);
@@ -185,11 +183,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         } = (cfg || {}) as SyncedSheetCfg & Record<string, any>;
 
         // Legacy aliasing: some legacy lists used "sheetId" to mean the spreadsheetId string.
-        if (
-          !spreadsheetId &&
-          typeof (cfg as any)?.sheetId === "string" &&
-          (cfg as any).sheetId.length > 12
-        ) {
+        if (!spreadsheetId && typeof (cfg as any)?.sheetId === "string" && (cfg as any).sheetId.length > 12) {
           spreadsheetId = (cfg as any).sheetId;
           sheetId = typeof (cfg as any)?.tabId === "number" ? (cfg as any).tabId : sheetId;
         }
@@ -210,9 +204,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             if (found?.properties?.title) {
               title = found.properties.title;
             }
-          } catch {
-            /* ignore */
-          }
+          } catch { /* ignore */ }
         }
         if (onlyTitle && title && title !== onlyTitle) continue;
         if (!title) title = "Sheet1";
@@ -248,9 +240,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             {
               arrayFilters: [{ "t.spreadsheetId": spreadsheetId }],
             }
-          ).catch(() => {
-            /* ignore if arrayFilters doesn't match legacy doc */
-          });
+          ).catch(() => {/* ignore if arrayFilters doesn't match legacy doc */});
 
           // Legacy array shape write (best-effort)
           await User.updateOne(
@@ -264,9 +254,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 "googleSheets.sheets.$.folderName": targetFolderName,
               },
             }
-          ).catch(() => {
-            /* ignore if not legacy */
-          });
+          ).catch(() => {/* ignore if not legacy */});
         }
 
         // --- Read values ----------------------------------------------------
@@ -280,6 +268,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const rawHeaders = (values[headerIdx] || []).map((h) => String(h ?? "").trim());
 
         const normalizedMapping: Record<string, string> = {};
+        // TS-safe entries cast
         (Object.entries(mapping as Record<string, unknown>) as Array<[string, unknown]>).forEach(
           ([key, val]) => {
             if (typeof val === "string" && val) {
@@ -319,10 +308,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
             const p = normPhone(doc.phone ?? (doc as any).Phone);
             const e = normEmail(doc.email ?? (doc as any).Email);
-            if (!p && !e) {
-              skippedNoKey++;
-              continue;
-            }
+            if (!p && !e) { skippedNoKey++; continue; }
 
             doc.userEmail = userEmail;
             doc.source = "google-sheets";
@@ -345,13 +331,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               .lean<{ _id: mongoose.Types.ObjectId } | null>();
 
             if (!existing) {
-              if (!dryRun)
-                await Lead.create({
-                  ...doc,
-                  folderId: targetFolderId,
-                  folder_name: targetFolderName,
-                  ["Folder Name"]: targetFolderName,
-                });
+              if (!dryRun) await Lead.create({
+                ...doc,
+                folderId: targetFolderId,
+                folder_name: targetFolderName,
+                ["Folder Name"]: targetFolderName
+              });
               imported++;
             } else {
               if (!dryRun)
@@ -362,8 +347,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                       ...doc,
                       folderId: targetFolderId,
                       folder_name: targetFolderName,
-                      ["Folder Name"]: targetFolderName,
-                    },
+                      ["Folder Name"]: targetFolderName
+                    }
                   }
                 );
               updated++;
@@ -387,9 +372,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 "googleSheets.syncedSheets.$.folderName": targetFolderName,
               },
             }
-          ).catch(() => {
-            /* ignore if not present */
-          });
+          ).catch(() => {/* ignore if not present */});
 
           await User.updateOne(
             {
@@ -404,9 +387,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 "googleSheets.sheets.$.folderName": targetFolderName,
               },
             }
-          ).catch(() => {
-            /* ignore if not present */
-          });
+          ).catch(() => {/* ignore if not present */});
         }
 
         detailsAll.push({
@@ -449,8 +430,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   } catch (err: any) {
     console.error("Sheets poll error:", err);
-    return res
-      .status(500)
-      .json({ error: err?.message || "Cron poll failed", fingerprint: FINGERPRINT });
+    return res.status(500).json({ error: err?.message || "Cron poll failed", fingerprint: FINGERPRINT });
   }
 }
