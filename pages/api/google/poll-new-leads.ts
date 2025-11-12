@@ -6,20 +6,10 @@ import Folder from "@/models/Folder";
 import Lead from "@/models/Lead";
 import { google } from "googleapis";
 import { sendInitialDrip } from "@/utils/sendInitialDrip";
-import { checkCronAuth } from "@/lib/cronAuth";
 
-export default async function handler(
-  req: NextApiRequest,
-  res: NextApiResponse,
-) {
-  // ✅ Allow GET and POST (Vercel Cron calls GET)
-  if (req.method !== "GET" && req.method !== "POST") {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  if (req.method !== "POST") {
     return res.status(405).json({ message: "Method not allowed" });
-  }
-
-  // ✅ Unified cron auth (query | x-cron-secret | Authorization: Bearer)
-  if (!checkCronAuth(req)) {
-    return res.status(401).json({ message: "Unauthorized" });
   }
 
   await dbConnect();
@@ -40,7 +30,7 @@ export default async function handler(
     const oauth2Client = new google.auth.OAuth2(
       process.env.GOOGLE_CLIENT_ID!,
       process.env.GOOGLE_CLIENT_SECRET!,
-      process.env.GOOGLE_REDIRECT_URI!,
+      process.env.GOOGLE_REDIRECT_URI!
     );
     oauth2Client.setCredentials({ refresh_token: refreshToken });
 
@@ -64,12 +54,8 @@ export default async function handler(
         });
 
         const rows = response.data.values || [];
-        const existingLeads = await Lead.find({ folderId }).select(
-          "externalId",
-        );
-        const existingIds = new Set(
-          existingLeads.map((l: any) => l.externalId),
-        );
+        const existingLeads = await Lead.find({ folderId }).select("externalId");
+        const existingIds = new Set(existingLeads.map((l: any) => l.externalId));
 
         const folder = await Folder.findById(folderId);
         if (!folder) continue;
