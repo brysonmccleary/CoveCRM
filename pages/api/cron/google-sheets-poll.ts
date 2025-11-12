@@ -1,4 +1,3 @@
-// pages/api/cron/google-sheets-poll.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";

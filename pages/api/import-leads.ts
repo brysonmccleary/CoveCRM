@@ -1,4 +1,3 @@
-// /pages/api/import-leads.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import formidable from "formidable";
 import fs from "fs";
@@ -359,7 +358,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (m.leadType) base["leadType"] = m.leadType;
 
         if (exists) {
-          if (m.status) base.status = m.status; // EXISTING → status only in $set
+          if (m.status) base.status = m.status; // EXISTING → status only if provided
           ops.push({ updateOne: { filter, update: { $set: base }, upsert: false } });
           processedFilters.push(filter);
         } else {
@@ -368,7 +367,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             status: m.status || "New", // NEW → status only in $setOnInsert
             createdAt: new Date(),
           };
-          // make sure status is NOT in $set for the new path
+          // ensure status not in $set for new path
           if ("status" in base) delete base.status;
 
           ops.push({
@@ -632,7 +631,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (m.leadType) base["leadType"] = m.leadType;
 
         if (exists) {
-          if (m.status) base.status = m.status; // EXISTING → status only in $set
+          if (m.status) base.status = m.status; // EXISTING → status only if provided
           ops.push({ updateOne: { filter, update: { $set: base }, upsert: false } });
           processedFilters.push(filter);
         } else {

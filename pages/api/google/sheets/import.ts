@@ -1,4 +1,3 @@
-// /pages/api/google/sheets/import.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../../auth/[...nextauth]";
@@ -25,23 +24,16 @@ type ImportBody = {
   skipExisting?: boolean;              // if true, do NOT move/update existing
 };
 
-function digits(s: any) {
-  return String(s ?? "").replace(/\D+/g, "");
-}
-function last10(s?: string) {
-  const d = digits(s);
-  return d.slice(-10) || "";
-}
-function lcEmail(s: any) {
-  const v = String(s ?? "").trim().toLowerCase();
-  return v || "";
-}
-function escapeA1Title(title: string) {
-  return title.replace(/'/g, "''");
-}
+function digits(s: any) { return String(s ?? "").replace(/\D+/g, ""); }
+function last10(s?: string) { const d = digits(s); return d.slice(-10) || ""; }
+function lcEmail(s: any) { const v = String(s ?? "").trim().toLowerCase(); return v || ""; }
+function escapeA1Title(title: string) { return title.replace(/'/g, "''"); }
 
-async function resolveFolder(userEmail: string, opts: { folderId?: string; folderName?: string; defaultName?: string; create?: boolean }) {
-  // If a name is provided, it WINS (and we create if needed)
+async function resolveFolder(
+  userEmail: string,
+  opts: { folderId?: string; folderName?: string; defaultName?: string; create?: boolean }
+) {
+  // Name wins (create if requested)
   const byName = (opts.folderName || "").trim();
   if (byName) {
     if (isSystemFolder(byName)) throw new Error("Cannot import into system folders");
@@ -54,7 +46,7 @@ async function resolveFolder(userEmail: string, opts: { folderId?: string; folde
     return doc;
   }
 
-  // Else by ID
+  // By id
   if (opts.folderId) {
     const doc = await Folder.findOne({ _id: new mongoose.Types.ObjectId(opts.folderId), userEmail });
     if (!doc) throw new Error("Folder not found or not owned by user");
@@ -62,7 +54,7 @@ async function resolveFolder(userEmail: string, opts: { folderId?: string; folde
     return doc;
   }
 
-  // Else fallback to default
+  // Default
   const def = (opts.defaultName || "").trim();
   if (!def) throw new Error("Missing target folder");
   if (isSystemFolder(def)) throw new Error("Cannot import into system folders");
@@ -245,14 +237,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         ],
       };
 
-      const setOnInsert: any = { createdAt: new Date() };
+      // NEW invariant: status only in $setOnInsert; for existing, only update if provided
+      const incomingStatus = typeof doc.status === "string" && doc.status.trim() ? doc.status : undefined;
+
+      const setOnInsert: any = {
+        createdAt: new Date(),
+        status: incomingStatus || "New",
+      };
+
       const set: any = {
         userEmail,
         ownerEmail: userEmail,
         folderId: folderDoc._id,
         folder_name: String(folderDoc.name),
         "Folder Name": String(folderDoc.name),
-        status: "New",
         // identity mirrors
         Email: emailLower || undefined,
         email: emailLower || undefined,
@@ -272,7 +270,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         sourceRowIndex: r + 1,
       };
 
-      const result = await (Lead as any).updateOne(filter, { $set: set, $setOnInsert: setOnInsert }, { upsert: true });
+      // If this is an existing lead, we'll conditionally add status into $set *only if provided*
+      const existing = await Lead.findOne(filter).select("_id").lean<{ _id: mongoose.Types.ObjectId } | null>();
+      if (existing && incomingStatus) set.status = incomingStatus;
+
+      const result = await (Lead as any).updateOne(
+        filter,
+        { $set: set, $setOnInsert: setOnInsert },
+        { upsert: true }
+      );
+
       const upc = result?.upsertedCount || (result?.upsertedId ? 1 : 0) || 0;
       const mod = result?.modifiedCount || 0;
       const match = result?.matchedCount || 0;
