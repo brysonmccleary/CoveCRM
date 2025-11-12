@@ -5,6 +5,8 @@ import Image from "next/image";
 import { useSession } from "next-auth/react";
 import { connectAndJoin } from "@/lib/socketClient";
 
+const LOGIN_PATH = "/login"; // ← change to "/auth/signin" if that's your login route
+
 export default function Sidebar() {
   const { data: session } = useSession();
   const [unreadCount, setUnreadCount] = useState(0);
@@ -58,6 +60,20 @@ export default function Sidebar() {
       </span>
     );
 
+  const handleLogout = async () => {
+    try {
+      // Do not rely on provider redirect here; Safari sometimes keeps history/URL.
+      await signOut({ redirect: false });
+    } catch (e) {
+      // ignore
+    } finally {
+      // Force a hard navigation to the login page
+      if (typeof window !== "undefined") {
+        window.location.replace(LOGIN_PATH);
+      }
+    }
+  };
+
   return (
     <div className="bg-[#0f172a] text-white w-60 p-4 min-h-screen flex flex-col justify-between">
       <div>
@@ -105,9 +121,9 @@ export default function Sidebar() {
 
       <div className="mt-8">
         <button
-          onClick={() => signOut({ callbackUrl: "/" })}
+          onClick={handleLogout}
           className="block text-red-500 hover:underline"
-          aria-label="Log out and return to Home"
+          aria-label="Log out and return to Login"
         >
           Log Out
         </button>
