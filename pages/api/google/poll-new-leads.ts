@@ -1,4 +1,4 @@
-// /pages/api/google/poll-new-leads.ts
+// pages/api/google/poll-new-leads.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import dbConnect from "@/lib/dbConnect";
 import User from "@/models/User";
@@ -6,13 +6,20 @@ import Folder from "@/models/Folder";
 import Lead from "@/models/Lead";
 import { google } from "googleapis";
 import { sendInitialDrip } from "@/utils/sendInitialDrip";
+import { checkCronAuth } from "@/lib/cronAuth";
 
 export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse,
 ) {
-  if (req.method !== "POST") {
+  // ✅ Allow GET and POST (Vercel Cron calls GET)
+  if (req.method !== "GET" && req.method !== "POST") {
     return res.status(405).json({ message: "Method not allowed" });
+  }
+
+  // ✅ Unified cron auth (query | x-cron-secret | Authorization: Bearer)
+  if (!checkCronAuth(req)) {
+    return res.status(401).json({ message: "Unauthorized" });
   }
 
   await dbConnect();
@@ -106,8 +113,8 @@ export default async function handler(
             ...newLead._doc,
             name: fullName,
             phone,
-            folderName: folder.name,
-            agentName: (folder as any).agentName || user.name || "your agent",
+            folderName: (folder as any).name,
+            agentName: (folder as any).agentName || (user as any).name || "your agent",
             agentPhone: (folder as any).agentPhone || "N/A",
           };
 

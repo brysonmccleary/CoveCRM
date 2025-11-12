@@ -1,12 +1,14 @@
- import type { NextApiRequest, NextApiResponse } from "next";
+// pages/api/cron/google-sheets-poll.ts
+import type { NextApiRequest, NextApiResponse } from "next";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import Lead from "@/models/Lead";
 import mongoose from "mongoose";
 import { google } from "googleapis";
 import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
+import { checkCronAuth } from "@/lib/cronAuth";
 
-const FINGERPRINT = "selfheal-v5h"; // revert to always-computed folder; TS safety intact
+const FINGERPRINT = "selfheal-v5h"; // keep existing fingerprint
 
 // --- Normalizers -------------------------------------------------------------
 const normPhone = (v: any) => String(v ?? "").replace(/\D+/g, "");
@@ -81,18 +83,13 @@ async function ensureNonSystemFolderRaw(
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  // Allow only GET and POST (to satisfy Vercel Cron GET and any manual POST runs)
   if (req.method !== "GET" && req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed", fingerprint: FINGERPRINT });
   }
 
-  // Accept secret via header or query
-  const headerToken = Array.isArray(req.headers["x-cron-secret"])
-    ? req.headers["x-cron-secret"][0]
-    : (req.headers["x-cron-secret"] as string | undefined);
-  const queryToken =
-    typeof req.query.token === "string" ? (req.query.token as string) : undefined;
-  const provided = headerToken || queryToken;
-  if (provided !== process.env.CRON_SECRET) {
+  // ✅ Unified cron auth (query | x-cron-secret | Authorization: Bearer)
+  if (!checkCronAuth(req)) {
     return res.status(401).json({ error: "Unauthorized", fingerprint: FINGERPRINT });
   }
 
@@ -432,4 +429,3 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: err?.message || "Cron poll failed", fingerprint: FINGERPRINT });
   }
 }
-
