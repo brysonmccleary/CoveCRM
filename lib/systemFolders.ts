@@ -22,7 +22,7 @@ function safeNormalize(name?: string | null): string {
 export function isSystemFolderName(name?: string | null): boolean {
   const n = safeNormalize(name);
   if (!n) return false;
-  if (CANONICAL_LOWER.has(n)) return true;
+  if (CANONICAL_LOOWER.has(n)) return true;
   if (n === "booked") return true; // shorthand for “Booked Appointment”
   return false;
 }

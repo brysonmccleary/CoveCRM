@@ -2,7 +2,7 @@ import mongoose from "mongoose";
 import Folder from "@/models/Folder";
 import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
 
-const FP = "ensureSafeFolder-v4"; // tracer fingerprint for logs
+const FP = "ensureSafeFolder-v4";
 
 type Opts = {
   userEmail: string;
@@ -29,17 +29,14 @@ export async function ensureSafeFolder(opts: Opts) {
     source = "google-sheets",
   } = opts;
 
-  // ---------- 0) Normalize inputs ----------
   const byName = String(folderName ?? "").trim();
   const defBase = String(defaultName ?? "").trim() || "Imported Leads";
   const defSafe = isSystemFolder(defBase) ? `${defBase} (Leads)` : defBase;
 
-  // ---------- 1) If folderName provided, it wins (unless system) ----------
+  // 1) Name provided → wins unless system; clamp if needed
   if (byName) {
     const chosenName = isSystemFolder(byName) ? `${byName} (Leads)` : byName;
     let doc = await upsertFolderByName(userEmail, chosenName, source);
-
-    // Final post-condition: never return a system folder
     if (!doc?.name || isSystemFolder(doc.name)) {
       const repaired = await upsertFolderByName(userEmail, defSafe, source);
       console.log(`[${FP}] clamp:name provided`, { userEmail, in: byName, out: repaired?.name });
@@ -48,13 +45,11 @@ export async function ensureSafeFolder(opts: Opts) {
     return doc;
   }
 
-  // ---------- 2) If folderId provided, validate ownership + non-system ----------
+  // 2) Id provided → validate ownership + non-system; else clamp to default
   if (folderId && mongoose.isValidObjectId(folderId)) {
     const fid = new mongoose.Types.ObjectId(folderId);
     const found = await Folder.findOne({ _id: fid, userEmail });
-
     if (found && !isSystemFolder(found.name)) {
-      // Double-check post-condition
       if (isSystemFolder(found.name)) {
         const repaired = await upsertFolderByName(userEmail, defSafe, source);
         console.log(`[${FP}] clamp:by id`, { userEmail, in: found?.name, out: repaired?.name });
@@ -62,18 +57,14 @@ export async function ensureSafeFolder(opts: Opts) {
       }
       return found;
     }
-    // system or not found → fall through to default
   }
 
-  // ---------- 3) Default (never a system name) ----------
+  // 3) Default (never a system name)
   let defDoc = await upsertFolderByName(userEmail, defSafe, source);
-
-  // Final post-condition: absolutely never return a system folder
   if (!defDoc?.name || isSystemFolder(defDoc.name)) {
     const repaired = await upsertFolderByName(userEmail, `${defSafe} (Leads)`, source);
     console.log(`[${FP}] clamp:default`, { userEmail, in: defBase, out: repaired?.name });
     return repaired;
   }
-
   return defDoc;
 }

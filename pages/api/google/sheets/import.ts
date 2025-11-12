@@ -5,10 +5,8 @@ import { authOptions } from "../../auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import Lead from "@/models/Lead";
-import Folder from "@/models/Folder";
 import { google } from "googleapis";
-import mongoose from "mongoose";
-import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
+import { ensureSafeFolder } from "@/lib/ensureSafeFolder";
 import { enrollOnNewLeadIfWatched } from "@/lib/drips/enrollOnNewLeadIfWatched";
 
 type ImportBody = {
@@ -18,50 +16,23 @@ type ImportBody = {
   headerRow?: number;
   startRow?: number;
   endRow?: number;
-
-  // ⚠️ These are now ignored to prevent system-folder accidents:
-  // folderId?: string;
-  // folderName?: string;
-
+  folderId?: string;          // ← accepted again
+  folderName?: string;        // ← accepted again
   mapping: Record<string, string>;
   skip?: Record<string, boolean>;
-  createFolderIfMissing?: boolean; // ignored; we always create the canonical folder
+  createFolderIfMissing?: boolean;
   skipExisting?: boolean;
 };
 
-const FINGERPRINT = "sheets-canonical-2025-10-30-1548PDT";
+const FINGERPRINT = "sheets-import-safe-restore-2025-11-12";
 
-function digits(s: any) { return String(s ?? "").replace(/\D+/g, ""); }
-function last10(s?: string) { const d = digits(s); return d.slice(-10) || ""; }
-function lcEmail(s: any) { const v = String(s ?? "").trim().toLowerCase(); return v || ""; }
-function escapeA1Title(title: string) { return title.replace(/'/g, "''"); }
-
-/** Always resolve to the canonical non-system folder:
- * "<Spreadsheet Name> — <Tab Title>"
- * Ignores any incoming folderId/folderName and rejects system names.
- */
-async function resolveCanonicalFolder(userEmail: string, oauth2: any, spreadsheetId: string, tabTitle: string) {
-  // Get the spreadsheet file name for canonical naming
-  const fileMeta = await google.drive({ version: "v3", auth: oauth2 }).files.get({
-    fileId: spreadsheetId,
-    fields: "name",
-  });
-  const spreadsheetName = fileMeta.data.name || "Imported Leads";
-  const canonicalName = `${spreadsheetName} — ${tabTitle}`.trim();
-
-  if (isSystemFolder(canonicalName)) {
-    // In practice the canonical name will be based on user sheet/tab and should never collide
-    throw new Error("Hardlock: canonical name resolves to a system folder");
-  }
-
-  const doc = await Folder.findOneAndUpdate(
-    { userEmail, name: canonicalName },
-    { $setOnInsert: { userEmail, name: canonicalName, source: "google-sheets", createdAt: new Date() } },
-    { new: true, upsert: true }
-  );
-  if (!doc) throw new Error("Failed to resolve canonical folder");
-  return doc;
-}
+const digits = (s: any) => String(s ?? "").replace(/\D+/g, "");
+const last10 = (s?: string) => (digits(s).slice(-10) || "");
+const lcEmail = (s: any) => {
+  const v = String(s ?? "").trim().toLowerCase();
+  return v || "";
+};
+const escapeA1Title = (t: string) => t.replace(/'/g, "''");
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
@@ -77,15 +48,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     headerRow = 1,
     startRow,
     endRow,
-    // folderId, folderName,   // deliberately ignored
+    folderId,
+    folderName,
     mapping = {},
     skip = {},
-    // createFolderIfMissing = true, // ignored; we always create canonical
+    createFolderIfMissing = true,
     skipExisting = false,
   } = (req.body || {}) as ImportBody;
 
   if (!spreadsheetId) return res.status(400).json({ error: "Missing spreadsheetId" });
-  if (!title && typeof sheetId !== "number") return res.status(400).json({ error: "Provide sheet 'title' or numeric 'sheetId'" });
+  if (!title && typeof sheetId !== "number") {
+    return res.status(400).json({ error: "Provide sheet 'title' or numeric 'sheetId'" });
+  }
 
   try {
     await dbConnect();
@@ -115,15 +89,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
 
     const sheets = google.sheets({ version: "v4", auth: oauth2 });
+    const drive  = google.drive({ version: "v3", auth: oauth2 });
 
-    // Resolve tab title if only sheetId passed
+    // Resolve tab title if only sheetId
     let tabTitle = title;
     if (!tabTitle && typeof sheetId === "number") {
       const meta = await sheets.spreadsheets.get({
         spreadsheetId,
         fields: "sheets(properties(sheetId,title))",
       });
-      const found = (meta.data.sheets || []).find((s) => s.properties?.sheetId === sheetId);
+      const found = (meta.data.sheets || []).find(s => s.properties?.sheetId === sheetId);
       tabTitle = found?.properties?.title || undefined;
       if (!tabTitle) return res.status(400).json({ error: "sheetId not found" });
     }
@@ -153,16 +128,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    // ☑️ ALWAYS resolve canonical, user-specific, non-system folder
-    const folderDoc = await resolveCanonicalFolder(userEmail, oauth2, spreadsheetId, tabTitle!);
-    if (!folderDoc) return res.status(400).json({ error: "Folder resolution failed" });
-    if (isSystemFolder(String(folderDoc.name))) {
-      // Extra guard; practically unreachable with canonical naming
-      return res.status(400).json({ error: "Hardlock: resolved a system folder; aborting", fingerprint: "sheets-hardlock-2025-10-30-1548PDT" });
-    }
+    // Build the canonical default name "<Drive Name> — <Tab Title>"
+    const fileMeta = await drive.files.get({ fileId: spreadsheetId, fields: "name" });
+    const spreadsheetName = fileMeta.data.name || "Imported Leads";
+    const defaultName = `${spreadsheetName} — ${tabTitle}`;
+
+    // ✅ CRITICAL: resolve via ensureSafeFolder (clamps any system name to a safe one)
+    const folderDoc = await ensureSafeFolder({
+      userEmail,
+      folderId,
+      folderName,
+      defaultName,
+      source: "google-sheets",
+    });
 
     const headerIdx = Math.max(0, headerRow - 1);
-    const headers = (values[headerIdx] || []).map((h) => String(h || "").trim());
+    const headers = (values[headerIdx] || []).map(h => String(h || "").trim());
 
     const firstDataRowIndex =
       typeof startRow === "number" ? Math.max(1, startRow) - 1 : headerIdx + 1;
@@ -171,20 +152,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         ? Math.min(values.length, Math.max(endRow, firstDataRowIndex + 1)) - 1
         : values.length - 1;
 
-    let inserted = 0;
-    let updated = 0;
-    let skippedNoKey = 0;
-    let skippedExistingCount = 0;
-    let lastNonEmptyRow = headerIdx;
+    let inserted = 0, updated = 0, skippedNoKey = 0, skippedExistingCount = 0, lastNonEmptyRow = headerIdx;
 
     for (let r = firstDataRowIndex; r <= lastRowIndex; r++) {
       const row = values[r] || [];
-      const hasAny = row.some((cell) => String(cell ?? "").trim() !== "");
-      if (!hasAny) continue;
-
+      if (!row.some(c => String(c ?? "").trim() !== "")) continue;
       lastNonEmptyRow = r;
 
-      // Build doc using header->field mapping, skipping configured headers
       const doc: Record<string, any> = {};
       headers.forEach((h, i) => {
         if (!h) return;
@@ -194,23 +168,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         doc[fieldName] = row[i] ?? "";
       });
 
-      // 🚫 Strip any sheet-provided status/disposition before writing
+      // Strip any incoming status/disposition fields
       delete doc.status;
       delete (doc as any).Status;
       delete (doc as any).Disposition;
       delete (doc as any)["Disposition"];
       delete (doc as any)["Status"];
 
-      const normalizedPhone = digits(doc.phone ?? doc.Phone ?? "");
-      const phoneKey = last10(normalizedPhone);
+      const phoneKey = last10(doc.phone ?? doc.Phone ?? "");
       const emailLower = lcEmail(doc.email ?? doc.Email ?? "");
+      if (!phoneKey && !emailLower) { skippedNoKey++; continue; }
 
-      if (!phoneKey && !emailLower) {
-        skippedNoKey++;
-        continue;
-      }
-
-      // Optionally skip existing without moving them
       if (skipExisting) {
         const exists = await Lead.findOne({
           userEmail,
@@ -218,13 +186,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             ...(phoneKey ? [{ phoneLast10: phoneKey }, { normalizedPhone: phoneKey }] : []),
             ...(emailLower ? [{ Email: emailLower }, { email: emailLower }] : []),
           ],
-        })
-          .select("_id")
-          .lean();
-        if (exists) {
-          skippedExistingCount++;
-          continue;
-        }
+        }).select("_id").lean();
+        if (exists) { skippedExistingCount++; continue; }
       }
 
       const filter: any = {
@@ -242,7 +205,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         folderId: folderDoc._id,
         folder_name: String(folderDoc.name),
         "Folder Name": String(folderDoc.name),
-        status: "New", // force New on import updates too
+        status: "New", // (matches your prior working file)
         Email: emailLower || undefined,
         email: emailLower || undefined,
         Phone: String(doc.phone ?? doc.Phone ?? ""),
@@ -268,7 +231,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       const upc = (result?.upsertedCount || (result?.upsertedId ? 1 : 0) || 0) as number;
 
-      // capture leadId for drip-enroll
       const found = await Lead.findOne(filter).select("_id").lean<{ _id: any } | null>();
       const leadId: string | undefined =
         (result as any)?.upsertedId ?? (found?._id ? String(found._id) : undefined);
@@ -276,7 +238,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (upc > 0) inserted += upc;
       else if ((result?.modifiedCount || 0) > 0 || (result?.matchedCount || 0) > 0) updated += 1;
 
-      // Enroll immediately if this folder is watched
       if (leadId) {
         await enrollOnNewLeadIfWatched({
           userEmail,
@@ -286,7 +247,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
-    // Update/record the canonical pointer so the UI shows the right folder going forward
+    // Persist pointer & canonical folder on the user doc (best-effort)
     try {
       const positional = await User.updateOne(
         {
@@ -329,9 +290,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           { strict: false }
         );
       }
-    } catch {
-      // best-effort only
-    }
+    } catch {}
 
     return res.status(200).json({
       ok: true,
