@@ -1,3 +1,5 @@
+// lib/systemFolders.ts
+
 // Canonical system folder names visible in the UI
 export const SYSTEM_FOLDERS = [
   "Sold",
@@ -22,7 +24,7 @@ function safeNormalize(name?: string | null): string {
 export function isSystemFolderName(name?: string | null): boolean {
   const n = safeNormalize(name);
   if (!n) return false;
-  if (CANONICAL_LOOWER.has(n)) return true;
+  if (CANONICAL_LOWER.has(n)) return true; // ✅ fixed: _LOWER (not _LOOWER)
   if (n === "booked") return true; // shorthand for “Booked Appointment”
   return false;
 }
