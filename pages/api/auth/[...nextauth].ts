@@ -314,8 +314,35 @@ export const authOptions: NextAuthOptions = {
       return session;
     },
 
-    // Force a stable post-login landing page to avoid loops
-    async redirect({ baseUrl }) {
+    // ✅ Respect /login and /auth/signin; allow relative/same-origin URLs; default to /leads.
+    async redirect({ url, baseUrl }) {
+      const toAbs = (u: string) => (u.startsWith("http") ? u : `${baseUrl}${u}`);
+      const lowerBase = baseUrl.toLowerCase();
+      const lowerUrl = (url || "").toLowerCase();
+
+      // Keep user on auth pages (e.g., after explicit navigation to /login)
+      if (lowerUrl.startsWith("/auth/signin") || lowerUrl.startsWith("/login")) {
+        return toAbs(url);
+      }
+      if (
+        lowerUrl.startsWith(`${lowerBase}/auth/signin`) ||
+        lowerUrl.startsWith(`${lowerBase}/login`)
+      ) {
+        return url;
+      }
+
+      // Allow relative paths provided by NextAuth/callbackUrl
+      if (url?.startsWith("/")) return `${baseUrl}${url}`;
+
+      // Allow same-origin absolute URLs
+      try {
+        const u = new URL(url);
+        if (u.origin === baseUrl) return url;
+      } catch {
+        /* ignore parse errors */
+      }
+
+      // Fallback: post-login land on /leads
       return `${baseUrl}/leads`;
     },
   },
