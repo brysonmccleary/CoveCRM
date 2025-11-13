@@ -22,15 +22,47 @@ const ALLOW_STATUS_SET = new Set([
 ]);
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed" });
+  if (req.method !== "POST") {
+    return res.status(405).json({ message: "Method not allowed" });
+  }
 
   const session = await getServerSession(req, res, authOptions);
   const userEmail = session?.user?.email?.toLowerCase();
-  if (!userEmail) return res.status(401).json({ message: "Unauthorized" });
+  if (!userEmail) {
+    return res.status(401).json({ message: "Unauthorized" });
+  }
 
-  const { leadId, newFolderName } = (req.body ?? {}) as { leadId?: string; newFolderName?: string };
-  const rawName = String(newFolderName || "").trim();
-  if (!leadId || !rawName) return res.status(400).json({ message: "Missing required fields." });
+  // 🔵 NEW: accept multiple possible payload shapes from the frontend
+  const body: any = req.body ?? {};
+
+  const leadIdRaw =
+    body.leadId ??
+    body.id ??
+    body.lead_id ??
+    body.leadIdStr ??
+    body.lead?._id ??
+    body.lead?.id ??
+    "";
+
+  const nameRaw =
+    body.newFolderName ??
+    body.disposition ??
+    body.folderName ??
+    body.status ??
+    body.newStatus ??
+    "";
+
+  const leadId = String(leadIdRaw || "").trim();
+  const rawName = String(nameRaw || "").trim();
+
+  if (!leadId || !rawName) {
+    console.warn("disposition-lead: missing fields", {
+      bodyKeys: Object.keys(body || {}),
+      leadId,
+      rawName,
+    });
+    return res.status(400).json({ message: "Missing required fields." });
+  }
 
   // Canonicalize disposition → pretty target name
   const canonical = folderNameForDisposition(rawName); // "Sold" | "Not Interested" | "Booked Appointment" | "Resolved" | null
@@ -51,6 +83,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         .select({ _id: 1, folderId: 1, status: 1 })
         .session(mongoSession)
         .lean<{ _id: any; folderId?: any; status?: string } | null>();
+
       if (!existing) throw new Error("Lead not found.");
 
       previousStatus = existing.status;
@@ -76,21 +109,32 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           .session(mongoSession)
           .lean<{ _id: mongoose.Types.ObjectId; name: string }[]>();
 
-        const exact = systemRows.find((r) => String(r.name).toLowerCase() === desiredLower);
+        const exact = systemRows.find(
+          (r) => String(r.name).toLowerCase() === desiredLower,
+        );
         if (!exact) {
           throw Object.assign(
             new Error(`System folder "${desiredFolderName}" not found for user.`),
-            { status: 400 }
+            { status: 400 },
           );
         }
         target = exact;
       } else {
         // Non-system: exact (case-insensitive) resolve or create
-        const nameRegex = new RegExp(`^${escapeRegex(desiredFolderName)}$`, "i");
+        const nameRegex = new RegExp(
+          `^${escapeRegex(desiredFolderName)}$`,
+          "i",
+        );
         const upserted = await Folder.findOneAndUpdate(
           { userEmail, name: nameRegex },
-          { $setOnInsert: { userEmail, name: desiredFolderName, assignedDrips: [] as string[] } },
-          { new: true, upsert: true, session: mongoSession }
+          {
+            $setOnInsert: {
+              userEmail,
+              name: desiredFolderName,
+              assignedDrips: [] as string[],
+            },
+          },
+          { new: true, upsert: true, session: mongoSession },
         ).select({ _id: 1, name: 1 });
 
         if (!upserted) throw new Error("Failed to resolve target folder.");
@@ -105,9 +149,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (String(toFolderName).toLowerCase() !== desiredLower) {
           throw Object.assign(
             new Error(
-              `Guard: about to move to wrong system folder (wanted "${desiredFolderName}", got "${toFolderName}")`
+              `Guard: about to move to wrong system folder (wanted "${desiredFolderName}", got "${toFolderName}")`,
             ),
-            { status: 500 }
+            { status: 500 },
           );
         }
       }
@@ -126,9 +170,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const write = await Lead.updateOne(
         { _id: leadId, userEmail },
         { $set: setFields },
-        { session: mongoSession }
+        { session: mongoSession },
       );
-      if (write.matchedCount === 0) throw new Error("Lead not found after update.");
+      if (write.matchedCount === 0)
+        throw new Error("Lead not found after update.");
     });
 
     // Log (for acceptance criteria)
@@ -139,7 +184,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         fromFolder: fromFolderName || null,
         toFolder: toFolderName || null,
         statusBefore: previousStatus || null,
-        statusAfter: ALLOW_STATUS_SET.has(desiredLower) ? desiredFolderName : previousStatus || null,
+        statusAfter: ALLOW_STATUS_SET.has(desiredLower)
+          ? desiredFolderName
+          : previousStatus || null,
       });
     } catch {}
 
@@ -151,11 +198,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         _id: String(leadId),
         folderId: String(targetFolderId),
         folderName: toFolderName,
-        status: ALLOW_STATUS_SET.has(desiredLower) ? desiredFolderName : previousStatus,
+        status: ALLOW_STATUS_SET.has(desiredLower)
+          ? desiredFolderName
+          : previousStatus,
         updatedAt: new Date(),
       });
     } catch (e) {
-      console.warn("disposition-lead: socket emit failed (non-fatal):", e);
+      console.warn(
+        "disposition-lead: socket emit failed (non-fatal):",
+        e,
+      );
     }
 
     return res.status(200).json({
@@ -163,7 +215,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       message: "Lead moved.",
       toFolderId: String(targetFolderId),
       folderName: toFolderName,
-      status: ALLOW_STATUS_SET.has(desiredLower) ? desiredFolderName : previousStatus,
+      status: ALLOW_STATUS_SET.has(desiredLower)
+        ? desiredFolderName
+        : previousStatus,
     });
   } catch (e: any) {
     const code = e?.status && Number.isInteger(e.status) ? e.status : 500;
