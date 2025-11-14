@@ -80,7 +80,11 @@ export default function LeadImportPanel({ onImportSuccess }: { onImportSuccess?:
 
   // UI
   const [isUploading, setIsUploading] = useState(false);
-  const [resultCounts, setResultCounts] = useState<{ inserted?: number; updated?: number; skipped?: number } | null>(null);
+  const [resultCounts, setResultCounts] = useState<{
+    inserted?: number;
+    updated?: number;
+    skipped?: number;
+  } | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -94,7 +98,9 @@ export default function LeadImportPanel({ onImportSuccess }: { onImportSuccess?:
           if (Array.isArray(data?.folders)) setFolders(data.folders);
           else if (Array.isArray(data)) setFolders(data as Folder[]);
         }
-      } catch { /* no-op */ }
+      } catch {
+        /* no-op */
+      }
 
       try {
         const saved = localStorage.getItem(LOCAL_KEY_MAPPING);
@@ -105,7 +111,9 @@ export default function LeadImportPanel({ onImportSuccess }: { onImportSuccess?:
 
         const savedSkip = localStorage.getItem(LOCAL_KEY_SKIP);
         if (savedSkip != null) setSkipExisting(savedSkip === "true");
-      } catch { /* ignore */ }
+      } catch {
+        /* ignore */
+      }
     })();
   }, []);
 
@@ -205,7 +213,7 @@ export default function LeadImportPanel({ onImportSuccess }: { onImportSuccess?:
       } else {
         const name = newFolderName.trim();
         if (!name) {
-          // Auto mode: send *no* folder fields at all
+          // Auto mode: backend will require a folder; if left blank it’ll return a 400 with message.
         } else if (isSystemFolder(name) || isSystemish(name)) {
           toast.error("Cannot import into system folders");
           return;
@@ -336,12 +344,14 @@ export default function LeadImportPanel({ onImportSuccess }: { onImportSuccess?:
           </div>
         ) : (
           <div>
-            <label className="block font-semibold mb-1">New Folder Name (leave blank for Auto)</label>
+            <label className="block font-semibold mb-1">
+              New Folder Name (leave blank for Auto)
+            </label>
             <input
               type="text"
               value={newFolderName}
               onChange={(e) => setNewFolderName(e.target.value)}
-              placeholder="(blank = Imports – YYYY-MM-DD)"
+              placeholder="(blank = backend will require you to pick a folder)"
               className="border p-2 rounded w-full"
             />
           </div>
@@ -377,7 +387,9 @@ export default function LeadImportPanel({ onImportSuccess }: { onImportSuccess?:
           ref={fileInputRef}
           className="hidden"
         />
-        {uploadedFile && <span className="text-sm text-gray-600">{uploadedFile.name}</span>}
+        {uploadedFile && (
+          <span className="text-sm text-gray-600">{uploadedFile.name}</span>
+        )}
       </div>
 
       {/* Mapping UI */}
@@ -424,7 +436,10 @@ export default function LeadImportPanel({ onImportSuccess }: { onImportSuccess?:
                   type="text"
                   value={customFieldNames[header] || ""}
                   onChange={(e) =>
-                    setCustomFieldNames((prev) => ({ ...prev, [header]: e.target.value }))
+                    setCustomFieldNames((prev) => ({
+                      ...prev,
+                      [header]: e.target.value,
+                    }))
                   }
                   placeholder="Custom field name"
                   className="border p-2 rounded flex-1 mt-2 md:mt-0"
@@ -436,7 +451,10 @@ export default function LeadImportPanel({ onImportSuccess }: { onImportSuccess?:
                   type="checkbox"
                   checked={!!skipHeader[header]}
                   onChange={(e) =>
-                    setSkipHeader((prev) => ({ ...prev, [header]: e.target.checked }))
+                    setSkipHeader((prev) => ({
+                      ...prev,
+                      [header]: e.target.checked,
+                    }))
                   }
                 />
                 <span>Do Not Import</span>
@@ -457,7 +475,8 @@ export default function LeadImportPanel({ onImportSuccess }: { onImportSuccess?:
           {resultCounts && (
             <div className="text-sm text-gray-700 mt-2">
               Inserted: <b>{resultCounts.inserted ?? 0}</b> • Updated:{" "}
-              <b>{resultCounts.updated ?? 0}</b> • Skipped: <b>{resultCounts.skipped ?? 0}</b>
+              <b>{resultCounts.updated ?? 0}</b> • Skipped:{" "}
+              <b>{resultCounts.skipped ?? 0}</b>
             </div>
           )}
         </div>
