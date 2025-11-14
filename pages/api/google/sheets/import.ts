@@ -7,7 +7,7 @@ import User from "@/models/User";
 import Lead from "@/models/Lead";
 import mongoose from "mongoose";
 import { google } from "googleapis";
-import { ensureSafeFolder } from "@/lib/ensureSafeFolder";
+import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
 
 type ImportBody = {
   spreadsheetId: string;
@@ -16,11 +16,11 @@ type ImportBody = {
   headerRow?: number;
   startRow?: number;
   endRow?: number;
-  folderId?: string;
-  folderName?: string;
+  folderId?: string;      // ignored for destination choice
+  folderName?: string;    // ignored for destination choice
   mapping: Record<string, string>; // CSVHeader -> CanonicalField
   skip?: Record<string, boolean>; // headers to ignore
-  createFolderIfMissing?: boolean; // ignored for destination choice, but ok to keep
+  createFolderIfMissing?: boolean; // ignored
   skipExisting?: boolean; // do NOT move/update existing if true
 };
 
@@ -29,6 +29,59 @@ const last10 = (s?: string) => digits(s).slice(-10) || "";
 const lcEmail = (s: any) => String(s ?? "").trim().toLowerCase() || "";
 const escapeA1Title = (t: string) => t.replace(/'/g, "''");
 
+// ----- Folder helper: ALWAYS derive from DriveName + TabTitle; NEVER system -----
+type FolderRaw = {
+  _id: mongoose.Types.ObjectId;
+  name?: string;
+  userEmail?: string;
+  source?: string;
+} | null;
+
+async function ensureNonSystemFolderRaw(
+  userEmail: string,
+  wantedName: string
+): Promise<NonNullable<FolderRaw>> {
+  const db = mongoose.connection.db;
+  if (!db) throw new Error("DB connection not ready");
+  const coll = db.collection("folders");
+
+  const baseName = isSystemFolder(wantedName) ? `${wantedName} (Leads)` : wantedName;
+
+  // 1) Try exact find
+  const existing = (await coll.findOne({ userEmail, name: baseName })) as FolderRaw;
+  if (existing && existing.name && !isSystemFolder(existing.name)) {
+    return existing as NonNullable<FolderRaw>;
+  }
+
+  // 2) Upsert exact name
+  const up = await coll.findOneAndUpdate(
+    { userEmail, name: baseName },
+    { $setOnInsert: { userEmail, name: baseName, source: "google-sheets" } },
+    { upsert: true, returnDocument: "after" }
+  );
+  const doc = (up && (up as any).value) as FolderRaw;
+
+  // 3) If still system or missing, force a unique safe name
+  if (!doc || !doc.name || isSystemFolder(doc.name)) {
+    const uniqueSafe = `${baseName} — ${Date.now()}`;
+    const ins = await coll.insertOne({
+      userEmail,
+      name: uniqueSafe,
+      source: "google-sheets",
+    });
+    const fresh = (await coll.findOne({ _id: ins.insertedId })) as FolderRaw;
+    if (!fresh || !fresh.name || isSystemFolder(fresh.name)) {
+      throw new Error(
+        `Folder rewrite detected. Expected non-system '${uniqueSafe}', got '${fresh?.name}'.`
+      );
+    }
+    return fresh as NonNullable<FolderRaw>;
+  }
+
+  return doc as NonNullable<FolderRaw>;
+}
+
+// ========================== HANDLER ==========================
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
@@ -43,8 +96,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     headerRow = 1,
     startRow,
     endRow,
-    folderId,
-    folderName,
+    // folderId,    // intentionally unused for destination
+    // folderName,  // intentionally unused for destination
     mapping = {},
     skip = {},
     skipExisting = false,
@@ -120,19 +173,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    // ---- Destination folder: use SAME helper as cron poll (no extra folders) ----
+    // ---- Destination folder: ALWAYS computed; NEVER system; ignore saved folder ----
     const driveMeta = await drive.files.get({ fileId: spreadsheetId, fields: "name" });
-    const baseDefaultName = `${driveMeta.data.name || "Imported Leads"} — ${tabTitle}`;
-    const defaultName = (folderName || baseDefaultName).trim();
-
-    const folderDoc = await ensureSafeFolder({
-      userEmail,
-      folderId,
-      folderName,
-      defaultName,
-      source: "google-sheets",
-    });
-
+    const computedDefault = `${driveMeta.data.name || "Imported Leads"} — ${tabTitle}`;
+    const folderDoc = await ensureNonSystemFolderRaw(userEmail, computedDefault);
     const targetFolderId = folderDoc._id as mongoose.Types.ObjectId;
     const targetFolderName = String(folderDoc.name || "");
 
