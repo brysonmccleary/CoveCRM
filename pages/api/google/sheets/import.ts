@@ -7,7 +7,7 @@ import User from "@/models/User";
 import Lead from "@/models/Lead";
 import mongoose from "mongoose";
 import { google } from "googleapis";
-import { ensureNonSystemFolderId } from "@/lib/folders/ensureNonSystemFolderId";
+import { ensureSafeFolder } from "@/lib/ensureSafeFolder";
 
 type ImportBody = {
   spreadsheetId: string;
@@ -120,37 +120,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    // ---- Destination folder: ALWAYS non-system, computed safely ----
+    // ---- Destination folder: use SAME helper as cron poll (no extra folders) ----
     const driveMeta = await drive.files.get({ fileId: spreadsheetId, fields: "name" });
-    const defaultName = `${driveMeta.data.name || "Imported Leads"} — ${tabTitle}`;
-    const nameCandidate = (folderName ?? "").trim() || defaultName;
+    const baseDefaultName = `${driveMeta.data.name || "Imported Leads"} — ${tabTitle}`;
+    const defaultName = (folderName || baseDefaultName).trim();
 
-    // Upsert a folder by *name* so users can type a nice name, then enforce non-system
-    const foldersColl = mongoose.connection.db!.collection("folders");
-    const up = await foldersColl.findOneAndUpdate(
-      { userEmail, name: nameCandidate },
-      { $setOnInsert: { userEmail, name: nameCandidate, source: "google-sheets" } },
-      { upsert: true, returnDocument: "after" }
-    );
-
-    let candidateId: any = up?.value?._id || folderId;
-    if (!candidateId) {
-      const ins = await foldersColl.insertOne({
-        userEmail,
-        name: nameCandidate,
-        source: "google-sheets",
-      });
-      candidateId = ins.insertedId;
-    }
-
-    // This is the key line: rewrite to a guaranteed non-system folder
-    const safe = await ensureNonSystemFolderId(
+    const folderDoc = await ensureSafeFolder({
       userEmail,
-      candidateId as any,
-      nameCandidate
-    );
-    const targetFolderId = safe.folderId;
-    const targetFolderName = safe.folderName;
+      folderId,
+      folderName,
+      defaultName,
+      source: "google-sheets",
+    });
+
+    const targetFolderId = folderDoc._id as mongoose.Types.ObjectId;
+    const targetFolderName = String(folderDoc.name || "");
 
     // ---- Import rows
     const headerIdx = Math.max(0, headerRow - 1);
@@ -219,8 +203,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         userEmail,
         ownerEmail: userEmail,
         folderId: targetFolderId,
-        folder_name: String(targetFolderName),
-        ["Folder Name"]: String(targetFolderName),
+        folder_name: targetFolderName,
+        ["Folder Name"]: targetFolderName,
 
         Email: emailLower || undefined,
         email: emailLower || undefined,
@@ -285,7 +269,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       headerRow,
       lastRowImported: lastNonEmptyRow + 1,
       folderId: String(targetFolderId),
-      folderName: String(targetFolderName),
+      folderName: targetFolderName,
     });
   } catch (err: any) {
     const message = err?.errors?.[0]?.message || err?.message || "Import failed";
