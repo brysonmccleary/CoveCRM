@@ -1,4 +1,4 @@
-// /pages/api/google/sheets/poll.ts
+// pages/api/google/sheets/poll.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../../auth/[...nextauth]";
@@ -76,9 +76,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (!spreadsheetId || !title) continue;
 
       // --- Resolve/Correct destination folder (CENTRALIZED via ensureSafeFolder) ---
-      // Build a deterministic, human-friendly default from Drive metadata + tab title.
+      // Now: default is just the spreadsheet name (no "— Sheet1", no timestamps).
       const meta = await drive.files.get({ fileId: spreadsheetId, fields: "name" });
-      const defaultName = (folderName || `${meta.data.name || "Imported Leads"} — ${title}`).trim();
+      const baseName = (meta.data.name || "Imported Leads").trim();
+      const defaultName = (folderName || baseName).trim();
 
       const folderDoc = await ensureSafeFolder({
         userEmail,

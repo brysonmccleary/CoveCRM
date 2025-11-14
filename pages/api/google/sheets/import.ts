@@ -7,7 +7,7 @@ import User from "@/models/User";
 import Lead from "@/models/Lead";
 import mongoose from "mongoose";
 import { google } from "googleapis";
-import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
+import { ensureSafeFolder } from "@/lib/ensureSafeFolder";
 
 type ImportBody = {
   spreadsheetId: string;
@@ -16,12 +16,12 @@ type ImportBody = {
   headerRow?: number;
   startRow?: number;
   endRow?: number;
-  folderId?: string;      // ignored for destination choice
-  folderName?: string;    // ignored for destination choice
-  mapping: Record<string, string>; // CSVHeader -> CanonicalField
-  skip?: Record<string, boolean>; // headers to ignore
-  createFolderIfMissing?: boolean; // ignored
-  skipExisting?: boolean; // do NOT move/update existing if true
+  folderId?: string;
+  folderName?: string;
+  mapping: Record<string, string>;        // CSVHeader -> CanonicalField
+  skip?: Record<string, boolean>;         // headers to ignore
+  createFolderIfMissing?: boolean;        // ignored for destination choice, but ok to keep
+  skipExisting?: boolean;                 // do NOT move/update existing if true
 };
 
 const digits = (s: any) => String(s ?? "").replace(/\D+/g, "");
@@ -29,59 +29,6 @@ const last10 = (s?: string) => digits(s).slice(-10) || "";
 const lcEmail = (s: any) => String(s ?? "").trim().toLowerCase() || "";
 const escapeA1Title = (t: string) => t.replace(/'/g, "''");
 
-// ----- Folder helper: ALWAYS derive from DriveName + TabTitle; NEVER system -----
-type FolderRaw = {
-  _id: mongoose.Types.ObjectId;
-  name?: string;
-  userEmail?: string;
-  source?: string;
-} | null;
-
-async function ensureNonSystemFolderRaw(
-  userEmail: string,
-  wantedName: string
-): Promise<NonNullable<FolderRaw>> {
-  const db = mongoose.connection.db;
-  if (!db) throw new Error("DB connection not ready");
-  const coll = db.collection("folders");
-
-  const baseName = isSystemFolder(wantedName) ? `${wantedName} (Leads)` : wantedName;
-
-  // 1) Try exact find
-  const existing = (await coll.findOne({ userEmail, name: baseName })) as FolderRaw;
-  if (existing && existing.name && !isSystemFolder(existing.name)) {
-    return existing as NonNullable<FolderRaw>;
-  }
-
-  // 2) Upsert exact name
-  const up = await coll.findOneAndUpdate(
-    { userEmail, name: baseName },
-    { $setOnInsert: { userEmail, name: baseName, source: "google-sheets" } },
-    { upsert: true, returnDocument: "after" }
-  );
-  const doc = (up && (up as any).value) as FolderRaw;
-
-  // 3) If still system or missing, force a unique safe name
-  if (!doc || !doc.name || isSystemFolder(doc.name)) {
-    const uniqueSafe = `${baseName} — ${Date.now()}`;
-    const ins = await coll.insertOne({
-      userEmail,
-      name: uniqueSafe,
-      source: "google-sheets",
-    });
-    const fresh = (await coll.findOne({ _id: ins.insertedId })) as FolderRaw;
-    if (!fresh || !fresh.name || isSystemFolder(fresh.name)) {
-      throw new Error(
-        `Folder rewrite detected. Expected non-system '${uniqueSafe}', got '${fresh?.name}'.`
-      );
-    }
-    return fresh as NonNullable<FolderRaw>;
-  }
-
-  return doc as NonNullable<FolderRaw>;
-}
-
-// ========================== HANDLER ==========================
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
@@ -96,8 +43,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     headerRow = 1,
     startRow,
     endRow,
-    // folderId,    // intentionally unused for destination
-    // folderName,  // intentionally unused for destination
+    folderId,
+    folderName,
     mapping = {},
     skip = {},
     skipExisting = false,
@@ -173,14 +120,50 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    // ---- Destination folder: ALWAYS computed; NEVER system; ignore saved folder ----
+    // ---- Destination folder ----------------------------------------------
+    // Goal:
+    // 1) Reuse any folder already saved on this sheet link.
+    // 2) Otherwise, use ONLY the spreadsheet name (no "— Sheet1", no timestamps).
     const driveMeta = await drive.files.get({ fileId: spreadsheetId, fields: "name" });
-    const computedDefault = `${driveMeta.data.name || "Imported Leads"} — ${tabTitle}`;
-    const folderDoc = await ensureNonSystemFolderRaw(userEmail, computedDefault);
-    const targetFolderId = folderDoc._id as mongoose.Types.ObjectId;
-    const targetFolderName = String(folderDoc.name || "");
 
-    // ---- Import rows
+    const syncedSheets: any[] = (user as any)?.googleSheets?.syncedSheets || [];
+    const link = syncedSheets.find(
+      (s) => s.spreadsheetId === spreadsheetId && s.title === tabTitle
+    );
+
+    const baseName = (driveMeta.data.name || "Imported Leads").trim();
+    const chosenFolderName = (folderName ?? link?.folderName ?? baseName).trim();
+    const chosenFolderId =
+      (link?.folderId as string | undefined) ?? (folderId as string | undefined);
+
+    const folderDoc = await ensureSafeFolder({
+      userEmail,
+      folderId: chosenFolderId,
+      folderName: chosenFolderName,
+      defaultName: baseName, // <-- spreadsheet name only
+      source: "google-sheets",
+    });
+
+    const targetFolderId = folderDoc._id as mongoose.Types.ObjectId;
+    const targetFolderName = String(folderDoc.name || baseName);
+
+    // Keep the sheet link in sync with the sanitized folder
+    await User.updateOne(
+      {
+        email: userEmail,
+        "googleSheets.syncedSheets.spreadsheetId": spreadsheetId,
+        "googleSheets.syncedSheets.title": tabTitle,
+      },
+      {
+        $set: {
+          "googleSheets.syncedSheets.$.folderId": targetFolderId,
+          "googleSheets.syncedSheets.$.folderName": targetFolderName,
+        },
+      },
+      { strict: false }
+    ).catch(() => {});
+
+    // ---- Import rows ------------------------------------------------------
     const headerIdx = Math.max(0, headerRow - 1);
     const headers = (values[headerIdx] || []).map((h) => String(h || "").trim());
     const firstDataRowIndex =
@@ -247,8 +230,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         userEmail,
         ownerEmail: userEmail,
         folderId: targetFolderId,
-        folder_name: targetFolderName,
-        ["Folder Name"]: targetFolderName,
+        folder_name: String(targetFolderName),
+        ["Folder Name"]: String(targetFolderName),
 
         Email: emailLower || undefined,
         email: emailLower || undefined,
@@ -313,7 +296,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       headerRow,
       lastRowImported: lastNonEmptyRow + 1,
       folderId: String(targetFolderId),
-      folderName: targetFolderName,
+      folderName: String(targetFolderName),
     });
   } catch (err: any) {
     const message = err?.errors?.[0]?.message || err?.message || "Import failed";
