@@ -2,7 +2,7 @@ import mongoose from "mongoose";
 import Folder from "@/models/Folder";
 import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
 
-const FP = "ensureSafeFolder-v5"; // tracer fingerprint for logs
+const FP = "ensureSafeFolder-v4"; // tracer fingerprint for logs
 
 type Opts = {
   userEmail: string;
@@ -20,22 +20,6 @@ async function upsertFolderByName(userEmail: string, name: string, source: strin
   );
 }
 
-// Clean up noisy Google Sheets names like
-// "Sheet Name — Sheet1 — 1763150405583" -> "Sheet Name"
-function cleanGoogleName(raw: string): string {
-  let name = String(raw || "").trim();
-  if (!name) return name;
-
-  // Strip "— SheetX" / "— Sheet1" / "— Sheet 1" chunks
-  name = name.replace(/\s*—\s*Sheet[^—]*/i, "");
-
-  // Strip trailing "— 1234567890..." (typical timestamp/id suffix)
-  name = name.replace(/\s*—\s*\d{6,}\s*$/i, "");
-
-  name = name.trim();
-  return name || raw.trim();
-}
-
 export async function ensureSafeFolder(opts: Opts) {
   const {
     userEmail,
@@ -45,17 +29,9 @@ export async function ensureSafeFolder(opts: Opts) {
     source = "google-sheets",
   } = opts;
 
-  const isGoogle = source === "google-sheets";
-
-  // ---------- 0) Normalize + optionally clean inputs ----------
-  const byNameRaw = String(folderName ?? "").trim();
-  const defBaseRaw = String(defaultName ?? "").trim() || "Imported Leads";
-
-  const baseForName = isGoogle ? cleanGoogleName(byNameRaw) : byNameRaw;
-  const baseForDefault = isGoogle ? cleanGoogleName(defBaseRaw) : defBaseRaw;
-
-  const byName = baseForName;
-  const defBase = baseForDefault || "Imported Leads";
+  // ---------- 0) Normalize inputs ----------
+  const byName = String(folderName ?? "").trim();
+  const defBase = String(defaultName ?? "").trim() || "Imported Leads";
   const defSafe = isSystemFolder(defBase) ? `${defBase} (Leads)` : defBase;
 
   // ---------- 1) If folderName provided, it wins (unless system) ----------

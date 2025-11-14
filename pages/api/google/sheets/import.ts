@@ -7,7 +7,7 @@ import User from "@/models/User";
 import Lead from "@/models/Lead";
 import mongoose from "mongoose";
 import { google } from "googleapis";
-import { ensureSafeFolder } from "@/lib/ensureSafeFolder";
+import { ensureNonSystemFolderId } from "@/lib/folders/ensureNonSystemFolderId";
 
 type ImportBody = {
   spreadsheetId: string;
@@ -120,50 +120,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    // ---- Destination folder ----------------------------------------------
-    // Goal:
-    // 1) Reuse any folder already saved on this sheet link.
-    // 2) Otherwise, use ONLY the spreadsheet name (no "— Sheet1", no timestamps).
+    // ---- Destination folder: spreadsheet name ONLY, always non-system ----
     const driveMeta = await drive.files.get({ fileId: spreadsheetId, fields: "name" });
+    const defaultName = driveMeta.data.name || "Imported Leads"; // <=== NO "Sheet1", NO timestamps
+    const nameCandidate = (folderName ?? "").trim() || defaultName;
 
-    const syncedSheets: any[] = (user as any)?.googleSheets?.syncedSheets || [];
-    const link = syncedSheets.find(
-      (s) => s.spreadsheetId === spreadsheetId && s.title === tabTitle
-    );
+    // Upsert / clamp to non-system folder
+    const { folderId: targetFolderId, folderName: targetFolderName } =
+      await ensureNonSystemFolderId(
+        userEmail,
+        nameCandidate ? undefined : (folderId as any),
+        nameCandidate
+      );
 
-    const baseName = (driveMeta.data.name || "Imported Leads").trim();
-    const chosenFolderName = (folderName ?? link?.folderName ?? baseName).trim();
-    const chosenFolderId =
-      (link?.folderId as string | undefined) ?? (folderId as string | undefined);
-
-    const folderDoc = await ensureSafeFolder({
-      userEmail,
-      folderId: chosenFolderId,
-      folderName: chosenFolderName,
-      defaultName: baseName, // <-- spreadsheet name only
-      source: "google-sheets",
-    });
-
-    const targetFolderId = folderDoc._id as mongoose.Types.ObjectId;
-    const targetFolderName = String(folderDoc.name || baseName);
-
-    // Keep the sheet link in sync with the sanitized folder
-    await User.updateOne(
-      {
-        email: userEmail,
-        "googleSheets.syncedSheets.spreadsheetId": spreadsheetId,
-        "googleSheets.syncedSheets.title": tabTitle,
-      },
-      {
-        $set: {
-          "googleSheets.syncedSheets.$.folderId": targetFolderId,
-          "googleSheets.syncedSheets.$.folderName": targetFolderName,
-        },
-      },
-      { strict: false }
-    ).catch(() => {});
-
-    // ---- Import rows ------------------------------------------------------
+    // ---- Import rows
     const headerIdx = Math.max(0, headerRow - 1);
     const headers = (values[headerIdx] || []).map((h) => String(h || "").trim());
     const firstDataRowIndex =

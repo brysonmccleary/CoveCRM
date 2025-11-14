@@ -1,4 +1,4 @@
-// pages/api/google/sheets/poll.ts
+// /pages/api/google/sheets/poll.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../../auth/[...nextauth]";
@@ -70,21 +70,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         skip = {},
         lastRowImported = headerRow,
         folderId,
-        folderName,
+        // folderName is ignored for naming now; we recalc from Drive
       } = sheetCfg || {};
 
       if (!spreadsheetId || !title) continue;
 
-      // --- Resolve/Correct destination folder (CENTRALIZED via ensureSafeFolder) ---
-      // Now: default is just the spreadsheet name (no "— Sheet1", no timestamps).
+      // --- Build canonical folder name: spreadsheet name ONLY ---
       const meta = await drive.files.get({ fileId: spreadsheetId, fields: "name" });
-      const baseName = (meta.data.name || "Imported Leads").trim();
-      const defaultName = (folderName || baseName).trim();
+      const defaultName = (meta.data.name || "Imported Leads").trim();
 
+      // --- Resolve/Correct destination folder (CENTRALIZED via ensureSafeFolder) ---
       const folderDoc = await ensureSafeFolder({
         userEmail,
-        folderId,
-        folderName,
+        folderId,          // respect user-selected folder if non-system
+        folderName: "",    // force using defaultName for Google auto folders
         defaultName,
         source: "google-sheets",
       });
