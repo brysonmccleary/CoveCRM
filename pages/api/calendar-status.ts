@@ -4,9 +4,15 @@ import { authOptions } from "@/pages/api/auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import { getUserByEmail } from "@/models/User";
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse
+) {
   // absolutely no caching while we fix this state
-  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+  res.setHeader(
+    "Cache-Control",
+    "no-store, no-cache, must-revalidate, max-age=0"
+  );
 
   await dbConnect();
 
@@ -21,22 +27,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const user = await getUserByEmail(email);
     if (!user) return res.status(404).json({ error: "User not found" });
 
-    // Look only for REFRESH tokens across all legacy locations
-    const googleTokens   = (user as any).googleTokens   || null;
+    // Look only for REFRESH tokens across legacy locations.
+    const googleTokens = (user as any).googleTokens || null;
     const googleCalendar = (user as any).googleCalendar || null;
-    const googleSheets   = (user as any).googleSheets   || null;
+    const googleSheets = (user as any).googleSheets || null;
 
-    const hasGT = !!googleTokens?.refreshToken;
-    const hasGC = !!googleCalendar?.refreshToken;
-    const hasGS = !!googleSheets?.refreshToken;
+    // Support both refreshToken and refresh_token shapes.
+    const hasGT =
+      !!(googleTokens?.refreshToken || googleTokens?.refresh_token);
+    const hasGC =
+      !!(googleCalendar?.refreshToken || googleCalendar?.refresh_token);
+    const hasGS =
+      !!(googleSheets?.refreshToken || googleSheets?.refresh_token);
 
-    const hasRefreshToken = hasGT || hasGC || hasGS;
+    // ❗ For CALENDAR status, sheets-only tokens do NOT count.
+    const hasRefreshToken = hasGC || hasGT;
 
     // keep your original shape so the FE doesn’t break
     return res.status(200).json({
-      calendarConnected: hasRefreshToken,      // ← ONLY true when a refresh token exists
+      calendarConnected: hasRefreshToken, // ← true only when a calendar-capable token exists
       calendarId: (user as any).calendarId ?? null,
-      googleCalendar: null
+      googleCalendar: null,
     });
   } catch (err) {
     console.error("❌ calendar-status error:", err);

@@ -1,4 +1,3 @@
-// /pages/api/calendar/events.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/pages/api/auth/[...nextauth]";
@@ -10,7 +9,11 @@ import { google } from "googleapis";
 /** Bare "Call with" detector (allows optional phone emoji) */
 function isBareCallWith(s?: string) {
   const t = (s || "").trim();
-  return /^(\p{Emoji_Presentation}|\p{Emoji}\uFE0F|\p{Extended_Pictographic})?\s*call with\s*$/iu.test(t) || t === "";
+  return (
+    /^(\p{Emoji_Presentation}|\p{Emoji}\uFE0F|\p{Extended_Pictographic})?\s*call with\s*$/iu.test(
+      t
+    ) || t === ""
+  );
 }
 
 /**
@@ -20,7 +23,7 @@ function isBareCallWith(s?: string) {
  */
 export default async function handler(
   req: NextApiRequest,
-  res: NextApiResponse,
+  res: NextApiResponse
 ) {
   if (req.method !== "GET")
     return res.status(405).json({ error: "Method not allowed" });
@@ -44,10 +47,11 @@ export default async function handler(
   const user = await User.findOne({ email });
   if (!user) return res.status(404).json({ error: "User not found" });
 
+  // 🔐 IMPORTANT: always prefer dedicated calendar tokens, then legacy googleTokens.
+  // Sheets-only tokens must NOT be used for Calendar (they may not have calendar scopes).
   const tokens: any =
-    (user as any).googleTokens ||
     (user as any).googleCalendar ||
-    (user as any).googleSheets ||
+    (user as any).googleTokens ||
     null;
 
   const refreshToken: string | undefined =
@@ -60,12 +64,10 @@ export default async function handler(
       calendarNeedsReconnect: true,
     };
     await user.save();
-    return res
-      .status(401)
-      .json({
-        error: "Google not connected (no refresh token)",
-        needsReconnect: true,
-      });
+    return res.status(401).json({
+      error: "Google not connected (no refresh token)",
+      needsReconnect: true,
+    });
   }
 
   const calendarId = (user as any).calendarId || "primary";
@@ -73,7 +75,7 @@ export default async function handler(
   const oauth2Client = new google.auth.OAuth2(
     process.env.GOOGLE_CLIENT_ID!,
     process.env.GOOGLE_CLIENT_SECRET!,
-    process.env.GOOGLE_REDIRECT_URI!,
+    process.env.GOOGLE_REDIRECT_URI!
   );
   oauth2Client.setCredentials({ refresh_token: refreshToken });
 
@@ -98,21 +100,43 @@ export default async function handler(
       description: event.description || "",
       location: event.location || "",
       colorId: event.colorId || null,
-      attendees: (event.attendees || []).map((a) => a.email || "").filter(Boolean),
+      attendees: (event.attendees || [])
+        .map((a) => a.email || "")
+        .filter(Boolean),
     }));
 
     // ---- Enrich weak titles ("Call with") from our CRM leads by eventId
-    const needsNameIds = raw.filter((e) => isBareCallWith(e.summary)).map((e) => e.id);
+    const needsNameIds = raw
+      .filter((e) => isBareCallWith(e.summary))
+      .map((e) => e.id);
     let nameByEventId: Record<string, string> = {};
     if (needsNameIds.length > 0) {
       const leads = await Lead.find(
         { userEmail: email, calendarEventId: { $in: needsNameIds } },
-        { "First Name": 1, firstName: 1, "Last Name": 1, lastName: 1, calendarEventId: 1 },
+        {
+          "First Name": 1,
+          firstName: 1,
+          "Last Name": 1,
+          lastName: 1,
+          calendarEventId: 1,
+        }
       ).lean();
 
       for (const l of leads) {
-        const first = (l["First Name"] || (l as any).firstName || "").toString().trim();
-        const last = (l["Last Name"] || (l as any).lastName || "").toString().trim();
+        const first = (
+          l["First Name"] ||
+          (l as any).firstName ||
+          ""
+        )
+          .toString()
+          .trim();
+        const last = (
+          l["Last Name"] ||
+          (l as any).lastName ||
+          ""
+        )
+          .toString()
+          .trim();
         const full = `${first} ${last}`.trim() || "Lead";
         if ((l as any).calendarEventId) {
           nameByEventId[(l as any).calendarEventId] = full;
@@ -138,7 +162,29 @@ export default async function handler(
 
     return res.status(200).json({ events });
   } catch (err: any) {
-    const msg = String(err?.message || err);
+    const googlePayload = err?.response?.data;
+    const msg = String(
+      googlePayload?.error?.message || err?.message || err
+    ).toLowerCase();
+    const code = googlePayload?.error?.code || err?.code;
+
+    // 🔒 If scopes are insufficient, mark as needing reconnect instead of generic 500.
+    if (code === 403 || msg.includes("insufficient") && msg.includes("scope")) {
+      console.error("❌ Google Calendar insufficient scopes:", googlePayload || err);
+
+      (user as any).flags = {
+        ...(user as any).flags,
+        calendarConnected: false,
+        calendarNeedsReconnect: true,
+      };
+      await user.save();
+
+      return res.status(401).json({
+        error: "insufficient_scopes",
+        needsReconnect: true,
+      });
+    }
+
     if (msg.includes("invalid_grant")) {
       (user as any).flags = {
         ...(user as any).flags,
@@ -151,7 +197,10 @@ export default async function handler(
         .json({ error: "invalid_grant", needsReconnect: true });
     }
 
-    console.error("❌ Google Calendar events error:", err?.response?.data || msg);
+    console.error(
+      "❌ Google Calendar events error:",
+      googlePayload || err?.message || err
+    );
     return res.status(500).json({ error: "Failed to fetch events" });
   }
 }
