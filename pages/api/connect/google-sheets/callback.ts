@@ -28,9 +28,7 @@ export default async function handler(
   const code = req.query.code as string | undefined;
   if (!code) return res.status(400).send("Missing code");
 
-  // IMPORTANT: no more "State mismatch" check here.
-  // We trust the logged-in session email as the owner of these tokens.
-
+  // No state/email check anymore – we trust the logged-in session.
   const redirectUri =
     process.env.GOOGLE_REDIRECT_URI ||
     `${baseUrl(req).replace(/\/$/, "")}/api/connect/google-sheets/callback`;
@@ -56,7 +54,7 @@ export default async function handler(
 
   const email = session.user.email.toLowerCase();
   const existing = await User.findOne({ email })
-    .select("googleSheets googleTokens")
+    .select("googleSheets googleTokens googleCalendar flags")
     .lean<any>();
 
   // Preserve refresh_token if Google doesn't resend it
@@ -64,27 +62,48 @@ export default async function handler(
     tokens.refresh_token ||
     existing?.googleSheets?.refreshToken ||
     existing?.googleTokens?.refreshToken ||
+    existing?.googleCalendar?.refreshToken ||
     "";
 
   const accessToken =
-    tokens.access_token || existing?.googleSheets?.accessToken || "";
+    tokens.access_token ||
+    existing?.googleSheets?.accessToken ||
+    existing?.googleTokens?.accessToken ||
+    existing?.googleCalendar?.accessToken ||
+    "";
   const expiryDate =
-    tokens.expiry_date ?? existing?.googleSheets?.expiryDate ?? null;
-  const scope = tokens.scope || existing?.googleSheets?.scope || "";
+    tokens.expiry_date ??
+    existing?.googleSheets?.expiryDate ??
+    existing?.googleTokens?.expiryDate ??
+    existing?.googleCalendar?.expiryDate ??
+    null;
+  const scope =
+    tokens.scope ||
+    existing?.googleSheets?.scope ||
+    existing?.googleTokens?.scope ||
+    existing?.googleCalendar?.scope ||
+    "";
 
   await User.updateOne(
     { email },
     {
       $set: {
-        // Primary location our APIs (including imports) read from
+        // ✅ Primary for Sheets imports (unchanged behavior)
         googleSheets: { accessToken, refreshToken, expiryDate, scope },
-        // Back-compat with any older code paths (including calendar/events)
+        // ✅ Back-compat
         googleTokens: { accessToken, refreshToken, expiryDate, scope },
+        // ✅ NEW: keep calendar in sync so /api/calendar/events uses a valid token
+        googleCalendar: { accessToken, refreshToken, expiryDate, scope },
         googleSheetsConnected: true,
+        flags: {
+          ...(existing as any)?.flags,
+          calendarConnected: !!refreshToken,
+          calendarNeedsReconnect: !refreshToken,
+        },
       },
     }
   );
 
-  // You can keep this redirect or change it to Settings; it doesn't affect leads.
+  // Same redirect as before – goes to Google Sheets Sync tab
   return res.redirect("/google-sheets-sync?connected=google-sheets");
 }
