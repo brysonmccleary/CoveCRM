@@ -41,10 +41,10 @@ const STATUS_CALLBACK =
 const ALLOW_DEV_TWILIO_TEST =
   process.env.ALLOW_LOCAL_TWILIO_TEST === "1" && process.env.NODE_ENV !== "production";
 
-// Human delay: 3–4 min; set AI_TEST_MODE=1 for 3–5s while testing
+// Human delay: 2–3 min; set AI_TEST_MODE=1 for 3–5s while testing
 const AI_TEST_MODE = process.env.AI_TEST_MODE === "1";
 function humanDelayMs() {
-  return AI_TEST_MODE ? 3000 + Math.random() * 2000 : 180000 + Math.random() * 60000;
+  return AI_TEST_MODE ? 3000 + Math.random() * 2000 : 120000 + Math.random() * 60000;
 }
 
 // ---------- quiet hours (lead-local) ----------
@@ -755,6 +755,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (isOptOut(body)) {
       lead.assignedDrips = [];
       (lead as any).dripProgress = [];
+      // legacy single-drip fields (stop-on-reply safety)
+      (lead as any).assignedDrip = null;
+      (lead as any).droppedFromDrip = true;
+      (lead as any).droppedFromDripAt = new Date();
+
       lead.isAIEngaged = false;
       (lead as any).unsubscribed = true;
       (lead as any).optOut = true;
@@ -815,6 +820,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // ✅ Cancel drips & engage AI
     lead.assignedDrips = [];
     (lead as any).dripProgress = [];
+    // legacy single-drip fields (safety for old data)
+    (lead as any).assignedDrip = null;
+    (lead as any).droppedFromDrip = true;
+    (lead as any).droppedFromDripAt = new Date();
     lead.isAIEngaged = true;
 
     const tz = pickLeadZone(lead);
@@ -961,7 +970,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     memory.lastDraft = aiReply;
     (lead as any).aiMemory = memory;
-    lead.aiLastResponseAt = new Date();
+    // IMPORTANT: do NOT touch aiLastResponseAt here — it’s set only when the message is actually sent
     await lead.save();
 
     // === NEW: ENQUEUE FIRST, THEN SEND LATER ===
@@ -1005,7 +1014,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const fresh = await Lead.findById(lead._id);
         if (!fresh) return;
 
-        // basic cooldown
+        // basic cooldown (protect against double-fires, but not the first one)
         if (fresh.aiLastResponseAt && Date.now() - new Date(fresh.aiLastResponseAt).getTime() < 2 * 60 * 1000) {
           console.log("⏳ Skipping AI reply (cool-down).");
           return;
@@ -1029,9 +1038,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           body: draft,
         };
 
-        // If quiet hours and MSID path were available we could use Twilio scheduling,
-        // but we are forcing From to the exact number (compliance + thread stickiness),
-        // so we send now and rely on our queued row to have shown the schedule.
         const { client } = await getClientForUser(user.email);
         const twilioMsg = await client.messages.create(paramsOut);
 
