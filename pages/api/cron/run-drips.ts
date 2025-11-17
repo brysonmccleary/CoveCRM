@@ -203,7 +203,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
 
       // --- Durable once-only: skip if this step already marked sent ---
-      const alreadySent = (claim as any)?.sentAtByIndex && (claim as any).sentAtByIndex.get?.(String(idx));
+      let alreadySent = false;
+      const sentMap = (claim as any)?.sentAtByIndex;
+
+      if (sentMap) {
+        if (sentMap instanceof Map) {
+          alreadySent = !!sentMap.get(String(idx));
+        } else if (typeof sentMap === "object") {
+          alreadySent = !!(sentMap as any)[String(idx)];
+        }
+      }
+
       if (alreadySent) {
         // Advance cursor without sending again.
         const nextIndex = idx + 1;
