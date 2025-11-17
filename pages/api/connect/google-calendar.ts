@@ -13,8 +13,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     process.env.NEXT_PUBLIC_BASE_URL ||
     "http://localhost:3000";
 
-  // 🔒 Hard-code the Calendar callback path so we NEVER accidentally hit Sheets.
-  const redirectUri = `${base.replace(/\/$/, "")}/api/connect/google-calendar/callback`;
+  // ✅ Force Calendar to use the SAME callback as Sheets.
+  const redirectUri = `${base.replace(/\/$/, "")}/api/connect/google-sheets/callback`;
 
   const oauth2 = new google.auth.OAuth2(
     process.env.GOOGLE_CLIENT_ID!,
@@ -26,11 +26,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     access_type: "offline",
     prompt: "consent",
     scope: [
+      "https://www.googleapis.com/auth/spreadsheets.readonly",
       "https://www.googleapis.com/auth/calendar",
       "https://www.googleapis.com/auth/calendar.events",
       "https://www.googleapis.com/auth/userinfo.email",
-      "openid",
       "https://www.googleapis.com/auth/userinfo.profile",
+      "openid",
     ],
   });
 
