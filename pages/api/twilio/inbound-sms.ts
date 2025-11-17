@@ -31,7 +31,7 @@ const RAW_BASE_URL = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL |
 const SHARED_MESSAGING_SERVICE_SID = process.env.TWILIO_MESSAGING_SERVICE_SID || "";
 const INTERNAL_API_TOKEN = process.env.INTERNAL_API_TOKEN || "";
 const LEAD_ENTRY_PATH = (process.env.APP_LEAD_ENTRY_PATH || "/lead").replace(/\/?$/, "");
-const BUILD_TAG = "inbound-sms@2025-11-11T20:50Z";
+const BUILD_TAG = "inbound-sms@2025-11-17T22:15Z";
 console.log(`[inbound-sms] build=${BUILD_TAG}`);
 
 const STATUS_CALLBACK =
@@ -41,10 +41,10 @@ const STATUS_CALLBACK =
 const ALLOW_DEV_TWILIO_TEST =
   process.env.ALLOW_LOCAL_TWILIO_TEST === "1" && process.env.NODE_ENV !== "production";
 
-// Human delay: 2–3 min; set AI_TEST_MODE=1 for 3–5s while testing
+// Human delay: 3–4 min; set AI_TEST_MODE=1 for 3–5s while testing
 const AI_TEST_MODE = process.env.AI_TEST_MODE === "1";
 function humanDelayMs() {
-  return AI_TEST_MODE ? 3000 + Math.random() * 2000 : 120000 + Math.random() * 60000;
+  return AI_TEST_MODE ? 3000 + Math.random() * 2000 : 180000 + Math.random() * 60000;
 }
 
 // ---------- quiet hours (lead-local) ----------
@@ -490,7 +490,7 @@ You are a helpful human-like SMS assistant for an insurance agent.
   return text.replace(/\s+/g, " ").trim();
 }
 
-function normalizeWhen(datetimeText: string | null, nowISO: string, tz: string) {
+function normalizeWhen(datetimeText: string | null, _nowISO: string, tz: string) {
   if (!datetimeText) return null;
   const iso = extractRequestedISO(datetimeText);
   if (iso) return { start: DateTime.fromISO(iso).setZone(tz) };
@@ -575,7 +575,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
-    console.log(`📥 inbound sid=${messageSid || "n/a"} from=${fromNumber} -> to=${toNumber} text="${body.slice(0, 120)}${body.length > 120 ? "…" : ""}"`);
+    console.log(
+      `📥 inbound sid=${messageSid || "n/a"} from=${fromNumber} -> to=${toNumber} text="${body.slice(0, 120)}${
+        body.length > 120 ? "…" : ""
+      }"`
+    );
 
     // Map to the user by the inbound (owned) number
     const toDigits = normalizeDigits(toNumber);
@@ -592,7 +596,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // ✅ NEW: set billing context for OpenAI
     _lastInboundUserEmailForBilling = (user.email || "").toLowerCase();
 
-    // ===================== FIXED: lead resolution =====================
+    // ===================== lead resolution =====================
     const fromDigits = normalizeDigits(fromNumber);
     const last10 = fromDigits.slice(-10);
     const anchored = last10 ? new RegExp(`${last10}$`) : undefined;
@@ -610,7 +614,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (lastOutbound?.leadId) {
       const viaMsg = await Lead.findById(lastOutbound.leadId);
       if (viaMsg && leadPhoneMatches(viaMsg, fromDigits)) lead = viaMsg;
-      else if (viaMsg) console.warn(`↪︎ Ignoring lastOutbound lead (${String(viaMsg._id)}) — phone on lead does not match inbound ${fromNumber}`);
+      else if (viaMsg)
+        console.warn(
+          `↪︎ Ignoring lastOutbound lead (${String(
+            viaMsg._id
+          )}) — phone on lead does not match inbound ${fromNumber}`
+        );
     }
 
     // (B) E.164 fields
@@ -649,12 +658,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         (await Lead.findOne({ userEmail: user.email, mobile: anchored } as any)) ||
         (await Lead.findOne({ userEmail: user.email, "phones.value": anchored } as any));
     }
-    // =================================================================
+    // ==========================================================
 
-    if (lead && last10 && !leadPhoneMatches(lead, fromDigits)) {
-      console.warn(`[inbound-sms] Rejecting suspect lead match leadId=${String(lead._id)} — phone on lead does not end with ${last10}`);
-      lead = null;
-    }
+    // ✅ IMPORTANT CHANGE:
+    // We NO LONGER throw away this lead based on an extra phone-mismatch guard.
+    // The lookups above already key off the inbound number, so if we found a lead,
+    // we keep it and do NOT create a new "SMS Lead" unless nothing matched.
 
     if (!lead) {
       try {
@@ -755,11 +764,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (isOptOut(body)) {
       lead.assignedDrips = [];
       (lead as any).dripProgress = [];
-      // legacy single-drip fields (stop-on-reply safety)
-      (lead as any).assignedDrip = null;
-      (lead as any).droppedFromDrip = true;
-      (lead as any).droppedFromDripAt = new Date();
-
       lead.isAIEngaged = false;
       (lead as any).unsubscribed = true;
       (lead as any).optOut = true;
@@ -820,10 +824,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // ✅ Cancel drips & engage AI
     lead.assignedDrips = [];
     (lead as any).dripProgress = [];
-    // legacy single-drip fields (safety for old data)
-    (lead as any).assignedDrip = null;
-    (lead as any).droppedFromDrip = true;
-    (lead as any).droppedFromDripAt = new Date();
     lead.isAIEngaged = true;
 
     const tz = pickLeadZone(lead);
@@ -970,7 +970,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     memory.lastDraft = aiReply;
     (lead as any).aiMemory = memory;
-    // IMPORTANT: do NOT touch aiLastResponseAt here — it’s set only when the message is actually sent
+    // 🔁 IMPORTANT: do NOT bump aiLastResponseAt here; we only set it after an actual send.
     await lead.save();
 
     // === NEW: ENQUEUE FIRST, THEN SEND LATER ===
@@ -1014,8 +1014,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const fresh = await Lead.findById(lead._id);
         if (!fresh) return;
 
-        // basic cooldown (protect against double-fires, but not the first one)
-        if (fresh.aiLastResponseAt && Date.now() - new Date(fresh.aiLastResponseAt).getTime() < 2 * 60 * 1000) {
+        // basic cooldown; shorter if AI_TEST_MODE so tests still send
+        const cooldownMs = AI_TEST_MODE ? 2000 : 2 * 60 * 1000;
+        if (
+          fresh.aiLastResponseAt &&
+          Date.now() - new Date(fresh.aiLastResponseAt).getTime() < cooldownMs
+        ) {
           console.log("⏳ Skipping AI reply (cool-down).");
           return;
         }
@@ -1100,7 +1104,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 /** Prefer shared Messaging Service if present; else tenant MS; else direct from. */
 async function getSendParams(
   userId: string,
-  toNumber: string,
+  _toNumber: string,
   fromNumber: string,
   opts?: { forceFrom?: string },
 ) {
@@ -1119,5 +1123,5 @@ async function getSendParams(
     return { ...base, messagingServiceSid: a2p.messagingServiceSid, to: fromNumber } as Parameters<Twilio["messages"]["create"]>[0];
   }
 
-  return { ...base, from: toNumber, to: fromNumber } as Parameters<Twilio["messages"]["create"]>[0];
+  return { ...base, from: fromNumber, to: fromNumber } as Parameters<Twilio["messages"]["create"]>[0];
 }
