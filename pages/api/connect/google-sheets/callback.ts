@@ -92,7 +92,7 @@ export default async function handler(
         googleSheets: { accessToken, refreshToken, expiryDate, scope },
         // ✅ Back-compat
         googleTokens: { accessToken, refreshToken, expiryDate, scope },
-        // ✅ NEW: keep calendar in sync so /api/calendar/events uses a valid token
+        // ✅ Keep calendar in sync so /api/calendar/events uses a valid token
         googleCalendar: { accessToken, refreshToken, expiryDate, scope },
         googleSheetsConnected: true,
         flags: {
@@ -104,6 +104,6 @@ export default async function handler(
     }
   );
 
-  // Same redirect as before – goes to Google Sheets Sync tab
-  return res.redirect("/google-sheets-sync?connected=google-sheets");
+  // ✅ After connecting, go straight back to the booking calendar
+  return res.redirect("/calendar");
 }
