@@ -5,6 +5,7 @@ import Lead from "@/models/Lead";
 import User from "@/models/User";
 import A2PProfile from "@/models/A2PProfile";
 import Message from "@/models/Message";
+import DripEnrollment from "@/models/DripEnrollment";
 import twilio, { Twilio } from "twilio";
 import { OpenAI } from "openai";
 import { getTimezoneFromState } from "@/utils/timezone";
@@ -31,7 +32,7 @@ const RAW_BASE_URL = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL |
 const SHARED_MESSAGING_SERVICE_SID = process.env.TWILIO_MESSAGING_SERVICE_SID || "";
 const INTERNAL_API_TOKEN = process.env.INTERNAL_API_TOKEN || "";
 const LEAD_ENTRY_PATH = (process.env.APP_LEAD_ENTRY_PATH || "/lead").replace(/\/?$/, "");
-const BUILD_TAG = "inbound-sms@2025-11-17T22:15Z";
+const BUILD_TAG = "inbound-sms@2025-11-17T23:40Z";
 console.log(`[inbound-sms] build=${BUILD_TAG}`);
 
 const STATUS_CALLBACK =
@@ -41,11 +42,9 @@ const STATUS_CALLBACK =
 const ALLOW_DEV_TWILIO_TEST =
   process.env.ALLOW_LOCAL_TWILIO_TEST === "1" && process.env.NODE_ENV !== "production";
 
-// Human delay: 3–4 min; set AI_TEST_MODE=1 for 3–5s while testing
+// Human delay flag (we're not using long delays inside this handler anymore)
+// AI_TEST_MODE kept for potential future use
 const AI_TEST_MODE = process.env.AI_TEST_MODE === "1";
-function humanDelayMs() {
-  return AI_TEST_MODE ? 3000 + Math.random() * 2000 : 180000 + Math.random() * 60000;
-}
 
 // ---------- quiet hours (lead-local) ----------
 const QUIET_START_HOUR = 21; // 9:00 PM
@@ -660,10 +659,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
     // ==========================================================
 
-    // ✅ IMPORTANT CHANGE:
-    // We NO LONGER throw away this lead based on an extra phone-mismatch guard.
-    // The lookups above already key off the inbound number, so if we found a lead,
-    // we keep it and do NOT create a new "SMS Lead" unless nothing matched.
+    // ✅ IMPORTANT: we KEEP any lead we resolved here.
+    // We only create an "SMS Lead" if nothing matched this inbound number.
 
     if (!lead) {
       try {
@@ -690,9 +687,43 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     console.log(`[inbound-sms] RESOLVED leadId=${lead?._id || null} from=${fromNumber} to=${toNumber}`);
 
-    const hadDrips =
-      Array.isArray((lead as any).assignedDrips) &&
-      (lead as any).assignedDrips.length > 0;
+    // ✅ NEW: DripEnrollment-based "stop drip on reply"
+    let hadDrips = false;
+    try {
+      const activeEnrollments = await DripEnrollment.find({
+        userEmail: user.email,
+        leadId: lead._id,
+        status: "active",
+      }).lean().exec();
+
+      if (activeEnrollments.length > 0) {
+        hadDrips = true;
+        await DripEnrollment.updateMany(
+          { userEmail: user.email, leadId: lead._id, status: "active" },
+          {
+            $set: {
+              status: "paused",
+              pausedAt: new Date(),
+              pausedReason: "lead_replied",
+            },
+          },
+        ).exec();
+        console.log(
+          `[inbound-sms] Paused ${activeEnrollments.length} DripEnrollment(s) for lead ${String(
+            lead._id,
+          )} due to inbound reply.`,
+        );
+      }
+
+      // also treat legacy assignedDrips as "had drips" for email subject tag
+      if (!hadDrips) {
+        hadDrips =
+          Array.isArray((lead as any).assignedDrips) &&
+          (lead as any).assignedDrips.length > 0;
+      }
+    } catch (e) {
+      console.warn("[inbound-sms] DripEnrollment lookup/update failed:", e);
+    }
 
     let io = (res as any)?.socket?.server?.io;
     try {
@@ -817,12 +848,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     // Do not engage AI for retention campaigns
-    const assignedDrips = (lead as any).assignedDrips || [];
-    const isClientRetention = (assignedDrips as any[]).some((id: any) => typeof id === "string" && id.includes("client_retention"));
+    const assignedDripsLegacy = (lead as any).assignedDrips || [];
+    const isClientRetention = (assignedDripsLegacy as any[]).some((id: any) => typeof id === "string" && id.includes("client_retention"));
     if (isClientRetention) return res.status(200).json({ message: "Client retention reply — no AI engagement." });
 
-    // ✅ Cancel drips & engage AI
-    lead.assignedDrips = [];
+    // Snapshot existing drips for context BEFORE we clear them
+    const existingDrips = Array.isArray((lead as any).assignedDrips)
+      ? [...(lead as any).assignedDrips]
+      : [];
+
+    // ✅ Cancel legacy drips & engage AI (DripEnrollment already paused above)
+    (lead as any).assignedDrips = [];
     (lead as any).dripProgress = [];
     lead.isAIEngaged = true;
 
@@ -839,7 +875,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     } as any;
 
     const stateCanon = normalizeStateInput(lead.State || (lead as any).state || "");
-    const context = computeContext(lead.assignedDrips);
+    const context = computeContext(existingDrips);
 
     // 0) Deterministic reply
     let aiReply: string | null = buildDeterministicReply(body, context);
@@ -973,18 +1009,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // 🔁 IMPORTANT: do NOT bump aiLastResponseAt here; we only set it after an actual send.
     await lead.save();
 
-    // === NEW: ENQUEUE FIRST, THEN SEND LATER ===
+    // === ENQUEUE + SYNC SEND (no setTimeout, no background lambda reliance) ===
     const zone = pickLeadZone(lead);
-    const humanDelay = humanDelayMs();
     const { isQuiet, scheduledAt: quietAt } = computeQuietHoursScheduling(zone);
-    const plannedAt = isQuiet && quietAt ? quietAt : new Date(Date.now() + humanDelay);
+    const plannedAt = isQuiet && quietAt ? quietAt : new Date();
 
-    // Create a queued Message row now (visible immediately)
     const queued = await Message.create({
       leadId: lead._id,
       userEmail: user.email,
       direction: "outbound",
-      text: aiReply,            // draft text we intend to send
+      text: aiReply,
       read: true,
       to: fromNumber,
       from: toNumber,
@@ -992,7 +1026,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       queuedAt: new Date(),
       scheduledAt: plannedAt,
       fromServiceSid: undefined,
-      reason: isQuiet ? "scheduled_quiet_hours" : "delayed_human_like",
+      reason: isQuiet ? "scheduled_quiet_hours" : "immediate_ai_reply",
       aiPlanned: true,
     } as any);
 
@@ -1007,14 +1041,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    // Now schedule the actual send (delay or quiet-hour schedule)
+    // Function that actually sends the SMS now (or is skipped for quiet hours)
     const fire = async () => {
       try {
         await mongooseConnect();
         const fresh = await Lead.findById(lead._id);
         if (!fresh) return;
 
-        // basic cooldown; shorter if AI_TEST_MODE so tests still send
+        // Cooldown kept, but first AI send will not be blocked
         const cooldownMs = AI_TEST_MODE ? 2000 : 2 * 60 * 1000;
         if (
           fresh.aiLastResponseAt &&
@@ -1071,7 +1105,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         console.log(`🤖 AI reply sent to ${fromNumber} FROM ${toNumber} | SID: ${(twilioMsg as any)?.sid}`);
       } catch (err) {
-        console.error("❌ Delayed send failed:", err);
+        console.error("❌ AI SMS send failed:", err);
         try {
           await Message.findByIdAndUpdate(queued._id, {
             $set: { status: "error", failedAt: new Date(), errorMessage: (err as any)?.message || "send_failed" },
@@ -1080,20 +1114,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     };
 
-    // If quiet hours defer to morning; else natural 2–3 min delay
+    // Quiet hours: do NOT auto-send now (stays queued with reason)
     if (isQuiet && quietAt) {
-      const ms = Math.max(0, quietAt.getTime() - Date.now());
-      setTimeout(fire, ms);
-      console.log(`🕘 Queued AI reply until quiet-hours end (${quietAt.toISOString()})`);
-    } else {
-      setTimeout(fire, Math.max(0, humanDelay));
-      console.log(`⏱️ Queued AI reply for ~${Math.round(humanDelay / 1000)}s`);
+      console.log(`🕘 Quiet hours in effect; AI reply queued only (no send) until ${quietAt.toISOString()}`);
+      return res.status(200).json({
+        message: "Inbound received; AI reply queued but not sent due to quiet hours.",
+        queuedMessageId: String(queued._id),
+        scheduledAt: plannedAt.toISOString(),
+        quietHours: true,
+      });
     }
 
+    // Normal hours: send synchronously (no setTimeout / background lambda)
+    await fire();
+
     return res.status(200).json({
-      message: "Inbound received; AI reply scheduled.",
+      message: "Inbound received; AI reply sent (or safely skipped by guardrails).",
       queuedMessageId: String(queued._id),
       scheduledAt: plannedAt.toISOString(),
+      quietHours: false,
     });
   } catch (error: any) {
     console.error("❌ SMS handler failed:", error);
