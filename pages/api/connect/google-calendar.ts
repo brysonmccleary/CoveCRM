@@ -1,3 +1,4 @@
+// /pages/api/connect/google-calendar.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
@@ -12,9 +13,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     process.env.NEXT_PUBLIC_BASE_URL ||
     "http://localhost:3000";
 
-  const redirectUri =
-    process.env.GOOGLE_REDIRECT_URI_CALENDAR ||
-    `${base.replace(/\/$/, "")}/api/connect/google-calendar/callback`;
+  // 🔒 Hard-code the Calendar callback path so we NEVER accidentally hit Sheets.
+  const redirectUri = `${base.replace(/\/$/, "")}/api/connect/google-calendar/callback`;
 
   const oauth2 = new google.auth.OAuth2(
     process.env.GOOGLE_CLIENT_ID!,
@@ -29,6 +29,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       "https://www.googleapis.com/auth/calendar",
       "https://www.googleapis.com/auth/calendar.events",
       "https://www.googleapis.com/auth/userinfo.email",
+      "openid",
+      "https://www.googleapis.com/auth/userinfo.profile",
     ],
   });
 

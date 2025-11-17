@@ -1,3 +1,4 @@
+// /pages/api/connect/google-calendar/callback.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { google } from "googleapis";
 import dbConnect from "@/lib/mongooseConnect";
@@ -14,7 +15,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).send("Missing authorization code");
     }
 
-    // 1) Require a logged-in user; no fancy state logic needed.
+    // Require logged-in user
     const session = await getServerSession(req, res, authOptions);
     const email =
       typeof session?.user?.email === "string"
@@ -22,21 +23,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         : "";
 
     if (!email) {
-      // As a last resort, send them to sign-in; don’t drop tokens on the floor
       return res.redirect(
         "/auth/signin?reason=no_session_for_calendar_connect"
       );
     }
 
-    // 2) Use the SAME redirect URI as the /api/connect/google-calendar start route.
     const base =
       process.env.NEXTAUTH_URL ||
       process.env.NEXT_PUBLIC_BASE_URL ||
       "http://localhost:3000";
 
-    const redirectUri =
-      process.env.GOOGLE_REDIRECT_URI_CALENDAR ||
-      `${base.replace(/\/$/, "")}/api/connect/google-calendar/callback`;
+    // 🔒 Must exactly match the redirectUri used in the connect route above.
+    const redirectUri = `${base.replace(/\/$/, "")}/api/connect/google-calendar/callback`;
 
     const oauth2 = new google.auth.OAuth2(
       process.env.GOOGLE_CLIENT_ID!,
@@ -44,12 +42,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       redirectUri
     );
 
-    // 3) Exchange code for tokens
+    // Exchange code for tokens
     const { tokens } = await oauth2.getToken(code);
 
     await dbConnect();
 
-    // Get any existing tokens so we can preserve accessToken/expiry if Google omits them
     const current = await User.findOne({ email }).lean<{
       googleTokens?: any;
       googleSheets?: any;
@@ -62,7 +59,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.redirect("/auth/signin?reason=user_not_found_for_calendar");
     }
 
-    // Prefer a brand-new refresh_token; fall back to any existing calendar/token refresh.
+    // Prefer new refresh_token, fall back to any existing one if Google omits it
     const refreshToken =
       tokens.refresh_token ||
       current?.googleCalendar?.refreshToken ||
@@ -70,7 +67,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       current?.googleSheets?.refreshToken ||
       "";
 
-    // 4) Keep your legacy Sheets helper (some parts may still rely on it)
+    // Keep legacy Sheets helper in sync
     await updateUserGoogleSheets(email, {
       accessToken:
         tokens.access_token ||
@@ -85,7 +82,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         null,
     });
 
-    // 5) Canonical storage: googleTokens + googleCalendar
+    // Canonical storage: googleTokens + googleCalendar
     await User.findOneAndUpdate(
       { email },
       {
@@ -124,7 +121,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       { new: false }
     );
 
-    // 6) Land them somewhere sensible (your Settings/Calendar tab)
+    // Send them back to Settings / Calendar
     return res.redirect("/dashboard?tab=settings");
   } catch (err: any) {
     console.error(
