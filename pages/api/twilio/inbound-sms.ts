@@ -19,6 +19,7 @@ import {
 } from "@/lib/email";
 import { initSocket } from "@/lib/socket";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
+import { sendSms } from "@/lib/twilio/sendSMS"; // ✅ NEW: use shared send path
 
 // ✅ NEW: billing imports
 import { trackUsage } from "@/lib/billing/trackUsage";
@@ -684,7 +685,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(200).json({ message: "Lead not found/created, acknowledged." });
     }
 
-    console.log(`[inbound-sms] RESOLVED leadId=${lead?._id || null} from=${fromNumber} to=${toNumber}`);
+    console.log(
+      `[inbound-sms] RESOLVED leadId=${lead?._id || null} for inbound from=${fromNumber} to=${toNumber}`
+    );
 
     // Pause any active DripEnrollments for this lead (drip → AI handoff)
     let pausedCount = 0;
@@ -987,7 +990,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     (lead as any).aiMemory = memory;
     await lead.save();
 
-    // === SEND AI REPLY AS REAL SMS IMMEDIATELY (no serverless timeouts) ===
+    // === SEND AI REPLY AS REAL SMS (via shared sendSms helper) ===
     const zone = pickLeadZone(lead);
     const { isQuiet } = computeQuietHoursScheduling(zone);
 
@@ -1024,51 +1027,41 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return res.status(200).json({ message: "Inbound received; AI reply skipped (duplicate content)." });
       }
 
-      const paramsOut: Parameters<Twilio["messages"]["create"]>[0] = {
-        statusCallback: STATUS_CALLBACK,
-        from: toNumber,
-        to: fromNumber,
-        body: draft,
-      };
-
-      const { client } = await getClientForUser(user.email);
-      const twilioMsg = await client.messages.create(paramsOut);
-
+      // Record AI entry in interaction history + emit green bubble
       const aiEntry = { type: "ai" as const, text: draft, date: new Date() };
       lead.interactionHistory = lead.interactionHistory || [];
       lead.interactionHistory.push(aiEntry);
       lead.aiLastResponseAt = new Date();
       await lead.save();
 
-      const sentDoc = await Message.create({
-        leadId: lead._id,
-        userEmail: user.email,
-        direction: "outbound",
-        text: draft,
-        read: true,
-        to: fromNumber,
-        from: toNumber,
-        sid: (twilioMsg as any)?.sid,
-        status: (twilioMsg as any)?.status || "accepted",
-        sentAt: new Date(),
-        fromServiceSid: (twilioMsg as any)?.messagingServiceSid,
-        aiPlanned: false,
-      } as any);
-
       if (io) {
         io.to(user.email).emit("message:new", { leadId: lead._id, ...aiEntry });
+      }
+
+      // ✅ Use shared sendSms path so AI uses the exact same Twilio routing as manual outbound
+      const sendResult = await sendSms({
+        to: fromNumber,
+        body: draft,
+        userEmail: user.email,
+        leadId: String(lead._id),
+        from: toNumber, // keep thread “from” identical to your owned number
+      });
+
+      if (io && sendResult.messageId) {
         io.to(user.email).emit("message:sent", {
-          _id: sentDoc._id,
-          sid: (twilioMsg as any)?.sid,
-          status: (twilioMsg as any)?.status || "accepted",
+          _id: sendResult.messageId,
+          sid: sendResult.sid,
+          status: "accepted",
         });
       }
 
-      console.log(`🤖 AI reply sent to ${fromNumber} FROM ${toNumber} | SID: ${(twilioMsg as any)?.sid}`);
+      console.log(
+        `🤖 AI reply sent via sendSms to ${fromNumber} FROM ${toNumber} | messageId=${sendResult.messageId} sid=${sendResult.sid}`
+      );
 
       return res.status(200).json({
         message: "Inbound received; AI reply sent.",
-        messageSid: (twilioMsg as any)?.sid,
+        messageSid: sendResult.sid,
         quietHours: false,
       });
     } catch (err) {
