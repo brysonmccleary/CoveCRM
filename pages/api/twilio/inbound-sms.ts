@@ -42,9 +42,11 @@ const STATUS_CALLBACK =
 const ALLOW_DEV_TWILIO_TEST =
   process.env.ALLOW_LOCAL_TWILIO_TEST === "1" && process.env.NODE_ENV !== "production";
 
-// Human delay flag (we're not using long delays inside this handler anymore)
-// AI_TEST_MODE kept for potential future use
+// Human delay: (kept only for cooldown tuning); we no longer use setTimeout in serverless
 const AI_TEST_MODE = process.env.AI_TEST_MODE === "1";
+function humanDelayMs() {
+  return AI_TEST_MODE ? 3000 + Math.random() * 2000 : 180000 + Math.random() * 60000;
+}
 
 // ---------- quiet hours (lead-local) ----------
 const QUIET_START_HOUR = 21; // 9:00 PM
@@ -421,7 +423,7 @@ function buildDeterministicReply(textRaw: string, context: string): string | nul
     return "About 5 minutes to see exact monthly and options. What time works today or tomorrow?";
   }
   if (/[áéíóúñ]|hablas|espanol|español/.test(t)) {
-    return "¡Sí! Podemos revisarlo en 5 minutos y ver si bajamos su pago $20–$50+ al mes. ¿Prefiere hoy o mañana para una llamada rápida?";
+    return "¡Sí! Podemos revisarlo en 5 minutos y ver si bajamos su pago $20-$50+ al mes. ¿Prefiere hoy o mañana para una llamada rápida?";
   }
   if (/\b(fuck|idiot|stupid|scam|bs|b\s*s)\b/i.test(textRaw) && !isOptOut(textRaw)) {
     return "I hear you. If you want a real number later, it’s a quick 5-minute review and often saves $20–$50+ a month. What time works today or tomorrow?";
@@ -659,9 +661,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
     // ==========================================================
 
-    // ✅ IMPORTANT: we KEEP any lead we resolved here.
-    // We only create an "SMS Lead" if nothing matched this inbound number.
-
     if (!lead) {
       try {
         lead = await Lead.create({
@@ -687,43 +686,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     console.log(`[inbound-sms] RESOLVED leadId=${lead?._id || null} from=${fromNumber} to=${toNumber}`);
 
-    // ✅ NEW: DripEnrollment-based "stop drip on reply"
-    let hadDrips = false;
+    // Pause any active DripEnrollments for this lead (drip → AI handoff)
+    let pausedCount = 0;
     try {
-      const activeEnrollments = await DripEnrollment.find({
-        userEmail: user.email,
-        leadId: lead._id,
-        status: "active",
-      }).lean().exec();
-
-      if (activeEnrollments.length > 0) {
-        hadDrips = true;
-        await DripEnrollment.updateMany(
-          { userEmail: user.email, leadId: lead._id, status: "active" },
-          {
-            $set: {
-              status: "paused",
-              pausedAt: new Date(),
-              pausedReason: "lead_replied",
-            },
-          },
-        ).exec();
-        console.log(
-          `[inbound-sms] Paused ${activeEnrollments.length} DripEnrollment(s) for lead ${String(
-            lead._id,
-          )} due to inbound reply.`,
-        );
-      }
-
-      // also treat legacy assignedDrips as "had drips" for email subject tag
-      if (!hadDrips) {
-        hadDrips =
-          Array.isArray((lead as any).assignedDrips) &&
-          (lead as any).assignedDrips.length > 0;
+      const result = await DripEnrollment.updateMany(
+        { leadId: lead._id, status: "active" },
+        { $set: { status: "paused" } }
+      );
+      pausedCount =
+        (result as any).modifiedCount ??
+        (result as any).nModified ??
+        0;
+      if (pausedCount > 0) {
+        console.log(`⏸️ Paused ${pausedCount} DripEnrollment(s) for lead ${lead._id}`);
       }
     } catch (e) {
-      console.warn("[inbound-sms] DripEnrollment lookup/update failed:", e);
+      console.warn("⚠️ Failed to pause DripEnrollments on reply:", e);
     }
+
+    const hadAssignedDrips =
+      Array.isArray((lead as any).assignedDrips) &&
+      (lead as any).assignedDrips.length > 0;
+    const hadDrips = hadAssignedDrips || pausedCount > 0;
 
     let io = (res as any)?.socket?.server?.io;
     try {
@@ -848,17 +832,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     // Do not engage AI for retention campaigns
-    const assignedDripsLegacy = (lead as any).assignedDrips || [];
-    const isClientRetention = (assignedDripsLegacy as any[]).some((id: any) => typeof id === "string" && id.includes("client_retention"));
+    const assignedDrips = (lead as any).assignedDrips || [];
+    const isClientRetention = (assignedDrips as any[]).some((id: any) => typeof id === "string" && id.includes("client_retention"));
     if (isClientRetention) return res.status(200).json({ message: "Client retention reply — no AI engagement." });
 
-    // Snapshot existing drips for context BEFORE we clear them
-    const existingDrips = Array.isArray((lead as any).assignedDrips)
-      ? [...(lead as any).assignedDrips]
-      : [];
-
-    // ✅ Cancel legacy drips & engage AI (DripEnrollment already paused above)
-    (lead as any).assignedDrips = [];
+    // ✅ Cancel drips & engage AI (legacy arrays)
+    lead.assignedDrips = [];
     (lead as any).dripProgress = [];
     lead.isAIEngaged = true;
 
@@ -875,7 +854,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     } as any;
 
     const stateCanon = normalizeStateInput(lead.State || (lead as any).state || "");
-    const context = computeContext(existingDrips);
+    const context = computeContext(lead.assignedDrips);
 
     // 0) Deterministic reply
     let aiReply: string | null = buildDeterministicReply(body, context);
@@ -1006,134 +985,105 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     memory.lastDraft = aiReply;
     (lead as any).aiMemory = memory;
-    // 🔁 IMPORTANT: do NOT bump aiLastResponseAt here; we only set it after an actual send.
     await lead.save();
 
-    // === ENQUEUE + SYNC SEND (no setTimeout, no background lambda reliance) ===
+    // === SEND AI REPLY AS REAL SMS IMMEDIATELY (no serverless timeouts) ===
     const zone = pickLeadZone(lead);
-    const { isQuiet, scheduledAt: quietAt } = computeQuietHoursScheduling(zone);
-    const plannedAt = isQuiet && quietAt ? quietAt : new Date();
+    const { isQuiet } = computeQuietHoursScheduling(zone);
 
-    const queued = await Message.create({
-      leadId: lead._id,
-      userEmail: user.email,
-      direction: "outbound",
-      text: aiReply,
-      read: true,
-      to: fromNumber,
-      from: toNumber,
-      status: "queued",
-      queuedAt: new Date(),
-      scheduledAt: plannedAt,
-      fromServiceSid: undefined,
-      reason: isQuiet ? "scheduled_quiet_hours" : "immediate_ai_reply",
-      aiPlanned: true,
-    } as any);
-
-    if (io) {
-      io.to(user.email).emit("message:queued", {
-        leadId: lead._id,
-        _id: queued._id,
-        direction: "outbound",
-        text: aiReply,
-        status: "queued",
-        scheduledAt: plannedAt,
-      });
-    }
-
-    // Function that actually sends the SMS now (or is skipped for quiet hours)
-    const fire = async () => {
-      try {
-        await mongooseConnect();
-        const fresh = await Lead.findById(lead._id);
-        if (!fresh) return;
-
-        // Cooldown kept, but first AI send will not be blocked
-        const cooldownMs = AI_TEST_MODE ? 2000 : 2 * 60 * 1000;
-        if (
-          fresh.aiLastResponseAt &&
-          Date.now() - new Date(fresh.aiLastResponseAt).getTime() < cooldownMs
-        ) {
-          console.log("⏳ Skipping AI reply (cool-down).");
-          return;
-        }
-        if ((fresh as any).appointmentTime && !(fresh as any).aiLastConfirmedISO) {
-          console.log("✅ Appointment already set; skipping nudge.");
-          return;
-        }
-
-        const lastAI = [...(fresh.interactionHistory || [])].reverse().find((m: any) => m.type === "ai");
-        const draft = ((fresh as any).aiMemory?.lastDraft as string) || aiReply;
-        if (lastAI && lastAI.text?.trim() === draft.trim()) {
-          console.log("🔁 Same AI content as last time — not sending.");
-          return;
-        }
-
-        const paramsOut: Parameters<Twilio["messages"]["create"]>[0] = {
-          statusCallback: STATUS_CALLBACK,
-          from: toNumber,     // force from the exact inbound number
-          to: fromNumber,
-          body: draft,
-        };
-
-        const { client } = await getClientForUser(user.email);
-        const twilioMsg = await client.messages.create(paramsOut);
-
-        // Persist to lead history now that it's actually sent
-        const aiEntry = { type: "ai" as const, text: draft, date: new Date() };
-        fresh.interactionHistory = fresh.interactionHistory || [];
-        fresh.interactionHistory.push(aiEntry);
-        fresh.aiLastResponseAt = new Date();
-        await fresh.save();
-
-        // Update the queued message → real send details
-        await Message.findByIdAndUpdate(queued._id, {
-          $set: {
-            sid: (twilioMsg as any)?.sid,
-            status: (twilioMsg as any)?.status || "accepted",
-            sentAt: new Date(),
-            fromServiceSid: undefined,
-            aiPlanned: false,
-          },
-        }).exec();
-
-        let io2 = (res as any)?.socket?.server?.io;
-        if (io2) {
-          io2.to(user.email).emit("message:new", { leadId: fresh._id, ...aiEntry });
-          io2.to(user.email).emit("message:sent", { _id: queued._id, sid: (twilioMsg as any)?.sid, status: (twilioMsg as any)?.status || "accepted" });
-        }
-
-        console.log(`🤖 AI reply sent to ${fromNumber} FROM ${toNumber} | SID: ${(twilioMsg as any)?.sid}`);
-      } catch (err) {
-        console.error("❌ AI SMS send failed:", err);
-        try {
-          await Message.findByIdAndUpdate(queued._id, {
-            $set: { status: "error", failedAt: new Date(), errorMessage: (err as any)?.message || "send_failed" },
-          }).exec();
-        } catch {}
-      }
-    };
-
-    // Quiet hours: do NOT auto-send now (stays queued with reason)
-    if (isQuiet && quietAt) {
-      console.log(`🕘 Quiet hours in effect; AI reply queued only (no send) until ${quietAt.toISOString()}`);
+    if (isQuiet) {
+      const note = {
+        type: "system" as const,
+        text: "[system] AI reply suppressed due to quiet hours. Agent will follow up during business hours.",
+        date: new Date(),
+      };
+      lead.interactionHistory.push(note);
+      await lead.save();
+      if (io) io.to(user.email).emit("message:new", { leadId: lead._id, ...note });
+      console.log("🌙 Quiet hours active — AI SMS not sent.");
       return res.status(200).json({
-        message: "Inbound received; AI reply queued but not sent due to quiet hours.",
-        queuedMessageId: String(queued._id),
-        scheduledAt: plannedAt.toISOString(),
+        message: "Inbound received; quiet hours active, AI reply suppressed.",
         quietHours: true,
       });
     }
 
-    // Normal hours: send synchronously (no setTimeout / background lambda)
-    await fire();
+    try {
+      const cooldownMs = AI_TEST_MODE ? 2000 : 2 * 60 * 1000;
+      if (
+        lead.aiLastResponseAt &&
+        Date.now() - new Date(lead.aiLastResponseAt).getTime() < cooldownMs
+      ) {
+        console.log("⏳ Skipping AI reply (cool-down).");
+        return res.status(200).json({ message: "Inbound received; AI reply skipped by cooldown." });
+      }
 
-    return res.status(200).json({
-      message: "Inbound received; AI reply sent (or safely skipped by guardrails).",
-      queuedMessageId: String(queued._id),
-      scheduledAt: plannedAt.toISOString(),
-      quietHours: false,
-    });
+      const lastAI = [...(lead.interactionHistory || [])].reverse().find((m: any) => m.type === "ai");
+      const draft = aiReply;
+      if (lastAI && lastAI.text?.trim() === draft.trim()) {
+        console.log("🔁 Same AI content as last time — not sending.");
+        return res.status(200).json({ message: "Inbound received; AI reply skipped (duplicate content)." });
+      }
+
+      const paramsOut: Parameters<Twilio["messages"]["create"]>[0] = {
+        statusCallback: STATUS_CALLBACK,
+        from: toNumber,
+        to: fromNumber,
+        body: draft,
+      };
+
+      const { client } = await getClientForUser(user.email);
+      const twilioMsg = await client.messages.create(paramsOut);
+
+      const aiEntry = { type: "ai" as const, text: draft, date: new Date() };
+      lead.interactionHistory = lead.interactionHistory || [];
+      lead.interactionHistory.push(aiEntry);
+      lead.aiLastResponseAt = new Date();
+      await lead.save();
+
+      const sentDoc = await Message.create({
+        leadId: lead._id,
+        userEmail: user.email,
+        direction: "outbound",
+        text: draft,
+        read: true,
+        to: fromNumber,
+        from: toNumber,
+        sid: (twilioMsg as any)?.sid,
+        status: (twilioMsg as any)?.status || "accepted",
+        sentAt: new Date(),
+        fromServiceSid: (twilioMsg as any)?.messagingServiceSid,
+        aiPlanned: false,
+      } as any);
+
+      if (io) {
+        io.to(user.email).emit("message:new", { leadId: lead._id, ...aiEntry });
+        io.to(user.email).emit("message:sent", {
+          _id: sentDoc._id,
+          sid: (twilioMsg as any)?.sid,
+          status: (twilioMsg as any)?.status || "accepted",
+        });
+      }
+
+      console.log(`🤖 AI reply sent to ${fromNumber} FROM ${toNumber} | SID: ${(twilioMsg as any)?.sid}`);
+
+      return res.status(200).json({
+        message: "Inbound received; AI reply sent.",
+        messageSid: (twilioMsg as any)?.sid,
+        quietHours: false,
+      });
+    } catch (err) {
+      console.error("❌ AI SMS send failed:", err);
+      const note = {
+        type: "system" as const,
+        text: "[system] AI reply failed to send. Agent should follow up manually.",
+        date: new Date(),
+      };
+      lead.interactionHistory = lead.interactionHistory || [];
+      lead.interactionHistory.push(note);
+      await lead.save();
+      if (io) io.to(user.email).emit("message:new", { leadId: lead._id, ...note });
+      return res.status(200).json({ message: "Inbound received; AI reply failed to send." });
+    }
   } catch (error: any) {
     console.error("❌ SMS handler failed:", error);
     return res.status(200).json({ message: "Inbound SMS handled with internal error." });
