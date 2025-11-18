@@ -675,12 +675,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (!lead) {
       try {
+        // 🔧 CHANGED: no more "SMS Lead" name – just a minimal record tied to the phone.
         lead = await Lead.create({
           userEmail: user.email,
           Phone: fromNumber,
           phone: fromNumber,
-          "First Name": "SMS",
-          "Last Name": "Lead",
           source: "inbound_sms",
           status: "New",
           createdAt: new Date(),
@@ -904,14 +903,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           if (!askedRecently(memory, "chat_followup")) pushAsked(memory, "chat_followup");
           memory.state = "awaiting_time";
         }
-      } catch {
+      } catch (err) {
+        console.warn("⚠️ extractIntentAndTimeLLM failed, falling back to conversational GPT:", err);
         memory.state = "awaiting_time";
-        const lastAI = [...(lead.interactionHistory || [])].reverse().find((m: any) => m.type === "ai");
-        const v = `What time works for you—today or tomorrow? You can reply like “tomorrow 3:00 pm”.`;
-        aiReply =
-          lastAI?.text?.trim() === v
-            ? `Shoot me a time that works (e.g., “tomorrow 3:00 pm”) and I’ll text a confirmation.`
-            : v;
+        try {
+          aiReply = await generateConversationalReply({
+            lead,
+            userEmail: user.email,
+            context,
+            tz,
+            inboundText: body,
+            history: lead.interactionHistory || [],
+          });
+          if (!askedRecently(memory, "chat_followup")) pushAsked(memory, "chat_followup");
+        } catch (inner) {
+          console.error("⚠️ generateConversationalReply also failed; using simple fallback.", inner);
+          const lastAI = [...(lead.interactionHistory || [])].reverse().find((m: any) => m.type === "ai");
+          const v = `What time works for you—today or tomorrow? You can reply like “tomorrow 3:00 pm”.`;
+          aiReply =
+            lastAI?.text?.trim() === v
+              ? `Shoot me a time that works (e.g., “tomorrow 3:00 pm”) and I’ll text a confirmation.`
+              : v;
+        }
       }
     }
 
