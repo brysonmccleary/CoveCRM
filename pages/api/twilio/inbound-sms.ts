@@ -19,7 +19,7 @@ import {
 } from "@/lib/email";
 import { initSocket } from "@/lib/socket";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
-import { sendSms } from "@/lib/twilio/sendSMS"; // ✅ NEW: use same path as manual SMS
+import { sendSms } from "@/lib/twilio/sendSMS";
 
 // ✅ NEW: billing imports
 import { trackUsage } from "@/lib/billing/trackUsage";
@@ -33,7 +33,7 @@ const RAW_BASE_URL = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL |
 const SHARED_MESSAGING_SERVICE_SID = process.env.TWILIO_MESSAGING_SERVICE_SID || "";
 const INTERNAL_API_TOKEN = process.env.INTERNAL_API_TOKEN || "";
 const LEAD_ENTRY_PATH = (process.env.APP_LEAD_ENTRY_PATH || "/lead").replace(/\/?$/, "");
-const BUILD_TAG = "inbound-sms@2025-11-18T15:40Z";
+const BUILD_TAG = "inbound-sms@2025-11-18T18:30Z";
 console.log(`[inbound-sms] build=${BUILD_TAG}`);
 
 const STATUS_CALLBACK =
@@ -375,68 +375,8 @@ function historyToChatMessages(history: any[] = []) {
   return msgs.slice(-24);
 }
 
-// --- Deterministic reply shortcuts (compliance + non-repetition)
-function buildDeterministicReply(textRaw: string, context: string): string | null {
-  const t = (textRaw || "").trim().toLowerCase();
-
-  // ✅ NEW: phrase match with word boundaries so "mortgage" doesn't trigger "age"
-  const containsPhrase = (phrase: string) => {
-    const escaped = phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    return new RegExp(`\\b${escaped}\\b`).test(t);
-  };
-  const any = (...subs: string[]) => subs.some(containsPhrase);
-
-  if (any("already have coverage","i already have","i'm covered","im covered","we're covered","we are covered","we’re covered","already insured","have life insurance","have insurance already")) {
-    return "I can see that on my end, it looks like we can save you anywhere from $20-$50+ a month. When do you have five minutes to talk?";
-  }
-  if (any("not interested","no thanks","no thank you","pass","stop texting") && !["stop","stopall","unsubscribe","cancel","end","quit"].includes(t)) {
-    return "Totally get it. Before I close it out, most folks still find $20–$50+ in savings in a 5-min check. Want me to hold a quick time later today or tomorrow?";
-  }
-  if (any("how much","price","rate","rates","cost","quote")) {
-    return "Good question. Your exact monthly depends on a couple quick details—takes about 5 minutes. What time works later today or tomorrow for a quick call?";
-  }
-  if (any("busy","can’t talk","cant talk","in a meeting","later","another time","driving")) {
-    return "No problem—I’ll keep it to 5 minutes. What’s a quick window later today or tomorrow?";
-  }
-  if (any("who is this","who are you","how did you get my number","what company","is this legit","scam")) {
-    return "Hey there—this is the benefits team that handles life insurance and mortgage protection requests you asked about. It’s a quick 5-min review. What time works today or tomorrow?";
-  }
-  if (any("remove me","wrong number","dont text","don't text","do not text")) {
-    return "Understood—I’ll update that. If you’re comparing options, we can check in 5 minutes. Want a quick time later today or tomorrow?";
-  }
-  if (any("send info","send the info","send details","email me","text me info","mail the info","just send it","can you send it","do you have something you can send","do you have anything you can send","link","website")) {
-    return "Unfortunately as of now there's nothing to send over without getting some information from you. When's a good time for a quick 5 minute call? After that we can send everything out.";
-  }
-  if (any("already talked","already applied","my agent","have an agent","working with an agent")) {
-    return "Makes sense—this will be quick. We usually find $20–$50+ a month by checking carriers they didn’t quote. Want a fast 5-min look later today or tomorrow?";
-  }
-  if (any("don’t qualify","dont qualify","declined","pre-existing","preexisting","health issues")) {
-    return "Some carriers are flexible on health—often people still qualify. Let’s take 5 minutes and check. What time works today or tomorrow?";
-  }
-  if (any("too old","too young","age")) {
-    return "Age changes which carriers fit best, but there are options. A quick 5-min check answers it. What time works today or tomorrow?";
-  }
-  if (any("too old","too young","age")) {
-    return "Age changes which carriers fit best, but there are options. A quick 5-min check answers it. What time works today or tomorrow?";
-  }
-  if (any("cheapest","lowest price","best rate")) {
-    return "Got it—let’s run a fast apples-to-apples check for the lowest monthly. Takes about 5 minutes. What time works later today or tomorrow?";
-  }
-  if (any("text only","don’t call","dont call","can we text")) {
-    return "We can text basics, but final numbers need a quick verbal to be accurate—it’s 5 minutes. What time works later today or tomorrow?";
-  }
-  if (any("tomorrow")) {
-    return "Sounds good—what’s a quick 5-10 minute window tomorrow?";
-  }
-  if (any("how long","time does it take","length of call")) {
-    return "About 5 minutes to see exact monthly and options. What time works today or tomorrow?";
-  }
-  if (/[áéíóúñ]|hablas|espanol|español/.test(t)) {
-    return "¡Sí! Podemos revisarlo en 5 minutos y ver si bajamos su pago $20-$50+ al mes. ¿Prefiere hoy o mañana para una llamada rápida?";
-  }
-  if (/\b(fuck|idiot|stupid|scam|bs|b\s*s)\b/i.test(textRaw) && !isOptOut(textRaw)) {
-    return "I hear you. If you want a real number later, it’s a quick 5-minute review and often saves $20–$50+ a month. What time works today or tomorrow?";
-  }
+// --- Deterministic reply shortcuts (currently UNUSED – we rely on GPT for convo)
+function buildDeterministicReply(_textRaw: string, _context: string): string | null {
   return null;
 }
 
@@ -524,6 +464,17 @@ function leadPhoneMatches(lead: any, fromDigits: string): boolean {
   const last10 = fromDigits.slice(-10);
   return cand.some((d) => d && d.endsWith(last10));
 }
+
+function isPlaceholderLead(l: any): boolean {
+  const fn = String((l as any)["First Name"] || (l as any).firstName || "").trim().toLowerCase();
+  const ln = String((l as any)["Last Name"] || (l as any).lastName || "").trim().toLowerCase();
+  const full = `${fn} ${ln}`.trim();
+  return (
+    (l as any).source === "inbound_sms" &&
+    (full === "sms lead" || (fn === "sms" && ln === "lead"))
+  );
+}
+
 // ----------------------------------------------------------------------------------------------------------
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -669,11 +620,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         (await Lead.findOne({ userEmail: user.email, "phones.value": anchored } as any));
     }
 
-    // (E) If we landed on an old inbound "SMS Lead", but there is a non-inbound lead with same phone, prefer that.
-    if (lead && lead.source === "inbound_sms" && last10 && anchored) {
-      const better = await Lead.findOne({
+    // (E) Prefer best non-placeholder lead with same phone (so imported leads beat "SMS Lead")
+    if (last10 && anchored) {
+      const candidates: any[] = await Lead.find({
         userEmail: user.email,
-        source: { $ne: "inbound_sms" },
         $or: [
           { Phone: anchored },
           { phone: anchored },
@@ -685,13 +635,40 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         ],
       }).sort({ updatedAt: -1, createdAt: -1 });
 
-      if (better && leadPhoneMatches(better, fromDigits)) {
-        console.log(
-          `[inbound-sms] Swapping SMS-lead ${String(lead._id)} -> imported lead ${String(
-            better._id
-          )} for inbound ${fromNumber}`
-        );
-        lead = better;
+      if (lead && !candidates.some((c) => String(c._id) === String(lead._id))) {
+        candidates.unshift(lead);
+      }
+
+      if (candidates.length > 0) {
+        const scoreLead = (l: any) => {
+          let score = 0;
+          if (!isPlaceholderLead(l)) score += 5;
+          else score -= 5;
+          if ((l as any).source && (l as any).source !== "inbound_sms") score += 2;
+          if ((l as any).status && (l as any).status !== "New") score += 1;
+          if (Array.isArray((l as any).assignedDrips) && (l as any).assignedDrips.length > 0) score += 1;
+          if ((l as any).updatedAt) score += 0.1;
+          return score;
+        };
+
+        let best = candidates[0];
+        let bestScore = scoreLead(best);
+        for (const c of candidates.slice(1)) {
+          const s = scoreLead(c);
+          if (s > bestScore) {
+            best = c;
+            bestScore = s;
+          }
+        }
+
+        if (!lead || String(lead._id) !== String(best._id)) {
+          console.log(
+            `[inbound-sms] Chose lead ${String(best._id)} over placeholder/SMS lead ${
+              lead ? String(lead._id) : "none"
+            } for inbound ${fromNumber}`
+          );
+          lead = best;
+        }
       }
     }
     // ==========================================================
@@ -891,59 +868,54 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const stateCanon = normalizeStateInput(lead.State || (lead as any).state || "");
     const context = computeContext(lead.assignedDrips);
 
-    // 0) Deterministic reply
-    let aiReply: string | null = buildDeterministicReply(body, context);
-    // 1) Parse time from text
+    // GPT-first logic
+    let aiReply: string | null = null;
+
+    // 1) Direct parse of any concrete time in their text
     let requestedISO: string | null = extractRequestedISO(body, stateCanon);
-    // 2) Confirmation language
+
+    // 2) If they’re confirming ("that works", etc.), reuse last proposed or last AI-suggested time
     if (!requestedISO && containsConfirmation(body)) {
       requestedISO =
         extractTimeFromLastAI(lead.interactionHistory || [], stateCanon) ||
-        (lead as any).aiLastProposedISO || null;
+        (lead as any).aiLastProposedISO ||
+        null;
     }
-    // 2.5) Info request
-    if (!requestedISO && isInfoRequest(body)) {
-      aiReply = `Unfortunately as of now there's nothing to send over without getting some information from you. When's a good time for a quick 5 minute call? After that we can send everything out.`;
-      memory.state = "qa";
-    }
-    // 3) LLM fallback
-    if (!requestedISO && !aiReply) {
+
+    // 3) Ask GPT to see if there’s a time hidden in what they said (or strong scheduling intent)
+    if (!requestedISO) {
       try {
         const ex = await extractIntentAndTimeLLM({ text: body, nowISO, tz });
         const norm = normalizeWhen(ex.datetime_text, nowISO, tz);
-        if (norm?.start) requestedISO = norm.start.toISO();
+        if (norm?.start) {
+          requestedISO = norm.start.toISO();
+        }
 
+        // If still no explicit time, let GPT drive a natural Jeremy-style reply
         if (!requestedISO) {
-          if (ex.intent === "ask_duration") {
-            aiReply = `It’s quick—about 10–15 minutes. Would later today or tomorrow afternoon work?`;
-            memory.state = "qa";
-          } else if (ex.intent === "ask_cost") {
-            aiReply = `No cost at all—just a quick review. What’s better for you, today or tomorrow?`;
-            memory.state = "qa";
-          } else {
-            aiReply = await generateConversationalReply({
-              lead,
-              userEmail: user.email,
-              context,
-              tz,
-              inboundText: body,
-              history: lead.interactionHistory || [],
-            });
-            if (!askedRecently(memory, "chat_followup")) pushAsked(memory, "chat_followup");
-            memory.state = "awaiting_time";
-          }
+          aiReply = await generateConversationalReply({
+            lead,
+            userEmail: user.email,
+            context,
+            tz,
+            inboundText: body,
+            history: lead.interactionHistory || [],
+          });
+          if (!askedRecently(memory, "chat_followup")) pushAsked(memory, "chat_followup");
+          memory.state = "awaiting_time";
         }
       } catch {
         memory.state = "awaiting_time";
         const lastAI = [...(lead.interactionHistory || [])].reverse().find((m: any) => m.type === "ai");
         const v = `What time works for you—today or tomorrow? You can reply like “tomorrow 3:00 pm”.`;
-        aiReply = lastAI?.text?.trim() === v
-          ? `Shoot me a time that works (e.g., “tomorrow 3:00 pm”) and I’ll text a confirmation.`
-          : v;
+        aiReply =
+          lastAI?.text?.trim() === v
+            ? `Shoot me a time that works (e.g., “tomorrow 3:00 pm”) and I’ll text a confirmation.`
+            : v;
       }
     }
 
-    // 4) Convert concrete time into booking + confirm copy
+    // 4) If we DO have a concrete time, book it and send a confirmation
     if (requestedISO) {
       const zone = tz;
       const clientTime = DateTime.fromISO(requestedISO, { zone }).set({ second: 0, millisecond: 0 });
@@ -1016,7 +988,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
-    if (!aiReply) aiReply = "When’s a good time today or tomorrow for a quick 5-minute chat?";
+    if (!aiReply) {
+      aiReply = "When’s a good time today or tomorrow for a quick 5-minute chat?";
+    }
 
     memory.lastDraft = aiReply;
     (lead as any).aiMemory = memory;
