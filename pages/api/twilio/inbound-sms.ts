@@ -675,7 +675,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (!lead) {
       try {
-        // 🔧 CHANGED: no more "SMS Lead" name – just a minimal record tied to the phone.
+        // Create a minimal lead record so the thread has an ID,
+        // but do NOT set "SMS Lead" as the name. This lets the UI
+        // fall back to showing the phone number instead of a fake name.
         lead = await Lead.create({
           userEmail: user.email,
           Phone: fromNumber,
@@ -881,50 +883,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         null;
     }
 
-    // 3) Ask GPT to see if there’s a time hidden in what they said (or strong scheduling intent)
+    // 3) If we still don’t have a concrete time, let GPT drive a natural Jeremy-style reply
     if (!requestedISO) {
       try {
-        const ex = await extractIntentAndTimeLLM({ text: body, nowISO, tz });
-        const norm = normalizeWhen(ex.datetime_text, nowISO, tz);
-        if (norm?.start) {
-          requestedISO = norm.start.toISO();
-        }
-
-        // If still no explicit time, let GPT drive a natural Jeremy-style reply
-        if (!requestedISO) {
-          aiReply = await generateConversationalReply({
-            lead,
-            userEmail: user.email,
-            context,
-            tz,
-            inboundText: body,
-            history: lead.interactionHistory || [],
-          });
-          if (!askedRecently(memory, "chat_followup")) pushAsked(memory, "chat_followup");
-          memory.state = "awaiting_time";
-        }
-      } catch (err) {
-        console.warn("⚠️ extractIntentAndTimeLLM failed, falling back to conversational GPT:", err);
+        aiReply = await generateConversationalReply({
+          lead,
+          userEmail: user.email,
+          context,
+          tz,
+          inboundText: body,
+          history: lead.interactionHistory || [],
+        });
+        if (!askedRecently(memory, "chat_followup")) pushAsked(memory, "chat_followup");
         memory.state = "awaiting_time";
-        try {
-          aiReply = await generateConversationalReply({
-            lead,
-            userEmail: user.email,
-            context,
-            tz,
-            inboundText: body,
-            history: lead.interactionHistory || [],
-          });
-          if (!askedRecently(memory, "chat_followup")) pushAsked(memory, "chat_followup");
-        } catch (inner) {
-          console.error("⚠️ generateConversationalReply also failed; using simple fallback.", inner);
-          const lastAI = [...(lead.interactionHistory || [])].reverse().find((m: any) => m.type === "ai");
-          const v = `What time works for you—today or tomorrow? You can reply like “tomorrow 3:00 pm”.`;
-          aiReply =
-            lastAI?.text?.trim() === v
-              ? `Shoot me a time that works (e.g., “tomorrow 3:00 pm”) and I’ll text a confirmation.`
-              : v;
-        }
+      } catch (err) {
+        console.error("[inbound-sms] GPT conversational reply failed:", err);
+        memory.state = "awaiting_time";
+        const lastAI = [...(lead.interactionHistory || [])].reverse().find((m: any) => m.type === "ai");
+        const v = `When’s a good time today or tomorrow for a quick 5-minute chat?`;
+        aiReply =
+          lastAI?.text?.trim() === v
+            ? `Got it — send me a time that works (for example “tomorrow 3:00 pm”) and I’ll text a confirmation.`
+            : v;
       }
     }
 
