@@ -19,7 +19,7 @@ import {
 } from "@/lib/email";
 import { initSocket } from "@/lib/socket";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
-import { sendSms } from "@/lib/twilio/sendSMS"; // ✅ NEW: use shared send path
+import { sendSms } from "@/lib/twilio/sendSMS"; // ✅ NEW: use same path as manual SMS
 
 // ✅ NEW: billing imports
 import { trackUsage } from "@/lib/billing/trackUsage";
@@ -33,7 +33,7 @@ const RAW_BASE_URL = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL |
 const SHARED_MESSAGING_SERVICE_SID = process.env.TWILIO_MESSAGING_SERVICE_SID || "";
 const INTERNAL_API_TOKEN = process.env.INTERNAL_API_TOKEN || "";
 const LEAD_ENTRY_PATH = (process.env.APP_LEAD_ENTRY_PATH || "/lead").replace(/\/?$/, "");
-const BUILD_TAG = "inbound-sms@2025-11-17T23:40Z";
+const BUILD_TAG = "inbound-sms@2025-11-18T15:40Z";
 console.log(`[inbound-sms] build=${BUILD_TAG}`);
 
 const STATUS_CALLBACK =
@@ -43,7 +43,7 @@ const STATUS_CALLBACK =
 const ALLOW_DEV_TWILIO_TEST =
   process.env.ALLOW_LOCAL_TWILIO_TEST === "1" && process.env.NODE_ENV !== "production";
 
-// Human delay: (kept only for cooldown tuning); we no longer use setTimeout in serverless
+// Human delay: (kept only for cooldown tuning)
 const AI_TEST_MODE = process.env.AI_TEST_MODE === "1";
 function humanDelayMs() {
   return AI_TEST_MODE ? 3000 + Math.random() * 2000 : 180000 + Math.random() * 60000;
@@ -305,7 +305,6 @@ function computeContext(drips?: string[]) {
   if (d.includes("veteran")) return "veteran life insurance";
   if (d.includes("iul")) return "retirement income protection";
   if (d.includes("final_expense")) return "final expense insurance";
-  // 🔁 Default updated for your requirement
   return "life insurance and mortgage protection";
 }
 
@@ -379,7 +378,13 @@ function historyToChatMessages(history: any[] = []) {
 // --- Deterministic reply shortcuts (compliance + non-repetition)
 function buildDeterministicReply(textRaw: string, context: string): string | null {
   const t = (textRaw || "").trim().toLowerCase();
-  const any = (...subs: string[]) => subs.some(s => t.includes(s));
+
+  // ✅ NEW: phrase match with word boundaries so "mortgage" doesn't trigger "age"
+  const containsPhrase = (phrase: string) => {
+    const escaped = phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return new RegExp(`\\b${escaped}\\b`).test(t);
+  };
+  const any = (...subs: string[]) => subs.some(containsPhrase);
 
   if (any("already have coverage","i already have","i'm covered","im covered","we're covered","we are covered","we’re covered","already insured","have life insurance","have insurance already")) {
     return "I can see that on my end, it looks like we can save you anywhere from $20-$50+ a month. When do you have five minutes to talk?";
@@ -399,7 +404,7 @@ function buildDeterministicReply(textRaw: string, context: string): string | nul
   if (any("remove me","wrong number","dont text","don't text","do not text")) {
     return "Understood—I’ll update that. If you’re comparing options, we can check in 5 minutes. Want a quick time later today or tomorrow?";
   }
-  if (any("send info","send the info","send details","email me","text me info","mail the info","just send it","can you send it","link","website")) {
+  if (any("send info","send the info","send details","email me","text me info","mail the info","just send it","can you send it","do you have something you can send","do you have anything you can send","link","website")) {
     return "Unfortunately as of now there's nothing to send over without getting some information from you. When's a good time for a quick 5 minute call? After that we can send everything out.";
   }
   if (any("already talked","already applied","my agent","have an agent","working with an agent")) {
@@ -407,6 +412,9 @@ function buildDeterministicReply(textRaw: string, context: string): string | nul
   }
   if (any("don’t qualify","dont qualify","declined","pre-existing","preexisting","health issues")) {
     return "Some carriers are flexible on health—often people still qualify. Let’s take 5 minutes and check. What time works today or tomorrow?";
+  }
+  if (any("too old","too young","age")) {
+    return "Age changes which carriers fit best, but there are options. A quick 5-min check answers it. What time works today or tomorrow?";
   }
   if (any("too old","too young","age")) {
     return "Age changes which carriers fit best, but there are options. A quick 5-min check answers it. What time works today or tomorrow?";
@@ -432,7 +440,7 @@ function buildDeterministicReply(textRaw: string, context: string): string | nul
   return null;
 }
 
-// --- conversational reply (LLM fallback, Jeremy Lee Minor-inspired consultative tone)
+// --- conversational reply (LLM fallback, Jeremy-style)
 async function generateConversationalReply(opts: {
   lead: any;
   userEmail: string;
@@ -660,6 +668,32 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         (await Lead.findOne({ userEmail: user.email, mobile: anchored } as any)) ||
         (await Lead.findOne({ userEmail: user.email, "phones.value": anchored } as any));
     }
+
+    // (E) If we landed on an old inbound "SMS Lead", but there is a non-inbound lead with same phone, prefer that.
+    if (lead && lead.source === "inbound_sms" && last10 && anchored) {
+      const better = await Lead.findOne({
+        userEmail: user.email,
+        source: { $ne: "inbound_sms" },
+        $or: [
+          { Phone: anchored },
+          { phone: anchored },
+          { ["Phone Number"]: anchored } as any,
+          { PhoneNumber: anchored } as any,
+          { Mobile: anchored } as any,
+          { mobile: anchored } as any,
+          { "phones.value": anchored } as any,
+        ],
+      }).sort({ updatedAt: -1, createdAt: -1 });
+
+      if (better && leadPhoneMatches(better, fromDigits)) {
+        console.log(
+          `[inbound-sms] Swapping SMS-lead ${String(lead._id)} -> imported lead ${String(
+            better._id
+          )} for inbound ${fromNumber}`
+        );
+        lead = better;
+      }
+    }
     // ==========================================================
 
     if (!lead) {
@@ -685,9 +719,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(200).json({ message: "Lead not found/created, acknowledged." });
     }
 
-    console.log(
-      `[inbound-sms] RESOLVED leadId=${lead?._id || null} for inbound from=${fromNumber} to=${toNumber}`
-    );
+    console.log(`[inbound-sms] RESOLVED leadId=${lead?._id || null} from=${fromNumber} to=${toNumber}`);
 
     // Pause any active DripEnrollments for this lead (drip → AI handoff)
     let pausedCount = 0;
@@ -869,7 +901,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         extractTimeFromLastAI(lead.interactionHistory || [], stateCanon) ||
         (lead as any).aiLastProposedISO || null;
     }
-    // 2.5) Info request (exact phrasing)
+    // 2.5) Info request
     if (!requestedISO && isInfoRequest(body)) {
       aiReply = `Unfortunately as of now there's nothing to send over without getting some information from you. When's a good time for a quick 5 minute call? After that we can send everything out.`;
       memory.state = "qa";
@@ -990,26 +1022,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     (lead as any).aiMemory = memory;
     await lead.save();
 
-    // === SEND AI REPLY AS REAL SMS (via shared sendSms helper) ===
-    const zone = pickLeadZone(lead);
-    const { isQuiet } = computeQuietHoursScheduling(zone);
-
-    if (isQuiet) {
-      const note = {
-        type: "system" as const,
-        text: "[system] AI reply suppressed due to quiet hours. Agent will follow up during business hours.",
-        date: new Date(),
-      };
-      lead.interactionHistory.push(note);
-      await lead.save();
-      if (io) io.to(user.email).emit("message:new", { leadId: lead._id, ...note });
-      console.log("🌙 Quiet hours active — AI SMS not sent.");
-      return res.status(200).json({
-        message: "Inbound received; quiet hours active, AI reply suppressed.",
-        quietHours: true,
-      });
-    }
-
+    // === SEND AI REPLY USING THE SAME PIPELINE AS MANUAL SMS (sendSms) ===
     try {
       const cooldownMs = AI_TEST_MODE ? 2000 : 2 * 60 * 1000;
       if (
@@ -1027,7 +1040,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return res.status(200).json({ message: "Inbound received; AI reply skipped (duplicate content)." });
       }
 
-      // Record AI entry in interaction history + emit green bubble
+      const sendResult = await sendSms({
+        to: fromNumber,
+        body: draft,
+        userEmail: user.email,
+        leadId: String(lead._id),
+      });
+
       const aiEntry = { type: "ai" as const, text: draft, date: new Date() };
       lead.interactionHistory = lead.interactionHistory || [];
       lead.interactionHistory.push(aiEntry);
@@ -1036,36 +1055,31 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       if (io) {
         io.to(user.email).emit("message:new", { leadId: lead._id, ...aiEntry });
-      }
-
-      // ✅ Use shared sendSms path so AI uses the exact same Twilio routing as manual outbound
-      const sendResult = await sendSms({
-        to: fromNumber,
-        body: draft,
-        userEmail: user.email,
-        leadId: String(lead._id),
-        from: toNumber, // keep thread “from” identical to your owned number
-      });
-
-      if (io && sendResult.messageId) {
         io.to(user.email).emit("message:sent", {
           _id: sendResult.messageId,
-          sid: sendResult.sid,
-          status: "accepted",
+          sid: (sendResult as any).sid,
+          status: sendResult.scheduledAt ? "scheduled" : "accepted",
         });
       }
 
-      console.log(
-        `🤖 AI reply sent via sendSms to ${fromNumber} FROM ${toNumber} | messageId=${sendResult.messageId} sid=${sendResult.sid}`
-      );
+      if (sendResult.scheduledAt) {
+        console.log(
+          `🤖 AI reply scheduled via sendSms for ${fromNumber} | messageId=${sendResult.messageId} at ${sendResult.scheduledAt}`
+        );
+      } else {
+        console.log(
+          `🤖 AI reply sent via sendSms to ${fromNumber} | messageId=${sendResult.messageId}`
+        );
+      }
 
       return res.status(200).json({
-        message: "Inbound received; AI reply sent.",
-        messageSid: sendResult.sid,
-        quietHours: false,
+        message: "Inbound received; AI reply processed via sendSms.",
+        messageId: sendResult.messageId,
+        sid: (sendResult as any).sid,
+        scheduledAt: sendResult.scheduledAt || null,
       });
     } catch (err) {
-      console.error("❌ AI SMS send failed:", err);
+      console.error("❌ AI SMS send failed via sendSms:", err);
       const note = {
         type: "system" as const,
         text: "[system] AI reply failed to send. Agent should follow up manually.",
