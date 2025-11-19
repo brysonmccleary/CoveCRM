@@ -51,7 +51,7 @@ function humanDelayMs() {
 
 // ---------- quiet hours (lead-local) ----------
 const QUIET_START_HOUR = 21; // 9:00 PM
-the QUIET_END_HOUR = 8; // 8:00 AM
+const QUIET_END_HOUR = 8; // 8:00 AM
 const MIN_SCHEDULE_LEAD_MINUTES = 15;
 
 // ---- State normalization + zone resolution ----
