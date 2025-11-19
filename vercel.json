@@ -19,6 +19,7 @@
     { "path": "/api/admin/audit-sheets-cron?token=@CRON_SECRET", "schedule": "*/15 * * * *" },
 
     { "path": "/api/cron/verify-twilio-webhooks?token=@CRON_SECRET", "schedule": "0 * * * *" },
-    { "path": "/api/cron/ensure-twilio-provision?token=@CRON_SECRET", "schedule": "*/10 * * * *" }
+    { "path": "/api/cron/ensure-twilio-provision?token=@CRON_SECRET", "schedule": "*/10 * * * *" },
+    { "path": "/api/cron/send-ai-queued?token=@CRON_SECRET", "schedule": "* * * * *" }
   ]
 }
