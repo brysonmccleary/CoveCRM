@@ -51,7 +51,7 @@ function humanDelayMs() {
 
 // ---------- quiet hours (lead-local) ----------
 const QUIET_START_HOUR = 21; // 9:00 PM
-const QUIET_END_HOUR = 8; // 8:00 AM
+the QUIET_END_HOUR = 8; // 8:00 AM
 const MIN_SCHEDULE_LEAD_MINUTES = 15;
 
 // ---- State normalization + zone resolution ----
@@ -557,89 +557,36 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // ✅ NEW: set billing context for OpenAI
     _lastInboundUserEmailForBilling = (user.email || "").toLowerCase();
 
-    // ===================== lead resolution =====================
+    // ===================== LEAD RESOLUTION (NEW, STRICT) =====================
     const fromDigits = normalizeDigits(fromNumber);
     const last10 = fromDigits.slice(-10);
-    const anchored = last10 ? new RegExp(`${last10}$`) : undefined;
 
     let lead: any = null;
 
-    // (A) last outbound (phone must match)
-    const lastOutbound = await Message.findOne({
-      userEmail: user.email,
-      direction: "outbound",
-      from: toNumber,
-      $or: [{ to: fromNumber }, { to: `+1${last10}` }, ...(anchored ? [{ to: anchored }] : [])],
-    }).sort({ sentAt: -1, createdAt: -1, _id: -1 });
-
-    if (lastOutbound?.leadId) {
-      const viaMsg = await Lead.findById(lastOutbound.leadId);
-      if (viaMsg && leadPhoneMatches(viaMsg, fromDigits)) lead = viaMsg;
-      else if (viaMsg)
-        console.warn(
-          `↪︎ Ignoring lastOutbound lead (${String(
-            viaMsg._id
-          )}) — phone on lead does not match inbound ${fromNumber}`
-        );
-    }
-
-    // (B) E.164 fields
-    if (!lead) {
-      lead =
-        (await Lead.findOne({ userEmail: user.email, Phone: fromNumber })) ||
-        (await Lead.findOne({ userEmail: user.email, phone: fromNumber })) ||
-        (await Lead.findOne({ userEmail: user.email, ["Phone Number"]: fromNumber } as any)) ||
-        (await Lead.findOne({ userEmail: user.email, PhoneNumber: fromNumber } as any)) ||
-        (await Lead.findOne({ userEmail: user.email, Mobile: fromNumber } as any)) ||
-        (await Lead.findOne({ userEmail: user.email, mobile: fromNumber } as any)) ||
-        (await Lead.findOne({ userEmail: user.email, "phones.value": fromNumber } as any));
-    }
-
-    // (C) +1 last-10
-    if (!lead && last10) {
-      const plus1 = `+1${last10}`;
-      lead =
-        (await Lead.findOne({ userEmail: user.email, Phone: plus1 })) ||
-        (await Lead.findOne({ userEmail: user.email, phone: plus1 })) ||
-        (await Lead.findOne({ userEmail: user.email, ["Phone Number"]: plus1 } as any)) ||
-        (await Lead.findOne({ userEmail: user.email, PhoneNumber: plus1 } as any)) ||
-        (await Lead.findOne({ userEmail: user.email, Mobile: plus1 } as any)) ||
-        (await Lead.findOne({ userEmail: user.email, mobile: plus1 } as any)) ||
-        (await Lead.findOne({ userEmail: user.email, "phones.value": plus1 } as any));
-    }
-
-    // (D) anchored regex
-    if (!lead && anchored) {
-      lead =
-        (await Lead.findOne({ userEmail: user.email, Phone: anchored })) ||
-        (await Lead.findOne({ userEmail: user.email, phone: anchored })) ||
-        (await Lead.findOne({ userEmail: user.email, ["Phone Number"]: anchored } as any)) ||
-        (await Lead.findOne({ userEmail: user.email, PhoneNumber: anchored } as any)) ||
-        (await Lead.findOne({ userEmail: user.email, Mobile: anchored } as any)) ||
-        (await Lead.findOne({ userEmail: user.email, mobile: anchored } as any)) ||
-        (await Lead.findOne({ userEmail: user.email, "phones.value": anchored } as any));
-    }
-
-    // (E) Prefer best non-placeholder lead with same phone (so imported leads beat "SMS Lead")
-    if (last10 && anchored) {
-      const candidates: any[] = await Lead.find({
+    if (last10) {
+      // Load candidates for this user that have any phone-like info.
+      const candidates = await Lead.find({
         userEmail: user.email,
         $or: [
-          { Phone: anchored },
-          { phone: anchored },
-          { ["Phone Number"]: anchored } as any,
-          { PhoneNumber: anchored } as any,
-          { Mobile: anchored } as any,
-          { mobile: anchored } as any,
-          { "phones.value": anchored } as any,
+          { Phone: { $exists: true, $ne: null } },
+          { phone: { $exists: true, $ne: null } },
+          { ["Phone Number"]: { $exists: true, $ne: null } } as any,
+          { PhoneNumber: { $exists: true, $ne: null } } as any,
+          { Mobile: { $exists: true, $ne: null } } as any,
+          { mobile: { $exists: true, $ne: null } } as any,
+          { "phones.value": { $exists: true, $ne: null } } as any,
         ],
-      }).sort({ updatedAt: -1, createdAt: -1 });
+      }).exec();
 
-      if (lead && !candidates.some((c) => String(c._id) === String(lead._id))) {
-        candidates.unshift(lead);
-      }
+      const matching = candidates.filter((l) => leadPhoneMatches(l, fromDigits));
 
-      if (candidates.length > 0) {
+      if (matching.length === 1) {
+        lead = matching[0];
+      } else if (matching.length > 1) {
+        // Choose best match:
+        // - prefer non-placeholder / non-inbound_sms
+        // - prefer non-"New" status / with drips
+        // - tie-break by updatedAt
         const scoreLead = (l: any) => {
           let score = 0;
           if (!isPlaceholderLead(l)) score += 5;
@@ -647,13 +594,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           if ((l as any).source && (l as any).source !== "inbound_sms") score += 2;
           if ((l as any).status && (l as any).status !== "New") score += 1;
           if (Array.isArray((l as any).assignedDrips) && (l as any).assignedDrips.length > 0) score += 1;
-          if ((l as any).updatedAt) score += 0.1;
+          // updatedAt breaks ties
+          if ((l as any).updatedAt) score += 0.000001 * new Date((l as any).updatedAt).getTime();
           return score;
         };
 
-        let best = candidates[0];
+        let best = matching[0];
         let bestScore = scoreLead(best);
-        for (const c of candidates.slice(1)) {
+        for (const c of matching.slice(1)) {
           const s = scoreLead(c);
           if (s > bestScore) {
             best = c;
@@ -661,23 +609,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
         }
 
-        if (!lead || String(lead._id) !== String(best._id)) {
-          console.log(
-            `[inbound-sms] Chose lead ${String(best._id)} over placeholder/SMS lead ${
-              lead ? String(lead._id) : "none"
-            } for inbound ${fromNumber}`
-          );
-          lead = best;
-        }
+        console.log(
+          `[inbound-sms] Multiple leads share phone ending ${last10}; chose ${String(
+            best._id
+          )} from ${matching.length} candidates.`,
+        );
+        lead = best;
       }
     }
-    // ==========================================================
 
+    // If we still have no lead, create a minimal one with this phone only.
     if (!lead) {
       try {
-        // Create a minimal lead record so the thread has an ID,
-        // but do NOT set "SMS Lead" as the name. This lets the UI
-        // fall back to showing the phone number instead of a fake name.
         lead = await Lead.create({
           userEmail: user.email,
           Phone: fromNumber,
@@ -698,6 +641,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     console.log(`[inbound-sms] RESOLVED leadId=${lead?._id || null} from=${fromNumber} to=${toNumber}`);
+    // ======================================================================
 
     // Pause any active DripEnrollments for this lead (drip → AI handoff)
     let pausedCount = 0;
