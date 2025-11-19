@@ -43,10 +43,11 @@ const STATUS_CALLBACK =
 const ALLOW_DEV_TWILIO_TEST =
   process.env.ALLOW_LOCAL_TWILIO_TEST === "1" && process.env.NODE_ENV !== "production";
 
-// Human delay: (kept only for cooldown tuning)
+// Human delay (for AI replies)
 const AI_TEST_MODE = process.env.AI_TEST_MODE === "1";
 function humanDelayMs() {
-  return AI_TEST_MODE ? 3000 + Math.random() * 2000 : 180000 + Math.random() * 60000;
+  // 3–5 minutes in production, 3–5 seconds in test mode
+  return AI_TEST_MODE ? 3000 + Math.random() * 2000 : 180000 + Math.random() * 120000;
 }
 
 // ---------- quiet hours (lead-local) ----------
@@ -200,6 +201,51 @@ function isInfoRequest(text: string): boolean {
   const t = (text || "").toLowerCase();
   const phrases = [
     "send the info","send info","send details","send me info","send me the info","email the info","email me the info","email details","email me details","just email me","text the info","text me the info","text details","text it","can you text it","mail the info","mail me the info","mail details","just send it","can you send it","do you have something you can send","do you have anything you can send","link","website",
+  ];
+  return phrases.some((p) => t.includes(p));
+}
+
+// NEW: detect vague scheduling language (no exact clock time, just “later today”, “tomorrow morning”, etc.)
+function isVagueTimePhrase(text: string): boolean {
+  const t = (text || "").toLowerCase();
+  const phrases = [
+    "later today",
+    "later tonight",
+    "sometime today",
+    "sometime tomorrow",
+    "sometime this afternoon",
+    "sometime this evening",
+    "this afternoon",
+    "this evening",
+    "tonight",
+    "tomorrow morning",
+    "tomorrow afternoon",
+    "tomorrow evening",
+    "tomorrow night",
+    "tomorrow works",
+    "tomorrow is better",
+    "any time tomorrow",
+    "anytime tomorrow",
+    "any time today",
+    "anytime today",
+    "anytime works",
+    "any time works",
+    "whenever works",
+    "whenever is fine",
+    "you pick",
+    "you choose",
+    "either works",
+    "either time",
+    "whatever works",
+    "probably monday",
+    "prob monday",
+    "sometime monday",
+    "next week",
+    "early next week",
+    "later this week",
+    "this weekend",
+    "over the weekend",
+    "sometime this week",
   ];
   return phrases.some((p) => t.includes(p));
 }
@@ -380,6 +426,82 @@ function buildDeterministicReply(_textRaw: string, _context: string): string | n
   return null;
 }
 
+// --- NEW: option-close reply for vague timing (Jeremy-style, two concrete options)
+async function generateOptionCloseReply(opts: {
+  lead: any;
+  userEmail: string;
+  context: string;
+  tz: string;
+  inboundText: string;
+  history: any[];
+  nowISO: string;
+}) {
+  const { context, tz, inboundText, history, nowISO } = opts;
+
+  const banned = [...(history || [])]
+    .reverse()
+    .filter((m: any) => m?.type === "ai")
+    .map((m: any) => (m.text || "").trim())
+    .filter(Boolean)
+    .slice(0, 5);
+
+  const sys = `
+You are a helpful human-like SMS assistant for an insurance agent.
+The lead has talked about timing (e.g. "later today", "tomorrow morning") but did NOT give a specific clock time.
+
+GOAL:
+- Send ONE short, text-message style reply (1–2 sentences, ~240 characters max).
+- Acknowledge what they said in a natural way.
+- Offer EXACTLY TWO clear time options that are concrete (e.g. "3:30pm or 5:00pm today", or "around 11am or 6pm tomorrow").
+- End with a single focused closing question asking them to choose one option.
+
+STYLE:
+- Jeremy Lee Minor–style consultative tone.
+- No names/signatures, no emojis, no links.
+- Speak like a real person texting, not a robot.
+- Avoid repeating any of these phrases: ${banned.join(" | ") || "(none)"}.
+- Local timezone: ${tz}, current time: ${nowISO}.
+- Context: ${context}.
+
+IMPORTANT:
+- Do not say things like "what time works"; you must propose TWO specific options.
+- Make sure the options align with what they said (today vs tomorrow, morning vs afternoon, etc.).
+`.trim();
+
+  const chat = historyToChatMessages(history);
+  chat.push({
+    role: "user",
+    content: `Lead's latest text: "${inboundText}"\nThey did NOT give a specific time. Respond with the option-close as described.`,
+  });
+
+  const resp = await openai.chat.completions.create({
+    model: "gpt-4o-mini",
+    temperature: 0.7,
+    top_p: 0.9,
+    presence_penalty: 0.5,
+    frequency_penalty: 0.7,
+    messages: [{ role: "system", content: sys }, ...chat],
+  });
+
+  try {
+    const usage = (resp as any)?.usage || {};
+    const raw = priceOpenAIUsage({
+      model: "gpt-4o-mini",
+      promptTokens: usage?.prompt_tokens,
+      completionTokens: usage?.completion_tokens,
+    });
+    if (raw > 0 && _lastInboundUserEmailForBilling) {
+      await trackUsage({ user: { email: _lastInboundUserEmailForBilling }, amount: raw, source: "openai" });
+    }
+  } catch {}
+
+  const text = resp.choices?.[0]?.message?.content?.trim() || "";
+  if (!text) {
+    return "Gotcha — would later this afternoon or early evening work better for a quick 5-minute call?";
+  }
+  return text.replace(/\s+/g, " ").trim();
+}
+
 // --- conversational reply (LLM fallback, Jeremy-style)
 async function generateConversationalReply(opts: {
   lead: any;
@@ -557,7 +679,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // ✅ NEW: set billing context for OpenAI
     _lastInboundUserEmailForBilling = (user.email || "").toLowerCase();
 
-    // ===================== LEAD RESOLUTION (NEW, STRICT) =====================
+    // ===================== LEAD RESOLUTION (STRICT) =====================
     const fromDigits = normalizeDigits(fromNumber);
     const last10 = fromDigits.slice(-10);
 
@@ -594,7 +716,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           if ((l as any).source && (l as any).source !== "inbound_sms") score += 2;
           if ((l as any).status && (l as any).status !== "New") score += 1;
           if (Array.isArray((l as any).assignedDrips) && (l as any).assignedDrips.length > 0) score += 1;
-          // updatedAt breaks ties
           if ((l as any).updatedAt) score += 0.000001 * new Date((l as any).updatedAt).getTime();
           return score;
         };
@@ -827,21 +948,54 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         null;
     }
 
-    // 3) If we still don’t have a concrete time, let GPT drive a natural Jeremy-style reply
+    // NEW: detect if this is a vague scheduling message (no concrete time) to trigger option-close
+    let isVagueScheduling = false;
     if (!requestedISO) {
       try {
-        aiReply = await generateConversationalReply({
-          lead,
-          userEmail: user.email,
-          context,
-          tz,
-          inboundText: body,
-          history: lead.interactionHistory || [],
-        });
+        const parsed = await extractIntentAndTimeLLM({ text: body, nowISO: nowISO || DateTime.utc().toISO(), tz });
+        const intent = parsed.intent || "unknown";
+        const hasConcreteFromLLM = !!extractRequestedISO(parsed.datetime_text || "", stateCanon);
+        if ((intent === "schedule" || intent === "reschedule") && !hasConcreteFromLLM) {
+          isVagueScheduling = true;
+        }
+      } catch (err) {
+        console.warn("[inbound-sms] extractIntentAndTimeLLM failed (continuing):", err);
+      }
+
+      if (isVagueTimePhrase(body)) {
+        isVagueScheduling = true;
+      }
+    }
+
+    // 3) If we still don’t have a concrete time, either:
+    //    - use special option-close mode (for vague timing), OR
+    //    - fall back to normal conversational reply.
+    if (!requestedISO) {
+      try {
+        if (isVagueScheduling) {
+          aiReply = await generateOptionCloseReply({
+            lead,
+            userEmail: user.email,
+            context,
+            tz,
+            inboundText: body,
+            history: lead.interactionHistory || [],
+            nowISO: nowISO || DateTime.utc().toISO(),
+          });
+        } else {
+          aiReply = await generateConversationalReply({
+            lead,
+            userEmail: user.email,
+            context,
+            tz,
+            inboundText: body,
+            history: lead.interactionHistory || [],
+          });
+        }
         if (!askedRecently(memory, "chat_followup")) pushAsked(memory, "chat_followup");
         memory.state = "awaiting_time";
       } catch (err) {
-        console.error("[inbound-sms] GPT conversational reply failed:", err);
+        console.error("[inbound-sms] GPT conversational/option-close reply failed:", err);
         memory.state = "awaiting_time";
         const lastAI = [...(lead.interactionHistory || [])].reverse().find((m: any) => m.type === "ai");
         const v = `When’s a good time today or tomorrow for a quick 5-minute chat?`;
@@ -951,11 +1105,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return res.status(200).json({ message: "Inbound received; AI reply skipped (duplicate content)." });
       }
 
+      // NEW: human-like delay using sendSms scheduling
+      const delayMs = humanDelayMs();
+      const scheduledAt = new Date(Date.now() + delayMs);
+
       const sendResult = await sendSms({
         to: fromNumber,
         body: draft,
         userEmail: user.email,
         leadId: String(lead._id),
+        scheduledAt, // <– this is picked up by sendSMS.ts and converted into Twilio scheduleType/sendAt
       });
 
       const aiEntry = { type: "ai" as const, text: draft, date: new Date() };

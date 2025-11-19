@@ -118,6 +118,9 @@ type SendCoreParams = {
   enrollmentId?: string | null;
   campaignId?: string | null;
   stepIndex?: number | null;
+
+  // NEW: explicit scheduled time override (e.g. AI 3–5 min delay)
+  scheduledAtOverride?: Date | null;
 };
 
 async function sendCore(paramsIn: SendCoreParams): Promise<{ sid?: string; serviceSid: string; messageId: string; scheduledAt?: string }> {
@@ -174,9 +177,22 @@ async function sendCore(paramsIn: SendCoreParams): Promise<{ sid?: string; servi
     return { serviceSid: messagingServiceSid || "", messageId: String(suppressed._id) };
   }
 
-  // Quiet hours schedule
+  // Quiet hours schedule + optional override
   const zone = pickLeadZone(lead);
   const { isQuiet, scheduledAt } = computeQuietHoursScheduling(zone);
+
+  let effectiveScheduledAt: Date | undefined;
+  let scheduledReason: string | undefined;
+
+  if (isQuiet && scheduledAt) {
+    // Quiet hours always win
+    effectiveScheduledAt = scheduledAt;
+    scheduledReason = "scheduled_quiet_hours";
+  } else if (paramsIn.scheduledAtOverride && paramsIn.scheduledAtOverride > new Date()) {
+    // e.g., AI human-like delay
+    effectiveScheduledAt = paramsIn.scheduledAtOverride;
+    scheduledReason = "scheduled_delay";
+  }
 
   // PRE-INSERT queued row with IDEMPOTENCY KEY (this is the duplicate gate)
   let preRow: any;
@@ -189,12 +205,12 @@ async function sendCore(paramsIn: SendCoreParams): Promise<{ sid?: string; servi
       read: true,
       status: "queued",
       suppressed: false,
-      reason: isQuiet ? "scheduled_quiet_hours" : undefined,
+      reason: scheduledReason,
       to: toNorm,
       from: forcedFrom || undefined,
       fromServiceSid: messagingServiceSid || undefined,
       queuedAt: new Date(),
-      scheduledAt: isQuiet && scheduledAt ? scheduledAt : undefined,
+      scheduledAt: effectiveScheduledAt,
       idempotencyKey: paramsIn.idempotencyKey || undefined,
       enrollmentId: paramsIn.enrollmentId || undefined,
       campaignId: paramsIn.campaignId || undefined,
@@ -217,14 +233,20 @@ async function sendCore(paramsIn: SendCoreParams): Promise<{ sid?: string; servi
 
   if (messagingServiceSid) {
     (twParams as any).messagingServiceSid = messagingServiceSid;
-    if (isQuiet && scheduledAt) { (twParams as any).scheduleType = "fixed"; (twParams as any).sendAt = scheduledAt; }
+    if (effectiveScheduledAt) {
+      (twParams as any).scheduleType = "fixed";
+      (twParams as any).sendAt = effectiveScheduledAt;
+    }
   } else if (forcedFrom) {
     (twParams as any).from = forcedFrom;
   } else if (!usingPersonal) {
     const msid = await ensureTenantMessagingService(String(user._id), user.name || user.email);
     (twParams as any).messagingServiceSid = msid;
     messagingServiceSid = msid;
-    if (isQuiet && scheduledAt) { (twParams as any).scheduleType = "fixed"; (twParams as any).sendAt = scheduledAt; }
+    if (effectiveScheduledAt) {
+      (twParams as any).scheduleType = "fixed";
+      (twParams as any).sendAt = effectiveScheduledAt;
+    }
   } else {
     throw new Error("No routing set (neither messagingServiceSid nor from).");
   }
@@ -244,11 +266,11 @@ async function sendCore(paramsIn: SendCoreParams): Promise<{ sid?: string; servi
       $set: {
         sid: tw.sid,
         status: newStatus,
-        sentAt: isQuiet && scheduledAt && messagingServiceSid ? scheduledAt : new Date(),
+        sentAt: effectiveScheduledAt && messagingServiceSid ? effectiveScheduledAt : new Date(),
       },
     }).exec();
-    return isQuiet && scheduledAt && messagingServiceSid
-      ? { sid: tw.sid, serviceSid: messagingServiceSid || "", messageId, scheduledAt: (scheduledAt as Date).toISOString() }
+    return effectiveScheduledAt && messagingServiceSid
+      ? { sid: tw.sid, serviceSid: messagingServiceSid || "", messageId, scheduledAt: (effectiveScheduledAt as Date).toISOString() }
       : { sid: tw.sid, serviceSid: messagingServiceSid || "", messageId };
   } catch (err: any) {
     const code = err?.code;
@@ -289,12 +311,29 @@ export async function sendSMS(to: string, body: string, userIdOrUser: string | a
 }
 
 export async function sendSms(args: {
-  to: string; body: string; userEmail: string; leadId?: string;
-  messagingServiceSid?: string; from?: string; mediaUrls?: string[];
-  idempotencyKey?: string; enrollmentId?: string; campaignId?: string; stepIndex?: number;
+  to: string;
+  body: string;
+  userEmail: string;
+  leadId?: string;
+  messagingServiceSid?: string;
+  from?: string;
+  mediaUrls?: string[];
+  idempotencyKey?: string;
+  enrollmentId?: string;
+  campaignId?: string;
+  stepIndex?: number;
+  scheduledAt?: Date | string; // NEW: optional scheduled send time
 }) {
   const user = await ensureUserDoc(args.userEmail);
   if (!user) throw new Error("User not found");
+
+  const scheduledAtOverride =
+    args.scheduledAt instanceof Date
+      ? args.scheduledAt
+      : typeof args.scheduledAt === "string"
+      ? new Date(args.scheduledAt)
+      : null;
+
   return await sendCore({
     to: args.to,
     body: args.body,
@@ -307,5 +346,6 @@ export async function sendSms(args: {
     enrollmentId: args.enrollmentId || null,
     campaignId: args.campaignId || null,
     stepIndex: typeof args.stepIndex === "number" ? args.stepIndex : null,
+    scheduledAtOverride,
   });
 }
