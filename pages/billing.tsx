@@ -143,7 +143,14 @@ export default function BillingPage() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-100 dark:bg-black px-4">
       <div className="max-w-2xl w-full p-6 bg-white dark:bg-gray-900 text-black dark:text-white shadow-xl rounded">
-        <h1 className="text-3xl font-bold mb-6 text-center">Secure Billing</h1>
+        <h1 className="text-3xl font-bold mb-2 text-center">Secure Billing</h1>
+
+        {/* New explanatory text */}
+        <p className="text-sm text-center text-gray-600 dark:text-gray-400 mb-6">
+          Your CRM subscription is handled here. Phone numbers, SMS, and call usage{" "}
+          <span className="font-semibold">are billed separately</span> and may
+          incur additional charges even during any free trial or discount period.
+        </p>
 
         {/* Loading */}
         {loading && (
