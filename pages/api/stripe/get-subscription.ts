@@ -44,10 +44,13 @@ export default async function handler(
 
   try {
     // Grab all subscriptions for the customer.
+    // We expand:
+    // - price on items to know which item is CRM vs AI
+    // - coupon on discounts so we can see amount_off / percent_off
     const subs = await stripe.subscriptions.list({
       customer: user.stripeCustomerId,
       status: "all",
-      expand: ["data.items.data.price"],
+      expand: ["data.items.data.price", "data.discounts.data.coupon"],
     });
 
     let crmAmountCents: number | null = null;
@@ -83,66 +86,47 @@ export default async function handler(
 
       // If we've already found a CRM subscription and computed a price,
       // keep the first one we saw and just continue scanning other subs
-      // for AI add-ons.
+      // for AI add-ons only.
       if (crmAmountCents !== null) {
         continue;
       }
 
-      // --- Primary path: use upcoming invoice line item for CRM base ---
-      let effectiveCents: number | null = null;
-      try {
-        const upcoming = (await stripe.invoices.retrieveUpcoming({
-          customer: user.stripeCustomerId,
-          subscription: sub.id,
-          expand: ["lines.data.price"],
-        })) as Stripe.Invoice;
+      // Start from the CRM base unit amount in cents.
+      let baseCents = crmItem.price?.unit_amount ?? 0;
 
-        const crmLine = upcoming.lines.data.find((line) => {
-          const price = (line as any).price as Stripe.Price | undefined;
-          return price && price.id === BASE_PRICE_ID;
-        });
+      // NEW: Use subscription.discounts (plural), which is what your
+      // create-subscription API populates via params.discounts.
+      const discountsList = (sub as any).discounts as
+        | Stripe.ApiList<Stripe.Discount>
+        | undefined;
 
-        if (crmLine) {
-          // This amount is the discounted line amount in cents (can be 0)
-          effectiveCents = crmLine.amount ?? null;
+      let coupon: Stripe.Coupon | null = null;
+
+      if (discountsList && discountsList.data && discountsList.data.length > 0) {
+        const firstDiscount = discountsList.data[0];
+        const rawCoupon = firstDiscount.coupon as Stripe.Coupon | string;
+
+        // If coupon is expanded, we can use it directly
+        if (typeof rawCoupon !== "string") {
+          coupon = rawCoupon as Stripe.Coupon;
         }
-      } catch (e) {
-        // If retrieveUpcoming fails for any reason, we'll fall back
-        // to the subscription + coupon logic below.
-        effectiveCents = null;
       }
 
-      // --- Fallback path: compute from unit_amount + subscription discount ---
-      if (effectiveCents === null) {
-        let baseCents = crmItem.price?.unit_amount ?? 0;
-
-        const discount = (sub as any).discount as
-          | Stripe.Discount
-          | null
-          | undefined;
-
-        if (discount && discount.coupon) {
-          const rawCoupon = discount.coupon as Stripe.Coupon | string;
-          const coupon =
-            typeof rawCoupon === "string" ? null : (rawCoupon as Stripe.Coupon);
-
-          if (coupon) {
-            if (coupon.amount_off) {
-              // Flat amount off (in cents) – subtract from base only, clamp at 0
-              baseCents = Math.max(baseCents - coupon.amount_off, 0);
-            } else if (coupon.percent_off) {
-              // Percentage off – apply to base amount
-              const pct = coupon.percent_off / 100;
-              baseCents = Math.round(baseCents * (1 - pct));
-            }
-          }
+      // Apply coupon to CRM base amount if present
+      if (coupon) {
+        if (coupon.amount_off) {
+          // Flat amount off (in cents) – subtract from base only, clamp at 0
+          baseCents = Math.max(baseCents - coupon.amount_off, 0);
+        } else if (coupon.percent_off) {
+          // Percentage off – apply to base amount
+          const pct = coupon.percent_off / 100;
+          baseCents = Math.round(baseCents * (1 - pct));
         }
-
-        effectiveCents = baseCents;
       }
 
       // This is the effective CRM amount for this user in cents.
-      crmAmountCents = effectiveCents;
+      // It can legitimately be 0 (e.g. 100% discount / free CRM access).
+      crmAmountCents = baseCents;
     }
 
     // If we never found a CRM subscription at all, treat as "no active CRM plan".
