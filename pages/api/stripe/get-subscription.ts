@@ -34,8 +34,14 @@ export default async function handler(
     return res.status(404).json({ error: "User not found" });
   }
 
+  // IMPORTANT: support both legacy stripeCustomerID and new stripeCustomerId
+  const stripeCustomerId =
+    (user as any).stripeCustomerId ||
+    (user as any).stripeCustomerID ||
+    null;
+
   // If we don’t even know their Stripe customer, just say “no CRM billing yet”
-  if (!user.stripeCustomerId || !BASE_PRICE_ID) {
+  if (!stripeCustomerId || !BASE_PRICE_ID) {
     return res.status(200).json({
       amount: null,
       hasAIUpgrade: !!(user as any).hasAI,
@@ -56,7 +62,7 @@ export default async function handler(
     // - price on items to know which item is CRM vs AI
     // - coupon on discounts so we can see amount_off / percent_off
     const subs = await stripe.subscriptions.list({
-      customer: user.stripeCustomerId,
+      customer: stripeCustomerId,
       status: "all",
       expand: ["data.items.data.price", "data.discounts.data.coupon"],
     });
