@@ -18,17 +18,21 @@ export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse
 ) {
-  if (req.method !== "GET")
+  if (req.method !== "GET") {
     return res.status(405).json({ error: "Method not allowed" });
+  }
 
   const session = await getServerSession(req, res, authOptions);
-  if (!session?.user?.email)
+  if (!session?.user?.email) {
     return res.status(401).json({ error: "Unauthorized" });
+  }
 
   await dbConnect();
 
   const user = await User.findOne({ email: session.user.email });
-  if (!user) return res.status(404).json({ error: "User not found" });
+  if (!user) {
+    return res.status(404).json({ error: "User not found" });
+  }
 
   // If they don’t even have a Stripe customer yet, show “unknown”
   if (!user.stripeCustomerId) {
@@ -51,6 +55,7 @@ export default async function handler(
 
     let totalCents = 0;
     let hasAI = false;
+    let hasAnyRelevantSub = false;
 
     for (const sub of subs.data) {
       const activeLike =
@@ -76,13 +81,14 @@ export default async function handler(
         }
       }
 
-      // If this subscription doesn’t contain our CRM price at all, skip it
+      // Skip subs that don't contain our CRM or AI prices at all
       if (!baseCents && !aiCents) continue;
+
+      hasAnyRelevantSub = true;
 
       let discountedBaseCents = baseCents;
 
       // 2) Find any coupon attached to this subscription.
-      // Newer Stripe API can use `discounts`, older uses `discount`.
       const subAny = sub as any;
       let coupon: Stripe.Coupon | undefined;
 
@@ -114,7 +120,6 @@ export default async function handler(
 
       totalCents += discountedBaseCents + aiCents;
 
-      // Debug log per subscription (safe to leave; helps if this ever breaks again)
       console.log(
         JSON.stringify({
           msg: "get-subscription summary",
@@ -135,8 +140,19 @@ export default async function handler(
       );
     }
 
+    // If there is no CRM/AI sub at all, report null (unknown)
+    if (!hasAnyRelevantSub) {
+      return res.status(200).json({
+        amount: null,
+        hasAIUpgrade: !!(user as any).hasAI,
+      });
+    }
+
+    // Otherwise, return the actual amount, including 0 for fully-discounted plans
+    const amountNumber = Number((totalCents / 100).toFixed(2));
+
     return res.status(200).json({
-      amount: totalCents ? Number((totalCents / 100).toFixed(2)) : null,
+      amount: amountNumber,
       hasAIUpgrade: hasAI || !!(user as any).hasAI,
     });
   } catch (err: any) {
