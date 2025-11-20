@@ -38,7 +38,7 @@ function maskSid(sid?: string): string | null {
   return `${sid.slice(0, 4)}…${sid.slice(-4)}`;
 }
 
-/** Add a number to a Messaging Service sender pool. Handles 21712 (unlink/reattach) within the SAME Twilio account. */
+/** Add a number to a Messaging Service sender pool. Handles 21710 + 21712 safely. */
 async function addNumberToMessagingService(
   client: any,
   serviceSid: string,
@@ -49,8 +49,14 @@ async function addNumberToMessagingService(
       phoneNumberSid: numberSid,
     });
   } catch (err: any) {
+    // 21710: Phone Number or Short Code is already in the Messaging Service.
+    // Safe to ignore – it's already attached where we want it.
+    if (err?.code === 21710) {
+      return;
+    }
+
+    // 21712: number is already linked to a different service in THIS account
     if (err?.code === 21712) {
-      // number is already linked to a different service in THIS account → unlink everywhere then reattach
       const services = await client.messaging.v1.services.list({ limit: 100 });
       for (const svc of services) {
         try {
@@ -156,7 +162,8 @@ export default async function handler(
     const user = await User.findOne({ email });
     if (!user) return res.status(404).json({ message: "User not found" });
 
-    const { client, accountSid: activeAccountSid, usingPersonal } = await getClientForUser(email);
+    const { client, accountSid: activeAccountSid, usingPersonal } =
+      await getClientForUser(email);
 
     console.log(
       JSON.stringify({
@@ -165,7 +172,7 @@ export default async function handler(
         usingPersonal,
         userBillingMode: user?.billingMode ?? null,
         activeAccountSidMasked: maskSid(activeAccountSid),
-      })
+      }),
     );
 
     // Resolve requested E.164 (or we'll search by area code)
@@ -219,7 +226,7 @@ export default async function handler(
             usingPersonal,
             userBillingMode: user?.billingMode ?? null,
             stripeCustomerId: user.stripeCustomerId,
-          })
+          }),
         );
         return res.status(402).json({
           code: "no_payment_method",
@@ -305,7 +312,7 @@ export default async function handler(
       );
     }
 
-    // Attach purchased number to the Messaging Service (idempotent; handles 21712)
+    // Attach purchased number to the Messaging Service (idempotent; handles 21710 + 21712)
     if (targetMS) {
       await addNumberToMessagingService(client, targetMS, purchased.sid);
     }
