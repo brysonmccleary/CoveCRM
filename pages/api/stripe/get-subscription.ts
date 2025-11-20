@@ -43,8 +43,16 @@ export default async function handler(
   }
 
   try {
+    // First, resolve the product behind the base CRM price.
+    // This lets us recognize legacy prices that share the same product.
+    const basePrice = (await stripe.prices.retrieve(
+      BASE_PRICE_ID
+    )) as Stripe.Price;
+    const baseProductId =
+      (basePrice.product as string | null | undefined) || null;
+
     // Grab all subscriptions for the customer.
-    // We expand:
+    // Expand:
     // - price on items to know which item is CRM vs AI
     // - coupon on discounts so we can see amount_off / percent_off
     const subs = await stripe.subscriptions.list({
@@ -74,10 +82,20 @@ export default async function handler(
         }
       }
 
-      // Look for the CRM base price item on this subscription
-      const crmItem = items.find(
-        (it) => it.price && it.price.id === BASE_PRICE_ID
-      );
+      // Look for the CRM base item on this subscription.
+      // We treat an item as CRM if:
+      //   - its price.id matches BASE_PRICE_ID  OR
+      //   - its price.product matches the base product (legacy price support)
+      const crmItem = items.find((it) => {
+        const price = it.price as Stripe.Price | null | undefined;
+        if (!price) return false;
+        const productId = price.product as string | null | undefined;
+        return (
+          price.id === BASE_PRICE_ID ||
+          (!!baseProductId && !!productId && productId === baseProductId)
+        );
+      });
+
       if (!crmItem) {
         // No CRM item here; this is probably a phone-number-only or other add-on
         // subscription. Ignore it for the main CRM plan price.
@@ -94,7 +112,7 @@ export default async function handler(
       // Start from the CRM base unit amount in cents.
       let baseCents = crmItem.price?.unit_amount ?? 0;
 
-      // NEW: Use subscription.discounts (plural), which is what your
+      // Use subscription.discounts (plural), which is what your
       // create-subscription API populates via params.discounts.
       const discountsList = (sub as any).discounts as
         | Stripe.ApiList<Stripe.Discount>
