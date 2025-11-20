@@ -1,4 +1,3 @@
-// pages/api/drips/drips-folder-watch.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import dbConnect from "@/lib/mongooseConnect";
 import { DateTime } from "luxon";
@@ -21,8 +20,29 @@ function nextWindowPT(): Date {
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (process.env.DRIPS_HARD_STOP === "1") return res.status(204).end(); // safe pause
-  if (req.method !== "GET") return res.status(405).json({ message: "Method not allowed" });
+  // Keep GET-only (Vercel Cron default)
+  if (req.method !== "GET") {
+    return res.status(405).json({ message: "Method not allowed" });
+  }
+
+  // --- Cron Auth ---
+  const CRON_SECRET = process.env.CRON_SECRET;
+  if (!CRON_SECRET) {
+    return res.status(500).json({ message: "CRON_SECRET not configured" });
+  }
+
+  const token =
+    (typeof req.query.token === "string" && req.query.token) ||
+    (typeof req.headers["x-cron-secret"] === "string" && req.headers["x-cron-secret"]);
+
+  if (!token || token !== CRON_SECRET) {
+    return res.status(401).json({ message: "Unauthorized" });
+  }
+
+  // Allow global pause
+  if (process.env.DRIPS_HARD_STOP === "1") {
+    return res.status(204).end();
+  }
 
   try {
     await dbConnect();
@@ -35,16 +55,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .select({ _id: 1, userEmail: 1, folderId: 1, campaignId: 1, startMode: 1, lastScanAt: 1 })
       .lean();
 
-    let scanned = 0, newlyEnrolled = 0, deduped = 0;
+    let scanned = 0,
+      newlyEnrolled = 0,
+      deduped = 0;
 
     for (const w of watchers) {
       scanned++;
 
-      // Isolate per-watcher
       const wLock = await acquireLock("watch", `folder:${w._id}`, 45);
       if (!wLock) continue;
 
-      // Fetch exactly one campaign (avoid TS union/array)
       const campaign = (await DripCampaign.findById(w.campaignId)
         .select({ _id: 1, isActive: 1, type: 1 })
         .lean()) as null | { _id: any; isActive?: boolean; type?: string };
@@ -56,7 +76,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         continue;
       }
 
-      // Find leads in the folder that DON'T have an active/paused enrollment for this campaign
       const leads = await Lead.aggregate([
         { $match: { userEmail: w.userEmail, folderId: w.folderId } },
         {
@@ -64,26 +83,29 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             from: "dripenrollments",
             let: { leadId: "$_id" },
             pipeline: [
-              { $match: {
-                $expr: {
-                  $and: [
-                    { $eq: ["$leadId", "$$leadId"] },
-                    { $eq: ["$campaignId", w.campaignId] },
-                    { $in: ["$status", ["active", "paused"]] },
-                  ]
-                }
-              } },
-              { $limit: 1 }
+              {
+                $match: {
+                  $expr: {
+                    $and: [
+                      { $eq: ["$leadId", "$$leadId"] },
+                      { $eq: ["$campaignId", w.campaignId] },
+                      { $in: ["$status", ["active", "paused"]] },
+                    ],
+                  },
+                },
+              },
+              { $limit: 1 },
             ],
-            as: "enr"
-          }
+            as: "enr",
+          },
         },
-        { $match: { enr: { $size: 0 } } }, // no active/paused enrollment
+        { $match: { enr: { $size: 0 } } },
         { $project: { _id: 1 } },
-        { $limit: 2000 }, // safety max per tick
+        { $limit: 2000 },
       ]);
 
-      const nextSendAt = w.startMode === "nextWindow" ? nextWindowPT() : new Date();
+      const nextSendAt =
+        w.startMode === "nextWindow" ? nextWindowPT() : new Date();
 
       for (const lead of leads) {
         const before = await DripEnrollment.findOne({
@@ -91,9 +113,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           leadId: lead._id,
           campaignId: w.campaignId,
           status: { $in: ["active", "paused"] },
-        }).select({ _id: 1 }).lean();
+        })
+          .select({ _id: 1 })
+          .lean();
 
-        if (before?._id) { deduped++; continue; }
+        if (before?._id) {
+          deduped++;
+          continue;
+        }
 
         await DripEnrollment.findOneAndUpdate(
           {
@@ -119,10 +146,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         newlyEnrolled++;
       }
 
-      await DripFolderEnrollment.updateOne({ _id: w._id }, { $set: { lastScanAt: new Date() } });
+      await DripFolderEnrollment.updateOne(
+        { _id: w._id },
+        { $set: { lastScanAt: new Date() } }
+      );
     }
 
     return res.status(200).json({
+      ok: true,
       message: "drips-folder-watch complete",
       scannedWatchers: scanned,
       newlyEnrolled,

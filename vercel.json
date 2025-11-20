@@ -9,7 +9,7 @@
     { "path": "/api/cron", "schedule": "0 17 * * *" },
     { "path": "/api/cron/twilio-daily-sync", "schedule": "0 16 * * *" },
 
-    { "path": "/api/drips/drips-folder-watch", "schedule": "*/2 * * * *" },
+    { "path": "/api/drips/drips-folder-watch?token=@CRON_SECRET", "schedule": "*/2 * * * *" }
     { "path": "/api/cron/run-drips?token=@CRON_SECRET", "schedule": "*/5 * * * *" },
 
     { "path": "/api/cron/check-a2p-status", "schedule": "*/30 * * * *" },
