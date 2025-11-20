@@ -77,13 +77,11 @@ export default async function handler(
     });
 
     // Grab all subscriptions for the customer.
-    // Expand:
-    // - price on items to know which item is CRM vs AI
-    // - coupon on discounts so we can see amount_off / percent_off
+    // Expand price on items so we know which item is CRM vs AI.
     const subs = await stripe.subscriptions.list({
       customer: stripeCustomerId,
       status: "all",
-      expand: ["data.items.data.price", "data.discounts.data.coupon"],
+      expand: ["data.items.data.price"],
     });
 
     console.log("[get-subscription] subscriptions fetched", {
@@ -176,11 +174,23 @@ export default async function handler(
 
       if (discountsList && discountsList.data && discountsList.data.length > 0) {
         const firstDiscount = discountsList.data[0];
-        const rawCoupon = firstDiscount.coupon as Stripe.Coupon | string;
+        const rawCoupon = firstDiscount.coupon as Stripe.Coupon | string | null;
 
-        // If coupon is expanded, we can use it directly
-        if (typeof rawCoupon !== "string") {
+        if (rawCoupon && typeof rawCoupon !== "string") {
           coupon = rawCoupon as Stripe.Coupon;
+        } else if (typeof rawCoupon === "string") {
+          try {
+            const fetched = (await stripe.coupons.retrieve(
+              rawCoupon
+            )) as Stripe.Coupon;
+            coupon = fetched;
+          } catch (e: any) {
+            console.error(
+              "[get-subscription] failed to retrieve coupon",
+              rawCoupon,
+              e?.message || e
+            );
+          }
         }
       }
 
