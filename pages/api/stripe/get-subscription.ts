@@ -24,7 +24,10 @@ function isActiveLike(status: Stripe.Subscription.Status) {
   return status === "active" || status === "trialing" || status === "past_due";
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   if (req.method !== "GET")
     return res.status(405).json({ error: "Method not allowed" });
 
@@ -118,14 +121,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // - $50 off → 199.99 → 149.99 (base) + AI (if enabled)
     // - 100% off → base becomes 0, AI still charged at full $50, etc.
     let discountedBaseCents = baseCents;
-    const coupon = sub.discount?.coupon as Stripe.Coupon | undefined;
+
+    // Use `any` to avoid TS complaining about `discount`
+    const coupon = (sub as any).discount?.coupon as
+      | Stripe.Coupon
+      | undefined;
 
     if (coupon) {
       if (coupon.amount_off) {
         discountedBaseCents = Math.max(0, baseCents - coupon.amount_off);
       } else if (coupon.percent_off) {
         const factor = 1 - coupon.percent_off / 100;
-        discountedBaseCents = Math.max(0, Math.round(baseCents * factor));
+        discountedBaseCents = Math.max(
+          0,
+          Math.round(baseCents * factor),
+        );
       }
     }
 
