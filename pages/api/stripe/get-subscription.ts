@@ -34,7 +34,7 @@ export default async function handler(
     return res.status(404).json({ error: "User not found" });
   }
 
-  // IMPORTANT: support both legacy stripeCustomerID and new stripeCustomerId
+  // Support both legacy stripeCustomerID and new stripeCustomerId
   const stripeCustomerId =
     (user as any).stripeCustomerId ||
     (user as any).stripeCustomerID ||
@@ -49,7 +49,6 @@ export default async function handler(
     AI_PRICE_ID,
   });
 
-  // If we don’t even know their Stripe customer, just say “no CRM billing yet”
   if (!stripeCustomerId || !BASE_PRICE_ID) {
     console.log("[get-subscription] early-exit: missing customer or base price", {
       stripeCustomerId,
@@ -62,8 +61,7 @@ export default async function handler(
   }
 
   try {
-    // First, resolve the product behind the base CRM price.
-    // This lets us recognize legacy prices that share the same product.
+    // Resolve the base CRM price → get its product id so we can match legacy prices.
     const basePrice = (await stripe.prices.retrieve(
       BASE_PRICE_ID
     )) as Stripe.Price;
@@ -76,8 +74,7 @@ export default async function handler(
       baseUnitAmount: basePrice.unit_amount,
     });
 
-    // Grab all subscriptions for the customer.
-    // Expand price on items so we know which item is CRM vs AI.
+    // Fetch all subs, only expanding prices.
     const subs = await stripe.subscriptions.list({
       customer: stripeCustomerId,
       status: "all",
@@ -99,7 +96,6 @@ export default async function handler(
 
       const items = sub.items.data as Stripe.SubscriptionItem[];
 
-      // Pre-log items for this subscription
       const itemSummary = items.map((it) => {
         const price = it.price as Stripe.Price | null | undefined;
         return {
@@ -115,7 +111,7 @@ export default async function handler(
         itemSummary,
       });
 
-      // Check if this subscription has the AI add-on price.
+      // Detect AI add-on
       if (AI_PRICE_ID) {
         const hasAiItem = items.some(
           (it) => it.price && it.price.id === AI_PRICE_ID
@@ -125,10 +121,7 @@ export default async function handler(
         }
       }
 
-      // Look for the CRM base item on this subscription.
-      // We treat an item as CRM if:
-      //   - its price.id matches BASE_PRICE_ID  OR
-      //   - its price.product matches the base product (legacy price support)
+      // Find CRM item on this sub by price ID or product match
       const crmItem = items.find((it) => {
         const price = it.price as Stripe.Price | null | undefined;
         if (!price) return false;
@@ -143,13 +136,10 @@ export default async function handler(
         console.log("[get-subscription] no CRM item on this subscription", {
           subscriptionId: sub.id,
         });
-        // No CRM item here; this is probably a phone-number-only or other add-on
         continue;
       }
 
-      // If we've already found a CRM subscription and computed a price,
-      // keep the first one we saw and just continue scanning other subs
-      // for AI add-ons only.
+      // If we've already set a CRM amount, don't overwrite it (but still track AI above).
       if (crmAmountCents !== null) {
         console.log(
           "[get-subscription] CRM amount already set, skipping price update",
@@ -161,65 +151,63 @@ export default async function handler(
         continue;
       }
 
-      // Start from the CRM base unit amount in cents.
-      let baseCents = crmItem.price?.unit_amount ?? 0;
+      // --- Primary path: use upcoming invoice line amount (after discounts) ---
+      let effectiveCents: number | null = null;
 
-      // Use subscription.discounts (plural), which is what your
-      // create-subscription API populates via params.discounts.
-      const discountsList = (sub as any).discounts as
-        | Stripe.ApiList<Stripe.Discount>
-        | undefined;
+      try {
+        const invoicesAny = (stripe.invoices as unknown) as {
+          retrieveUpcoming: (params: any) => Promise<Stripe.Invoice>;
+        };
 
-      let coupon: Stripe.Coupon | null = null;
+        const upcoming = await invoicesAny.retrieveUpcoming({
+          customer: stripeCustomerId,
+          subscription: sub.id,
+          expand: ["lines.data.price"],
+        });
 
-      if (discountsList && discountsList.data && discountsList.data.length > 0) {
-        const firstDiscount = discountsList.data[0];
-        const rawCoupon = firstDiscount.coupon as Stripe.Coupon | string | null;
+        const crmLine = upcoming.lines.data.find((line) => {
+          const price = (line as any).price as Stripe.Price | undefined;
+          if (!price) return false;
+          const productId = price.product as string | null | undefined;
+          return (
+            price.id === BASE_PRICE_ID ||
+            (!!baseProductId && !!productId && productId === baseProductId)
+          );
+        });
 
-        if (rawCoupon && typeof rawCoupon !== "string") {
-          coupon = rawCoupon as Stripe.Coupon;
-        } else if (typeof rawCoupon === "string") {
-          try {
-            const fetched = (await stripe.coupons.retrieve(
-              rawCoupon
-            )) as Stripe.Coupon;
-            coupon = fetched;
-          } catch (e: any) {
-            console.error(
-              "[get-subscription] failed to retrieve coupon",
-              rawCoupon,
-              e?.message || e
-            );
-          }
+        if (crmLine) {
+          // Stripe invoices store line.amount in cents, after discounts.
+          effectiveCents =
+            typeof crmLine.amount === "number" ? crmLine.amount : null;
+          console.log("[get-subscription] upcoming invoice CRM line", {
+            subscriptionId: sub.id,
+            lineAmount: crmLine.amount,
+          });
+        } else {
+          console.log(
+            "[get-subscription] no matching CRM line on upcoming invoice",
+            { subscriptionId: sub.id }
+          );
         }
+      } catch (e: any) {
+        console.error(
+          "[get-subscription] retrieveUpcoming failed (will fall back to base amount)",
+          e?.message || e
+        );
+        effectiveCents = null;
       }
 
-      console.log("[get-subscription] CRM item found", {
-        subscriptionId: sub.id,
-        crmPriceId: crmItem.price?.id,
-        crmProductId: crmItem.price?.product || null,
-        crmBaseUnitAmount: crmItem.price?.unit_amount,
-        hasDiscountsList: !!discountsList,
-        couponSummary: coupon
-          ? {
-              id: coupon.id,
-              amount_off: coupon.amount_off,
-              percent_off: coupon.percent_off,
-            }
-          : null,
-      });
-
-      // Apply coupon to CRM base amount if present
-      if (coupon) {
-        if (coupon.amount_off) {
-          baseCents = Math.max(baseCents - coupon.amount_off, 0);
-        } else if (coupon.percent_off) {
-          const pct = coupon.percent_off / 100;
-          baseCents = Math.round(baseCents * (1 - pct));
-        }
+      // --- Fallback: use base unit amount (no discount logic) ---
+      if (effectiveCents === null) {
+        const baseCents = crmItem.price?.unit_amount ?? 0;
+        console.log("[get-subscription] fallback to base unit amount", {
+          subscriptionId: sub.id,
+          baseCents,
+        });
+        effectiveCents = baseCents;
       }
 
-      crmAmountCents = baseCents;
+      crmAmountCents = effectiveCents;
 
       console.log("[get-subscription] computed CRM amount", {
         subscriptionId: sub.id,
@@ -227,7 +215,6 @@ export default async function handler(
       });
     }
 
-    // If we never found a CRM subscription at all, treat as "no active CRM plan".
     if (crmAmountCents === null) {
       console.log("[get-subscription] no CRM subscription found at all", {
         stripeCustomerId,
@@ -238,7 +225,6 @@ export default async function handler(
       });
     }
 
-    // Convert cents → dollars with 2 decimal places.
     const amountNumber = Number((crmAmountCents / 100).toFixed(2));
 
     console.log("[get-subscription] final result", {
@@ -247,13 +233,11 @@ export default async function handler(
     });
 
     return res.status(200).json({
-      // e.g. 0, 149.99, 199.99, etc.
       amount: amountNumber,
       hasAIUpgrade: hasAI || !!(user as any).hasAI,
     });
   } catch (err: any) {
     console.error("get-subscription error:", err?.message || err);
-    // On error, fall back to "no price yet" but keep AI flag if we have it on the user.
     return res.status(200).json({
       amount: null,
       hasAIUpgrade: !!(user as any).hasAI,
