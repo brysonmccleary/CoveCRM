@@ -81,18 +81,31 @@ async function ensureNonSystemFolderRaw(
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  // Allow GET (Vercel Cron) and POST (manual/admin tests)
   if (req.method !== "GET" && req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed", fingerprint: FINGERPRINT });
   }
 
-  // Accept secret via header or query
+  // --- Cron auth: single secret pattern (CRON_SECRET) ---
+  const CRON_SECRET = process.env.CRON_SECRET;
+  if (!CRON_SECRET) {
+    // Env misconfiguration — make this obvious in logs instead of looking like a bad token
+    return res
+      .status(500)
+      .json({ error: "CRON_SECRET not configured", fingerprint: FINGERPRINT });
+  }
+
+  // Accept secret via header or query (?token=...) – matches vercel.json: ?token=@CRON_SECRET
   const headerToken = Array.isArray(req.headers["x-cron-secret"])
     ? req.headers["x-cron-secret"][0]
     : (req.headers["x-cron-secret"] as string | undefined);
+
   const queryToken =
     typeof req.query.token === "string" ? (req.query.token as string) : undefined;
+
   const provided = headerToken || queryToken;
-  if (provided !== process.env.CRON_SECRET) {
+
+  if (provided !== CRON_SECRET) {
     return res.status(401).json({ error: "Unauthorized", fingerprint: FINGERPRINT });
   }
 
@@ -386,7 +399,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 "googleSheets.sheets.$.folderName": targetFolderName,
               },
             }
-          ).catch(() => {/* ignore if not present */});
+          ).catch(() => {/* ignore if not legacy */});
         }
 
         detailsAll.push({
@@ -429,7 +442,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   } catch (err: any) {
     console.error("Sheets poll error:", err);
-    return res.status(500).json({ error: err?.message || "Cron poll failed", fingerprint: FINGERPRINT });
+    return res
+      .status(500)
+      .json({ error: err?.message || "Cron poll failed", fingerprint: FINGERPRINT });
   }
 }
-
