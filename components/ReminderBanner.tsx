@@ -71,14 +71,15 @@ export default function ReminderBanner({ leads, inDialSession = false }: Props) 
       if (!confirmLeave) return;
     }
 
-    router.push(`/leads/${activeReminder._id}`);
+    // FIXED: route matches pages/lead/[id].tsx
+    router.push(`/lead/${activeReminder._id}`);
   };
 
   if (!activeReminder || !reminderType) return null;
 
   return (
     <div
-      className="bg-yellow-500 text-black px-6 py-3 flex justify-between items-center z-50 fixed top-0 left-0 right-0 shadow-lg cursor-pointer"
+      className="bg-blue-600 text-white px-6 py-3 flex justify-between items-center z-50 fixed top-0 left-0 right-0 shadow-lg cursor-pointer"
       onClick={goToLead}
     >
       <div>
@@ -95,7 +96,7 @@ export default function ReminderBanner({ leads, inDialSession = false }: Props) 
           e.stopPropagation();
           handleDismiss();
         }}
-        className="text-xl font-bold hover:text-white ml-4"
+        className="text-xl font-bold hover:text-blue-100 ml-4"
       >
         ✕
       </button>
