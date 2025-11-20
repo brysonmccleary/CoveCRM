@@ -119,8 +119,8 @@ type SendCoreParams = {
   campaignId?: string | null;
   stepIndex?: number | null;
 
-  // NEW: explicit scheduled time override (e.g. AI 3–5 min delay)
-  scheduledAtOverride?: Date | null;
+  // NEW: generic delay (in minutes) for non-quiet-hours scheduling (e.g. AI human-like delay)
+  delayMinutesForNonQuiet?: number | null;
 };
 
 async function sendCore(paramsIn: SendCoreParams): Promise<{ sid?: string; serviceSid: string; messageId: string; scheduledAt?: string }> {
@@ -177,21 +177,18 @@ async function sendCore(paramsIn: SendCoreParams): Promise<{ sid?: string; servi
     return { serviceSid: messagingServiceSid || "", messageId: String(suppressed._id) };
   }
 
-  // Quiet hours schedule + optional override
+  // Quiet hours schedule + generic delay scheduling
   const zone = pickLeadZone(lead);
-  const { isQuiet, scheduledAt } = computeQuietHoursScheduling(zone);
+  const { isQuiet, scheduledAt: quietScheduledAt } = computeQuietHoursScheduling(zone);
 
-  let effectiveScheduledAt: Date | undefined;
-  let scheduledReason: string | undefined;
+  let scheduledAt: Date | undefined = quietScheduledAt;
+  let reason: string | undefined = isQuiet && quietScheduledAt ? "scheduled_quiet_hours" : undefined;
 
-  if (isQuiet && scheduledAt) {
-    // Quiet hours always win
-    effectiveScheduledAt = scheduledAt;
-    scheduledReason = "scheduled_quiet_hours";
-  } else if (paramsIn.scheduledAtOverride && paramsIn.scheduledAtOverride > new Date()) {
-    // e.g., AI human-like delay
-    effectiveScheduledAt = paramsIn.scheduledAtOverride;
-    scheduledReason = "scheduled_delay";
+  if (!scheduledAt && !isQuiet && paramsIn.delayMinutesForNonQuiet && paramsIn.delayMinutesForNonQuiet > 0) {
+    const nowLocal = DateTime.now().setZone(zone);
+    const dt = nowLocal.plus({ minutes: paramsIn.delayMinutesForNonQuiet });
+    scheduledAt = dt.toUTC().toJSDate();
+    reason = "scheduled_delay";
   }
 
   // PRE-INSERT queued row with IDEMPOTENCY KEY (this is the duplicate gate)
@@ -205,12 +202,12 @@ async function sendCore(paramsIn: SendCoreParams): Promise<{ sid?: string; servi
       read: true,
       status: "queued",
       suppressed: false,
-      reason: scheduledReason,
+      reason,
       to: toNorm,
       from: forcedFrom || undefined,
       fromServiceSid: messagingServiceSid || undefined,
       queuedAt: new Date(),
-      scheduledAt: effectiveScheduledAt,
+      scheduledAt: scheduledAt ? scheduledAt : undefined,
       idempotencyKey: paramsIn.idempotencyKey || undefined,
       enrollmentId: paramsIn.enrollmentId || undefined,
       campaignId: paramsIn.campaignId || undefined,
@@ -233,19 +230,22 @@ async function sendCore(paramsIn: SendCoreParams): Promise<{ sid?: string; servi
 
   if (messagingServiceSid) {
     (twParams as any).messagingServiceSid = messagingServiceSid;
-    if (effectiveScheduledAt) {
+    if (scheduledAt) {
       (twParams as any).scheduleType = "fixed";
-      (twParams as any).sendAt = effectiveScheduledAt;
+      (twParams as any).sendAt = scheduledAt;
     }
   } else if (forcedFrom) {
     (twParams as any).from = forcedFrom;
+    if (scheduledAt) {
+      console.warn("⚠️ Requested scheduled send but no Messaging Service SID; sending immediately.");
+    }
   } else if (!usingPersonal) {
     const msid = await ensureTenantMessagingService(String(user._id), user.name || user.email);
     (twParams as any).messagingServiceSid = msid;
     messagingServiceSid = msid;
-    if (effectiveScheduledAt) {
+    if (scheduledAt) {
       (twParams as any).scheduleType = "fixed";
-      (twParams as any).sendAt = effectiveScheduledAt;
+      (twParams as any).sendAt = scheduledAt;
     }
   } else {
     throw new Error("No routing set (neither messagingServiceSid nor from).");
@@ -266,11 +266,11 @@ async function sendCore(paramsIn: SendCoreParams): Promise<{ sid?: string; servi
       $set: {
         sid: tw.sid,
         status: newStatus,
-        sentAt: effectiveScheduledAt && messagingServiceSid ? effectiveScheduledAt : new Date(),
+        sentAt: scheduledAt && messagingServiceSid ? scheduledAt : new Date(),
       },
     }).exec();
-    return effectiveScheduledAt && messagingServiceSid
-      ? { sid: tw.sid, serviceSid: messagingServiceSid || "", messageId, scheduledAt: (effectiveScheduledAt as Date).toISOString() }
+    return scheduledAt && messagingServiceSid
+      ? { sid: tw.sid, serviceSid: messagingServiceSid || "", messageId, scheduledAt: (scheduledAt as Date).toISOString() }
       : { sid: tw.sid, serviceSid: messagingServiceSid || "", messageId };
   } catch (err: any) {
     const code = err?.code;
@@ -282,7 +282,7 @@ async function sendCore(paramsIn: SendCoreParams): Promise<{ sid?: string; servi
       try {
         await Lead.findByIdAndUpdate(lead._id, {
           $set: { optOut: true, unsubscribed: true, status: "Not Interested", updatedAt: new Date() },
-          $push: { interactionHistory: { type: "system", text: "[system] Twilio 21610 (STOP) — lead marked Not Interested.", date: new Date() } as any },
+          $push: { interactionHistory: { type: "ai", text: "[system] Twilio 21610 (STOP) — lead marked Not Interested.", date: new Date() } as any },
         }).exec();
       } catch {}
     }
@@ -311,29 +311,13 @@ export async function sendSMS(to: string, body: string, userIdOrUser: string | a
 }
 
 export async function sendSms(args: {
-  to: string;
-  body: string;
-  userEmail: string;
-  leadId?: string;
-  messagingServiceSid?: string;
-  from?: string;
-  mediaUrls?: string[];
-  idempotencyKey?: string;
-  enrollmentId?: string;
-  campaignId?: string;
-  stepIndex?: number;
-  scheduledAt?: Date | string; // NEW: optional scheduled send time
+  to: string; body: string; userEmail: string; leadId?: string;
+  messagingServiceSid?: string; from?: string; mediaUrls?: string[];
+  idempotencyKey?: string; enrollmentId?: string; campaignId?: string; stepIndex?: number;
+  delayMinutes?: number;
 }) {
   const user = await ensureUserDoc(args.userEmail);
   if (!user) throw new Error("User not found");
-
-  const scheduledAtOverride =
-    args.scheduledAt instanceof Date
-      ? args.scheduledAt
-      : typeof args.scheduledAt === "string"
-      ? new Date(args.scheduledAt)
-      : null;
-
   return await sendCore({
     to: args.to,
     body: args.body,
@@ -346,6 +330,6 @@ export async function sendSms(args: {
     enrollmentId: args.enrollmentId || null,
     campaignId: args.campaignId || null,
     stepIndex: typeof args.stepIndex === "number" ? args.stepIndex : null,
-    scheduledAtOverride,
+    delayMinutesForNonQuiet: typeof args.delayMinutes === "number" ? args.delayMinutes : null,
   });
 }

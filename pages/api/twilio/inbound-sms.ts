@@ -43,7 +43,7 @@ const STATUS_CALLBACK =
 const ALLOW_DEV_TWILIO_TEST =
   process.env.ALLOW_LOCAL_TWILIO_TEST === "1" && process.env.NODE_ENV !== "production";
 
-// Human delay: (kept only for cooldown tuning)
+// Human delay: 3–5 minutes in production, 3–5 seconds in AI_TEST_MODE
 const AI_TEST_MODE = process.env.AI_TEST_MODE === "1";
 function humanDelayMs() {
   return AI_TEST_MODE ? 3000 + Math.random() * 2000 : 180000 + Math.random() * 60000;
@@ -299,6 +299,48 @@ function extractTimeFromLastAI(history: any[], state?: string): string | null {
   return extractRequestedISO(String(lastAI.text), state);
 }
 
+// NEW: inherit "tomorrow" + AM/PM from the last AI message when the lead says only a time like "let's do 11"
+function inferTimeFromLastAITomorrow(inboundText: string, state?: string, history?: any[]): string | null {
+  const lastAI = [...(history || [])].reverse().find((m: any) => m.type === "ai");
+  if (!lastAI?.text) return null;
+
+  const lastText = String(lastAI.text).toLowerCase();
+  if (!lastText.includes("tomorrow")) return null;
+
+  const lowerInbound = (inboundText || "").toLowerCase();
+  const timeRe = /(\b\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/;
+  const mInbound = lowerInbound.match(timeRe);
+  if (!mInbound) return null;
+
+  let hour = parseInt(mInbound[1], 10);
+  const minute = mInbound[2] ? parseInt(mInbound[2], 10) : 0;
+  let ap: string | undefined = mInbound[3] as string | undefined;
+
+  if (!ap) {
+    const matchesInLast = [...lastText.matchAll(timeRe)];
+    for (const match of matchesInLast) {
+      const h = parseInt(match[1], 10);
+      const apCandidate = match[3] as string | undefined;
+      if (h === hour && apCandidate) {
+        ap = apCandidate;
+        break;
+      }
+    }
+  }
+
+  const zone = zoneFromAnyState(state || "") || "America/New_York";
+  let base = DateTime.now().setZone(zone).plus({ days: 1 }); // "tomorrow" in client zone
+
+  if (ap) {
+    if (ap === "pm" && hour < 12) hour += 12;
+    if (ap === "am" && hour === 12) hour = 0;
+  }
+
+  let dt = base.set({ hour, minute, second: 0, millisecond: 0 });
+  if (!dt.isValid) return null;
+  return dt.toISO();
+}
+
 function computeContext(drips?: string[]) {
   const d = drips?.[0] || "";
   if (d.includes("mortgage")) return "mortgage protection";
@@ -369,8 +411,11 @@ function historyToChatMessages(history: any[] = []) {
   const msgs: { role: "user" | "assistant"; content: string }[] = [];
   for (const m of history) {
     if (!m?.text) continue;
-    if (m.type === "inbound") msgs.push({ role: "user", content: String(m.text) });
-    else if (m.type === "ai" || m.type === "outbound") msgs.push({ role: "assistant", content: String(m.text) });
+    const text = String(m.text);
+    // Skip system notes
+    if (text.startsWith("[system]") || text.startsWith("[note]")) continue;
+    if (m.type === "inbound") msgs.push({ role: "user", content: text });
+    else if (m.type === "ai" || m.type === "outbound") msgs.push({ role: "assistant", content: text });
   }
   return msgs.slice(-24);
 }
@@ -475,17 +520,6 @@ function isPlaceholderLead(l: any): boolean {
   );
 }
 
-// ✅ Allowed types for interactionHistory (schema enum safety)
-const ALLOWED_HISTORY_TYPES = new Set(["inbound", "outbound", "ai"]);
-function sanitizeInteractionHistory(lead: any) {
-  if (!Array.isArray(lead?.interactionHistory)) return;
-  for (const entry of lead.interactionHistory) {
-    if (!entry?.type || !ALLOWED_HISTORY_TYPES.has(entry.type)) {
-      entry.type = "ai";
-    }
-  }
-}
-
 // ----------------------------------------------------------------------------------------------------------
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -568,14 +602,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // ✅ NEW: set billing context for OpenAI
     _lastInboundUserEmailForBilling = (user.email || "").toLowerCase();
 
-    // ===================== LEAD RESOLUTION (NEW, STRICT) =====================
+    // ===================== LEAD RESOLUTION (strict) =====================
     const fromDigits = normalizeDigits(fromNumber);
     const last10 = fromDigits.slice(-10);
 
     let lead: any = null;
 
     if (last10) {
-      // Load candidates for this user that have any phone-like info.
       const candidates = await Lead.find({
         userEmail: user.email,
         $or: [
@@ -594,10 +627,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (matching.length === 1) {
         lead = matching[0];
       } else if (matching.length > 1) {
-        // Choose best match:
-        // - prefer non-placeholder / non-inbound_sms
-        // - prefer non-"New" status / with drips
-        // - tie-break by updatedAt
         const scoreLead = (l: any) => {
           let score = 0;
           if (!isPlaceholderLead(l)) score += 5;
@@ -605,7 +634,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           if ((l as any).source && (l as any).source !== "inbound_sms") score += 2;
           if ((l as any).status && (l as any).status !== "New") score += 1;
           if (Array.isArray((l as any).assignedDrips) && (l as any).assignedDrips.length > 0) score += 1;
-          // updatedAt breaks ties
           if ((l as any).updatedAt) score += 0.000001 * new Date((l as any).updatedAt).getTime();
           return score;
         };
@@ -629,7 +657,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
-    // If we still have no lead, create a minimal one with this phone only.
     if (!lead) {
       try {
         lead = await Lead.create({
@@ -652,9 +679,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     console.log(`[inbound-sms] RESOLVED leadId=${lead?._id || null} from=${fromNumber} to=${toNumber}`);
-
-    // 🧹 sanitize old bad interactionHistory entries (system → ai) before any saves
-    sanitizeInteractionHistory(lead);
     // ======================================================================
 
     // Pause any active DripEnrollments for this lead (drip → AI handoff)
@@ -833,37 +857,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // 1) Direct parse of any concrete time in their text
     let requestedISO: string | null = extractRequestedISO(body, stateCanon);
 
-    // 1b) If they only sent a time (e.g. "4pm") and the LAST AI message mentioned a day
-    //     inherit the DATE from the AI message but use the NEW time.
+    // 1b) If they are selecting a time that was offered "tomorrow" in the last AI message (e.g. "let's do 11")
     if (!requestedISO) {
-      const lower = body.toLowerCase();
-      const timeMatch = lower.match(/(\b\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/);
-      const hasDayWord = /\b(today|tonight|tomorrow|mon(day)?|tue(sday)?|wed(nesday)?|thu(rsday)?|fri(day)?|sat(urday)?|sun(day)?)\b/.test(
-        lower,
-      );
-      if (timeMatch && !hasDayWord) {
-        const lastAI = [...(lead.interactionHistory || [])].reverse().find((m: any) => m.type === "ai" && m.text);
-        if (lastAI?.text) {
-          const baseISO = extractRequestedISO(String(lastAI.text), stateCanon);
-          if (baseISO) {
-            let base = DateTime.fromISO(baseISO, { zone: tz });
-            if (!base.isValid) base = DateTime.fromISO(baseISO);
-            if (base.isValid) {
-              let h = parseInt(timeMatch[1], 10);
-              const min = timeMatch[2] ? parseInt(timeMatch[2], 10) : 0;
-              const ap = timeMatch[3];
-              if (ap) {
-                if (ap === "pm" && h < 12) h += 12;
-                if (ap === "am" && h === 12) h = 0;
-              }
-              const dt = base.set({ hour: h, minute: min, second: 0, millisecond: 0 });
-              if (dt.isValid) {
-                requestedISO = dt.toISO();
-              }
-            }
-          }
-        }
-      }
+      requestedISO = inferTimeFromLastAITomorrow(body, stateCanon, lead.interactionHistory || []);
     }
 
     // 2) If they’re confirming ("that works", etc.), reuse last proposed or last AI-suggested time
@@ -998,11 +994,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return res.status(200).json({ message: "Inbound received; AI reply skipped (duplicate content)." });
       }
 
+      // Human-like delay: 3–5 minutes (0 in AI_TEST_MODE)
+      const delayMs = humanDelayMs();
+      const delayMinutes =
+        AI_TEST_MODE ? 0 : Math.max(3, Math.min(5, Math.round(delayMs / 60000)));
+
       const sendResult = await sendSms({
         to: fromNumber,
         body: draft,
         userEmail: user.email,
         leadId: String(lead._id),
+        delayMinutes: delayMinutes,
       });
 
       const aiEntry = { type: "ai" as const, text: draft, date: new Date() };
