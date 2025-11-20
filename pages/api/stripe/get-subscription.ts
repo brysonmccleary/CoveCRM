@@ -7,9 +7,20 @@ import User from "@/models/User";
 import { stripe } from "@/lib/stripe";
 import type Stripe from "stripe";
 
+// Base CRM plan price (required)
 const BASE_PRICE_ID = process.env.STRIPE_PRICE_ID_MONTHLY || "";
-// IMPORTANT: use the SAME env var name as create-subscription
-const AI_PRICE_ID = process.env.STRIPE_PRICE_ID_AI_ADDON || "";
+
+// Support BOTH legacy AI price and new add-on price
+const AI_PRICE_ID_LEGACY = process.env.STRIPE_PRICE_ID_AI_MONTHLY || "";
+const AI_PRICE_ID_ADDON = process.env.STRIPE_PRICE_ID_AI_ADDON || "";
+
+// Helper: set of AI price IDs to check against
+const AI_PRICE_IDS = [AI_PRICE_ID_LEGACY, AI_PRICE_ID_ADDON].filter(Boolean);
+
+function isAiPriceId(id?: string | null): boolean {
+  if (!id) return false;
+  return AI_PRICE_IDS.includes(id);
+}
 
 export default async function handler(
   req: NextApiRequest,
@@ -32,15 +43,15 @@ export default async function handler(
     console.error("Stripe client missing");
     return res.status(200).json({
       amount: null,
-      hasAIUpgrade: !!user.hasAI,
+      hasAIUpgrade: !!(user as any).hasAI,
     });
   }
 
   if (!user.stripeCustomerId) {
-    // No Stripe profile yet → show “Loading / $…”
+    // No Stripe customer yet → show loading / unknown
     return res.status(200).json({
       amount: null,
-      hasAIUpgrade: !!user.hasAI,
+      hasAIUpgrade: !!(user as any).hasAI,
     });
   }
 
@@ -60,51 +71,36 @@ export default async function handler(
         status === "active" || status === "trialing" || status === "past_due";
       if (!activeLike) continue;
 
-      // Only consider subs that actually have the base or AI prices
+      // Only consider subscriptions that include our base plan or AI prices
       const hasRelevantItem = sub.items.data.some((item) => {
         const price = item.price;
         if (!price) return false;
-        return price.id === BASE_PRICE_ID || price.id === AI_PRICE_ID;
+        return price.id === BASE_PRICE_ID || isAiPriceId(price.id);
       });
 
       if (!hasRelevantItem) continue;
 
-      let subSubtotalCents: number | null = null;
+      let subTotalCents: number | null = null;
 
-      // --- Primary path: use upcoming invoice subtotal (already includes discounts) ---
+      // --- PRIMARY PATH: use upcoming invoice amount_due / total (already discounted) ---
       try {
-        const invoicesApi: any = stripe.invoices; // cast to any to safely call retrieveUpcoming
-        const upcoming = await invoicesApi.retrieveUpcoming({
-          customer: user.stripeCustomerId,
-          subscription: sub.id,
-          expand: ["lines.data.price"],
-        });
+        const invoicesApi: any = stripe.invoices; // cast to any so we can call retrieveUpcoming safely
+        const upcoming: Stripe.UpcomingInvoice | any =
+          await invoicesApi.retrieveUpcoming({
+            customer: user.stripeCustomerId,
+            subscription: sub.id,
+          });
 
-        if (upcoming && upcoming.lines && Array.isArray(upcoming.lines.data)) {
-          let subtotal = 0;
+        if (upcoming) {
+          const amountDue = typeof upcoming.amount_due === "number"
+            ? upcoming.amount_due
+            : typeof upcoming.total === "number"
+            ? upcoming.total
+            : null;
 
-          for (const line of upcoming.lines.data as any[]) {
-            const price = line.price as Stripe.Price | null;
-            if (!price || typeof price.unit_amount !== "number") continue;
-
-            if (price.id === BASE_PRICE_ID || price.id === AI_PRICE_ID) {
-              const quantity =
-                typeof line.quantity === "number" ? line.quantity : 1;
-              // line.amount is already discount-adjusted; fall back to unit_amount * quantity
-              const lineAmount =
-                typeof line.amount === "number"
-                  ? line.amount
-                  : price.unit_amount * quantity;
-
-              subtotal += lineAmount;
-
-              if (price.id === AI_PRICE_ID) {
-                hasAI = true;
-              }
-            }
+          if (amountDue !== null) {
+            subTotalCents = amountDue;
           }
-
-          subSubtotalCents = subtotal;
         }
       } catch (e) {
         console.warn(
@@ -114,41 +110,48 @@ export default async function handler(
         );
       }
 
-      // --- Fallback path: no upcoming invoice → sum raw price amounts (no discounts) ---
-      if (subSubtotalCents === null) {
-        let fallbackSubtotal = 0;
+      // --- FALLBACK: if we couldn't get upcoming invoice, sum raw price amounts (no discounts) ---
+      if (subTotalCents === null) {
+        let fallback = 0;
 
         for (const item of sub.items.data) {
           const price = item.price;
           if (!price || typeof price.unit_amount !== "number") continue;
           const qty = item.quantity ?? 1;
 
-          if (price.id === BASE_PRICE_ID || price.id === AI_PRICE_ID) {
-            fallbackSubtotal += price.unit_amount * qty;
-            if (price.id === AI_PRICE_ID) hasAI = true;
+          if (price.id === BASE_PRICE_ID || isAiPriceId(price.id)) {
+            fallback += price.unit_amount * qty;
           }
         }
 
-        subSubtotalCents = fallbackSubtotal;
+        subTotalCents = fallback;
       }
 
-      if (subSubtotalCents && subSubtotalCents > 0) {
-        totalCents += subSubtotalCents;
+      // Track AI flag based on subscription items
+      if (!hasAI) {
+        hasAI = sub.items.data.some((item) =>
+          isAiPriceId(item.price?.id || "")
+        );
+      }
+
+      if (subTotalCents && subTotalCents > 0) {
+        totalCents += subTotalCents;
       }
     }
 
+    // If nothing found, treat CRM as $0 (e.g., fully comped) instead of null.
     const amount =
       totalCents > 0 ? Number((totalCents / 100).toFixed(2)) : 0;
 
     return res.status(200).json({
       amount,
-      hasAIUpgrade: hasAI || !!user.hasAI,
+      hasAIUpgrade: hasAI || !!(user as any).hasAI,
     });
   } catch (err: any) {
     console.error("get-subscription error:", err?.message || err);
     return res.status(200).json({
       amount: null,
-      hasAIUpgrade: !!user.hasAI,
+      hasAIUpgrade: !!(user as any).hasAI,
     });
   }
 }
