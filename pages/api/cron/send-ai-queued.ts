@@ -8,16 +8,35 @@ import { sendSms } from "@/lib/twilio/sendSMS";
 import { initSocket } from "@/lib/socket";
 
 const INTERNAL_API_TOKEN = process.env.INTERNAL_API_TOKEN || "";
-const CRON_SECRET = process.env.CRON_SECRET || "";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  const token = (req.query.token as string) || (req.headers.authorization || "").replace(/^Bearer\s+/i, "");
-  if (!token || (token !== INTERNAL_API_TOKEN && token !== CRON_SECRET)) {
-    return res.status(401).json({ message: "Unauthorized" });
-  }
-
+  // Vercel Cron uses GET by default; keep this strict
   if (req.method !== "GET") {
     return res.status(405).json({ message: "Method not allowed" });
+  }
+
+  // Primary cron secret for scheduled jobs
+  const CRON_SECRET = process.env.CRON_SECRET;
+  if (!CRON_SECRET) {
+    // Env misconfig should be obvious, not masquerade as Unauthorized
+    return res.status(500).json({ message: "CRON_SECRET not configured" });
+  }
+
+  // Accept token from query (?token=...) or Authorization: Bearer ...
+  const queryToken =
+    typeof req.query.token === "string" ? (req.query.token as string) : undefined;
+
+  const authHeader = req.headers.authorization;
+  const bearerToken =
+    typeof authHeader === "string"
+      ? authHeader.replace(/^Bearer\s+/i, "")
+      : "";
+
+  const provided = queryToken || bearerToken;
+
+  // Allow either CRON_SECRET (Vercel cron) or INTERNAL_API_TOKEN (internal tools/debug)
+  if (!provided || (provided !== CRON_SECRET && provided !== INTERNAL_API_TOKEN)) {
+    return res.status(401).json({ message: "Unauthorized" });
   }
 
   try {
