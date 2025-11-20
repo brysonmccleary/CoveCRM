@@ -59,12 +59,13 @@ export default async function handler(
         status === "active" || status === "trialing" || status === "past_due";
       if (!activeLike) continue;
 
-      const items = sub.items.data;
+      const items = sub.items.data as Stripe.SubscriptionItem[];
 
       // Identify the CRM base and AI add-on items on THIS subscription
       const baseItem = items.find((it) => it.price?.id === BASE_PRICE_ID);
-      const aiItem =
-        AI_PRICE_ID && items.find((it) => it.price?.id === AI_PRICE_ID);
+      const aiItem = AI_PRICE_ID
+        ? items.find((it) => it.price?.id === AI_PRICE_ID)
+        : undefined;
 
       // If this subscription has neither CRM base nor AI add-on, it’s probably
       // just phone-number billing → ignore for the main plan display.
