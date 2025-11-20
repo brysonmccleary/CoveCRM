@@ -40,8 +40,21 @@ export default async function handler(
     (user as any).stripeCustomerID ||
     null;
 
+  console.log("[get-subscription] user", {
+    email: user.email,
+    stripeCustomerId,
+    hasStripeCustomerIdField: !!(user as any).stripeCustomerId,
+    hasLegacyStripeCustomerIDField: !!(user as any).stripeCustomerID,
+    BASE_PRICE_ID,
+    AI_PRICE_ID,
+  });
+
   // If we don’t even know their Stripe customer, just say “no CRM billing yet”
   if (!stripeCustomerId || !BASE_PRICE_ID) {
+    console.log("[get-subscription] early-exit: missing customer or base price", {
+      stripeCustomerId,
+      BASE_PRICE_ID,
+    });
     return res.status(200).json({
       amount: null,
       hasAIUpgrade: !!(user as any).hasAI,
@@ -57,6 +70,12 @@ export default async function handler(
     const baseProductId =
       (basePrice.product as string | null | undefined) || null;
 
+    console.log("[get-subscription] base price resolved", {
+      BASE_PRICE_ID,
+      baseProductId,
+      baseUnitAmount: basePrice.unit_amount,
+    });
+
     // Grab all subscriptions for the customer.
     // Expand:
     // - price on items to know which item is CRM vs AI
@@ -67,16 +86,36 @@ export default async function handler(
       expand: ["data.items.data.price", "data.discounts.data.coupon"],
     });
 
+    console.log("[get-subscription] subscriptions fetched", {
+      count: subs.data.length,
+      ids: subs.data.map((s) => ({ id: s.id, status: s.status })),
+    });
+
     let crmAmountCents: number | null = null;
     let hasAI = false;
 
     for (const sub of subs.data as Stripe.Subscription[]) {
-      // Only consider active / trialing subs as "current"
       const isActiveLike =
         sub.status === "active" || sub.status === "trialing";
       if (!isActiveLike) continue;
 
       const items = sub.items.data as Stripe.SubscriptionItem[];
+
+      // Pre-log items for this subscription
+      const itemSummary = items.map((it) => {
+        const price = it.price as Stripe.Price | null | undefined;
+        return {
+          priceId: price?.id,
+          productId: price?.product || null,
+          unitAmount: price?.unit_amount,
+        };
+      });
+
+      console.log("[get-subscription] inspecting subscription", {
+        subscriptionId: sub.id,
+        status: sub.status,
+        itemSummary,
+      });
 
       // Check if this subscription has the AI add-on price.
       if (AI_PRICE_ID) {
@@ -103,8 +142,10 @@ export default async function handler(
       });
 
       if (!crmItem) {
+        console.log("[get-subscription] no CRM item on this subscription", {
+          subscriptionId: sub.id,
+        });
         // No CRM item here; this is probably a phone-number-only or other add-on
-        // subscription. Ignore it for the main CRM plan price.
         continue;
       }
 
@@ -112,6 +153,13 @@ export default async function handler(
       // keep the first one we saw and just continue scanning other subs
       // for AI add-ons only.
       if (crmAmountCents !== null) {
+        console.log(
+          "[get-subscription] CRM amount already set, skipping price update",
+          {
+            subscriptionId: sub.id,
+            existingCrmAmountCents: crmAmountCents,
+          }
+        );
         continue;
       }
 
@@ -136,25 +184,44 @@ export default async function handler(
         }
       }
 
+      console.log("[get-subscription] CRM item found", {
+        subscriptionId: sub.id,
+        crmPriceId: crmItem.price?.id,
+        crmProductId: crmItem.price?.product || null,
+        crmBaseUnitAmount: crmItem.price?.unit_amount,
+        hasDiscountsList: !!discountsList,
+        couponSummary: coupon
+          ? {
+              id: coupon.id,
+              amount_off: coupon.amount_off,
+              percent_off: coupon.percent_off,
+            }
+          : null,
+      });
+
       // Apply coupon to CRM base amount if present
       if (coupon) {
         if (coupon.amount_off) {
-          // Flat amount off (in cents) – subtract from base only, clamp at 0
           baseCents = Math.max(baseCents - coupon.amount_off, 0);
         } else if (coupon.percent_off) {
-          // Percentage off – apply to base amount
           const pct = coupon.percent_off / 100;
           baseCents = Math.round(baseCents * (1 - pct));
         }
       }
 
-      // This is the effective CRM amount for this user in cents.
-      // It can legitimately be 0 (e.g. 100% discount / free CRM access).
       crmAmountCents = baseCents;
+
+      console.log("[get-subscription] computed CRM amount", {
+        subscriptionId: sub.id,
+        crmAmountCents,
+      });
     }
 
     // If we never found a CRM subscription at all, treat as "no active CRM plan".
     if (crmAmountCents === null) {
+      console.log("[get-subscription] no CRM subscription found at all", {
+        stripeCustomerId,
+      });
       return res.status(200).json({
         amount: null,
         hasAIUpgrade: hasAI || !!(user as any).hasAI,
@@ -163,6 +230,11 @@ export default async function handler(
 
     // Convert cents → dollars with 2 decimal places.
     const amountNumber = Number((crmAmountCents / 100).toFixed(2));
+
+    console.log("[get-subscription] final result", {
+      amountNumber,
+      hasAIUpgrade: hasAI || !!(user as any).hasAI,
+    });
 
     return res.status(200).json({
       // e.g. 0, 149.99, 199.99, etc.
