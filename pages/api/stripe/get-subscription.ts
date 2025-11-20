@@ -7,48 +7,31 @@ import User from "@/models/User";
 import { stripe } from "@/lib/stripe";
 import type Stripe from "stripe";
 
-// Base CRM plan price (required)
-const BASE_PRICE_ID = process.env.STRIPE_PRICE_ID_MONTHLY || "";
-
-// Support BOTH legacy AI price and new add-on price
-const AI_PRICE_ID_LEGACY = process.env.STRIPE_PRICE_ID_AI_MONTHLY || "";
-const AI_PRICE_ID_ADDON = process.env.STRIPE_PRICE_ID_AI_ADDON || "";
-
-// Helper: set of AI price IDs to check against
-const AI_PRICE_IDS = [AI_PRICE_ID_LEGACY, AI_PRICE_ID_ADDON].filter(Boolean);
-
-function isAiPriceId(id?: string | null): boolean {
-  if (!id) return false;
-  return AI_PRICE_IDS.includes(id);
-}
+const BASE_PRICE_ID = process.env.STRIPE_PRICE_ID_MONTHLY as string; // main CRM plan
+// Try both env names for the AI add-on (use whichever you actually set)
+const AI_PRICE_ID =
+  process.env.STRIPE_PRICE_ID_AI_MONTHLY ||
+  process.env.STRIPE_PRICE_ID_AI_ADDON ||
+  "";
 
 export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse
 ) {
-  if (req.method !== "GET") {
+  if (req.method !== "GET")
     return res.status(405).json({ error: "Method not allowed" });
-  }
 
   const session = await getServerSession(req, res, authOptions);
-  if (!session?.user?.email) {
+  if (!session?.user?.email)
     return res.status(401).json({ error: "Unauthorized" });
-  }
 
   await dbConnect();
+
   const user = await User.findOne({ email: session.user.email });
   if (!user) return res.status(404).json({ error: "User not found" });
 
-  if (!stripe) {
-    console.error("Stripe client missing");
-    return res.status(200).json({
-      amount: null,
-      hasAIUpgrade: !!(user as any).hasAI,
-    });
-  }
-
+  // If they don’t even have a Stripe customer yet, show “unknown”
   if (!user.stripeCustomerId) {
-    // No Stripe customer yet → show loading / unknown
     return res.status(200).json({
       amount: null,
       hasAIUpgrade: !!(user as any).hasAI,
@@ -59,92 +42,101 @@ export default async function handler(
     const subs = await stripe.subscriptions.list({
       customer: user.stripeCustomerId,
       status: "all",
-      expand: ["data.items.data.price"],
+      expand: [
+        "data.items.data.price",
+        "data.discount.coupon",
+        "data.discounts.data.coupon",
+      ],
     });
 
     let totalCents = 0;
     let hasAI = false;
 
     for (const sub of subs.data) {
-      const status = sub.status;
       const activeLike =
-        status === "active" || status === "trialing" || status === "past_due";
+        sub.status === "active" ||
+        sub.status === "trialing" ||
+        sub.status === "past_due";
+
       if (!activeLike) continue;
 
-      // Only consider subscriptions that include our base plan or AI prices
-      const hasRelevantItem = sub.items.data.some((item) => {
+      let baseCents = 0;
+      let aiCents = 0;
+
+      // 1) Identify CRM base + AI prices on this subscription
+      for (const item of sub.items.data) {
         const price = item.price;
-        if (!price) return false;
-        return price.id === BASE_PRICE_ID || isAiPriceId(price.id);
-      });
+        if (!price || typeof price.unit_amount !== "number") continue;
 
-      if (!hasRelevantItem) continue;
-
-      let subTotalCents: number | null = null;
-
-      // --- PRIMARY PATH: use upcoming invoice amount_due / total (already discounted) ---
-      try {
-        const invoicesApi: any = stripe.invoices; // cast to any so we can call retrieveUpcoming safely
-        const upcoming: Stripe.UpcomingInvoice | any =
-          await invoicesApi.retrieveUpcoming({
-            customer: user.stripeCustomerId,
-            subscription: sub.id,
-          });
-
-        if (upcoming) {
-          const amountDue = typeof upcoming.amount_due === "number"
-            ? upcoming.amount_due
-            : typeof upcoming.total === "number"
-            ? upcoming.total
-            : null;
-
-          if (amountDue !== null) {
-            subTotalCents = amountDue;
-          }
+        if (BASE_PRICE_ID && price.id === BASE_PRICE_ID) {
+          baseCents += price.unit_amount;
+        } else if (AI_PRICE_ID && price.id === AI_PRICE_ID) {
+          aiCents += price.unit_amount;
+          hasAI = true;
         }
-      } catch (e) {
-        console.warn(
-          "get-subscription: upcoming invoice lookup failed for sub",
-          sub.id,
-          e
-        );
       }
 
-      // --- FALLBACK: if we couldn't get upcoming invoice, sum raw price amounts (no discounts) ---
-      if (subTotalCents === null) {
-        let fallback = 0;
+      // If this subscription doesn’t contain our CRM price at all, skip it
+      if (!baseCents && !aiCents) continue;
 
-        for (const item of sub.items.data) {
-          const price = item.price;
-          if (!price || typeof price.unit_amount !== "number") continue;
-          const qty = item.quantity ?? 1;
+      let discountedBaseCents = baseCents;
 
-          if (price.id === BASE_PRICE_ID || isAiPriceId(price.id)) {
-            fallback += price.unit_amount * qty;
-          }
+      // 2) Find any coupon attached to this subscription.
+      // Newer Stripe API can use `discounts`, older uses `discount`.
+      const subAny = sub as any;
+      let coupon: Stripe.Coupon | undefined;
+
+      if (subAny.discount?.coupon) {
+        coupon = subAny.discount.coupon as Stripe.Coupon;
+      } else if (subAny.discounts?.data?.length) {
+        const first = subAny.discounts.data[0];
+        if (first?.coupon) {
+          coupon = first.coupon as Stripe.Coupon;
         }
-
-        subTotalCents = fallback;
       }
 
-      // Track AI flag based on subscription items
-      if (!hasAI) {
-        hasAI = sub.items.data.some((item) =>
-          isAiPriceId(item.price?.id || "")
-        );
+      if (coupon) {
+        const amountOff = (coupon as any).amount_off as number | undefined;
+        const percentOff = (coupon as any).percent_off as number | undefined;
+
+        if (amountOff && amountOff > 0) {
+          // flat $ off (applied to base only)
+          discountedBaseCents = Math.max(baseCents - amountOff, 0);
+        } else if (percentOff && percentOff > 0) {
+          // percentage off (applied to base only)
+          const factor = 1 - percentOff / 100;
+          discountedBaseCents = Math.max(
+            Math.round(baseCents * factor),
+            0
+          );
+        }
       }
 
-      if (subTotalCents && subTotalCents > 0) {
-        totalCents += subTotalCents;
-      }
+      totalCents += discountedBaseCents + aiCents;
+
+      // Debug log per subscription (safe to leave; helps if this ever breaks again)
+      console.log(
+        JSON.stringify({
+          msg: "get-subscription summary",
+          email: user.email,
+          subscriptionId: sub.id,
+          status: sub.status,
+          baseCents,
+          aiCents,
+          discountedBaseCents,
+          appliedCoupon: coupon
+            ? {
+                id: coupon.id,
+                amount_off: (coupon as any).amount_off || null,
+                percent_off: (coupon as any).percent_off || null,
+              }
+            : null,
+        })
+      );
     }
 
-    // If nothing found, treat CRM as $0 (e.g., fully comped) instead of null.
-    const amount =
-      totalCents > 0 ? Number((totalCents / 100).toFixed(2)) : 0;
-
     return res.status(200).json({
-      amount,
+      amount: totalCents ? Number((totalCents / 100).toFixed(2)) : null,
       hasAIUpgrade: hasAI || !!(user as any).hasAI,
     });
   } catch (err: any) {
