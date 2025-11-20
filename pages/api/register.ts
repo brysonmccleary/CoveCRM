@@ -12,6 +12,8 @@ const STRIPE_MODE: "live" | "test" | undefined = stripeKey
   ? (stripeKey.startsWith("sk_live_") ? "live" : "test")
   : undefined;
 
+import { sendWelcomeEmail } from "@/lib/email"; // ✅ NEW
+
 /** Admin allow-list (comma-separated emails in Vercel env) */
 function isAdminEmail(email?: string | null) {
   if (!email) return false;
@@ -129,7 +131,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       // Non-fatal: proceed; subscription API will create customer if missing.
     }
 
-    await User.create({
+    const newUser = await User.create({
       name: cleanName,
       email: cleanEmail,
       password: hashed,
@@ -143,6 +145,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       usedCode: codeInputRaw || undefined,
       isHouseCode: isHouse,
     });
+
+    // ✅ Send welcome email for /signup flow (non-blocking)
+    try {
+      await sendWelcomeEmail({ to: newUser.email, name: newUser.name });
+    } catch (e) {
+      console.warn("welcome email (register) failed:", e);
+    }
 
     return res.status(200).json({
       ok: true,
