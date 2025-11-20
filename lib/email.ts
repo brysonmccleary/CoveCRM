@@ -2,6 +2,7 @@
 // (works fine at runtime and side-steps the "Could not find a declaration file" error)
 const nodemailer = require("nodemailer") as any;
 import { Resend } from "resend";
+import { DateTime } from "luxon";
 
 const {
   // SMTP (fallback)
@@ -115,8 +116,27 @@ function escapeHtml(str: string) {
     .replace(/>/g, "&gt;");
 }
 
+/**
+ * Format a booking time in a human-friendly way.
+ *
+ * - `timeISO` should include an offset (e.g. "2025-11-20T11:00:00-07:00") and
+ *   is treated as the **client-local** time.
+ * - `tzLabel` is an optional display label like "MST" / "PST". If not provided,
+ *   we derive one from the offset.
+ *
+ * This avoids relying on the server's local timezone and keeps emails aligned
+ * with the Google Calendar event time.
+ */
 function formatDateTimeFriendly(timeISO: string, tzLabel?: string | null) {
   try {
+    const dt = DateTime.fromISO(timeISO);
+    if (dt.isValid) {
+      const when = dt.toFormat("ccc, MMM d yyyy 'at' h:mm a");
+      const abbr = tzLabel || dt.toFormat("ZZZ"); // e.g. MST / PDT
+      return abbr ? `${when} ${abbr}` : when;
+    }
+
+    // Fallback: legacy Date formatting if parsing somehow fails
     const d = new Date(timeISO);
     const when = d.toLocaleString(undefined, {
       year: "numeric",
@@ -127,7 +147,7 @@ function formatDateTimeFriendly(timeISO: string, tzLabel?: string | null) {
     });
     return tzLabel ? `${when} ${tzLabel}` : when;
   } catch {
-    return timeISO;
+    return tzLabel ? `${timeISO} ${tzLabel}` : timeISO;
   }
 }
 
@@ -467,7 +487,9 @@ function renderAffiliateApprovedEmail(opts: { name?: string; promoCode: string; 
       <p style="margin:0 0 12px 0">
         Your referral code is <b>${escapeHtml(opts.promoCode)}</b>. Share it anywhere you like. When people sign up with your code, their discounts and your commissions apply automatically.
       </p>
-      ${ opts.dashboardUrl ? `<p style="margin:0 0 12px 0"><a href="${opts.dashboardUrl}">Open your affiliate dashboard</a></p>` : "" }
+      ${
+        opts.dashboardUrl ? `<p style="margin:0 0 12px 0"><a href="${opts.dashboardUrl}">Open your affiliate dashboard</a></p>` : ""
+      }
       <p style="margin:0 0 12px 0">Thanks for partnering with us! — The Cove CRM Team</p>
     </div>
   `;
@@ -591,7 +613,7 @@ function renderA2PApprovedEmail(opts: {
           : ""
       }
       <p style="margin:0 0 12px 0">If you have any questions, reply to this email and we’ll help.</p>
-      <p style="margin:16px 0 0 0">— The Cove CRM Team</p>
+      <p style="margin:0 0 12px 0">— The Cove CRM Team</p>
     </div>
   `;
 }

@@ -27,6 +27,15 @@ const SHARED_MESSAGING_SERVICE_SID =
   process.env.TWILIO_MESSAGING_SERVICE_SID || "";
 const MIN_SCHEDULE_LEAD_MINUTES = 15;
 
+// ✅ Human-like delay for AI confirmations
+const AI_TEST_MODE = process.env.AI_TEST_MODE === "1";
+function humanDelayMinutes() {
+  if (AI_TEST_MODE) return 0;
+  const base = 3;
+  const extra = Math.floor(Math.random() * 3); // 0,1,2 => 3–5
+  return base + extra;
+}
+
 // ------- State normalization (handles "GA", "Georgia", "washington dc") -------
 const STATE_CODE_FROM_NAME: Record<string, string> = {
   alabama: "AL",
@@ -353,7 +362,7 @@ export default async function handler(
         );
       }
 
-      // Send confirmation via thread-sticky sender
+      // Send confirmation via thread-sticky sender (AI flow => human-like delay)
       const tzShort = clientStart.offsetNameShort;
       const readable = clientStart.toFormat("ccc, MMM d 'at' h:mm a");
       const confirmBody = withStopFooter(
@@ -364,6 +373,7 @@ export default async function handler(
         body: confirmBody,
         userEmail: user.email,
         leadId: String(lead._id),
+        delayMinutes: humanDelayMinutes(),
       });
 
       // Fake a successful calendar response
@@ -552,11 +562,15 @@ export default async function handler(
 
     // 1) Confirmation NOW from the SAME THREAD NUMBER (sticky "from")
     if (leadId) {
+      const isAI = !!(bearer && INTERNAL_API_TOKEN && bearer === INTERNAL_API_TOKEN);
       await sendSms({
         to,
         body: confirmBody,
         userEmail: user.email,
         leadId: String(leadId),
+        // ✅ Only AI SMS assistant confirmations get the 3–5 min human delay;
+        // manual bookings still go out immediately.
+        delayMinutes: isAI ? humanDelayMinutes() : undefined,
       });
     } else {
       const paramsBase = await getSendParams(String((user as any)._id), to);
@@ -633,7 +647,7 @@ export default async function handler(
       await sendOrSchedule(fifteenBody, fifteenBefore);
     }
 
-    // ✅ Email the agent a booking notice
+    // ✅ Email the agent a booking notice (time derived from same clientStart)
     try {
       await sendAppointmentBookedEmail({
         to: user.email,
