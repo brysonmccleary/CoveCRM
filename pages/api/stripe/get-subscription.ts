@@ -51,14 +51,16 @@ export default async function handler(
 
   try {
     // Grab all subs so we can pick the CRM one (ignore phone-number subs)
-    const subs = await stripe.subscriptions.list({
+    const subs = await (stripe as any).subscriptions.list({
       customer: user.stripeCustomerId,
       status: "all",
       expand: ["data.items.data.price"],
       limit: 10,
     });
 
-    const activeSubs = subs.data.filter((s) => isActiveLike(s.status));
+    const activeSubs: Stripe.Subscription[] = subs.data.filter((s: Stripe.Subscription) =>
+      isActiveLike(s.status),
+    );
     if (!activeSubs.length) {
       return res.status(200).json({
         amount: null,
@@ -88,7 +90,7 @@ export default async function handler(
     let amount: string | null = null;
 
     try {
-      const upcoming = await stripe.invoices.retrieveUpcoming({
+      const upcoming = await (stripe as any).invoices.retrieveUpcoming({
         customer: user.stripeCustomerId,
         subscription: sub.id,
       });
@@ -97,16 +99,14 @@ export default async function handler(
       const totalCents =
         (upcoming.total ?? upcoming.amount_due ?? 0) || 0;
 
-      amount =
-        totalCents > 0 ? (totalCents / 100).toFixed(2) : "0.00";
+      amount = totalCents > 0 ? (totalCents / 100).toFixed(2) : "0.00";
     } catch (invoiceErr) {
       console.warn(
         "get-subscription: retrieveUpcoming failed, falling back to list prices:",
         (invoiceErr as any)?.message || invoiceErr,
       );
 
-      // Fallback: sum the price list on the sub (will show 199.99 if discounts
-      // can't be read – better than crashing)
+      // Fallback: sum the price list on the sub
       const monthlyCents = sub.items.data.reduce((sum, item) => {
         const unit = item.price?.unit_amount ?? 0;
         const qty = item.quantity ?? 1;
