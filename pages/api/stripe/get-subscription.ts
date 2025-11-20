@@ -96,7 +96,11 @@ export default async function handler(
       // Apply any subscription-level discount coupon to the CRM base amount.
       // In your setup, CRM is on its own subscription, so applying the coupon
       // directly to the base amount is accurate.
-      const discount = sub.discount as Stripe.Discount | null | undefined;
+      const discount = (sub as any).discount as
+        | Stripe.Discount
+        | null
+        | undefined;
+
       if (discount && discount.coupon) {
         const rawCoupon = discount.coupon as Stripe.Coupon | string;
         const coupon =
