@@ -19,7 +19,7 @@ const BASE_URL = (
 ).replace(/\/$/, "");
 const INBOUND_SMS_WEBHOOK = `${BASE_URL}/api/twilio/inbound-sms`;
 const STATUS_CALLBACK = `${BASE_URL}/api/twilio/status-callback`;
-// ✅ minimal change: point voice to inbound-banner webhook
+// ✅ point voice to inbound-banner webhook
 const VOICE_URL = `${BASE_URL}/api/twilio/voice/inbound`;
 
 /** Normalize to E.164 (+1XXXXXXXXXX) */
@@ -36,6 +36,81 @@ function maskSid(sid?: string): string | null {
   if (!sid) return null;
   if (sid.length <= 6) return sid;
   return `${sid.slice(0, 4)}…${sid.slice(-4)}`;
+}
+
+/**
+ * Ensure a tenant Messaging Service exists in the *current* Twilio account
+ * (platform or personal, depending on getClientForUser).
+ *
+ * IMPORTANT:
+ * - We ONLY look for / create services via the **passed-in client**, so we
+ *   can never accidentally reuse an MG SID from a different Twilio account.
+ * - We STILL mirror the SID into A2PProfile + User.a2p for convenience,
+ *   but we do not trust those fields to decide which Twilio account to call.
+ */
+async function ensureTenantMessagingServiceInThisAccount(
+  client: any,
+  userId: string,
+  friendlyNameHint?: string,
+) {
+  const userDoc = await User.findById(userId);
+  const a2p = await A2PProfile.findOne({ userId });
+
+  const friendlyName = `CoveCRM – ${friendlyNameHint || userId}`;
+
+  // 1) Try to find an existing service in THIS account by friendlyName
+  let existingService = null as any;
+  try {
+    const services = await client.messaging.v1.services.list({ limit: 50 });
+    existingService = services.find((svc: any) => svc.friendlyName === friendlyName) || null;
+  } catch (err) {
+    // If listing fails for some reason, we'll just create a new one below.
+    console.warn("ensureTenantMessagingServiceInThisAccount: failed to list services", err);
+  }
+
+  // 2) If found, make sure webhooks are correct and use it
+  if (existingService) {
+    await client.messaging.v1.services(existingService.sid).update({
+      friendlyName,
+      inboundRequestUrl: INBOUND_SMS_WEBHOOK,
+      statusCallback: STATUS_CALLBACK,
+    });
+
+    // Mirror onto A2PProfile/User for reference (does NOT affect which account we use)
+    if (a2p) {
+      a2p.messagingServiceSid = existingService.sid;
+      await a2p.save();
+    }
+    if (userDoc) {
+      userDoc.a2p = userDoc.a2p || ({} as any);
+      (userDoc.a2p as any).messagingServiceSid = existingService.sid;
+      await userDoc.save();
+    }
+
+    return existingService.sid;
+  }
+
+  // 3) Otherwise, create a new per-tenant service in the *current* Twilio account
+  const svc = await client.messaging.v1.services.create({
+    friendlyName,
+    inboundRequestUrl: INBOUND_SMS_WEBHOOK,
+    statusCallback: STATUS_CALLBACK,
+  });
+
+  // Update if present; do NOT create a new A2PProfile (your schema requires many fields)
+  if (a2p) {
+    a2p.messagingServiceSid = svc.sid;
+    await a2p.save();
+  }
+
+  // Mirror on User for quick lookups
+  if (userDoc) {
+    userDoc.a2p = userDoc.a2p || ({} as any);
+    (userDoc.a2p as any).messagingServiceSid = svc.sid;
+    await userDoc.save();
+  }
+
+  return svc.sid;
 }
 
 /** Add a number to a Messaging Service sender pool. Handles 21710 + 21712 safely. */
@@ -69,63 +144,12 @@ async function addNumberToMessagingService(
         phoneNumberSid: numberSid,
       });
     } else {
+      // NOTE: If this is a 20404 here, it means the serviceSid truly does not
+      // exist in THIS account. With the new ensureTenantMessagingService logic
+      // above, that should no longer happen for normal flows.
       throw err;
     }
   }
-}
-
-/**
- * Ensure a tenant Messaging Service exists in the *current* Twilio account
- * (platform or personal, depending on getClientForUser). Keeps webhooks fresh.
- * - Updates A2PProfile.messagingServiceSid if profile exists.
- * - Also mirrors SID into User.a2p.messagingServiceSid for convenience.
- */
-async function ensureTenantMessagingServiceInThisAccount(
-  client: any,
-  userId: string,
-  friendlyNameHint?: string,
-) {
-  const userDoc = await User.findById(userId);
-  const a2p = await A2PProfile.findOne({ userId });
-
-  // Prefer an existing SID from either A2PProfile or User.a2p
-  const existingSid =
-    a2p?.messagingServiceSid || (userDoc?.a2p as any)?.messagingServiceSid;
-
-  if (existingSid) {
-    try {
-      await client.messaging.v1.services(existingSid).update({
-        friendlyName: `CoveCRM – ${friendlyNameHint || userId}`,
-        inboundRequestUrl: INBOUND_SMS_WEBHOOK,
-        statusCallback: STATUS_CALLBACK,
-      });
-      return existingSid;
-    } catch {
-      // if the SID isn't present in this Twilio account, we'll create a new one
-    }
-  }
-
-  // Create a new per-tenant service in the *current* account
-  const svc = await client.messaging.v1.services.create({
-    friendlyName: `CoveCRM – ${friendlyNameHint || userId}`,
-    inboundRequestUrl: INBOUND_SMS_WEBHOOK,
-    statusCallback: STATUS_CALLBACK,
-  });
-
-  // Update if present; do NOT create a new A2PProfile (your schema requires many fields)
-  if (a2p) {
-    a2p.messagingServiceSid = svc.sid;
-    await a2p.save();
-  }
-
-  // Mirror on User for quick lookups
-  if (userDoc) {
-    userDoc.a2p = userDoc.a2p || ({} as any);
-    (userDoc.a2p as any).messagingServiceSid = svc.sid;
-    await userDoc.save();
-  }
-
-  return svc.sid;
 }
 
 export default async function handler(
@@ -256,7 +280,7 @@ export default async function handler(
         phoneNumber: requestedNumber,
         smsUrl: INBOUND_SMS_WEBHOOK, // fine even if you attach to a Messaging Service
         voiceUrl: VOICE_URL,
-        voiceMethod: "POST", // ✅ explicit
+        voiceMethod: "POST", // explicit
       });
     } else {
       const areaCodeNum =
@@ -286,33 +310,24 @@ export default async function handler(
         phoneNumber: available[0].phoneNumber!,
         smsUrl: INBOUND_SMS_WEBHOOK,
         voiceUrl: VOICE_URL,
-        voiceMethod: "POST", // ✅ explicit
+        voiceMethod: "POST",
       });
     }
     purchasedSid = purchased.sid;
 
-    // ---------- Resolve target Messaging Service
-    // Priority:
-    // 1) explicit attachToMessagingServiceSid (body)
-    // 2) User.a2p.messagingServiceSid
-    // 3) A2PProfile.messagingServiceSid (if present)
-    // 4) ensure/create in the *current* Twilio account (platform or personal)
-    const a2pProfile = await A2PProfile.findOne({ userId: String(user._id) }).lean();
-    let targetMS: string | undefined =
-      attachToMessagingServiceSid ||
-      (user as any)?.a2p?.messagingServiceSid ||
-      a2pProfile?.messagingServiceSid ||
-      undefined;
+    // ---------- Resolve target Messaging Service in the *current* Twilio account
+    let targetMS: string;
 
-    // 🛡️ NEW: make sure targetMS actually exists in the *active* Twilio account
-    if (targetMS) {
+    if (attachToMessagingServiceSid) {
+      // If frontend explicitly passes a serviceSid, only use it if it exists
       try {
-        await client.messaging.v1.services(targetMS).fetch();
+        const svc = await client.messaging.v1.services(attachToMessagingServiceSid).fetch();
+        targetMS = svc.sid;
       } catch (err: any) {
         if (err?.code === 20404) {
           console.warn(
-            "target messagingServiceSid not present in active Twilio account; creating tenant MS instead",
-            { targetMS },
+            "attachToMessagingServiceSid not present in active Twilio account; creating tenant MS instead",
+            { attachToMessagingServiceSid },
           );
           targetMS = await ensureTenantMessagingServiceInThisAccount(
             client,
@@ -324,6 +339,7 @@ export default async function handler(
         }
       }
     } else {
+      // Always ensure a per-tenant Messaging Service in THIS account
       targetMS = await ensureTenantMessagingServiceInThisAccount(
         client,
         String(user._id),
@@ -332,9 +348,7 @@ export default async function handler(
     }
 
     // Attach purchased number to the Messaging Service (idempotent; handles 21710 + 21712)
-    if (targetMS) {
-      await addNumberToMessagingService(client, targetMS, purchased.sid);
-    }
+    await addNumberToMessagingService(client, targetMS, purchased.sid);
 
     // ---------- Save on user doc
     user.numbers = user.numbers || [];
@@ -351,11 +365,10 @@ export default async function handler(
         sms: (purchased as any).capabilities?.SMS ?? purchased.capabilities?.sms,
         mms: (purchased as any).capabilities?.MMS ?? purchased.capabilities?.mms,
       },
-      country: (purchased as any).countryCode || undefined,
     } as any);
     // mirror target MS on User.a2p if present
     user.a2p = user.a2p || ({} as any);
-    if (targetMS) (user.a2p as any).messagingServiceSid = targetMS;
+    (user.a2p as any).messagingServiceSid = targetMS;
     await user.save();
 
     // ---------- Persist to PhoneNumber collection
@@ -379,15 +392,11 @@ export default async function handler(
 
     return res.status(200).json({
       ok: true,
-      message: targetMS
-        ? "Number purchased and added to your messaging service."
-        : usingPersonal
-        ? "Number purchased. Link your A2P Messaging Service to enable texting; calls work now."
-        : "Number purchased. Start A2P registration to enable texting; calls work now.",
+      message: "Number purchased and added to your messaging service.",
       number: purchased.phoneNumber,
       sid: purchased.sid,
       subscriptionId: createdSubscriptionId || null,
-      messagingServiceSid: targetMS || null,
+      messagingServiceSid: targetMS,
       usingPersonal,
       activeAccountSid: activeAccountSid,
     });
