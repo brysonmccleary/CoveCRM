@@ -292,16 +292,38 @@ export default async function handler(
     purchasedSid = purchased.sid;
 
     // ---------- Resolve target Messaging Service
-    // NEW: always ensure the Messaging Service exists in THIS Twilio account,
-    // instead of trusting a SID that might belong to a different account.
+    // Priority:
+    // 1) explicit attachToMessagingServiceSid (body)
+    // 2) User.a2p.messagingServiceSid
+    // 3) A2PProfile.messagingServiceSid (if present)
+    // 4) ensure/create in the *current* Twilio account (platform or personal)
     const a2pProfile = await A2PProfile.findOne({ userId: String(user._id) }).lean();
-    let targetMS: string | undefined;
+    let targetMS: string | undefined =
+      attachToMessagingServiceSid ||
+      (user as any)?.a2p?.messagingServiceSid ||
+      a2pProfile?.messagingServiceSid ||
+      undefined;
 
-    if (attachToMessagingServiceSid) {
-      targetMS = attachToMessagingServiceSid;
+    // 🛡️ NEW: make sure targetMS actually exists in the *active* Twilio account
+    if (targetMS) {
+      try {
+        await client.messaging.v1.services(targetMS).fetch();
+      } catch (err: any) {
+        if (err?.code === 20404) {
+          console.warn(
+            "target messagingServiceSid not present in active Twilio account; creating tenant MS instead",
+            { targetMS },
+          );
+          targetMS = await ensureTenantMessagingServiceInThisAccount(
+            client,
+            String(user._id),
+            user.name || user.email,
+          );
+        } else {
+          throw err;
+        }
+      }
     } else {
-      // This helper reuses a valid SID in this account or creates one, and
-      // syncs it back onto User.a2p / A2PProfile for future calls.
       targetMS = await ensureTenantMessagingServiceInThisAccount(
         client,
         String(user._id),
