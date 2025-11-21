@@ -1,11 +1,10 @@
-// /pages/settingspanel.tsx
+// /components/settingspanel.tsx
 import { useEffect, useState } from "react";
 import A2PVerificationForm from "@/components/A2PVerificationForm";
 import AffiliateProgramPanel from "@/components/settings/AffiliateProgramPanel";
 import BillingPanel from "@/components/settings/BillingPanel";
 import toast from "react-hot-toast";
 import InvoicesPanel from "@/components/settings/InvoicesPanel";
-import { ASSISTANT_NAME } from "@/lib/assistantName";
 
 type DayKey = "Monday" | "Tuesday" | "Wednesday" | "Thursday" | "Friday";
 type WorkingHours = {
@@ -28,11 +27,7 @@ export default function SettingsPanel() {
   const [lastName, setLastName] = useState("");
   const [country, setCountry] = useState("United States");
   const [email, setEmail] = useState("");
-  const [agentPhone, setAgentPhone] = useState(""); // ✅ NEW
-
-  // ✅ AI assistant name (env-driven default/fallback)
-  const [aiName, setAiName] = useState(ASSISTANT_NAME);
-  const [aiLoading, setAiLoading] = useState(false);
+  const [agentPhone, setAgentPhone] = useState("");
 
   // Password update state
   const [currentPassword, setCurrentPassword] = useState("");
@@ -71,7 +66,7 @@ export default function SettingsPanel() {
         setLastName(data.lastName || "");
         setEmail(data.email || "");
         setCountry(data.country || "United States");
-        setAgentPhone(data.agentPhone || ""); // ✅ load agent phone
+        setAgentPhone(data.agentPhone || "");
         if (data.workingHours) setWorkingHours(data.workingHours);
       } catch (err: any) {
         toast.error(err.message || "Error loading profile");
@@ -94,23 +89,8 @@ export default function SettingsPanel() {
       }
     };
 
-    // ✅ Load AI assistant name (independent API) with env fallback
-    const loadAI = async () => {
-      try {
-        setAiLoading(true);
-        const res = await fetch("/api/settings/ai");
-        const data = await res.json();
-        if (res.ok) {
-          setAiName(data.aiAssistantName || ASSISTANT_NAME);
-        }
-      } finally {
-        setAiLoading(false);
-      }
-    };
-
     loadProfile();
     loadNotifications();
-    loadAI();
   }, []);
 
   const handleSaveProfile = async () => {
@@ -123,7 +103,7 @@ export default function SettingsPanel() {
           lastName,
           email,
           country,
-          agentPhone: normalizeUSPhone(agentPhone), // ✅ include + normalize
+          agentPhone: normalizeUSPhone(agentPhone),
         }),
       });
 
@@ -138,26 +118,6 @@ export default function SettingsPanel() {
       toast.success("Profile updated successfully!");
     } catch (err: any) {
       toast.error(err.message || "Something went wrong.");
-    }
-  };
-
-  // ✅ Save AI assistant name
-  const handleSaveAI = async () => {
-    try {
-      setAiLoading(true);
-      const res = await fetch("/api/settings/ai", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ aiAssistantName: aiName }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Failed to save");
-      setAiName(data.aiAssistantName || ASSISTANT_NAME);
-      toast.success("AI assistant name saved!");
-    } catch (err: any) {
-      toast.error(err.message || "Failed to save AI name");
-    } finally {
-      setAiLoading(false);
     }
   };
 
@@ -313,9 +273,11 @@ export default function SettingsPanel() {
               </select>
             </div>
 
-            {/* ✅ Agent Phone */}
+            {/* Agent Phone */}
             <div>
-              <label className="block text-sm mb-2">Agent Phone (where calls should ring)</label>
+              <label className="block text-sm mb-2">
+                Agent Phone (where calls should ring)
+              </label>
               <input
                 type="tel"
                 inputMode="tel"
@@ -327,33 +289,6 @@ export default function SettingsPanel() {
               />
               <p className="text-xs text-gray-300 mt-1">
                 We’ll call this number first and automatically bridge to your lead.
-              </p>
-            </div>
-
-            {/* ✅ AI Assistant Name */}
-            <div>
-              <label className="block text-sm mb-2">AI Assistant Name</label>
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  className="bg-[#334155] p-3 rounded-md w-full"
-                  value={aiName}
-                  onChange={(e) => setAiName(e.target.value)}
-                  maxLength={40}
-                  placeholder={ASSISTANT_NAME}
-                />
-                <button
-                  onClick={handleSaveAI}
-                  disabled={aiLoading || !aiName.trim()}
-                  className={`px-4 py-2 rounded-md font-bold ${
-                    aiLoading ? "bg-gray-600 cursor-not-allowed" : "bg-green-600 hover:bg-green-700"
-                  }`}
-                >
-                  {aiLoading ? "Saving..." : "Save"}
-                </button>
-              </div>
-              <p className="text-xs text-gray-300 mt-1">
-                Used in texts (e.g., “You’re chatting with {aiName} from our team.”)
               </p>
             </div>
 
@@ -534,19 +469,27 @@ export default function SettingsPanel() {
           </div>
         )}
 
-        {activeTab === "a2p" && <div><A2PVerificationForm /></div>}
+        {activeTab === "a2p" && (
+          <div>
+            <A2PVerificationForm />
+          </div>
+        )}
+
         {activeTab === "billing" && (
           <div>
             <h2 className="text-2xl font-bold mb-4">Billing & Usage</h2>
             <BillingPanel />
           </div>
         )}
+
         {activeTab === "invoices" && (
           <div>
             <InvoicesPanel />
           </div>
         )}
+
         {activeTab === "affiliate" && <AffiliateProgramPanel />}
+
         {activeTab === "legal" && (
           <div className="space-y-6 max-w-xl">
             <h2 className="text-2xl font-bold mb-4">Legal Policies</h2>
@@ -562,14 +505,19 @@ export default function SettingsPanel() {
                 </a>
               </li>
               <li>
-                <a href="/legal/refund-policy" target="_blank" rel="noopener noreferrer">
+                <a
+                  href="/legal/refund-policy"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
                   Refund Policy
                 </a>
               </li>
               <li>
                 <a
                   href="/legal/acceptable-use"
-                  target="_blank" rel="noopener noreferrer"
+                  target="_blank"
+                  rel="noopener noreferrer"
                 >
                   Acceptable Use Policy
                 </a>
@@ -577,7 +525,8 @@ export default function SettingsPanel() {
               <li>
                 <a
                   href="/legal/affiliate-terms"
-                  target="_blank" rel="noopener noreferrer"
+                  target="_blank"
+                  rel="noopener noreferrer"
                 >
                   Affiliate Program Terms
                 </a>
