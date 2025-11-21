@@ -27,7 +27,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     await dbConnect();
 
-    // 1. Ensure this lead belongs to the user
+    // 1. Ensure this lead belongs to the user (tenant safety)
     const lead = await Lead.findOne({
       _id: leadId,
       userEmail: session.user.email.toLowerCase(),
@@ -37,7 +37,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(404).json({ error: "Lead not found" });
     }
 
-    // 2. Kill any active DripEnrollment
+    // 2. Kill any active/paused DripEnrollment for this lead+campaign
     const upd = await DripEnrollment.updateMany(
       {
         userEmail: session.user.email,
@@ -47,8 +47,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       },
       {
         $set: {
-          status: "stopped",
-          nextSendTime: null,
+          status: "canceled",      // <-- valid enum value
+          nextSendAt: null,        // <-- correct field name
           isActive: false,
           isPaused: true,
           stopAll: true,
@@ -60,10 +60,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     );
 
-    // 3. Remove drip assignment from Lead (legacy)
-    lead.assignedDrips = [];
+    // 3. Remove drip assignment from Lead (legacy fields)
+    //    This guarantees the legacy engine and any UI see "no active drip".
+    (lead as any).assignedDrips = [];
     (lead as any).dripProgress = [];
-    lead.isAIEngaged = false;
+    (lead as any).isAIEngaged = false;
     await lead.save();
 
     return res.status(200).json({
