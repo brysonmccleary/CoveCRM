@@ -2,21 +2,14 @@
 import type { NextApiRequest } from "next";
 
 export function checkCronAuth(req: NextApiRequest): boolean {
-  // ✅ Allow official Vercel Cron Jobs by header, no token required
-  const vercelHeader = req.headers["x-vercel-cron"];
-  const isVercelCron =
-    typeof vercelHeader === "string"
-      ? vercelHeader.length > 0
-      : Array.isArray(vercelHeader)
-      ? vercelHeader.length > 0
-      : false;
-
-  if (isVercelCron) {
-    return true;
-  }
-
-  // ✅ For manual / curl calls, still require CRON_SECRET
   const secret = process.env.CRON_SECRET || "";
+
+  // ✅ If this was invoked by a Vercel Scheduled Function, always allow it
+  // Vercel adds this header on cron runs.
+  const isVercelCron = !!req.headers["x-vercel-cron"];
+  if (isVercelCron) return true;
+
+  // For manual / external hits, require the actual secret
   if (!secret) return false;
 
   const hdr = String(req.headers.authorization || "");

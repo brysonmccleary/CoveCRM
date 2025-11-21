@@ -1,4 +1,4 @@
-// /pages/api/cron/google-sheets-poll.ts
+// pages/api/cron/google-sheets-poll.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
@@ -67,7 +67,7 @@ async function ensureNonSystemFolderRaw(
 
   // 3) If still system or missing, force a unique safe name
   if (!doc || !doc.name || isSystemFolder(doc.name)) {
-    const uniqueSafe = `${baseName} — ${Date.now()}`;
+    const uniqueSafe = `${baseName} — Date.now()`;
     const ins = await coll.insertOne({ userEmail, name: uniqueSafe, source: "google-sheets" });
     const fresh = (await coll.findOne({ _id: ins.insertedId })) as FolderRaw;
     if (!fresh || !fresh.name || isSystemFolder(fresh.name)) {
@@ -87,35 +87,32 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(405).json({ error: "Method not allowed", fingerprint: FINGERPRINT });
   }
 
-  // --- Cron auth: allow Vercel Cron header OR CRON_SECRET token for manual calls ---
-  const vercelHeader = req.headers["x-vercel-cron"];
-  const isVercelCron =
-    typeof vercelHeader === "string"
-      ? vercelHeader.length > 0
-      : Array.isArray(vercelHeader)
-      ? vercelHeader.length > 0
-      : false;
-
+  // --- Cron auth: allow CRON_SECRET OR Vercel cron header ---
   const CRON_SECRET = process.env.CRON_SECRET || "";
 
-  const headerToken = Array.isArray(req.headers["x-cron-secret"])
-    ? req.headers["x-cron-secret"][0]
-    : (req.headers["x-cron-secret"] as string | undefined);
-
   const queryToken =
-    typeof req.query.token === "string" ? (req.query.token as string) : undefined;
+    typeof req.query.token === "string" ? (req.query.token as string) : "";
 
-  const provided = headerToken || queryToken;
+  const authHeader = typeof req.headers.authorization === "string"
+    ? (req.headers.authorization as string)
+    : "";
+  const bearerToken = authHeader.replace(/^Bearer\s+/i, "");
 
-  if (!isVercelCron) {
-    if (!CRON_SECRET) {
-      return res
-        .status(500)
-        .json({ error: "CRON_SECRET not configured", fingerprint: FINGERPRINT });
-    }
-    if (!provided || provided !== CRON_SECRET) {
-      return res.status(401).json({ error: "Unauthorized", fingerprint: FINGERPRINT });
-    }
+  const headerSecret = Array.isArray(req.headers["x-cron-secret"])
+    ? (req.headers["x-cron-secret"][0] as string)
+    : ((req.headers["x-cron-secret"] as string | undefined) || "");
+
+  const isVercelCron = !!req.headers["x-vercel-cron"];
+
+  const authorized =
+    isVercelCron ||
+    (!!CRON_SECRET &&
+      (queryToken === CRON_SECRET ||
+        bearerToken === CRON_SECRET ||
+        headerSecret === CRON_SECRET));
+
+  if (!authorized) {
+    return res.status(401).json({ error: "Unauthorized", fingerprint: FINGERPRINT });
   }
 
   // Optional debug/filters

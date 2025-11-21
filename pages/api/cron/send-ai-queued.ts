@@ -15,30 +15,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(405).json({ message: "Method not allowed" });
   }
 
+  // Primary cron secret for scheduled jobs
   const CRON_SECRET = process.env.CRON_SECRET || "";
-  const vercelHeader = req.headers["x-vercel-cron"];
-  const isVercelCron =
-    typeof vercelHeader === "string"
-      ? vercelHeader.length > 0
-      : Array.isArray(vercelHeader)
-      ? vercelHeader.length > 0
-      : false;
 
   // Accept token from query (?token=...) or Authorization: Bearer ...
   const queryToken =
     typeof req.query.token === "string" ? (req.query.token as string) : undefined;
 
-  const authHeader = req.headers.authorization;
-  const bearerToken =
-    typeof authHeader === "string"
-      ? authHeader.replace(/^Bearer\s+/i, "")
-      : "";
+  const authHeader = typeof req.headers.authorization === "string"
+    ? (req.headers.authorization as string)
+    : "";
 
-  const provided = queryToken || bearerToken;
+  const bearerToken = authHeader.replace(/^Bearer\s+/i, "");
+
+  // Vercel Scheduled Functions include this header
+  const isVercelCron = !!req.headers["x-vercel-cron"];
+
+  const provided = queryToken || bearerToken || "";
 
   // ✅ Allow either:
-  // - Vercel Cron (x-vercel-cron header), OR
-  // - Matching CRON_SECRET / INTERNAL_API_TOKEN for manual/debug calls
+  //  - Vercel cron (x-vercel-cron present), OR
+  //  - CRON_SECRET / INTERNAL_API_TOKEN via query or Bearer
   if (
     !isVercelCron &&
     (!provided || (provided !== CRON_SECRET && provided !== INTERNAL_API_TOKEN))
