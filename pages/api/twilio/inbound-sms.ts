@@ -6,6 +6,8 @@ import User from "@/models/User";
 import A2PProfile from "@/models/A2PProfile";
 import Message from "@/models/Message";
 import DripEnrollment from "@/models/DripEnrollment";
+import DripCampaign from "@/models/DripCampaign";
+import { AiQueuedReply } from "@/models/AiQueuedReply";
 import twilio, { Twilio } from "twilio";
 import { OpenAI } from "openai";
 import { getTimezoneFromState } from "@/utils/timezone";
@@ -33,7 +35,7 @@ const RAW_BASE_URL = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL |
 const SHARED_MESSAGING_SERVICE_SID = process.env.TWILIO_MESSAGING_SERVICE_SID || "";
 const INTERNAL_API_TOKEN = process.env.INTERNAL_API_TOKEN || "";
 const LEAD_ENTRY_PATH = (process.env.APP_LEAD_ENTRY_PATH || "/lead").replace(/\/?$/, "");
-const BUILD_TAG = "inbound-sms@2025-11-18T18:30Z";
+const BUILD_TAG = "inbound-sms@2025-11-21T22:45Z";
 console.log(`[inbound-sms] build=${BUILD_TAG}`);
 
 const STATUS_CALLBACK =
@@ -341,12 +343,32 @@ function inferTimeFromLastAITomorrow(inboundText: string, state?: string, histor
   return dt.toISO();
 }
 
-function computeContext(drips?: string[]) {
-  const d = drips?.[0] || "";
-  if (d.includes("mortgage")) return "mortgage protection";
-  if (d.includes("veteran")) return "veteran life insurance";
-  if (d.includes("iul")) return "retirement income protection";
-  if (d.includes("final_expense")) return "final expense insurance";
+// ✅ UPDATED: context from drips + campaign names
+function computeContext(drips?: string[], campaignNames?: string[]) {
+  const lower = (s: string) => s.toLowerCase();
+  const tokens: string[] = [];
+
+  if (Array.isArray(drips)) {
+    for (const d of drips) tokens.push(lower(String(d)));
+  }
+  if (Array.isArray(campaignNames)) {
+    for (const n of campaignNames) tokens.push(lower(String(n)));
+  }
+
+  const joined = tokens.join(" | ");
+
+  if (joined.includes("mortgage")) return "mortgage protection";
+  if (joined.includes("veteran")) return "life insurance for veterans";
+  if (joined.includes("final expense") || joined.includes("final_expense") || joined.includes("fex"))
+    return "final expense life insurance";
+  if (joined.includes("iul"))
+    return "indexed universal life and retirement income protection";
+  if (joined.includes("retention"))
+    return "existing client retention and policy reviews";
+  if (joined.includes("birthday") || joined.includes("holiday"))
+    return "client birthdays, holidays, and policy reviews";
+
+  // Safe generic fallback
   return "life insurance and mortgage protection";
 }
 
@@ -645,7 +667,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           if (s > bestScore) {
             best = c;
             bestScore = s;
-          }
+            }
         }
 
         console.log(
@@ -681,17 +703,57 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     console.log(`[inbound-sms] RESOLVED leadId=${lead?._id || null} from=${fromNumber} to=${toNumber}`);
     // ======================================================================
 
-    // Pause any active DripEnrollments for this lead (drip → AI handoff)
+    // Pause any active DripEnrollments for this lead (drip → AI handoff),
+    // AND capture campaign names for AI context (mortgage vs vets vs IUL, etc.)
     let pausedCount = 0;
+    let campaignNames: string[] = [];
+    let activeEnrollments: any[] = [];
+
     try {
+      activeEnrollments = await DripEnrollment.find({
+        leadId: lead._id,
+        userEmail: user.email,
+        status: "active",
+      })
+        .select({ _id: 1, campaignId: 1 })
+        .lean();
+
+      const campaignIds = activeEnrollments
+        .map((e: any) => e.campaignId)
+        .filter(Boolean);
+
+      if (campaignIds.length) {
+        const campaigns = await DripCampaign.find({ _id: { $in: campaignIds } })
+          .select({ _id: 1, name: 1 })
+          .lean();
+        campaignNames = campaigns
+          .map((c: any) => String(c.name || "").trim())
+          .filter(Boolean);
+      }
+
       const result = await DripEnrollment.updateMany(
-        { leadId: lead._id, status: "active" },
-        { $set: { status: "paused" } }
+        { leadId: lead._id, userEmail: user.email, status: "active" },
+        {
+          $set: {
+            status: "paused",
+            paused: true,
+            isPaused: true,
+            isActive: false,
+            stopAll: true,
+            nextSendAt: null,
+          },
+          $unset: {
+            processing: 1,
+            processingAt: 1,
+          },
+        },
       );
+
       pausedCount =
         (result as any).modifiedCount ??
         (result as any).nModified ??
         0;
+
       if (pausedCount > 0) {
         console.log(`⏸️ Paused ${pausedCount} DripEnrollment(s) for lead ${lead._id}`);
       }
@@ -702,7 +764,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const hadAssignedDrips =
       Array.isArray((lead as any).assignedDrips) &&
       (lead as any).assignedDrips.length > 0;
-    const hadDrips = hadAssignedDrips || pausedCount > 0;
+    const hadDrips = hadAssignedDrips || pausedCount > 0 || activeEnrollments.length > 0;
 
     let io = (res as any)?.socket?.server?.io;
     try {
@@ -826,9 +888,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(200).json({ message: "Lead unsubscribed; no auto-reply." });
     }
 
+    // Keep original assignedDrips snapshot for context before we clear it
+    const legacyAssignedDrips = Array.isArray((lead as any).assignedDrips)
+      ? [...(lead as any).assignedDrips]
+      : [];
+
     // Do not engage AI for retention campaigns
     const assignedDrips = (lead as any).assignedDrips || [];
-    const isClientRetention = (assignedDrips as any[]).some((id: any) => typeof id === "string" && id.includes("client_retention"));
+    const isClientRetention = (assignedDrips as any[]).some(
+      (id: any) => typeof id === "string" && id.includes("client_retention"),
+    );
     if (isClientRetention) return res.status(200).json({ message: "Client retention reply — no AI engagement." });
 
     // ✅ Cancel drips & engage AI (legacy arrays)
@@ -849,7 +918,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     } as any;
 
     const stateCanon = normalizeStateInput(lead.State || (lead as any).state || "");
-    const context = computeContext(lead.assignedDrips);
+    const context = computeContext(legacyAssignedDrips, campaignNames);
 
     // GPT-first logic
     let aiReply: string | null = null;
@@ -990,7 +1059,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     (lead as any).aiMemory = memory;
     await lead.save();
 
-    // === SEND AI REPLY USING THE SAME PIPELINE AS MANUAL SMS (sendSms) ===
+    // === QUEUE AI REPLY FOR LATER SEND (human delay) ===
     try {
       const cooldownMs = AI_TEST_MODE ? 2000 : 2 * 60 * 1000;
       if (
@@ -1004,21 +1073,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const lastAI = [...(lead.interactionHistory || [])].reverse().find((m: any) => m.type === "ai");
       const draft = aiReply;
       if (lastAI && lastAI.text?.trim() === draft.trim()) {
-        console.log("🔁 Same AI content as last time — not sending.");
+        console.log("🔁 Same AI content as last time — not queueing.");
         return res.status(200).json({ message: "Inbound received; AI reply skipped (duplicate content)." });
       }
 
-      // Human-like delay: 3–5 minutes (0 in AI_TEST_MODE)
       const delayMs = humanDelayMs();
-      const delayMinutes =
-        AI_TEST_MODE ? 0 : Math.max(3, Math.min(5, Math.round(delayMs / 60000)));
+      const sendAfter = new Date(Date.now() + delayMs);
 
-      const sendResult = await sendSms({
+      const queued = await AiQueuedReply.create({
+        leadId: lead._id,
+        userEmail: user.email,
         to: fromNumber,
         body: draft,
-        userEmail: user.email,
-        leadId: String(lead._id),
-        delayMinutes: delayMinutes,
+        sendAfter,
+        status: "queued",
+        attempts: 0,
       });
 
       const aiEntry = { type: "ai" as const, text: draft, date: new Date() };
@@ -1029,41 +1098,34 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       if (io) {
         io.to(user.email).emit("message:new", { leadId: lead._id, ...aiEntry });
-        io.to(user.email).emit("message:sent", {
-          _id: sendResult.messageId,
-          sid: (sendResult as any).sid,
-          status: sendResult.scheduledAt ? "scheduled" : "accepted",
+        io.to(user.email).emit("ai:queued", {
+          leadId: lead._id,
+          queuedId: queued._id,
+          sendAfter,
         });
       }
 
-      if (sendResult.scheduledAt) {
-        console.log(
-          `🤖 AI reply scheduled via sendSms for ${fromNumber} | messageId=${sendResult.messageId} at ${sendResult.scheduledAt}`
-        );
-      } else {
-        console.log(
-          `🤖 AI reply sent via sendSms to ${fromNumber} | messageId=${sendResult.messageId}`
-        );
-      }
+      console.log(
+        `🤖 AI reply queued for ${fromNumber} | queuedId=${queued._id} sendAfter=${sendAfter.toISOString()}`
+      );
 
       return res.status(200).json({
-        message: "Inbound received; AI reply processed via sendSms.",
-        messageId: sendResult.messageId,
-        sid: (sendResult as any).sid,
-        scheduledAt: sendResult.scheduledAt || null,
+        message: "Inbound received; AI reply queued.",
+        queuedId: String(queued._id),
+        sendAfter,
       });
     } catch (err) {
-      console.error("❌ AI SMS send failed via sendSms:", err);
+      console.error("❌ AI SMS queue failed:", err);
       const note = {
         type: "ai" as const,
-        text: "[system] AI reply failed to send. Agent should follow up manually.",
+        text: "[system] AI reply failed to queue. Agent should follow up manually.",
         date: new Date(),
       };
       lead.interactionHistory = lead.interactionHistory || [];
       lead.interactionHistory.push(note);
       await lead.save();
       if (io) io.to(user.email).emit("message:new", { leadId: lead._id, ...note });
-      return res.status(200).json({ message: "Inbound received; AI reply failed to send." });
+      return res.status(200).json({ message: "Inbound received; AI reply failed to queue." });
     }
   } catch (error: any) {
     console.error("❌ SMS handler failed:", error);
