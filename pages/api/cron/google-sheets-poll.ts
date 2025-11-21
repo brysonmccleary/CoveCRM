@@ -6,6 +6,7 @@ import Lead from "@/models/Lead";
 import mongoose from "mongoose";
 import { google } from "googleapis";
 import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
+import { checkCronAuth } from "@/lib/cronAuth";
 
 const FINGERPRINT = "selfheal-v5h"; // revert to always-computed folder; TS safety intact
 
@@ -68,7 +69,11 @@ async function ensureNonSystemFolderRaw(
   // 3) If still system or missing, force a unique safe name
   if (!doc || !doc.name || isSystemFolder(doc.name)) {
     const uniqueSafe = `${baseName} — ${Date.now()}`;
-    const ins = await coll.insertOne({ userEmail, name: uniqueSafe, source: "google-sheets" });
+    const ins = await coll.insertOne({
+      userEmail,
+      name: uniqueSafe,
+      source: "google-sheets",
+    });
     const fresh = (await coll.findOne({ _id: ins.insertedId })) as FolderRaw;
     if (!fresh || !fresh.name || isSystemFolder(fresh.name)) {
       throw new Error(
@@ -87,32 +92,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(405).json({ error: "Method not allowed", fingerprint: FINGERPRINT });
   }
 
-  // --- Cron auth: single secret pattern (CRON_SECRET) ---
-  const CRON_SECRET = process.env.CRON_SECRET;
-  if (!CRON_SECRET) {
-    // Env misconfiguration — make this obvious in logs instead of looking like a bad token
-    return res
-      .status(500)
-      .json({ error: "CRON_SECRET not configured", fingerprint: FINGERPRINT });
-  }
-
-  // Accept secret via header or query (?token=...) – matches vercel.json: ?token=@CRON_SECRET
-  const headerToken = Array.isArray(req.headers["x-cron-secret"])
-    ? req.headers["x-cron-secret"][0]
-    : (req.headers["x-cron-secret"] as string | undefined);
-
-  const queryToken =
-    typeof req.query.token === "string" ? (req.query.token as string) : undefined;
-
-  // Vercel Scheduled Functions include this header
-  const isVercelCron =
-    typeof req.headers["x-vercel-cron"] === "string" &&
-    (req.headers["x-vercel-cron"] as string).length > 0;
-
-  const provided = headerToken || queryToken;
-
-  // ✅ Allow either: valid token OR a real Vercel Cron job
-  if (!isVercelCron && provided !== CRON_SECRET) {
+  // --- Centralized cron auth ---
+  if (!checkCronAuth(req)) {
     return res.status(401).json({ error: "Unauthorized", fingerprint: FINGERPRINT });
   }
 
@@ -158,7 +139,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const legacy: any = (user as any).googleTokens || {};
       const tok = gs?.refreshToken ? gs : legacy?.refreshToken ? legacy : null;
       if (!tok?.refreshToken) {
-        detailsAll.push({ userEmail, note: "No Google refresh token", fingerprint: FINGERPRINT });
+        detailsAll.push({
+          userEmail,
+          note: "No Google refresh token",
+          fingerprint: FINGERPRINT,
+        });
         continue;
       }
 
@@ -185,7 +170,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           : (gs?.sheets && Array.isArray(gs.sheets) ? gs.sheets : [])) as any[];
 
       if (!rawConfigs?.length) {
-        detailsAll.push({ userEmail, note: "No syncedSheets or sheets", fingerprint: FINGERPRINT });
+        detailsAll.push({
+          userEmail,
+          note: "No syncedSheets or sheets",
+          fingerprint: FINGERPRINT,
+        });
         continue;
       }
 
@@ -202,9 +191,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         } = (cfg || {}) as SyncedSheetCfg & Record<string, any>;
 
         // Legacy aliasing: some legacy lists used "sheetId" to mean the spreadsheetId string.
-        if (!spreadsheetId && typeof (cfg as any)?.sheetId === "string" && (cfg as any).sheetId.length > 12) {
+        if (
+          !spreadsheetId &&
+          typeof (cfg as any)?.sheetId === "string" &&
+          (cfg as any).sheetId.length > 12
+        ) {
           spreadsheetId = (cfg as any).sheetId;
-          sheetId = typeof (cfg as any)?.tabId === "number" ? (cfg as any).tabId : sheetId;
+          sheetId =
+            typeof (cfg as any)?.tabId === "number" ? (cfg as any).tabId : sheetId;
         }
 
         if (!spreadsheetId) continue;
@@ -231,7 +225,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (!title) title = "Sheet1";
 
         // ---- DESTINATION FOLDER — ALWAYS computed, NEVER from cfg
-        const driveMeta = await drive.files.get({ fileId: spreadsheetId, fields: "name" });
+        const driveMeta = await drive.files.get({
+          fileId: spreadsheetId,
+          fields: "name",
+        });
         const computedDefault = `${driveMeta.data.name || "Imported Leads"} — ${title}`;
 
         const folderDoc = await ensureNonSystemFolderRaw(userEmail, computedDefault);
@@ -290,24 +287,31 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         });
         const values = (resp.data.values || []) as string[][];
         const headerIdx = Math.max(0, headerRow - 1);
-        const rawHeaders = (values[headerIdx] || []).map((h) => String(h ?? "").trim());
+        const rawHeaders = (values[headerIdx] || []).map((h) =>
+          String(h ?? "").trim()
+        );
 
         const normalizedMapping: Record<string, string> = {};
         // TS-safe entries cast
-        (Object.entries(mapping as Record<string, unknown>) as Array<[string, unknown]>).forEach(
-          ([key, val]) => {
-            if (typeof val === "string" && val) {
-              normalizedMapping[normHeader(key)] = val;
-            }
+        (
+          Object.entries(mapping as Record<string, unknown>) as Array<
+            [string, unknown]
+          >
+        ).forEach(([key, val]) => {
+          if (typeof val === "string" && val) {
+            normalizedMapping[normHeader(key)] = val;
           }
-        );
+        });
 
         const pointer = typeof lastRowImported === "number" ? lastRowImported : headerRow;
         const firstDataZero = headerIdx + 1;
         let startIndex = Math.max(firstDataZero, Number(pointer));
         if (startIndex > values.length - 1) startIndex = firstDataZero;
 
-        const endIndex = Math.min(values.length - 1, startIndex + MAX_ROWS_PER_SHEET - 1);
+        const endIndex = Math.min(
+          values.length - 1,
+          startIndex + MAX_ROWS_PER_SHEET - 1
+        );
 
         let imported = 0;
         let updated = 0;
@@ -457,7 +461,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     return res.status(200).json({
       ok: true,
-      build: (process.env.VERCEL_GIT_COMMIT_SHA || "").slice(0, 8) || undefined,
+      build:
+        (process.env.VERCEL_GIT_COMMIT_SHA || "").slice(0, 8) || undefined,
       details: detailsAll,
       fingerprint: FINGERPRINT,
     });

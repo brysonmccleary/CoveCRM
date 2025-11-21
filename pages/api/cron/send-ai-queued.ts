@@ -1,141 +1,171 @@
-// /pages/api/cron/send-ai-queued.ts
+// pages/api/drips/drips-folder-watch.ts
 import type { NextApiRequest, NextApiResponse } from "next";
-import mongooseConnect from "@/lib/mongooseConnect";
-import { AiQueuedReply } from "@/models/AiQueuedReply";
+import dbConnect from "@/lib/mongooseConnect";
+import { DateTime } from "luxon";
 import Lead from "@/models/Lead";
-import User from "@/models/User";
-import { sendSms } from "@/lib/twilio/sendSMS";
-import { initSocket } from "@/lib/socket";
+import DripEnrollment from "@/models/DripEnrollment";
+import DripFolderEnrollment from "@/models/DripFolderEnrollment";
+import DripCampaign from "@/models/DripCampaign";
+import { acquireLock } from "@/lib/locks";
+import { checkCronAuth } from "@/lib/cronAuth";
 
-const INTERNAL_API_TOKEN = process.env.INTERNAL_API_TOKEN || "";
+export const config = { maxDuration: 60 };
+
+const PT_ZONE = "America/Los_Angeles";
+const SEND_HOUR_PT = 9;
+
+// Next 9:00am PT
+function nextWindowPT(): Date {
+  const nowPT = DateTime.now().setZone(PT_ZONE);
+  const base = nowPT.hour < SEND_HOUR_PT ? nowPT : nowPT.plus({ days: 1 });
+  return base
+    .set({ hour: SEND_HOUR_PT, minute: 0, second: 0, millisecond: 0 })
+    .toJSDate();
+}
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  // Vercel Cron uses GET by default; keep this strict
+  // Keep GET-only (Vercel Cron default)
   if (req.method !== "GET") {
     return res.status(405).json({ message: "Method not allowed" });
   }
 
-  // Primary cron secret for scheduled jobs
-  const CRON_SECRET = process.env.CRON_SECRET || "";
-
-  // Accept token from query (?token=...) or Authorization: Bearer ...
-  const queryToken =
-    typeof req.query.token === "string" ? (req.query.token as string) : undefined;
-
-  const authHeader =
-    typeof req.headers.authorization === "string"
-      ? (req.headers.authorization as string)
-      : "";
-
-  const bearerToken = authHeader.replace(/^Bearer\s+/i, "");
-
-  // Vercel Scheduled Functions include this header
-  const isVercelCron = !!req.headers["x-vercel-cron"];
-
-  const provided = queryToken || bearerToken || "";
-
-  // ✅ Allow either:
-  //  - Vercel cron (x-vercel-cron present), OR
-  //  - CRON_SECRET / INTERNAL_API_TOKEN via query or Bearer
-  if (
-    !isVercelCron &&
-    (!provided || (provided !== CRON_SECRET && provided !== INTERNAL_API_TOKEN))
-  ) {
+  // --- Centralized cron auth ---
+  if (!checkCronAuth(req)) {
     return res.status(401).json({ message: "Unauthorized" });
   }
 
+  // Allow global pause
+  if (process.env.DRIPS_HARD_STOP === "1") {
+    return res.status(204).end();
+  }
+
   try {
-    await mongooseConnect();
+    await dbConnect();
 
-    const now = new Date();
-    const limit = Number(req.query.limit || 25);
+    // Prevent overlap
+    const ok = await acquireLock("cron", "drips-folder-watch", 50);
+    if (!ok) return res.status(200).json({ message: "Already running, skipping" });
 
-    const io = (res as any)?.socket?.server?.io || initSocket(res as any);
-
-    const queueItems = await AiQueuedReply.find({
-      status: "queued",
-      sendAfter: { $lte: now },
-    })
-      .sort({ sendAfter: 1, createdAt: 1 })
-      .limit(limit)
+    const watchers = await DripFolderEnrollment.find({ active: true })
+      .select({
+        _id: 1,
+        userEmail: 1,
+        folderId: 1,
+        campaignId: 1,
+        startMode: 1,
+        lastScanAt: 1,
+      })
       .lean();
 
-    if (!queueItems.length) {
-      return res.status(200).json({ processed: 0 });
-    }
+    let scanned = 0,
+      newlyEnrolled = 0,
+      deduped = 0;
 
-    let processed = 0;
+    for (const w of watchers) {
+      scanned++;
 
-    for (const item of queueItems) {
-      // Double-lock to avoid races
-      const locked = await AiQueuedReply.findOneAndUpdate(
-        { _id: item._id, status: "queued" },
-        { $set: { status: "sending" }, $inc: { attempts: 1 } },
-        { new: true }
-      );
-      if (!locked) continue;
+      const wLock = await acquireLock("watch", `folder:${w._id}`, 45);
+      if (!wLock) continue;
 
-      try {
-        const userEmail = locked.userEmail;
-        const user = await User.findOne({ email: userEmail });
-        const lead = await Lead.findById(locked.leadId);
-        if (!user || !lead) {
-          await AiQueuedReply.updateOne(
-            { _id: locked._id },
-            { $set: { status: "failed", failReason: "Missing user or lead" } }
-          );
+      const campaign = (await DripCampaign.findById(w.campaignId)
+        .select({ _id: 1, isActive: 1, type: 1 })
+        .lean()) as null | { _id: any; isActive?: boolean; type?: string };
+
+      const isSmsActive = !!campaign && campaign.type === "sms" && campaign.isActive === true;
+
+      if (!isSmsActive) {
+        await DripFolderEnrollment.updateOne(
+          { _id: w._id },
+          { $set: { active: false } }
+        );
+        continue;
+      }
+
+      const leads = await Lead.aggregate([
+        { $match: { userEmail: w.userEmail, folderId: w.folderId } },
+        {
+          $lookup: {
+            from: "dripenrollments",
+            let: { leadId: "$_id" },
+            pipeline: [
+              {
+                $match: {
+                  $expr: {
+                    $and: [
+                      { $eq: ["$leadId", "$$leadId"] },
+                      { $eq: ["$campaignId", w.campaignId] },
+                      { $in: ["$status", ["active", "paused"]] },
+                    ],
+                  },
+                },
+              },
+              { $limit: 1 },
+            ],
+            as: "enr",
+          },
+        },
+        { $match: { enr: { $size: 0 } } },
+        { $project: { _id: 1 } },
+        { $limit: 2000 },
+      ]);
+
+      const nextSendAt =
+        w.startMode === "nextWindow" ? nextWindowPT() : new Date();
+
+      for (const lead of leads) {
+        const before = await DripEnrollment.findOne({
+          userEmail: w.userEmail,
+          leadId: lead._id,
+          campaignId: w.campaignId,
+          status: { $in: ["active", "paused"] },
+        })
+          .select({ _id: 1 })
+          .lean();
+
+        if (before?._id) {
+          deduped++;
           continue;
         }
 
-        const sendResult = await sendSms({
-          to: locked.to,
-          body: locked.body,
-          userEmail: userEmail,
-          leadId: String(lead._id),
-        });
-
-        const aiEntry = {
-          type: "ai" as const,
-          text: locked.body,
-          date: new Date(),
-        };
-        lead.interactionHistory = lead.interactionHistory || [];
-        lead.interactionHistory.push(aiEntry);
-        (lead as any).aiLastResponseAt = new Date();
-        await lead.save();
-
-        if (io) {
-          io.to(userEmail).emit("message:new", { leadId: lead._id, ...aiEntry });
-          io.to(userEmail).emit("message:sent", {
-            _id: sendResult.messageId,
-            sid: (sendResult as any).sid,
-            status: sendResult.scheduledAt ? "scheduled" : "accepted",
-          });
-        }
-
-        await AiQueuedReply.updateOne(
-          { _id: locked._id },
-          { $set: { status: "sent" } }
-        );
-
-        processed += 1;
-      } catch (err: any) {
-        console.error("❌ Failed to send queued AI reply:", err);
-        await AiQueuedReply.updateOne(
-          { _id: locked._id },
+        await DripEnrollment.findOneAndUpdate(
           {
-            $set: {
-              status: "failed",
-              failReason: err?.message || "Unknown error",
+            userEmail: w.userEmail,
+            leadId: lead._id,
+            campaignId: w.campaignId,
+            status: { $in: ["active", "paused"] },
+          },
+          {
+            $setOnInsert: {
+              userEmail: w.userEmail,
+              leadId: lead._id,
+              campaignId: w.campaignId,
+              status: "active",
+              cursorStep: 0,
+              nextSendAt,
+              source: "folder-bulk",
             },
-          }
+          },
+          { upsert: true, new: true }
         );
+
+        newlyEnrolled++;
       }
+
+      await DripFolderEnrollment.updateOne(
+        { _id: w._id },
+        { $set: { lastScanAt: new Date() } }
+      );
     }
 
-    return res.status(200).json({ processed });
-  } catch (err: any) {
-    console.error("❌ send-ai-queued cron error:", err);
-    return res.status(500).json({ message: "Cron error" });
+    return res.status(200).json({
+      ok: true,
+      message: "drips-folder-watch complete",
+      scannedWatchers: scanned,
+      newlyEnrolled,
+      deduped,
+    });
+  } catch (err) {
+    console.error("❌ drips-folder-watch error:", err);
+    return res.status(500).json({ message: "Server error" });
   }
 }

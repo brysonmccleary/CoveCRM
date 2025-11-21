@@ -18,16 +18,26 @@ function isCronAuthorized(req: NextRequest) {
   const url = new URL(req.url);
   const token = url.searchParams.get("token") || "";
 
-  // ✅ Accept either header name
+  // ✅ Accept either header name for custom tokens
   const headerKey = req.headers.get("x-cron-key") || "";
   const headerSecret = req.headers.get("x-cron-secret") || "";
   const headerToken = headerKey || headerSecret;
 
+  // ✅ Official Vercel cron security: Authorization: Bearer <CRON_SECRET>
+  const authHeader = req.headers.get("authorization") || "";
+  const lowerAuth = authHeader.toLowerCase();
+  const bearer =
+    lowerAuth.startsWith("bearer ") ? authHeader.slice(7).trim() : "";
+
+  // Vercel marker header (not secret, but indicates real cron)
   const isVercelCron = !!req.headers.get("x-vercel-cron");
 
-  const ok = (secret && (token === secret || headerToken === secret)) || isVercelCron;
+  const ok =
+    (!!secret &&
+      (token === secret || headerToken === secret || bearer === secret)) ||
+    isVercelCron;
 
-  // Attach debug headers so we can surface them on 403
+  // Attach debug info so we can surface it on 403
   (req as any)._cron_dbg = {
     path: url.pathname,
     queryTokenPresent: token !== "",
@@ -37,6 +47,8 @@ function isCronAuthorized(req: NextRequest) {
     headerSecretPresent: headerSecret !== "",
     headerSecretLen: headerSecret.length,
     vercelCronHeader: isVercelCron,
+    authHeaderPresent: authHeader !== "",
+    bearerLen: bearer.length,
     secretLenServer: secret.length,
   };
 
@@ -68,6 +80,8 @@ export function middleware(req: NextRequest) {
         "x-cron-header-secret-present": String(!!dbg.headerSecretPresent),
         "x-cron-header-secret-len": String(dbg.headerSecretLen ?? 0),
         "x-cron-vercel-header": String(!!dbg.vercelCronHeader),
+        "x-cron-auth-header-present": String(!!dbg.authHeaderPresent),
+        "x-cron-bearer-len": String(dbg.bearerLen ?? 0),
         "x-cron-secret-len": String(dbg.secretLenServer ?? 0),
       },
     });
