@@ -15,28 +15,34 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(405).json({ message: "Method not allowed" });
   }
 
+  // If this is coming from Vercel Cron (x-vercel-cron header), allow it
+  const isVercelCron = !!req.headers["x-vercel-cron"];
+
   // Primary cron secret for scheduled jobs
   const CRON_SECRET = process.env.CRON_SECRET;
-  if (!CRON_SECRET) {
-    // Env misconfig should be obvious, not masquerade as Unauthorized
-    return res.status(500).json({ message: "CRON_SECRET not configured" });
-  }
 
-  // Accept token from query (?token=...) or Authorization: Bearer ...
-  const queryToken =
-    typeof req.query.token === "string" ? (req.query.token as string) : undefined;
+  if (!isVercelCron) {
+    if (!CRON_SECRET) {
+      // Env misconfig should be obvious, not masquerade as Unauthorized
+      return res.status(500).json({ message: "CRON_SECRET not configured" });
+    }
 
-  const authHeader = req.headers.authorization;
-  const bearerToken =
-    typeof authHeader === "string"
-      ? authHeader.replace(/^Bearer\s+/i, "")
-      : "";
+    // Accept token from query (?token=...) or Authorization: Bearer ...
+    const queryToken =
+      typeof req.query.token === "string" ? (req.query.token as string) : undefined;
 
-  const provided = queryToken || bearerToken;
+    const authHeader = req.headers.authorization;
+    const bearerToken =
+      typeof authHeader === "string"
+        ? authHeader.replace(/^Bearer\s+/i, "")
+        : "";
 
-  // Allow either CRON_SECRET (Vercel cron) or INTERNAL_API_TOKEN (internal tools/debug)
-  if (!provided || (provided !== CRON_SECRET && provided !== INTERNAL_API_TOKEN)) {
-    return res.status(401).json({ message: "Unauthorized" });
+    const provided = queryToken || bearerToken;
+
+    // Allow either CRON_SECRET (Vercel cron / manual) or INTERNAL_API_TOKEN (internal tools/debug)
+    if (!provided || (provided !== CRON_SECRET && provided !== INTERNAL_API_TOKEN)) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
   }
 
   try {

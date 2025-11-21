@@ -1,3 +1,4 @@
+// /pages/api/cron/google-sheets-poll.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
@@ -86,27 +87,34 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(405).json({ error: "Method not allowed", fingerprint: FINGERPRINT });
   }
 
+  // Detect Vercel Cron (x-vercel-cron header)
+  const isVercelCron = !!req.headers["x-vercel-cron"];
+
   // --- Cron auth: single secret pattern (CRON_SECRET) ---
   const CRON_SECRET = process.env.CRON_SECRET;
-  if (!CRON_SECRET) {
-    // Env misconfiguration — make this obvious in logs instead of looking like a bad token
-    return res
-      .status(500)
-      .json({ error: "CRON_SECRET not configured", fingerprint: FINGERPRINT });
-  }
 
-  // Accept secret via header or query (?token=...) – matches vercel.json: ?token=@CRON_SECRET
-  const headerToken = Array.isArray(req.headers["x-cron-secret"])
-    ? req.headers["x-cron-secret"][0]
-    : (req.headers["x-cron-secret"] as string | undefined);
+  // For **non**-Vercel-cron calls, enforce the token check exactly like before
+  if (!isVercelCron) {
+    if (!CRON_SECRET) {
+      // Env misconfiguration — make this obvious in logs instead of looking like a bad token
+      return res
+        .status(500)
+        .json({ error: "CRON_SECRET not configured", fingerprint: FINGERPRINT });
+    }
 
-  const queryToken =
-    typeof req.query.token === "string" ? (req.query.token as string) : undefined;
+    // Accept secret via header or query (?token=...) – matches vercel.json: ?token=@CRON_SECRET
+    const headerToken = Array.isArray(req.headers["x-cron-secret"])
+      ? req.headers["x-cron-secret"][0]
+      : (req.headers["x-cron-secret"] as string | undefined);
 
-  const provided = headerToken || queryToken;
+    const queryToken =
+      typeof req.query.token === "string" ? (req.query.token as string) : undefined;
 
-  if (provided !== CRON_SECRET) {
-    return res.status(401).json({ error: "Unauthorized", fingerprint: FINGERPRINT });
+    const provided = headerToken || queryToken;
+
+    if (provided !== CRON_SECRET) {
+      return res.status(401).json({ error: "Unauthorized", fingerprint: FINGERPRINT });
+    }
   }
 
   // Optional debug/filters
