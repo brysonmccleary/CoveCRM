@@ -87,32 +87,33 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(405).json({ error: "Method not allowed", fingerprint: FINGERPRINT });
   }
 
-  // Detect Vercel Cron (x-vercel-cron header)
-  const isVercelCron = !!req.headers["x-vercel-cron"];
+  // --- Cron auth: allow Vercel Cron header OR CRON_SECRET token for manual calls ---
+  const vercelHeader = req.headers["x-vercel-cron"];
+  const isVercelCron =
+    typeof vercelHeader === "string"
+      ? vercelHeader.length > 0
+      : Array.isArray(vercelHeader)
+      ? vercelHeader.length > 0
+      : false;
 
-  // --- Cron auth: single secret pattern (CRON_SECRET) ---
-  const CRON_SECRET = process.env.CRON_SECRET;
+  const CRON_SECRET = process.env.CRON_SECRET || "";
 
-  // For **non**-Vercel-cron calls, enforce the token check exactly like before
+  const headerToken = Array.isArray(req.headers["x-cron-secret"])
+    ? req.headers["x-cron-secret"][0]
+    : (req.headers["x-cron-secret"] as string | undefined);
+
+  const queryToken =
+    typeof req.query.token === "string" ? (req.query.token as string) : undefined;
+
+  const provided = headerToken || queryToken;
+
   if (!isVercelCron) {
     if (!CRON_SECRET) {
-      // Env misconfiguration — make this obvious in logs instead of looking like a bad token
       return res
         .status(500)
         .json({ error: "CRON_SECRET not configured", fingerprint: FINGERPRINT });
     }
-
-    // Accept secret via header or query (?token=...) – matches vercel.json: ?token=@CRON_SECRET
-    const headerToken = Array.isArray(req.headers["x-cron-secret"])
-      ? req.headers["x-cron-secret"][0]
-      : (req.headers["x-cron-secret"] as string | undefined);
-
-    const queryToken =
-      typeof req.query.token === "string" ? (req.query.token as string) : undefined;
-
-    const provided = headerToken || queryToken;
-
-    if (provided !== CRON_SECRET) {
+    if (!provided || provided !== CRON_SECRET) {
       return res.status(401).json({ error: "Unauthorized", fingerprint: FINGERPRINT });
     }
   }
