@@ -21,6 +21,11 @@ const INBOUND_SMS_WEBHOOK = `${BASE_URL}/api/twilio/inbound-sms`;
 const STATUS_CALLBACK = `${BASE_URL}/api/twilio/status-callback`;
 const VOICE_URL = `${BASE_URL}/api/twilio/voice/inbound`;
 
+// Master/platform account SID (sanitized)
+const PLATFORM_ACCOUNT_SID = (process.env.TWILIO_ACCOUNT_SID || "")
+  .replace(/[^A-Za-z0-9]/g, "")
+  .trim();
+
 /** Normalize to E.164 (+1XXXXXXXXXX) */
 function normalizeE164(p: string) {
   const digits = (p || "").replace(/\D/g, "");
@@ -39,13 +44,13 @@ function maskSid(sid?: string): string | null {
 
 /**
  * Ensure a tenant Messaging Service exists in the *current* Twilio account
- * (platform or personal, depending on getClientForUser).
+ * (platform or subaccount, depending on the client we pass in).
  *
  * IMPORTANT:
- * - We ONLY look for / create services via the **passed-in client**, so we
- *   can never accidentally reuse an MG SID from a different Twilio account.
- * - We STILL mirror the SID into A2PProfile + User.a2p for convenience,
- *   but we do not trust those fields to decide which Twilio account to call.
+ * - We ONLY talk to Twilio via the **passed-in client**, so we never
+ *   accidentally reuse an MG SID from a different Twilio account.
+ * - We mirror the SID into A2PProfile + User.a2p for convenience,
+ *   but we do not trust those fields to decide which account to call.
  */
 async function ensureTenantMessagingServiceInThisAccount(
   client: any,
@@ -58,13 +63,16 @@ async function ensureTenantMessagingServiceInThisAccount(
   const friendlyName = `CoveCRM – ${friendlyNameHint || userId}`;
 
   // 1) Try to find an existing service in THIS account by friendlyName
-  let existingService = null as any;
+  let existingService: any = null;
   try {
     const services = await client.messaging.v1.services.list({ limit: 50 });
-    existingService = services.find((svc: any) => svc.friendlyName === friendlyName) || null;
+    existingService =
+      services.find((svc: any) => svc.friendlyName === friendlyName) || null;
   } catch (err) {
-    // If listing fails for some reason, we'll just create a new one below.
-    console.warn("ensureTenantMessagingServiceInThisAccount: failed to list services", err);
+    console.warn(
+      "ensureTenantMessagingServiceInThisAccount: failed to list services",
+      err,
+    );
   }
 
   // 2) If found, make sure webhooks are correct and use it
@@ -75,7 +83,7 @@ async function ensureTenantMessagingServiceInThisAccount(
       statusCallback: STATUS_CALLBACK,
     });
 
-    // Mirror onto A2PProfile/User for reference (does NOT affect which account we use)
+    // Mirror onto A2PProfile/User for reference
     if (a2p) {
       a2p.messagingServiceSid = existingService.sid;
       await a2p.save();
@@ -96,13 +104,11 @@ async function ensureTenantMessagingServiceInThisAccount(
     statusCallback: STATUS_CALLBACK,
   });
 
-  // Update if present; do NOT create a new A2PProfile (your schema requires many fields)
   if (a2p) {
     a2p.messagingServiceSid = svc.sid;
     await a2p.save();
   }
 
-  // Mirror on User for quick lookups
   if (userDoc) {
     userDoc.a2p = userDoc.a2p || ({} as any);
     (userDoc.a2p as any).messagingServiceSid = svc.sid;
@@ -135,9 +141,12 @@ async function addNumberToMessagingService(
       const services = await client.messaging.v1.services.list({ limit: 100 });
       for (const svc of services) {
         try {
-          await client.messaging.v1.services(svc.sid).phoneNumbers(numberSid).remove();
+          await client
+            .messaging.v1.services(svc.sid)
+            .phoneNumbers(numberSid)
+            .remove();
         } catch {
-          // ignore if not linked
+          /* ignore if not linked */
         }
       }
       await client.messaging.v1.services(serviceSid).phoneNumbers.create({
@@ -152,7 +161,6 @@ async function addNumberToMessagingService(
         "addNumberToMessagingService: serviceSid not found in this Twilio account, re-ensuring tenant MS",
         { serviceSid },
       );
-      // Ensure a fresh, valid service for THIS account & user, then retry once.
       const freshServiceSid = await ensureTenantMessagingServiceInThisAccount(
         client,
         userId,
@@ -203,8 +211,16 @@ export default async function handler(
     const user = await User.findOne({ email });
     if (!user) return res.status(404).json({ message: "User not found" });
 
-    const { client, accountSid: activeAccountSid, usingPersonal } =
-      await getClientForUser(email);
+    const {
+      client,
+      accountSid: activeAccountSid,
+      usingPersonal,
+    } = await getClientForUser(email);
+
+    const isMasterAccount =
+      PLATFORM_ACCOUNT_SID &&
+      PLATFORM_ACCOUNT_SID.length > 0 &&
+      PLATFORM_ACCOUNT_SID === activeAccountSid;
 
     console.log(
       JSON.stringify({
@@ -213,6 +229,7 @@ export default async function handler(
         usingPersonal,
         userBillingMode: user?.billingMode ?? null,
         activeAccountSidMasked: maskSid(activeAccountSid),
+        isMasterAccount,
       }),
     );
 
@@ -220,8 +237,13 @@ export default async function handler(
     const requestedNumber = number ? normalizeE164(number) : undefined;
 
     // Idempotency: prevent dup purchase
-    if (requestedNumber && user.numbers?.some((n: any) => n.phoneNumber === requestedNumber)) {
-      return res.status(409).json({ message: "You already own this phone number." });
+    if (
+      requestedNumber &&
+      user.numbers?.some((n: any) => n.phoneNumber === requestedNumber)
+    ) {
+      return res
+        .status(409)
+        .json({ message: "You already own this phone number." });
     }
     if (requestedNumber) {
       const existingPhoneDoc = await PhoneNumber.findOne({
@@ -229,7 +251,9 @@ export default async function handler(
         phoneNumber: requestedNumber,
       });
       if (existingPhoneDoc) {
-        return res.status(409).json({ message: "You already own this phone number (db)." });
+        return res
+          .status(409)
+          .json({ message: "You already own this phone number (db)." });
       }
     }
 
@@ -295,7 +319,7 @@ export default async function handler(
     if (requestedNumber) {
       purchased = await client.incomingPhoneNumbers.create({
         phoneNumber: requestedNumber,
-        smsUrl: INBOUND_SMS_WEBHOOK, // fine even if you attach to a Messaging Service
+        smsUrl: INBOUND_SMS_WEBHOOK,
         voiceUrl: VOICE_URL,
         voiceMethod: "POST",
       });
@@ -307,8 +331,14 @@ export default async function handler(
           ? parseInt(areaCode, 10)
           : undefined;
 
-      if (!areaCodeNum || Number.isNaN(areaCodeNum) || String(areaCodeNum).length !== 3) {
-        return res.status(400).json({ message: "Invalid areaCode (must be a 3-digit number)" });
+      if (
+        !areaCodeNum ||
+        Number.isNaN(areaCodeNum) ||
+        String(areaCodeNum).length !== 3
+      ) {
+        return res
+          .status(400)
+          .json({ message: "Invalid areaCode (must be a 3-digit number)" });
       }
 
       const available = await client
@@ -321,7 +351,9 @@ export default async function handler(
         });
 
       if (!available.length)
-        return res.status(400).json({ message: "No numbers available for that area code" });
+        return res.status(400).json({
+          message: "No numbers available for that area code",
+        });
 
       purchased = await client.incomingPhoneNumbers.create({
         phoneNumber: available[0].phoneNumber!,
@@ -332,13 +364,16 @@ export default async function handler(
     }
     purchasedSid = purchased.sid;
 
-    // ---------- Resolve target Messaging Service in the *current* Twilio account
+    // ---------- Resolve target Messaging Service for THIS account
     let targetMS: string;
 
-    if (attachToMessagingServiceSid) {
-      // If frontend explicitly passes a serviceSid, only use it if it exists
+    if (isMasterAccount && attachToMessagingServiceSid) {
+      // Only respect attachToMessagingServiceSid in the MASTER account.
+      // For subaccounts, we *never* trust a passed-in SID (to avoid cross-account MGs).
       try {
-        const svc = await client.messaging.v1.services(attachToMessagingServiceSid).fetch();
+        const svc = await client.messaging.v1
+          .services(attachToMessagingServiceSid)
+          .fetch();
         targetMS = svc.sid;
       } catch (err: any) {
         if (err?.code === 20404) {
@@ -356,7 +391,7 @@ export default async function handler(
         }
       }
     } else {
-      // Always ensure a per-tenant Messaging Service in THIS account
+      // Subaccounts (and master when no explicit override) always get a per-tenant service
       targetMS = await ensureTenantMessagingServiceInThisAccount(
         client,
         String(user._id),
@@ -385,11 +420,12 @@ export default async function handler(
       status: "active",
       capabilities: {
         voice: purchased.capabilities?.voice,
-        sms: (purchased as any).capabilities?.SMS ?? purchased.capabilities?.sms,
-        mms: (purchased as any).capabilities?.MMS ?? purchased.capabilities?.mms,
+        sms:
+          (purchased as any).capabilities?.SMS ?? purchased.capabilities?.sms,
+        mms:
+          (purchased as any).capabilities?.MMS ?? purchased.capabilities?.mms,
       },
     } as any);
-    // mirror target MS on User.a2p if present
     user.a2p = user.a2p || ({} as any);
     (user.a2p as any).messagingServiceSid = targetMS;
     await user.save();
@@ -404,7 +440,9 @@ export default async function handler(
           phoneNumber: purchased.phoneNumber!,
           messagingServiceSid: targetMS || null,
           profileSid: a2pLegacy?.profileSid,
-          a2pApproved: Boolean((user as any).a2p?.messagingReady || a2pLegacy?.messagingReady),
+          a2pApproved: Boolean(
+            (user as any).a2p?.messagingReady || a2pLegacy?.messagingReady,
+          ),
           datePurchased: new Date(),
           twilioSid: purchased.sid,
           friendlyName: purchased.friendlyName || undefined,
@@ -434,7 +472,8 @@ export default async function handler(
       }
     } catch {}
     try {
-      if (createdSubscriptionId) await stripe.subscriptions.cancel(createdSubscriptionId);
+      if (createdSubscriptionId)
+        await stripe.subscriptions.cancel(createdSubscriptionId);
     } catch {}
 
     const msg =
