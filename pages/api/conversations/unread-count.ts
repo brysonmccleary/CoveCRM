@@ -13,7 +13,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     const session = await getServerSession(req, res, authOptions);
     const userEmail = (session?.user?.email || "").toLowerCase();
-    if (!userEmail) return res.status(401).json({ error: "Unauthorized" });
+
+    // If no session/user, just say "0 unread" instead of throwing 401s into logs.
+    if (!userEmail) {
+      return res.status(200).json({ count: 0 });
+    }
 
     await dbConnect();
 
