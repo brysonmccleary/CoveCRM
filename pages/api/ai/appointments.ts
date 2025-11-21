@@ -94,6 +94,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const userEmail = (lead.userEmail || agentEmail || "").toLowerCase();
     const zone = pickLeadZone(lead);
 
+    // 🕒 NEW: interpret the appointment time in the lead's zone and see if it's already in the past
+    const apptZoned = DateTime.fromISO(timeISO, { zone }).set({ second: 0, millisecond: 0 });
+    if (!apptZoned.isValid) {
+      return res.status(400).json({ message: "Invalid timeISO" });
+    }
+    const nowUtc = DateTime.utc();
+    const isPast = apptZoned.toUTC() <= nowUtc;
+
     // 1) Book via the existing Google Calendar endpoint (which may already send confirm+reminders)
     const bookingUrl = `${BASE_URL}/api/google/calendar/book-appointment`;
     const bookResp = await axios.post(
@@ -121,8 +129,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // 2) Persist basic booking flags on the lead
     lead.status = "Booked";
-    (lead as any).appointmentTime = DateTime.fromISO(timeISO).toJSDate();
-    (lead as any).aiLastConfirmedISO = DateTime.fromISO(timeISO).toISO();
+    (lead as any).appointmentTime = apptZoned.toJSDate();
+    (lead as any).aiLastConfirmedISO = apptZoned.toISO();
 
     // 3) De-dupe: if a confirmation containing the formatted local time
     //    was already sent in the last 15 minutes, skip our own confirm.
@@ -139,8 +147,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }).lean();
 
     let confirmationSent = false;
+    let skippedBecauseRecent = Boolean(alreadySent);
+    let skippedBecausePast = false;
 
-    if (!alreadySent) {
+    // 🚫 NEW: never send confirmation SMS if appointment time is already in the past
+    if (isPast) {
+      skippedBecausePast = true;
+      console.log(
+        "[ai/appointments] Skipping confirmation SMS because time is in the past:",
+        apptZoned.toISO()
+      );
+    } else if (!alreadySent) {
       // 4) Send confirmation SMS from the thread-sticky number
       const fromOverride = await pickFromNumberForThread(String(lead._id), userEmail);
       await sendSms({
@@ -163,7 +180,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       success: true,
       event: bookResp.data?.event || bookResp.data,
       confirmationSent,
-      skippedBecauseRecent: Boolean(alreadySent),
+      skippedBecauseRecent,
+      skippedBecausePast,
     });
   } catch (err: any) {
     console.error("[ai/appointments] error:", err?.response?.data || err);

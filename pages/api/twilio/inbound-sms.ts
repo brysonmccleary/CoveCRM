@@ -900,71 +900,85 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const zone = tz;
       const clientTime = DateTime.fromISO(requestedISO, { zone }).set({ second: 0, millisecond: 0 });
 
-      const alreadyConfirmedSame =
-        (lead as any).aiLastConfirmedISO &&
-        DateTime.fromISO((lead as any).aiLastConfirmedISO).toISO() === clientTime.toISO();
+      const nowUtc = DateTime.utc();
+      const apptUtc = clientTime.toUTC();
 
-      if (alreadyConfirmedSame) {
-        aiReply = `All set — you’re on my schedule. Talk soon!`;
+      // 🚫 NEW: Never book or confirm a time that is already in the past
+      if (!clientTime.isValid || apptUtc <= nowUtc) {
+        console.log(
+          "[inbound-sms] Skipping booking/confirmation for past or invalid time:",
+          clientTime.toISO()
+        );
+        aiReply =
+          "It looks like that time might have already passed on my end — what works later today or tomorrow for a quick 5 minute call?";
+        memory.state = "awaiting_time";
       } else {
-        try {
-          const bookingPayload = {
-            agentEmail: (lead.userEmail || user.email || "").toLowerCase(),
-            name: resolveLeadDisplayName(lead) || "Client",
-            phone: lead.Phone || (lead as any).phone || fromNumber,
-            email: lead.Email || (lead as any).email || "",
-            time: clientTime.toISO(),
-            state: stateCanon || "AZ",
-            durationMinutes: 30,
-            notes: "Auto-booked via inbound SMS",
-          };
+        const alreadyConfirmedSame =
+          (lead as any).aiLastConfirmedISO &&
+          DateTime.fromISO((lead as any).aiLastConfirmedISO).toISO() === clientTime.toISO();
 
-          console.log("📌 Booking payload ->", bookingPayload);
+        if (alreadyConfirmedSame) {
+          aiReply = `All set — you’re on my schedule. Talk soon!`;
+        } else {
+          try {
+            const bookingPayload = {
+              agentEmail: (lead.userEmail || user.email || "").toLowerCase(),
+              name: resolveLeadDisplayName(lead) || "Client",
+              phone: lead.Phone || (lead as any).phone || fromNumber,
+              email: lead.Email || (lead as any).email || "",
+              time: clientTime.toISO(),
+              state: stateCanon || "AZ",
+              durationMinutes: 30,
+              notes: "Auto-booked via inbound SMS",
+            };
 
-          const bookingRes = await axios.post(
-            `${RAW_BASE_URL || ABS_BASE_URL}/api/google/calendar/book-appointment`,
-            { ...bookingPayload },
-            {
-              headers: { Authorization: `Bearer ${INTERNAL_API_TOKEN}`, "Content-Type": "application/json" },
-              timeout: 15000,
-            },
-          );
+            console.log("📌 Booking payload ->", bookingPayload);
 
-          if ((bookingRes.data || {}).success) {
-            (lead as any).status = "Booked";
-            (lead as any).appointmentTime = clientTime.toJSDate();
+            const bookingRes = await axios.post(
+              `${RAW_BASE_URL || ABS_BASE_URL}/api/google/calendar/book-appointment`,
+              { ...bookingPayload },
+              {
+                headers: { Authorization: `Bearer ${INTERNAL_API_TOKEN}`, "Content-Type": "application/json" },
+                timeout: 15000,
+              },
+            );
 
-            try {
-              const fullName = resolveLeadDisplayName(lead, lead.Phone || (lead as any).phone || fromNumber);
-              await sendAppointmentBookedEmail({
-                to: (lead.userEmail || user.email || "").toLowerCase(),
-                agentName: (user as any)?.name || user.email,
-                leadName: fullName,
-                phone: lead.Phone || (lead as any).phone || fromNumber,
-                state: stateCanon || "",
-                timeISO: clientTime.toISO()!,
-                timezone: clientTime.offsetNameShort || undefined,
-                source: "AI",
-                eventUrl: (bookingRes.data?.event?.htmlLink || bookingRes.data?.htmlLink || "") as string | undefined,
-              });
-            } catch (e) {
-              console.warn("Email send failed (appointment):", e);
+            if ((bookingRes.data || {}).success) {
+              (lead as any).status = "Booked";
+              (lead as any).appointmentTime = clientTime.toJSDate();
+
+              try {
+                const fullName = resolveLeadDisplayName(lead, lead.Phone || (lead as any).phone || fromNumber);
+                await sendAppointmentBookedEmail({
+                  to: (lead.userEmail || user.email || "").toLowerCase(),
+                  agentName: (user as any)?.name || user.email,
+                  leadName: fullName,
+                  phone: lead.Phone || (lead as any).phone || fromNumber,
+                  state: stateCanon || "",
+                  timeISO: clientTime.toISO()!,
+                  timezone: clientTime.offsetNameShort || undefined,
+                  source: "AI",
+                  eventUrl: (bookingRes.data?.event?.htmlLink || bookingRes.data?.htmlLink || "") as string | undefined,
+                });
+              } catch (e) {
+                console.warn("Email send failed (appointment):", e);
+              }
+            } else {
+              console.warn("⚠️ Booking API responded but not success:", bookingRes.data);
             }
-          } else {
-            console.warn("⚠️ Booking API responded but not success:", bookingRes.data);
+          } catch (e) {
+            console.error("⚠️ Booking API failed (proceeding to confirm by SMS):", (e as any)?.response?.data || e);
           }
-        } catch (e) {
-          console.error("⚠️ Booking API failed (proceeding to confirm by SMS):", (e as any)?.response?.data || e);
-        }
 
-        const readable = clientTime.toFormat("ccc, MMM d 'at' h:mm a");
-        aiReply = `Perfect — I’ve got you down for ${readable} ${clientTime.offsetNameShort}. You’ll get a confirmation shortly. Reply RESCHEDULE if you need to change it.`;
-        (lead as any).aiLastConfirmedISO = clientTime.toISO();
-        (lead as any).aiLastProposedISO = clientTime.toISO();
-        memory.state = "scheduled";
-        memory.apptISO = clientTime.toISO();
-        memory.apptText = requestedISO;
-        memory.lastConfirmAtISO = DateTime.utc().toISO();
+          const readable = clientTime.toFormat("ccc, MMM d 'at' h:mm a");
+          aiReply = `Perfect — I’ve got you down for ${readable} ${clientTime.offsetNameShort}. You’ll get a confirmation shortly. Reply RESCHEDULE if you need to change it.`;
+          (lead as any).aiLastConfirmedISO = clientTime.toISO();
+          (lead as any).aiLastProposedISO = clientTime.toISO();
+          memory.state = "scheduled";
+          memory.apptISO = clientTime.toISO();
+          memory.apptText = requestedISO;
+          memory.lastConfirmAtISO = DateTime.utc().toISO();
+        }
       }
     }
 
