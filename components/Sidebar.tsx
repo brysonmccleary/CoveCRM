@@ -1,8 +1,7 @@
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
-import { signOut } from "next-auth/react";
+import { signOut, useSession } from "next-auth/react"; 
 import Image from "next/image";
-import { useSession } from "next-auth/react";
 import { connectAndJoin } from "@/lib/socketClient";
 
 export default function Sidebar() {

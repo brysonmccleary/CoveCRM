@@ -19,7 +19,7 @@ const sections = [
     children: [
       { id: "profile", label: "Profile" },
       { id: "a2p", label: "A2P Registration" },
-      { id: "ai", label: "AI Assistant" }, // ✅ NEW
+      // AI Assistant tab removed for now
     ],
   },
   {
@@ -46,12 +46,6 @@ export default function SettingsPage() {
   const isAdmin = session?.user?.role === "admin";
   const [activeTab, setActiveTab] = useState("profile");
   const [message, setMessage] = useState("");
-
-  // ✅ local state for AI Assistant panel
-  const [aiName, setAiName] = useState("Assistant");
-  const [aiLoading, setAiLoading] = useState(false);
-  const [aiError, setAiError] = useState<string | null>(null);
-  const [aiSaved, setAiSaved] = useState(false);
 
   useEffect(() => {
     const query = new URLSearchParams(window.location.search);
@@ -83,99 +77,12 @@ export default function SettingsPage() {
     return () => clearTimeout(timer);
   }, []);
 
-  // ✅ Load current AI name once when tab first shown
-  useEffect(() => {
-    if (activeTab !== "ai") return;
-    let cancelled = false;
-    (async () => {
-      try {
-        setAiLoading(true);
-        setAiError(null);
-        const res = await fetch("/api/settings/ai");
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "Failed to load");
-        if (!cancelled) setAiName(data.aiAssistantName || "Assistant");
-      } catch (e: any) {
-        if (!cancelled) setAiError(e.message || "Failed to load");
-      } finally {
-        if (!cancelled) setAiLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [activeTab]);
-
-  const saveAiName = async () => {
-    try {
-      setAiLoading(true);
-      setAiError(null);
-      setAiSaved(false);
-      const res = await fetch("/api/settings/ai", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ aiAssistantName: aiName }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Failed to save");
-      setAiName(data.aiAssistantName || "Assistant");
-      setAiSaved(true);
-      setTimeout(() => setAiSaved(false), 2500);
-    } catch (e: any) {
-      setAiError(e.message || "Failed to save");
-    } finally {
-      setAiLoading(false);
-    }
-  };
-
-  const renderAIPanel = () => (
-    <div className="max-w-xl space-y-4">
-      <h2 className="text-2xl font-bold">AI Assistant</h2>
-      <p className="text-sm text-gray-300">
-        Choose how your texting assistant introduces themself. This name is used
-        in lead conversations (e.g., “You’re chatting with <b>{aiName}</b> from
-        our team.”)
-      </p>
-
-      <label className="block text-sm mb-2">Assistant Name</label>
-      <input
-        type="text"
-        className="bg-[#334155] p-3 rounded-md w-full"
-        value={aiName}
-        onChange={(e) => setAiName(e.target.value)}
-        maxLength={40}
-        placeholder="Assistant"
-      />
-      <div className="flex items-center gap-3">
-        <button
-          onClick={saveAiName}
-          disabled={aiLoading || !aiName.trim()}
-          className={`px-6 py-2 rounded-md font-bold ${
-            aiLoading
-              ? "bg-gray-600 cursor-not-allowed"
-              : "bg-green-600 hover:bg-green-700"
-          }`}
-        >
-          {aiLoading ? "Saving..." : "Save Name"}
-        </button>
-        {aiSaved && <span className="text-green-400 text-sm">Saved!</span>}
-        {aiError && <span className="text-red-400 text-sm">{aiError}</span>}
-      </div>
-
-      <div className="text-xs text-gray-400 pt-2">
-        Tip: Keep it short, friendly, and human (e.g., Taylor, Jordan, Alex).
-      </div>
-    </div>
-  );
-
   const renderTabContent = () => {
     switch (activeTab) {
       case "profile":
         return <ProfilePanel />;
       case "a2p":
         return <A2PVerificationPanel />;
-      case "ai":
-        return renderAIPanel(); // ✅ NEW
       case "referral":
         return <ReferralPanel />;
       case "settings":

@@ -1,4 +1,4 @@
-// components/ProfilePanel.tsx
+// /components/settings/ProfilePanel.tsx
 import { useEffect, useState } from "react";
 import { useSession } from "next-auth/react";
 import axios from "axios";

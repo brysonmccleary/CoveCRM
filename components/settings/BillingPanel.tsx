@@ -100,11 +100,10 @@ export default function BillingPanel() {
           <div>
             <p className="font-medium">AI Assistant</p>
             <p className="text-sm text-gray-500 dark:text-gray-300">
-              Transcripts and AI summaries on recorded calls & SMS automation
+              SMS automation for your leads and clients.
             </p>
             <ul className="text-sm text-gray-500 dark:text-gray-300 mt-1 list-disc ml-5">
               <li>$50 monthly access fee</li>
-              <li>$0.02 per minute on recorded calls</li>
             </ul>
           </div>
           <div className="flex items-center gap-3">
