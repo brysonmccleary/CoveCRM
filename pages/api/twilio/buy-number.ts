@@ -19,7 +19,6 @@ const BASE_URL = (
 ).replace(/\/$/, "");
 const INBOUND_SMS_WEBHOOK = `${BASE_URL}/api/twilio/inbound-sms`;
 const STATUS_CALLBACK = `${BASE_URL}/api/twilio/status-callback`;
-// ✅ point voice to inbound-banner webhook
 const VOICE_URL = `${BASE_URL}/api/twilio/voice/inbound`;
 
 /** Normalize to E.164 (+1XXXXXXXXXX) */
@@ -113,11 +112,13 @@ async function ensureTenantMessagingServiceInThisAccount(
   return svc.sid;
 }
 
-/** Add a number to a Messaging Service sender pool. Handles 21710 + 21712 safely. */
+/** Add a number to a Messaging Service sender pool. Handles 21710 + 21712 + stale 20404 safely. */
 async function addNumberToMessagingService(
   client: any,
   serviceSid: string,
   numberSid: string,
+  userId: string,
+  friendlyNameHint?: string,
 ) {
   try {
     await client.messaging.v1.services(serviceSid).phoneNumbers.create({
@@ -125,7 +126,6 @@ async function addNumberToMessagingService(
     });
   } catch (err: any) {
     // 21710: Phone Number or Short Code is already in the Messaging Service.
-    // Safe to ignore – it's already attached where we want it.
     if (err?.code === 21710) {
       return;
     }
@@ -143,12 +143,29 @@ async function addNumberToMessagingService(
       await client.messaging.v1.services(serviceSid).phoneNumbers.create({
         phoneNumberSid: numberSid,
       });
-    } else {
-      // NOTE: If this is a 20404 here, it means the serviceSid truly does not
-      // exist in THIS account. With the new ensureTenantMessagingService logic
-      // above, that should no longer happen for normal flows.
-      throw err;
+      return;
     }
+
+    // 20404: the Messaging Service itself does not exist in THIS account.
+    if (err?.code === 20404) {
+      console.warn(
+        "addNumberToMessagingService: serviceSid not found in this Twilio account, re-ensuring tenant MS",
+        { serviceSid },
+      );
+      // Ensure a fresh, valid service for THIS account & user, then retry once.
+      const freshServiceSid = await ensureTenantMessagingServiceInThisAccount(
+        client,
+        userId,
+        friendlyNameHint,
+      );
+      await client.messaging.v1.services(freshServiceSid).phoneNumbers.create({
+        phoneNumberSid: numberSid,
+      });
+      return;
+    }
+
+    // Anything else: bubble up
+    throw err;
   }
 }
 
@@ -280,7 +297,7 @@ export default async function handler(
         phoneNumber: requestedNumber,
         smsUrl: INBOUND_SMS_WEBHOOK, // fine even if you attach to a Messaging Service
         voiceUrl: VOICE_URL,
-        voiceMethod: "POST", // explicit
+        voiceMethod: "POST",
       });
     } else {
       const areaCodeNum =
@@ -347,8 +364,14 @@ export default async function handler(
       );
     }
 
-    // Attach purchased number to the Messaging Service (idempotent; handles 21710 + 21712)
-    await addNumberToMessagingService(client, targetMS, purchased.sid);
+    // Attach purchased number to the Messaging Service (idempotent; handles 21710 + 21712 + 20404)
+    await addNumberToMessagingService(
+      client,
+      targetMS,
+      purchased.sid,
+      String(user._id),
+      user.name || user.email,
+    );
 
     // ---------- Save on user doc
     user.numbers = user.numbers || [];
