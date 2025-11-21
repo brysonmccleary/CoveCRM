@@ -4,6 +4,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "../auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import DripEnrollment from "@/models/DripEnrollment";
+import Lead from "@/models/Lead";
 
 type Body = {
   leadId?: string;
@@ -15,16 +16,29 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     const session = (await getServerSession(req, res, authOptions as any)) as any;
-    if (!session?.user?.email) return res.status(401).json({ error: "Unauthorized" });
+    if (!session?.user?.email) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
 
-    const { leadId, campaignId }: Body = (req.body || {}) as any;
+    const { leadId, campaignId }: Body = req.body || {};
     if (!leadId || !campaignId) {
       return res.status(400).json({ error: "leadId and campaignId are required" });
     }
 
     await dbConnect();
 
-    const upd = await DripEnrollment.updateOne(
+    // 1. Ensure this lead belongs to the user
+    const lead = await Lead.findOne({
+      _id: leadId,
+      userEmail: session.user.email.toLowerCase(),
+    });
+
+    if (!lead) {
+      return res.status(404).json({ error: "Lead not found" });
+    }
+
+    // 2. Kill any active DripEnrollment
+    const upd = await DripEnrollment.updateMany(
       {
         userEmail: session.user.email,
         leadId,
@@ -33,30 +47,33 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       },
       {
         $set: {
-          status: "canceled",
-          paused: true,
+          status: "stopped",
+          nextSendTime: null,
+          isActive: false,
           isPaused: true,
           stopAll: true,
-          active: false,
-          isActive: false,
-          enabled: false,
-          lastError: "manually removed",
         },
         $unset: {
-          nextSendAt: 1,
           processing: 1,
           processingAt: 1,
         },
       }
     );
 
+    // 3. Remove drip assignment from Lead (legacy)
+    lead.assignedDrips = [];
+    (lead as any).dripProgress = [];
+    lead.isAIEngaged = false;
+    await lead.save();
+
     return res.status(200).json({
       success: true,
       matched: upd.matchedCount,
       modified: upd.modifiedCount,
-      message: upd.modifiedCount > 0 ? "Enrollment canceled" : "No active enrollment found",
+      message: "Lead fully unenrolled from drip",
     });
   } catch (err: any) {
+    console.error("unenroll-lead error:", err);
     return res.status(500).json({ error: "Server error", detail: err?.message });
   }
 }
