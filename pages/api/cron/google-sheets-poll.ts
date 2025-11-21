@@ -1,4 +1,4 @@
-// pages/api/cron/google-sheets-poll.ts
+// /pages/api/cron/google-sheets-poll.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
@@ -67,7 +67,7 @@ async function ensureNonSystemFolderRaw(
 
   // 3) If still system or missing, force a unique safe name
   if (!doc || !doc.name || isSystemFolder(doc.name)) {
-    const uniqueSafe = `${baseName} — Date.now()`;
+    const uniqueSafe = `${baseName} — ${Date.now()}`;
     const ins = await coll.insertOne({ userEmail, name: uniqueSafe, source: "google-sheets" });
     const fresh = (await coll.findOne({ _id: ins.insertedId })) as FolderRaw;
     if (!fresh || !fresh.name || isSystemFolder(fresh.name)) {
@@ -87,31 +87,32 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(405).json({ error: "Method not allowed", fingerprint: FINGERPRINT });
   }
 
-  // --- Cron auth: allow CRON_SECRET OR Vercel cron header ---
-  const CRON_SECRET = process.env.CRON_SECRET || "";
+  // --- Cron auth: single secret pattern (CRON_SECRET) ---
+  const CRON_SECRET = process.env.CRON_SECRET;
+  if (!CRON_SECRET) {
+    // Env misconfiguration — make this obvious in logs instead of looking like a bad token
+    return res
+      .status(500)
+      .json({ error: "CRON_SECRET not configured", fingerprint: FINGERPRINT });
+  }
+
+  // Accept secret via header or query (?token=...) – matches vercel.json: ?token=@CRON_SECRET
+  const headerToken = Array.isArray(req.headers["x-cron-secret"])
+    ? req.headers["x-cron-secret"][0]
+    : (req.headers["x-cron-secret"] as string | undefined);
 
   const queryToken =
-    typeof req.query.token === "string" ? (req.query.token as string) : "";
+    typeof req.query.token === "string" ? (req.query.token as string) : undefined;
 
-  const authHeader = typeof req.headers.authorization === "string"
-    ? (req.headers.authorization as string)
-    : "";
-  const bearerToken = authHeader.replace(/^Bearer\s+/i, "");
+  // Vercel Scheduled Functions include this header
+  const isVercelCron =
+    typeof req.headers["x-vercel-cron"] === "string" &&
+    (req.headers["x-vercel-cron"] as string).length > 0;
 
-  const headerSecret = Array.isArray(req.headers["x-cron-secret"])
-    ? (req.headers["x-cron-secret"][0] as string)
-    : ((req.headers["x-cron-secret"] as string | undefined) || "");
+  const provided = headerToken || queryToken;
 
-  const isVercelCron = !!req.headers["x-vercel-cron"];
-
-  const authorized =
-    isVercelCron ||
-    (!!CRON_SECRET &&
-      (queryToken === CRON_SECRET ||
-        bearerToken === CRON_SECRET ||
-        headerSecret === CRON_SECRET));
-
-  if (!authorized) {
+  // ✅ Allow either: valid token OR a real Vercel Cron job
+  if (!isVercelCron && provided !== CRON_SECRET) {
     return res.status(401).json({ error: "Unauthorized", fingerprint: FINGERPRINT });
   }
 
@@ -222,7 +223,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             if (found?.properties?.title) {
               title = found.properties.title;
             }
-          } catch { /* ignore */ }
+          } catch {
+            /* ignore */
+          }
         }
         if (onlyTitle && title && title !== onlyTitle) continue;
         if (!title) title = "Sheet1";
@@ -258,7 +261,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             {
               arrayFilters: [{ "t.spreadsheetId": spreadsheetId }],
             }
-          ).catch(() => {/* ignore if arrayFilters doesn't match legacy doc */});
+          ).catch(() => {
+            /* ignore if arrayFilters doesn't match legacy doc */
+          });
 
           // Legacy array shape write (best-effort)
           await User.updateOne(
@@ -272,7 +277,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 "googleSheets.sheets.$.folderName": targetFolderName,
               },
             }
-          ).catch(() => {/* ignore if not legacy */});
+          ).catch(() => {
+            /* ignore if not legacy */
+          });
         }
 
         // --- Read values ----------------------------------------------------
@@ -326,7 +333,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
             const p = normPhone(doc.phone ?? (doc as any).Phone);
             const e = normEmail(doc.email ?? (doc as any).Email);
-            if (!p && !e) { skippedNoKey++; continue; }
+            if (!p && !e) {
+              skippedNoKey++;
+              continue;
+            }
 
             doc.userEmail = userEmail;
             doc.source = "google-sheets";
@@ -349,12 +359,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               .lean<{ _id: mongoose.Types.ObjectId } | null>();
 
             if (!existing) {
-              if (!dryRun) await Lead.create({
-                ...doc,
-                folderId: targetFolderId,
-                folder_name: targetFolderName,
-                ["Folder Name"]: targetFolderName
-              });
+              if (!dryRun)
+                await Lead.create({
+                  ...doc,
+                  folderId: targetFolderId,
+                  folder_name: targetFolderName,
+                  ["Folder Name"]: targetFolderName,
+                });
               imported++;
             } else {
               if (!dryRun)
@@ -365,8 +376,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                       ...doc,
                       folderId: targetFolderId,
                       folder_name: targetFolderName,
-                      ["Folder Name"]: targetFolderName
-                    }
+                      ["Folder Name"]: targetFolderName,
+                    },
                   }
                 );
               updated++;
@@ -390,7 +401,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 "googleSheets.syncedSheets.$.folderName": targetFolderName,
               },
             }
-          ).catch(() => {/* ignore if not present */});
+          ).catch(() => {
+            /* ignore if not present */
+          });
 
           await User.updateOne(
             {
@@ -405,7 +418,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 "googleSheets.sheets.$.folderName": targetFolderName,
               },
             }
-          ).catch(() => {/* ignore if not legacy */});
+          ).catch(() => {
+            /* ignore if not legacy */
+          });
         }
 
         detailsAll.push({

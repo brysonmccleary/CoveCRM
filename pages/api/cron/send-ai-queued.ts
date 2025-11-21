@@ -22,9 +22,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const queryToken =
     typeof req.query.token === "string" ? (req.query.token as string) : undefined;
 
-  const authHeader = typeof req.headers.authorization === "string"
-    ? (req.headers.authorization as string)
-    : "";
+  const authHeader =
+    typeof req.headers.authorization === "string"
+      ? (req.headers.authorization as string)
+      : "";
 
   const bearerToken = authHeader.replace(/^Bearer\s+/i, "");
 
@@ -70,7 +71,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const locked = await AiQueuedReply.findOneAndUpdate(
         { _id: item._id, status: "queued" },
         { $set: { status: "sending" }, $inc: { attempts: 1 } },
-        { new: true },
+        { new: true }
       );
       if (!locked) continue;
 
@@ -81,7 +82,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (!user || !lead) {
           await AiQueuedReply.updateOne(
             { _id: locked._id },
-            { $set: { status: "failed", failReason: "Missing user or lead" } },
+            { $set: { status: "failed", failReason: "Missing user or lead" } }
           );
           continue;
         }
@@ -114,7 +115,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         await AiQueuedReply.updateOne(
           { _id: locked._id },
-          { $set: { status: "sent" } },
+          { $set: { status: "sent" } }
         );
 
         processed += 1;
@@ -127,7 +128,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               status: "failed",
               failReason: err?.message || "Unknown error",
             },
-          },
+          }
         );
       }
     }
