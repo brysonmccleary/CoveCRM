@@ -60,7 +60,7 @@ export default function Home() {
             {[
               [
                 "Power Dialer",
-                "Call leads from any number, with local presence and automatic logging.",
+                "Call leads from any number with automatic logging.",
               ],
               [
                 "2-Way SMS Inbox",
@@ -79,8 +79,20 @@ export default function Home() {
                 "Upload from CSV or Google Sheets. Automatically categorize leads by type.",
               ],
               [
-                "Call Summaries + Recording",
-                "Every call gets a smart AI summary plus optional audio recording.",
+                "Built-In Affiliate Program",
+                "Earn recurring commissions by sharing your referral link, built directly into the CRM.",
+              ],
+              [
+                "Prebuilt Drip Campaigns",
+                "Turn on proven text drips for every lead type plus client retention and referral collection.",
+              ],
+              [
+                "No-Show & Missed Appointment Rescheduling",
+                "Automatically text no-shows and missed appointments to reschedule without you lifting a finger.",
+              ],
+              [
+                "Local Presence Dialing",
+                "Use local area codes so more leads pick up your calls.",
               ],
             ].map(([title, description], i) => (
               <div
@@ -104,9 +116,6 @@ export default function Home() {
             <p className="text-4xl font-bold mb-2">$199.99/mo</p>
             <p className="text-sm text-gray-500 mb-4">+ tax & call/SMS usage</p>
             <ul className="text-left text-gray-700 mb-6">
-              <li className="mb-2">
-                ✔ 1 Free Phone Number ($2/month each additional)
-              </li>
               <li className="mb-2">✔ Unlimited users per account</li>
               <li className="mb-2">
                 ✔ Includes dialer, texting, and lead management
