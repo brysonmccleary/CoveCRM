@@ -1,4 +1,3 @@
-// /pages/api/auth/[...nextauth].ts
 import NextAuth, { type NextAuthOptions } from "next-auth";
 import CredentialsProvider from "next-auth/providers/credentials";
 import GoogleProvider from "next-auth/providers/google";
@@ -102,7 +101,8 @@ function getCookieValue(cookieHeader: string | undefined, name: string) {
 }
 
 export const authOptions: NextAuthOptions = {
-  debug: true,
+  // ⬇⬇ Only change here: debug in dev only
+  debug: isDev,
   useSecureCookies: !isDev,
 
   providers: [
@@ -163,7 +163,10 @@ export const authOptions: NextAuthOptions = {
         if (!currentHash) {
           if (DBG) console.log("AUTH DEBUG: no password set, setting one", email);
           const hashed = await bcrypt.hash(password, 10);
-          await User.updateOne({ _id: (user as any)._id }, { $set: { password: hashed } });
+          await User.updateOne(
+            { _id: (user as any)._id },
+            { $set: { password: hashed } }
+          );
           isValid = true;
         } else {
           isValid = await bcrypt.compare(password, String(currentHash));
@@ -316,7 +319,8 @@ export const authOptions: NextAuthOptions = {
 
     // Force a stable post-login landing page to avoid loops
     async redirect({ baseUrl }) {
-      return `${baseUrl}/leads`;
+      // ⬇⬇ Only change here: send to dashboard instead of /leads
+      return `${baseUrl}/dashboard`;
     },
   },
 

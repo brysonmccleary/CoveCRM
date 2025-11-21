@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
-import { signOut, useSession } from "next-auth/react"; 
+import { signOut, useSession } from "next-auth/react";
 import Image from "next/image";
 import { connectAndJoin } from "@/lib/socketClient";
 
@@ -79,7 +79,10 @@ export default function Sidebar() {
           <Link href="/dashboard?tab=leads" className="block hover:underline">
             Leads
           </Link>
-          <Link href="/dashboard?tab=drip-campaigns" className="block hover:underline">
+          <Link
+            href="/dashboard?tab=drip-campaigns"
+            className="block hover:underline"
+          >
             Drip Campaigns
           </Link>
 
@@ -104,7 +107,7 @@ export default function Sidebar() {
 
       <div className="mt-8">
         <button
-          onClick={() => signOut({ callbackUrl: "/" })}
+          onClick={() => signOut({ callbackUrl: "/auth/signin" })}
           className="block text-red-500 hover:underline"
           aria-label="Log out and return to Home"
         >
