@@ -1,3 +1,4 @@
+// pages/api/drips/drips-folder-watch.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import dbConnect from "@/lib/mongooseConnect";
 import { DateTime } from "luxon";
@@ -16,7 +17,9 @@ const SEND_HOUR_PT = 9;
 function nextWindowPT(): Date {
   const nowPT = DateTime.now().setZone(PT_ZONE);
   const base = nowPT.hour < SEND_HOUR_PT ? nowPT : nowPT.plus({ days: 1 });
-  return base.set({ hour: SEND_HOUR_PT, minute: 0, second: 0, millisecond: 0 }).toJSDate();
+  return base
+    .set({ hour: SEND_HOUR_PT, minute: 0, second: 0, millisecond: 0 })
+    .toJSDate();
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -25,19 +28,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(405).json({ message: "Method not allowed" });
   }
 
-  // --- Cron Auth ---
-  const CRON_SECRET = process.env.CRON_SECRET;
-  if (!CRON_SECRET) {
-    return res.status(500).json({ message: "CRON_SECRET not configured" });
-  }
-
-  const token =
-    (typeof req.query.token === "string" && req.query.token) ||
-    (typeof req.headers["x-cron-secret"] === "string" && req.headers["x-cron-secret"]);
-
-  if (!token || token !== CRON_SECRET) {
-    return res.status(401).json({ message: "Unauthorized" });
-  }
+  // ⚠️ Auth is enforced in middleware.ts for /api/drips/drips-folder-watch.
+  // Middleware checks CRON_SECRET / x-vercel-cron / Bearer token, so we don’t
+  // need a second auth check here. That avoids redundant 401s from this handler.
 
   // Allow global pause
   if (process.env.DRIPS_HARD_STOP === "1") {
@@ -52,7 +45,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!ok) return res.status(200).json({ message: "Already running, skipping" });
 
     const watchers = await DripFolderEnrollment.find({ active: true })
-      .select({ _id: 1, userEmail: 1, folderId: 1, campaignId: 1, startMode: 1, lastScanAt: 1 })
+      .select({
+        _id: 1,
+        userEmail: 1,
+        folderId: 1,
+        campaignId: 1,
+        startMode: 1,
+        lastScanAt: 1,
+      })
       .lean();
 
     let scanned = 0,
@@ -72,7 +72,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const isSmsActive = !!campaign && campaign.type === "sms" && campaign.isActive === true;
 
       if (!isSmsActive) {
-        await DripFolderEnrollment.updateOne({ _id: w._id }, { $set: { active: false } });
+        await DripFolderEnrollment.updateOne(
+          { _id: w._id },
+          { $set: { active: false } }
+        );
         continue;
       }
 
