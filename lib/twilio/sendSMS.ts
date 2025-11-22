@@ -11,7 +11,11 @@ import { getTimezoneFromState } from "@/utils/timezone";
 import { getClientForUser } from "./getClientForUser";
 import type { MessageListInstanceCreateOptions } from "twilio/lib/rest/api/v2010/account/message";
 
-const BASE_URL = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "http://localhost:3000").replace(/\/$/, "");
+const BASE_URL = (
+  process.env.NEXT_PUBLIC_BASE_URL ||
+  process.env.BASE_URL ||
+  "http://localhost:3000"
+).replace(/\/$/, "");
 const STATUS_CALLBACK =
   process.env.A2P_STATUS_CALLBACK_URL ||
   (BASE_URL ? `${BASE_URL}/api/twilio/status-callback` : undefined);
@@ -85,11 +89,13 @@ async function ensureTenantMessagingService(
   let a2p = await A2PProfile.findOne({ userId });
   if (a2p?.messagingServiceSid) {
     try {
-      await platformClient.messaging.v1.services(a2p.messagingServiceSid).update({
-        friendlyName: `CoveCRM – ${friendlyNameHint || userId}`,
-        inboundRequestUrl: `${BASE_URL}/api/twilio/inbound-sms`,
-        statusCallback: STATUS_CALLBACK,
-      });
+      await platformClient.messaging.v1
+        .services(a2p.messagingServiceSid)
+        .update({
+          friendlyName: `CoveCRM – ${friendlyNameHint || userId}`,
+          inboundRequestUrl: `${BASE_URL}/api/twilio/inbound-sms`,
+          statusCallback: STATUS_CALLBACK,
+        });
     } catch {}
     return a2p.messagingServiceSid;
   }
@@ -174,16 +180,33 @@ async function sendCore(
   if (!toNorm) throw new Error("Invalid destination phone number.");
   const isUSDest = isUS(toNorm);
 
-  const { client, usingPersonal } = await getClientForUser(user.email);
+  // Resolve Twilio client for this user (platform vs subaccount vs personal)
+  const { client, usingPersonal, accountSid } = await getClientForUser(
+    user.email,
+  );
+  const platformAccountSid = (process.env.TWILIO_ACCOUNT_SID || "").trim();
+  const isPlatformAccount =
+    platformAccountSid && accountSid === platformAccountSid;
+  const isSubaccount = !usingPersonal && !isPlatformAccount;
+
   const userA2P = (user as any).a2p || {};
   const legacyA2P = await A2PProfile.findOne({
     userId: String(user._id),
   }).lean();
 
+  // --- Strict A2P gating for US SMS ---
+  const isMessagingReady = userA2P.messagingReady === true;
+  if (isUSDest && !isMessagingReady && !DEV_ALLOW_UNAPPROVED) {
+    throw new Error(
+      "Texting is not enabled yet. Your A2P 10DLC registration is pending or not linked.",
+    );
+  }
+
+  // Only platform/master account is allowed to default to the shared Messaging Service SID.
   let messagingServiceSid =
     paramsIn.overrideMsid ||
     userA2P.messagingServiceSid ||
-    SHARED_MESSAGING_SERVICE_SID ||
+    (isPlatformAccount ? SHARED_MESSAGING_SERVICE_SID : null) ||
     legacyA2P?.messagingServiceSid ||
     null;
 
@@ -191,21 +214,8 @@ async function sendCore(
   const wantsDelayedSend =
     !!(paramsIn.delayMinutesForNonQuiet && paramsIn.delayMinutesForNonQuiet > 0);
 
+  // If caller explicitly passes a from-number, prefer that over Messaging Service
   if (paramsIn.from) messagingServiceSid = null;
-
-  const approvedViaUser =
-    !!userA2P.messagingServiceSid && userA2P.messagingReady === true;
-  const approvedViaShared = Boolean(SHARED_MESSAGING_SERVICE_SID);
-  const approvedViaLegacy = Boolean(legacyA2P?.messagingReady);
-  if (
-    isUSDest &&
-    messagingServiceSid &&
-    !(approvedViaUser || approvedViaShared || approvedViaLegacy || DEV_ALLOW_UNAPPROVED)
-  ) {
-    throw new Error(
-      "Texting is not enabled yet. Your A2P 10DLC registration is pending or not linked.",
-    );
-  }
 
   const lead = await resolveLeadForSend({
     leadId: paramsIn.leadId,
@@ -216,7 +226,7 @@ async function sendCore(
   // pick from number from thread if not provided
   let forcedFrom: string | null = paramsIn.from || null;
 
-  // ❗ For delayed AI replies we *must* use a Messaging Service so Twilio can schedule.
+  // For delayed AI replies we *must* use a Messaging Service so Twilio can schedule.
   // So we only auto-force the from-number when we are NOT doing a delayed send.
   if (!forcedFrom && lead?._id && !wantsDelayedSend) {
     const lastMsg = await Message.findOne({ leadId: lead._id })
@@ -331,6 +341,11 @@ async function sendCore(
   };
   if (paramsIn.mediaUrls?.length) (twParams as any).mediaUrl = paramsIn.mediaUrls;
 
+  // Routing:
+  //  - If we have a Messaging Service SID, use it (platform account or per-tenant MS).
+  //  - Else if we have a from-number, use that.
+  //  - Else, only the platform/master account is allowed to auto-create a per-tenant MS.
+  //  - Subaccounts without an explicit from-number will error (no silent use of master MS).
   if (messagingServiceSid) {
     (twParams as any).messagingServiceSid = messagingServiceSid;
     if (scheduledAt) {
@@ -344,7 +359,7 @@ async function sendCore(
         "⚠️ Requested scheduled send but no Messaging Service SID; sending immediately.",
       );
     }
-  } else if (!usingPersonal) {
+  } else if (!usingPersonal && isPlatformAccount) {
     const msid = await ensureTenantMessagingService(
       String(user._id),
       user.name || user.email,
@@ -356,7 +371,9 @@ async function sendCore(
       (twParams as any).sendAt = scheduledAt;
     }
   } else {
-    throw new Error("No routing set (neither messagingServiceSid nor from).");
+    throw new Error(
+      "No routing set (neither messagingServiceSid nor from). Please choose a sending number.",
+    );
   }
 
   const mps =
@@ -368,7 +385,7 @@ async function sendCore(
   try {
     const tw = await client.messages.create(twParams);
     if (usingPersonal || (user as any).billingMode === "self") {
-      await trackUsage({ user, amount: 0, source: "twilio-self" });
+      await trackUsage({ user, amount: 0, source: "twilio-self" as any });
     } else {
       await trackUsage({ user, amount: SMS_COST, source: "twilio" });
     }

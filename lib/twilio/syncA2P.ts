@@ -1,8 +1,12 @@
-// lib/twilio/syncA2P.ts
-import twilio from "twilio";
+// /lib/twilio/syncA2P.ts
 import mongooseConnect from "@/lib/mongooseConnect";
 import User, { IUser } from "@/models/User";
-import A2PProfile from "@/models/A2PProfile";
+import A2PProfile, {
+  A2PRegistrationStatus,
+  A2PApplicationStatus,
+} from "@/models/A2PProfile";
+import PhoneNumber from "@/models/PhoneNumber";
+import { getClientForUser } from "@/lib/twilio/getClientForUser";
 import { sendA2PApprovedEmail, sendA2PDeclinedEmail } from "@/lib/email";
 
 /**
@@ -11,8 +15,8 @@ import { sendA2PApprovedEmail, sendA2PDeclinedEmail } from "@/lib/email";
 function computeRegistrationStatus(opts: {
   brandStatus?: string;
   campaignStatus?: string;
-  hasServiceWithNumbers: boolean;
-}) {
+  hasNumbers: boolean;
+}): A2PRegistrationStatus {
   const b = String(opts.brandStatus || "").toLowerCase();
   const c = String(opts.campaignStatus || "").toLowerCase();
 
@@ -21,22 +25,31 @@ function computeRegistrationStatus(opts: {
   const campaignApproved = c === "approved" || c === "active";
   const campaignRejected = c === "rejected";
 
-  if (brandRejected || campaignRejected) return "rejected" as const;
-  if (brandApproved && campaignApproved && opts.hasServiceWithNumbers)
-    return "ready" as const;
-  if (brandApproved && !campaignApproved) return "brand_approved" as const;
+  if (brandRejected || campaignRejected) return "rejected";
+  if (brandApproved && campaignApproved && opts.hasNumbers) return "ready";
+  if (brandApproved && !campaignApproved) return "brand_approved";
   if (!brandApproved && (b === "pending" || b === "submitted"))
-    return "brand_submitted" as const;
+    return "brand_submitted";
   if (brandApproved && (c === "pending" || c === "submitted"))
-    return "campaign_submitted" as const;
-  return "not_started" as const;
+    return "campaign_submitted";
+  return "not_started";
+}
+
+function computeApplicationStatus(
+  registrationStatus: A2PRegistrationStatus,
+): A2PApplicationStatus {
+  if (registrationStatus === "ready") return "approved";
+  if (registrationStatus === "rejected") return "declined";
+  return "pending";
 }
 
 /**
  * Sync Twilio A2P state + numbers for a single user.
+ * - Uses getClientForUser(email) so we hit the correct Twilio account (master vs subaccount)
  * - Uses stored brand/campaign/service SIDs from A2PProfile when available
  * - Falls back to best-effort discovery (typed as any to avoid SDK type gaps)
  * - Updates A2PProfile + User (numbers + a2p quick fields)
+ * - Marks PhoneNumber.a2pApproved based on readiness
  * - Sends approval/decline email on state transitions
  */
 export async function syncA2PForUser(passedUser: IUser) {
@@ -46,18 +59,18 @@ export async function syncA2PForUser(passedUser: IUser) {
   const user = await User.findById(passedUser._id).lean<IUser>().exec();
   if (!user?.email) return passedUser;
 
-  const accountSid = process.env.TWILIO_ACCOUNT_SID;
-  const authToken = process.env.TWILIO_AUTH_TOKEN;
-  if (!accountSid || !authToken) {
-    throw new Error("Missing TWILIO_ACCOUNT_SID or TWILIO_AUTH_TOKEN");
-  }
+  // Resolve the correct Twilio client + accountSid (master OR subaccount OR personal)
+  const { client, accountSid } = await getClientForUser(user.email);
 
-  const client = twilio(accountSid, authToken);
+  const platformAccountSid = (process.env.TWILIO_ACCOUNT_SID || "").trim();
+  const isPlatformAccount =
+    platformAccountSid && accountSid === platformAccountSid;
 
   // Pull or create A2PProfile for this user
   const userId = String(user._id);
   let profile = await A2PProfile.findOne({ userId }).exec();
   if (!profile) {
+    // Minimal placeholder; real data should be filled during registration flow
     profile = await A2PProfile.create({
       userId,
       businessName: "",
@@ -86,20 +99,20 @@ export async function syncA2PForUser(passedUser: IUser) {
   // --- Fetch brand status (by SID when present) ---
   let brandStatus: string | undefined;
   try {
-    if (brandSid) {
-      const br = await (client.messaging.v1 as any)
-        .brandRegistrations(brandSid)
-        .fetch();
+    const messagingV1 = (client.messaging.v1 as any) || {};
+    if (brandSid && messagingV1.brandRegistrations) {
+      const br = await messagingV1.brandRegistrations(brandSid).fetch();
       brandStatus = br?.status;
-    } else {
-      // Best-effort discovery; cast as any to avoid SDK typing gaps
-      const brands = await ((
-        client.messaging.v1 as any
-      ).brandRegistrations.list?.({ limit: 50 }) ?? []);
+    } else if (messagingV1.brandRegistrations?.list) {
+      // Best-effort discovery: use approved/active first, else first returned
+      const brands =
+        (await messagingV1.brandRegistrations.list({ limit: 50 })) || [];
       if (brands.length) {
         const approved =
           brands.find((b: any) =>
-            ["approved", "active"].includes(String(b?.status).toLowerCase()),
+            ["approved", "active"].includes(
+              String(b?.status).toLowerCase(),
+            ),
           ) || brands[0];
         brandSid = approved?.brandSid || approved?.sid || approved?.id;
         brandStatus = approved?.status;
@@ -112,7 +125,7 @@ export async function syncA2PForUser(passedUser: IUser) {
   // --- Fetch campaign status (by SID when present) ---
   let campaignStatus: string | undefined;
   try {
-    const campaignsApi = (client.messaging.v1 as any).campaigns;
+    const campaignsApi = (client.messaging.v1 as any)?.campaigns;
     if (campaignSid && campaignsApi?.call) {
       // Some SDK versions expose .campaigns(cSid).fetch()
       const c = await campaignsApi(campaignSid).fetch();
@@ -126,7 +139,9 @@ export async function syncA2PForUser(passedUser: IUser) {
       if (list?.length) {
         const approved =
           list.find((c: any) =>
-            ["approved", "active"].includes(String(c?.status).toLowerCase()),
+            ["approved", "active"].includes(
+              String(c?.status).toLowerCase(),
+            ),
           ) || list[0];
         campaignSid = approved?.sid || campaignSid;
         campaignStatus = approved?.status;
@@ -136,33 +151,40 @@ export async function syncA2PForUser(passedUser: IUser) {
     // ignore; keep undefined
   }
 
-  // --- Pick a Messaging Service (prefer stored/env; else first with numbers) ---
-  const forceMsSid =
-    process.env.FORCE_MESSAGING_SERVICE_SID ||
-    process.env.TWILIO_MESSAGING_SERVICE_SID;
+  // --- Pick a Messaging Service (platform account only) ---
+  // For subaccounts / personal accounts, we do NOT apply shared/platform MS SIDs from env.
+  const envForceMsSid = isPlatformAccount
+    ? process.env.FORCE_MESSAGING_SERVICE_SID ||
+      process.env.TWILIO_MESSAGING_SERVICE_SID
+    : undefined;
+
+  const messagingV1 = (client.messaging.v1 as any) || {};
   let messagingService: any | undefined;
 
   async function fetchService(sid: string) {
     try {
-      return await client.messaging.v1.services(sid).fetch();
+      return await messagingV1.services(sid).fetch();
     } catch {
       return undefined;
     }
   }
 
-  if (forceMsSid) messagingService = await fetchService(forceMsSid);
-  if (!messagingService && messagingServiceSid)
+  if (envForceMsSid && messagingV1.services) {
+    messagingService = await fetchService(envForceMsSid);
+  }
+  if (!messagingService && messagingServiceSid && messagingV1.services) {
     messagingService = await fetchService(messagingServiceSid);
+  }
 
-  if (!messagingService) {
+  if (!messagingService && messagingV1.services?.list) {
     try {
-      const services = await client.messaging.v1.services.list({ limit: 50 });
-      // Choose the first service that has at least one attached number
+      const services = await messagingV1.services.list({ limit: 50 });
+      // Prefer a service that actually has numbers attached
       for (const s of services) {
         try {
-          const nums = await client.messaging.v1
-            .services(s.sid)
-            .phoneNumbers.list({ limit: 1 });
+          const nums = await messagingV1.services(s.sid).phoneNumbers.list({
+            limit: 1,
+          });
           if (nums.length > 0) {
             messagingService = s;
             break;
@@ -178,13 +200,13 @@ export async function syncA2PForUser(passedUser: IUser) {
         messagingServiceSid = messagingService.sid;
       }
     } catch {
-      // ignore
+      // ignore; no services available in this account
     }
-  } else {
+  } else if (messagingService) {
     messagingServiceSid = messagingService.sid;
   }
 
-  // --- Pull purchased numbers from the account ---
+  // --- Pull purchased numbers from THIS Twilio account ---
   const twilioNumbers = await client.incomingPhoneNumbers.list({ limit: 100 });
   const mappedNumbers = twilioNumbers.map((num: any) => ({
     sid: num.sid,
@@ -210,20 +232,24 @@ export async function syncA2PForUser(passedUser: IUser) {
     },
   }));
 
-  const hasServiceWithNumbers = Boolean(
-    messagingServiceSid && mappedNumbers.length > 0,
-  );
+  // For readiness, we only require:
+  // - Brand approved
+  // - Campaign approved
+  // - At least one number in this account
+  const hasNumbers = mappedNumbers.length > 0;
 
   // --- Compute readiness + new registrationStatus
   const registrationStatus = computeRegistrationStatus({
     brandStatus,
     campaignStatus,
-    hasServiceWithNumbers,
+    hasNumbers,
   });
   const messagingReady = registrationStatus === "ready";
+  const applicationStatus = computeApplicationStatus(registrationStatus);
 
   // --- Detect transitions for email
-  const prevStatus = profile.registrationStatus || "not_started";
+  const prevStatus: A2PRegistrationStatus =
+    (profile.registrationStatus as A2PRegistrationStatus) || "not_started";
   const prevReady = Boolean(profile.messagingReady);
 
   const justApproved = !prevReady && messagingReady;
@@ -236,8 +262,10 @@ export async function syncA2PForUser(passedUser: IUser) {
   profile.campaignSid = campaignSid || profile.campaignSid;
   profile.messagingServiceSid =
     messagingServiceSid || profile.messagingServiceSid;
-  profile.registrationStatus = registrationStatus as any;
+  profile.registrationStatus = registrationStatus;
   profile.messagingReady = messagingReady;
+  profile.applicationStatus = applicationStatus;
+  profile.lastSyncedAt = now;
   profile.updatedAt = now;
 
   if (justApproved) {
@@ -249,7 +277,7 @@ export async function syncA2PForUser(passedUser: IUser) {
 
   try {
     await profile.save();
-  } catch (e) {
+  } catch {
     // non-fatal
   }
 
@@ -272,6 +300,16 @@ export async function syncA2PForUser(passedUser: IUser) {
     { new: true, upsert: false },
   ).exec();
 
+  // --- Mark PhoneNumber.a2pApproved for this user
+  try {
+    const userScoped = { userId: userId };
+    await PhoneNumber.updateMany(userScoped, {
+      $set: { a2pApproved: messagingReady },
+    }).exec();
+  } catch {
+    // non-fatal; do not break sync if PhoneNumber model fails
+  }
+
   // --- Notify on transitions (best-effort; ignore failures)
   try {
     if (justApproved && user.email) {
@@ -279,17 +317,22 @@ export async function syncA2PForUser(passedUser: IUser) {
         to: user.email,
         name: (user as any).name || undefined,
         dashboardUrl: process.env.NEXT_PUBLIC_BASE_URL
-          ? `${process.env.NEXT_PUBLIC_BASE_URL.replace(/\/$/, "")}/settings/messaging`
+          ? `${process.env.NEXT_PUBLIC_BASE_URL.replace(
+              /\/$/,
+              "",
+            )}/settings/messaging`
           : undefined,
       });
     } else if (justRejected && user.email) {
       await sendA2PDeclinedEmail({
         to: user.email,
         name: (user as any).name || undefined,
-        // If Twilio returns a reason on campaign/brand objects, you could surface it here
         reason: undefined,
         helpUrl: process.env.NEXT_PUBLIC_BASE_URL
-          ? `${process.env.NEXT_PUBLIC_BASE_URL.replace(/\/$/, "")}/help/a2p-checklist`
+          ? `${process.env.NEXT_PUBLIC_BASE_URL.replace(
+              /\/$/,
+              "",
+            )}/help/a2p-checklist`
           : undefined,
       });
     }
@@ -297,7 +340,7 @@ export async function syncA2PForUser(passedUser: IUser) {
     // ignore notification errors
   }
 
-  return (updated as unknown as IUser) || passedUser;
+  return ((updated as unknown as IUser) || passedUser) as IUser;
 }
 
 /** Cron helper: sync many users */
