@@ -19,6 +19,7 @@ import User from "@/models/User";
  * - SECONDARY_PROFILE_POLICY_SID
  * - A2P_TRUST_PRODUCT_POLICY_SID
  * - A2P_STATUS_CALLBACK_URL
+ * - A2P_NOTIFICATIONS_EMAIL
  */
 
 const accountSid = process.env.TWILIO_ACCOUNT_SID!;
@@ -40,10 +41,72 @@ const baseUrl =
 const STATUS_CB =
   process.env.A2P_STATUS_CALLBACK_URL || `${baseUrl}/api/a2p/status-callback`;
 
+const NOTIFY_EMAIL =
+  process.env.A2P_NOTIFICATIONS_EMAIL || "a2p@yourcompany.com";
+
 // ---------------- helpers ----------------
 function required<T>(v: T, name: string): T {
   if (!v) throw new Error(`Missing required field: ${name}`);
   return v;
+}
+
+function maskSid(sid?: string | null) {
+  if (!sid || typeof sid !== "string") return sid;
+  if (sid.length <= 6) return sid;
+  return `${sid.slice(0, 2)}…${sid.slice(-4)}`;
+}
+
+function summarizeAttributes(attrs: any) {
+  try {
+    if (!attrs) return { keys: [], length: 0 };
+    const obj = typeof attrs === "string" ? JSON.parse(attrs) : attrs;
+    const keys = Object.keys(obj);
+    return {
+      keys,
+      length: JSON.stringify(obj).length,
+    };
+  } catch {
+    return { keys: [], length: 0, parseError: true };
+  }
+}
+
+function logStep(step: string, extra?: any) {
+  console.log(
+    "[A2P start] step:",
+    step,
+    extra
+      ? {
+          ...extra,
+        }
+      : undefined,
+  );
+}
+
+function logTwilioError(step: string, err: any, extra?: any) {
+  console.error("[A2P start] Twilio error at step:", step, {
+    code: err?.code,
+    status: err?.status,
+    moreInfo: err?.moreInfo,
+    details: err?.details,
+    message: err?.message,
+    extra,
+  });
+}
+
+async function callTwilio<T>(
+  step: string,
+  extra: any,
+  fn: () => Promise<T>,
+): Promise<T> {
+  logStep(step, extra);
+  try {
+    const result = await fn();
+    console.log("[A2P start] step success:", step);
+    return result;
+  } catch (err: any) {
+    logTwilioError(step, err, extra);
+    throw err;
+  }
 }
 
 // Twilio's TS typings for TrustHub vary across SDK versions; cast at the boundary.
@@ -51,45 +114,113 @@ async function assignEntityToCustomerProfile(
   customerProfileSid: string,
   objectSid: string,
 ) {
-  await (
-    client.trusthub.v1.customerProfiles(customerProfileSid) as any
-  ).entityAssignments.create({
-    objectSid,
-  });
+  return callTwilio(
+    "assignEntityToCustomerProfile",
+    {
+      customerProfileSid: maskSid(customerProfileSid),
+      objectSid: maskSid(objectSid),
+    },
+    async () =>
+      (client.trusthub.v1.customerProfiles(customerProfileSid) as any)
+        .entityAssignments.create({
+          objectSid,
+        }),
+  );
 }
+
 async function assignEntityToTrustProduct(
   trustProductSid: string,
   objectSid: string,
 ) {
-  await (
-    client.trusthub.v1.trustProducts(trustProductSid) as any
-  ).entityAssignments.create({
-    objectSid,
-  });
+  return callTwilio(
+    "assignEntityToTrustProduct",
+    {
+      trustProductSid: maskSid(trustProductSid),
+      objectSid: maskSid(objectSid),
+    },
+    async () =>
+      (client.trusthub.v1.trustProducts(trustProductSid) as any)
+        .entityAssignments.create({
+          objectSid,
+        }),
+  );
 }
+
 async function evaluateAndSubmitCustomerProfile(customerProfileSid: string) {
-  try {
-    await (
-      client.trusthub.v1.customerProfiles(customerProfileSid) as any
-    ).evaluations.create({});
-  } catch {}
-  try {
-    await client.trusthub.v1.customerProfiles(customerProfileSid).update({
-      status: "pending-review",
-    } as any);
-  } catch {}
+  await callTwilio(
+    "customerProfile.evaluations.create",
+    { customerProfileSid: maskSid(customerProfileSid) },
+    async () => {
+      try {
+        return await (
+          client.trusthub.v1.customerProfiles(customerProfileSid) as any
+        ).evaluations.create({});
+      } catch (err) {
+        // some accounts may not allow explicit evaluations; log + continue
+        logTwilioError("customerProfile.evaluations.create (non-fatal)", err, {
+          customerProfileSid: maskSid(customerProfileSid),
+        });
+        return null;
+      }
+    },
+  );
+
+  await callTwilio(
+    "customerProfile.update(status=pending-review)",
+    { customerProfileSid: maskSid(customerProfileSid) },
+    async () => {
+      try {
+        return await client.trusthub.v1
+          .customerProfiles(customerProfileSid)
+          .update({
+            status: "pending-review",
+          } as any);
+      } catch (err) {
+        logTwilioError("customerProfile.update (non-fatal)", err, {
+          customerProfileSid: maskSid(customerProfileSid),
+        });
+        return null;
+      }
+    },
+  );
 }
+
 async function evaluateAndSubmitTrustProduct(trustProductSid: string) {
-  try {
-    await (
-      client.trusthub.v1.trustProducts(trustProductSid) as any
-    ).evaluations.create({});
-  } catch {}
-  try {
-    await client.trusthub.v1.trustProducts(trustProductSid).update({
-      status: "pending-review",
-    } as any);
-  } catch {}
+  await callTwilio(
+    "trustProduct.evaluations.create",
+    { trustProductSid: maskSid(trustProductSid) },
+    async () => {
+      try {
+        return await (
+          client.trusthub.v1.trustProducts(trustProductSid) as any
+        ).evaluations.create({});
+      } catch (err) {
+        logTwilioError("trustProduct.evaluations.create (non-fatal)", err, {
+          trustProductSid: maskSid(trustProductSid),
+        });
+        return null;
+      }
+    },
+  );
+
+  await callTwilio(
+    "trustProduct.update(status=pending-review)",
+    { trustProductSid: maskSid(trustProductSid) },
+    async () => {
+      try {
+        return await client.trusthub.v1
+          .trustProducts(trustProductSid)
+          .update({
+            status: "pending-review",
+          } as any);
+      } catch (err) {
+        logTwilioError("trustProduct.update (non-fatal)", err, {
+          trustProductSid: maskSid(trustProductSid),
+        });
+        return null;
+      }
+    },
+  );
 }
 
 async function ensureMessagingServiceForUser(
@@ -99,11 +230,21 @@ async function ensureMessagingServiceForUser(
   const a2p = await A2PProfile.findOne({ userId }).lean<IA2PProfile | null>();
   if (a2p?.messagingServiceSid) return a2p.messagingServiceSid;
 
-  const ms = await client.messaging.v1.services.create({
+  const payload = {
     friendlyName: `CoveCRM Service – ${userEmail}`,
     inboundRequestUrl: `${baseUrl}/api/twilio/inbound-sms`,
     statusCallback: `${baseUrl}/api/twilio/status-callback`,
-  });
+  };
+
+  const ms = await callTwilio(
+    "messaging.services.create",
+    {
+      friendlyName: payload.friendlyName,
+      inboundRequestUrl: payload.inboundRequestUrl,
+      statusCallback: payload.statusCallback,
+    },
+    async () => client.messaging.v1.services.create(payload),
+  );
 
   await A2PProfile.updateOne(
     { userId },
@@ -147,7 +288,7 @@ export default async function handler(
       volume, // string
       optInScreenshotUrl, // string (optional)
       usecaseCode, // string | undefined
-      // ✅ NEW optional links
+      // optional links
       landingOptInUrl,
       landingTosUrl,
       landingPrivacyUrl,
@@ -181,6 +322,9 @@ export default async function handler(
       );
     }
 
+    const emailStr = String(email);
+    const businessNameStr = String(businessName);
+
     // Upsert local A2PProfile
     const userId = String(user._id);
     const existing = await A2PProfile.findOne({
@@ -190,11 +334,11 @@ export default async function handler(
 
     const setPayload: Partial<IA2PProfile> & { userId: string } = {
       userId,
-      businessName: String(businessName),
+      businessName: businessNameStr,
       ein: String(ein),
       website: String(website),
       address: String(address),
-      email: String(email),
+      email: emailStr,
       phone: String(phone),
       contactTitle: String(contactTitle),
       contactFirstName: String(contactFirstName),
@@ -204,7 +348,7 @@ export default async function handler(
       optInDetails: String(optInDetails),
       volume: (volume as string) || "Low",
       optInScreenshotUrl: (optInScreenshotUrl as string) || "",
-      // ✅ persist optional artifacts & campaign choice
+      // persist optional artifacts & campaign choice
       landingOptInUrl: (landingOptInUrl as string) || "",
       landingTosUrl: (landingTosUrl as string) || "",
       landingPrivacyUrl: (landingPrivacyUrl as string) || "",
@@ -242,12 +386,24 @@ export default async function handler(
     // 1) Secondary Customer Profile (BU...) if missing
     let secondaryProfileSid: string | undefined = (a2p as any).profileSid;
     if (!secondaryProfileSid) {
-      const created = await client.trusthub.v1.customerProfiles.create({
+      const payload = {
         friendlyName: `${setPayload.businessName} – Secondary Customer Profile`,
-        email: process.env.A2P_NOTIFICATIONS_EMAIL || "a2p@yourcompany.com",
+        email: NOTIFY_EMAIL,
         policySid: SECONDARY_PROFILE_POLICY_SID,
         statusCallback: STATUS_CB,
-      });
+      };
+
+      const created = await callTwilio(
+        "customerProfiles.create",
+        {
+          friendlyName: payload.friendlyName,
+          email: payload.email,
+          policySid: payload.policySid,
+          statusCallback: payload.statusCallback,
+        },
+        async () => client.trusthub.v1.customerProfiles.create(payload),
+      );
+
       secondaryProfileSid = created.sid;
 
       await A2PProfile.updateOne(
@@ -258,23 +414,32 @@ export default async function handler(
 
     // 1.2) EndUser: business information + attach
     if (!(a2p as any).businessEndUserSid) {
-      const businessAttributes = JSON.stringify({
-        business_identity: "BUSINESS",
+      const businessAttributes = {
+        business_identity: "direct_customer",
         business_industry: "OTHER",
         business_name: setPayload.businessName,
-        business_regions_of_operation: ["US"],
+        business_regions_of_operation: "USA_AND_CANADA",
         business_registration_identifier: "EIN",
         business_registration_number: setPayload.ein,
         business_type: "LLC",
         website_url: setPayload.website,
         social_media_profile_urls: [] as string[],
-      });
+      };
 
-      const businessEU = await client.trusthub.v1.endUsers.create({
-        type: "customer_profile_business_information",
-        friendlyName: `${setPayload.businessName} – Business Info`,
-        attributes: businessAttributes as any,
-      });
+      const businessEU = await callTwilio(
+        "endUsers.create (business_info)",
+        {
+          type: "customer_profile_business_information",
+          friendlyName: `${setPayload.businessName} – Business Info`,
+          attributesSummary: summarizeAttributes(businessAttributes),
+        },
+        async () =>
+          client.trusthub.v1.endUsers.create({
+            type: "customer_profile_business_information",
+            friendlyName: `${setPayload.businessName} – Business Info`,
+            attributes: businessAttributes as any,
+          }),
+      );
 
       await assignEntityToCustomerProfile(secondaryProfileSid!, businessEU.sid);
 
@@ -286,19 +451,29 @@ export default async function handler(
 
     // 1.4) Authorized representative + attach
     if (!(a2p as any).authorizedRepEndUserSid) {
-      const repAttributes = JSON.stringify({
+      const repAttributes = {
         first_name: setPayload.contactFirstName,
         last_name: setPayload.contactLastName,
         email: setPayload.email,
         phone_number: setPayload.phone,
-        job_title: setPayload.contactTitle,
-      });
+        business_title: setPayload.contactTitle,
+        job_position: setPayload.contactTitle,
+      };
 
-      const repEU = await client.trusthub.v1.endUsers.create({
-        type: "authorized_representative_1",
-        friendlyName: `${setPayload.businessName} – Authorized Rep`,
-        attributes: repAttributes as any,
-      });
+      const repEU = await callTwilio(
+        "endUsers.create (authorized_rep)",
+        {
+          type: "authorized_representative_1",
+          friendlyName: `${setPayload.businessName} – Authorized Rep`,
+          attributesSummary: summarizeAttributes(repAttributes),
+        },
+        async () =>
+          client.trusthub.v1.endUsers.create({
+            type: "authorized_representative_1",
+            friendlyName: `${setPayload.businessName} – Authorized Rep`,
+            attributes: repAttributes as any,
+          }),
+      );
 
       await assignEntityToCustomerProfile(secondaryProfileSid!, repEU.sid);
 
@@ -326,12 +501,23 @@ export default async function handler(
     // 2) TrustProduct (A2P) if missing
     let trustProductSid: string | undefined = (a2p as any).trustProductSid;
     if (!trustProductSid) {
-      const tp = await client.trusthub.v1.trustProducts.create({
+      const tpPayload = {
         friendlyName: `${setPayload.businessName} – A2P Trust Product`,
-        email: process.env.A2P_NOTIFICATIONS_EMAIL || "a2p@yourcompany.com",
+        email: NOTIFY_EMAIL,
         policySid: A2P_TRUST_PRODUCT_POLICY_SID,
         statusCallback: STATUS_CB,
-      });
+      };
+
+      const tp = await callTwilio(
+        "trustProducts.create",
+        {
+          friendlyName: tpPayload.friendlyName,
+          email: tpPayload.email,
+          policySid: tpPayload.policySid,
+          statusCallback: tpPayload.statusCallback,
+        },
+        async () => client.trusthub.v1.trustProducts.create(tpPayload),
+      );
       trustProductSid = tp.sid;
 
       await A2PProfile.updateOne(
@@ -342,21 +528,28 @@ export default async function handler(
 
     // 2.2) EndUser: us_a2p_messaging_profile_information + attach to TrustProduct (+ attach Secondary)
     if (!(a2p as any).a2pProfileEndUserSid) {
-      const a2pAttributes = JSON.stringify({
-        description: `A2P messaging for ${setPayload.businessName}`,
-        message_samples: samples,
-        message_flow: messageFlowText,
-        message_volume: setPayload.volume || "Low",
-        has_embedded_links: true,
-        has_embedded_phone: false,
-        subscriber_opt_in: true,
-      });
+      // According to Twilio ISV docs, this EndUser primarily carries
+      // company stock / type info + brand contact email; the
+      // messaging flow + samples live on the Campaign itself.
+      const a2pAttributes = {
+        company_type: "private",
+        brand_contact_email: emailStr,
+      };
 
-      const a2pEU = await client.trusthub.v1.endUsers.create({
-        type: "us_a2p_messaging_profile_information",
-        friendlyName: `${setPayload.businessName} – A2P Messaging Profile`,
-        attributes: a2pAttributes as any,
-      });
+      const a2pEU = await callTwilio(
+        "endUsers.create (us_a2p_messaging_profile_information)",
+        {
+          type: "us_a2p_messaging_profile_information",
+          friendlyName: `${setPayload.businessName} – A2P Messaging Profile`,
+          attributesSummary: summarizeAttributes(a2pAttributes),
+        },
+        async () =>
+          client.trusthub.v1.endUsers.create({
+            type: "us_a2p_messaging_profile_information",
+            friendlyName: `${setPayload.businessName} – A2P Messaging Profile`,
+            attributes: a2pAttributes as any,
+          }),
+      );
 
       await assignEntityToTrustProduct(trustProductSid!, a2pEU.sid);
       await assignEntityToTrustProduct(trustProductSid!, secondaryProfileSid!);
@@ -373,11 +566,22 @@ export default async function handler(
     // 3) BrandRegistration (BN...) if missing
     let brandSid: string | undefined = (a2p as any).brandSid;
     if (!brandSid) {
-      const brand = await client.messaging.v1.brandRegistrations.create({
+      const brandPayload: any = {
         customerProfileBundleSid: secondaryProfileSid!,
         a2PProfileBundleSid: trustProductSid!,
         brandType: "STANDARD",
-      });
+      };
+
+      const brand = await callTwilio(
+        "brandRegistrations.create",
+        {
+          customerProfileBundleSid: maskSid(secondaryProfileSid!),
+          a2PProfileBundleSid: maskSid(trustProductSid!),
+          brandType: brandPayload.brandType,
+        },
+        async () =>
+          client.messaging.v1.brandRegistrations.create(brandPayload),
+      );
       brandSid = brand.sid;
 
       await A2PProfile.updateOne({ _id: a2p._id }, { $set: { brandSid } });
@@ -390,22 +594,35 @@ export default async function handler(
     if (!usa2pSid) {
       const code = (usecaseCode as string) || "LOW_VOLUME";
 
-      const usa2p = await client.messaging.v1
-        .services(messagingServiceSid)
-        .usAppToPerson.create({
-          brandRegistrationSid: brandSid!,
-          usAppToPersonUsecase: code,
-          description: `Campaign for ${setPayload.businessName} (${code})`,
-          messageFlow: messageFlowText,
-          messageSamples: samples,
-          hasEmbeddedLinks: true,
-          hasEmbeddedPhone: false,
-          subscriberOptIn: true,
-          ageGated: false,
-          directLending: false,
-        });
+      const usa2pPayload: any = {
+        brandRegistrationSid: brandSid!,
+        usAppToPersonUsecase: code,
+        description: `Campaign for ${setPayload.businessName} (${code})`,
+        messageFlow: messageFlowText,
+        messageSamples: samples,
+        hasEmbeddedLinks: true,
+        hasEmbeddedPhone: false,
+        subscriberOptIn: true,
+        ageGated: false,
+        directLending: false,
+      };
 
-      usa2pSid = usa2p.sid;
+      const usa2p = await callTwilio(
+        "messaging.services.usAppToPerson.create",
+        {
+          messagingServiceSid: maskSid(messagingServiceSid),
+          brandRegistrationSid: maskSid(brandSid!),
+          usecase: code,
+          samplesCount: samples.length,
+          messageFlowLength: messageFlowText.length,
+        },
+        async () =>
+          client.messaging.v1
+            .services(messagingServiceSid)
+            .usAppToPerson.create(usa2pPayload),
+      );
+
+      usa2pSid = (usa2p as any).sid;
 
       await A2PProfile.updateOne(
         { _id: a2p._id },
@@ -429,7 +646,13 @@ export default async function handler(
       },
     });
   } catch (err: any) {
-    console.error("A2P start error:", err);
+    console.error("[A2P start] top-level error:", {
+      message: err?.message,
+      code: err?.code,
+      status: err?.status,
+      moreInfo: err?.moreInfo,
+      details: err?.details,
+    });
     return res.status(500).json({
       message: err?.message || "Failed to start A2P flow",
     });
