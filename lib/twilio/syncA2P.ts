@@ -17,7 +17,7 @@ function computeRegistrationStatus(opts: {
   brandStatus?: string;
   campaignStatus?: string;
   hasNumbers: boolean;
-}: A2PRegistrationStatus | any {
+}): A2PRegistrationStatus {
   const b = String(opts.brandStatus || "").toLowerCase();
   const c = String(opts.campaignStatus || "").toLowerCase();
 
