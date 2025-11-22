@@ -40,30 +40,10 @@ const baseUrl =
 const STATUS_CB =
   process.env.A2P_STATUS_CALLBACK_URL || `${baseUrl}/api/a2p/status-callback`;
 
-// ---- Twilio field safety limits (conservative) ----
-const MAX_SAMPLE_LEN = 900; // per Twilio docs: 20–1024 chars; keep buffer
-const MAX_FLOW_LEN = 1000; // message_flow also has limits; keep under ~1k
-const MAX_SAMPLES = 5;
-
 // ---------------- helpers ----------------
 function required<T>(v: T, name: string): T {
   if (!v) throw new Error(`Missing required field: ${name}`);
   return v;
-}
-
-function sanitizeSample(s: string): string {
-  const trimmed = (s || "").trim();
-  if (!trimmed) return "";
-  // ensure min length ~20; Twilio needs real content
-  const normalized = trimmed.length < 20 ? trimmed.padEnd(20, ".") : trimmed;
-  // hard cap length so TrustHub JSON doesn’t blow up
-  return normalized.slice(0, MAX_SAMPLE_LEN);
-}
-
-function sanitizeFlow(s: string): string {
-  const trimmed = (s || "").trim();
-  if (!trimmed) return "Leads request information and receive follow-up messages about insurance options.";
-  return trimmed.slice(0, MAX_FLOW_LEN);
 }
 
 // Twilio's TS typings for TrustHub vary across SDK versions; cast at the boundary.
@@ -185,27 +165,21 @@ export default async function handler(
     required(contactLastName, "contactLastName");
     required(optInDetails, "optInDetails");
 
-    // Normalize + sanitize sample messages
-    let rawSamples: string[] = Array.isArray(sampleMessages)
-      ? (sampleMessages as string[])
+    // Normalize sample messages
+    const samples: string[] = Array.isArray(sampleMessages)
+      ? (sampleMessages as string[]).map((s) => s.trim()).filter(Boolean)
       : typeof sampleMessages === "string"
-        ? (sampleMessages as string).split("\n")
+        ? (sampleMessages as string)
+            .split("\n")
+            .map((s) => s.trim())
+            .filter(Boolean)
         : [];
 
-    rawSamples = rawSamples
-      .map((s) => (s || "").trim())
-      .filter(Boolean)
-      .slice(0, MAX_SAMPLES);
-
-    const samples: string[] = rawSamples.map(sanitizeSample);
     if (samples.length < 2) {
       throw new Error(
         "Provide at least 2 sample messages (20–1024 chars each).",
       );
     }
-
-    // Sanitize message flow (opt-in details)
-    const messageFlowText: string = sanitizeFlow(String(optInDetails || ""));
 
     // Upsert local A2PProfile
     const userId = String(user._id);
@@ -227,7 +201,7 @@ export default async function handler(
       contactLastName: String(contactLastName),
       sampleMessages: samples.join("\n\n"),
       sampleMessagesArr: samples, // keep array form too
-      optInDetails: messageFlowText,
+      optInDetails: String(optInDetails),
       volume: (volume as string) || "Low",
       optInScreenshotUrl: (optInScreenshotUrl as string) || "",
       // ✅ persist optional artifacts & campaign choice
@@ -238,6 +212,9 @@ export default async function handler(
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
     };
+
+    // Use a narrowed local for fields needed as strict strings later
+    const messageFlowText: string = setPayload.optInDetails!;
 
     const a2p = await A2PProfile.findOneAndUpdate<IA2PProfile>(
       { userId },
@@ -284,7 +261,7 @@ export default async function handler(
       const businessEU = await client.trusthub.v1.endUsers.create({
         type: "customer_profile_business_information",
         friendlyName: `${setPayload.businessName} – Business Info`,
-        attributes: {
+        attributes: JSON.stringify({
           business_identity: "BUSINESS",
           business_industry: "OTHER",
           business_name: setPayload.businessName,
@@ -294,7 +271,7 @@ export default async function handler(
           business_type: "LLC",
           website_url: setPayload.website,
           social_media_profile_urls: [],
-        } as any,
+        }),
       });
 
       await assignEntityToCustomerProfile(secondaryProfileSid!, businessEU.sid);
@@ -310,13 +287,13 @@ export default async function handler(
       const repEU = await client.trusthub.v1.endUsers.create({
         type: "authorized_representative_1",
         friendlyName: `${setPayload.businessName} – Authorized Rep`,
-        attributes: {
+        attributes: JSON.stringify({
           first_name: setPayload.contactFirstName,
           last_name: setPayload.contactLastName,
           email: setPayload.email,
           phone_number: setPayload.phone,
           job_title: setPayload.contactTitle,
-        } as any,
+        }),
       });
 
       await assignEntityToCustomerProfile(secondaryProfileSid!, repEU.sid);
@@ -364,7 +341,7 @@ export default async function handler(
       const a2pEU = await client.trusthub.v1.endUsers.create({
         type: "us_a2p_messaging_profile_information",
         friendlyName: `${setPayload.businessName} – A2P Messaging Profile`,
-        attributes: {
+        attributes: JSON.stringify({
           description: `A2P messaging for ${setPayload.businessName}`,
           message_samples: samples,
           message_flow: messageFlowText,
@@ -372,7 +349,8 @@ export default async function handler(
           has_embedded_links: true,
           has_embedded_phone: false,
           subscriber_opt_in: true,
-        } as any,
+          // these can be enhanced later if Twilio adds more fields
+        }),
       });
 
       await assignEntityToTrustProduct(trustProductSid!, a2pEU.sid);
@@ -446,13 +424,7 @@ export default async function handler(
       },
     });
   } catch (err: any) {
-    console.error("A2P start error:", {
-      message: err?.message,
-      status: err?.status,
-      code: err?.code,
-      moreInfo: err?.moreInfo,
-      details: err?.details,
-    });
+    console.error("A2P start error:", err);
     return res.status(500).json({
       message: err?.message || "Failed to start A2P flow",
     });
