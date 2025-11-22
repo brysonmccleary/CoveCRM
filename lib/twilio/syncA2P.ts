@@ -8,6 +8,7 @@ import A2PProfile, {
 import PhoneNumber from "@/models/PhoneNumber";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
 import { sendA2PApprovedEmail, sendA2PDeclinedEmail } from "@/lib/email";
+import { chargeA2PApprovalIfNeeded } from "@/lib/billing/trackUsage";
 
 /**
  * Determine a coarse registration status used in IA2PProfile.registrationStatus
@@ -16,7 +17,7 @@ function computeRegistrationStatus(opts: {
   brandStatus?: string;
   campaignStatus?: string;
   hasNumbers: boolean;
-}): A2PRegistrationStatus {
+}: A2PRegistrationStatus | any {
   const b = String(opts.brandStatus || "").toLowerCase();
   const c = String(opts.campaignStatus || "").toLowerCase();
 
@@ -51,6 +52,7 @@ function computeApplicationStatus(
  * - Updates A2PProfile + User (numbers + a2p quick fields)
  * - Marks PhoneNumber.a2pApproved based on readiness
  * - Sends approval/decline email on state transitions
+ * - Bills one-time A2P approval fee when first becoming ready
  */
 export async function syncA2PForUser(passedUser: IUser) {
   await mongooseConnect();
@@ -247,7 +249,7 @@ export async function syncA2PForUser(passedUser: IUser) {
   const messagingReady = registrationStatus === "ready";
   const applicationStatus = computeApplicationStatus(registrationStatus);
 
-  // --- Detect transitions for email
+  // --- Detect transitions for email + billing
   const prevStatus: A2PRegistrationStatus =
     (profile.registrationStatus as A2PRegistrationStatus) || "not_started";
   const prevReady = Boolean(profile.messagingReady);
@@ -294,6 +296,7 @@ export async function syncA2PForUser(passedUser: IUser) {
         "a2p.campaignStatus": campaignStatus,
         "a2p.messagingServiceSid": messagingServiceSid,
         "a2p.messagingReady": messagingReady,
+        "a2p.applicationStatus": applicationStatus,
         "a2p.lastSyncedAt": now,
       },
     },
@@ -338,6 +341,18 @@ export async function syncA2PForUser(passedUser: IUser) {
     }
   } catch {
     // ignore notification errors
+  }
+
+  // --- Bill one-time A2P approval fee on first "ready" transition ---
+  if (justApproved) {
+    try {
+      await chargeA2PApprovalIfNeeded({ user: updated || user });
+    } catch (e: any) {
+      console.warn(
+        "[A2P billing] chargeA2PApprovalIfNeeded failed:",
+        e?.message || e,
+      );
+    }
   }
 
   return ((updated as unknown as IUser) || passedUser) as IUser;

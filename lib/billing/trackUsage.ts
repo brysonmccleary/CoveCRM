@@ -12,9 +12,10 @@ const DEV_SKIP_BILLING = process.env.DEV_SKIP_BILLING === "1";
  * Example: 33 => 33% markup. If unset/invalid, defaults to 0.
  */
 const USAGE_MARKUP_PCT = Number(process.env.USAGE_MARKUP_PCT ?? "33");
-const MARKUP_FACTOR = Number.isFinite(USAGE_MARKUP_PCT) && USAGE_MARKUP_PCT > 0
-  ? 1 + USAGE_MARKUP_PCT / 100
-  : 1;
+const MARKUP_FACTOR =
+  Number.isFinite(USAGE_MARKUP_PCT) && USAGE_MARKUP_PCT > 0
+    ? 1 + USAGE_MARKUP_PCT / 100
+    : 1;
 
 const TOPUP_AMOUNT_USD = 10; // Auto top-up when balance < $1
 const TOPUP_AMOUNT_CENTS = TOPUP_AMOUNT_USD * 100;
@@ -159,7 +160,9 @@ export async function trackUsage({
         description: `Cove CRM usage top-up ($${TOPUP_AMOUNT_USD})`,
       });
       userDoc.usageBalance += TOPUP_AMOUNT_USD;
-      console.log(`💰 Auto-topup: $${TOPUP_AMOUNT_USD} charged to ${userDoc.email}`);
+      console.log(
+        `💰 Auto-topup: $${TOPUP_AMOUNT_USD} charged to ${userDoc.email}`,
+      );
     } catch (err) {
       console.error("❌ Stripe auto top-up failed:", err);
     }
@@ -196,10 +199,18 @@ export async function chargeA2PApprovalIfNeeded({
     return { charged: false, reason: "admin" };
   }
 
+  const a2p = userDoc.a2p || {};
+
+  // Align with syncA2PForUser:
+  //  - a2p.messagingReady === true
+  //  - a2p.applicationStatus === 'approved'
+  //  - a2p.registrationStatus === 'ready'
+  //  - legacy: twilio.a2pStatus === 'approved'
   const approved =
-    userDoc?.a2p?.status === "approved" ||
-    userDoc?.twilio?.a2pStatus === "approved" ||
-    userDoc?.messagingReady === true;
+    a2p.messagingReady === true ||
+    a2p.applicationStatus === "approved" ||
+    a2p.registrationStatus === "ready" ||
+    userDoc?.twilio?.a2pStatus === "approved";
 
   if (!approved) {
     return { charged: false, reason: "not-approved" };
