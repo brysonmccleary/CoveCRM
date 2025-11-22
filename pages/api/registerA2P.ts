@@ -31,7 +31,7 @@ type BodyIn = {
 
   // campaign type
   usecaseCode?: string; // e.g. "LOW_VOLUME"
-  useCase?: string;     // alias (will be normalized)
+  useCase?: string; // alias (will be normalized)
 
   // messages
   sampleMessages?: string; // joined blob
@@ -50,12 +50,17 @@ type BodyIn = {
   landingPrivacyUrl?: string;
 };
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed" });
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
+  if (req.method !== "POST")
+    return res.status(405).json({ message: "Method not allowed" });
 
   // session check (aligns with your other handlers)
   const session = await getServerSession(req, res, authOptions);
-  if (!session?.user?.email) return res.status(401).json({ message: "Unauthorized" });
+  if (!session?.user?.email)
+    return res.status(401).json({ message: "Unauthorized" });
 
   const body = (req.body || {}) as BodyIn;
 
@@ -83,13 +88,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     .map((s) => s.trim())
     .filter(Boolean);
 
-  const samplesFromFields = [body.sampleMessage1, body.sampleMessage2, body.sampleMessage3]
+  const samplesFromFields = [
+    body.sampleMessage1,
+    body.sampleMessage2,
+    body.sampleMessage3,
+  ]
     .map((s) => (s || "").trim())
     .filter(Boolean);
 
-  const finalSamples = (samplesFromFields.length ? samplesFromFields : samplesFromBlob).filter(Boolean);
+  const finalSamples = (samplesFromFields.length
+    ? samplesFromFields
+    : samplesFromBlob
+  ).filter(Boolean);
 
-  if (finalSamples.length < 2) missing.push("sampleMessages (need at least 2 samples via blob or fields)");
+  if (finalSamples.length < 2)
+    missing.push("sampleMessages (need at least 2 samples via blob or fields)");
 
   if (missing.length) {
     return res.status(400).json({
@@ -125,23 +138,38 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     volume: body.volume || "Low",
 
     // optional artifacts (only include if present)
-    ...(body.optInScreenshotUrl ? { optInScreenshotUrl: body.optInScreenshotUrl } : {}),
+    ...(body.optInScreenshotUrl
+      ? { optInScreenshotUrl: body.optInScreenshotUrl }
+      : {}),
     ...(body.landingOptInUrl ? { landingOptInUrl: body.landingOptInUrl } : {}),
     ...(body.landingTosUrl ? { landingTosUrl: body.landingTosUrl } : {}),
-    ...(body.landingPrivacyUrl ? { landingPrivacyUrl: body.landingPrivacyUrl } : {}),
+    ...(body.landingPrivacyUrl
+      ? { landingPrivacyUrl: body.landingPrivacyUrl }
+      : {}),
   };
+
+  // Forward the user's cookies so /api/a2p/* can see the same session
+  const cookie = req.headers.cookie || "";
+  const commonHeaders: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  if (cookie) {
+    commonHeaders["Cookie"] = cookie;
+  }
 
   try {
     // 1) Start the A2P flow (creates/links everything, idempotent)
     const startRes = await fetch(`${BASE_URL}/api/a2p/start`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: commonHeaders,
       body: JSON.stringify(startPayload),
     });
 
     const startData = await startRes.json().catch(() => ({}));
     if (!startRes.ok) {
-      return res.status(startRes.status).json({ message: startData?.message || "A2P start failed" });
+      return res.status(startRes.status).json({
+        message: startData?.message || "A2P start failed",
+      });
     }
 
     // 2) Ensure campaign reflects the latest info (idempotent)
@@ -154,24 +182,29 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const submitRes = await fetch(`${BASE_URL}/api/a2p/submit-campaign`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: commonHeaders,
       body: JSON.stringify(submitPayload),
     });
 
     const submitData = await submitRes.json().catch(() => ({}));
     if (!submitRes.ok) {
       // Not fatal for brand/profile creation; return error for UI
-      return res.status(submitRes.status).json({ message: submitData?.message || "Campaign submission failed" });
+      return res.status(submitRes.status).json({
+        message: submitData?.message || "Campaign submission failed",
+      });
     }
 
     return res.status(200).json({
       ok: true,
-      message: "Submitted. We’ll email you when it’s approved or if reviewers need changes.",
+      message:
+        "Submitted. We’ll email you when it’s approved or if reviewers need changes.",
       start: startData?.data || startData,
       campaign: submitData,
     });
   } catch (e: any) {
     console.error("registerA2P error:", e);
-    return res.status(500).json({ message: e?.message || "registerA2P failed" });
+    return res
+      .status(500)
+      .json({ message: e?.message || "registerA2P failed" });
   }
 }
