@@ -258,20 +258,22 @@ export default async function handler(
 
     // 1.2) EndUser: business information + attach
     if (!(a2p as any).businessEndUserSid) {
+      const businessAttributes = JSON.stringify({
+        business_identity: "BUSINESS",
+        business_industry: "OTHER",
+        business_name: setPayload.businessName,
+        business_regions_of_operation: ["US"],
+        business_registration_identifier: "EIN",
+        business_registration_number: setPayload.ein,
+        business_type: "LLC",
+        website_url: setPayload.website,
+        social_media_profile_urls: [] as string[],
+      });
+
       const businessEU = await client.trusthub.v1.endUsers.create({
         type: "customer_profile_business_information",
         friendlyName: `${setPayload.businessName} – Business Info`,
-        attributes: JSON.stringify({
-          business_identity: "BUSINESS",
-          business_industry: "OTHER",
-          business_name: setPayload.businessName,
-          business_regions_of_operation: ["US"],
-          business_registration_identifier: "EIN",
-          business_registration_number: setPayload.ein,
-          business_type: "LLC",
-          website_url: setPayload.website,
-          social_media_profile_urls: [],
-        }),
+        attributes: businessAttributes as any,
       });
 
       await assignEntityToCustomerProfile(secondaryProfileSid!, businessEU.sid);
@@ -284,16 +286,18 @@ export default async function handler(
 
     // 1.4) Authorized representative + attach
     if (!(a2p as any).authorizedRepEndUserSid) {
+      const repAttributes = JSON.stringify({
+        first_name: setPayload.contactFirstName,
+        last_name: setPayload.contactLastName,
+        email: setPayload.email,
+        phone_number: setPayload.phone,
+        job_title: setPayload.contactTitle,
+      });
+
       const repEU = await client.trusthub.v1.endUsers.create({
         type: "authorized_representative_1",
         friendlyName: `${setPayload.businessName} – Authorized Rep`,
-        attributes: JSON.stringify({
-          first_name: setPayload.contactFirstName,
-          last_name: setPayload.contactLastName,
-          email: setPayload.email,
-          phone_number: setPayload.phone,
-          job_title: setPayload.contactTitle,
-        }),
+        attributes: repAttributes as any,
       });
 
       await assignEntityToCustomerProfile(secondaryProfileSid!, repEU.sid);
@@ -338,19 +342,20 @@ export default async function handler(
 
     // 2.2) EndUser: us_a2p_messaging_profile_information + attach to TrustProduct (+ attach Secondary)
     if (!(a2p as any).a2pProfileEndUserSid) {
+      const a2pAttributes = JSON.stringify({
+        description: `A2P messaging for ${setPayload.businessName}`,
+        message_samples: samples,
+        message_flow: messageFlowText,
+        message_volume: setPayload.volume || "Low",
+        has_embedded_links: true,
+        has_embedded_phone: false,
+        subscriber_opt_in: true,
+      });
+
       const a2pEU = await client.trusthub.v1.endUsers.create({
         type: "us_a2p_messaging_profile_information",
         friendlyName: `${setPayload.businessName} – A2P Messaging Profile`,
-        attributes: JSON.stringify({
-          description: `A2P messaging for ${setPayload.businessName}`,
-          message_samples: samples,
-          message_flow: messageFlowText,
-          message_volume: setPayload.volume || "Low",
-          has_embedded_links: true,
-          has_embedded_phone: false,
-          subscriber_opt_in: true,
-          // these can be enhanced later if Twilio adds more fields
-        }),
+        attributes: a2pAttributes as any,
       });
 
       await assignEntityToTrustProduct(trustProductSid!, a2pEU.sid);
