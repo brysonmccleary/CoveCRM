@@ -169,11 +169,11 @@ export default async function handler(
     const samples: string[] = Array.isArray(sampleMessages)
       ? (sampleMessages as string[]).map((s) => s.trim()).filter(Boolean)
       : typeof sampleMessages === "string"
-      ? (sampleMessages as string)
-          .split("\n")
-          .map((s) => s.trim())
-          .filter(Boolean)
-      : [];
+        ? (sampleMessages as string)
+            .split("\n")
+            .map((s) => s.trim())
+            .filter(Boolean)
+        : [];
 
     if (samples.length < 2) {
       throw new Error(
@@ -261,6 +261,7 @@ export default async function handler(
       const businessEU = await client.trusthub.v1.endUsers.create({
         type: "customer_profile_business_information",
         friendlyName: `${setPayload.businessName} – Business Info`,
+        // IMPORTANT: attributes must be a JSON string
         attributes: JSON.stringify({
           business_identity: "BUSINESS",
           business_industry: "OTHER",
@@ -271,8 +272,8 @@ export default async function handler(
           business_type: "LLC",
           website_url: setPayload.website,
           social_media_profile_urls: [],
-        }),
-      } as any);
+        } as any),
+      });
 
       await assignEntityToCustomerProfile(secondaryProfileSid!, businessEU.sid);
 
@@ -287,14 +288,15 @@ export default async function handler(
       const repEU = await client.trusthub.v1.endUsers.create({
         type: "authorized_representative_1",
         friendlyName: `${setPayload.businessName} – Authorized Rep`,
+        // IMPORTANT: attributes must be a JSON string
         attributes: JSON.stringify({
           first_name: setPayload.contactFirstName,
           last_name: setPayload.contactLastName,
           email: setPayload.email,
           phone_number: setPayload.phone,
           job_title: setPayload.contactTitle,
-        }),
-      } as any);
+        } as any),
+      });
 
       await assignEntityToCustomerProfile(secondaryProfileSid!, repEU.sid);
 
@@ -341,6 +343,7 @@ export default async function handler(
       const a2pEU = await client.trusthub.v1.endUsers.create({
         type: "us_a2p_messaging_profile_information",
         friendlyName: `${setPayload.businessName} – A2P Messaging Profile`,
+        // IMPORTANT: attributes must be a JSON string
         attributes: JSON.stringify({
           description: `A2P messaging for ${setPayload.businessName}`,
           message_samples: samples,
@@ -349,8 +352,8 @@ export default async function handler(
           has_embedded_links: true,
           has_embedded_phone: false,
           subscriber_opt_in: true,
-        }),
-      } as any);
+        } as any),
+      });
 
       await assignEntityToTrustProduct(trustProductSid!, a2pEU.sid);
       await assignEntityToTrustProduct(trustProductSid!, secondaryProfileSid!);
