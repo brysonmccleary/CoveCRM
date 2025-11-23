@@ -1,3 +1,5 @@
+// lib/email.ts
+
 // Use CommonJS require for Nodemailer to avoid TS type requirement on @types/nodemailer
 // (works fine at runtime and side-steps the "Could not find a declaration file" error)
 const nodemailer = require("nodemailer") as any;
@@ -17,11 +19,14 @@ const {
   RESEND_API_KEY,
   EMAIL_FROM,
 
-  // Admin recipients
+  // Admin recipients / support
   AFFILIATE_APPS_EMAIL,
   ADMIN_EMAIL,
   EMAIL_SUPPORT,
 } = process.env;
+
+// Default support/reply-to email for most system messages
+const DEFAULT_SUPPORT_EMAIL = EMAIL_SUPPORT || "support@covecrm.com";
 
 const resend = RESEND_API_KEY ? new Resend(RESEND_API_KEY) : null;
 
@@ -81,7 +86,11 @@ async function sendViaResend({
   replyTo?: string | string[];
 }): Promise<SendEmailResult> {
   try {
-    if (!resend || !EMAIL_FROM) return await sendEmail(to, subject, html, replyTo);
+    // If Resend is not configured or EMAIL_FROM is missing, fall back to SMTP
+    if (!resend || !EMAIL_FROM) {
+      return await sendEmail(to, subject, html, replyTo);
+    }
+
     const result = await resend.emails.send({
       from: EMAIL_FROM,
       to,
@@ -90,8 +99,11 @@ async function sendViaResend({
       // Resend expects `reply_to`
       ...(replyTo ? { reply_to: replyTo } : {}),
     } as any);
-    if ((result as any)?.error)
+
+    if ((result as any)?.error) {
       throw new Error((result as any).error?.message || "Resend send failed");
+    }
+
     return { ok: true, id: (result as any)?.data?.id };
   } catch (e: any) {
     if (process.env.NODE_ENV !== "production") {
@@ -99,6 +111,7 @@ async function sendViaResend({
     } else {
       console.warn("sendViaResend error");
     }
+    // Do not crash flows – just return an error result
     return { ok: false, error: e?.message || "Email send failed" };
   }
 }
@@ -326,7 +339,11 @@ export function renderAgentAppointmentNotice(opts: {
         <tr><td style="padding:4px 8px;color:#64748b">State</td><td style="padding:4px 8px">${st}</td></tr>
         <tr><td style="padding:4px 8px;color:#64748b">Time</td><td style="padding:4px 8px">${escapeHtml(pretty)}</td></tr>
         <tr><td style="padding:4px 8px;color:#64748b">Booked via</td><td style="padding:4px 8px">${src}</td></tr>
-        ${opts.eventUrl ? `<tr><td style="padding:4px 8px;color:#64748b">Calendar</td><td style="padding:4px 8px"><a href="${opts.eventUrl}">Open event</a></td></tr>` : ""}
+        ${
+          opts.eventUrl
+            ? `<tr><td style="padding:4px 8px;color:#64748b">Calendar</td><td style="padding:4px 8px"><a href="${opts.eventUrl}">Open event</a></td></tr>`
+            : ""
+        }
       </table>
       <p style="margin:16px 0 0 0">Have a great call! — CRM Cove</p>
     </div>
@@ -363,7 +380,13 @@ export async function sendAppointmentBookedEmail(opts: {
     source: opts.source,
     eventUrl: opts.eventUrl ?? opts.eventLink,
   });
-  return sendViaResend({ to: opts.to, subject, html });
+  // Agent emails can just use default support reply-to, but it's optional
+  return sendViaResend({
+    to: opts.to,
+    subject,
+    html,
+    replyTo: DEFAULT_SUPPORT_EMAIL,
+  });
 }
 
 /* ---------- Password reset ---------- */
@@ -390,14 +413,21 @@ export async function sendPasswordResetEmail(opts: {
 }): Promise<SendEmailResult> {
   const subject = "Reset your CRM Cove password";
   const html = renderPasswordResetEmail(opts.resetUrl);
-  return sendViaResend({ to: opts.to, subject, html });
+  return sendViaResend({
+    to: opts.to,
+    subject,
+    html,
+    replyTo: DEFAULT_SUPPORT_EMAIL,
+  });
 }
 
 /** Welcome */
 export function renderWelcomeEmail(name?: string) {
   return `
     <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; color:#0f172a">
-      <h2 style="margin:0 0 12px 0">Welcome to Cove CRM${name ? `, ${escapeHtml(name)}` : ""}!</h2>
+      <h2 style="margin:0 0 12px 0">Welcome to Cove CRM${
+        name ? `, ${escapeHtml(name)}` : ""
+      }!</h2>
       <p style="margin:0 0 12px 0">
         You’re in. We built Cove to help you call, text, and book faster—without the busywork.
       </p>
@@ -407,7 +437,9 @@ export function renderWelcomeEmail(name?: string) {
       </p>
       <p style="margin:0 0 12px 0">
         If the Assistant can’t answer something, our team is here:
-        <a href="mailto:${EMAIL_SUPPORT || "support@covecrm.com"}">${EMAIL_SUPPORT || "support@covecrm.com"}</a>.
+        <a href="mailto:${EMAIL_SUPPORT || "support@covecrm.com"}">${
+    EMAIL_SUPPORT || "support@covecrm.com"
+  }</a>.
       </p>
       <p style="margin:16px 0 0 0">— The Cove CRM Team</p>
     </div>
@@ -420,7 +452,12 @@ export async function sendWelcomeEmail(opts: {
 }): Promise<SendEmailResult> {
   const subject = "Welcome to Cove CRM";
   const html = renderWelcomeEmail(opts.name);
-  return sendViaResend({ to: opts.to, subject, html });
+  return sendViaResend({
+    to: opts.to,
+    subject,
+    html,
+    replyTo: DEFAULT_SUPPORT_EMAIL,
+  });
 }
 
 /* ---------- Affiliate: Admin notification on application ---------- */
@@ -441,12 +478,24 @@ function renderAffiliateApplicationAdminEmail(opts: {
       <p style="margin:0 0 12px 0">A new affiliate has applied to the Cove CRM program.</p>
       <table style="border-collapse:collapse">
         <tbody>
-          <tr><td style="padding:4px 8px"><b>Name</b></td><td style="padding:4px 8px">${escapeHtml(opts.name)}</td></tr>
-          <tr><td style="padding:4px 8px"><b>Email</b></td><td style="padding:4px 8px">${escapeHtml(opts.email)}</td></tr>
-          <tr><td style="padding:4px 8px"><b>Company</b></td><td style="padding:4px 8px">${escapeHtml(opts.company)}</td></tr>
-          <tr><td style="padding:4px 8px"><b># Agents</b></td><td style="padding:4px 8px">${escapeHtml(String(opts.agents))}</td></tr>
-          <tr><td style="padding:4px 8px"><b>Requested Code</b></td><td style="padding:4px 8px">${escapeHtml(opts.promoCode)}</td></tr>
-          <tr><td style="padding:4px 8px"><b>Submitted</b></td><td style="padding:4px 8px">${escapeHtml(when)}</td></tr>
+          <tr><td style="padding:4px 8px"><b>Name</b></td><td style="padding:4px 8px">${escapeHtml(
+            opts.name,
+          )}</td></tr>
+          <tr><td style="padding:4px 8px"><b>Email</b></td><td style="padding:4px 8px">${escapeHtml(
+            opts.email,
+          )}</td></tr>
+          <tr><td style="padding:4px 8px"><b>Company</b></td><td style="padding:4px 8px">${escapeHtml(
+            opts.company,
+          )}</td></tr>
+          <tr><td style="padding:4px 8px"><b># Agents</b></td><td style="padding:4px 8px">${escapeHtml(
+            String(opts.agents),
+          )}</td></tr>
+          <tr><td style="padding:4px 8px"><b>Requested Code</b></td><td style="padding:4px 8px">${escapeHtml(
+            opts.promoCode,
+          )}</td></tr>
+          <tr><td style="padding:4px 8px"><b>Submitted</b></td><td style="padding:4px 8px">${escapeHtml(
+            when,
+          )}</td></tr>
         </tbody>
       </table>
       <p style="margin:16px 0 0 0">— Cove CRM</p>
@@ -472,23 +521,38 @@ export async function sendAffiliateApplicationAdminEmail(opts: {
   }
   const subject = `New Affiliate Application — ${opts.name} (${opts.promoCode})`;
   const html = renderAffiliateApplicationAdminEmail(opts);
-  return sendViaResend({ to: recipient, subject, html });
+  return sendViaResend({
+    to: recipient,
+    subject,
+    html,
+    replyTo: DEFAULT_SUPPORT_EMAIL,
+  });
 }
 
 /* ---------- Affiliate: Notify affiliate when approved (via Stripe promo code going live) ---------- */
 
-function renderAffiliateApprovedEmail(opts: { name?: string; promoCode: string; dashboardUrl?: string; }) {
+function renderAffiliateApprovedEmail(opts: {
+  name?: string;
+  promoCode: string;
+  dashboardUrl?: string;
+}) {
   return `
     <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; color:#0f172a">
       <h2 style="margin:0 0 12px 0">You're approved 🎉</h2>
       <p style="margin:0 0 12px 0">
-        ${opts.name ? `Hi ${escapeHtml(opts.name)}, ` : ""}your Cove CRM affiliate application has been approved.
+        ${
+          opts.name ? `Hi ${escapeHtml(opts.name)}, ` : ""
+        }your Cove CRM affiliate application has been approved.
       </p>
       <p style="margin:0 0 12px 0">
-        Your referral code is <b>${escapeHtml(opts.promoCode)}</b>. Share it anywhere you like. When people sign up with your code, their discounts and your commissions apply automatically.
+        Your referral code is <b>${escapeHtml(
+          opts.promoCode,
+        )}</b>. Share it anywhere you like. When people sign up with your code, their discounts and your commissions apply automatically.
       </p>
       ${
-        opts.dashboardUrl ? `<p style="margin:0 0 12px 0"><a href="${opts.dashboardUrl}">Open your affiliate dashboard</a></p>` : ""
+        opts.dashboardUrl
+          ? `<p style="margin:0 0 12px 0"><a href="${opts.dashboardUrl}">Open your affiliate dashboard</a></p>`
+          : ""
       }
       <p style="margin:0 0 12px 0">Thanks for partnering with us! — The Cove CRM Team</p>
     </div>
@@ -511,7 +575,12 @@ export async function sendAffiliateApprovedEmail(opts: {
     promoCode: codeStr || "YOURCODE",
     dashboardUrl: opts.dashboardUrl,
   });
-  return sendViaResend({ to: opts.to, subject, html });
+  return sendViaResend({
+    to: opts.to,
+    subject,
+    html,
+    replyTo: DEFAULT_SUPPORT_EMAIL,
+  });
 }
 
 /* ---------- Affiliate: Notify affiliate when Stripe onboarding completes ---------- */
@@ -521,7 +590,9 @@ function renderAffiliateOnboardingCompleteEmail(opts: { name?: string }) {
     <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; color:#0f172a">
       <h2 style="margin:0 0 12px 0">Payouts ready ✅</h2>
       <p style="margin:0 0 12px 0">
-        ${opts.name ? `Hi ${escapeHtml(opts.name)}, ` : ""}your Stripe Connect onboarding is complete. Payouts for your affiliate commissions are now enabled.
+        ${
+          opts.name ? `Hi ${escapeHtml(opts.name)}, ` : ""
+        }your Stripe Connect onboarding is complete. Payouts for your affiliate commissions are now enabled.
       </p>
       <p style="margin:0 0 12px 0">
         You can return to your dashboard anytime to see referrals and payouts.
@@ -537,7 +608,12 @@ export async function sendAffiliateOnboardingCompleteEmail(opts: {
 }): Promise<SendEmailResult> {
   const subject = "Cove CRM — Affiliate payouts enabled";
   const html = renderAffiliateOnboardingCompleteEmail({ name: opts.name });
-  return sendViaResend({ to: opts.to, subject, html });
+  return sendViaResend({
+    to: opts.to,
+    subject,
+    html,
+    replyTo: DEFAULT_SUPPORT_EMAIL,
+  });
 }
 
 /* ---------- Affiliate: Payout email ---------- */
@@ -561,7 +637,9 @@ export function renderAffiliatePayoutEmail(opts: {
   return `
     <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; color:#0f172a">
       <h2 style="margin:0 0 12px 0">Your affiliate payout is on the way 🎉</h2>
-      <p style="margin:0 0 8px 0">Amount: <b>$${opts.amount.toFixed(2)} ${escapeHtml(currency)}</b></p>
+      <p style="margin:0 0 8px 0">Amount: <b>$${opts.amount.toFixed(
+        2,
+      )} ${escapeHtml(currency)}</b></p>
       <p style="margin:0 0 8px 0">Period: ${escapeHtml(period)}</p>
       ${
         typeof opts.balanceAfter === "number"
@@ -591,10 +669,15 @@ export async function sendAffiliatePayoutEmail(opts: {
 }): Promise<SendEmailResult> {
   const subject = `Cove CRM — Affiliate payout $${opts.amount.toFixed(2)}`;
   const html = renderAffiliatePayoutEmail(opts);
-  return sendViaResend({ to: opts.to, subject, html });
+  return sendViaResend({
+    to: opts.to,
+    subject,
+    html,
+    replyTo: DEFAULT_SUPPORT_EMAIL,
+  });
 }
 
-/* ========== NEW: A2P registration status emails (approved / declined) ========== */
+/* ========== A2P registration status emails (approved / declined) ========== */
 
 function renderA2PApprovedEmail(opts: {
   name?: string;
@@ -604,7 +687,9 @@ function renderA2PApprovedEmail(opts: {
     <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; color:#0f172a">
       <h2 style="margin:0 0 12px 0">Your A2P registration is approved 🎉</h2>
       <p style="margin:0 0 12px 0">
-        ${opts.name ? `Hi ${escapeHtml(opts.name)}, ` : ""}great news — your A2P 10DLC registration has been <b>approved</b>.
+        ${
+          opts.name ? `Hi ${escapeHtml(opts.name)}, ` : ""
+        }great news — your A2P 10DLC registration has been <b>approved</b>.
         You can now send and receive texts in CoveCRM.
       </p>
       ${
@@ -628,7 +713,12 @@ export async function sendA2PApprovedEmail(opts: {
     name: opts.name,
     dashboardUrl: opts.dashboardUrl,
   });
-  return sendViaResend({ to: opts.to, subject, html });
+  return sendViaResend({
+    to: opts.to,
+    subject,
+    html,
+    replyTo: DEFAULT_SUPPORT_EMAIL,
+  });
 }
 
 function renderA2PDeclinedEmail(opts: {
@@ -640,7 +730,9 @@ function renderA2PDeclinedEmail(opts: {
     <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; color:#0f172a">
       <h2 style="margin:0 0 12px 0">A2P registration needs attention</h2>
       <p style="margin:0 0 12px 0">
-        ${opts.name ? `Hi ${escapeHtml(opts.name)}, ` : ""}your A2P 10DLC application was <b>declined</b>.
+        ${
+          opts.name ? `Hi ${escapeHtml(opts.name)}, ` : ""
+        }your A2P 10DLC application was <b>declined</b>.
         ${opts.reason ? `Reason: <i>${escapeHtml(opts.reason)}</i>.` : ""}
       </p>
       <p style="margin:0 0 12px 0">
@@ -669,10 +761,15 @@ export async function sendA2PDeclinedEmail(opts: {
     reason: opts.reason,
     helpUrl: opts.helpUrl,
   });
-  return sendViaResend({ to: opts.to, subject, html });
+  return sendViaResend({
+    to: opts.to,
+    subject,
+    html,
+    replyTo: DEFAULT_SUPPORT_EMAIL,
+  });
 }
 
-/* ========== NEW: Lead reply notification email ========== */
+/* ========== Lead reply notification email ========== */
 
 export function renderLeadReplyNotificationEmail(opts: {
   leadName?: string;
@@ -696,12 +793,44 @@ export function renderLeadReplyNotificationEmail(opts: {
       <h2 style="margin:0 0 12px 0">New Lead Reply</h2>
       <table style="border-collapse:collapse;margin:8px 0 16px 0">
         <tbody>
-          ${opts.leadName ? `<tr><td style="padding:4px 8px;color:#64748b">Lead</td><td style="padding:4px 8px"><b>${escapeHtml(opts.leadName)}</b></td></tr>` : ""}
-          ${opts.leadPhone ? `<tr><td style="padding:4px 8px;color:#64748b">Phone</td><td style="padding:4px 8px">${escapeHtml(opts.leadPhone)}</td></tr>` : ""}
-          ${opts.leadEmail ? `<tr><td style="padding:4px 8px;color:#64748b">Email</td><td style="padding:4px 8px">${escapeHtml(opts.leadEmail)}</td></tr>` : ""}
-          ${opts.folder ? `<tr><td style="padding:4px 8px;color:#64748b">Folder</td><td style="padding:4px 8px">${escapeHtml(opts.folder)}</td></tr>` : ""}
-          ${opts.status ? `<tr><td style="padding:4px 8px;color:#64748b">Status</td><td style="padding:4px 8px">${escapeHtml(opts.status)}</td></tr>` : ""}
-          <tr><td style="padding:4px 8px;color:#64748b">Received</td><td style="padding:4px 8px">${escapeHtml(when)}</td></tr>
+          ${
+            opts.leadName
+              ? `<tr><td style="padding:4px 8px;color:#64748b">Lead</td><td style="padding:4px 8px"><b>${escapeHtml(
+                  opts.leadName,
+                )}</b></td></tr>`
+              : ""
+          }
+          ${
+            opts.leadPhone
+              ? `<tr><td style="padding:4px 8px;color:#64748b">Phone</td><td style="padding:4px 8px">${escapeHtml(
+                  opts.leadPhone,
+                )}</td></tr>`
+              : ""
+          }
+          ${
+            opts.leadEmail
+              ? `<tr><td style="padding:4px 8px;color:#64748b">Email</td><td style="padding:4px 8px">${escapeHtml(
+                  opts.leadEmail,
+                )}</td></tr>`
+              : ""
+          }
+          ${
+            opts.folder
+              ? `<tr><td style="padding:4px 8px;color:#64748b">Folder</td><td style="padding:4px 8px">${escapeHtml(
+                  opts.folder,
+                )}</td></tr>`
+              : ""
+          }
+          ${
+            opts.status
+              ? `<tr><td style="padding:4px 8px;color:#64748b">Status</td><td style="padding:4px 8px">${escapeHtml(
+                  opts.status,
+                )}</td></tr>`
+              : ""
+          }
+          <tr><td style="padding:4px 8px;color:#64748b">Received</td><td style="padding:4px 8px">${escapeHtml(
+            when,
+          )}</td></tr>
           ${
             opts.linkUrl
               ? `<tr><td style="padding:4px 8px;color:#64748b">Lead Link</td><td style="padding:4px 8px"><a href="${opts.linkUrl}">Open in Cove</a></td></tr>`
@@ -724,9 +853,9 @@ export function renderLeadReplyNotificationEmail(opts: {
  * but From is the app’s configured address and Reply-To is the agent’s email.
  */
 export async function sendLeadReplyNotificationEmail(opts: {
-  to: string;                 // agent email (user.email)
+  to: string; // agent email (user.email)
   replyTo?: string | string[]; // set to user.email so agent can reply quickly
-  subject: string;            // e.g. "[New Lead Reply] {Lead Name or Phone} — {first 60 chars}"
+  subject: string; // e.g. "[New Lead Reply] {Lead Name or Phone} — {first 60 chars}"
   leadName?: string;
   leadPhone?: string;
   leadEmail?: string;
@@ -750,6 +879,7 @@ export async function sendLeadReplyNotificationEmail(opts: {
     to: opts.to,
     subject: opts.subject,
     html,
-    replyTo: opts.replyTo,
+    // For lead replies we respect the caller's reply-to (usually the agent)
+    replyTo: opts.replyTo || DEFAULT_SUPPORT_EMAIL,
   });
 }
