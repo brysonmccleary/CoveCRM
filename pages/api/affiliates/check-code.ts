@@ -1,6 +1,12 @@
+// /pages/api/affiliates/check-code.ts
+
 import type { NextApiRequest, NextApiResponse } from "next";
 import dbConnect from "@/lib/mongooseConnect";
 import Affiliate from "@/models/Affiliate";
+
+// Keep helpers in sync with other affiliate endpoints
+const U = (s?: string | null) => (s || "").trim().toUpperCase();
+const HOUSE_CODE = U(process.env.AFFILIATE_HOUSE_CODE || "COVE50");
 
 export default async function handler(
   req: NextApiRequest,
@@ -19,7 +25,18 @@ export default async function handler(
       return res.status(400).json({ error: "Missing or invalid code" });
     }
 
-    const normalizedCode = code.trim().toUpperCase();
+    const normalizedCode = U(code);
+    if (!normalizedCode) {
+      return res.status(400).json({ error: "Missing or invalid code" });
+    }
+
+    // Reserved house code is never available
+    if (normalizedCode === HOUSE_CODE) {
+      return res.status(200).json({
+        available: false,
+        reason: "reserved",
+      });
+    }
 
     // Check if any affiliate already has this code
     const exists = await Affiliate.findOne({ promoCode: normalizedCode });

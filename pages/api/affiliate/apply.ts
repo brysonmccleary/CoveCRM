@@ -25,6 +25,10 @@ const DEFAULT_PAYOUT_FLAT = Number(
   process.env.AFFILIATE_DEFAULT_PAYOUT || "25", // $25 to affiliate on first paid invoice
 );
 
+// Helpers to mirror other affiliate code
+const U = (s?: string | null) => (s || "").trim().toUpperCase();
+const HOUSE_CODE = U(process.env.AFFILIATE_HOUSE_CODE || "COVE50");
+
 export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse,
@@ -47,7 +51,18 @@ export default async function handler(
     return res.status(400).json({ error: "Missing required fields" });
   }
 
-  const promoCode = String(code).trim().toUpperCase();
+  const promoCode = U(code);
+  if (!promoCode) {
+    return res.status(400).json({ error: "Invalid promo code" });
+  }
+
+  // Block house / reserved code from being used by affiliates
+  if (promoCode === HOUSE_CODE) {
+    return res
+      .status(400)
+      .json({ error: "This promo code is reserved and cannot be used." });
+  }
+
   const SKIP_CONNECT = process.env.DEV_SKIP_BILLING === "1"; // dev-only bypass for Connect
 
   await dbConnect();
@@ -168,7 +183,6 @@ export default async function handler(
       payoutHistory: [],
       approved: true,
       approvedAt: new Date(),
-      // If your Affiliate schema includes these, they will be saved; otherwise Mongoose will ignore.
       couponId,
       promotionCodeId,
     } as any);
