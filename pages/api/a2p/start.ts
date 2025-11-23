@@ -509,10 +509,26 @@ export default async function handler(
         secondaryProfileSid,
       });
 
-      await assignEntityToCustomerProfile(
-        PRIMARY_PROFILE_SID,
-        secondaryProfileSid!,
-      );
+      try {
+        await assignEntityToCustomerProfile(
+          PRIMARY_PROFILE_SID,
+          secondaryProfileSid!,
+        );
+      } catch (err: any) {
+        // If Twilio says the primary bundle is TWILIO_APPROVED and cannot be
+        // modified, just log and move on – this is informational, not fatal.
+        if (
+          err?.code === 70002 &&
+          typeof err?.message === "string" &&
+          err.message.includes("TWILIO_APPROVED")
+        ) {
+          console.warn(
+            "[A2P start] primary profile is TWILIO_APPROVED; skipping secondary assignment",
+          );
+        } else {
+          throw err;
+        }
+      }
 
       await A2PProfile.updateOne(
         { _id: a2p._id },
