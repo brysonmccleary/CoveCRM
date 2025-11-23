@@ -63,11 +63,16 @@ async function assignEntityToCustomerProfile(
     customerProfileSid,
     objectSid,
   });
-  await (
-    client.trusthub.v1.customerProfiles(customerProfileSid) as any
-  ).entityAssignments.create({
-    objectSid,
-  });
+  const cp: any = client.trusthub.v1.customerProfiles(customerProfileSid) as any;
+  if (!cp || !cp.customerProfilesEntityAssignments?.create) {
+    // Older SDKs expose .entityAssignments
+    if (cp?.entityAssignments?.create) {
+      await cp.entityAssignments.create({ objectSid });
+      return;
+    }
+    throw new Error("customerProfilesEntityAssignments.create not available");
+  }
+  await cp.customerProfilesEntityAssignments.create({ objectSid });
 }
 
 async function assignEntityToTrustProduct(
@@ -78,19 +83,35 @@ async function assignEntityToTrustProduct(
     trustProductSid,
     objectSid,
   });
-  await (
-    client.trusthub.v1.trustProducts(trustProductSid) as any
-  ).entityAssignments.create({
-    objectSid,
-  });
+  const tp: any = client.trusthub.v1.trustProducts(trustProductSid) as any;
+  if (!tp || !tp.trustProductsEntityAssignments?.create) {
+    if (tp?.entityAssignments?.create) {
+      await tp.entityAssignments.create({ objectSid });
+      return;
+    }
+    throw new Error("trustProductsEntityAssignments.create not available");
+  }
+  await tp.trustProductsEntityAssignments.create({ objectSid });
 }
 
 async function evaluateAndSubmitCustomerProfile(customerProfileSid: string) {
   try {
     log("step: customerProfiles.evaluations.create", { customerProfileSid });
-    await (
-      client.trusthub.v1.customerProfiles(customerProfileSid) as any
-    ).evaluations.create({});
+    const root: any = client.trusthub.v1;
+    if (root.customerProfilesEvaluations?.create) {
+      // Newer style
+      await root.customerProfilesEvaluations.create({
+        customerProfileSid,
+        policySid: SECONDARY_PROFILE_POLICY_SID,
+      });
+    } else {
+      // Older nested style (may be undefined; caught below)
+      await (client.trusthub.v1.customerProfiles(
+        customerProfileSid,
+      ) as any).evaluations.create({
+        policySid: SECONDARY_PROFILE_POLICY_SID,
+      });
+    }
   } catch (err: any) {
     log("warn: evaluations.create failed (customerProfile)", {
       customerProfileSid,
@@ -119,9 +140,19 @@ async function evaluateAndSubmitCustomerProfile(customerProfileSid: string) {
 async function evaluateAndSubmitTrustProduct(trustProductSid: string) {
   try {
     log("step: trustProducts.evaluations.create", { trustProductSid });
-    await (
-      client.trusthub.v1.trustProducts(trustProductSid) as any
-    ).evaluations.create({});
+    const root: any = client.trusthub.v1;
+    if (root.trustProductsEvaluations?.create) {
+      await root.trustProductsEvaluations.create({
+        trustProductSid,
+        policySid: A2P_TRUST_PRODUCT_POLICY_SID,
+      });
+    } else {
+      await (client.trusthub.v1.trustProducts(
+        trustProductSid,
+      ) as any).evaluations.create({
+        policySid: A2P_TRUST_PRODUCT_POLICY_SID,
+      });
+    }
   } catch (err: any) {
     log("warn: evaluations.create failed (trustProduct)", {
       trustProductSid,
@@ -171,42 +202,6 @@ async function ensureMessagingServiceForUser(
   return ms.sid;
 }
 
-/**
- * Attach secondary to primary, but **skip** if primary is already TWILIO_APPROVED
- * to avoid "Cannot add bundle item to a TWILIO_APPROVED bundle".
- */
-async function assignSecondaryToPrimary(secondaryProfileSid: string) {
-  try {
-    const primary = await client.trusthub.v1
-      .customerProfiles(PRIMARY_PROFILE_SID)
-      .fetch();
-    const status = String((primary as any).status || "").toUpperCase();
-
-    log("step: assign secondary to primary", {
-      primaryProfileSid: PRIMARY_PROFILE_SID,
-      secondaryProfileSid,
-      primaryStatus: status,
-    });
-
-    if (status === "TWILIO_APPROVED") {
-      log(
-        "warning: primary profile is TWILIO_APPROVED; skipping secondary assignment",
-      );
-      return;
-    }
-  } catch (err: any) {
-    log("warn: failed to fetch primary profile; attempting assignment anyway", {
-      primaryProfileSid: PRIMARY_PROFILE_SID,
-      code: err?.code,
-      status: err?.status,
-      moreInfo: err?.moreInfo,
-      message: err?.message,
-    });
-  }
-
-  await assignEntityToCustomerProfile(PRIMARY_PROFILE_SID, secondaryProfileSid);
-}
-
 // ---------------- handler ----------------
 export default async function handler(
   req: NextApiRequest,
@@ -222,7 +217,7 @@ export default async function handler(
 
     await mongooseConnect();
 
-    const user = await User.findOne({ email: session.user.email });
+    const user = await User.findOne({ email: session.user?.email });
     if (!user) return res.status(404).json({ message: "User not found" });
 
     const {
@@ -258,7 +253,7 @@ export default async function handler(
     required(contactLastName, "contactLastName");
     required(optInDetails, "optInDetails");
 
-    // Normalize EIN to 9 digits for business_registration_number
+    // Normalize EIN to 9 digits
     const einDigits = String(ein)
       .replace(/[^\d]/g, "")
       .slice(0, 9);
@@ -284,9 +279,6 @@ export default async function handler(
       );
     }
 
-    // Clamp sample length for TrustHub payload (defensive)
-    const trimmedSamples = samples.slice(0, 5).map((s) => s.slice(0, 1024));
-
     const userId = String(user._id);
     const existing = await A2PProfile.findOne({
       userId,
@@ -305,8 +297,8 @@ export default async function handler(
       contactTitle: String(contactTitle),
       contactFirstName: String(contactFirstName),
       contactLastName: String(contactLastName),
-      sampleMessages: trimmedSamples.join("\n\n"),
-      sampleMessagesArr: trimmedSamples, // keep array form too
+      sampleMessages: samples.join("\n\n"),
+      sampleMessagesArr: samples,
       optInDetails: String(optInDetails),
       volume: (volume as string) || "Low",
       optInScreenshotUrl: (optInScreenshotUrl as string) || "",
@@ -461,7 +453,7 @@ export default async function handler(
         email: setPayload.email,
         business_title: setPayload.contactTitle,
         job_position: "Director",
-        phone_number: digitsOnlyPhone,
+        phone_number: digitsOnlyPhone ? `+1${digitsOnlyPhone}` : undefined,
       };
 
       log("step: endUsers.create (authorized_rep)", {
@@ -504,11 +496,53 @@ export default async function handler(
 
     // ---------------- 1.9) Assign Secondary to Primary (ISV) ----------------
     if (!(a2p as any).assignedToPrimary) {
-      await assignSecondaryToPrimary(secondaryProfileSid!);
-      await A2PProfile.updateOne(
-        { _id: a2p._id },
-        { $set: { assignedToPrimary: true } },
-      );
+      try {
+        log("step: assign secondary to primary", {
+          primaryProfileSid: PRIMARY_PROFILE_SID,
+          secondaryProfileSid,
+        });
+
+        // Some accounts may not support this when the primary bundle is TWILIO_APPROVED; treat as best-effort.
+        await assignEntityToCustomerProfile(
+          PRIMARY_PROFILE_SID,
+          secondaryProfileSid!,
+        );
+
+        await A2PProfile.updateOne(
+          { _id: a2p._id },
+          { $set: { assignedToPrimary: true } },
+        );
+      } catch (err: any) {
+        if (
+          err?.message &&
+          typeof err.message === "string" &&
+          err.message.includes("TWILIO_APPROVED")
+        ) {
+          console.warn(
+            "[A2P start] primary profile is TWILIO_APPROVED; skipping secondary assignment",
+          );
+        } else if (err?.code === 70002) {
+          console.warn(
+            "[A2P start] unable to assign secondary to primary (70002); continuing",
+            {
+              code: err.code,
+              status: err.status,
+              moreInfo: err.moreInfo,
+              message: err.message,
+            },
+          );
+        } else {
+          console.error(
+            "[A2P start] error assigning secondary to primary; continuing anyway",
+            {
+              code: err?.code,
+              status: err?.status,
+              moreInfo: err?.moreInfo,
+              message: err?.message,
+            },
+          );
+        }
+      }
     }
 
     // Evaluate + submit Secondary
@@ -521,15 +555,12 @@ export default async function handler(
         email: NOTIFY_EMAIL,
         policySid: A2P_TRUST_PRODUCT_POLICY_SID,
       });
-
       const tp = await client.trusthub.v1.trustProducts.create({
         friendlyName: `${setPayload.businessName} – A2P Trust Product`,
         email: NOTIFY_EMAIL,
         policySid: A2P_TRUST_PRODUCT_POLICY_SID,
-        statusCallback: STATUS_CB,
       });
       trustProductSid = tp.sid;
-
       log("created trustProduct", { trustProductSid });
 
       await A2PProfile.updateOne(
@@ -538,25 +569,17 @@ export default async function handler(
       );
     }
 
-    // ---------------- 2.2) EndUser: us_a2p_messaging_profile_information + attach ----------------
+    // ---------------- 2.2) EndUser: us_a2p_messaging_profile_information ----------------
+    // IMPORTANT: Twilio docs expect ONLY company_type / stock_* / brand_contact_email here.
+    // All message_flow / samples belong to the campaign, not this EndUser.
     if (!(a2p as any).a2pProfileEndUserSid) {
-      const messageVolumeCode =
-        typeof setPayload.volume === "string" &&
-        ["LOW", "MEDIUM", "HIGH"].includes(
-          setPayload.volume.toUpperCase() as string,
-        )
-          ? (setPayload.volume as string).toUpperCase()
-          : "LOW";
-
-      const a2pAttributes = {
-        description: `A2P messaging for ${setPayload.businessName}`,
-        message_samples: trimmedSamples,
-        message_flow: messageFlowText.slice(0, 4096),
-        message_volume: messageVolumeCode,
-        has_embedded_links: true,
-        has_embedded_phone: false,
-        subscriber_opt_in: true,
+      const a2pAttributes: any = {
+        company_type: "private", // not public; no stock_* fields
       };
+
+      if (setPayload.email) {
+        a2pAttributes.brand_contact_email = setPayload.email;
+      }
 
       log("step: endUsers.create (a2p_profile)", {
         type: "us_a2p_messaging_profile_information",
@@ -572,7 +595,7 @@ export default async function handler(
         a2pEU = await client.trusthub.v1.endUsers.create({
           type: "us_a2p_messaging_profile_information",
           friendlyName: `${setPayload.businessName} – A2P Messaging Profile`,
-          attributes: a2pAttributes as any,
+          attributes: a2pAttributes,
         });
       } catch (err: any) {
         console.error(
@@ -603,6 +626,10 @@ export default async function handler(
     // ---------------- 3) BrandRegistration (BN...) if missing ----------------
     let brandSid: string | undefined = (a2p as any).brandSid;
     if (!brandSid) {
+      log("step: brandRegistrations.create", {
+        customerProfileBundleSid: secondaryProfileSid,
+        a2PProfileBundleSid: trustProductSid,
+      });
       const brand = await client.messaging.v1.brandRegistrations.create({
         customerProfileBundleSid: secondaryProfileSid!,
         a2PProfileBundleSid: trustProductSid!,
@@ -627,7 +654,7 @@ export default async function handler(
           usAppToPersonUsecase: code,
           description: `Campaign for ${setPayload.businessName} (${code})`,
           messageFlow: messageFlowText,
-          messageSamples: trimmedSamples,
+          messageSamples: samples,
           hasEmbeddedLinks: true,
           hasEmbeddedPhone: false,
           subscriberOptIn: true,
