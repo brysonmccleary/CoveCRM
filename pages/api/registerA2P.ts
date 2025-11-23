@@ -1,12 +1,14 @@
-// /pages/api/registerA2P.ts
+// pages/api/registerA2P.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "./auth/[...nextauth]";
 
 /**
  * This endpoint orchestrates the full A2P flow:
- * 1) POST /api/a2p/start (creates/links TrustHub entities, Brand, Messaging Service, and initial Campaign if missing)
- * 2) POST /api/a2p/submit-campaign (idempotently aligns the campaign with latest use-case, flow, and samples)
+ * 1) POST /api/a2p/start (creates/links TrustHub entities, Brand, Messaging Service,
+ *    and, if the Brand is already eligible, initial Campaign)
+ * 2) POST /api/a2p/submit-campaign (idempotently aligns the campaign with latest
+ *    use-case, flow, and samples WHEN the Brand is eligible)
  *
  * Notes:
  * - Screenshot + links are optional but recommended.
@@ -17,6 +19,15 @@ const BASE_URL =
   process.env.NEXT_PUBLIC_BASE_URL ||
   process.env.BASE_URL ||
   "http://localhost:3000";
+
+// Brand statuses that are safe to attach an A2P campaign to
+const BRAND_OK_FOR_CAMPAIGN = new Set([
+  "APPROVED",
+  "VERIFIED",
+  "ACTIVE",
+  "IN_USE",
+  "REGISTERED",
+]);
 
 type BodyIn = {
   businessName?: string;
@@ -183,7 +194,54 @@ export default async function handler(
       });
     }
 
-    // 2) Ensure campaign reflects the latest info (idempotent)
+    // Extract brand status + campaign eligibility from /api/a2p/start response
+    const startInner = (startData && startData.data) || startData || {};
+    const rawBrandStatus =
+      startData?.brandStatus ||
+      startInner.brandStatus ||
+      (startInner.brand && startInner.brand.status);
+    const brandStatus = rawBrandStatus
+      ? String(rawBrandStatus).toUpperCase()
+      : undefined;
+
+    const rawCanCreateCampaign =
+      typeof startData?.canCreateCampaign === "boolean"
+        ? startData.canCreateCampaign
+        : typeof startInner?.canCreateCampaign === "boolean"
+        ? startInner.canCreateCampaign
+        : undefined;
+
+    const canCreateCampaign =
+      typeof rawCanCreateCampaign === "boolean"
+        ? rawCanCreateCampaign
+        : brandStatus
+        ? BRAND_OK_FOR_CAMPAIGN.has(brandStatus)
+        : undefined;
+
+    const brandFailureReason =
+      startData?.brandFailureReason ||
+      startInner.brandFailureReason ||
+      startInner.brandFailureReasons ||
+      undefined;
+
+    // If brand is not in an approved/ready state, DO NOT create/submit a campaign.
+    if (canCreateCampaign === false) {
+      const msg =
+        brandStatus === "FAILED"
+          ? "Your brand registration is currently FAILED. We created/updated your A2P profile, but cannot create a campaign until Twilio approves your brand."
+          : "Your brand registration is not yet approved. We created/updated your A2P profile; once Twilio approves your brand, we can create the campaign.";
+
+      return res.status(200).json({
+        ok: true,
+        message: msg,
+        brandStatus,
+        brandFailureReason,
+        start: startInner,
+      });
+    }
+
+    // 2) Ensure campaign reflects the latest info (idempotent),
+    //    but only when the brand is in an allowed state.
     const submitPayload = {
       useCase: normalizedUseCase,
       messageFlow: body.optInDetails!,
@@ -202,6 +260,9 @@ export default async function handler(
       // Not fatal for brand/profile creation; return error for UI
       return res.status(submitRes.status).json({
         message: submitData?.message || "Campaign submission failed",
+        brandStatus,
+        brandFailureReason,
+        start: startInner,
       });
     }
 
@@ -209,8 +270,9 @@ export default async function handler(
       ok: true,
       message:
         "Submitted. We’ll email you when it’s approved or if reviewers need changes.",
-      start: startData?.data || startData,
+      start: startInner,
       campaign: submitData,
+      brandStatus,
     });
   } catch (e: any) {
     console.error("registerA2P error:", e);

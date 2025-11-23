@@ -44,6 +44,14 @@ const STATUS_CB =
 const NOTIFY_EMAIL =
   process.env.A2P_NOTIFICATIONS_EMAIL || "a2p@yourcompany.com";
 
+// Brand statuses that are safe to attach an A2P campaign to
+const BRAND_OK_FOR_CAMPAIGN = new Set([
+  "APPROVED",
+  "ACTIVE",
+  "IN_USE",
+  "REGISTERED",
+]);
+
 function log(...args: any[]) {
   console.log("[A2P start]", ...args);
 }
@@ -104,10 +112,13 @@ async function assignEntityToCustomerProfile(
       ) as any).fetch();
       const status = String(primary?.status || "").toUpperCase();
       if (status === "TWILIO_APPROVED") {
-        log("warning: primary profile is TWILIO_APPROVED; skipping secondary assignment", {
-          customerProfileSid,
-          objectSid,
-        });
+        log(
+          "warning: primary profile is TWILIO_APPROVED; skipping secondary assignment",
+          {
+            customerProfileSid,
+            objectSid,
+          },
+        );
         return;
       }
     } catch (err) {
@@ -340,7 +351,8 @@ export default async function handler(
     };
 
     const messageFlowText: string = setPayload.optInDetails!;
-    const useCaseCode: string = (setPayload.usecaseCode as string) || "LOW_VOLUME";
+    const useCaseCode: string =
+      (setPayload.usecaseCode as string) || "LOW_VOLUME";
 
     const a2p = await A2PProfile.findOneAndUpdate<IA2PProfile>(
       { userId },
@@ -362,7 +374,7 @@ export default async function handler(
       user.email,
     );
 
-    // Idempotent short-circuit
+    // Idempotent short-circuit (legacy path where brand + campaign already exist)
     if ((a2p as any).brandSid && (a2p as any).usa2pSid) {
       log("short-circuit: brand + usa2p already exist", {
         brandSid: (a2p as any).brandSid,
@@ -371,9 +383,13 @@ export default async function handler(
       });
       return res.status(200).json({
         message: "A2P already created for this user.",
-        messagingServiceSid,
-        brandSid: (a2p as any).brandSid,
-        usa2pSid: (a2p as any).usa2pSid,
+        data: {
+          messagingServiceSid,
+          brandSid: (a2p as any).brandSid,
+          usa2pSid: (a2p as any).usa2pSid,
+          brandStatus: undefined,
+          canCreateCampaign: true,
+        },
       });
     }
 
@@ -531,7 +547,10 @@ export default async function handler(
         secondaryProfileSid,
       });
 
-      await assignEntityToCustomerProfile(PRIMARY_PROFILE_SID, secondaryProfileSid!);
+      await assignEntityToCustomerProfile(
+        PRIMARY_PROFILE_SID,
+        secondaryProfileSid!,
+      );
 
       await A2PProfile.updateOne(
         { _id: a2p._id },
@@ -634,11 +653,43 @@ export default async function handler(
       await A2PProfile.updateOne({ _id: a2p._id }, { $set: { brandSid } });
     }
 
-    // ---------------- 4) Messaging Service already ensured ----------------
+    // ---------------- 3.1) Fetch brand status so we know if we can create a campaign ----------------
+    let brandStatus: string | undefined;
+    let brandFailureReason: any;
+    try {
+      const brand = await client.messaging.v1
+        .brandRegistrations(brandSid!)
+        .fetch();
+      brandStatus = brand?.status;
+      brandFailureReason =
+        (brand as any).failureReason ||
+        (brand as any).failureReasons ||
+        (brand as any).errorCodes ||
+        undefined;
 
-    // ---------------- 5) Campaign (Usa2p QE...) if missing ----------------
+      log("brandRegistrations.fetch", {
+        brandSid,
+        status: brandStatus,
+        failureReason: brandFailureReason,
+      });
+    } catch (err: any) {
+      log("warn: brandRegistrations.fetch failed", {
+        brandSid,
+        code: err?.code,
+        status: err?.status,
+        moreInfo: err?.moreInfo,
+        message: err?.message,
+      });
+    }
+
+    const normalizedBrandStatus = String(brandStatus || "").toUpperCase();
+    const canCreateCampaign = BRAND_OK_FOR_CAMPAIGN.has(normalizedBrandStatus);
+
+    // ---------------- 4) Messaging Service already ensured above ----------------
+
+    // ---------------- 5) Campaign (Usa2p QE...) if missing AND brand is eligible ----------------
     let usa2pSid: string | undefined = (a2p as any).usa2pSid;
-    if (!usa2pSid) {
+    if (!usa2pSid && canCreateCampaign) {
       const code = useCaseCode;
       const description = buildCampaignDescription({
         businessName: setPayload.businessName || "",
@@ -678,6 +729,11 @@ export default async function handler(
         { _id: a2p._id },
         { $set: { usa2pSid, messagingServiceSid, usecaseCode: code } },
       );
+    } else if (!usa2pSid && !canCreateCampaign) {
+      log("brand not eligible for campaign creation yet; deferring usAppToPerson.create", {
+        brandSid,
+        brandStatus,
+      });
     }
 
     // Done
@@ -686,13 +742,16 @@ export default async function handler(
     ).lean<IA2PProfile | null>();
     return res.status(200).json({
       message:
-        "A2P registration started/submitted. We'll move to VERIFIED automatically when TCR approves.",
+        "A2P registration started/submitted. Campaign creation will proceed when your brand is eligible.",
       data: {
         messagingServiceSid,
         profileSid: updated?.profileSid,
         trustProductSid: (updated as any)?.trustProductSid,
         brandSid: (updated as any)?.brandSid,
         usa2pSid: (updated as any)?.usa2pSid,
+        brandStatus,
+        canCreateCampaign,
+        brandFailureReason,
       },
     });
   } catch (err: any) {

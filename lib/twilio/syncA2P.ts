@@ -22,9 +22,9 @@ function computeRegistrationStatus(opts: {
   const c = String(opts.campaignStatus || "").toLowerCase();
 
   const brandApproved = b === "approved" || b === "active";
-  const brandRejected = b === "rejected";
+  const brandRejected = b === "rejected" || b === "failed";
   const campaignApproved = c === "approved" || c === "active";
-  const campaignRejected = c === "rejected";
+  const campaignRejected = c === "rejected" || c === "failed";
 
   if (brandRejected || campaignRejected) return "rejected";
   if (brandApproved && campaignApproved && opts.hasNumbers) return "ready";
