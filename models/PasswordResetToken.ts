@@ -13,7 +13,8 @@ const PasswordResetTokenSchema = new Schema<IPasswordResetToken>(
   {
     userEmail: { type: String, required: true, index: true },
     tokenHash: { type: String, required: true },
-    expiresAt: { type: Date, required: true, index: true },
+    // Remove field-level index to avoid duplicate with TTL index below
+    expiresAt: { type: Date, required: true },
     usedAt: { type: Date },
   },
   { timestamps: { createdAt: true, updatedAt: false } },
@@ -21,6 +22,7 @@ const PasswordResetTokenSchema = new Schema<IPasswordResetToken>(
 
 // TTL on expiresAt (Mongo will remove after the time passes)
 PasswordResetTokenSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
+
 // Uniqueness per email/hash
 PasswordResetTokenSchema.index(
   { userEmail: 1, tokenHash: 1 },
