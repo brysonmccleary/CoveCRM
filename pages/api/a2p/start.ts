@@ -254,8 +254,7 @@ export default async function handler(
     required(contactLastName, "contactLastName");
     required(optInDetails, "optInDetails");
 
-    // Normalize EIN: should already be 9 digits from registerA2P,
-    // but we defensively clean it again here.
+    // Normalize EIN
     const einDigits = String(ein)
       .replace(/[^\d]/g, "")
       .slice(0, 9);
@@ -301,7 +300,7 @@ export default async function handler(
       contactFirstName: String(contactFirstName),
       contactLastName: String(contactLastName),
       sampleMessages: samples.join("\n\n"),
-      sampleMessagesArr: samples, // keep array form too
+      sampleMessagesArr: samples,
       optInDetails: String(optInDetails),
       volume: (volume as string) || "Low",
       optInScreenshotUrl: (optInScreenshotUrl as string) || "",
@@ -449,6 +448,12 @@ export default async function handler(
         /[^\d]/g,
         "",
       );
+      const normalizedPhone =
+        digitsOnlyPhone.length === 10
+          ? `+1${digitsOnlyPhone}`
+          : digitsOnlyPhone.startsWith("1") && digitsOnlyPhone.length === 11
+            ? `+${digitsOnlyPhone}`
+            : `+${digitsOnlyPhone}`;
 
       const repAttributes = {
         last_name: setPayload.contactLastName,
@@ -456,8 +461,7 @@ export default async function handler(
         email: setPayload.email,
         business_title: setPayload.contactTitle,
         job_position: "Director",
-        phone_number: digitsOnlyPhone,
-        country_code: "+1",
+        phone_number: normalizedPhone,
       };
 
       log("step: endUsers.create (authorized_rep)", {
