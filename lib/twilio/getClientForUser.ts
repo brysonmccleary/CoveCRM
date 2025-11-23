@@ -88,19 +88,47 @@ export async function getClientForUser(email: string): Promise<ResolvedTwilioCli
     const apiKeySecret = String(user.twilio.apiKeySecret || "").trim();
 
     if (!accountSid.startsWith("AC")) throw new Error("User personal accountSid invalid.");
-    if (!apiKeySid.startsWith("SK") || !apiKeySecret)
-      throw new Error("User personal API key invalid.");
 
-    const client = buildTwilioClient({ accountSid, apiKeySid, apiKeySecret });
+    // SPECIAL CASE: platform owner using their main Twilio as "personal"
+    // If this user's accountSid == platformAccountSid and we have a platform AUTH TOKEN,
+    // prefer the known-good SID+AUTH creds instead of the per-user API key pair.
+    const isPlatformOwner =
+      platformAccountSid &&
+      platformAccountSid === accountSid &&
+      !!platformAuthToken;
 
-    console.log(
-      JSON.stringify({
-        msg: "getClientForUser: PERSONAL Twilio (API Key)",
-        email: normalizedEmail,
-        accountSidMasked: maskSid(accountSid),
-        billingMode: user?.billingMode,
-      }),
-    );
+    let client: Twilio;
+
+    if (isPlatformOwner) {
+      client = buildTwilioClient({
+        accountSid,
+        authToken: platformAuthToken,
+      });
+
+      console.log(
+        JSON.stringify({
+          msg: "getClientForUser: PERSONAL Twilio (platform auth token)",
+          email: normalizedEmail,
+          accountSidMasked: maskSid(accountSid),
+          billingMode: user?.billingMode,
+        }),
+      );
+    } else {
+      if (!apiKeySid.startsWith("SK") || !apiKeySecret) {
+        throw new Error("User personal API key invalid.");
+      }
+
+      client = buildTwilioClient({ accountSid, apiKeySid, apiKeySecret });
+
+      console.log(
+        JSON.stringify({
+          msg: "getClientForUser: PERSONAL Twilio (API Key)",
+          email: normalizedEmail,
+          accountSidMasked: maskSid(accountSid),
+          billingMode: user?.billingMode,
+        }),
+      );
+    }
 
     return { client, accountSid, usingPersonal: true, user };
   }
