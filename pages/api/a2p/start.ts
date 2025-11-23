@@ -59,62 +59,30 @@ async function assignEntityToCustomerProfile(
   customerProfileSid: string,
   objectSid: string,
 ) {
-  const cp = client.trusthub.v1.customerProfiles(customerProfileSid) as any;
-
-  const assignments =
-    cp.customerProfilesEntityAssignments || cp.entityAssignments;
-
-  if (!assignments || typeof assignments.create !== "function") {
-    console.error(
-      "[A2P start] customerProfile entity assignments API missing",
-      {
-        hasCustomerProfilesEntityAssignments:
-          !!cp.customerProfilesEntityAssignments,
-        hasEntityAssignments: !!cp.entityAssignments,
-      },
-    );
-    throw new Error(
-      "Twilio SDK: customerProfile entity assignments API not available",
-    );
-  }
-
   log("step: entityAssignments.create (customerProfile)", {
     customerProfileSid,
     objectSid,
   });
-
-  await assignments.create({ objectSid });
+  await (
+    client.trusthub.v1.customerProfiles(customerProfileSid) as any
+  ).entityAssignments.create({
+    objectSid,
+  });
 }
 
 async function assignEntityToTrustProduct(
   trustProductSid: string,
   objectSid: string,
 ) {
-  const tp = client.trusthub.v1.trustProducts(trustProductSid) as any;
-
-  const assignments =
-    tp.trustProductsEntityAssignments || tp.entityAssignments;
-
-  if (!assignments || typeof assignments.create !== "function") {
-    console.error(
-      "[A2P start] trustProduct entity assignments API missing",
-      {
-        hasTrustProductsEntityAssignments:
-          !!tp.trustProductsEntityAssignments,
-        hasEntityAssignments: !!tp.entityAssignments,
-      },
-    );
-    throw new Error(
-      "Twilio SDK: trustProduct entity assignments API not available",
-    );
-  }
-
   log("step: entityAssignments.create (trustProduct)", {
     trustProductSid,
     objectSid,
   });
-
-  await assignments.create({ objectSid });
+  await (
+    client.trusthub.v1.trustProducts(trustProductSid) as any
+  ).entityAssignments.create({
+    objectSid,
+  });
 }
 
 async function evaluateAndSubmitCustomerProfile(customerProfileSid: string) {
@@ -203,6 +171,42 @@ async function ensureMessagingServiceForUser(
   return ms.sid;
 }
 
+/**
+ * Attach secondary to primary, but **skip** if primary is already TWILIO_APPROVED
+ * to avoid "Cannot add bundle item to a TWILIO_APPROVED bundle".
+ */
+async function assignSecondaryToPrimary(secondaryProfileSid: string) {
+  try {
+    const primary = await client.trusthub.v1
+      .customerProfiles(PRIMARY_PROFILE_SID)
+      .fetch();
+    const status = String((primary as any).status || "").toUpperCase();
+
+    log("step: assign secondary to primary", {
+      primaryProfileSid: PRIMARY_PROFILE_SID,
+      secondaryProfileSid,
+      primaryStatus: status,
+    });
+
+    if (status === "TWILIO_APPROVED") {
+      log(
+        "warning: primary profile is TWILIO_APPROVED; skipping secondary assignment",
+      );
+      return;
+    }
+  } catch (err: any) {
+    log("warn: failed to fetch primary profile; attempting assignment anyway", {
+      primaryProfileSid: PRIMARY_PROFILE_SID,
+      code: err?.code,
+      status: err?.status,
+      moreInfo: err?.moreInfo,
+      message: err?.message,
+    });
+  }
+
+  await assignEntityToCustomerProfile(PRIMARY_PROFILE_SID, secondaryProfileSid);
+}
+
 // ---------------- handler ----------------
 export default async function handler(
   req: NextApiRequest,
@@ -254,11 +258,10 @@ export default async function handler(
     required(contactLastName, "contactLastName");
     required(optInDetails, "optInDetails");
 
-    // Normalize EIN
+    // Normalize EIN to 9 digits for business_registration_number
     const einDigits = String(ein)
       .replace(/[^\d]/g, "")
       .slice(0, 9);
-
     if (einDigits.length !== 9) {
       throw new Error(
         "EIN must be 9 digits (business_registration_number is invalid).",
@@ -281,6 +284,9 @@ export default async function handler(
       );
     }
 
+    // Clamp sample length for TrustHub payload (defensive)
+    const trimmedSamples = samples.slice(0, 5).map((s) => s.slice(0, 1024));
+
     const userId = String(user._id);
     const existing = await A2PProfile.findOne({
       userId,
@@ -299,8 +305,8 @@ export default async function handler(
       contactTitle: String(contactTitle),
       contactFirstName: String(contactFirstName),
       contactLastName: String(contactLastName),
-      sampleMessages: samples.join("\n\n"),
-      sampleMessagesArr: samples,
+      sampleMessages: trimmedSamples.join("\n\n"),
+      sampleMessagesArr: trimmedSamples, // keep array form too
       optInDetails: String(optInDetails),
       volume: (volume as string) || "Low",
       optInScreenshotUrl: (optInScreenshotUrl as string) || "",
@@ -376,10 +382,10 @@ export default async function handler(
     // ---------------- 1.2) EndUser: business information + attach ----------------
     if (!(a2p as any).businessEndUserSid) {
       const rawWebsite = String(setPayload.website || "").trim();
-      const websiteUrl = rawWebsite.startsWith("http://") ||
-        rawWebsite.startsWith("https://")
-        ? rawWebsite
-        : `https://${rawWebsite}`;
+      const websiteUrl =
+        rawWebsite.startsWith("http://") || rawWebsite.startsWith("https://")
+          ? rawWebsite
+          : `https://${rawWebsite}`;
 
       const businessAttributes = {
         business_name: setPayload.businessName,
@@ -388,7 +394,7 @@ export default async function handler(
         business_regions_of_operation: "USA_AND_CANADA",
         business_type: "Limited Liability Corporation",
         business_registration_identifier: "EIN",
-        business_identity: "isv_reseller_or_partner",
+        business_identity: "direct_customer",
         business_industry: "INSURANCE",
         business_registration_number: einDigits,
       };
@@ -448,12 +454,6 @@ export default async function handler(
         /[^\d]/g,
         "",
       );
-      const normalizedPhone =
-        digitsOnlyPhone.length === 10
-          ? `+1${digitsOnlyPhone}`
-          : digitsOnlyPhone.startsWith("1") && digitsOnlyPhone.length === 11
-            ? `+${digitsOnlyPhone}`
-            : `+${digitsOnlyPhone}`;
 
       const repAttributes = {
         last_name: setPayload.contactLastName,
@@ -461,7 +461,7 @@ export default async function handler(
         email: setPayload.email,
         business_title: setPayload.contactTitle,
         job_position: "Director",
-        phone_number: normalizedPhone,
+        phone_number: digitsOnlyPhone,
       };
 
       log("step: endUsers.create (authorized_rep)", {
@@ -504,32 +504,7 @@ export default async function handler(
 
     // ---------------- 1.9) Assign Secondary to Primary (ISV) ----------------
     if (!(a2p as any).assignedToPrimary) {
-      log("step: assign secondary to primary", {
-        primaryProfileSid: PRIMARY_PROFILE_SID,
-        secondaryProfileSid,
-      });
-
-      try {
-        await assignEntityToCustomerProfile(
-          PRIMARY_PROFILE_SID,
-          secondaryProfileSid!,
-        );
-      } catch (err: any) {
-        // If Twilio says the primary bundle is TWILIO_APPROVED and cannot be
-        // modified, just log and move on – this is informational, not fatal.
-        if (
-          err?.code === 70002 &&
-          typeof err?.message === "string" &&
-          err.message.includes("TWILIO_APPROVED")
-        ) {
-          console.warn(
-            "[A2P start] primary profile is TWILIO_APPROVED; skipping secondary assignment",
-          );
-        } else {
-          throw err;
-        }
-      }
-
+      await assignSecondaryToPrimary(secondaryProfileSid!);
       await A2PProfile.updateOne(
         { _id: a2p._id },
         { $set: { assignedToPrimary: true } },
@@ -563,13 +538,21 @@ export default async function handler(
       );
     }
 
-    // 2.2) EndUser: us_a2p_messaging_profile_information + attach to TrustProduct (+ attach Secondary)
+    // ---------------- 2.2) EndUser: us_a2p_messaging_profile_information + attach ----------------
     if (!(a2p as any).a2pProfileEndUserSid) {
+      const messageVolumeCode =
+        typeof setPayload.volume === "string" &&
+        ["LOW", "MEDIUM", "HIGH"].includes(
+          setPayload.volume.toUpperCase() as string,
+        )
+          ? (setPayload.volume as string).toUpperCase()
+          : "LOW";
+
       const a2pAttributes = {
         description: `A2P messaging for ${setPayload.businessName}`,
-        message_samples: samples,
-        message_flow: messageFlowText,
-        message_volume: setPayload.volume || "Low",
+        message_samples: trimmedSamples,
+        message_flow: messageFlowText.slice(0, 4096),
+        message_volume: messageVolumeCode,
         has_embedded_links: true,
         has_embedded_phone: false,
         subscriber_opt_in: true,
@@ -620,19 +603,12 @@ export default async function handler(
     // ---------------- 3) BrandRegistration (BN...) if missing ----------------
     let brandSid: string | undefined = (a2p as any).brandSid;
     if (!brandSid) {
-      log("step: brandRegistrations.create", {
-        customerProfileBundleSid: secondaryProfileSid,
-        a2PProfileBundleSid: trustProductSid,
-      });
-
       const brand = await client.messaging.v1.brandRegistrations.create({
         customerProfileBundleSid: secondaryProfileSid!,
         a2PProfileBundleSid: trustProductSid!,
         brandType: "STANDARD",
       });
       brandSid = brand.sid;
-
-      log("created brandRegistration", { brandSid });
 
       await A2PProfile.updateOne({ _id: a2p._id }, { $set: { brandSid } });
     }
@@ -644,12 +620,6 @@ export default async function handler(
     if (!usa2pSid) {
       const code = (usecaseCode as string) || "LOW_VOLUME";
 
-      log("step: usAppToPerson.create (campaign)", {
-        messagingServiceSid,
-        brandSid,
-        code,
-      });
-
       const usa2p = await client.messaging.v1
         .services(messagingServiceSid)
         .usAppToPerson.create({
@@ -657,7 +627,7 @@ export default async function handler(
           usAppToPersonUsecase: code,
           description: `Campaign for ${setPayload.businessName} (${code})`,
           messageFlow: messageFlowText,
-          messageSamples: samples,
+          messageSamples: trimmedSamples,
           hasEmbeddedLinks: true,
           hasEmbeddedPhone: false,
           subscriberOptIn: true,
@@ -665,9 +635,7 @@ export default async function handler(
           directLending: false,
         });
 
-      usa2pSid = (usa2p as any).sid;
-
-      log("created usa2p campaign", { usa2pSid });
+      usa2pSid = usa2p.sid;
 
       await A2PProfile.updateOne(
         { _id: a2p._id },
