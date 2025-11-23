@@ -1,171 +1,171 @@
-// pages/api/drips/drips-folder-watch.ts
+// /pages/api/cron/send-ai-queued.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import dbConnect from "@/lib/mongooseConnect";
-import { DateTime } from "luxon";
-import Lead from "@/models/Lead";
-import DripEnrollment from "@/models/DripEnrollment";
-import DripFolderEnrollment from "@/models/DripFolderEnrollment";
-import DripCampaign from "@/models/DripCampaign";
-import { acquireLock } from "@/lib/locks";
 import { checkCronAuth } from "@/lib/cronAuth";
+import { acquireLock } from "@/lib/locks";
+import { AiQueuedReply } from "@/models/AiQueuedReply";
+import { sendSms } from "@/lib/twilio/sendSMS";
 
-export const config = { maxDuration: 60 };
+export const config = {
+  maxDuration: 60,
+};
 
-const PT_ZONE = "America/Los_Angeles";
-const SEND_HOUR_PT = 9;
+const MAX_PER_RUN = 25;
+const MAX_ATTEMPTS = 5;
 
-// Next 9:00am PT
-function nextWindowPT(): Date {
-  const nowPT = DateTime.now().setZone(PT_ZONE);
-  const base = nowPT.hour < SEND_HOUR_PT ? nowPT : nowPT.plus({ days: 1 });
-  return base
-    .set({ hour: SEND_HOUR_PT, minute: 0, second: 0, millisecond: 0 })
-    .toJSDate();
-}
-
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  // Keep GET-only (Vercel Cron default)
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse
+) {
+  // Vercel cron hits with GET
   if (req.method !== "GET") {
     return res.status(405).json({ message: "Method not allowed" });
   }
 
-  // --- Centralized cron auth ---
+  // Centralized cron auth (?token=CRON_SECRET or Bearer)
   if (!checkCronAuth(req)) {
     return res.status(401).json({ message: "Unauthorized" });
   }
 
-  // Allow global pause
-  if (process.env.DRIPS_HARD_STOP === "1") {
+  // Global kill switch if needed
+  if (process.env.AI_SMS_HARD_STOP === "1") {
+    console.warn("[send-ai-queued] HARD STOP enabled, exiting.");
     return res.status(204).end();
   }
 
   try {
     await dbConnect();
 
-    // Prevent overlap
-    const ok = await acquireLock("cron", "drips-folder-watch", 50);
-    if (!ok) return res.status(200).json({ message: "Already running, skipping" });
+    // Prevent overlapping runs
+    const locked = await acquireLock("cron", "send-ai-queued", 55);
+    if (!locked) {
+      console.log("[send-ai-queued] Another run in progress, skipping.");
+      return res.status(200).json({ message: "Already running, skipped." });
+    }
 
-    const watchers = await DripFolderEnrollment.find({ active: true })
-      .select({
-        _id: 1,
-        userEmail: 1,
-        folderId: 1,
-        campaignId: 1,
-        startMode: 1,
-        lastScanAt: 1,
-      })
+    const now = new Date();
+
+    // Find due queued AI replies
+    const due = await AiQueuedReply.find({
+      status: "queued",
+      sendAfter: { $lte: now },
+      attempts: { $lt: MAX_ATTEMPTS },
+    })
+      .sort({ sendAfter: 1, createdAt: 1 })
+      .limit(MAX_PER_RUN)
       .lean();
 
-    let scanned = 0,
-      newlyEnrolled = 0,
-      deduped = 0;
+    if (!due.length) {
+      console.log("[send-ai-queued] No queued messages due.");
+      return res.status(200).json({
+        ok: true,
+        processed: 0,
+        sent: 0,
+        failed: 0,
+        remaining: 0,
+      });
+    }
 
-    for (const w of watchers) {
-      scanned++;
+    console.log(
+      `[send-ai-queued] Processing ${due.length} queued AI message(s) at ${now.toISOString()}`
+    );
 
-      const wLock = await acquireLock("watch", `folder:${w._id}`, 45);
-      if (!wLock) continue;
+    let sent = 0;
+    let failed = 0;
 
-      const campaign = (await DripCampaign.findById(w.campaignId)
-        .select({ _id: 1, isActive: 1, type: 1 })
-        .lean()) as null | { _id: any; isActive?: boolean; type?: string };
-
-      const isSmsActive = !!campaign && campaign.type === "sms" && campaign.isActive === true;
-
-      if (!isSmsActive) {
-        await DripFolderEnrollment.updateOne(
-          { _id: w._id },
-          { $set: { active: false } }
-        );
-        continue;
-      }
-
-      const leads = await Lead.aggregate([
-        { $match: { userEmail: w.userEmail, folderId: w.folderId } },
-        {
-          $lookup: {
-            from: "dripenrollments",
-            let: { leadId: "$_id" },
-            pipeline: [
-              {
-                $match: {
-                  $expr: {
-                    $and: [
-                      { $eq: ["$leadId", "$$leadId"] },
-                      { $eq: ["$campaignId", w.campaignId] },
-                      { $in: ["$status", ["active", "paused"]] },
-                    ],
-                  },
-                },
-              },
-              { $limit: 1 },
-            ],
-            as: "enr",
+    for (const job of due) {
+      const id = String(job._id);
+      try {
+        // Mark as "sending" and bump attempts, but only if still queued
+        const updated = await AiQueuedReply.findOneAndUpdate(
+          {
+            _id: job._id,
+            status: "queued",
+            attempts: { $lt: MAX_ATTEMPTS },
           },
-        },
-        { $match: { enr: { $size: 0 } } },
-        { $project: { _id: 1 } },
-        { $limit: 2000 },
-      ]);
+          {
+            $set: { status: "sending" },
+            $inc: { attempts: 1 },
+          },
+          { new: true }
+        );
 
-      const nextSendAt =
-        w.startMode === "nextWindow" ? nextWindowPT() : new Date();
-
-      for (const lead of leads) {
-        const before = await DripEnrollment.findOne({
-          userEmail: w.userEmail,
-          leadId: lead._id,
-          campaignId: w.campaignId,
-          status: { $in: ["active", "paused"] },
-        })
-          .select({ _id: 1 })
-          .lean();
-
-        if (before?._id) {
-          deduped++;
+        if (!updated) {
+          // Another worker grabbed or it changed; skip
+          console.log(
+            `[send-ai-queued] Skipping ${id} — no longer queued or max attempts reached.`
+          );
           continue;
         }
 
-        await DripEnrollment.findOneAndUpdate(
-          {
-            userEmail: w.userEmail,
-            leadId: lead._id,
-            campaignId: w.campaignId,
-            status: { $in: ["active", "paused"] },
-          },
-          {
-            $setOnInsert: {
-              userEmail: w.userEmail,
-              leadId: lead._id,
-              campaignId: w.campaignId,
-              status: "active",
-              cursorStep: 0,
-              nextSendAt,
-              source: "folder-bulk",
-            },
-          },
-          { upsert: true, new: true }
+        console.log(
+          `[send-ai-queued] Sending queuedId=${id} to=${updated.to} (attempt ${updated.attempts})`
         );
 
-        newlyEnrolled++;
-      }
+        // Actually send via Twilio (no extra delay here)
+        await sendSms({
+          to: updated.to,
+          body: updated.body,
+          userEmail: updated.userEmail,
+          // no delayMinutes: we already respected human delay when enqueuing
+        });
 
-      await DripFolderEnrollment.updateOne(
-        { _id: w._id },
-        { $set: { lastScanAt: new Date() } }
-      );
+        await AiQueuedReply.updateOne(
+          { _id: updated._id },
+          {
+            $set: {
+              status: "sent",
+              failReason: undefined,
+            },
+          }
+        );
+
+        sent++;
+        console.log(
+          `[send-ai-queued] ✅ Sent queuedId=${id} to=${updated.to}`
+        );
+      } catch (err: any) {
+        console.error(
+          `[send-ai-queued] ❌ Error sending queuedId=${id}:`,
+          err?.message || err
+        );
+
+        failed++;
+
+        const reason =
+          (err && (err.message || (err as any).toString())) ||
+          "Unknown error";
+
+        // If we hit max attempts, mark as permanently failed; else put back to queued
+        const doc = await AiQueuedReply.findById(job._id);
+        if (!doc) continue;
+
+        if ((doc.attempts || 0) >= MAX_ATTEMPTS) {
+          doc.status = "failed";
+          doc.failReason = reason.slice(0, 500);
+        } else {
+          doc.status = "queued";
+          doc.failReason = reason.slice(0, 500);
+        }
+        await doc.save();
+      }
     }
+
+    const remaining = await AiQueuedReply.countDocuments({
+      status: "queued",
+      sendAfter: { $lte: new Date() },
+      attempts: { $lt: MAX_ATTEMPTS },
+    });
 
     return res.status(200).json({
       ok: true,
-      message: "drips-folder-watch complete",
-      scannedWatchers: scanned,
-      newlyEnrolled,
-      deduped,
+      processed: due.length,
+      sent,
+      failed,
+      remaining,
     });
-  } catch (err) {
-    console.error("❌ drips-folder-watch error:", err);
+  } catch (err: any) {
+    console.error("[send-ai-queued] ❌ Cron error:", err);
     return res.status(500).json({ message: "Server error" });
   }
 }
