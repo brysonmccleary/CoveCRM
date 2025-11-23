@@ -82,6 +82,17 @@ export default async function handler(
     if (!body[k] || String(body[k]).trim() === "") missing.push(k);
   }
 
+  // EIN: must be 9 digits
+  let normalizedEin = "";
+  if (body.ein) {
+    normalizedEin = String(body.ein).replace(/[^\d]/g, "");
+    if (normalizedEin.length !== 9) {
+      missing.push(
+        'ein (must be a valid 9-digit EIN, e.g. "123456789" or "12-3456789")',
+      );
+    }
+  }
+
   // messages: allow either 3 fields or a joined blob
   const samplesFromBlob = (body.sampleMessages || "")
     .split("\n")
@@ -106,7 +117,7 @@ export default async function handler(
 
   if (missing.length) {
     return res.status(400).json({
-      message: `Missing required fields: ${missing.join(", ")}`,
+      message: `Missing or invalid required fields: ${missing.join(", ")}`,
     });
   }
 
@@ -114,15 +125,15 @@ export default async function handler(
   const normalizedUseCase = body.useCase || body.usecaseCode || "LOW_VOLUME";
 
   const startPayload = {
-    businessName: body.businessName!,
-    ein: body.ein!,
-    website: body.website!,
-    address: body.address!,
-    email: body.email!,
-    phone: body.phone!,
-    contactTitle: body.contactTitle || "Owner",
-    contactFirstName: body.contactFirstName!,
-    contactLastName: body.contactLastName!,
+    businessName: body.businessName!.trim(),
+    ein: normalizedEin, // send cleaned 9-digit EIN
+    website: body.website!.trim(),
+    address: body.address!.trim(),
+    email: body.email!.trim(),
+    phone: body.phone!.trim(),
+    contactTitle: (body.contactTitle || "Owner").trim(),
+    contactFirstName: body.contactFirstName!.trim(),
+    contactLastName: body.contactLastName!.trim(),
 
     // campaign selection
     usecaseCode: normalizedUseCase,
