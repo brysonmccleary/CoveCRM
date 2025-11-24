@@ -132,8 +132,7 @@ async function assignEntityToCustomerProfile(
     }
   }
 
-  // Try SDK subresource first (depending on SDK version this may be entityAssignments
-  // or customerProfilesEntityAssignments). If it's missing, fall back to raw REST call.
+  // Try SDK subresource first
   try {
     const cp: any = client.trusthub.v1.customerProfiles(customerProfileSid) as any;
     const sub =
@@ -170,9 +169,7 @@ async function assignEntityToCustomerProfile(
     );
   }
 
-  // Fallback: direct HTTP call to the TrustHub REST endpoint. This bypasses
-  // SDK shape issues and matches Twilio's documented API:
-  // POST https://trusthub.twilio.com/v1/CustomerProfiles/{CustomerProfileSid}/EntityAssignments
+  // Fallback: direct HTTP call
   try {
     const url = `https://trusthub.twilio.com/v1/CustomerProfiles/${customerProfileSid}/EntityAssignments`;
     await (client as any).request({
@@ -196,6 +193,7 @@ async function assignEntityToCustomerProfile(
   }
 }
 
+// 🔧 UPDATED: make TrustProduct entity assignment robust like CustomerProfile
 async function assignEntityToTrustProduct(
   trustProductSid: string,
   objectSid: string,
@@ -204,11 +202,66 @@ async function assignEntityToTrustProduct(
     trustProductSid,
     objectSid,
   });
-  await (
-    client.trusthub.v1.trustProducts(trustProductSid) as any
-  ).entityAssignments.create({
-    objectSid,
-  });
+
+  // Try SDK subresource first (varies across SDK versions)
+  try {
+    const tp: any = client.trusthub.v1.trustProducts(trustProductSid) as any;
+    const sub =
+      tp?.entityAssignments ||
+      tp?.trustProductsEntityAssignments ||
+      tp?.trustProductsEntityAssignment;
+
+    if (sub && typeof sub.create === "function") {
+      await sub.create({ objectSid });
+      return;
+    }
+
+    log(
+      "warn: trustProducts entityAssignments subresource unavailable; falling back to raw request",
+      { trustProductSid, objectSid },
+    );
+  } catch (err: any) {
+    const msg = String(err?.message || "");
+    if (msg.includes("TWILIO_APPROVED")) {
+      // Trust product / bundle locked; safe to ignore.
+      log("info: trustProduct is TWILIO_APPROVED; skipping assignment", {
+        trustProductSid,
+        objectSid,
+        message: msg,
+      });
+      return;
+    }
+    log(
+      "warn: error accessing trustProducts entityAssignments; falling back to raw request",
+      {
+        trustProductSid,
+        message: err?.message,
+      },
+    );
+  }
+
+  // Fallback: direct HTTP call to TrustHub
+  try {
+    const url = `https://trusthub.twilio.com/v1/TrustProducts/${trustProductSid}/EntityAssignments`;
+    await (client as any).request({
+      method: "POST",
+      uri: url,
+      formData: {
+        ObjectSid: objectSid,
+      },
+    });
+  } catch (err: any) {
+    const msg = String(err?.message || "");
+    if (msg.includes("TWILIO_APPROVED")) {
+      log("info: trustProduct TWILIO_APPROVED (fallback); skipping assignment", {
+        trustProductSid,
+        objectSid,
+        message: msg,
+      });
+      return;
+    }
+    throw err;
+  }
 }
 
 async function evaluateAndSubmitCustomerProfile(customerProfileSid: string) {
