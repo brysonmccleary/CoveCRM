@@ -1,3 +1,4 @@
+// components/BuyNumberPanel.tsx
 import { useState, useEffect } from "react";
 import axios from "axios";
 
@@ -82,16 +83,22 @@ export default function BuyNumberPanel() {
 
   const handleBuyNumber = async () => {
     if (!selectedNumber) return;
+
+    // Immediately close the popup so they can't double-click / re-trigger
+    const numberToBuy = selectedNumber;
+    setConfirming(false);
+    setSelectedNumber(null);
+
     setLoading(true);
     setError("");
     try {
-      await axios.post("/api/twilio/buy-number", { number: selectedNumber.phoneNumber });
+      await axios.post("/api/twilio/buy-number", { number: numberToBuy.phoneNumber });
       await fetchOwnedNumbers();
-      alert(`Successfully purchased ${selectedNumber.phoneNumber}`);
-      setConfirming(false);
-      setSelectedNumber(null);
+      alert(`Successfully purchased ${numberToBuy.phoneNumber}`);
     } catch (err: any) {
+      console.error("Error purchasing number", err);
       setError(err?.response?.data?.message || "Error purchasing number");
+      // Optional: you could reopen the modal here if you wanted, but it's safer to leave it closed.
     } finally {
       setLoading(false);
     }
@@ -138,7 +145,9 @@ export default function BuyNumberPanel() {
           <li key={num.phoneNumber} className="flex justify-between items-center border p-2 rounded">
             <div>
               <p className="font-medium">{formatPhoneNumber(num.phoneNumber)}</p>
-              <p className="text-sm text-gray-400">{num.city}, {num.state}</p>
+              <p className="text-sm text-gray-400">
+                {num.city}, {num.state}
+              </p>
             </div>
             <button
               onClick={() => handleSelectNumber(num)}
@@ -164,12 +173,18 @@ export default function BuyNumberPanel() {
               </button>
             </div>
             <div className="text-sm text-gray-600 mt-1">
-              <p>Status: <span className="capitalize">{num.subscriptionStatus}</span></p>
+              <p>
+                Status: <span className="capitalize">{num.subscriptionStatus}</span>
+              </p>
               {num.nextBillingDate && (
                 <p>Next Billing: {new Date(num.nextBillingDate).toLocaleDateString()}</p>
               )}
-              <p>Calls: {num.usage.callsMade} made / {num.usage.callsReceived} received</p>
-              <p>Texts: {num.usage.textsSent} sent / {num.usage.textsReceived} received</p>
+              <p>
+                Calls: {num.usage.callsMade} made / {num.usage.callsReceived} received
+              </p>
+              <p>
+                Texts: {num.usage.textsSent} sent / {num.usage.textsReceived} received
+              </p>
             </div>
           </li>
         ))}
@@ -181,14 +196,17 @@ export default function BuyNumberPanel() {
           <div className="bg-white text-black p-6 rounded shadow-lg space-y-4 max-w-sm w-full">
             <h2 className="text-lg font-bold">Confirm Number Purchase</h2>
             <p>Number: {formatPhoneNumber(selectedNumber.phoneNumber)}</p>
-            <p>Location: {selectedNumber.city}, {selectedNumber.state}</p>
+            <p>
+              Location: {selectedNumber.city}, {selectedNumber.state}
+            </p>
             <p>Price: $2.00/month</p>
             <div className="flex space-x-4 mt-4">
               <button
-                className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded cursor-pointer"
+                className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded cursor-pointer disabled:opacity-60"
                 onClick={handleBuyNumber}
+                disabled={loading}
               >
-                Confirm Purchase
+                {loading ? "Purchasing..." : "Confirm Purchase"}
               </button>
               <button
                 className="bg-gray-400 hover:bg-gray-500 text-black px-4 py-2 rounded cursor-pointer"
