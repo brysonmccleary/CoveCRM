@@ -1,4 +1,4 @@
-// pages/api/get-folders.ts
+// /pages/api/get-folders.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "./auth/[...nextauth]";
@@ -26,9 +26,6 @@ type DBFolder = {
   updatedAt?: any;
 };
 
-function escapeRegex(s: string) {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
 function normalizeName(s?: string) {
   return String(s ?? "").trim().replace(/\s+/g, " ");
 }
@@ -46,13 +43,14 @@ function toLeanFolder(doc: DBFolder, fallbackEmail: string): LeanFolder {
   };
 }
 
-export default async function handler(
-  req: NextApiRequest,
-  res: NextApiResponse
-) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  if (req.method !== "GET") {
+    return res.status(405).json({ message: "Method not allowed" });
+  }
+
   // prevent stale caches while we’re stabilizing
   res.setHeader("Cache-Control", "no-store");
-  res.setHeader("X-Folders-Impl", "sys-final");
+  res.setHeader("X-Folders-Impl", "strict-per-user-v1");
 
   try {
     const session = await getServerSession(req, res, authOptions);
@@ -60,39 +58,31 @@ export default async function handler(
       typeof session?.user?.email === "string"
         ? session.user.email.toLowerCase()
         : "";
-    if (!email) return res.status(401).json({ message: "Unauthorized" });
+
+    if (!email) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
 
     await dbConnect();
 
-    // 1) Ensure the 3 system folders exist *for this user only*
+    // 1) Ensure THIS user has the 3 system folders (no Vet Leads here)
     for (const name of SYSTEM_FOLDERS) {
       await Folder.findOneAndUpdate(
-        {
-          userEmail: email,
-          name: {
-            $regex: `^\\s*${escapeRegex(name)}\\s*$`,
-            $options: "i",
-          },
-        },
-        {
-          $setOnInsert: { userEmail: email, name, assignedDrips: [] },
-        },
-        {
-          upsert: true,
-          new: false,
-          lean: true,
-        }
+        { userEmail: email, name },
+        { $setOnInsert: { userEmail: email, name, assignedDrips: [] } },
+        { upsert: true, new: false, lean: true }
       ).exec();
     }
 
-    // 2) Fetch all folders for this user only
+    // 2) Fetch only this user's folders
     const raw = await Folder.find({ userEmail: email })
       .sort({ createdAt: -1 })
       .lean<DBFolder[]>()
       .exec();
+
     const all = raw.map((r) => toLeanFolder(r, email));
 
-    // 3) Partition: custom vs system (using trimmed, case-insensitive key)
+    // 3) Split system vs custom for THIS user
     const systemKeys = new Set(SYSTEM_FOLDERS.map((n) => normKey(n)));
     const custom: LeanFolder[] = [];
     const systemBuckets = new Map<string, LeanFolder[]>();
@@ -111,7 +101,7 @@ export default async function handler(
     // Custom alphabetical
     custom.sort((a, b) => a.name.localeCompare(b.name));
 
-    // For each system bucket, choose the canonical doc (oldest by createdAt, then by _id)
+    // For each system bucket, keep the oldest doc as canonical
     const canonicalByKey = new Map<string, LeanFolder>();
     for (const [key, arr] of systemBuckets) {
       arr.sort((a, b) => {
@@ -119,10 +109,10 @@ export default async function handler(
         const bd = b.createdAt?.getTime() ?? 0;
         return ad - bd || a._id.localeCompare(b._id);
       });
-      canonicalByKey.set(key, arr[0]);
+      canonicalByKey.set(key, arr[0]!);
     }
 
-    // 4) Counts by folderId (strict by ObjectId string) for this user
+    // 4) Count leads strictly by folderId for THIS user
     const byIdAgg = await (Lead as any).aggregate([
       {
         $match: {
@@ -133,37 +123,64 @@ export default async function handler(
       { $addFields: { fid: { $toString: "$folderId" } } },
       { $group: { _id: "$fid", n: { $sum: 1 } } },
     ]);
-    const byId = new Map<string, number>();
-    for (const r of byIdAgg) byId.set(String(r._id), Number(r.n) || 0);
 
-    // 5) Optional legacy "Unsorted" handling (only if present for this user)
-    const unsorted = all
-      .filter((f) => normKey(f.name) === "unsorted")
-      .sort((a, b) => {
-        const ad = a.createdAt?.getTime() ?? 0;
-        const bd = b.createdAt?.getTime() ?? 0;
-        return ad - bd || a._id.localeCompare(b._id);
-      })[0];
-    const unsortedIdStr = unsorted ? String(unsorted._id) : null;
+    const byId = new Map<string, number>();
+    for (const r of byIdAgg) {
+      byId.set(String(r._id), Number(r.n) || 0);
+    }
+
+    // 5) Optional "Unsorted" bucket for this user (no folderId)
     const unsortedCount = await Lead.countDocuments({
       userEmail: email,
       $or: [{ folderId: { $exists: false } }, { folderId: null }],
     });
 
-    // 6) Build final ordered list: custom (alphabetical), then canonical system in fixed order
+    let unsortedFolder: LeanFolder | null = null;
+    const existingUnsorted = all.find((f) => normKey(f.name) === "unsorted");
+    if (existingUnsorted) {
+      unsortedFolder = existingUnsorted;
+    } else if (unsortedCount > 0) {
+      // create one if they actually have unsorted leads
+      const created = await Folder.findOneAndUpdate(
+        { userEmail: email, name: "Unsorted" },
+        { $setOnInsert: { userEmail: email, name: "Unsorted", assignedDrips: [] } },
+        { new: true, upsert: true, lean: true }
+      ).exec();
+      if (created) {
+        unsortedFolder = toLeanFolder(created as any, email);
+      }
+    }
+
+    // 6) Build final ordered list: custom, then system, then optional Unsorted
     const systemOrdered = SYSTEM_FOLDERS.map((n) =>
       canonicalByKey.get(normKey(n))
     ).filter(Boolean) as LeanFolder[];
 
-    const ordered = [...custom, ...systemOrdered];
+    const ordered: LeanFolder[] = [...custom, ...systemOrdered];
+
+    if (unsortedFolder) {
+      ordered.push(unsortedFolder);
+    }
 
     const foldersWithCounts = ordered.map((f) => {
       const idStr = String(f._id);
       const base = byId.get(idStr) || 0;
       const extra =
-        unsortedIdStr && idStr === unsortedIdStr ? unsortedCount : 0;
-      return { ...f, _id: idStr, leadCount: base + extra };
+        unsortedFolder && idStr === String(unsortedFolder._id)
+          ? unsortedCount
+          : 0;
+      return {
+        ...f,
+        _id: idStr,
+        leadCount: base + extra,
+      };
     });
+
+    console.info(
+      "[get-folders] userEmail=%s folders=%d",
+      email,
+      foldersWithCounts.length
+    );
 
     return res.status(200).json({ folders: foldersWithCounts });
   } catch (error) {
