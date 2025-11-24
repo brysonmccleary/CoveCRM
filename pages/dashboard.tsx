@@ -32,8 +32,23 @@ import {
 } from "recharts";
 import { FaPhoneAlt } from "react-icons/fa";
 
-type KPI = { dials: number; connects: number; totalTalkSec: number; avgTalkSec: number; longestTalkSec: number; contactRate: number };
-type TrendPoint = { label: string; dials: number; connects: number; date?: string; hour?: string };
+type KPI = {
+  dials: number;
+  connects: number;
+  totalTalkSec: number;
+  avgTalkSec: number;
+  longestTalkSec: number;
+  contactRate: number;
+};
+
+type TrendPoint = {
+  label: string;
+  dials: number;
+  connects: number;
+  date?: string;
+  hour?: string;
+};
+
 type ApiResponse = {
   range: { from: string; to: string; timezone: string };
   kpis: KPI;
@@ -47,26 +62,61 @@ const NumbersPanel = () => (
   </div>
 );
 
-const CalendarPanel = ({ showBanner }: { showBanner: boolean }) => (
-  <div className="p-4 space-y-8">
-    {showBanner && (
-      <div className="bg-yellow-100 text-yellow-800 p-4 mb-4 rounded-md">
-        ⏰ You haven’t connected your Google Calendar yet.{" "}
-        <a href="/api/connect/google-calendar" className="underline font-semibold">
-          Connect Now
-        </a>
+// 🔁 Calendar tab now checks calendar status on the client
+const CalendarPanel = () => {
+  const [loading, setLoading] = useState(true);
+  const [showBanner, setShowBanner] = useState(false);
+
+  useEffect(() => {
+    const checkCalendarStatus = async () => {
+      try {
+        const res = await fetch("/api/user/calendar-status");
+        if (!res.ok) throw new Error("Failed to check calendar status");
+
+        const data = await res.json();
+
+        const connected =
+          data.calendarConnected === true ||
+          !!data.googleCalendar?.accessToken ||
+          !!data.googleSheets?.accessToken ||
+          !!data.calendarId;
+
+        setShowBanner(!connected);
+      } catch (err) {
+        // If we can't tell, default to showing the banner so users can connect.
+        setShowBanner(true);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    checkCalendarStatus();
+  }, []);
+
+  return (
+    <div className="p-4 space-y-8">
+      {!loading && showBanner && (
+        <div className="bg-yellow-100 text-yellow-800 p-4 mb-4 rounded-md">
+          ⏰ You haven’t connected your Google Calendar yet.{" "}
+          <a
+            href="/api/connect/google-calendar"
+            className="underline font-semibold"
+          >
+            Connect Now
+          </a>
+        </div>
+      )}
+      <div>
+        <h1 className="text-2xl font-bold mb-4">Upcoming Bookings</h1>
+        <CalendarBookings />
       </div>
-    )}
-    <div>
-      <h1 className="text-2xl font-bold mb-4">Upcoming Bookings</h1>
-      <CalendarBookings />
+      <div>
+        <h2 className="text-xl font-semibold mb-2">Book a New Appointment</h2>
+        <BookingForm />
+      </div>
     </div>
-    <div>
-      <h2 className="text-xl font-semibold mb-2">Book a New Appointment</h2>
-      <BookingForm />
-    </div>
-  </div>
-);
+  );
+};
 
 function secsToHMS(s: number) {
   const sec = Math.max(0, Math.floor(s || 0));
@@ -87,9 +137,14 @@ function DashboardOverview() {
   const fetchStats = async (r: typeof range) => {
     setLoading(true);
     try {
-      const res = await fetch(`/api/dashboard/stats?range=${encodeURIComponent(r)}&tz=America/Phoenix`);
+      const res = await fetch(
+        `/api/dashboard/stats?range=${encodeURIComponent(
+          r,
+        )}&tz=America/Phoenix`,
+      );
       const json: any = await res.json();
-      if (!res.ok || json?.error) throw new Error(json?.error || "Failed to load stats");
+      if (!res.ok || json?.error)
+        throw new Error(json?.error || "Failed to load stats");
       setResp(json);
     } catch (e: any) {
       toast.error(e?.message || "Error fetching dashboard data.");
@@ -104,13 +159,19 @@ function DashboardOverview() {
   }, [range]);
 
   const k = resp?.kpis;
-  const dailySeries = range === "last30" ? (resp as any)?.trends?.daily30 || [] : (resp as any)?.trends?.daily7 || [];
+  const dailySeries =
+    range === "last30"
+      ? (resp as any)?.trends?.daily30 || []
+      : (resp as any)?.trends?.daily7 || [];
 
   const kpiCards = [
     { label: "Dials", value: k?.dials ?? 0 },
     { label: "Connects", value: k?.connects ?? 0 },
     { label: "Talk Time", value: k ? secsToHMS(k.totalTalkSec) : "0s" },
-    { label: "Contact Rate", value: k ? `${Math.round((k.contactRate || 0) * 100)}%` : "0%" },
+    {
+      label: "Contact Rate",
+      value: k ? `${Math.round((k.contactRate || 0) * 100)}%` : "0%",
+    },
   ];
 
   return (
@@ -121,7 +182,11 @@ function DashboardOverview() {
           <button
             key={opt}
             onClick={() => setRange(opt)}
-            className={`px-3 py-1 rounded border ${range === opt ? "bg-[#111D35] text-white border-[#111D35]" : "bg-white text-gray-800 border-gray-300"} transition`}
+            className={`px-3 py-1 rounded border ${
+              range === opt
+                ? "bg-[#111D35] text-white border-[#111D35]"
+                : "bg-white text-gray-800 border-gray-300"
+            } transition`}
           >
             {opt === "last7" ? "Last 7" : opt === "last30" ? "Last 30" : "Today"}
           </button>
@@ -131,7 +196,10 @@ function DashboardOverview() {
       {/* KPI cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {kpiCards.map((c) => (
-          <div key={c.label} className="bg-[#111D35] text-white rounded-lg p-4 shadow flex flex-col items-center justify-center">
+          <div
+            key={c.label}
+            className="bg-[#111D35] text-white rounded-lg p-4 shadow flex flex-col items-center justify-center"
+          >
             <div className="text-sm uppercase text-gray-400">{c.label}</div>
             <div className="text-2xl font-bold">{c.value}</div>
           </div>
@@ -142,7 +210,13 @@ function DashboardOverview() {
       <div className="bg-[#111D35] text-white p-6 rounded-lg shadow">
         <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
           <FaPhoneAlt className="text-pink-400" />
-          {`Call Performance — ${range === "today" ? "Today" : range === "last30" ? "Last 30 Days" : "Last 7 Days"}`}
+          {`Call Performance — ${
+            range === "today"
+              ? "Today"
+              : range === "last30"
+              ? "Last 30 Days"
+              : "Last 7 Days"
+          }`}
         </h2>
         <div className="h-80">
           {loading ? (
@@ -153,10 +227,35 @@ function DashboardOverview() {
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis dataKey="label" stroke="#D1D5DB" />
                 <YAxis stroke="#D1D5DB" allowDecimals={false} />
-                <Tooltip formatter={(value: number) => `${value} calls`} labelStyle={{ color: "#E5E7EB" }} contentStyle={{ backgroundColor: "#1A2B45", borderColor: "#4B5563" }} />
-                <Legend verticalAlign="bottom" height={36} wrapperStyle={{ color: "#E5E7EB" }} />
-                <Line type="monotone" dataKey="dials" stroke="#3B82F6" strokeWidth={3} dot={{ r: 3 }} name="Dials" />
-                <Line type="monotone" dataKey="connects" stroke="#F97316" strokeWidth={3} dot={{ r: 3 }} name="Connects" />
+                <Tooltip
+                  formatter={(value: number) => `${value} calls`}
+                  labelStyle={{ color: "#E5E7EB" }}
+                  contentStyle={{
+                    backgroundColor: "#1A2B45",
+                    borderColor: "#4B5563",
+                  }}
+                />
+                <Legend
+                  verticalAlign="bottom"
+                  height={36}
+                  wrapperStyle={{ color: "#E5E7EB" }}
+                />
+                <Line
+                  type="monotone"
+                  dataKey="dials"
+                  stroke="#3B82F6"
+                  strokeWidth={3}
+                  dot={{ r: 3 }}
+                  name="Dials"
+                />
+                <Line
+                  type="monotone"
+                  dataKey="connects"
+                  stroke="#F97316"
+                  strokeWidth={3}
+                  dot={{ r: 3 }}
+                  name="Connects"
+                />
               </LineChart>
             </ResponsiveContainer>
           )}
@@ -166,12 +265,14 @@ function DashboardOverview() {
   );
 }
 
-export default function DashboardPage({ userNeedsCalendarConnect }: { userNeedsCalendarConnect?: boolean }) {
+export default function DashboardPage() {
   const { data: session } = useSession();
   const router = useRouter();
   const { tab } = router.query;
 
-  useEffect(() => { void session; }, [session]);
+  useEffect(() => {
+    void session;
+  }, [session]);
 
   return (
     <RequireAuth>
@@ -182,7 +283,7 @@ export default function DashboardPage({ userNeedsCalendarConnect }: { userNeedsC
         {tab === "numbers" && <NumbersPanel />}
         {tab === "settings" && <SettingsPanel />}
         {tab === "drip-campaigns" && <DripCampaignsPanel />}
-        {tab === "calendar" && <CalendarPanel showBanner={!!userNeedsCalendarConnect} />}
+        {tab === "calendar" && <CalendarPanel />}
       </DashboardLayout>
     </RequireAuth>
   );
@@ -191,10 +292,15 @@ export default function DashboardPage({ userNeedsCalendarConnect }: { userNeedsC
 export const getServerSideProps: GetServerSideProps = async (context) => {
   const session = await getServerSession(context.req, context.res, authOptions);
   if (!session || !session.user?.email) {
-    return { redirect: { destination: "/auth/signin", permanent: false } };
+    return {
+      redirect: { destination: "/auth/signin", permanent: false },
+    };
   }
+
+  // Keep DB connect in case other server logic relies on it
   await dbConnect();
-  const user = await User.findOne({ email: session.user.email as string });
-  const hasCalendarConnected = Boolean(user?.googleSheets?.accessToken && user?.calendarId);
-  return { props: { userNeedsCalendarConnect: !hasCalendarConnected } };
+  await User.findOne({ email: session.user.email as string });
+
+  // No need to compute calendar status here; the client checks via /api/user/calendar-status
+  return { props: {} };
 };
