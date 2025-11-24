@@ -17,6 +17,7 @@ const APPROVED = new Set([
   "active",
   "in_use",
   "registered",
+  "campaign_approved",
 ]);
 const PENDING = new Set([
   "pending",
@@ -24,6 +25,7 @@ const PENDING = new Set([
   "under_review",
   "pending-review",
   "in_progress",
+  "campaign_submitted",
 ]);
 
 type NextAction =
@@ -39,30 +41,43 @@ export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse,
 ) {
-  if (req.method !== "GET")
+  if (req.method !== "GET") {
     return res.status(405).json({ message: "Method not allowed" });
+  }
 
   const session = await getServerSession(req, res, authOptions);
-  if (!session?.user?.email)
+  if (!session?.user?.email) {
     return res.status(401).json({ message: "Unauthorized" });
+  }
 
   try {
     await mongooseConnect();
 
     const user = await User.findOne({ email: session.user.email });
-    if (!user) return res.status(404).json({ message: "User not found" });
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
 
     const a2p = await A2PProfile.findOne({ userId: String(user._id) });
     if (!a2p) {
       return res.status(200).json({
         nextAction: "start_profile" as NextAction,
-        messagingReady: false,
         registrationStatus: "not_started",
+        messagingReady: false,
+        canSendSms: false,
+        applicationStatus: "pending",
+        a2pStatusLabel: "Pending",
+        declinedReason: null,
         brand: { sid: null, status: "unknown" },
         campaign: { sid: null, status: "unknown" },
         messagingServiceSid: null,
-        canSendSms: false,
         senders: [],
+        hints: {
+          hasProfile: false,
+          hasBrand: false,
+          hasCampaign: false,
+          hasMessagingService: false,
+        },
       });
     }
 
@@ -73,14 +88,16 @@ export default async function handler(
         const brand = await client.messaging.v1
           .brandRegistrations(a2p.brandSid)
           .fetch();
-        brandStatus = (brand as any).status || brandStatus;
-        if (APPROVED.has(brandStatus.toLowerCase())) {
+        brandStatus = ((brand as any).status || brandStatus) as string;
+        const lower = brandStatus.toLowerCase();
+
+        if (APPROVED.has(lower)) {
           a2p.registrationStatus = "brand_approved";
-        } else if (PENDING.has(brandStatus.toLowerCase())) {
+        } else if (PENDING.has(lower)) {
           a2p.registrationStatus = "brand_submitted";
         }
       } catch {
-        // keep previous
+        // keep prior brand status in DB if fetch fails
       }
     }
 
@@ -92,17 +109,21 @@ export default async function handler(
           .services(a2p.messagingServiceSid)
           .usAppToPerson(campaignSid)
           .fetch();
-        campaignStatus =
-          (camp as any).status || (camp as any).state || campaignStatus;
 
-        if (APPROVED.has(String(campaignStatus).toLowerCase())) {
+        campaignStatus =
+          ((camp as any).status ||
+            (camp as any).state ||
+            campaignStatus) as string;
+
+        const lower = campaignStatus.toLowerCase();
+        if (APPROVED.has(lower)) {
           a2p.registrationStatus = "campaign_approved";
           a2p.messagingReady = true;
-        } else if (PENDING.has(String(campaignStatus).toLowerCase())) {
+        } else if (PENDING.has(lower)) {
           a2p.registrationStatus = "campaign_submitted";
         }
       } catch {
-        // leave as-is
+        // ignore campaign fetch errors; we still return what we know
       }
     }
 
@@ -120,10 +141,9 @@ export default async function handler(
           .services(a2p.messagingServiceSid)
           .phoneNumbers.list({ limit: 100 });
 
-        // Map PN sid → phone number string
         const pnSids = attached.map((p: any) => p.phoneNumberSid).filter(Boolean);
+
         if (pnSids.length) {
-          // Fetch each IncomingPhoneNumber for its E.164 string
           const pnDetailPromises = pnSids.map((sid) =>
             client.incomingPhoneNumbers(sid).fetch().then(
               (d) => ({ sid, phoneNumber: (d as any).phoneNumber || null }),
@@ -131,7 +151,9 @@ export default async function handler(
             ),
           );
           const pnDetails = await Promise.all(pnDetailPromises);
-          const phoneBySid = new Map(pnDetails.map((d) => [d.sid, d.phoneNumber]));
+          const phoneBySid = new Map(
+            pnDetails.map((d) => [d.sid, d.phoneNumber]),
+          );
 
           senders = attached.map((p: any) => ({
             phoneNumberSid: p.phoneNumberSid,
@@ -141,15 +163,35 @@ export default async function handler(
           }));
         }
       } catch {
-        // ignore
+        // sender lookup is best-effort; ignore failures
       }
     }
 
+    // --- Update bookkeeping fields on the profile ---
     a2p.lastSyncedAt = new Date();
+
+    // Derive a clean high-level applicationStatus if not already set
+    let applicationStatus = a2p.applicationStatus || "pending";
+
+    if (a2p.registrationStatus === "rejected" || a2p.declinedReason) {
+      applicationStatus = "declined";
+    } else if (
+      a2p.messagingReady ||
+      a2p.registrationStatus === "ready" ||
+      a2p.registrationStatus === "campaign_approved"
+    ) {
+      applicationStatus = "approved";
+    } else {
+      applicationStatus = "pending";
+    }
+
+    a2p.applicationStatus = applicationStatus as any;
+
     await a2p.save();
 
-    // --- Decide next action ---
+    // --- Decide next action for the wizard/UI ---
     let nextAction: NextAction = "ready";
+
     if (!a2p.profileSid) {
       nextAction = "start_profile";
     } else if (!a2p.brandSid) {
@@ -171,11 +213,22 @@ export default async function handler(
 
     const canSendSms = Boolean(a2p.messagingReady && a2p.messagingServiceSid);
 
+    // Simple label your UI can show directly
+    const a2pStatusLabel =
+      applicationStatus === "approved"
+        ? "Approved"
+        : applicationStatus === "declined"
+        ? "Declined"
+        : "Pending";
+
     return res.status(200).json({
       nextAction,
       registrationStatus: a2p.registrationStatus || "unknown",
       messagingReady: Boolean(a2p.messagingReady),
       canSendSms,
+      applicationStatus,
+      a2pStatusLabel,
+      declinedReason: a2p.declinedReason || null,
       brand: { sid: a2p.brandSid || null, status: brandStatus },
       campaign: { sid: campaignSid || null, status: campaignStatus },
       messagingServiceSid: a2p.messagingServiceSid || null,
