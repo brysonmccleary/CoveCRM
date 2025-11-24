@@ -19,6 +19,7 @@ const APPROVED = new Set([
   "registered",
   "campaign_approved",
 ]);
+
 const PENDING = new Set([
   "pending",
   "submitted",
@@ -26,6 +27,16 @@ const PENDING = new Set([
   "pending-review",
   "in_progress",
   "campaign_submitted",
+]);
+
+// Terminal failure-ish statuses reported by Twilio / TCR
+const FAILED = new Set([
+  "failed",
+  "rejected",
+  "declined",
+  "brand_failed",
+  "campaign_failed",
+  "terminated",
 ]);
 
 type NextAction =
@@ -88,10 +99,19 @@ export default async function handler(
         const brand = await client.messaging.v1
           .brandRegistrations(a2p.brandSid)
           .fetch();
+
         brandStatus = ((brand as any).status || brandStatus) as string;
         const lower = brandStatus.toLowerCase();
 
-        if (APPROVED.has(lower)) {
+        if (FAILED.has(lower)) {
+          // Brand was explicitly rejected by TCR / carriers
+          a2p.registrationStatus = "rejected";
+          a2p.messagingReady = false;
+          if (!a2p.declinedReason) {
+            a2p.declinedReason =
+              "Your A2P brand registration was rejected by carriers. Please double-check your legal business information (business name, tax ID, address, and website) and resubmit.";
+          }
+        } else if (APPROVED.has(lower)) {
           a2p.registrationStatus = "brand_approved";
         } else if (PENDING.has(lower)) {
           a2p.registrationStatus = "brand_submitted";
@@ -116,7 +136,15 @@ export default async function handler(
             campaignStatus) as string;
 
         const lower = campaignStatus.toLowerCase();
-        if (APPROVED.has(lower)) {
+
+        if (FAILED.has(lower)) {
+          a2p.registrationStatus = "rejected";
+          a2p.messagingReady = false;
+          if (!a2p.declinedReason) {
+            a2p.declinedReason =
+              "Your A2P campaign registration was rejected by carriers. Please review your use case description, sample messages, and opt-in/opt-out details, then resubmit.";
+          }
+        } else if (APPROVED.has(lower)) {
           a2p.registrationStatus = "campaign_approved";
           a2p.messagingReady = true;
         } else if (PENDING.has(lower)) {
@@ -173,8 +201,12 @@ export default async function handler(
     // Derive a clean high-level applicationStatus if not already set
     let applicationStatus = a2p.applicationStatus || "pending";
 
-    if (a2p.registrationStatus === "rejected" || a2p.declinedReason) {
+    const isRejected =
+      a2p.registrationStatus === "rejected" || Boolean(a2p.declinedReason);
+
+    if (isRejected) {
       applicationStatus = "declined";
+      a2p.messagingReady = false;
     } else if (
       a2p.messagingReady ||
       a2p.registrationStatus === "ready" ||
@@ -190,19 +222,26 @@ export default async function handler(
     await a2p.save();
 
     // --- Decide next action for the wizard/UI ---
+    const lowerBrand = brandStatus.toLowerCase();
+    const lowerCampaign = String(campaignStatus).toLowerCase();
+    const brandFailed = Boolean(a2p.brandSid && FAILED.has(lowerBrand));
+    const campaignFailed = Boolean(campaignSid && FAILED.has(lowerCampaign));
+
     let nextAction: NextAction = "ready";
 
     if (!a2p.profileSid) {
       nextAction = "start_profile";
-    } else if (!a2p.brandSid) {
+    } else if (!a2p.brandSid || brandFailed) {
+      // Either no brand yet, or brand was rejected -> go back to brand submission
       nextAction = "submit_brand";
-    } else if (a2p.brandSid && !APPROVED.has(brandStatus.toLowerCase())) {
+    } else if (a2p.brandSid && !APPROVED.has(lowerBrand)) {
       nextAction = "brand_pending";
-    } else if (!campaignSid) {
+    } else if (!campaignSid || campaignFailed) {
+      // Either no campaign yet, or campaign was rejected -> go back to campaign submission
       nextAction = "submit_campaign";
     } else if (
       campaignSid &&
-      !APPROVED.has(String(campaignStatus).toLowerCase())
+      !APPROVED.has(lowerCampaign)
     ) {
       nextAction = "campaign_pending";
     } else if (!a2p.messagingServiceSid) {

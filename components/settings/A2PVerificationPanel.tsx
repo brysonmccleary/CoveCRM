@@ -75,6 +75,14 @@ export default function A2PVerificationPanel() {
     };
   }, []);
 
+  // Auto-open the form whenever the application is not yet approved
+  useEffect(() => {
+    if (!status) return;
+    if (status.applicationStatus !== "approved") {
+      setShowForm(true);
+    }
+  }, [status?.applicationStatus]);
+
   const applicationStatus: A2PApplicationStatus =
     status?.applicationStatus || "pending";
 
@@ -91,11 +99,11 @@ export default function A2PVerificationPanel() {
       case "start_profile":
         return "Start A2P brand verification";
       case "submit_brand":
-        return "Submit brand details";
+        return "Submit or update your brand details";
       case "brand_pending":
         return "Brand is under review";
       case "submit_campaign":
-        return "Submit messaging campaign details";
+        return "Submit or update your messaging campaign details";
       case "campaign_pending":
         return "Campaign is under review";
       case "create_messaging_service":
@@ -105,6 +113,19 @@ export default function A2PVerificationPanel() {
         return "Ready to send SMS";
     }
   })();
+
+  const primaryButtonLabel = (() => {
+    if (!status) return "Start A2P verification";
+    if (applicationStatus === "declined") {
+      return "Fix details & resubmit";
+    }
+    if (status.nextAction === "start_profile") {
+      return "Start A2P verification";
+    }
+    return "Continue A2P verification";
+  })();
+
+  const showDeclinedGuidance = applicationStatus === "declined";
 
   return (
     <div className="space-y-4">
@@ -140,6 +161,23 @@ export default function A2PVerificationPanel() {
             <span className="font-semibold">Current status:</span>{" "}
             {status.a2pStatusLabel}
           </p>
+
+          {showDeclinedGuidance && (
+            <div className="rounded-md border border-red-500/40 bg-red-500/5 p-3 text-sm text-red-200 space-y-1">
+              <p className="font-semibold">Your registration was rejected.</p>
+              <p>
+                Carriers did not accept your A2P brand or campaign details. This
+                usually means some of your business information (legal name,
+                tax ID, address, website, or sample messages) did not match
+                their records or policies.
+              </p>
+              <p>
+                Review the information in the form below, correct any issues,
+                and submit again. If you believe this is a mistake, contact
+                support with your brand and campaign IDs.
+              </p>
+            </div>
+          )}
 
           {status.declinedReason && (
             <div className="rounded-md border border-red-500/40 bg-red-500/5 p-3 text-sm text-red-200">
@@ -178,11 +216,11 @@ export default function A2PVerificationPanel() {
             <p className="text-xs text-green-300">
               Your A2P registration is approved. Your connected numbers can send
               SMS via CoveCRM. You can still update your details later if
-              needed.
+              needed, but major changes may require re-review by carriers.
             </p>
           )}
 
-          {applicationStatus !== "approved" && (
+          {applicationStatus !== "approved" && !showDeclinedGuidance && (
             <p className="text-xs text-yellow-200">
               Once approved, CoveCRM will automatically attach your approved
               campaign to your numbers and you&apos;ll be cleared to send SMS.
@@ -205,9 +243,7 @@ export default function A2PVerificationPanel() {
                 onClick={() => setShowForm(true)}
                 className="inline-flex items-center px-3 py-1.5 rounded-md bg-blue-600 hover:bg-blue-700 text-xs font-medium text-white transition-colors"
               >
-                {status.nextAction === "start_profile"
-                  ? "Start A2P verification"
-                  : "Continue A2P verification"}
+                {primaryButtonLabel}
               </button>
             )}
           </div>
@@ -216,6 +252,8 @@ export default function A2PVerificationPanel() {
 
       {showForm && (
         <div className="mt-4">
+          {/* The underlying A2PVerificationForm already knows how to
+              create or update the profile; we just control visibility here. */}
           <A2PVerificationForm />
         </div>
       )}
