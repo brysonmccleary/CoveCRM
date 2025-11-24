@@ -1,4 +1,4 @@
-// /pages/api/get-folders.ts
+// pages/api/get-folders.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "./auth/[...nextauth]";
@@ -21,6 +21,7 @@ type DBFolder = {
   _id: any;
   name?: string;
   userEmail?: string;
+  user?: string;
   assignedDrips?: any[];
   createdAt?: any;
   updatedAt?: any;
@@ -35,11 +36,18 @@ function normalizeName(s?: string) {
 function normKey(s?: string) {
   return normalizeName(s).toLowerCase();
 }
-function toLeanFolder(doc: DBFolder, fallbackEmail: string): LeanFolder {
+function resolveOwnerEmail(doc: DBFolder): string {
+  const direct =
+    (typeof doc.userEmail === "string" && doc.userEmail) ||
+    (typeof doc.user === "string" && doc.user) ||
+    "";
+  return direct.toLowerCase();
+}
+function toLeanFolder(doc: DBFolder): LeanFolder {
   return {
     _id: String(doc._id),
     name: normalizeName(doc.name),
-    userEmail: String(doc.userEmail ?? fallbackEmail),
+    userEmail: resolveOwnerEmail(doc),
     assignedDrips: doc.assignedDrips ?? [],
     createdAt: doc.createdAt ? new Date(doc.createdAt) : undefined,
     updatedAt: doc.updatedAt ? new Date(doc.updatedAt) : undefined,
@@ -49,34 +57,61 @@ function toLeanFolder(doc: DBFolder, fallbackEmail: string): LeanFolder {
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   // prevent stale caches while we’re stabilizing
   res.setHeader("Cache-Control", "no-store");
-  res.setHeader("X-Folders-Impl", "sys-v5");
+  res.setHeader("X-Folders-Impl", "sys-v6");
 
   try {
     const session = await getServerSession(req, res, authOptions);
-    const email = typeof session?.user?.email === "string" ? session.user.email.toLowerCase() : "";
+    const emailRaw = typeof session?.user?.email === "string" ? session.user.email : "";
+    const email = emailRaw.toLowerCase();
     if (!email) return res.status(401).json({ message: "Unauthorized" });
 
     await dbConnect();
 
-    // 1) Idempotently ensure the 3 system folders exist (match ignoring outer whitespace & case)
+    // 1) Idempotently ensure the 3 system folders exist for THIS user only
     for (const name of SYSTEM_FOLDERS) {
       await Folder.findOneAndUpdate(
-        { userEmail: email, name: { $regex: `^\\s*${escapeRegex(name)}\\s*$`, $options: "i" } },
-        { $setOnInsert: { userEmail: email, name, assignedDrips: [] } },
+        {
+          userEmail: email,
+          name: { $regex: `^\\s*${escapeRegex(name)}\\s*$`, $options: "i" },
+        },
+        { $setOnInsert: { userEmail: email, user: email, name, assignedDrips: [] } },
         { upsert: true, new: false, lean: true }
       ).exec();
     }
 
-    // 2) Fetch & normalize
-    const raw = await Folder.find({ userEmail: email }).sort({ createdAt: -1 }).lean<DBFolder[]>().exec();
-    const all = raw.map((r) => toLeanFolder(r, email));
+    // 2) Fetch raw folders that COULD belong to this user
+    //    We still query narrowly, but we’ll also enforce owner in JS below.
+    const raw = await Folder.find({
+      $or: [{ userEmail: email }, { user: email }],
+    })
+      .sort({ createdAt: -1 })
+      .lean<DBFolder[]>()
+      .exec();
 
-    // 3) Partition: custom vs system (using *trimmed* case-insensitive key)
+    // 3) Normalize + HARD scope to this user
+    const all = raw.map((r) => toLeanFolder(r));
+
+    const scoped = all.filter((f) => {
+      const owner = (f.userEmail || "").toLowerCase();
+      const ok = !!owner && owner === email;
+      if (!ok) {
+        // Safety log – should basically never fire, but helps if something is weird.
+        console.warn("[get-folders] filtered out folder not owned by user", {
+          owner,
+          email,
+          _id: f._id,
+          name: f.name,
+        });
+      }
+      return ok;
+    });
+
+    // 4) Partition: custom vs system (using *trimmed* case-insensitive key)
     const systemKeys = new Set(SYSTEM_FOLDERS.map((n) => normKey(n)));
     const custom: LeanFolder[] = [];
     const systemBuckets = new Map<string, LeanFolder[]>();
 
-    for (const f of all) {
+    for (const f of scoped) {
       const key = normKey(f.name);
       if (systemKeys.has(key)) {
         const arr = systemBuckets.get(key) || [];
@@ -101,7 +136,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       canonicalByKey.set(key, arr[0]); // arr is non-empty
     }
 
-    // 4) Counts by folderId (strict by ObjectId string)
+    // 5) Counts by folderId (strict by ObjectId string) – stays scoped by userEmail
     const byIdAgg = await (Lead as any).aggregate([
       { $match: { userEmail: email, folderId: { $exists: true, $ne: null } } },
       { $addFields: { fid: { $toString: "$folderId" } } },
@@ -110,8 +145,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const byId = new Map<string, number>();
     for (const r of byIdAgg) byId.set(String(r._id), Number(r.n) || 0);
 
-    // 5) Optional legacy "Unsorted" handling (only if present)
-    const unsorted = all
+    // 6) Optional legacy "Unsorted" handling (only if present)
+    const unsorted = scoped
       .filter((f) => normKey(f.name) === "unsorted")
       .sort((a, b) => {
         const ad = a.createdAt?.getTime() ?? 0;
@@ -124,8 +159,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       $or: [{ folderId: { $exists: false } }, { folderId: null }],
     });
 
-    // 6) Build final ordered list: custom, then canonical system in fixed order
-    const systemOrdered = SYSTEM_FOLDERS.map((n) => canonicalByKey.get(normKey(n))).filter(Boolean) as LeanFolder[];
+    // 7) Build final ordered list: custom, then canonical system in fixed order
+    const systemOrdered = SYSTEM_FOLDERS.map((n) => canonicalByKey.get(normKey(n))).filter(
+      Boolean
+    ) as LeanFolder[];
 
     const ordered = [...custom, ...systemOrdered];
     const foldersWithCounts = ordered.map((f) => {
