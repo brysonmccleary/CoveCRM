@@ -62,61 +62,29 @@ const NumbersPanel = () => (
   </div>
 );
 
-// 🔁 Calendar tab now checks calendar status on the client
-const CalendarPanel = () => {
-  const [loading, setLoading] = useState(true);
-  const [showBanner, setShowBanner] = useState(false);
-
-  useEffect(() => {
-    const checkCalendarStatus = async () => {
-      try {
-        const res = await fetch("/api/user/calendar-status");
-        if (!res.ok) throw new Error("Failed to check calendar status");
-
-        const data = await res.json();
-
-        const connected =
-          data.calendarConnected === true ||
-          !!data.googleCalendar?.accessToken ||
-          !!data.googleSheets?.accessToken ||
-          !!data.calendarId;
-
-        setShowBanner(!connected);
-      } catch (err) {
-        // If we can't tell, default to showing the banner so users can connect.
-        setShowBanner(true);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    checkCalendarStatus();
-  }, []);
-
-  return (
-    <div className="p-4 space-y-8">
-      {!loading && showBanner && (
-        <div className="bg-yellow-100 text-yellow-800 p-4 mb-4 rounded-md">
-          ⏰ You haven’t connected your Google Calendar yet.{" "}
-          <a
-            href="/api/connect/google-calendar"
-            className="underline font-semibold"
-          >
-            Connect Now
-          </a>
-        </div>
-      )}
-      <div>
-        <h1 className="text-2xl font-bold mb-4">Upcoming Bookings</h1>
-        <CalendarBookings />
+const CalendarPanel = ({ showBanner }: { showBanner: boolean }) => (
+  <div className="p-4 space-y-8">
+    {showBanner && (
+      <div className="bg-yellow-100 text-yellow-800 p-4 mb-4 rounded-md">
+        ⏰ You haven’t connected your Google Calendar yet.{" "}
+        <a
+          href="/api/connect/google-calendar"
+          className="underline font-semibold"
+        >
+          Connect Now
+        </a>
       </div>
-      <div>
-        <h2 className="text-xl font-semibold mb-2">Book a New Appointment</h2>
-        <BookingForm />
-      </div>
+    )}
+    <div>
+      <h1 className="text-2xl font-bold mb-4">Upcoming Bookings</h1>
+      <CalendarBookings />
     </div>
-  );
-};
+    <div>
+      <h2 className="text-xl font-semibold mb-2">Book a New Appointment</h2>
+      <BookingForm />
+    </div>
+  </div>
+);
 
 function secsToHMS(s: number) {
   const sec = Math.max(0, Math.floor(s || 0));
@@ -129,7 +97,6 @@ function secsToHMS(s: number) {
 }
 
 function DashboardOverview() {
-  // Removed "thisWeek"; only Today / Last 7 / Last 30
   const [range, setRange] = useState<"today" | "last7" | "last30">("last30");
   const [loading, setLoading] = useState(true);
   const [resp, setResp] = useState<ApiResponse | null>(null);
@@ -188,7 +155,11 @@ function DashboardOverview() {
                 : "bg-white text-gray-800 border-gray-300"
             } transition`}
           >
-            {opt === "last7" ? "Last 7" : opt === "last30" ? "Last 30" : "Today"}
+            {opt === "last7"
+              ? "Last 7"
+              : opt === "last30"
+              ? "Last 30"
+              : "Today"}
           </button>
         ))}
       </div>
@@ -265,7 +236,11 @@ function DashboardOverview() {
   );
 }
 
-export default function DashboardPage() {
+export default function DashboardPage({
+  userNeedsCalendarConnect,
+}: {
+  userNeedsCalendarConnect?: boolean;
+}) {
   const { data: session } = useSession();
   const router = useRouter();
   const { tab } = router.query;
@@ -283,7 +258,9 @@ export default function DashboardPage() {
         {tab === "numbers" && <NumbersPanel />}
         {tab === "settings" && <SettingsPanel />}
         {tab === "drip-campaigns" && <DripCampaignsPanel />}
-        {tab === "calendar" && <CalendarPanel />}
+        {tab === "calendar" && (
+          <CalendarPanel showBanner={!!userNeedsCalendarConnect} />
+        )}
       </DashboardLayout>
     </RequireAuth>
   );
@@ -297,10 +274,17 @@ export const getServerSideProps: GetServerSideProps = async (context) => {
     };
   }
 
-  // Keep DB connect in case other server logic relies on it
   await dbConnect();
-  await User.findOne({ email: session.user.email as string });
+  const user = await User.findOne({ email: session.user.email as string });
 
-  // No need to compute calendar status here; the client checks via /api/user/calendar-status
-  return { props: {} };
+  // ✅ Use the actual calendar fields, NOT googleSheets
+  const hasCalendarConnected = Boolean(
+    (user as any)?.googleCalendar?.accessToken || (user as any)?.calendarId,
+  );
+
+  return {
+    props: {
+      userNeedsCalendarConnect: !hasCalendarConnected,
+    },
+  };
 };
