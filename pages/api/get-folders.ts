@@ -36,18 +36,13 @@ function normalizeName(s?: string) {
 function normKey(s?: string) {
   return normalizeName(s).toLowerCase();
 }
-function resolveOwnerEmail(doc: DBFolder): string {
-  const direct =
-    (typeof doc.userEmail === "string" && doc.userEmail) ||
-    (typeof doc.user === "string" && doc.user) ||
-    "";
-  return direct.toLowerCase();
-}
-function toLeanFolder(doc: DBFolder): LeanFolder {
+
+function toLeanFolder(doc: DBFolder, sessionEmail: string): LeanFolder {
   return {
     _id: String(doc._id),
     name: normalizeName(doc.name),
-    userEmail: resolveOwnerEmail(doc),
+    // 🔒 Always treat the owner as the current session user
+    userEmail: sessionEmail,
     assignedDrips: doc.assignedDrips ?? [],
     createdAt: doc.createdAt ? new Date(doc.createdAt) : undefined,
     updatedAt: doc.updatedAt ? new Date(doc.updatedAt) : undefined,
@@ -57,7 +52,7 @@ function toLeanFolder(doc: DBFolder): LeanFolder {
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   // prevent stale caches while we’re stabilizing
   res.setHeader("Cache-Control", "no-store");
-  res.setHeader("X-Folders-Impl", "sys-v7");
+  res.setHeader("X-Folders-Impl", "sys-v8");
 
   try {
     const session = await getServerSession(req, res, authOptions);
@@ -67,77 +62,47 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     await dbConnect();
 
-    // -------- 1) Ensure system folders exist for THIS user (regex safe) --------
+    // -------- 1) Ensure system folders exist for THIS user --------
     for (const name of SYSTEM_FOLDERS) {
       await Folder.findOneAndUpdate(
         {
           userEmail: email,
           name: { $regex: `^\\s*${escapeRegex(name)}\\s*$`, $options: "i" },
         },
-        { $setOnInsert: { userEmail: email, user: email, name, assignedDrips: [] } },
+        {
+          $setOnInsert: {
+            userEmail: email,
+            user: email,
+            name,
+            assignedDrips: [],
+          },
+        },
         { upsert: true, new: false, lean: true }
       ).exec();
     }
 
-    // -------- 2) Fetch raw folders that could belong to this user --------
-    let raw = await Folder.find({
+    // -------- 2) Fetch folders for this user only (DB-level scoping) --------
+    const raw = await Folder.find({
       $or: [{ userEmail: email }, { user: email }],
     })
       .sort({ createdAt: -1 })
       .lean<DBFolder[]>()
       .exec();
 
-    // If *still* nothing for this user (brand new user), aggressively seed system folders
-    if (!raw.length) {
-      try {
-        const seeds = SYSTEM_FOLDERS.map((name) => ({
-          userEmail: email,
-          user: email,
-          name,
-          assignedDrips: [],
-        }));
-        await Folder.insertMany(seeds, { ordered: false });
-      } catch (e) {
-        // ignore duplicate errors, etc.
-        console.warn("[get-folders] seed insertMany warn", e);
-      }
+    // Map into LeanFolder rows, forcing owner = session user
+    const all: LeanFolder[] = raw.map((r) => toLeanFolder(r, email));
 
-      raw = await Folder.find({
-        $or: [{ userEmail: email }, { user: email }],
-      })
-        .sort({ createdAt: -1 })
-        .lean<DBFolder[]>()
-        .exec();
-    }
-
-    // -------- 3) Normalize + HARD scope to this user --------
-    const all = raw.map((r) => toLeanFolder(r));
-
-    const scoped = all.filter((f) => {
-      const owner = (f.userEmail || "").toLowerCase();
-      const ok = !!owner && owner === email;
-      if (!ok) {
-        console.warn("[get-folders] filtered out folder not owned by user", {
-          owner,
-          email,
-          _id: f._id,
-          name: f.name,
-        });
-      }
-      return ok;
-    });
-
-    // If somehow still nothing, just return empty array (no leakage)
-    if (!scoped.length) {
+    // If truly nothing, just return empty — no leakage to other users
+    if (!all.length) {
       return res.status(200).json({ folders: [] });
     }
 
-    // -------- 4) Partition: custom vs system (trimmed, case-insensitive) --------
+    // -------- 3) Partition: custom vs system (trimmed, case-insensitive) --------
     const systemKeys = new Set(SYSTEM_FOLDERS.map((n) => normKey(n)));
     const custom: LeanFolder[] = [];
     const systemBuckets = new Map<string, LeanFolder[]>();
 
-    for (const f of scoped) {
+    for (const f of all) {
       const key = normKey(f.name);
       if (systemKeys.has(key)) {
         const arr = systemBuckets.get(key) || [];
@@ -162,7 +127,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       canonicalByKey.set(key, arr[0]);
     }
 
-    // -------- 5) Counts per folderId (already scoped by user) --------
+    // -------- 4) Counts per folderId (already scoped by userEmail) --------
     const byIdAgg = await (Lead as any).aggregate([
       { $match: { userEmail: email, folderId: { $exists: true, $ne: null } } },
       { $addFields: { fid: { $toString: "$folderId" } } },
@@ -171,8 +136,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const byId = new Map<string, number>();
     for (const r of byIdAgg) byId.set(String(r._id), Number(r.n) || 0);
 
-    // -------- 6) Optional "Unsorted" handling --------
-    const unsorted = scoped
+    // -------- 5) Optional "Unsorted" handling --------
+    const unsorted = all
       .filter((f) => normKey(f.name) === "unsorted")
       .sort((a, b) => {
         const ad = a.createdAt?.getTime() ?? 0;
@@ -185,7 +150,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       $or: [{ folderId: { $exists: false } }, { folderId: null }],
     });
 
-    // -------- 7) Build final ordered list: custom, then system --------
+    // -------- 6) Build final ordered list: custom, then system --------
     const systemOrdered = SYSTEM_FOLDERS.map((n) => canonicalByKey.get(normKey(n))).filter(
       Boolean
     ) as LeanFolder[];
