@@ -1,11 +1,43 @@
 // models/Folder.ts
 import mongoose, { Schema, models, model } from "mongoose";
 
-// Flexible schema — we keep this loose to avoid breaking existing data.
-const FolderSchema = new Schema({}, { strict: false, timestamps: true });
+// Canonical Folder shape in-app
+export interface IFolder extends mongoose.Document {
+  name: string;
+  userEmail: string;
+  assignedDrips: any[];
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+// Explicit schema for clarity, but keep strict:false so legacy fields
+// (like `user`, old flags, etc.) do NOT break anything.
+const FolderSchema = new Schema<IFolder>(
+  {
+    name: { type: String, required: true, trim: true },
+    userEmail: {
+      type: String,
+      required: true,
+      lowercase: true,
+      index: true,
+    },
+    assignedDrips: {
+      type: [Schema.Types.Mixed],
+      default: [],
+    },
+  },
+  {
+    timestamps: true,
+    strict: false, // allow legacy fields, we just won’t rely on them
+  }
+);
+
+// Helpful index for per-user/system-name lookups
+FolderSchema.index({ userEmail: 1, name: 1 });
 
 const Folder =
-  (models.Folder as mongoose.Model<any>) || model("Folder", FolderSchema);
+  (models.Folder as mongoose.Model<IFolder>) ||
+  model<IFolder>("Folder", FolderSchema);
 export default Folder;
 
 // ---------------------------------------------------------------------------

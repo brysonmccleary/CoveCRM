@@ -1,7 +1,8 @@
 // lib/systemFolders.ts
 
 // Canonical system folder names visible in the UI for *every* user.
-// IMPORTANT: Only these are global/system; everything else is per-user.
+// IMPORTANT: Only these are global/system in *name*; every actual Folder
+// document is still per-user via userEmail.
 export const SYSTEM_FOLDERS = [
   "Sold",
   "Not Interested",
