@@ -122,16 +122,49 @@ async function assignEntityToCustomerProfile(
         return;
       }
     } catch (err) {
-      log("warn: could not fetch primary profile status; attempting assignment anyway", {
-        customerProfileSid,
-      });
+      log(
+        "warn: could not fetch primary profile status; attempting assignment anyway",
+        {
+          customerProfileSid,
+        },
+      );
     }
   }
 
-  await (
-    client.trusthub.v1.customerProfiles(customerProfileSid) as any
-  ).entityAssignments.create({
-    objectSid,
+  // Try SDK subresource first (depending on SDK version this may be entityAssignments
+  // or customerProfilesEntityAssignments). If it's missing, fall back to raw REST call.
+  try {
+    const cp: any = client.trusthub.v1.customerProfiles(customerProfileSid) as any;
+    const sub =
+      cp?.entityAssignments ||
+      cp?.customerProfilesEntityAssignments ||
+      cp?.customerProfilesEntityAssignment;
+
+    if (sub && typeof sub.create === "function") {
+      await sub.create({ objectSid });
+      return;
+    }
+
+    log(
+      "warn: customerProfiles entityAssignments subresource unavailable; falling back to raw request",
+      { customerProfileSid, objectSid },
+    );
+  } catch (err: any) {
+    log("warn: error accessing customerProfiles entityAssignments; falling back to raw request", {
+      customerProfileSid,
+      message: err?.message,
+    });
+  }
+
+  // Fallback: direct HTTP call to the TrustHub REST endpoint. This bypasses
+  // SDK shape issues and matches Twilio's documented API:
+  // POST /trusthub/v1/CustomerProfiles/{CustomerProfileSid}/EntityAssignments
+  await (client as any).request({
+    method: "POST",
+    uri: `/trusthub/v1/CustomerProfiles/${customerProfileSid}/EntityAssignments`,
+    formData: {
+      ObjectSid: objectSid,
+    },
   });
 }
 
@@ -730,10 +763,13 @@ export default async function handler(
         { $set: { usa2pSid, messagingServiceSid, usecaseCode: code } },
       );
     } else if (!usa2pSid && !canCreateCampaign) {
-      log("brand not eligible for campaign creation yet; deferring usAppToPerson.create", {
-        brandSid,
-        brandStatus,
-      });
+      log(
+        "brand not eligible for campaign creation yet; deferring usAppToPerson.create",
+        {
+          brandSid,
+          brandStatus,
+        },
+      );
     }
 
     // Done
