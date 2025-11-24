@@ -69,7 +69,7 @@ function normalizeEinDigits(raw: unknown): string {
     .slice(0, 9);
   if (einDigits.length !== 9) {
     throw new Error(
-      "EIN must be 9 digits (business_registration_number is invalid).",
+      "EIN must be 9 digits (business_registration_number is invalid)."
     );
   }
   return einDigits;
@@ -114,7 +114,7 @@ function buildCampaignDescription(opts: {
 // Twilio's TS typings for TrustHub vary across SDK versions; cast at the boundary.
 async function assignEntityToCustomerProfile(
   customerProfileSid: string,
-  objectSid: string,
+  objectSid: string
 ) {
   log("step: entityAssignments.create (customerProfile)", {
     customerProfileSid,
@@ -126,7 +126,7 @@ async function assignEntityToCustomerProfile(
   if (customerProfileSid === PRIMARY_PROFILE_SID) {
     try {
       const primary = await (client.trusthub.v1.customerProfiles(
-        customerProfileSid,
+        customerProfileSid
       ) as any).fetch();
       const status = String(primary?.status || "").toUpperCase();
       if (status === "TWILIO_APPROVED") {
@@ -136,7 +136,7 @@ async function assignEntityToCustomerProfile(
             customerProfileSid,
             objectSid,
             status,
-          },
+          }
         );
         return;
       }
@@ -145,7 +145,7 @@ async function assignEntityToCustomerProfile(
         "warn: could not fetch primary profile status; attempting assignment anyway",
         {
           customerProfileSid,
-        },
+        }
       );
     }
   }
@@ -165,7 +165,7 @@ async function assignEntityToCustomerProfile(
 
     log(
       "warn: customerProfiles entityAssignments subresource unavailable; falling back to raw request",
-      { customerProfileSid, objectSid },
+      { customerProfileSid, objectSid }
     );
   } catch (err: any) {
     const msg = String(err?.message || "");
@@ -183,7 +183,7 @@ async function assignEntityToCustomerProfile(
       {
         customerProfileSid,
         message: err?.message,
-      },
+      }
     );
   }
 
@@ -214,7 +214,7 @@ async function assignEntityToCustomerProfile(
 // 🔧 UPDATED: make TrustProduct entity assignment robust like CustomerProfile
 async function assignEntityToTrustProduct(
   trustProductSid: string,
-  objectSid: string,
+  objectSid: string
 ) {
   log("step: entityAssignments.create (trustProduct)", {
     trustProductSid,
@@ -236,7 +236,7 @@ async function assignEntityToTrustProduct(
 
     log(
       "warn: trustProducts entityAssignments subresource unavailable; falling back to raw request",
-      { trustProductSid, objectSid },
+      { trustProductSid, objectSid }
     );
   } catch (err: any) {
     const msg = String(err?.message || "");
@@ -254,8 +254,8 @@ async function assignEntityToTrustProduct(
       {
         trustProductSid,
         message: err?.message,
-      },
-    });
+      }
+    );
   }
 
   // Fallback: direct HTTP call to TrustHub
@@ -352,7 +352,7 @@ async function evaluateAndSubmitTrustProduct(trustProductSid: string) {
 
 async function ensureMessagingServiceForUser(
   userId: string,
-  userEmail: string,
+  userEmail: string
 ): Promise<string> {
   const a2p = await A2PProfile.findOne({ userId }).lean<IA2PProfile | null>();
   if (a2p?.messagingServiceSid) return a2p.messagingServiceSid;
@@ -368,7 +368,7 @@ async function ensureMessagingServiceForUser(
   await A2PProfile.updateOne(
     { userId },
     { $set: { messagingServiceSid: ms.sid } },
-    { upsert: true },
+    { upsert: true }
   );
 
   return ms.sid;
@@ -377,7 +377,7 @@ async function ensureMessagingServiceForUser(
 // ---------------- handler ----------------
 export default async function handler(
   req: NextApiRequest,
-  res: NextApiResponse,
+  res: NextApiResponse
 ) {
   if (req.method !== "POST")
     return res.status(405).json({ message: "Method not allowed" });
@@ -449,17 +449,19 @@ export default async function handler(
 
     // Normalize sample messages
     const samples: string[] = Array.isArray(sampleMessages)
-      ? (sampleMessages as string[]).map((s) => s.trim()).filter(Boolean)
+      ? (sampleMessages as string[])
+          .map((s) => s.trim())
+          .filter(Boolean)
       : typeof sampleMessages === "string"
-        ? (sampleMessages as string)
-            .split("\n")
-            .map((s) => s.trim())
-            .filter(Boolean)
-        : [];
+      ? (sampleMessages as string)
+          .split("\n")
+          .map((s) => s.trim())
+          .filter(Boolean)
+      : [];
 
     if (samples.length < 2) {
       throw new Error(
-        "Provide at least 2 sample messages (20–1024 chars each).",
+        "Provide at least 2 sample messages (20–1024 chars each)."
       );
     }
 
@@ -509,7 +511,7 @@ export default async function handler(
     const a2p = await A2PProfile.findOneAndUpdate<IA2PProfile>(
       { userId },
       { $set: setPayload },
-      { upsert: true, returnDocument: "after" },
+      { upsert: true, returnDocument: "after" }
     );
     if (!a2p) throw new Error("Failed to upsert A2P profile");
 
@@ -523,7 +525,7 @@ export default async function handler(
     // Ensure per-user Messaging Service
     const messagingServiceSid = await ensureMessagingServiceForUser(
       userId,
-      user.email,
+      user.email
     );
 
     // Idempotent short-circuit (legacy path where brand + campaign already exist)
@@ -566,7 +568,7 @@ export default async function handler(
 
       await A2PProfile.updateOne(
         { _id: a2p._id },
-        { $set: { profileSid: secondaryProfileSid } },
+        { $set: { profileSid: secondaryProfileSid } }
       );
     }
 
@@ -624,19 +626,19 @@ export default async function handler(
                 length: JSON.stringify(businessAttributes).length,
               },
             },
-          },
+          }
         );
         throw err;
       }
 
       await assignEntityToCustomerProfile(
         secondaryProfileSid!,
-        businessEU.sid,
+        businessEU.sid
       );
 
       await A2PProfile.updateOne(
         { _id: a2p._id },
-        { $set: { businessEndUserSid: businessEU.sid } },
+        { $set: { businessEndUserSid: businessEU.sid } }
       );
     }
 
@@ -644,7 +646,7 @@ export default async function handler(
     if (!(a2p as any).authorizedRepEndUserSid) {
       const digitsOnlyPhone = String(setPayload.phone || "").replace(
         /[^\d]/g,
-        "",
+        ""
       );
 
       const repAttributes = {
@@ -681,7 +683,7 @@ export default async function handler(
             moreInfo: err?.moreInfo,
             details: err?.details,
             message: err?.message,
-          },
+          }
         );
         throw err;
       }
@@ -690,7 +692,7 @@ export default async function handler(
 
       await A2PProfile.updateOne(
         { _id: a2p._id },
-        { $set: { authorizedRepEndUserSid: repEU.sid } },
+        { $set: { authorizedRepEndUserSid: repEU.sid } }
       );
     }
 
@@ -715,7 +717,7 @@ export default async function handler(
 
       await A2PProfile.updateOne(
         { _id: a2p._id },
-        { $set: { addressSid } },
+        { $set: { addressSid } }
       );
     }
 
@@ -742,13 +744,16 @@ export default async function handler(
 
       await A2PProfile.updateOne(
         { _id: a2p._id },
-        { $set: { supportingDocumentSid } },
+        { $set: { supportingDocumentSid } }
       );
     }
 
     // ---------------- 1.8) Attach SupportingDocument to Secondary profile ----
     if (supportingDocumentSid) {
-      await assignEntityToCustomerProfile(secondaryProfileSid!, supportingDocumentSid);
+      await assignEntityToCustomerProfile(
+        secondaryProfileSid!,
+        supportingDocumentSid
+      );
     }
 
     // ---------------- 1.9) Assign Secondary to Primary (ISV) ----------------
@@ -760,12 +765,12 @@ export default async function handler(
 
       await assignEntityToCustomerProfile(
         PRIMARY_PROFILE_SID,
-        secondaryProfileSid!,
+        secondaryProfileSid!
       );
 
       await A2PProfile.updateOne(
         { _id: a2p._id },
-        { $set: { assignedToPrimary: true } },
+        { $set: { assignedToPrimary: true } }
       );
     }
 
@@ -791,7 +796,7 @@ export default async function handler(
 
       await A2PProfile.updateOne(
         { _id: a2p._id },
-        { $set: { trustProductSid } },
+        { $set: { trustProductSid } }
       );
     }
 
@@ -828,7 +833,7 @@ export default async function handler(
             moreInfo: err?.moreInfo,
             details: err?.details,
             message: err?.message,
-          },
+          }
         );
         throw err;
       }
@@ -838,7 +843,7 @@ export default async function handler(
 
       await A2PProfile.updateOne(
         { _id: a2p._id },
-        { $set: { a2pProfileEndUserSid: a2pEU.sid } },
+        { $set: { a2pProfileEndUserSid: a2pEU.sid } }
       );
     }
 
@@ -855,11 +860,7 @@ export default async function handler(
     const normalizedStoredStatus = String(storedBrandStatus || "").toUpperCase();
     const isResubmit = Boolean(resubmit);
 
-    if (
-      brandSid &&
-      normalizedStoredStatus === "FAILED" &&
-      isResubmit
-    ) {
+    if (brandSid && normalizedStoredStatus === "FAILED" && isResubmit) {
       log("resubmit requested and brand previously FAILED; creating new brand", {
         oldBrandSid: brandSid,
         storedBrandStatus,
@@ -874,7 +875,7 @@ export default async function handler(
             brandStatus: "not_started",
             brandFailureReason: undefined,
           },
-        },
+        }
       );
     }
 
@@ -888,7 +889,7 @@ export default async function handler(
       log("step: brandRegistrations.create", payload);
 
       const brand = await client.messaging.v1.brandRegistrations.create(
-        payload,
+        payload
       );
       brandSid = brand.sid;
 
@@ -908,7 +909,7 @@ export default async function handler(
               note: "Brand registration created via API",
             },
           },
-        },
+        }
       );
     }
 
@@ -975,14 +976,14 @@ export default async function handler(
                 note: "Brand FAILED",
               },
             },
-          },
+          }
         );
       } else {
         await A2PProfile.updateOne(
           { _id: a2p._id },
           {
             $set: update,
-          },
+          }
         );
       }
     } catch (err: any) {
@@ -1054,7 +1055,7 @@ export default async function handler(
               note: "Initial A2P campaign created",
             },
           },
-        },
+        }
       );
     } else if (!usa2pSid && !canCreateCampaign) {
       log(
@@ -1062,7 +1063,7 @@ export default async function handler(
         {
           brandSid,
           brandStatus,
-        },
+        }
       );
     }
 
@@ -1084,13 +1085,13 @@ export default async function handler(
               note: "Brand + campaign approved / ready for messaging",
             },
           },
-        },
+        }
       );
     }
 
     // Done
     const updated = await A2PProfile.findById(
-      a2p._id,
+      a2p._id
     ).lean<IA2PProfile | null>();
 
     return res.status(200).json({
