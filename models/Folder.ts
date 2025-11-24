@@ -1,11 +1,18 @@
 // models/Folder.ts
 import mongoose, { Schema, models, model } from "mongoose";
 
+// Flexible schema — we keep this loose to avoid breaking existing data.
 const FolderSchema = new Schema({}, { strict: false, timestamps: true });
-const Folder = (models.Folder as mongoose.Model<any>) || model("Folder", FolderSchema);
+
+const Folder =
+  (models.Folder as mongoose.Model<any>) || model("Folder", FolderSchema);
 export default Folder;
 
-// Canonical system folder names visible in the UI
+// ---------------------------------------------------------------------------
+// System folder helpers
+// Keep in sync with lib/systemFolders, but *do not* include Vet Leads.
+// ---------------------------------------------------------------------------
+
 export const SYSTEM_FOLDERS = [
   "Sold",
   "Not Interested",
@@ -24,7 +31,7 @@ function safeNormalize(name?: string | null): string {
     .replace(/\s+/g, " ");
 }
 
-/** Strict server-side check. Only exact canonical names (case-insensitive) + “booked” shorthand. */
+/** Strict server-side check (mirror of lib/systemFolders). */
 export function isSystemFolderName(name?: string | null): boolean {
   const n = safeNormalize(name);
   if (!n) return false;
@@ -33,7 +40,7 @@ export function isSystemFolderName(name?: string | null): boolean {
   return false;
 }
 
-/** Softer, UX-only heuristic. Do NOT use for server blocking. */
+/** Softer heuristic, only for UX. */
 export function isSystemish(name?: string | null): boolean {
   const n = safeNormalize(name);
   if (!n) return false;
