@@ -148,32 +148,32 @@ export default async function handler(
     });
   }
 
-  // ---- determine if we should auto-resubmit a FAILED brand ----
-  let resubmit = false;
-  try {
-    await mongooseConnect();
-    const user = await User.findOne({ email: session.user.email }).lean();
-    if (user) {
-      const userId = String(user._id);
-      const a2p = await A2PProfile.findOne({ userId }).lean<IA2PProfile | null>();
-      const brandStatus = a2p?.brandStatus
-        ? String(a2p.brandStatus).toUpperCase()
-        : undefined;
-      if (brandStatus === "FAILED") {
-        resubmit = true;
-      }
-    }
-  } catch (err: any) {
-    console.error("registerA2P: error while checking A2PProfile for resubmit", {
-      message: err?.message,
-    });
-    // non-fatal: we just proceed without resubmit flag
+  // ---- determine if this should be treated as a resubmit ----
+  await mongooseConnect();
+
+  const user = await User.findOne({ email: session.user.email });
+  if (!user) {
+    return res.status(404).json({ message: "User not found" });
   }
+
+  const userId = String(user._id);
+  const existingA2P = await A2PProfile.findOne({
+    userId,
+  }).lean<IA2PProfile | null>();
+
+  const existingBrandStatus = String(
+    existingA2P?.brandStatus || "",
+  ).toUpperCase();
+  const hasExistingFailedBrand =
+    !!existingA2P?.brandSid && existingBrandStatus === "FAILED";
+
+  // If there is an existing FAILED brand for this bundle, automatically mark this as a resubmit.
+  const resubmit = hasExistingFailedBrand;
 
   // ---- normalize payload for downstream endpoints ----
   const normalizedUseCase = body.useCase || body.usecaseCode || "LOW_VOLUME";
 
-  const startPayload = {
+  const startPayload: Record<string, any> = {
     businessName: body.businessName!.trim(),
     ein: normalizedEin, // send cleaned 9-digit EIN
     website: body.website!.trim(),
@@ -205,7 +205,7 @@ export default async function handler(
     optInDetails: body.optInDetails!,
     volume: body.volume || "Low",
 
-    // 🔧 auto-resubmit flag for FAILED brands
+    // resubmit hint to /api/a2p/start
     resubmit,
 
     // optional artifacts (only include if present)
