@@ -12,7 +12,8 @@ export interface IFolder extends mongoose.Document {
 
 // Explicit schema for clarity, but keep strict:false so legacy fields
 // (like `user`, old flags, etc.) do NOT break anything.
-const FolderSchema = new Schema<IFolder>(
+// Use Schema<any> so TypeScript doesn't freak out about Mixed[].
+const FolderSchema = new Schema<any>(
   {
     name: { type: String, required: true, trim: true },
     userEmail: {
@@ -22,6 +23,7 @@ const FolderSchema = new Schema<IFolder>(
       index: true,
     },
     assignedDrips: {
+      // array of arbitrary objects
       type: [Schema.Types.Mixed],
       default: [],
     },
