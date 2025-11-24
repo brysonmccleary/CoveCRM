@@ -746,7 +746,10 @@ export default async function handler(
 
     // ---------------- 1.8) Attach SupportingDocument to Secondary profile ----
     if (supportingDocumentSid) {
-      await assignEntityToCustomerProfile(secondaryProfileSid!, supportingDocumentSid);
+      await assignEntityToCustomerProfile(
+        secondaryProfileSid!,
+        supportingDocumentSid,
+      );
     }
 
     // ---------------- 1.9) Assign Secondary to Primary (ISV) ----------------
@@ -853,11 +856,7 @@ export default async function handler(
     const normalizedStoredStatus = String(storedBrandStatus || "").toUpperCase();
     const isResubmit = Boolean(resubmit);
 
-    if (
-      brandSid &&
-      normalizedStoredStatus === "FAILED" &&
-      isResubmit
-    ) {
+    if (brandSid && normalizedStoredStatus === "FAILED" && isResubmit) {
       log("resubmit requested and brand previously FAILED; creating new brand", {
         oldBrandSid: brandSid,
         storedBrandStatus,
@@ -881,6 +880,7 @@ export default async function handler(
         customerProfileBundleSid: secondaryProfileSid!,
         a2PProfileBundleSid: trustProductSid!,
         brandType: "STANDARD",
+        statusCallback: STATUS_CB, // 🔑 ensure brand status hits status-callback
       };
 
       log("step: brandRegistrations.create", payload);
