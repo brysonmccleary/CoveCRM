@@ -9,20 +9,26 @@ export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse,
 ) {
-  const session = await getServerSession(req, res, authOptions);
-  if (!session?.user?.email) {
+  const session = await getServerSession(req, res, authOptions as any);
+  const email =
+    typeof session?.user?.email === "string"
+      ? session.user.email.toLowerCase()
+      : "";
+
+  if (!email) {
     return res.status(401).json({ message: "Unauthorized" });
   }
 
   await dbConnect();
-  const userEmail = session.user.email.toLowerCase();
+  const userEmail = email;
 
   if (req.method === "GET") {
     try {
-      // Scope folders strictly to this user. Support legacy `user` field plus new `userEmail`.
+      // STRICT: only folders for this user by userEmail.
+      // No more legacy `user` field usage.
       const folders = await Folder.find({
-        $or: [{ userEmail }, { user: userEmail }],
-      });
+        userEmail,
+      }).sort({ createdAt: 1, _id: 1 });
 
       return res.status(200).json(folders);
     } catch (error) {
@@ -44,13 +50,16 @@ export default async function handler(
 
       const trimmedName = name.trim();
 
-      // Create folder tied to this user only (both legacy `user` and canonical `userEmail`).
+      // Create folder tied ONLY to this user (canonical userEmail).
       const newFolder = new Folder({
         name: trimmedName,
-        description,
-        user: userEmail,
         userEmail,
       });
+
+      // allow optional description via loose schema
+      if (typeof description === "string") {
+        (newFolder as any).description = description;
+      }
 
       await newFolder.save();
       return res.status(201).json(newFolder);
@@ -60,5 +69,5 @@ export default async function handler(
     }
   }
 
-  res.status(405).json({ message: "Method not allowed" });
+  return res.status(405).json({ message: "Method not allowed" });
 }

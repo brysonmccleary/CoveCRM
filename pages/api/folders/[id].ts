@@ -9,20 +9,25 @@ export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse,
 ) {
-  const session = await getServerSession(req, res, authOptions);
-  if (!session?.user?.email) {
+  const session = await getServerSession(req, res, authOptions as any);
+  const email =
+    typeof session?.user?.email === "string"
+      ? session.user.email.toLowerCase()
+      : "";
+
+  if (!email) {
     return res.status(401).json({ message: "Unauthorized" });
   }
 
   await dbConnect();
-  const userEmail = session.user.email.toLowerCase();
+  const userEmail = email;
   const { id } = req.query;
 
   try {
-    // Folder must belong to this user (support legacy `user` plus canonical `userEmail`)
+    // Folder must belong to THIS user only (strict userEmail).
     const folder = await Folder.findOne({
       _id: id,
-      $or: [{ userEmail }, { user: userEmail }],
+      userEmail,
     });
 
     if (!folder) {
@@ -40,8 +45,11 @@ export default async function handler(
       if (typeof name === "string" && name.trim()) {
         folder.name = name.trim();
       }
+
+      // `description` is not in the TS interface, but schema is strict:false,
+      // so we safely assign it via `any` to keep TypeScript happy.
       if (typeof description === "string") {
-        folder.description = description;
+        (folder as any).description = description;
       }
 
       await folder.save();
@@ -53,9 +61,9 @@ export default async function handler(
       return res.status(200).json({ message: "Folder deleted" });
     }
 
-    res.status(405).json({ message: "Method not allowed" });
+    return res.status(405).json({ message: "Method not allowed" });
   } catch (error) {
     console.error("Folder update/delete error:", error);
-    res.status(500).json({ message: "Server error" });
+    return res.status(500).json({ message: "Server error" });
   }
 }
