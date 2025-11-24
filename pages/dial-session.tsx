@@ -715,20 +715,27 @@ export default function DialSession() {
   };
 
   const persistDisposition = async (leadId: string, label: string) => {
-    const candidates: Array<{ url: string; body: any; required?: boolean }> = [
-      { url: "/api/leads/set-disposition", body: { leadId, disposition: label } },
-      { url: "/api/leads/update", body: { leadId, update: { disposition: label } } },
-    ];
-    for (const c of candidates) {
-      try {
-        const r = await fetch(c.url, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(c.body),
-        });
-        if (r.ok) break;
-      } catch {}
+    // ❌ Do NOT move folders or touch disposition endpoints for "No Answer"
+    if (label !== "No Answer") {
+      const candidates: Array<{ url: string; body: any; required?: boolean }> = [
+        { url: "/api/leads/set-disposition", body: { leadId, disposition: label } },
+        { url: "/api/leads/update", body: { leadId, update: { disposition: label } } },
+      ];
+      for (const c of candidates) {
+        try {
+          const r = await fetch(c.url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(c.body),
+          });
+          if (r.ok) break;
+        } catch {
+          // ignore and try the next candidate
+        }
+      }
     }
+
+    // ✅ Always log the disposition in history so you can still see "No Answer"
     try {
       await fetch("/api/leads/add-history", {
         method: "POST",
@@ -740,7 +747,9 @@ export default function DialSession() {
           meta: { disposition: label, ts: Date.now() },
         }),
       });
-    } catch {}
+    } catch {
+      // ignore
+    }
   };
 
   const handleDisposition = async (label: "Sold" | "No Answer" | "Booked Appointment" | "Not Interested") => {
@@ -965,7 +974,7 @@ export default function DialSession() {
     "";
 
   return (
-    <div className="flex bg-[#0f172a] text-white min-h-screen flex-col">
+    <div className="flex bg-[#0f172a] text:white min-h-screen flex-col">
       <div className="bg-[#1e293b] p-4 border-b border-gray-700 flex justify-between items-center">
         <h1 className="text-xl font-bold">Dial Session</h1>
       </div>
