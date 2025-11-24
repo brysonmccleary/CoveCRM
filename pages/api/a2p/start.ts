@@ -476,10 +476,15 @@ export default async function handler(
       website: String(website),
 
       address: String(address),
+      // @ts-ignore – extra address fields are fine in Mongo, even if not in TS
       addressLine2: addressLine2 ? String(addressLine2) : undefined,
+      // @ts-ignore
       addressCity: String(addressCity),
+      // @ts-ignore
       addressState: String(addressState),
+      // @ts-ignore
       addressPostalCode: String(addressPostalCode),
+      // @ts-ignore
       addressCountry: String(addressCountry),
 
       email: String(email),
@@ -703,11 +708,11 @@ export default async function handler(
       const addr = await client.addresses.create({
         customerName: String(setPayload.businessName),
         street: String(setPayload.address),
-        streetSecondary: setPayload.addressLine2 || undefined,
-        city: String(setPayload.addressCity),
-        region: String(setPayload.addressState),
-        postalCode: String(setPayload.addressPostalCode),
-        isoCountry: String(setPayload.addressCountry || "US"),
+        streetSecondary: (setPayload as any).addressLine2 || undefined,
+        city: (setPayload as any).addressCity as string,
+        region: (setPayload as any).addressState as string,
+        postalCode: (setPayload as any).addressPostalCode as string,
+        isoCountry: ((setPayload as any).addressCountry as string) || "US",
       });
 
       addressSid = addr.sid;
@@ -730,10 +735,12 @@ export default async function handler(
         attributes,
       });
 
+      // IMPORTANT: TrustHub requires `attributes` as a JSON string here,
+      // otherwise you get "Unable to process JSON" (400).
       const sd = await (client.trusthub.v1.supportingDocuments as any).create({
         friendlyName: `${setPayload.businessName} – Address SupportingDocument`,
         type: "customer_profile_address",
-        attributes: attributes as any,
+        attributes: JSON.stringify(attributes),
       });
 
       supportingDocumentSid = sd.sid;
@@ -880,7 +887,6 @@ export default async function handler(
         customerProfileBundleSid: secondaryProfileSid!,
         a2PProfileBundleSid: trustProductSid!,
         brandType: "STANDARD",
-        statusCallback: STATUS_CB, // 🔑 ensure brand status hits status-callback
       };
 
       log("step: brandRegistrations.create", payload);
