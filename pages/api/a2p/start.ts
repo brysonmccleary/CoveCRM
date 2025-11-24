@@ -1,3 +1,4 @@
+// /pages/api/a2p/start.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
@@ -254,7 +255,7 @@ async function assignEntityToTrustProduct(
         trustProductSid,
         message: err?.message,
       },
-    );
+    });
   }
 
   // Fallback: direct HTTP call to TrustHub
@@ -476,15 +477,10 @@ export default async function handler(
       website: String(website),
 
       address: String(address),
-      // @ts-ignore – extra address fields are fine in Mongo, even if not in TS
       addressLine2: addressLine2 ? String(addressLine2) : undefined,
-      // @ts-ignore
       addressCity: String(addressCity),
-      // @ts-ignore
       addressState: String(addressState),
-      // @ts-ignore
       addressPostalCode: String(addressPostalCode),
-      // @ts-ignore
       addressCountry: String(addressCountry),
 
       email: String(email),
@@ -708,11 +704,11 @@ export default async function handler(
       const addr = await client.addresses.create({
         customerName: String(setPayload.businessName),
         street: String(setPayload.address),
-        streetSecondary: (setPayload as any).addressLine2 || undefined,
-        city: (setPayload as any).addressCity as string,
-        region: (setPayload as any).addressState as string,
-        postalCode: (setPayload as any).addressPostalCode as string,
-        isoCountry: ((setPayload as any).addressCountry as string) || "US",
+        streetSecondary: setPayload.addressLine2 || undefined,
+        city: String(setPayload.addressCity),
+        region: String(setPayload.addressState),
+        postalCode: String(setPayload.addressPostalCode),
+        isoCountry: String(setPayload.addressCountry || "US"),
       });
 
       addressSid = addr.sid;
@@ -728,19 +724,18 @@ export default async function handler(
       .supportingDocumentSid;
     if (!supportingDocumentSid && addressSid) {
       const attributes = {
-        address_sids: [addressSid],
+        // Twilio expects a single SID string here, not an array
+        address_sids: addressSid,
       };
 
       log("step: supportingDocuments.create (customer_profile_address)", {
         attributes,
       });
 
-      // IMPORTANT: TrustHub requires `attributes` as a JSON string here,
-      // otherwise you get "Unable to process JSON" (400).
       const sd = await (client.trusthub.v1.supportingDocuments as any).create({
         friendlyName: `${setPayload.businessName} – Address SupportingDocument`,
         type: "customer_profile_address",
-        attributes: JSON.stringify(attributes),
+        attributes: attributes as any,
       });
 
       supportingDocumentSid = sd.sid;
@@ -753,10 +748,7 @@ export default async function handler(
 
     // ---------------- 1.8) Attach SupportingDocument to Secondary profile ----
     if (supportingDocumentSid) {
-      await assignEntityToCustomerProfile(
-        secondaryProfileSid!,
-        supportingDocumentSid,
-      );
+      await assignEntityToCustomerProfile(secondaryProfileSid!, supportingDocumentSid);
     }
 
     // ---------------- 1.9) Assign Secondary to Primary (ISV) ----------------
@@ -863,7 +855,11 @@ export default async function handler(
     const normalizedStoredStatus = String(storedBrandStatus || "").toUpperCase();
     const isResubmit = Boolean(resubmit);
 
-    if (brandSid && normalizedStoredStatus === "FAILED" && isResubmit) {
+    if (
+      brandSid &&
+      normalizedStoredStatus === "FAILED" &&
+      isResubmit
+    ) {
       log("resubmit requested and brand previously FAILED; creating new brand", {
         oldBrandSid: brandSid,
         storedBrandStatus,
