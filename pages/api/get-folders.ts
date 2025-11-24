@@ -56,10 +56,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   res.setHeader("X-Folders-Impl", "per-user-system-final");
 
   try {
-    const session = (await getServerSession(req, res, authOptions as any)) as any;
+    const session = (await getServerSession(
+      req,
+      res,
+      authOptions as any,
+    )) as any;
+
     const email =
       typeof session?.user?.email === "string"
-        ? session.user.email.toLowerCase()
+        ? (session.user.email as string).toLowerCase()
         : "";
 
     if (!email) {
@@ -84,10 +89,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             userEmail: email,
             name,
             assignedDrips: [],
-          },
-          // normalize userEmail in case old docs had weird casing
-          $set: {
-            userEmail: email,
           },
         },
         { upsert: true, new: false, lean: true }
