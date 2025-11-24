@@ -18,9 +18,17 @@ export interface IA2PProfile extends Document {
 
   // ---- Business info collected from tenant ----
   businessName: string;
-  ein: string;
+  ein: string; // display format (e.g. 00-0000000)
   website: string;
-  address: string;
+
+  // full address fields from the A2P form
+  address: string; // street line 1
+  addressLine2?: string;
+  addressCity: string;
+  addressState: string;
+  addressPostalCode: string;
+  addressCountry: string;
+
   email: string;
   phone: string;
   contactTitle: string;
@@ -35,6 +43,10 @@ export interface IA2PProfile extends Document {
   trustProductSid?: string; // TP...
   a2pProfileEndUserSid?: string; // us_a2p_messaging_profile_information end user
   assignedToPrimary?: boolean; // secondary assigned to ISV primary
+
+  // Address-related TrustHub artifacts
+  addressSid?: string; // AD...
+  supportingDocumentSid?: string; // SD... (customer_profile_address)
 
   // Optional legacy/use-case sid
   useCaseSid?: string;
@@ -59,6 +71,10 @@ export interface IA2PProfile extends Document {
   campaignSid?: string; // (optional legacy)
   usa2pSid?: string; // QE/CM identifier created under Messaging Service
   messagingServiceSid?: string; // MGxxxxxxxx
+
+  // Twilio / TCR brand state and failure info
+  brandStatus?: string;
+  brandFailureReason?: string; // flattened for UI
 
   // Lifecycle + health
   registrationStatus?: A2PRegistrationStatus;
@@ -98,9 +114,18 @@ const A2PProfileSchema = new Schema<IA2PProfile>({
 
   // Business info
   businessName: { type: String, required: true },
+  // stored as a display string: 00-0000000
   ein: { type: String, required: true },
   website: { type: String, required: true },
-  address: { type: String, required: true },
+
+  // Full address fields
+  address: { type: String, required: true }, // line 1
+  addressLine2: { type: String },
+  addressCity: { type: String, required: true },
+  addressState: { type: String, required: true },
+  addressPostalCode: { type: String, required: true },
+  addressCountry: { type: String, required: true },
+
   email: { type: String, required: true },
   phone: { type: String, required: true },
   contactTitle: { type: String, required: true },
@@ -116,6 +141,10 @@ const A2PProfileSchema = new Schema<IA2PProfile>({
   trustProductSid: { type: String },
   a2pProfileEndUserSid: { type: String },
   assignedToPrimary: { type: Boolean },
+
+  // Address / SupportingDocument artifacts
+  addressSid: { type: String },
+  supportingDocumentSid: { type: String },
 
   // Legacy/use-case
   useCaseSid: { type: String },
@@ -140,6 +169,10 @@ const A2PProfileSchema = new Schema<IA2PProfile>({
   campaignSid: { type: String },
   usa2pSid: { type: String },
   messagingServiceSid: { type: String },
+
+  // Brand status / failure info from Twilio
+  brandStatus: { type: String },
+  brandFailureReason: { type: String },
 
   // Detailed lifecycle
   registrationStatus: {

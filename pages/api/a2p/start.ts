@@ -1,4 +1,3 @@
-// pages/api/a2p/start.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
@@ -60,6 +59,24 @@ function log(...args: any[]) {
 function required<T>(v: T, name: string): T {
   if (!v) throw new Error(`Missing required field: ${name}`);
   return v;
+}
+
+// EIN helpers: store display format, send digits-only to Twilio
+function normalizeEinDigits(raw: unknown): string {
+  const einDigits = String(raw || "")
+    .replace(/[^\d]/g, "")
+    .slice(0, 9);
+  if (einDigits.length !== 9) {
+    throw new Error(
+      "EIN must be 9 digits (business_registration_number is invalid).",
+    );
+  }
+  return einDigits;
+}
+
+function formatEinDisplay(einDigits: string): string {
+  // 00-0000000
+  return `${einDigits.slice(0, 2)}-${einDigits.slice(2)}`;
 }
 
 // Ensure campaign description meets Twilio min/max length requirements
@@ -378,7 +395,15 @@ export default async function handler(
       businessName,
       ein,
       website,
-      address,
+
+      // full address pieces from your A2P form
+      address, // street line 1
+      addressLine2,
+      addressCity,
+      addressState,
+      addressPostalCode,
+      addressCountry,
+
       email,
       phone,
       contactTitle,
@@ -389,6 +414,10 @@ export default async function handler(
       volume, // string
       optInScreenshotUrl, // string (optional)
       usecaseCode, // string | undefined
+
+      // resubmit flag (when brand previously FAILED)
+      resubmit,
+
       // optional links
       landingOptInUrl,
       landingTosUrl,
@@ -399,7 +428,13 @@ export default async function handler(
     required(businessName, "businessName");
     required(ein, "ein");
     required(website, "website");
+
     required(address, "address");
+    required(addressCity, "addressCity");
+    required(addressState, "addressState");
+    required(addressPostalCode, "addressPostalCode");
+    required(addressCountry, "addressCountry");
+
     required(email, "email");
     required(phone, "phone");
     required(contactTitle, "contactTitle");
@@ -407,15 +442,9 @@ export default async function handler(
     required(contactLastName, "contactLastName");
     required(optInDetails, "optInDetails");
 
-    // Normalize EIN: 9 digits
-    const einDigits = String(ein)
-      .replace(/[^\d]/g, "")
-      .slice(0, 9);
-    if (einDigits.length !== 9) {
-      throw new Error(
-        "EIN must be 9 digits (business_registration_number is invalid).",
-      );
-    }
+    // Normalize EIN to digits for Twilio, but store human format 00-0000000
+    const einDigits = normalizeEinDigits(ein);
+    const einDisplay = formatEinDisplay(einDigits);
 
     // Normalize sample messages
     const samples: string[] = Array.isArray(sampleMessages)
@@ -443,9 +472,16 @@ export default async function handler(
     const setPayload: Partial<IA2PProfile> & { userId: string } = {
       userId,
       businessName: String(businessName),
-      ein: einDigits,
+      ein: einDisplay, // stored with dash for UI
       website: String(website),
+
       address: String(address),
+      addressLine2: addressLine2 ? String(addressLine2) : undefined,
+      addressCity: String(addressCity),
+      addressState: String(addressState),
+      addressPostalCode: String(addressPostalCode),
+      addressCountry: String(addressCountry),
+
       email: String(email),
       phone: String(phone),
       contactTitle: String(contactTitle),
@@ -462,6 +498,7 @@ export default async function handler(
       usecaseCode: (usecaseCode as string) || "LOW_VOLUME",
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
+      lastSyncedAt: now,
     };
 
     const messageFlowText: string = setPayload.optInDetails!;
@@ -501,8 +538,9 @@ export default async function handler(
           messagingServiceSid,
           brandSid: (a2p as any).brandSid,
           usa2pSid: (a2p as any).usa2pSid,
-          brandStatus: undefined,
+          brandStatus: (a2p as any).brandStatus,
           canCreateCampaign: true,
+          brandFailureReason: (a2p as any).brandFailureReason,
         },
       });
     }
@@ -548,6 +586,7 @@ export default async function handler(
         business_registration_identifier: "EIN",
         business_identity: "isv_reseller_or_partner",
         business_industry: "INSURANCE",
+        // Twilio wants digits only here
         business_registration_number: einDigits,
       };
 
@@ -654,6 +693,62 @@ export default async function handler(
       );
     }
 
+    // ---------------- 1.6) Address resource (Twilio Address) ----------------
+    let addressSid: string | undefined = (a2p as any).addressSid;
+    if (!addressSid) {
+      log("step: addresses.create (mailing address)", {
+        customerName: setPayload.businessName,
+      });
+
+      const addr = await client.addresses.create({
+        customerName: String(setPayload.businessName),
+        street: String(setPayload.address),
+        streetSecondary: setPayload.addressLine2 || undefined,
+        city: String(setPayload.addressCity),
+        region: String(setPayload.addressState),
+        postalCode: String(setPayload.addressPostalCode),
+        isoCountry: String(setPayload.addressCountry || "US"),
+      });
+
+      addressSid = addr.sid;
+
+      await A2PProfile.updateOne(
+        { _id: a2p._id },
+        { $set: { addressSid } },
+      );
+    }
+
+    // ---------------- 1.7) SupportingDocument for address ----------------
+    let supportingDocumentSid: string | undefined = (a2p as any)
+      .supportingDocumentSid;
+    if (!supportingDocumentSid && addressSid) {
+      const attributes = {
+        address_sids: [addressSid],
+      };
+
+      log("step: supportingDocuments.create (customer_profile_address)", {
+        attributes,
+      });
+
+      const sd = await (client.trusthub.v1.supportingDocuments as any).create({
+        friendlyName: `${setPayload.businessName} – Address SupportingDocument`,
+        type: "customer_profile_address",
+        attributes: attributes as any,
+      });
+
+      supportingDocumentSid = sd.sid;
+
+      await A2PProfile.updateOne(
+        { _id: a2p._id },
+        { $set: { supportingDocumentSid } },
+      );
+    }
+
+    // ---------------- 1.8) Attach SupportingDocument to Secondary profile ----
+    if (supportingDocumentSid) {
+      await assignEntityToCustomerProfile(secondaryProfileSid!, supportingDocumentSid);
+    }
+
     // ---------------- 1.9) Assign Secondary to Primary (ISV) ----------------
     if (!(a2p as any).assignedToPrimary) {
       log("step: assign secondary to primary", {
@@ -748,8 +843,39 @@ export default async function handler(
     // Evaluate + submit TrustProduct
     await evaluateAndSubmitTrustProduct(trustProductSid!);
 
-    // ---------------- 3) BrandRegistration (BN...) if missing ----------------
+    // ---------------- 3) BrandRegistration (BN...) with resubmit logic -------
+
+    // If we previously recorded a FAILED brand and this call is a resubmit,
+    // clear the old brandSid so we can create a new one on the same bundles.
+    let storedBrandStatus = (a2p as any).brandStatus as string | undefined;
     let brandSid: string | undefined = (a2p as any).brandSid;
+
+    const normalizedStoredStatus = String(storedBrandStatus || "").toUpperCase();
+    const isResubmit = Boolean(resubmit);
+
+    if (
+      brandSid &&
+      normalizedStoredStatus === "FAILED" &&
+      isResubmit
+    ) {
+      log("resubmit requested and brand previously FAILED; creating new brand", {
+        oldBrandSid: brandSid,
+        storedBrandStatus,
+      });
+
+      brandSid = undefined;
+      await A2PProfile.updateOne(
+        { _id: a2p._id },
+        {
+          $set: {
+            brandSid: undefined,
+            brandStatus: "not_started",
+            brandFailureReason: undefined,
+          },
+        },
+      );
+    }
+
     if (!brandSid) {
       const payload: any = {
         customerProfileBundleSid: secondaryProfileSid!,
@@ -764,28 +890,99 @@ export default async function handler(
       );
       brandSid = brand.sid;
 
-      await A2PProfile.updateOne({ _id: a2p._id }, { $set: { brandSid } });
+      await A2PProfile.updateOne(
+        { _id: a2p._id },
+        {
+          $set: {
+            brandSid,
+            registrationStatus: "brand_submitted",
+            applicationStatus: "pending",
+            lastError: undefined,
+          },
+          $push: {
+            approvalHistory: {
+              stage: "brand_submitted",
+              at: new Date(),
+              note: "Brand registration created via API",
+            },
+          },
+        },
+      );
     }
 
     // ---------------- 3.1) Fetch brand status so we know if we can create a campaign ----------------
     let brandStatus: string | undefined;
-    let brandFailureReason: any;
+    let brandFailureReason: string | undefined;
     try {
-      const brand = await client.messaging.v1
+      const brand: any = await client.messaging.v1
         .brandRegistrations(brandSid!)
         .fetch();
       brandStatus = brand?.status;
-      brandFailureReason =
-        (brand as any).failureReason ||
-        (brand as any).failureReasons ||
-        (brand as any).errorCodes ||
+
+      const rawFailure =
+        brand?.failureReason ||
+        brand?.failureReasons ||
+        brand?.errorCodes ||
         undefined;
+
+      if (!rawFailure) {
+        brandFailureReason = undefined;
+      } else if (typeof rawFailure === "string") {
+        brandFailureReason = rawFailure;
+      } else if (Array.isArray(rawFailure)) {
+        brandFailureReason = rawFailure.join("; ");
+      } else {
+        // flatten object
+        try {
+          brandFailureReason = JSON.stringify(rawFailure);
+        } catch {
+          brandFailureReason = String(rawFailure);
+        }
+      }
 
       log("brandRegistrations.fetch", {
         brandSid,
         status: brandStatus,
         failureReason: brandFailureReason,
       });
+
+      const normalized = String(brandStatus || "").toUpperCase();
+
+      const update: any = {
+        brandStatus: brandStatus || undefined,
+        brandFailureReason,
+        lastSyncedAt: new Date(),
+      };
+
+      if (normalized === "FAILED") {
+        update.registrationStatus = "rejected";
+        update.applicationStatus = "declined";
+        update.declinedReason =
+          brandFailureReason || "Brand registration failed.";
+        update.messagingReady = false;
+        update.lastError = brandFailureReason;
+
+        await A2PProfile.updateOne(
+          { _id: a2p._id },
+          {
+            $set: update,
+            $push: {
+              approvalHistory: {
+                stage: "rejected",
+                at: new Date(),
+                note: "Brand FAILED",
+              },
+            },
+          },
+        );
+      } else {
+        await A2PProfile.updateOne(
+          { _id: a2p._id },
+          {
+            $set: update,
+          },
+        );
+      }
     } catch (err: any) {
       log("warn: brandRegistrations.fetch failed", {
         brandSid,
@@ -841,7 +1038,21 @@ export default async function handler(
 
       await A2PProfile.updateOne(
         { _id: a2p._id },
-        { $set: { usa2pSid, messagingServiceSid, usecaseCode: code } },
+        {
+          $set: {
+            usa2pSid,
+            messagingServiceSid,
+            usecaseCode: code,
+            registrationStatus: "campaign_submitted",
+          },
+          $push: {
+            approvalHistory: {
+              stage: "campaign_submitted",
+              at: new Date(),
+              note: "Initial A2P campaign created",
+            },
+          },
+        },
       );
     } else if (!usa2pSid && !canCreateCampaign) {
       log(
@@ -853,10 +1064,33 @@ export default async function handler(
       );
     }
 
+    // If brand is approved AND campaign exists, mark ready
+    if (usa2pSid && canCreateCampaign) {
+      await A2PProfile.updateOne(
+        { _id: a2p._id },
+        {
+          $set: {
+            registrationStatus: "ready",
+            applicationStatus:
+              normalizedBrandStatus === "FAILED" ? "declined" : "approved",
+            messagingReady: true,
+          },
+          $push: {
+            approvalHistory: {
+              stage: "ready",
+              at: new Date(),
+              note: "Brand + campaign approved / ready for messaging",
+            },
+          },
+        },
+      );
+    }
+
     // Done
     const updated = await A2PProfile.findById(
       a2p._id,
     ).lean<IA2PProfile | null>();
+
     return res.status(200).json({
       message:
         "A2P registration started/submitted. Campaign creation will proceed when your brand is eligible.",
@@ -866,9 +1100,11 @@ export default async function handler(
         trustProductSid: (updated as any)?.trustProductSid,
         brandSid: (updated as any)?.brandSid,
         usa2pSid: (updated as any)?.usa2pSid,
-        brandStatus,
+        brandStatus: updated?.brandStatus || brandStatus,
+        brandFailureReason: updated?.brandFailureReason || brandFailureReason,
         canCreateCampaign,
-        brandFailureReason,
+        registrationStatus: updated?.registrationStatus,
+        messagingReady: updated?.messagingReady,
       },
     });
   } catch (err: any) {
