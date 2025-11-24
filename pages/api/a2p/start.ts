@@ -282,7 +282,30 @@ async function assignEntityToTrustProduct(
   }
 }
 
+// 🔧 UPDATED: don’t try to re-submit the primary / TWILIO_APPROVED profile
 async function evaluateAndSubmitCustomerProfile(customerProfileSid: string) {
+  // If this is the primary ISV profile and is already TWILIO_APPROVED, skip.
+  if (customerProfileSid === PRIMARY_PROFILE_SID) {
+    try {
+      const primary = await (client.trusthub.v1.customerProfiles(
+        customerProfileSid
+      ) as any).fetch();
+      const status = String(primary?.status || "").toUpperCase();
+      if (status === "TWILIO_APPROVED") {
+        log("info: skipping evaluation/update for TWILIO_APPROVED primary profile", {
+          customerProfileSid,
+          status,
+        });
+        return;
+      }
+    } catch (err: any) {
+      log("warn: could not fetch profile before evaluation; continuing anyway", {
+        customerProfileSid,
+        message: err?.message,
+      });
+    }
+  }
+
   try {
     log("step: customerProfiles.evaluations.create", { customerProfileSid });
     const cp: any = client.trusthub.v1.customerProfiles(customerProfileSid);
@@ -550,6 +573,20 @@ export default async function handler(
 
     // ---------------- 1) Secondary Customer Profile (BU...) ----------------
     let secondaryProfileSid: string | undefined = (a2p as any).profileSid;
+
+    // 🔧 HEALING: if we ever stored the PRIMARY profile as the user's profileSid,
+    // treat that as legacy state and force creation of a true secondary profile.
+    if (secondaryProfileSid === PRIMARY_PROFILE_SID) {
+      log("detected PRIMARY_PROFILE_SID stored as profileSid; creating real secondary", {
+        currentProfileSid: secondaryProfileSid,
+      });
+      secondaryProfileSid = undefined;
+      await A2PProfile.updateOne(
+        { _id: a2p._id },
+        { $set: { profileSid: undefined } }
+      );
+    }
+
     if (!secondaryProfileSid) {
       log("step: customerProfiles.create (secondary)", {
         email: NOTIFY_EMAIL,
@@ -774,7 +811,7 @@ export default async function handler(
       );
     }
 
-    // Evaluate + submit Secondary
+    // Evaluate + submit Secondary (skips primary / TWILIO_APPROVED inside)
     await evaluateAndSubmitCustomerProfile(secondaryProfileSid!);
 
     // ---------------- 2) TrustProduct (A2P) if missing ----------------
