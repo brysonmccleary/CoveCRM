@@ -1,4 +1,3 @@
-// pages/api/registerA2P.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "./auth/[...nextauth]";
@@ -33,7 +32,15 @@ type BodyIn = {
   businessName?: string;
   ein?: string;
   website?: string;
-  address?: string;
+
+  // address parts
+  address?: string; // line 1
+  addressLine2?: string;
+  addressCity?: string;
+  addressState?: string;
+  addressPostalCode?: string;
+  addressCountry?: string;
+
   email?: string;
   phone?: string;
   contactTitle?: string;
@@ -82,6 +89,10 @@ export default async function handler(
     "ein",
     "website",
     "address",
+    "addressCity",
+    "addressState",
+    "addressPostalCode",
+    "addressCountry",
     "email",
     "phone",
     "contactFirstName",
@@ -139,7 +150,15 @@ export default async function handler(
     businessName: body.businessName!.trim(),
     ein: normalizedEin, // send cleaned 9-digit EIN
     website: body.website!.trim(),
+
+    // address parts
     address: body.address!.trim(),
+    addressLine2: (body.addressLine2 || "").trim() || undefined,
+    addressCity: body.addressCity!.trim(),
+    addressState: body.addressState!.trim(),
+    addressPostalCode: body.addressPostalCode!.trim(),
+    addressCountry: body.addressCountry!.trim(),
+
     email: body.email!.trim(),
     phone: body.phone!.trim(),
     contactTitle: (body.contactTitle || "Owner").trim(),
