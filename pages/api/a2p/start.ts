@@ -113,10 +113,11 @@ async function assignEntityToCustomerProfile(
       const status = String(primary?.status || "").toUpperCase();
       if (status === "TWILIO_APPROVED") {
         log(
-          "warning: primary profile is TWILIO_APPROVED; skipping secondary assignment",
+          "info: primary profile is TWILIO_APPROVED; skipping secondary assignment",
           {
             customerProfileSid,
             objectSid,
+            status,
           },
         );
         return;
@@ -150,22 +151,49 @@ async function assignEntityToCustomerProfile(
       { customerProfileSid, objectSid },
     );
   } catch (err: any) {
-    log("warn: error accessing customerProfiles entityAssignments; falling back to raw request", {
-      customerProfileSid,
-      message: err?.message,
-    });
+    const msg = String(err?.message || "");
+    if (msg.includes("TWILIO_APPROVED")) {
+      // Twilio is telling us the bundle is locked; this is safe to ignore.
+      log("info: bundle is TWILIO_APPROVED; skipping assignment", {
+        customerProfileSid,
+        objectSid,
+        message: msg,
+      });
+      return;
+    }
+    log(
+      "warn: error accessing customerProfiles entityAssignments; falling back to raw request",
+      {
+        customerProfileSid,
+        message: err?.message,
+      },
+    );
   }
 
   // Fallback: direct HTTP call to the TrustHub REST endpoint. This bypasses
   // SDK shape issues and matches Twilio's documented API:
-  // POST /trusthub/v1/CustomerProfiles/{CustomerProfileSid}/EntityAssignments
-  await (client as any).request({
-    method: "POST",
-    uri: `/trusthub/v1/CustomerProfiles/${customerProfileSid}/EntityAssignments`,
-    formData: {
-      ObjectSid: objectSid,
-    },
-  });
+  // POST https://trusthub.twilio.com/v1/CustomerProfiles/{CustomerProfileSid}/EntityAssignments
+  try {
+    const url = `https://trusthub.twilio.com/v1/CustomerProfiles/${customerProfileSid}/EntityAssignments`;
+    await (client as any).request({
+      method: "POST",
+      uri: url,
+      formData: {
+        ObjectSid: objectSid,
+      },
+    });
+  } catch (err: any) {
+    const msg = String(err?.message || "");
+    if (msg.includes("TWILIO_APPROVED")) {
+      log("info: bundle is TWILIO_APPROVED (fallback); skipping assignment", {
+        customerProfileSid,
+        objectSid,
+        message: msg,
+      });
+      return;
+    }
+    throw err;
+  }
 }
 
 async function assignEntityToTrustProduct(
