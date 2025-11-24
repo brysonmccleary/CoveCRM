@@ -1,6 +1,11 @@
+// /pages/api/registerA2P.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "./auth/[...nextauth]";
+import mongooseConnect from "@/lib/mongooseConnect";
+import A2PProfile from "@/models/A2PProfile";
+import type { IA2PProfile } from "@/models/A2PProfile";
+import User from "@/models/User";
 
 /**
  * This endpoint orchestrates the full A2P flow:
@@ -143,6 +148,28 @@ export default async function handler(
     });
   }
 
+  // ---- determine if we should auto-resubmit a FAILED brand ----
+  let resubmit = false;
+  try {
+    await mongooseConnect();
+    const user = await User.findOne({ email: session.user.email }).lean();
+    if (user) {
+      const userId = String(user._id);
+      const a2p = await A2PProfile.findOne({ userId }).lean<IA2PProfile | null>();
+      const brandStatus = a2p?.brandStatus
+        ? String(a2p.brandStatus).toUpperCase()
+        : undefined;
+      if (brandStatus === "FAILED") {
+        resubmit = true;
+      }
+    }
+  } catch (err: any) {
+    console.error("registerA2P: error while checking A2PProfile for resubmit", {
+      message: err?.message,
+    });
+    // non-fatal: we just proceed without resubmit flag
+  }
+
   // ---- normalize payload for downstream endpoints ----
   const normalizedUseCase = body.useCase || body.usecaseCode || "LOW_VOLUME";
 
@@ -177,6 +204,9 @@ export default async function handler(
     // consent/volume
     optInDetails: body.optInDetails!,
     volume: body.volume || "Low",
+
+    // 🔧 auto-resubmit flag for FAILED brands
+    resubmit,
 
     // optional artifacts (only include if present)
     ...(body.optInScreenshotUrl
