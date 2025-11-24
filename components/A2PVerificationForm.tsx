@@ -1,5 +1,5 @@
-// components/settings/A2PVerificationForm.tsx
-import { useState, ChangeEvent } from "react";
+// components/A2PVerificationForm.tsx
+import { useState } from "react";
 import toast from "react-hot-toast";
 
 type UploadedFileResponse = { url: string; message?: string };
@@ -51,7 +51,15 @@ export default function A2PVerificationForm() {
   // ---------- Business ----------
   const [businessName, setBusinessName] = useState("");
   const [ein, setEin] = useState("");
-  const [address, setAddress] = useState("");
+
+  // Address split into individual fields to match /api/a2p/start
+  const [address, setAddress] = useState(""); // street line 1
+  const [addressLine2, setAddressLine2] = useState("");
+  const [addressCity, setAddressCity] = useState("");
+  const [addressState, setAddressState] = useState("");
+  const [addressPostalCode, setAddressPostalCode] = useState("");
+  const [addressCountry, setAddressCountry] = useState("US");
+
   const [website, setWebsite] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
@@ -105,11 +113,29 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
   const ensureHasStopLanguage = (text: string) =>
     /reply\s+stop/i.test(text) || /text\s+stop/i.test(text);
 
+  // EIN formatting: force 9 digits and show as 00-0000000
+  const handleEinChange = (value: string) => {
+    const digits = value.replace(/[^\d]/g, "").slice(0, 9);
+    if (!digits) {
+      setEin("");
+      return;
+    }
+    if (digits.length <= 2) {
+      setEin(digits);
+      return;
+    }
+    setEin(`${digits.slice(0, 2)}-${digits.slice(2)}`);
+  };
+
   // Required (soften: links + screenshot are optional, but we warn if missing)
   const requiredOk = () =>
     businessName &&
     ein &&
     address &&
+    addressCity &&
+    addressState &&
+    addressPostalCode &&
+    addressCountry &&
     website &&
     email &&
     phone &&
@@ -122,7 +148,7 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
     volume;
 
   // ---------- Upload (optional) ----------
-  const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files?.length) setFile(e.target.files[0]);
   };
 
@@ -194,8 +220,16 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
     try {
       const payload = {
         businessName,
-        ein,
-        address,
+        ein, // backend normalizes to digits and enforces 9-digit EIN
+
+        // Address pieces expected by /api/a2p/start
+        address, // street line 1
+        addressLine2: addressLine2 || undefined,
+        addressCity,
+        addressState,
+        addressPostalCode,
+        addressCountry,
+
         website,
         email,
         phone,
@@ -205,7 +239,7 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
 
         // campaign type for both existing endpoints
         usecaseCode: usecase, // /api/a2p/start expects this
-        useCase: usecase, // /api/a2p/submit-campaign expects this
+        useCase: usecase, // /api/a2p/submit-campaign expects this (if used)
 
         // messages
         sampleMessages: allMessages,
@@ -261,18 +295,60 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
       />
       <input
         type="text"
-        placeholder="EIN or Tax ID"
+        placeholder="EIN (00-0000000)"
         value={ein}
-        onChange={(e) => setEin(e.target.value)}
+        onChange={(e) => handleEinChange(e.target.value)}
         className="border p-2 rounded w-full"
       />
-      <input
-        type="text"
-        placeholder="Business Address"
-        value={address}
-        onChange={(e) => setAddress(e.target.value)}
-        className="border p-2 rounded w-full"
-      />
+
+      {/* Address fields */}
+      <div className="space-y-2">
+        <input
+          type="text"
+          placeholder="Street Address"
+          value={address}
+          onChange={(e) => setAddress(e.target.value)}
+          className="border p-2 rounded w-full"
+        />
+        <input
+          type="text"
+          placeholder="Address Line 2 (optional)"
+          value={addressLine2}
+          onChange={(e) => setAddressLine2(e.target.value)}
+          className="border p-2 rounded w-full"
+        />
+        <div className="grid md:grid-cols-3 gap-2">
+          <input
+            type="text"
+            placeholder="City"
+            value={addressCity}
+            onChange={(e) => setAddressCity(e.target.value)}
+            className="border p-2 rounded w-full"
+          />
+          <input
+            type="text"
+            placeholder="State"
+            value={addressState}
+            onChange={(e) => setAddressState(e.target.value)}
+            className="border p-2 rounded w-full"
+          />
+          <input
+            type="text"
+            placeholder="ZIP / Postal Code"
+            value={addressPostalCode}
+            onChange={(e) => setAddressPostalCode(e.target.value)}
+            className="border p-2 rounded w-full"
+          />
+        </div>
+        <input
+          type="text"
+          placeholder="Country (e.g., US)"
+          value={addressCountry}
+          onChange={(e) => setAddressCountry(e.target.value)}
+          className="border p-2 rounded w-full"
+        />
+      </div>
+
       <input
         type="url"
         placeholder="Website URL"
