@@ -21,6 +21,7 @@ type DBFolder = {
   _id: any;
   name?: string;
   userEmail?: string;
+  user?: string; // legacy field
   assignedDrips?: any[];
   createdAt?: any;
   updatedAt?: any;
@@ -35,11 +36,11 @@ function normalizeName(s?: string) {
 function normKey(s?: string) {
   return normalizeName(s).toLowerCase();
 }
-function toLeanFolder(doc: DBFolder, fallbackEmail: string): LeanFolder {
+function toLeanFolder(doc: DBFolder, email: string): LeanFolder {
   return {
     _id: String(doc._id),
     name: normalizeName(doc.name),
-    userEmail: String(doc.userEmail ?? fallbackEmail).toLowerCase(),
+    userEmail: String(doc.userEmail ?? doc.user ?? email),
     assignedDrips: doc.assignedDrips ?? [],
     createdAt: doc.createdAt ? new Date(doc.createdAt) : undefined,
     updatedAt: doc.updatedAt ? new Date(doc.updatedAt) : undefined,
@@ -49,10 +50,10 @@ function toLeanFolder(doc: DBFolder, fallbackEmail: string): LeanFolder {
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   // prevent stale caches while we’re stabilizing
   res.setHeader("Cache-Control", "no-store");
-  res.setHeader("X-Folders-Impl", "sys-v6-hard-scope");
+  res.setHeader("X-Folders-Impl", "sys-final");
 
   try {
-    const session = await getServerSession(req, res, authOptions);
+    const session = await getServerSession(req, res, authOptions as any);
     const email =
       typeof session?.user?.email === "string"
         ? session.user.email.toLowerCase()
@@ -61,41 +62,51 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     await dbConnect();
 
-    // 1) Idempotently ensure the 3 system folders exist **for THIS user only**
+    // 1) Ensure system folders exist for *this* user only
     for (const name of SYSTEM_FOLDERS) {
       await Folder.findOneAndUpdate(
         {
-          userEmail: email,
-          name: {
-            $regex: `^\\s*${escapeRegex(name)}\\s*$`,
-            $options: "i",
+          // strictly scoped to this user
+          $or: [
+            { userEmail: email, name: { $regex: `^\\s*${escapeRegex(name)}\\s*$`, $options: "i" } },
+            {
+              user: email,
+              userEmail: { $exists: false },
+              name: { $regex: `^\\s*${escapeRegex(name)}\\s*$`, $options: "i" },
+            },
+          ],
+        },
+        {
+          $setOnInsert: {
+            userEmail: email,
+            user: email,
+            name,
+            assignedDrips: [],
           },
         },
-        { $setOnInsert: { userEmail: email, name, assignedDrips: [] } },
         { upsert: true, new: false, lean: true }
       ).exec();
     }
 
-    // 2) Fetch ALL folders, then HARD-FILTER in memory to this user’s email.
-    //    This guarantees no cross-tenant bleed even if some docs are messy.
-    const rawAll = await Folder.find({})
+    // 2) Fetch folders *only* for this user
+    const raw = await Folder.find({
+      $or: [
+        { userEmail: email },
+        { user: email, userEmail: { $exists: false } }, // legacy docs
+      ],
+    })
       .sort({ createdAt: -1 })
       .lean<DBFolder[]>()
       .exec();
 
-    const raw = rawAll
-      .filter((doc) => {
-        const docEmail = String(doc.userEmail ?? "").toLowerCase();
-        return docEmail === email;
-      })
-      .map((r) => toLeanFolder(r, email));
+    const all = raw.map((r) => toLeanFolder(r, email));
 
-    // 3) Partition: custom vs system (using *trimmed* case-insensitive key)
+    // 3) Partition: custom vs system (by trimmed, lower-case name)
     const systemKeys = new Set(SYSTEM_FOLDERS.map((n) => normKey(n)));
     const custom: LeanFolder[] = [];
     const systemBuckets = new Map<string, LeanFolder[]>();
 
-    for (const f of raw) {
+    for (const f of all) {
       const key = normKey(f.name);
       if (systemKeys.has(key)) {
         const arr = systemBuckets.get(key) || [];
@@ -106,10 +117,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
-    // Custom alphabetical
+    // alphabetical custom
     custom.sort((a, b) => a.name.localeCompare(b.name));
 
-    // For each system bucket, choose the canonical doc (oldest by createdAt, then by _id)
+    // For each system bucket, choose canonical (oldest)
     const canonicalByKey = new Map<string, LeanFolder>();
     for (const [key, arr] of systemBuckets) {
       arr.sort((a, b) => {
@@ -117,43 +128,41 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const bd = b.createdAt?.getTime() ?? 0;
         return ad - bd || a._id.localeCompare(b._id);
       });
-      canonicalByKey.set(key, arr[0]); // arr is non-empty
+      canonicalByKey.set(key, arr[0]);
     }
 
-    // 4) Counts by folderId (strict by ObjectId string) — for THIS user only
+    // 4) Counts per folder for this user
     const byIdAgg = await (Lead as any).aggregate([
-      {
-        $match: {
-          userEmail: email,
-          folderId: { $exists: true, $ne: null },
-        },
-      },
+      { $match: { userEmail: email, folderId: { $exists: true, $ne: null } } },
       { $addFields: { fid: { $toString: "$folderId" } } },
       { $group: { _id: "$fid", n: { $sum: 1 } } },
     ]);
+
     const byId = new Map<string, number>();
     for (const r of byIdAgg) byId.set(String(r._id), Number(r.n) || 0);
 
-    // 5) Optional legacy "Unsorted" handling (only if present for this user)
-    const unsorted = raw
+    // Optional legacy "Unsorted" handling (only for THIS user)
+    const unsorted = all
       .filter((f) => normKey(f.name) === "unsorted")
       .sort((a, b) => {
         const ad = a.createdAt?.getTime() ?? 0;
         const bd = b.createdAt?.getTime() ?? 0;
         return ad - bd || a._id.localeCompare(b._id);
       })[0];
+
     const unsortedIdStr = unsorted ? String(unsorted._id) : null;
     const unsortedCount = await Lead.countDocuments({
       userEmail: email,
       $or: [{ folderId: { $exists: false } }, { folderId: null }],
     });
 
-    // 6) Build final ordered list: custom, then canonical system in fixed order
+    // 5) Final list: custom first, then the 3 system folders in fixed order
     const systemOrdered = SYSTEM_FOLDERS.map((n) =>
       canonicalByKey.get(normKey(n))
     ).filter(Boolean) as LeanFolder[];
 
     const ordered = [...custom, ...systemOrdered];
+
     const foldersWithCounts = ordered.map((f) => {
       const idStr = String(f._id);
       const base = byId.get(idStr) || 0;
