@@ -1,3 +1,4 @@
+// pages/api/folders/[id].ts
 import dbConnect from "@/lib/dbConnect";
 import Folder from "@/models/Folder";
 import { getServerSession } from "next-auth/next";
@@ -14,11 +15,15 @@ export default async function handler(
   }
 
   await dbConnect();
-  const userEmail = session.user.email;
+  const userEmail = session.user.email.toLowerCase();
   const { id } = req.query;
 
   try {
-    const folder = await Folder.findOne({ _id: id, user: userEmail });
+    // Folder must belong to this user (support legacy `user` plus canonical `userEmail`)
+    const folder = await Folder.findOne({
+      _id: id,
+      $or: [{ userEmail }, { user: userEmail }],
+    });
 
     if (!folder) {
       return res
@@ -27,9 +32,17 @@ export default async function handler(
     }
 
     if (req.method === "PUT") {
-      const { name, description } = req.body;
-      folder.name = name ?? folder.name;
-      folder.description = description ?? folder.description;
+      const { name, description } = req.body as {
+        name?: string;
+        description?: string;
+      };
+
+      if (typeof name === "string" && name.trim()) {
+        folder.name = name.trim();
+      }
+      if (typeof description === "string") {
+        folder.description = description;
+      }
 
       await folder.save();
       return res.status(200).json(folder);

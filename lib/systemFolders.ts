@@ -1,9 +1,9 @@
+// lib/systemFolders.ts
 // Canonical system folder names visible in the UI
 export const SYSTEM_FOLDERS = [
   "Sold",
   "Not Interested",
   "Booked Appointment",
-  "Vet Leads",
 ] as const;
 
 export type SystemFolderName = (typeof SYSTEM_FOLDERS)[number];

@@ -1,3 +1,4 @@
+// pages/api/folders/index.ts
 import dbConnect from "@/lib/dbConnect";
 import Folder from "@/models/Folder";
 import { getServerSession } from "next-auth/next";
@@ -14,11 +15,15 @@ export default async function handler(
   }
 
   await dbConnect();
-  const userEmail = session.user.email;
+  const userEmail = session.user.email.toLowerCase();
 
   if (req.method === "GET") {
     try {
-      const folders = await Folder.find({ user: userEmail });
+      // Scope folders strictly to this user. Support legacy `user` field plus new `userEmail`.
+      const folders = await Folder.find({
+        $or: [{ userEmail }, { user: userEmail }],
+      });
+
       return res.status(200).json(folders);
     } catch (error) {
       console.error("Get folders error:", error);
@@ -28,12 +33,23 @@ export default async function handler(
 
   if (req.method === "POST") {
     try {
-      const { name, description } = req.body;
+      const { name, description } = req.body as {
+        name?: string;
+        description?: string;
+      };
 
+      if (!name || !name.trim()) {
+        return res.status(400).json({ message: "Folder name is required" });
+      }
+
+      const trimmedName = name.trim();
+
+      // Create folder tied to this user only (both legacy `user` and canonical `userEmail`).
       const newFolder = new Folder({
-        name,
+        name: trimmedName,
         description,
         user: userEmail,
+        userEmail,
       });
 
       await newFolder.save();
