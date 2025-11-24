@@ -9,10 +9,15 @@ export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse,
 ) {
-  const session = await getServerSession(req, res, authOptions as any);
+  const session = (await getServerSession(
+    req,
+    res,
+    authOptions as any,
+  )) as any;
+
   const email =
     typeof session?.user?.email === "string"
-      ? session.user.email.toLowerCase()
+      ? (session.user.email as string).toLowerCase()
       : "";
 
   if (!email) {
