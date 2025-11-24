@@ -1,4 +1,5 @@
-import { useState } from "react";
+// components/settings/A2PVerificationForm.tsx
+import { useState, ChangeEvent } from "react";
 import toast from "react-hot-toast";
 
 type UploadedFileResponse = { url: string; message?: string };
@@ -56,8 +57,8 @@ export default function A2PVerificationForm() {
   const [phone, setPhone] = useState("");
 
   // ---------- Explicit link fields (optional but recommended) ----------
-  const [landingOptInUrl, setLandingOptInUrl] = useState("");     // page that shows opt-in language + form
-  const [landingTosUrl, setLandingTosUrl] = useState("");         // Terms of Service link
+  const [landingOptInUrl, setLandingOptInUrl] = useState(""); // page that shows opt-in language + form
+  const [landingTosUrl, setLandingTosUrl] = useState(""); // Terms of Service link
   const [landingPrivacyUrl, setLandingPrivacyUrl] = useState(""); // Privacy Policy link
 
   // ---------- Contact ----------
@@ -70,13 +71,13 @@ export default function A2PVerificationForm() {
 
   // ---------- Sample Messages (separate boxes) ----------
   const [msg1, setMsg1] = useState(
-    `Hi {{first_name}}, it’s {{agent_name}} from our insurance team. You requested info on your life insurance options – when’s a good time for a quick call? Reply STOP to opt out.`
+    `Hi {{first_name}}, it’s {{agent_name}} from our insurance team. You requested info on your life insurance options – when’s a good time for a quick call? Reply STOP to opt out.`,
   );
   const [msg2, setMsg2] = useState(
-    `Hi {{first_name}}, you’re pre-approved for benefits this week through the program you opted into. Want to review options now or later today? Reply STOP to unsubscribe.`
+    `Hi {{first_name}}, you’re pre-approved for benefits this week through the program you opted into. Want to review options now or later today? Reply STOP to unsubscribe.`,
   );
   const [msg3, setMsg3] = useState(
-    `Hi {{first_name}}, just following up from your Facebook request for a life insurance quote. This is {{agent_name}} – can I call you real quick? Reply STOP to opt out.`
+    `Hi {{first_name}}, just following up from your Facebook request for a life insurance quote. This is {{agent_name}} – can I call you real quick? Reply STOP to opt out.`,
   );
 
   // ---------- Opt-in Details (no template tokens, includes exclusivity) ----------
@@ -87,13 +88,15 @@ Before submission, users see a disclosure similar to:
 
 “By entering your name and information above and clicking this button, you are consenting to receive calls or emails regarding your life insurance options (at any phone number or email address you provide) from a licensed insurance agent or one of our business partners. You agree such calls may use an automatic telephone dialing system or a prerecorded voice to deliver messages even if you are on a government do-not-call registry. This agreement is not a condition of enrollment.”
 
-The form uses click-wrap consent and displays Privacy Policy and Terms & Conditions links on the same page as the form submission. This campaign is exclusive to me. Leads are never resold, reused, or shared with other agents or organizations. Vendors maintain timestamped proof of consent, IP address, and full submission metadata to ensure compliance.`
+The form uses click-wrap consent and displays Privacy Policy and Terms & Conditions links on the same page as the form submission. This campaign is exclusive to me. Leads are never resold, reused, or shared with other agents or organizations. Vendors maintain timestamped proof of consent, IP address, and full submission metadata to ensure compliance.`,
   );
 
   // ---------- Volume + screenshot (screenshot OPTIONAL) ----------
   const [volume, setVolume] = useState("");
   const [file, setFile] = useState<File | null>(null);
-  const [optInScreenshotUrl, setOptInScreenshotUrl] = useState<string | null>(null);
+  const [optInScreenshotUrl, setOptInScreenshotUrl] = useState<string | null>(
+    null,
+  );
   const [uploading, setUploading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
@@ -119,7 +122,7 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
     volume;
 
   // ---------- Upload (optional) ----------
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
     if (e.target.files?.length) setFile(e.target.files[0]);
   };
 
@@ -133,7 +136,10 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
       const formData = new FormData();
       formData.append("file", file);
 
-      const res = await fetch("/api/uploadOptIn", { method: "POST", body: formData });
+      const res = await fetch("/api/uploadOptIn", {
+        method: "POST",
+        body: formData,
+      });
       const data: UploadedFileResponse = await res.json();
 
       if (!res.ok) {
@@ -159,7 +165,9 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
     }
 
     if (![msg1, msg2, msg3].every(ensureHasStopLanguage)) {
-      toast.error('Each sample message must include opt-out language (e.g., "Reply STOP to opt out").');
+      toast.error(
+        'Each sample message must include opt-out language (e.g., "Reply STOP to opt out").',
+      );
       return;
     }
 
@@ -168,14 +176,17 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
       toast(
         (t) => (
           <span>
-            <b>Heads up:</b> A public opt-in page URL greatly improves approval speed.
-            You can submit now and add it later.
-            <button onClick={() => toast.dismiss(t.id)} className="ml-2 underline">
+            <b>Heads up:</b> A public opt-in page URL greatly improves approval
+            speed. You can submit now and add it later.
+            <button
+              onClick={() => toast.dismiss(t.id)}
+              className="ml-2 underline"
+            >
               OK
             </button>
           </span>
         ),
-        { duration: 6000 }
+        { duration: 6000 },
       );
     }
 
@@ -194,7 +205,7 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
 
         // campaign type for both existing endpoints
         usecaseCode: usecase, // /api/a2p/start expects this
-        useCase: usecase,     // /api/a2p/submit-campaign expects this
+        useCase: usecase, // /api/a2p/submit-campaign expects this
 
         // messages
         sampleMessages: allMessages,
@@ -224,7 +235,9 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
         return;
       }
 
-      toast.success("Verification submitted! We’ll notify you when it’s approved or if changes are needed.");
+      toast.success(
+        "Verification submitted! We’ll notify you when it’s approved or if changes are needed.",
+      );
     } catch (err) {
       console.error("Submission error:", err);
       toast.error("Error submitting verification");
@@ -306,8 +319,9 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
           </optgroup>
         </select>
         <p className="text-xs text-gray-500">
-          “Low Volume (mixed)” is suitable for most small businesses sending a mix of conversational,
-          marketing, and informational messages at modest volumes.
+          “Low Volume (mixed)” is suitable for most small businesses sending a
+          mix of conversational, marketing, and informational messages at modest
+          volumes.
         </p>
       </div>
 
@@ -335,8 +349,9 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
           className="border p-2 rounded w-full md:col-span-2"
         />
         <p className="md:col-span-2 text-xs text-gray-500">
-          These links are optional but strongly recommended. A public page showing how users opt in
-          significantly reduces review delays and declines.
+          These links are optional but strongly recommended. A public page
+          showing how users opt in significantly reduces review delays and
+          declines.
         </p>
       </div>
 
@@ -366,7 +381,8 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
       {/* Sample Messages – separate inputs */}
       <div className="space-y-3">
         <label className="text-sm text-gray-500">
-          Tip: Use variables like <code>{`{{first_name}}`}</code> and include opt-out language (e.g., “Reply STOP to opt out”).
+          Tip: Use variables like <code>{`{{first_name}}`}</code> and include
+          opt-out language (e.g., “Reply STOP to opt out”).
         </label>
         <textarea
           placeholder="Sample Message #1"
@@ -411,15 +427,27 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
 
       {/* Screenshot Upload (optional) */}
       <div className="space-y-2">
-        <label className="font-semibold block">Screenshot of opt-in language (optional)</label>
+        <label className="font-semibold block">
+          Screenshot of opt-in language (optional)
+        </label>
         <p className="text-xs text-gray-500">
-          A screenshot of your opt-in form/page helps reviewers verify consent flow quickly.
+          A screenshot of your opt-in form/page helps reviewers verify consent
+          flow quickly.
         </p>
 
-        <label htmlFor="file-upload" className="cursor-pointer underline text-blue-700 hover:text-blue-900">
+        <label
+          htmlFor="file-upload"
+          className="cursor-pointer underline text-blue-700 hover:text-blue-900"
+        >
           Choose File
         </label>
-        <input id="file-upload" type="file" accept="image/*" onChange={handleFileChange} className="hidden" />
+        <input
+          id="file-upload"
+          type="file"
+          accept="image/*"
+          onChange={handleFileChange}
+          className="hidden"
+        />
 
         <button
           onClick={handleUpload}
@@ -432,7 +460,12 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
         {optInScreenshotUrl && (
           <p className="text-green-600 text-sm">
             Uploaded:{" "}
-            <a href={optInScreenshotUrl} className="underline cursor-pointer" target="_blank" rel="noopener noreferrer">
+            <a
+              href={optInScreenshotUrl}
+              className="underline cursor-pointer"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
               {optInScreenshotUrl}
             </a>
           </p>
