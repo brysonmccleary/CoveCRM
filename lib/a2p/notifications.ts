@@ -15,7 +15,7 @@ const FROM_EMAIL =
   process.env.NOTIFY_FROM_EMAIL ||
   process.env.SENDGRID_FROM_EMAIL ||
   process.env.RESEND_FROM_EMAIL ||
-  "CoveCRM <no-reply@covecrm.com>"; // safe default, must be a verified domain
+  "CoveCRM <no-reply@covecrm.com>"; // verified domain / fallback
 
 // Simple sleep helper for rate-limit backoff
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -142,24 +142,60 @@ export async function sendA2PDeclinedEmail(opts: {
   to: string;
   name?: string;
   reason?: string;
-  helpUrl: string;
+  helpUrl?: string;
 }) {
   const subject = "⚠️ A2P Campaign Requires Changes";
   const greeting = opts.name ? `Hi ${opts.name},` : "Hi there,";
-  const reason = opts.reason ? `Reason: ${opts.reason}\n\n` : "";
+
+  const reasonLine = opts.reason
+    ? `Reason from carrier: ${opts.reason} (this is the exact text they sent).\n\n`
+    : "";
+
+  // Only include a help link if it's NOT the old 404 checklist URL
+  const hasValidHelpUrl =
+    !!opts.helpUrl &&
+    !/\/help\/a2p-checklist\/?$/i.test(opts.helpUrl || "");
+
+  const extraHelpText = hasValidHelpUrl
+    ? `You can also review this checklist:\n${opts.helpUrl}\n\n`
+    : "";
+
   const text = `${greeting}
 
 Your A2P campaign was not approved yet.
-${reason}Please review the checklist and resubmit:
-${opts.helpUrl}
+${reasonLine}Here are common fixes:
+- Make sure your legal business name, EIN, and address exactly match your official records.
+- Make sure your website is live and clearly shows what your business does.
+- Make sure your sample messages clearly describe what you send and include opt-out language (e.g. "Reply STOP to opt out").
+
+Log into your CoveCRM account, open Settings → A2P Registration, update your details, and resubmit.
+${extraHelpText}If you're not sure what to change, just reply to this email and our team will help.
 
 — CoveCRM`;
+
+  const htmlReason = opts.reason
+    ? `<p><strong>Reason from carrier:</strong> ${opts.reason} <span style="color:#64748b;font-size:12px">(this is the exact text they sent)</span></p>`
+    : "";
+
+  const htmlChecklist = hasValidHelpUrl
+    ? `<p>You can also review this checklist: <a href="${opts.helpUrl}">${opts.helpUrl}</a></p>`
+    : "";
+
   const html = `
     <p>${greeting}</p>
     <p>Your <strong>A2P campaign was not approved</strong> yet.</p>
-    ${opts.reason ? `<p><em>Reason:</em> ${opts.reason}</p>` : ""}
-    <p>Please review the checklist and resubmit: <a href="${opts.helpUrl}">${opts.helpUrl}</a></p>
+    ${htmlReason}
+    <p>Here are common fixes:</p>
+    <ul>
+      <li>Make sure your legal business name, EIN, and address exactly match your official records.</li>
+      <li>Make sure your website is live and clearly shows what your business does.</li>
+      <li>Make sure your sample messages clearly describe what you send and include opt-out language (e.g. "Reply STOP to opt out").</li>
+    </ul>
+    <p>Then log into your CoveCRM account, open <strong>Settings → A2P Registration</strong>, update your details, and resubmit.</p>
+    ${htmlChecklist}
+    <p>If you're not sure what to change, just reply to this email and our team will help.</p>
     <p>— CoveCRM</p>
   `;
+
   await safeSendEmail({ to: opts.to, subject, text, html });
 }
