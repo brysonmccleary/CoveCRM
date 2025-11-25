@@ -18,17 +18,23 @@ const BASE_URL =
 const AFFILIATE_RETURN_PATH =
   process.env.AFFILIATE_RETURN_PATH || "/dashboard?tab=settings";
 
-// Tunables (env-overridable)
-const DEFAULT_DISCOUNT_PERCENT = Number(
-  process.env.AFFILIATE_DEFAULT_DISCOUNT_PERCENT || "20", // 20% off forever
-);
+// Flat payout to affiliate on first paid invoice
 const DEFAULT_PAYOUT_FLAT = Number(
-  process.env.AFFILIATE_DEFAULT_PAYOUT || "25", // $25 to affiliate on first paid invoice
+  process.env.AFFILIATE_DEFAULT_PAYOUT || "25",
 );
 
 // Helpers to mirror other affiliate code
 const U = (s?: string | null) => (s || "").trim().toUpperCase();
 const HOUSE_CODE = U(process.env.AFFILIATE_HOUSE_CODE || "COVE50");
+
+/**
+ * Every affiliate promo code should use THIS same Stripe coupon,
+ * which is your $50-off discount.
+ *
+ * You can also set STRIPE_REFERRAL_COUPON_ID in env and override it.
+ */
+const REFERRAL_COUPON_ID =
+  process.env.STRIPE_REFERRAL_COUPON_ID || "A5t6ytdl";
 
 export default async function handler(
   req: NextApiRequest,
@@ -86,11 +92,12 @@ export default async function handler(
 
     const userIdStr = String((user as any)._id ?? (user as any).id);
 
-    // 1) Create (or reuse) Stripe Coupon + Promotion Code so the code is live immediately
+    // 1) Create (or reuse) Stripe Promotion Code so the code is live immediately
     let couponId: string | undefined;
     let promotionCodeId: string | undefined;
 
     try {
+      // First, see if a promotion code with this exact code already exists
       const listResp = await stripe.promotionCodes.list({
         code: promoCode,
         limit: 1,
@@ -103,6 +110,9 @@ export default async function handler(
       if (promos.length) {
         const p: any = promos[0];
         promotionCodeId = String(p.id);
+
+        // If the promo code points at some other coupon, we still accept it,
+        // but going forward all new codes will use REFERRAL_COUPON_ID.
         couponId =
           typeof p.coupon === "string"
             ? String(p.coupon)
@@ -112,20 +122,13 @@ export default async function handler(
           await stripe.promotionCodes.update(String(p.id), { active: true });
         }
       } else {
-        const coupon = await stripe.coupons.create({
-          duration: "forever",
-          percent_off: DEFAULT_DISCOUNT_PERCENT,
-          name: promoCode,
-          metadata: {
-            promoCode,
-            affiliateUserId: userIdStr,
-          },
-        });
-
-        couponId = coupon.id;
+        // IMPORTANT: Do NOT create a coupon. We ALWAYS reuse the
+        // existing $50-off coupon (REFERRAL_COUPON_ID) and only
+        // create a promotion code that points to it.
+        couponId = REFERRAL_COUPON_ID;
 
         const promo = await stripe.promotionCodes.create({
-          coupon: couponId,
+          coupon: REFERRAL_COUPON_ID,
           code: promoCode,
           active: true,
           metadata: {
