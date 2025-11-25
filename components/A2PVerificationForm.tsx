@@ -47,6 +47,14 @@ const ADVANCED_SPECIAL: { value: UseCaseCode; label: string }[] = [
   { value: "EMERGENCY", label: "Emergency (special)" },
 ];
 
+const US_STATE_CODES = [
+  "AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA",
+  "HI","ID","IL","IN","IA","KS","KY","LA","ME","MD",
+  "MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ",
+  "NM","NY","NC","ND","OH","OK","OR","PA","RI","SC",
+  "SD","TN","TX","UT","VT","VA","WA","WV","WI","WY",
+];
+
 type FieldErrors = {
   businessName?: string;
   ein?: string;
@@ -136,6 +144,19 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
   const ensureHasStopLanguage = (text: string) =>
     /reply\s+stop/i.test(text) || /text\s+stop/i.test(text);
 
+  const isUsState = (value: string) =>
+    US_STATE_CODES.includes(value.trim().toUpperCase());
+
+  const isUsCountry = (value: string) => {
+    const v = value.trim().toUpperCase();
+    return (
+      v === "US" ||
+      v === "USA" ||
+      v === "UNITED STATES" ||
+      v === "UNITED STATES OF AMERICA"
+    );
+  };
+
   // EIN formatting: force 9 digits and show as 00-0000000
   const handleEinChange = (value: string) => {
     const digits = value.replace(/[^\d]/g, "").slice(0, 9);
@@ -152,9 +173,19 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
     setErrors((prev) => ({ ...prev, ein: undefined }));
   };
 
-  // Simple URL check
-  const isValidUrl = (value: string) =>
-    /^https?:\/\/.+/i.test(value.trim());
+  // Strict URL check (must be https and non-localhost-ish)
+  const isValidUrl = (value: string) => {
+    const v = value.trim();
+    if (!/^https:\/\//i.test(v)) return false;
+    try {
+      const u = new URL(v);
+      if (!u.hostname || !u.hostname.includes(".")) return false;
+      if (/localhost|127\.0\.0\.1/i.test(u.hostname)) return false;
+      return true;
+    } catch {
+      return false;
+    }
+  };
 
   // Email check (simple)
   const isValidEmail = (value: string) =>
@@ -165,6 +196,9 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
     const digits = value.replace(/[^\d]/g, "");
     return digits.length === 10 || (digits.length === 11 && digits.startsWith("1"));
   };
+
+  const isValidZip = (value: string) =>
+    /^[0-9]{5}(-[0-9]{4})?$/.test(value.trim());
 
   // Required (for quick global check)
   const requiredOk = () =>
@@ -226,18 +260,24 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
   const runValidation = (): boolean => {
     const newErrors: FieldErrors = {};
 
+    // Business name
     if (!businessName.trim()) {
       newErrors.businessName = "Business name is required.";
+    } else if (businessName.trim().length < 3) {
+      newErrors.businessName =
+        "Business name must be at least 3 characters.";
     }
 
+    // EIN
     const einDigits = ein.replace(/[^\d]/g, "");
     if (!einDigits) {
       newErrors.ein = "EIN is required.";
     } else if (einDigits.length !== 9) {
       newErrors.ein =
-        'EIN must be 9 digits, e.g. "12-3456789" (no letters or symbols).';
+        'EIN must be 9 digits, e.g. "12-3456789" (no letters or extra symbols).';
     }
 
+    // Address
     if (!address.trim()) {
       newErrors.address = "Street address is required.";
     }
@@ -246,27 +286,41 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
     }
     if (!addressState.trim()) {
       newErrors.addressState = "State is required.";
-    }
-    if (!addressPostalCode.trim()) {
-      newErrors.addressPostalCode = "ZIP / postal code is required.";
-    }
-    if (!addressCountry.trim()) {
-      newErrors.addressCountry = "Country is required.";
+    } else if (!isUsState(addressState)) {
+      newErrors.addressState =
+        "Enter a valid 2-letter US state code (e.g., CA, TX).";
     }
 
+    if (!addressPostalCode.trim()) {
+      newErrors.addressPostalCode = "ZIP / postal code is required.";
+    } else if (!isValidZip(addressPostalCode)) {
+      newErrors.addressPostalCode =
+        "Enter a valid US ZIP code (12345 or 12345-6789).";
+    }
+
+    if (!addressCountry.trim()) {
+      newErrors.addressCountry = "Country is required.";
+    } else if (!isUsCountry(addressCountry)) {
+      newErrors.addressCountry =
+        "A2P 10DLC only supports US-based brands. Enter 'US' for the country.";
+    }
+
+    // Website
     if (!website.trim()) {
       newErrors.website = "Website URL is required.";
     } else if (!isValidUrl(website)) {
       newErrors.website =
-        'Website must be a valid URL starting with "http://" or "https://".';
+        'Website must be a real, public HTTPS URL (starting with "https://").';
     }
 
+    // Email
     if (!email.trim()) {
       newErrors.email = "Business email is required.";
     } else if (!isValidEmail(email)) {
       newErrors.email = "Enter a valid email address (example@domain.com).";
     }
 
+    // Phone
     if (!phone.trim()) {
       newErrors.phone = "Business / authorized rep phone is required.";
     } else if (!isValidPhone(phone)) {
@@ -274,6 +328,7 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
         "Enter a valid US phone number (10 digits). Example: 5551234567. We’ll add +1 automatically.";
     }
 
+    // Contact names
     if (!contactFirstName.trim()) {
       newErrors.contactFirstName = "Contact first name is required.";
     }
@@ -281,36 +336,56 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
       newErrors.contactLastName = "Contact last name is required.";
     }
 
-    if (!msg1.trim()) {
-      newErrors.msg1 = "Sample message #1 is required.";
-    }
-    if (!msg2.trim()) {
-      newErrors.msg2 = "Sample message #2 is required.";
-    }
-    if (!msg3.trim()) {
-      newErrors.msg3 = "Sample message #3 is required.";
-    }
+    // Sample messages
+    const messages = [msg1, msg2, msg3];
+    const msgFields: Array<keyof FieldErrors> = ["msg1", "msg2", "msg3"];
 
-    if (!optInDetails.trim()) {
+    messages.forEach((m, idx) => {
+      const key = msgFields[idx];
+      const trimmed = m.trim();
+      if (!trimmed) {
+        newErrors[key] = `Sample message #${idx + 1} is required.`;
+        return;
+      }
+      if (trimmed.length < 20 || trimmed.length > 320) {
+        newErrors[key] =
+          "Sample messages must be between 20 and 320 characters.";
+      }
+      if (!ensureHasStopLanguage(trimmed)) {
+        newErrors[key] =
+          'Sample messages must include opt-out language like "Reply STOP to opt out".';
+      }
+    });
+
+    // Opt-in details
+    const od = optInDetails.trim();
+    if (!od) {
       newErrors.optInDetails = "Opt-in details are required.";
+    } else {
+      if (od.length < 300) {
+        newErrors.optInDetails =
+          "Opt-in description must be detailed (at least a few full sentences describing the form, disclosure, and consent).";
+      } else if (
+        !/consent/i.test(od) ||
+        !/(by clicking|by entering)/i.test(od)
+      ) {
+        newErrors.optInDetails =
+          'Opt-in description must clearly state that the user gives consent by clicking/entering their information (e.g., "By entering your information and clicking this button, you consent to receive calls/texts...").';
+      }
     }
 
-    if (!volume.trim()) {
-      newErrors.volume = "Estimated monthly volume is required.";
-    }
-
-    if (![msg1, msg2, msg3].every(ensureHasStopLanguage)) {
-      if (!ensureHasStopLanguage(msg1)) {
-        newErrors.msg1 =
-          'Sample message #1 must include opt-out language like "Reply STOP to opt out".';
-      }
-      if (!ensureHasStopLanguage(msg2)) {
-        newErrors.msg2 =
-          'Sample message #2 must include opt-out language like "Reply STOP to opt out".';
-      }
-      if (!ensureHasStopLanguage(msg3)) {
-        newErrors.msg3 =
-          'Sample message #3 must include opt-out language like "Reply STOP to opt out".';
+    // Volume
+    const volDigits = volume.replace(/[^\d]/g, "");
+    if (!volDigits) {
+      newErrors.volume =
+        "Estimated monthly volume is required as a number (e.g., 500).";
+    } else {
+      const num = parseInt(volDigits, 10);
+      if (Number.isNaN(num) || num <= 0) {
+        newErrors.volume = "Monthly volume must be a positive number.";
+      } else if (num > 250000) {
+        newErrors.volume =
+          "Monthly volume must be realistic for review (<= 250,000 messages).";
       }
     }
 
@@ -363,16 +438,16 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
         address, // street line 1
         addressLine2: addressLine2 || undefined,
         addressCity,
-        addressState,
+        addressState: addressState.toUpperCase().trim(),
         addressPostalCode,
-        addressCountry,
+        addressCountry: addressCountry.toUpperCase().trim(),
 
-        website,
-        email,
-        phone,
-        contactFirstName,
-        contactLastName,
-        contactTitle,
+        website: website.trim(),
+        email: email.trim(),
+        phone: phone.trim(),
+        contactFirstName: contactFirstName.trim(),
+        contactLastName: contactLastName.trim(),
+        contactTitle: contactTitle.trim(),
 
         // campaign type for both existing endpoints
         usecaseCode: usecase, // /api/a2p/start expects this
@@ -498,10 +573,10 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
           <div>
             <input
               type="text"
-              placeholder="State"
+              placeholder="State (2-letter, e.g., CA)"
               value={addressState}
               onChange={(e) => {
-                setAddressState(e.target.value);
+                setAddressState(e.target.value.toUpperCase());
                 setErrors((prev) => ({ ...prev, addressState: undefined }));
               }}
               className="border p-2 rounded w-full"
@@ -536,7 +611,7 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
         <div>
           <input
             type="text"
-            placeholder="Country (e.g., US)"
+            placeholder="Country (US only)"
             value={addressCountry}
             onChange={(e) => {
               setAddressCountry(e.target.value);
@@ -555,7 +630,7 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
       <div>
         <input
           type="url"
-          placeholder="Website URL"
+          placeholder="Website URL (must start with https://)"
           value={website}
           onChange={(e) => {
             setWebsite(e.target.value);
@@ -783,7 +858,7 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
       <div>
         <input
           type="text"
-          placeholder="Estimated Monthly Volume"
+          placeholder="Estimated Monthly Volume (number only, e.g. 500)"
           value={volume}
           onChange={(e) => {
             setVolume(e.target.value);

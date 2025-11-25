@@ -1,24 +1,36 @@
 // /pages/api/cron/a2p-sync-all.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import mongooseConnect from "@/lib/mongooseConnect";
-import A2PProfile from "@/models/A2PProfile";
+import A2PProfile, { IA2PProfile } from "@/models/A2PProfile";
 import User from "@/models/User";
 import twilio from "twilio";
 
 const client = twilio(
   process.env.TWILIO_API_KEY_SID || process.env.TWILIO_ACCOUNT_SID!,
-  (process.env.TWILIO_API_KEY_SECRET || process.env.TWILIO_AUTH_TOKEN)!
+  (process.env.TWILIO_API_KEY_SECRET || process.env.TWILIO_AUTH_TOKEN)!,
 );
 
 const CRON_SECRET = (process.env.CRON_SECRET || "").trim();
-const BASE_URL = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "").replace(/\/$/, "");
+const BASE_URL = (
+  process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || ""
+).replace(/\/$/, "");
 
 // status normalizers
-const APPROVED = new Set(["approved", "verified", "active", "in_use", "registered"]);
+const APPROVED = new Set([
+  "approved",
+  "verified",
+  "active",
+  "in_use",
+  "registered",
+]);
 const DECLINED = new Set(["rejected", "denied", "failed"]);
 
 // Lazy-load email helpers if present; no-op if missing
-async function sendApprovedEmailSafe(args: { to: string; name?: string; dashboardUrl: string }) {
+async function sendApprovedEmailSafe(args: {
+  to: string;
+  name?: string;
+  dashboardUrl: string;
+}) {
   try {
     const mod: any = await import("@/lib/twilio/getClientForUser");
     if (typeof mod?.sendA2PApprovedEmail === "function") {
@@ -28,7 +40,12 @@ async function sendApprovedEmailSafe(args: { to: string; name?: string; dashboar
     /* no-op */
   }
 }
-async function sendDeclinedEmailSafe(args: { to: string; name?: string; reason: string; helpUrl: string }) {
+async function sendDeclinedEmailSafe(args: {
+  to: string;
+  name?: string;
+  reason: string;
+  helpUrl: string;
+}) {
   try {
     const mod: any = await import("@/lib/twilio/getClientForUser");
     if (typeof mod?.sendA2PDeclinedEmail === "function") {
@@ -39,14 +56,47 @@ async function sendDeclinedEmailSafe(args: { to: string; name?: string; reason: 
   }
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+// Same description builder used elsewhere
+function buildCampaignDescription(opts: {
+  businessName: string;
+  useCase: string;
+  messageFlow: string;
+}): string {
+  const businessName = (opts.businessName || "").trim() || "this business";
+  const useCase = (opts.useCase || "").trim() || "LOW_VOLUME";
+
+  let desc = `Life insurance lead follow-up and appointment reminder SMS campaign for ${businessName}. Use case: ${useCase}. `;
+
+  const flowSnippet = (opts.messageFlow || "").replace(/\s+/g, " ").trim();
+  if (flowSnippet) {
+    desc += `Opt-in and message flow: ${flowSnippet.slice(0, 300)}`;
+  } else {
+    desc +=
+      "Leads opt in via TCPA-compliant web forms and receive updates about their life insurance options and booked appointments.";
+  }
+
+  if (desc.length > 1024) desc = desc.slice(0, 1024);
+  if (desc.length < 40) {
+    desc +=
+      " This campaign sends compliant follow-up and reminder messages to warm leads.";
+  }
+
+  return desc;
+}
+
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   if (req.method !== "GET" && req.method !== "POST") {
     return res.status(405).json({ message: "Method not allowed" });
   }
 
   // Allow header or query token
   const provided =
-    (Array.isArray(req.headers["x-cron-secret"]) ? req.headers["x-cron-secret"][0] : (req.headers["x-cron-secret"] as string | undefined)) ||
+    (Array.isArray(req.headers["x-cron-secret"])
+      ? req.headers["x-cron-secret"][0]
+      : (req.headers["x-cron-secret"] as string | undefined)) ||
     (typeof req.query.token === "string" ? req.query.token : undefined);
 
   if (!CRON_SECRET || provided !== CRON_SECRET) {
@@ -70,27 +120,128 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         let finalStatus = (a2p.registrationStatus as string) || "not_started";
         let finalDecline: string | undefined;
 
-        // Brand status
+        // ---------------- BRAND STATUS ----------------
         if (a2p.brandSid) {
           try {
-            const brand = await client.messaging.v1.brandRegistrations(a2p.brandSid).fetch();
-            const st = String((brand as any).status || (brand as any).state || "").toLowerCase();
-            if (APPROVED.has(st)) finalStatus = "brand_approved";
-            else if (DECLINED.has(st)) {
+            const brand = await client.messaging.v1
+              .brandRegistrations(a2p.brandSid)
+              .fetch();
+            const st = String(
+              (brand as any).status || (brand as any).state || "",
+            ).toLowerCase();
+
+            if (APPROVED.has(st)) {
+              finalStatus = "brand_approved";
+            } else if (DECLINED.has(st)) {
               finalStatus = "rejected";
               finalDecline = "Brand rejected";
             }
-          } catch {
-            /* ignore brand fetch errors */
+          } catch (err: any) {
+            console.warn(
+              "a2p-sync-all brand fetch failed:",
+              err?.message || err,
+            );
+            // ignore brand fetch errors, move on
           }
         }
 
-        // Campaign status
-        const campaignSid = (a2p as any).usa2pSid || a2p.campaignSid;
+        // ---------------- AUTO-CREATE CAMPAIGN IF BRAND APPROVED ----------------
+        let campaignSid = (a2p as any).usa2pSid || a2p.campaignSid;
+
+        const brandStatusNormalized = String(a2p.brandStatus || finalStatus)
+          .toLowerCase()
+          .trim();
+        const brandApproved = APPROVED.has(brandStatusNormalized);
+
+        if (
+          !campaignSid &&
+          brandApproved &&
+          a2p.messagingServiceSid &&
+          a2p.brandSid
+        ) {
+          const useCase = a2p.usecaseCode || "LOW_VOLUME";
+          const messageFlow = (a2p.optInDetails || "").trim();
+
+          const samples =
+            a2p.sampleMessagesArr && a2p.sampleMessagesArr.length
+              ? a2p.sampleMessagesArr
+              : (a2p.sampleMessages || "")
+                  .split("\n")
+                  .map((s) => s.trim())
+                  .filter(Boolean);
+
+          if (messageFlow && samples.length >= 2) {
+            try {
+              const description = buildCampaignDescription({
+                businessName: a2p.businessName || "",
+                useCase,
+                messageFlow,
+              });
+
+              const createPayload: any = {
+                brandRegistrationSid: a2p.brandSid,
+                usAppToPersonUsecase: useCase,
+                description,
+                messageFlow,
+                messageSamples: samples,
+                hasEmbeddedLinks: true,
+                hasEmbeddedPhone: false,
+                subscriberOptIn: true,
+                ageGated: false,
+                directLending: false,
+              };
+
+              const created = await client.messaging.v1
+                .services(a2p.messagingServiceSid)
+                .usAppToPerson.create(createPayload);
+
+              const newSid = (created as any).sid;
+              const st = String(
+                (created as any).status || (created as any).state || "",
+              ).toLowerCase();
+
+              campaignSid = newSid;
+              (a2p as any).usa2pSid = newSid;
+              a2p.messagingServiceSid = a2p.messagingServiceSid;
+
+              if (APPROVED.has(st)) {
+                finalReady = true;
+                finalStatus = "campaign_approved";
+              } else if (!DECLINED.has(st)) {
+                finalStatus = "campaign_submitted";
+              } else {
+                finalDecline = "Campaign rejected";
+                finalStatus = "rejected";
+                finalReady = false;
+              }
+
+              // keep samples in both forms
+              a2p.sampleMessagesArr = samples;
+              a2p.sampleMessages = samples.join("\n\n");
+              a2p.usecaseCode = useCase;
+            } catch (err: any) {
+              console.warn(
+                "a2p-sync-all campaign auto-create failed:",
+                err?.message || err,
+              );
+              // leave campaignSid unset; will try again next run
+            }
+          }
+        }
+
+        // ---------------- CAMPAIGN STATUS (IF EXISTS) ----------------
+        campaignSid = campaignSid || (a2p as any).usa2pSid || a2p.campaignSid;
+
         if (campaignSid && a2p.messagingServiceSid) {
           try {
-            const c = await client.messaging.v1.services(a2p.messagingServiceSid).usAppToPerson(campaignSid).fetch();
-            const st = String((c as any).status || (c as any).state || "").toLowerCase();
+            const c = await client.messaging.v1
+              .services(a2p.messagingServiceSid)
+              .usAppToPerson(campaignSid)
+              .fetch();
+            const st = String(
+              (c as any).status || (c as any).state || "",
+            ).toLowerCase();
+
             if (APPROVED.has(st)) {
               finalReady = true;
               finalStatus = "campaign_approved";
@@ -99,19 +250,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               finalStatus = "rejected";
               finalDecline = "Campaign rejected";
             }
-          } catch {
-            /* ignore campaign fetch errors */
+          } catch (err: any) {
+            console.warn(
+              "a2p-sync-all campaign fetch failed:",
+              err?.message || err,
+            );
+            // ignore, will retry on next cron
           }
         }
 
-        // Persist + notify
+        // ---------------- PERSIST + NOTIFY ----------------
         a2p.messagingReady = finalReady;
         a2p.registrationStatus = finalStatus as any;
 
         if (finalDecline) {
           a2p.applicationStatus = "declined";
           a2p.declinedReason = finalDecline;
-          a2p.approvalHistory = [...(a2p.approvalHistory || []), { stage: "rejected", at: new Date(), note: finalDecline }];
+          a2p.approvalHistory = [
+            ...(a2p.approvalHistory || []),
+            { stage: "rejected", at: new Date(), note: finalDecline },
+          ];
 
           if (user?.email) {
             await sendDeclinedEmailSafe({
@@ -137,7 +295,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         await a2p.save();
         updated++;
       } catch (e) {
-        console.warn("a2p sync-all item failed:", (e as any)?.message || e);
+        console.warn(
+          "a2p sync-all item failed:",
+          (e as any)?.message || e,
+        );
       }
     }
 

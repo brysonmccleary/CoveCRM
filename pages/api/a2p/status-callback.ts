@@ -1,4 +1,4 @@
-// /pages/api/a2p/status-callback.ts
+// pages/api/a2p/status-callback.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import mongooseConnect from "@/lib/mongooseConnect";
 import A2PProfile from "@/models/A2PProfile";
@@ -403,7 +403,7 @@ export default async function handler(
         );
       }
 
-      // Flip flags WITHOUT validation
+      // Flip flags WITHOUT validation on A2PProfile
       const registrationStatus =
         updatedAfterCampaign?.registrationStatus === "brand_submitted"
           ? "brand_approved"
@@ -439,6 +439,39 @@ export default async function handler(
           },
         },
       );
+
+      // 🔁 Mirror core A2P readiness into User.a2p so everything else can key off it
+      try {
+        if (user?._id) {
+          const userDoc = await User.findById(user._id);
+          if (userDoc) {
+            (userDoc as any).a2p = (userDoc as any).a2p || {};
+            const ua2p = (userDoc as any).a2p as any;
+
+            ua2p.messagingReady = messagingReady;
+            if (msSid) ua2p.messagingServiceSid = msSid;
+            if (brandSid) ua2p.brandSid = brandSid;
+            if (updatedAfterCampaign?.usa2pSid || (a2p as any).usa2pSid) {
+              ua2p.usa2pSid =
+                updatedAfterCampaign?.usa2pSid || (a2p as any).usa2pSid;
+            }
+            if (updatedAfterCampaign?.profileSid || (a2p as any).profileSid) {
+              ua2p.profileSid =
+                updatedAfterCampaign?.profileSid || (a2p as any).profileSid;
+            }
+            ua2p.registrationStatus = registrationStatus;
+            ua2p.applicationStatus = messagingReady ? "approved" : "pending";
+            ua2p.lastSyncedAt = new Date();
+
+            await userDoc.save();
+          }
+        }
+      } catch (e) {
+        console.warn(
+          "A2P status-callback: failed to mirror A2P state into User.a2p:",
+          (e as any)?.message || e,
+        );
+      }
 
       // Notify once (best effort) – only when fully ready
       try {
@@ -505,6 +538,28 @@ export default async function handler(
           },
         },
       );
+
+      // Mirror decline into User.a2p as well
+      try {
+        if (a2p.userId) {
+          const userDoc = await User.findById(a2p.userId);
+          if (userDoc) {
+            (userDoc as any).a2p = (userDoc as any).a2p || {};
+            const ua2p = (userDoc as any).a2p as any;
+            ua2p.messagingReady = false;
+            ua2p.applicationStatus = "declined";
+            ua2p.registrationStatus = "rejected";
+            ua2p.declinedReason = declinedReason;
+            ua2p.lastSyncedAt = new Date();
+            await userDoc.save();
+          }
+        }
+      } catch (e) {
+        console.warn(
+          "A2P declined mirror to User.a2p failed:",
+          (e as any)?.message || e,
+        );
+      }
 
       try {
         const user = a2p.userId ? await User.findById(a2p.userId).lean() : null;

@@ -14,9 +14,10 @@ import User from "@/models/User";
  * 2) POST /api/a2p/submit-campaign (idempotently aligns the campaign with latest
  *    use-case, flow, and samples WHEN the Brand is eligible)
  *
- * Notes:
- * - Screenshot + links are optional but recommended.
- * - Use-case comes from `useCase` or `usecaseCode` (either is accepted).
+ * IMPORTANT:
+ * - This version includes STRICT validation that mirrors the frontend form.
+ * - If anything is not in the exact format Twilio/TCR expects, we return 400
+ *   and DO NOT touch Twilio at all.
  */
 
 const BASE_URL =
@@ -32,6 +33,14 @@ const BRAND_OK_FOR_CAMPAIGN = new Set([
   "IN_USE",
   "REGISTERED",
 ]);
+
+const US_STATE_CODES = [
+  "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA",
+  "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD",
+  "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ",
+  "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC",
+  "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY",
+];
 
 type BodyIn = {
   businessName?: string;
@@ -73,6 +82,76 @@ type BodyIn = {
   landingPrivacyUrl?: string;
 };
 
+type ValidationErrors = {
+  businessName?: string;
+  ein?: string;
+  website?: string;
+  address?: string;
+  addressCity?: string;
+  addressState?: string;
+  addressPostalCode?: string;
+  addressCountry?: string;
+  email?: string;
+  phone?: string;
+  contactFirstName?: string;
+  contactLastName?: string;
+  optInDetails?: string;
+  volume?: string;
+  sampleMessage1?: string;
+  sampleMessage2?: string;
+  sampleMessage3?: string;
+};
+
+function isUsState(value: string | undefined): boolean {
+  if (!value) return false;
+  return US_STATE_CODES.includes(value.trim().toUpperCase());
+}
+
+function isUsCountry(value: string | undefined): boolean {
+  if (!value) return false;
+  const v = value.trim().toUpperCase();
+  return (
+    v === "US" ||
+    v === "USA" ||
+    v === "UNITED STATES" ||
+    v === "UNITED STATES OF AMERICA"
+  );
+}
+
+function isValidHttpsUrl(value: string | undefined): boolean {
+  if (!value) return false;
+  const v = value.trim();
+  if (!/^https:\/\//i.test(v)) return false;
+  try {
+    const u = new URL(v);
+    if (!u.hostname || !u.hostname.includes(".")) return false;
+    if (/localhost|127\.0\.0\.1/i.test(u.hostname)) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isValidEmail(value: string | undefined): boolean {
+  if (!value) return false;
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
+}
+
+function isValidPhone(value: string | undefined): boolean {
+  if (!value) return false;
+  const digits = value.replace(/[^\d]/g, "");
+  return digits.length === 10 || (digits.length === 11 && digits.startsWith("1"));
+}
+
+function isValidZip(value: string | undefined): boolean {
+  if (!value) return false;
+  return /^[0-9]{5}(-[0-9]{4})?$/.test(value.trim());
+}
+
+function ensureHasStopLanguage(text: string): boolean {
+  return /reply\s+stop/i.test(text) || /text\s+stop/i.test(text);
+}
+
 export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse,
@@ -86,38 +165,102 @@ export default async function handler(
     return res.status(401).json({ message: "Unauthorized" });
 
   const body = (req.body || {}) as BodyIn;
+  const errors: ValidationErrors = {};
 
-  // ---- basic validation (screenshot + links OPTIONAL) ----
-  const missing: string[] = [];
-  const requiredKeys: (keyof BodyIn)[] = [
-    "businessName",
-    "ein",
-    "website",
-    "address",
-    "addressCity",
-    "addressState",
-    "addressPostalCode",
-    "addressCountry",
-    "email",
-    "phone",
-    "contactFirstName",
-    "contactLastName",
-    "optInDetails",
-    "volume",
-  ];
-  for (const k of requiredKeys) {
-    if (!body[k] || String(body[k]).trim() === "") missing.push(k);
+  // ---- basic required presence ----
+  const {
+    businessName,
+    ein,
+    website,
+    address,
+    addressCity,
+    addressState,
+    addressPostalCode,
+    addressCountry,
+    email,
+    phone,
+    contactFirstName,
+    contactLastName,
+    optInDetails,
+    volume,
+  } = body;
+
+  // Business name
+  if (!businessName || !businessName.trim()) {
+    errors.businessName = "Business name is required.";
+  } else if (businessName.trim().length < 3) {
+    errors.businessName = "Business name must be at least 3 characters.";
   }
 
   // EIN: must be 9 digits
   let normalizedEin = "";
-  if (body.ein) {
-    normalizedEin = String(body.ein).replace(/[^\d]/g, "");
+  if (!ein || !ein.trim()) {
+    errors.ein = "EIN is required.";
+  } else {
+    normalizedEin = ein.replace(/[^\d]/g, "");
     if (normalizedEin.length !== 9) {
-      missing.push(
-        'ein (must be a valid 9-digit EIN, e.g. "123456789" or "12-3456789")',
-      );
+      errors.ein =
+        'EIN must be 9 digits, e.g. "12-3456789" or "123456789" (no letters or extra symbols).';
     }
+  }
+
+  // Address
+  if (!address || !address.trim()) {
+    errors.address = "Street address is required.";
+  }
+  if (!addressCity || !addressCity.trim()) {
+    errors.addressCity = "City is required.";
+  }
+  if (!addressState || !addressState.trim()) {
+    errors.addressState = "State is required.";
+  } else if (!isUsState(addressState)) {
+    errors.addressState =
+      "Enter a valid 2-letter US state code (e.g., CA, TX).";
+  }
+
+  if (!addressPostalCode || !addressPostalCode.trim()) {
+    errors.addressPostalCode = "ZIP / postal code is required.";
+  } else if (!isValidZip(addressPostalCode)) {
+    errors.addressPostalCode =
+      "Enter a valid US ZIP code (12345 or 12345-6789).";
+  }
+
+  if (!addressCountry || !addressCountry.trim()) {
+    errors.addressCountry = "Country is required.";
+  } else if (!isUsCountry(addressCountry)) {
+    errors.addressCountry =
+      "A2P 10DLC only supports US-based brands. Enter 'US' for the country.";
+  }
+
+  // Website
+  if (!website || !website.trim()) {
+    errors.website = "Website URL is required.";
+  } else if (!isValidHttpsUrl(website)) {
+    errors.website =
+      'Website must be a real, public HTTPS URL (starting with "https://").';
+  }
+
+  // Email
+  if (!email || !email.trim()) {
+    errors.email = "Business email is required.";
+  } else if (!isValidEmail(email)) {
+    errors.email = "Enter a valid email address (example@domain.com).";
+  }
+
+  // Phone
+  if (!phone || !phone.trim()) {
+    errors.phone = "Business / authorized rep phone is required.";
+  } else if (!isValidPhone(phone)) {
+    errors.phone =
+      "Enter a valid US phone number (10 digits). Example: 5551234567. We’ll add +1 automatically.";
+  }
+
+  // Contact names
+  if (!contactFirstName || !contactFirstName.trim()) {
+    errors.contactFirstName = "Contact first name is required.";
+  }
+  if (!contactLastName || !contactLastName.trim()) {
+    errors.contactLastName = "Contact last name is required.";
   }
 
   // messages: allow either 3 fields or a joined blob
@@ -126,11 +269,13 @@ export default async function handler(
     .map((s) => s.trim())
     .filter(Boolean);
 
-  const samplesFromFields = [
+  const samplesFromFieldsRaw = [
     body.sampleMessage1,
     body.sampleMessage2,
     body.sampleMessage3,
-  ]
+  ] as (string | undefined)[];
+
+  const samplesFromFields = samplesFromFieldsRaw
     .map((s) => (s || "").trim())
     .filter(Boolean);
 
@@ -139,12 +284,97 @@ export default async function handler(
     : samplesFromBlob
   ).filter(Boolean);
 
-  if (finalSamples.length < 2)
-    missing.push("sampleMessages (need at least 2 samples via blob or fields)");
+  if (finalSamples.length < 2) {
+    // We still validate individual fields if present
+    errors.sampleMessage1 =
+      "At least 2 sample messages are required. Provide Sample Message #1 and #2 (and #3 if desired).";
+  }
 
-  if (missing.length) {
+  // Per-sample validation (match frontend strict rules)
+  const messageFields: (keyof ValidationErrors)[] = [
+    "sampleMessage1",
+    "sampleMessage2",
+    "sampleMessage3",
+  ];
+
+  samplesFromFieldsRaw.forEach((raw, idx) => {
+    const key = messageFields[idx];
+    if (!key) return;
+    const trimmed = (raw || "").trim();
+    if (!trimmed) {
+      // only mark error if field is present at all or if it's one of the first 2
+      if (idx < 2) {
+        errors[key] = `Sample message #${idx + 1} is required.`;
+      }
+      return;
+    }
+    if (trimmed.length < 20 || trimmed.length > 320) {
+      errors[key] =
+        "Sample messages must be between 20 and 320 characters.";
+    }
+    if (!ensureHasStopLanguage(trimmed)) {
+      errors[key] =
+        'Sample messages must include opt-out language like "Reply STOP to opt out".';
+    }
+  });
+
+  // If samples were only provided via blob, still validate each one generically
+  if (!samplesFromFieldsRaw[0] && finalSamples.length) {
+    finalSamples.forEach((m, idx) => {
+      if (m.length < 20 || m.length > 320) {
+        // don't overwrite a more specific field error
+        if (!errors.sampleMessage1) {
+          errors.sampleMessage1 =
+            "Sample messages must be between 20 and 320 characters.";
+        }
+      }
+      if (!ensureHasStopLanguage(m)) {
+        if (!errors.sampleMessage1) {
+          errors.sampleMessage1 =
+            'Sample messages must include opt-out language like "Reply STOP to opt out".';
+        }
+      }
+    });
+  }
+
+  // Opt-in details
+  const optIn = (optInDetails || "").trim();
+  if (!optIn) {
+    errors.optInDetails = "Opt-in details are required.";
+  } else {
+    if (optIn.length < 300) {
+      errors.optInDetails =
+        "Opt-in description must be detailed (at least a few full sentences describing the form, disclosure, and consent).";
+    } else if (
+      !/consent/i.test(optIn) ||
+      !/(by clicking|by entering)/i.test(optIn)
+    ) {
+      errors.optInDetails =
+        'Opt-in description must clearly state that the user gives consent by clicking/entering their information (e.g., "By entering your information and clicking this button, you consent to receive calls/texts...").';
+    }
+  }
+
+  // Volume
+  const volDigits = (volume || "").replace(/[^\d]/g, "");
+  if (!volDigits) {
+    errors.volume =
+      "Estimated monthly volume is required as a number (e.g., 500).";
+  } else {
+    const num = parseInt(volDigits, 10);
+    if (Number.isNaN(num) || num <= 0) {
+      errors.volume = "Monthly volume must be a positive number.";
+    } else if (num > 250000) {
+      errors.volume =
+        "Monthly volume must be realistic for review (<= 250,000 messages).";
+    }
+  }
+
+  // If any errors exist, stop here and do NOT touch Twilio
+  if (Object.keys(errors).length > 0) {
     return res.status(400).json({
-      message: `Missing or invalid required fields: ${missing.join(", ")}`,
+      message:
+        "Submission contains missing or invalid fields. Please fix the highlighted issues and try again.",
+      errors,
     });
   }
 
@@ -173,37 +403,44 @@ export default async function handler(
   // ---- normalize payload for downstream endpoints ----
   const normalizedUseCase = body.useCase || body.usecaseCode || "LOW_VOLUME";
 
+  const normalizedState = addressState!.trim().toUpperCase();
+  const normalizedCountry = addressCountry!.trim().toUpperCase();
+
+  const finalSampleArray = finalSamples.length
+    ? finalSamples
+    : samplesFromFieldsRaw.map((s) => (s || "").trim()).filter(Boolean);
+
   const startPayload: Record<string, any> = {
-    businessName: body.businessName!.trim(),
+    businessName: businessName!.trim(),
     ein: normalizedEin, // send cleaned 9-digit EIN
-    website: body.website!.trim(),
+    website: website!.trim(),
 
     // address parts
-    address: body.address!.trim(),
+    address: address!.trim(),
     addressLine2: (body.addressLine2 || "").trim() || undefined,
-    addressCity: body.addressCity!.trim(),
-    addressState: body.addressState!.trim(),
-    addressPostalCode: body.addressPostalCode!.trim(),
-    addressCountry: body.addressCountry!.trim(),
+    addressCity: addressCity!.trim(),
+    addressState: normalizedState,
+    addressPostalCode: addressPostalCode!.trim(),
+    addressCountry: normalizedCountry,
 
-    email: body.email!.trim(),
-    phone: body.phone!.trim(),
+    email: email!.trim(),
+    phone: phone!.trim(),
     contactTitle: (body.contactTitle || "Owner").trim(),
-    contactFirstName: body.contactFirstName!.trim(),
-    contactLastName: body.contactLastName!.trim(),
+    contactFirstName: contactFirstName!.trim(),
+    contactLastName: contactLastName!.trim(),
 
     // campaign selection
     usecaseCode: normalizedUseCase,
 
     // messages (send both joined + individual for compatibility)
-    sampleMessages: finalSamples.join("\n\n"),
-    sampleMessage1: finalSamples[0],
-    sampleMessage2: finalSamples[1],
-    sampleMessage3: finalSamples[2],
+    sampleMessages: finalSampleArray.join("\n\n"),
+    sampleMessage1: finalSampleArray[0],
+    sampleMessage2: finalSampleArray[1],
+    sampleMessage3: finalSampleArray[2],
 
     // consent/volume
-    optInDetails: body.optInDetails!,
-    volume: body.volume || "Low",
+    optInDetails: optInDetails!,
+    volume: volDigits, // normalized numeric string
 
     // resubmit hint to /api/a2p/start
     resubmit,
@@ -293,9 +530,9 @@ export default async function handler(
     //    but only when the brand is in an allowed state.
     const submitPayload = {
       useCase: normalizedUseCase,
-      messageFlow: body.optInDetails!,
-      sampleMessages: finalSamples,
-      // leave flags defaulted by the handler (hasEmbeddedLinks true, etc.)
+      messageFlow: optInDetails!,
+      sampleMessages: finalSampleArray,
+      // flags defaulted by /api/a2p/submit-campaign
     };
 
     const submitRes = await fetch(`${BASE_URL}/api/a2p/submit-campaign`, {
