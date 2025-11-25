@@ -159,7 +159,10 @@ export default async function handler(
         const account = await stripe.accounts.create({
           type: "express",
           email,
-          capabilities: { transfers: { requested: true } },
+          capabilities: {
+            card_payments: { requested: true },
+            transfers: { requested: true },
+          },
           metadata: {
             userId: userIdStr,
             affiliateCode: promoCode,
