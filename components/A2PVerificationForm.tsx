@@ -47,6 +47,26 @@ const ADVANCED_SPECIAL: { value: UseCaseCode; label: string }[] = [
   { value: "EMERGENCY", label: "Emergency (special)" },
 ];
 
+type FieldErrors = {
+  businessName?: string;
+  ein?: string;
+  address?: string;
+  addressCity?: string;
+  addressState?: string;
+  addressPostalCode?: string;
+  addressCountry?: string;
+  website?: string;
+  email?: string;
+  phone?: string;
+  contactFirstName?: string;
+  contactLastName?: string;
+  msg1?: string;
+  msg2?: string;
+  msg3?: string;
+  optInDetails?: string;
+  volume?: string;
+};
+
 export default function A2PVerificationForm() {
   // ---------- Business ----------
   const [businessName, setBusinessName] = useState("");
@@ -108,6 +128,9 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
   const [uploading, setUploading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
+  // ---------- Errors ----------
+  const [errors, setErrors] = useState<FieldErrors>({});
+
   // ---------- Helpers ----------
   const allMessages = [msg1, msg2, msg3].filter(Boolean).join("\n\n");
   const ensureHasStopLanguage = (text: string) =>
@@ -118,6 +141,7 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
     const digits = value.replace(/[^\d]/g, "").slice(0, 9);
     if (!digits) {
       setEin("");
+      setErrors((prev) => ({ ...prev, ein: undefined }));
       return;
     }
     if (digits.length <= 2) {
@@ -125,9 +149,24 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
       return;
     }
     setEin(`${digits.slice(0, 2)}-${digits.slice(2)}`);
+    setErrors((prev) => ({ ...prev, ein: undefined }));
   };
 
-  // Required (soften: links + screenshot are optional, but we warn if missing)
+  // Simple URL check
+  const isValidUrl = (value: string) =>
+    /^https?:\/\/.+/i.test(value.trim());
+
+  // Email check (simple)
+  const isValidEmail = (value: string) =>
+    /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
+
+  // Phone: allow 10 digits or +1XXXXXXXXXX; we’ll convert to +1 on backend.
+  const isValidPhone = (value: string) => {
+    const digits = value.replace(/[^\d]/g, "");
+    return digits.length === 10 || (digits.length === 11 && digits.startsWith("1"));
+  };
+
+  // Required (for quick global check)
   const requiredOk = () =>
     businessName &&
     ein &&
@@ -183,17 +222,115 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
     }
   };
 
-  // ---------- Submit ----------
-  const handleSubmit = async () => {
-    if (!requiredOk()) {
-      toast.error("Please complete all required fields.");
-      return;
+  // ---------- Validate all fields & build errors ----------
+  const runValidation = (): boolean => {
+    const newErrors: FieldErrors = {};
+
+    if (!businessName.trim()) {
+      newErrors.businessName = "Business name is required.";
+    }
+
+    const einDigits = ein.replace(/[^\d]/g, "");
+    if (!einDigits) {
+      newErrors.ein = "EIN is required.";
+    } else if (einDigits.length !== 9) {
+      newErrors.ein =
+        'EIN must be 9 digits, e.g. "12-3456789" (no letters or symbols).';
+    }
+
+    if (!address.trim()) {
+      newErrors.address = "Street address is required.";
+    }
+    if (!addressCity.trim()) {
+      newErrors.addressCity = "City is required.";
+    }
+    if (!addressState.trim()) {
+      newErrors.addressState = "State is required.";
+    }
+    if (!addressPostalCode.trim()) {
+      newErrors.addressPostalCode = "ZIP / postal code is required.";
+    }
+    if (!addressCountry.trim()) {
+      newErrors.addressCountry = "Country is required.";
+    }
+
+    if (!website.trim()) {
+      newErrors.website = "Website URL is required.";
+    } else if (!isValidUrl(website)) {
+      newErrors.website =
+        'Website must be a valid URL starting with "http://" or "https://".';
+    }
+
+    if (!email.trim()) {
+      newErrors.email = "Business email is required.";
+    } else if (!isValidEmail(email)) {
+      newErrors.email = "Enter a valid email address (example@domain.com).";
+    }
+
+    if (!phone.trim()) {
+      newErrors.phone = "Business / authorized rep phone is required.";
+    } else if (!isValidPhone(phone)) {
+      newErrors.phone =
+        "Enter a valid US phone number (10 digits). Example: 5551234567. We’ll add +1 automatically.";
+    }
+
+    if (!contactFirstName.trim()) {
+      newErrors.contactFirstName = "Contact first name is required.";
+    }
+    if (!contactLastName.trim()) {
+      newErrors.contactLastName = "Contact last name is required.";
+    }
+
+    if (!msg1.trim()) {
+      newErrors.msg1 = "Sample message #1 is required.";
+    }
+    if (!msg2.trim()) {
+      newErrors.msg2 = "Sample message #2 is required.";
+    }
+    if (!msg3.trim()) {
+      newErrors.msg3 = "Sample message #3 is required.";
+    }
+
+    if (!optInDetails.trim()) {
+      newErrors.optInDetails = "Opt-in details are required.";
+    }
+
+    if (!volume.trim()) {
+      newErrors.volume = "Estimated monthly volume is required.";
     }
 
     if (![msg1, msg2, msg3].every(ensureHasStopLanguage)) {
-      toast.error(
-        'Each sample message must include opt-out language (e.g., "Reply STOP to opt out").',
-      );
+      if (!ensureHasStopLanguage(msg1)) {
+        newErrors.msg1 =
+          'Sample message #1 must include opt-out language like "Reply STOP to opt out".';
+      }
+      if (!ensureHasStopLanguage(msg2)) {
+        newErrors.msg2 =
+          'Sample message #2 must include opt-out language like "Reply STOP to opt out".';
+      }
+      if (!ensureHasStopLanguage(msg3)) {
+        newErrors.msg3 =
+          'Sample message #3 must include opt-out language like "Reply STOP to opt out".';
+      }
+    }
+
+    setErrors(newErrors);
+
+    if (Object.keys(newErrors).length > 0) {
+      toast.error("Please fix the highlighted errors and try again.");
+      return false;
+    }
+    return true;
+  };
+
+  // ---------- Submit ----------
+  const handleSubmit = async () => {
+    // run full field-level validation first
+    if (!runValidation()) return;
+
+    if (!requiredOk()) {
+      // this is just a backup; in practice runValidation covers this
+      toast.error("Please complete all required fields.");
       return;
     }
 
@@ -265,6 +402,7 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
 
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
+        // backend may send generic message; just show toast
         toast.error(data.message || "Submission failed");
         return;
       }
@@ -286,30 +424,52 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
       <h2 className="text-xl font-bold">A2P Brand Verification</h2>
 
       {/* Business */}
-      <input
-        type="text"
-        placeholder="Business Name"
-        value={businessName}
-        onChange={(e) => setBusinessName(e.target.value)}
-        className="border p-2 rounded w-full"
-      />
-      <input
-        type="text"
-        placeholder="EIN (00-0000000)"
-        value={ein}
-        onChange={(e) => handleEinChange(e.target.value)}
-        className="border p-2 rounded w-full"
-      />
+      <div>
+        <input
+          type="text"
+          placeholder="Business Name"
+          value={businessName}
+          onChange={(e) => {
+            setBusinessName(e.target.value);
+            setErrors((prev) => ({ ...prev, businessName: undefined }));
+          }}
+          className="border p-2 rounded w-full"
+        />
+        {errors.businessName && (
+          <p className="text-xs text-red-500 mt-1">{errors.businessName}</p>
+        )}
+      </div>
+
+      <div>
+        <input
+          type="text"
+          placeholder="EIN (00-0000000)"
+          value={ein}
+          onChange={(e) => handleEinChange(e.target.value)}
+          className="border p-2 rounded w-full"
+        />
+        {errors.ein && (
+          <p className="text-xs text-red-500 mt-1">{errors.ein}</p>
+        )}
+      </div>
 
       {/* Address fields */}
       <div className="space-y-2">
-        <input
-          type="text"
-          placeholder="Street Address"
-          value={address}
-          onChange={(e) => setAddress(e.target.value)}
-          className="border p-2 rounded w-full"
-        />
+        <div>
+          <input
+            type="text"
+            placeholder="Street Address"
+            value={address}
+            onChange={(e) => {
+              setAddress(e.target.value);
+              setErrors((prev) => ({ ...prev, address: undefined }));
+            }}
+            className="border p-2 rounded w-full"
+          />
+          {errors.address && (
+            <p className="text-xs text-red-500 mt-1">{errors.address}</p>
+          )}
+        </div>
         <input
           type="text"
           placeholder="Address Line 2 (optional)"
@@ -318,58 +478,133 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
           className="border p-2 rounded w-full"
         />
         <div className="grid md:grid-cols-3 gap-2">
-          <input
-            type="text"
-            placeholder="City"
-            value={addressCity}
-            onChange={(e) => setAddressCity(e.target.value)}
-            className="border p-2 rounded w-full"
-          />
-          <input
-            type="text"
-            placeholder="State"
-            value={addressState}
-            onChange={(e) => setAddressState(e.target.value)}
-            className="border p-2 rounded w-full"
-          />
-          <input
-            type="text"
-            placeholder="ZIP / Postal Code"
-            value={addressPostalCode}
-            onChange={(e) => setAddressPostalCode(e.target.value)}
-            className="border p-2 rounded w-full"
-          />
+          <div>
+            <input
+              type="text"
+              placeholder="City"
+              value={addressCity}
+              onChange={(e) => {
+                setAddressCity(e.target.value);
+                setErrors((prev) => ({ ...prev, addressCity: undefined }));
+              }}
+              className="border p-2 rounded w-full"
+            />
+            {errors.addressCity && (
+              <p className="text-xs text-red-500 mt-1">
+                {errors.addressCity}
+              </p>
+            )}
+          </div>
+          <div>
+            <input
+              type="text"
+              placeholder="State"
+              value={addressState}
+              onChange={(e) => {
+                setAddressState(e.target.value);
+                setErrors((prev) => ({ ...prev, addressState: undefined }));
+              }}
+              className="border p-2 rounded w-full"
+            />
+            {errors.addressState && (
+              <p className="text-xs text-red-500 mt-1">
+                {errors.addressState}
+              </p>
+            )}
+          </div>
+          <div>
+            <input
+              type="text"
+              placeholder="ZIP / Postal Code"
+              value={addressPostalCode}
+              onChange={(e) => {
+                setAddressPostalCode(e.target.value);
+                setErrors((prev) => ({
+                  ...prev,
+                  addressPostalCode: undefined,
+                }));
+              }}
+              className="border p-2 rounded w-full"
+            />
+            {errors.addressPostalCode && (
+              <p className="text-xs text-red-500 mt-1">
+                {errors.addressPostalCode}
+              </p>
+            )}
+          </div>
         </div>
-        <input
-          type="text"
-          placeholder="Country (e.g., US)"
-          value={addressCountry}
-          onChange={(e) => setAddressCountry(e.target.value)}
-          className="border p-2 rounded w-full"
-        />
+        <div>
+          <input
+            type="text"
+            placeholder="Country (e.g., US)"
+            value={addressCountry}
+            onChange={(e) => {
+              setAddressCountry(e.target.value);
+              setErrors((prev) => ({ ...prev, addressCountry: undefined }));
+            }}
+            className="border p-2 rounded w-full"
+          />
+          {errors.addressCountry && (
+            <p className="text-xs text-red-500 mt-1">
+              {errors.addressCountry}
+            </p>
+          )}
+        </div>
       </div>
 
-      <input
-        type="url"
-        placeholder="Website URL"
-        value={website}
-        onChange={(e) => setWebsite(e.target.value)}
-        className="border p-2 rounded w-full"
-      />
-      <input
-        type="email"
-        placeholder="Business Email"
-        value={email}
-        onChange={(e) => setEmail(e.target.value)}
-        className="border p-2 rounded w-full"
-      />
-      <input
-        type="text"
-        placeholder="Business Phone"
-        value={phone}
-        onChange={(e) => setPhone(e.target.value)}
-        className="border p-2 rounded w-full"
-      />
+      <div>
+        <input
+          type="url"
+          placeholder="Website URL"
+          value={website}
+          onChange={(e) => {
+            setWebsite(e.target.value);
+            setErrors((prev) => ({ ...prev, website: undefined }));
+          }}
+          className="border p-2 rounded w-full"
+        />
+        {errors.website && (
+          <p className="text-xs text-red-500 mt-1">{errors.website}</p>
+        )}
+      </div>
+
+      <div>
+        <input
+          type="email"
+          placeholder="Business Email"
+          value={email}
+          onChange={(e) => {
+            setEmail(e.target.value);
+            setErrors((prev) => ({ ...prev, email: undefined }));
+          }}
+          className="border p-2 rounded w-full"
+        />
+        {errors.email && (
+          <p className="text-xs text-red-500 mt-1">{errors.email}</p>
+        )}
+      </div>
+
+      <div>
+        <input
+          type="text"
+          placeholder="Business / Authorized Rep Phone"
+          value={phone}
+          onChange={(e) => {
+            setPhone(e.target.value);
+            setErrors((prev) => ({ ...prev, phone: undefined }));
+          }}
+          className="border p-2 rounded w-full"
+        />
+        {errors.phone && (
+          <p className="text-xs text-red-500 mt-1">{errors.phone}</p>
+        )}
+        {!errors.phone && (
+          <p className="text-xs text-gray-500 mt-1">
+            Enter a 10-digit US number (e.g. 5551234567). We’ll convert it to
+            +1 format for Twilio automatically.
+          </p>
+        )}
+      </div>
 
       {/* Campaign Type */}
       <div className="space-y-1">
@@ -432,20 +667,40 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
       </div>
 
       {/* Contact */}
-      <input
-        type="text"
-        placeholder="Contact First Name"
-        value={contactFirstName}
-        onChange={(e) => setContactFirstName(e.target.value)}
-        className="border p-2 rounded w-full"
-      />
-      <input
-        type="text"
-        placeholder="Contact Last Name"
-        value={contactLastName}
-        onChange={(e) => setContactLastName(e.target.value)}
-        className="border p-2 rounded w-full"
-      />
+      <div>
+        <input
+          type="text"
+          placeholder="Contact First Name"
+          value={contactFirstName}
+          onChange={(e) => {
+            setContactFirstName(e.target.value);
+            setErrors((prev) => ({ ...prev, contactFirstName: undefined }));
+          }}
+          className="border p-2 rounded w-full"
+        />
+        {errors.contactFirstName && (
+          <p className="text-xs text-red-500 mt-1">
+            {errors.contactFirstName}
+          </p>
+        )}
+      </div>
+      <div>
+        <input
+          type="text"
+          placeholder="Contact Last Name"
+          value={contactLastName}
+          onChange={(e) => {
+            setContactLastName(e.target.value);
+            setErrors((prev) => ({ ...prev, contactLastName: undefined }));
+          }}
+          className="border p-2 rounded w-full"
+        />
+        {errors.contactLastName && (
+          <p className="text-xs text-red-500 mt-1">
+            {errors.contactLastName}
+          </p>
+        )}
+      </div>
       <input
         type="text"
         placeholder="Contact Title (optional)"
@@ -460,46 +715,86 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
           Tip: Use variables like <code>{`{{first_name}}`}</code> and include
           opt-out language (e.g., “Reply STOP to opt out”).
         </label>
-        <textarea
-          placeholder="Sample Message #1"
-          value={msg1}
-          onChange={(e) => setMsg1(e.target.value)}
-          className="border p-2 rounded w-full"
-          rows={3}
-        />
-        <textarea
-          placeholder="Sample Message #2"
-          value={msg2}
-          onChange={(e) => setMsg2(e.target.value)}
-          className="border p-2 rounded w-full"
-          rows={3}
-        />
-        <textarea
-          placeholder="Sample Message #3"
-          value={msg3}
-          onChange={(e) => setMsg3(e.target.value)}
-          className="border p-2 rounded w-full"
-          rows={3}
-        />
+        <div>
+          <textarea
+            placeholder="Sample Message #1"
+            value={msg1}
+            onChange={(e) => {
+              setMsg1(e.target.value);
+              setErrors((prev) => ({ ...prev, msg1: undefined }));
+            }}
+            className="border p-2 rounded w-full"
+            rows={3}
+          />
+          {errors.msg1 && (
+            <p className="text-xs text-red-500 mt-1">{errors.msg1}</p>
+          )}
+        </div>
+        <div>
+          <textarea
+            placeholder="Sample Message #2"
+            value={msg2}
+            onChange={(e) => {
+              setMsg2(e.target.value);
+              setErrors((prev) => ({ ...prev, msg2: undefined }));
+            }}
+            className="border p-2 rounded w-full"
+            rows={3}
+          />
+          {errors.msg2 && (
+            <p className="text-xs text-red-500 mt-1">{errors.msg2}</p>
+          )}
+        </div>
+        <div>
+          <textarea
+            placeholder="Sample Message #3"
+            value={msg3}
+            onChange={(e) => {
+              setMsg3(e.target.value);
+              setErrors((prev) => ({ ...prev, msg3: undefined }));
+            }}
+            className="border p-2 rounded w-full"
+            rows={3}
+          />
+          {errors.msg3 && (
+            <p className="text-xs text-red-500 mt-1">{errors.msg3}</p>
+          )}
+        </div>
       </div>
 
       {/* Opt-in Details */}
-      <textarea
-        placeholder="How do end-users consent to receive messages?"
-        value={optInDetails}
-        onChange={(e) => setOptInDetails(e.target.value)}
-        className="border p-2 rounded w-full"
-        rows={10}
-      />
+      <div>
+        <textarea
+          placeholder="How do end-users consent to receive messages?"
+          value={optInDetails}
+          onChange={(e) => {
+            setOptInDetails(e.target.value);
+            setErrors((prev) => ({ ...prev, optInDetails: undefined }));
+          }}
+          className="border p-2 rounded w-full"
+          rows={10}
+        />
+        {errors.optInDetails && (
+          <p className="text-xs text-red-500 mt-1">{errors.optInDetails}</p>
+        )}
+      </div>
 
       {/* Volume */}
-      <input
-        type="text"
-        placeholder="Estimated Monthly Volume"
-        value={volume}
-        onChange={(e) => setVolume(e.target.value)}
-        className="border p-2 rounded w-full"
-      />
+      <div>
+        <input
+          type="text"
+          placeholder="Estimated Monthly Volume"
+          value={volume}
+          onChange={(e) => {
+            setVolume(e.target.value);
+            setErrors((prev) => ({ ...prev, volume: undefined }));
+          }}
+          className="border p-2 rounded w-full"
+        />
+        {errors.volume && (
+          <p className="text-xs text-red-500 mt-1">{errors.volume}</p>
+        )}
+      </div>
 
       {/* Screenshot Upload (optional) */}
       <div className="space-y-2">

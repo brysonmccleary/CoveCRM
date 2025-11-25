@@ -642,10 +642,18 @@ export default async function handler(
 
     // ---------------- 1.4) Authorized representative + attach ----------------
     if (!(a2p as any).authorizedRepEndUserSid) {
-      const digitsOnlyPhone = String(setPayload.phone || "").replace(
-        /[^\d]/g,
-        "",
-      );
+      const rawPhone = String(setPayload.phone || "");
+      const digitsOnlyPhone = rawPhone.replace(/[^\d]/g, "");
+
+      if (digitsOnlyPhone.length < 10) {
+        throw new Error(
+          "Authorized representative phone must be a valid US number with 10 digits including area code.",
+        );
+      }
+
+      // Use the last 10 digits as the US number and prepend +1 for E.164
+      const last10 = digitsOnlyPhone.slice(-10);
+      const repPhoneE164 = `+1${last10}`;
 
       const repAttributes = {
         last_name: setPayload.contactLastName,
@@ -653,7 +661,7 @@ export default async function handler(
         email: setPayload.email,
         business_title: setPayload.contactTitle,
         job_position: "Director",
-        phone_number: digitsOnlyPhone,
+        phone_number: repPhoneE164,
       };
 
       log("step: endUsers.create (authorized_rep)", {
