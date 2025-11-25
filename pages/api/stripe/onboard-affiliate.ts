@@ -1,3 +1,4 @@
+// pages/api/stripe/onboard-affiliate.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import type { Session } from "next-auth";
@@ -39,7 +40,10 @@ async function createConnectAccount(params: {
   const acct = await stripe.accounts.create({
     type: "express",
     email: params.email,
-    capabilities: { transfers: { requested: true } },
+    capabilities: {
+      card_payments: { requested: true },
+      transfers: { requested: true },
+    },
     metadata: {
       userId: params.userId,
       affiliateCode: params.promoCode,
