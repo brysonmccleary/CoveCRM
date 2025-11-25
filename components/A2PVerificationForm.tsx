@@ -118,7 +118,9 @@ export default function A2PVerificationForm() {
 
   // ---------- Opt-in Details (no template tokens, includes exclusivity) ----------
   const [optInDetails, setOptInDetails] = useState(
-    `End users opt in by submitting their contact information through a TCPA-compliant lead form hosted on a vendor or agency landing page. The form collects full name, email, and phone number, and includes an electronic signature agreement directly above the “Confirm” button.
+    `This campaign sends follow-up messages to users who request life insurance information through TCPA-compliant Facebook lead forms or vendor landing pages. Messages include appointment scheduling, policy information, and benefits reminders for users who have explicitly opted in.
+
+End users opt in by submitting their contact information through a TCPA-compliant lead form hosted on a vendor or agency landing page. The form collects full name, email, and phone number, and includes an electronic signature agreement directly above the “Confirm” button.
 
 Before submission, users see a disclosure similar to:
 
