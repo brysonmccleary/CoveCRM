@@ -12,35 +12,74 @@ type EmailBase = {
   html?: string;
 };
 
+/**
+ * FROM_EMAIL rules:
+ * - Prefer explicit NOTIFY_FROM_EMAIL (so you can override just for these).
+ * - Then fall back to EMAIL_FROM (same as the rest of the app).
+ * - Then other legacy vars.
+ * - FINAL fallback is a verified @covecrm.com address, NOT .app.
+ *
+ * Make sure your Resend domain config includes covecrm.com and that
+ * noreply@covecrm.com (or whatever you use here) is allowed.
+ */
 const FROM_EMAIL =
   process.env.NOTIFY_FROM_EMAIL ||
+  process.env.EMAIL_FROM ||
   process.env.SENDGRID_FROM_EMAIL ||
   process.env.RESEND_FROM_EMAIL ||
-  "no-reply@covecrm.app"; // change if you prefer
+  "noreply@covecrm.com";
+
+/** Simple sleep helper for rate-limit backoff */
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 async function sendWithResend(msg: EmailBase) {
   const key = process.env.RESEND_API_KEY;
   if (!key) return false;
-  const res = await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${key}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      from: FROM_EMAIL,
-      to: [msg.to],
-      subject: msg.subject,
-      html: msg.html ?? `<pre>${msg.text}</pre>`,
-      text: msg.text,
-    }),
-  });
-  if (!res.ok) {
+
+  const payload = {
+    from: FROM_EMAIL,
+    to: [msg.to],
+    subject: msg.subject,
+    html: msg.html ?? `<pre>${msg.text}</pre>`,
+    text: msg.text,
+  };
+
+  // Try once, and on 429 back off briefly and retry once.
+  const attempt = async (): Promise<boolean | "retry429"> => {
+    const res = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${key}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (res.ok) return true;
+
     const body = await res.text().catch(() => "");
     console.warn("Resend send error:", res.status, body);
+
+    if (res.status === 429) {
+      return "retry429";
+    }
+
     return false;
+  };
+
+  const first = await attempt();
+  if (first === true) return true;
+
+  if (first === "retry429") {
+    // Resend allows 2 req/s; a ~700ms pause is usually enough
+    await sleep(700);
+    const second = await attempt();
+    if (second === true) return true;
   }
-  return true;
+
+  return false;
 }
 
 async function sendWithSendGrid(msg: EmailBase) {
@@ -76,7 +115,7 @@ async function safeSendEmail(msg: EmailBase) {
   if (await sendWithResend(msg)) return true;
   if (await sendWithSendGrid(msg)) return true;
   console.log(
-    `[notifications] No email provider configured. Would have sent -> to: ${msg.to}, subject: ${msg.subject}`
+    `[notifications] No email provider configured. Would have sent -> to: ${msg.to}, subject: ${msg.subject}`,
   );
   return false;
 }
