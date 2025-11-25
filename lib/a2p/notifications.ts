@@ -1,4 +1,3 @@
-// lib/a2p/notifications.ts
 /**
  * Lightweight notifications shim used by A2P flows.
  * Supports RESEND_API_KEY or SENDGRID_API_KEY. If neither is set,
@@ -12,71 +11,63 @@ type EmailBase = {
   html?: string;
 };
 
-/**
- * FROM_EMAIL rules:
- * - Prefer explicit NOTIFY_FROM_EMAIL (so you can override just for these).
- * - Then fall back to EMAIL_FROM (same as the rest of the app).
- * - Then other legacy vars.
- * - FINAL fallback is a verified @covecrm.com address, NOT .app.
- *
- * Make sure your Resend domain config includes covecrm.com and that
- * noreply@covecrm.com (or whatever you use here) is allowed.
- */
 const FROM_EMAIL =
   process.env.NOTIFY_FROM_EMAIL ||
-  process.env.EMAIL_FROM ||
   process.env.SENDGRID_FROM_EMAIL ||
   process.env.RESEND_FROM_EMAIL ||
-  "noreply@covecrm.com";
+  "CoveCRM <no-reply@covecrm.com>"; // safe default, must be a verified domain
 
-/** Simple sleep helper for rate-limit backoff */
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
+// Simple sleep helper for rate-limit backoff
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function sendWithResend(msg: EmailBase) {
   const key = process.env.RESEND_API_KEY;
   if (!key) return false;
 
-  const payload = {
-    from: FROM_EMAIL,
-    to: [msg.to],
-    subject: msg.subject,
-    html: msg.html ?? `<pre>${msg.text}</pre>`,
-    text: msg.text,
-  };
+  const maxAttempts = 3;
 
-  // Try once, and on 429 back off briefly and retry once.
-  const attempt = async (): Promise<boolean | "retry429"> => {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     const res = await fetch("https://api.resend.com/emails", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${key}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({
+        from: FROM_EMAIL,
+        to: [msg.to],
+        subject: msg.subject,
+        html: msg.html ?? `<pre>${msg.text}</pre>`,
+        text: msg.text,
+      }),
     });
 
-    if (res.ok) return true;
+    if (res.ok) {
+      return true;
+    }
 
     const body = await res.text().catch(() => "");
     console.warn("Resend send error:", res.status, body);
 
-    if (res.status === 429) {
-      return "retry429";
+    // If we hit a rate limit, wait and retry up to maxAttempts
+    if (res.status === 429 && attempt < maxAttempts) {
+      // Try to respect Retry-After header if present
+      const retryAfter = res.headers.get("retry-after");
+      let delayMs = 600; // default ~0.6s
+
+      if (retryAfter) {
+        const asNumber = Number(retryAfter);
+        if (!Number.isNaN(asNumber) && asNumber > 0) {
+          delayMs = asNumber * 1000;
+        }
+      }
+
+      await sleep(delayMs);
+      continue;
     }
 
+    // For non-rate-limit errors or last attempt, give up
     return false;
-  };
-
-  const first = await attempt();
-  if (first === true) return true;
-
-  if (first === "retry429") {
-    // Resend allows 2 req/s; a ~700ms pause is usually enough
-    await sleep(700);
-    const second = await attempt();
-    if (second === true) return true;
   }
 
   return false;
@@ -85,6 +76,7 @@ async function sendWithResend(msg: EmailBase) {
 async function sendWithSendGrid(msg: EmailBase) {
   const key = process.env.SENDGRID_API_KEY;
   if (!key) return false;
+
   const res = await fetch("https://api.sendgrid.com/v3/mail/send", {
     method: "POST",
     headers: {
@@ -102,20 +94,22 @@ async function sendWithSendGrid(msg: EmailBase) {
       ],
     }),
   });
+
   if (!res.ok) {
     const body = await res.text().catch(() => "");
     console.warn("SendGrid send error:", res.status, body);
     return false;
   }
+
   return true;
 }
 
 async function safeSendEmail(msg: EmailBase) {
-  // Try Resend, then SendGrid, else soft-fail
+  // Try Resend (with backoff), then SendGrid, else soft-fail
   if (await sendWithResend(msg)) return true;
   if (await sendWithSendGrid(msg)) return true;
   console.log(
-    `[notifications] No email provider configured. Would have sent -> to: ${msg.to}, subject: ${msg.subject}`,
+    `[notifications] No email provider configured or all providers failed. Would have sent -> to: ${msg.to}, subject: ${msg.subject}`,
   );
   return false;
 }
