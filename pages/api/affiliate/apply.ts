@@ -37,7 +37,12 @@ export default async function handler(
   if (req.method !== "POST") return res.status(405).end("Method Not Allowed");
 
   try {
-    const session = await getServerSession(req, res, authOptions as any);
+    // Cast the session to any so TS stops complaining about .user.email
+    const session = (await getServerSession(
+      req,
+      res,
+      authOptions as any,
+    )) as any;
 
     if (!session?.user?.email) {
       return res.status(401).json({ error: "Unauthorized" });
@@ -86,7 +91,6 @@ export default async function handler(
     let promotionCodeId: string | undefined;
 
     try {
-      // Stripe list API: { object: 'list', data: [...] }
       const listResp = await stripe.promotionCodes.list({
         code: promoCode,
         limit: 1,
@@ -257,7 +261,7 @@ export default async function handler(
       accountLinkUrl = `${BASE_URL}${AFFILIATE_RETURN_PATH}`;
     }
 
-    // 6) Email admin (non-fatal, already wired to noreply@covecrm.com in lib/email)
+    // 6) Email admin (non-fatal)
     try {
       await sendAffiliateApplicationAdminEmail({
         name,
