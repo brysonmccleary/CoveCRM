@@ -547,14 +547,28 @@ function renderAffiliateApprovedEmail(opts: {
       <p style="margin:0 0 12px 0">
         Your referral code is <b>${escapeHtml(
           opts.promoCode,
-        )}</b>. Share it anywhere you like. When people sign up with your code, their discounts and your commissions apply automatically.
+        )}</b>. When people sign up with this code, their discount and your commission apply automatically.
       </p>
+      <p style="margin:0 0 8px 0">
+        Here’s how your deal works:
+      </p>
+      <ul style="margin:0 0 12px 20px;padding:0;">
+        <li style="margin:4px 0;">
+          Every referral who uses your code saves <b>$50/month</b> on their Cove CRM subscription.
+        </li>
+        <li style="margin:4px 0;">
+          You earn <b>$25 per active paying user</b> as long as their account stays active.
+        </li>
+      </ul>
       ${
         opts.dashboardUrl
-          ? `<p style="margin:0 0 12px 0"><a href="${opts.dashboardUrl}">Open your affiliate dashboard</a></p>`
+          ? `<p style="margin:12px 0 12px 0"><a href="${opts.dashboardUrl}">Open your affiliate dashboard</a></p>`
           : ""
       }
-      <p style="margin:0 0 12px 0">Thanks for partnering with us! — The Cove CRM Team</p>
+      <p style="margin:0 0 12px 0">
+        Share your code in your team chats, trainings, and social posts—every active user with your code is money in your pocket.
+      </p>
+      <p style="margin:16px 0 0 0">Thanks for partnering with us! — The Cove CRM Team</p>
     </div>
   `;
 }
