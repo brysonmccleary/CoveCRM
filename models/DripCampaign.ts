@@ -50,8 +50,13 @@ const DripCampaignSchema = new mongoose.Schema(
     // Metadata (existing fields)
     createdBy: { type: String, default: "admin" },
     comments: [CommentSchema],
-    user: { type: String },              // Tenant/user scope (optional)
-    isGlobal: { type: Boolean, default: false }, // Global availability flag
+
+    // Tenant/user scope (existing + new for clarity)
+    user: { type: String }, // some code paths already use this
+    userEmail: { type: String, index: true }, // explicit tenant field for new custom drips
+
+    // Global availability flag
+    isGlobal: { type: Boolean, default: false },
   },
   { timestamps: true }
 );

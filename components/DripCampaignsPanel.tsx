@@ -16,19 +16,40 @@ interface Folder {
   assignedDrip?: string;
 }
 
+interface ApiCampaign {
+  _id: string;
+  name: string;
+  key?: string | null;
+  isActive: boolean;
+  steps?: MessageStep[];
+  isGlobal?: boolean;
+  createdBy?: string | null;
+  user?: string | null;
+  userEmail?: string | null;
+}
+
 export default function DripCampaignsPanel() {
   const [campaignName, setCampaignName] = useState("");
   const [messageSteps, setMessageSteps] = useState<MessageStep[]>([]);
   const [currentText, setCurrentText] = useState("");
   const [currentDay, setCurrentDay] = useState("immediately");
   const [maxDayUsed, setMaxDayUsed] = useState(0);
-  const [savedCampaigns, setSavedCampaigns] = useState<any[]>([]);
+
   const [folders, setFolders] = useState<Folder[]>([]);
+
   const [showModal, setShowModal] = useState(false);
   const [selectedDripId, setSelectedDripId] = useState<string | null>(null);
+
   const [expandedDrips, setExpandedDrips] = useState<Record<string, boolean>>({});
   const [editableDrips, setEditableDrips] = useState<Record<string, MessageStep[]>>({});
 
+  const [backendCampaigns, setBackendCampaigns] = useState<ApiCampaign[]>([]);
+  const [loadingCampaigns, setLoadingCampaigns] = useState(false);
+
+  // Precompute prebuilt names to distinguish custom campaigns
+  const prebuiltNames = new Set(prebuiltDrips.map((d) => d.name));
+
+  // Load folders for assignment
   useEffect(() => {
     const fetchFolders = async () => {
       try {
@@ -41,8 +62,27 @@ export default function DripCampaignsPanel() {
     fetchFolders();
   }, []);
 
+  // Load campaigns (global + user-scoped) from API
+  useEffect(() => {
+    const fetchCampaigns = async () => {
+      try {
+        setLoadingCampaigns(true);
+        const res = await axios.get("/api/drips/campaigns?active=1");
+        const campaigns: ApiCampaign[] = res.data?.campaigns || [];
+        setBackendCampaigns(campaigns);
+      } catch {
+        toast.error("❌ Error fetching drip campaigns");
+      } finally {
+        setLoadingCampaigns(false);
+      }
+    };
+    fetchCampaigns();
+  }, []);
+
+  // ---- Step builder for new custom campaigns ----
   const addStep = () => {
     if (!currentText) return;
+
     const numericDay =
       currentDay === "immediately" ? 0 : parseInt(currentDay.replace("Day ", ""), 10);
 
@@ -51,32 +91,69 @@ export default function DripCampaignsPanel() {
       ? currentText.trim()
       : `${currentText.trim()}${optOut}`;
 
-    setMessageSteps([...messageSteps, { text: enforcedText, day: currentDay }]);
+    setMessageSteps((prev) => [...prev, { text: enforcedText, day: currentDay }]);
     setCurrentText("");
     setCurrentDay(`Day ${numericDay + 1}`);
-    setMaxDayUsed(Math.max(maxDayUsed, numericDay));
+    setMaxDayUsed((prev) => Math.max(prev, numericDay));
   };
 
-  const saveCampaign = () => {
+  const generateDayOptions = () => {
+    const options: string[] = [];
+    if (maxDayUsed === 0) options.push("immediately");
+    const start = maxDayUsed === 0 ? 1 : maxDayUsed + 1;
+    for (let i = start; i <= 365; i++) options.push(`Day ${i}`);
+    return options;
+  };
+
+  const insertMergeField = (field: string) => {
+    // Keep legacy <token> style so it stays compatible with existing rendering logic
+    setCurrentText((prev) => `${prev} <${field}>`);
+  };
+
+  // ---- Save new custom campaign to backend ----
+  const saveCampaign = async () => {
     if (!campaignName || messageSteps.length === 0) {
       toast.error("❌ Please enter a campaign name and at least one message.");
       return;
     }
-    const newCampaign = { name: campaignName, steps: messageSteps };
-    setSavedCampaigns([...savedCampaigns, newCampaign]);
-    setCampaignName("");
-    setMessageSteps([]);
-    setMaxDayUsed(0);
-    toast.success("✅ Custom drip campaign saved!");
+
+    try {
+      const res = await axios.post("/api/drips/campaigns", {
+        name: campaignName,
+        steps: messageSteps,
+      });
+
+      const created: ApiCampaign | undefined = res.data?.campaign;
+      if (created?._id) {
+        setBackendCampaigns((prev) => [...prev, created]);
+      }
+
+      setCampaignName("");
+      setMessageSteps([]);
+      setMaxDayUsed(0);
+      setCurrentDay("immediately");
+
+      toast.success("✅ Custom drip campaign saved!");
+    } catch (err: any) {
+      console.error("Error saving custom drip campaign", err);
+      toast.error("❌ Error saving custom drip campaign");
+    }
   };
 
+  // ---- Prebuilt drips (static definition) ----
   const toggleExpand = (dripId: string) => {
     const isExpanded = expandedDrips[dripId] || false;
-    setExpandedDrips({ ...expandedDrips, [dripId]: !isExpanded });
+    const nextExpanded = { ...expandedDrips, [dripId]: !isExpanded };
+    setExpandedDrips(nextExpanded);
 
     if (!editableDrips[dripId]) {
       const found = prebuiltDrips.find((d) => d.id === dripId);
-      if (found) setEditableDrips({ ...editableDrips, [dripId]: [...found.messages] });
+      if (found) {
+        setEditableDrips((prev) => ({
+          ...prev,
+          [dripId]: [...found.messages],
+        }));
+      }
     }
   };
 
@@ -98,6 +175,7 @@ export default function DripCampaignsPanel() {
   };
 
   const handleSaveDrip = (dripId: string) => {
+    // Still a mock save; real persistence would require wiring into backend
     toast.success("✅ Changes saved (mock save — hook backend if needed)");
   };
 
@@ -109,18 +187,6 @@ export default function DripCampaignsPanel() {
     setExpandedDrips(newExpanded);
     setEditableDrips(newEditable);
     toast.success("🗑️ Drip cleared from view (mock delete)");
-  };
-
-  const insertMergeField = (field: string) => {
-    setCurrentText((prev) => `${prev} <${field}>`);
-  };
-
-  const generateDayOptions = () => {
-    const options: string[] = [];
-    if (maxDayUsed === 0) options.push("immediately");
-    const start = maxDayUsed === 0 ? 1 : maxDayUsed + 1;
-    for (let i = start; i <= 365; i++) options.push(`Day ${i}`);
-    return options;
   };
 
   const handleAssignConfirm = async (folderId: string) => {
@@ -142,6 +208,11 @@ export default function DripCampaignsPanel() {
     }
   };
 
+  // ---- Custom campaigns derived from backend data ----
+  const customCampaigns: ApiCampaign[] = backendCampaigns.filter(
+    (c) => !prebuiltNames.has(c.name) && !c.isGlobal
+  );
+
   return (
     <div className="p-4 space-y-6">
       {/* Creator */}
@@ -153,11 +224,32 @@ export default function DripCampaignsPanel() {
           placeholder="Campaign Name"
           className="border border-black dark:border-white p-2 w-full rounded mb-2"
         />
+
         <div className="mb-2 space-x-2">
-          <button onClick={() => insertMergeField("client_first_name")} className="text-xs bg-gray-700 text-white px-2 py-1 rounded hover:bg-gray-600">Insert Client First Name</button>
-          <button onClick={() => insertMergeField("agent_name")} className="text-xs bg-gray-700 text-white px-2 py-1 rounded hover:bg-gray-600">Insert Agent Name</button>
-          <button onClick={() => insertMergeField("agent_phone")} className="text-xs bg-gray-700 text-white px-2 py-1 rounded hover:bg-gray-600">Insert Agent Phone</button>
-          <button onClick={() => insertMergeField("folder_name")} className="text-xs bg-gray-700 text-white px-2 py-1 rounded hover:bg-gray-600">Insert Folder Name</button>
+          <button
+            onClick={() => insertMergeField("client_first_name")}
+            className="text-xs bg-gray-700 text-white px-2 py-1 rounded hover:bg-gray-600"
+          >
+            Insert Client First Name
+          </button>
+          <button
+            onClick={() => insertMergeField("agent_name")}
+            className="text-xs bg-gray-700 text-white px-2 py-1 rounded hover:bg-gray-600"
+          >
+            Insert Agent Name
+          </button>
+          <button
+            onClick={() => insertMergeField("agent_phone")}
+            className="text-xs bg-gray-700 text-white px-2 py-1 rounded hover:bg-gray-600"
+          >
+            Insert Agent Phone
+          </button>
+          <button
+            onClick={() => insertMergeField("folder_name")}
+            className="text-xs bg-gray-700 text-white px-2 py-1 rounded hover:bg-gray-600"
+          >
+            Insert Folder Name
+          </button>
         </div>
 
         <div className="flex flex-col md:flex-row space-y-2 md:space-y-0 md:space-x-2">
@@ -173,10 +265,15 @@ export default function DripCampaignsPanel() {
             className="border border-black dark:border-white p-2 rounded"
           >
             {generateDayOptions().map((day, idx) => (
-              <option key={idx} value={day}>{day}</option>
+              <option key={idx} value={day}>
+                {day}
+              </option>
             ))}
           </select>
-          <button onClick={addStep} className="border border-black dark:border-white px-4 rounded cursor-pointer">
+          <button
+            onClick={addStep}
+            className="border border-black dark:border-white px-4 rounded cursor-pointer"
+          >
             Add
           </button>
         </div>
@@ -186,14 +283,21 @@ export default function DripCampaignsPanel() {
             <h3 className="font-semibold">Messages in Campaign:</h3>
             {messageSteps.map((step, idx) => (
               <div key={idx} className="border border-black dark:border-white p-2 rounded">
-                <p><strong>When:</strong> {step.day}</p>
-                <p><strong>Message:</strong> {step.text}</p>
+                <p>
+                  <strong>When:</strong> {step.day}
+                </p>
+                <p>
+                  <strong>Message:</strong> {step.text}
+                </p>
               </div>
             ))}
           </div>
         )}
 
-        <button onClick={saveCampaign} className="mt-2 border border-black dark:border-white px-4 py-2 rounded cursor-pointer">
+        <button
+          onClick={saveCampaign}
+          className="mt-2 border border-black dark:border-white px-4 py-2 rounded cursor-pointer"
+        >
           Save Campaign
         </button>
       </div>
@@ -201,9 +305,15 @@ export default function DripCampaignsPanel() {
       {/* Prebuilt Drips */}
       <h2 className="text-xl font-bold mt-8">Prebuilt Drip Campaigns</h2>
       {prebuiltDrips.map((drip) => (
-        <div key={drip.id} className="border border-black dark:border-white p-3 rounded mb-4">
+        <div
+          key={drip.id}
+          className="border border-black dark:border-white p-3 rounded mb-4"
+        >
           <div className="flex justify-between items-center">
-            <button onClick={() => toggleExpand(drip.id)} className="text-left font-semibold text-lg cursor-pointer">
+            <button
+              onClick={() => toggleExpand(drip.id)}
+              className="text-left font-semibold text-lg cursor-pointer"
+            >
               {drip.name} — {drip.messages.length} messages
             </button>
             <button
@@ -220,21 +330,31 @@ export default function DripCampaignsPanel() {
                 <div key={idx} className="space-y-1">
                   <input
                     value={msg.day}
-                    onChange={(e) => handleEditMessage(drip.id, idx, "day", e.target.value)}
+                    onChange={(e) =>
+                      handleEditMessage(drip.id, idx, "day", e.target.value)
+                    }
                     className="border border-black dark:border-white p-1 rounded w-32 text-sm"
                   />
                   <textarea
                     value={msg.text}
-                    onChange={(e) => handleEditMessage(drip.id, idx, "text", e.target.value)}
+                    onChange={(e) =>
+                      handleEditMessage(drip.id, idx, "text", e.target.value)
+                    }
                     className="border border-black dark:border-white p-2 rounded w-full text-sm"
                   />
                 </div>
               ))}
               <div className="flex space-x-2 pt-2">
-                <button onClick={() => handleSaveDrip(drip.id)} className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded cursor-pointer">
+                <button
+                  onClick={() => handleSaveDrip(drip.id)}
+                  className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded cursor-pointer"
+                >
                   Save Changes
                 </button>
-                <button onClick={() => handleDeleteDrip(drip.id)} className="bg-red-600 hover:bg-red-700 text-white px-3 py-1 rounded cursor-pointer">
+                <button
+                  onClick={() => handleDeleteDrip(drip.id)}
+                  className="bg-red-600 hover:bg-red-700 text-white px-3 py-1 rounded cursor-pointer"
+                >
                   Delete Drip
                 </button>
               </div>
@@ -243,24 +363,42 @@ export default function DripCampaignsPanel() {
         </div>
       ))}
 
-      {/* Saved Campaigns */}
-      {savedCampaigns.length > 0 && (
-        <div>
-          <h2 className="text-xl font-bold mt-8">Your Custom Campaigns</h2>
-          {savedCampaigns.map((camp, idx) => (
-            <div key={idx} className="border border-black dark:border-white p-3 rounded mb-4">
-              <h3 className="font-semibold">{camp.name}</h3>
-              <ul className="list-disc pl-5 text-sm">
-                {camp.steps.map((msg: MessageStep, stepIdx: number) => (
-                  <li key={stepIdx}>
-                    <strong>{msg.day}:</strong> {msg.text}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ))}
-        </div>
+      {/* Custom Campaigns from backend */}
+      <h2 className="text-xl font-bold mt-8">
+        Your Custom Campaigns{" "}
+        {loadingCampaigns && (
+          <span className="text-sm font-normal text-gray-400">(loading…)</span>
+        )}
+      </h2>
+      {customCampaigns.length === 0 && !loadingCampaigns && (
+        <p className="text-sm text-gray-400">
+          You don&apos;t have any custom drip campaigns yet.
+        </p>
       )}
+      {customCampaigns.map((camp) => (
+        <div
+          key={camp._id}
+          className="border border-black dark:border-white p-3 rounded mb-4"
+        >
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="font-semibold">{camp.name}</h3>
+            <button
+              onClick={() => handleAssignDrip(camp._id)}
+              className="bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded text-sm cursor-pointer"
+            >
+              Assign to Folder/Leads
+            </button>
+          </div>
+
+          <ul className="list-disc pl-5 text-sm">
+            {(camp.steps || []).map((msg: MessageStep, idx: number) => (
+              <li key={idx}>
+                <strong>{msg.day}:</strong> {msg.text}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))}
 
       {/* Assign Drip Modal */}
       {showModal && selectedDripId && (
