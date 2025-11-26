@@ -116,8 +116,14 @@ export default async function handler(
 
         const user = a2p.userId ? await User.findById(a2p.userId).lean() : null;
 
+        // capture previous state BEFORE we touch anything
+        const prevRegistrationStatus =
+          (a2p.registrationStatus as string) || "not_started";
+        const prevApplicationStatus = a2p.applicationStatus;
+        const prevDeclinedReason = a2p.declinedReason;
+
         let finalReady = !!a2p.messagingReady;
-        let finalStatus = (a2p.registrationStatus as string) || "not_started";
+        let finalStatus = prevRegistrationStatus;
         let finalDecline: string | undefined;
 
         // ---------------- BRAND STATUS ----------------
@@ -263,9 +269,11 @@ export default async function handler(
         a2p.messagingReady = finalReady;
         a2p.registrationStatus = finalStatus as any;
 
-        // capture previous state BEFORE we overwrite it
-        const prevApplicationStatus = a2p.applicationStatus;
-        const prevDeclinedReason = a2p.declinedReason;
+        // Did we JUST now become rejected on this run?
+        const justNowRejected =
+          prevRegistrationStatus !== "rejected" &&
+          finalStatus === "rejected" &&
+          !!finalDecline;
 
         if (finalDecline) {
           a2p.applicationStatus = "declined";
@@ -275,12 +283,8 @@ export default async function handler(
             { stage: "rejected", at: new Date(), note: finalDecline },
           ];
 
-          // 🔒 only send decline email ONCE per unique reason
-          const shouldNotifyDecline =
-            prevApplicationStatus !== "declined" ||
-            prevDeclinedReason !== finalDecline;
-
-          if (shouldNotifyDecline && user?.email) {
+          // 🔒 Only send decline email once per transition into rejected
+          if (justNowRejected && user?.email) {
             await sendDeclinedEmailSafe({
               to: user.email,
               name: user.name || undefined,
