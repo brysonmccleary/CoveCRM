@@ -1,7 +1,7 @@
 // /pages/api/cron/a2p-sync-all.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import mongooseConnect from "@/lib/mongooseConnect";
-import A2PProfile, { IA2PProfile } from "@/models/A2PProfile";
+import A2PProfile from "@/models/A2PProfile";
 import User from "@/models/User";
 import twilio from "twilio";
 
@@ -119,8 +119,10 @@ export default async function handler(
         // capture previous state BEFORE we touch anything
         const prevRegistrationStatus =
           (a2p.registrationStatus as string) || "not_started";
-        const prevApplicationStatus = a2p.applicationStatus;
-        const prevDeclinedReason = a2p.declinedReason;
+
+        const hadRejectionAlready = (a2p.approvalHistory || []).some(
+          (h: any) => h?.stage === "rejected",
+        );
 
         let finalReady = !!a2p.messagingReady;
         let finalStatus = prevRegistrationStatus;
@@ -147,7 +149,6 @@ export default async function handler(
               "a2p-sync-all brand fetch failed:",
               err?.message || err,
             );
-            // ignore brand fetch errors, move on
           }
         }
 
@@ -208,7 +209,6 @@ export default async function handler(
 
               campaignSid = newSid;
               (a2p as any).usa2pSid = newSid;
-              a2p.messagingServiceSid = a2p.messagingServiceSid;
 
               if (APPROVED.has(st)) {
                 finalReady = true;
@@ -230,7 +230,6 @@ export default async function handler(
                 "a2p-sync-all campaign auto-create failed:",
                 err?.message || err,
               );
-              // leave campaignSid unset; will try again next run
             }
           }
         }
@@ -261,7 +260,6 @@ export default async function handler(
               "a2p-sync-all campaign fetch failed:",
               err?.message || err,
             );
-            // ignore, will retry on next cron
           }
         }
 
@@ -269,28 +267,34 @@ export default async function handler(
         a2p.messagingReady = finalReady;
         a2p.registrationStatus = finalStatus as any;
 
-        // Did we JUST now become rejected on this run?
+        // TRUE only if we've never logged a rejection before AND status is now rejected
         const justNowRejected =
-          prevRegistrationStatus !== "rejected" &&
+          !hadRejectionAlready &&
           finalStatus === "rejected" &&
           !!finalDecline;
 
         if (finalDecline) {
           a2p.applicationStatus = "declined";
           a2p.declinedReason = finalDecline;
-          a2p.approvalHistory = [
-            ...(a2p.approvalHistory || []),
-            { stage: "rejected", at: new Date(), note: finalDecline },
-          ];
 
-          // 🔒 Only send decline email once per transition into rejected
-          if (justNowRejected && user?.email) {
-            await sendDeclinedEmailSafe({
-              to: user.email,
-              name: user.name || undefined,
-              reason: finalDecline,
-              helpUrl: `${BASE_URL}/help/a2p-checklist`,
-            });
+          if (justNowRejected) {
+            a2p.approvalHistory = [
+              ...(a2p.approvalHistory || []),
+              { stage: "rejected", at: new Date(), note: finalDecline },
+            ];
+
+            if (user?.email) {
+              console.log(
+                "[a2p-sync-all] sending ONE decline email for",
+                user.email,
+              );
+              await sendDeclinedEmailSafe({
+                to: user.email,
+                name: user.name || undefined,
+                reason: finalDecline,
+                helpUrl: `${BASE_URL}/help/a2p-checklist`,
+              });
+            }
           }
         } else if (finalReady) {
           a2p.applicationStatus = "approved";
