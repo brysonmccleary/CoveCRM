@@ -263,6 +263,10 @@ export default async function handler(
         a2p.messagingReady = finalReady;
         a2p.registrationStatus = finalStatus as any;
 
+        // capture previous state BEFORE we overwrite it
+        const prevApplicationStatus = a2p.applicationStatus;
+        const prevDeclinedReason = a2p.declinedReason;
+
         if (finalDecline) {
           a2p.applicationStatus = "declined";
           a2p.declinedReason = finalDecline;
@@ -271,7 +275,12 @@ export default async function handler(
             { stage: "rejected", at: new Date(), note: finalDecline },
           ];
 
-          if (user?.email) {
+          // 🔒 only send decline email ONCE per unique reason
+          const shouldNotifyDecline =
+            prevApplicationStatus !== "declined" ||
+            prevDeclinedReason !== finalDecline;
+
+          if (shouldNotifyDecline && user?.email) {
             await sendDeclinedEmailSafe({
               to: user.email,
               name: user.name || undefined,
