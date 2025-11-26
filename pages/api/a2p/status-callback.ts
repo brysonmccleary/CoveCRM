@@ -294,11 +294,6 @@ export default async function handler(
         .json({ ok: true, ...(debugEnabled ? { debug } : {}) });
     }
 
-    // Has this profile already ever been marked rejected?
-    const hadRejectionAlready = (a2p.approvalHistory || []).some(
-      (h: any) => h?.stage === "rejected",
-    );
-
     // === APPROVED-ish path (brand / campaign / etc.) ===
     if (statusRaw && APPROVED.has(statusRaw)) {
       let brandSid: string | undefined =
@@ -522,30 +517,31 @@ export default async function handler(
         body.Reason || body.reason || body.Error || "Rejected by reviewers",
       );
 
-      // Build update doc so we only push history once
-      const update: any = {
-        $set: {
-          messagingReady: false,
-          applicationStatus: "declined",
-          registrationStatus: "rejected",
-          declinedReason,
-          lastSyncedAt: new Date(),
-          brandStatus: "FAILED",
-          brandFailureReason: declinedReason,
-        },
-      };
+      // 👇 NEW: if this profile is already marked declined, skip sending
+      // another email. Twilio may retry callbacks, but we only notify once.
+      const alreadyDeclined = a2p.applicationStatus === "declined";
 
-      if (!hadRejectionAlready) {
-        update.$push = {
-          approvalHistory: {
-            stage: "rejected",
-            at: new Date(),
-            note: declinedReason,
+      await A2PProfile.updateOne(
+        { _id: a2p._id },
+        {
+          $set: {
+            messagingReady: false,
+            applicationStatus: "declined",
+            registrationStatus: "rejected",
+            declinedReason,
+            lastSyncedAt: new Date(),
+            brandStatus: "FAILED",
+            brandFailureReason: declinedReason,
           },
-        };
-      }
-
-      await A2PProfile.updateOne({ _id: a2p._id }, update);
+          $push: {
+            approvalHistory: {
+              stage: "rejected",
+              at: new Date(),
+              note: declinedReason,
+            },
+          },
+        },
+      );
 
       // Mirror decline into User.a2p as well
       try {
@@ -569,17 +565,12 @@ export default async function handler(
         );
       }
 
-      // Only send decline email the FIRST time we see a rejection
-      if (!hadRejectionAlready) {
+      // 👇 Only send the decline email the FIRST time we see this profile
+      // in a declined state.
+      if (!alreadyDeclined) {
         try {
-          const user = a2p.userId
-            ? await User.findById(a2p.userId).lean()
-            : null;
+          const user = a2p.userId ? await User.findById(a2p.userId).lean() : null;
           if (user?.email) {
-            console.log(
-              "[a2p status-callback] sending ONE decline email for",
-              user.email,
-            );
             await sendA2PDeclinedEmail({
               to: user.email,
               name: user.name || undefined,
