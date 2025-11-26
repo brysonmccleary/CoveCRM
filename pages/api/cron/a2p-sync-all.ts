@@ -1,89 +1,24 @@
 // /pages/api/cron/a2p-sync-all.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import mongooseConnect from "@/lib/mongooseConnect";
-import A2PProfile, { IA2PProfile } from "@/models/A2PProfile";
-import User from "@/models/User";
-import twilio from "twilio";
-
-const client = twilio(
-  process.env.TWILIO_API_KEY_SID || process.env.TWILIO_ACCOUNT_SID!,
-  (process.env.TWILIO_API_KEY_SECRET || process.env.TWILIO_AUTH_TOKEN)!,
-);
 
 const CRON_SECRET = (process.env.CRON_SECRET || "").trim();
-const BASE_URL = (
-  process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || ""
-).replace(/\/$/, "");
 
-// status normalizers
-const APPROVED = new Set([
-  "approved",
-  "verified",
-  "active",
-  "in_use",
-  "registered",
-]);
-const DECLINED = new Set(["rejected", "denied", "failed"]);
-
-// Lazy-load email helpers if present; no-op if missing
-async function sendApprovedEmailSafe(args: {
-  to: string;
-  name?: string;
-  dashboardUrl: string;
-}) {
-  try {
-    const mod: any = await import("@/lib/twilio/getClientForUser");
-    if (typeof mod?.sendA2PApprovedEmail === "function") {
-      await mod.sendA2PApprovedEmail(args);
-    }
-  } catch {
-    /* no-op */
-  }
-}
-async function sendDeclinedEmailSafe(args: {
-  to: string;
-  name?: string;
-  reason: string;
-  helpUrl: string;
-}) {
-  try {
-    const mod: any = await import("@/lib/twilio/getClientForUser");
-    if (typeof mod?.sendA2PDeclinedEmail === "function") {
-      await mod.sendA2PDeclinedEmail(args);
-    }
-  } catch {
-    /* no-op */
-  }
-}
-
-// Same description builder used elsewhere
-function buildCampaignDescription(opts: {
-  businessName: string;
-  useCase: string;
-  messageFlow: string;
-}): string {
-  const businessName = (opts.businessName || "").trim() || "this business";
-  const useCase = (opts.useCase || "").trim() || "LOW_VOLUME";
-
-  let desc = `Life insurance lead follow-up and appointment reminder SMS campaign for ${businessName}. Use case: ${useCase}. `;
-
-  const flowSnippet = (opts.messageFlow || "").replace(/\s+/g, " ").trim();
-  if (flowSnippet) {
-    desc += `Opt-in and message flow: ${flowSnippet.slice(0, 300)}`;
-  } else {
-    desc +=
-      "Leads opt in via TCPA-compliant web forms and receive updates about their life insurance options and booked appointments.";
-  }
-
-  if (desc.length > 1024) desc = desc.slice(0, 1024);
-  if (desc.length < 40) {
-    desc +=
-      " This campaign sends compliant follow-up and reminder messages to warm leads.";
-  }
-
-  return desc;
-}
-
+/**
+ * TEMPORARY SAFE MODE
+ *
+ * - Authenticates with CRON_SECRET (header or ?token=)
+ * - Connects to Mongo (so the function stays warm/valid)
+ * - Does NOT:
+ *    • Call Twilio
+ *    • Send ANY emails
+ *    • Mutate A2P profiles
+ *
+ * A2P approvals / declines are now handled purely by:
+ *   - /api/a2p/status-callback  (Twilio webhooks)
+ *
+ * This stops the repeated decline emails and Resend 429 spam from the cron.
+ */
 export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse,
@@ -106,219 +41,15 @@ export default async function handler(
   try {
     await mongooseConnect();
 
-    const profiles = await A2PProfile.find({}).lean();
-    let updated = 0;
-
-    for (const p of profiles) {
-      try {
-        const a2p = await A2PProfile.findById(p._id);
-        if (!a2p) continue;
-
-        const user = a2p.userId ? await User.findById(a2p.userId).lean() : null;
-
-        let finalReady = !!a2p.messagingReady;
-        let finalStatus = (a2p.registrationStatus as string) || "not_started";
-        let finalDecline: string | undefined;
-
-        // 🧠 Has this profile already been rejected at least once?
-        const alreadyRejected =
-          a2p.applicationStatus === "declined" ||
-          (Array.isArray(a2p.approvalHistory) &&
-            a2p.approvalHistory.some((h: any) => h?.stage === "rejected"));
-
-        // ---------------- BRAND STATUS ----------------
-        if (a2p.brandSid) {
-          try {
-            const brand = await client.messaging.v1
-              .brandRegistrations(a2p.brandSid)
-              .fetch();
-            const st = String(
-              (brand as any).status || (brand as any).state || "",
-            ).toLowerCase();
-
-            if (APPROVED.has(st)) {
-              finalStatus = "brand_approved";
-            } else if (DECLINED.has(st)) {
-              finalStatus = "rejected";
-              finalDecline = "Brand rejected";
-            }
-          } catch (err: any) {
-            console.warn(
-              "a2p-sync-all brand fetch failed:",
-              err?.message || err,
-            );
-            // ignore brand fetch errors, move on
-          }
-        }
-
-        // ---------------- AUTO-CREATE CAMPAIGN IF BRAND APPROVED ----------------
-        let campaignSid = (a2p as any).usa2pSid || a2p.campaignSid;
-
-        const brandStatusNormalized = String(a2p.brandStatus || finalStatus)
-          .toLowerCase()
-          .trim();
-        const brandApproved = APPROVED.has(brandStatusNormalized);
-
-        if (
-          !campaignSid &&
-          brandApproved &&
-          a2p.messagingServiceSid &&
-          a2p.brandSid
-        ) {
-          const useCase = a2p.usecaseCode || "LOW_VOLUME";
-          const messageFlow = (a2p.optInDetails || "").trim();
-
-          const samples =
-            a2p.sampleMessagesArr && a2p.sampleMessagesArr.length
-              ? a2p.sampleMessagesArr
-              : (a2p.sampleMessages || "")
-                  .split("\n")
-                  .map((s) => s.trim())
-                  .filter(Boolean);
-
-          if (messageFlow && samples.length >= 2) {
-            try {
-              const description = buildCampaignDescription({
-                businessName: a2p.businessName || "",
-                useCase,
-                messageFlow,
-              });
-
-              const createPayload: any = {
-                brandRegistrationSid: a2p.brandSid,
-                usAppToPersonUsecase: useCase,
-                description,
-                messageFlow,
-                messageSamples: samples,
-                hasEmbeddedLinks: true,
-                hasEmbeddedPhone: false,
-                subscriberOptIn: true,
-                ageGated: false,
-                directLending: false,
-              };
-
-              const created = await client.messaging.v1
-                .services(a2p.messagingServiceSid)
-                .usAppToPerson.create(createPayload);
-
-              const newSid = (created as any).sid;
-              const st = String(
-                (created as any).status || (created as any).state || "",
-              ).toLowerCase();
-
-              campaignSid = newSid;
-              (a2p as any).usa2pSid = newSid;
-              a2p.messagingServiceSid = a2p.messagingServiceSid;
-
-              if (APPROVED.has(st)) {
-                finalReady = true;
-                finalStatus = "campaign_approved";
-              } else if (!DECLINED.has(st)) {
-                finalStatus = "campaign_submitted";
-              } else {
-                finalDecline = "Campaign rejected";
-                finalStatus = "rejected";
-                finalReady = false;
-              }
-
-              // keep samples in both forms
-              a2p.sampleMessagesArr = samples;
-              a2p.sampleMessages = samples.join("\n\n");
-              a2p.usecaseCode = useCase;
-            } catch (err: any) {
-              console.warn(
-                "a2p-sync-all campaign auto-create failed:",
-                err?.message || err,
-              );
-              // leave campaignSid unset; will try again next run
-            }
-          }
-        }
-
-        // ---------------- CAMPAIGN STATUS (IF EXISTS) ----------------
-        campaignSid = campaignSid || (a2p as any).usa2pSid || a2p.campaignSid;
-
-        if (campaignSid && a2p.messagingServiceSid) {
-          try {
-            const c = await client.messaging.v1
-              .services(a2p.messagingServiceSid)
-              .usAppToPerson(campaignSid)
-              .fetch();
-            const st = String(
-              (c as any).status || (c as any).state || "",
-            ).toLowerCase();
-
-            if (APPROVED.has(st)) {
-              finalReady = true;
-              finalStatus = "campaign_approved";
-            } else if (DECLINED.has(st)) {
-              finalReady = false;
-              finalStatus = "rejected";
-              finalDecline = "Campaign rejected";
-            }
-          } catch (err: any) {
-            console.warn(
-              "a2p-sync-all campaign fetch failed:",
-              err?.message || err,
-            );
-            // ignore, will retry on next cron
-          }
-        }
-
-        // ---------------- PERSIST + NOTIFY ----------------
-        a2p.messagingReady = finalReady;
-        a2p.registrationStatus = finalStatus as any;
-
-        if (finalDecline) {
-          // Mark as declined every time, but only notify ONCE per profile
-          a2p.applicationStatus = "declined";
-          a2p.declinedReason = finalDecline;
-
-          if (!alreadyRejected) {
-            a2p.approvalHistory = [
-              ...(a2p.approvalHistory || []),
-              { stage: "rejected", at: new Date(), note: finalDecline },
-            ];
-
-            if (user?.email) {
-              await sendDeclinedEmailSafe({
-                to: user.email,
-                name: user.name || undefined,
-                reason: finalDecline,
-                helpUrl: `${BASE_URL}/help/a2p-checklist`,
-              });
-            }
-          }
-        } else if (finalReady) {
-          a2p.applicationStatus = "approved";
-          if (!a2p.approvalNotifiedAt && user?.email) {
-            await sendApprovedEmailSafe({
-              to: user.email,
-              name: user.name || undefined,
-              dashboardUrl: `${BASE_URL}/settings/messaging`,
-            });
-            a2p.approvalNotifiedAt = new Date();
-          }
-        }
-
-        a2p.lastSyncedAt = new Date();
-        await a2p.save();
-        updated++;
-      } catch (e) {
-        console.warn(
-          "a2p sync-all item failed:",
-          (e as any)?.message || e,
-        );
-      }
-    }
-
     return res.status(200).json({
       ok: true,
-      updated,
-      build: process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 8) || null,
+      mode: "safe",
+      message:
+        "A2P sync cron temporarily disabled. Live Twilio callbacks now handle A2P status + emails.",
+      timestamp: new Date().toISOString(),
     });
   } catch (e: any) {
-    console.error("cron a2p-sync-all error:", e?.message || e);
+    console.error("cron a2p-sync-all (safe mode) error:", e?.message || e);
     return res.status(500).json({ message: e?.message || "Cron failed" });
   }
 }
