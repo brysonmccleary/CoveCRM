@@ -294,6 +294,11 @@ export default async function handler(
         .json({ ok: true, ...(debugEnabled ? { debug } : {}) });
     }
 
+    // Has this profile already ever been marked rejected?
+    const hadRejectionAlready = (a2p.approvalHistory || []).some(
+      (h: any) => h?.stage === "rejected",
+    );
+
     // === APPROVED-ish path (brand / campaign / etc.) ===
     if (statusRaw && APPROVED.has(statusRaw)) {
       let brandSid: string | undefined =
@@ -517,27 +522,30 @@ export default async function handler(
         body.Reason || body.reason || body.Error || "Rejected by reviewers",
       );
 
-      await A2PProfile.updateOne(
-        { _id: a2p._id },
-        {
-          $set: {
-            messagingReady: false,
-            applicationStatus: "declined",
-            registrationStatus: "rejected",
-            declinedReason,
-            lastSyncedAt: new Date(),
-            brandStatus: "FAILED",
-            brandFailureReason: declinedReason,
-          },
-          $push: {
-            approvalHistory: {
-              stage: "rejected",
-              at: new Date(),
-              note: declinedReason,
-            },
-          },
+      // Build update doc so we only push history once
+      const update: any = {
+        $set: {
+          messagingReady: false,
+          applicationStatus: "declined",
+          registrationStatus: "rejected",
+          declinedReason,
+          lastSyncedAt: new Date(),
+          brandStatus: "FAILED",
+          brandFailureReason: declinedReason,
         },
-      );
+      };
+
+      if (!hadRejectionAlready) {
+        update.$push = {
+          approvalHistory: {
+            stage: "rejected",
+            at: new Date(),
+            note: declinedReason,
+          },
+        };
+      }
+
+      await A2PProfile.updateOne({ _id: a2p._id }, update);
 
       // Mirror decline into User.a2p as well
       try {
@@ -561,29 +569,38 @@ export default async function handler(
         );
       }
 
-      try {
-        const user = a2p.userId ? await User.findById(a2p.userId).lean() : null;
-        if (user?.email) {
-          await sendA2PDeclinedEmail({
-            to: user.email,
-            name: user.name || undefined,
-            reason: declinedReason,
-            helpUrl: `${BASE_URL}/help/a2p-checklist`,
-          });
-        }
-      } catch (e) {
-        console.warn(
-          "A2P declined email failed:",
-          (e as any)?.message || e,
-        );
-        await A2PProfile.updateOne(
-          { _id: a2p._id },
-          {
-            $set: {
-              lastError: `notify: ${(e as any)?.message || e}`,
+      // Only send decline email the FIRST time we see a rejection
+      if (!hadRejectionAlready) {
+        try {
+          const user = a2p.userId
+            ? await User.findById(a2p.userId).lean()
+            : null;
+          if (user?.email) {
+            console.log(
+              "[a2p status-callback] sending ONE decline email for",
+              user.email,
+            );
+            await sendA2PDeclinedEmail({
+              to: user.email,
+              name: user.name || undefined,
+              reason: declinedReason,
+              helpUrl: `${BASE_URL}/help/a2p-checklist`,
+            });
+          }
+        } catch (e) {
+          console.warn(
+            "A2P declined email failed:",
+            (e as any)?.message || e,
+          );
+          await A2PProfile.updateOne(
+            { _id: a2p._id },
+            {
+              $set: {
+                lastError: `notify: ${(e as any)?.message || e}`,
+              },
             },
-          },
-        );
+          );
+        }
       }
 
       const payload: any = { ok: true, messagingReady: false };
