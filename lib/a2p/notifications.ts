@@ -1,3 +1,5 @@
+// lib/a2p/notifications.ts
+
 /**
  * Lightweight notifications shim used by A2P flows.
  * Supports RESEND_API_KEY or SENDGRID_API_KEY. If neither is set,
@@ -16,6 +18,16 @@ const FROM_EMAIL =
   process.env.SENDGRID_FROM_EMAIL ||
   process.env.RESEND_FROM_EMAIL ||
   "CoveCRM <no-reply@covecrm.com>"; // verified domain / fallback
+
+// ✅ Global kill-switch for decline emails (default: enabled)
+// Set A2P_DECLINE_EMAILS_ENABLED=false or "0" in env to fully disable.
+const A2P_DECLINE_EMAILS_ENABLED = (() => {
+  const raw = process.env.A2P_DECLINE_EMAILS_ENABLED;
+  if (!raw) return true; // default ON
+  const v = raw.trim().toLowerCase();
+  if (v === "false" || v === "0" || v === "off" || v === "no") return false;
+  return true;
+})();
 
 // Simple sleep helper for rate-limit backoff
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -144,6 +156,15 @@ export async function sendA2PDeclinedEmail(opts: {
   reason?: string;
   helpUrl?: string;
 }) {
+  // ✅ Global kill-switch: if disabled, log and bail.
+  if (!A2P_DECLINE_EMAILS_ENABLED) {
+    console.log(
+      "[notifications] A2P_DECLINE_EMAILS_ENABLED=false; skipping decline email",
+      { to: opts.to },
+    );
+    return;
+  }
+
   const subject = "⚠️ A2P Campaign Requires Changes";
   const greeting = opts.name ? `Hi ${opts.name},` : "Hi there,";
 

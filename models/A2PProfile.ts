@@ -1,3 +1,4 @@
+// models/A2PProfile.ts
 import mongoose, { Schema, Document } from "mongoose";
 
 export type A2PRegistrationStatus =
@@ -85,6 +86,7 @@ export interface IA2PProfile extends Document {
   applicationStatus?: A2PApplicationStatus;
   approvalNotifiedAt?: Date;
   declinedReason?: string;
+  declineNotifiedAt?: Date; // ✅ new: when we sent a decline email for the latest decline
 
   // Optional richer compliance content
   compliance?: {
@@ -200,6 +202,7 @@ const A2PProfileSchema = new Schema<IA2PProfile>({
   },
   approvalNotifiedAt: { type: Date },
   declinedReason: { type: String },
+  declineNotifiedAt: { type: Date }, // ✅ new
 
   // Optional richer compliance fields
   compliance: {

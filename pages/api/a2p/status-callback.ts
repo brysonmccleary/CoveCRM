@@ -517,10 +517,7 @@ export default async function handler(
         body.Reason || body.reason || body.Error || "Rejected by reviewers",
       );
 
-      // 👇 NEW: if this profile is already marked declined, skip sending
-      // another email. Twilio may retry callbacks, but we only notify once.
-      const alreadyDeclined = a2p.applicationStatus === "declined";
-
+      // Always persist the decline state
       await A2PProfile.updateOne(
         { _id: a2p._id },
         {
@@ -565,11 +562,27 @@ export default async function handler(
         );
       }
 
-      // 👇 Only send the decline email the FIRST time we see this profile
-      // in a declined state.
-      if (!alreadyDeclined) {
+      // ✅ DB-backed idempotency: only the first decline event gets an email.
+      let shouldNotify = false;
+      try {
+        const newlyFlagged = await A2PProfile.findOneAndUpdate(
+          { _id: a2p._id, declineNotifiedAt: { $exists: false } },
+          { $set: { declineNotifiedAt: new Date() } },
+          { new: true },
+        ).lean();
+        shouldNotify = !!newlyFlagged;
+      } catch (e) {
+        console.warn(
+          "A2P declined: failed to set declineNotifiedAt:",
+          (e as any)?.message || e,
+        );
+      }
+
+      if (shouldNotify) {
         try {
-          const user = a2p.userId ? await User.findById(a2p.userId).lean() : null;
+          const user = a2p.userId
+            ? await User.findById(a2p.userId).lean()
+            : null;
           if (user?.email) {
             await sendA2PDeclinedEmail({
               to: user.email,

@@ -888,6 +888,10 @@ export default async function handler(
               lastError: undefined,
               lastSyncedAt: new Date(),
             },
+            $unset: {
+              declinedReason: 1,
+              declineNotifiedAt: 1, // ✅ clear old decline notification so a new decline can email once
+            },
             $push: {
               approvalHistory: {
                 stage: "brand_resubmitted",
@@ -1078,8 +1082,6 @@ export default async function handler(
     const normalizedBrandStatus = String(brandStatus || "").toUpperCase();
     const canCreateCampaign = BRAND_OK_FOR_CAMPAIGN.has(normalizedBrandStatus);
 
-    // ---------------- 4) Messaging Service already ensured above ----------------
-
     // ---------------- 5) Campaign (Usa2p QE...) if missing AND brand is eligible ----------------
     let usa2pSid: string | undefined = (a2p as any).usa2pSid;
     if (!usa2pSid && canCreateCampaign) {
@@ -1148,57 +1150,44 @@ export default async function handler(
 
     // If brand is approved AND campaign exists, mark ready
     if (usa2pSid && canCreateCampaign) {
+      const appStatus =
+        normalizedBrandStatus === "FAILED" ? "declined" : "approved";
+
       await A2PProfile.updateOne(
         { _id: a2p._id },
         {
           $set: {
             registrationStatus: "ready",
-            applicationStatus:
-              normalizedBrandStatus === "FAILED" ? "declined" : "approved",
-            messagingReady: true,
+            applicationStatus: appStatus,
+            messagingReady: appStatus === "approved",
+            lastSyncedAt: new Date(),
           },
           $push: {
             approvalHistory: {
               stage: "ready",
               at: new Date(),
-              note: "Brand + campaign approved / ready for messaging",
+              note: "Brand + campaign ready from start.ts",
             },
           },
         },
       );
     }
 
-    // Done
-    const updated = await A2PProfile.findById(
-      a2p._id,
-    ).lean<IA2PProfile | null>();
-
     return res.status(200).json({
-      message:
-        "A2P registration started/submitted. Campaign creation will proceed when your brand is eligible.",
+      ok: true,
       data: {
         messagingServiceSid,
-        profileSid: updated?.profileSid,
-        trustProductSid: (updated as any)?.trustProductSid,
-        brandSid: (updated as any)?.brandSid,
-        usa2pSid: (updated as any)?.usa2pSid,
-        brandStatus: updated?.brandStatus || brandStatus,
-        brandFailureReason: updated?.brandFailureReason || brandFailureReason,
+        brandSid,
+        usa2pSid,
+        brandStatus,
         canCreateCampaign,
-        registrationStatus: updated?.registrationStatus,
-        messagingReady: updated?.messagingReady,
+        brandFailureReason,
       },
     });
   } catch (err: any) {
-    console.error("[A2P start] top-level error:", {
-      message: err?.message,
-      code: err?.code,
-      status: err?.status,
-      moreInfo: err?.moreInfo,
-      details: err?.details,
-    });
-    return res.status(500).json({
-      message: err?.message || "Failed to start A2P flow",
-    });
+    console.error("[A2P start] top-level error:", err);
+    return res
+      .status(500)
+      .json({ message: "A2P start failed", error: err?.message || String(err) });
   }
 }
