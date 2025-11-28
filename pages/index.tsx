@@ -150,7 +150,16 @@ export default function Home() {
 
         {/* Footer */}
         <footer className="py-10 text-center text-sm text-gray-400">
-          © {new Date().getFullYear()} CRM Cove. All rights reserved.
+          <div className="mb-2 space-x-3">
+            <Link href="/privacy-policy" className="hover:text-gray-600">
+              Privacy Policy
+            </Link>
+            <span>·</span>
+            <Link href="/terms-of-service" className="hover:text-gray-600">
+              Terms of Service
+            </Link>
+          </div>
+          <div>© {new Date().getFullYear()} CRM Cove. All rights reserved.</div>
         </footer>
       </main>
     </>
