@@ -149,17 +149,23 @@ export default function Home() {
         </section>
 
         {/* Footer */}
-        <footer className="py-10 text-center text-sm text-gray-400">
-          <div className="mb-2 space-x-3">
-            <Link href="/privacy-policy" className="hover:text-gray-600">
+        <footer className="py-10 text-center text-sm text-gray-400 space-y-2">
+          <div>
+            <Link
+              href="https://www.covecrm.com/legal/privacy"
+              className="text-gray-500 hover:text-gray-700 underline mx-2"
+            >
               Privacy Policy
             </Link>
-            <span>·</span>
-            <Link href="/terms-of-service" className="hover:text-gray-600">
+            <span className="text-gray-500">•</span>
+            <Link
+              href="https://www.covecrm.com/legal/terms"
+              className="text-gray-500 hover:text-gray-700 underline mx-2"
+            >
               Terms of Service
             </Link>
           </div>
-          <div>© {new Date().getFullYear()} CRM Cove. All rights reserved.</div>
+          <p>© {new Date().getFullYear()} CRM Cove. All rights reserved.</p>
         </footer>
       </main>
     </>
