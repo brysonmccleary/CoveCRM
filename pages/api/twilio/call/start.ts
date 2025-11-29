@@ -16,19 +16,13 @@ function runtimeBase(req: NextApiRequest) {
   const host = (req.headers["x-forwarded-host"] as string) || req.headers.host || "";
   return `${proto}://${host}`.replace(/\/+$/, "");
 }
-
-function voiceAnswerUrl(req: NextApiRequest, leadId?: string) {
-  const base = `${runtimeBase(req)}/api/twilio/voice-answer`;
-  if (!leadId) return base;
-  const encoded = encodeURIComponent(leadId);
-  return `${base}?leadId=${encoded}`;
+function voiceAnswerUrl(req: NextApiRequest) {
+  return `${runtimeBase(req)}/api/twilio/voice-answer`;
 }
-
 function voiceStatusUrl(req: NextApiRequest, email: string) {
   const encoded = encodeURIComponent(email.toLowerCase());
   return `${runtimeBase(req)}/api/twilio/voice-status?userEmail=${encoded}`;
 }
-
 function normalizeE164(p?: string) {
   const raw = String(p || "");
   const d = raw.replace(/\D/g, "");
@@ -48,16 +42,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const body = (req.body || {}) as { leadId?: string; to?: string };
 
-  try {
-    await dbConnect();
-  } catch {
-    // best-effort; Twilio call will still be attempted
-  }
+  try { await dbConnect(); } catch {}
 
   // --- Resolve lead + enforce quiet hours (8am–9pm local) ---
   let toNumber = "";
-  let leadId: string | undefined = body.leadId;
-
   if (body.leadId) {
     const leadDoc: any = await Lead.findOne({ _id: body.leadId, userEmail }).lean();
     if (!leadDoc) return res.status(404).json({ error: "Lead not found" });
@@ -71,12 +59,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const candidates = [
-      leadDoc.phone,
-      leadDoc.Phone,
-      leadDoc.mobile,
-      leadDoc.Mobile,
-      leadDoc.primaryPhone,
-      leadDoc["Primary Phone"],
+      leadDoc.phone, leadDoc.Phone, leadDoc.mobile, leadDoc.Mobile,
+      leadDoc.primaryPhone, leadDoc["Primary Phone"],
     ].filter(Boolean);
     toNumber = normalizeE164(candidates[0]);
   } else {
@@ -88,15 +72,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     const { client } = await getClientForUser(userEmail);
     const from = await pickFromNumberForUser(userEmail);
-    if (!from) {
-      return res.status(400).json({ error: "No outbound caller ID configured. Buy a number first." });
-    }
+    if (!from) return res.status(400).json({ error: "No outbound caller ID configured. Buy a number first." });
 
     // Place the call with correct runtime URLs + full callback events
     const call = await client.calls.create({
       to: toNumber,
       from,
-      url: voiceAnswerUrl(req, leadId),
+      url: voiceAnswerUrl(req),
       statusCallback: voiceStatusUrl(req, userEmail),
       statusCallbackEvent: ["initiated", "ringing", "answered", "completed"],
       record: false,
@@ -104,29 +86,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // Seed the Call row immediately so the dashboard shows a Dial right away
     const now = new Date();
-
-    const setOnInsert: any = {
-      callSid: call.sid,
-      userEmail,
-      direction: "outbound",
-      createdAt: now,
-      kind: "call",
-    };
-    if (leadId) setOnInsert.leadId = leadId;
-
-    const set: any = {
-      ownerNumber: from,
-      otherNumber: toNumber,
-      from,
-      to: toNumber,
-      startedAt: now, // ensures it's in today's window
-      updatedAt: now,
-    };
-    if (leadId) set.leadId = leadId;
-
     await (Call as any).updateOne(
       { callSid: call.sid },
-      { $setOnInsert: setOnInsert, $set: set },
+      {
+        $setOnInsert: {
+          callSid: call.sid,
+          userEmail,
+          direction: "outbound",
+          createdAt: now,
+          kind: "call",
+          leadId: body.leadId, // ✅ tie this call to the lead
+        },
+        $set: {
+          ownerNumber: from,
+          otherNumber: toNumber,
+          from,
+          to: toNumber,
+          startedAt: now,   // ensures it's in today's window
+          updatedAt: now,
+          leadId: body.leadId, // ✅ keep leadId on the call for by-lead queries
+        },
+      },
       { upsert: true }
     );
 
@@ -140,7 +120,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       to: toNumber,
     });
   } catch (e: any) {
-    console.error("Error starting outbound call:", e?.message || e);
     return res.status(500).json({ error: e?.message || "Call failed" });
   }
 }
