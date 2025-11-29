@@ -22,6 +22,8 @@ import {
 import { initSocket } from "@/lib/socket";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
 import { sendSms } from "@/lib/twilio/sendSMS";
+// ✅ NEW: mobile devices for push notifications
+import MobileDevice from "@/models/MobileDevice";
 
 // ✅ NEW: billing imports
 import { trackUsage } from "@/lib/billing/trackUsage";
@@ -830,6 +832,77 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     } catch (e) {
       console.warn("⚠️ Inbound reply email failed (non-fatal):", (e as any)?.message || e);
+    }
+
+    // 🔔 Mobile push notifications for inbound SMS
+    try {
+      const userEmailLower = (user.email || "").toLowerCase();
+
+      const devices = await MobileDevice.find({
+        userEmail: userEmailLower,
+        disabled: { $ne: true },
+      })
+        .lean()
+        .exec();
+
+      if (Array.isArray(devices) && devices.length > 0) {
+        const leadDisplayName = resolveLeadDisplayName(
+          lead,
+          lead.Phone || (lead as any).phone || fromNumber,
+        );
+
+        const title = `New message from ${
+          leadDisplayName || lead.Phone || (lead as any).phone || fromNumber
+        }`;
+
+        const snippet =
+          body && body.length > 80
+            ? `${body.slice(0, 80)}…`
+            : body || (numMedia ? "[media]" : "");
+
+        const dataPayload = {
+          type: "sms",
+          leadId: String(lead._id),
+          from: fromNumber,
+          to: toNumber,
+        };
+
+        const allTokens = devices
+          .map((d: any) => d.expoPushToken)
+          .filter(Boolean);
+
+        if (allTokens.length > 0) {
+          // Expo recommends batching (max 100 per request). We'll be conservative at 90.
+          const chunkSize = 90;
+          for (let i = 0; i < allTokens.length; i += chunkSize) {
+            const chunk = allTokens.slice(i, i + chunkSize);
+
+            await axios.post(
+              "https://exp.host/--/api/v2/push/send",
+              chunk.map((token) => ({
+                to: token,
+                sound: "default",
+                title,
+                body: snippet || "New message",
+                data: dataPayload,
+              })),
+              {
+                headers: { "Content-Type": "application/json" },
+                timeout: 10000,
+              },
+            );
+          }
+
+          console.log(
+            `📲 Sent ${allTokens.length} mobile push notification(s) for inbound SMS to ${userEmailLower}`,
+          );
+        }
+      }
+    } catch (e) {
+      console.warn(
+        "⚠️ Failed to send mobile push notification:",
+        (e as any)?.message || e,
+      );
     }
 
     // === Keyword handling (flags only)
