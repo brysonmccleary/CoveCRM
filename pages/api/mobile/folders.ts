@@ -110,7 +110,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .lean()
       .exec();
 
-    const all = raw.map((r: DBFolder) => toLeanFolder(r, email));
+    const all: LeanFolder[] = (raw as DBFolder[]).map((r: DBFolder) =>
+      toLeanFolder(r, email)
+    );
 
     // 3) Partition: custom vs system
     const systemKeys = new Set(SYSTEM_FOLDERS.map((n) => normKey(n)));
@@ -128,11 +130,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
-    custom.sort((a, b) => a.name.localeCompare(b.name));
+    custom.sort((a: LeanFolder, b: LeanFolder) => a.name.localeCompare(b.name));
 
     const canonicalByKey = new Map<string, LeanFolder>();
     for (const [key, arr] of systemBuckets) {
-      arr.sort((a, b) => {
+      arr.sort((a: LeanFolder, b: LeanFolder) => {
         const ad = a.createdAt?.getTime() ?? 0;
         const bd = b.createdAt?.getTime() ?? 0;
         return ad - bd || a._id.localeCompare(b._id);
@@ -165,8 +167,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     for (const r of byIdAgg) byId.set(String(r._id), Number(r.n) || 0);
 
     const unsorted = all
-      .filter((f) => normKey(f.name) === "unsorted")
-      .sort((a, b) => {
+      .filter((f: LeanFolder) => normKey(f.name) === "unsorted")
+      .sort((a: LeanFolder, b: LeanFolder) => {
         const ad = a.createdAt?.getTime() ?? 0;
         const bd = b.createdAt?.getTime() ?? 0;
         return ad - bd || a._id.localeCompare(b._id);
@@ -182,9 +184,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       canonicalByKey.get(normKey(n))
     ).filter(Boolean) as LeanFolder[];
 
-    const ordered = [...custom, ...systemOrdered];
+    const ordered: LeanFolder[] = [...custom, ...systemOrdered];
 
-    const foldersWithCounts = ordered.map((f) => {
+    const foldersWithCounts = ordered.map((f: LeanFolder) => {
       const idStr = String(f._id);
       const base = byId.get(idStr) || 0;
       const extra = unsortedIdStr && idStr === unsortedIdStr ? unsortedCount : 0;
