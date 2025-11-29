@@ -1,6 +1,8 @@
+// pages/api/twilio/voice-status.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import dbConnect from "@/lib/mongooseConnect";
 import Call from "@/models/Call";
+import InboundCall from "@/models/InboundCall";
 
 /** Helpers */
 function firstDefined<T = any>(...vals: T[]): T | undefined {
@@ -73,22 +75,38 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       ? String(q.userEmail).toLowerCase()
       : undefined;
 
+  // 🔎 Pull any inbound metadata (ownerEmail + leadId) for this callSid
+  let inboundOwnerEmail: string | undefined;
+  let inboundLeadId: string | undefined;
+  try {
+    const inbound = await (InboundCall as any).findOne({ callSid }).lean();
+    if (inbound) {
+      if (inbound.ownerEmail) inboundOwnerEmail = String(inbound.ownerEmail).toLowerCase();
+      if (inbound.leadId) inboundLeadId = String(inbound.leadId);
+    }
+  } catch (e) {
+    console.error("[voice-status] inbound lookup error", e);
+  }
+
   // Load existing to preserve attribution
   const existing = await (Call as any).findOne({ callSid }).lean();
 
-  const userEmail = (existing?.userEmail || userEmailParam || "").toLowerCase();
+  const userEmail = (existing?.userEmail || userEmailParam || inboundOwnerEmail || "").toLowerCase();
   const effDirection: "outbound" | "inbound" = (existing?.direction || direction) as any;
+  const leadId = existing?.leadId ? String(existing.leadId) : inboundLeadId;
 
   // If we’d have to insert but still lack userEmail, skip insert (prevent orphan rows)
   const allowInsert = Boolean(userEmail);
   const isNewDoc = !existing;
 
   const now = new Date();
-  // ✅ IMPORTANT: Only include NON-overlapping fields in $setOnInsert
+
+  // ✅ Only include NON-overlapping fields in $setOnInsert
   const setOnInsert = prune({
     callSid,
     userEmail: userEmail || undefined,
     direction: effDirection,
+    leadId: leadId || undefined,
     createdAt: now,
     kind: "call",
   });
@@ -98,6 +116,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const set = prune({
     status,
+
     // keep latest numbers (do NOT duplicate in $setOnInsert)
     ownerNumber: existing?.ownerNumber || from,
     otherNumber: existing?.otherNumber || to,
@@ -122,6 +141,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     amd: answeredBy ? { answeredBy } : undefined,
     isVoicemail,
     updatedAt: now,
+
+    // If we learned a leadId from InboundCall and the Call doc doesn't have one yet, attach it
+    ...(leadId && !existing?.leadId ? { leadId } : {}),
   });
 
   try {
@@ -139,7 +161,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     await (Call as any).updateOne({ callSid }, { $set: set, $setOnInsert: setOnInsert }, { upsert: true });
 
-    console.log(`[voice-status] callSid=${callSid} status=${status} hadUserEmail=${Boolean(userEmail)}`);
+    console.log(
+      `[voice-status] callSid=${callSid} status=${status} hadUserEmail=${Boolean(
+        userEmail,
+      )} leadId=${leadId || existing?.leadId || ""}`,
+    );
 
     res.setHeader("Cache-Control", "no-store");
     return res.status(200).json({ ok: true, callSid, status, hadUserEmail: Boolean(userEmail) });

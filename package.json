@@ -31,6 +31,7 @@
     "formidable": "^3.5.4",
     "google-spreadsheet": "^4.1.4",
     "googleapis": "^153.0.0",
+    "jsonwebtoken": "^9.0.2",
     "luxon": "^3.3.0",
     "micro": "^10.0.1",
     "moment": "^2.30.1",
