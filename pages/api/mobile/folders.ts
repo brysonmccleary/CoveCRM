@@ -107,10 +107,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const raw = await (Folder as any)
       .find({ userEmail: email })
       .sort({ createdAt: 1, _id: 1 })
-      .lean<DBFolder[]>()
+      .lean()
       .exec();
 
-    const all = raw.map((r) => toLeanFolder(r, email));
+    const all = raw.map((r: DBFolder) => toLeanFolder(r, email));
 
     // 3) Partition: custom vs system
     const systemKeys = new Set(SYSTEM_FOLDERS.map((n) => normKey(n)));
