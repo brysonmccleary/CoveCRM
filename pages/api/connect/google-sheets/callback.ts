@@ -88,11 +88,11 @@ export default async function handler(
     { email },
     {
       $set: {
-        // ✅ Primary for Sheets imports (unchanged behavior)
+        // ✅ Primary for Sheets imports
         googleSheets: { accessToken, refreshToken, expiryDate, scope },
         // ✅ Back-compat
         googleTokens: { accessToken, refreshToken, expiryDate, scope },
-        // ✅ Keep calendar in sync so /api/calendar/events uses a valid token
+        // ✅ Keep calendar in sync so calendar endpoints can still use it
         googleCalendar: { accessToken, refreshToken, expiryDate, scope },
         googleSheetsConnected: true,
         flags: {
@@ -104,6 +104,6 @@ export default async function handler(
     }
   );
 
-  // ✅ After connecting, go straight back to the booking calendar
-  return res.redirect("/calendar");
+  // ✅ After connecting, go back to Leads and trigger sheet loading
+  return res.redirect("/leads?connected=google-sheets");
 }
