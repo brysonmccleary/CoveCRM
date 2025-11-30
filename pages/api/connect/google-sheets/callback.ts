@@ -28,8 +28,9 @@ export default async function handler(
   const code = req.query.code as string | undefined;
   if (!code) return res.status(400).send("Missing code");
 
-  // No state/email check anymore – we trust the logged-in session.
+  // Use the same redirectUri as the connect + list handlers
   const redirectUri =
+    process.env.GOOGLE_REDIRECT_URI_SHEETS ||
     process.env.GOOGLE_REDIRECT_URI ||
     `${baseUrl(req).replace(/\/$/, "")}/api/connect/google-sheets/callback`;
 
@@ -57,7 +58,6 @@ export default async function handler(
     .select("googleSheets googleTokens googleCalendar flags")
     .lean<any>();
 
-  // Preserve refresh_token if Google doesn't resend it
   const refreshToken =
     tokens.refresh_token ||
     existing?.googleSheets?.refreshToken ||
@@ -88,11 +88,8 @@ export default async function handler(
     { email },
     {
       $set: {
-        // ✅ Primary for Sheets imports (unchanged behavior)
         googleSheets: { accessToken, refreshToken, expiryDate, scope },
-        // ✅ Back-compat
         googleTokens: { accessToken, refreshToken, expiryDate, scope },
-        // ✅ Keep calendar in sync so /api/calendar/events uses a valid token
         googleCalendar: { accessToken, refreshToken, expiryDate, scope },
         googleSheetsConnected: true,
         flags: {
@@ -104,6 +101,5 @@ export default async function handler(
     }
   );
 
-  // ✅ After connecting, go back to Leads so the Sheets picker auto-loads
   return res.redirect("/leads?connected=google-sheets");
 }
