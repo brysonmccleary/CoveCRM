@@ -1,3 +1,4 @@
+// pages/calendar.tsx
 import { useSession } from "next-auth/react";
 import { useEffect, useState, useRef } from "react";
 import axios from "axios";
@@ -27,7 +28,8 @@ export default function CalendarPage() {
 
   const fetchCalendarStatus = async () => {
     try {
-      const res = await axios.get("/api/user/calendar-status");
+      // ✅ use the actual API route
+      const res = await axios.get("/api/calendar-status");
       console.log("✅ calendar-status:", res.data);
 
       const connected =
@@ -45,7 +47,8 @@ export default function CalendarPage() {
 
       // If connected, fetch events count
       if (connected) {
-        const eventsRes = await axios.get("/api/user/calendar-events");
+        // ✅ use the actual events route
+        const eventsRes = await axios.get("/api/calendar/events");
         console.log("📆 Events fetched:", eventsRes.data?.length || 0);
         setEventCount(eventsRes.data?.length || 0);
       }
