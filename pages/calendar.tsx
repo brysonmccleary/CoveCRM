@@ -28,7 +28,7 @@ export default function CalendarPage() {
 
   const fetchCalendarStatus = async () => {
     try {
-      // ✅ use the actual API route
+      // 🔑 Match the real API route: pages/api/calendar-status.ts
       const res = await axios.get("/api/calendar-status");
       console.log("✅ calendar-status:", res.data);
 
@@ -47,7 +47,7 @@ export default function CalendarPage() {
 
       // If connected, fetch events count
       if (connected) {
-        // ✅ use the actual events route
+        // 🔑 Match the real API route: pages/api/calendar/events.ts
         const eventsRes = await axios.get("/api/calendar/events");
         console.log("📆 Events fetched:", eventsRes.data?.length || 0);
         setEventCount(eventsRes.data?.length || 0);
