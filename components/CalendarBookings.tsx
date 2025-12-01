@@ -116,9 +116,9 @@ export default function CalendarBookings() {
     setErrorMsg(null);
 
     try {
-      const url = `/api/calendar/events?start=${encodeURIComponent(toISO(start))}&end=${encodeURIComponent(
-        toISO(end)
-      )}`;
+      const url = `/api/calendar/events?start=${encodeURIComponent(
+        toISO(start),
+      )}&end=${encodeURIComponent(toISO(end))}`;
       const res = await fetch(url);
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || "Failed to load events");
@@ -131,7 +131,9 @@ export default function CalendarBookings() {
         description: e.description,
         location: e.location,
         colorId: e.colorId ?? null,
-        attendeesEmails: Array.isArray(e.attendees) ? e.attendees.filter(Boolean) : [],
+        attendeesEmails: Array.isArray(e.attendees)
+          ? e.attendees.filter(Boolean)
+          : [],
         source: "unknown",
       }));
 
@@ -149,11 +151,21 @@ export default function CalendarBookings() {
         parsed.map((e) => ({
           ...e,
           source: matchedIds.includes(e.id) ? "crm" : "manual",
-        }))
+        })),
       );
     } catch (err: any) {
-      console.error("❌ Calendar fetch error:", err?.message || err);
-      setErrorMsg(err?.message || "Failed to load events");
+      const message = err?.message || "Failed to load events";
+      console.error("❌ Calendar fetch error:", message);
+      setErrorMsg(message);
+
+      // If the error indicates expired / bad grant / missing scopes,
+      // treat it as "needs reconnect" and drop connection state.
+      if (
+        typeof message === "string" &&
+        /GOOGLE_RECONNECT_REQUIRED|invalid_grant|insufficient/i.test(message)
+      ) {
+        setCalendarConnected(false);
+      }
     }
   };
 
@@ -168,7 +180,15 @@ export default function CalendarBookings() {
   // 3) Compute & track visible range
   const monthVisibleRange = (date: Date) => {
     const mStart = new Date(date.getFullYear(), date.getMonth(), 1, 0, 0, 0, 0);
-    const mEnd = new Date(date.getFullYear(), date.getMonth() + 1, 0, 23, 59, 59, 999);
+    const mEnd = new Date(
+      date.getFullYear(),
+      date.getMonth() + 1,
+      0,
+      23,
+      59,
+      59,
+      999,
+    );
     const startOfWeek = (d: Date) => {
       const x = new Date(d);
       x.setHours(0, 0, 0, 0);
@@ -273,7 +293,9 @@ export default function CalendarBookings() {
   // 4) Event modal + robust lead lookup
   const extractPhone = (text?: string): string | null => {
     if (!text) return null;
-    const match = text.match(/(?:\+?1[-.\s]?)?(\d{3})[-.\s]?(\d{3})[-.\s]?(\d{4})/);
+    const match = text.match(
+      /(?:\+?1[-.\s]?)?(\d{3})[-.\s]?(\d{3})[-.\s]?(\d{4})/,
+    );
     return match ? match.slice(1).join("") : null;
   };
 
@@ -313,6 +335,10 @@ export default function CalendarBookings() {
       router.push(`/dial-session?leadId=${lead._id}`);
     }
   };
+
+  const needsReconnect =
+    !!errorMsg &&
+    /GOOGLE_RECONNECT_REQUIRED|invalid_grant|insufficient/i.test(errorMsg);
 
   return (
     <div className="p-4">
@@ -361,7 +387,9 @@ export default function CalendarBookings() {
         `}
       </style>
 
-      <h2 className="text-2xl font-semibold mb-4 text-white">📅 Booking Calendar</h2>
+      <h2 className="text-2xl font-semibold mb-4 text-white">
+        📅 Booking Calendar
+      </h2>
 
       {!loadingStatus && !calendarConnected && (
         <div className="mb-4">
@@ -453,7 +481,20 @@ export default function CalendarBookings() {
         </div>
       )}
 
-      {errorMsg && <p className="text-red-500 mt-3">{errorMsg}</p>}
+      {/* Error / reconnect messaging */}
+      {errorMsg && needsReconnect && (
+        <div className="mt-3">
+          <p className="text-red-400 text-sm mb-2">
+            Your Google Calendar authorization expired or changed. Please
+            reconnect your Google account.
+          </p>
+          <ConnectGoogleCalendarButton />
+        </div>
+      )}
+
+      {errorMsg && !needsReconnect && (
+        <p className="text-red-500 mt-3 text-sm">{errorMsg}</p>
+      )}
 
       <Modal
         isOpen={modalOpen}
@@ -465,23 +506,47 @@ export default function CalendarBookings() {
         {selectedEvent && (
           <div className="text-white space-y-2">
             <h2 className="text-xl font-bold">{selectedEvent.title}</h2>
-            <p><strong>Start:</strong> {selectedEvent.start.toLocaleString()}</p>
-            <p><strong>End:</strong> {selectedEvent.end.toLocaleString()}</p>
-            {selectedEvent.location && <p><strong>Location:</strong> {selectedEvent.location}</p>}
+            <p>
+              <strong>Start:</strong>{" "}
+              {selectedEvent.start.toLocaleString()}
+            </p>
+            <p>
+              <strong>End:</strong> {selectedEvent.end.toLocaleString()}
+            </p>
+            {selectedEvent.location && (
+              <p>
+                <strong>Location:</strong> {selectedEvent.location}
+              </p>
+            )}
             {selectedEvent.description && (
-              <p className="whitespace-pre-wrap"><strong>Description:</strong> {selectedEvent.description}</p>
+              <p className="whitespace-pre-wrap">
+                <strong>Description:</strong> {selectedEvent.description}
+              </p>
             )}
-            {selectedEvent.attendeesEmails && selectedEvent.attendeesEmails.length > 0 && (
-              <p><strong>Attendee:</strong> {selectedEvent.attendeesEmails[0]}</p>
-            )}
+            {selectedEvent.attendeesEmails &&
+              selectedEvent.attendeesEmails.length > 0 && (
+                <p>
+                  <strong>Attendee:</strong>{" "}
+                  {selectedEvent.attendeesEmails[0]}
+                </p>
+              )}
 
             {lead ? (
               <>
                 <hr className="my-2 border-[#1e293b]" />
-                <p><strong>Lead:</strong> {lead["First Name"]} {lead["Last Name"]}</p>
-                <p><strong>Email:</strong> {lead.Email}</p>
-                <p><strong>Phone:</strong> {lead.Phone}</p>
-                <p><strong>Notes:</strong> {lead.Notes || "—"}</p>
+                <p>
+                  <strong>Lead:</strong> {lead["First Name"]}{" "}
+                  {lead["Last Name"]}
+                </p>
+                <p>
+                  <strong>Email:</strong> {lead.Email}
+                </p>
+                <p>
+                  <strong>Phone:</strong> {lead.Phone}
+                </p>
+                <p>
+                  <strong>Notes:</strong> {lead.Notes || "—"}
+                </p>
                 <button
                   onClick={callNow}
                   className="mt-4 px-4 py-2 bg-green-600 hover:bg-green-700 rounded text-white w-full"
@@ -490,11 +555,16 @@ export default function CalendarBookings() {
                 </button>
               </>
             ) : (
-              <p className="mt-3 italic text-sm text-gray-300">No matching lead found for this event.</p>
+              <p className="mt-3 italic text-sm text-gray-300">
+                No matching lead found for this event.
+              </p>
             )}
 
             <div className="mt-4 text-right">
-              <button onClick={closeModal} className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded">
+              <button
+                onClick={closeModal}
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded"
+              >
                 Close
               </button>
             </div>
