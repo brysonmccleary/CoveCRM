@@ -4,57 +4,56 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
 import { google } from "googleapis";
 
-export default async function handler(
-  req: NextApiRequest,
-  res: NextApiResponse,
-) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const session = await getServerSession(req, res, authOptions);
   if (!session?.user?.email) {
     return res.status(401).json({ error: "Unauthorized" });
   }
 
-  const clientId = process.env.GOOGLE_CLIENT_ID;
-  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
-
-  // Prefer the explicit SHEETS redirect, otherwise build it from host
-  const base =
-    process.env.NEXTAUTH_URL ||
-    process.env.NEXT_PUBLIC_BASE_URL ||
-    `https://${req.headers["x-forwarded-host"] || req.headers.host}`;
-  const redirectUri =
-    process.env.GOOGLE_REDIRECT_URI_SHEETS ||
-    `${base}/api/connect/google-sheets/callback`;
+  const clientId = process.env.GOOGLE_CLIENT_ID!;
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET!;
+  const redirectUri = process.env.GOOGLE_REDIRECT_URI_SHEETS;
 
   if (!clientId || !clientSecret || !redirectUri) {
     return res.status(500).json({
-      error: "Missing Google env vars",
+      error: "Missing env",
       have: {
         clientId: !!clientId,
         clientSecret: !!clientSecret,
-        redirectUri: !!redirectUri,
+        redirectUri: redirectUri || null,
+      },
+      need: {
+        GOOGLE_CLIENT_ID: "(set to your Web client ID)",
+        GOOGLE_CLIENT_SECRET: "(set to your Web client secret)",
+        GOOGLE_REDIRECT_URI_SHEETS:
+          "https://www.covecrm.com/api/connect/google-sheets/callback",
       },
     });
   }
 
-  const oauth2Client = new google.auth.OAuth2(
-    clientId,
-    clientSecret,
-    redirectUri,
-  );
+  const oauth2 = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
 
-  const scopes = [
-    "https://www.googleapis.com/auth/spreadsheets",
-    "https://www.googleapis.com/auth/drive.metadata.readonly",
+  const scope = [
+    "https://www.googleapis.com/auth/spreadsheets.readonly",
+    "https://www.googleapis.com/auth/drive.file",
     "https://www.googleapis.com/auth/userinfo.email",
-    "openid",
   ];
 
-  const url = oauth2Client.generateAuthUrl({
+  const authorizeUrl = oauth2.generateAuthUrl({
     access_type: "offline",
     prompt: "consent",
-    scope: scopes,
+    scope,
   });
 
-  // ✅ IMPORTANT: call res.redirect instead of returning an object
-  res.redirect(url);
+  if (typeof req.query.debug !== "undefined") {
+    res.setHeader("Cache-Control", "no-store");
+    return res.status(200).json({
+      clientId,
+      redirectUri,
+      scope,
+      authorizeUrl,
+    });
+  }
+
+  res.redirect(authorizeUrl);
 }

@@ -13,7 +13,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     process.env.NEXT_PUBLIC_BASE_URL ||
     "http://localhost:3000";
 
-  // ✅ Force Calendar to use the SAME callback as Sheets.
   const redirectUri = `${base.replace(/\/$/, "")}/api/connect/google-sheets/callback`;
 
   const oauth2 = new google.auth.OAuth2(
@@ -27,8 +26,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     prompt: "consent",
     scope: [
       "https://www.googleapis.com/auth/spreadsheets.readonly",
-      "https://www.googleapis.com/auth/calendar",
+      "https://www.googleapis.com/auth/drive.file",
       "https://www.googleapis.com/auth/calendar.events",
+      "https://www.googleapis.com/auth/calendar.readonly",
       "https://www.googleapis.com/auth/userinfo.email",
       "https://www.googleapis.com/auth/userinfo.profile",
       "openid",

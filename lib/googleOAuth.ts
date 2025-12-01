@@ -11,9 +11,10 @@ const CALENDAR_SCOPES = [
 ];
 
 const SHEETS_SCOPES = [
-  "https://www.googleapis.com/auth/spreadsheets",
-  // If you only write user-created files, drive.file is a safe narrow scope:
-  // "https://www.googleapis.com/auth/drive.file",
+  // ✅ Narrowed Sheets scope
+  "https://www.googleapis.com/auth/spreadsheets.readonly",
+  // ✅ Per-file Drive access (non-restricted) for user-selected files
+  "https://www.googleapis.com/auth/drive.file",
   "https://www.googleapis.com/auth/userinfo.email",
   "openid",
 ];
@@ -37,7 +38,8 @@ export function getOAuthClient() {
 
 export function buildScopes(target: GoogleTarget = "calendar") {
   if (target === "sheets") return SHEETS_SCOPES;
-  if (target === "both") return Array.from(new Set([...CALENDAR_SCOPES, ...SHEETS_SCOPES]));
+  if (target === "both")
+    return Array.from(new Set([...CALENDAR_SCOPES, ...SHEETS_SCOPES]));
   return CALENDAR_SCOPES; // default
 }
 

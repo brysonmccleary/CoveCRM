@@ -1,13 +1,10 @@
-// pages/api/google/auth.ts
+// /pages/api/google/auth.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { google } from "googleapis";
 
 const SCOPES = [
-  // Sheets (read-only for lead import/sync)
   "https://www.googleapis.com/auth/spreadsheets.readonly",
-  // Calendar (for booking/reads; safe superset)
   "https://www.googleapis.com/auth/calendar.readonly",
-  // Identity
   "https://www.googleapis.com/auth/userinfo.email",
   "https://www.googleapis.com/auth/userinfo.profile",
   "openid",
@@ -33,7 +30,6 @@ function isHostAllowed(host: string): boolean {
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean);
-  // exact or suffix match (for *.ngrok.app)
   return allow.some(
     (rule) =>
       host === rule ||
@@ -54,7 +50,6 @@ export default async function handler(
   try {
     const { hostname } = new URL(origin);
     if (!isHostAllowed(hostname)) {
-      // Fallback to BASE_URL if current host not allowlisted
       const base =
         process.env.NEXT_PUBLIC_BASE_URL ||
         process.env.BASE_URL ||
@@ -76,8 +71,6 @@ export default async function handler(
     redirectUri,
   );
 
-  // Optional: allow frontend to pass the CRM user email so we can link tokens even
-  // if Google account email differs. (We’ll validate on callback.)
   const userEmail = (
     req.query.userEmail ? String(req.query.userEmail) : ""
   ).toLowerCase();

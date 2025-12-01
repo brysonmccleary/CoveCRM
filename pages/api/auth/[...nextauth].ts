@@ -1,3 +1,4 @@
+// /pages/api/auth/[...nextauth].ts
 import NextAuth, { type NextAuthOptions } from "next-auth";
 import CredentialsProvider from "next-auth/providers/credentials";
 import GoogleProvider from "next-auth/providers/google";
@@ -101,7 +102,6 @@ function getCookieValue(cookieHeader: string | undefined, name: string) {
 }
 
 export const authOptions: NextAuthOptions = {
-  // ⬇⬇ Only change here: debug in dev only
   debug: isDev,
   useSecureCookies: !isDev,
 
@@ -123,11 +123,9 @@ export const authOptions: NextAuthOptions = {
 
         await mongooseConnect();
 
-        // Case-insensitive find
         let user = await getUserByEmailCI(emailRaw);
         let isNewUser = false;
 
-        // Create if missing (store email lowercased)
         if (!user) {
           const hashedPassword = await bcrypt.hash(password, 10);
           const cookieHeader =
@@ -152,7 +150,6 @@ export const authOptions: NextAuthOptions = {
             console.warn("welcome email (credentials) failed:", e);
           }
         } else if (user.email !== email) {
-          // normalize stored casing to lowercase going forward
           await User.updateOne({ _id: user._id }, { $set: { email } });
           user.email = email;
         }
@@ -175,7 +172,6 @@ export const authOptions: NextAuthOptions = {
 
         if (!isValid) return null;
 
-        // Side-effects must never block login
         if (isNewUser) {
           Promise.resolve(
             ensureMessagingService(String((user as any)._id), user.email)
@@ -199,8 +195,10 @@ export const authOptions: NextAuthOptions = {
       authorization: {
         url: "https://accounts.google.com/o/oauth2/v2/auth",
         params: {
+          // ✅ Identity only – Sheets/Calendar scopes are handled
+          // by the dedicated connect endpoints, not sign-in.
           scope:
-            "https://www.googleapis.com/auth/spreadsheets.readonly https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile openid",
+            "https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile openid",
           prompt: "consent",
           access_type: "offline",
           response_type: "code",
@@ -317,14 +315,11 @@ export const authOptions: NextAuthOptions = {
       return session;
     },
 
-    // Force a stable post-login landing page to avoid loops
     async redirect({ baseUrl }) {
-      // ⬇⬇ Only change here: send to dashboard instead of /leads
       return `${baseUrl}/dashboard`;
     },
   },
 
-  // Minimal server-side logging
   logger: {
     error(code, ...meta) {
       console.error("NextAuth error:", code, ...meta);

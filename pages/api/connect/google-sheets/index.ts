@@ -5,8 +5,9 @@ import { authOptions } from "../../auth/[...nextauth]";
 import { google } from "googleapis";
 
 const SHEETS_SCOPES = [
-  "https://www.googleapis.com/auth/spreadsheets",
+  "https://www.googleapis.com/auth/spreadsheets.readonly",
   "https://www.googleapis.com/auth/drive.metadata.readonly",
+  "https://www.googleapis.com/auth/drive.file",
   "https://www.googleapis.com/auth/userinfo.email",
   "openid",
 ];
@@ -17,10 +18,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   const session = await getServerSession(req, res, authOptions);
-  const email = typeof session?.user?.email === "string" ? session.user.email.toLowerCase() : "";
+  const email =
+    typeof session?.user?.email === "string"
+      ? session.user.email.toLowerCase()
+      : "";
 
   if (!email) {
-    // Force login first
     return res.redirect("/auth/signin?reason=google_sheets_connect");
   }
 
@@ -40,13 +43,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 
-  // Build base URL from env or current request host.
   const base =
     process.env.NEXTAUTH_URL ||
     process.env.NEXT_PUBLIC_BASE_URL ||
     `http://${req.headers["x-forwarded-host"] || req.headers.host}`;
 
-  // This MUST match the OAuth redirect URI you added in Google Cloud.
   const redirectUri =
     process.env.GOOGLE_REDIRECT_URI_SHEETS ||
     `${String(base).replace(/\/$/, "")}/api/connect/google-sheets/callback`;
