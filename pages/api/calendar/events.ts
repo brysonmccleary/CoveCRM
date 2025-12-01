@@ -1,10 +1,12 @@
+// /pages/api/calendar/events.ts
 import type { NextApiRequest, NextApiResponse } from "next";
-import { getServerSession } from "next-auth";
+import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/pages/api/auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import Lead from "@/models/Lead";
 import { google } from "googleapis";
+import { getFreshGoogleOAuthClient } from "@/lib/googleCalendarClient";
 
 /** Bare "Call with" detector (allows optional phone emoji) */
 function isBareCallWith(s?: string) {
@@ -47,39 +49,11 @@ export default async function handler(
   const user = await User.findOne({ email });
   if (!user) return res.status(404).json({ error: "User not found" });
 
-  // 🔐 IMPORTANT: always prefer dedicated calendar tokens, then legacy googleTokens.
-  // Sheets-only tokens must NOT be used for Calendar (they may not have calendar scopes).
-  const tokens: any =
-    (user as any).googleCalendar ||
-    (user as any).googleTokens ||
-    null;
-
-  const refreshToken: string | undefined =
-    tokens?.refreshToken || tokens?.refresh_token;
-
-  if (!refreshToken) {
-    (user as any).flags = {
-      ...(user as any).flags,
-      calendarConnected: false,
-      calendarNeedsReconnect: true,
-    };
-    await user.save();
-    return res.status(401).json({
-      error: "Google not connected (no refresh token)",
-      needsReconnect: true,
-    });
-  }
-
   const calendarId = (user as any).calendarId || "primary";
 
-  const oauth2Client = new google.auth.OAuth2(
-    process.env.GOOGLE_CLIENT_ID!,
-    process.env.GOOGLE_CLIENT_SECRET!,
-    process.env.GOOGLE_REDIRECT_URI!
-  );
-  oauth2Client.setCredentials({ refresh_token: refreshToken });
-
   try {
+    // Centralized token handling + invalid_grant logic
+    const oauth2Client = await getFreshGoogleOAuthClient(email);
     const calendar = google.calendar({ version: "v3", auth: oauth2Client });
 
     const response = await calendar.events.list({
@@ -153,6 +127,7 @@ export default async function handler(
       return { ...e, summary };
     });
 
+    // Mark user as connected & healthy
     (user as any).flags = {
       ...(user as any).flags,
       calendarConnected: true,
@@ -162,15 +137,52 @@ export default async function handler(
 
     return res.status(200).json({ events });
   } catch (err: any) {
-    const googlePayload = err?.response?.data;
     const msg = String(
-      googlePayload?.error?.message || err?.message || err
+      err?.message ||
+        err?.response?.data?.error_description ||
+        err?.response?.data?.error ||
+        err
     ).toLowerCase();
+    const googlePayload = err?.response?.data;
     const code = googlePayload?.error?.code || err?.code;
 
-    // 🔒 If scopes are insufficient, mark as needing reconnect instead of generic 500.
-    if (code === 403 || msg.includes("insufficient") && msg.includes("scope")) {
-      console.error("❌ Google Calendar insufficient scopes:", googlePayload || err);
+    // Tokens missing or removed
+    if (msg.includes("no google calendar credentials found")) {
+      (user as any).flags = {
+        ...(user as any).flags,
+        calendarConnected: false,
+        calendarNeedsReconnect: true,
+      };
+      await user.save();
+      return res.status(401).json({
+        error: "no_credentials",
+        needsReconnect: true,
+      });
+    }
+
+    // Our helper cleared tokens and wants a reconnect
+    if (
+      err?.code === "GOOGLE_RECONNECT_REQUIRED" ||
+      err?.message === "GOOGLE_RECONNECT_REQUIRED"
+    ) {
+      (user as any).flags = {
+        ...(user as any).flags,
+        calendarConnected: false,
+        calendarNeedsReconnect: true,
+      };
+      await user.save();
+      return res.status(401).json({
+        error: "GOOGLE_RECONNECT_REQUIRED",
+        needsReconnect: true,
+      });
+    }
+
+    // Insufficient scopes – also treat as reconnect
+    if (code === 403 || (msg.includes("insufficient") && msg.includes("scope"))) {
+      console.error(
+        "❌ Google Calendar insufficient scopes:",
+        googlePayload || err
+      );
 
       (user as any).flags = {
         ...(user as any).flags,
@@ -185,6 +197,7 @@ export default async function handler(
       });
     }
 
+    // Fallback invalid_grant handling (should be rare if helper caught it)
     if (msg.includes("invalid_grant")) {
       (user as any).flags = {
         ...(user as any).flags,

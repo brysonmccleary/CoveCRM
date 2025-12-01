@@ -9,9 +9,11 @@ type GCalStore = {
   expiryDate?: number;
 };
 
+type StorePath = "googleCalendar" | "integrations.googleCalendar";
+
 function extractStore(user: any): {
   store: GCalStore | null;
-  path: "googleCalendar" | "integrations.googleCalendar";
+  path: StorePath;
 } {
   if (user?.googleCalendar?.refreshToken) {
     const gc = user.googleCalendar;
@@ -25,6 +27,7 @@ function extractStore(user: any): {
       path: "googleCalendar",
     };
   }
+
   if (user?.integrations?.googleCalendar?.refreshToken) {
     const gc = user.integrations.googleCalendar;
     return {
@@ -37,15 +40,40 @@ function extractStore(user: any): {
       path: "integrations.googleCalendar",
     };
   }
+
   return { store: null, path: "googleCalendar" };
 }
 
+async function clearCalendarTokens(email: string, path: StorePath) {
+  // Blow away ALL calendar creds at that path so we treat as disconnected
+  await User.updateOne(
+    { email },
+    {
+      $unset: {
+        [`${path}.refreshToken`]: "",
+        [`${path}.accessToken`]: "",
+        [`${path}.expiryDate`]: "",
+        [`${path}.scope`]: "",
+        [`${path}.tokenType`]: "",
+        [`${path}.idToken`]: "",
+      },
+    }
+  );
+}
+
+/**
+ * Returns an OAuth2 client with a fresh access token for the given user.
+ *
+ * If Google replies "invalid_grant" during refresh, we:
+ *   - clear stored calendar tokens
+ *   - throw an Error with code/message "GOOGLE_RECONNECT_REQUIRED"
+ */
 export async function getFreshGoogleOAuthClient(userEmail: string) {
   await dbConnect();
 
-  // Use lean() to avoid strict IUser typing issues
-  const user = await User.findOne({ email: userEmail }).lean();
-  if (!user) throw new Error(`User not found for email: ${userEmail}`);
+  const email = userEmail.toLowerCase();
+  const user = await User.findOne({ email }).lean();
+  if (!user) throw new Error(`User not found for email: ${email}`);
 
   const { store, path } = extractStore(user as any);
   if (!store?.refreshToken) {
@@ -56,14 +84,14 @@ export async function getFreshGoogleOAuthClient(userEmail: string) {
     process.env;
   if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET || !GOOGLE_REDIRECT_URI) {
     throw new Error(
-      "Missing Google OAuth env vars (GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI)",
+      "Missing Google OAuth env vars (GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI)"
     );
   }
 
   const oauth2Client = new google.auth.OAuth2(
     GOOGLE_CLIENT_ID,
     GOOGLE_CLIENT_SECRET,
-    GOOGLE_REDIRECT_URI,
+    GOOGLE_REDIRECT_URI
   );
 
   oauth2Client.setCredentials({
@@ -72,23 +100,46 @@ export async function getFreshGoogleOAuthClient(userEmail: string) {
     expiry_date: store.expiryDate,
   });
 
-  // Refresh if missing/near expiry (2-min buffer), then persist
   const needsRefresh =
     !store.expiryDate || Date.now() >= store.expiryDate - 120_000;
-  if (needsRefresh) {
-    // Cast to any to satisfy TS across googleapis versions
-    const { credentials } = await (oauth2Client as any).refreshAccessToken();
-    oauth2Client.setCredentials(credentials);
 
-    await User.updateOne(
-      { email: userEmail },
-      {
-        $set: {
-          [`${path}.accessToken`]: credentials.access_token,
-          [`${path}.expiryDate`]: credentials.expiry_date,
-        },
-      },
-    );
+  if (needsRefresh) {
+    try {
+      // googleapis typings differ by version, so cast to any
+      const { credentials } = await (oauth2Client as any).refreshAccessToken();
+      oauth2Client.setCredentials(credentials);
+
+      await User.updateOne(
+        { email },
+        {
+          $set: {
+            [`${path}.accessToken`]: credentials.access_token,
+            [`${path}.expiryDate`]: credentials.expiry_date,
+          },
+        }
+      );
+    } catch (err: any) {
+      const data = err?.response?.data || err;
+      const errMsg =
+        data?.error_description || data?.error || err?.message || "";
+
+      const isInvalidGrant =
+        data?.error === "invalid_grant" ||
+        errMsg.includes("invalid_grant") ||
+        errMsg.toLowerCase().includes("invalid grant");
+
+      if (isInvalidGrant) {
+        // Tokens are dead. Clear them and signal to caller.
+        await clearCalendarTokens(email, path);
+
+        const reconnectErr: any = new Error("GOOGLE_RECONNECT_REQUIRED");
+        reconnectErr.code = "GOOGLE_RECONNECT_REQUIRED";
+        throw reconnectErr;
+      }
+
+      // Some other Google error – just rethrow
+      throw err;
+    }
   }
 
   return oauth2Client;

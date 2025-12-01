@@ -1,3 +1,4 @@
+// /pages/api/calendar-status.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/pages/api/auth/[...nextauth]";
@@ -27,26 +28,46 @@ export default async function handler(
     const user = await getUserByEmail(email);
     if (!user) return res.status(404).json({ error: "User not found" });
 
-    // Look only for REFRESH tokens across legacy locations.
-    const googleTokens = (user as any).googleTokens || null;
-    const googleCalendar = (user as any).googleCalendar || null;
-    const googleSheets = (user as any).googleSheets || null;
+    const u: any = user;
+
+    // Legacy token locations
+    const googleTokens = u.googleTokens || null;
+    const googleCalendar = u.googleCalendar || null;
+    const integrations = u.integrations || {};
+    const integrationsCalendar = integrations.googleCalendar || null;
 
     // Support both refreshToken and refresh_token shapes.
     const hasGT =
       !!(googleTokens?.refreshToken || googleTokens?.refresh_token);
     const hasGC =
       !!(googleCalendar?.refreshToken || googleCalendar?.refresh_token);
-    const hasGS =
-      !!(googleSheets?.refreshToken || googleSheets?.refresh_token);
+    const hasIC =
+      !!(
+        integrationsCalendar?.refreshToken ||
+        integrationsCalendar?.refresh_token
+      );
 
     // ❗ For CALENDAR status, sheets-only tokens do NOT count.
-    const hasRefreshToken = hasGC || hasGT;
+    const hasRefreshToken = hasGC || hasGT || hasIC;
 
-    // keep your original shape so the FE doesn’t break
+    const flags = u.flags || {};
+    const calendarNeedsReconnect = !!flags.calendarNeedsReconnect;
+    const calendarConnectedFlag = !!flags.calendarConnected;
+
+    // Derive final "connected" state:
+    // - if we know we need reconnect → false
+    // - else if we still have a calendar-capable refresh token → true
+    // - else fall back to false
+    const calendarConnected =
+      !calendarNeedsReconnect && hasRefreshToken && !calendarConnectedFlag
+        ? true
+        : !calendarNeedsReconnect && (calendarConnectedFlag || hasRefreshToken);
+
     return res.status(200).json({
-      calendarConnected: hasRefreshToken, // ← true only when a calendar-capable token exists
-      calendarId: (user as any).calendarId ?? null,
+      calendarConnected,
+      calendarId: u.calendarId ?? null,
+      needsReconnect: calendarNeedsReconnect || !hasRefreshToken,
+      // keep googleCalendar shape so FE doesn't break even though we don't expose tokens
       googleCalendar: null,
     });
   } catch (err) {

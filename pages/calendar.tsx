@@ -1,4 +1,4 @@
-// pages/calendar.tsx
+// /pages/calendar.tsx
 import { useSession } from "next-auth/react";
 import { useEffect, useState, useRef } from "react";
 import axios from "axios";
@@ -16,11 +16,11 @@ export default function CalendarPage() {
   const { data: session, status: sessionStatus } = useSession();
   const [calendarId, setCalendarId] = useState<string | null>(null);
   const [calendarConnected, setCalendarConnected] = useState<boolean | null>(
-    null,
+    null
   );
   const [loading, setLoading] = useState(true);
   const [statusMessage, setStatusMessage] = useState(
-    "Checking calendar connection...",
+    "Checking calendar connection..."
   );
   const [eventCount, setEventCount] = useState<number | null>(null);
   const socketRef = useRef<Socket | null>(null);
@@ -38,7 +38,7 @@ export default function CalendarPage() {
 
       setCalendarConnected(connected);
       setStatusMessage(
-        connected ? "✅ Google Calendar Connected" : "⚠️ Not Connected",
+        connected ? "✅ Google Calendar Connected" : "⚠️ Not Connected"
       );
 
       if (res.data?.calendarId) {
@@ -47,10 +47,36 @@ export default function CalendarPage() {
 
       // If connected, fetch events count
       if (connected) {
-        // 🔑 Match the real API route: pages/api/calendar/events.ts
-        const eventsRes = await axios.get("/api/calendar/events");
-        console.log("📆 Events fetched:", eventsRes.data?.length || 0);
-        setEventCount(eventsRes.data?.length || 0);
+        try {
+          // 🔑 Match the real API route: pages/api/calendar/events.ts
+          const eventsRes = await axios.get("/api/calendar/events");
+          const count = eventsRes.data?.events?.length || 0;
+          console.log("📆 Events fetched:", count);
+          setEventCount(count);
+        } catch (err: any) {
+          const data = err?.response?.data;
+          const status = err?.response?.status;
+
+          // Any of these mean "you need to reconnect"
+          if (
+            status === 401 &&
+            [
+              "GOOGLE_RECONNECT_REQUIRED",
+              "invalid_grant",
+              "insufficient_scopes",
+              "no_credentials",
+            ].includes(data?.error)
+          ) {
+            console.warn("Calendar requires reconnect:", data?.error);
+            setCalendarConnected(false);
+            setStatusMessage(
+              "⚠️ Google Calendar connection expired. Please reconnect."
+            );
+          } else {
+            console.error("❌ Error loading calendar events:", err);
+            setStatusMessage("❌ Error loading calendar events");
+          }
+        }
       }
     } catch (error) {
       console.error("❌ Error checking calendar status:", error);
@@ -64,6 +90,7 @@ export default function CalendarPage() {
   useEffect(() => {
     if (sessionStatus !== "authenticated") return;
     fetchCalendarStatus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionStatus]);
 
   // 🔁 Listen for socket-based calendar updates
