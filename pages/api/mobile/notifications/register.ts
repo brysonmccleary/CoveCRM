@@ -34,8 +34,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (req.method !== "POST")
     return res.status(405).json({ error: "Method not allowed" });
 
-  const userEmail = getEmailFromAuth(req);
-  if (!userEmail) return res.status(401).json({ error: "Unauthorized" });
+  const userEmailRaw = getEmailFromAuth(req);
+  if (!userEmailRaw) return res.status(401).json({ error: "Unauthorized" });
+
+  const userEmail = userEmailRaw.toLowerCase();
 
   const { expoPushToken, platform, deviceId } = (req.body || {}) as {
     expoPushToken?: string;
@@ -46,6 +48,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!expoPushToken || typeof expoPushToken !== "string") {
     return res.status(400).json({ error: "Missing or invalid expoPushToken" });
   }
+
+  // 🔍 Helpful log so we can see this hit in Vercel
+  console.log(
+    "[mobile] /api/mobile/notifications/register hit",
+    userEmail,
+    expoPushToken.slice(0, 30) + "..."
+  );
 
   try {
     await mongooseConnect();
