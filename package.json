@@ -28,6 +28,7 @@
     "csv-parser": "^3.2.0",
     "date-fns": "^3.6.0",
     "dotenv": "^17.2.0",
+    "expo-server-sdk": "^4.0.0",
     "formidable": "^3.5.4",
     "google-spreadsheet": "^4.1.4",
     "googleapis": "^153.0.0",
