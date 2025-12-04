@@ -4,13 +4,20 @@ import jwt from "jsonwebtoken";
 import dbConnect from "@/lib/mongooseConnect";
 import Lead from "@/models/Lead";
 import Folder from "@/models/Folder";
+import User from "@/models/User";
 import { Types } from "mongoose";
 
 type LeadType = Record<string, any>;
 type LeanFolderDoc = { _id: Types.ObjectId; name?: string };
 
 const MOBILE_JWT_SECRET =
-  process.env.MOBILE_JWT_SECRET || process.env.NEXTAUTH_SECRET || "dev-mobile-secret";
+  process.env.MOBILE_JWT_SECRET ||
+  process.env.NEXTAUTH_SECRET ||
+  "dev-mobile-secret";
+
+function escapeRegex(s: string) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
 function getEmailFromAuth(req: NextApiRequest): string | null {
   const auth = req.headers.authorization || "";
@@ -19,26 +26,70 @@ function getEmailFromAuth(req: NextApiRequest): string | null {
 
   try {
     const payload = jwt.verify(token, MOBILE_JWT_SECRET) as any;
-    const email = (payload?.email || payload?.sub || "").toString().toLowerCase();
+    const emailRaw = (payload?.email || payload?.sub || "").toString();
+    const email = emailRaw.trim().toLowerCase();
     return email || null;
   } catch {
     return null;
   }
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+/** Same “snap to canonical User email” logic as folders.ts */
+async function resolveEffectiveEmail(rawEmail: string): Promise<string> {
+  const trimmed = (rawEmail || "").trim();
+  if (!trimmed) return trimmed;
+
+  try {
+    const user = await User.findOne(
+      {
+        email: {
+          $regex: `^${escapeRegex(trimmed)}$`,
+          $options: "i",
+        },
+      },
+      { email: 1 },
+    )
+      .lean()
+      .exec();
+
+    if (user?.email) {
+      return String(user.email).trim().toLowerCase();
+    }
+  } catch (e) {
+    console.warn("[mobile/leads-by-folder] resolveEffectiveEmail error:", e);
+  }
+
+  return trimmed.toLowerCase();
+}
+
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   if (req.method !== "GET")
     return res.status(405).json({ message: "Method not allowed" });
 
   try {
-    const email = getEmailFromAuth(req);
-    if (!email) return res.status(401).json({ message: "Unauthorized" });
+    const jwtEmail = getEmailFromAuth(req);
+    if (!jwtEmail) return res.status(401).json({ message: "Unauthorized" });
 
-    const { folderId } = req.query as { folderId?: string };
     await dbConnect();
 
+    const email = await resolveEffectiveEmail(jwtEmail);
+    console.log(
+      "[mobile/leads-by-folder] email:",
+      email,
+      "(jwt:",
+      jwtEmail,
+      ")",
+    );
+
+    const { folderId } = req.query as { folderId?: string };
+
     if (!folderId || typeof folderId !== "string" || !folderId.trim()) {
-      return res.status(200).json({ leads: [] as LeadType[], folderName: null });
+      return res
+        .status(200)
+        .json({ leads: [] as LeadType[], folderName: null });
     }
 
     const rawId = folderId.trim();
@@ -62,7 +113,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     if (!folderDoc) {
-      return res.status(200).json({ leads: [] as LeadType[], folderName: null });
+      return res
+        .status(200)
+        .json({ leads: [] as LeadType[], folderName: null });
     }
 
     const canonicalId = folderDoc._id;
@@ -93,7 +146,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           status: 1,
           updatedAt: 1,
           folderId: 1,
-        }
+        },
       )
         .sort({ updatedAt: -1, createdAt: -1, _id: -1 })
         .lean()
@@ -127,7 +180,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           age: 1,
           updatedAt: 1,
           folderId: 1,
-        }
+        },
       )
         .sort({ updatedAt: -1, createdAt: -1, _id: -1 })
         .lean()

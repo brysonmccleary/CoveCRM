@@ -4,6 +4,7 @@ import jwt from "jsonwebtoken";
 import mongooseConnect from "@/lib/mongooseConnect";
 import Folder from "@/models/Folder";
 import Lead from "@/models/Lead";
+import User from "@/models/User";
 
 const SYSTEM_FOLDERS = ["Sold", "Not Interested", "Booked Appointment"] as const;
 
@@ -47,7 +48,9 @@ function toLeanFolder(doc: DBFolder, email: string): LeanFolder {
 
 // ---- Mobile auth helper (JWT from /api/mobile/login) ----
 const MOBILE_JWT_SECRET =
-  process.env.MOBILE_JWT_SECRET || process.env.NEXTAUTH_SECRET || "dev-mobile-secret";
+  process.env.MOBILE_JWT_SECRET ||
+  process.env.NEXTAUTH_SECRET ||
+  "dev-mobile-secret";
 
 function getEmailFromAuth(req: NextApiRequest): string | null {
   const auth = req.headers.authorization || "";
@@ -56,11 +59,44 @@ function getEmailFromAuth(req: NextApiRequest): string | null {
 
   try {
     const payload = jwt.verify(token, MOBILE_JWT_SECRET) as any;
-    const email = (payload?.email || payload?.sub || "").toString().toLowerCase();
+    const emailRaw = (payload?.email || payload?.sub || "").toString();
+    const email = emailRaw.trim().toLowerCase();
     return email || null;
   } catch {
     return null;
   }
+}
+
+/**
+ * Snap the JWT email to the canonical email stored on the User doc.
+ * This fixes any case / whitespace / alias mismatches so mobile sees
+ * the exact same folders/leads as the web app.
+ */
+async function resolveEffectiveEmail(rawEmail: string): Promise<string> {
+  const trimmed = (rawEmail || "").trim();
+  if (!trimmed) return trimmed;
+
+  try {
+    const user = await User.findOne(
+      {
+        email: {
+          $regex: `^${escapeRegex(trimmed)}$`,
+          $options: "i",
+        },
+      },
+      { email: 1 },
+    )
+      .lean()
+      .exec();
+
+    if (user?.email) {
+      return String(user.email).trim().toLowerCase();
+    }
+  } catch (e) {
+    console.warn("[mobile/folders] resolveEffectiveEmail error:", e);
+  }
+
+  return trimmed.toLowerCase();
 }
 
 // ---- Handler (same logic as /api/get-folders, but mobile auth) ----
@@ -73,12 +109,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   res.setHeader("X-Folders-Impl", "per-user-system-final-mobile");
 
   try {
-    const email = getEmailFromAuth(req);
-    if (!email) {
+    const jwtEmail = getEmailFromAuth(req);
+    if (!jwtEmail) {
       return res.status(401).json({ message: "Unauthorized" });
     }
 
     await mongooseConnect();
+
+    const email = await resolveEffectiveEmail(jwtEmail);
+    console.log("[mobile/folders] email:", email, "(jwt:", jwtEmail, ")");
 
     // 1) Ensure system folders exist for *this* user only
     for (const name of SYSTEM_FOLDERS) {
@@ -98,7 +137,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               assignedDrips: [],
             },
           },
-          { upsert: true, new: false, lean: true }
+          { upsert: true, new: false, lean: true },
         )
         .exec();
     }
@@ -111,7 +150,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .exec();
 
     const all: LeanFolder[] = (raw as DBFolder[]).map((r: DBFolder) =>
-      toLeanFolder(r, email)
+      toLeanFolder(r, email),
     );
 
     // 3) Partition: custom vs system
@@ -181,7 +220,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
 
     const systemOrdered = SYSTEM_FOLDERS.map((n) =>
-      canonicalByKey.get(normKey(n))
+      canonicalByKey.get(normKey(n)),
     ).filter(Boolean) as LeanFolder[];
 
     const ordered: LeanFolder[] = [...custom, ...systemOrdered];

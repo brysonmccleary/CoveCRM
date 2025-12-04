@@ -1,72 +1,48 @@
-// /pages/api/twilio/voice/token.ts
+// /pages/api/mobile/voice-token.ts
+// Twilio Voice Access Token for MOBILE clients (JWT auth, not NextAuth cookies).
+
 import type { NextApiRequest, NextApiResponse } from "next";
-import { getServerSession } from "next-auth/next";
-import { authOptions } from "@/pages/api/auth/[...nextauth]";
-import twilio from "twilio";
 import jwt from "jsonwebtoken";
+import twilio from "twilio";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
 
 const MOBILE_JWT_SECRET =
-  process.env.MOBILE_JWT_SECRET ||
-  process.env.NEXTAUTH_SECRET ||
-  "dev-mobile-secret";
+  process.env.NEXTAUTH_SECRET || process.env.JWT_SECRET || "dev-mobile-secret";
 
-/**
- * Try to get identity from a Bearer mobile JWT (used by native app).
- */
-function getEmailFromMobileAuth(req: NextApiRequest): string | null {
+function getEmailFromAuth(req: NextApiRequest): string | null {
   const auth = req.headers.authorization || "";
   const [scheme, token] = auth.split(" ");
   if (scheme !== "Bearer" || !token) return null;
 
   try {
     const payload = jwt.verify(token, MOBILE_JWT_SECRET) as any;
-    const emailRaw = (payload?.email || payload?.sub || "").toString();
-    const email = emailRaw.trim().toLowerCase();
+    const email = (payload?.email || payload?.sub || "").toString().toLowerCase();
     return email || null;
   } catch {
     return null;
   }
 }
 
-/**
- * Twilio Voice Access Token (for Twilio Voice JS / RN SDK).
- * - Accepts either:
- *   - Mobile Bearer JWT (Authorization: Bearer <mobile token>)
- *   - OR NextAuth web session cookie (fallback).
- * - identity = user email.
- */
-export default async function handler(
-  req: NextApiRequest,
-  res: NextApiResponse,
-) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "GET") {
+    res.setHeader("Allow", "GET");
     return res.status(405).json({ message: "Method not allowed" });
   }
 
+  const identity = getEmailFromAuth(req);
+  if (!identity) {
+    return res.status(401).json({ message: "Unauthorized" });
+  }
+
   try {
-    // 1) Prefer mobile JWT identity
-    let identity = getEmailFromMobileAuth(req);
-
-    // 2) Fallback to web session
-    if (!identity) {
-      const session = await getServerSession(req, res, authOptions as any);
-      const s = session as any;
-      identity = (s?.user?.email || s?.user?.name || "").toString().trim();
-    }
-
-    if (!identity) {
-      return res.status(401).json({ message: "Unauthorized" });
-    }
-
-    identity = identity.toLowerCase();
-
-    // Resolve per-user or platform Account SID
+    // Resolve per-user or platform Account SID (same as /api/twilio/voice/token)
     const resolved = (await getClientForUser(identity)) as any;
     const usingPersonal = !!resolved?.usingPersonal;
     const user = resolved?.user || {};
     const accountSid: string =
-      (resolved?.accountSid as string) || process.env.TWILIO_ACCOUNT_SID || "";
+      (resolved?.accountSid as string) ||
+      process.env.TWILIO_ACCOUNT_SID ||
+      "";
 
     // Prefer user keys when present, otherwise fall back to platform envs.
     const envApiKeySid = process.env.TWILIO_API_KEY_SID || "";
@@ -76,6 +52,7 @@ export default async function handler(
       usingPersonal && user?.twilioApiKeySid
         ? user.twilioApiKeySid
         : envApiKeySid;
+
     const apiKeySecret: string =
       usingPersonal && user?.twilioApiKeySecret
         ? user.twilioApiKeySecret
@@ -94,17 +71,17 @@ export default async function handler(
           accountSidPresent: !!accountSid,
           apiKeySidPresent: !!apiKeySid,
           apiKeySecretPresent: !!apiKeySecret,
-          hint: "AccessToken must use API Key SID/Secret (not the Auth Token). Ensure envs are set for the current deployment environment.",
+          hint: "AccessToken must use API Key SID/Secret (not the Auth Token). Ensure envs are set.",
         },
       });
     }
 
-    const { jwt: TwilioJwt } = twilio as any;
-    const AccessToken = TwilioJwt.AccessToken;
+    const { jwt: twilioJwt } = twilio as any;
+    const AccessToken = twilioJwt.AccessToken;
     const VoiceGrant = AccessToken.VoiceGrant;
 
     const token = new AccessToken(accountSid, apiKeySid, apiKeySecret, {
-      identity,
+      identity, // user's email
       ttl: 3600,
     });
 
@@ -126,7 +103,7 @@ export default async function handler(
           : "env",
     });
   } catch (err: any) {
-    console.error("❌ /api/twilio/voice/token error:", err);
+    console.error("❌ /api/mobile/voice-token error:", err);
     return res.status(500).json({
       message: "Unable to generate token",
       error: String(err?.message || err),
