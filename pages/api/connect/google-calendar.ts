@@ -4,9 +4,13 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
 import { google } from "googleapis";
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   const session = await getServerSession(req, res, authOptions);
-  if (!session?.user?.email) return res.status(401).json({ error: "Unauthorized" });
+  if (!session?.user?.email)
+    return res.status(401).json({ error: "Unauthorized" });
 
   const base =
     process.env.NEXTAUTH_URL ||
@@ -18,14 +22,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const oauth2 = new google.auth.OAuth2(
     process.env.GOOGLE_CLIENT_ID!,
     process.env.GOOGLE_CLIENT_SECRET!,
-    redirectUri
+    redirectUri,
   );
 
   const url = oauth2.generateAuthUrl({
     access_type: "offline",
     prompt: "consent",
     scope: [
-      // ❌ removed spreadsheets.readonly
+      "https://www.googleapis.com/auth/drive.readonly",
       "https://www.googleapis.com/auth/drive.file",
       "https://www.googleapis.com/auth/calendar.events",
       "https://www.googleapis.com/auth/calendar.readonly",

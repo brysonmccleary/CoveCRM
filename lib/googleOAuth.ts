@@ -11,9 +11,8 @@ const CALENDAR_SCOPES = [
 ];
 
 const SHEETS_SCOPES = [
-  // ❌ removed spreadsheets.readonly per Google review
-  // ✅ Per-file Drive access (non-restricted) for user-selected files
-  "https://www.googleapis.com/auth/drive.file",
+  // ✅ Use Drive read-only so we can read *any* spreadsheet the user can see
+  "https://www.googleapis.com/auth/drive.readonly",
   "https://www.googleapis.com/auth/userinfo.email",
   "openid",
 ];

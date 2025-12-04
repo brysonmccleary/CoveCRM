@@ -5,14 +5,18 @@ import { authOptions } from "../../auth/[...nextauth]";
 import { google } from "googleapis";
 
 const SHEETS_SCOPES = [
-  // ❌ removed spreadsheets.readonly
+  "https://www.googleapis.com/auth/drive.readonly",
   "https://www.googleapis.com/auth/drive.metadata.readonly",
   "https://www.googleapis.com/auth/drive.file",
   "https://www.googleapis.com/auth/userinfo.email",
+  "https://www.googleapis.com/auth/userinfo.profile",
   "openid",
 ];
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   if (req.method !== "GET") {
     return res.status(405).json({ error: "Method not allowed" });
   }

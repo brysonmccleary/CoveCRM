@@ -4,7 +4,10 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
 import { google } from "googleapis";
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   const session = await getServerSession(req, res, authOptions);
   if (!session?.user?.email) {
     return res.status(401).json({ error: "Unauthorized" });
@@ -34,9 +37,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const oauth2 = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
 
   const scope = [
-    // ❌ removed spreadsheets.readonly
+    "https://www.googleapis.com/auth/drive.readonly",
     "https://www.googleapis.com/auth/drive.file",
     "https://www.googleapis.com/auth/userinfo.email",
+    "https://www.googleapis.com/auth/userinfo.profile",
+    "openid",
   ];
 
   const authorizeUrl = oauth2.generateAuthUrl({
