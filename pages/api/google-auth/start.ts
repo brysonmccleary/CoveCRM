@@ -31,8 +31,8 @@ export default async function handler(
       "https://www.googleapis.com/auth/userinfo.email",
       // calendar events (read/write appointments)
       "https://www.googleapis.com/auth/calendar.events",
-      // sheets READ-ONLY (matches console + reviewer email)
-      "https://www.googleapis.com/auth/spreadsheets.readonly",
+      // ✅ per-file Drive access used with Sheets API
+      "https://www.googleapis.com/auth/drive.file",
     ],
   });
 

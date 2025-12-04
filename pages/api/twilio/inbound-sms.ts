@@ -22,10 +22,7 @@ import {
 import { initSocket } from "@/lib/socket";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
 import { sendSms } from "@/lib/twilio/sendSMS";
-// ✅ NEW: use push helper instead of raw axios + MobileDevice
 import { sendIncomingSmsPush } from "@/lib/mobile/push";
-
-// ✅ NEW: billing imports
 import { trackUsage } from "@/lib/billing/trackUsage";
 import { priceOpenAIUsage } from "@/lib/billing/openaiPricing";
 
@@ -197,13 +194,17 @@ function isStart(text: string): boolean {
 function containsConfirmation(text: string) {
   const t = (text || "").toLowerCase();
   return [
-    "that works","works for me","sounds good","sounds great","perfect","let's do","lets do","confirm","confirmed","book it","schedule it","set it","lock it in","we can do","we could do","3 works","works",
+    "that works","works for me","sounds good","sounds great","perfect","let's do","lets do","confirm","confirmed",
+    "book it","schedule it","set it","lock it in","we can do","we could do","3 works","works",
   ].some((p) => t.includes(p));
 }
 function isInfoRequest(text: string): boolean {
   const t = (text || "").toLowerCase();
   const phrases = [
-    "send the info","send info","send details","send me info","send me the info","email the info","email me the info","email details","email me details","just email me","text the info","text me the info","text details","text it","can you text it","mail the info","mail me the info","mail details","just send it","can you send it","do you have something you can send","do you have anything you can send","link","website",
+    "send the info","send info","send details","send me info","send me the info","email the info","email me the info",
+    "email details","email me details","just email me","text the info","text me the info","text details","text it",
+    "can you text it","mail the info","mail me the info","mail details","just send it","can you send it",
+    "do you have something you can send","do you have anything you can send","link","website",
   ];
   return phrases.some((p) => t.includes(p));
 }
@@ -274,7 +275,10 @@ function extractRequestedISO(textIn: string, state?: string): string | null {
         if (ap === "pm" && h < 12) h += 12;
         if (ap === "am" && h === 12) h = 0;
       }
-      let dt = DateTime.fromObject({ year: now.year, month, day, hour: h, minute: min, second: 0, millisecond: 0 }, { zone });
+      let dt = DateTime.fromObject(
+        { year: now.year, month, day, hour: h, minute: min, second: 0, millisecond: 0 },
+        { zone },
+      );
       if (dt.isValid && dt < now) dt = dt.plus({ years: 1 });
       return dt.isValid ? dt.toISO() : null;
     }
@@ -363,10 +367,8 @@ function computeContext(drips?: string[], campaignNames?: string[]) {
   if (joined.includes("veteran")) return "life insurance for veterans";
   if (joined.includes("final expense") || joined.includes("final_expense") || joined.includes("fex"))
     return "final expense life insurance";
-  if (joined.includes("iul"))
-    return "indexed universal life and retirement income protection";
-  if (joined.includes("retention"))
-    return "existing client retention and policy reviews";
+  if (joined.includes("iul")) return "indexed universal life and retirement income protection";
+  if (joined.includes("retention")) return "existing client retention and policy reviews";
   if (joined.includes("birthday") || joined.includes("holiday"))
     return "client birthdays, holidays, and policy reviews";
 
@@ -398,7 +400,7 @@ function pushAsked(memory: LeadMemory, key: string) {
 let _lastInboundUserEmailForBilling: string | null = null;
 
 // --- LLM helpers
-async function extractIntentAndTimeLLM(input: { text: string; nowISO: string; tz: string; }) {
+async function extractIntentAndTimeLLM(input: { text: string; nowISO: string; tz: string }) {
   const sys = `Extract intent for a brief SMS thread about booking a call.
 Return STRICT JSON with keys:
 intent: one of [schedule, confirm, reschedule, ask_cost, ask_duration, cancel, smalltalk, unknown]
@@ -409,7 +411,10 @@ yesno: "yes"|"no"|"unknown"`;
   const resp = await openai.chat.completions.create({
     model: "gpt-4o-mini",
     temperature: 0,
-    messages: [{ role: "system", content: sys }, { role: "user", content: user }],
+    messages: [
+      { role: "system", content: sys },
+      { role: "user", content: user },
+    ],
     response_format: { type: "json_object" },
   });
 
@@ -421,13 +426,22 @@ yesno: "yes"|"no"|"unknown"`;
       completionTokens: usage?.completion_tokens,
     });
     if (raw > 0 && _lastInboundUserEmailForBilling) {
-      await trackUsage({ user: { email: _lastInboundUserEmailForBilling }, amount: raw, source: "openai" });
+      await trackUsage({
+        user: { email: _lastInboundUserEmailForBilling },
+        amount: raw,
+        source: "openai",
+      });
     }
   } catch {}
 
   let data: any = {};
-  try { data = JSON.parse(resp.choices[0].message.content || "{}"); } catch {}
-  return { intent: (data.intent as string) || "unknown", datetime_text: (data.datetime_text as string) || null };
+  try {
+    data = JSON.parse(resp.choices[0].message.content || "{}");
+  } catch {}
+  return {
+    intent: (data.intent as string) || "unknown",
+    datetime_text: (data.datetime_text as string) || null,
+  };
 }
 
 // --- chat history for LLM (user/assistant roles)
@@ -500,7 +514,11 @@ You are a helpful human-like SMS assistant for an insurance agent.
       completionTokens: usage?.completion_tokens,
     });
     if (raw > 0 && _lastInboundUserEmailForBilling) {
-      await trackUsage({ user: { email: _lastInboundUserEmailForBilling }, amount: raw, source: "openai" });
+      await trackUsage({
+        user: { email: _lastInboundUserEmailForBilling },
+        amount: raw,
+        source: "openai",
+      });
     }
   } catch {}
 
@@ -520,7 +538,9 @@ function normalizeWhen(datetimeText: string | null, _nowISO: string, tz: string)
 function leadPhoneMatches(lead: any, fromDigits: string): boolean {
   if (!lead) return false;
   const cand: string[] = [];
-  const push = (v: any) => { if (v) cand.push(normalizeDigits(String(v))); };
+  const push = (v: any) => {
+    if (v) cand.push(normalizeDigits(String(v)));
+  };
   push((lead as any).Phone);
   push((lead as any).phone);
   push((lead as any)["Phone Number"]);
@@ -535,8 +555,12 @@ function leadPhoneMatches(lead: any, fromDigits: string): boolean {
 }
 
 function isPlaceholderLead(l: any): boolean {
-  const fn = String((l as any)["First Name"] || (l as any).firstName || "").trim().toLowerCase();
-  const ln = String((l as any)["Last Name"] || (l as any).lastName || "").trim().toLowerCase();
+  const fn = String((l as any)["First Name"] || (l as any).firstName || "")
+    .trim()
+    .toLowerCase();
+  const ln = String((l as any)["Last Name"] || (l as any).lastName || "")
+    .trim()
+    .toLowerCase();
   const full = `${fn} ${ln}`.trim();
   return (
     (l as any).source === "inbound_sms" &&
@@ -608,7 +632,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     console.log(
       `📥 inbound sid=${messageSid || "n/a"} from=${fromNumber} -> to=${toNumber} text="${body.slice(0, 120)}${
         body.length > 120 ? "…" : ""
-      }"`
+      }"`,
     );
 
     // Map to the user by the inbound (owned) number
@@ -674,7 +698,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         console.log(
           `[inbound-sms] Multiple leads share phone ending ${last10}; chose ${String(
-            best._id
+            best._id,
           )} from ${matching.length} candidates.`,
         );
         lead = best;
@@ -720,9 +744,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         .select({ _id: 1, campaignId: 1 })
         .lean();
 
-      const campaignIds = activeEnrollments
-        .map((e: any) => e.campaignId)
-        .filter(Boolean);
+      const campaignIds = activeEnrollments.map((e: any) => e.campaignId).filter(Boolean);
 
       if (campaignIds.length) {
         const campaigns = await DripCampaign.find({ _id: { $in: campaignIds } })
@@ -751,10 +773,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         },
       );
 
-      pausedCount =
-        (result as any).modifiedCount ??
-        (result as any).nModified ??
-        0;
+      pausedCount = (result as any).modifiedCount ?? (result as any).nModified ?? 0;
 
       if (pausedCount > 0) {
         console.log(`⏸️ Paused ${pausedCount} DripEnrollment(s) for lead ${lead._id}`);
@@ -764,8 +783,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const hadAssignedDrips =
-      Array.isArray((lead as any).assignedDrips) &&
-      (lead as any).assignedDrips.length > 0;
+      Array.isArray((lead as any).assignedDrips) && (lead as any).assignedDrips.length > 0;
     const hadDrips = hadAssignedDrips || pausedCount > 0 || activeEnrollments.length > 0;
 
     let io = (res as any)?.socket?.server?.io;
@@ -796,7 +814,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
 
     // Update lead interaction history
-    const inboundEntry = { type: "inbound" as const, text: body || (numMedia ? "[media]" : ""), date: new Date() };
+    const inboundEntry = {
+      type: "inbound" as const,
+      text: body || (numMedia ? "[media]" : ""),
+      date: new Date(),
+    };
     lead.interactionHistory = lead.interactionHistory || [];
     lead.interactionHistory.push(inboundEntry);
     lead.lastInboundAt = new Date();
@@ -806,15 +828,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (io) io.to(user.email).emit("message:new", { leadId: lead._id, ...inboundEntry });
 
+    // Compute display name once for email + push
+    const leadDisplayName = resolveLeadDisplayName(
+      lead,
+      lead.Phone || (lead as any).phone || fromNumber,
+    );
+
     /* Agent email notify */
     try {
       const emailEnabled = user?.notifications?.emailOnInboundSMS !== false;
       if (emailEnabled) {
-        const leadDisplayName = resolveLeadDisplayName(lead, lead.Phone || (lead as any).phone || fromNumber);
         const snippet = body.length > 60 ? `${body.slice(0, 60)}…` : body;
         const dripTag = hadDrips ? "[drip] " : "";
         const deepLink = `${ABS_BASE_URL}${LEAD_ENTRY_PATH}/${lead._id}`;
-        const subjectWho = leadDisplayName || (lead.Phone || (lead as any).phone || fromNumber);
+        const subjectWho =
+          leadDisplayName || (lead.Phone || (lead as any).phone || fromNumber);
 
         await sendLeadReplyNotificationEmail({
           to: user.email,
@@ -823,7 +851,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           leadName: leadDisplayName || undefined,
           leadPhone: lead.Phone || (lead as any).phone || fromNumber,
           leadEmail: lead.Email || (lead as any).email || "",
-          folder: (lead as any).folder || (lead as any).Folder || (lead as any)["Folder Name"],
+          folder:
+            (lead as any).folder ||
+            (lead as any).Folder ||
+            (lead as any)["Folder Name"],
           status: (lead as any).status || (lead as any).Status,
           message: body || (numMedia ? "[media]" : ""),
           receivedAtISO: new Date().toISOString(),
@@ -840,13 +871,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         userEmail: user.email,
         fromPhone: fromNumber,
         previewText: body || (numMedia ? "[media]" : ""),
+        // IDs so mobile can deep-link directly
+        leadId: lead._id.toString(),
+        conversationId: lead._id.toString(),
         messageId: savedMessage._id.toString(),
+        leadName: leadDisplayName || undefined,
       });
     } catch (e) {
-      console.warn(
-        "⚠️ Failed to send mobile push notification:",
-        (e as any)?.message || e,
-      );
+      console.warn("⚠️ Failed to send mobile push notification:", (e as any)?.message || e);
     }
 
     // === Keyword handling (flags only)
@@ -857,11 +889,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       (lead as any).unsubscribed = true;
       (lead as any).optOut = true;
       (lead as any).status = "Not Interested";
-      const note = { type: "ai" as const, text: "[system] Lead opted out — moved to Not Interested.", date: new Date() };
+      const note = {
+        type: "ai" as const,
+        text: "[system] Lead opted out — moved to Not Interested.",
+        date: new Date(),
+      };
+      lead.interactionHistory = lead.interactionHistory || [];
       lead.interactionHistory.push(note);
       await lead.save();
       if (io) {
-        io.to(user.email).emit("lead:updated", { _id: lead._id, status: "Not Interested", unsubscribed: true, optOut: true });
+        io.to(user.email).emit("lead:updated", {
+          _id: lead._id,
+          status: "Not Interested",
+          unsubscribed: true,
+          optOut: true,
+        });
         io.to(user.email).emit("message:new", { leadId: lead._id, ...note });
       }
       console.log("🚫 Opt-out set & moved to Not Interested for", fromNumber);
@@ -869,7 +911,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     if (isHelp(body)) {
-      const note = { type: "ai" as const, text: "[system] HELP detected.", date: new Date() };
+      const note = {
+        type: "ai" as const,
+        text: "[system] HELP detected.",
+        date: new Date(),
+      };
+      lead.interactionHistory = lead.interactionHistory || [];
       lead.interactionHistory.push(note);
       await lead.save();
       if (io) io.to(user.email).emit("message:new", { leadId: lead._id, ...note });
@@ -879,7 +926,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (isStart(body)) {
       (lead as any).unsubscribed = false;
       (lead as any).optOut = false;
-      const note = { type: "ai" as const, text: "[system] START/UNSTOP detected — lead opted back in.", date: new Date() };
+      const note = {
+        type: "ai" as const,
+        text: "[system] START/UNSTOP detected — lead opted back in.",
+        date: new Date(),
+      };
+      lead.interactionHistory = lead.interactionHistory || [];
       lead.interactionHistory.push(note);
       await lead.save();
       if (io) io.to(user.email).emit("message:new", { leadId: lead._id, ...note });
@@ -890,9 +942,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // A2P gate
     const a2p = await A2PProfile.findOne({ userId: String(user._id) });
     const usConversation = isUS(fromNumber) || isUS(toNumber);
-    const approved = SHARED_MESSAGING_SERVICE_SID || (a2p?.messagingReady && a2p?.messagingServiceSid);
+    const approved =
+      SHARED_MESSAGING_SERVICE_SID ||
+      (a2p?.messagingReady && a2p?.messagingServiceSid);
     if (usConversation && !approved) {
-      const note = { type: "ai" as const, text: "[note] Auto-reply suppressed: A2P not approved yet.", date: new Date() };
+      const note = {
+        type: "ai" as const,
+        text: "[note] Auto-reply suppressed: A2P not approved yet.",
+        date: new Date(),
+      };
+      lead.interactionHistory = lead.interactionHistory || [];
       lead.interactionHistory.push(note);
       await lead.save();
       if (io) io.to(user.email).emit("message:new", { leadId: lead._id, ...note });
@@ -915,7 +974,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const isClientRetention = (assignedDrips as any[]).some(
       (id: any) => typeof id === "string" && id.includes("client_retention"),
     );
-    if (isClientRetention) return res.status(200).json({ message: "Client retention reply — no AI engagement." });
+    if (isClientRetention)
+      return res.status(200).json({ message: "Client retention reply — no AI engagement." });
 
     // ✅ Cancel drips & engage AI (legacy arrays)
     lead.assignedDrips = [];
@@ -945,7 +1005,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // 1b) If they are selecting a time that was offered "tomorrow" in the last AI message (e.g. "let's do 11")
     if (!requestedISO) {
-      requestedISO = inferTimeFromLastAITomorrow(body, stateCanon, lead.interactionHistory || []);
+      requestedISO = inferTimeFromLastAITomorrow(
+        body,
+        stateCanon,
+        lead.interactionHistory || [],
+      );
     }
 
     // 2) If they’re confirming ("that works", etc.), reuse last proposed or last AI-suggested time
@@ -973,7 +1037,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         console.error("[inbound-sms] GPT conversational reply failed:", err);
         memory.state = "awaiting_time";
         const lastAI = [...(lead.interactionHistory || [])].reverse().find((m: any) => m.type === "ai");
-        const v = `When’s a good time today or tomorrow for a quick 5-minute chat?`;
+        const v = "When’s a good time today or tomorrow for a quick 5-minute chat?";
         aiReply =
           lastAI?.text?.trim() === v
             ? `Got it — send me a time that works (for example “tomorrow 3:00 pm”) and I’ll text a confirmation.`
@@ -984,7 +1048,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // 4) If we DO have a concrete time, book it and send a confirmation
     if (requestedISO) {
       const zone = tz;
-      const clientTime = DateTime.fromISO(requestedISO, { zone }).set({ second: 0, millisecond: 0 });
+      const clientTime = DateTime.fromISO(requestedISO, { zone }).set({
+        second: 0,
+        millisecond: 0,
+      });
 
       const nowUtc = DateTime.utc();
       const apptUtc = clientTime.toUTC();
@@ -993,7 +1060,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (!clientTime.isValid || apptUtc <= nowUtc) {
         console.log(
           "[inbound-sms] Skipping booking/confirmation for past or invalid time:",
-          clientTime.toISO()
+          clientTime.toISO(),
         );
         aiReply =
           "It looks like that time might have already passed on my end — what works later today or tomorrow for a quick 5 minute call?";
@@ -1004,7 +1071,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           DateTime.fromISO((lead as any).aiLastConfirmedISO).toISO() === clientTime.toISO();
 
         if (alreadyConfirmedSame) {
-          aiReply = `All set — you’re on my schedule. Talk soon!`;
+          aiReply = "All set — you’re on my schedule. Talk soon!";
         } else {
           try {
             const bookingPayload = {
@@ -1024,7 +1091,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               `${RAW_BASE_URL || ABS_BASE_URL}/api/google/calendar/book-appointment`,
               { ...bookingPayload },
               {
-                headers: { Authorization: `Bearer ${INTERNAL_API_TOKEN}`, "Content-Type": "application/json" },
+                headers: {
+                  Authorization: `Bearer ${INTERNAL_API_TOKEN}`,
+                  "Content-Type": "application/json",
+                },
                 timeout: 15000,
               },
             );
@@ -1034,7 +1104,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               (lead as any).appointmentTime = clientTime.toJSDate();
 
               try {
-                const fullName = resolveLeadDisplayName(lead, lead.Phone || (lead as any).phone || fromNumber);
+                const fullName = resolveLeadDisplayName(
+                  lead,
+                  lead.Phone || (lead as any).phone || fromNumber,
+                );
                 await sendAppointmentBookedEmail({
                   to: (lead.userEmail || user.email || "").toLowerCase(),
                   agentName: (user as any)?.name || user.email,
@@ -1044,7 +1117,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                   timeISO: clientTime.toISO()!,
                   timezone: clientTime.offsetNameShort || undefined,
                   source: "AI",
-                  eventUrl: (bookingRes.data?.event?.htmlLink || bookingRes.data?.htmlLink || "") as string | undefined,
+                  eventUrl: (bookingRes.data?.event?.htmlLink ||
+                    bookingRes.data?.htmlLink ||
+                    "") as string | undefined,
                 });
               } catch (e) {
                 console.warn("Email send failed (appointment):", e);
@@ -1053,11 +1128,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               console.warn("⚠️ Booking API responded but not success:", bookingRes.data);
             }
           } catch (e) {
-            console.error("⚠️ Booking API failed (proceeding to confirm by SMS):", (e as any)?.response?.data || e);
+            console.error(
+              "⚠️ Booking API failed (proceeding to confirm by SMS):",
+              (e as any)?.response?.data || e,
+            );
           }
 
           const readable = clientTime.toFormat("ccc, MMM d 'at' h:mm a");
-          aiReply = `Perfect — I’ve got you down for ${readable} ${clientTime.offsetNameShort}. You’ll get a confirmation shortly. Reply RESCHEDULE if you need to change it.`;
+          aiReply = `Perfect — I’ve got you down for ${readable} ${
+            clientTime.offsetNameShort
+          }. You’ll get a confirmation shortly. Reply RESCHEDULE if you need to change it.`;
           (lead as any).aiLastConfirmedISO = clientTime.toISO();
           (lead as any).aiLastProposedISO = clientTime.toISO();
           memory.state = "scheduled";
@@ -1084,14 +1164,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         Date.now() - new Date(lead.aiLastResponseAt).getTime() < cooldownMs
       ) {
         console.log("⏳ Skipping AI reply (cool-down).");
-        return res.status(200).json({ message: "Inbound received; AI reply skipped by cooldown." });
+        return res.status(200).json({
+          message: "Inbound received; AI reply skipped by cooldown.",
+        });
       }
 
       const lastAI = [...(lead.interactionHistory || [])].reverse().find((m: any) => m.type === "ai");
       const draft = aiReply;
       if (lastAI && lastAI.text?.trim() === draft.trim()) {
         console.log("🔁 Same AI content as last time — not queueing.");
-        return res.status(200).json({ message: "Inbound received; AI reply skipped (duplicate content)." });
+        return res.status(200).json({
+          message: "Inbound received; AI reply skipped (duplicate content).",
+        });
       }
 
       const delayMs = humanDelayMs();
@@ -1123,7 +1207,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
 
       console.log(
-        `🤖 AI reply queued for ${fromNumber} | queuedId=${queued._id} sendAfter=${sendAfter.toISOString()}`
+        `🤖 AI reply queued for ${fromNumber} | queuedId=${queued._id} sendAfter=${sendAfter.toISOString()}`,
       );
 
       return res.status(200).json({
@@ -1142,11 +1226,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       lead.interactionHistory.push(note);
       await lead.save();
       if (io) io.to(user.email).emit("message:new", { leadId: lead._id, ...note });
-      return res.status(200).json({ message: "Inbound received; AI reply failed to queue." });
+      return res.status(200).json({
+        message: "Inbound received; AI reply failed to queue.",
+      });
     }
   } catch (error: any) {
     console.error("❌ SMS handler failed:", error);
-    return res.status(200).json({ message: "Inbound SMS handled with internal error." });
+    return res.status(200).json({
+      message: "Inbound SMS handled with internal error.",
+    });
   }
 }
 
@@ -1160,17 +1248,33 @@ async function getSendParams(
   const base: any = { statusCallback: STATUS_CALLBACK };
 
   if (opts?.forceFrom) {
-    return { ...base, from: opts.forceFrom, to: fromNumber } as Parameters<Twilio["messages"]["create"]>[0];
+    return {
+      ...base,
+      from: opts.forceFrom,
+      to: fromNumber,
+    } as Parameters<Twilio["messages"]["create"]>[0];
   }
 
   if (process.env.TWILIO_MESSAGING_SERVICE_SID) {
-    return { ...base, messagingServiceSid: process.env.TWILIO_MESSAGING_SERVICE_SID, to: fromNumber } as Parameters<Twilio["messages"]["create"]>[0];
+    return {
+      ...base,
+      messagingServiceSid: process.env.TWILIO_MESSAGING_SERVICE_SID,
+      to: fromNumber,
+    } as Parameters<Twilio["messages"]["create"]>[0];
   }
 
   const a2p = await A2PProfile.findOne({ userId });
   if (a2p?.messagingServiceSid) {
-    return { ...base, messagingServiceSid: a2p.messagingServiceSid, to: fromNumber } as Parameters<Twilio["messages"]["create"]>[0];
+    return {
+      ...base,
+      messagingServiceSid: a2p.messagingServiceSid,
+      to: fromNumber,
+    } as Parameters<Twilio["messages"]["create"]>[0];
   }
 
-  return { ...base, from: fromNumber, to: fromNumber } as Parameters<Twilio["messages"]["create"]>[0];
+  return {
+    ...base,
+    from: fromNumber,
+    to: fromNumber,
+  } as Parameters<Twilio["messages"]["create"]>[0];
 }

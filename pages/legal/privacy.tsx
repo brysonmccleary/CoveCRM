@@ -47,7 +47,6 @@ export default function PrivacyPolicy() {
             <span className="font-semibold">Google Sheets / Drive:</span> We use
             Google Sheets and Drive-related scopes (including{" "}
             <span className="italic">
-              https://www.googleapis.com/auth/spreadsheets.readonly
             </span>{" "}
             and{" "}
             <span className="italic">

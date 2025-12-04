@@ -25,7 +25,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     access_type: "offline",
     prompt: "consent",
     scope: [
-      "https://www.googleapis.com/auth/spreadsheets.readonly",
+      // ❌ removed spreadsheets.readonly
       "https://www.googleapis.com/auth/drive.file",
       "https://www.googleapis.com/auth/calendar.events",
       "https://www.googleapis.com/auth/calendar.readonly",

@@ -1,4 +1,4 @@
-// pages/api/mobile/message/conversations.ts
+// /pages/api/mobile/message/conversations.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import jwt from "jsonwebtoken";
 import mongooseConnect from "@/lib/mongooseConnect";
@@ -36,7 +36,9 @@ type LeanLead = {
 };
 
 const MOBILE_JWT_SECRET =
-  process.env.MOBILE_JWT_SECRET || process.env.NEXTAUTH_SECRET || "dev-mobile-secret";
+  process.env.MOBILE_JWT_SECRET ||
+  process.env.NEXTAUTH_SECRET ||
+  "dev-mobile-secret";
 
 function getEmailFromAuth(req: NextApiRequest): string | null {
   const auth = req.headers.authorization || "";
@@ -98,6 +100,18 @@ function resolvePhone(lead: LeanLead | undefined | null) {
     (lead.mobile as string) ||
     ""
   );
+}
+
+// Apply "never show SMS Lead" rule on the backend too, for mobile
+function safeNameOrPhone(rawName: string, phone: string) {
+  const name = (rawName || "").trim();
+  const isSmsLead =
+    name && name.toLowerCase() === "sms lead";
+
+  if (!name || isSmsLead) {
+    return phone || "Unknown";
+  }
+  return name;
 }
 
 export default async function handler(
@@ -209,9 +223,9 @@ export default async function handler(
       const lead = leadById.get(leadIdStr);
       if (!lead) continue;
 
-      const fullName = resolveDisplayName(lead);
+      const rawFullName = resolveDisplayName(lead);
       const phone = resolvePhone(lead);
-      const displayName = fullName || phone || "Unknown";
+      const name = safeNameOrPhone(rawFullName, phone);
 
       const lastMessageTime =
         lastMsg.deliveredAt ||
@@ -223,7 +237,7 @@ export default async function handler(
 
       conversations.push({
         _id: lead._id,
-        name: displayName,
+        name,
         phone,
         lastMessage: lastMsg.text || lastMsg.body || "",
         lastMessageTime,
@@ -251,9 +265,9 @@ export default async function handler(
       const match = candidates.find((l) => leadMatchesLast10(l, cp));
       if (!match) continue;
 
-      const fullName = resolveDisplayName(match);
-      const phone = resolvePhone(match);
-      const displayName = fullName || phone || cp || "Unknown";
+      const rawFullName = resolveDisplayName(match);
+      const phone = resolvePhone(match) || cp;
+      const name = safeNameOrPhone(rawFullName, phone);
 
       const lastMessageTime =
         lastMsg.deliveredAt ||
@@ -265,8 +279,8 @@ export default async function handler(
 
       conversations.push({
         _id: match._id,
-        name: displayName,
-        phone: phone || cp,
+        name,
+        phone,
         lastMessage: lastMsg.text || lastMsg.body || "",
         lastMessageTime,
         lastMessageDirection: lastMsg.direction || null,
@@ -279,7 +293,8 @@ export default async function handler(
         lastMessageDeliveredAt: lastMsg.deliveredAt || null,
         lastMessageFailedAt: lastMsg.failedAt || null,
         unread: lastMsg.direction === "inbound" && lastMsg.read === false,
-        unreadCount: lastMsg.direction === "inbound" && lastMsg.read === false ? 1 : 0,
+        unreadCount:
+          lastMsg.direction === "inbound" && lastMsg.read === false ? 1 : 0,
       });
     }
 

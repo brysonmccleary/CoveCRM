@@ -11,8 +11,7 @@ const CALENDAR_SCOPES = [
 ];
 
 const SHEETS_SCOPES = [
-  // ✅ Narrowed Sheets scope
-  "https://www.googleapis.com/auth/spreadsheets.readonly",
+  // ❌ removed spreadsheets.readonly per Google review
   // ✅ Per-file Drive access (non-restricted) for user-selected files
   "https://www.googleapis.com/auth/drive.file",
   "https://www.googleapis.com/auth/userinfo.email",

@@ -34,7 +34,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const oauth2 = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
 
   const scope = [
-    "https://www.googleapis.com/auth/spreadsheets.readonly",
+    // ❌ removed spreadsheets.readonly
     "https://www.googleapis.com/auth/drive.file",
     "https://www.googleapis.com/auth/userinfo.email",
   ];

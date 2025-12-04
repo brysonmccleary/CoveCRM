@@ -1,3 +1,4 @@
+// /pages/api/google/initiate.ts 
 import type { NextApiRequest, NextApiResponse } from "next";
 import { google } from "googleapis";
 
@@ -12,7 +13,8 @@ export default async function handler(
   );
 
   const scopes = [
-    "https://www.googleapis.com/auth/spreadsheets.readonly",
+    // ❌ removed spreadsheets.readonly
+    "https://www.googleapis.com/auth/drive.file",
     "https://www.googleapis.com/auth/userinfo.email",
     "https://www.googleapis.com/auth/userinfo.profile",
   ];

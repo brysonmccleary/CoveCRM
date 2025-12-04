@@ -93,18 +93,41 @@ export async function sendIncomingSmsPush(options: {
   previewText: string;
   conversationId?: string;
   messageId?: string;
+  leadId?: string;
+  leadName?: string;
 }) {
-  const { userEmail, fromPhone, previewText, conversationId, messageId } =
-    options;
+  const {
+    userEmail,
+    fromPhone,
+    previewText,
+    conversationId,
+    messageId,
+    leadId,
+    leadName,
+  } = options;
+
+  // Display name logic:
+  // - If there's a real lead name that's not "SMS Lead", use that.
+  // - Otherwise, show the phone number.
+  const trimmedName = (leadName || "").trim();
+  const isSmsLeadName =
+    trimmedName && trimmedName.toLowerCase() === "sms lead";
+
+  const displayTitle =
+    (!trimmedName || isSmsLeadName ? fromPhone : trimmedName) ||
+    fromPhone ||
+    "New text message";
 
   await sendPushToUserEmail(userEmail, {
-    title: `New text from ${fromPhone}`,
+    title: displayTitle,
     body: previewText || "New incoming message",
     data: {
       _type: "incoming_sms",
       fromPhone,
       conversationId,
       messageId,
+      leadId,
+      leadName,
     },
   });
 }
