@@ -121,8 +121,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       { new: false }
     );
 
-    // Send them back to Settings / Calendar
-    return res.redirect("/dashboard?tab=settings");
+    // ✅ Send them back to the Calendar tab
+    const dashboardUrl = `${base.replace(/\/$/, "")}/dashboard?tab=calendar`;
+    return res.redirect(dashboardUrl);
   } catch (err: any) {
     console.error(
       "Calendar OAuth callback error:",

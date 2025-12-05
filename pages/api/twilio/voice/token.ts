@@ -29,6 +29,12 @@ function getEmailFromMobileAuth(req: NextApiRequest): string | null {
   }
 }
 
+function mask(s?: string | null) {
+  if (!s) return null;
+  const v = String(s);
+  return v.length > 8 ? `${v.slice(0, 4)}…${v.slice(-4)}` : v;
+}
+
 /**
  * Twilio Voice Access Token (for Twilio Voice JS / RN SDK).
  * - Accepts either:
@@ -99,6 +105,37 @@ export default async function handler(
       });
     }
 
+    // 🚨 New: fail fast if there is no TwiML App for outbound PSTN
+    if (!outgoingAppSid) {
+      console.error(
+        "[voice/token] No outgoing TwiML App SID configured for user",
+        identity,
+        {
+          accountSidMasked: mask(accountSid),
+          usingPersonal,
+        },
+      );
+      return res.status(500).json({
+        message:
+          "Twilio Voice is missing an outgoing TwiML App SID for this user (TWILIO_TWIML_APP_SID or user.twimlAppSid).",
+        detail: {
+          accountSidMasked: mask(accountSid),
+          usingPersonal,
+        },
+      });
+    }
+
+    console.log("[voice/token] issuing token", {
+      identity,
+      accountSidMasked: mask(accountSid),
+      usingPersonal,
+      outgoingAppSidMasked: mask(outgoingAppSid),
+      keySource:
+        usingPersonal && user?.twilioApiKeySid && user?.twilioApiKeySecret
+          ? "user"
+          : "env",
+    });
+
     const { jwt: TwilioJwt } = twilio as any;
     const AccessToken = TwilioJwt.AccessToken;
     const VoiceGrant = AccessToken.VoiceGrant;
@@ -132,10 +169,4 @@ export default async function handler(
       error: String(err?.message || err),
     });
   }
-}
-
-function mask(s?: string | null) {
-  if (!s) return null;
-  const v = String(s);
-  return v.length > 8 ? `${v.slice(0, 4)}…${v.slice(-4)}` : v;
 }

@@ -193,11 +193,8 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
   const isValidEmail = (value: string) =>
     /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
 
-  // Phone: allow 10 digits or +1XXXXXXXXXX; we’ll convert to +1 on backend.
-  const isValidPhone = (value: string) => {
-    const digits = value.replace(/[^\d]/g, "");
-    return digits.length === 10 || (digits.length === 11 && digits.startsWith("1"));
-  };
+  // 🔒 Phone: must be EXACTLY 10 digits, no symbols/spaces/parentheses
+  const isValidPhone = (value: string) => /^\d{10}$/.test(value.trim());
 
   const isValidZip = (value: string) =>
     /^[0-9]{5}(-[0-9]{4})?$/.test(value.trim());
@@ -327,7 +324,7 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
       newErrors.phone = "Business / authorized rep phone is required.";
     } else if (!isValidPhone(phone)) {
       newErrors.phone =
-        "Enter a valid US phone number (10 digits). Example: 5551234567. We’ll add +1 automatically.";
+        "Phone number must be exactly 10 digits with no spaces, dashes, or parentheses. Example: 5551234567.";
     }
 
     // Contact names
@@ -664,11 +661,21 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
       <div>
         <input
           type="text"
-          placeholder="Business / Authorized Rep Phone"
+          placeholder="Business / Authorized Rep Phone (10 digits only)"
           value={phone}
           onChange={(e) => {
-            setPhone(e.target.value);
-            setErrors((prev) => ({ ...prev, phone: undefined }));
+            const v = e.target.value;
+            setPhone(v);
+            // Live validation for non-digit characters
+            if (!/^\d*$/.test(v)) {
+              setErrors((prev) => ({
+                ...prev,
+                phone:
+                  "Phone number can only contain digits 0–9 (no spaces, dashes, or parentheses).",
+              }));
+            } else {
+              setErrors((prev) => ({ ...prev, phone: undefined }));
+            }
           }}
           className="border p-2 rounded w-full"
         />
@@ -677,8 +684,8 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
         )}
         {!errors.phone && (
           <p className="text-xs text-gray-500 mt-1">
-            Enter a 10-digit US number (e.g. 5551234567). We’ll convert it to
-            +1 format for Twilio automatically.
+            Enter exactly 10 digits (e.g. 5551234567). No spaces, dashes, or
+            parentheses. We’ll convert it to +1 format for Twilio automatically.
           </p>
         )}
       </div>

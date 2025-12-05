@@ -17,7 +17,8 @@ export default async function handler(
     process.env.NEXT_PUBLIC_BASE_URL ||
     "http://localhost:3000";
 
-  const redirectUri = `${base.replace(/\/$/, "")}/api/connect/google-sheets/callback`;
+  // ✅ Use the calendar callback, not the sheets callback
+  const redirectUri = `${base.replace(/\/$/, "")}/api/connect/google-calendar/callback`;
 
   const oauth2 = new google.auth.OAuth2(
     process.env.GOOGLE_CLIENT_ID!,

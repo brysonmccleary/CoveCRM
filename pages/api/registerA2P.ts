@@ -137,10 +137,11 @@ function isValidEmail(value: string | undefined): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
 }
 
+// 🔒 Phone must be EXACTLY 10 digits, no symbols, spaces, +1, etc.
 function isValidPhone(value: string | undefined): boolean {
   if (!value) return false;
-  const digits = value.replace(/[^\d]/g, "");
-  return digits.length === 10 || (digits.length === 11 && digits.startsWith("1"));
+  const v = value.trim();
+  return /^\d{10}$/.test(v);
 }
 
 function isValidZip(value: string | undefined): boolean {
@@ -252,7 +253,7 @@ export default async function handler(
     errors.phone = "Business / authorized rep phone is required.";
   } else if (!isValidPhone(phone)) {
     errors.phone =
-      "Enter a valid US phone number (10 digits). Example: 5551234567. We’ll add +1 automatically.";
+      "Phone number must be exactly 10 digits with no spaces, dashes, or parentheses. Example: 5551234567.";
   }
 
   // Contact names
@@ -406,6 +407,9 @@ export default async function handler(
   const normalizedState = addressState!.trim().toUpperCase();
   const normalizedCountry = addressCountry!.trim().toUpperCase();
 
+  // Phone is already validated as exactly 10 digits
+  const normalizedPhone = phone!.trim();
+
   const finalSampleArray = finalSamples.length
     ? finalSamples
     : samplesFromFieldsRaw.map((s) => (s || "").trim()).filter(Boolean);
@@ -424,7 +428,7 @@ export default async function handler(
     addressCountry: normalizedCountry,
 
     email: email!.trim(),
-    phone: phone!.trim(),
+    phone: normalizedPhone,
     contactTitle: (body.contactTitle || "Owner").trim(),
     contactFirstName: contactFirstName!.trim(),
     contactLastName: contactLastName!.trim(),

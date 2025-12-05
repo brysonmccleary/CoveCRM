@@ -1,6 +1,6 @@
 // /pages/api/disposition-lead.ts
 import type { NextApiRequest, NextApiResponse } from "next";
-import { getServerSession } from "next-auth";
+import { getServerSession } from "next-auth/next";
 import { authOptions } from "./auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import mongoose from "mongoose";
@@ -9,30 +9,68 @@ import Folder from "@/models/Folder";
 import { initSocket } from "@/lib/socket";
 import { folderNameForDisposition } from "@/lib/dispositionToFolder";
 import { isSystemFolderName } from "@/lib/systemFolders";
+import jwt from "jsonwebtoken";
 
 function escapeRegex(s: string) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+// 🔵 Only these statuses now – no "resolved"
 const ALLOW_STATUS_SET = new Set([
   "sold",
   "not interested",
   "booked appointment",
-  "resolved",
 ]);
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+const MOBILE_JWT_SECRET =
+  process.env.MOBILE_JWT_SECRET ||
+  process.env.NEXTAUTH_SECRET ||
+  "dev-mobile-secret";
+
+// 🔵 More forgiving email extraction – matches other mobile APIs
+function getEmailFromAuth(req: NextApiRequest): string | null {
+  const auth = req.headers.authorization || "";
+  const [scheme, token] = auth.split(" ");
+  if (scheme !== "Bearer" || !token) return null;
+
+  try {
+    const payload = jwt.verify(token, MOBILE_JWT_SECRET) as any;
+
+    const email =
+      (payload?.email ||
+        payload?.userEmail ||
+        payload?.user?.email ||
+        payload?.sub ||
+        "") + "";
+
+    const lower = email.toString().trim().toLowerCase();
+    return lower || null;
+  } catch {
+    return null;
+  }
+}
+
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   if (req.method !== "POST") {
     return res.status(405).json({ message: "Method not allowed" });
   }
 
+  // ✅ Support BOTH:
+  //  - Web: NextAuth session cookies
+  //  - Mobile: Bearer <mobile JWT> with email
   const session = await getServerSession(req, res, authOptions);
-  const userEmail = session?.user?.email?.toLowerCase();
+  const sessionEmail = session?.user?.email?.toLowerCase() || "";
+  const jwtEmail = getEmailFromAuth(req) || "";
+  const userEmail = (sessionEmail || jwtEmail).toLowerCase();
+
   if (!userEmail) {
     return res.status(401).json({ message: "Unauthorized" });
   }
 
-  // 🔵 NEW: accept multiple possible payload shapes from the frontend
+  // 🔵 Accept multiple possible payload shapes from the frontend
   const body: any = req.body ?? {};
 
   const leadIdRaw =
@@ -65,7 +103,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   // Canonicalize disposition → pretty target name
-  const canonical = folderNameForDisposition(rawName); // "Sold" | "Not Interested" | "Booked Appointment" | "Resolved" | null
+  const canonical = folderNameForDisposition(rawName); // "Sold" | "Not Interested" | "Booked Appointment" | null
   const desiredFolderName = canonical ?? rawName;
   const desiredLower = desiredFolderName.toLowerCase();
 

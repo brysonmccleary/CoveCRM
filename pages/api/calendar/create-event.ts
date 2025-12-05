@@ -8,6 +8,7 @@ import User from "@/models/User";
 import Lead from "@/models/Lead";
 import { resolveTimezoneFromRequest } from "@/lib/resolveTimezone";
 import { sendAppointmentBookedEmail } from "@/lib/email";
+import jwt from "jsonwebtoken";
 
 /** Utility: take last 10 digits for phone matching */
 function last10(raw?: string): string | undefined {
@@ -31,7 +32,29 @@ function getBaseUrl(req: NextApiRequest) {
 function isBareCallWithTitle(s?: string) {
   const t = (s || "").trim();
   // matches: "Call with", "📞 Call with", any capitalization, and optional trailing punctuation/spaces
-  return /^(\p{Emoji_Presentation}|\p{Emoji}\uFE0F|\p{Extended_Pictographic})?\s*call with\s*$/iu.test(t);
+  return /^(\p{Emoji_Presentation}|\p{Emoji}\uFE0F|\p{Extended_Pictographic})?\s*call with\s*$/iu.test(
+    t,
+  );
+}
+
+// 🔐 Mobile JWT helper (same pattern as other mobile APIs)
+const MOBILE_JWT_SECRET =
+  process.env.MOBILE_JWT_SECRET ||
+  process.env.NEXTAUTH_SECRET ||
+  "dev-mobile-secret";
+
+function getEmailFromAuth(req: NextApiRequest): string | null {
+  const auth = req.headers.authorization || "";
+  const [scheme, token] = auth.split(" ");
+  if (scheme !== "Bearer" || !token) return null;
+
+  try {
+    const payload = jwt.verify(token, MOBILE_JWT_SECRET) as any;
+    const email = (payload?.email || payload?.sub || "").toString().toLowerCase();
+    return email || null;
+  } catch {
+    return null;
+  }
 }
 
 export default async function handler(
@@ -42,8 +65,15 @@ export default async function handler(
     return res.status(405).json({ message: "Method not allowed" });
   }
 
-  const session = await getServerSession(req, res, authOptions);
-  const userEmail = session?.user?.email?.toLowerCase();
+  // ✅ Web (NextAuth session) OR mobile (Bearer mobile JWT)
+  const session = await getServerSession(req, res, authOptions).catch(
+    () => null as any,
+  );
+  const jwtEmail = getEmailFromAuth(req);
+  const userEmail =
+    (session?.user?.email as string | undefined)?.toLowerCase() ||
+    jwtEmail ||
+    "";
   if (!userEmail) return res.status(401).json({ message: "Unauthorized" });
 
   const {
@@ -51,7 +81,7 @@ export default async function handler(
     start,
     end,
     startISO, // tolerate legacy payloads
-    endISO,   // tolerate legacy payloads
+    endISO, // tolerate legacy payloads
     description,
     location,
     attendee, // optional lead email
@@ -91,10 +121,7 @@ export default async function handler(
   );
 
   // Prefer calendar token store; fall back to Sheets store if present
-  const tokenStore: any =
-    (user as any).googleTokens ||
-    (user as any).googleSheets ||
-    null;
+  const tokenStore: any = (user as any).googleTokens || (user as any).googleSheets || null;
 
   const accessToken = tokenStore?.accessToken || undefined;
   const refreshToken = tokenStore?.refreshToken || undefined;
@@ -123,9 +150,8 @@ export default async function handler(
     let finalLocation = location || "";
     const attendees: Array<{ email: string }> = [];
 
-    const baseUrl = (process.env.NEXT_PUBLIC_BASE_URL ||
-      process.env.BASE_URL ||
-      base
+    const baseUrl = (
+      process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || base
     ).replace(/\/$/, "");
 
     const privateProps: Record<string, string> = {};
@@ -136,8 +162,16 @@ export default async function handler(
     if (leadId) {
       leadDoc = await Lead.findById(leadId).lean();
       if (leadDoc) {
-        const first = (leadDoc["First Name"] || leadDoc.firstName || "").toString().trim();
-        const last = (leadDoc["Last Name"] || leadDoc.lastName || "").toString().trim();
+        const first = (
+          leadDoc["First Name"] ||
+          leadDoc.firstName ||
+          ""
+        ).toString().trim();
+        const last = (
+          leadDoc["Last Name"] ||
+          leadDoc.lastName ||
+          ""
+        ).toString().trim();
         const full = `${first} ${last}`.trim() || "Lead";
         const phone =
           leadDoc["Phone"] ||
@@ -302,7 +336,10 @@ export default async function handler(
         eventUrl: created.data.htmlLink || undefined,
       });
     } catch (e) {
-      console.warn("Agent email (Dialer) failed (non-blocking):", (e as any)?.message || e);
+      console.warn(
+        "Agent email (Dialer) failed (non-blocking):",
+        (e as any)?.message || e,
+      );
     }
 
     res.setHeader("Cache-Control", "no-store");
