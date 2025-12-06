@@ -624,7 +624,8 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
             statusData && typeof statusData.nextAction !== "undefined"
               ? statusData
               : null;
-          const updated = resp
+
+          const updated: A2PStatusView = resp
             ? ((): A2PStatusView => {
                 const app = (resp.applicationStatus || "").toLowerCase();
                 const reg = (resp.registrationStatus || "").toLowerCase();
@@ -653,7 +654,7 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
                       "Your brand and campaign are approved. Your CoveCRM numbers are ready to send compliant A2P traffic.",
                   };
                 }
-                if (declined) {
+                if (declined || brand === "failed" || camp === "failed") {
                   return {
                     state: "declined",
                     title: "A2P Declined – changes required",
