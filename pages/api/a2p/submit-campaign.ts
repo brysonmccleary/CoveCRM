@@ -1,17 +1,15 @@
-// pages/api/a2p/submit-campaign.ts
+// /pages/api/a2p/submit-campaign.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
 import mongooseConnect from "@/lib/mongooseConnect";
 import twilio from "twilio";
 import User from "@/models/User";
-import A2PProfile, { IA2PProfile } from "@/models/A2PProfile";
+import A2PProfile from "@/models/A2PProfile";
 
 const accountSid = process.env.TWILIO_ACCOUNT_SID!;
 const authToken = process.env.TWILIO_AUTH_TOKEN!;
 const client = twilio(accountSid, authToken);
-
-const CRON_SECRET = process.env.CRON_SECRET || process.env.CRON_KEY || "";
 
 const APPROVED = new Set([
   "approved",
@@ -30,10 +28,6 @@ type Body = {
   subscriberOptIn?: boolean;
   ageGated?: boolean;
   directLending?: boolean;
-
-  // --- INTERNAL (cron) fields: NOT exposed to frontend ---
-  internalUserId?: string;
-  internalA2PId?: string;
 };
 
 // Ensure campaign description meets Twilio min/max length requirements
@@ -41,7 +35,7 @@ function buildCampaignDescription(opts: {
   businessName: string;
   useCase: string;
   messageFlow: string;
-}: string) {
+}): string {
   const businessName = (opts.businessName || "").trim() || "this business";
   const useCase = (opts.useCase || "").trim() || "LOW_VOLUME";
 
@@ -74,58 +68,24 @@ export default async function handler(
   if (req.method !== "POST")
     return res.status(405).json({ message: "Method not allowed" });
 
-  const body = (req.body || {}) as Body;
-
-  // Internal cron / sync caller? (bypasses session, uses CRON_SECRET)
-  const isInternalCron =
-    CRON_SECRET && req.headers["x-cron-key"] === CRON_SECRET;
-
   try {
+    const session = await getServerSession(req, res, authOptions);
+    if (!session?.user?.email)
+      return res.status(401).json({ message: "Unauthorized" });
+
     await mongooseConnect();
 
-    let a2p: IA2PProfile | null = null;
+    const user = await User.findOne({ email: session.user.email }).lean();
+    if (!user)
+      return res.status(404).json({ message: "User not found" });
 
-    if (isInternalCron) {
-      // Called from /api/a2p/sync using CRON_SECRET
-      const internalA2PId = body.internalA2PId?.trim();
-      const internalUserId = body.internalUserId?.trim();
-
-      if (internalA2PId) {
-        a2p = await A2PProfile.findById(internalA2PId);
-      } else if (internalUserId) {
-        a2p = await A2PProfile.findOne({ userId: internalUserId });
-      } else {
-        return res.status(400).json({
-          message:
-            "Internal call requires internalUserId or internalA2PId in body.",
-        });
-      }
-
-      if (!a2p) {
-        return res
-          .status(404)
-          .json({ message: "A2P profile not found for internal call." });
-      }
-    } else {
-      // Normal user-triggered call (from dashboard)
-      const session = await getServerSession(req, res, authOptions);
-      if (!session?.user?.email)
-        return res.status(401).json({ message: "Unauthorized" });
-
-      const user = await User.findOne({ email: session.user.email }).lean();
-      if (!user)
-        return res.status(404).json({ message: "User not found" });
-
-      a2p = await A2PProfile.findOne({
-        userId: String((user as any)._id),
-      });
-
-      if (!a2p) {
-        return res.status(400).json({
-          message: "A2P profile not found—call /api/a2p/start first.",
-        });
-      }
-    }
+    const a2p = await A2PProfile.findOne({
+      userId: String((user as any)._id),
+    });
+    if (!a2p)
+      return res
+        .status(400)
+        .json({ message: "A2P profile not found—call /api/a2p/start first." });
 
     if (!a2p.brandSid)
       return res.status(400).json({ message: "Brand not created yet." });
@@ -137,12 +97,14 @@ export default async function handler(
       });
     }
 
+    const body = (req.body || {}) as Body;
+
     // prefer explicit, then stored selection from /api/a2p/start, else LOW_VOLUME
     const useCase = body.useCase || a2p.usecaseCode || "LOW_VOLUME";
 
     const storedSamples =
-      a2p.sampleMessagesArr && a2p.sampleMessagesArr.length
-        ? a2p.sampleMessagesArr
+      (a2p as any).sampleMessagesArr && (a2p as any).sampleMessagesArr.length
+        ? (a2p as any).sampleMessagesArr
         : (a2p.sampleMessages || "")
             .split("\n")
             .map((s) => s.trim())
@@ -228,17 +190,17 @@ export default async function handler(
 
         const status =
           (updated as any).status || (updated as any).state || "unknown";
-        const lower = String(status).toLowerCase();
-
-        a2p.usa2pSid = campaignSid;
-        a2p.registrationStatus = APPROVED.has(lower)
+        (a2p as any).usa2pSid = campaignSid;
+        a2p.registrationStatus = APPROVED.has(
+          String(status).toLowerCase(),
+        )
           ? "campaign_approved"
           : "campaign_submitted";
-        a2p.messagingReady = APPROVED.has(lower);
+        a2p.messagingReady = APPROVED.has(String(status).toLowerCase());
         a2p.lastSyncedAt = new Date();
 
         // Keep samples in both forms for UI/API parity
-        a2p.sampleMessagesArr = messageSamples;
+        (a2p as any).sampleMessagesArr = messageSamples;
         a2p.sampleMessages = messageSamples.join("\n\n");
         await a2p.save();
 
@@ -248,7 +210,7 @@ export default async function handler(
           campaign: { sid: campaignSid, status },
           messagingReady: a2p.messagingReady,
         });
-      } catch {
+      } catch (e) {
         // Fall back to create if Twilio doesn’t allow updates for some fields
         campaignSid = undefined;
       }
@@ -262,8 +224,6 @@ export default async function handler(
     const newSid = (created as any).sid;
     const status =
       (created as any).status || (created as any).state || "unknown";
-    const lower = String(status).toLowerCase();
-    const approved = APPROVED.has(lower);
 
     await A2PProfile.updateOne(
       { _id: a2p._id },
@@ -271,10 +231,10 @@ export default async function handler(
         $set: {
           usa2pSid: newSid,
           messagingServiceSid: a2p.messagingServiceSid,
-          registrationStatus: approved
+          registrationStatus: APPROVED.has(String(status).toLowerCase())
             ? "campaign_approved"
             : "campaign_submitted",
-          messagingReady: approved,
+          messagingReady: APPROVED.has(String(status).toLowerCase()),
           lastSyncedAt: new Date(),
           // keep samples persisted in both forms
           sampleMessagesArr: messageSamples,
@@ -289,7 +249,7 @@ export default async function handler(
       ok: true,
       action: "created",
       campaign: { sid: newSid, status },
-      messagingReady: approved,
+      messagingReady: APPROVED.has(String(status).toLowerCase()),
     });
   } catch (err: any) {
     console.error("A2P submit-campaign error:", err);
