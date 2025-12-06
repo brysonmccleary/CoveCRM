@@ -1,8 +1,41 @@
 // components/A2PVerificationForm.tsx
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import toast from "react-hot-toast";
 
 type UploadedFileResponse = { url: string; message?: string };
+
+// Match your /api/a2p/status shape
+type A2PStatusApiResponse = {
+  nextAction: string;
+  registrationStatus: string;
+  messagingReady: boolean;
+  canSendSms: boolean;
+  applicationStatus: string;
+  a2pStatusLabel: string;
+  declinedReason: string | null;
+  brand: { sid: string | null; status: string };
+  campaign: { sid: string | null; status: string };
+  messagingServiceSid: string | null;
+  hints?: {
+    hasProfile?: boolean;
+    hasBrand?: boolean;
+    hasCampaign?: boolean;
+    hasMessagingService?: boolean;
+  };
+};
+
+type A2PStatusState =
+  | "not_submitted"
+  | "pending"
+  | "approved"
+  | "declined"
+  | "error";
+
+type A2PStatusView = {
+  state: A2PStatusState;
+  title: string;
+  description?: string;
+};
 
 // Twilio / TCR-approved use cases (the common ones first)
 type UseCaseCode =
@@ -76,6 +109,134 @@ type FieldErrors = {
 };
 
 export default function A2PVerificationForm() {
+  // ---------- Status banner ----------
+  const [statusView, setStatusView] = useState<A2PStatusView | null>(null);
+  const [loadingStatus, setLoadingStatus] = useState<boolean>(true);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const classifyStatus = (resp: A2PStatusApiResponse | null): A2PStatusView => {
+      if (!resp) {
+        return {
+          state: "not_submitted",
+          title: "Not submitted yet",
+          description:
+            "Fill out this form to submit your business for A2P 10DLC review. We’ll handle the brand and campaign setup for you.",
+        };
+      }
+
+      const app = (resp.applicationStatus || "").toLowerCase();
+      const reg = (resp.registrationStatus || "").toLowerCase();
+      const brand = (resp.brand?.status || "").toLowerCase();
+      const camp = (resp.campaign?.status || "").toLowerCase();
+      const declined = app === "declined" || reg === "rejected" || !!resp.declinedReason;
+      const approved =
+        (app === "approved" || reg === "campaign_approved") &&
+        (resp.messagingReady || resp.canSendSms);
+
+      const notStarted =
+        reg === "not_started" ||
+        resp.nextAction === "start_profile" ||
+        (!resp.hints?.hasProfile && !resp.hints?.hasBrand && !resp.hints?.hasCampaign);
+
+      if (approved) {
+        return {
+          state: "approved",
+          title: "A2P Approved – texting is live",
+          description:
+            "Your brand and campaign are approved. Your CoveCRM numbers are ready to send compliant A2P traffic.",
+        };
+      }
+
+      if (declined || brand === "failed" || camp === "failed") {
+        return {
+          state: "declined",
+          title: "A2P Declined – changes required",
+          description:
+            resp.declinedReason ||
+            "Reviewers declined your submission. Update your opt-in details and sample messages, then resubmit.",
+        };
+      }
+
+      if (notStarted) {
+        return {
+          state: "not_submitted",
+          title: "Not submitted yet",
+          description:
+            "Complete this form to submit your A2P brand and campaign. We’ll keep you updated by email.",
+        };
+      }
+
+      return {
+        state: "pending",
+        title: "In review – waiting on carrier approval",
+        description:
+          "Your brand and/or campaign have been submitted and are under review. We’ll email you as soon as everything is approved.",
+      };
+    };
+
+    const loadStatus = async () => {
+      try {
+        const res = await fetch("/api/a2p/status");
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          if (!cancelled) {
+            setStatusView({
+              state: "error",
+              title: "Status unavailable",
+              description:
+                "We couldn’t load your A2P status. You can still submit the form, and we’ll process it normally.",
+            });
+          }
+          return;
+        }
+
+        // "not started" payload from your handler has no a2p doc
+        const resp: A2PStatusApiResponse | null =
+          data && typeof data.nextAction !== "undefined" ? data : null;
+
+        if (!cancelled) {
+          setStatusView(classifyStatus(resp));
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setStatusView({
+            state: "error",
+            title: "Status unavailable",
+            description:
+              "We couldn’t load your A2P status. You can still submit the form, and we’ll process it normally.",
+          });
+        }
+      } finally {
+        if (!cancelled) setLoadingStatus(false);
+      }
+    };
+
+    loadStatus();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const statusClasses = (() => {
+    if (!statusView) return "border border-gray-600 bg-gray-800 text-gray-100";
+    switch (statusView.state) {
+      case "approved":
+        return "border border-green-500 bg-green-500/10 text-green-200";
+      case "declined":
+        return "border border-red-500 bg-red-500/10 text-red-200";
+      case "pending":
+        return "border border-yellow-500 bg-yellow-500/10 text-yellow-100";
+      case "error":
+        return "border border-orange-500 bg-orange-500/10 text-orange-100";
+      case "not_submitted":
+      default:
+        return "border border-gray-600 bg-gray-800 text-gray-100";
+    }
+  })();
+
   // ---------- Business ----------
   const [businessName, setBusinessName] = useState("");
   const [ein, setEin] = useState("");
@@ -93,9 +254,9 @@ export default function A2PVerificationForm() {
   const [phone, setPhone] = useState("");
 
   // ---------- Explicit link fields (optional but recommended) ----------
-  const [landingOptInUrl, setLandingOptInUrl] = useState(""); // page that shows opt-in language + form
-  const [landingTosUrl, setLandingTosUrl] = useState(""); // Terms of Service link
-  const [landingPrivacyUrl, setLandingPrivacyUrl] = useState(""); // Privacy Policy link
+  const [landingOptInUrl, setLandingOptInUrl] = useState("");
+  const [landingTosUrl, setLandingTosUrl] = useState("");
+  const [landingPrivacyUrl, setLandingPrivacyUrl] = useState("");
 
   // ---------- Contact ----------
   const [contactFirstName, setContactFirstName] = useState("");
@@ -103,9 +264,9 @@ export default function A2PVerificationForm() {
   const [contactTitle, setContactTitle] = useState("");
 
   // ---------- Campaign type ----------
-  const [usecase, setUsecase] = useState<UseCaseCode>("LOW_VOLUME"); // default to Low Volume (mixed)
+  const [usecase, setUsecase] = useState<UseCaseCode>("LOW_VOLUME");
 
-  // ---------- Sample Messages (separate boxes) ----------
+  // ---------- Sample Messages ----------
   const [msg1, setMsg1] = useState(
     `Hi {{first_name}}, it’s {{agent_name}} from our insurance team. You requested info on your life insurance options – when’s a good time for a quick call? Reply STOP to opt out.`,
   );
@@ -116,7 +277,7 @@ export default function A2PVerificationForm() {
     `Hi {{first_name}}, just following up from your Facebook request for a life insurance quote. This is {{agent_name}} – can I call you real quick? Reply STOP to opt out.`,
   );
 
-  // ---------- Opt-in Details (no template tokens, includes exclusivity) ----------
+  // ---------- Opt-in Details ----------
   const [optInDetails, setOptInDetails] = useState(
     `This campaign sends follow-up messages to users who request life insurance information through TCPA-compliant Facebook lead forms or vendor landing pages. Messages include appointment scheduling, policy information, and benefits reminders for users who have explicitly opted in.
 
@@ -129,7 +290,7 @@ Before submission, users see a disclosure similar to:
 The form uses click-wrap consent and displays Privacy Policy and Terms & Conditions links on the same page as the form submission. This campaign is exclusive to me. Leads are never resold, reused, or shared with other agents or organizations. Vendors maintain timestamped proof of consent, IP address, and full submission metadata to ensure compliance.`,
   );
 
-  // ---------- Volume + screenshot (screenshot OPTIONAL) ----------
+  // ---------- Volume + screenshot ----------
   const [volume, setVolume] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [optInScreenshotUrl, setOptInScreenshotUrl] = useState<string | null>(
@@ -159,7 +320,6 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
     );
   };
 
-  // EIN formatting: force 9 digits and show as 00-0000000
   const handleEinChange = (value: string) => {
     const digits = value.replace(/[^\d]/g, "").slice(0, 9);
     if (!digits) {
@@ -175,7 +335,6 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
     setErrors((prev) => ({ ...prev, ein: undefined }));
   };
 
-  // Strict URL check (must be https and non-localhost-ish)
   const isValidUrl = (value: string) => {
     const v = value.trim();
     if (!/^https:\/\//i.test(v)) return false;
@@ -189,17 +348,14 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
     }
   };
 
-  // Email check (simple)
   const isValidEmail = (value: string) =>
     /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
 
-  // 🔒 Phone: must be EXACTLY 10 digits, no symbols/spaces/parentheses
   const isValidPhone = (value: string) => /^\d{10}$/.test(value.trim());
 
   const isValidZip = (value: string) =>
     /^[0-9]{5}(-[0-9]{4})?$/.test(value.trim());
 
-  // Required (for quick global check)
   const requiredOk = () =>
     businessName &&
     ein &&
@@ -219,7 +375,6 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
     optInDetails &&
     volume;
 
-  // ---------- Upload (optional) ----------
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files?.length) setFile(e.target.files[0]);
   };
@@ -255,11 +410,9 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
     }
   };
 
-  // ---------- Validate all fields & build errors ----------
   const runValidation = (): boolean => {
     const newErrors: FieldErrors = {};
 
-    // Business name
     if (!businessName.trim()) {
       newErrors.businessName = "Business name is required.";
     } else if (businessName.trim().length < 3) {
@@ -267,7 +420,6 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
         "Business name must be at least 3 characters.";
     }
 
-    // EIN
     const einDigits = ein.replace(/[^\d]/g, "");
     if (!einDigits) {
       newErrors.ein = "EIN is required.";
@@ -276,7 +428,6 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
         'EIN must be 9 digits, e.g. "12-3456789" (no letters or extra symbols).';
     }
 
-    // Address
     if (!address.trim()) {
       newErrors.address = "Street address is required.";
     }
@@ -304,7 +455,6 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
         "A2P 10DLC only supports US-based brands. Enter 'US' for the country.";
     }
 
-    // Website
     if (!website.trim()) {
       newErrors.website = "Website URL is required.";
     } else if (!isValidUrl(website)) {
@@ -312,14 +462,12 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
         'Website must be a real, public HTTPS URL (starting with "https://").';
     }
 
-    // Email
     if (!email.trim()) {
       newErrors.email = "Business email is required.";
     } else if (!isValidEmail(email)) {
       newErrors.email = "Enter a valid email address (example@domain.com).";
     }
 
-    // Phone
     if (!phone.trim()) {
       newErrors.phone = "Business / authorized rep phone is required.";
     } else if (!isValidPhone(phone)) {
@@ -327,7 +475,6 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
         "Phone number must be exactly 10 digits with no spaces, dashes, or parentheses. Example: 5551234567.";
     }
 
-    // Contact names
     if (!contactFirstName.trim()) {
       newErrors.contactFirstName = "Contact first name is required.";
     }
@@ -335,7 +482,6 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
       newErrors.contactLastName = "Contact last name is required.";
     }
 
-    // Sample messages
     const messages = [msg1, msg2, msg3];
     const msgFields: Array<keyof FieldErrors> = ["msg1", "msg2", "msg3"];
 
@@ -356,7 +502,6 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
       }
     });
 
-    // Opt-in details
     const od = optInDetails.trim();
     if (!od) {
       newErrors.optInDetails = "Opt-in details are required.";
@@ -373,7 +518,6 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
       }
     }
 
-    // Volume
     const volDigits = volume.replace(/[^\d]/g, "");
     if (!volDigits) {
       newErrors.volume =
@@ -397,18 +541,14 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
     return true;
   };
 
-  // ---------- Submit ----------
   const handleSubmit = async () => {
-    // run full field-level validation first
     if (!runValidation()) return;
 
     if (!requiredOk()) {
-      // this is just a backup; in practice runValidation covers this
       toast.error("Please complete all required fields.");
       return;
     }
 
-    // Soft warnings for optional-but-recommended artifacts
     if (!landingOptInUrl) {
       toast(
         (t) => (
@@ -431,37 +571,27 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
     try {
       const payload = {
         businessName,
-        ein, // backend normalizes to digits and enforces 9-digit EIN
-
-        // Address pieces expected by /api/a2p/start
-        address, // street line 1
+        ein,
+        address,
         addressLine2: addressLine2 || undefined,
         addressCity,
         addressState: addressState.toUpperCase().trim(),
         addressPostalCode,
         addressCountry: addressCountry.toUpperCase().trim(),
-
         website: website.trim(),
         email: email.trim(),
         phone: phone.trim(),
         contactFirstName: contactFirstName.trim(),
         contactLastName: contactLastName.trim(),
         contactTitle: contactTitle.trim(),
-
-        // campaign type for both existing endpoints
-        usecaseCode: usecase, // /api/a2p/start expects this
-        useCase: usecase, // /api/a2p/submit-campaign expects this (if used)
-
-        // messages
+        usecaseCode: usecase,
+        useCase: usecase,
         sampleMessages: allMessages,
         sampleMessage1: msg1,
         sampleMessage2: msg2,
         sampleMessage3: msg3,
-
         optInDetails,
         volume,
-
-        // optional artifacts (included if provided)
         optInScreenshotUrl: optInScreenshotUrl || undefined,
         landingOptInUrl: landingOptInUrl || undefined,
         landingTosUrl: landingTosUrl || undefined,
@@ -476,7 +606,6 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
 
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        // backend may send generic message; just show toast
         toast.error(data.message || "Submission failed");
         return;
       }
@@ -484,6 +613,82 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
       toast.success(
         "Verification submitted! We’ll notify you when it’s approved or if changes are needed.",
       );
+
+      // Refresh status banner so it shows "pending" right away
+      setLoadingStatus(true);
+      try {
+        const statusRes = await fetch("/api/a2p/status");
+        const statusData = await statusRes.json().catch(() => ({}));
+        if (statusRes.ok) {
+          const resp: A2PStatusApiResponse | null =
+            statusData && typeof statusData.nextAction !== "undefined"
+              ? statusData
+              : null;
+          const updated = resp
+            ? ((): A2PStatusView => {
+                const app = (resp.applicationStatus || "").toLowerCase();
+                const reg = (resp.registrationStatus || "").toLowerCase();
+                const brand = (resp.brand?.status || "").toLowerCase();
+                const camp = (resp.campaign?.status || "").toLowerCase();
+                const declined =
+                  app === "declined" ||
+                  reg === "rejected" ||
+                  !!resp.declinedReason;
+                const approved =
+                  (app === "approved" || reg === "campaign_approved") &&
+                  (resp.messagingReady || resp.canSendSms);
+
+                const notStarted =
+                  reg === "not_started" ||
+                  resp.nextAction === "start_profile" ||
+                  (!resp.hints?.hasProfile &&
+                    !resp.hints?.hasBrand &&
+                    !resp.hints?.hasCampaign);
+
+                if (approved) {
+                  return {
+                    state: "approved",
+                    title: "A2P Approved – texting is live",
+                    description:
+                      "Your brand and campaign are approved. Your CoveCRM numbers are ready to send compliant A2P traffic.",
+                  };
+                }
+                if (declined) {
+                  return {
+                    state: "declined",
+                    title: "A2P Declined – changes required",
+                    description:
+                      resp.declinedReason ||
+                      "Reviewers declined your submission. Update your opt-in details and sample messages, then resubmit.",
+                  };
+                }
+                if (notStarted) {
+                  return {
+                    state: "not_submitted",
+                    title: "Not submitted yet",
+                    description:
+                      "Complete this form to submit your A2P brand and campaign. We’ll keep you updated by email.",
+                  };
+                }
+                return {
+                  state: "pending",
+                  title: "In review – waiting on carrier approval",
+                  description:
+                    "Your brand and campaign have been submitted. Carriers are still reviewing. We’ll email you as soon as everything is approved.",
+                };
+              })()
+            : {
+                state: "pending",
+                title: "In review – waiting on carrier approval",
+                description:
+                  "Your brand and campaign have been submitted. Carriers are still reviewing. We’ll email you as soon as everything is approved.",
+              };
+
+          setStatusView(updated);
+        }
+      } finally {
+        setLoadingStatus(false);
+      }
     } catch (err) {
       console.error("Submission error:", err);
       toast.error("Error submitting verification");
@@ -496,6 +701,26 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
   return (
     <div className="border border-black dark:border-white p-4 rounded space-y-4">
       <h2 className="text-xl font-bold">A2P Brand Verification</h2>
+
+      {/* Status banner at the top */}
+      <div className="mb-2">
+        {loadingStatus ? (
+          <div className="border border-gray-600 bg-gray-800 text-gray-100 text-sm px-3 py-2 rounded">
+            Checking your A2P status…
+          </div>
+        ) : statusView ? (
+          <div className={`${statusClasses} text-sm px-3 py-2 rounded`}>
+            <div className="font-semibold">{statusView.title}</div>
+            {statusView.description && (
+              <p className="text-xs mt-1 opacity-90">
+                {statusView.description}
+              </p>
+            )}
+          </div>
+        ) : null}
+      </div>
+
+      {/* (everything below is your existing form) */}
 
       {/* Business */}
       <div>
@@ -666,7 +891,6 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
           onChange={(e) => {
             const v = e.target.value;
             setPhone(v);
-            // Live validation for non-digit characters
             if (!/^\d*$/.test(v)) {
               setErrors((prev) => ({
                 ...prev,
@@ -720,7 +944,7 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
         </p>
       </div>
 
-      {/* Links (optional but recommended) */}
+      {/* Links */}
       <div className="grid md:grid-cols-2 gap-3">
         <input
           type="url"
@@ -793,7 +1017,7 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
         className="border p-2 rounded w-full"
       />
 
-      {/* Sample Messages – separate inputs */}
+      {/* Sample Messages */}
       <div className="space-y-3">
         <label className="text-sm text-gray-500">
           Tip: Use variables like <code>{`{{first_name}}`}</code> and include
@@ -880,7 +1104,7 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
         )}
       </div>
 
-      {/* Screenshot Upload (optional) */}
+      {/* Screenshot Upload */}
       <div className="space-y-2">
         <label className="font-semibold block">
           Screenshot of opt-in language (optional)

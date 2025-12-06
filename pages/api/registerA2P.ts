@@ -18,6 +18,9 @@ import User from "@/models/User";
  * - This version includes STRICT validation that mirrors the frontend form.
  * - If anything is not in the exact format Twilio/TCR expects, we return 400
  *   and DO NOT touch Twilio at all.
+ * - After a successful /api/a2p/start, we persist the "last submitted" campaign
+ *   data into A2PProfile so /api/a2p/sync can auto-create the campaign later
+ *   as soon as the brand is approved.
  */
 
 const BASE_URL =
@@ -35,11 +38,56 @@ const BRAND_OK_FOR_CAMPAIGN = new Set([
 ]);
 
 const US_STATE_CODES = [
-  "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA",
-  "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD",
-  "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ",
-  "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC",
-  "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY",
+  "AL",
+  "AK",
+  "AZ",
+  "AR",
+  "CA",
+  "CO",
+  "CT",
+  "DE",
+  "FL",
+  "GA",
+  "HI",
+  "ID",
+  "IL",
+  "IN",
+  "IA",
+  "KS",
+  "KY",
+  "LA",
+  "ME",
+  "MD",
+  "MA",
+  "MI",
+  "MN",
+  "MS",
+  "MO",
+  "MT",
+  "NE",
+  "NV",
+  "NH",
+  "NJ",
+  "NM",
+  "NY",
+  "NC",
+  "ND",
+  "OH",
+  "OK",
+  "OR",
+  "PA",
+  "RI",
+  "SC",
+  "SD",
+  "TN",
+  "TX",
+  "UT",
+  "VT",
+  "VA",
+  "WA",
+  "WV",
+  "WI",
+  "WY",
 ];
 
 type BodyIn = {
@@ -460,6 +508,40 @@ export default async function handler(
       : {}),
   };
 
+  // Selector + helper to persist last submitted values into A2PProfile
+  const profileSelector = existingA2P
+    ? { _id: existingA2P._id }
+    : { userId };
+
+  const persistLastSubmitted = async () => {
+    try {
+      await A2PProfile.updateOne(
+        profileSelector,
+        {
+          $set: {
+            lastSubmittedUseCase: normalizedUseCase,
+            lastSubmittedSampleMessages: finalSampleArray,
+            lastSubmittedOptInDetails: optInDetails!,
+            // Keep simple normalized copies the sync job can also read
+            useCase: normalizedUseCase,
+            usecaseCode: normalizedUseCase,
+            sampleMessages: finalSampleArray,
+            sampleMessage1: finalSampleArray[0],
+            sampleMessage2: finalSampleArray[1],
+            sampleMessage3: finalSampleArray[2],
+            optInDetails: optInDetails!,
+            volume: volDigits,
+          },
+        },
+        // We allow upsert in case /api/a2p/start created the profile
+        // using the same userId key after we fetched existingA2P.
+        { upsert: true },
+      );
+    } catch (e) {
+      console.error("A2P persistLastSubmitted error:", e);
+    }
+  };
+
   // Forward the user's cookies so /api/a2p/* can see the same session
   const cookie = req.headers.cookie || "";
   const commonHeaders: Record<string, string> = {
@@ -484,8 +566,14 @@ export default async function handler(
       });
     }
 
-    // Extract brand status + campaign eligibility from /api/a2p/start response
     const startInner = (startData && startData.data) || startData || {};
+
+    // Persist the latest submitted campaign details so that
+    // /api/a2p/sync can auto-create a campaign as soon as the
+    // brand is approved, even if there was no campaign at this time.
+    await persistLastSubmitted();
+
+    // Extract brand status + campaign eligibility from /api/a2p/start response
     const rawBrandStatus =
       startData?.brandStatus ||
       startInner.brandStatus ||
@@ -514,7 +602,8 @@ export default async function handler(
       startInner.brandFailureReasons ||
       undefined;
 
-    // If brand is not in an approved/ready state, DO NOT create/submit a campaign.
+    // If brand is not in an approved/ready state, DO NOT create/submit a campaign now.
+    // Our /api/a2p/sync job will auto-create the campaign later once Twilio approves it.
     if (canCreateCampaign === false) {
       const msg =
         brandStatus === "FAILED"
@@ -524,6 +613,20 @@ export default async function handler(
       return res.status(200).json({
         ok: true,
         message: msg,
+        brandStatus,
+        brandFailureReason,
+        start: startInner,
+      });
+    }
+
+    // If for some reason we still don't think we can create a campaign,
+    // just return success for the brand/profile and let the sync job
+    // handle things later.
+    if (!canCreateCampaign) {
+      return res.status(200).json({
+        ok: true,
+        message:
+          "Brand submitted/updated. Once Twilio finishes review, we’ll auto-create your campaign and email you.",
         brandStatus,
         brandFailureReason,
         start: startInner,
