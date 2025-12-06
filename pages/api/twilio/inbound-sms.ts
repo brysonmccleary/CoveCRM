@@ -30,11 +30,14 @@ export const config = { api: { bodyParser: false } };
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN!;
-const RAW_BASE_URL = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "").replace(/\/$/, "");
+const RAW_BASE_URL = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "").replace(
+  /\/$/,
+  "",
+);
 const SHARED_MESSAGING_SERVICE_SID = process.env.TWILIO_MESSAGING_SERVICE_SID || "";
 const INTERNAL_API_TOKEN = process.env.INTERNAL_API_TOKEN || "";
 const LEAD_ENTRY_PATH = (process.env.APP_LEAD_ENTRY_PATH || "/lead").replace(/\/?$/, "");
-const BUILD_TAG = "inbound-sms@2025-11-21T22:45Z";
+const BUILD_TAG = "inbound-sms@2025-12-06-o3-mini-upgrade";
 console.log(`[inbound-sms] build=${BUILD_TAG}`);
 
 const STATUS_CALLBACK =
@@ -58,59 +61,181 @@ const MIN_SCHEDULE_LEAD_MINUTES = 15;
 // ---- State normalization + zone resolution ----
 const STATE_CODE_FROM_NAME: Record<string, string> = {
   // Eastern
-  alabama: "AL", al: "AL", georgia: "GA", ga: "GA", florida: "FL", fl: "FL",
-  southcarolina: "SC", sc: "SC", northcarolina: "NC", nc: "NC", virginia: "VA", va: "VA",
-  westvirginia: "WV", wv: "WV", maryland: "MD", md: "MD", delaware: "DE", de: "DE",
-  districtofcolumbia: "DC", dc: "DC", pennsylvania: "PA", pa: "PA", newyork: "NY", ny: "NY",
-  newjersey: "NJ", nj: "NJ", connecticut: "CT", ct: "CT", rhodeisland: "RI", ri: "RI",
-  massachusetts: "MA", ma: "MA", vermont: "VT", vt: "VT", newhampshire: "NH", nh: "NH",
-  maine: "ME", me: "ME", ohio: "OH", oh: "OH", michigan: "MI", mi: "MI", indiana: "IN", in: "IN",
-  kentucky: "KY", ky: "KY", tennessee: "TN", tn: "TN",
+  alabama: "AL",
+  al: "AL",
+  georgia: "GA",
+  ga: "GA",
+  florida: "FL",
+  fl: "FL",
+  southcarolina: "SC",
+  sc: "SC",
+  northcarolina: "NC",
+  nc: "NC",
+  virginia: "VA",
+  va: "VA",
+  westvirginia: "WV",
+  wv: "WV",
+  maryland: "MD",
+  md: "MD",
+  delaware: "DE",
+  de: "DE",
+  districtofcolumbia: "DC",
+  dc: "DC",
+  pennsylvania: "PA",
+  pa: "PA",
+  newyork: "NY",
+  ny: "NY",
+  newjersey: "NJ",
+  nj: "NJ",
+  connecticut: "CT",
+  ct: "CT",
+  rhodeisland: "RI",
+  ri: "RI",
+  massachusetts: "MA",
+  ma: "MA",
+  vermont: "VT",
+  vt: "VT",
+  newhampshire: "NH",
+  nh: "NH",
+  maine: "ME",
+  me: "ME",
+  ohio: "OH",
+  oh: "OH",
+  michigan: "MI",
+  mi: "MI",
+  indiana: "IN",
+  in: "IN",
+  kentucky: "KY",
+  ky: "KY",
+  tennessee: "TN",
+  tn: "TN",
   // Central
-  illinois: "IL", il: "IL", wisconsin: "WI", wi: "WI", minnesota: "MN", mn: "MN",
-  iowa: "IA", ia: "IA", missouri: "MO", mo: "MO", arkansas: "AR", ar: "AR",
-  louisiana: "LA", la: "LA", mississippi: "MS", ms: "MS", oklahoma: "OK", ok: "OK",
-  kansas: "KS", ks: "KS", nebraska: "NE", ne: "NE", southdakota: "SD", sd: "SD",
-  northdakota: "ND", nd: "ND", texas: "TX", tx: "TX",
+  illinois: "IL",
+  il: "IL",
+  wisconsin: "WI",
+  wi: "WI",
+  minnesota: "MN",
+  mn: "MN",
+  iowa: "IA",
+  ia: "IA",
+  missouri: "MO",
+  mo: "MO",
+  arkansas: "AR",
+  ar: "AR",
+  louisiana: "LA",
+  la: "LA",
+  mississippi: "MS",
+  ms: "MS",
+  oklahoma: "OK",
+  ok: "OK",
+  kansas: "KS",
+  ks: "KS",
+  nebraska: "NE",
+  ne: "NE",
+  southdakota: "SD",
+  sd: "SD",
+  northdakota: "ND",
+  nd: "ND",
+  texas: "TX",
+  tx: "TX",
   // Mountain
-  colorado: "CO", co: "CO", newmexico: "NM", nm: "NM", wyoming: "WY", wy: "WY",
-  montana: "MT", mt: "MT", utah: "UT", ut: "UT", idaho: "ID", id: "ID", arizona: "AZ", az: "AZ",
+  colorado: "CO",
+  co: "CO",
+  newmexico: "NM",
+  nm: "NM",
+  wyoming: "WY",
+  wy: "WY",
+  montana: "MT",
+  mt: "MT",
+  utah: "UT",
+  ut: "UT",
+  idaho: "ID",
+  id: "ID",
+  arizona: "AZ",
+  az: "AZ",
   // Pacific
-  california: "CA", ca: "CA", oregon: "OR", or: "OR", washington: "WA", wa: "WA", nevada: "NV", nv: "NV",
+  california: "CA",
+  ca: "CA",
+  oregon: "OR",
+  or: "OR",
+  washington: "WA",
+  wa: "WA",
+  nevada: "NV",
+  nv: "NV",
   // Alaska / Hawaii
-  alaska: "AK", ak: "AK", hawaii: "HI", hi: "HI",
+  alaska: "AK",
+  ak: "AK",
+  hawaii: "HI",
+  hi: "HI",
 };
 
 const CODE_TO_ZONE: Record<string, string> = {
-  AL: "America/Chicago", GA: "America/New_York", FL: "America/New_York", SC: "America/New_York",
-  NC: "America/New_York", VA: "America/New_York", WV: "America/New_York", MD: "America/New_York",
-  DE: "America/New_York", DC: "America/New_York", PA: "America/New_York", NY: "America/New_York",
-  NJ: "America/New_York", CT: "America/New_York", RI: "America/New_York", MA: "America/New_York",
-  VT: "America/New_York", NH: "America/New_York", ME: "America/New_York", OH: "America/New_York",
-  MI: "America/New_York", IN: "America/Indiana/Indianapolis", KY: "America/New_York",
+  AL: "America/Chicago",
+  GA: "America/New_York",
+  FL: "America/New_York",
+  SC: "America/New_York",
+  NC: "America/New_York",
+  VA: "America/New_York",
+  WV: "America/New_York",
+  MD: "America/New_York",
+  DE: "America/New_York",
+  DC: "America/New_York",
+  PA: "America/New_York",
+  NY: "America/New_York",
+  NJ: "America/New_York",
+  CT: "America/New_York",
+  RI: "America/New_York",
+  MA: "America/New_York",
+  VT: "America/New_York",
+  NH: "America/New_York",
+  ME: "America/New_York",
+  OH: "America/New_York",
+  MI: "America/New_York",
+  IN: "America/Indiana/Indianapolis",
+  KY: "America/New_York",
   TN: "America/Chicago",
   // Central
-  IL: "America/Chicago", WI: "America/Chicago", MN: "America/Chicago", IA: "America/Chicago",
-  MO: "America/Chicago", AR: "America/Chicago", LA: "America/Chicago", MS: "America/Chicago",
-  OK: "America/Chicago", KS: "America/Chicago", NE: "America/Chicago", SD: "America/Chicago",
-  ND: "America/Chicago", TX: "America/Chicago",
+  IL: "America/Chicago",
+  WI: "America/Chicago",
+  MN: "America/Chicago",
+  IA: "America/Chicago",
+  MO: "America/Chicago",
+  AR: "America/Chicago",
+  LA: "America/Chicago",
+  MS: "America/Chicago",
+  OK: "America/Chicago",
+  KS: "America/Chicago",
+  NE: "America/Chicago",
+  SD: "America/Chicago",
+  ND: "America/Chicago",
+  TX: "America/Chicago",
   // Mountain
-  CO: "America/Denver", NM: "America/Denver", WY: "America/Denver", MT: "America/Denver",
-  UT: "America/Denver", ID: "America/Denver", AZ: "America/Phoenix",
+  CO: "America/Denver",
+  NM: "America/Denver",
+  WY: "America/Denver",
+  MT: "America/Denver",
+  UT: "America/Denver",
+  ID: "America/Denver",
+  AZ: "America/Phoenix",
   // Pacific
-  CA: "America/Los_Angeles", OR: "America/Los_Angeles", WA: "America/Los_Angeles", NV: "America/Los_Angeles",
+  CA: "America/Los_Angeles",
+  OR: "America/Los_Angeles",
+  WA: "America/Los_Angeles",
+  NV: "America/Los_Angeles",
   // Alaska / Hawaii
-  AK: "America/Anchorage", HI: "Pacific/Honolulu",
+  AK: "America/Anchorage",
+  HI: "Pacific/Honolulu",
 };
 
 function normalizeStateInput(raw: string | undefined | null): string {
-  const s = String(raw || "").toLowerCase().replace(/[^a-z]/g, "");
-  return (
-    STATE_CODE_FROM_NAME[s] ||
-    (STATE_CODE_FROM_NAME[s.slice(0, 2)]
-      ? STATE_CODE_FROM_NAME[s.slice(0, 2)]
-      : "")
-  );
+  const s = String(raw || "")
+    .toLowerCase()
+    .replace(/[^a-z]/g, "");
+  return STATE_CODE_FROM_NAME[s]
+    ? STATE_CODE_FROM_NAME[s]
+    : STATE_CODE_FROM_NAME[s.slice(0, 2)]
+    ? STATE_CODE_FROM_NAME[s.slice(0, 2)]
+    : "";
 }
 
 function zoneFromAnyState(raw: string | undefined | null): string | null {
@@ -194,24 +319,65 @@ function isStart(text: string): boolean {
 function containsConfirmation(text: string) {
   const t = (text || "").toLowerCase();
   return [
-    "that works","works for me","sounds good","sounds great","perfect","let's do","lets do","confirm","confirmed",
-    "book it","schedule it","set it","lock it in","we can do","we could do","3 works","works",
+    "that works",
+    "works for me",
+    "sounds good",
+    "sounds great",
+    "perfect",
+    "let's do",
+    "lets do",
+    "confirm",
+    "confirmed",
+    "book it",
+    "schedule it",
+    "set it",
+    "lock it in",
+    "we can do",
+    "we could do",
+    "3 works",
+    "works",
   ].some((p) => t.includes(p));
 }
 function isInfoRequest(text: string): boolean {
   const t = (text || "").toLowerCase();
   const phrases = [
-    "send the info","send info","send details","send me info","send me the info","email the info","email me the info",
-    "email details","email me details","just email me","text the info","text me the info","text details","text it",
-    "can you text it","mail the info","mail me the info","mail details","just send it","can you send it",
-    "do you have something you can send","do you have anything you can send","link","website",
+    "send the info",
+    "send info",
+    "send details",
+    "send me info",
+    "send me the info",
+    "email the info",
+    "email me the info",
+    "email details",
+    "email me details",
+    "just email me",
+    "text the info",
+    "text me the info",
+    "text details",
+    "text it",
+    "can you text it",
+    "mail the info",
+    "mail me the info",
+    "mail details",
+    "just send it",
+    "can you send it",
+    "do you have something you can send",
+    "do you have anything you can send",
+    "link",
+    "website",
   ];
   return phrases.some((p) => t.includes(p));
 }
 
 const TZ_ABBR: Record<string, string> = {
-  est: "America/New_York", edt: "America/New_York", cst: "America/Chicago", cdt: "America/Chicago",
-  mst: "America/Denver", mdt: "America/Denver", pst: "America/Los_Angeles", pdt: "America/Los_Angeles",
+  est: "America/New_York",
+  edt: "America/New_York",
+  cst: "America/Chicago",
+  cdt: "America/Chicago",
+  mst: "America/Denver",
+  mdt: "America/Denver",
+  pst: "America/Los_Angeles",
+  pdt: "America/Los_Angeles",
 };
 
 function extractRequestedISO(textIn: string, state?: string): string | null {
@@ -238,7 +404,7 @@ function extractRequestedISO(textIn: string, state?: string): string | null {
     }
   }
 
-  const weekdays = ["sunday","monday","tuesday","wednesday","thursday","friday","saturday"];
+  const weekdays = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
   for (const w of weekdays) {
     if (text.includes(w)) {
       const m = text.match(timeRe);
@@ -267,7 +433,8 @@ function extractRequestedISO(textIn: string, state?: string): string | null {
   for (const re of patterns) {
     const m = text.match(re);
     if (m) {
-      const month = parseInt(m[1], 10), day = parseInt(m[2], 10);
+      const month = parseInt(m[1], 10),
+        day = parseInt(m[2], 10);
       let h = parseInt(m[3], 10);
       const min = parseInt(m[4], 10) || 0;
       const ap = m[5];
@@ -308,7 +475,11 @@ function extractTimeFromLastAI(history: any[], state?: string): string | null {
 }
 
 // NEW: inherit "tomorrow" + AM/PM from the last AI message when the lead says only a time like "let's do 11"
-function inferTimeFromLastAITomorrow(inboundText: string, state?: string, history?: any[]): string | null {
+function inferTimeFromLastAITomorrow(
+  inboundText: string,
+  state?: string,
+  history?: any[],
+): string | null {
   const lastAI = [...(history || [])].reverse().find((m: any) => m.type === "ai");
   if (!lastAI?.text) return null;
 
@@ -365,7 +536,11 @@ function computeContext(drips?: string[], campaignNames?: string[]) {
 
   if (joined.includes("mortgage")) return "mortgage protection";
   if (joined.includes("veteran")) return "life insurance for veterans";
-  if (joined.includes("final expense") || joined.includes("final_expense") || joined.includes("fex"))
+  if (
+    joined.includes("final expense") ||
+    joined.includes("final_expense") ||
+    joined.includes("fex")
+  )
     return "final expense life insurance";
   if (joined.includes("iul")) return "indexed universal life and retirement income protection";
   if (joined.includes("retention")) return "existing client retention and policy reviews";
@@ -396,10 +571,10 @@ function pushAsked(memory: LeadMemory, key: string) {
   memory.lastAsked = arr;
 }
 
-// ===== NEW =====
+// ===== NEW: billing context for OpenAI =====
 let _lastInboundUserEmailForBilling: string | null = null;
 
-// --- LLM helpers
+// --- LLM helpers (INTENT extractor still using gpt-4o-mini; left as-is)
 async function extractIntentAndTimeLLM(input: { text: string; nowISO: string; tz: string }) {
   const sys = `Extract intent for a brief SMS thread about booking a call.
 Return STRICT JSON with keys:
@@ -463,68 +638,403 @@ function buildDeterministicReply(_textRaw: string, _context: string): string | n
   return null;
 }
 
-// --- conversational reply (LLM fallback, Jeremy-style)
+/* -------------------------------------------------------------------------------------
+   RESPONSES API (o3-mini) WRAPPER + TOOLS
+   - This is the ONLY place we call the model for SMS replies.
+   - All Twilio, quiet hours, drips, booking queueing, etc. remain unchanged.
+-------------------------------------------------------------------------------------- */
+
+type SmsToolEnv = {
+  lead: any;
+  user: any;
+  tz: string;
+};
+
+type SmsToolCallOutput = {
+  type: "function_call_output";
+  call_id: string;
+  output: string;
+};
+
+// --- Tool implementations (these DO NOT change any existing flows; they are additive) ---
+async function runBookAppointmentTool(
+  args: { leadId: string; datetime: string; timezone?: string },
+  env: SmsToolEnv,
+): Promise<any> {
+  const { lead, user, tz } = env;
+  const zone = args.timezone || tz || pickLeadZone(lead);
+  const dt = DateTime.fromISO(args.datetime, { zone });
+  const now = DateTime.now().setZone(zone);
+
+  if (!dt.isValid || dt <= now) {
+    return {
+      ok: false,
+      reason: "invalid_or_past_time",
+    };
+  }
+
+  // Store on lead (this mirrors your existing appointment fields; we do NOT touch quiet hours or queueing)
+  (lead as any).status = "Booked";
+  (lead as any).appointmentTime = dt.toJSDate();
+  (lead as any).aiLastConfirmedISO = dt.toISO();
+  (lead as any).aiLastProposedISO = dt.toISO();
+  lead.interactionHistory = lead.interactionHistory || [];
+  lead.interactionHistory.push({
+    type: "ai",
+    text: `[system] Appointment booked via AI tool for ${dt.toFormat(
+      "ccc, MMM d 'at' h:mm a",
+    )} (${zone}).`,
+    date: new Date(),
+  });
+  await lead.save();
+
+  return {
+    ok: true,
+    timeISO: dt.toISO(),
+    timezone: zone,
+    readable: dt.toFormat("ccc, MMM d 'at' h:mm a"),
+    leadId: String(lead._id),
+    agentEmail: (lead.userEmail || user.email || "").toLowerCase(),
+  };
+}
+
+async function runUpdateLeadStatusTool(
+  args: { leadId: string; status: string },
+  env: SmsToolEnv,
+): Promise<any> {
+  const { lead } = env;
+  const status = String(args.status || "").trim() || "New";
+
+  (lead as any).status = status;
+  (lead as any).updatedAt = new Date();
+  lead.interactionHistory = lead.interactionHistory || [];
+  lead.interactionHistory.push({
+    type: "ai",
+    text: `[system] Status updated via AI tool to "${status}".`,
+    date: new Date(),
+  });
+  await lead.save();
+
+  return {
+    ok: true,
+    status,
+    leadId: String(lead._id),
+  };
+}
+
+async function runAddNoteTool(
+  args: { leadId: string; text: string },
+  env: SmsToolEnv,
+): Promise<any> {
+  const { lead } = env;
+  const noteText = String(args.text || "").trim();
+  if (!noteText) {
+    return { ok: false, reason: "empty_text" };
+  }
+
+  lead.interactionHistory = lead.interactionHistory || [];
+  lead.interactionHistory.push({
+    type: "ai",
+    text: `[note] ${noteText}`,
+    date: new Date(),
+  });
+  await lead.save();
+
+  return {
+    ok: true,
+    leadId: String(lead._id),
+  };
+}
+
+// --- Core wrapper that actually calls o3-mini Responses API + tools ---
+async function runO3MiniSmsAssistant(opts: {
+  lead: any;
+  user: any;
+  userEmail: string;
+  context: string;
+  tz: string;
+  inboundText: string;
+  history: any[];
+}): Promise<string> {
+  const { lead, user, context, tz, inboundText, history } = opts;
+
+  const recentAssistant = (history || [])
+    .filter((m: any) => m?.type === "ai")
+    .map((m: any) => (m.text || "").trim())
+    .filter(Boolean)
+    .slice(-5);
+
+  // --- SYSTEM PROMPT (Jeremy-style, appointment only, no quotes/details) ---
+  const systemPrompt = `
+You are an SMS appointment-setting assistant for a licensed insurance agent.
+You are NOT a licensed agent yourself. You NEVER give quotes, product details, carrier advice, or policy recommendations.
+
+PRODUCT CONTEXT:
+- Primary focus: ${context || "life insurance and mortgage protection"}.
+- Your ONLY job is to book a quick phone appointment so the agent can explain everything.
+
+STYLE (Jeremy Lee Minor–inspired):
+- Short, friendly, confident, and direct.
+- 1–2 sentences per reply, ~240 characters max.
+- Sound like a real human texting, not a bot.
+- No emojis, no links, no signatures, no disclaimers.
+- Never repeat the same sentence or opening line twice in a row.
+- Local timezone for the lead: ${tz}.
+
+BEHAVIOR:
+- Always acknowledge what they just said in your own words, then pivot back to booking a quick 5–10 minute call.
+- Ask exactly ONE clear question that moves the conversation toward a specific time.
+- If they ask for info by text/email/mail, say:
+  "Unfortunately as of now there's nothing to send over without getting some information from you, when's a good time for a quick 5 minute call and then we can send everything out"
+- Do NOT talk about prices, rates, specific companies, or plan details. If asked, say the agent will cover that on the call and then ask for a time.
+- If a time is already agreed on and CONFIRMED, keep it short: acknowledge and remind them you're looking forward to the call.
+
+TOOLS:
+- You can optionally:
+  • bookAppointment(leadId, datetime, timezone) to save a booked time.
+  • updateLeadStatus(leadId, status) when they are clearly Not Interested, Booked, Reschedule Requested, etc.
+  • addNote(leadId, text) for useful internal notes.
+- Only call tools when it clearly helps the agent (e.g., a firm time given, clear status change, or important note).
+- Even when you call tools, you must still send a natural SMS reply to the lead.
+
+RECENT ASSISTANT PHRASES TO AVOID REPEATING:
+${recentAssistant.length ? recentAssistant.join(" | ") : "(none yet)"}
+`.trim();
+
+  // --- Messages history (converted to Responses API format) ---
+  const chatHistory = historyToChatMessages(history);
+  const inputMessages: any[] = [
+    { type: "message", role: "system", content: systemPrompt },
+    ...chatHistory.map((m) => ({
+      type: "message",
+      role: m.role,
+      content: m.content,
+    })),
+    { type: "message", role: "user", content: inboundText },
+  ];
+
+  // --- Tool definitions (JSON-schema style) ---
+  const tools: any[] = [
+    {
+      type: "function",
+      name: "bookAppointment",
+      description:
+        "Save a firm appointment time for this lead once they clearly agree to a specific datetime.",
+      parameters: {
+        type: "object",
+        properties: {
+          leadId: {
+            type: "string",
+            description: "The MongoDB _id of the lead being booked.",
+          },
+          datetime: {
+            type: "string",
+            description:
+              "ISO-8601 datetime string for the appointment in the lead's local timezone.",
+          },
+          timezone: {
+            type: "string",
+            description:
+              "IANA timezone name like America/New_York or America/Chicago. Use this if needed.",
+          },
+        },
+        required: ["leadId", "datetime"],
+      },
+    },
+    {
+      type: "function",
+      name: "updateLeadStatus",
+      description:
+        "Update the lead's status when they are clearly booked, not interested, want to reschedule, etc.",
+      parameters: {
+        type: "object",
+        properties: {
+          leadId: {
+            type: "string",
+            description: "The MongoDB _id of the lead.",
+          },
+          status: {
+            type: "string",
+            description:
+              "A short status label such as 'Booked', 'Not Interested', 'Reschedule Requested', or 'Follow Up'.",
+          },
+        },
+        required: ["leadId", "status"],
+      },
+    },
+    {
+      type: "function",
+      name: "addNote",
+      description:
+        "Add an internal note about this lead for the agent (do NOT show note text to the lead).",
+      parameters: {
+        type: "object",
+        properties: {
+          leadId: {
+            type: "string",
+            description: "The MongoDB _id of the lead.",
+          },
+          text: {
+            type: "string",
+            description: "Short internal note (reason for reschedule, key objection, etc.).",
+          },
+        },
+        required: ["leadId", "text"],
+      },
+    },
+  ];
+
+  // --- First Responses API call ---
+  const response = await openai.responses.create({
+    model: "o3-mini",
+    input: inputMessages,
+    tools,
+    reasoning: { effort: "medium" },
+  });
+
+  let totalPromptTokens = (response as any)?.usage?.input_tokens || 0;
+  let totalCompletionTokens = (response as any)?.usage?.output_tokens || 0;
+
+  const env: SmsToolEnv = { lead, user, tz };
+  const toolOutputs: SmsToolCallOutput[] = [];
+
+  for (const out of (response as any).output || []) {
+    if (out.type === "function_call") {
+      const name = out.name as string;
+      const callId = out.call_id as string;
+      let parsedArgs: any = {};
+      try {
+        parsedArgs = out.arguments ? JSON.parse(out.arguments as string) : {};
+      } catch {
+        parsedArgs = {};
+      }
+
+      let toolResult: any = null;
+      try {
+        if (name === "bookAppointment") {
+          toolResult = await runBookAppointmentTool(parsedArgs, env);
+        } else if (name === "updateLeadStatus") {
+          toolResult = await runUpdateLeadStatusTool(parsedArgs, env);
+        } else if (name === "addNote") {
+          toolResult = await runAddNoteTool(parsedArgs, env);
+        } else {
+          toolResult = { ok: false, reason: `unknown_tool:${name}` };
+        }
+      } catch (err: any) {
+        toolResult = {
+          ok: false,
+          reason: "exception",
+          message: err?.message || String(err || ""),
+        };
+      }
+
+      toolOutputs.push({
+        type: "function_call_output",
+        call_id: callId,
+        output: JSON.stringify(toolResult || {}),
+      });
+    }
+  }
+
+  let finalResponse = response;
+
+  // If tools were called, send tool outputs back into Responses API for a final natural-language reply
+  if (toolOutputs.length > 0) {
+    const followup = await openai.responses.create({
+      model: "o3-mini",
+      previous_response_id: (response as any).id,
+      input: toolOutputs,
+    });
+    finalResponse = followup;
+    totalPromptTokens += (followup as any)?.usage?.input_tokens || 0;
+    totalCompletionTokens += (followup as any)?.usage?.output_tokens || 0;
+  }
+
+  // --- Billing for o3-mini usage ---
+  try {
+    const cost = priceOpenAIUsage({
+      model: "o3-mini",
+      promptTokens: totalPromptTokens,
+      completionTokens: totalCompletionTokens,
+    });
+    if (cost > 0 && _lastInboundUserEmailForBilling) {
+      await trackUsage({
+        user: { email: _lastInboundUserEmailForBilling },
+        amount: cost,
+        source: "openai",
+      });
+    }
+  } catch (e) {
+    console.warn("[inbound-sms] Failed to track o3-mini usage:", e);
+  }
+
+  // --- Extract final text reply from Responses API output ---
+  const outArray = (finalResponse as any).output || [];
+  let candidate = "";
+
+  // Prefer output_text if present
+  if ((finalResponse as any).output_text) {
+    candidate = String((finalResponse as any).output_text || "").trim();
+  } else {
+    // Otherwise grab first assistant message's text content
+    for (const out of outArray) {
+      if (out.type === "message" && out.role === "assistant") {
+        const contents = out.content || [];
+        const textPart = contents.find((c: any) => c.type === "output_text" || c.type === "text");
+        if (textPart?.text) {
+          candidate = String(textPart.text).trim();
+          break;
+        }
+      }
+    }
+  }
+
+  if (!candidate) {
+    candidate =
+      "Got it — what time works for a quick 5 minute call today or tomorrow so the agent can walk you through everything?";
+  }
+
+  // Normalize whitespace
+  return candidate.replace(/\s+/g, " ").trim();
+}
+
+// --- conversational reply (now uses o3-mini Responses API wrapper) ---
 async function generateConversationalReply(opts: {
   lead: any;
+  user: any;
   userEmail: string;
   context: string;
   tz: string;
   inboundText: string;
   history: any[];
 }) {
-  const { context, tz, inboundText, history } = opts;
+  const { lead, user, userEmail, context, tz, inboundText, history } = opts;
 
-  const banned = [...(history || [])]
-    .reverse()
-    .filter((m: any) => m?.type === "ai")
-    .map((m: any) => (m.text || "").trim())
-    .filter(Boolean)
-    .slice(0, 5);
-
-  const sys = `
-You are a helpful human-like SMS assistant for an insurance agent.
-- Speak like a real person texting: friendly, concise, natural (1–2 sentences, ~240 chars max).
-- Use a Jeremy Lee Minor–style consultative tone: ask one precise question to uncover motivation or timing, isolate objections, and move to a call.
-- No names/signatures. No links. No emojis.
-- Acknowledge their message briefly, then pivot toward ${context} and a specific time window.
-- Ask exactly ONE focused, non-repetitive follow-up each turn.
-- Vary phrasing—avoid repeating any of these: ${banned.join(" | ") || "(none)"}.
-- If they ask about cost or time commitment, answer briefly then ask for a time.
-- Keep momentum: suggest two choices when helpful (e.g., “later today or tomorrow afternoon?”).
-- Local timezone: ${tz}.
-`.trim();
-
-  const chat = historyToChatMessages(history);
-  chat.push({ role: "user", content: inboundText });
-
-  const resp = await openai.chat.completions.create({
-    model: "gpt-4o-mini",
-    temperature: 0.7,
-    top_p: 0.9,
-    presence_penalty: 0.5,
-    frequency_penalty: 0.7,
-    messages: [{ role: "system", content: sys }, ...chat],
-  });
+  // If you ever want deterministic shortcuts, plug them in here (still unused)
+  const deterministic = buildDeterministicReply(inboundText, context);
+  if (deterministic) return deterministic;
 
   try {
-    const usage = (resp as any)?.usage || {};
-    const raw = priceOpenAIUsage({
-      model: "gpt-4o-mini",
-      promptTokens: usage?.prompt_tokens,
-      completionTokens: usage?.completion_tokens,
+    const reply = await runO3MiniSmsAssistant({
+      lead,
+      user,
+      userEmail,
+      context,
+      tz,
+      inboundText,
+      history,
     });
-    if (raw > 0 && _lastInboundUserEmailForBilling) {
-      await trackUsage({
-        user: { email: _lastInboundUserEmailForBilling },
-        amount: raw,
-        source: "openai",
-      });
+    return reply;
+  } catch (err) {
+    console.error("[inbound-sms] o3-mini Responses API failed, falling back:", err);
+    const lastAI = [...(history || [])].reverse().find((m: any) => m.type === "ai");
+    const fallback =
+      "When’s a good time today or tomorrow for a quick 5 minute call so we can go over everything with you?";
+    if (lastAI?.text?.trim() === fallback) {
+      return `Got it — send me a time that works (for example “tomorrow 3:00 pm”) and I’ll text a confirmation.`;
     }
-  } catch {}
-
-  const text = resp.choices?.[0]?.message?.content?.trim() || "";
-  if (!text) return "Got it — what time works for a quick call today or tomorrow?";
-  return text.replace(/\s+/g, " ").trim();
+    return fallback;
+  }
 }
 
 function normalizeWhen(datetimeText: string | null, _nowISO: string, tz: string) {
@@ -582,7 +1092,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const proto = (req.headers["x-forwarded-proto"] as string) || "https";
   const pathOnly = (req.url || "").split("?")[0] || "/api/twilio/inbound-sms";
   const ABS_BASE_URL = host ? `${proto}://${host}` : RAW_BASE_URL || "";
-  const absoluteUrl = host ? `${proto}://${host}${pathOnly}` : RAW_BASE_URL ? `${RAW_BASE_URL}${pathOnly}` : "";
+  const absoluteUrl = host
+    ? `${proto}://${host}${pathOnly}`
+    : RAW_BASE_URL
+    ? `${RAW_BASE_URL}${pathOnly}`
+    : "";
 
   // Verify Twilio signature (unless dev bypass)
   const signature = (req.headers["x-twilio-signature"] || "") as string;
@@ -630,9 +1144,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     console.log(
-      `📥 inbound sid=${messageSid || "n/a"} from=${fromNumber} -> to=${toNumber} text="${body.slice(0, 120)}${
-        body.length > 120 ? "…" : ""
-      }"`,
+      `📥 inbound sid=${messageSid || "n/a"} from=${fromNumber} -> to=${toNumber} text="${body.slice(
+        0,
+        120,
+      )}${body.length > 120 ? "…" : ""}"`,
     );
 
     // Map to the user by the inbound (owned) number
@@ -681,7 +1196,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           else score -= 5;
           if ((l as any).source && (l as any).source !== "inbound_sms") score += 2;
           if ((l as any).status && (l as any).status !== "New") score += 1;
-          if (Array.isArray((l as any).assignedDrips) && (l as any).assignedDrips.length > 0) score += 1;
+          if (Array.isArray((l as any).assignedDrips) && (l as any).assignedDrips.length > 0)
+            score += 1;
           if ((l as any).updatedAt) score += 0.000001 * new Date((l as any).updatedAt).getTime();
           return score;
         };
@@ -997,7 +1513,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const stateCanon = normalizeStateInput(lead.State || (lead as any).state || "");
     const context = computeContext(legacyAssignedDrips, campaignNames);
 
-    // GPT-first logic
+    // GPT-first logic (now o3-mini)
     let aiReply: string | null = null;
 
     // 1) Direct parse of any concrete time in their text
@@ -1020,11 +1536,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         null;
     }
 
-    // 3) If we still don’t have a concrete time, let GPT drive a natural Jeremy-style reply
+    // 3) If we still don’t have a concrete time, let o3-mini drive a natural Jeremy-style reply
     if (!requestedISO) {
       try {
         aiReply = await generateConversationalReply({
           lead,
+          user,
           userEmail: user.email,
           context,
           tz,
@@ -1036,8 +1553,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       } catch (err) {
         console.error("[inbound-sms] GPT conversational reply failed:", err);
         memory.state = "awaiting_time";
-        const lastAI = [...(lead.interactionHistory || [])].reverse().find((m: any) => m.type === "ai");
-        const v = "When’s a good time today or tomorrow for a quick 5-minute chat?";
+        const lastAI = [...(lead.interactionHistory || [])].reverse().find(
+          (m: any) => m.type === "ai",
+        );
+        const v =
+          "When’s a good time today or tomorrow for a quick 5-minute chat?";
         aiReply =
           lastAI?.text?.trim() === v
             ? `Got it — send me a time that works (for example “tomorrow 3:00 pm”) and I’ll text a confirmation.`
@@ -1169,7 +1689,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         });
       }
 
-      const lastAI = [...(lead.interactionHistory || [])].reverse().find((m: any) => m.type === "ai");
+      const lastAI = [...(lead.interactionHistory || [])].reverse().find(
+        (m: any) => m.type === "ai",
+      );
       const draft = aiReply;
       if (lastAI && lastAI.text?.trim() === draft.trim()) {
         console.log("🔁 Same AI content as last time — not queueing.");
