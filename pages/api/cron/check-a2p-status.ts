@@ -6,10 +6,6 @@ import A2PProfile, {
   IA2PProfile,
   A2PRegistrationStatus,
 } from "@/models/A2PProfile";
-import User from "@/models/User";
-import {
-  sendA2PApprovedEmail /* optional: sendA2PStatusEmail */,
-} from "@/lib/email";
 
 const { TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, CRON_SECRET } = process.env;
 const client =
@@ -178,35 +174,14 @@ export default async function handler(
     });
 
     let updated = 0;
-    let approved = 0;
     const results: Json[] = [];
 
     for (const profile of profiles) {
-      const beforeReady = !!profile.messagingReady;
-      const { changed, approvedNow, details } = await checkOne(
-        profile as IA2PProfile,
-      );
+      const { changed, details } = await checkOne(profile as IA2PProfile);
 
       if (changed) {
         await profile.save();
         updated++;
-      }
-
-      // Fire "approved" email once, right when it flips to ready
-      if (approvedNow && !beforeReady) {
-        const user = await User.findById(profile.userId).lean();
-        if (user?.email) {
-          try {
-            await sendA2PApprovedEmail({
-              to: user.email,
-              name: user.name || user.firstName || undefined,
-            });
-            approved++;
-          } catch (e) {
-            // swallow email failures; status has still been updated
-            // optionally log e
-          }
-        }
       }
 
       results.push({
@@ -224,7 +199,6 @@ export default async function handler(
       ok: true,
       checked: profiles.length,
       updated,
-      approved,
       results,
     });
   } catch (err: any) {
