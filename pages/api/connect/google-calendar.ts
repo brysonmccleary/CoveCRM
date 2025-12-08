@@ -30,7 +30,6 @@ export default async function handler(
     access_type: "offline",
     prompt: "consent",
     scope: [
-      "https://www.googleapis.com/auth/drive.readonly",
       "https://www.googleapis.com/auth/drive.file",
       "https://www.googleapis.com/auth/calendar.events",
       "https://www.googleapis.com/auth/calendar.readonly",

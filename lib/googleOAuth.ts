@@ -12,7 +12,6 @@ const CALENDAR_SCOPES = [
 
 const SHEETS_SCOPES = [
   // ✅ Use Drive read-only so we can read *any* spreadsheet the user can see
-  "https://www.googleapis.com/auth/drive.readonly",
   "https://www.googleapis.com/auth/userinfo.email",
   "openid",
 ];
