@@ -4,17 +4,21 @@ import { google } from "googleapis";
 export type GoogleTarget = "calendar" | "sheets" | "both";
 
 const CALENDAR_SCOPES = [
+  // Calendar only
   "https://www.googleapis.com/auth/calendar.events",
   "https://www.googleapis.com/auth/calendar.readonly",
   "https://www.googleapis.com/auth/userinfo.email",
+  "https://www.googleapis.com/auth/userinfo.profile",
   "openid",
 ];
 
 const SHEETS_SCOPES = [
-  // Drive metadata + file access so we can list & read user-selected spreadsheets
-  "https://www.googleapis.com/auth/drive.metadata.readonly",
+  // Sheets + minimal Drive for listing & accessing user-selected files
   "https://www.googleapis.com/auth/drive.file",
+  "https://www.googleapis.com/auth/drive.metadata.readonly",
+  "https://www.googleapis.com/auth/spreadsheets.readonly",
   "https://www.googleapis.com/auth/userinfo.email",
+  "https://www.googleapis.com/auth/userinfo.profile",
   "openid",
 ];
 
@@ -39,7 +43,7 @@ export function buildScopes(target: GoogleTarget = "calendar") {
   if (target === "sheets") return SHEETS_SCOPES;
   if (target === "both")
     return Array.from(new Set([...CALENDAR_SCOPES, ...SHEETS_SCOPES]));
-  return CALENDAR_SCOPES; // default
+  return CALENDAR_SCOPES; // default calendar-only
 }
 
 export function getAuthUrl(target: GoogleTarget = "calendar") {
