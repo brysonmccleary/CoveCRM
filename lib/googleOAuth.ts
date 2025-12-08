@@ -11,7 +11,9 @@ const CALENDAR_SCOPES = [
 ];
 
 const SHEETS_SCOPES = [
-  // ✅ Use Drive read-only so we can read *any* spreadsheet the user can see
+  // Drive metadata + file access so we can list & read user-selected spreadsheets
+  "https://www.googleapis.com/auth/drive.metadata.readonly",
+  "https://www.googleapis.com/auth/drive.file",
   "https://www.googleapis.com/auth/userinfo.email",
   "openid",
 ];

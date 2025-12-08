@@ -3,6 +3,7 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import { google } from "googleapis";
 
 const SCOPES = [
+  "https://www.googleapis.com/auth/drive.metadata.readonly",
   "https://www.googleapis.com/auth/drive.file",
   "https://www.googleapis.com/auth/calendar.readonly",
   "https://www.googleapis.com/auth/userinfo.email",
