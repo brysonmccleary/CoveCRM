@@ -35,7 +35,10 @@ const aiRecordingUrl = (sessionId: string, leadId: string) =>
     sessionId
   )}&leadId=${encodeURIComponent(leadId)}`;
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse
+) {
   // Allow both GET (for Vercel cron) and POST (manual / external triggers)
   if (req.method !== "GET" && req.method !== "POST") {
     return res.status(405).json({ ok: false, message: "Method Not Allowed" });
@@ -85,9 +88,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const sessionId = String(aiSession._id);
     const userEmail = String(aiSession.userEmail || "").toLowerCase();
     const fromNumber = String(aiSession.fromNumber || "").trim();
-    const leadIds: any[] = Array.isArray(aiSession.leadIds) ? aiSession.leadIds : [];
-    const total = typeof aiSession.total === "number" ? aiSession.total : leadIds.length;
-    const lastIndex = typeof aiSession.lastIndex === "number" ? aiSession.lastIndex : -1;
+    const leadIds: any[] = Array.isArray(aiSession.leadIds)
+      ? aiSession.leadIds
+      : [];
+    const total =
+      typeof aiSession.total === "number" ? aiSession.total : leadIds.length;
+    const lastIndex =
+      typeof aiSession.lastIndex === "number" ? aiSession.lastIndex : -1;
 
     if (!userEmail || !fromNumber || !leadIds.length || total <= 0) {
       aiSession.status = "error";
@@ -215,7 +222,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const from = normalizeE164(fromNumber);
     if (!from) {
       aiSession.status = "error";
-      aiSession.errorMessage = "AI session fromNumber is not a valid E.164 phone.";
+      aiSession.errorMessage =
+        "AI session fromNumber is not a valid E.164 phone.";
       aiSession.completedAt = new Date();
       await aiSession.save();
 
@@ -228,10 +236,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // Place the AI outbound call via user's Twilio client
     try {
-      const { client, accountSidMasked } = await getClientForUser(userEmail);
+      const { client } = await getClientForUser(userEmail);
       console.log("[ai-calls/worker] Using Twilio client for", {
         userEmail,
-        accountSidMasked,
       });
 
       const call = await client.calls.create({
@@ -313,7 +320,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       // Otherwise, keep session running but log error against this lead
       aiSession.status = "running";
-      aiSession.errorMessage = `Twilio error: ${twilioErr?.message || twilioErr}`;
+      aiSession.errorMessage = `Twilio error: ${
+        twilioErr?.message || twilioErr
+      }`;
       await aiSession.save();
 
       return res.status(500).json({
