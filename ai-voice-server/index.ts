@@ -1,4 +1,5 @@
 // ai-voice-server/index.ts
+import http, { IncomingMessage, ServerResponse } from "http";
 import WebSocket, { WebSocketServer } from "ws";
 import fetch from "node-fetch";
 
@@ -120,9 +121,120 @@ type CallState = {
 const calls = new Map<WebSocket, CallState>();
 
 /**
- * WebSocket server that Twilio connects to via <Stream url="wss://...">
+ * HTTP server (for /start-session, /stop-session) + WebSocket server
  */
-const wss = new WebSocketServer({ port: PORT });
+const server = http.createServer(async (req: IncomingMessage, res: ServerResponse) => {
+  try {
+    const url = new URL(req.url || "/", "http://localhost");
+
+    if (req.method === "POST" && url.pathname === "/start-session") {
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", async () => {
+        try {
+          const payload = body ? JSON.parse(body) : {};
+          const { userEmail, sessionId, folderId, total } = payload;
+
+          console.log("[AI-VOICE] /start-session received:", {
+            userEmail,
+            sessionId,
+            folderId,
+            total,
+          });
+
+          // Optional: kick CoveCRM AI worker once so dialing starts immediately.
+          if (AI_DIALER_CRON_KEY) {
+            try {
+              const workerUrl = new URL(
+                "/api/ai-calls/worker",
+                COVECRM_BASE_URL
+              );
+              workerUrl.searchParams.set("key", AI_DIALER_CRON_KEY);
+
+              await fetch(workerUrl.toString(), {
+                method: "POST",
+                headers: {
+                  "x-cron-key": AI_DIALER_CRON_KEY,
+                },
+              });
+            } catch (err: any) {
+              console.error(
+                "[AI-VOICE] Error kicking AI worker from /start-session:",
+                err?.message || err
+              );
+            }
+          }
+
+          res.statusCode = 200;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ ok: true }));
+        } catch (err: any) {
+          console.error(
+            "[AI-VOICE] /start-session JSON parse error:",
+            err?.message || err
+          );
+          res.statusCode = 400;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ ok: false, error: "Invalid JSON body" }));
+        }
+      });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/stop-session") {
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        try {
+          const payload = body ? JSON.parse(body) : {};
+          const { userEmail, sessionId } = payload;
+
+          console.log("[AI-VOICE] /stop-session received:", {
+            userEmail,
+            sessionId,
+          });
+
+          // NOTE:
+          //  - Actual stopping of new calls is handled by CoveCRM:
+          //    /api/ai-calls/stop.ts marks the AICallSession as "completed",
+          //    and the worker only processes sessions in ["queued", "running"].
+          //  - If you later want to track active sessions in this process,
+          //    you can add in-memory maps here.
+
+          res.statusCode = 200;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ ok: true }));
+        } catch (err: any) {
+          console.error(
+            "[AI-VOICE] /stop-session JSON parse error:",
+            err?.message || err
+          );
+          res.statusCode = 400;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ ok: false, error: "Invalid JSON body" }));
+        }
+      });
+      return;
+    }
+
+    // Fallback 404 for other HTTP routes
+    res.statusCode = 404;
+    res.setHeader("Content-Type", "application/json");
+    res.end(JSON.stringify({ ok: false, error: "Not found" }));
+  } catch (err: any) {
+    console.error("[AI-VOICE] HTTP server error:", err?.message || err);
+    res.statusCode = 500;
+    res.setHeader("Content-Type", "application/json");
+    res.end(JSON.stringify({ ok: false, error: "Internal server error" }));
+  }
+});
+
+// Attach WebSocket server to the same HTTP server/port
+const wss = new WebSocketServer({ server });
 
 wss.on("connection", (ws: WebSocket) => {
   console.log("[AI-VOICE] New WebSocket connection");
@@ -174,7 +286,9 @@ wss.on("connection", (ws: WebSocket) => {
   });
 });
 
-console.log(`[AI-VOICE] WebSocket server listening on port ${PORT}`);
+server.listen(PORT, () => {
+  console.log(`[AI-VOICE] HTTP + WebSocket server listening on port ${PORT}`);
+});
 
 /**
  * START: Twilio begins streaming the call
@@ -261,7 +375,10 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
     };
     state.openAiWs.send(JSON.stringify(event));
   } catch (err: any) {
-    console.error("[AI-VOICE] Error forwarding audio to OpenAI:", err?.message || err);
+    console.error(
+      "[AI-VOICE] Error forwarding audio to OpenAI:",
+      err?.message || err
+    );
   }
 }
 
@@ -296,7 +413,10 @@ async function handleStop(ws: WebSocket, msg: TwilioStopEvent) {
         })
       );
     } catch (err: any) {
-      console.error("[AI-VOICE] Error committing OpenAI buffer:", err?.message || err);
+      console.error(
+        "[AI-VOICE] Error committing OpenAI buffer:",
+        err?.message || err
+      );
     }
   }
 
@@ -313,7 +433,9 @@ async function handleStop(ws: WebSocket, msg: TwilioStopEvent) {
  */
 async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
   if (!OPENAI_API_KEY) {
-    console.error("[AI-VOICE] OPENAI_API_KEY not set; cannot start realtime session.");
+    console.error(
+      "[AI-VOICE] OPENAI_API_KEY not set; cannot start realtime session."
+    );
     return;
   }
   if (!state.context) {
@@ -381,7 +503,10 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
         })
       );
     } catch (err: any) {
-      console.error("[AI-VOICE] Error sending session.update:", err?.message || err);
+      console.error(
+        "[AI-VOICE] Error sending session.update:",
+        err?.message || err
+      );
     }
   });
 
@@ -392,7 +517,10 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
 
       await handleOpenAiEvent(ws, state, event);
     } catch (err: any) {
-      console.error("[AI-VOICE] Error handling OpenAI event:", err?.message || err);
+      console.error(
+        "[AI-VOICE] Error handling OpenAI event:",
+        err?.message || err
+      );
     }
   });
 
@@ -419,8 +547,6 @@ async function handleOpenAiEvent(
   if (!context) return;
 
   // 1) Audio back to Twilio
-  //    Realtime will send audio chunks in events like:
-  //    { type: "response.output_audio.delta", audio: "<base64 pcm>" }
   if (event.type === "response.output_audio.delta" && event.audio) {
     try {
       // TODO: You may need to transcode PCM to μ-law here
@@ -436,7 +562,10 @@ async function handleOpenAiEvent(
 
       twilioWs.send(JSON.stringify(twilioMediaMsg));
     } catch (err: any) {
-      console.error("[AI-VOICE] Error sending audio to Twilio:", err?.message || err);
+      console.error(
+        "[AI-VOICE] Error sending audio to Twilio:",
+        err?.message || err
+      );
     }
   }
 
@@ -462,14 +591,15 @@ async function handleOpenAiEvent(
       }
     }
   } catch (err: any) {
-    console.error("[AI-VOICE] Error parsing control intent:", err?.message || err);
+    console.error(
+      "[AI-VOICE] Error parsing control intent:",
+      err?.message || err
+    );
   }
 }
 
 /**
- * Handle a booking intent from the AI:
- *  - Call /api/ai-calls/book-appointment
- *  - Use returned humanReadableForLead so the AI can confirm back to the lead
+ * Handle a booking intent from the AI
  */
 async function handleBookAppointmentIntent(state: CallState, control: any) {
   const ctx = state.context;
@@ -490,12 +620,7 @@ async function handleBookAppointmentIntent(state: CallState, control: any) {
     notes,
   } = control;
 
-  if (
-    !startTimeUtc ||
-    !durationMinutes ||
-    !leadTimeZone ||
-    !agentTimeZone
-  ) {
+  if (!startTimeUtc || !durationMinutes || !leadTimeZone || !agentTimeZone) {
     console.warn(
       "[AI-VOICE] Incomplete book_appointment control payload:",
       control
@@ -540,7 +665,7 @@ async function handleBookAppointmentIntent(state: CallState, control: any) {
       `[AI-VOICE] Appointment booked for lead ${ctx.clientFirstName} ${ctx.clientLastName} – eventId=${json.eventId}`
     );
 
-    // You can optionally send another Realtime instruction to speak back the confirmation:
+    // Optionally speak back the confirmation
     if (state.openAiWs) {
       const humanReadable: string =
         json.humanReadableForLead ||
@@ -564,9 +689,7 @@ async function handleBookAppointmentIntent(state: CallState, control: any) {
 }
 
 /**
- * Handle a final outcome intent from the AI:
- *  - Call /api/ai-calls/outcome
- *  - This is the ONLY place we move leads between resolution folders
+ * Handle a final outcome intent from the AI
  */
 async function handleFinalOutcomeIntent(state: CallState, control: any) {
   const ctx = state.context;
@@ -642,7 +765,7 @@ async function handleFinalOutcomeIntent(state: CallState, control: any) {
 }
 
 /**
- * System prompt + rebuttal engine (Jeremy Lee Minor style, appointment-only)
+ * System prompt (Jeremy Lee Minor style, appointment-only)
  */
 function buildSystemPrompt(ctx: AICallContext): string {
   const aiName = ctx.voiceProfile.aiName || "Alex";

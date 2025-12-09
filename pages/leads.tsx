@@ -17,7 +17,11 @@ interface Lead {
 }
 
 type NumberEntry = { id: string; phoneNumber: string; sid: string };
-type ResumeInfo = { lastIndex: number | null; total: number | null; updatedAt?: string | null };
+type ResumeInfo = {
+  lastIndex: number | null;
+  total: number | null;
+  updatedAt?: string | null;
+};
 
 const SYSTEM_FOLDERS = ["Not Interested", "Booked Appointment", "Sold"];
 
@@ -26,7 +30,14 @@ function LeadSearchInline() {
   const [q, setQ] = useState("");
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState<
-    { _id: string; displayName: string; phone?: string; email?: string; state?: string; status?: string }[]
+    {
+      _id: string;
+      displayName: string;
+      phone?: string;
+      email?: string;
+      state?: string;
+      status?: string;
+    }[]
   >([]);
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(-1);
@@ -125,17 +136,22 @@ function LeadSearchInline() {
                 <div className="flex items-center justify-between">
                   <div className="font-medium">
                     {r.displayName || "(No name)"}{" "}
-                    <span className="text-xs text-gray-500">• {r.status || "New"}</span>
+                    <span className="text-xs text-gray-500">
+                      • {r.status || "New"}
+                    </span>
                   </div>
                   <div className="text-sm text-gray-600">
-                    {r.phone || r.email || "—"} {r.state ? `• ${r.state}` : ""}
+                    {r.phone || r.email || "—"}{" "}
+                    {r.state ? `• ${r.state}` : ""}
                   </div>
                 </div>
               </button>
             ))
           ) : (
             <div className="p-2 text-sm text-gray-500">
-              {q.trim().length >= 2 && !loading ? "No results." : "Type to search…"}
+              {q.trim().length >= 2 && !loading
+                ? "No results."
+                : "Type to search…"}
             </div>
           )}
         </div>
@@ -148,8 +164,11 @@ function LeadSearchInline() {
 export default function LeadsPage() {
   const router = useRouter();
   const selectedFolderId = useMemo(
-    () => (typeof router.query.folderId === "string" ? router.query.folderId : ""),
-    [router.query.folderId]
+    () =>
+      typeof router.query.folderId === "string"
+        ? router.query.folderId
+        : "",
+    [router.query.folderId],
   );
 
   // folders + leads + loading
@@ -171,6 +190,9 @@ export default function LeadsPage() {
 
   // preview panel
   const [previewLead, setPreviewLead] = useState<any | null>(null);
+
+  // import panel toggle for top "Import Leads" button
+  const [showImport, setShowImport] = useState(false);
 
   /** fetch folders */
   useEffect(() => {
@@ -226,7 +248,11 @@ export default function LeadsPage() {
       try {
         setLoadingLeads(true);
         setLeadError(null);
-        const r = await fetch(`/api/get-leads-by-folder?folderId=${encodeURIComponent(selectedFolderId)}`);
+        const r = await fetch(
+          `/api/get-leads-by-folder?folderId=${encodeURIComponent(
+            selectedFolderId,
+          )}`,
+        );
         if (!r.ok) throw new Error("Failed to fetch leads in folder");
         const j = await r.json();
         const rows: Lead[] = Array.isArray(j?.leads) ? j.leads : [];
@@ -234,8 +260,12 @@ export default function LeadsPage() {
 
         // restore per-folder selection
         try {
-          const saved = localStorage.getItem(`selectedLeads_${selectedFolderId}`);
-          setSelectedLeadIds(saved ? (JSON.parse(saved) as string[]) : []);
+          const saved = localStorage.getItem(
+            `selectedLeads_${selectedFolderId}`,
+          );
+          setSelectedLeadIds(
+            saved ? (JSON.parse(saved) as string[]) : [],
+          );
           setSelectAll(false);
         } catch {
           setSelectedLeadIds([]);
@@ -252,7 +282,9 @@ export default function LeadsPage() {
       // server pointer
       try {
         const key = `folder:${selectedFolderId}`;
-        const r2 = await fetch(`/api/dial/progress?key=${encodeURIComponent(key)}`);
+        const r2 = await fetch(
+          `/api/dial/progress?key=${encodeURIComponent(key)}`,
+        );
         if (!r2.ok) setResumeInfo(null);
         else {
           const j2 = await r2.json();
@@ -273,20 +305,27 @@ export default function LeadsPage() {
   useEffect(() => {
     if (selectedFolderId) {
       try {
-        localStorage.setItem(`selectedLeads_${selectedFolderId}`, JSON.stringify(selectedLeadIds));
+        localStorage.setItem(
+          `selectedLeads_${selectedFolderId}`,
+          JSON.stringify(selectedLeadIds),
+        );
       } catch {}
     }
   }, [selectedLeadIds, selectedFolderId]);
 
   /** nav helpers */
   const handleFolderClick = (folderId: string) => {
-    router.push({ pathname: "/leads", query: { folderId } }).catch(() => {});
+    router
+      .push({ pathname: "/leads", query: { folderId } })
+      .catch(() => {});
   };
   const clearSelection = () => {
     router.push("/leads").catch(() => {});
   };
   const selectedFolderName =
-    (selectedFolderId && folders.find((f) => f._id === selectedFolderId)?.name) || "";
+    (selectedFolderId &&
+      folders.find((f) => f._id === selectedFolderId)?.name) ||
+    "";
 
   /** progress keys */
   const buildLocalProgressKey = () => {
@@ -325,7 +364,9 @@ export default function LeadsPage() {
       return;
     }
     if (!selectedNumber) {
-      alert("Please select a number to call from before starting the dial session.");
+      alert(
+        "Please select a number to call from before starting the dial session.",
+      );
       return;
     }
 
@@ -349,7 +390,11 @@ export default function LeadsPage() {
       await fetch("/api/dial/progress", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ key: serverKey, lastIndex: -1, total: selectedLeadIds.length }),
+        body: JSON.stringify({
+          key: serverKey,
+          lastIndex: -1,
+          total: selectedLeadIds.length,
+        }),
       });
       setResumeInfo(null);
     } catch {
@@ -384,7 +429,9 @@ export default function LeadsPage() {
     localStorage.setItem("selectedDialNumber", selectedNumber);
 
     const serverKey = buildServerProgressKey();
-    const ids = selectedLeadIds.length ? selectedLeadIds : (leads as Lead[]).map((l) => l._id);
+    const ids = selectedLeadIds.length
+      ? selectedLeadIds
+      : (leads as Lead[]).map((l) => l._id);
     const startAt = Math.max(0, (resumeInfo?.lastIndex ?? -1) + 1);
 
     const params = new URLSearchParams({
@@ -399,7 +446,9 @@ export default function LeadsPage() {
 
   /** delete folder (unchanged behavior) */
   const handleDeleteFolder = async (folderId: string) => {
-    const confirmed = confirm("Are you sure you want to delete this folder? This cannot be undone.");
+    const confirmed = confirm(
+      "Are you sure you want to delete this folder? This cannot be undone.",
+    );
     if (!confirmed) return;
 
     try {
@@ -435,7 +484,10 @@ export default function LeadsPage() {
 
     try {
       // 🔍 One-line log so we can verify outgoing payload during QA
-      console.log("UI disposition payload →", { leadId, newFolderName: disposition });
+      console.log("UI disposition payload →", {
+        leadId,
+        newFolderName: disposition,
+      });
 
       const res = await fetch("/api/disposition-lead", {
         method: "POST",
@@ -445,22 +497,37 @@ export default function LeadsPage() {
 
       const data = await res.json();
       if (!res.ok || !data?.success) {
-        console.error("Disposition failed:", data?.message || res.statusText);
+        console.error(
+          "Disposition failed:",
+          data?.message || res.statusText,
+        );
         return;
       }
 
-      setLeads((prev) => (Array.isArray(prev) ? prev.filter((l) => l._id !== leadId) : prev));
+      setLeads((prev) =>
+        Array.isArray(prev) ? prev.filter((l) => l._id !== leadId) : prev,
+      );
 
       // refresh folder counts + reload leads in current folder
       await Promise.all([
         fetch("/api/get-folders")
           .then((r) => r.json())
-          .then((j) => setFolders(Array.isArray(j?.folders) ? j.folders : []))
+          .then((j) =>
+            setFolders(Array.isArray(j?.folders) ? j.folders : []),
+          )
           .catch(() => {}),
         selectedFolderId
-          ? fetch(`/api/get-leads-by-folder?folderId=${encodeURIComponent(selectedFolderId)}`)
+          ? fetch(
+              `/api/get-leads-by-folder?folderId=${encodeURIComponent(
+                selectedFolderId,
+              )}`,
+            )
               .then((r) => r.json())
-              .then((j) => setLeads(Array.isArray(j?.leads) ? j.leads : []))
+              .then((j) =>
+                setLeads(
+                  Array.isArray(j?.leads) ? j.leads : [],
+                ),
+              )
               .catch(() => {})
           : Promise.resolve(),
       ]);
@@ -481,7 +548,8 @@ export default function LeadsPage() {
     resumeInfo.lastIndex >= 0;
 
   const canStart = selectedLeadIds.length > 0;
-  const canResume = hasResume && !!selectedNumber && !!leads && leads.length > 0;
+  const canResume =
+    hasResume && !!selectedNumber && !!leads && leads.length > 0;
 
   return (
     <div className="flex bg-[#0f172a] text-white min-h-screen">
@@ -490,10 +558,25 @@ export default function LeadsPage() {
         {/* Top actions */}
         <div className="flex flex-wrap gap-2 mb-4">
           <button
+            onClick={() => setShowImport((v) => !v)}
+            className="bg-[#6b5b95] text-white px-4 py-2 rounded hover:opacity-90 cursor-pointer"
+          >
+            {showImport ? "Close Import" : "Import Leads"}
+          </button>
+          <button
             onClick={handleConnectGoogleSheet}
             className="bg-green-600 text-white px-4 py-2 rounded hover:opacity-90 cursor-pointer"
           >
             Connect Google Sheet
+          </button>
+          {/* AI Dial Session button (just navigates, does not touch existing flows) */}
+          <button
+            onClick={() =>
+              router.push("/ai-dial-session").catch(() => {})
+            }
+            className="bg-indigo-600 text-white px-4 py-2 rounded hover:opacity-90 cursor-pointer"
+          >
+            AI Dial Session
           </button>
         </div>
 
@@ -512,7 +595,10 @@ export default function LeadsPage() {
             ) : (
               <div className="space-y-2">
                 {folders.map((folder) => (
-                  <div key={folder._id} className="flex items-center justify-between">
+                  <div
+                    key={folder._id}
+                    className="flex items-center justify-between"
+                  >
                     <button
                       onClick={() => handleFolderClick(folder._id)}
                       className="w-full text-left border p-3 rounded cursor-pointer hover:bg-gray-700"
@@ -522,7 +608,9 @@ export default function LeadsPage() {
                     </button>
                     {!SYSTEM_FOLDERS.includes(folder.name) && (
                       <button
-                        onClick={() => handleDeleteFolder(folder._id)}
+                        onClick={() =>
+                          handleDeleteFolder(folder._id)
+                        }
                         className="text-red-600 hover:text-red-800 px-2 cursor-pointer"
                         title="Delete Folder"
                       >
@@ -535,22 +623,28 @@ export default function LeadsPage() {
             )}
 
             {/* Import panel lives here when no folder is opened */}
-            <div className="mt-6">
-              <LeadImportPanel
-                onImportSuccess={async () => {
-                  try {
-                    const r = await fetch("/api/get-folders");
-                    const j = await r.json();
-                    setFolders(Array.isArray(j?.folders) ? j.folders : []);
-                  } catch {}
-                }}
-              />
-            </div>
+            {showImport && (
+              <div className="mt-6">
+                <LeadImportPanel
+                  onImportSuccess={async () => {
+                    try {
+                      const r = await fetch("/api/get-folders");
+                      const j = await r.json();
+                      setFolders(
+                        Array.isArray(j?.folders) ? j.folders : [],
+                      );
+                    } catch {}
+                  }}
+                />
+              </div>
+            )}
           </>
         ) : (
           <>
             <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-2xl font-bold">Folder: {selectedFolderName || selectedFolderId}</h2>
+              <h2 className="text-2xl font-bold">
+                Folder: {selectedFolderName || selectedFolderId}
+              </h2>
               <button
                 onClick={clearSelection}
                 className="px-3 py-1 rounded bg-gray-700 hover:bg-gray-600"
@@ -563,10 +657,14 @@ export default function LeadsPage() {
             {/* Dial controls */}
             <div className="flex flex-col gap-3 mb-4">
               <div className="flex flex-col">
-                <label className="font-semibold">Select Number to Call From:</label>
+                <label className="font-semibold">
+                  Select Number to Call From:
+                </label>
                 <select
                   value={selectedNumber}
-                  onChange={(e) => setSelectedNumber(e.target.value)}
+                  onChange={(e) =>
+                    setSelectedNumber(e.target.value)
+                  }
                   className="border p-2 rounded w-full cursor-pointer text-black"
                 >
                   <option value="">-- Choose a number --</option>
@@ -579,10 +677,15 @@ export default function LeadsPage() {
               </div>
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <button onClick={handleSelectAll} className="border px-3 py-1 rounded cursor-pointer">
+                  <button
+                    onClick={handleSelectAll}
+                    className="border px-3 py-1 rounded cursor-pointer"
+                  >
                     {selectAll ? "Deselect All" : "Select All"}
                   </button>
-                  <span className="text-sm text-gray-300">{selectedLeadIds.length} selected</span>
+                  <span className="text-sm text-gray-300">
+                    {selectedLeadIds.length} selected
+                  </span>
                 </div>
 
                 {/* Right-side actions: Start + Resume */}
@@ -590,7 +693,9 @@ export default function LeadsPage() {
                   <button
                     onClick={startDialSession}
                     className={`${
-                      canStart ? "bg-green-600 hover:bg-green-700" : "bg-gray-500 cursor-not-allowed"
+                      canStart
+                        ? "bg-green-600 hover:bg-green-700"
+                        : "bg-gray-500 cursor-not-allowed"
                     } text-white px-3 py-1 rounded`}
                     disabled={!canStart}
                     title="Start from the beginning (fresh)"
@@ -601,10 +706,16 @@ export default function LeadsPage() {
                   <button
                     onClick={handleResumeQuickButton}
                     className={`${
-                      canResume ? "bg-blue-600 hover:bg-blue-700" : "bg-gray-500 cursor-not-allowed"
+                      canResume
+                        ? "bg-blue-600 hover:bg-blue-700"
+                        : "bg-gray-500 cursor-not-allowed"
                     } text-white px-3 py-1 rounded`}
                     disabled={!canResume}
-                    title={hasResume ? "Resume where you left off" : "No server resume available for this folder yet"}
+                    title={
+                      hasResume
+                        ? "Resume where you left off"
+                        : "No server resume available for this folder yet"
+                    }
                   >
                     Resume
                   </button>
@@ -635,31 +746,67 @@ export default function LeadsPage() {
                   </thead>
                   <tbody>
                     {leads.map((lead, index) => {
-                      const checked = selectedLeadIds.includes(lead._id);
+                      const checked =
+                        selectedLeadIds.includes(lead._id);
                       return (
-                        <tr key={lead._id} className={`border-t ${checked ? "bg-gray-700 text-white" : ""}`}>
+                        <tr
+                          key={lead._id}
+                          className={`border-t ${
+                            checked
+                              ? "bg-gray-700 text-white"
+                              : ""
+                          }`}
+                        >
                           <td className="px-2">
                             <input
                               type="checkbox"
                               className="cursor-pointer"
                               checked={checked}
-                              onChange={() => toggleLeadSelection(lead._id)}
+                              onChange={() =>
+                                toggleLeadSelection(lead._id)
+                              }
                             />
                           </td>
-                          <td className="px-2">{index + 1}</td>
+                          <td className="px-2">
+                            {index + 1}
+                          </td>
                           <td className="px-2">
                             <button
-                              onClick={() => setPreviewLead(lead)}
+                              onClick={() =>
+                                setPreviewLead(lead)
+                              }
                               className="text-blue-500 underline cursor-pointer"
                             >
-                              {lead.firstName || (lead as any)["First Name"] || "-"}
+                              {lead.firstName ||
+                                (lead as any)["First Name"] ||
+                                "-"}
                             </button>
                           </td>
-                          <td className="px-2">{lead.lastName || (lead as any)["Last Name"] || "-"}</td>
-                          <td className="px-2">{lead.phone || (lead as any)["Phone"] || "-"}</td>
-                          <td className="px-2">{lead.email || (lead as any)["Email"] || "-"}</td>
-                          <td className="px-2">{lead.state || (lead as any)["State"] || "-"}</td>
-                          <td className="px-2">{(lead as any).age ?? (lead as any)["Age"] ?? "-"}</td>
+                          <td className="px-2">
+                            {lead.lastName ||
+                              (lead as any)["Last Name"] ||
+                              "-"}
+                          </td>
+                          <td className="px-2">
+                            {lead.phone ||
+                              (lead as any)["Phone"] ||
+                              "-"}
+                          </td>
+                          <td className="px-2">
+                            {lead.email ||
+                              (lead as any)["Email"] ||
+                              "-"}
+                          </td>
+                          <td className="px-2">
+                            {lead.state ||
+                              (lead as any)["State"] ||
+                              "-"}
+                          </td>
+                          <td className="px-2">
+                            {(lead as any).age ??
+                              (lead as any)["Age"] ??
+                              "-"}
+                          </td>
                         </tr>
                       );
                     })}
@@ -677,38 +824,60 @@ export default function LeadsPage() {
                   onSaveNotes={(notes: string) => {
                     if (!leads) return;
                     const updatedLeads = leads.map((l) =>
-                      l._id === previewLead._id ? { ...l, Notes: notes } : l
+                      l._id === previewLead._id
+                        ? { ...l, Notes: notes }
+                        : l,
                     );
                     setLeads(updatedLeads);
-                    setPreviewLead({ ...previewLead, Notes: notes });
+                    setPreviewLead({
+                      ...previewLead,
+                      Notes: notes,
+                    });
                   }}
-                  onDispositionChange={(disposition) => handleDisposition(previewLead._id, disposition)}
+                  onDispositionChange={(disposition) =>
+                    handleDisposition(previewLead._id, disposition)
+                  }
                 />
 
-                {previewLead.hasAIAccess && Array.isArray(previewLead.callTranscripts) && (
-                  <div className="mt-6 space-y-6">
-                    <div>
-                      <h2 className="text-lg font-semibold mb-2">🧠 AI Call Summary</h2>
-                      <div className="p-3 bg-yellow-50 border rounded shadow text-sm text-gray-800">
-                        {previewLead.aiSummary || "No AI summary generated yet."}
+                {previewLead.hasAIAccess &&
+                  Array.isArray(previewLead.callTranscripts) && (
+                    <div className="mt-6 space-y-6">
+                      <div>
+                        <h2 className="text-lg font-semibold mb-2">
+                          🧠 AI Call Summary
+                        </h2>
+                        <div className="p-3 bg-yellow-50 border rounded shadow text-sm text-gray-800">
+                          {previewLead.aiSummary ||
+                            "No AI summary generated yet."}
+                        </div>
                       </div>
-                    </div>
 
-                    <div>
-                      <h2 className="text-lg font-semibold mb-2">📞 Full Call Transcript</h2>
-                      <div className="space-y-4 max-h-64 overflow-y-auto border rounded p-4 bg-gray-50">
-                        {previewLead.callTranscripts.map((entry: any, index: number) => (
-                          <div key={index} className="border-b pb-2">
-                            <p className="text-sm text-gray-700 whitespace-pre-line">{entry.text}</p>
-                            <p className="text-xs text-gray-500 mt-1">
-                              {new Date(entry.createdAt).toLocaleString()}
-                            </p>
-                          </div>
-                        ))}
+                      <div>
+                        <h2 className="text-lg font-semibold mb-2">
+                          📞 Full Call Transcript
+                        </h2>
+                        <div className="space-y-4 max-h-64 overflow-y-auto border rounded p-4 bg-gray-50">
+                          {previewLead.callTranscripts.map(
+                            (entry: any, index: number) => (
+                              <div
+                                key={index}
+                                className="border-b pb-2"
+                              >
+                                <p className="text-sm text-gray-700 whitespace-pre-line">
+                                  {entry.text}
+                                </p>
+                                <p className="text-xs text-gray-500 mt-1">
+                                  {new Date(
+                                    entry.createdAt,
+                                  ).toLocaleString()}
+                                </p>
+                              </div>
+                            ),
+                          )}
+                        </div>
                       </div>
                     </div>
-                  </div>
-                )}
+                  )}
               </div>
             )}
           </>

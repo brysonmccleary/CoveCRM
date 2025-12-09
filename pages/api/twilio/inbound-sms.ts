@@ -369,6 +369,49 @@ function isInfoRequest(text: string): boolean {
   return phrases.some((p) => t.includes(p));
 }
 
+/**
+ * FAQ overrides for specific questions:
+ * - "who are you with?"
+ * - "what is mortgage protection?"
+ *
+ * Returns a hard-coded Jeremy-style reply (with booking question).
+ */
+function getFaqOverrideReply(text: string): string | null {
+  const t = (text || "").trim().toLowerCase();
+  if (!t) return null;
+
+  // "Who are you with?" / "Who do you work for?" etc.
+  const whoTriggers = [
+    "who are you with",
+    "who you with",
+    "who do you work for",
+    "who are you calling with",
+    "who is this with",
+    "what company are you with",
+    "what company do you work for",
+    "who are you from",
+  ];
+  if (whoTriggers.some((p) => t.includes(p))) {
+    return "I’m a broker through the state contracted with all the companies that offer these products. My job is to find you the best rate for the coverage. When do you have five minutes for a quick call?";
+  }
+
+  // "What is mortgage protection?"
+  const mpTriggers = [
+    "what is mortgage protection",
+    "what’s mortgage protection",
+    "whats mortgage protection",
+    "what is mortgage protection insurance",
+  ];
+  if (
+    mpTriggers.some((p) => t.includes(p)) ||
+    (t.includes("mortgage protection") && t.includes("?"))
+  ) {
+    return "Mortgage protection is a privately owned insurance policy that pays off and/or pays down the house in the event of a death or disability so your family can keep the house if something happens. When do you have five minutes for a quick call?";
+  }
+
+  return null;
+}
+
 const TZ_ABBR: Record<string, string> = {
   est: "America/New_York",
   edt: "America/New_York",
@@ -1515,54 +1558,63 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // GPT-first logic (now o3-mini)
     let aiReply: string | null = null;
+    let requestedISO: string | null = null;
 
-    // 1) Direct parse of any concrete time in their text
-    let requestedISO: string | null = extractRequestedISO(body, stateCanon);
+    // 🔒 Hard-coded FAQ overrides for "who are you with" / "what is mortgage protection"
+    const faqOverride = getFaqOverrideReply(body);
+    if (!faqOverride) {
+      // 1) Direct parse of any concrete time in their text
+      requestedISO = extractRequestedISO(body, stateCanon);
 
-    // 1b) If they are selecting a time that was offered "tomorrow" in the last AI message (e.g. "let's do 11")
-    if (!requestedISO) {
-      requestedISO = inferTimeFromLastAITomorrow(
-        body,
-        stateCanon,
-        lead.interactionHistory || [],
-      );
-    }
-
-    // 2) If they’re confirming ("that works", etc.), reuse last proposed or last AI-suggested time
-    if (!requestedISO && containsConfirmation(body)) {
-      requestedISO =
-        extractTimeFromLastAI(lead.interactionHistory || [], stateCanon) ||
-        (lead as any).aiLastProposedISO ||
-        null;
-    }
-
-    // 3) If we still don’t have a concrete time, let o3-mini drive a natural Jeremy-style reply
-    if (!requestedISO) {
-      try {
-        aiReply = await generateConversationalReply({
-          lead,
-          user,
-          userEmail: user.email,
-          context,
-          tz,
-          inboundText: body,
-          history: lead.interactionHistory || [],
-        });
-        if (!askedRecently(memory, "chat_followup")) pushAsked(memory, "chat_followup");
-        memory.state = "awaiting_time";
-      } catch (err) {
-        console.error("[inbound-sms] GPT conversational reply failed:", err);
-        memory.state = "awaiting_time";
-        const lastAI = [...(lead.interactionHistory || [])].reverse().find(
-          (m: any) => m.type === "ai",
+      // 1b) If they are selecting a time that was offered "tomorrow" in the last AI message (e.g. "let's do 11")
+      if (!requestedISO) {
+        requestedISO = inferTimeFromLastAITomorrow(
+          body,
+          stateCanon,
+          lead.interactionHistory || [],
         );
-        const v =
-          "When’s a good time today or tomorrow for a quick 5-minute chat?";
-        aiReply =
-          lastAI?.text?.trim() === v
-            ? `Got it — send me a time that works (for example “tomorrow 3:00 pm”) and I’ll text a confirmation.`
-            : v;
       }
+
+      // 2) If they’re confirming ("that works", etc.), reuse last proposed or last AI-suggested time
+      if (!requestedISO && containsConfirmation(body)) {
+        requestedISO =
+          extractTimeFromLastAI(lead.interactionHistory || [], stateCanon) ||
+          (lead as any).aiLastProposedISO ||
+          null;
+      }
+
+      // 3) If we still don’t have a concrete time, let o3-mini drive a natural Jeremy-style reply
+      if (!requestedISO) {
+        try {
+          aiReply = await generateConversationalReply({
+            lead,
+            user,
+            userEmail: user.email,
+            context,
+            tz,
+            inboundText: body,
+            history: lead.interactionHistory || [],
+          });
+          if (!askedRecently(memory, "chat_followup")) pushAsked(memory, "chat_followup");
+          memory.state = "awaiting_time";
+        } catch (err) {
+          console.error("[inbound-sms] GPT conversational reply failed:", err);
+          memory.state = "awaiting_time";
+          const lastAI = [...(lead.interactionHistory || [])].reverse().find(
+            (m: any) => m.type === "ai",
+          );
+          const v =
+            "When’s a good time today or tomorrow for a quick 5-minute chat?";
+          aiReply =
+            lastAI?.text?.trim() === v
+              ? `Got it — send me a time that works (for example “tomorrow 3:00 pm”) and I’ll text a confirmation.`
+              : v;
+        }
+      }
+    } else {
+      // For FAQ answers, use the exact scripted reply (already includes booking question)
+      aiReply = faqOverride;
+      memory.state = "awaiting_time";
     }
 
     // 4) If we DO have a concrete time, book it and send a confirmation

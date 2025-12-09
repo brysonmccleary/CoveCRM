@@ -477,6 +477,11 @@ export default function LeadsPanel() {
     }
   };
 
+  // NEW: navigate to AI Dial Session page
+  const goToAIDialSession = () => {
+    router.push("/ai-dial-session").catch(() => {});
+  };
+
   return (
     <div className="space-y-4 p-4">
       {/* Top actions */}
@@ -492,6 +497,12 @@ export default function LeadsPanel() {
           className="bg-green-600 text-white px-4 py-2 rounded hover:opacity-90 cursor-pointer"
         >
           Connect Google Sheet
+        </button>
+        <button
+          onClick={goToAIDialSession}
+          className="bg-blue-600 text-white px-4 py-2 rounded hover:opacity-90 cursor-pointer"
+        >
+          AI Dial Session
         </button>
       </div>
 
