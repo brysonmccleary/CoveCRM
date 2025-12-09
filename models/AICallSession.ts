@@ -6,6 +6,8 @@ export type AICallSessionStatus =
   | "running"
   | "paused"
   | "completed"
+  | "stopped"
+  | "failed"
   | "error";
 
 export interface IAICallSession extends Document {
@@ -57,7 +59,7 @@ const AICallSessionSchema = new Schema<IAICallSession>(
 
     status: {
       type: String,
-      enum: ["queued", "running", "paused", "completed", "error"],
+      enum: ["queued", "running", "paused", "completed", "stopped", "failed", "error"],
       required: true,
       default: "queued",
       index: true,
