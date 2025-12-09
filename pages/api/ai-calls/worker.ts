@@ -246,11 +246,13 @@ export default async function handler(
         from,
         url: aiVoiceUrl(sessionId, String(leadId)),
         // Record entire call at call-level; status callback goes to AI-specific endpoint
-        record: "record-from-answer-dual",
+        // Twilio typings say `record?: boolean`, but the API accepts advanced modes.
+        // We cast to any so we can send the exact string we want.
+        record: "record-from-answer-dual" as any,
         recordingStatusCallback: aiRecordingUrl(sessionId, String(leadId)),
         recordingStatusCallbackEvent: ["completed"],
         recordingStatusCallbackMethod: "POST",
-      });
+      } as any);
 
       await AICallRecording.findOneAndUpdate(
         { callSid: call.sid },
