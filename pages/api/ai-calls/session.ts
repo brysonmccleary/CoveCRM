@@ -19,6 +19,18 @@ type PostBody = {
   voiceKey?: string;
 };
 
+function serializeSession(doc: any | null) {
+  if (!doc) return null;
+  const json = typeof doc.toJSON === "function" ? doc.toJSON() : doc;
+
+  // Map completedAt → endedAt for the frontend while keeping the original field.
+  if (!json.endedAt && json.completedAt) {
+    json.endedAt = json.completedAt;
+  }
+
+  return json;
+}
+
 export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse<GetResponse>
@@ -28,7 +40,8 @@ export default async function handler(
     typeof session?.user?.email === "string"
       ? session.user.email.toLowerCase()
       : "";
-  if (!email) return res.status(401).json({ ok: false, message: "Unauthorized" });
+  if (!email)
+    return res.status(401).json({ ok: false, message: "Unauthorized" });
 
   await mongooseConnect();
 
@@ -41,28 +54,31 @@ export default async function handler(
 
       if (folderId) {
         if (!Types.ObjectId.isValid(folderId)) {
-          return res.status(400).json({ ok: false, message: "Invalid folderId" });
+          return res
+            .status(400)
+            .json({ ok: false, message: "Invalid folderId" });
         }
         const fid = new Types.ObjectId(folderId);
-        const latest = await AICallSession.findOne({
+        const latestDoc = await AICallSession.findOne({
           userEmail: email,
           folderId: fid,
         })
           .sort({ createdAt: -1 })
-          .lean()
           .exec();
+
+        const latest = serializeSession(latestDoc);
         return res.status(200).json({ ok: true, session: latest || null });
       }
 
       // No folderId → return most recent active session for this user
-      const active = await AICallSession.findOne({
+      const activeDoc = await AICallSession.findOne({
         userEmail: email,
         status: { $in: ["queued", "running", "paused"] },
       })
         .sort({ createdAt: -1 })
-        .lean()
         .exec();
 
+      const active = serializeSession(activeDoc);
       return res.status(200).json({ ok: true, session: active || null });
     } catch (err) {
       console.error("AI session GET error:", err);
@@ -86,7 +102,9 @@ export default async function handler(
           .json({ ok: false, message: "folderId is required" });
       }
       if (!Types.ObjectId.isValid(folderId)) {
-        return res.status(400).json({ ok: false, message: "Invalid folderId" });
+        return res
+          .status(400)
+          .json({ ok: false, message: "Invalid folderId" });
       }
       if (!fromNumber) {
         return res
@@ -132,6 +150,8 @@ export default async function handler(
         .sort({ createdAt: -1 })
         .exec();
 
+      const now = new Date();
+
       if (!aiSession) {
         // First time → always behave like fresh
         aiSession = new AICallSession({
@@ -144,12 +164,12 @@ export default async function handler(
           total,
           lastIndex: -1,
           status: "queued",
-          startedAt: new Date(),
+          startedAt: now,
           completedAt: null,
           errorMessage: null,
         });
       } else {
-        // Re-use existing session
+        // Re-use existing session for this folder/user
         aiSession.leadIds = leadIds;
         aiSession.total = total;
         aiSession.fromNumber = fromNumber;
@@ -160,17 +180,17 @@ export default async function handler(
         if (mode === "fresh") {
           aiSession.lastIndex = -1;
         }
-        // mode === 'resume' keeps lastIndex exactly where it was
+        // mode === "resume" keeps lastIndex where it was
 
         aiSession.status = "queued";
-        aiSession.startedAt = new Date();
+        aiSession.startedAt = now;
         aiSession.completedAt = null;
       }
 
       await aiSession.save();
 
-      // Worker picks up sessions with status=queued/running in the background.
-      return res.status(200).json({ ok: true, session: aiSession.toJSON() });
+      const payload = serializeSession(aiSession);
+      return res.status(200).json({ ok: true, session: payload });
     } catch (err) {
       console.error("AI session POST error:", err);
       return res
@@ -228,7 +248,8 @@ export default async function handler(
       }
 
       await aiSession.save();
-      return res.status(200).json({ ok: true, session: aiSession.toJSON() });
+      const payload = serializeSession(aiSession);
+      return res.status(200).json({ ok: true, session: payload });
     } catch (err) {
       console.error("AI session PATCH error:", err);
       return res

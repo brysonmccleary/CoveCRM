@@ -85,6 +85,11 @@ const VOICE_OPTIONS = [
   },
 ];
 
+// Reusable select style to match the regular dialer "white outlined" look
+const selectClass =
+  "w-full px-3 py-2 rounded border border-slate-200 bg-slate-900 text-sm text-slate-100 " +
+  "focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-400";
+
 export default function AIDialSessionPage() {
   const router = useRouter();
 
@@ -325,7 +330,6 @@ export default function AIDialSessionPage() {
           voiceKey: selectedVoiceKey,
           fromNumber: selectedFromNumber,
           mode: "resume",
-          // resumeFromSessionId: lastSession._id, // optional / future if API ever uses it
         }),
       });
 
@@ -426,7 +430,7 @@ export default function AIDialSessionPage() {
               <select
                 value={selectedFolderId}
                 onChange={(e) => setSelectedFolderId(e.target.value)}
-                className="w-full p-2 rounded text-black"
+                className={selectClass}
               >
                 <option value="">-- Select a folder --</option>
                 {folders.map((f) => (
@@ -458,7 +462,7 @@ export default function AIDialSessionPage() {
               <select
                 value={selectedFromNumber}
                 onChange={(e) => setSelectedFromNumber(e.target.value)}
-                className="w-full p-2 rounded text-black"
+                className={selectClass}
               >
                 <option value="">-- Select a number --</option>
                 {numbers.map((n) => (
@@ -483,7 +487,7 @@ export default function AIDialSessionPage() {
             <select
               value={selectedScriptKey}
               onChange={(e) => setSelectedScriptKey(e.target.value)}
-              className="w-full p-2 rounded text-black"
+              className={selectClass}
             >
               <option value="">-- Select a script --</option>
               {SCRIPT_OPTIONS.map((s) => (
@@ -505,7 +509,7 @@ export default function AIDialSessionPage() {
             <select
               value={selectedVoiceKey}
               onChange={(e) => setSelectedVoiceKey(e.target.value)}
-              className="w-full p-2 rounded text-black"
+              className={selectClass}
             >
               <option value="">-- Select a voice --</option>
               {VOICE_OPTIONS.map((v) => (
@@ -556,7 +560,10 @@ export default function AIDialSessionPage() {
                   !canConfigure || !lastSession || !!activeSession || sessionLoading
                 }
                 className={`px-4 py-2 rounded text-white ${
-                  !canConfigure || !lastSession || !!activeSession || sessionLoading
+                  !canConfigure ||
+                  !lastSession ||
+                  !!activeSession ||
+                  sessionLoading
                     ? "bg-gray-600 cursor-not-allowed"
                     : "bg-blue-600 hover:bg-blue-700"
                 }`}

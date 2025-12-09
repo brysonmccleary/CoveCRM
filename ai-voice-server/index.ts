@@ -58,7 +58,7 @@ type TwilioMediaEvent = {
   event: "media";
   streamSid: string;
   media: {
-    payload: string; // base64-encoded audio
+    payload: string; // base64-encoded μ-law 8k audio (g711_ulaw)
     track?: string;
   };
 };
@@ -114,7 +114,7 @@ type CallState = {
   // OpenAI Realtime connection + buffers
   openAiWs?: WebSocket;
   openAiReady?: boolean;
-  pendingAudioFrames: Buffer[];
+  pendingAudioFrames: string[]; // base64-encoded g711_ulaw chunks
   finalOutcomeSent?: boolean;
 };
 
@@ -202,8 +202,6 @@ const server = http.createServer(async (req: IncomingMessage, res: ServerRespons
           //  - Actual stopping of new calls is handled by CoveCRM:
           //    /api/ai-calls/stop.ts marks the AICallSession as "completed",
           //    and the worker only processes sessions in ["queued", "running"].
-          //  - If you later want to track active sessions in this process,
-          //    you can add in-memory maps here.
 
           res.statusCode = 200;
           res.setHeader("Content-Type", "application/json");
@@ -346,32 +344,26 @@ async function handleStart(ws: WebSocket, msg: TwilioStartEvent) {
 }
 
 /**
- * MEDIA: Twilio sends audio frames (mulaw 8k) -> forward to OpenAI
+ * MEDIA: Twilio sends audio frames (μ-law 8k) -> forward to OpenAI
  */
 async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
   const state = calls.get(ws);
   if (!state) return;
 
   const { media } = msg;
-  const { payload } = media;
+  const { payload } = media; // base64 g711_ulaw
 
-  // payload is base64-encoded audio (mulaw 8k)
-  const audioBuffer = Buffer.from(payload, "base64");
-
-  // If OpenAI connection isn't ready yet, temporarily buffer
+  // If OpenAI connection isn't ready yet, temporarily buffer base64 payloads
   if (!state.openAiWs || !state.openAiReady) {
-    state.pendingAudioFrames.push(audioBuffer);
+    state.pendingAudioFrames.push(payload);
     return;
   }
 
-  // TODO: You will likely need to:
-  //  - Convert μ-law 8kHz audio (Twilio) -> 16-bit PCM at model's sample rate
-  //  - For now, we just forward the base64 payload as a placeholder
   try {
+    // We configured OpenAI for g711_ulaw, so we can forward Twilio's base64 payload directly.
     const event = {
       type: "input_audio_buffer.append",
-      // This "audio" field is expected to be base64 PCM; adapt when you wire codecs
-      audio: audioBuffer.toString("base64"),
+      audio: payload, // still base64 g711_ulaw
     };
     state.openAiWs.send(JSON.stringify(event));
   } catch (err: any) {
@@ -393,7 +385,7 @@ async function handleStop(ws: WebSocket, msg: TwilioStopEvent) {
     `[AI-VOICE] stop: callSid=${msg.stop.callSid}, streamSid=${msg.streamSid}`
   );
 
-  // Tell OpenAI we're done sending audio
+  // Tell OpenAI we're done sending audio for this call
   if (state.openAiWs && state.openAiReady) {
     try {
       state.openAiWs.send(
@@ -408,7 +400,7 @@ async function handleStop(ws: WebSocket, msg: TwilioStopEvent) {
           type: "response.create",
           response: {
             instructions:
-              "The call has ended; finalize your notes and outcome internally.",
+              "The call has ended; finalize your internal notes and final_outcome control payload.",
           },
         })
       );
@@ -464,16 +456,25 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
 
     const systemPrompt = buildSystemPrompt(state.context!);
 
-    // Configure the Realtime session: instructions, voice, audio formats, etc.
+    // Configure the Realtime session:
+    //  - Jeremy-Lee-style instructions
+    //  - voice
+    //  - g711_ulaw audio in/out (so Twilio ↔ OpenAI is pass-through)
+    //  - server-side VAD to detect turns and respond automatically
     const sessionUpdate = {
       type: "session.update",
       session: {
         instructions: systemPrompt,
-        // Voice ID from your context
         voice: state.context!.voiceProfile.openAiVoiceId || "alloy",
-        // You can configure audio formats here as needed
-        // input_audio_format: "pcm16",
-        // output_audio_format: "pcm16",
+        input_audio_format: "g711_ulaw",
+        output_audio_format: "g711_ulaw",
+        turn_detection: {
+          type: "server_vad",
+          // Fine-tune these if needed for pacing
+          threshold: 0.5,
+          silence_duration_ms: 800,
+          create_response: true,
+        },
       },
     };
 
@@ -482,10 +483,10 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
 
       // Flush any buffered audio frames we received before the model was ready
       if (state.pendingAudioFrames.length > 0) {
-        for (const buf of state.pendingAudioFrames) {
+        for (const base64Chunk of state.pendingAudioFrames) {
           const event = {
             type: "input_audio_buffer.append",
-            audio: buf.toString("base64"),
+            audio: base64Chunk,
           };
           openAiWs.send(JSON.stringify(event));
         }
@@ -498,7 +499,7 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
           type: "response.create",
           response: {
             instructions:
-              "Begin the call now and greet the lead following the call rules.",
+              "Begin the call now and greet the lead following the call rules. Wait for the lead to respond before continuing.",
           },
         })
       );
@@ -546,11 +547,10 @@ async function handleOpenAiEvent(
   const { streamSid, context } = state;
   if (!context) return;
 
-  // 1) Audio back to Twilio
+  // 1) Audio back to Twilio (we configured OpenAI for g711_ulaw)
   if (event.type === "response.output_audio.delta" && event.audio) {
     try {
-      // TODO: You may need to transcode PCM to μ-law here
-      const payloadBase64 = event.audio as string;
+      const payloadBase64 = event.audio as string; // base64 g711_ulaw
 
       const twilioMediaMsg = {
         event: "media",
@@ -569,7 +569,7 @@ async function handleOpenAiEvent(
     }
   }
 
-  // 2) Text / tool calls / intents
+  // 2) Text / tool calls / intents via control metadata
   try {
     const control =
       event?.control ||
