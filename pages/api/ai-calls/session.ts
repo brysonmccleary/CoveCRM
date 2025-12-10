@@ -16,6 +16,17 @@ type PostBody = {
   mode?: "fresh" | "resume";
   fromNumber?: string;
   scriptKey?: string;
+  /**
+   * Voice persona key – must match one of the keys used in:
+   * - pages/ai-dial-session.tsx → VOICE_OPTIONS
+   * - pages/api/ai-calls/context.ts → VOICE_PROFILES
+   *
+   * Current expected values:
+   *  - "jacob"
+   *  - "iris"
+   *  - "kayla"
+   *  - "elena"
+   */
   voiceKey?: string;
 };
 
@@ -27,6 +38,48 @@ function serializeSession(doc: any | null) {
   if (!json.endedAt && json.completedAt) {
     json.endedAt = json.completedAt;
   }
+
+  // ───────────────────────── Stats normalization for the frontend ─────────────────────────
+  //
+  // DB stores (AICallSession.stats):
+  //   stats.completed
+  //   stats.booked
+  //   stats.not_interested
+  //   stats.no_answer
+  //   stats.callback
+  //   stats.do_not_call
+  //   stats.disconnected
+  //
+  // The AI Dial Session UI expects:
+  //   stats.totalLeads
+  //   stats.completed
+  //   stats.booked
+  //   stats.notInterested
+  //   stats.noAnswers
+  //
+  // We normalize here without changing what’s in Mongo.
+  const rawStats = (json.stats || {}) as any;
+
+  const totalFromSession =
+    typeof json.total === "number"
+      ? json.total
+      : Array.isArray(json.leadIds)
+      ? json.leadIds.length
+      : undefined;
+
+  json.stats = {
+    // keep any existing stats fields in case we add more later
+    ...rawStats,
+    // front-end friendly aliases
+    totalLeads:
+      rawStats.totalLeads ??
+      (typeof totalFromSession === "number" ? totalFromSession : 0),
+    completed: rawStats.completed ?? 0,
+    booked: rawStats.booked ?? 0,
+    notInterested:
+      rawStats.notInterested ?? rawStats.not_interested ?? 0,
+    noAnswers: rawStats.noAnswers ?? rawStats.no_answer ?? 0,
+  };
 
   return json;
 }

@@ -1,3 +1,4 @@
+// pages/api/stripe/webhook.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { buffer } from "micro";
 import type Stripe from "stripe";
@@ -52,7 +53,6 @@ const audit = (msg: string, extra?: Record<string, unknown>) => {
 /* Affiliate helpers (existing behavior preserved; targeted adjustments only)   */
 /* ──────────────────────────────────────────────────────────────────────────── */
 
-/** Upsert an Affiliate document from a Stripe PromotionCode (typed) */
 async function upsertAffiliateFromPromo(
   pc: Stripe.PromotionCode,
 ): Promise<IAffiliate | null> {
@@ -86,7 +86,6 @@ async function findAffiliateByPromoCode(
   return Affiliate.findOne({ promoCode: q }).lean<IAffiliate | null>();
 }
 
-/** Mark a single checkout redemption once using payoutHistory as a zero-amount marker (idempotent on sessionId). */
 async function markRedemptionOnce(affId: string, sessionId: string) {
   const aff = await Affiliate.findById(affId);
   if (!aff) return;
@@ -134,7 +133,6 @@ async function creditAffiliateOnce(opts: CreditOnceOpts) {
     note,
   } = opts;
 
-  // 🚫 NEW: never pay on first invoice (renewals only)
   if (isFirstInvoice) {
     audit("skip credit (first invoice)", {
       affiliateId: String((affiliate as any)._id || ""),
@@ -145,8 +143,12 @@ async function creditAffiliateOnce(opts: CreditOnceOpts) {
 
   (affiliate as any).payoutHistory = (affiliate as any).payoutHistory || [];
 
-  // idempotency on invoice
-  if ((affiliate as any).payoutHistory.some((p: any) => p?.invoiceId === invoiceId)) return false;
+  if (
+    (affiliate as any).payoutHistory.some(
+      (p: any) => p?.invoiceId === invoiceId,
+    )
+  )
+    return false;
 
   (affiliate as any).payoutHistory.push({
     invoiceId,
@@ -279,7 +281,6 @@ export default async function handler(
     switch (event.type) {
       case "account.updated": {
         const account = event.data.object as Stripe.Account;
-
         let connectedAccountStatus:
           | "pending"
           | "incomplete"
@@ -343,9 +344,115 @@ export default async function handler(
       case "checkout.session.completed": {
         const s = event.data.object as Stripe.Checkout.Session;
 
-        const email =
+        const emailRaw =
           s.customer_email ||
-          (s.customer_details?.email as string | undefined);
+          (s.customer_details?.email as string | undefined) ||
+          "";
+        const email = emailRaw ? L(emailRaw) : "";
+
+        const purpose = s.metadata?.purpose || "";
+
+        /* ───────────── AI DIALER TOP-UP (manual or auto-triggered checkout) ───────────── */
+        if (purpose === "ai_dialer_topup") {
+          if (!email) {
+            audit("ai_dialer_topup: missing email on session", {
+              sessionId: s.id,
+            });
+            break;
+          }
+
+          const user = await User.findOne({ email });
+          if (!user) {
+            audit("ai_dialer_topup: user not found", {
+              email,
+              sessionId: s.id,
+            });
+            break;
+          }
+
+          const amountUSD =
+            typeof s.amount_total === "number" ? s.amount_total / 100 : 0;
+
+          if (!amountUSD || amountUSD <= 0) {
+            audit("ai_dialer_topup: zero or missing amount", {
+              email,
+              sessionId: s.id,
+              amountUSD,
+            });
+            break;
+          }
+
+          const currentBalance = Number((user as any).aiDialerBalance || 0);
+          (user as any).aiDialerBalance = currentBalance + amountUSD;
+          (user as any).aiDialerLastTopUpAt = new Date();
+
+          await user.save();
+
+          audit("ai_dialer_topup: credited", {
+            email,
+            sessionId: s.id,
+            addedUSD: amountUSD,
+            newBalanceUSD: (user as any).aiDialerBalance,
+          });
+
+          break;
+        }
+
+        /* ───────────── AI DIALER ACCESS ($50/mo) ───────────── */
+        if (purpose === "ai_dialer_access") {
+          if (!email) {
+            audit("ai_dialer_access: missing email on session", {
+              sessionId: s.id,
+            });
+            break;
+          }
+
+          const userIdMeta = s.metadata?.userId;
+          let user = null;
+          if (userIdMeta) {
+            user = await User.findById(userIdMeta);
+          }
+          if (!user) {
+            user = await User.findOne({ email });
+          }
+          if (!user) {
+            audit("ai_dialer_access: user not found", {
+              email,
+              sessionId: s.id,
+            });
+            break;
+          }
+
+          // Store Stripe customer if not already present
+          if (
+            !user.stripeCustomerId &&
+            typeof s.customer === "string" &&
+            s.customer
+          ) {
+            user.stripeCustomerId = s.customer;
+          }
+
+          // Admin-free accounts never need credits, but it doesn't hurt if they get them.
+          const INITIAL_AI_DIALER_CREDIT_USD = 20;
+
+          const currentBalance = Number((user as any).aiDialerBalance || 0);
+          (user as any).aiDialerBalance =
+            currentBalance + INITIAL_AI_DIALER_CREDIT_USD;
+          (user as any).aiDialerLastTopUpAt = new Date();
+
+          await user.save();
+
+          audit("ai_dialer_access: activated + initial credit", {
+            email,
+            sessionId: s.id,
+            addedUSD: INITIAL_AI_DIALER_CREDIT_USD,
+            newBalanceUSD: (user as any).aiDialerBalance,
+          });
+
+          break;
+        }
+
+        /* ───────────── Normal CRM subscription checkout ───────────── */
         const userId = s.metadata?.userId;
         const referralCodeUsed = U(s.metadata?.referralCodeUsed || "");
 
@@ -367,7 +474,6 @@ export default async function handler(
         if (referralCodeUsed) (user as any).referredBy = referralCodeUsed;
         await user.save();
 
-        // Ensure the affiliate record exists for the code used + count redemption once
         if (referralCodeUsed) {
           try {
             const list = await stripe.promotionCodes.list({
@@ -400,7 +506,6 @@ export default async function handler(
           inv.billing_reason === "subscription_create" ||
           (!!inv.subscription && inv.attempt_count === 1);
 
-        // Identify the promo code actually used
         let codeText: string | null = null;
 
         const promoId = (inv.discount as any)?.promotion_code as
@@ -444,7 +549,6 @@ export default async function handler(
           }
         }
 
-        // Always record revenue; payouts may be skipped below
         if (codeText) {
           const affForRevenue = await findAffiliateByPromoCode(codeText);
           if (affForRevenue) {
@@ -458,7 +562,9 @@ export default async function handler(
             };
 
             if (isFirst && userEmail) {
-              const referrals = ((affForRevenue as any).referrals || []).slice();
+              const referrals = (
+                (affForRevenue as any).referrals || []
+              ).slice();
               if (
                 !referrals.some(
                   (r: any) => r?.email?.toLowerCase() === L(userEmail!),
@@ -478,7 +584,6 @@ export default async function handler(
           }
         }
 
-        // Payouts: only if non-house code AND not first invoice
         if (!codeText || isHouseCode(codeText) || isFirst) {
           audit("skip payout", {
             reason: !codeText
@@ -506,7 +611,7 @@ export default async function handler(
           customerId: customerId || null,
           userEmail,
           amountUSD: payoutUSD,
-          isFirstInvoice: isFirst, // guarded inside
+          isFirstInvoice: isFirst,
           note: `commission for ${codeText}`,
         });
 
@@ -527,7 +632,6 @@ export default async function handler(
         const invoiceId = (note.invoice as string) || "";
         if (!invoiceId) break;
 
-        // Resolve the affiliate again (like above)
         let aff: IAffiliate | null = null;
         try {
           const inv = await stripe.invoices.retrieve(invoiceId);
@@ -564,7 +668,6 @@ export default async function handler(
 
         if (!aff) break;
 
-        // Flat reversal (mirrors your flat-commission policy)
         const flatUSD =
           Number((aff as any).flatPayoutAmount || 0) ||
           Number(process.env.AFFILIATE_DEFAULT_PAYOUT || 25);
@@ -585,7 +688,10 @@ export default async function handler(
             },
           },
         );
-        audit("credit_note reversal", { invoiceId, affiliateId: String((aff as any)._id) });
+        audit("credit_note reversal", {
+          invoiceId,
+          affiliateId: String((aff as any)._id),
+        });
         break;
       }
 
@@ -672,7 +778,6 @@ export default async function handler(
       }
 
       default:
-        // ignore other events
         break;
     }
 

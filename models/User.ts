@@ -1,3 +1,4 @@
+// models/User.ts
 import mongoose, { Schema } from "mongoose";
 
 export interface IUser {
@@ -54,8 +55,16 @@ export interface IUser {
     }[];
   };
 
-  googleTokens?: { accessToken: string; refreshToken?: string; expiryDate?: number };
-  googleCalendar?: { accessToken: string; refreshToken?: string; expiryDate?: number };
+  googleTokens?: {
+    accessToken: string;
+    refreshToken?: string;
+    expiryDate?: number;
+  };
+  googleCalendar?: {
+    accessToken: string;
+    refreshToken?: string;
+    expiryDate?: number;
+  };
 
   calendarId?: string;
   bookingSettings?: {
@@ -92,6 +101,26 @@ export interface IUser {
   subscriptionStatus?: "active" | "canceled";
 
   aiUsage?: { openAiCost: number; twilioCost: number; totalCost: number };
+
+  /**
+   * 🔹 AI Dialer usage is tracked completely separately from regular CRM usage.
+   * - vendorCost: your raw Twilio/OpenAI cost for AI calls
+   * - billedMinutes: total minutes you’ve billed them for AI
+   * - billedAmount: total $ you’ve billed via AI dialer usage top-ups
+   */
+  aiDialerUsage?: {
+    vendorCost: number;
+    billedMinutes: number;
+    billedAmount: number;
+    lastChargedAt?: Date;
+  };
+
+  /**
+   * 🔹 AI Dialer balance only: remaining $ of AI dialer credit.
+   * Regular CRM dialer/SMS keeps using usageBalance via the existing tracker.
+   */
+  aiDialerBalance?: number;
+  aiDialerLastTopUpAt?: Date;
 
   usageBalance?: number;
 
@@ -141,7 +170,7 @@ const SyncedSheetSchema = new Schema(
     lastRowImported: { type: Number, default: 1 },
     lastImportedAt: Date,
   },
-  { _id: false }
+  { _id: false },
 );
 
 const DialProgressSchema = new Schema(
@@ -151,7 +180,7 @@ const DialProgressSchema = new Schema(
     total: { type: Number },
     updatedAt: { type: Date, default: Date.now },
   },
-  { _id: false }
+  { _id: false },
 );
 
 const UserSchema = new Schema<IUser>({
@@ -179,7 +208,11 @@ const UserSchema = new Schema<IUser>({
       status: String,
       country: String,
       carrier: String,
-      capabilities: { voice: { type: Boolean }, sms: { type: Boolean }, mms: { type: Boolean } },
+      capabilities: {
+        voice: { type: Boolean },
+        sms: { type: Boolean },
+        mms: { type: Boolean },
+      },
       purchasedAt: Date,
       messagingServiceSid: String,
       friendlyName: String,
@@ -198,8 +231,16 @@ const UserSchema = new Schema<IUser>({
     syncedSheets: { type: [SyncedSheetSchema], default: [] },
   },
 
-  googleTokens: { accessToken: String, refreshToken: String, expiryDate: Number },
-  googleCalendar: { accessToken: String, refreshToken: String, expiryDate: Number },
+  googleTokens: {
+    accessToken: String,
+    refreshToken: String,
+    expiryDate: Number,
+  },
+  googleCalendar: {
+    accessToken: String,
+    refreshToken: String,
+    expiryDate: Number,
+  },
 
   calendarId: String,
   bookingSettings: {
@@ -217,7 +258,12 @@ const UserSchema = new Schema<IUser>({
 
   /** 🔹 New, explicit referral fields */
   referredByCode: { type: String, index: true, sparse: true },
-  referredByUserId: { type: Schema.Types.ObjectId, ref: "User", index: true, sparse: true },
+  referredByUserId: {
+    type: Schema.Types.ObjectId,
+    ref: "User",
+    index: true,
+    sparse: true,
+  },
 
   /** (legacy) keep, but don’t write new values here */
   referredBy: { type: Schema.Types.Mixed },
@@ -233,7 +279,11 @@ const UserSchema = new Schema<IUser>({
 
   hasAI: { type: Boolean, default: false },
   plan: { type: String, enum: ["Free", "Pro"], default: "Free" },
-  subscriptionStatus: { type: String, enum: ["active", "canceled"], default: "active" },
+  subscriptionStatus: {
+    type: String,
+    enum: ["active", "canceled"],
+    default: "active",
+  },
 
   aiUsage: {
     openAiCost: { type: Number, default: 0 },
@@ -241,7 +291,19 @@ const UserSchema = new Schema<IUser>({
     totalCost: { type: Number, default: 0 },
   },
 
+  // 🔹 AI Dialer usage – completely separate from regular CRM usage.
+  aiDialerUsage: {
+    vendorCost: { type: Number, default: 0 },
+    billedMinutes: { type: Number, default: 0 },
+    billedAmount: { type: Number, default: 0 },
+    lastChargedAt: { type: Date, default: null },
+  },
+
+  aiDialerBalance: { type: Number, default: 0 },
+  aiDialerLastTopUpAt: { type: Date, default: null },
+
   usageBalance: { type: Number, default: 0 },
+
   notifications: {
     emailReminders: { type: Boolean, default: true },
     dripAlerts: { type: Boolean, default: true },
@@ -262,7 +324,11 @@ const UserSchema = new Schema<IUser>({
   },
 
   twilio: { accountSid: String, apiKeySid: String, apiKeySecret: String },
-  billingMode: { type: String, enum: ["platform", "self"], default: "platform" },
+  billingMode: {
+    type: String,
+    enum: ["platform", "self"],
+    default: "platform",
+  },
 
   numbersLastSyncedAt: Date,
 
@@ -270,10 +336,22 @@ const UserSchema = new Schema<IUser>({
 });
 
 UserSchema.index({ email: 1 }, { name: "user_email_idx" });
-UserSchema.index({ "numbers.phoneNumber": 1 }, { name: "user_numbers_phone_idx" });
-UserSchema.index({ "numbers.messagingServiceSid": 1 }, { name: "user_numbers_msid_idx", sparse: true });
-UserSchema.index({ "a2p.messagingServiceSid": 1 }, { name: "user_a2p_msid_idx", sparse: true });
-UserSchema.index({ "dialProgress.key": 1 }, { name: "user_dial_progress_key_idx", sparse: true });
+UserSchema.index(
+  { "numbers.phoneNumber": 1 },
+  { name: "user_numbers_phone_idx" },
+);
+UserSchema.index(
+  { "numbers.messagingServiceSid": 1 },
+  { name: "user_numbers_msid_idx", sparse: true },
+);
+UserSchema.index(
+  { "a2p.messagingServiceSid": 1 },
+  { name: "user_a2p_msid_idx", sparse: true },
+);
+UserSchema.index(
+  { "dialProgress.key": 1 },
+  { name: "user_dial_progress_key_idx", sparse: true },
+);
 
 const User =
   (mongoose.models.User as mongoose.Model<IUser>) ||

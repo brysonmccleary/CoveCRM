@@ -60,35 +60,51 @@ const SCRIPT_OPTIONS = [
     description: "Final expense, social security anchor, and simple close.",
   },
   {
+    key: "iul_leads",
+    label: "IUL Script",
+    description: "Indexed UL positioning, cash value benefits, and close.",
+  },
+  {
     key: "veteran_leads",
     label: "Veteran Leads Script",
     description: "Veteran program positioning and benefits-focused script.",
   },
+  {
+    key: "trucker_leads",
+    label: "Trucker Leads Script",
+    description: "CDL / trucker lead script tailored to over-the-road drivers.",
+  },
 ];
 
-// Hardcoded voice options for now (later: AIAgentVoiceProfile)
+/**
+ * Hardcoded voice personas for now (later: AIAgentVoiceProfile)
+ *
+ * Keys here must match:
+ *  - pages/api/ai-calls/context.ts → VOICE_PROFILES
+ *  - pages/api/ai-calls/session.ts PostBody.voiceKey docs
+ */
 const VOICE_OPTIONS = [
   {
-    key: "calm_male",
-    label: "Calm Male",
-    providerVoiceId: "openai_calm_male_1",
+    key: "jacob",
+    label: "Jacob (Male)",
+    providerVoiceId: "cedar",
   },
   {
-    key: "high_energy_female",
-    label: "High Energy Female",
-    providerVoiceId: "openai_high_energy_female_1",
+    key: "iris",
+    label: "Iris (Female)",
+    providerVoiceId: "marin",
   },
   {
-    key: "neutral_conversational",
-    label: "Neutral Conversational",
-    providerVoiceId: "openai_neutral_1",
+    key: "kayla",
+    label: "Kayla (Female)",
+    providerVoiceId: "shimmer",
+  },
+  {
+    key: "elena",
+    label: "Elena (Female)",
+    providerVoiceId: "alloy",
   },
 ];
-
-// Reusable select style to match the regular dialer "white outlined" look
-const selectClass =
-  "w-full px-3 py-2 rounded border border-slate-200 bg-slate-900 text-sm text-slate-100 " +
-  "focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-400";
 
 export default function AIDialSessionPage() {
   const router = useRouter();
@@ -108,6 +124,15 @@ export default function AIDialSessionPage() {
   const [sessionError, setSessionError] = useState<string | null>(null);
   const [lastSession, setLastSession] = useState<AICallSession | null>(null);
 
+  // 🔹 AI Dialer billing state (separate from SMS AI)
+  const [aiBillingLoading, setAiBillingLoading] = useState(true);
+  const [aiBillingError, setAiBillingError] = useState<string | null>(null);
+  const [hasAiDialer, setHasAiDialer] = useState(false);
+  // minutes still tracked internally if we ever want it, just not shown
+  const [aiMinutesRemaining, setAiMinutesRemaining] = useState<number | null>(
+    null,
+  );
+
   // Active = anything still in play (queued / running / paused)
   const activeSession = useMemo(
     () =>
@@ -117,20 +142,18 @@ export default function AIDialSessionPage() {
         lastSession.status === "paused")
         ? lastSession
         : null,
-    [lastSession]
+    [lastSession],
   );
 
   const selectedFolderName = useMemo(
     () => folders.find((f) => f._id === selectedFolderId)?.name || "",
-    [folders, selectedFolderId]
+    [folders, selectedFolderId],
   );
 
   const currentScript = SCRIPT_OPTIONS.find(
-    (s) => s.key === selectedScriptKey
+    (s) => s.key === selectedScriptKey,
   );
-  const currentVoice = VOICE_OPTIONS.find(
-    (v) => v.key === selectedVoiceKey
-  );
+  const currentVoice = VOICE_OPTIONS.find((v) => v.key === selectedVoiceKey);
   const stats = lastSession?.stats || {};
 
   /** Load folders (same source as leads page) */
@@ -185,6 +208,35 @@ export default function AIDialSessionPage() {
     fetchNumbers();
   }, []);
 
+  /** Load AI Dialer billing status (separate from SMS AI) */
+  useEffect(() => {
+    const loadBilling = async () => {
+      try {
+        setAiBillingLoading(true);
+        setAiBillingError(null);
+        const res = await fetch("/api/ai-calls/billing-status");
+        const data = await res.json();
+        if (!res.ok || !data?.ok) {
+          throw new Error(data?.error || "Failed to load AI Dialer status");
+        }
+        setHasAiDialer(Boolean(data.hasAiDialer));
+        setAiMinutesRemaining(
+          typeof data.minutesRemaining === "number"
+            ? data.minutesRemaining
+            : null,
+        );
+      } catch (e: any) {
+        console.error("AI Dial: billing status error", e);
+        setAiBillingError(e?.message || "Failed to load AI Dialer status");
+        setHasAiDialer(false);
+        setAiMinutesRemaining(null);
+      } finally {
+        setAiBillingLoading(false);
+      }
+    };
+    loadBilling();
+  }, []);
+
   /** Load + poll latest AI call session for selected folder */
   useEffect(() => {
     if (!selectedFolderId) {
@@ -200,8 +252,8 @@ export default function AIDialSessionPage() {
       try {
         const res = await fetch(
           `/api/ai-calls/session?folderId=${encodeURIComponent(
-            selectedFolderId
-          )}`
+            selectedFolderId,
+          )}`,
         );
         const data = await res.json();
         if (!res.ok || !data?.ok) {
@@ -246,15 +298,23 @@ export default function AIDialSessionPage() {
     !!selectedVoiceKey &&
     !!selectedFromNumber;
 
+  const aiDialerLocked = !hasAiDialer;
+
   /** Start a brand new AI dial session for the selected folder (mode: fresh) */
   const handleStartSession = async () => {
+    if (aiDialerLocked) {
+      alert(
+        "AI Dialer is locked. Add AI Dialer minutes in Settings → Billing before starting.",
+      );
+      return;
+    }
     if (!canConfigure) {
       alert("Choose a folder, script, voice, and number first.");
       return;
     }
     if (activeSession) {
       alert(
-        "You already have an AI dial session in progress for this folder. End it first."
+        "You already have an AI dial session in progress for this folder. End it first.",
       );
       return;
     }
@@ -298,6 +358,12 @@ export default function AIDialSessionPage() {
 
   /** Resume AI dial session (keep lastIndex, mark as queued) */
   const handleResumeSession = async () => {
+    if (aiDialerLocked) {
+      alert(
+        "AI Dialer is locked. Add AI Dialer minutes in Settings → Billing before resuming.",
+      );
+      return;
+    }
     if (!canConfigure) {
       alert("Choose a folder, script, voice, and number first.");
       return;
@@ -351,7 +417,7 @@ export default function AIDialSessionPage() {
   const handleEndSession = async () => {
     if (!activeSession) return;
     const confirmEnd = window.confirm(
-      "End the current AI dial session? The AI will stop calling new leads in this folder."
+      "End the current AI dial session? The AI will stop calling new leads in this folder.",
     );
     if (!confirmEnd) return;
 
@@ -396,12 +462,57 @@ export default function AIDialSessionPage() {
               ← Back to Dashboard
             </button>
             <button
-              onClick={() => router.push("/leads").catch(() => {})}
+              onClick={() =>
+                router.push("/dashboard?tab=leads").catch(() => {})
+              }
               className="px-3 py-1 rounded bg-gray-700 hover:bg-gray-600"
             >
               Lead Folders
             </button>
           </div>
+        </div>
+
+        {/* AI Dialer upgrade banner */}
+        <div className="mb-4">
+          {aiBillingLoading ? (
+            <div className="p-3 rounded bg-slate-800 border border-slate-600 text-sm">
+              Checking AI Dialer status…
+            </div>
+          ) : aiBillingError ? (
+            <div className="p-3 rounded bg-red-900/40 border border-red-500 text-sm">
+              {aiBillingError}
+            </div>
+          ) : aiDialerLocked ? (
+            <div className="p-3 rounded bg-slate-900 border border-yellow-500 text-sm">
+              <div className="font-semibold mb-1">
+                AI Dialer Add-on Required
+              </div>
+              <p className="text-xs text-gray-200">
+                The AI dialer runs on advanced AI voice calls and is billed
+                separately from your normal dialer usage.
+                <br />
+                Add the <span className="font-semibold">AI Dialer</span> add-on
+                in <span className="font-semibold">Settings → Billing</span> to
+                unlock this page.
+                <br />
+                Each $20 top-up gives you ~{" "}
+                <span className="font-semibold">133 minutes</span> at{" "}
+                <span className="font-semibold">$0.15/min</span> (~$9/hour).
+              </p>
+            </div>
+          ) : (
+            <div className="p-3 rounded bg-emerald-900/40 border border-emerald-500 text-sm">
+              <div className="font-semibold mb-1">AI Dialer Enabled</div>
+              <p className="text-xs text-gray-100">
+                AI Dialer runs completely separate from your manual dialer
+                usage. We bill{" "}
+                <span className="font-semibold">
+                  $20 automatically for every 133 minutes
+                </span>{" "}
+                of AI dialing.
+              </p>
+            </div>
+          )}
         </div>
 
         {error && (
@@ -430,7 +541,7 @@ export default function AIDialSessionPage() {
               <select
                 value={selectedFolderId}
                 onChange={(e) => setSelectedFolderId(e.target.value)}
-                className={selectClass}
+                className="w-full p-2 rounded text-black border border-gray-400 bg-white"
               >
                 <option value="">-- Select a folder --</option>
                 {folders.map((f) => (
@@ -462,7 +573,7 @@ export default function AIDialSessionPage() {
               <select
                 value={selectedFromNumber}
                 onChange={(e) => setSelectedFromNumber(e.target.value)}
-                className={selectClass}
+                className="w-full p-2 rounded text-black border border-gray-400 bg-white"
               >
                 <option value="">-- Select a number --</option>
                 {numbers.map((n) => (
@@ -487,7 +598,7 @@ export default function AIDialSessionPage() {
             <select
               value={selectedScriptKey}
               onChange={(e) => setSelectedScriptKey(e.target.value)}
-              className={selectClass}
+              className="w-full p-2 rounded text-black border border-gray-400 bg-white"
             >
               <option value="">-- Select a script --</option>
               {SCRIPT_OPTIONS.map((s) => (
@@ -509,7 +620,7 @@ export default function AIDialSessionPage() {
             <select
               value={selectedVoiceKey}
               onChange={(e) => setSelectedVoiceKey(e.target.value)}
-              className={selectClass}
+              className="w-full p-2 rounded text-black border border-gray-400 bg-white"
             >
               <option value="">-- Select a voice --</option>
               {VOICE_OPTIONS.map((v) => (
@@ -520,10 +631,8 @@ export default function AIDialSessionPage() {
             </select>
             {currentVoice && (
               <p className="mt-2 text-xs text-gray-300">
-                Engine voice ID:{" "}
-                <span className="font-mono text-[11px]">
-                  {currentVoice.providerVoiceId}
-                </span>
+                Voice preset:{" "}
+                <span className="font-semibold">{currentVoice.label}</span>
               </p>
             )}
           </div>
@@ -539,14 +648,28 @@ export default function AIDialSessionPage() {
                 anywhere in CoveCRM while it calls leads from the selected
                 folder.
               </p>
+              {aiDialerLocked && !aiBillingLoading && (
+                <p className="mt-1 text-xs text-yellow-300">
+                  AI Dialer is currently locked. Add minutes in Settings →
+                  Billing to enable these controls.
+                </p>
+              )}
             </div>
 
             <div className="flex flex-wrap gap-2">
               <button
                 onClick={handleStartSession}
-                disabled={!canConfigure || !!activeSession || sessionLoading}
+                disabled={
+                  aiDialerLocked ||
+                  !canConfigure ||
+                  !!activeSession ||
+                  sessionLoading
+                }
                 className={`px-4 py-2 rounded text-white ${
-                  !canConfigure || !!activeSession || sessionLoading
+                  aiDialerLocked ||
+                  !canConfigure ||
+                  !!activeSession ||
+                  sessionLoading
                     ? "bg-gray-600 cursor-not-allowed"
                     : "bg-emerald-600 hover:bg-emerald-700"
                 }`}
@@ -557,9 +680,14 @@ export default function AIDialSessionPage() {
               <button
                 onClick={handleResumeSession}
                 disabled={
-                  !canConfigure || !lastSession || !!activeSession || sessionLoading
+                  aiDialerLocked ||
+                  !canConfigure ||
+                  !lastSession ||
+                  !!activeSession ||
+                  sessionLoading
                 }
                 className={`px-4 py-2 rounded text-white ${
+                  aiDialerLocked ||
                   !canConfigure ||
                   !lastSession ||
                   !!activeSession ||
@@ -666,6 +794,10 @@ export default function AIDialSessionPage() {
               <code>AIAgentScript</code> and{" "}
               <code>AIAgentVoiceProfile</code> instead of the hardcoded lists
               here.
+            </li>
+            <li>
+              AI Dialer billing is separate from your manual dialer usage and
+              uses a prepaid minute balance.
             </li>
           </ul>
         </div>

@@ -10,6 +10,16 @@ export type AICallSessionStatus =
   | "failed"
   | "error";
 
+export interface IAICallSessionStats {
+  completed: number;
+  booked: number;
+  not_interested: number;
+  no_answer: number;
+  callback: number;
+  do_not_call: number;
+  disconnected: number;
+}
+
 export interface IAICallSession extends Document {
   userEmail: string;
   userId?: mongoose.Types.ObjectId | null; // optional for now
@@ -24,6 +34,7 @@ export interface IAICallSession extends Document {
   startedAt?: Date | null;
   completedAt?: Date | null;
   errorMessage?: string | null;
+  stats?: IAICallSessionStats;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -68,6 +79,17 @@ const AICallSessionSchema = new Schema<IAICallSession>(
     startedAt: { type: Date, default: null },
     completedAt: { type: Date, default: null },
     errorMessage: { type: String, default: null },
+
+    // AI dialer stats (per session)
+    stats: {
+      completed: { type: Number, default: 0 },
+      booked: { type: Number, default: 0 },
+      not_interested: { type: Number, default: 0 },
+      no_answer: { type: Number, default: 0 },
+      callback: { type: Number, default: 0 },
+      do_not_call: { type: Number, default: 0 },
+      disconnected: { type: Number, default: 0 },
+    },
   },
   {
     timestamps: true,

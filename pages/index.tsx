@@ -51,32 +51,122 @@ export default function Home() {
           <p className="text-sm mt-4 opacity-70">7-day free trial</p>
         </section>
 
-        {/* Features Section */}
-        <section className="py-20 px-6 max-w-6xl mx-auto">
-          <h2 className="text-3xl font-bold text-center mb-12">
-            Everything you need to sell more policies
-          </h2>
-          <div className="grid md:grid-cols-3 gap-10">
+        {/* Features + Flagship AI Section */}
+        <section className="py-20 px-6 max-w-6xl mx-auto space-y-10">
+          <div className="text-center mb-4">
+            <h2 className="text-3xl font-bold mb-2">
+              Everything you need to sell more policies
+            </h2>
+            <p className="text-sm md:text-base text-gray-600 max-w-2xl mx-auto">
+              A modern command center for high-performing agents — combining a
+              full CRM with intelligent calling and texting that works for you
+              around the clock.
+            </p>
+          </div>
+
+          {/* Flagship: AI Dialer */}
+          <div className="bg-[#020617] text-white rounded-3xl px-8 py-10 md:px-12 md:py-12 shadow-xl flex flex-col md:flex-row items-start md:items-center justify-between gap-8">
+            <div className="max-w-xl">
+              <p className="text-xs tracking-[0.2em] uppercase text-gray-400 mb-3">
+                Flagship Feature
+              </p>
+              <h3 className="text-2xl md:text-3xl font-bold mb-4">
+                AI Dialer – Your 24/7 Appointment Setter
+              </h3>
+              <p className="text-sm md:text-base text-gray-200 mb-5 leading-relaxed">
+                A fully autonomous calling agent that dials your leads, is
+                trained on proven insurance scripts, rebuttals, and overcoming
+                objections, and books real appointments directly on your
+                calendar — all while you focus on closing.
+              </p>
+              <ul className="text-xs md:text-sm text-gray-300 space-y-2">
+                <li>• Calls through your existing Cove numbers.</li>
+                <li>
+                  • Uses your lead types to stay on-message for mortgage
+                  protection, final expense, and more.
+                </li>
+                <li>
+                  • Books appointments into your real Google Calendar in the
+                  correct time zone.
+                </li>
+                <li>
+                  • Runs quietly in the background while you work, travel, or
+                  take the day off.
+                </li>
+              </ul>
+            </div>
+
+            <div className="border border-gray-700/70 rounded-2xl px-6 py-5 text-xs md:text-sm text-gray-200 max-w-xs self-stretch flex flex-col justify-between">
+              <div>
+                <p className="text-[10px] tracking-[0.25em] uppercase text-gray-400 mb-2 text-center">
+                  Automated Calling Engine
+                </p>
+                <p className="text-center leading-relaxed">
+                  Turn entire folders of leads into booked appointments without
+                  manually dialing a single number.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Flagship: AI SMS Assistant */}
+          <div className="bg-[#020617] text-white rounded-3xl px-8 py-10 md:px-12 md:py-12 shadow-xl flex flex-col md:flex-row items-start md:items-center justify-between gap-8">
+            <div className="max-w-xl">
+              <p className="text-xs tracking-[0.2em] uppercase text-gray-400 mb-3">
+                Flagship Feature
+              </p>
+              <h3 className="text-2xl md:text-3xl font-bold mb-4">
+                AI SMS Assistant – Always-On Follow-Up
+              </h3>
+              <p className="text-sm md:text-base text-gray-200 mb-5 leading-relaxed">
+                Your built-in texting assistant that nurtures leads, chases
+                no-shows, and reschedules missed appointments — all using
+                tested, compliant scripts tailored for life insurance.
+              </p>
+              <ul className="text-xs md:text-sm text-gray-300 space-y-2">
+                <li>• 2-way conversations in your existing SMS inbox.</li>
+                <li>
+                  • Plays the long game with proven drips for every lead type.
+                </li>
+                <li>
+                  • Automatically follows up with no-shows and missed
+                  appointments.
+                </li>
+                <li>• Keeps everything documented inside Cove conversations.</li>
+              </ul>
+            </div>
+
+            <div className="border border-gray-700/70 rounded-2xl px-6 py-5 text-xs md:text-sm text-gray-200 max-w-xs self-stretch flex flex-col justify-between">
+              <div>
+                <p className="text-[10px] tracking-[0.25em] uppercase text-gray-400 mb-2 text-center">
+                  Intelligent Follow-Up
+                </p>
+                <p className="text-center leading-relaxed">
+                  Make sure every lead is contacted, followed up with, and
+                  rescheduled — without adding more to your daily to-do list.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Core CRM Features Grid */}
+          <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
             {[
               [
                 "Power Dialer",
-                "Call leads from any number with automatic logging.",
+                "Call leads from any number with automatic logging and simple one-click controls.",
               ],
               [
                 "2-Way SMS Inbox",
-                "Text back and forth with leads in real time. Full conversation tracking included.",
-              ],
-              [
-                "AI Follow-Up Bot",
-                "Automatically follow up with unresponsive leads and book appointments for you.",
+                "Text back and forth with leads in real time. Every conversation is tracked in one place.",
               ],
               [
                 "Google Calendar Sync",
-                "Appointments sync instantly with your real calendar, two-way.",
+                "Appointments sync instantly with your real calendar, two-way, so your schedule is always accurate.",
               ],
               [
                 "Lead Import + Smart Folders",
-                "Upload from CSV or Google Sheets. Automatically categorize leads by type.",
+                "Upload from CSV or Google Sheets and automatically organize leads by type and source.",
               ],
               [
                 "Built-In Affiliate Program",
@@ -97,10 +187,12 @@ export default function Home() {
             ].map(([title, description], i) => (
               <div
                 key={i}
-                className="border rounded-xl p-6 shadow-sm hover:shadow-md transition cursor-pointer"
+                className="border rounded-xl p-6 shadow-sm hover:shadow-md transition cursor-pointer bg-white"
               >
-                <h3 className="font-bold text-xl mb-2">{title}</h3>
-                <p className="text-gray-600 text-sm">{description}</p>
+                <h3 className="font-bold text-lg mb-2">{title}</h3>
+                <p className="text-gray-600 text-sm leading-relaxed">
+                  {description}
+                </p>
               </div>
             ))}
           </div>
@@ -114,7 +206,9 @@ export default function Home() {
           <div className="max-w-3xl mx-auto bg-white rounded-2xl shadow-lg p-10">
             <h3 className="text-2xl font-bold mb-2">CRM Cove</h3>
             <p className="text-4xl font-bold mb-2">$199.99/mo</p>
-            <p className="text-sm text-gray-500 mb-4">+ tax & call/SMS usage</p>
+            <p className="text-sm text-gray-500 mb-4">
+              + tax &amp; call/SMS usage
+            </p>
             <ul className="text-left text-gray-700 mb-6">
               <li className="mb-2">✔ Unlimited users per account</li>
               <li className="mb-2">

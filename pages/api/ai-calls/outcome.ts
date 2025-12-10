@@ -80,21 +80,25 @@ export default async function handler(
     }
 
     // ───────────────────────── Normalize outcome ─────────────────────────
+    const allowed: AllowedOutcome[] = [
+      "unknown",
+      "booked",
+      "not_interested",
+      "no_answer",
+      "callback",
+      "do_not_call",
+      "disconnected",
+    ];
+
+    const prevOutcome: AllowedOutcome = rec.outcome || "unknown";
     let normalizedOutcome: AllowedOutcome | undefined = undefined;
-    if (outcome) {
-      const allowed: AllowedOutcome[] = [
-        "unknown",
-        "booked",
-        "not_interested",
-        "no_answer",
-        "callback",
-        "do_not_call",
-        "disconnected",
-      ];
-      if (allowed.includes(outcome)) {
-        normalizedOutcome = outcome;
-      }
+
+    if (outcome && allowed.includes(outcome)) {
+      normalizedOutcome = outcome;
     }
+
+    const nextOutcome: AllowedOutcome =
+      normalizedOutcome ?? prevOutcome ?? "unknown";
 
     // Update recording fields
     if (normalizedOutcome) {
@@ -111,17 +115,38 @@ export default async function handler(
     rec.updatedAt = new Date();
     await rec.save();
 
-    // ───────────────────────── Session stats (AI-only) ─────────────────────────
-    if (aiCallSessionId && normalizedOutcome) {
-      const statsUpdate: any = { $set: { updatedAt: new Date() } };
-      if (!statsUpdate.$inc) statsUpdate.$inc = {};
-      statsUpdate.$inc["stats.completed"] = 1;
-      statsUpdate.$inc[`stats.${normalizedOutcome}`] = 1;
+    // ───────────────────────── Session stats (AI-only, idempotent) ─────────────────────────
+    if (aiCallSessionId && normalizedOutcome && userEmail) {
+      const now = new Date();
+      const inc: Record<string, number> = {};
+      const set: Record<string, any> = { updatedAt: now };
 
-      await AICallSession.findByIdAndUpdate(
-        aiCallSessionId,
-        statsUpdate
-      ).exec();
+      if (prevOutcome !== nextOutcome) {
+        // Adjust per-outcome counters
+        if (prevOutcome !== "unknown") {
+          inc[`stats.${prevOutcome}`] = (inc[`stats.${prevOutcome}`] || 0) - 1;
+        }
+        if (nextOutcome !== "unknown") {
+          inc[`stats.${nextOutcome}`] = (inc[`stats.${nextOutcome}`] || 0) + 1;
+        }
+
+        // Completed only tracks leads where we have a *final* outcome
+        if (prevOutcome === "unknown" && nextOutcome !== "unknown") {
+          inc["stats.completed"] = (inc["stats.completed"] || 0) + 1;
+        } else if (prevOutcome !== "unknown" && nextOutcome === "unknown") {
+          inc["stats.completed"] = (inc["stats.completed"] || 0) - 1;
+        }
+      }
+
+      if (Object.keys(inc).length > 0) {
+        await AICallSession.updateOne(
+          { _id: aiCallSessionId, userEmail },
+          {
+            $inc: inc,
+            $set: set,
+          }
+        ).exec();
+      }
     }
 
     // ───────────────────────── Move lead to resolution folder ─────────────────────────
@@ -135,12 +160,12 @@ export default async function handler(
     let moved = false;
     let targetFolderId: Types.ObjectId | null = null;
 
-    if (userEmail && leadId && normalizedOutcome) {
+    if (userEmail && leadId && nextOutcome) {
       let systemFolderName: string | null = null;
 
-      if (normalizedOutcome === "booked") {
+      if (nextOutcome === "booked") {
         systemFolderName = "Booked Appointment";
-      } else if (normalizedOutcome === "not_interested") {
+      } else if (nextOutcome === "not_interested") {
         systemFolderName = "Not Interested";
       }
 
@@ -179,6 +204,65 @@ export default async function handler(
         ).exec();
 
         moved = !!updateResult.modifiedCount;
+      }
+    }
+
+    // ───────────────────────── Timeline / notes on Lead ─────────────────────────
+    if (userEmail && leadId) {
+      try {
+        const now = new Date();
+        const outcomeLabel = nextOutcome || "unknown";
+        const baseMsg = `🤖 AI Dialer outcome: ${outcomeLabel.replace(
+          "_",
+          " "
+        )}`;
+        const extra =
+          typeof summary === "string" && summary.trim().length > 0
+            ? ` – ${summary.trim()}`
+            : "";
+        const message = baseMsg + extra;
+
+        const historyEntry = {
+          type: "ai_outcome",
+          message,
+          timestamp: now,
+          userEmail,
+          meta: {
+            outcome: outcomeLabel,
+            callSid,
+            recordingId: rec._id,
+          },
+        };
+
+        // Append to CRM history + optionally persist notesAppend into Notes/notes fields
+        const leadUpdate: any = {
+          $push: { history: historyEntry },
+          $set: { updatedAt: now },
+        };
+
+        if (typeof notesAppend === "string" && notesAppend.trim().length > 0) {
+          const notesField = notesAppend.trim();
+          // Preserve both "Notes" and "notes" shapes for compatibility
+          leadUpdate.$set["Notes"] = notesField;
+          leadUpdate.$set["notes"] = notesField;
+        }
+
+        await Lead.updateOne(
+          {
+            _id: leadId,
+            $or: [
+              { userEmail: userEmail },
+              { ownerEmail: userEmail },
+              { user: userEmail },
+            ],
+          },
+          leadUpdate
+        ).exec();
+      } catch (err) {
+        console.warn(
+          "[ai-calls/outcome] Failed to append AI outcome to lead history (non-blocking):",
+          (err as any)?.message || err
+        );
       }
     }
 

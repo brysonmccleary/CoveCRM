@@ -99,11 +99,10 @@ export default async function handler(
   try {
     const CallSid = params.get("CallSid") || "";
     const RecordingSid = params.get("RecordingSid") || "";
-    const RecordingStatus = (params.get("RecordingStatus") || "").toLowerCase(); // completed | ...
+    const RecordingStatus = (params.get("RecordingStatus") || "").toLowerCase();
     const RecordingUrlRaw = params.get("RecordingUrl") || "";
     const RecordingDurationStr = params.get("RecordingDuration") || "";
     const Timestamp = params.get("Timestamp") || undefined;
-    const CallStatus = params.get("CallStatus") || "";
 
     const recordingUrl = RecordingUrlRaw
       ? RecordingUrlRaw.endsWith(".mp3") || RecordingUrlRaw.endsWith(".wav")
@@ -149,18 +148,17 @@ export default async function handler(
       updatedAt: now,
     };
 
-    // Build Twilio meta notes suffix
     const metaBits: string[] = [];
-    if (CallStatus) metaBits.push(`callStatus=${CallStatus}`);
     if (RecordingStatus) metaBits.push(`recordingStatus=${RecordingStatus}`);
     if (typeof durationSec === "number")
       metaBits.push(`durationSec=${durationSec}`);
     const notesSuffix =
       metaBits.length > 0 ? `Twilio: ${metaBits.join(", ")}` : null;
 
-    // If we don't have a row yet, create one
+    let finalRecordingDoc: any = null;
+
     if (!existing) {
-      await AICallRecording.create({
+      finalRecordingDoc = await AICallRecording.create({
         userEmail: userEmail || undefined,
         leadId: leadObjectId,
         aiCallSessionId: aiSession?._id,
@@ -174,9 +172,6 @@ export default async function handler(
         createdAt: now,
         updatedAt: now,
       });
-
-      // Optionally: mark session as completed when everything is done.
-      // For now we leave session state management to the worker.
     } else {
       const newNotes =
         notesSuffix && notesSuffix.length
@@ -198,11 +193,19 @@ export default async function handler(
           },
         }
       );
+
+      finalRecordingDoc = {
+        ...existing.toObject(),
+        ...baseSet,
+        notes: newNotes,
+      };
     }
 
-    // We do NOT attempt to guess outcome here; that can be done later via AI summary.
+    // NOTE: No billing here anymore — billing is handled in call-status-webhook
+    // based on full call duration, not just recording duration.
+
     if (RecordingStatus === "completed") {
-      // Hook point for future: enqueue AI summarizer to update outcome + summary
+      // Future: enqueue AI summarizer to update outcome + summary
     }
 
     res.status(200).end();

@@ -2,9 +2,11 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import dbConnect from "@/lib/dbConnect";
 import AICallSession from "@/models/AICallSession";
+import AICallRecording from "@/models/AICallRecording";
 import Lead from "@/models/Lead";
 import User from "@/models/User";
 import { google } from "googleapis";
+import { Types } from "mongoose";
 
 const AI_DIALER_CRON_KEY = process.env.AI_DIALER_CRON_KEY;
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID!;
@@ -16,10 +18,10 @@ type BookAppointmentRequest = {
   leadId: string;
   startTimeUtc: string; // ISO string in UTC
   durationMinutes: number;
-  leadTimeZone: string;  // e.g. "America/Chicago"
+  leadTimeZone: string; // e.g. "America/Chicago"
   agentTimeZone: string; // e.g. "America/Phoenix"
   notes?: string;
-  source?: string;       // e.g. "ai-dialer"
+  source?: string; // e.g. "ai-dialer"
 };
 
 type BookAppointmentResponse = {
@@ -44,7 +46,9 @@ export default async function handler(
 
   try {
     // ─────────────────────── Auth via secret key ───────────────────────
-    const key = (req.query.key as string) || (req.headers["x-ai-dialer-key"] as string);
+    const key =
+      (req.query.key as string) ||
+      (req.headers["x-ai-dialer-key"] as string);
     if (!AI_DIALER_CRON_KEY || key !== AI_DIALER_CRON_KEY) {
       return res.status(401).json({ ok: false, error: "Unauthorized" });
     }
@@ -87,14 +91,17 @@ export default async function handler(
     // ─────────────────────── Multi-tenant safety ───────────────────────
     const session = await AICallSession.findById(aiCallSessionId);
     if (!session) {
-      return res.status(404).json({ ok: false, error: "AI call session not found" });
+      return res
+        .status(404)
+        .json({ ok: false, error: "AI call session not found" });
     }
 
     const userEmail: string | undefined = session.userEmail;
     if (!userEmail) {
-      return res
-        .status(500)
-        .json({ ok: false, error: "AI call session missing userEmail" });
+      return res.status(500).json({
+        ok: false,
+        error: "AI call session missing userEmail",
+      });
     }
 
     const lead = await Lead.findOne({
@@ -111,7 +118,9 @@ export default async function handler(
 
     const user: any = await User.findOne({ email: userEmail });
     if (!user) {
-      return res.status(404).json({ ok: false, error: "User not found" });
+      return res
+        .status(404)
+        .json({ ok: false, error: "User not found" });
     }
 
     const refreshToken =
@@ -199,6 +208,96 @@ export default async function handler(
     });
 
     const eventData = event.data;
+
+    // ─────────────────────── Attach booking → Lead history ───────────────────────
+    try {
+      const startLocal = new Date(startUtcDate.toISOString());
+      const nice = startLocal.toLocaleString("en-US", {
+        dateStyle: "medium",
+        timeStyle: "short",
+        timeZone: agentTz,
+      });
+
+      // last10-style helper (kept local to this file)
+      const phoneDigits = String(phoneRaw || "").replace(/\D+/g, "");
+      const phoneLast10 =
+        phoneDigits.length >= 10 ? phoneDigits.slice(-10) : undefined;
+
+      const historyEntry = {
+        type: "booking",
+        message: `🤖 AI Dialer • ${summary} • ${nice}`,
+        timestamp: startLocal,
+        userEmail,
+        meta: {
+          eventId: eventData.id,
+          calendarId,
+          startsAt: startUtcDate.toISOString(),
+          endsAt: endUtcDate.toISOString(),
+          timeZone: agentTz,
+          source: source || "ai-dialer",
+        },
+      };
+
+      const update: any = {
+        $set: {
+          calendarEventId: eventData.id,
+          updatedAt: new Date(),
+        },
+        $push: {
+          history: historyEntry,
+        },
+      };
+
+      if (phoneLast10 && !(lead as any).phoneLast10) {
+        update.$set.phoneLast10 = phoneLast10;
+      }
+
+      await Lead.updateOne(
+        {
+          _id: lead._id,
+          $or: [
+            { userEmail },
+            { ownerEmail: userEmail },
+            { user: userEmail },
+          ],
+        },
+        update
+      ).exec();
+
+      // ─────────────────────── Optionally annotate AICallRecording ───────────────────────
+      try {
+        const sessionObjectId = Types.ObjectId.isValid(aiCallSessionId)
+          ? new Types.ObjectId(aiCallSessionId)
+          : null;
+
+        if (sessionObjectId) {
+          const rec = await AICallRecording.findOne({
+            aiCallSessionId: sessionObjectId,
+            leadId: lead._id,
+          })
+            .sort({ createdAt: -1 })
+            .exec();
+
+          if (rec) {
+            const bookingNote = `Appointment booked for ${nice} (${agentTz}) via AI Dialer.`;
+            rec.notes = rec.notes
+              ? `${rec.notes}\n${bookingNote}`
+              : bookingNote;
+            await rec.save();
+          }
+        }
+      } catch (err) {
+        console.warn(
+          "[AI-CALLS][BOOK-APPOINTMENT] Failed to annotate AICallRecording (non-blocking):",
+          (err as any)?.message || err
+        );
+      }
+    } catch (err) {
+      console.warn(
+        "[AI-CALLS][BOOK-APPOINTMENT] Failed to attach booking to lead history (non-blocking):",
+        (err as any)?.message || err
+      );
+    }
 
     // ─────────────────────── Timezone formatting for AI voice ───────────────────────
     const startTimeAgentTz = convertUtcToTimeZone(startUtcDate, agentTz);
