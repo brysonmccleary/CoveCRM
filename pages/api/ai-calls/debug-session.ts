@@ -9,7 +9,13 @@ export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse
 ) {
-  const session = await getServerSession(req, res, authOptions as any);
+  // Typed session so TypeScript knows about session.user.email
+  const session = (await getServerSession(
+    req,
+    res,
+    authOptions as any
+  )) as { user?: { email?: string | null } } | null;
+
   const userEmail = String(session?.user?.email || "").toLowerCase();
 
   if (!userEmail) {
