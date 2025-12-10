@@ -25,7 +25,13 @@ export default async function handler(
       .json({ ok: false, error: "AI Dialer access price not configured" });
 
   try {
-    const session = await getServerSession(req, res, authOptions as any);
+    // Typed session so TS knows about session.user.email
+    const session = (await getServerSession(
+      req,
+      res,
+      authOptions as any
+    )) as { user?: { email?: string | null } } | null;
+
     if (!session?.user?.email)
       return res.status(401).json({ ok: false, error: "Not authenticated" });
 
