@@ -48,7 +48,12 @@ export default async function handler(
   // but for AI sessions the worker is server-side, so this is mostly metadata.
   let userEmail: string | undefined;
   try {
-    const session = await getServerSession(req, res, authOptions as any);
+    const session = (await getServerSession(
+      req,
+      res,
+      authOptions as any
+    )) as { user?: { email?: string | null } } | null;
+
     if (session?.user?.email) {
       userEmail = String(session.user.email).toLowerCase();
     }
