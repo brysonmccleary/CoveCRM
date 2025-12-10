@@ -30,6 +30,66 @@ type PostBody = {
   voiceKey?: string;
 };
 
+// 🔹 Base URL for talking to the AI voice server (HTTP)
+// We derive it from AI_VOICE_STREAM_URL, which is used for wss:// streaming.
+// Example env:
+//   AI_VOICE_STREAM_URL = wss://ai-voice.covecrm.com
+// → AI_VOICE_HTTP_BASE = https://ai-voice.covecrm.com
+const RAW_STREAM_URL = (process.env.AI_VOICE_STREAM_URL || "").trim();
+const AI_VOICE_HTTP_BASE = RAW_STREAM_URL
+  ? RAW_STREAM_URL.replace(/^wss:/, "https:")
+      .replace(/^ws:/, "http:")
+      .replace(/\/$/, "")
+  : "";
+
+async function notifyVoiceServerStartSession(params: {
+  userEmail: string;
+  sessionId: string;
+  folderId: string;
+  total: number;
+}) {
+  if (!AI_VOICE_HTTP_BASE) {
+    console.error(
+      "[AI SESSION] AI_VOICE_STREAM_URL/AI_VOICE_HTTP_BASE not set; skipping /start-session notify."
+    );
+    return;
+  }
+
+  const url = `${AI_VOICE_HTTP_BASE}/start-session`;
+
+  try {
+    // Fire-and-forget style; we don't want to block user on this.
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(params),
+    });
+
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => "");
+      console.error("[AI SESSION] /start-session non-200 response:", {
+        status: resp.status,
+        text,
+      });
+    } else {
+      console.log("[AI SESSION] Notified voice server /start-session:", {
+        url,
+        email: params.userEmail,
+        sessionId: params.sessionId,
+        folderId: params.folderId,
+        total: params.total,
+      });
+    }
+  } catch (err: any) {
+    console.error(
+      "[AI SESSION] Error calling voice server /start-session:",
+      err?.message || err
+    );
+  }
+}
+
 function serializeSession(doc: any | null) {
   if (!doc) return null;
   const json = typeof doc.toJSON === "function" ? doc.toJSON() : doc;
@@ -76,8 +136,7 @@ function serializeSession(doc: any | null) {
       (typeof totalFromSession === "number" ? totalFromSession : 0),
     completed: rawStats.completed ?? 0,
     booked: rawStats.booked ?? 0,
-    notInterested:
-      rawStats.notInterested ?? rawStats.not_interested ?? 0,
+    notInterested: rawStats.notInterested ?? rawStats.not_interested ?? 0,
     noAnswers: rawStats.noAnswers ?? rawStats.no_answer ?? 0,
   };
 
@@ -241,6 +300,20 @@ export default async function handler(
       }
 
       await aiSession.save();
+
+      // 🔹 Immediately notify the AI voice server so it can kick the worker
+      // This is what actually starts dialing instead of leaving the session stuck at QUEUED.
+      notifyVoiceServerStartSession({
+        userEmail: email,
+        sessionId: aiSession._id.toString(),
+        folderId: fid.toString(),
+        total,
+      }).catch((err) => {
+        console.error(
+          "[AI SESSION] Unexpected error in notifyVoiceServerStartSession:",
+          err
+        );
+      });
 
       const payload = serializeSession(aiSession);
       return res.status(200).json({ ok: true, session: payload });
