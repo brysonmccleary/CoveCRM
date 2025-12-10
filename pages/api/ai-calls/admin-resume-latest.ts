@@ -37,9 +37,17 @@ export default async function handler(
       .json({ ok: false, error: "Method not allowed. Use POST." });
   }
 
-  // Try normal auth first
-  const session = await getServerSession(req, res, authOptions as any);
-  let userEmail = String(session?.user?.email || "").toLowerCase() || null;
+  // Try normal auth first (typed so TS knows session.user exists)
+  const session = (await getServerSession(
+    req,
+    res,
+    authOptions as any
+  )) as { user?: { email?: string | null } } | null;
+
+  let userEmail: string | null =
+    session?.user?.email != null
+      ? String(session.user.email).toLowerCase()
+      : null;
 
   // If no logged-in user, allow dev access via AI_DIALER_CRON_KEY (same as worker)
   if (!userEmail) {
