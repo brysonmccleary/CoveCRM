@@ -3,8 +3,10 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import { buffer } from "micro";
 import mongooseConnect from "@/lib/mongooseConnect";
 import AICallRecording from "@/models/AICallRecording";
+import AICallSession from "@/models/AICallSession";
 import User from "@/models/User";
 import { trackAiDialerUsage } from "@/lib/billing/trackAiDialerUsage";
+import { Types } from "mongoose";
 
 export const config = { api: { bodyParser: false } };
 
@@ -139,6 +141,70 @@ export default async function handler(
       console.error(
         "❌ AI Dialer billing error (non-blocking) in call-status-webhook:",
         (billErr as any)?.message || billErr
+      );
+    }
+
+    // --- SESSION COMPLETION: mark AICallSession completed when all calls done ---
+
+    try {
+      if (CallSid) {
+        const rec = await AICallRecording.findOne({ callSid: CallSid }).lean();
+
+        if (rec && rec.aiCallSessionId) {
+          const aiCallSessionId = rec.aiCallSessionId as Types.ObjectId;
+
+          const session = await AICallSession.findById(aiCallSessionId).lean();
+          if (session) {
+            const s: any = session;
+            const total: number =
+              typeof s.total === "number"
+                ? s.total
+                : Array.isArray(s.leadIds)
+                ? s.leadIds.length
+                : 0;
+
+            if (total > 0) {
+              // Count how many recordings we have for this session
+              const completedCount = await AICallRecording.countDocuments({
+                aiCallSessionId,
+              });
+
+              if (
+                completedCount >= total &&
+                s.status !== "completed"
+              ) {
+                await AICallSession.updateOne(
+                  {
+                    _id: aiCallSessionId,
+                    status: { $ne: "completed" },
+                  },
+                  {
+                    $set: {
+                      status: "completed",
+                      completedAt: new Date(),
+                      updatedAt: new Date(),
+                    },
+                  }
+                ).exec();
+
+                console.log(
+                  "[AI Dialer] Marked AI session completed from call-status-webhook",
+                  {
+                    sessionId: String(aiCallSessionId),
+                    userEmail,
+                    total,
+                    completedCount,
+                  }
+                );
+              }
+            }
+          }
+        }
+      }
+    } catch (sessionErr) {
+      console.warn(
+        "⚠️ AI Dialer session completion check failed (non-blocking):",
+        (sessionErr as any)?.message || sessionErr
       );
     }
 
