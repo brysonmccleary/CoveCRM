@@ -487,6 +487,7 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
       session: {
         instructions: systemPrompt,
         voice: state.context!.voiceProfile.openAiVoiceId || "alloy",
+        modalities: ["audio"],
         input_audio_format: "g711_ulaw",
         output_audio_format: "g711_ulaw",
         turn_detection: {
@@ -569,9 +570,12 @@ async function handleOpenAiEvent(
   if (!context) return;
 
   // 1) Audio back to Twilio (we configured OpenAI for g711_ulaw)
-  if (event.type === "response.output_audio.delta" && event.audio) {
+  if (
+    event.type === "response.output_audio.delta" &&
+    typeof event.delta === "string"
+  ) {
     try {
-      const payloadBase64 = event.audio as string; // base64 g711_ulaw
+      const payloadBase64 = event.delta as string; // base64 g711_ulaw
 
       const twilioMediaMsg = {
         event: "media",
@@ -1037,7 +1041,7 @@ TRUCKER / CDL LEADS
 - Acknowledge schedule:
   "Makes sense. I know your schedule can be all over the place, so we keep this really simple."
 - Clarify:
-  "When you requested the info, were you mainly trying to make sure final expenses are covered, or more about protecting income for the family if something happens while you’re on the road?"
+  "When you were looking into that, was the main thing you wanted to accomplish more about building tax-favored savings, protecting income for the family if something happens while you’re on the road?"
 - Framing:
   "What I do is line you up with ${agentName}, who works a lot with truck drivers. They’ll do a quick 10–15 minute call — no long presentation — just what you qualify for and what fits the budget."
 - Appointment timing:
