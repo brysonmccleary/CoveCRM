@@ -115,6 +115,14 @@ type AICallContext = {
 };
 
 /**
+ * Conversation phases for strict 2-step opener + normal mode
+ */
+type ConversationPhase =
+  | "waiting_first_response"
+  | "waiting_second_response"
+  | "normal";
+
+/**
  * Internal call state for each Twilio <Stream> connection
  */
 type CallState = {
@@ -135,6 +143,10 @@ type CallState = {
   // Debug flags (to avoid log spam)
   debugLoggedFirstMedia?: boolean;
   debugLoggedFirstOutputAudio?: boolean;
+
+  // Turn-taking state
+  phase: ConversationPhase;
+  aiSpeaking: boolean;
 };
 
 const calls = new Map<WebSocket, CallState>();
@@ -326,6 +338,9 @@ wss.on("connection", (ws: WebSocket) => {
     streamSid: "",
     callSid: "",
     pendingAudioFrames: [],
+    // NEW: start in first-phase so we enforce the 2-step opener
+    phase: "waiting_first_response",
+    aiSpeaking: false,
   };
   calls.set(ws, state);
 
@@ -383,6 +398,9 @@ async function handleStart(ws: WebSocket, msg: TwilioStartEvent) {
   state.callSid = msg.start.callSid;
   state.callStartedAtMs = Date.now();
   state.billedUsageSent = false;
+  // reset conversation state at the start of every call
+  state.phase = "waiting_first_response";
+  state.aiSpeaking = false;
 
   const custom = msg.start.customParameters || {};
   const sessionId = custom.sessionId;
@@ -562,7 +580,7 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
     //  - Jeremy-Lee-style instructions
     //  - voice
     //  - g711_ulaw audio IN, PCM16 audio OUT
-    //  - server-side VAD to detect turns and respond automatically
+    //  - server-side VAD to detect turns, but we will manually decide when to respond
     const sessionUpdate = {
       type: "session.update",
       session: {
@@ -577,7 +595,9 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
           // Slightly faster, still human-like: reacts a bit sooner
           threshold: 0.4,
           silence_duration_ms: 800,
-          create_response: true,
+          // 🔴 was true – that let the model auto-respond and ramble.
+          // 🔵 now we keep VAD but only use it as a signal; we create responses manually.
+          create_response: false,
         },
         // Hard cap so it can't monologue forever on each turn
         max_response_output_tokens: 80,
@@ -670,6 +690,7 @@ Rules for this first response:
 /**
  * Handle events coming back from OpenAI Realtime.
  *  - Stream audio deltas back to Twilio (with PCM16 → μ-law conversion)
+ *  - Detect VAD events and control turn-taking
  *  - Detect tool calls / intents for booking + outcomes
  */
 async function handleOpenAiEvent(
@@ -679,6 +700,26 @@ async function handleOpenAiEvent(
 ) {
   const { streamSid, context } = state;
   if (!context) return;
+
+  // Mark when AI is speaking for potential future use
+  if (event.type === "response.created") {
+    state.aiSpeaking = true;
+  }
+  if (event.type === "response.completed") {
+    state.aiSpeaking = false;
+  }
+
+  // VAD events: we use these to decide WHEN to respond
+  if (event.type === "input_audio_buffer.speech_started") {
+    console.log("[AI-VOICE] VAD: speech_started");
+    return;
+  }
+
+  if (event.type === "input_audio_buffer.speech_stopped") {
+    console.log("[AI-VOICE] VAD: speech_stopped; phase=", state.phase);
+    await handleUserSpeechStopped(state);
+    return;
+  }
 
   // 1) Audio back to Twilio
   //    OpenAI → PCM16 → μ-law 8k → Twilio media payload.
@@ -733,7 +774,7 @@ async function handleOpenAiEvent(
     }
   }
 
-  // 2) Text / tool calls / intents via control metadata (if you decide to use it later)
+  // 2) Text / tool calls / intents via control metadata
   try {
     const control =
       event?.control ||
@@ -760,6 +801,102 @@ async function handleOpenAiEvent(
       err?.message || err
     );
   }
+}
+
+/**
+ * When the lead finishes speaking (VAD speech_stopped), decide what the AI should
+ * say next based on the conversation phase and send a manual response.create.
+ */
+async function handleUserSpeechStopped(state: CallState) {
+  if (!state.openAiWs || !state.openAiReady || !state.context) return;
+
+  const ctx = state.context;
+  const clientName = ctx.clientFirstName || "there";
+  const aiName = ctx.voiceProfile.aiName || "Alex";
+
+  // Commit the chunk we just heard
+  try {
+    state.openAiWs.send(
+      JSON.stringify({
+        type: "input_audio_buffer.commit",
+      })
+    );
+  } catch (err: any) {
+    console.error(
+      "[AI-VOICE] Error committing buffer on speech_stopped:",
+      err?.message || err
+    );
+    return;
+  }
+
+  let instructions: string;
+  let delayMs = 500;
+
+  if (state.phase === "waiting_first_response") {
+    // We just got their answer to "can you hear me okay?"
+    instructions = `
+In this response, you must do ONLY the following in 1–2 short sentences:
+
+1) Acknowledge that they can hear you.
+2) Introduce yourself by first name.
+3) State the reason for the call.
+4) End with this question (or a very close variation):
+   "How's your day going so far?"
+
+Say something like:
+"Hey ${clientName}, perfect, I'm ${aiName} calling about the life insurance information you requested. How's your day going so far?"
+
+After you say this once, stop talking and wait silently for their response.
+`.trim();
+
+    state.phase = "waiting_second_response";
+    delayMs = 450;
+  } else if (state.phase === "waiting_second_response") {
+    // We just got their answer to "How's your day going so far?"
+    instructions = `
+In this response, you must do ONLY the following in 2–3 short sentences:
+
+1) Briefly acknowledge how their day is going.
+2) Confirm this will be quick.
+3) Ask a simple first discovery question about who the coverage would be for or what they were hoping to accomplish.
+
+Example style:
+"Gotcha, I hear that. I'll keep this really quick for you. When you sent that request in, were you mainly thinking about coverage just for yourself or for you and a spouse as well?"
+
+After you finish, stop and wait for their answer.
+`.trim();
+
+    state.phase = "normal";
+    delayMs = 550;
+  } else {
+    // Normal conversation turn: short, Q&A style
+    instructions = `
+Respond briefly to what they just said using 1–3 short sentences.
+- If appropriate, end with exactly ONE clear question about their situation or the appointment.
+- Do NOT stack multiple big steps in one turn.
+- After you finish speaking, stop and wait silently for their response.
+`.trim();
+
+    delayMs = 600;
+  }
+
+  const payload = {
+    type: "response.create",
+    response: {
+      instructions,
+    },
+  };
+
+  setTimeout(() => {
+    try {
+      state.openAiWs!.send(JSON.stringify(payload));
+    } catch (err: any) {
+      console.error(
+        "[AI-VOICE] Error sending response.create after speech_stopped:",
+        err?.message || err
+      );
+    }
+  }, delayMs);
 }
 
 /**
