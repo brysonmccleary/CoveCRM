@@ -1,4 +1,4 @@
-// /components/CallPanelClose.tsx
+// components/CallPanelClose.tsx
 import { useCallback, useEffect, useMemo, useState } from "react";
 import CallRowClose from "./CallRowClose";
 
@@ -24,7 +24,7 @@ export default function CallPanelClose({
   leadId,
   userHasAI,
   defaultFromNumber,
-  onOpenCall,   // optional navigation override
+  onOpenCall, // optional navigation override
 }: {
   leadId: string;
   userHasAI: boolean;
@@ -43,7 +43,12 @@ export default function CallPanelClose({
     setLoading(true);
     setError(null);
     try {
-      const r = await fetch(`/api/calls/by-lead?leadId=${encodeURIComponent(leadId)}&page=${page}&pageSize=${pageSize}`, { cache: "no-store" });
+      const r = await fetch(
+        `/api/calls/by-lead?leadId=${encodeURIComponent(
+          leadId
+        )}&page=${page}&pageSize=${pageSize}`,
+        { cache: "no-store" }
+      );
       const j = await r.json();
       if (!r.ok) throw new Error(j?.message || "Failed to load calls.");
       setRows(j.rows || []);
@@ -59,7 +64,10 @@ export default function CallPanelClose({
     load();
   }, [load]);
 
-  const pageCount = useMemo(() => Math.max(1, Math.ceil(total / pageSize)), [total]);
+  const pageCount = useMemo(
+    () => Math.max(1, Math.ceil(total / pageSize)),
+    [total]
+  );
 
   return (
     <div className="bg-[#0b1220] border border-white/10 rounded-xl">
@@ -102,7 +110,9 @@ export default function CallPanelClose({
       {error ? (
         <div className="p-4 text-sm text-rose-300">{error}</div>
       ) : rows.length === 0 ? (
-        <div className="p-4 text-sm text-gray-300">No calls yet for this lead.</div>
+        <div className="p-4 text-sm text-gray-300">
+          No calls yet for this lead.
+        </div>
       ) : (
         <ul className="divide-y divide-white/10">
           {rows.map((row) => (
