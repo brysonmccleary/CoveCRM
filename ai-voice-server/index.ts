@@ -141,113 +141,115 @@ const calls = new Map<WebSocket, CallState>();
 /**
  * HTTP server (for /start-session, /stop-session) + WebSocket server
  */
-const server = http.createServer(async (req: IncomingMessage, res: ServerResponse) => {
-  try {
-    const url = new URL(req.url || "/", "http://localhost");
+const server = http.createServer(
+  async (req: IncomingMessage, res: ServerResponse) => {
+    try {
+      const url = new URL(req.url || "/", "http://localhost");
 
-    if (req.method === "POST" && url.pathname === "/start-session") {
-      let body = "";
-      req.on("data", (chunk) => {
-        body += chunk;
-      });
-      req.on("end", async () => {
-        try {
-          const payload = body ? JSON.parse(body) : {};
-          const { userEmail, sessionId, folderId, total } = payload;
+      if (req.method === "POST" && url.pathname === "/start-session") {
+        let body = "";
+        req.on("data", (chunk) => {
+          body += chunk;
+        });
+        req.on("end", async () => {
+          try {
+            const payload = body ? JSON.parse(body) : {};
+            const { userEmail, sessionId, folderId, total } = payload;
 
-          console.log("[AI-VOICE] /start-session received:", {
-            userEmail,
-            sessionId,
-            folderId,
-            total,
-          });
+            console.log("[AI-VOICE] /start-session received:", {
+              userEmail,
+              sessionId,
+              folderId,
+              total,
+            });
 
-          // Optional: kick CoveCRM AI worker once so dialing starts immediately.
-          if (AI_DIALER_CRON_KEY) {
-            try {
-              const workerUrl = new URL(
-                "/api/ai-calls/worker",
-                COVECRM_BASE_URL
-              );
-              workerUrl.searchParams.set("key", AI_DIALER_CRON_KEY);
+            // Optional: kick CoveCRM AI worker once so dialing starts immediately.
+            if (AI_DIALER_CRON_KEY) {
+              try {
+                const workerUrl = new URL(
+                  "/api/ai-calls/worker",
+                  COVECRM_BASE_URL
+                );
+                workerUrl.searchParams.set("key", AI_DIALER_CRON_KEY);
 
-              await fetch(workerUrl.toString(), {
-                method: "POST",
-                headers: {
-                  "x-cron-key": AI_DIALER_CRON_KEY,
-                },
-              });
-            } catch (err: any) {
-              console.error(
-                "[AI-VOICE] Error kicking AI worker from /start-session:",
-                err?.message || err
-              );
+                await fetch(workerUrl.toString(), {
+                  method: "POST",
+                  headers: {
+                    "x-cron-key": AI_DIALER_CRON_KEY,
+                  },
+                });
+              } catch (err: any) {
+                console.error(
+                  "[AI-VOICE] Error kicking AI worker from /start-session:",
+                  err?.message || err
+                );
+              }
             }
+
+            res.statusCode = 200;
+            res.setHeader("Content-Type", "application/json");
+            res.end(JSON.stringify({ ok: true }));
+          } catch (err: any) {
+            console.error(
+              "[AI-VOICE] /start-session JSON parse error:",
+              err?.message || err
+            );
+            res.statusCode = 400;
+            res.setHeader("Content-Type", "application/json");
+            res.end(JSON.stringify({ ok: false, error: "Invalid JSON body" }));
           }
+        });
+        return;
+      }
 
-          res.statusCode = 200;
-          res.setHeader("Content-Type", "application/json");
-          res.end(JSON.stringify({ ok: true }));
-        } catch (err: any) {
-          console.error(
-            "[AI-VOICE] /start-session JSON parse error:",
-            err?.message || err
-          );
-          res.statusCode = 400;
-          res.setHeader("Content-Type", "application/json");
-          res.end(JSON.stringify({ ok: false, error: "Invalid JSON body" }));
-        }
-      });
-      return;
+      if (req.method === "POST" && url.pathname === "/stop-session") {
+        let body = "";
+        req.on("data", (chunk) => {
+          body += chunk;
+        });
+        req.on("end", () => {
+          try {
+            const payload = body ? JSON.parse(body) : {};
+            const { userEmail, sessionId } = payload;
+
+            console.log("[AI-VOICE] /stop-session received:", {
+              userEmail,
+              sessionId,
+            });
+
+            // NOTE:
+            //  - Actual stopping of new calls is handled by CoveCRM:
+            //    /api/ai-calls/stop.ts marks the AICallSession as "completed",
+            //    and the worker only processes sessions in ["queued", "running"].
+
+            res.statusCode = 200;
+            res.setHeader("Content-Type", "application/json");
+            res.end(JSON.stringify({ ok: true }));
+          } catch (err: any) {
+            console.error(
+              "[AI-VOICE] /stop-session JSON parse error:",
+              err?.message || err
+            );
+            res.statusCode = 400;
+            res.setHeader("Content-Type", "application/json");
+            res.end(JSON.stringify({ ok: false, error: "Invalid JSON body" }));
+          }
+        });
+        return;
+      }
+
+      // Fallback 404 for other HTTP routes
+      res.statusCode = 404;
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ ok: false, error: "Not found" }));
+    } catch (err: any) {
+      console.error("[AI-VOICE] HTTP server error:", err?.message || err);
+      res.statusCode = 500;
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ ok: false, error: "Internal server error" }));
     }
-
-    if (req.method === "POST" && url.pathname === "/stop-session") {
-      let body = "";
-      req.on("data", (chunk) => {
-        body += chunk;
-      });
-      req.on("end", () => {
-        try {
-          const payload = body ? JSON.parse(body) : {};
-          const { userEmail, sessionId } = payload;
-
-          console.log("[AI-VOICE] /stop-session received:", {
-            userEmail,
-            sessionId,
-          });
-
-          // NOTE:
-          //  - Actual stopping of new calls is handled by CoveCRM:
-          //    /api/ai-calls/stop.ts marks the AICallSession as "completed",
-          //    and the worker only processes sessions in ["queued", "running"].
-
-          res.statusCode = 200;
-          res.setHeader("Content-Type", "application/json");
-          res.end(JSON.stringify({ ok: true }));
-        } catch (err: any) {
-          console.error(
-            "[AI-VOICE] /stop-session JSON parse error:",
-            err?.message || err
-          );
-          res.statusCode = 400;
-          res.setHeader("Content-Type", "application/json");
-          res.end(JSON.stringify({ ok: false, error: "Invalid JSON body" }));
-        }
-      });
-      return;
-    }
-
-    // Fallback 404 for other HTTP routes
-    res.statusCode = 404;
-    res.setHeader("Content-Type", "application/json");
-    res.end(JSON.stringify({ ok: false, error: "Not found" }));
-  } catch (err: any) {
-    console.error("[AI-VOICE] HTTP server error:", err?.message || err);
-    res.statusCode = 500;
-    res.setHeader("Content-Type", "application/json");
-    res.end(JSON.stringify({ ok: false, error: "Internal server error" }));
   }
-});
+);
 
 // Attach WebSocket server to the same HTTP server/port
 const wss = new WebSocketServer({ server });
@@ -278,8 +280,7 @@ wss.on("connection", (ws: WebSocket) => {
           await handleStop(ws, msg as TwilioStopEvent);
           break;
         default:
-          // "mark" and other events can be ignored/logged if needed
-          break;
+        // "mark" and other events can be ignored/logged if needed
       }
     } catch (err: any) {
       console.error("[AI-VOICE] Error handling message:", err?.message || err);
@@ -597,35 +598,32 @@ async function handleOpenAiEvent(
   if (!context) return;
 
   // 1) Audio back to Twilio (we configured OpenAI for g711_ulaw)
-  if (event.type === "response.output_audio.delta") {
-    // Support both shapes:
-    //  - event.delta as base64 string
-    //  - event.delta.audio as base64 string
+  //    Support both legacy `response.audio.delta` and newer `response.output_audio.delta`.
+  if (
+    event.type === "response.audio.delta" ||
+    event.type === "response.output_audio.delta"
+  ) {
     let payloadBase64: string | undefined;
 
     if (typeof event.delta === "string") {
+      // shape: { type: "response.audio.delta", delta: "<base64>" }
       payloadBase64 = event.delta;
-    } else if (
-      event.delta &&
-      typeof event.delta.audio === "string"
-    ) {
+    } else if (event.delta && typeof event.delta.audio === "string") {
+      // shape: { type: "response.output_audio.delta", delta: { audio: "<base64>" } }
       payloadBase64 = event.delta.audio as string;
     }
 
     if (!payloadBase64) {
       console.warn(
-        "[AI-VOICE] output_audio.delta event without audio payload:",
+        "[AI-VOICE] audio delta event without audio payload:",
         event
       );
     } else {
       if (!state.debugLoggedFirstOutputAudio) {
-        console.log(
-          "[AI-VOICE] Sending first audio chunk to Twilio",
-          {
-            streamSid,
-            length: payloadBase64.length,
-          }
-        );
+        console.log("[AI-VOICE] Sending first audio chunk to Twilio", {
+          streamSid,
+          length: payloadBase64.length,
+        });
         state.debugLoggedFirstOutputAudio = true;
       }
 
@@ -994,8 +992,7 @@ You should feel like a real assistant on a recorded line — friendly and natura
 SMALL TALK
 - If they ask "How are you?" or "How's your day going?":
   • Answer briefly and positively: "It's going great so far, thanks for asking. How about you?"
-  • After they answer, gently pivot back into the reason for the call.
-- If they ask about YOUR day later in the call, keep it short again and redirect to the appointment.
+  • After they answer, gently pivot back into the reason for the call and booking.
 
 LIGHT HUMOR
 - If they make a light joke (about age, forgetting, busy schedule, etc.):
