@@ -1409,7 +1409,32 @@ When you successfully agree on an appointment time:
     "notes": "Short note about what they want and who will be on the call."
   }
 
-When the call is clearly finished, you SHOULD emit exactly ONE final outcome payload:
+FINAL OUTCOME + NOTES FORMAT
+
+When the call is clearly finished, you SHOULD emit exactly ONE final outcome payload.
+Use both:
+- "summary": 1–2 short sentences describing what happened on the call.
+- "notesAppend": 1–3 bullet-style note lines that can be added directly to the lead’s notes in the CRM.
+
+"summary" examples:
+- "Lead asked for basic quotes and booked a call with ${agentName} for tomorrow at 4:30pm EST."
+- "Lead requested a callback next week; currently busy with work."
+
+"notesAppend" style:
+- Use short, human-readable note lines.
+- Start each line with "* " (asterisk + space).
+- Include the AI voice name and today’s date when helpful.
+- Keep each line under ~120 characters.
+- Write in past tense.
+
+"notesAppend" examples:
+- "* Called from ${aiName} on 12/11, asked to call back later this evening."
+- "* Appointment booked with ${clientName} and spouse for 4:30pm EST tomorrow."
+- "* Said they mainly just want to see quotes and keep the budget low."
+- "* Mentioned existing small policy through work; wants to compare coverage."
+
+When the call is clearly finished, pick the appropriate outcome and send something like:
+
 - Booked:
   { "kind": "final_outcome", "outcome": "booked", "summary": "...", "notesAppend": "..." }
 - Not interested:

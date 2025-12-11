@@ -94,6 +94,8 @@ export default async function handler(
         openAiVoiceId: "marin",
         style: "clear, professional female voice (Marin)",
       },
+      // These can be hidden in the UI if you only want Iris + Jacob,
+      // but we keep them here for back-compat with old sessions.
       kayla: {
         aiName: "Kayla",
         openAiVoiceId: "shimmer",
@@ -123,8 +125,6 @@ export default async function handler(
       },
     };
 
-    // Fallback: if someone ever stores a raw OpenAI voice name as voiceKey,
-    // we’ll still send something valid.
     const voiceProfile =
       VOICE_PROFILES[voiceKey] || {
         aiName: "Jacob",
@@ -133,8 +133,6 @@ export default async function handler(
       };
 
     // -------- Script mapping (LOCKED TO SESSION) --------
-    // We ONLY trust the scriptKey stored on the AICallSession so we never
-    // accidentally switch scripts based on leadType.
     const scriptKeyRaw = (aiSession as any).scriptKey;
     const scriptKey =
       typeof scriptKeyRaw === "string" && scriptKeyRaw.trim().length > 0

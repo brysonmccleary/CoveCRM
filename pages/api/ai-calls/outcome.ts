@@ -108,9 +108,9 @@ export default async function handler(
       rec.summary = summary;
     }
     if (typeof notesAppend === "string" && notesAppend.trim().length > 0) {
-      rec.notes = rec.notes
-        ? `${rec.notes}\n${notesAppend.trim()}`
-        : notesAppend.trim();
+      // Append onto AICallRecording.notes (multi-line allowed)
+      const appended = notesAppend.trim();
+      rec.notes = rec.notes ? `${rec.notes}\n${appended}` : appended;
     }
     rec.updatedAt = new Date();
     await rec.save();
@@ -127,7 +127,8 @@ export default async function handler(
           inc[`stats.${prevOutcome}`] = (inc[`stats.${prevOutcome}`] || 0) - 1;
         }
         if (nextOutcome !== "unknown") {
-          inc[`stats.${nextOutcome}`] = (inc[`stats.${nextOutcome}`] || 0) + 1;
+          inc[`stats.${nextOutcome}`] =
+            (inc[`stats.${nextOutcome}`] || 0) + 1;
         }
 
         // Completed only tracks leads where we have a *final* outcome
@@ -292,30 +293,44 @@ export default async function handler(
           },
         };
 
-        // Append to CRM history + optionally persist notesAppend into Notes/notes fields
-        const leadUpdate: any = {
-          $push: { history: historyEntry },
-          $set: { updatedAt: now },
-        };
+        // Load lead so we can APPEND notesAppend instead of overwriting
+        const lead = await Lead.findOne({
+          _id: leadId,
+          $or: [
+            { userEmail: userEmail },
+            { ownerEmail: userEmail },
+            { user: userEmail },
+          ],
+        }).exec();
 
-        if (typeof notesAppend === "string" && notesAppend.trim().length > 0) {
-          const notesField = notesAppend.trim();
-          // Preserve both "Notes" and "notes" shapes for compatibility
-          leadUpdate.$set["Notes"] = notesField;
-          leadUpdate.$set["notes"] = notesField;
+        if (lead) {
+          // History
+          const existingHistory: any[] = Array.isArray((lead as any).history)
+            ? (lead as any).history
+            : [];
+          existingHistory.push(historyEntry);
+          (lead as any).history = existingHistory;
+
+          // Notes append behavior
+          if (typeof notesAppend === "string" && notesAppend.trim().length > 0) {
+            const appendText = notesAppend.trim();
+            const existingNotes =
+              ((lead as any).notes as string | undefined) ||
+              ((lead as any).Notes as string | undefined) ||
+              "";
+
+            const combined =
+              existingNotes && existingNotes.trim().length > 0
+                ? `${existingNotes}\n${appendText}`
+                : appendText;
+
+            (lead as any).notes = combined;
+            (lead as any).Notes = combined;
+          }
+
+          (lead as any).updatedAt = now;
+          await lead.save();
         }
-
-        await Lead.updateOne(
-          {
-            _id: leadId,
-            $or: [
-              { userEmail: userEmail },
-              { ownerEmail: userEmail },
-              { user: userEmail },
-            ],
-          },
-          leadUpdate
-        ).exec();
       } catch (err) {
         console.warn(
           "[ai-calls/outcome] Failed to append AI outcome to lead history (non-blocking):",
