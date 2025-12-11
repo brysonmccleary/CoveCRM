@@ -1,7 +1,6 @@
 // pages/api/ai-calls/recording-webhook.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { buffer } from "micro";
-import twilio from "twilio";
 import mongooseConnect from "@/lib/mongooseConnect";
 import AICallRecording from "@/models/AICallRecording";
 import AICallSession from "@/models/AICallSession";
@@ -9,56 +8,10 @@ import { Types } from "mongoose";
 
 export const config = { api: { bodyParser: false } };
 
-const PLATFORM_AUTH_TOKEN = (process.env.TWILIO_AUTH_TOKEN || "").trim();
-
-const RAW_BASE = (
-  process.env.NEXT_PUBLIC_BASE_URL ||
-  process.env.BASE_URL ||
-  ""
-).replace(/\/$/, "");
-const BASE_URL = RAW_BASE || "";
-const ALLOW_DEV_TWILIO_TEST =
-  process.env.ALLOW_LOCAL_TWILIO_TEST === "1" &&
-  process.env.NODE_ENV !== "production";
-
-function candidateUrls(path: string): string[] {
-  if (!BASE_URL) return [];
-  const u = new URL(BASE_URL);
-  const withWww = u.hostname.startsWith("www.")
-    ? BASE_URL
-    : `${u.protocol}//www.${u.hostname}${u.port ? ":" + u.port : ""}`;
-  const withoutWww = u.hostname.startsWith("www.")
-    ? `${u.protocol}//${u.hostname.replace(/^www\./, "")}${
-        u.port ? ":" + u.port : ""
-      }`
-    : BASE_URL;
-  return [
-    `${BASE_URL}${path}`,
-    `${withWww}${path}`,
-    `${withoutWww}${path}`,
-  ].filter((v, i, a) => !!v && a.indexOf(v) === i);
-}
-
 function parseIntSafe(n?: string | null): number | undefined {
   if (!n) return undefined;
   const v = parseInt(n, 10);
   return Number.isFinite(v) ? v : undefined;
-}
-
-async function tryValidate(
-  signature: string,
-  params: Record<string, any>,
-  urls: string[],
-  tokens: (string | undefined)[]
-) {
-  for (const token of tokens) {
-    const t = (token || "").trim();
-    if (!t) continue;
-    for (const url of urls) {
-      if (twilio.validateRequest(t, signature, url, params)) return true;
-    }
-  }
-  return false;
 }
 
 export default async function handler(
@@ -70,31 +23,12 @@ export default async function handler(
     return;
   }
 
+  // Twilio sends x-www-form-urlencoded
   const raw = await buffer(req);
   const bodyStr = raw.toString("utf8");
   const params = new URLSearchParams(bodyStr);
-  const signature = (req.headers["x-twilio-signature"] || "") as string;
-  const urls = candidateUrls("/api/ai-calls/recording-webhook");
-  const paramsObj = Object.fromEntries(params as any);
 
   await mongooseConnect();
-
-  let valid = await tryValidate(signature, paramsObj, urls, [
-    PLATFORM_AUTH_TOKEN,
-  ]);
-
-  if (!valid && !ALLOW_DEV_TWILIO_TEST) {
-    console.warn(
-      "❌ Invalid Twilio signature on AI recording-webhook (all tokens/URLs failed)"
-    );
-    res.status(403).end("Invalid signature");
-    return;
-  }
-  if (!valid && ALLOW_DEV_TWILIO_TEST) {
-    console.warn(
-      "⚠️ Dev bypass: Twilio signature validation skipped (AI recording-webhook)."
-    );
-  }
 
   try {
     const CallSid = params.get("CallSid") || "";

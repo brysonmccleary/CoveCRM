@@ -135,10 +135,7 @@ async function autoTopupIfNeeded(userDoc: any): Promise<{
       status: paymentIntent.status,
     });
   } catch (err: any) {
-    console.error(
-      "[AI Dialer] Auto-topup failed",
-      err?.message || err
-    );
+    console.error("[AI Dialer] Auto-topup failed", err?.message || err);
   }
 
   // If we get here, no top-up happened
@@ -283,6 +280,15 @@ export default async function handler(
       aiSession.status = "completed";
       aiSession.completedAt = new Date();
       await aiSession.save();
+
+      // 🔔 HOOK: send "AI dial session ended" email to the agent here
+      // We’ll wire this to your actual email helper in lib/email.ts.
+      console.log("[AI Dialer] Session completed; email agent about completion", {
+        userEmail,
+        sessionId,
+        totalLeads: total,
+      });
+
       return res.status(200).json({
         ok: true,
         message: "AI session completed (no remaining leads).",
@@ -414,6 +420,10 @@ export default async function handler(
         to,
         from,
         url: aiVoiceUrl(sessionId, String(leadId)),
+
+        // 🔔 NEW: if it rings more than 35 seconds with no answer, give up.
+        timeout: 35,
+
         // ✅ Recording for QA / summaries (talk-time only)
         record: true,
         recordingChannels: "dual",
@@ -421,7 +431,7 @@ export default async function handler(
         recordingStatusCallbackEvent: ["completed"],
         recordingStatusCallbackMethod: "POST",
 
-        // ✅ NEW: bill based on *dial time* when the call completes
+        // ✅ Bill based on *dial time* when the call completes
         statusCallback: aiCallStatusUrl(userEmail),
         statusCallbackEvent: ["completed"],
         statusCallbackMethod: "POST",
