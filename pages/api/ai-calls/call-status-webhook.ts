@@ -5,6 +5,7 @@ import mongooseConnect from "@/lib/mongooseConnect";
 import AICallRecording from "@/models/AICallRecording";
 import AICallSession from "@/models/AICallSession";
 import User from "@/models/User";
+import Call from "@/models/Call";
 import { trackAiDialerUsage } from "@/lib/billing/trackAiDialerUsage";
 import { Types } from "mongoose";
 
@@ -100,11 +101,14 @@ export default async function handler(
     }
 
     // If we don't have userEmail in query, try to get it from AICallRecording
+    let rec = null as any;
     if (!userEmail && CallSid) {
-      const rec = await AICallRecording.findOne({ callSid: CallSid }).lean();
+      rec = await AICallRecording.findOne({ callSid: CallSid }).lean();
       if (rec?.userEmail) {
         userEmail = (rec.userEmail as string).toLowerCase();
       }
+    } else if (CallSid) {
+      rec = await AICallRecording.findOne({ callSid: CallSid }).lean();
     }
 
     if (!userEmail) {
@@ -144,14 +148,59 @@ export default async function handler(
       );
     }
 
+    // --- SYNC INTO Call MODEL FOR LEAD ACTIVITY PANEL (AI DIALER ONLY) ---
+
+    try {
+      if (CallSid && rec && rec.leadId) {
+        const now = new Date();
+        const startedAt =
+          typeof durationSec === "number" && durationSec > 0
+            ? new Date(now.getTime() - durationSec * 1000)
+            : undefined;
+
+        const callUpdate: any = {
+          userEmail,
+          leadId: rec.leadId,
+          direction: "outbound",
+          aiEnabledAtCallTime: true,
+          completedAt: now,
+          duration: durationSec,
+          durationSec,
+        };
+
+        if (startedAt) {
+          callUpdate.startedAt = startedAt;
+        }
+
+        if (rec.recordingUrl) {
+          callUpdate.recordingUrl = rec.recordingUrl;
+        }
+        if (rec.recordingSid) {
+          callUpdate.recordingSid = rec.recordingSid;
+        }
+
+        await Call.updateOne(
+          { callSid: CallSid },
+          { $set: callUpdate },
+          { upsert: true }
+        ).exec();
+      }
+    } catch (callErr) {
+      console.warn(
+        "⚠️ AI Dialer call-status-webhook: failed to upsert Call document (non-blocking):",
+        (callErr as any)?.message || callErr
+      );
+    }
+
     // --- SESSION COMPLETION: mark AICallSession completed when all calls done ---
 
     try {
       if (CallSid) {
-        const rec = await AICallRecording.findOne({ callSid: CallSid }).lean();
+        const recForSession =
+          rec || (await AICallRecording.findOne({ callSid: CallSid }).lean());
 
-        if (rec && rec.aiCallSessionId) {
-          const aiCallSessionId = rec.aiCallSessionId as Types.ObjectId;
+        if (recForSession && recForSession.aiCallSessionId) {
+          const aiCallSessionId = recForSession.aiCallSessionId as Types.ObjectId;
 
           const session = await AICallSession.findById(aiCallSessionId).lean();
           if (session) {
@@ -169,10 +218,7 @@ export default async function handler(
                 aiCallSessionId,
               });
 
-              if (
-                completedCount >= total &&
-                s.status !== "completed"
-              ) {
+              if (completedCount >= total && s.status !== "completed") {
                 await AICallSession.updateOne(
                   {
                     _id: aiCallSessionId,

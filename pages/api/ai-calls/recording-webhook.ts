@@ -4,6 +4,7 @@ import { buffer } from "micro";
 import mongooseConnect from "@/lib/mongooseConnect";
 import AICallRecording from "@/models/AICallRecording";
 import AICallSession from "@/models/AICallSession";
+import Call from "@/models/Call";
 import { Types } from "mongoose";
 
 export const config = { api: { bodyParser: false } };
@@ -133,6 +134,43 @@ export default async function handler(
         ...baseSet,
         notes: newNotes,
       };
+    }
+
+    // ---- SYNC INTO Call MODEL FOR LEAD ACTIVITY PANEL ----
+    try {
+      const callSidForCall = CallSid || RecordingSid || "";
+      if (callSidForCall && userEmail && leadObjectId) {
+        const callUpdate: any = {
+          userEmail,
+          leadId: leadObjectId,
+          aiEnabledAtCallTime: true,
+        };
+
+        if (typeof durationSec === "number" && durationSec >= 0) {
+          callUpdate.duration = durationSec;
+          callUpdate.durationSec = durationSec;
+        }
+
+        if (recordingUrl) {
+          callUpdate.recordingUrl = recordingUrl;
+        }
+        if (RecordingSid) {
+          callUpdate.recordingSid = RecordingSid;
+        }
+
+        await Call.updateOne(
+          { callSid: callSidForCall },
+          {
+            $set: callUpdate,
+          },
+          { upsert: true }
+        ).exec();
+      }
+    } catch (callErr) {
+      console.warn(
+        "⚠️ AI recording-webhook: failed to upsert Call document (non-blocking):",
+        (callErr as any)?.message || callErr
+      );
     }
 
     // NOTE: No billing here anymore — billing is handled in call-status-webhook
