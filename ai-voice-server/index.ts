@@ -572,9 +572,9 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
         output_audio_format: "pcm16",
         turn_detection: {
           type: "server_vad",
-          // Fine-tune these if needed for pacing
-          threshold: 0.5,
-          silence_duration_ms: 800,
+          // Slightly slower / more human turn-taking
+          threshold: 0.45,
+          silence_duration_ms: 1100,
           create_response: true,
         },
       },
@@ -605,7 +605,7 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
           type: "response.create",
           response: {
             instructions:
-              "Begin the call now and greet the lead following the call rules. Wait for the lead to respond before continuing.",
+              "Begin the call now and greet the lead following the call rules. Keep it to one or two short sentences and end with a simple question like 'How's your day going so far?' Then stop speaking and wait for the lead to respond before continuing.",
           },
         })
       );
@@ -1008,29 +1008,6 @@ LANGUAGE BEHAVIOR (VERY IMPORTANT)
 - You NEVER start the call or any part of the call in Spanish or any other language unless the lead clearly and explicitly asks you to switch.
 - Do NOT open the call with "Hola", bilingual greetings, or any Spanish sentence on your own.
 - Only switch languages if the lead says something like "Can we speak Spanish?" or very clearly requests another language. Otherwise, remain in English for the entire call.
-
-AGENT NAME USAGE
-- When speaking out loud, ONLY refer to the agent as "${agentName}" (first name only). Never say their last name, even if you know it.
-- Do NOT invent nicknames or alternative names for ${agentName}.
-
-TURN LENGTH & PACING
-- Keep each spoken response short: usually 1–3 sentences, then stop and listen.
-- Do NOT rush ahead into explaining the full process or appointment details until the lead has clearly answered your current question and is still engaged.
-
-PRIMARY MISSION
-- Your ONLY goal is to schedule a short phone or Zoom appointment for ${agentName} with the lead.
-- You DO NOT give quotes, carriers, detailed product explanations, or underwriting decisions.
-- When asked for details, say variations of:
-  • "Great question, that's exactly what ${agentName} will walk you through on the call."
-  • "My job is just to get you scheduled with ${agentName}, who is the licensed specialist."
-
-You must be able to hold a full, free-flowing conversation:
-- Listen carefully to what the lead actually says and respond directly.
-- Ask smart follow-up questions to understand their situation and goals.
-- If the conversation goes off-script, stay calm and guide it back toward either:
-  • booking an appointment, or
-  • setting a clean final outcome (not_interested, callback, etc.).
-Do NOT read any script word-for-word. Use the scripts as frameworks and talking points, then speak naturally in your own words.
 `.trim();
 
   const compliance = `
@@ -1075,6 +1052,7 @@ VOICE & TONE
 - Voice ID: ${ctx.voiceProfile.openAiVoiceId} (${ctx.voiceProfile.style})
 - Tone: warm, confident, low-pressure.
 - Speak at a natural phone pace with short, clear sentences.
+- Use natural contractions: I'm, you're, that's, we'll, can't, don't.
 - Use phrases like: "fair enough", "that makes sense", "would it be crazy if…", "does that sound fair?".
 - Do NOT use texting slang like "LOL", "OMG", or emojis. Keep it conversational but professional.
 `.trim();
