@@ -130,6 +130,10 @@ type CallState = {
   // Billing
   callStartedAtMs?: number;
   billedUsageSent?: boolean;
+
+  // Debug flags (to avoid log spam)
+  debugLoggedFirstMedia?: boolean;
+  debugLoggedFirstOutputAudio?: boolean;
 };
 
 const calls = new Map<WebSocket, CallState>();
@@ -369,6 +373,16 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
   const { media } = msg;
   const { payload } = media; // base64 g711_ulaw
 
+  if (!state.debugLoggedFirstMedia) {
+    console.log("[AI-VOICE] handleMedia: first audio frame received", {
+      streamSid: state.streamSid,
+      hasOpenAi: !!state.openAiWs,
+      openAiReady: !!state.openAiReady,
+      payloadLength: payload?.length || 0,
+    });
+    state.debugLoggedFirstMedia = true;
+  }
+
   // If OpenAI connection isn't ready yet, temporarily buffer base64 payloads
   if (!state.openAiWs || !state.openAiReady) {
     state.pendingAudioFrames.push(payload);
@@ -505,6 +519,10 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
 
       // Flush any buffered audio frames we received before the model was ready
       if (state.pendingAudioFrames.length > 0) {
+        console.log(
+          "[AI-VOICE] Flushing buffered audio frames to OpenAI:",
+          state.pendingAudioFrames.length
+        );
         for (const base64Chunk of state.pendingAudioFrames) {
           const event = {
             type: "input_audio_buffer.append",
@@ -538,6 +556,15 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
       const text = data.toString();
       const event = JSON.parse(text);
 
+      if (event?.type) {
+        console.log("[AI-VOICE] OpenAI event:", event.type);
+      } else {
+        console.log(
+          "[AI-VOICE] OpenAI event (no type):",
+          text.slice(0, 200) + (text.length > 200 ? "..." : "")
+        );
+      }
+
       await handleOpenAiEvent(ws, state, event);
     } catch (err: any) {
       console.error(
@@ -570,27 +597,54 @@ async function handleOpenAiEvent(
   if (!context) return;
 
   // 1) Audio back to Twilio (we configured OpenAI for g711_ulaw)
-  if (
-    event.type === "response.output_audio.delta" &&
-    typeof event.delta === "string"
-  ) {
-    try {
-      const payloadBase64 = event.delta as string; // base64 g711_ulaw
+  if (event.type === "response.output_audio.delta") {
+    // Support both shapes:
+    //  - event.delta as base64 string
+    //  - event.delta.audio as base64 string
+    let payloadBase64: string | undefined;
 
-      const twilioMediaMsg = {
-        event: "media",
-        streamSid,
-        media: {
-          payload: payloadBase64,
-        },
-      };
+    if (typeof event.delta === "string") {
+      payloadBase64 = event.delta;
+    } else if (
+      event.delta &&
+      typeof event.delta.audio === "string"
+    ) {
+      payloadBase64 = event.delta.audio as string;
+    }
 
-      twilioWs.send(JSON.stringify(twilioMediaMsg));
-    } catch (err: any) {
-      console.error(
-        "[AI-VOICE] Error sending audio to Twilio:",
-        err?.message || err
+    if (!payloadBase64) {
+      console.warn(
+        "[AI-VOICE] output_audio.delta event without audio payload:",
+        event
       );
+    } else {
+      if (!state.debugLoggedFirstOutputAudio) {
+        console.log(
+          "[AI-VOICE] Sending first audio chunk to Twilio",
+          {
+            streamSid,
+            length: payloadBase64.length,
+          }
+        );
+        state.debugLoggedFirstOutputAudio = true;
+      }
+
+      try {
+        const twilioMediaMsg = {
+          event: "media",
+          streamSid,
+          media: {
+            payload: payloadBase64,
+          },
+        };
+
+        twilioWs.send(JSON.stringify(twilioMediaMsg));
+      } catch (err: any) {
+        console.error(
+          "[AI-VOICE] Error sending audio to Twilio:",
+          err?.message || err
+        );
+      }
     }
   }
 

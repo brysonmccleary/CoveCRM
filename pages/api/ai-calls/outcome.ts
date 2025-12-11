@@ -147,6 +147,64 @@ export default async function handler(
           }
         ).exec();
       }
+
+      // ───────────────────────── Auto-complete session when all leads resolved ─────────────────────────
+      try {
+        const session = await AICallSession.findOne({
+          _id: aiCallSessionId,
+          userEmail,
+        }).lean();
+
+        if (session) {
+          const s: any = session;
+          const total: number = typeof s.total === "number" ? s.total : 0;
+          const completed: number =
+            s.stats && typeof s.stats.completed === "number"
+              ? s.stats.completed
+              : 0;
+
+          if (
+            total > 0 &&
+            completed >= total &&
+            s.status !== "completed"
+          ) {
+            await AICallSession.updateOne(
+              {
+                _id: aiCallSessionId,
+                userEmail,
+                status: { $ne: "completed" },
+              },
+              {
+                $set: {
+                  status: "completed",
+                  completedAt: new Date(),
+                  updatedAt: new Date(),
+                },
+              }
+            ).exec();
+
+            console.log(
+              "[ai-calls/outcome] Marked AI session completed based on stats",
+              {
+                sessionId: String(aiCallSessionId),
+                userEmail,
+                total,
+                completed,
+              }
+            );
+
+            // TODO: hook in your Resend email here:
+            //  - Load latest stats from session
+            //  - Send "Your AI dial session has finished" to userEmail
+            //  - Include folder name, total leads, booked, not_interested, no_answer, callback, etc.
+          }
+        }
+      } catch (sessionErr: any) {
+        console.warn(
+          "[ai-calls/outcome] Failed to auto-complete session by stats (non-blocking):",
+          sessionErr?.message || sessionErr
+        );
+      }
     }
 
     // ───────────────────────── Move lead to resolution folder ─────────────────────────
