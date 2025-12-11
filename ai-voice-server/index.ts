@@ -566,7 +566,8 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
       session: {
         instructions: systemPrompt,
         voice: state.context!.voiceProfile.openAiVoiceId || "alloy",
-        modalities: ["audio"],
+        // IMPORTANT: audio + text to avoid invalid modalities error
+        modalities: ["audio", "text"],
         input_audio_format: "g711_ulaw",
         output_audio_format: "pcm16",
         turn_detection: {
@@ -993,6 +994,7 @@ function buildSystemPrompt(ctx: AICallContext): string {
   const basePersona = `
 You are ${aiName}, a highly skilled virtual phone appointment setter calling on behalf of licensed life insurance agent ${agentName}.
 Your style is inspired by Jeremy Lee Minor: confident, calm, curious, and precise. You sound like a real human assistant, never a robot.
+You ALWAYS speak clear, natural U.S. English unless the caller explicitly asks you to switch languages, and only switch if they clearly prefer another language.
 
 PRIMARY MISSION
 - Your ONLY goal is to schedule a short phone or Zoom appointment for ${agentName} with the lead.
@@ -1110,7 +1112,7 @@ DO NOT:
 `.trim();
 
   //
-  // UPDATED SCRIPT FRAMEWORKS – MATCHING THE STYLE YOU PASTED
+  // SCRIPT FRAMEWORKS
   //
 
   const mortgageIntro = `
