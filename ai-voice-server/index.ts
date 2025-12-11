@@ -1271,7 +1271,7 @@ Use this as a flexible framework. Do NOT read word-for-word.
 - "Gotcha. And just so I better understand where you're coming from, do you mind walking me through what prompted you to reach out and feel like you might need something like this right now?"
 
 5) NORMALIZE & FRAME
-- "That makes sense. A lot of veterans we talk to say the same thing – they just want to make sure that if something does happen, their family isn't stuck trying to figure it all out."
+- "That makes sense. A lot of veterans we talk to say the same thing – they just want to make sure that if something happens, their family isn't stuck trying to figure it all out."
 
 6) POSITION YOUR ROLE
 - "My job is pretty simple – I just make sure you actually get the information you requested and then line you up with ${agentName}, who specializes in these veteran programs."

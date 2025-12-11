@@ -72,21 +72,22 @@ export default async function handler(
       return res.status(404).json({ ok: false, error: "Lead not found" });
     }
 
-    const userEmail = (aiSession as any).userEmail as string;
+    const userEmail = ((aiSession as any).userEmail as string) || "";
     const user = await User.findOne({ email: userEmail }).lean();
 
     // -------- Voice profile mapping --------
     // New default persona: Jacob (Cedar)
     const rawVoiceKey = (aiSession as any).voiceKey;
-    const voiceKey = typeof rawVoiceKey === "string" && rawVoiceKey.trim()
-      ? rawVoiceKey.trim()
-      : "jacob";
+    const voiceKey =
+      typeof rawVoiceKey === "string" && rawVoiceKey.trim()
+        ? rawVoiceKey.trim()
+        : "jacob";
 
     const VOICE_PROFILES: Record<
       string,
       { aiName: string; openAiVoiceId: string; style: string }
     > = {
-      // Primary personas (only these show in the UI)
+      // Primary personas (only these should show in the UI)
       jacob: {
         aiName: "Jacob",
         openAiVoiceId: "cedar",
@@ -142,24 +143,32 @@ export default async function handler(
         ? scriptKeyRaw
         : "mortgage_protection";
 
-    const clientFirstName =
-      (lead as any).firstName ||
-      (lead as any).name ||
-      (lead as any).fullName ||
-      "there";
+    const leadAny = lead as any;
 
-    const clientLastName =
-      (lead as any).lastName ||
-      (lead as any).surname ||
-      (typeof (lead as any).name === "string"
-        ? (lead as any).name.split(" ").slice(1).join(" ")
-        : "");
+    // Derive a clean first name (prefer explicit first-name fields)
+    const rawFirstName: string =
+      leadAny.firstName ||
+      leadAny["First Name"] ||
+      leadAny.name ||
+      leadAny.fullName ||
+      "";
+
+    const clientFirstName =
+      rawFirstName && typeof rawFirstName === "string"
+        ? rawFirstName.trim().split(" ")[0] || "there"
+        : "there";
+
+    const clientLastName: string =
+      leadAny.lastName ||
+      leadAny["Last Name"] ||
+      (typeof leadAny.name === "string"
+        ? leadAny.name.trim().split(" ").slice(1).join(" ")
+        : "") ||
+      leadAny.surname ||
+      "";
 
     const clientState =
-      (lead as any).state ||
-      (lead as any).st ||
-      (lead as any).province ||
-      undefined;
+      leadAny.state || leadAny.st || leadAny.province || undefined;
 
     const agentName =
       (user as any)?.fullName ||
@@ -174,10 +183,7 @@ export default async function handler(
 
     // Optional notes from lead fields
     const notesFromLead =
-      (lead as any).notes ||
-      (lead as any).notesInternal ||
-      (lead as any).leadNotes ||
-      "";
+      leadAny.notes || leadAny.notesInternal || leadAny.leadNotes || "";
 
     const context = {
       userEmail,
@@ -188,8 +194,8 @@ export default async function handler(
       clientFirstName,
       clientLastName,
       clientState,
-      clientPhone: (lead as any).phone || (lead as any).phoneNumber,
-      clientEmail: (lead as any).email,
+      clientPhone: leadAny.phone || leadAny.phoneNumber || leadAny.Phone,
+      clientEmail: leadAny.email || leadAny.Email,
       clientNotes: notesFromLead,
       scriptKey,
       voiceKey,
