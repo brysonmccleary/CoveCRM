@@ -82,6 +82,9 @@ const SCRIPT_OPTIONS = [
  * Keys here must match:
  *  - pages/api/ai-calls/context.ts → VOICE_PROFILES
  *  - pages/api/ai-calls/session.ts PostBody.voiceKey docs
+ *
+ * Primary, selectable voices are now ONLY Jacob and Iris.
+ * Legacy keys like Kayla/Elena are still supported on the backend but no longer appear here.
  */
 const VOICE_OPTIONS = [
   {
@@ -93,16 +96,6 @@ const VOICE_OPTIONS = [
     key: "iris",
     label: "Iris (Female)",
     providerVoiceId: "marin",
-  },
-  {
-    key: "kayla",
-    label: "Kayla (Female)",
-    providerVoiceId: "shimmer",
-  },
-  {
-    key: "elena",
-    label: "Elena (Female)",
-    providerVoiceId: "alloy",
   },
 ];
 

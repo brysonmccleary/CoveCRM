@@ -76,14 +76,16 @@ export default async function handler(
     const user = await User.findOne({ email: userEmail }).lean();
 
     // -------- Voice profile mapping --------
-    // New default persona: Jacob (Cedar)
+    // Primary, supported UI personas: Jacob (Cedar) and Iris (Marin).
+    // Legacy keys (neutral_conversational, upbeat_confident, calm_reassuring)
+    // and older Kayla/Elena sessions are mapped onto Jacob/Iris to avoid breaking past sessions.
     const voiceKey = (aiSession as any).voiceKey || "jacob";
 
     const VOICE_PROFILES: Record<
       string,
       { aiName: string; openAiVoiceId: string; style: string }
     > = {
-      // New named personas
+      // Primary named personas (these are the only options exposed in the UI now)
       jacob: {
         aiName: "Jacob",
         openAiVoiceId: "cedar",
@@ -94,42 +96,45 @@ export default async function handler(
         openAiVoiceId: "marin",
         style: "clear, professional female voice (Marin)",
       },
-      // These can be hidden in the UI if you only want Iris + Jacob,
-      // but we keep them here for back-compat with old sessions.
+
+      // Legacy UI personas (no longer selectable, but still supported for old sessions)
+      // Map them to Jacob/Iris so they sound natural and don't break.
       kayla: {
-        aiName: "Kayla",
-        openAiVoiceId: "shimmer",
-        style: "friendly, energetic female voice (Shimmer)",
+        aiName: "Iris",
+        openAiVoiceId: "marin",
+        style:
+          "legacy alias mapped to Iris (formerly Kayla/Shimmer, energetic female)",
       },
       elena: {
-        aiName: "Elena",
-        openAiVoiceId: "alloy",
-        style: "neutral, conversational female voice (Alloy)",
+        aiName: "Iris",
+        openAiVoiceId: "marin",
+        style:
+          "legacy alias mapped to Iris (formerly Elena/Alloy, neutral female)",
       },
 
-      // Back-compat keys (map to the closest new voices)
+      // Back-compat keys mapped to the closest new voices
       neutral_conversational: {
-        aiName: "Taylor",
-        openAiVoiceId: "alloy",
-        style: "neutral conversational (legacy key)",
+        aiName: "Jacob",
+        openAiVoiceId: "cedar",
+        style: "neutral conversational (mapped to Jacob/Cedar)",
       },
       upbeat_confident: {
-        aiName: "Jordan",
-        openAiVoiceId: "shimmer",
-        style: "upbeat, confident (legacy key)",
+        aiName: "Iris",
+        openAiVoiceId: "marin",
+        style: "upbeat, confident (mapped to Iris/Marin)",
       },
       calm_reassuring: {
-        aiName: "Riley",
+        aiName: "Jacob",
         openAiVoiceId: "cedar",
-        style: "calm, reassuring (legacy key)",
+        style: "calm, reassuring (mapped to Jacob/Cedar)",
       },
     };
 
     const voiceProfile =
       VOICE_PROFILES[voiceKey] || {
         aiName: "Jacob",
-        openAiVoiceId: voiceKey, // assume it’s a valid OpenAI voice id
-        style: "neutral conversational (fallback)",
+        openAiVoiceId: "cedar",
+        style: "neutral conversational (fallback to Jacob/Cedar)",
       };
 
     // -------- Script mapping (LOCKED TO SESSION) --------
@@ -176,6 +181,13 @@ export default async function handler(
       (lead as any).leadNotes ||
       "";
 
+    // From-number used for this AI dial session (also used for appointment cementing script)
+    const fromNumber =
+      (aiSession as any).fromNumber ||
+      (lead as any).phone ||
+      (lead as any).phoneNumber ||
+      "";
+
     const context = {
       userEmail,
       sessionId: (aiSession as any)._id.toString(),
@@ -190,6 +202,7 @@ export default async function handler(
       clientNotes: notesFromLead,
       scriptKey,
       voiceKey,
+      fromNumber,
       voiceProfile,
       raw: {
         session: aiSession,
