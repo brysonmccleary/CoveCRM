@@ -19,6 +19,7 @@ const COVECRM_BASE_URL =
 const AI_DIALER_CRON_KEY = process.env.AI_DIALER_CRON_KEY || "";
 const AI_DIALER_AGENT_KEY = process.env.AI_DIALER_AGENT_KEY || "";
 
+// Your internal vendor-cost estimate (Twilio + OpenAI)
 const AI_DIALER_VENDOR_COST_PER_MIN_USD = Number(
   process.env.AI_DIALER_VENDOR_COST_PER_MIN_USD || "0"
 );
@@ -126,17 +127,17 @@ type CallState = {
   debugLoggedFirstMedia?: boolean;
   debugLoggedFirstOutputAudio?: boolean;
 
-  // NEW: cost/turn-control state
-  waitingForResponse?: boolean;
-  aiSpeaking?: boolean;
-  userAudioMsBuffered?: number; // approximate ms of user audio seen
+  // TURN + COST CONTROL
+  waitingForResponse?: boolean; // we have sent response.create and are waiting
+  aiSpeaking?: boolean; // AI is currently speaking back to Twilio
+  userAudioMsBuffered?: number; // total ms of user audio seen in this turn
 };
 
 const calls = new Map<WebSocket, CallState>();
 
 /**
  * PCM16 (24k) → μ-law 8k (base64) for Twilio
- * (audio path UNCHANGED per instructions)
+ * (audio path UNCHANGED)
  */
 function pcm16ToMulawBase64(pcm16Base64: string): string {
   if (!pcm16Base64) return "";
@@ -325,7 +326,7 @@ wss.on("connection", (ws: WebSocket) => {
           await handleStop(ws, msg as TwilioStopEvent);
           break;
         default:
-        // ignore
+        // ignore other events
       }
     } catch (err: any) {
       console.error("[AI-VOICE] Error handling message:", err?.message || err);
@@ -466,12 +467,8 @@ async function handleStop(ws: WebSocket, msg: TwilioStopEvent) {
 
   if (state.openAiWs && state.openAiReady) {
     try {
-      // Only commit if:
-      // - At least ~100ms of user audio has been seen
-      // - AI is not currently speaking
-      // - We are not still waiting on a previous response
       const hasEnoughAudio =
-        (state.userAudioMsBuffered || 0) >= 100; // 5+ frames ≈ 100ms
+        (state.userAudioMsBuffered || 0) >= 100; // ≥ ~100ms user audio
       const canCommit =
         hasEnoughAudio && !state.aiSpeaking && !state.waitingForResponse;
 
@@ -492,7 +489,7 @@ async function handleStop(ws: WebSocket, msg: TwilioStopEvent) {
         );
       }
 
-      // Final "wrap up" response, but only if we are not already waiting
+      // Final wrap-up response, only if we aren't already waiting
       if (!state.waitingForResponse) {
         state.waitingForResponse = true;
         state.aiSpeaking = true;
@@ -570,20 +567,22 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
       type: "session.update",
       session: {
         instructions: systemPrompt,
+
+        // Use audio-only mode to avoid any text output costs
+        modalities: ["audio"],
         voice: state.context!.voiceProfile.openAiVoiceId || "alloy",
-        modalities: ["audio", "text"],
 
         // AUDIO FORMATS (UNCHANGED)
         input_audio_format: "g711_ulaw",
         output_audio_format: "pcm16",
 
-        // VAD: disable auto-response generation – manual response.create only
+        // Server-side VAD, but NO auto create_response.
         turn_detection: {
           type: "server_vad",
           create_response: false,
         },
 
-        // COST CONTROL: audio-only mode
+        // Explicitly disable text I/O for cost control
         output_text: false,
         input_text_enabled: false,
         response_format: { type: "audio" },
@@ -608,7 +607,7 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
         state.pendingAudioFrames = [];
       }
 
-      // Initial greeting – guarded so we never stack multiple responses
+      // Initial greeting – guarded so we don't send multiple on reconnects
       if (!state.waitingForResponse) {
         state.waitingForResponse = true;
         state.aiSpeaking = true;
@@ -679,7 +678,7 @@ async function handleOpenAiEvent(
   const { streamSid, context } = state;
   if (!context) return;
 
-  // Turn-completion: once OpenAI finishes a response, allow new responses again
+  // When a response finishes, allow the next one
   if (
     event.type === "response.completed" ||
     event.type === "response.output_audio.done" ||
@@ -689,7 +688,7 @@ async function handleOpenAiEvent(
     state.aiSpeaking = false;
   }
 
-  // Audio back to Twilio (UNCHANGED PATH)
+  // AUDIO BACK TO TWILIO (UNCHANGED PATH)
   if (
     event.type === "response.audio.delta" ||
     event.type === "response.output_audio.delta"
@@ -1009,9 +1008,7 @@ async function billAiDialerUsageForCall(state: CallState) {
 }
 
 /**
- * System prompt – insurance only, no home-improvement BS,
- * English only unless they explicitly ask otherwise.
- * (UNCHANGED)
+ * System prompt – insurance only, English by default.
  */
 function buildSystemPrompt(ctx: AICallContext): string {
   const aiName = ctx.voiceProfile.aiName || "Alex";
@@ -1106,9 +1103,6 @@ IF THEY ASK "WHERE ARE YOU CALLING FROM?" OR "WHO ARE YOU WITH?"
 - Do NOT claim to be the licensed agent and do not say you are a human if directly asked.
 `.trim();
 
-  //
-  // Script frameworks
-  //
   const mortgageIntro = `
 MORTGAGE PROTECTION LEADS
 Use this as a flexible framework. Do NOT read word-for-word.
