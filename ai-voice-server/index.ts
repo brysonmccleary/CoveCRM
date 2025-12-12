@@ -116,6 +116,14 @@ type AICallContext = {
 };
 
 /**
+ * Conversation phases for strict 2-step opener + normal mode
+ */
+type ConversationPhase =
+  | "waiting_first_response"
+  | "waiting_second_response"
+  | "normal";
+
+/**
  * Internal call state for each Twilio <Stream> connection
  */
 type CallState = {
@@ -129,16 +137,6 @@ type CallState = {
   pendingAudioFrames: string[]; // base64-encoded g711_ulaw chunks
   finalOutcomeSent?: boolean;
 
-  // Track whether we've appended audio since the last commit
-  hasUncommittedAudio?: boolean;
-
-  // New: simple ms tracker since last commit + last media timestamp
-  bufferedMsSinceLastCommit?: number;
-  lastMediaAtMs?: number;
-
-  // Optional future use for periodic commit logic
-  commitInterval?: NodeJS.Timeout;
-
   // Billing
   callStartedAtMs?: number;
   billedUsageSent?: boolean;
@@ -147,14 +145,15 @@ type CallState = {
   debugLoggedFirstMedia?: boolean;
   debugLoggedFirstOutputAudio?: boolean;
 
+  // Turn-taking state
+  phase: ConversationPhase;
+  aiSpeaking: boolean;
+
   // Outbound audio buffer for Twilio (raw μ-law bytes waiting to be framed)
   outboundAudioBuffer?: Buffer;
 };
 
 const calls = new Map<WebSocket, CallState>();
-
-// Frame size for μ-law @ 8kHz (20ms)
-const FRAME_SIZE = 160;
 
 /**
  * HTTP server (for /start-session, /stop-session) + WebSocket server
@@ -279,8 +278,8 @@ wss.on("connection", (ws: WebSocket) => {
     streamSid: "",
     callSid: "",
     pendingAudioFrames: [],
-    hasUncommittedAudio: false,
-    bufferedMsSinceLastCommit: 0,
+    phase: "waiting_first_response",
+    aiSpeaking: false,
     outboundAudioBuffer: Buffer.alloc(0),
   };
   calls.set(ws, state);
@@ -311,10 +310,6 @@ wss.on("connection", (ws: WebSocket) => {
   ws.on("close", () => {
     console.log("[AI-VOICE] WebSocket closed");
     const state = calls.get(ws);
-    if (state?.commitInterval) {
-      clearInterval(state.commitInterval);
-      state.commitInterval = undefined;
-    }
     if (state?.openAiWs) {
       try {
         state.openAiWs.close();
@@ -333,41 +328,6 @@ server.listen(PORT, () => {
 });
 
 /**
- * Safely commit the input audio buffer if we have enough new audio.
- * This is used sparingly (e.g., on STOP) to avoid empty commits.
- */
-function commitIfHasAudio(state: CallState) {
-  const ws = state.openAiWs;
-  if (!ws || ws.readyState !== WebSocket.OPEN) return;
-
-  const bufferedMs = state.bufferedMsSinceLastCommit ?? 0;
-  if (bufferedMs < 100) {
-    // OpenAI expects at least ~100ms of audio or it will error.
-    return;
-  }
-
-  try {
-    ws.send(
-      JSON.stringify({
-        type: "input_audio_buffer.commit",
-      })
-    );
-    state.bufferedMsSinceLastCommit = 0;
-    state.hasUncommittedAudio = false;
-    console.log(
-      "[AI-VOICE] Committed input audio buffer with ~",
-      bufferedMs,
-      "ms of audio"
-    );
-  } catch (err: any) {
-    console.error(
-      "[AI-VOICE] Error sending input_audio_buffer.commit:",
-      err?.message || err
-    );
-  }
-}
-
-/**
  * START: Twilio begins streaming the call
  */
 async function handleStart(ws: WebSocket, msg: TwilioStartEvent) {
@@ -378,9 +338,10 @@ async function handleStart(ws: WebSocket, msg: TwilioStartEvent) {
   state.callSid = msg.start.callSid;
   state.callStartedAtMs = Date.now();
   state.billedUsageSent = false;
-  state.hasUncommittedAudio = false;
-  state.bufferedMsSinceLastCommit = 0;
-  state.lastMediaAtMs = undefined;
+  // reset conversation state at the start of every call
+  state.phase = "waiting_first_response";
+  state.aiSpeaking = false;
+  state.outboundAudioBuffer = Buffer.alloc(0);
 
   const custom = msg.start.customParameters || {};
   const sessionId = custom.sessionId;
@@ -460,12 +421,6 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
       audio: payload, // still base64 g711_ulaw
     };
     state.openAiWs.send(JSON.stringify(event));
-    state.hasUncommittedAudio = true;
-
-    // Track input audio duration for safe commits
-    state.bufferedMsSinceLastCommit =
-      (state.bufferedMsSinceLastCommit ?? 0) + 20;
-    state.lastMediaAtMs = Date.now();
   } catch (err: any) {
     console.error(
       "[AI-VOICE] Error forwarding audio to OpenAI:",
@@ -485,22 +440,8 @@ async function handleStop(ws: WebSocket, msg: TwilioStopEvent) {
     `[AI-VOICE] stop: callSid=${msg.stop.callSid}, streamSid=${msg.streamSid}`
   );
 
-  // Clear any periodic commit timer if we ever add it
-  if (state.commitInterval) {
-    clearInterval(state.commitInterval);
-    state.commitInterval = undefined;
-  }
-
-  // Safely commit any remaining input audio if there is enough buffered.
-  // This is guarded so we never hit input_audio_buffer_commit_empty.
-  try {
-    commitIfHasAudio(state);
-  } catch (err: any) {
-    console.error(
-      "[AI-VOICE] Error in guarded commit on stop:",
-      err?.message || err
-    );
-  }
+  // IMPORTANT: we DO NOT commit input_audio_buffer here or force a last response
+  // to avoid "input_audio_buffer_commit_empty" errors and surprise extra audio.
 
   // Bill for the full duration of this AI dialer call (vendor analytics)
   try {
@@ -555,8 +496,8 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
     // Configure the Realtime session:
     //  - Jeremy-Lee-style instructions
     //  - voice
-    //  - g711_ulaw audio IN, g711_ulaw audio OUT (DIRECT passthrough)
-    //  - server-side VAD to detect turns and respond automatically
+    //  - g711_ulaw audio IN and OUT
+    //  - server-side VAD to detect turns, but we manually decide when to respond
     const sessionUpdate = {
       type: "session.update",
       session: {
@@ -565,17 +506,16 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
         // IMPORTANT: audio + text to avoid invalid modalities error
         modalities: ["audio", "text"],
         input_audio_format: "g711_ulaw",
-        // output is ALSO g711_ulaw now
         output_audio_format: "g711_ulaw",
         turn_detection: {
           type: "server_vad",
-          // Slightly faster, still human-like: reacts a bit sooner
           threshold: 0.4,
           silence_duration_ms: 800,
-          create_response: true,
+          // manual control: we trigger response.create ourselves
+          create_response: false,
         },
         // Hard cap so it can't monologue forever on each turn
-        max_response_output_tokens: 40,
+        max_response_output_tokens: 80,
       },
     };
 
@@ -594,10 +534,6 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
             audio: base64Chunk,
           };
           openAiWs.send(JSON.stringify(event));
-          state.hasUncommittedAudio = true;
-          state.bufferedMsSinceLastCommit =
-            (state.bufferedMsSinceLastCommit ?? 0) + 20;
-          state.lastMediaAtMs = Date.now();
         }
         state.pendingAudioFrames = [];
       }
@@ -648,16 +584,30 @@ Rules for this first response:
         );
       }
 
-      // When the server VAD commits, clear our uncommitted flag and ms tracker
-      if (event.type === "input_audio_buffer.committed") {
-        const st = calls.get(ws);
-        if (st) {
-          st.hasUncommittedAudio = false;
-          st.bufferedMsSinceLastCommit = 0;
-        }
+      const currentState = calls.get(ws);
+      if (!currentState) return;
+
+      // Track AI speaking status (optional, future use)
+      if (event.type === "response.created") {
+        currentState.aiSpeaking = true;
+      }
+      if (event.type === "response.completed") {
+        currentState.aiSpeaking = false;
       }
 
-      await handleOpenAiEvent(ws, state, event);
+      // VAD events: we use these to decide WHEN to respond
+      if (event.type === "input_audio_buffer.speech_started") {
+        console.log("[AI-VOICE] VAD: speech_started");
+        return;
+      }
+
+      if (event.type === "input_audio_buffer.speech_stopped") {
+        console.log("[AI-VOICE] VAD: speech_stopped; phase=", currentState.phase);
+        await handleUserSpeechStopped(currentState);
+        return;
+      }
+
+      await handleOpenAiEvent(ws, currentState, event);
     } catch (err: any) {
       console.error(
         "[AI-VOICE] Error handling OpenAI event:",
@@ -700,7 +650,7 @@ async function handleOpenAiEvent(
       // shape: { type: "response.audio.delta", delta: "<base64 g711_ulaw>" }
       payloadBase64 = event.delta;
     } else if (event.delta && typeof event.delta.audio === "string") {
-      // fallback for any variant that nests the audio
+      // shape: { type: "response.output_audio.delta", delta: { audio: "<base64 g711_ulaw>" } }
       payloadBase64 = event.delta.audio as string;
     }
 
@@ -711,18 +661,19 @@ async function handleOpenAiEvent(
       );
     } else {
       try {
-        // Decode the full μ-law block from OpenAI
         const incomingBuffer = Buffer.from(payloadBase64, "base64");
 
         if (!state.outboundAudioBuffer) {
           state.outboundAudioBuffer = Buffer.alloc(0);
         }
 
-        // Append to any leftover bytes from previous deltas
         let working = Buffer.concat([state.outboundAudioBuffer, incomingBuffer]);
+        const FRAME_SIZE = 160; // 20ms @ 8kHz, μ-law (1 byte per sample)
 
-        // Log once on the very first outbound audio we send
-        if (!state.debugLoggedFirstOutputAudio && working.length >= FRAME_SIZE) {
+        if (
+          !state.debugLoggedFirstOutputAudio &&
+          working.length >= FRAME_SIZE
+        ) {
           console.log("[AI-VOICE] Preparing first outbound audio frames", {
             streamSid,
             totalBytes: working.length,
@@ -760,7 +711,7 @@ async function handleOpenAiEvent(
     }
   }
 
-  // 2) Text / tool calls / intents via control metadata (if you decide to use it later)
+  // 2) Text / tool calls / intents via control metadata
   try {
     const control =
       event?.control ||
@@ -787,6 +738,102 @@ async function handleOpenAiEvent(
       err?.message || err
     );
   }
+}
+
+/**
+ * When the lead finishes speaking (VAD speech_stopped), decide what the AI should
+ * say next based on the conversation phase and send a manual response.create.
+ */
+async function handleUserSpeechStopped(state: CallState) {
+  if (!state.openAiWs || !state.openAiReady || !state.context) return;
+
+  const ctx = state.context;
+  const clientName = ctx.clientFirstName || "there";
+  const aiName = ctx.voiceProfile.aiName || "Alex";
+
+  // Commit the chunk we just heard
+  try {
+    state.openAiWs.send(
+      JSON.stringify({
+        type: "input_audio_buffer.commit",
+      })
+    );
+  } catch (err: any) {
+    console.error(
+      "[AI-VOICE] Error committing buffer on speech_stopped:",
+      err?.message || err
+    );
+    return;
+  }
+
+  let instructions: string;
+  let delayMs = 500;
+
+  if (state.phase === "waiting_first_response") {
+    // We just got their answer to "can you hear me okay?"
+    instructions = `
+In this response, you must do ONLY the following in 1–2 short sentences:
+
+1) Acknowledge that they can hear you.
+2) Introduce yourself by first name.
+3) State the reason for the call.
+4) End with this question (or a very close variation):
+   "How's your day going so far?"
+
+Say something like:
+"Hey ${clientName}, perfect, I'm ${aiName} calling about the life insurance information you requested. How's your day going so far?"
+
+After you say this once, stop talking and wait silently for their response.
+`.trim();
+
+    state.phase = "waiting_second_response";
+    delayMs = 450;
+  } else if (state.phase === "waiting_second_response") {
+    // We just got their answer to "How's your day going so far?"
+    instructions = `
+In this response, you must do ONLY the following in 2–3 short sentences:
+
+1) Briefly acknowledge how their day is going.
+2) Confirm this will be quick.
+3) Ask a simple first discovery question about who the coverage would be for or what they were hoping to accomplish.
+
+Example style:
+"Gotcha, I hear that. I'll keep this really quick for you. When you sent that request in, were you mainly thinking about coverage just for yourself or for you and a spouse as well?"
+
+After you finish, stop and wait for their answer.
+`.trim();
+
+    state.phase = "normal";
+    delayMs = 550;
+  } else {
+    // Normal conversation turn: short, Q&A style
+    instructions = `
+Respond briefly to what they just said using 1–3 short sentences.
+- If appropriate, end with exactly ONE clear question about their situation or the appointment.
+- Do NOT stack multiple big steps in one turn.
+- After you finish speaking, stop and wait silently for their response.
+`.trim();
+
+    delayMs = 600;
+  }
+
+  const payload = {
+    type: "response.create",
+    response: {
+      instructions,
+    },
+  };
+
+  setTimeout(() => {
+    try {
+      state.openAiWs!.send(JSON.stringify(payload));
+    } catch (err: any) {
+      console.error(
+        "[AI-VOICE] Error sending response.create after speech_stopped:",
+        err?.message || err
+      );
+    }
+  }, delayMs);
 }
 
 /**
@@ -1086,25 +1133,6 @@ function buildSystemPrompt(ctx: AICallContext): string {
 
   const scriptKey = ctx.scriptKey || "mortgage_protection";
 
-  // Dynamic descriptor for the second-turn intro line,
-  // so mortgage leads don't sound like generic life leads.
-  let leadDescriptor =
-    "the life insurance information you requested online";
-  if (scriptKey === "mortgage_protection") {
-    leadDescriptor = "the mortgage protection request you put in for your home";
-  } else if (scriptKey === "veteran_leads") {
-    leadDescriptor = "the veteran life insurance programs you were looking into";
-  } else if (scriptKey === "iul_cash_value" || scriptKey === "iul_leads") {
-    leadDescriptor =
-      "the cash-building life insurance and Indexed Universal Life information you asked about";
-  } else if (scriptKey === "final_expense") {
-    leadDescriptor =
-      "the life insurance information you requested to cover final expenses";
-  } else if (scriptKey === "trucker_leads") {
-    leadDescriptor =
-      "the life insurance information you requested as a truck driver";
-  }
-
   const basePersona = `
 You are ${aiName}, a highly skilled virtual phone appointment setter calling on behalf of licensed life insurance agent ${agentName}.
 Your style is inspired by Jeremy Lee Minor: confident, calm, curious, and precise. You sound like a real human assistant, never a robot.
@@ -1182,21 +1210,20 @@ You must follow this exact pattern for the first two turns of the call:
 1) FIRST TURN (audio check only)
    - Your first spoken turn is pre-configured separately and will be:
      "Hey ${clientName}, can you hear me okay?"
-   - You say that once, then stop and wait. You must NOT add anything else.
+   - You say that once, then stop and wait.
 
 2) SECOND TURN (intro + reason + simple question)
-   - ONLY AFTER they respond to your audio check, your second spoken turn should be exactly ONE short sentence:
-     "Hey ${clientName}, this is ${aiName} calling about ${leadDescriptor}. How's your day going so far?"
-   - You must NOT add any extra sentences, disclaimers, jokes, or filler in this second turn.
+   - AFTER they respond to your audio check, your second spoken turn should be:
+     "Hey ${clientName}, this is ${aiName} calling about the life insurance information you requested. How's your day going so far?"
+   - Keep it short and friendly.
    - After you ask "How's your day going so far?", STOP speaking and wait again for their response.
 
 3) DO NOT:
    - Do NOT combine the audio check and the full intro into one long monologue.
    - Do NOT mention that you're calling from ${agentName}'s office in your first or second turn.
    - Do NOT mention the appointment length (10–15 minutes) in the first two turns.
-   - Do NOT start explaining the full process or script in the first two turns.
 
-ONLY AFTER the first two turns are complete may you transition into your normal discovery questions and script for this lead type.
+ONLY AFTER the first two turns are complete may you transition into your normal discovery questions.
 
 IF THEY ASK "WHERE ARE YOU CALLING FROM?" OR "WHO ARE YOU WITH?"
 - Only at that point, answer clearly once:
@@ -1594,7 +1621,7 @@ GENERAL TURN-TAKING
 1) OPENING
 - Follow the required first two turns exactly as described earlier:
   • Turn 1: "Hey ${clientName}, can you hear me okay?"
-  • Turn 2: "Hey ${clientName}, this is ${aiName} calling about ${leadDescriptor}. How's your day going so far?"
+  • Turn 2 (once they respond): "Hey ${clientName}, this is ${aiName} calling about the life insurance information you requested. How's your day going so far?"
 - Only AFTER those two turns are complete, confirm they have a moment to talk and transition into discovery.
 
 2) DISCOVERY (2–3 questions only)
