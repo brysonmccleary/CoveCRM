@@ -20,7 +20,6 @@ type A2PStatusApiResponse = {
     hasProfile?: boolean;
     hasBrand?: boolean;
     hasCampaign?: boolean;
-    hasMessagingService?: boolean;
   };
 };
 
@@ -71,7 +70,10 @@ const ADVANCED_SPECIAL: { value: UseCaseCode; label: string }[] = [
   { value: "FRAUD_ALERT", label: "Fraud / Spend Alerts" },
   { value: "HIGHER_EDUCATION", label: "Higher Education" },
   { value: "POLLING_VOTING", label: "Polling / Voting (non-political)" },
-  { value: "PUBLIC_SERVICE_ANNOUNCEMENT", label: "Public Service Announcement" },
+  {
+    value: "PUBLIC_SERVICE_ANNOUNCEMENT",
+    label: "Public Service Announcement",
+  },
   { value: "SECURITY_ALERT", label: "Security Alerts" },
   { value: "AGENTS_FRANCHISES", label: "Agents / Franchises (special)" },
   { value: "CHARITY", label: "Charity 501(c)(3) (special)" },
@@ -81,11 +83,56 @@ const ADVANCED_SPECIAL: { value: UseCaseCode; label: string }[] = [
 ];
 
 const US_STATE_CODES = [
-  "AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA",
-  "HI","ID","IL","IN","IA","KS","KY","LA","ME","MD",
-  "MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ",
-  "NM","NY","NC","ND","OH","OK","OR","PA","RI","SC",
-  "SD","TN","TX","UT","VT","VA","WA","WV","WI","WY",
+  "AL",
+  "AK",
+  "AZ",
+  "AR",
+  "CA",
+  "CO",
+  "CT",
+  "DE",
+  "FL",
+  "GA",
+  "HI",
+  "ID",
+  "IL",
+  "IN",
+  "IA",
+  "KS",
+  "KY",
+  "LA",
+  "ME",
+  "MD",
+  "MA",
+  "MI",
+  "MN",
+  "MS",
+  "MO",
+  "MT",
+  "NE",
+  "NV",
+  "NH",
+  "NJ",
+  "NM",
+  "NY",
+  "NC",
+  "ND",
+  "OH",
+  "OK",
+  "OR",
+  "PA",
+  "RI",
+  "SC",
+  "SD",
+  "TN",
+  "TX",
+  "UT",
+  "VT",
+  "VA",
+  "WA",
+  "WV",
+  "WI",
+  "WY",
 ];
 
 type FieldErrors = {
@@ -130,7 +177,14 @@ export default function A2PVerificationForm() {
       const reg = (resp.registrationStatus || "").toLowerCase();
       const brand = (resp.brand?.status || "").toLowerCase();
       const camp = (resp.campaign?.status || "").toLowerCase();
-      const declined = app === "declined" || reg === "rejected" || !!resp.declinedReason;
+
+      // 🔁 CHANGED: do NOT treat any non-empty declinedReason as "declined"
+      const declined =
+        app === "declined" ||
+        reg === "rejected" ||
+        brand === "failed" ||
+        camp === "failed";
+
       const approved =
         (app === "approved" || reg === "campaign_approved") &&
         (resp.messagingReady || resp.canSendSms);
@@ -138,7 +192,9 @@ export default function A2PVerificationForm() {
       const notStarted =
         reg === "not_started" ||
         resp.nextAction === "start_profile" ||
-        (!resp.hints?.hasProfile && !resp.hints?.hasBrand && !resp.hints?.hasCampaign);
+        (!resp.hints?.hasProfile &&
+          !resp.hints?.hasBrand &&
+          !resp.hints?.hasCampaign);
 
       if (approved) {
         return {
@@ -149,7 +205,7 @@ export default function A2PVerificationForm() {
         };
       }
 
-      if (declined || brand === "failed" || camp === "failed") {
+      if (declined) {
         return {
           state: "declined",
           title: "A2P Declined – changes required",
@@ -631,10 +687,14 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
                 const reg = (resp.registrationStatus || "").toLowerCase();
                 const brand = (resp.brand?.status || "").toLowerCase();
                 const camp = (resp.campaign?.status || "").toLowerCase();
+
+                // 🔁 CHANGED HERE TOO: same logic as classifyStatus above
                 const declined =
                   app === "declined" ||
                   reg === "rejected" ||
-                  !!resp.declinedReason;
+                  brand === "failed" ||
+                  camp === "failed";
+
                 const approved =
                   (app === "approved" || reg === "campaign_approved") &&
                   (resp.messagingReady || resp.canSendSms);
@@ -654,7 +714,7 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
                       "Your brand and campaign are approved. Your CoveCRM numbers are ready to send compliant A2P traffic.",
                   };
                 }
-                if (declined || brand === "failed" || camp === "failed") {
+                if (declined) {
                   return {
                     state: "declined",
                     title: "A2P Declined – changes required",
