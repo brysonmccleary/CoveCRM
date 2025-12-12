@@ -128,6 +128,9 @@ type CallState = {
   pendingAudioFrames: string[]; // base64-encoded g711_ulaw chunks
   finalOutcomeSent?: boolean;
 
+  // Track whether we've appended audio since the last commit
+  hasUncommittedAudio?: boolean;
+
   // Billing
   callStartedAtMs?: number;
   billedUsageSent?: boolean;
@@ -326,6 +329,7 @@ wss.on("connection", (ws: WebSocket) => {
     streamSid: "",
     callSid: "",
     pendingAudioFrames: [],
+    hasUncommittedAudio: false,
   };
   calls.set(ws, state);
 
@@ -383,6 +387,7 @@ async function handleStart(ws: WebSocket, msg: TwilioStartEvent) {
   state.callSid = msg.start.callSid;
   state.callStartedAtMs = Date.now();
   state.billedUsageSent = false;
+  state.hasUncommittedAudio = false;
 
   const custom = msg.start.customParameters || {};
   const sessionId = custom.sessionId;
@@ -462,6 +467,7 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
       audio: payload, // still base64 g711_ulaw
     };
     state.openAiWs.send(JSON.stringify(event));
+    state.hasUncommittedAudio = true;
   } catch (err: any) {
     console.error(
       "[AI-VOICE] Error forwarding audio to OpenAI:",
@@ -484,11 +490,15 @@ async function handleStop(ws: WebSocket, msg: TwilioStopEvent) {
   // Tell OpenAI we're done sending audio for this call
   if (state.openAiWs && state.openAiReady) {
     try {
-      state.openAiWs.send(
-        JSON.stringify({
-          type: "input_audio_buffer.commit",
-        })
-      );
+      // Only commit if we've actually appended audio since last commit
+      if (state.hasUncommittedAudio) {
+        state.openAiWs.send(
+          JSON.stringify({
+            type: "input_audio_buffer.commit",
+          })
+        );
+        state.hasUncommittedAudio = false;
+      }
 
       // Ask the model to finalize any internal notes / outcome.
       state.openAiWs.send(
@@ -599,6 +609,7 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
             audio: base64Chunk,
           };
           openAiWs.send(JSON.stringify(event));
+          state.hasUncommittedAudio = true;
         }
         state.pendingAudioFrames = [];
       }
@@ -647,6 +658,12 @@ Rules for this first response:
           "[AI-VOICE] OpenAI event (no type):",
           text.slice(0, 200) + (text.length > 200 ? "..." : "")
         );
+      }
+
+      // When the server VAD commits, clear our uncommitted flag
+      if (event.type === "input_audio_buffer.committed") {
+        const st = calls.get(ws);
+        if (st) st.hasUncommittedAudio = false;
       }
 
       await handleOpenAiEvent(ws, state, event);
@@ -702,28 +719,44 @@ async function handleOpenAiEvent(
         event
       );
     } else {
-      const mulawBase64 = pcm16ToMulawBase64(payloadBase64);
+      const mulawBase64All = pcm16ToMulawBase64(payloadBase64);
+
+      if (!mulawBase64All) {
+        return;
+      }
+
+      const mulawBuf = Buffer.from(mulawBase64All, "base64");
+      if (!mulawBuf.length) return;
 
       if (!state.debugLoggedFirstOutputAudio) {
         console.log("[AI-VOICE] Sending first audio chunk to Twilio", {
           streamSid,
           pcmLength: payloadBase64.length,
-          mulawLength: mulawBase64.length,
+          mulawLength: mulawBase64All.length,
+          bytes: mulawBuf.length,
         });
         state.debugLoggedFirstOutputAudio = true;
       }
 
       try {
-        const twilioMediaMsg = {
-          event: "media",
-          streamSid,
-          media: {
-            payload: mulawBase64,
-            track: "outbound",
-          },
-        };
+        // Send in ~20ms frames (160 bytes at 8kHz μ-law)
+        const FRAME_SIZE = 160;
+        for (let offset = 0; offset < mulawBuf.length; offset += FRAME_SIZE) {
+          const frame = mulawBuf.subarray(offset, offset + FRAME_SIZE);
+          if (!frame.length) continue;
 
-        twilioWs.send(JSON.stringify(twilioMediaMsg));
+          const frameBase64 = frame.toString("base64");
+          const twilioMediaMsg = {
+            event: "media",
+            streamSid,
+            media: {
+              payload: frameBase64,
+              track: "outbound",
+            },
+          };
+
+          twilioWs.send(JSON.stringify(twilioMediaMsg));
+        }
       } catch (err: any) {
         console.error(
           "[AI-VOICE] Error sending audio to Twilio:",
