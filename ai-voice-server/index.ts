@@ -128,12 +128,8 @@ type CallState = {
   pendingAudioFrames: string[]; // base64-encoded g711_ulaw chunks
   finalOutcomeSent?: boolean;
 
-  // Track whether we've appended audio since the last commit
+  // Track whether we've appended audio since the last commit (not used now, but kept)
   hasUncommittedAudio?: boolean;
-
-  // Track user turn commits for opening behavior
-  userCommitCount?: number;
-  hasSentSecondTurn?: boolean;
 
   // Billing
   callStartedAtMs?: number;
@@ -145,98 +141,6 @@ type CallState = {
 };
 
 const calls = new Map<WebSocket, CallState>();
-
-/**
- * Helper: convert OpenAI PCM16 (24k) → μ-law 8k and return base64 string.
- *
- * NOTE:
- * - OpenAI Realtime audio deltas are PCM16 (signed 16-bit, LE) at 24k.
- * - Twilio Media Streams expect G.711 μ-law at 8k.
- * - We do a quick-and-dirty downsample by taking every 3rd sample.
- *   This is fine for phone-quality speech.
- */
-function pcm16ToMulawBase64(pcm16Base64: string): string {
-  if (!pcm16Base64) return "";
-
-  const pcmBuf = Buffer.from(pcm16Base64, "base64");
-  if (pcmBuf.length < 2) return "";
-
-  const sampleCount = Math.floor(pcmBuf.length / 2);
-  if (sampleCount <= 0) return "";
-
-  // Downsample 24k → 8k by taking every 3rd sample
-  const outSampleCount = Math.ceil(sampleCount / 3);
-  const mulawBytes = Buffer.alloc(outSampleCount);
-
-  const BIAS = 0x84;
-  const CLIP = 32635;
-
-  const linearToMulaw = (sample: number): number => {
-    let sign = (sample >> 8) & 0x80;
-    if (sign !== 0) {
-      sample = -sample;
-    }
-    if (sample > CLIP) {
-      sample = CLIP;
-    }
-    sample = sample + BIAS;
-
-    let exponent = 7;
-    for (
-      let expMask = 0x4000;
-      (sample & expMask) === 0 && exponent > 0;
-      expMask >>= 1
-    ) {
-      exponent--;
-    }
-
-    const mantissa = (sample >> (exponent + 3)) & 0x0f;
-    let mu = ~(sign | (exponent << 4) | mantissa);
-    return mu & 0xff;
-  };
-
-  let outIndex = 0;
-  for (let i = 0; i < sampleCount && outIndex < outSampleCount; i += 3) {
-    const offset = i * 2;
-    if (offset + 1 >= pcmBuf.length) break;
-    const sample = pcmBuf.readInt16LE(offset);
-    const mu = linearToMulaw(sample);
-    mulawBytes[outIndex++] = mu;
-  }
-
-  if (outIndex < outSampleCount) {
-    return mulawBytes.slice(0, outIndex).toString("base64");
-  }
-  return mulawBytes.toString("base64");
-}
-
-/**
- * Helper: compute the lead descriptor string based on scriptKey.
- * The wording here matches exactly what is used in buildSystemPrompt.
- */
-function getLeadDescriptor(scriptKeyRaw: string | undefined): string {
-  const scriptKey = scriptKeyRaw || "mortgage_protection";
-
-  let leadDescriptor =
-    "the life insurance information you requested online";
-
-  if (scriptKey === "mortgage_protection") {
-    leadDescriptor = "the mortgage protection request you put in for your home";
-  } else if (scriptKey === "veteran_leads") {
-    leadDescriptor = "the veteran life insurance programs you were looking into";
-  } else if (scriptKey === "iul_cash_value" || scriptKey === "iul_leads") {
-    leadDescriptor =
-      "the cash-building life insurance and Indexed Universal Life information you asked about";
-  } else if (scriptKey === "final_expense") {
-    leadDescriptor =
-      "the life insurance information you requested to cover final expenses";
-  } else if (scriptKey === "trucker_leads") {
-    leadDescriptor =
-      "the life insurance information you requested as a truck driver";
-  }
-
-  return leadDescriptor;
-}
 
 /**
  * HTTP server (for /start-session, /stop-session) + WebSocket server
@@ -362,8 +266,6 @@ wss.on("connection", (ws: WebSocket) => {
     callSid: "",
     pendingAudioFrames: [],
     hasUncommittedAudio: false,
-    userCommitCount: 0,
-    hasSentSecondTurn: false,
   };
   calls.set(ws, state);
 
@@ -422,8 +324,6 @@ async function handleStart(ws: WebSocket, msg: TwilioStartEvent) {
   state.callStartedAtMs = Date.now();
   state.billedUsageSent = false;
   state.hasUncommittedAudio = false;
-  state.userCommitCount = 0;
-  state.hasSentSecondTurn = false;
 
   const custom = msg.start.customParameters || {};
   const sessionId = custom.sessionId;
@@ -523,36 +423,9 @@ async function handleStop(ws: WebSocket, msg: TwilioStopEvent) {
     `[AI-VOICE] stop: callSid=${msg.stop.callSid}, streamSid=${msg.streamSid}`
   );
 
-  // Tell OpenAI we're done sending audio for this call
-  if (state.openAiWs && state.openAiReady) {
-    try {
-      // Only commit if we've actually appended audio since last commit
-      if (state.hasUncommittedAudio) {
-        state.openAiWs.send(
-          JSON.stringify({
-            type: "input_audio_buffer.commit",
-          })
-        );
-        state.hasUncommittedAudio = false;
-      }
-
-      // Ask the model to finalize any internal notes / outcome.
-      state.openAiWs.send(
-        JSON.stringify({
-          type: "response.create",
-          response: {
-            instructions:
-              "The call has ended; finalize your internal notes and, if appropriate, emit a final_outcome control payload. Do not send any more greeting audio.",
-          },
-        })
-      );
-    } catch (err: any) {
-      console.error(
-        "[AI-VOICE] Error committing OpenAI buffer:",
-        err?.message || err
-      );
-    }
-  }
+  // 🔴 IMPORTANT CHANGE:
+  // We NO LONGER call input_audio_buffer.commit or force a final response here.
+  // That avoids the "input_audio_buffer_commit_empty" error and surprise extra audio.
 
   // Bill for the full duration of this AI dialer call (vendor analytics)
   try {
@@ -607,7 +480,7 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
     // Configure the Realtime session:
     //  - Jeremy-Lee-style instructions
     //  - voice
-    //  - g711_ulaw audio IN, PCM16 audio OUT
+    //  - g711_ulaw audio IN, g711_ulaw audio OUT (DIRECT passthrough)
     //  - server-side VAD to detect turns and respond automatically
     const sessionUpdate = {
       type: "session.update",
@@ -617,7 +490,8 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
         // IMPORTANT: audio + text to avoid invalid modalities error
         modalities: ["audio", "text"],
         input_audio_format: "g711_ulaw",
-        output_audio_format: "pcm16",
+        // 🔴 IMPORTANT CHANGE: output is ALSO g711_ulaw now
+        output_audio_format: "g711_ulaw",
         turn_detection: {
           type: "server_vad",
           // Slightly faster, still human-like: reacts a bit sooner
@@ -699,65 +573,7 @@ Rules for this first response:
       // When the server VAD commits, clear our uncommitted flag
       if (event.type === "input_audio_buffer.committed") {
         const st = calls.get(ws);
-        if (st) {
-          st.hasUncommittedAudio = false;
-          st.userCommitCount = (st.userCommitCount || 0) + 1;
-
-          // After the FIRST user turn is committed, force the second-turn intro
-          if (
-            st.userCommitCount === 1 &&
-            !st.hasSentSecondTurn &&
-            st.openAiWs &&
-            st.context
-          ) {
-            try {
-              // Cancel any auto-created response that might have been triggered
-              st.openAiWs.send(
-                JSON.stringify({
-                  type: "response.cancel",
-                })
-              );
-            } catch (err: any) {
-              console.error(
-                "[AI-VOICE] Error sending response.cancel for second turn:",
-                err?.message || err
-              );
-            }
-
-            const ctx = st.context;
-            const clientName = ctx.clientFirstName || "there";
-            const aiName = ctx.voiceProfile.aiName || "Alex";
-            const leadDescriptor = getLeadDescriptor(ctx.scriptKey);
-
-            try {
-              st.openAiWs.send(
-                JSON.stringify({
-                  type: "response.create",
-                  response: {
-                    instructions: `
-Your ONLY job in this response is to say exactly this one short line, then stop talking completely:
-
-"Hey ${clientName}, this is ${aiName} calling about ${leadDescriptor}. How's your day going so far?"
-
-Rules for this response:
-- Do NOT change or add any words.
-- Do NOT add a second sentence.
-- Do NOT explain anything else yet.
-- After you speak that line once, you must stop and wait silently for the lead's response.
-`.trim(),
-                  },
-                })
-              );
-              st.hasSentSecondTurn = true;
-              console.log("[AI-VOICE] Forced second-turn intro line sent");
-            } catch (err: any) {
-              console.error(
-                "[AI-VOICE] Error sending forced second-turn intro:",
-                err?.message || err
-              );
-            }
-          }
-        }
+        if (st) st.hasUncommittedAudio = false;
       }
 
       await handleOpenAiEvent(ws, state, event);
@@ -780,7 +596,7 @@ Rules for this response:
 
 /**
  * Handle events coming back from OpenAI Realtime.
- *  - Stream audio deltas back to Twilio (with PCM16 → μ-law conversion)
+ *  - Stream audio deltas back to Twilio (DIRECT g711_ulaw passthrough)
  *  - Detect tool calls / intents for booking + outcomes
  */
 async function handleOpenAiEvent(
@@ -792,7 +608,7 @@ async function handleOpenAiEvent(
   if (!context) return;
 
   // 1) Audio back to Twilio
-  //    OpenAI → PCM16 → μ-law 8k → Twilio media payload.
+  //    OpenAI → g711_ulaw base64 → Twilio media payload.
   if (
     event.type === "response.audio.delta" ||
     event.type === "response.output_audio.delta"
@@ -800,10 +616,10 @@ async function handleOpenAiEvent(
     let payloadBase64: string | undefined;
 
     if (typeof event.delta === "string") {
-      // shape: { type: "response.audio.delta", delta: "<base64 pcm16>" }
+      // shape: { type: "response.audio.delta", delta: "<base64 g711_ulaw>" }
       payloadBase64 = event.delta;
     } else if (event.delta && typeof event.delta.audio === "string") {
-      // shape: { type: "response.output_audio.delta", delta: { audio: "<base64 pcm16>" } }
+      // shape: { type: "response.output_audio.delta", delta: { audio: "<base64 g711_ulaw>" } }
       payloadBase64 = event.delta.audio as string;
     }
 
@@ -813,43 +629,26 @@ async function handleOpenAiEvent(
         event
       );
     } else {
-      const mulawBase64All = pcm16ToMulawBase64(payloadBase64);
-
-      if (!mulawBase64All) {
-        return;
-      }
-
-      const mulawBuf = Buffer.from(mulawBase64All, "base64");
-      if (!mulawBuf.length) return;
-
       if (!state.debugLoggedFirstOutputAudio) {
         console.log("[AI-VOICE] Sending first audio chunk to Twilio", {
           streamSid,
-          pcmLength: payloadBase64.length,
-          mulawLength: mulawBase64All.length,
-          bytes: mulawBuf.length,
+          base64Length: payloadBase64.length,
         });
         state.debugLoggedFirstOutputAudio = true;
       }
 
       try {
-        // Send in ~20ms frames (160 bytes at 8kHz μ-law)
-        const FRAME_SIZE = 160;
-        for (let offset = 0; offset < mulawBuf.length; offset += FRAME_SIZE) {
-          const frame = mulawBuf.subarray(offset, offset + FRAME_SIZE);
-          if (!frame.length) continue;
+        const twilioMediaMsg = {
+          event: "media",
+          streamSid,
+          media: {
+            payload: payloadBase64,
+            // track is optional; Twilio will play this back to the call
+            // track: "outbound",
+          },
+        };
 
-          const frameBase64 = frame.toString("base64");
-          const twilioMediaMsg = {
-            event: "media",
-            streamSid,
-            media: {
-              payload: frameBase64,
-            },
-          };
-
-          twilioWs.send(JSON.stringify(twilioMediaMsg));
-        }
+        twilioWs.send(JSON.stringify(twilioMediaMsg));
       } catch (err: any) {
         console.error(
           "[AI-VOICE] Error sending audio to Twilio:",
@@ -859,7 +658,7 @@ async function handleOpenAiEvent(
     }
   }
 
-  // 2) Text / tool calls / intents via control metadata
+  // 2) Text / tool calls / intents via control metadata (if you decide to use it later)
   try {
     const control =
       event?.control ||
@@ -1187,7 +986,22 @@ function buildSystemPrompt(ctx: AICallContext): string {
 
   // Dynamic descriptor for the second-turn intro line,
   // so mortgage leads don't sound like generic life leads.
-  const leadDescriptor = getLeadDescriptor(scriptKey);
+  let leadDescriptor =
+    "the life insurance information you requested online";
+  if (scriptKey === "mortgage_protection") {
+    leadDescriptor = "the mortgage protection request you put in for your home";
+  } else if (scriptKey === "veteran_leads") {
+    leadDescriptor = "the veteran life insurance programs you were looking into";
+  } else if (scriptKey === "iul_cash_value" || scriptKey === "iul_leads") {
+    leadDescriptor =
+      "the cash-building life insurance and Indexed Universal Life information you asked about";
+  } else if (scriptKey === "final_expense") {
+    leadDescriptor =
+      "the life insurance information you requested to cover final expenses";
+  } else if (scriptKey === "trucker_leads") {
+    leadDescriptor =
+      "the life insurance information you requested as a truck driver";
+  }
 
   const basePersona = `
 You are ${aiName}, a highly skilled virtual phone appointment setter calling on behalf of licensed life insurance agent ${agentName}.
