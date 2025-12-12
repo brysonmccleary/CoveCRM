@@ -125,12 +125,18 @@ type CallState = {
 
   debugLoggedFirstMedia?: boolean;
   debugLoggedFirstOutputAudio?: boolean;
+
+  // NEW: cost/turn-control state
+  waitingForResponse?: boolean;
+  aiSpeaking?: boolean;
+  userAudioMsBuffered?: number; // approximate ms of user audio seen
 };
 
 const calls = new Map<WebSocket, CallState>();
 
 /**
  * PCM16 (24k) → μ-law 8k (base64) for Twilio
+ * (audio path UNCHANGED per instructions)
  */
 function pcm16ToMulawBase64(pcm16Base64: string): string {
   if (!pcm16Base64) return "";
@@ -297,6 +303,9 @@ wss.on("connection", (ws: WebSocket) => {
     streamSid: "",
     callSid: "",
     pendingAudioFrames: [],
+    waitingForResponse: false,
+    aiSpeaking: false,
+    userAudioMsBuffered: 0,
   };
   calls.set(ws, state);
 
@@ -356,6 +365,9 @@ async function handleStart(ws: WebSocket, msg: TwilioStartEvent) {
   state.callSid = msg.start.callSid;
   state.callStartedAtMs = Date.now();
   state.billedUsageSent = false;
+  state.waitingForResponse = false;
+  state.aiSpeaking = false;
+  state.userAudioMsBuffered = 0;
 
   const custom = msg.start.customParameters || {};
   const sessionId = custom.sessionId;
@@ -409,6 +421,9 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
 
   const { payload } = msg.media;
 
+  // Track approximate user audio duration (20ms per frame)
+  state.userAudioMsBuffered = (state.userAudioMsBuffered || 0) + 20;
+
   if (!state.debugLoggedFirstMedia) {
     console.log("[AI-VOICE] handleMedia: first audio frame received", {
       streamSid: state.streamSid,
@@ -451,23 +466,53 @@ async function handleStop(ws: WebSocket, msg: TwilioStopEvent) {
 
   if (state.openAiWs && state.openAiReady) {
     try {
-      state.openAiWs.send(
-        JSON.stringify({
-          type: "input_audio_buffer.commit",
-        })
-      );
-      state.openAiWs.send(
-        JSON.stringify({
-          type: "response.create",
-          response: {
-            instructions:
-              "The call has ended; finalize your internal notes and, if appropriate, emit a final_outcome control payload. Do not send any more greeting audio.",
-          },
-        })
-      );
+      // Only commit if:
+      // - At least ~100ms of user audio has been seen
+      // - AI is not currently speaking
+      // - We are not still waiting on a previous response
+      const hasEnoughAudio =
+        (state.userAudioMsBuffered || 0) >= 100; // 5+ frames ≈ 100ms
+      const canCommit =
+        hasEnoughAudio && !state.aiSpeaking && !state.waitingForResponse;
+
+      if (canCommit) {
+        state.openAiWs.send(
+          JSON.stringify({
+            type: "input_audio_buffer.commit",
+          })
+        );
+      } else {
+        console.log(
+          "[AI-VOICE] Skipping final input_audio_buffer.commit due to gating conditions",
+          {
+            userAudioMsBuffered: state.userAudioMsBuffered,
+            aiSpeaking: state.aiSpeaking,
+            waitingForResponse: state.waitingForResponse,
+          }
+        );
+      }
+
+      // Final "wrap up" response, but only if we are not already waiting
+      if (!state.waitingForResponse) {
+        state.waitingForResponse = true;
+        state.aiSpeaking = true;
+        state.openAiWs.send(
+          JSON.stringify({
+            type: "response.create",
+            response: {
+              instructions:
+                "The call has ended; finalize your internal notes and, if appropriate, emit a final_outcome control payload. Do not send any more greeting audio.",
+            },
+          })
+        );
+      } else {
+        console.log(
+          "[AI-VOICE] Suppressing final response.create because waitingForResponse is already true"
+        );
+      }
     } catch (err: any) {
       console.error(
-        "[AI-VOICE] Error committing OpenAI buffer:",
+        "[AI-VOICE] Error committing OpenAI buffer / final response:",
         err?.message || err
       );
     }
@@ -527,14 +572,21 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
         instructions: systemPrompt,
         voice: state.context!.voiceProfile.openAiVoiceId || "alloy",
         modalities: ["audio", "text"],
+
+        // AUDIO FORMATS (UNCHANGED)
         input_audio_format: "g711_ulaw",
         output_audio_format: "pcm16",
+
+        // VAD: disable auto-response generation – manual response.create only
         turn_detection: {
           type: "server_vad",
-          threshold: 0.45,
-          silence_duration_ms: 1100,
-          create_response: true,
+          create_response: false,
         },
+
+        // COST CONTROL: audio-only mode
+        output_text: false,
+        input_text_enabled: false,
+        response_format: { type: "audio" },
       },
     };
 
@@ -556,18 +608,27 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
         state.pendingAudioFrames = [];
       }
 
-      openAiWs.send(
-        JSON.stringify({
-          type: "response.create",
-          response: {
-            instructions:
-              "Begin the call now and greet the lead following the call rules. Keep it to one or two short sentences and end with a simple question like 'How's your day going so far?' Then stop speaking and wait for the lead to respond before continuing.",
-          },
-        })
-      );
+      // Initial greeting – guarded so we never stack multiple responses
+      if (!state.waitingForResponse) {
+        state.waitingForResponse = true;
+        state.aiSpeaking = true;
+        openAiWs.send(
+          JSON.stringify({
+            type: "response.create",
+            response: {
+              instructions:
+                "Begin the call now and greet the lead following the call rules. Keep it to one or two short sentences and end with a simple question like 'How's your day going so far?' Then stop speaking and wait for the lead to respond before continuing.",
+            },
+          })
+        );
+      } else {
+        console.log(
+          "[AI-VOICE] Suppressing initial greeting response.create because waitingForResponse is already true"
+        );
+      }
     } catch (err: any) {
       console.error(
-        "[AI-VOICE] Error sending session.update:",
+        "[AI-VOICE] Error sending session.update / initial greeting:",
         err?.message || err
       );
     }
@@ -618,7 +679,17 @@ async function handleOpenAiEvent(
   const { streamSid, context } = state;
   if (!context) return;
 
-  // Audio back to Twilio
+  // Turn-completion: once OpenAI finishes a response, allow new responses again
+  if (
+    event.type === "response.completed" ||
+    event.type === "response.output_audio.done" ||
+    event.type === "response.audio.done"
+  ) {
+    state.waitingForResponse = false;
+    state.aiSpeaking = false;
+  }
+
+  // Audio back to Twilio (UNCHANGED PATH)
   if (
     event.type === "response.audio.delta" ||
     event.type === "response.output_audio.delta"
@@ -769,14 +840,22 @@ async function handleBookAppointmentIntent(state: CallState, control: any) {
         json.humanReadableForLead ||
         "your scheduled appointment time as discussed";
 
-      state.openAiWs.send(
-        JSON.stringify({
-          type: "response.create",
-          response: {
-            instructions: `Explain to the lead, in natural language, that their appointment is confirmed for ${humanReadable}. Then briefly restate what the appointment will cover and end the call politely.`,
-          },
-        })
-      );
+      if (!state.waitingForResponse) {
+        state.waitingForResponse = true;
+        state.aiSpeaking = true;
+        state.openAiWs.send(
+          JSON.stringify({
+            type: "response.create",
+            response: {
+              instructions: `Explain to the lead, in natural language, that their appointment is confirmed for ${humanReadable}. Then briefly restate what the appointment will cover and end the call politely.`,
+            },
+          })
+        );
+      } else {
+        console.log(
+          "[AI-VOICE] Suppressing booking confirmation response.create because waitingForResponse is already true"
+        );
+      }
     }
   } catch (err: any) {
     console.error(
@@ -932,6 +1011,7 @@ async function billAiDialerUsageForCall(state: CallState) {
 /**
  * System prompt – insurance only, no home-improvement BS,
  * English only unless they explicitly ask otherwise.
+ * (UNCHANGED)
  */
 function buildSystemPrompt(ctx: AICallContext): string {
   const aiName = ctx.voiceProfile.aiName || "Alex";
