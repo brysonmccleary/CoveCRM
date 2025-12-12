@@ -369,7 +369,7 @@ export default async function handler(
 
   // If samples were only provided via blob, still validate each one generically
   if (!samplesFromFieldsRaw[0] && finalSamples.length) {
-    finalSamples.forEach((m, idx) => {
+    finalSamples.forEach((m) => {
       if (m.length < 20 || m.length > 320) {
         // don't overwrite a more specific field error
         if (!errors.sampleMessage1) {
@@ -525,7 +525,9 @@ export default async function handler(
             // Keep simple normalized copies the sync job can also read
             useCase: normalizedUseCase,
             usecaseCode: normalizedUseCase,
-            sampleMessages: finalSampleArray,
+            // 🔧 FIX: sampleMessages is a string; sampleMessagesArr is the array
+            sampleMessages: finalSampleArray.join("\n\n"),
+            sampleMessagesArr: finalSampleArray,
             sampleMessage1: finalSampleArray[0],
             sampleMessage2: finalSampleArray[1],
             sampleMessage3: finalSampleArray[2],
