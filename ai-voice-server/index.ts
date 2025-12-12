@@ -2,6 +2,7 @@
 import http, { IncomingMessage, ServerResponse } from "http";
 import WebSocket, { WebSocketServer } from "ws";
 import fetch from "node-fetch";
+import { Buffer } from "buffer";
 
 /**
  * ENV + config
@@ -138,6 +139,9 @@ type CallState = {
   // Debug flags (to avoid log spam)
   debugLoggedFirstMedia?: boolean;
   debugLoggedFirstOutputAudio?: boolean;
+
+  // Outbound audio buffer for Twilio (raw μ-law bytes waiting to be framed)
+  outboundAudioBuffer?: Buffer;
 };
 
 const calls = new Map<WebSocket, CallState>();
@@ -266,6 +270,7 @@ wss.on("connection", (ws: WebSocket) => {
     callSid: "",
     pendingAudioFrames: [],
     hasUncommittedAudio: false,
+    outboundAudioBuffer: Buffer.alloc(0),
   };
   calls.set(ws, state);
 
@@ -596,7 +601,7 @@ Rules for this first response:
 
 /**
  * Handle events coming back from OpenAI Realtime.
- *  - Stream audio deltas back to Twilio (DIRECT g711_ulaw passthrough)
+ *  - Stream audio deltas back to Twilio (chunked g711_ulaw passthrough)
  *  - Detect tool calls / intents for booking + outcomes
  */
 async function handleOpenAiEvent(
@@ -608,7 +613,7 @@ async function handleOpenAiEvent(
   if (!context) return;
 
   // 1) Audio back to Twilio
-  //    OpenAI → g711_ulaw base64 → Twilio media payload.
+  //    OpenAI → g711_ulaw base64 → Twilio media payload(s).
   if (
     event.type === "response.audio.delta" ||
     event.type === "response.output_audio.delta"
@@ -629,29 +634,52 @@ async function handleOpenAiEvent(
         event
       );
     } else {
-      if (!state.debugLoggedFirstOutputAudio) {
-        console.log("[AI-VOICE] Sending first audio chunk to Twilio", {
-          streamSid,
-          base64Length: payloadBase64.length,
-        });
-        state.debugLoggedFirstOutputAudio = true;
-      }
-
       try {
-        const twilioMediaMsg = {
-          event: "media",
-          streamSid,
-          media: {
-            payload: payloadBase64,
-            // track is optional; Twilio will play this back to the call
-            // track: "outbound",
-          },
-        };
+        // Decode the full μ-law block from OpenAI
+        const incomingBuffer = Buffer.from(payloadBase64, "base64");
 
-        twilioWs.send(JSON.stringify(twilioMediaMsg));
+        if (!state.outboundAudioBuffer) {
+          state.outboundAudioBuffer = Buffer.alloc(0);
+        }
+
+        // Append to any leftover bytes from previous deltas
+        let working = Buffer.concat([state.outboundAudioBuffer, incomingBuffer]);
+
+        const FRAME_SIZE = 160; // 20ms @ 8kHz, μ-law (1 byte per sample)
+
+        // Log once on the very first outbound audio we send
+        if (!state.debugLoggedFirstOutputAudio && working.length >= FRAME_SIZE) {
+          console.log("[AI-VOICE] Preparing first outbound audio frames", {
+            streamSid,
+            totalBytes: working.length,
+          });
+          state.debugLoggedFirstOutputAudio = true;
+        }
+
+        // While we have at least 20ms of audio, send it as a Twilio media frame
+        while (working.length >= FRAME_SIZE) {
+          const frame = working.subarray(0, FRAME_SIZE);
+          working = working.subarray(FRAME_SIZE);
+
+          const frameBase64 = frame.toString("base64");
+
+          const twilioMediaMsg = {
+            event: "media" as const,
+            streamSid,
+            media: {
+              payload: frameBase64,
+              track: "outbound" as const,
+            },
+          };
+
+          twilioWs.send(JSON.stringify(twilioMediaMsg));
+        }
+
+        // Store any leftover partial frame for the next delta
+        state.outboundAudioBuffer = working;
       } catch (err: any) {
         console.error(
-          "[AI-VOICE] Error sending audio to Twilio:",
+          "[AI-VOICE] Error chunking/sending audio to Twilio:",
           err?.message || err
         );
       }
