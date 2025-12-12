@@ -129,8 +129,15 @@ type CallState = {
   pendingAudioFrames: string[]; // base64-encoded g711_ulaw chunks
   finalOutcomeSent?: boolean;
 
-  // Track whether we've appended audio since the last commit (not used now, but kept)
+  // Track whether we've appended audio since the last commit
   hasUncommittedAudio?: boolean;
+
+  // New: simple ms tracker since last commit + last media timestamp
+  bufferedMsSinceLastCommit?: number;
+  lastMediaAtMs?: number;
+
+  // Optional future use for periodic commit logic
+  commitInterval?: NodeJS.Timeout;
 
   // Billing
   callStartedAtMs?: number;
@@ -145,6 +152,9 @@ type CallState = {
 };
 
 const calls = new Map<WebSocket, CallState>();
+
+// Frame size for μ-law @ 8kHz (20ms)
+const FRAME_SIZE = 160;
 
 /**
  * HTTP server (for /start-session, /stop-session) + WebSocket server
@@ -270,6 +280,7 @@ wss.on("connection", (ws: WebSocket) => {
     callSid: "",
     pendingAudioFrames: [],
     hasUncommittedAudio: false,
+    bufferedMsSinceLastCommit: 0,
     outboundAudioBuffer: Buffer.alloc(0),
   };
   calls.set(ws, state);
@@ -300,6 +311,10 @@ wss.on("connection", (ws: WebSocket) => {
   ws.on("close", () => {
     console.log("[AI-VOICE] WebSocket closed");
     const state = calls.get(ws);
+    if (state?.commitInterval) {
+      clearInterval(state.commitInterval);
+      state.commitInterval = undefined;
+    }
     if (state?.openAiWs) {
       try {
         state.openAiWs.close();
@@ -318,6 +333,41 @@ server.listen(PORT, () => {
 });
 
 /**
+ * Safely commit the input audio buffer if we have enough new audio.
+ * This is used sparingly (e.g., on STOP) to avoid empty commits.
+ */
+function commitIfHasAudio(state: CallState) {
+  const ws = state.openAiWs;
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+
+  const bufferedMs = state.bufferedMsSinceLastCommit ?? 0;
+  if (bufferedMs < 100) {
+    // OpenAI expects at least ~100ms of audio or it will error.
+    return;
+  }
+
+  try {
+    ws.send(
+      JSON.stringify({
+        type: "input_audio_buffer.commit",
+      })
+    );
+    state.bufferedMsSinceLastCommit = 0;
+    state.hasUncommittedAudio = false;
+    console.log(
+      "[AI-VOICE] Committed input audio buffer with ~",
+      bufferedMs,
+      "ms of audio"
+    );
+  } catch (err: any) {
+    console.error(
+      "[AI-VOICE] Error sending input_audio_buffer.commit:",
+      err?.message || err
+    );
+  }
+}
+
+/**
  * START: Twilio begins streaming the call
  */
 async function handleStart(ws: WebSocket, msg: TwilioStartEvent) {
@@ -329,6 +379,8 @@ async function handleStart(ws: WebSocket, msg: TwilioStartEvent) {
   state.callStartedAtMs = Date.now();
   state.billedUsageSent = false;
   state.hasUncommittedAudio = false;
+  state.bufferedMsSinceLastCommit = 0;
+  state.lastMediaAtMs = undefined;
 
   const custom = msg.start.customParameters || {};
   const sessionId = custom.sessionId;
@@ -409,6 +461,11 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
     };
     state.openAiWs.send(JSON.stringify(event));
     state.hasUncommittedAudio = true;
+
+    // Track input audio duration for safe commits
+    state.bufferedMsSinceLastCommit =
+      (state.bufferedMsSinceLastCommit ?? 0) + 20;
+    state.lastMediaAtMs = Date.now();
   } catch (err: any) {
     console.error(
       "[AI-VOICE] Error forwarding audio to OpenAI:",
@@ -428,9 +485,22 @@ async function handleStop(ws: WebSocket, msg: TwilioStopEvent) {
     `[AI-VOICE] stop: callSid=${msg.stop.callSid}, streamSid=${msg.streamSid}`
   );
 
-  // 🔴 IMPORTANT CHANGE:
-  // We NO LONGER call input_audio_buffer.commit or force a final response here.
-  // That avoids the "input_audio_buffer_commit_empty" error and surprise extra audio.
+  // Clear any periodic commit timer if we ever add it
+  if (state.commitInterval) {
+    clearInterval(state.commitInterval);
+    state.commitInterval = undefined;
+  }
+
+  // Safely commit any remaining input audio if there is enough buffered.
+  // This is guarded so we never hit input_audio_buffer_commit_empty.
+  try {
+    commitIfHasAudio(state);
+  } catch (err: any) {
+    console.error(
+      "[AI-VOICE] Error in guarded commit on stop:",
+      err?.message || err
+    );
+  }
 
   // Bill for the full duration of this AI dialer call (vendor analytics)
   try {
@@ -495,7 +565,7 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
         // IMPORTANT: audio + text to avoid invalid modalities error
         modalities: ["audio", "text"],
         input_audio_format: "g711_ulaw",
-        // 🔴 IMPORTANT CHANGE: output is ALSO g711_ulaw now
+        // output is ALSO g711_ulaw now
         output_audio_format: "g711_ulaw",
         turn_detection: {
           type: "server_vad",
@@ -525,6 +595,9 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
           };
           openAiWs.send(JSON.stringify(event));
           state.hasUncommittedAudio = true;
+          state.bufferedMsSinceLastCommit =
+            (state.bufferedMsSinceLastCommit ?? 0) + 20;
+          state.lastMediaAtMs = Date.now();
         }
         state.pendingAudioFrames = [];
       }
@@ -575,10 +648,13 @@ Rules for this first response:
         );
       }
 
-      // When the server VAD commits, clear our uncommitted flag
+      // When the server VAD commits, clear our uncommitted flag and ms tracker
       if (event.type === "input_audio_buffer.committed") {
         const st = calls.get(ws);
-        if (st) st.hasUncommittedAudio = false;
+        if (st) {
+          st.hasUncommittedAudio = false;
+          st.bufferedMsSinceLastCommit = 0;
+        }
       }
 
       await handleOpenAiEvent(ws, state, event);
@@ -624,7 +700,7 @@ async function handleOpenAiEvent(
       // shape: { type: "response.audio.delta", delta: "<base64 g711_ulaw>" }
       payloadBase64 = event.delta;
     } else if (event.delta && typeof event.delta.audio === "string") {
-      // shape: { type: "response.output_audio.delta", delta: { audio: "<base64 g711_ulaw>" } }
+      // fallback for any variant that nests the audio
       payloadBase64 = event.delta.audio as string;
     }
 
@@ -644,8 +720,6 @@ async function handleOpenAiEvent(
 
         // Append to any leftover bytes from previous deltas
         let working = Buffer.concat([state.outboundAudioBuffer, incomingBuffer]);
-
-        const FRAME_SIZE = 160; // 20ms @ 8kHz, μ-law (1 byte per sample)
 
         // Log once on the very first outbound audio we send
         if (!state.debugLoggedFirstOutputAudio && working.length >= FRAME_SIZE) {
