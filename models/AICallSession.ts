@@ -34,15 +34,12 @@ export interface IAICallSession extends Document {
   startedAt?: Date | null;
   completedAt?: Date | null;
   errorMessage?: string | null;
-
-  // ✅ Guardrails
-  lockedAt?: Date | null;
-  lockOwner?: string | null;
-  lockExpiresAt?: Date | null;
-  cooldownUntil?: Date | null;
-  leadAttemptCounts?: Record<string, number>;
-
   stats?: IAICallSessionStats;
+
+  // ✅ Guardrail to prevent duplicate “kick worker” loops from Twilio retries
+  chainKickedAt?: Date | null;
+  chainKickCallSid?: string | null;
+
   createdAt: Date;
   updatedAt: Date;
 }
@@ -88,12 +85,9 @@ const AICallSessionSchema = new Schema<IAICallSession>(
     completedAt: { type: Date, default: null },
     errorMessage: { type: String, default: null },
 
-    // ✅ Guardrails (minimal additions)
-    lockedAt: { type: Date, default: null },
-    lockOwner: { type: String, default: null },
-    lockExpiresAt: { type: Date, default: null },
-    cooldownUntil: { type: Date, default: null },
-    leadAttemptCounts: { type: Schema.Types.Mixed, default: {} },
+    // ✅ prevents duplicate chaining from Twilio callback retries
+    chainKickedAt: { type: Date, default: null },
+    chainKickCallSid: { type: String, default: null },
 
     // AI dialer stats (per session)
     stats: {
