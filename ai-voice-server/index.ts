@@ -38,10 +38,7 @@ const OUTCOME_URL = new URL(
   "/api/ai-calls/outcome",
   COVECRM_BASE_URL
 ).toString();
-const USAGE_URL = new URL(
-  "/api/ai-calls/usage",
-  COVECRM_BASE_URL
-).toString();
+const USAGE_URL = new URL("/api/ai-calls/usage", COVECRM_BASE_URL).toString();
 
 /**
  * Twilio <Stream> message types
@@ -350,9 +347,7 @@ wss.on("connection", (ws: WebSocket) => {
 });
 
 server.listen(PORT, () => {
-  console.log(
-    `[AI-VOICE] HTTP + WebSocket server listening on port ${PORT}`
-  );
+  console.log(`[AI-VOICE] HTTP + WebSocket server listening on port ${PORT}`);
 });
 
 /**
@@ -465,54 +460,13 @@ async function handleStop(ws: WebSocket, msg: TwilioStopEvent) {
     `[AI-VOICE] stop: callSid=${msg.stop.callSid}, streamSid=${msg.streamSid}`
   );
 
-  if (state.openAiWs && state.openAiReady) {
+  // COST CONTROL: call is over — don't commit buffers or generate any final OpenAI response.
+  // Closing the OpenAI socket avoids extra post-hangup generation and eliminates
+  // input_audio_buffer_commit_empty errors.
+  if (state.openAiWs) {
     try {
-      const hasEnoughAudio =
-        (state.userAudioMsBuffered || 0) >= 100; // ≥ ~100ms user audio
-      const canCommit =
-        hasEnoughAudio && !state.aiSpeaking && !state.waitingForResponse;
-
-      if (canCommit) {
-        state.openAiWs.send(
-          JSON.stringify({
-            type: "input_audio_buffer.commit",
-          })
-        );
-      } else {
-        console.log(
-          "[AI-VOICE] Skipping final input_audio_buffer.commit due to gating conditions",
-          {
-            userAudioMsBuffered: state.userAudioMsBuffered,
-            aiSpeaking: state.aiSpeaking,
-            waitingForResponse: state.waitingForResponse,
-          }
-        );
-      }
-
-      // Final wrap-up response, only if we aren't already waiting
-      if (!state.waitingForResponse) {
-        state.waitingForResponse = true;
-        state.aiSpeaking = true;
-        state.openAiWs.send(
-          JSON.stringify({
-            type: "response.create",
-            response: {
-              instructions:
-                "The call has ended; finalize your internal notes and, if appropriate, emit a final_outcome control payload. Do not send any more greeting audio.",
-            },
-          })
-        );
-      } else {
-        console.log(
-          "[AI-VOICE] Suppressing final response.create because waitingForResponse is already true"
-        );
-      }
-    } catch (err: any) {
-      console.error(
-        "[AI-VOICE] Error committing OpenAI buffer / final response:",
-        err?.message || err
-      );
-    }
+      state.openAiWs.close();
+    } catch {}
   }
 
   try {
@@ -568,7 +522,7 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
       session: {
         instructions: systemPrompt,
 
-        // Use audio-only mode to avoid any text output costs
+        // Audio-only session
         modalities: ["audio"],
         voice: state.context!.voiceProfile.openAiVoiceId || "alloy",
 
@@ -581,11 +535,6 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
           type: "server_vad",
           create_response: false,
         },
-
-        // Explicitly disable text I/O for cost control
-        output_text: false,
-        input_text_enabled: false,
-        response_format: { type: "audio" },
       },
     };
 
@@ -702,10 +651,7 @@ async function handleOpenAiEvent(
     }
 
     if (!payloadBase64) {
-      console.warn(
-        "[AI-VOICE] audio delta event without audio payload:",
-        event
-      );
+      console.warn("[AI-VOICE] audio delta event without audio payload:", event);
     } else {
       const mulawBase64 = pcm16ToMulawBase64(payloadBase64);
 
@@ -958,8 +904,7 @@ async function billAiDialerUsageForCall(state: CallState) {
   const diffMs = Math.max(0, endedAtMs - startedAtMs);
 
   const rawMinutes = diffMs / 60000;
-  const minutes =
-    rawMinutes <= 0 ? 0.01 : Math.round(rawMinutes * 100) / 100;
+  const minutes = rawMinutes <= 0 ? 0.01 : Math.round(rawMinutes * 100) / 100;
 
   const vendorCostUsd = minutes * AI_DIALER_VENDOR_COST_PER_MIN_USD;
 
