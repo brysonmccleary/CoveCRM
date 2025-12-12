@@ -47,6 +47,18 @@ const USAGE_URL = new URL(
 ).toString();
 
 /**
+ * Audio constants for μ-law 8k (g711_ulaw)
+ * - SAMPLE_RATE: 8000 samples/sec, 1 byte per sample
+ * - FRAME_SIZE: 160 bytes = 20 ms of audio
+ * - MIN_COMMIT_MS: we only commit if we have at least this much audio
+ */
+const SAMPLE_RATE = 8000;
+const BYTES_PER_MS = SAMPLE_RATE / 1000; // 8 bytes per ms
+const FRAME_SIZE = 160; // 20 ms frame for Twilio media payloads
+const MIN_COMMIT_MS = 100;
+const MIN_COMMIT_BYTES = Math.ceil(BYTES_PER_MS * MIN_COMMIT_MS); // 800 bytes
+
+/**
  * Types for Twilio <Stream> messages
  */
 type TwilioStreamMessage =
@@ -131,11 +143,10 @@ type CallState = {
   callSid: string;
   context?: AICallContext;
 
-  // OpenAI Realtime connection + buffers
+  // OpenAI Realtime connection
   openAiWs?: WebSocket;
   openAiReady?: boolean;
-  pendingAudioFrames: string[]; // base64-encoded g711_ulaw chunks
-  finalOutcomeSent?: boolean;
+  pendingAudioFrames: string[]; // base64-encoded g711_ulaw chunks received before OpenAI is ready
 
   // Billing
   callStartedAtMs?: number;
@@ -147,10 +158,19 @@ type CallState = {
 
   // Turn-taking state
   phase: ConversationPhase;
-  aiSpeaking: boolean;
+  aiSpeaking: boolean; // true while AI is currently talking (streaming audio out)
+  awaitingResponse: boolean; // true between response.create and response.completed/done
+
+  // Inbound audio buffer (Twilio -> OpenAI)
+  // We track bytes since last commit to avoid committing "empty" buffers.
+  inputAudioBuffer: Buffer;
+  inputAudioBufferedBytes: number;
 
   // Outbound audio buffer for Twilio (raw μ-law bytes waiting to be framed)
   outboundAudioBuffer?: Buffer;
+
+  // Outcome tracking
+  finalOutcomeSent?: boolean;
 };
 
 const calls = new Map<WebSocket, CallState>();
@@ -280,6 +300,9 @@ wss.on("connection", (ws: WebSocket) => {
     pendingAudioFrames: [],
     phase: "waiting_first_response",
     aiSpeaking: false,
+    awaitingResponse: false,
+    inputAudioBuffer: Buffer.alloc(0),
+    inputAudioBufferedBytes: 0,
     outboundAudioBuffer: Buffer.alloc(0),
   };
   calls.set(ws, state);
@@ -338,10 +361,16 @@ async function handleStart(ws: WebSocket, msg: TwilioStartEvent) {
   state.callSid = msg.start.callSid;
   state.callStartedAtMs = Date.now();
   state.billedUsageSent = false;
-  // reset conversation state at the start of every call
+
+  // Reset conversation + audio state at the start of every call
   state.phase = "waiting_first_response";
   state.aiSpeaking = false;
+  state.awaitingResponse = false;
+  state.inputAudioBuffer = Buffer.alloc(0);
+  state.inputAudioBufferedBytes = 0;
   state.outboundAudioBuffer = Buffer.alloc(0);
+  state.pendingAudioFrames = [];
+  state.finalOutcomeSent = false;
 
   const custom = msg.start.customParameters || {};
   const sessionId = custom.sessionId;
@@ -390,6 +419,15 @@ async function handleStart(ws: WebSocket, msg: TwilioStartEvent) {
 
 /**
  * MEDIA: Twilio sends audio frames (μ-law 8k) -> forward to OpenAI
+ *
+ * STRICT RULES:
+ * - Only forward media to OpenAI when:
+ *    • The Realtime WS is ready, AND
+ *    • The AI is NOT currently speaking (no duplex).
+ * - For each frame we forward, we:
+ *    • Decode base64 into a Buffer.
+ *    • Append to our in-memory input buffer.
+ *    • Track the byte count so we know how many ms are ready for commit.
  */
 async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
   const state = calls.get(ws);
@@ -414,11 +452,25 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
     return;
   }
 
+  // While the AI is speaking, we intentionally do NOT forward human audio
+  // to avoid duplex/overlap confusion.
+  if (state.aiSpeaking) {
+    // Optional: debug once
+    return;
+  }
+
   try {
-    // We configured OpenAI for g711_ulaw input, so we can forward Twilio's base64 payload directly.
+    // Decode into bytes so we can track ms of audio in our local input buffer
+    const pcmBytes = Buffer.from(payload, "base64");
+
+    // Append to in-memory buffer for this streamSid
+    state.inputAudioBuffer = Buffer.concat([state.inputAudioBuffer, pcmBytes]);
+    state.inputAudioBufferedBytes += pcmBytes.length;
+
+    // Forward to OpenAI as g711_ulaw base64 (no format conversion)
     const event = {
       type: "input_audio_buffer.append",
-      audio: payload, // still base64 g711_ulaw
+      audio: payload, // base64 g711_ulaw
     };
     state.openAiWs.send(JSON.stringify(event));
   } catch (err: any) {
@@ -529,11 +581,25 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
           state.pendingAudioFrames.length
         );
         for (const base64Chunk of state.pendingAudioFrames) {
-          const event = {
-            type: "input_audio_buffer.append",
-            audio: base64Chunk,
-          };
-          openAiWs.send(JSON.stringify(event));
+          try {
+            const pcmBytes = Buffer.from(base64Chunk, "base64");
+            state.inputAudioBuffer = Buffer.concat([
+              state.inputAudioBuffer,
+              pcmBytes,
+            ]);
+            state.inputAudioBufferedBytes += pcmBytes.length;
+
+            const event = {
+              type: "input_audio_buffer.append",
+              audio: base64Chunk,
+            };
+            openAiWs.send(JSON.stringify(event));
+          } catch (err: any) {
+            console.error(
+              "[AI-VOICE] Error flushing buffered audio to OpenAI:",
+              err?.message || err
+            );
+          }
         }
         state.pendingAudioFrames = [];
       }
@@ -560,6 +626,7 @@ Rules for this first response:
           },
         })
       );
+      state.awaitingResponse = true;
     } catch (err: any) {
       console.error(
         "[AI-VOICE] Error sending session.update / first response:",
@@ -587,11 +654,26 @@ Rules for this first response:
       const currentState = calls.get(ws);
       if (!currentState) return;
 
-      // Track AI speaking status (optional, future use)
+      // Track AI speaking / response lifecycle
       if (event.type === "response.created") {
         currentState.aiSpeaking = true;
+        currentState.awaitingResponse = true;
       }
-      if (event.type === "response.completed") {
+
+      if (
+        event.type === "response.completed" ||
+        event.type === "response.done"
+      ) {
+        currentState.aiSpeaking = false;
+        currentState.awaitingResponse = false;
+      }
+
+      if (
+        event.type === "response.audio.stopped" ||
+        event.type === "response.audio.done" ||
+        event.type === "response.output_audio.done"
+      ) {
+        // Audio streaming has finished for this response
         currentState.aiSpeaking = false;
       }
 
@@ -602,7 +684,12 @@ Rules for this first response:
       }
 
       if (event.type === "input_audio_buffer.speech_stopped") {
-        console.log("[AI-VOICE] VAD: speech_stopped; phase=", currentState.phase);
+        console.log(
+          "[AI-VOICE] VAD: speech_stopped; phase=",
+          currentState.phase,
+          " bufferedBytes=",
+          currentState.inputAudioBufferedBytes
+        );
         await handleUserSpeechStopped(currentState);
         return;
       }
@@ -628,6 +715,7 @@ Rules for this first response:
 /**
  * Handle events coming back from OpenAI Realtime.
  *  - Stream audio deltas back to Twilio (chunked g711_ulaw passthrough)
+ *  - Make sure we flush ALL outbound audio per response
  *  - Detect tool calls / intents for booking + outcomes
  */
 async function handleOpenAiEvent(
@@ -668,7 +756,6 @@ async function handleOpenAiEvent(
         }
 
         let working = Buffer.concat([state.outboundAudioBuffer, incomingBuffer]);
-        const FRAME_SIZE = 160; // 20ms @ 8kHz, μ-law (1 byte per sample)
 
         if (
           !state.debugLoggedFirstOutputAudio &&
@@ -711,6 +798,50 @@ async function handleOpenAiEvent(
     }
   }
 
+  // When OpenAI signals the end of the audio for this response,
+  // flush ANY remaining bytes in the outbound buffer so we don't
+  // cut off trailing syllables.
+  if (
+    event.type === "response.audio.done" ||
+    event.type === "response.output_audio.done"
+  ) {
+    try {
+      if (state.outboundAudioBuffer && state.outboundAudioBuffer.length > 0) {
+        let working = state.outboundAudioBuffer;
+        console.log(
+          "[AI-VOICE] Flushing remaining outbound audio bytes:",
+          working.length
+        );
+
+        while (working.length > 0) {
+          const sliceSize = Math.min(FRAME_SIZE, working.length);
+          const frame = working.subarray(0, sliceSize);
+          working = working.subarray(sliceSize);
+
+          const frameBase64 = frame.toString("base64");
+
+          const twilioMediaMsg = {
+            event: "media" as const,
+            streamSid,
+            media: {
+              payload: frameBase64,
+              track: "outbound" as const,
+            },
+          };
+
+          twilioWs.send(JSON.stringify(twilioMediaMsg));
+        }
+
+        state.outboundAudioBuffer = Buffer.alloc(0);
+      }
+    } catch (err: any) {
+      console.error(
+        "[AI-VOICE] Error flushing final outbound audio:",
+        err?.message || err
+      );
+    }
+  }
+
   // 2) Text / tool calls / intents via control metadata
   try {
     const control =
@@ -743,21 +874,60 @@ async function handleOpenAiEvent(
 /**
  * When the lead finishes speaking (VAD speech_stopped), decide what the AI should
  * say next based on the conversation phase and send a manual response.create.
+ *
+ * CRITICAL RULES:
+ * - Never commit an empty or too-small input buffer (OpenAI requires ~100 ms).
+ * - Never start a new response while one is still in-flight (awaitingResponse).
+ * - Reset the local inbound buffer after a successful commit.
  */
 async function handleUserSpeechStopped(state: CallState) {
   if (!state.openAiWs || !state.openAiReady || !state.context) return;
+
+  // If we already have a response in-flight, do NOT start another.
+  if (state.awaitingResponse) {
+    console.log(
+      "[AI-VOICE] speech_stopped while awaitingResponse=true; skipping commit/response."
+    );
+    return;
+  }
+
+  const bufferedBytes = state.inputAudioBufferedBytes;
+  const bufferedMs = bufferedBytes / BYTES_PER_MS;
+
+  if (bufferedBytes < MIN_COMMIT_BYTES) {
+    console.log(
+      "[AI-VOICE] Skipping input_audio_buffer.commit – buffer too small:",
+      {
+        bufferedBytes,
+        bufferedMs,
+        requiredBytes: MIN_COMMIT_BYTES,
+        requiredMs: MIN_COMMIT_MS,
+      }
+    );
+    return;
+  }
 
   const ctx = state.context;
   const clientName = ctx.clientFirstName || "there";
   const aiName = ctx.voiceProfile.aiName || "Alex";
 
-  // Commit the chunk we just heard
+  // Commit the chunk we just heard. Because we track bytes ourselves,
+  // we only call this when we KNOW we have at least 100ms of audio,
+  // preventing the "input_audio_buffer_commit_empty" error.
   try {
     state.openAiWs.send(
       JSON.stringify({
         type: "input_audio_buffer.commit",
       })
     );
+    console.log("[AI-VOICE] input_audio_buffer.commit sent:", {
+      bufferedBytes,
+      bufferedMs,
+    });
+
+    // Reset local inbound buffer tracking AFTER commit
+    state.inputAudioBuffer = Buffer.alloc(0);
+    state.inputAudioBufferedBytes = 0;
   } catch (err: any) {
     console.error(
       "[AI-VOICE] Error committing buffer on speech_stopped:",
@@ -824,6 +994,10 @@ Respond briefly to what they just said using 1–3 short sentences.
     },
   };
 
+  // Immediately mark that a response is in-flight to prevent
+  // overlapping turns, even before the first delta comes back.
+  state.awaitingResponse = true;
+
   setTimeout(() => {
     try {
       state.openAiWs!.send(JSON.stringify(payload));
@@ -832,6 +1006,8 @@ Respond briefly to what they just said using 1–3 short sentences.
         "[AI-VOICE] Error sending response.create after speech_stopped:",
         err?.message || err
       );
+      // If we fail to send, clear awaitingResponse so the system can recover.
+      state.awaitingResponse = false;
     }
   }, delayMs);
 }
@@ -961,6 +1137,7 @@ Keep it warm, confident, and under about 4–6 short sentences. Then wrap up the
           },
         })
       );
+      state.awaitingResponse = true;
     }
   } catch (err: any) {
     console.error(
@@ -1346,7 +1523,7 @@ Use this as a flexible framework. Do NOT read word-for-word.
 - "Gotcha. And just so I better understand where you're coming from, do you mind walking me through what prompted you to reach out and feel like you might need something like this right now?"
 
 5) NORMALIZE & FRAME
-- "That makes sense. A lot of veterans we talk to say the same thing – they just want to make sure that if something does happen, their family isn't stuck trying to figure it all out."
+- "That makes sense. A lot of veterans we talk to say the same thing – they just want to make sure that if something happens, their family isn't stuck trying to figure it all out."
 
 6) POSITION YOUR ROLE
 - "My job is pretty simple – I just make sure you actually get the information you requested and then line you up with ${agentName}, who specializes in these veteran programs."
