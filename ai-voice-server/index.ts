@@ -131,6 +131,10 @@ type CallState = {
   // Track whether we've appended audio since the last commit
   hasUncommittedAudio?: boolean;
 
+  // Track user turn commits for opening behavior
+  userCommitCount?: number;
+  hasSentSecondTurn?: boolean;
+
   // Billing
   callStartedAtMs?: number;
   billedUsageSent?: boolean;
@@ -204,6 +208,34 @@ function pcm16ToMulawBase64(pcm16Base64: string): string {
     return mulawBytes.slice(0, outIndex).toString("base64");
   }
   return mulawBytes.toString("base64");
+}
+
+/**
+ * Helper: compute the lead descriptor string based on scriptKey.
+ * The wording here matches exactly what is used in buildSystemPrompt.
+ */
+function getLeadDescriptor(scriptKeyRaw: string | undefined): string {
+  const scriptKey = scriptKeyRaw || "mortgage_protection";
+
+  let leadDescriptor =
+    "the life insurance information you requested online";
+
+  if (scriptKey === "mortgage_protection") {
+    leadDescriptor = "the mortgage protection request you put in for your home";
+  } else if (scriptKey === "veteran_leads") {
+    leadDescriptor = "the veteran life insurance programs you were looking into";
+  } else if (scriptKey === "iul_cash_value" || scriptKey === "iul_leads") {
+    leadDescriptor =
+      "the cash-building life insurance and Indexed Universal Life information you asked about";
+  } else if (scriptKey === "final_expense") {
+    leadDescriptor =
+      "the life insurance information you requested to cover final expenses";
+  } else if (scriptKey === "trucker_leads") {
+    leadDescriptor =
+      "the life insurance information you requested as a truck driver";
+  }
+
+  return leadDescriptor;
 }
 
 /**
@@ -330,6 +362,8 @@ wss.on("connection", (ws: WebSocket) => {
     callSid: "",
     pendingAudioFrames: [],
     hasUncommittedAudio: false,
+    userCommitCount: 0,
+    hasSentSecondTurn: false,
   };
   calls.set(ws, state);
 
@@ -388,6 +422,8 @@ async function handleStart(ws: WebSocket, msg: TwilioStartEvent) {
   state.callStartedAtMs = Date.now();
   state.billedUsageSent = false;
   state.hasUncommittedAudio = false;
+  state.userCommitCount = 0;
+  state.hasSentSecondTurn = false;
 
   const custom = msg.start.customParameters || {};
   const sessionId = custom.sessionId;
@@ -663,7 +699,65 @@ Rules for this first response:
       // When the server VAD commits, clear our uncommitted flag
       if (event.type === "input_audio_buffer.committed") {
         const st = calls.get(ws);
-        if (st) st.hasUncommittedAudio = false;
+        if (st) {
+          st.hasUncommittedAudio = false;
+          st.userCommitCount = (st.userCommitCount || 0) + 1;
+
+          // After the FIRST user turn is committed, force the second-turn intro
+          if (
+            st.userCommitCount === 1 &&
+            !st.hasSentSecondTurn &&
+            st.openAiWs &&
+            st.context
+          ) {
+            try {
+              // Cancel any auto-created response that might have been triggered
+              st.openAiWs.send(
+                JSON.stringify({
+                  type: "response.cancel",
+                })
+              );
+            } catch (err: any) {
+              console.error(
+                "[AI-VOICE] Error sending response.cancel for second turn:",
+                err?.message || err
+              );
+            }
+
+            const ctx = st.context;
+            const clientName = ctx.clientFirstName || "there";
+            const aiName = ctx.voiceProfile.aiName || "Alex";
+            const leadDescriptor = getLeadDescriptor(ctx.scriptKey);
+
+            try {
+              st.openAiWs.send(
+                JSON.stringify({
+                  type: "response.create",
+                  response: {
+                    instructions: `
+Your ONLY job in this response is to say exactly this one short line, then stop talking completely:
+
+"Hey ${clientName}, this is ${aiName} calling about ${leadDescriptor}. How's your day going so far?"
+
+Rules for this response:
+- Do NOT change or add any words.
+- Do NOT add a second sentence.
+- Do NOT explain anything else yet.
+- After you speak that line once, you must stop and wait silently for the lead's response.
+`.trim(),
+                  },
+                })
+              );
+              st.hasSentSecondTurn = true;
+              console.log("[AI-VOICE] Forced second-turn intro line sent");
+            } catch (err: any) {
+              console.error(
+                "[AI-VOICE] Error sending forced second-turn intro:",
+                err?.message || err
+              );
+            }
+          }
+        }
       }
 
       await handleOpenAiEvent(ws, state, event);
@@ -751,7 +845,6 @@ async function handleOpenAiEvent(
             streamSid,
             media: {
               payload: frameBase64,
-              track: "outbound",
             },
           };
 
@@ -766,7 +859,7 @@ async function handleOpenAiEvent(
     }
   }
 
-  // 2) Text / tool calls / intents via control metadata (if you decide to use it later)
+  // 2) Text / tool calls / intents via control metadata
   try {
     const control =
       event?.control ||
@@ -1094,22 +1187,7 @@ function buildSystemPrompt(ctx: AICallContext): string {
 
   // Dynamic descriptor for the second-turn intro line,
   // so mortgage leads don't sound like generic life leads.
-  let leadDescriptor =
-    "the life insurance information you requested online";
-  if (scriptKey === "mortgage_protection") {
-    leadDescriptor = "the mortgage protection request you put in for your home";
-  } else if (scriptKey === "veteran_leads") {
-    leadDescriptor = "the veteran life insurance programs you were looking into";
-  } else if (scriptKey === "iul_cash_value" || scriptKey === "iul_leads") {
-    leadDescriptor =
-      "the cash-building life insurance and Indexed Universal Life information you asked about";
-  } else if (scriptKey === "final_expense") {
-    leadDescriptor =
-      "the life insurance information you requested to cover final expenses";
-  } else if (scriptKey === "trucker_leads") {
-    leadDescriptor =
-      "the life insurance information you requested as a truck driver";
-  }
+  const leadDescriptor = getLeadDescriptor(scriptKey);
 
   const basePersona = `
 You are ${aiName}, a highly skilled virtual phone appointment setter calling on behalf of licensed life insurance agent ${agentName}.
