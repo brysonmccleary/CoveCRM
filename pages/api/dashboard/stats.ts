@@ -1,3 +1,4 @@
+// pages/api/dashboard/stats.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
@@ -90,7 +91,12 @@ function baseMatchCI(userEmailLower: string, timeOr: any[]) {
   };
 }
 
-/** Fields we compute repeatedly, before dedup */
+/**
+ * Fields we compute repeatedly, before dedup
+ * IMPORTANT:
+ * - Many rows use durationSec (alias) instead of duration
+ * - We must treat durationSec as a valid talk-time source for KPI + connects
+ */
 function addDerivedFields(connectThreshold: number) {
   return [
     {
@@ -103,7 +109,13 @@ function addDerivedFields(connectThreshold: number) {
               $cond: [
                 { $and: [{ $ne: ["$duration", null] }, { $ne: ["$duration", undefined] }] },
                 "$duration",
-                0,
+                {
+                  $cond: [
+                    { $and: [{ $ne: ["$durationSec", null] }, { $ne: ["$durationSec", undefined] }] },
+                    "$durationSec",
+                    0,
+                  ],
+                },
               ],
             },
           ],
@@ -114,6 +126,8 @@ function addDerivedFields(connectThreshold: number) {
     {
       $addFields: {
         _connectedByTalk: { $gte: ["$_talkTimeNum", connectThreshold] },
+        // NOTE: Call schema doesn't reliably include amd.answeredBy.
+        // We keep this for backwards compatibility but it usually won't trigger.
         _connectedByAMD: {
           $regexMatch: { input: { $toString: "$amd.answeredBy" }, regex: /human/i },
         },
@@ -129,7 +143,13 @@ function addDerivedFields(connectThreshold: number) {
             },
           ],
         },
-        _ts: { $ifNull: ["$startedAt", { $ifNull: ["$completedAt", "$createdAt"] }] },
+        // Prefer startedAt/completedAt/createdAt, but include endedAt as a fallback too
+        _ts: {
+          $ifNull: [
+            "$startedAt",
+            { $ifNull: ["$completedAt", { $ifNull: ["$endedAt", "$createdAt"] }] },
+          ],
+        },
       },
     },
   ] as any[];
@@ -183,6 +203,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const callTimeOr = [
     { startedAt: { $gte: from, $lt: to } },
     { completedAt: { $gte: from, $lt: to } },
+    { endedAt: { $gte: from, $lt: to } },
     { createdAt: { $gte: from, $lt: to } },
   ];
 
@@ -291,6 +312,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         $match: baseMatchCI(userEmail, [
           { startedAt: { $gte: todayFrom, $lt: todayTo } },
           { completedAt: { $gte: todayFrom, $lt: todayTo } },
+          { endedAt: { $gte: todayFrom, $lt: todayTo } },
           { createdAt: { $gte: todayFrom, $lt: todayTo } },
         ]),
       },
@@ -331,6 +353,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           $match: baseMatchCI(userEmail, [
             { startedAt: { $gte: start, $lt: end } },
             { completedAt: { $gte: start, $lt: end } },
+            { endedAt: { $gte: start, $lt: end } },
             { createdAt: { $gte: start, $lt: end } },
           ]),
         },
@@ -370,7 +393,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const [daily7, daily30] = await Promise.all([dailyAgg(7), dailyAgg(30)]);
 
-    // ---------- Recent (leave as-is but case-insensitive match + order by ts) ----------
+    // ---------- Recent ----------
     const recentRows = await (Call as any).aggregate([
       { $match: baseMatchCI(userEmail, callTimeOr) },
       ...addDerivedFields(connectThreshold),
@@ -404,7 +427,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       ...recentRows.map((c: any) => ({
         type: "call" as const,
         at: new Date(c.ts || new Date()).toISOString(),
-        callSid: undefined, // intentionally omitted; not needed for UI list
+        callSid: undefined,
         leadId: null,
         direction: undefined,
         durationSec: c.talkTime ?? null,
