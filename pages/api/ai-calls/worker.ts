@@ -16,7 +16,10 @@ const BASE = (
   "http://localhost:3000"
 ).replace(/\/$/, "");
 
+// Accept either AI_DIALER_CRON_KEY (your internal kick key)
+// OR CRON_SECRET (Vercel native cron secret / your existing cron pattern)
 const AI_DIALER_CRON_KEY = (process.env.AI_DIALER_CRON_KEY || "").trim();
+const CRON_SECRET = (process.env.CRON_SECRET || "").trim();
 
 // 🔹 What you charge the user: $0.15 per *dial* minute
 const AI_RATE_PER_MINUTE = Number(
@@ -65,20 +68,63 @@ const aiCallStatusUrl = (userEmail: string) =>
   )}`;
 
 /**
- * Try to auto-charge the user for a $20 AI Dialer top-up when their balance
- * is too low to cover even 1 billed minute.
- *
- * - Uses Stripe PaymentIntent off-session with the customer's default method.
- * - On success, credits `aiDialerBalance` and updates `aiDialerLastTopUpAt`.
- * - Returns the *new* balance and whether a top-up actually happened.
+ * Parse "Authorization: Bearer <token>"
  */
+function getBearerToken(req: NextApiRequest): string {
+  const auth = String(req.headers["authorization"] || "");
+  const m = auth.match(/^Bearer\s+(.+)$/i);
+  return (m?.[1] || "").trim();
+}
+
+/**
+ * Secure cron auth:
+ * Accept secret via:
+ *  - Authorization: Bearer <CRON_SECRET> (Vercel recommended)
+ *  - x-cron-key / x-cron-secret headers
+ *  - query string (?key=... or ?token=...)
+ *
+ * Still requires a secret match. Not weakened.
+ */
+function isAuthorizedCron(req: NextApiRequest): boolean {
+  const hdrKey = String(
+    req.headers["x-cron-key"] || req.headers["x-cron-secret"] || ""
+  ).trim();
+
+  const qsKey = String(
+    (req.query.key as string | undefined) ||
+      (req.query.token as string | undefined) ||
+      ""
+  ).trim();
+
+  const bearer = getBearerToken(req);
+
+  const provided = (bearer || hdrKey || qsKey || "").trim();
+  if (!provided) return false;
+
+  // Allow either secret if configured
+  const allowDialerKey = !!AI_DIALER_CRON_KEY && provided === AI_DIALER_CRON_KEY;
+  const allowCronSecret = !!CRON_SECRET && provided === CRON_SECRET;
+
+  return allowDialerKey || allowCronSecret;
+}
+
+/**
+ * Hard gating:
+ * - NEVER dial unless there is a truly active / fresh queued session.
+ * - Prevents old “queued” sessions from being processed forever by a 1/min cron.
+ *
+ * You can tune this window. Minimal safe default: 15 minutes.
+ */
+const QUEUED_FRESH_WINDOW_MINUTES = Number(
+  process.env.AI_DIALER_QUEUED_FRESH_WINDOW_MINUTES || "15"
+);
+
 async function autoTopupIfNeeded(userDoc: any): Promise<{
   balanceUSD: number;
   toppedUp: boolean;
 }> {
   let currentBalance = Number(userDoc.aiDialerBalance || 0);
 
-  // Already enough balance for at least one billed minute
   if (currentBalance >= AI_RATE_PER_MINUTE) {
     return { balanceUSD: currentBalance, toppedUp: false };
   }
@@ -92,10 +138,9 @@ async function autoTopupIfNeeded(userDoc: any): Promise<{
 
   const customerId = userDoc.stripeCustomerId as string | undefined;
   if (!customerId) {
-    console.warn(
-      "[AI Dialer] Auto-topup skipped: user has no stripeCustomerId",
-      { email: userDoc.email }
-    );
+    console.warn("[AI Dialer] Auto-topup skipped: user has no stripeCustomerId", {
+      email: userDoc.email,
+    });
     return { balanceUSD: currentBalance, toppedUp: false };
   }
 
@@ -138,102 +183,108 @@ async function autoTopupIfNeeded(userDoc: any): Promise<{
     console.error("[AI Dialer] Auto-topup failed", err?.message || err);
   }
 
-  // If we get here, no top-up happened
   currentBalance = Number(userDoc.aiDialerBalance || currentBalance || 0);
   return { balanceUSD: currentBalance, toppedUp: false };
 }
 
-export default async function handler(
-  req: NextApiRequest,
-  res: NextApiResponse
-) {
-  // Allow both GET (for Vercel cron) and POST (manual / external triggers)
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  // Allow both GET (cron) and POST (manual / internal triggers)
   if (req.method !== "GET" && req.method !== "POST") {
     return res.status(405).json({ ok: false, message: "Method Not Allowed" });
   }
 
-  if (!AI_DIALER_CRON_KEY) {
-    return res
-      .status(500)
-      .json({ ok: false, message: "AI dialer cron key not configured" });
+  // Require at least one secret to be configured
+  if (!AI_DIALER_CRON_KEY && !CRON_SECRET) {
+    return res.status(500).json({
+      ok: false,
+      message: "Cron auth not configured (AI_DIALER_CRON_KEY/CRON_SECRET missing)",
+    });
   }
 
-  // Accept secret via header OR query string (?key= / ?token=)
-  const hdrKey = (req.headers["x-cron-key"] ||
-    req.headers["x-cron-secret"] ||
-    "") as string;
-
-  const qsKey =
-    (req.query.key as string | undefined) ||
-    (req.query.token as string | undefined) ||
-    "";
-
-  const providedKey = (hdrKey || qsKey || "").trim();
-
-  // Debug logs for local only
-  if (process.env.NODE_ENV !== "production") {
-    console.log("[AI WORKER] providedKey raw:", JSON.stringify(providedKey));
-    console.log("[AI WORKER] expectedKey raw:", JSON.stringify(AI_DIALER_CRON_KEY));
-    console.log("[AI WORKER] provided len:", providedKey.length);
-    console.log("[AI WORKER] expected len:", AI_DIALER_CRON_KEY.length);
-  }
-
-  if (!providedKey || providedKey !== AI_DIALER_CRON_KEY) {
+  if (!isAuthorizedCron(req)) {
     return res.status(403).json({ ok: false, message: "Forbidden" });
   }
 
   try {
     await mongooseConnect();
 
-    // Find one active AI dial session to advance.
-    // We keep it simple: pick the most recently updated queued/running session.
+    const now = Date.now();
+    const freshCutoff = new Date(
+      now - QUEUED_FRESH_WINDOW_MINUTES * 60 * 1000
+    );
+
+    // ✅ HARD GATING: only process sessions that are actually "running",
+    // or "queued" but recently created/updated (fresh).
     const aiSession: any = await AICallSession.findOne({
-      status: { $in: ["queued", "running"] },
       total: { $gt: 0 },
+      $or: [
+        { status: "running" },
+        { status: "queued", updatedAt: { $gte: freshCutoff } },
+      ],
     })
       .sort({ updatedAt: -1, createdAt: -1 })
       .exec();
 
     if (!aiSession) {
+      console.log("[AI WORKER] no queued/running sessions (fresh window), exiting");
       return res.status(200).json({
         ok: true,
-        message: "No AI dial sessions to process",
+        message: "no_work",
       });
     }
 
     const sessionId = String(aiSession._id);
     const userEmail = String(aiSession.userEmail || "").toLowerCase();
     const fromNumber = String(aiSession.fromNumber || "").trim();
-    const leadIds: any[] = Array.isArray(aiSession.leadIds)
-      ? aiSession.leadIds
-      : [];
-    const total =
-      typeof aiSession.total === "number" ? aiSession.total : leadIds.length;
-    const lastIndex =
-      typeof aiSession.lastIndex === "number" ? aiSession.lastIndex : -1;
+    const leadIds: any[] = Array.isArray(aiSession.leadIds) ? aiSession.leadIds : [];
+    const total = typeof aiSession.total === "number" ? aiSession.total : leadIds.length;
+    const lastIndex = typeof aiSession.lastIndex === "number" ? aiSession.lastIndex : -1;
 
+    // ✅ HARD GATING: if not ready to dial, exit 200 without side effects
+    // (This prevents cron from “doing anything” and avoids accidental dial attempts.)
     if (!userEmail || !fromNumber || !leadIds.length || total <= 0) {
-      aiSession.status = "error";
-      aiSession.errorMessage =
-        "Invalid AI session state (missing userEmail, fromNumber, or leadIds).";
-      aiSession.completedAt = new Date();
-      await aiSession.save();
-      return res.status(200).json({
-        ok: false,
-        message: "Invalid AI session state; marked as error.",
+      console.log("[AI WORKER] session not ready to dial, exiting", {
+        sessionId,
+        status: aiSession.status,
+        hasUserEmail: !!userEmail,
+        hasFromNumber: !!fromNumber,
+        leadCount: leadIds.length,
+        total,
       });
+
+      // Only mark ERROR if it was actively running (meaning user explicitly started it)
+      if (aiSession.status === "running") {
+        aiSession.status = "error";
+        aiSession.errorMessage =
+          "Invalid AI session state (missing userEmail, fromNumber, or leadIds).";
+        aiSession.completedAt = new Date();
+        await aiSession.save();
+      }
+
+      return res.status(200).json({ ok: true, message: "not_ready", sessionId });
+    }
+
+    // If the session is queued but NOT fresh anymore, do nothing.
+    if (
+      aiSession.status === "queued" &&
+      aiSession.updatedAt &&
+      new Date(aiSession.updatedAt).getTime() < freshCutoff.getTime()
+    ) {
+      console.log("[AI WORKER] queued session is stale; exiting without dialing", {
+        sessionId,
+        updatedAt: aiSession.updatedAt,
+        cutoff: freshCutoff,
+      });
+      return res.status(200).json({ ok: true, message: "stale_queued_noop", sessionId });
     }
 
     const adminFree = isAdminFreeEmail(userEmail);
 
-    // 🔹 Check AI dialer balance before placing ANY new call
-    //     - For normal users: require enough balance for at least 1 billed minute.
-    //     - For admin-free users: skip billing entirely (they're free).
+    // Balance check before placing ANY new call (no OpenAI involvement here)
     if (AI_RATE_PER_MINUTE > 0 && !adminFree) {
-      // NOTE: we need a real Mongoose doc here (no .lean()) so we can save updates.
       const userDoc: any = await User.findOne({ email: userEmail });
-
       if (!userDoc) {
+        // If user doc is missing, don't keep burning cron cycles dialing
         aiSession.status = "error";
         aiSession.errorMessage =
           "AI dialer user not found for this session (billing).";
@@ -242,8 +293,7 @@ export default async function handler(
 
         return res.status(200).json({
           ok: false,
-          message:
-            "User not found for AI dialer session; session marked error.",
+          message: "user_not_found_marked_error",
           sessionId,
         });
       }
@@ -251,7 +301,6 @@ export default async function handler(
       let balance = Number(userDoc.aiDialerBalance || 0);
 
       if (balance < AI_RATE_PER_MINUTE) {
-        // Try auto-topup once
         const { balanceUSD, toppedUp } = await autoTopupIfNeeded(userDoc);
         balance = balanceUSD;
 
@@ -265,8 +314,7 @@ export default async function handler(
 
           return res.status(200).json({
             ok: true,
-            message:
-              "AI Dialer balance depleted; session stopped until billing is resolved.",
+            message: "stopped_balance_depleted",
             sessionId,
             balanceUSD: balance,
           });
@@ -281,8 +329,6 @@ export default async function handler(
       aiSession.completedAt = new Date();
       await aiSession.save();
 
-      // 🔔 HOOK: send "AI dial session ended" email to the agent here
-      // We’ll wire this to your actual email helper in lib/email.ts.
       console.log("[AI Dialer] Session completed; email agent about completion", {
         userEmail,
         sessionId,
@@ -291,7 +337,7 @@ export default async function handler(
 
       return res.status(200).json({
         ok: true,
-        message: "AI session completed (no remaining leads).",
+        message: "completed_no_remaining_leads",
         sessionId,
       });
     }
@@ -304,7 +350,7 @@ export default async function handler(
       await aiSession.save();
       return res.status(200).json({
         ok: false,
-        message: "Invalid leadId encountered; skipped.",
+        message: "invalid_lead_skipped",
         sessionId,
         nextIndex,
       });
@@ -312,28 +358,23 @@ export default async function handler(
 
     const leadDoc: any = await Lead.findOne({
       _id: leadId,
-      $or: [
-        { userEmail: userEmail },
-        { ownerEmail: userEmail },
-        { user: userEmail },
-      ],
+      $or: [{ userEmail: userEmail }, { ownerEmail: userEmail }, { user: userEmail }],
     }).lean();
 
     if (!leadDoc) {
-      // Skip this lead and move on
       aiSession.lastIndex = nextIndex;
       aiSession.status = "running";
       await aiSession.save();
 
       return res.status(200).json({
         ok: false,
-        message: "Lead not found or access denied; skipped.",
+        message: "lead_not_found_skipped",
         sessionId,
         nextIndex,
       });
     }
 
-    // Respect quiet hours with same helper as manual dialer
+    // Quiet hours gating
     const { allowed, zone } = isCallAllowedForLead(leadDoc);
     if (!allowed) {
       await AICallRecording.create({
@@ -353,7 +394,7 @@ export default async function handler(
 
       return res.status(200).json({
         ok: true,
-        message: "Lead skipped due to quiet hours.",
+        message: "quiet_hours_skipped",
         sessionId,
         nextIndex,
       });
@@ -368,8 +409,10 @@ export default async function handler(
       leadDoc.primaryPhone,
       leadDoc["Primary Phone"],
     ].filter(Boolean);
+
     const toRaw = candidates[0];
     const to = normalizeE164(toRaw);
+
     if (!to) {
       await AICallRecording.create({
         userEmail,
@@ -388,7 +431,7 @@ export default async function handler(
 
       return res.status(200).json({
         ok: false,
-        message: "Lead has no valid phone number; skipped.",
+        message: "no_valid_phone_skipped",
         sessionId,
         nextIndex,
       });
@@ -397,14 +440,13 @@ export default async function handler(
     const from = normalizeE164(fromNumber);
     if (!from) {
       aiSession.status = "error";
-      aiSession.errorMessage =
-        "AI session fromNumber is not a valid E.164 phone.";
+      aiSession.errorMessage = "AI session fromNumber is not a valid E.164 phone.";
       aiSession.completedAt = new Date();
       await aiSession.save();
 
       return res.status(200).json({
         ok: false,
-        message: "Invalid fromNumber for AI session; session marked error.",
+        message: "invalid_fromNumber_marked_error",
         sessionId,
       });
     }
@@ -412,26 +454,21 @@ export default async function handler(
     // Place the AI outbound call via user's Twilio client
     try {
       const { client } = await getClientForUser(userEmail);
-      console.log("[ai-calls/worker] Using Twilio client for", {
-        userEmail,
-      });
+      console.log("[ai-calls/worker] Using Twilio client for", { userEmail });
 
       const call = await client.calls.create({
         to,
         from,
         url: aiVoiceUrl(sessionId, String(leadId)),
 
-        // 🔔 NEW: if it rings more than 35 seconds with no answer, give up.
         timeout: 35,
 
-        // ✅ Recording for QA / summaries (talk-time only)
         record: true,
         recordingChannels: "dual",
         recordingStatusCallback: aiRecordingUrl(sessionId, String(leadId)),
         recordingStatusCallbackEvent: ["completed"],
         recordingStatusCallbackMethod: "POST",
 
-        // ✅ Bill based on *dial time* when the call completes
         statusCallback: aiCallStatusUrl(userEmail),
         statusCallbackEvent: ["completed"],
         statusCallbackMethod: "POST",
@@ -463,7 +500,7 @@ export default async function handler(
 
       return res.status(200).json({
         ok: true,
-        message: "Placed AI outbound call.",
+        message: "placed_call",
         sessionId,
         callSid: call.sid,
         leadId,
@@ -472,22 +509,11 @@ export default async function handler(
         nextIndex,
       });
     } catch (twilioErr: any) {
-      // Twilio auth or API error
-      console.error(
-        "AI dial worker Twilio error:",
-        twilioErr?.message || twilioErr
-      );
-      if (twilioErr?.code) {
-        console.error("[Twilio] code:", twilioErr.code);
-      }
-      if (twilioErr?.status) {
-        console.error("[Twilio] status:", twilioErr.status);
-      }
-      if (twilioErr?.moreInfo) {
-        console.error("[Twilio] moreInfo:", twilioErr.moreInfo);
-      }
+      console.error("AI dial worker Twilio error:", twilioErr?.message || twilioErr);
+      if (twilioErr?.code) console.error("[Twilio] code:", twilioErr.code);
+      if (twilioErr?.status) console.error("[Twilio] status:", twilioErr.status);
+      if (twilioErr?.moreInfo) console.error("[Twilio] moreInfo:", twilioErr.moreInfo);
 
-      // If it's an auth error ("Authenticate" / 401), mark session as error
       const msg = String(twilioErr?.message || "").toLowerCase();
       if (msg.includes("authenticate") || twilioErr?.status === 401) {
         aiSession.status = "error";
@@ -498,21 +524,18 @@ export default async function handler(
 
         return res.status(500).json({
           ok: false,
-          message: "AI dial worker failed (Twilio authentication).",
+          message: "twilio_auth_failed",
           error: twilioErr?.message || String(twilioErr),
         });
       }
 
-      // Otherwise, keep session running but log error against this lead
       aiSession.status = "running";
-      aiSession.errorMessage = `Twilio error: ${
-        twilioErr?.message || twilioErr
-      }`;
+      aiSession.errorMessage = `Twilio error: ${twilioErr?.message || twilioErr}`;
       await aiSession.save();
 
       return res.status(500).json({
         ok: false,
-        message: "AI dial worker Twilio error",
+        message: "twilio_error",
         error: twilioErr?.message || String(twilioErr),
       });
     }
