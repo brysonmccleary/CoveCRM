@@ -60,7 +60,8 @@ export interface IA2PProfile extends Document {
   sampleMessagesArr?: string[]; // modern array variant
   optInDetails: string;
   volume: string;
-  optInScreenshotUrl: string;
+  // ⬇️ made optional
+  optInScreenshotUrl?: string;
 
   // ✅ Optional public links (for reviewer convenience)
   landingOptInUrl?: string;
@@ -159,7 +160,8 @@ const A2PProfileSchema = new Schema<IA2PProfile>({
   sampleMessagesArr: { type: [String], default: undefined },
   optInDetails: { type: String, required: true },
   volume: { type: String, required: true },
-  optInScreenshotUrl: { type: String, required: true },
+  // ⬇️ no longer required
+  optInScreenshotUrl: { type: String },
 
   // ✅ Optional public links
   landingOptInUrl: { type: String },
