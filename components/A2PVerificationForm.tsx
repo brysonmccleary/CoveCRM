@@ -447,6 +447,7 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
 
       const res = await fetch("/api/uploadOptIn", {
         method: "POST",
+        credentials: "same-origin", // 🔧 FIX: ensure cookies/same-site session is included in Safari
         body: formData,
       });
       const data: UploadedFileResponse = await res.json();
@@ -656,6 +657,7 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
 
       const res = await fetch("/api/registerA2P", {
         method: "POST",
+        credentials: "same-origin", // 🔧 FIX: ensure cookies/same-site session is included in Safari
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
