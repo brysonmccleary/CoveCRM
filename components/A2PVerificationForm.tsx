@@ -83,56 +83,7 @@ const ADVANCED_SPECIAL: { value: UseCaseCode; label: string }[] = [
 ];
 
 const US_STATE_CODES = [
-  "AL",
-  "AK",
-  "AZ",
-  "AR",
-  "CA",
-  "CO",
-  "CT",
-  "DE",
-  "FL",
-  "GA",
-  "HI",
-  "ID",
-  "IL",
-  "IN",
-  "IA",
-  "KS",
-  "KY",
-  "LA",
-  "ME",
-  "MD",
-  "MA",
-  "MI",
-  "MN",
-  "MS",
-  "MO",
-  "MT",
-  "NE",
-  "NV",
-  "NH",
-  "NJ",
-  "NM",
-  "NY",
-  "NC",
-  "ND",
-  "OH",
-  "OK",
-  "OR",
-  "PA",
-  "RI",
-  "SC",
-  "SD",
-  "TN",
-  "TX",
-  "UT",
-  "VT",
-  "VA",
-  "WA",
-  "WV",
-  "WI",
-  "WY",
+  "AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA","KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ","NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT","VA","WA","WV","WI","WY",
 ];
 
 type FieldErrors = {
@@ -178,7 +129,7 @@ export default function A2PVerificationForm() {
       const brand = (resp.brand?.status || "").toLowerCase();
       const camp = (resp.campaign?.status || "").toLowerCase();
 
-      // 🔁 CHANGED: do NOT treat any non-empty declinedReason as "declined"
+      // 🔁 do NOT treat any non-empty declinedReason as "declined"
       const declined =
         app === "declined" ||
         reg === "rejected" ||
@@ -349,9 +300,7 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
   // ---------- Volume + screenshot ----------
   const [volume, setVolume] = useState("");
   const [file, setFile] = useState<File | null>(null);
-  const [optInScreenshotUrl, setOptInScreenshotUrl] = useState<string | null>(
-    null,
-  );
+  const [optInScreenshotUrl, setOptInScreenshotUrl] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
@@ -447,7 +396,7 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
 
       const res = await fetch("/api/uploadOptIn", {
         method: "POST",
-        credentials: "same-origin", // 🔧 FIX: ensure cookies/same-site session is included in Safari
+        credentials: "same-origin", // Safari session cookie
         body: formData,
       });
       const data: UploadedFileResponse = await res.json();
@@ -473,8 +422,7 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
     if (!businessName.trim()) {
       newErrors.businessName = "Business name is required.";
     } else if (businessName.trim().length < 3) {
-      newErrors.businessName =
-        "Business name must be at least 3 characters.";
+      newErrors.businessName = "Business name must be at least 3 characters.";
     }
 
     const einDigits = ein.replace(/[^\d]/g, "");
@@ -485,38 +433,30 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
         'EIN must be 9 digits, e.g. "12-3456789" (no letters or extra symbols).';
     }
 
-    if (!address.trim()) {
-      newErrors.address = "Street address is required.";
-    }
-    if (!addressCity.trim()) {
-      newErrors.addressCity = "City is required.";
-    }
+    if (!address.trim()) newErrors.address = "Street address is required.";
+    if (!addressCity.trim()) newErrors.addressCity = "City is required.";
     if (!addressState.trim()) {
       newErrors.addressState = "State is required.";
     } else if (!isUsState(addressState)) {
-      newErrors.addressState =
-        "Enter a valid 2-letter US state code (e.g., CA, TX).";
+      newErrors.addressState = "Enter a valid 2-letter US state code (e.g., CA, TX).";
     }
 
     if (!addressPostalCode.trim()) {
       newErrors.addressPostalCode = "ZIP / postal code is required.";
     } else if (!isValidZip(addressPostalCode)) {
-      newErrors.addressPostalCode =
-        "Enter a valid US ZIP code (12345 or 12345-6789).";
+      newErrors.addressPostalCode = "Enter a valid US ZIP code (12345 or 12345-6789).";
     }
 
     if (!addressCountry.trim()) {
       newErrors.addressCountry = "Country is required.";
     } else if (!isUsCountry(addressCountry)) {
-      newErrors.addressCountry =
-        "A2P 10DLC only supports US-based brands. Enter 'US' for the country.";
+      newErrors.addressCountry = "A2P 10DLC only supports US-based brands. Enter 'US' for the country.";
     }
 
     if (!website.trim()) {
       newErrors.website = "Website URL is required.";
     } else if (!isValidUrl(website)) {
-      newErrors.website =
-        'Website must be a real, public HTTPS URL (starting with "https://").';
+      newErrors.website = 'Website must be a real, public HTTPS URL (starting with "https://").';
     }
 
     if (!email.trim()) {
@@ -532,12 +472,8 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
         "Phone number must be exactly 10 digits with no spaces, dashes, or parentheses. Example: 5551234567.";
     }
 
-    if (!contactFirstName.trim()) {
-      newErrors.contactFirstName = "Contact first name is required.";
-    }
-    if (!contactLastName.trim()) {
-      newErrors.contactLastName = "Contact last name is required.";
-    }
+    if (!contactFirstName.trim()) newErrors.contactFirstName = "Contact first name is required.";
+    if (!contactLastName.trim()) newErrors.contactLastName = "Contact last name is required.";
 
     const messages = [msg1, msg2, msg3];
     const msgFields: Array<keyof FieldErrors> = ["msg1", "msg2", "msg3"];
@@ -550,12 +486,10 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
         return;
       }
       if (trimmed.length < 20 || trimmed.length > 320) {
-        newErrors[key] =
-          "Sample messages must be between 20 and 320 characters.";
+        newErrors[key] = "Sample messages must be between 20 and 320 characters.";
       }
       if (!ensureHasStopLanguage(trimmed)) {
-        newErrors[key] =
-          'Sample messages must include opt-out language like "Reply STOP to opt out".';
+        newErrors[key] = 'Sample messages must include opt-out language like "Reply STOP to opt out".';
       }
     });
 
@@ -566,10 +500,7 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
       if (od.length < 300) {
         newErrors.optInDetails =
           "Opt-in description must be detailed (at least a few full sentences describing the form, disclosure, and consent).";
-      } else if (
-        !/consent/i.test(od) ||
-        !/(by clicking|by entering)/i.test(od)
-      ) {
+      } else if (!/consent/i.test(od) || !/(by clicking|by entering)/i.test(od)) {
         newErrors.optInDetails =
           'Opt-in description must clearly state that the user gives consent by clicking/entering their information (e.g., "By entering your information and clicking this button, you consent to receive calls/texts...").';
       }
@@ -577,15 +508,13 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
 
     const volDigits = volume.replace(/[^\d]/g, "");
     if (!volDigits) {
-      newErrors.volume =
-        "Estimated monthly volume is required as a number (e.g., 500).";
+      newErrors.volume = "Estimated monthly volume is required as a number (e.g., 500).";
     } else {
       const num = parseInt(volDigits, 10);
       if (Number.isNaN(num) || num <= 0) {
         newErrors.volume = "Monthly volume must be a positive number.";
       } else if (num > 250000) {
-        newErrors.volume =
-          "Monthly volume must be realistic for review (<= 250,000 messages).";
+        newErrors.volume = "Monthly volume must be realistic for review (<= 250,000 messages).";
       }
     }
 
@@ -610,12 +539,8 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
       toast(
         (t) => (
           <span>
-            <b>Heads up:</b> A public opt-in page URL greatly improves approval
-            speed. You can submit now and add it later.
-            <button
-              onClick={() => toast.dismiss(t.id)}
-              className="ml-2 underline"
-            >
+            <b>Heads up:</b> A public opt-in page URL greatly improves approval speed. You can submit now and add it later.
+            <button onClick={() => toast.dismiss(t.id)} className="ml-2 underline">
               OK
             </button>
           </span>
@@ -640,7 +565,7 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
         phone: phone.trim(),
         contactFirstName: contactFirstName.trim(),
         contactLastName: contactLastName.trim(),
-        contactTitle: contactTitle.trim(),
+        contactTitle: contactTitle.trim(), // optional; backend defaults to "Owner"
         usecaseCode: usecase,
         useCase: usecase,
         sampleMessages: allMessages,
@@ -657,7 +582,7 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
 
       const res = await fetch("/api/registerA2P", {
         method: "POST",
-        credentials: "same-origin", // 🔧 FIX: ensure cookies/same-site session is included in Safari
+        credentials: "same-origin", // Safari session cookie
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
@@ -684,13 +609,12 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
               : null;
 
           const updated: A2PStatusView = resp
-            ? ((): A2PStatusView => {
+            ? (() => {
                 const app = (resp.applicationStatus || "").toLowerCase();
                 const reg = (resp.registrationStatus || "").toLowerCase();
                 const brand = (resp.brand?.status || "").toLowerCase();
                 const camp = (resp.campaign?.status || "").toLowerCase();
 
-                // 🔁 CHANGED HERE TOO: same logic as classifyStatus above
                 const declined =
                   app === "declined" ||
                   reg === "rejected" ||
@@ -775,15 +699,11 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
           <div className={`${statusClasses} text-sm px-3 py-2 rounded`}>
             <div className="font-semibold">{statusView.title}</div>
             {statusView.description && (
-              <p className="text-xs mt-1 opacity-90">
-                {statusView.description}
-              </p>
+              <p className="text-xs mt-1 opacity-90">{statusView.description}</p>
             )}
           </div>
         ) : null}
       </div>
-
-      {/* (everything below is your existing form) */}
 
       {/* Business */}
       <div>
@@ -810,9 +730,7 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
           onChange={(e) => handleEinChange(e.target.value)}
           className="border p-2 rounded w-full"
         />
-        {errors.ein && (
-          <p className="text-xs text-red-500 mt-1">{errors.ein}</p>
-        )}
+        {errors.ein && <p className="text-xs text-red-500 mt-1">{errors.ein}</p>}
       </div>
 
       {/* Address fields */}
@@ -828,9 +746,7 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
             }}
             className="border p-2 rounded w-full"
           />
-          {errors.address && (
-            <p className="text-xs text-red-500 mt-1">{errors.address}</p>
-          )}
+          {errors.address && <p className="text-xs text-red-500 mt-1">{errors.address}</p>}
         </div>
         <input
           type="text"
@@ -852,9 +768,7 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
               className="border p-2 rounded w-full"
             />
             {errors.addressCity && (
-              <p className="text-xs text-red-500 mt-1">
-                {errors.addressCity}
-              </p>
+              <p className="text-xs text-red-500 mt-1">{errors.addressCity}</p>
             )}
           </div>
           <div>
@@ -869,9 +783,7 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
               className="border p-2 rounded w-full"
             />
             {errors.addressState && (
-              <p className="text-xs text-red-500 mt-1">
-                {errors.addressState}
-              </p>
+              <p className="text-xs text-red-500 mt-1">{errors.addressState}</p>
             )}
           </div>
           <div>
@@ -881,17 +793,12 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
               value={addressPostalCode}
               onChange={(e) => {
                 setAddressPostalCode(e.target.value);
-                setErrors((prev) => ({
-                  ...prev,
-                  addressPostalCode: undefined,
-                }));
+                setErrors((prev) => ({ ...prev, addressPostalCode: undefined }));
               }}
               className="border p-2 rounded w-full"
             />
             {errors.addressPostalCode && (
-              <p className="text-xs text-red-500 mt-1">
-                {errors.addressPostalCode}
-              </p>
+              <p className="text-xs text-red-500 mt-1">{errors.addressPostalCode}</p>
             )}
           </div>
         </div>
@@ -907,9 +814,7 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
             className="border p-2 rounded w-full"
           />
           {errors.addressCountry && (
-            <p className="text-xs text-red-500 mt-1">
-              {errors.addressCountry}
-            </p>
+            <p className="text-xs text-red-500 mt-1">{errors.addressCountry}</p>
           )}
         </div>
       </div>
@@ -925,9 +830,7 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
           }}
           className="border p-2 rounded w-full"
         />
-        {errors.website && (
-          <p className="text-xs text-red-500 mt-1">{errors.website}</p>
-        )}
+        {errors.website && <p className="text-xs text-red-500 mt-1">{errors.website}</p>}
       </div>
 
       <div>
@@ -941,9 +844,7 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
           }}
           className="border p-2 rounded w-full"
         />
-        {errors.email && (
-          <p className="text-xs text-red-500 mt-1">{errors.email}</p>
-        )}
+        {errors.email && <p className="text-xs text-red-500 mt-1">{errors.email}</p>}
       </div>
 
       <div>
@@ -966,13 +867,11 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
           }}
           className="border p-2 rounded w-full"
         />
-        {errors.phone && (
-          <p className="text-xs text-red-500 mt-1">{errors.phone}</p>
-        )}
+        {errors.phone && <p className="text-xs text-red-500 mt-1">{errors.phone}</p>}
         {!errors.phone && (
           <p className="text-xs text-gray-500 mt-1">
-            Enter exactly 10 digits (e.g. 5551234567). No spaces, dashes, or
-            parentheses. We’ll convert it to +1 format for Twilio automatically.
+            Enter exactly 10 digits (e.g. 5551234567). No spaces, dashes, or parentheses.
+            We’ll convert it to +1 format for Twilio automatically.
           </p>
         )}
       </div>
@@ -1001,9 +900,8 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
           </optgroup>
         </select>
         <p className="text-xs text-gray-500">
-          “Low Volume (mixed)” is suitable for most small businesses sending a
-          mix of conversational, marketing, and informational messages at modest
-          volumes.
+          “Low Volume (mixed)” is suitable for most small businesses sending a mix of conversational,
+          marketing, and informational messages at modest volumes.
         </p>
       </div>
 
@@ -1031,9 +929,8 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
           className="border p-2 rounded w-full md:col-span-2"
         />
         <p className="md:col-span-2 text-xs text-gray-500">
-          These links are optional but strongly recommended. A public page
-          showing how users opt in significantly reduces review delays and
-          declines.
+          These links are optional but strongly recommended. A public page showing how users opt in
+          significantly reduces review delays and declines.
         </p>
       </div>
 
@@ -1050,9 +947,7 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
           className="border p-2 rounded w-full"
         />
         {errors.contactFirstName && (
-          <p className="text-xs text-red-500 mt-1">
-            {errors.contactFirstName}
-          </p>
+          <p className="text-xs text-red-500 mt-1">{errors.contactFirstName}</p>
         )}
       </div>
       <div>
@@ -1067,9 +962,7 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
           className="border p-2 rounded w-full"
         />
         {errors.contactLastName && (
-          <p className="text-xs text-red-500 mt-1">
-            {errors.contactLastName}
-          </p>
+          <p className="text-xs text-red-500 mt-1">{errors.contactLastName}</p>
         )}
       </div>
       <input
@@ -1083,8 +976,8 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
       {/* Sample Messages */}
       <div className="space-y-3">
         <label className="text-sm text-gray-500">
-          Tip: Use variables like <code>{`{{first_name}}`}</code> and include
-          opt-out language (e.g., “Reply STOP to opt out”).
+          Tip: Use variables like <code>{`{{first_name}}`}</code> and include opt-out language
+          (e.g., “Reply STOP to opt out”).
         </label>
         <div>
           <textarea
@@ -1097,9 +990,7 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
             className="border p-2 rounded w-full"
             rows={3}
           />
-          {errors.msg1 && (
-            <p className="text-xs text-red-500 mt-1">{errors.msg1}</p>
-          )}
+          {errors.msg1 && <p className="text-xs text-red-500 mt-1">{errors.msg1}</p>}
         </div>
         <div>
           <textarea
@@ -1112,9 +1003,7 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
             className="border p-2 rounded w-full"
             rows={3}
           />
-          {errors.msg2 && (
-            <p className="text-xs text-red-500 mt-1">{errors.msg2}</p>
-          )}
+          {errors.msg2 && <p className="text-xs text-red-500 mt-1">{errors.msg2}</p>}
         </div>
         <div>
           <textarea
@@ -1127,9 +1016,7 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
             className="border p-2 rounded w-full"
             rows={3}
           />
-          {errors.msg3 && (
-            <p className="text-xs text-red-500 mt-1">{errors.msg3}</p>
-          )}
+          {errors.msg3 && <p className="text-xs text-red-500 mt-1">{errors.msg3}</p>}
         </div>
       </div>
 
@@ -1162,19 +1049,14 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
           }}
           className="border p-2 rounded w-full"
         />
-        {errors.volume && (
-          <p className="text-xs text-red-500 mt-1">{errors.volume}</p>
-        )}
+        {errors.volume && <p className="text-xs text-red-500 mt-1">{errors.volume}</p>}
       </div>
 
       {/* Screenshot Upload */}
       <div className="space-y-2">
-        <label className="font-semibold block">
-          Screenshot of opt-in language (optional)
-        </label>
+        <label className="font-semibold block">Screenshot of opt-in language (optional)</label>
         <p className="text-xs text-gray-500">
-          A screenshot of your opt-in form/page helps reviewers verify consent
-          flow quickly.
+          A screenshot of your opt-in form/page helps reviewers verify consent flow quickly.
         </p>
 
         <label

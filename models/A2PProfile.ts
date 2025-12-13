@@ -41,16 +41,15 @@ export interface IA2PProfile extends Document {
 
   // ---- TrustHub/Profile ----
   profileSid: string; // Secondary Customer Profile (BU...)
-  // extra TrustHub artifacts used by /api/a2p/start.ts
   businessEndUserSid?: string;
   authorizedRepEndUserSid?: string;
-  trustProductSid?: string; // TP...
-  a2pProfileEndUserSid?: string; // us_a2p_messaging_profile_information end user
-  assignedToPrimary?: boolean; // secondary assigned to ISV primary
+  trustProductSid?: string;
+  a2pProfileEndUserSid?: string;
+  assignedToPrimary?: boolean;
 
   // Address-related TrustHub artifacts
-  addressSid?: string; // AD...
-  supportingDocumentSid?: string; // SD... (customer_profile_address)
+  addressSid?: string;
+  supportingDocumentSid?: string;
 
   // Optional legacy/use-case sid
   useCaseSid?: string;
@@ -59,40 +58,40 @@ export interface IA2PProfile extends Document {
   usecaseCode?: string;
 
   // ---- Campaign content & consent ----
-  sampleMessages: string; // legacy string
-  sampleMessagesArr?: string[]; // modern array variant
+  sampleMessages: string;
+  sampleMessagesArr?: string[];
   optInDetails: string;
   volume: string;
-  // ⬇️ made optional
   optInScreenshotUrl?: string;
 
-  // ✅ Optional public links (for reviewer convenience)
   landingOptInUrl?: string;
   landingTosUrl?: string;
   landingPrivacyUrl?: string;
 
   // -------------------- ISV automation fields --------------------
-  brandSid?: string; // BNxxxxxxxx
-  campaignSid?: string; // (optional legacy)
-  usa2pSid?: string; // QE/CM identifier created under Messaging Service
-  messagingServiceSid?: string; // MGxxxxxxxx
+  brandSid?: string;
+  campaignSid?: string;
+  usa2pSid?: string;
+  messagingServiceSid?: string;
 
   // Twilio / TCR brand state and failure info
   brandStatus?: string;
-  brandFailureReason?: string; // flattened for UI
+  brandFailureReason?: string;
+
+  // ✅ NEW: capture Twilio’s actual error payload (for UI + debugging)
+  brandErrors?: any[];
+  brandErrorsText?: string;
 
   // Lifecycle + health
   registrationStatus?: A2PRegistrationStatus;
   messagingReady?: boolean;
   lastError?: string;
 
-  // Rollup status + notifications
   applicationStatus?: A2PApplicationStatus;
   approvalNotifiedAt?: Date;
   declinedReason?: string;
-  declineNotifiedAt?: Date; // ✅ new: when we sent a decline email for the latest decline
+  declineNotifiedAt?: Date;
 
-  // ✅ deterministic audit trail for last submission payload
   lastSubmittedAt?: Date;
   lastSubmittedUseCase?: string;
   lastSubmittedOptInDetails?: string;
@@ -102,25 +101,21 @@ export interface IA2PProfile extends Document {
   // ✅ optional: record Twilio account used when last updating A2P (proves routing)
   twilioAccountSidLastUsed?: string;
 
-  // Optional richer compliance content
   compliance?: {
     help?: string;
     stop?: string;
     optOutKeywords?: string[];
   };
 
-  // Optional metrics / vetting details
   vettingScore?: number;
   lastSyncedAt?: Date;
 
-  // Audit trail
   approvalHistory?: {
     stage: A2PRegistrationStatus | string;
     at: Date;
     note?: string;
   }[];
 
-  // bookkeeping
   createdAt: Date;
   updatedAt?: Date;
 }
@@ -128,17 +123,13 @@ export interface IA2PProfile extends Document {
 const A2PProfileSchema = new Schema<IA2PProfile>({
   userId: { type: String, required: true, index: true },
 
-  // ✅ stable lookup key (some legacy code uses userEmail)
   userEmail: { type: String, index: true },
 
-  // Business info
   businessName: { type: String, required: true },
-  // stored as a display string: 00-0000000
   ein: { type: String, required: true },
   website: { type: String, required: true },
 
-  // Full address fields
-  address: { type: String, required: true }, // line 1
+  address: { type: String, required: true },
   addressLine2: { type: String },
   addressCity: { type: String, required: true },
   addressState: { type: String, required: true },
@@ -151,50 +142,42 @@ const A2PProfileSchema = new Schema<IA2PProfile>({
   contactFirstName: { type: String, required: true },
   contactLastName: { type: String, required: true },
 
-  // TrustHub/Business profile (secondary)
   profileSid: { type: String, required: true },
 
-  // Extra TrustHub artifacts you create/attach in /api/a2p/start
   businessEndUserSid: { type: String },
   authorizedRepEndUserSid: { type: String },
   trustProductSid: { type: String },
   a2pProfileEndUserSid: { type: String },
   assignedToPrimary: { type: Boolean },
 
-  // Address / SupportingDocument artifacts
   addressSid: { type: String },
   supportingDocumentSid: { type: String },
 
-  // Legacy/use-case
   useCaseSid: { type: String },
-
-  // ✅ Persisted selected use case
   usecaseCode: { type: String },
 
-  // Consent & messaging details
   sampleMessages: { type: String, required: true },
   sampleMessagesArr: { type: [String], default: undefined },
   optInDetails: { type: String, required: true },
   volume: { type: String, required: true },
-  // ⬇️ no longer required
   optInScreenshotUrl: { type: String },
 
-  // ✅ Optional public links
   landingOptInUrl: { type: String },
   landingTosUrl: { type: String },
   landingPrivacyUrl: { type: String },
 
-  // ISV artifacts
   brandSid: { type: String },
   campaignSid: { type: String },
   usa2pSid: { type: String },
   messagingServiceSid: { type: String },
 
-  // Brand status / failure info from Twilio
   brandStatus: { type: String },
   brandFailureReason: { type: String },
 
-  // Detailed lifecycle
+  // ✅ NEW
+  brandErrors: { type: [Schema.Types.Mixed], default: undefined },
+  brandErrorsText: { type: String },
+
   registrationStatus: {
     type: String,
     enum: [
@@ -211,7 +194,6 @@ const A2PProfileSchema = new Schema<IA2PProfile>({
   messagingReady: { type: Boolean, default: false },
   lastError: { type: String },
 
-  // High-level rollup + notification + decline reason
   applicationStatus: {
     type: String,
     enum: ["pending", "approved", "declined"],
@@ -220,19 +202,16 @@ const A2PProfileSchema = new Schema<IA2PProfile>({
   },
   approvalNotifiedAt: { type: Date },
   declinedReason: { type: String },
-  declineNotifiedAt: { type: Date }, // ✅ new
+  declineNotifiedAt: { type: Date },
 
-  // ✅ deterministic audit trail for last submission payload
   lastSubmittedAt: { type: Date },
   lastSubmittedUseCase: { type: String },
   lastSubmittedOptInDetails: { type: String },
   lastSubmittedSampleMessages: { type: [String], default: undefined },
   lastSubmittedInputs: { type: Schema.Types.Mixed },
 
-  // ✅ prove which Twilio account SID last touched this record
   twilioAccountSidLastUsed: { type: String },
 
-  // Optional richer compliance fields
   compliance: {
     help: { type: String },
     stop: { type: String },
@@ -242,7 +221,6 @@ const A2PProfileSchema = new Schema<IA2PProfile>({
   vettingScore: { type: Number },
   lastSyncedAt: { type: Date },
 
-  // Audit
   approvalHistory: [
     {
       stage: { type: String },
@@ -251,15 +229,12 @@ const A2PProfileSchema = new Schema<IA2PProfile>({
     },
   ],
 
-  // bookkeeping
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },
 });
 
-// ✅ Prevent duplicate A2P profiles per tenant userId
 A2PProfileSchema.index({ userId: 1 }, { unique: true });
 
-// keep updatedAt fresh
 A2PProfileSchema.pre("save", function (next) {
   (this as any).updatedAt = new Date();
   next();

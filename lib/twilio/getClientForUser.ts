@@ -62,12 +62,15 @@ function buildTwilioClient(params: {
   if (authToken) return twilio(accountSid, authToken, { accountSid });
 
   // Else use API key pair (scoped to provided accountSid)
-  if (apiKeySid && apiKeySecret) return twilio(apiKeySid, apiKeySecret, { accountSid });
+  if (apiKeySid && apiKeySecret)
+    return twilio(apiKeySid, apiKeySecret, { accountSid });
 
   throw new Error("Missing Twilio credentials: need AUTH TOKEN or API Key pair.");
 }
 
-export async function getClientForUser(email: string): Promise<ResolvedTwilioClient> {
+export async function getClientForUser(
+  email: string,
+): Promise<ResolvedTwilioClient> {
   await dbConnect();
 
   const normalizedEmail = (email || "").toLowerCase().trim();

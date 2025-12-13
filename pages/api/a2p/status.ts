@@ -47,6 +47,31 @@ function safeLower(v: any) {
   return String(v || "").toLowerCase();
 }
 
+function flattenErrorsText(errorsArr: any[]): string {
+  if (!Array.isArray(errorsArr) || !errorsArr.length) return "";
+  return errorsArr
+    .map((e: any) => {
+      const code = e?.code ? `(${e.code}) ` : "";
+      const msg =
+        e?.message ||
+        e?.detail ||
+        e?.description ||
+        (typeof e === "string" ? e : "");
+      const fallback =
+        msg ||
+        (() => {
+          try {
+            return JSON.stringify(e);
+          } catch {
+            return String(e);
+          }
+        })();
+      return `${code}${fallback}`.trim();
+    })
+    .filter(Boolean)
+    .join(" | ");
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "GET") {
     return res.status(405).json({ message: "Method not allowed" });
@@ -62,7 +87,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const user = await User.findOne({ email: session.user.email });
     if (!user) {
-      // IMPORTANT: don't call getClientForUser here anymore (it will hard-throw)
       return res.status(404).json({ message: "User not found" });
     }
 
@@ -98,9 +122,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       client = resolved.client;
       twilioAccountSidUsed = resolved.accountSid;
       console.log("[A2P status] twilioAccountSidUsed", { twilioAccountSidUsed });
+
+      // ✅ Optional proof: list brands in this scoped context
+      if ((process.env.A2P_DEBUG_BRANDS || "") === "1") {
+        try {
+          const brands = await (client.messaging.v1 as any).brandRegistrations.list({ limit: 20 });
+          console.log("[A2P status] debug: brandRegistrations.list count", brands?.length || 0);
+          console.log(
+            "[A2P status] debug: brandRegistrations.list sids",
+            (brands || []).map((b: any) => ({ sid: b?.sid, status: b?.status })),
+          );
+        } catch (e: any) {
+          console.warn("[A2P status] debug: brandRegistrations.list failed", {
+            message: e?.message || String(e),
+          });
+        }
+      }
     } catch (e: any) {
-      // ✅ CRITICAL: status endpoint should NOT 500 if Twilio routing fails.
-      // Return a clean payload that lets UI show an actionable error.
       const msg = e?.message || String(e);
       console.warn("[A2P status] getClientForUser failed (non-fatal)", { msg });
 
@@ -128,23 +166,90 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // --- Pull fresh statuses from Twilio where possible ---
     let brandStatus = "unknown";
+    let brandFailureReason: string | null = null;
+    let brandErrors: any[] = [];
+    let brandErrorsText = "";
+
+    // ✅ Track whether Twilio *explicitly* says this is failed (this is the only thing that should drive "declined")
+    let twilioBrandFailed = false;
+    let twilioCampaignFailed = false;
+
     if (a2p.brandSid) {
       try {
-        const brand = await client.messaging.v1.brandRegistrations(a2p.brandSid).fetch();
+        const brand: any = await client.messaging.v1.brandRegistrations(a2p.brandSid).fetch();
         brandStatus = String((brand as any).status || brandStatus);
+
+        // capture failure reason(s)
+        const rawFailure =
+          brand?.failureReason ||
+          brand?.failureReasons ||
+          brand?.errors ||
+          brand?.errorCodes ||
+          undefined;
+
+        if (typeof rawFailure === "string") {
+          brandFailureReason = rawFailure;
+        } else if (Array.isArray(rawFailure)) {
+          try {
+            brandFailureReason = rawFailure
+              .map((x) =>
+                typeof x === "string"
+                  ? x
+                  : typeof x === "object"
+                  ? JSON.stringify(x)
+                  : String(x),
+              )
+              .join("; ");
+          } catch {
+            brandFailureReason = String(rawFailure);
+          }
+        } else if (rawFailure) {
+          try {
+            brandFailureReason = JSON.stringify(rawFailure);
+          } catch {
+            brandFailureReason = String(rawFailure);
+          }
+        } else {
+          brandFailureReason = null;
+        }
+
+        // capture errors array (Twilio often uses .errors)
+        brandErrors = Array.isArray(brand?.errors) ? brand.errors : [];
+        brandErrorsText = flattenErrorsText(brandErrors);
+
+        (a2p as any).brandStatus = brandStatus;
+        (a2p as any).brandFailureReason = brandFailureReason || undefined;
+        (a2p as any).brandErrors = brandErrors.length ? brandErrors : undefined;
+        (a2p as any).brandErrorsText = brandErrorsText || undefined;
+
         const lower = safeLower(brandStatus);
 
         if (FAILED.has(lower)) {
+          twilioBrandFailed = true;
+
           a2p.registrationStatus = "rejected";
           a2p.messagingReady = false;
-          if (!a2p.declinedReason) {
-            a2p.declinedReason =
-              "Your A2P brand registration was rejected by carriers. Please double-check your legal business information (business name, tax ID, address, and website) and resubmit.";
-          }
+
+          // ✅ set declinedReason to the REAL reason if we have one
+          const realReason =
+            brandErrorsText ||
+            brandFailureReason ||
+            "Brand rejected. Please review and resubmit.";
+
+          a2p.declinedReason = realReason;
+          (a2p as any).applicationStatus = "declined";
         } else if (APPROVED.has(lower)) {
           a2p.registrationStatus = "brand_approved";
+
+          // ✅ IMPORTANT: if Twilio says approved, clear stale decline flags
+          a2p.declinedReason = null;
+          (a2p as any).applicationStatus = "pending";
         } else if (PENDING.has(lower)) {
           a2p.registrationStatus = "brand_submitted";
+
+          // ✅ IMPORTANT: if Twilio says pending, clear stale decline flags
+          a2p.declinedReason = null;
+          (a2p as any).applicationStatus = "pending";
         }
       } catch {
         // best-effort
@@ -153,6 +258,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     let campaignStatus = "unknown";
     const campaignSid = (a2p as any).usa2pSid || (a2p as any).campaignSid;
+
     if (a2p.messagingServiceSid && campaignSid) {
       try {
         const camp = await client.messaging.v1
@@ -165,8 +271,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const lower = safeLower(campaignStatus);
 
         if (FAILED.has(lower)) {
+          twilioCampaignFailed = true;
+
           a2p.registrationStatus = "rejected";
           a2p.messagingReady = false;
+
+          // Only set declinedReason if Twilio explicitly failed and we don't already have one
           if (!a2p.declinedReason) {
             a2p.declinedReason =
               "Your A2P campaign registration was rejected by carriers. Please review your use case description, sample messages, and opt-in/opt-out details, then resubmit.";
@@ -174,8 +284,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         } else if (APPROVED.has(lower)) {
           a2p.registrationStatus = "campaign_approved";
           a2p.messagingReady = true;
+
+          // ✅ clear stale decline flags if campaign approved
+          a2p.declinedReason = null;
         } else if (PENDING.has(lower)) {
           a2p.registrationStatus = "campaign_submitted";
+
+          // ✅ clear stale decline flags if campaign pending
+          a2p.declinedReason = null;
         }
       } catch {
         // best-effort
@@ -224,26 +340,33 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // --- Derive applicationStatus ---
     a2p.lastSyncedAt = new Date();
+    (a2p as any).twilioAccountSidLastUsed = twilioAccountSidUsed || undefined;
 
-    let applicationStatus = (a2p as any).applicationStatus || "pending";
-    const isRejected = a2p.registrationStatus === "rejected" || Boolean(a2p.declinedReason);
+    // ✅ FIX: ONLY treat as declined if Twilio explicitly returned FAILED on brand or campaign.
+    // DO NOT mark declined just because DB has stale registrationStatus/declinedReason.
+    let applicationStatus = "pending";
 
-    if (isRejected) {
+    if (twilioBrandFailed || twilioCampaignFailed) {
       applicationStatus = "declined";
       a2p.messagingReady = false;
+      (a2p as any).applicationStatus = "declined";
     } else if (
       a2p.messagingReady ||
       a2p.registrationStatus === "ready" ||
       a2p.registrationStatus === "campaign_approved"
     ) {
       applicationStatus = "approved";
+      (a2p as any).applicationStatus = "approved";
     } else {
       applicationStatus = "pending";
+      (a2p as any).applicationStatus = "pending";
     }
 
-    (a2p as any).applicationStatus = applicationStatus;
+    // If Twilio did NOT fail and we are pending/approved, ensure no stale decline reason is returned
+    if (applicationStatus !== "declined") {
+      a2p.declinedReason = null;
+    }
 
-    // ✅ Don’t 500 on schema mismatches from older docs
     try {
       await (a2p as any).save({ validateBeforeSave: false });
     } catch (e: any) {
@@ -279,7 +402,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const canSendSms = Boolean(a2p.messagingReady && a2p.messagingServiceSid);
 
     const a2pStatusLabel =
-      applicationStatus === "approved" ? "Approved" : applicationStatus === "declined" ? "Declined" : "Pending";
+      applicationStatus === "approved"
+        ? "Approved"
+        : applicationStatus === "declined"
+        ? "Declined"
+        : "Pending";
 
     return res.status(200).json({
       nextAction,
@@ -288,8 +415,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       canSendSms,
       applicationStatus,
       a2pStatusLabel,
-      declinedReason: a2p.declinedReason || null,
-      brand: { sid: a2p.brandSid || null, status: brandStatus },
+      declinedReason: applicationStatus === "declined" ? a2p.declinedReason || null : null,
+      brand: {
+        sid: a2p.brandSid || null,
+        status: brandStatus,
+        failureReason: brandFailureReason || null,
+        errorsText: brandErrorsText || null,
+      },
       campaign: { sid: campaignSid || null, status: campaignStatus },
       messagingServiceSid: a2p.messagingServiceSid || null,
       senders,
