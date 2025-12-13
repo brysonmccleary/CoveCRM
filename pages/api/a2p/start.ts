@@ -3,6 +3,7 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
 import mongooseConnect from "@/lib/mongooseConnect";
+import twilio from "twilio";
 import A2PProfile from "@/models/A2PProfile";
 import type { IA2PProfile } from "@/models/A2PProfile";
 import User from "@/models/User";
@@ -59,6 +60,11 @@ function log(...args: any[]) {
 // We set these per-request in the handler.
 let client: any = null;
 let twilioAccountSidUsed: string = "";
+
+const parentClient = twilio(
+  process.env.TWILIO_ACCOUNT_SID,
+  process.env.TWILIO_AUTH_TOKEN,
+);
 
 // ---------------- helpers ----------------
 function required<T>(v: T, name: string): T {
@@ -124,7 +130,12 @@ function isTwilioNotFound(err: any): boolean {
   const code = Number(err?.code);
   const status = Number(err?.status);
   const message = String(err?.message || "");
-  return code === 20404 || status === 404 || /20404/.test(message) || /not found/i.test(message);
+  return (
+    code === 20404 ||
+    status === 404 ||
+    /20404/.test(message) ||
+    /not found/i.test(message)
+  );
 }
 
 // ✅ Added: unset stale SID(s) on profile and record lastError proof
@@ -214,7 +225,9 @@ async function assignEntityToCustomerProfile(
 
   // Try SDK subresource first
   try {
-    const cp: any = client.trusthub.v1.customerProfiles(customerProfileSid) as any;
+    const cp: any = client.trusthub.v1.customerProfiles(
+      customerProfileSid,
+    ) as any;
     const sub =
       cp?.entityAssignments ||
       cp?.customerProfilesEntityAssignments ||
@@ -682,7 +695,9 @@ export default async function handler(
     (setPayload as any).userEmail = user.email;
     (setPayload as any).lastSubmittedAt = now;
     (setPayload as any).lastSubmittedUseCase = normalizedUseCase;
-    (setPayload as any).lastSubmittedOptInDetails = String(optInDetails || "").trim();
+    (setPayload as any).lastSubmittedOptInDetails = String(
+      optInDetails || "",
+    ).trim();
     (setPayload as any).lastSubmittedSampleMessages = samples;
     (setPayload as any).twilioAccountSidLastUsed = twilioAccountSidUsed;
 
@@ -739,7 +754,9 @@ export default async function handler(
     // ✅ Added: recover if stored secondary profile SID is stale (20404)
     if (secondaryProfileSid) {
       try {
-        await (client.trusthub.v1.customerProfiles(secondaryProfileSid) as any).fetch();
+        await (
+          client.trusthub.v1.customerProfiles(secondaryProfileSid) as any
+        ).fetch();
       } catch (err: any) {
         if (isTwilioNotFound(err)) {
           await clearStaleSidOnProfile({
@@ -950,11 +967,13 @@ export default async function handler(
         twilioAccountSidUsed,
       });
 
-      const sd = await (client.trusthub.v1.supportingDocuments as any).create({
-        friendlyName: `${setPayload.businessName} – Address SupportingDocument`,
-        type: "customer_profile_address",
-        attributes: attributes as any,
-      });
+      const sd = await (parentClient.trusthub.v1.supportingDocuments as any).create(
+        {
+          friendlyName: `${setPayload.businessName} – Address SupportingDocument`,
+          type: "customer_profile_address",
+          attributes: attributes as any,
+        },
+      );
 
       supportingDocumentSid = sd.sid;
 
@@ -1198,7 +1217,10 @@ export default async function handler(
         brandType: "STANDARD",
       };
 
-      log("step: brandRegistrations.create", { ...payload, twilioAccountSidUsed });
+      log("step: brandRegistrations.create", {
+        ...payload,
+        twilioAccountSidUsed,
+      });
 
       let brand: any | undefined;
       try {
