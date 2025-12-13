@@ -42,10 +42,11 @@ function hasSubaccountCreds(u: any): boolean {
 
 // New: user has a subaccount SID but no API keys; billed via platform
 function hasSubaccountSidOnly(u: any): boolean {
+  const t = u?.twilio || {};
   return Boolean(
-    u?.twilio?.accountSid &&
+    t?.accountSid &&
       u?.billingMode !== "self" &&
-      (!u.twilio.apiKeySid || !u.twilio.apiKeySecret),
+      (!t?.apiKeySid || !t?.apiKeySecret),
   );
 }
 
@@ -70,7 +71,17 @@ export async function getClientForUser(email: string): Promise<ResolvedTwilioCli
   await dbConnect();
 
   const normalizedEmail = (email || "").toLowerCase().trim();
+  if (!normalizedEmail) {
+    throw new Error("getClientForUser: missing email");
+  }
+
   const user = await User.findOne({ email: normalizedEmail }).lean<any>();
+
+  // ✅ CRITICAL: never silently fall back to platform when we can't resolve a tenant user.
+  // If this triggers, your session/email mapping is broken and MUST be fixed.
+  if (!user) {
+    throw new Error(`getClientForUser: User not found for email: ${normalizedEmail}`);
+  }
 
   const FORCE_PLATFORM = (process.env.TWILIO_FORCE_PLATFORM || "") === "1";
 
@@ -91,7 +102,7 @@ export async function getClientForUser(email: string): Promise<ResolvedTwilioCli
 
     // SPECIAL CASE: platform owner using their main Twilio as "personal"
     // If this user's accountSid == platformAccountSid and we have a platform AUTH TOKEN,
-    // prefer the known-good SID+AUTH creds instead of the per-user API key pair.
+    // prefer SID+AUTH only if it actually works; else fall back to their API key pair.
     const isPlatformOwner =
       platformAccountSid &&
       platformAccountSid === accountSid &&
@@ -100,19 +111,41 @@ export async function getClientForUser(email: string): Promise<ResolvedTwilioCli
     let client: Twilio;
 
     if (isPlatformOwner) {
-      client = buildTwilioClient({
+      const testClient = buildTwilioClient({
         accountSid,
         authToken: platformAuthToken,
       });
 
-      console.log(
-        JSON.stringify({
-          msg: "getClientForUser: PERSONAL Twilio (platform auth token)",
-          email: normalizedEmail,
-          accountSidMasked: maskSid(accountSid),
-          billingMode: user?.billingMode,
-        }),
-      );
+      try {
+        await testClient.api.v2010.accounts(accountSid).fetch();
+        client = testClient;
+
+        console.log(
+          JSON.stringify({
+            msg: "getClientForUser: PERSONAL Twilio (platform auth token)",
+            email: normalizedEmail,
+            accountSidMasked: maskSid(accountSid),
+            billingMode: user?.billingMode,
+          }),
+        );
+      } catch (e: any) {
+        // Fall back to user API keys if platform token is misconfigured
+        if (!apiKeySid.startsWith("SK") || !apiKeySecret) {
+          throw new Error("User personal API key invalid (and platform auth token failed).");
+        }
+
+        client = buildTwilioClient({ accountSid, apiKeySid, apiKeySecret });
+
+        console.log(
+          JSON.stringify({
+            msg: "getClientForUser: PERSONAL Twilio (API Key fallback; platform token failed)",
+            email: normalizedEmail,
+            accountSidMasked: maskSid(accountSid),
+            billingMode: user?.billingMode,
+            platformTokenError: e?.message || String(e),
+          }),
+        );
+      }
     } else {
       if (!apiKeySid.startsWith("SK") || !apiKeySecret) {
         throw new Error("User personal API key invalid.");

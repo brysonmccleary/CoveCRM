@@ -1,4 +1,4 @@
-// models/A2PProfile.ts
+// /models/A2PProfile.ts
 import mongoose, { Schema, Document } from "mongoose";
 
 export type A2PRegistrationStatus =
@@ -16,6 +16,9 @@ export type A2PApplicationStatus = "pending" | "approved" | "declined";
 export interface IA2PProfile extends Document {
   // linkage
   userId: string;
+
+  // ✅ stable lookup for tenant (some code queries by userEmail)
+  userEmail?: string;
 
   // ---- Business info collected from tenant ----
   businessName: string;
@@ -89,6 +92,16 @@ export interface IA2PProfile extends Document {
   declinedReason?: string;
   declineNotifiedAt?: Date; // ✅ new: when we sent a decline email for the latest decline
 
+  // ✅ deterministic audit trail for last submission payload
+  lastSubmittedAt?: Date;
+  lastSubmittedUseCase?: string;
+  lastSubmittedOptInDetails?: string;
+  lastSubmittedSampleMessages?: string[];
+  lastSubmittedInputs?: any;
+
+  // ✅ optional: record Twilio account used when last updating A2P (proves routing)
+  twilioAccountSidLastUsed?: string;
+
   // Optional richer compliance content
   compliance?: {
     help?: string;
@@ -114,6 +127,9 @@ export interface IA2PProfile extends Document {
 
 const A2PProfileSchema = new Schema<IA2PProfile>({
   userId: { type: String, required: true, index: true },
+
+  // ✅ stable lookup key (some legacy code uses userEmail)
+  userEmail: { type: String, index: true },
 
   // Business info
   businessName: { type: String, required: true },
@@ -206,6 +222,16 @@ const A2PProfileSchema = new Schema<IA2PProfile>({
   declinedReason: { type: String },
   declineNotifiedAt: { type: Date }, // ✅ new
 
+  // ✅ deterministic audit trail for last submission payload
+  lastSubmittedAt: { type: Date },
+  lastSubmittedUseCase: { type: String },
+  lastSubmittedOptInDetails: { type: String },
+  lastSubmittedSampleMessages: { type: [String], default: undefined },
+  lastSubmittedInputs: { type: Schema.Types.Mixed },
+
+  // ✅ prove which Twilio account SID last touched this record
+  twilioAccountSidLastUsed: { type: String },
+
   // Optional richer compliance fields
   compliance: {
     help: { type: String },
@@ -229,6 +255,9 @@ const A2PProfileSchema = new Schema<IA2PProfile>({
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },
 });
+
+// ✅ Prevent duplicate A2P profiles per tenant userId
+A2PProfileSchema.index({ userId: 1 }, { unique: true });
 
 // keep updatedAt fresh
 A2PProfileSchema.pre("save", function (next) {
