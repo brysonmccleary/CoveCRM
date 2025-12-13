@@ -243,7 +243,7 @@ export default async function handler(
             updatedAt: new Date(),
           }));
 
-        targetFolderId = folderDoc._id;
+        targetFolderId = folderDoc?._id as any;
 
         const updateResult = await Lead.updateOne(
           {

@@ -305,7 +305,7 @@ export default async function handler(
       // This is what actually starts dialing instead of leaving the session stuck at QUEUED.
       notifyVoiceServerStartSession({
         userEmail: email,
-        sessionId: aiSession._id.toString(),
+        sessionId: String((aiSession as any)?._id),
         folderId: fid.toString(),
         total,
       }).catch((err) => {

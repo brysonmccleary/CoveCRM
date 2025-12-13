@@ -3,13 +3,9 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
 import mongooseConnect from "@/lib/mongooseConnect";
-import twilio from "twilio";
 import A2PProfile from "@/models/A2PProfile";
 import User from "@/models/User";
-
-const accountSid = process.env.TWILIO_ACCOUNT_SID!;
-const authToken = process.env.TWILIO_AUTH_TOKEN!;
-const client = twilio(accountSid, authToken);
+import { getClientForUser } from "@/lib/twilio/getClientForUser";
 
 const APPROVED = new Set([
   "approved",
@@ -29,7 +25,6 @@ const PENDING = new Set([
   "campaign_submitted",
 ]);
 
-// Terminal failure-ish statuses reported by Twilio / TCR
 const FAILED = new Set([
   "failed",
   "rejected",
@@ -48,10 +43,11 @@ type NextAction =
   | "create_messaging_service"
   | "ready";
 
-export default async function handler(
-  req: NextApiRequest,
-  res: NextApiResponse,
-) {
+function safeLower(v: any) {
+  return String(v || "").toLowerCase();
+}
+
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "GET") {
     return res.status(405).json({ message: "Method not allowed" });
   }
@@ -66,6 +62,7 @@ export default async function handler(
 
     const user = await User.findOne({ email: session.user.email });
     if (!user) {
+      // IMPORTANT: don't call getClientForUser here anymore (it will hard-throw)
       return res.status(404).json({ message: "User not found" });
     }
 
@@ -92,19 +89,52 @@ export default async function handler(
       });
     }
 
+    // ✅ Resolve tenant Twilio context (subaccount/personal/platform)
+    let client: any = null;
+    let twilioAccountSidUsed: string | null = null;
+
+    try {
+      const resolved = await getClientForUser(session.user.email);
+      client = resolved.client;
+      twilioAccountSidUsed = resolved.accountSid;
+      console.log("[A2P status] twilioAccountSidUsed", { twilioAccountSidUsed });
+    } catch (e: any) {
+      // ✅ CRITICAL: status endpoint should NOT 500 if Twilio routing fails.
+      // Return a clean payload that lets UI show an actionable error.
+      const msg = e?.message || String(e);
+      console.warn("[A2P status] getClientForUser failed (non-fatal)", { msg });
+
+      return res.status(200).json({
+        nextAction: "start_profile" as NextAction,
+        registrationStatus: a2p.registrationStatus || "unknown",
+        messagingReady: Boolean(a2p.messagingReady),
+        canSendSms: false,
+        applicationStatus: (a2p as any).applicationStatus || "pending",
+        a2pStatusLabel: "Pending",
+        declinedReason: a2p.declinedReason || null,
+        brand: { sid: a2p.brandSid || null, status: (a2p as any).brandStatus || "unknown" },
+        campaign: { sid: (a2p as any).usa2pSid || (a2p as any).campaignSid || null, status: "unknown" },
+        messagingServiceSid: a2p.messagingServiceSid || null,
+        senders: [],
+        hints: {
+          hasProfile: Boolean((a2p as any).profileSid),
+          hasBrand: Boolean(a2p.brandSid),
+          hasCampaign: Boolean((a2p as any).usa2pSid || (a2p as any).campaignSid),
+          hasMessagingService: Boolean(a2p.messagingServiceSid),
+        },
+        error: msg,
+      });
+    }
+
     // --- Pull fresh statuses from Twilio where possible ---
     let brandStatus = "unknown";
     if (a2p.brandSid) {
       try {
-        const brand = await client.messaging.v1
-          .brandRegistrations(a2p.brandSid)
-          .fetch();
-
-        brandStatus = ((brand as any).status || brandStatus) as string;
-        const lower = brandStatus.toLowerCase();
+        const brand = await client.messaging.v1.brandRegistrations(a2p.brandSid).fetch();
+        brandStatus = String((brand as any).status || brandStatus);
+        const lower = safeLower(brandStatus);
 
         if (FAILED.has(lower)) {
-          // Brand was explicitly rejected by TCR / carriers
           a2p.registrationStatus = "rejected";
           a2p.messagingReady = false;
           if (!a2p.declinedReason) {
@@ -117,12 +147,12 @@ export default async function handler(
           a2p.registrationStatus = "brand_submitted";
         }
       } catch {
-        // keep prior brand status in DB if fetch fails
+        // best-effort
       }
     }
 
     let campaignStatus = "unknown";
-    const campaignSid = (a2p as any).usa2pSid || a2p.campaignSid;
+    const campaignSid = (a2p as any).usa2pSid || (a2p as any).campaignSid;
     if (a2p.messagingServiceSid && campaignSid) {
       try {
         const camp = await client.messaging.v1
@@ -130,12 +160,9 @@ export default async function handler(
           .usAppToPerson(campaignSid)
           .fetch();
 
-        campaignStatus =
-          ((camp as any).status ||
-            (camp as any).state ||
-            campaignStatus) as string;
+        campaignStatus = String((camp as any).status || (camp as any).state || campaignStatus);
 
-        const lower = campaignStatus.toLowerCase();
+        const lower = safeLower(campaignStatus);
 
         if (FAILED.has(lower)) {
           a2p.registrationStatus = "rejected";
@@ -151,7 +178,7 @@ export default async function handler(
           a2p.registrationStatus = "campaign_submitted";
         }
       } catch {
-        // ignore campaign fetch errors; we still return what we know
+        // best-effort
       }
     }
 
@@ -172,16 +199,16 @@ export default async function handler(
         const pnSids = attached.map((p: any) => p.phoneNumberSid).filter(Boolean);
 
         if (pnSids.length) {
-          const pnDetailPromises = pnSids.map((sid) =>
-            client.incomingPhoneNumbers(sid).fetch().then(
-              (d) => ({ sid, phoneNumber: (d as any).phoneNumber || null }),
-              () => ({ sid, phoneNumber: null }),
+          const pnDetails = await Promise.all(
+            pnSids.map((sid: string) =>
+              client.incomingPhoneNumbers(sid).fetch().then(
+                (d: any) => ({ sid, phoneNumber: d?.phoneNumber || null }),
+                () => ({ sid, phoneNumber: null }),
+              ),
             ),
           );
-          const pnDetails = await Promise.all(pnDetailPromises);
-          const phoneBySid = new Map(
-            pnDetails.map((d) => [d.sid, d.phoneNumber]),
-          );
+
+          const phoneBySid = new Map(pnDetails.map((d) => [d.sid, d.phoneNumber]));
 
           senders = attached.map((p: any) => ({
             phoneNumberSid: p.phoneNumberSid,
@@ -191,18 +218,15 @@ export default async function handler(
           }));
         }
       } catch {
-        // sender lookup is best-effort; ignore failures
+        // ignore
       }
     }
 
-    // --- Update bookkeeping fields on the profile ---
+    // --- Derive applicationStatus ---
     a2p.lastSyncedAt = new Date();
 
-    // Derive a clean high-level applicationStatus if not already set
-    let applicationStatus = a2p.applicationStatus || "pending";
-
-    const isRejected =
-      a2p.registrationStatus === "rejected" || Boolean(a2p.declinedReason);
+    let applicationStatus = (a2p as any).applicationStatus || "pending";
+    const isRejected = a2p.registrationStatus === "rejected" || Boolean(a2p.declinedReason);
 
     if (isRejected) {
       applicationStatus = "declined";
@@ -217,32 +241,34 @@ export default async function handler(
       applicationStatus = "pending";
     }
 
-    a2p.applicationStatus = applicationStatus as any;
+    (a2p as any).applicationStatus = applicationStatus;
 
-    await a2p.save();
+    // ✅ Don’t 500 on schema mismatches from older docs
+    try {
+      await (a2p as any).save({ validateBeforeSave: false });
+    } catch (e: any) {
+      console.warn("[A2P status] non-fatal: failed to persist status snapshot", {
+        message: e?.message,
+      });
+    }
 
     // --- Decide next action for the wizard/UI ---
-    const lowerBrand = brandStatus.toLowerCase();
-    const lowerCampaign = String(campaignStatus).toLowerCase();
+    const lowerBrand = safeLower(brandStatus);
+    const lowerCampaign = safeLower(campaignStatus);
     const brandFailed = Boolean(a2p.brandSid && FAILED.has(lowerBrand));
     const campaignFailed = Boolean(campaignSid && FAILED.has(lowerCampaign));
 
     let nextAction: NextAction = "ready";
 
-    if (!a2p.profileSid) {
+    if (!(a2p as any).profileSid) {
       nextAction = "start_profile";
     } else if (!a2p.brandSid || brandFailed) {
-      // Either no brand yet, or brand was rejected -> go back to brand submission
       nextAction = "submit_brand";
     } else if (a2p.brandSid && !APPROVED.has(lowerBrand)) {
       nextAction = "brand_pending";
     } else if (!campaignSid || campaignFailed) {
-      // Either no campaign yet, or campaign was rejected -> go back to campaign submission
       nextAction = "submit_campaign";
-    } else if (
-      campaignSid &&
-      !APPROVED.has(lowerCampaign)
-    ) {
+    } else if (campaignSid && !APPROVED.has(lowerCampaign)) {
       nextAction = "campaign_pending";
     } else if (!a2p.messagingServiceSid) {
       nextAction = "create_messaging_service";
@@ -252,13 +278,8 @@ export default async function handler(
 
     const canSendSms = Boolean(a2p.messagingReady && a2p.messagingServiceSid);
 
-    // Simple label your UI can show directly
     const a2pStatusLabel =
-      applicationStatus === "approved"
-        ? "Approved"
-        : applicationStatus === "declined"
-        ? "Declined"
-        : "Pending";
+      applicationStatus === "approved" ? "Approved" : applicationStatus === "declined" ? "Declined" : "Pending";
 
     return res.status(200).json({
       nextAction,
@@ -273,16 +294,15 @@ export default async function handler(
       messagingServiceSid: a2p.messagingServiceSid || null,
       senders,
       hints: {
-        hasProfile: Boolean(a2p.profileSid),
+        hasProfile: Boolean((a2p as any).profileSid),
         hasBrand: Boolean(a2p.brandSid),
         hasCampaign: Boolean(campaignSid),
         hasMessagingService: Boolean(a2p.messagingServiceSid),
       },
+      twilioAccountSidUsed,
     });
   } catch (err: any) {
     console.error("A2P status error:", err);
-    return res
-      .status(500)
-      .json({ message: err?.message || "Failed to fetch A2P status" });
+    return res.status(500).json({ message: err?.message || "Failed to fetch A2P status" });
   }
 }

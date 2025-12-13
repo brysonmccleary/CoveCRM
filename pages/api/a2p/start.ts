@@ -3,10 +3,10 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
 import mongooseConnect from "@/lib/mongooseConnect";
-import twilio from "twilio";
 import A2PProfile from "@/models/A2PProfile";
 import type { IA2PProfile } from "@/models/A2PProfile";
 import User from "@/models/User";
+import { getClientForUser } from "@/lib/twilio/getClientForUser";
 
 /**
  * Required ENV:
@@ -22,22 +22,21 @@ import User from "@/models/User";
  * - A2P_NOTIFICATIONS_EMAIL
  */
 
-const accountSid = process.env.TWILIO_ACCOUNT_SID!;
-const authToken = process.env.TWILIO_AUTH_TOKEN!;
-const client = twilio(accountSid, authToken);
-
 const SECONDARY_PROFILE_POLICY_SID =
   process.env.SECONDARY_PROFILE_POLICY_SID ||
   "RNdfbf3fae0e1107f8aded0e7cead80bf5";
+
 const A2P_TRUST_PRODUCT_POLICY_SID =
   process.env.A2P_TRUST_PRODUCT_POLICY_SID ||
   "RNb0d4771c2c98518d916a3d4cd70a8f8b";
+
 const PRIMARY_PROFILE_SID = process.env.A2P_PRIMARY_PROFILE_SID!; // BU... (ISV)
 
 const baseUrl =
   process.env.NEXT_PUBLIC_BASE_URL ||
   process.env.BASE_URL ||
   "http://localhost:3000";
+
 const STATUS_CB =
   process.env.A2P_STATUS_CALLBACK_URL || `${baseUrl}/api/a2p/status-callback`;
 
@@ -55,6 +54,11 @@ const BRAND_OK_FOR_CAMPAIGN = new Set([
 function log(...args: any[]) {
   console.log("[A2P start]", ...args);
 }
+
+// NOTE: We keep helper signatures unchanged (smallest-change).
+// We set these per-request in the handler.
+let client: any = null;
+let twilioAccountSidUsed: string = "";
 
 // ---------------- helpers ----------------
 function required<T>(v: T, name: string): T {
@@ -111,6 +115,54 @@ function buildCampaignDescription(opts: {
   return desc;
 }
 
+function isSidLike(value: any, prefix: string) {
+  return typeof value === "string" && value.startsWith(prefix);
+}
+
+// ✅ Added: deterministic Twilio "not found" detection
+function isTwilioNotFound(err: any): boolean {
+  const code = Number(err?.code);
+  const status = Number(err?.status);
+  const message = String(err?.message || "");
+  return code === 20404 || status === 404 || /20404/.test(message) || /not found/i.test(message);
+}
+
+// ✅ Added: unset stale SID(s) on profile and record lastError proof
+async function clearStaleSidOnProfile(args: {
+  a2pId: string;
+  unset: Record<string, any>;
+  reason: string;
+  extra?: any;
+}) {
+  const { a2pId, unset, reason, extra } = args;
+  log("recover: clearing stale Twilio SID(s) on A2PProfile", {
+    a2pId,
+    unset,
+    reason,
+    twilioAccountSidUsed,
+    ...(extra ? { extra } : {}),
+  });
+
+  await A2PProfile.updateOne(
+    { _id: a2pId },
+    {
+      $unset: unset,
+      $set: {
+        lastError: reason,
+        lastSyncedAt: new Date(),
+        twilioAccountSidLastUsed: twilioAccountSidUsed,
+      } as any,
+      $push: {
+        approvalHistory: {
+          stage: "recovered_stale_sid",
+          at: new Date(),
+          note: reason,
+        },
+      },
+    },
+  );
+}
+
 // Twilio's TS typings for TrustHub vary across SDK versions; cast at the boundary.
 async function assignEntityToCustomerProfile(
   customerProfileSid: string,
@@ -119,16 +171,19 @@ async function assignEntityToCustomerProfile(
   log("step: entityAssignments.create (customerProfile)", {
     customerProfileSid,
     objectSid,
+    twilioAccountSidUsed,
   });
 
-  // Special-case: if the customerProfile is the PRIMARY and is already TWILIO_APPROVED,
-  // Twilio will reject adding new items. Skip in that case.
+  // CRITICAL CHECK:
+  // - If the customerProfile is the PRIMARY and is already TWILIO_APPROVED, Twilio will reject adding new items.
+  // - The PRIMARY_PROFILE_SID may exist only in master (not in subaccounts). If not accessible, skip safely.
   if (customerProfileSid === PRIMARY_PROFILE_SID) {
     try {
       const primary = await (client.trusthub.v1.customerProfiles(
         customerProfileSid,
       ) as any).fetch();
       const status = String(primary?.status || "").toUpperCase();
+
       if (status === "TWILIO_APPROVED") {
         log(
           "info: primary profile is TWILIO_APPROVED; skipping secondary assignment",
@@ -136,17 +191,24 @@ async function assignEntityToCustomerProfile(
             customerProfileSid,
             objectSid,
             status,
+            twilioAccountSidUsed,
           },
         );
         return;
       }
-    } catch (err) {
+    } catch (err: any) {
       log(
-        "warn: could not fetch primary profile status; attempting assignment anyway",
+        "info: primary profile not accessible in this Twilio account; skipping secondary->primary assignment",
         {
           customerProfileSid,
+          objectSid,
+          twilioAccountSidUsed,
+          code: err?.code,
+          status: err?.status,
+          message: err?.message,
         },
       );
+      return;
     }
   }
 
@@ -165,16 +227,16 @@ async function assignEntityToCustomerProfile(
 
     log(
       "warn: customerProfiles entityAssignments subresource unavailable; falling back to raw request",
-      { customerProfileSid, objectSid },
+      { customerProfileSid, objectSid, twilioAccountSidUsed },
     );
   } catch (err: any) {
     const msg = String(err?.message || "");
     if (msg.includes("TWILIO_APPROVED")) {
-      // Twilio is telling us the bundle is locked; this is safe to ignore.
       log("info: bundle is TWILIO_APPROVED; skipping assignment", {
         customerProfileSid,
         objectSid,
         message: msg,
+        twilioAccountSidUsed,
       });
       return;
     }
@@ -183,6 +245,7 @@ async function assignEntityToCustomerProfile(
       {
         customerProfileSid,
         message: err?.message,
+        twilioAccountSidUsed,
       },
     );
   }
@@ -204,6 +267,7 @@ async function assignEntityToCustomerProfile(
         customerProfileSid,
         objectSid,
         message: msg,
+        twilioAccountSidUsed,
       });
       return;
     }
@@ -219,6 +283,7 @@ async function assignEntityToTrustProduct(
   log("step: entityAssignments.create (trustProduct)", {
     trustProductSid,
     objectSid,
+    twilioAccountSidUsed,
   });
 
   // Try SDK subresource first (varies across SDK versions)
@@ -236,16 +301,16 @@ async function assignEntityToTrustProduct(
 
     log(
       "warn: trustProducts entityAssignments subresource unavailable; falling back to raw request",
-      { trustProductSid, objectSid },
+      { trustProductSid, objectSid, twilioAccountSidUsed },
     );
   } catch (err: any) {
     const msg = String(err?.message || "");
     if (msg.includes("TWILIO_APPROVED")) {
-      // Trust product / bundle locked; safe to ignore.
       log("info: trustProduct is TWILIO_APPROVED; skipping assignment", {
         trustProductSid,
         objectSid,
         message: msg,
+        twilioAccountSidUsed,
       });
       return;
     }
@@ -254,6 +319,7 @@ async function assignEntityToTrustProduct(
       {
         trustProductSid,
         message: err?.message,
+        twilioAccountSidUsed,
       },
     );
   }
@@ -275,6 +341,7 @@ async function assignEntityToTrustProduct(
         trustProductSid,
         objectSid,
         message: msg,
+        twilioAccountSidUsed,
       });
       return;
     }
@@ -284,7 +351,10 @@ async function assignEntityToTrustProduct(
 
 async function evaluateAndSubmitCustomerProfile(customerProfileSid: string) {
   try {
-    log("step: customerProfiles.evaluations.create", { customerProfileSid });
+    log("step: customerProfiles.evaluations.create", {
+      customerProfileSid,
+      twilioAccountSidUsed,
+    });
     const cp: any = client.trusthub.v1.customerProfiles(customerProfileSid);
     if ((cp as any).evaluations?.create) {
       await (cp as any).evaluations.create({});
@@ -294,6 +364,7 @@ async function evaluateAndSubmitCustomerProfile(customerProfileSid: string) {
   } catch (err: any) {
     log("warn: evaluations.create failed (customerProfile)", {
       customerProfileSid,
+      twilioAccountSidUsed,
       code: err?.code,
       status: err?.status,
       moreInfo: err?.moreInfo,
@@ -301,13 +372,17 @@ async function evaluateAndSubmitCustomerProfile(customerProfileSid: string) {
     });
   }
   try {
-    log("step: customerProfiles.update(pending-review)", { customerProfileSid });
+    log("step: customerProfiles.update(pending-review)", {
+      customerProfileSid,
+      twilioAccountSidUsed,
+    });
     await client.trusthub.v1.customerProfiles(customerProfileSid).update({
       status: "pending-review",
     } as any);
   } catch (err: any) {
     log("warn: customerProfiles.update failed", {
       customerProfileSid,
+      twilioAccountSidUsed,
       code: err?.code,
       status: err?.status,
       moreInfo: err?.moreInfo,
@@ -318,7 +393,10 @@ async function evaluateAndSubmitCustomerProfile(customerProfileSid: string) {
 
 async function evaluateAndSubmitTrustProduct(trustProductSid: string) {
   try {
-    log("step: trustProducts.evaluations.create", { trustProductSid });
+    log("step: trustProducts.evaluations.create", {
+      trustProductSid,
+      twilioAccountSidUsed,
+    });
     const tp: any = client.trusthub.v1.trustProducts(trustProductSid);
     if ((tp as any).evaluations?.create) {
       await (tp as any).evaluations.create({});
@@ -328,6 +406,7 @@ async function evaluateAndSubmitTrustProduct(trustProductSid: string) {
   } catch (err: any) {
     log("warn: evaluations.create failed (trustProduct)", {
       trustProductSid,
+      twilioAccountSidUsed,
       code: err?.code,
       status: err?.status,
       moreInfo: err?.moreInfo,
@@ -335,13 +414,17 @@ async function evaluateAndSubmitTrustProduct(trustProductSid: string) {
     });
   }
   try {
-    log("step: trustProducts.update(pending-review)", { trustProductSid });
+    log("step: trustProducts.update(pending-review)", {
+      trustProductSid,
+      twilioAccountSidUsed,
+    });
     await client.trusthub.v1.trustProducts(trustProductSid).update({
       status: "pending-review",
     } as any);
   } catch (err: any) {
     log("warn: trustProducts.update failed", {
       trustProductSid,
+      twilioAccountSidUsed,
       code: err?.code,
       status: err?.status,
       moreInfo: err?.moreInfo,
@@ -355,9 +438,30 @@ async function ensureMessagingServiceForUser(
   userEmail: string,
 ): Promise<string> {
   const a2p = await A2PProfile.findOne({ userId }).lean<IA2PProfile | null>();
-  if (a2p?.messagingServiceSid) return a2p.messagingServiceSid;
+  if (a2p?.messagingServiceSid) {
+    // ✅ Added: verify stored Messaging Service still exists; recover if stale
+    try {
+      await client.messaging.v1.services(a2p.messagingServiceSid).fetch();
+      return a2p.messagingServiceSid;
+    } catch (err: any) {
+      if (isTwilioNotFound(err)) {
+        await clearStaleSidOnProfile({
+          a2pId: String((a2p as any)._id),
+          unset: { messagingServiceSid: 1 },
+          reason: `Recovered stale messagingServiceSid (Twilio 20404): ${a2p.messagingServiceSid}`,
+          extra: { sid: a2p.messagingServiceSid },
+        });
+      } else {
+        throw err;
+      }
+    }
+  }
 
-  log("step: messaging.services.create (per-user)", { userId, userEmail });
+  log("step: messaging.services.create (per-user)", {
+    userId,
+    userEmail,
+    twilioAccountSidUsed,
+  });
 
   const ms = await client.messaging.v1.services.create({
     friendlyName: `CoveCRM Service – ${userEmail}`,
@@ -372,6 +476,40 @@ async function ensureMessagingServiceForUser(
   );
 
   return ms.sid;
+}
+
+async function findExistingBrandForBundles(opts: {
+  secondaryProfileSid: string;
+  trustProductSid: string;
+}) {
+  try {
+    const list = await (client.messaging.v1 as any).brandRegistrations.list({
+      limit: 50,
+    });
+
+    const match = (list || []).find((b: any) => {
+      const cp = b?.customerProfileBundleSid || b?.customerProfileSid;
+      const tp =
+        b?.a2PProfileBundleSid ||
+        b?.a2pProfileBundleSid ||
+        b?.a2PProfileSid;
+      return cp === opts.secondaryProfileSid && tp === opts.trustProductSid;
+    });
+
+    const sid = match?.sid || match?.brandSid || match?.id;
+    if (isSidLike(sid, "BN")) {
+      return sid as string;
+    }
+    return undefined;
+  } catch (e: any) {
+    log("warn: could not list brandRegistrations to recover duplicate", {
+      message: e?.message,
+      code: e?.code,
+      status: e?.status,
+      twilioAccountSidUsed,
+    });
+    return undefined;
+  }
 }
 
 // ---------------- handler ----------------
@@ -391,6 +529,42 @@ export default async function handler(
 
     const user = await User.findOne({ email: session.user.email });
     if (!user) return res.status(404).json({ message: "User not found" });
+
+    // ✅ Resolve the Twilio client in the *user subaccount* context (or self-billing creds).
+    try {
+      const resolved = await getClientForUser(session.user.email);
+      client = resolved.client;
+      twilioAccountSidUsed = resolved.accountSid;
+    } catch (e: any) {
+      console.error("[A2P start] getClientForUser failed:", {
+        email: session.user.email,
+        message: e?.message,
+      });
+      return res.status(400).json({
+        message:
+          e?.message ||
+          "Twilio is not connected for this user. Missing subaccount SID or platform credentials.",
+      });
+    }
+
+    // Minimal, safe logging (no secrets)
+    log("twilioAccountSidUsed", { twilioAccountSidUsed });
+
+    // "twilio account in use" log must fetch the account matching twilioAccountSidUsed
+    try {
+      const acct = await client.api.v2010
+        .accounts(twilioAccountSidUsed)
+        .fetch();
+      log("twilio account in use", {
+        sid: acct?.sid,
+        friendlyName: acct?.friendlyName,
+      });
+    } catch (e: any) {
+      log("twilio account in use", {
+        sid: twilioAccountSidUsed,
+        message: e?.message,
+      });
+    }
 
     const {
       businessName,
@@ -464,10 +638,12 @@ export default async function handler(
     }
 
     const userId = String(user._id);
-    const existing = await A2PProfile.findOne({
-      userId,
-    }).lean<IA2PProfile | null>();
+    const existing = await A2PProfile.findOne({ userId }).lean<
+      IA2PProfile | null
+    >();
     const now = new Date();
+
+    const normalizedUseCase = String(usecaseCode || "LOW_VOLUME");
 
     // Upsert local A2PProfile
     const setPayload: Partial<IA2PProfile> & { userId: string } = {
@@ -496,11 +672,19 @@ export default async function handler(
       landingOptInUrl: (landingOptInUrl as string) || "",
       landingTosUrl: (landingTosUrl as string) || "",
       landingPrivacyUrl: (landingPrivacyUrl as string) || "",
-      usecaseCode: (usecaseCode as string) || "LOW_VOLUME",
+      usecaseCode: normalizedUseCase,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
       lastSyncedAt: now,
     };
+
+    // ✅ Additive: persist "last submitted" fields (schema may or may not include these)
+    (setPayload as any).userEmail = user.email;
+    (setPayload as any).lastSubmittedAt = now;
+    (setPayload as any).lastSubmittedUseCase = normalizedUseCase;
+    (setPayload as any).lastSubmittedOptInDetails = String(optInDetails || "").trim();
+    (setPayload as any).lastSubmittedSampleMessages = samples;
+    (setPayload as any).twilioAccountSidLastUsed = twilioAccountSidUsed;
 
     const messageFlowText: string = setPayload.optInDetails!;
     const useCaseCode: string =
@@ -508,16 +692,17 @@ export default async function handler(
 
     const a2p = await A2PProfile.findOneAndUpdate<IA2PProfile>(
       { userId },
-      { $set: setPayload },
+      { $set: setPayload as any },
       { upsert: true, returnDocument: "after" },
     );
     if (!a2p) throw new Error("Failed to upsert A2P profile");
 
     log("upserted A2PProfile", {
       userId,
-      profileId: a2p._id.toString(),
+      profileId: String((a2p as any)?._id),
       brandSid: (a2p as any).brandSid,
       usa2pSid: (a2p as any).usa2pSid,
+      twilioAccountSidUsed,
     });
 
     // Ensure per-user Messaging Service
@@ -532,6 +717,7 @@ export default async function handler(
         brandSid: (a2p as any).brandSid,
         usa2pSid: (a2p as any).usa2pSid,
         messagingServiceSid,
+        twilioAccountSidUsed,
       });
       return res.status(200).json({
         message: "A2P already created for this user.",
@@ -542,16 +728,45 @@ export default async function handler(
           brandStatus: (a2p as any).brandStatus,
           canCreateCampaign: true,
           brandFailureReason: (a2p as any).brandFailureReason,
+          twilioAccountSidUsed,
         },
       });
     }
 
     // ---------------- 1) Secondary Customer Profile (BU...) ----------------
     let secondaryProfileSid: string | undefined = (a2p as any).profileSid;
+
+    // ✅ Added: recover if stored secondary profile SID is stale (20404)
+    if (secondaryProfileSid) {
+      try {
+        await (client.trusthub.v1.customerProfiles(secondaryProfileSid) as any).fetch();
+      } catch (err: any) {
+        if (isTwilioNotFound(err)) {
+          await clearStaleSidOnProfile({
+            a2pId: String(a2p._id),
+            unset: {
+              profileSid: 1,
+              businessEndUserSid: 1,
+              authorizedRepEndUserSid: 1,
+              assignedToPrimary: 1,
+              addressSid: 1,
+              supportingDocumentSid: 1,
+            },
+            reason: `Recovered stale profileSid (Twilio 20404): ${secondaryProfileSid}`,
+            extra: { profileSid: secondaryProfileSid },
+          });
+          secondaryProfileSid = undefined;
+        } else {
+          throw err;
+        }
+      }
+    }
+
     if (!secondaryProfileSid) {
       log("step: customerProfiles.create (secondary)", {
         email: NOTIFY_EMAIL,
         policySid: SECONDARY_PROFILE_POLICY_SID,
+        twilioAccountSidUsed,
       });
 
       const created = await client.trusthub.v1.customerProfiles.create({
@@ -562,7 +777,10 @@ export default async function handler(
       });
 
       secondaryProfileSid = created.sid;
-      log("created customerProfile (secondary)", { secondaryProfileSid });
+      log("created customerProfile (secondary)", {
+        secondaryProfileSid,
+        twilioAccountSidUsed,
+      });
 
       await A2PProfile.updateOne(
         { _id: a2p._id },
@@ -598,6 +816,7 @@ export default async function handler(
           keys: Object.keys(businessAttributes),
           length: JSON.stringify(businessAttributes).length,
         },
+        twilioAccountSidUsed,
       });
 
       let businessEU;
@@ -611,28 +830,18 @@ export default async function handler(
         console.error(
           "[A2P start] Twilio error at step: endUsers.create (business_info)",
           {
+            twilioAccountSidUsed,
             code: err?.code,
             status: err?.status,
             moreInfo: err?.moreInfo,
             details: err?.details,
             message: err?.message,
-            extra: {
-              type: "customer_profile_business_information",
-              friendlyName: `${setPayload.businessName} – Business Info`,
-              attributesSummary: {
-                keys: Object.keys(businessAttributes),
-                length: JSON.stringify(businessAttributes).length,
-              },
-            },
           },
         );
         throw err;
       }
 
-      await assignEntityToCustomerProfile(
-        secondaryProfileSid!,
-        businessEU.sid,
-      );
+      await assignEntityToCustomerProfile(secondaryProfileSid!, businessEU.sid);
 
       await A2PProfile.updateOne(
         { _id: a2p._id },
@@ -671,6 +880,7 @@ export default async function handler(
           keys: Object.keys(repAttributes),
           length: JSON.stringify(repAttributes).length,
         },
+        twilioAccountSidUsed,
       });
 
       let repEU;
@@ -684,6 +894,7 @@ export default async function handler(
         console.error(
           "[A2P start] Twilio error at step: endUsers.create (authorized_rep)",
           {
+            twilioAccountSidUsed,
             code: err?.code,
             status: err?.status,
             moreInfo: err?.moreInfo,
@@ -707,6 +918,7 @@ export default async function handler(
     if (!addressSid) {
       log("step: addresses.create (mailing address)", {
         customerName: setPayload.businessName,
+        twilioAccountSidUsed,
       });
 
       const addr = await client.addresses.create({
@@ -721,10 +933,7 @@ export default async function handler(
 
       addressSid = addr.sid;
 
-      await A2PProfile.updateOne(
-        { _id: a2p._id },
-        { $set: { addressSid } },
-      );
+      await A2PProfile.updateOne({ _id: a2p._id }, { $set: { addressSid } });
     }
 
     // ---------------- 1.7) SupportingDocument for address ----------------
@@ -738,6 +947,7 @@ export default async function handler(
 
       log("step: supportingDocuments.create (customer_profile_address)", {
         attributes,
+        twilioAccountSidUsed,
       });
 
       const sd = await (client.trusthub.v1.supportingDocuments as any).create({
@@ -763,10 +973,13 @@ export default async function handler(
     }
 
     // ---------------- 1.9) Assign Secondary to Primary (ISV) ----------------
+    // CRITICAL CHECK:
+    // If PRIMARY_PROFILE_SID cannot be fetched/used inside subaccounts, skip safely and continue.
     if (!(a2p as any).assignedToPrimary) {
-      log("step: assign secondary to primary", {
+      log("step: assign secondary to primary (attempt)", {
         primaryProfileSid: PRIMARY_PROFILE_SID,
         secondaryProfileSid,
+        twilioAccountSidUsed,
       });
 
       await assignEntityToCustomerProfile(
@@ -774,10 +987,22 @@ export default async function handler(
         secondaryProfileSid!,
       );
 
-      await A2PProfile.updateOne(
-        { _id: a2p._id },
-        { $set: { assignedToPrimary: true } },
-      );
+      // Only mark assigned if the primary profile is accessible in this account.
+      try {
+        await (client.trusthub.v1.customerProfiles(
+          PRIMARY_PROFILE_SID,
+        ) as any).fetch();
+
+        await A2PProfile.updateOne(
+          { _id: a2p._id },
+          { $set: { assignedToPrimary: true } },
+        );
+      } catch {
+        log(
+          "info: not marking assignedToPrimary because primary profile is not accessible in this account",
+          { primaryProfileSid: PRIMARY_PROFILE_SID, twilioAccountSidUsed },
+        );
+      }
     }
 
     // Evaluate + submit Secondary
@@ -785,20 +1010,46 @@ export default async function handler(
 
     // ---------------- 2) TrustProduct (A2P) if missing ----------------
     let trustProductSid: string | undefined = (a2p as any).trustProductSid;
+
+    // ✅ Added: recover if stored trustProductSid is stale (20404)
+    if (trustProductSid) {
+      try {
+        await (client.trusthub.v1.trustProducts(trustProductSid) as any).fetch();
+      } catch (err: any) {
+        if (isTwilioNotFound(err)) {
+          await clearStaleSidOnProfile({
+            a2pId: String(a2p._id),
+            unset: {
+              trustProductSid: 1,
+              a2pProfileEndUserSid: 1,
+            },
+            reason: `Recovered stale trustProductSid (Twilio 20404): ${trustProductSid}`,
+            extra: { trustProductSid },
+          });
+          trustProductSid = undefined;
+        } else {
+          throw err;
+        }
+      }
+    }
+
     if (!trustProductSid) {
       log("step: trustProducts.create (A2P)", {
         email: NOTIFY_EMAIL,
         policySid: A2P_TRUST_PRODUCT_POLICY_SID,
+        twilioAccountSidUsed,
       });
+
       const tp = await client.trusthub.v1.trustProducts.create({
         friendlyName: `${setPayload.businessName} – A2P Trust Product`,
         email: NOTIFY_EMAIL,
         policySid: A2P_TRUST_PRODUCT_POLICY_SID,
         statusCallback: STATUS_CB,
       });
+
       trustProductSid = tp.sid;
 
-      log("created trustProduct", { trustProductSid });
+      log("created trustProduct", { trustProductSid, twilioAccountSidUsed });
 
       await A2PProfile.updateOne(
         { _id: a2p._id },
@@ -821,6 +1072,7 @@ export default async function handler(
           keys: Object.keys(a2pAttributes),
           length: JSON.stringify(a2pAttributes).length,
         },
+        twilioAccountSidUsed,
       });
 
       let a2pEU;
@@ -834,6 +1086,7 @@ export default async function handler(
         console.error(
           "[A2P start] Twilio error at step: endUsers.create (a2p_profile)",
           {
+            twilioAccountSidUsed,
             code: err?.code,
             status: err?.status,
             moreInfo: err?.moreInfo,
@@ -857,9 +1110,34 @@ export default async function handler(
     await evaluateAndSubmitTrustProduct(trustProductSid!);
 
     // ---------------- 3) BrandRegistration (BN...) with resubmit logic -------
-
     let storedBrandStatus = (a2p as any).brandStatus as string | undefined;
     let brandSid: string | undefined = (a2p as any).brandSid;
+
+    // ✅ Added: recover if stored brandSid is stale (20404)
+    if (brandSid) {
+      try {
+        await client.messaging.v1.brandRegistrations(brandSid).fetch();
+      } catch (err: any) {
+        if (isTwilioNotFound(err)) {
+          await clearStaleSidOnProfile({
+            a2pId: String(a2p._id),
+            unset: {
+              brandSid: 1,
+              brandStatus: 1,
+              brandFailureReason: 1,
+              usa2pSid: 1,
+              campaignSid: 1,
+            },
+            reason: `Recovered stale brandSid (Twilio 20404): ${brandSid}`,
+            extra: { brandSid },
+          });
+          brandSid = undefined;
+          storedBrandStatus = undefined;
+        } else {
+          throw err;
+        }
+      }
+    }
 
     const normalizedStoredStatus = String(storedBrandStatus || "").toUpperCase();
     const isResubmit = Boolean(resubmit);
@@ -868,10 +1146,7 @@ export default async function handler(
     if (brandSid && normalizedStoredStatus === "FAILED" && isResubmit) {
       log(
         "resubmit requested for existing FAILED brand; updating BrandRegistration",
-        {
-          brandSid,
-          storedBrandStatus,
-        },
+        { brandSid, storedBrandStatus, twilioAccountSidUsed },
       );
 
       try {
@@ -881,22 +1156,24 @@ export default async function handler(
           { _id: a2p._id },
           {
             $set: {
-              registrationStatus: "brand_resubmitted",
+              // ✅ PATCH: "brand_resubmitted" is NOT in schema enum; keep schema-safe value.
+              registrationStatus: "brand_submitted",
               applicationStatus: "pending",
               brandStatus: "PENDING",
               brandFailureReason: undefined,
               lastError: undefined,
               lastSyncedAt: new Date(),
-            },
+              twilioAccountSidLastUsed: twilioAccountSidUsed,
+            } as any,
             $unset: {
               declinedReason: 1,
-              declineNotifiedAt: 1, // ✅ clear old decline notification so a new decline can email once
+              declineNotifiedAt: 1,
             },
             $push: {
               approvalHistory: {
-                stage: "brand_resubmitted",
+                stage: "brand_submitted",
                 at: new Date(),
-                note: "Brand resubmitted via API",
+                note: "Brand resubmitted via API (schema-safe status)",
               },
             },
           },
@@ -904,12 +1181,12 @@ export default async function handler(
       } catch (err: any) {
         log("warn: brandRegistrations.update (resubmit) failed", {
           brandSid,
+          twilioAccountSidUsed,
           code: err?.code,
           status: err?.status,
           moreInfo: err?.moreInfo,
           message: err?.message,
         });
-        // Don't throw; user can still see current status.
       }
     }
 
@@ -921,27 +1198,36 @@ export default async function handler(
         brandType: "STANDARD",
       };
 
-      log("step: brandRegistrations.create", payload);
+      log("step: brandRegistrations.create", { ...payload, twilioAccountSidUsed });
 
       let brand: any | undefined;
       try {
         brand = await client.messaging.v1.brandRegistrations.create(payload);
       } catch (err: any) {
-        // 20409/409 => duplicate brand for this bundle; reuse existing if we somehow have it
+        // 20409/409 => duplicate brand for this bundle
         if (err?.code === 20409 || err?.status === 409) {
-          log(
-            "warn: duplicate brand detected when creating; reusing existing brand if present",
-            {
-              code: err?.code,
-              status: err?.status,
-              message: err?.message,
-            },
-          );
+          log("warn: duplicate brand detected when creating", {
+            code: err?.code,
+            status: err?.status,
+            message: err?.message,
+            twilioAccountSidUsed,
+          });
 
-          if ((a2p as any).brandSid) {
-            brandSid = (a2p as any).brandSid;
+          const recovered = await findExistingBrandForBundles({
+            secondaryProfileSid: secondaryProfileSid!,
+            trustProductSid: trustProductSid!,
+          });
+
+          if (recovered) {
+            brandSid = recovered;
+            log("recovered existing brandSid from Twilio list()", {
+              brandSid,
+              twilioAccountSidUsed,
+            });
           } else {
-            throw err;
+            throw new Error(
+              "Twilio reported duplicate brand for this bundle, but we could not recover the existing BN SID. This usually happens right after deleting a brand in the Twilio UI.",
+            );
           }
         } else {
           throw err;
@@ -949,47 +1235,48 @@ export default async function handler(
       }
 
       if (!brandSid && brand) {
-        brandSid = brand.sid;
+        const sidCandidate = brand.sid || brand.brandSid || brand.id;
+        if (isSidLike(sidCandidate, "BN")) {
+          brandSid = sidCandidate;
+        }
       }
 
-      if (brandSid) {
-        await A2PProfile.updateOne(
-          { _id: a2p._id },
-          {
-            $set: {
-              brandSid,
-              registrationStatus:
-                normalizedStoredStatus === "FAILED"
-                  ? "brand_resubmitted"
-                  : "brand_submitted",
-              applicationStatus: "pending",
-              lastError: undefined,
-            },
-            $push: {
-              approvalHistory: {
-                stage:
-                  normalizedStoredStatus === "FAILED"
-                    ? "brand_resubmitted"
-                    : "brand_submitted",
-                at: new Date(),
-                note:
-                  normalizedStoredStatus === "FAILED"
-                    ? "Brand resubmission created via API"
-                    : "Brand registration created via API",
-              },
-            },
-          },
+      if (!brandSid) {
+        throw new Error(
+          "Brand registration did not return a BN SID. Check Twilio credentials and logs; the request may be hitting a different account or Twilio returned an unexpected response.",
         );
       }
+
+      await A2PProfile.updateOne(
+        { _id: a2p._id },
+        {
+          $set: {
+            brandSid,
+            registrationStatus: "brand_submitted",
+            applicationStatus: "pending",
+            lastError: undefined,
+            twilioAccountSidLastUsed: twilioAccountSidUsed,
+          } as any,
+          $push: {
+            approvalHistory: {
+              stage: "brand_submitted",
+              at: new Date(),
+              note: "Brand registration created/recovered via API",
+            },
+          },
+        },
+      );
     }
 
     // ---------------- 3.1) Fetch brand status so we know if we can create a campaign ----------------
     let brandStatus: string | undefined;
     let brandFailureReason: string | undefined;
+
     try {
       const brand: any = await client.messaging.v1
         .brandRegistrations(brandSid!)
         .fetch();
+
       brandStatus = brand?.status;
 
       const rawFailure =
@@ -1018,7 +1305,6 @@ export default async function handler(
           brandFailureReason = String(rawFailure);
         }
       } else {
-        // flatten object
         try {
           brandFailureReason = JSON.stringify(rawFailure);
         } catch {
@@ -1030,6 +1316,7 @@ export default async function handler(
         brandSid,
         status: brandStatus,
         failureReason: brandFailureReason,
+        twilioAccountSidUsed,
       });
 
       const normalized = String(brandStatus || "").toUpperCase();
@@ -1038,6 +1325,7 @@ export default async function handler(
         brandStatus: brandStatus || undefined,
         brandFailureReason,
         lastSyncedAt: new Date(),
+        twilioAccountSidLastUsed: twilioAccountSidUsed,
       };
 
       if (normalized === "FAILED") {
@@ -1062,16 +1350,28 @@ export default async function handler(
           },
         );
       } else {
-        await A2PProfile.updateOne(
-          { _id: a2p._id },
-          {
-            $set: update,
-          },
-        );
+        await A2PProfile.updateOne({ _id: a2p._id }, { $set: update });
       }
     } catch (err: any) {
+      // ✅ Added: if fetch fails with 20404, clear and force recreate next call
+      if (isTwilioNotFound(err)) {
+        await clearStaleSidOnProfile({
+          a2pId: String(a2p._id),
+          unset: {
+            brandSid: 1,
+            brandStatus: 1,
+            brandFailureReason: 1,
+            usa2pSid: 1,
+            campaignSid: 1,
+          },
+          reason: `Recovered stale brandSid during fetch (Twilio 20404): ${brandSid}`,
+          extra: { brandSid },
+        });
+      }
+
       log("warn: brandRegistrations.fetch failed", {
         brandSid,
+        twilioAccountSidUsed,
         code: err?.code,
         status: err?.status,
         moreInfo: err?.moreInfo,
@@ -1084,8 +1384,10 @@ export default async function handler(
 
     // ---------------- 5) Campaign (Usa2p QE...) if missing AND brand is eligible ----------------
     let usa2pSid: string | undefined = (a2p as any).usa2pSid;
+
     if (!usa2pSid && canCreateCampaign) {
       const code = useCaseCode;
+
       const description = buildCampaignDescription({
         businessName: setPayload.businessName || "",
         useCase: code,
@@ -1112,6 +1414,7 @@ export default async function handler(
           descriptionLength: description.length,
           samplesCount: samples.length,
         },
+        twilioAccountSidUsed,
       });
 
       const usa2p = await client.messaging.v1
@@ -1128,7 +1431,8 @@ export default async function handler(
             messagingServiceSid,
             usecaseCode: code,
             registrationStatus: "campaign_submitted",
-          },
+            twilioAccountSidLastUsed: twilioAccountSidUsed,
+          } as any,
           $push: {
             approvalHistory: {
               stage: "campaign_submitted",
@@ -1141,10 +1445,7 @@ export default async function handler(
     } else if (!usa2pSid && !canCreateCampaign) {
       log(
         "brand not eligible for campaign creation yet; deferring usAppToPerson.create",
-        {
-          brandSid,
-          brandStatus,
-        },
+        { brandSid, brandStatus, twilioAccountSidUsed },
       );
     }
 
@@ -1161,7 +1462,8 @@ export default async function handler(
             applicationStatus: appStatus,
             messagingReady: appStatus === "approved",
             lastSyncedAt: new Date(),
-          },
+            twilioAccountSidLastUsed: twilioAccountSidUsed,
+          } as any,
           $push: {
             approvalHistory: {
               stage: "ready",
@@ -1182,12 +1484,14 @@ export default async function handler(
         brandStatus,
         canCreateCampaign,
         brandFailureReason,
+        twilioAccountSidUsed,
       },
     });
   } catch (err: any) {
     console.error("[A2P start] top-level error:", err);
-    return res
-      .status(500)
-      .json({ message: "A2P start failed", error: err?.message || String(err) });
+    return res.status(500).json({
+      message: "A2P start failed",
+      error: err?.message || String(err),
+    });
   }
 }
