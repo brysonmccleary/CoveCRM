@@ -230,8 +230,8 @@ async function trusthubFetch(
   return json ?? text;
 }
 
-// ✅ FIXED: SupportingDocuments must hit TrustHub host AND tenant scope.
-// Do NOT use client.request() for SupportingDocuments.
+// ✅ FIXED: SupportingDocuments must prefer SDK when present; raw TrustHub fetch as fallback.
+// Do NOT remove the raw fallback — we keep it for safety.
 async function createSupportingDocumentRaw(args: {
   friendlyName: string;
   type: string;
@@ -239,6 +239,34 @@ async function createSupportingDocumentRaw(args: {
 }) {
   const { friendlyName, type, attributes } = args;
 
+  // ---- Preferred: official SDK surface (your logs show this exists) ----
+  const sdk = (client as any)?.trusthub?.v1?.supportingDocuments;
+  if (sdk && typeof sdk.create === "function") {
+    log("step: supportingDocuments.create SDK", {
+      type,
+      attributes,
+      twilioAccountSidUsed,
+    });
+
+    const created = await sdk.create({
+      friendlyName,
+      type,
+      attributes,
+    });
+
+    const sid = created?.sid || created?.Sid || created?.id;
+    if (!sid || typeof sid !== "string") {
+      throw new Error(
+        `SupportingDocument SDK create did not return sid. Body: ${JSON.stringify(
+          created,
+        )}`,
+      );
+    }
+
+    return { sid, raw: created };
+  }
+
+  // ---- Fallback: raw TrustHub host with tenant scope ----
   if (!twilioResolvedAuth) {
     throw new Error(
       "Missing twilioResolvedAuth (getClientForUser did not populate auth)",
@@ -668,12 +696,13 @@ export default async function handler(
 
       // ✅ NEW (additive): this is the auth we will use for TrustHub fetch fallback
       twilioResolvedAuth = resolved.auth;
-     log("TrustHub SDK surface", {
-  hasSupportingDocuments: Boolean(
-    (client as any)?.trusthub?.v1?.supportingDocuments
-  ),
-  trusthubV1Keys: Object.keys(((client as any)?.trusthub?.v1 || {})),
-});
+
+      log("TrustHub SDK surface", {
+        hasSupportingDocuments: Boolean(
+          (client as any)?.trusthub?.v1?.supportingDocuments,
+        ),
+        trusthubV1Keys: Object.keys((client as any)?.trusthub?.v1 || {}),
+      });
     } catch (e: any) {
       console.error("[A2P start] getClientForUser failed:", {
         email: session.user.email,
@@ -1094,7 +1123,7 @@ export default async function handler(
       });
 
       try {
-        // ✅ FIXED: do TrustHub fetch w/ tenant scope + correct auth mode
+        // ✅ FIXED: prefer SDK; fallback to TrustHub fetch w/ tenant scope + correct auth mode
         const sd = await createSupportingDocumentRaw({
           friendlyName: `${setPayload.businessName} – Address SupportingDocument`,
           type: "customer_profile_address",
