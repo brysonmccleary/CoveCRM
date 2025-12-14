@@ -709,9 +709,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         machineDetection: "Enable",
         asyncAmd: true,
 
+        // ✅ IMPORTANT: ensure async AMD results (AnsweredBy=human/machine_*) hit our webhook
+        // This enables your voicemail fast-skip to actually fire ASAP.
+        asyncAmdStatusCallback: aiCallStatusUrl(userEmail),
+        asyncAmdStatusCallbackMethod: "POST",
+
         // ✅ Send status callbacks earlier so voicemail can be skipped immediately
         statusCallback: aiCallStatusUrl(userEmail),
-        statusCallbackEvent: ["initiated", "ringing", "answered", "completed"],
+
+        // ✅ Include terminal statuses so your webhook can chain next lead on busy/no-answer/failed/canceled too
+        statusCallbackEvent: [
+          "initiated",
+          "ringing",
+          "answered",
+          "completed",
+          "busy",
+          "no-answer",
+          "failed",
+          "canceled",
+        ],
         statusCallbackMethod: "POST",
       } as any);
 

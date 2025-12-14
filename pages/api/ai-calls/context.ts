@@ -27,11 +27,10 @@ export default async function handler(
     return res.status(405).json({ ok: false, error: "Method not allowed" });
   }
 
-  const { sessionId, leadId, key, callSid } = req.query as {
+  const { sessionId, leadId, key } = req.query as {
     sessionId?: string;
     leadId?: string;
     key?: string;
-    callSid?: string;
   };
 
   try {
@@ -76,45 +75,6 @@ export default async function handler(
 
     const userEmail = ((aiSession as any).userEmail as string) || "";
     const user = await User.findOne({ email: userEmail }).lean();
-
-    // ✅ Optional: attach callSid to recording so ai-voice-server can know AnsweredBy (human/machine)
-    // This is a reliability safety net and does NOT change any prompts, scripts, or audio.
-    let answeredBy: string | undefined = undefined;
-    try {
-      const callSidStr =
-        typeof callSid === "string" ? callSid.trim() : "";
-
-      if (callSidStr) {
-        const now = new Date();
-
-        const rec = await AICallRecording.findOneAndUpdate(
-          { callSid: callSidStr },
-          {
-            $setOnInsert: {
-              callSid: callSidStr,
-              outcome: "unknown",
-              createdAt: now,
-            },
-            $set: {
-              userEmail: userEmail || undefined,
-              leadId: leadObjectId,
-              aiCallSessionId: sessionObjectId,
-              updatedAt: now,
-            },
-          },
-          { upsert: true, new: true }
-        ).lean();
-
-        if (rec && rec.answeredBy) {
-          answeredBy = String(rec.answeredBy);
-        }
-      }
-    } catch (recErr: any) {
-      console.warn(
-        "[AI-CALLS] context: failed to upsert/read AICallRecording for callSid (non-blocking):",
-        recErr?.message || recErr
-      );
-    }
 
     // -------- Voice profile mapping --------
     // New default persona: Jacob (Cedar)
@@ -225,6 +185,29 @@ export default async function handler(
     // Optional notes from lead fields
     const notesFromLead =
       leadAny.notes || leadAny.notesInternal || leadAny.leadNotes || "";
+
+    // ✅ Optional: expose AMD AnsweredBy when known (typing-safe access)
+    let answeredBy: string | undefined = undefined;
+    try {
+      const callSid =
+        (aiSession as any).callSid ||
+        (aiSession as any).currentCallSid ||
+        (aiSession as any).lastCallSid ||
+        "";
+
+      if (callSid) {
+        const rec = await AICallRecording.findOne({ callSid })
+          .select({ answeredBy: 1 })
+          .lean();
+
+        const ab = rec ? (rec as any).answeredBy : "";
+        if (ab) {
+          answeredBy = String(ab);
+        }
+      }
+    } catch {
+      // swallow (context must still return)
+    }
 
     const context = {
       userEmail,
