@@ -9,6 +9,7 @@ import Call from "@/models/Call";
 import Lead from "@/models/Lead";
 import { trackAiDialerUsage } from "@/lib/billing/trackAiDialerUsage";
 import { Types } from "mongoose";
+import { getClientForUser } from "@/lib/twilio/getClientForUser";
 
 export const config = { api: { bodyParser: false } };
 
@@ -98,6 +99,30 @@ function mapTerminalOutcome(callStatus: string, answeredByRaw: string) {
   }
 }
 
+function looksLikeVoicemail(answeredByRaw: string) {
+  const answeredBy = (answeredByRaw || "").toLowerCase();
+  return answeredBy.includes("machine") || answeredBy.includes("fax");
+}
+
+async function hangupCallIfPossible(userEmail: string, callSid: string) {
+  if (!userEmail || !callSid) return;
+  try {
+    const { client } = await getClientForUser(userEmail);
+    // Ending the call is NOT touching audio streaming; it simply completes the call.
+    await client.calls(callSid).update({ status: "completed" } as any);
+    console.log("[AI Dialer] Hung up call after voicemail detection", {
+      userEmail,
+      callSid,
+    });
+  } catch (err: any) {
+    console.warn("[AI Dialer] Failed to hang up call (non-blocking)", {
+      userEmail,
+      callSid,
+      error: err?.message || err,
+    });
+  }
+}
+
 export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse
@@ -119,11 +144,13 @@ export default async function handler(
     const CallStatus = (params.get("CallStatus") || "").toLowerCase();
 
     // Twilio sends Duration or CallDuration in seconds on completed calls
-    const DurationStr = params.get("CallDuration") || params.get("Duration") || "";
+    const DurationStr =
+      params.get("CallDuration") || params.get("Duration") || "";
     const durationSec = parseIntSafe(DurationStr);
 
     // AMD hint (if enabled on call creation)
-    const AnsweredBy = params.get("AnsweredBy") || params.get("answered_by") || "";
+    const AnsweredBy =
+      params.get("AnsweredBy") || params.get("answered_by") || "";
 
     // Optional hints from statusCallback URL
     const qs = req.query as { userEmail?: string };
@@ -195,6 +222,169 @@ export default async function handler(
       if (!userEmail && recDoc?.userEmail) {
         userEmail = String(recDoc.userEmail).toLowerCase();
       }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────
+    // ✅ Voicemail fast-skip:
+    // If AMD says machine/voicemail, end call ASAP + set fallback outcome + kick worker once.
+    // This DOES NOT touch <Connect><Stream> or audio encoding — it only ends the call.
+    // ─────────────────────────────────────────────────────────────────────────────
+    try {
+      const isMachine = looksLikeVoicemail(AnsweredBy);
+      if (CallSid && isMachine && userEmail && recDoc && recDoc.aiCallSessionId) {
+        const now = new Date();
+
+        // One-time guard per callSid (Twilio may retry status callbacks)
+        const handled = await AICallRecording.updateOne(
+          {
+            callSid: CallSid,
+            $or: [{ voicemailHandledAt: { $exists: false } }, { voicemailHandledAt: null }],
+          },
+          {
+            $set: {
+              voicemailHandledAt: now,
+              updatedAt: now,
+            },
+          }
+        ).exec();
+
+        const firstHandle = ((handled as any)?.modifiedCount ?? 0) > 0;
+
+        if (firstHandle) {
+          // Set conservative voicemail outcome only if still unknown
+          await AICallRecording.updateOne(
+            {
+              callSid: CallSid,
+              $or: [{ outcome: { $exists: false } }, { outcome: null }, { outcome: "unknown" }],
+            },
+            {
+              $set: {
+                outcome: "voicemail",
+                outcomeSource: "amd_voicemail",
+                updatedAt: now,
+              },
+            }
+          ).exec();
+
+          // Append lead history + notes once
+          if (recDoc.leadId) {
+            const leadId = recDoc.leadId as Types.ObjectId;
+
+            const historyEntry = {
+              type: "ai_outcome_fallback",
+              message: `🤖 AI Dialer voicemail detected (AMD): AnsweredBy=${AnsweredBy || "machine"}`,
+              timestamp: now,
+              userEmail,
+              meta: {
+                source: "call-status-webhook",
+                callSid: CallSid,
+                outcome: "voicemail",
+                recordingId: recDoc._id,
+                answeredBy: AnsweredBy,
+              },
+            };
+
+            const lead = await Lead.findOne({
+              _id: leadId,
+              $or: [{ userEmail: userEmail }, { ownerEmail: userEmail }, { user: userEmail }],
+            }).exec();
+
+            if (lead) {
+              const existingHistory: any[] = Array.isArray((lead as any).history)
+                ? (lead as any).history
+                : [];
+
+              const alreadyHasEntry = existingHistory.some((h: any) => {
+                const meta = h?.meta || {};
+                return meta?.callSid === CallSid && meta?.source === "call-status-webhook";
+              });
+
+              if (!alreadyHasEntry) {
+                existingHistory.push(historyEntry);
+                (lead as any).history = existingHistory;
+              }
+
+              const appendLine = `[AI Dialer] Voicemail detected (AMD) • CallSid=${CallSid} • AnsweredBy=${AnsweredBy || "machine"}`;
+              const existingNotes =
+                ((lead as any).notes as string | undefined) ||
+                ((lead as any).Notes as string | undefined) ||
+                "";
+
+              const alreadyInNotes =
+                typeof existingNotes === "string" && existingNotes.includes(`CallSid=${CallSid}`);
+
+              if (!alreadyInNotes) {
+                const combined =
+                  existingNotes && existingNotes.trim().length > 0
+                    ? `${existingNotes}\n${appendLine}`
+                    : appendLine;
+                (lead as any).notes = combined;
+                (lead as any).Notes = combined;
+              }
+
+              (lead as any).updatedAt = now;
+              await lead.save();
+            }
+          }
+
+          // End call immediately (non-audio)
+          await hangupCallIfPossible(userEmail, CallSid);
+
+          // Chain next lead immediately (CallSid-level dedupe)
+          if (!AI_DIALER_DISABLED) {
+            const aiCallSessionId = recDoc.aiCallSessionId as Types.ObjectId;
+
+            const sessionKick = await AICallSession.updateOne(
+              {
+                _id: aiCallSessionId,
+                status: { $in: ["queued", "running"] },
+                $or: [
+                  { chainKickCallSid: { $exists: false } },
+                  { chainKickCallSid: null },
+                  { chainKickCallSid: { $ne: CallSid } },
+                ],
+              },
+              {
+                $set: {
+                  chainKickedAt: now,
+                  chainKickCallSid: CallSid,
+                  updatedAt: now,
+                },
+              }
+            ).exec();
+
+            const kicked = ((sessionKick as any)?.modifiedCount ?? 0) > 0;
+
+            if (kicked) {
+              await kickAiWorkerOnce(req, {
+                reason: "amd_voicemail_fast_skip",
+                sessionId: String(aiCallSessionId),
+                callSid: CallSid,
+                callStatus: CallStatus,
+                answeredBy: AnsweredBy,
+              });
+            } else {
+              console.log("[AI Dialer] Suppressed duplicate voicemail fast-skip kick (same CallSid)", {
+                sessionId: String(aiCallSessionId),
+                callSid: CallSid,
+                answeredBy: AnsweredBy,
+              });
+            }
+          }
+        } else {
+          console.log("[AI Dialer] Suppressed duplicate voicemail handling (already voicemailHandledAt)", {
+            callSid: CallSid,
+            userEmail,
+            answeredBy: AnsweredBy,
+            callStatus: CallStatus,
+          });
+        }
+      }
+    } catch (amdErr: any) {
+      console.warn(
+        "⚠️ AI Dialer voicemail fast-skip failed (non-blocking):",
+        amdErr?.message || amdErr
+      );
     }
 
     // ─────────────────────────────────────────────────────────────────────────────
@@ -298,7 +488,11 @@ export default async function handler(
           callUpdate.recordingSid = recDoc.recordingSid;
         }
 
-        await Call.updateOne({ callSid: CallSid }, { $set: callUpdate }, { upsert: true }).exec();
+        await Call.updateOne(
+          { callSid: CallSid },
+          { $set: callUpdate },
+          { upsert: true }
+        ).exec();
       }
     } catch (callErr) {
       console.warn(
@@ -326,7 +520,14 @@ export default async function handler(
         // Do NOT override a real outcome already set by the agent.
         if ((currentOutcome === "unknown" || !currentOutcome) && mapped) {
           await AICallRecording.updateOne(
-            { callSid: CallSid, $or: [{ outcome: { $exists: false } }, { outcome: null }, { outcome: "unknown" }] },
+            {
+              callSid: CallSid,
+              $or: [
+                { outcome: { $exists: false } },
+                { outcome: null },
+                { outcome: "unknown" },
+              ],
+            },
             {
               $set: {
                 outcome: mapped,
@@ -339,11 +540,12 @@ export default async function handler(
 
         // Append lead history/notes only once per callSid (idempotent)
         const outcomeToLog = mapped || currentOutcome || "unknown";
-        const historyMessageBase = `🤖 AI Dialer outcome (fallback): ${String(outcomeToLog).replace(
-          "_",
-          " "
-        )}`;
-        const statusBits = `Twilio status=${CallStatus}${AnsweredBy ? `, AnsweredBy=${AnsweredBy}` : ""}${
+        const historyMessageBase = `🤖 AI Dialer outcome (fallback): ${String(
+          outcomeToLog
+        ).replace("_", " ")}`;
+        const statusBits = `Twilio status=${CallStatus}${
+          AnsweredBy ? `, AnsweredBy=${AnsweredBy}` : ""
+        }${
           typeof durationSec === "number" ? `, durationSec=${durationSec}` : ""
         }`;
 
@@ -362,14 +564,22 @@ export default async function handler(
 
         const lead = await Lead.findOne({
           _id: leadId,
-          $or: [{ userEmail: userEmail }, { ownerEmail: userEmail }, { user: userEmail }],
+          $or: [
+            { userEmail: userEmail },
+            { ownerEmail: userEmail },
+            { user: userEmail },
+          ],
         }).exec();
 
         if (lead) {
-          const existingHistory: any[] = Array.isArray((lead as any).history) ? (lead as any).history : [];
+          const existingHistory: any[] = Array.isArray((lead as any).history)
+            ? (lead as any).history
+            : [];
           const alreadyHasEntry = existingHistory.some((h: any) => {
             const meta = h?.meta || {};
-            return meta?.callSid === CallSid && meta?.source === "call-status-webhook";
+            return (
+              meta?.callSid === CallSid && meta?.source === "call-status-webhook"
+            );
           });
 
           if (!alreadyHasEntry) {
@@ -385,7 +595,8 @@ export default async function handler(
             "";
 
           const alreadyInNotes =
-            typeof existingNotes === "string" && existingNotes.includes(`CallSid=${CallSid}`);
+            typeof existingNotes === "string" &&
+            existingNotes.includes(`CallSid=${CallSid}`);
 
           if (!alreadyInNotes) {
             const combined =
@@ -409,7 +620,7 @@ export default async function handler(
 
     // ─────────────────────────────────────────────────────────────────────────────
     // --- SESSION COMPLETION + CHAIN NEXT LEAD ---
-    // (kept intact; only uses existing lock-based dedupe)
+    // Now includes CallSid-level dedupe so answered/completed callbacks can't double-kick.
     // ─────────────────────────────────────────────────────────────────────────────
     try {
       if (CallSid && recDoc && recDoc.aiCallSessionId) {
@@ -420,9 +631,11 @@ export default async function handler(
           const s: any = session;
 
           const leadCount = Array.isArray(s.leadIds) ? s.leadIds.length : 0;
-          const total: number = typeof s.total === "number" ? s.total : leadCount;
+          const total: number =
+            typeof s.total === "number" ? s.total : leadCount;
 
-          const lastIndex: number = typeof s.lastIndex === "number" ? s.lastIndex : -1;
+          const lastIndex: number =
+            typeof s.lastIndex === "number" ? s.lastIndex : -1;
 
           const hasMoreLeads = leadCount > 0 && lastIndex < leadCount - 1;
 
@@ -456,7 +669,11 @@ export default async function handler(
           // - call ended (terminal status)
           // - session is still active (queued/running)
           // - session has more leads
-          if (isTerminal && hasMoreLeads && (s.status === "queued" || s.status === "running")) {
+          if (
+            isTerminal &&
+            hasMoreLeads &&
+            (s.status === "queued" || s.status === "running")
+          ) {
             if (AI_DIALER_DISABLED) {
               console.log("[AI Dialer] Not kicking worker: AI_DIALER_DISABLED=true", {
                 sessionId: String(aiCallSessionId),
@@ -469,6 +686,7 @@ export default async function handler(
             }
 
             // ✅ Dedupe: Twilio may retry callbacks; prevent rapid re-kicks
+            // ✅ AND prevent double kick for the same callSid across answered/completed
             const now = new Date();
             const recentCutoff = new Date(now.getTime() - 15000); // 15s
 
@@ -476,7 +694,21 @@ export default async function handler(
               {
                 _id: aiCallSessionId,
                 status: { $in: ["queued", "running"] },
-                $or: [{ chainKickedAt: null }, { chainKickedAt: { $lt: recentCutoff } }],
+                $and: [
+                  {
+                    $or: [
+                      { chainKickedAt: null },
+                      { chainKickedAt: { $lt: recentCutoff } },
+                    ],
+                  },
+                  {
+                    $or: [
+                      { chainKickCallSid: { $exists: false } },
+                      { chainKickCallSid: null },
+                      { chainKickCallSid: { $ne: CallSid } },
+                    ],
+                  },
+                ],
               },
               {
                 $set: {
@@ -507,7 +739,7 @@ export default async function handler(
                 leadCount,
               });
             } else {
-              console.log("[AI Dialer] Suppressed duplicate chain kick (recently kicked)", {
+              console.log("[AI Dialer] Suppressed duplicate chain kick (recently kicked or same CallSid)", {
                 sessionId: String(aiCallSessionId),
                 callSid: CallSid,
                 callStatus: CallStatus,

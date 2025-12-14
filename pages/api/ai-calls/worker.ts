@@ -705,8 +705,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         recordingStatusCallbackEvent: ["completed"],
         recordingStatusCallbackMethod: "POST",
 
+        // ✅ Enable AMD metadata (does NOT change audio streaming)
+        machineDetection: "Enable",
+        asyncAmd: true,
+
+        // ✅ Send status callbacks earlier so voicemail can be skipped immediately
         statusCallback: aiCallStatusUrl(userEmail),
-        statusCallbackEvent: ["completed"],
+        statusCallbackEvent: ["initiated", "ringing", "answered", "completed"],
         statusCallbackMethod: "POST",
       } as any);
 
