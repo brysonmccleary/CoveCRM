@@ -3,7 +3,7 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
 import mongooseConnect from "@/lib/mongooseConnect";
-import twilio from "twilio";
+import { Buffer } from "buffer";
 import A2PProfile from "@/models/A2PProfile";
 import type { IA2PProfile } from "@/models/A2PProfile";
 import User from "@/models/User";
@@ -60,11 +60,6 @@ function log(...args: any[]) {
 // We set these per-request in the handler.
 let client: any = null;
 let twilioAccountSidUsed: string = "";
-
-const parentClient = twilio(
-  process.env.TWILIO_ACCOUNT_SID,
-  process.env.TWILIO_AUTH_TOKEN,
-);
 
 // ---------------- helpers ----------------
 function required<T>(v: T, name: string): T {
@@ -176,6 +171,7 @@ async function clearStaleSidOnProfile(args: {
 
 // ✅ FIX: SupportingDocuments SDK route can 20404 on some accounts/SDK contexts.
 // Use a raw request against trusthub.twilio.com directly.
+// IMPORTANT: This uses platform creds (TWILIO_ACCOUNT_SID/TWILIO_AUTH_TOKEN).
 async function createSupportingDocumentRaw(args: {
   friendlyName: string;
   type: string;
@@ -183,7 +179,6 @@ async function createSupportingDocumentRaw(args: {
 }) {
   const { friendlyName, type, attributes } = args;
 
-  // IMPORTANT: Twilio TrustHub expects Attributes as a JSON string in form encoding.
   const uri = "https://trusthub.twilio.com/v1/SupportingDocuments";
 
   log("step: supportingDocuments.create RAW (trusthub.twilio.com)", {
@@ -193,32 +188,53 @@ async function createSupportingDocumentRaw(args: {
     twilioAccountSidUsed,
   });
 
-  // ✅ Twilio's request() in some SDK contexts will NOT send formData as expected.
-  // Send x-www-form-urlencoded payload via `data` instead.
+  // Twilio expects x-www-form-urlencoded with these exact keys.
   const payload = new URLSearchParams();
   payload.set("FriendlyName", friendlyName);
   payload.set("Type", type);
   payload.set("Attributes", JSON.stringify(attributes));
 
-  const resp = await (parentClient as any).request({
-    method: "POST",
-    uri,
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
-    data: payload.toString(),
-  });
-// Twilio raw response body shape varies; normalize:
-  const sid = resp?.body?.sid || resp?.body?.Sid || resp?.body?.id;
-  if (!sid || typeof sid !== "string") {
+  const accountSid = process.env.TWILIO_ACCOUNT_SID || "";
+  const authToken = process.env.TWILIO_AUTH_TOKEN || "";
+  if (!accountSid || !authToken) {
     throw new Error(
-      `SupportingDocument RAW create did not return sid. Body: ${JSON.stringify(
-        resp?.body || resp,
-      )}`,
+      "Missing TWILIO_ACCOUNT_SID or TWILIO_AUTH_TOKEN for RAW TrustHub request",
     );
   }
 
-  return { sid, raw: resp?.body };
+  const basicAuth = Buffer.from(`${accountSid}:${authToken}`).toString("base64");
+
+  const resp = await fetch(uri, {
+    method: "POST",
+    headers: {
+      Authorization: `Basic ${basicAuth}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: payload,
+  });
+
+  const text = await resp.text();
+  let json: any = null;
+  try {
+    json = text ? JSON.parse(text) : null;
+  } catch {
+    json = null;
+  }
+
+  if (!resp.ok) {
+    throw new Error(
+      `SupportingDocument RAW create failed (${resp.status}). Body: ${text}`,
+    );
+  }
+
+  const sid = json?.sid || json?.Sid || json?.id;
+  if (!sid || typeof sid !== "string") {
+    throw new Error(
+      `SupportingDocument RAW create did not return sid. Body: ${text}`,
+    );
+  }
+
+  return { sid, raw: json ?? text };
 }
 
 // Twilio's TS typings for TrustHub vary across SDK versions; cast at the boundary.
@@ -685,11 +701,11 @@ export default async function handler(
     const samples: string[] = Array.isArray(sampleMessages)
       ? (sampleMessages as string[]).map((s) => s.trim()).filter(Boolean)
       : typeof sampleMessages === "string"
-      ? (sampleMessages as string)
-          .split("\n")
-          .map((s) => s.trim())
-          .filter(Boolean)
-      : [];
+        ? (sampleMessages as string)
+            .split("\n")
+            .map((s) => s.trim())
+            .filter(Boolean)
+        : [];
 
     if (samples.length < 2) {
       throw new Error(
@@ -1001,7 +1017,8 @@ export default async function handler(
     }
 
     // ---------------- 1.7) SupportingDocument for address ----------------
-    let supportingDocumentSid: string | undefined = (a2p as any).supportingDocumentSid;
+    let supportingDocumentSid: string | undefined = (a2p as any)
+      .supportingDocumentSid;
     if (!supportingDocumentSid && addressSid) {
       const attributes = {
         // Twilio expects a single SID string here, not an array
@@ -1014,7 +1031,7 @@ export default async function handler(
       });
 
       try {
-        // ✅ Do NOT use SDK here — raw request is more reliable on twilio@5.7.2
+        // ✅ Do NOT use SDK here — raw request is more reliable
         const sd = await createSupportingDocumentRaw({
           friendlyName: `${setPayload.businessName} – Address SupportingDocument`,
           type: "customer_profile_address",
@@ -1375,8 +1392,8 @@ export default async function handler(
               typeof x === "string"
                 ? x
                 : typeof x === "object"
-                ? JSON.stringify(x)
-                : String(x),
+                  ? JSON.stringify(x)
+                  : String(x),
             )
             .join("; ");
         } catch {
