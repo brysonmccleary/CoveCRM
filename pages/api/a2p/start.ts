@@ -174,6 +174,48 @@ async function clearStaleSidOnProfile(args: {
   );
 }
 
+// ✅ FIX: SupportingDocuments SDK route can 20404 on some accounts/SDK contexts.
+// Use a raw request against trusthub.twilio.com directly.
+async function createSupportingDocumentRaw(args: {
+  friendlyName: string;
+  type: string;
+  attributes: Record<string, any>;
+}) {
+  const { friendlyName, type, attributes } = args;
+
+  // IMPORTANT: Twilio TrustHub expects Attributes as a JSON string in form encoding.
+  const uri = "https://trusthub.twilio.com/v1/SupportingDocuments";
+
+  log("step: supportingDocuments.create RAW (trusthub.twilio.com)", {
+    uri,
+    type,
+    attributes,
+    twilioAccountSidUsed,
+  });
+
+  const resp = await (parentClient as any).request({
+    method: "POST",
+    uri,
+    formData: {
+      FriendlyName: friendlyName,
+      Type: type,
+      Attributes: JSON.stringify(attributes),
+    },
+  });
+
+  // Twilio raw response body shape varies; normalize:
+  const sid = resp?.body?.sid || resp?.body?.Sid || resp?.body?.id;
+  if (!sid || typeof sid !== "string") {
+    throw new Error(
+      `SupportingDocument RAW create did not return sid. Body: ${JSON.stringify(
+        resp?.body || resp,
+      )}`,
+    );
+  }
+
+  return { sid, raw: resp?.body };
+}
+
 // Twilio's TS typings for TrustHub vary across SDK versions; cast at the boundary.
 async function assignEntityToCustomerProfile(
   customerProfileSid: string,
@@ -954,8 +996,7 @@ export default async function handler(
     }
 
     // ---------------- 1.7) SupportingDocument for address ----------------
-    let supportingDocumentSid: string | undefined = (a2p as any)
-      .supportingDocumentSid;
+    let supportingDocumentSid: string | undefined = (a2p as any).supportingDocumentSid;
     if (!supportingDocumentSid && addressSid) {
       const attributes = {
         // Twilio expects a single SID string here, not an array
@@ -967,20 +1008,30 @@ export default async function handler(
         twilioAccountSidUsed,
       });
 
-      const sd = await (parentClient.trusthub.v1.supportingDocuments as any).create(
-        {
+      try {
+        // ✅ Do NOT use SDK here — raw request is more reliable on twilio@5.7.2
+        const sd = await createSupportingDocumentRaw({
           friendlyName: `${setPayload.businessName} – Address SupportingDocument`,
           type: "customer_profile_address",
-          attributes: attributes as any,
-        },
-      );
+          attributes,
+        });
 
-      supportingDocumentSid = sd.sid;
+        supportingDocumentSid = sd.sid;
 
-      await A2PProfile.updateOne(
-        { _id: a2p._id },
-        { $set: { supportingDocumentSid } },
-      );
+        await A2PProfile.updateOne(
+          { _id: a2p._id },
+          { $set: { supportingDocumentSid } },
+        );
+      } catch (err: any) {
+        console.error("[A2P start] supportingDocuments RAW create failed", {
+          twilioAccountSidUsed,
+          code: err?.code,
+          status: err?.status,
+          message: err?.message,
+          moreInfo: err?.moreInfo,
+        });
+        throw err;
+      }
     }
 
     // ---------------- 1.8) Attach SupportingDocument to Secondary profile ----
