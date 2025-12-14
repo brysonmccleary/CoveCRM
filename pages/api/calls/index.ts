@@ -6,6 +6,7 @@ import dbConnect from "@/lib/mongooseConnect";
 import Call from "@/models/Call";
 import Lead from "@/models/Lead";
 import { getUserByEmail } from "@/models/User";
+import { Types } from "mongoose";
 
 function toInt(v: string | string[] | undefined, d = 25) {
   const n = parseInt(String(v ?? ""), 10);
@@ -62,7 +63,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const s = Math.min(100, Math.max(1, toInt(pageSize, 25)));
     const skip = (p - 1) * s;
 
-    const q: any = { leadId };
+    // ✅ CRITICAL FIX:
+    // Call.leadId is Schema.Types.Mixed, and in practice your AI dialer often stores it as ObjectId.
+    // leadId from query is a string, so match both string and ObjectId forms.
+    const leadIdStr = String(leadId);
+    const leadIdObj = Types.ObjectId.isValid(leadIdStr)
+      ? new Types.ObjectId(leadIdStr)
+      : null;
+
+    const q: any = {
+      leadId: leadIdObj ? { $in: [leadIdStr, leadIdObj] } : leadIdStr,
+    };
     if (!isAdmin) q.userEmail = requesterEmail;
 
     const [rows, total] = await Promise.all([
