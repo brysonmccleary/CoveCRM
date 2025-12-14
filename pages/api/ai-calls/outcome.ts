@@ -106,7 +106,7 @@ export default async function handler(
       "disconnected",
     ];
 
-    const prevOutcome: AllowedOutcome = rec.outcome || "unknown";
+    const prevOutcome: AllowedOutcome = (rec.outcome as any) || "unknown";
     let normalizedOutcome: AllowedOutcome | undefined = undefined;
 
     let bookedAccepted = true;
@@ -116,8 +116,17 @@ export default async function handler(
       normalizedOutcome = outcome;
     }
 
+    // ✅ Reliability: NEVER allow regression back to "unknown" if we already have a real outcome.
+    if (normalizedOutcome === "unknown" && prevOutcome !== "unknown") {
+      normalizedOutcome = undefined;
+    }
+
     // ✅ Enforce appointment cementing server-side:
     // Only allow "booked" when we have explicit confirmation fields.
+    //
+    // CRITICAL RELIABILITY GUARD:
+    // If the lead is ALREADY "booked" from a prior valid outcome, DO NOT downgrade it
+    // due to missing confirmation fields on a later retry/partial payload.
     if (normalizedOutcome === "booked") {
       const hasDate = isNonEmptyString(confirmedDate);
       const hasTime = isNonEmptyString(confirmedTime);
@@ -125,21 +134,27 @@ export default async function handler(
       const hasRepeat = repeatBackConfirmed === true;
 
       if (!hasDate || !hasTime || !hasYes || !hasRepeat) {
-        bookedAccepted = false;
-        bookedRejectedReason =
-          "booked_rejected_missing_confirmation_fields";
+        if (prevOutcome === "booked") {
+          // Keep booked. Do not downgrade an already-booked lead due to partial payloads.
+          bookedAccepted = true;
+          bookedRejectedReason = null;
+          normalizedOutcome = undefined; // preserve prevOutcome
+        } else {
+          bookedAccepted = false;
+          bookedRejectedReason = "booked_rejected_missing_confirmation_fields";
 
-        // Downgrade to callback (actionable) instead of incorrectly marking booked.
-        normalizedOutcome = "callback";
+          // Downgrade to callback (actionable) instead of incorrectly marking booked.
+          normalizedOutcome = "callback";
+        }
       }
     }
 
     const nextOutcome: AllowedOutcome =
-      normalizedOutcome ?? prevOutcome ?? "unknown";
+      (normalizedOutcome as any) ?? prevOutcome ?? "unknown";
 
     // Update recording fields
     if (normalizedOutcome) {
-      rec.outcome = normalizedOutcome;
+      rec.outcome = normalizedOutcome as any;
     }
     if (typeof summary === "string") {
       rec.summary = summary;
@@ -155,9 +170,11 @@ export default async function handler(
       // Add a visible audit note so you can diagnose false-booked attempts quickly.
       const audit = `[AI Dialer] BOOKED rejected: missing confirmation fields (date=${String(
         confirmedDate || ""
-      ).trim() || "missing"}, time=${String(confirmedTime || "").trim() || "missing"}, yes=${String(
-        confirmedYes === true
-      )}, repeatBack=${String(repeatBackConfirmed === true)})`;
+      ).trim() || "missing"}, time=${
+        String(confirmedTime || "").trim() || "missing"
+      }, yes=${String(confirmedYes === true)}, repeatBack=${String(
+        repeatBackConfirmed === true
+      )})`;
       toAppend.push(audit);
     }
 
@@ -168,8 +185,10 @@ export default async function handler(
 
     // Store confirmation fields if provided (non-breaking; safe for later audits)
     // Only set if they exist so we don't overwrite prior info.
-    if (isNonEmptyString(confirmedDate)) (rec as any).confirmedDate = confirmedDate!.trim();
-    if (isNonEmptyString(confirmedTime)) (rec as any).confirmedTime = confirmedTime!.trim();
+    if (isNonEmptyString(confirmedDate))
+      (rec as any).confirmedDate = confirmedDate!.trim();
+    if (isNonEmptyString(confirmedTime))
+      (rec as any).confirmedTime = confirmedTime!.trim();
     if (typeof confirmedYes === "boolean") (rec as any).confirmedYes = confirmedYes;
     if (typeof repeatBackConfirmed === "boolean")
       (rec as any).repeatBackConfirmed = repeatBackConfirmed;
@@ -352,11 +371,17 @@ export default async function handler(
             recordingId: rec._id,
             bookedAccepted,
             bookedRejectedReason,
-            confirmedDate: isNonEmptyString(confirmedDate) ? confirmedDate!.trim() : undefined,
-            confirmedTime: isNonEmptyString(confirmedTime) ? confirmedTime!.trim() : undefined,
+            confirmedDate: isNonEmptyString(confirmedDate)
+              ? confirmedDate!.trim()
+              : undefined,
+            confirmedTime: isNonEmptyString(confirmedTime)
+              ? confirmedTime!.trim()
+              : undefined,
             confirmedYes: typeof confirmedYes === "boolean" ? confirmedYes : undefined,
             repeatBackConfirmed:
-              typeof repeatBackConfirmed === "boolean" ? repeatBackConfirmed : undefined,
+              typeof repeatBackConfirmed === "boolean"
+                ? repeatBackConfirmed
+                : undefined,
           },
         };
 
@@ -371,12 +396,20 @@ export default async function handler(
         }).exec();
 
         if (lead) {
-          // History
+          // History (idempotent per callSid)
           const existingHistory: any[] = Array.isArray((lead as any).history)
             ? (lead as any).history
             : [];
-          existingHistory.push(historyEntry);
-          (lead as any).history = existingHistory;
+
+          const alreadyHasEntry = existingHistory.some((h: any) => {
+            const meta = h?.meta || {};
+            return h?.type === "ai_outcome" && meta?.callSid === callSid;
+          });
+
+          if (!alreadyHasEntry) {
+            existingHistory.push(historyEntry);
+            (lead as any).history = existingHistory;
+          }
 
           // Notes append behavior (preserve existing behavior)
           if (typeof notesAppend === "string" && notesAppend.trim().length > 0) {
@@ -403,7 +436,10 @@ export default async function handler(
               "";
 
             const auditLine = `[AI Dialer] BOOKED rejected: missing confirmation (CallSid=${callSid})`;
-            if (!existingNotes.includes(`CallSid=${callSid}`) || !existingNotes.includes("BOOKED rejected")) {
+            if (
+              !existingNotes.includes(`CallSid=${callSid}`) ||
+              !existingNotes.includes("BOOKED rejected")
+            ) {
               const combined =
                 existingNotes && existingNotes.trim().length > 0
                   ? `${existingNotes}\n${auditLine}`
