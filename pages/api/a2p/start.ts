@@ -7,7 +7,10 @@ import { Buffer } from "buffer";
 import A2PProfile from "@/models/A2PProfile";
 import type { IA2PProfile } from "@/models/A2PProfile";
 import User from "@/models/User";
-import { getClientForUser } from "@/lib/twilio/getClientForUser";
+import {
+  getClientForUser,
+  TwilioResolvedAuth,
+} from "@/lib/twilio/getClientForUser";
 
 /**
  * Required ENV:
@@ -60,6 +63,10 @@ function log(...args: any[]) {
 // We set these per-request in the handler.
 let client: any = null;
 let twilioAccountSidUsed: string = "";
+
+// ✅ NEW (additive): capture the exact auth used by getClientForUser so raw fetch
+// can match tenant + auth mode correctly.
+let twilioResolvedAuth: TwilioResolvedAuth | null = null;
 
 // ---------------- helpers ----------------
 function required<T>(v: T, name: string): T {
@@ -169,49 +176,40 @@ async function clearStaleSidOnProfile(args: {
   );
 }
 
-// ✅ FIX: SupportingDocuments SDK route can 20404 on some accounts/SDK contexts.
-// Use a raw request against trusthub.twilio.com directly.
-// IMPORTANT: This uses platform creds (TWILIO_ACCOUNT_SID/TWILIO_AUTH_TOKEN).
-async function createSupportingDocumentRaw(args: {
-  friendlyName: string;
-  type: string;
-  attributes: Record<string, any>;
-}) {
-  const { friendlyName, type, attributes } = args;
+function toFormUrlEncoded(body: Record<string, string>): string {
+  const params = new URLSearchParams();
+  for (const [k, v] of Object.entries(body)) params.append(k, v);
+  return params.toString();
+}
 
-  const uri = "https://trusthub.twilio.com/v1/SupportingDocuments";
+function basicAuthHeader(username: string, password: string): string {
+  const token = Buffer.from(`${username}:${password}`).toString("base64");
+  return `Basic ${token}`;
+}
 
-  log("step: supportingDocuments.create RAW (trusthub.twilio.com)", {
-    uri,
-    type,
-    attributes,
-    twilioAccountSidUsed,
-  });
+async function trusthubFetch(
+  auth: TwilioResolvedAuth,
+  method: "POST" | "GET",
+  path: string,
+  form?: Record<string, string>,
+) {
+  const url = `https://trusthub.twilio.com${path}`;
 
-  // Twilio expects x-www-form-urlencoded with these exact keys.
-  const payload = new URLSearchParams();
-  payload.set("FriendlyName", friendlyName);
-  payload.set("Type", type);
-  payload.set("Attributes", JSON.stringify(attributes));
+  const headers: Record<string, string> = {
+    Authorization: basicAuthHeader(auth.username, auth.password),
+  };
 
-  const accountSid = process.env.TWILIO_ACCOUNT_SID || "";
-  const authToken = process.env.TWILIO_AUTH_TOKEN || "";
-  if (!accountSid || !authToken) {
-    throw new Error(
-      "Missing TWILIO_ACCOUNT_SID or TWILIO_AUTH_TOKEN for RAW TrustHub request",
-    );
+  // ✅ CRITICAL: force tenant scope. This prevents “created under parent account” mistakes.
+  // Using the same accountSid your client is scoped to.
+  headers["X-Twilio-AccountSid"] = twilioAccountSidUsed;
+
+  let body: string | undefined = undefined;
+  if (method === "POST") {
+    headers["Content-Type"] = "application/x-www-form-urlencoded";
+    body = toFormUrlEncoded(form || {});
   }
 
-  const basicAuth = Buffer.from(`${accountSid}:${authToken}`).toString("base64");
-
-  const resp = await fetch(uri, {
-    method: "POST",
-    headers: {
-      Authorization: `Basic ${basicAuth}`,
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
-    body: payload,
-  });
+  const resp = await fetch(url, { method, headers, body });
 
   const text = await resp.text();
   let json: any = null;
@@ -222,19 +220,75 @@ async function createSupportingDocumentRaw(args: {
   }
 
   if (!resp.ok) {
+    const code = json?.code ?? resp.status;
+    const message = json?.message ?? text ?? `HTTP ${resp.status}`;
     throw new Error(
-      `SupportingDocument RAW create failed (${resp.status}). Body: ${text}`,
+      `TrustHub ${method} ${path} failed (${resp.status}) code=${code} message=${message}`,
     );
   }
 
-  const sid = json?.sid || json?.Sid || json?.id;
+  return json ?? text;
+}
+
+// ✅ FIXED: SupportingDocuments must hit TrustHub host AND tenant scope.
+// Do NOT use client.request() for SupportingDocuments.
+async function createSupportingDocumentRaw(args: {
+  friendlyName: string;
+  type: string;
+  attributes: Record<string, any>;
+}) {
+  const { friendlyName, type, attributes } = args;
+
+  if (!twilioResolvedAuth) {
+    throw new Error(
+      "Missing twilioResolvedAuth (getClientForUser did not populate auth)",
+    );
+  }
+
+  log("step: supportingDocuments.create RAW (trusthub.twilio.com)", {
+    host: "trusthub.twilio.com",
+    path: "/v1/SupportingDocuments",
+    type,
+    attributes,
+    twilioAccountSidUsed,
+    authMode: twilioResolvedAuth.mode,
+    authUserMasked:
+      twilioResolvedAuth.username?.slice(0, 4) +
+      "…" +
+      twilioResolvedAuth.username?.slice(-4),
+  });
+
+  // Twilio expects x-www-form-urlencoded with these exact keys.
+  const created: any = await trusthubFetch(
+    twilioResolvedAuth,
+    "POST",
+    "/v1/SupportingDocuments",
+    {
+      FriendlyName: friendlyName,
+      Type: type,
+      Attributes: JSON.stringify(attributes),
+    },
+  );
+
+  const sid = created?.sid || created?.Sid || created?.id;
   if (!sid || typeof sid !== "string") {
     throw new Error(
-      `SupportingDocument RAW create did not return sid. Body: ${text}`,
+      `SupportingDocument RAW create did not return sid. Body: ${JSON.stringify(
+        created,
+      )}`,
     );
   }
 
-  return { sid, raw: json ?? text };
+  // ✅ Optional but recommended: verify existence under same scope (catches wrong account instantly)
+  try {
+    await trusthubFetch(twilioResolvedAuth, "GET", `/v1/SupportingDocuments/${sid}`);
+  } catch (e: any) {
+    throw new Error(
+      `SupportingDocument created but verification failed (likely wrong account scope). sid=${sid} error=${e?.message || String(e)}`,
+    );
+  }
+
+  return { sid, raw: created };
 }
 
 // Twilio's TS typings for TrustHub vary across SDK versions; cast at the boundary.
@@ -611,6 +665,9 @@ export default async function handler(
       const resolved = await getClientForUser(session.user.email);
       client = resolved.client;
       twilioAccountSidUsed = resolved.accountSid;
+
+      // ✅ NEW (additive): this is the auth we will use for TrustHub fetch fallback
+      twilioResolvedAuth = resolved.auth;
     } catch (e: any) {
       console.error("[A2P start] getClientForUser failed:", {
         email: session.user.email,
@@ -1021,7 +1078,7 @@ export default async function handler(
       .supportingDocumentSid;
     if (!supportingDocumentSid && addressSid) {
       const attributes = {
-        // Twilio expects a single SID string here, not an array
+        // leave as-is: your issue is 404/host routing, not attribute validation
         address_sids: addressSid,
       };
 
@@ -1031,7 +1088,7 @@ export default async function handler(
       });
 
       try {
-        // ✅ Do NOT use SDK here — raw request is more reliable
+        // ✅ FIXED: do TrustHub fetch w/ tenant scope + correct auth mode
         const sd = await createSupportingDocumentRaw({
           friendlyName: `${setPayload.businessName} – Address SupportingDocument`,
           type: "customer_profile_address",

@@ -3,11 +3,26 @@ import twilio, { Twilio } from "twilio";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 
+export type TwilioResolvedAuth = {
+  // "authToken" = SID + Auth Token
+  // "apiKey" = API Key Sid + Secret
+  mode: "authToken" | "apiKey";
+  username: string; // Basic auth username
+  password: string; // Basic auth password
+  // The account SID that requests should be scoped to (tenant account)
+  effectiveAccountSid: string;
+};
+
 export type ResolvedTwilioClient = {
   client: Twilio;
   accountSid: string;
   usingPersonal: boolean; // same meaning as before
   user: any;
+
+  // ✅ NEW (additive): exposes the exact auth mode + credentials used to build the client,
+  // so API routes can make direct TrustHub calls (fetch) without accidentally using
+  // the wrong host or wrong scope.
+  auth: TwilioResolvedAuth;
 };
 
 function maskSid(sid?: string): string | null {
@@ -83,7 +98,9 @@ export async function getClientForUser(
   // ✅ CRITICAL: never silently fall back to platform when we can't resolve a tenant user.
   // If this triggers, your session/email mapping is broken and MUST be fixed.
   if (!user) {
-    throw new Error(`getClientForUser: User not found for email: ${normalizedEmail}`);
+    throw new Error(
+      `getClientForUser: User not found for email: ${normalizedEmail}`,
+    );
   }
 
   const FORCE_PLATFORM = (process.env.TWILIO_FORCE_PLATFORM || "") === "1";
@@ -92,7 +109,9 @@ export async function getClientForUser(
   const platformAccountSid = sanitizeId(process.env.TWILIO_ACCOUNT_SID || "");
   const platformAuthToken = String(process.env.TWILIO_AUTH_TOKEN || "").trim();
   const platformApiKeySid = sanitizeId(process.env.TWILIO_API_KEY_SID || "");
-  const platformApiKeySecret = String(process.env.TWILIO_API_KEY_SECRET || "").trim();
+  const platformApiKeySecret = String(
+    process.env.TWILIO_API_KEY_SECRET || "",
+  ).trim();
 
   // ---------- PERSONAL (self-billed) ----------
   const personalEligible = !FORCE_PLATFORM && hasPersonalCreds(user);
@@ -101,7 +120,8 @@ export async function getClientForUser(
     const apiKeySid = sanitizeId(user.twilio.apiKeySid);
     const apiKeySecret = String(user.twilio.apiKeySecret || "").trim();
 
-    if (!accountSid.startsWith("AC")) throw new Error("User personal accountSid invalid.");
+    if (!accountSid.startsWith("AC"))
+      throw new Error("User personal accountSid invalid.");
 
     // SPECIAL CASE: platform owner using their main Twilio as "personal"
     // If this user's accountSid == platformAccountSid and we have a platform AUTH TOKEN,
@@ -112,6 +132,7 @@ export async function getClientForUser(
       !!platformAuthToken;
 
     let client: Twilio;
+    let auth: TwilioResolvedAuth;
 
     if (isPlatformOwner) {
       const testClient = buildTwilioClient({
@@ -122,6 +143,13 @@ export async function getClientForUser(
       try {
         await testClient.api.v2010.accounts(accountSid).fetch();
         client = testClient;
+
+        auth = {
+          mode: "authToken",
+          username: accountSid,
+          password: platformAuthToken,
+          effectiveAccountSid: accountSid,
+        };
 
         console.log(
           JSON.stringify({
@@ -134,10 +162,19 @@ export async function getClientForUser(
       } catch (e: any) {
         // Fall back to user API keys if platform token is misconfigured
         if (!apiKeySid.startsWith("SK") || !apiKeySecret) {
-          throw new Error("User personal API key invalid (and platform auth token failed).");
+          throw new Error(
+            "User personal API key invalid (and platform auth token failed).",
+          );
         }
 
         client = buildTwilioClient({ accountSid, apiKeySid, apiKeySecret });
+
+        auth = {
+          mode: "apiKey",
+          username: apiKeySid,
+          password: apiKeySecret,
+          effectiveAccountSid: accountSid,
+        };
 
         console.log(
           JSON.stringify({
@@ -156,6 +193,13 @@ export async function getClientForUser(
 
       client = buildTwilioClient({ accountSid, apiKeySid, apiKeySecret });
 
+      auth = {
+        mode: "apiKey",
+        username: apiKeySid,
+        password: apiKeySecret,
+        effectiveAccountSid: accountSid,
+      };
+
       console.log(
         JSON.stringify({
           msg: "getClientForUser: PERSONAL Twilio (API Key)",
@@ -166,7 +210,7 @@ export async function getClientForUser(
       );
     }
 
-    return { client, accountSid, usingPersonal: true, user };
+    return { client, accountSid, usingPersonal: true, user, auth };
   }
 
   // ---------- SUBACCOUNT (platform-billed per user, with their own API keys) ----------
@@ -179,7 +223,18 @@ export async function getClientForUser(
     if (!apiKeySid.startsWith("SK") || !apiKeySecret)
       throw new Error("User subaccount API key invalid.");
 
-    const client = buildTwilioClient({ accountSid: subSid, apiKeySid, apiKeySecret });
+    const client = buildTwilioClient({
+      accountSid: subSid,
+      apiKeySid,
+      apiKeySecret,
+    });
+
+    const auth: TwilioResolvedAuth = {
+      mode: "apiKey",
+      username: apiKeySid,
+      password: apiKeySecret,
+      effectiveAccountSid: subSid,
+    };
 
     console.log(
       JSON.stringify({
@@ -192,7 +247,7 @@ export async function getClientForUser(
     );
 
     // NOTE: usingPersonal=false here (still platform-billed, just isolated)
-    return { client, accountSid: subSid, usingPersonal: false, user };
+    return { client, accountSid: subSid, usingPersonal: false, user, auth };
   }
 
   // ---------- SUBACCOUNT via PLATFORM CREDS (SID only on user) ----------
@@ -205,13 +260,32 @@ export async function getClientForUser(
     }
 
     let client: Twilio;
+    let auth: TwilioResolvedAuth;
 
     if (platformAuthToken) {
       // Use master SID + Auth Token, but scope requests to the subaccount
-      client = twilio(platformAccountSid, platformAuthToken, { accountSid: subSid });
+      client = twilio(platformAccountSid, platformAuthToken, {
+        accountSid: subSid,
+      });
+
+      auth = {
+        mode: "authToken",
+        username: platformAccountSid,
+        password: platformAuthToken,
+        effectiveAccountSid: subSid,
+      };
     } else if (platformApiKeySid && platformApiKeySecret) {
       // Or master API key pair, scoped to the subaccount
-      client = twilio(platformApiKeySid, platformApiKeySecret, { accountSid: subSid });
+      client = twilio(platformApiKeySid, platformApiKeySecret, {
+        accountSid: subSid,
+      });
+
+      auth = {
+        mode: "apiKey",
+        username: platformApiKeySid,
+        password: platformApiKeySecret,
+        effectiveAccountSid: subSid,
+      };
     } else {
       throw new Error("Missing platform Twilio credentials for subaccount.");
     }
@@ -226,7 +300,7 @@ export async function getClientForUser(
       }),
     );
 
-    return { client, accountSid: subSid, usingPersonal: false, user };
+    return { client, accountSid: subSid, usingPersonal: false, user, auth };
   }
 
   // ---------- PLATFORM (shared master account) ----------
@@ -238,8 +312,24 @@ export async function getClientForUser(
     accountSid: platformAccountSid,
     authToken: platformAuthToken || undefined,
     apiKeySid: platformAuthToken ? undefined : platformApiKeySid || undefined,
-    apiKeySecret: platformAuthToken ? undefined : platformApiKeySecret || undefined,
+    apiKeySecret: platformAuthToken
+      ? undefined
+      : platformApiKeySecret || undefined,
   });
+
+  const auth: TwilioResolvedAuth = platformAuthToken
+    ? {
+        mode: "authToken",
+        username: platformAccountSid,
+        password: platformAuthToken,
+        effectiveAccountSid: platformAccountSid,
+      }
+    : {
+        mode: "apiKey",
+        username: platformApiKeySid,
+        password: platformApiKeySecret,
+        effectiveAccountSid: platformAccountSid,
+      };
 
   console.log(
     JSON.stringify({
@@ -252,5 +342,5 @@ export async function getClientForUser(
     }),
   );
 
-  return { client, accountSid: platformAccountSid, usingPersonal: false, user };
+  return { client, accountSid: platformAccountSid, usingPersonal: false, user, auth };
 }
