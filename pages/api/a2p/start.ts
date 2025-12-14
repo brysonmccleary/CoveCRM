@@ -668,6 +668,12 @@ export default async function handler(
 
       // ✅ NEW (additive): this is the auth we will use for TrustHub fetch fallback
       twilioResolvedAuth = resolved.auth;
+     log("TrustHub SDK surface", {
+  hasSupportingDocuments: Boolean(
+    (client as any)?.trusthub?.v1?.supportingDocuments
+  ),
+  trusthubV1Keys: Object.keys(((client as any)?.trusthub?.v1 || {})),
+});
     } catch (e: any) {
       console.error("[A2P start] getClientForUser failed:", {
         email: session.user.email,
