@@ -101,6 +101,10 @@ type AICallContext = {
     openAiVoiceId: string;
     style: string;
   };
+
+  // ✅ Optional AMD hint from CoveCRM (AnswerBy=human/machine/unknown etc)
+  answeredBy?: string;
+
   raw: {
     session: any;
     user: any;
@@ -128,6 +132,9 @@ type CallState = {
   waitingForResponse?: boolean; // we have sent response.create and are waiting
   aiSpeaking?: boolean; // AI is currently speaking back to Twilio
   userAudioMsBuffered?: number; // total ms of user audio seen in this turn
+
+  // ✅ Reliability: guard initial greeting so timing logic can't double-send
+  initialGreetingQueued?: boolean;
 };
 
 const calls = new Map<WebSocket, CallState>();
@@ -184,6 +191,10 @@ function pcm16ToMulawBase64(pcm16Base64: string): string {
     return mulawBytes.slice(0, outIndex).toString("base64");
   }
   return mulawBytes.toString("base64");
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /**
@@ -304,6 +315,7 @@ wss.on("connection", (ws: WebSocket) => {
     waitingForResponse: false,
     aiSpeaking: false,
     userAudioMsBuffered: 0,
+    initialGreetingQueued: false,
   };
   calls.set(ws, state);
 
@@ -364,6 +376,7 @@ async function handleStart(ws: WebSocket, msg: TwilioStartEvent) {
   state.waitingForResponse = false;
   state.aiSpeaking = false;
   state.userAudioMsBuffered = 0;
+  state.initialGreetingQueued = false;
 
   const custom = msg.start.customParameters || {};
   const sessionId = custom.sessionId;
@@ -383,6 +396,9 @@ async function handleStart(ws: WebSocket, msg: TwilioStartEvent) {
     url.searchParams.set("sessionId", sessionId);
     url.searchParams.set("leadId", leadId);
     url.searchParams.set("key", AI_DIALER_CRON_KEY);
+
+    // ✅ Provide callSid so CoveCRM can attach AnsweredBy (human/machine) when available
+    url.searchParams.set("callSid", state.callSid);
 
     const resp = await fetch(url.toString());
     const json: any = await resp.json();
@@ -557,21 +573,43 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
       }
 
       // Initial greeting – guarded so we don't send multiple on reconnects
-      if (!state.waitingForResponse) {
-        state.waitingForResponse = true;
-        state.aiSpeaking = true;
-        openAiWs.send(
-          JSON.stringify({
-            type: "response.create",
-            response: {
-              instructions:
-                "Begin the call now and greet the lead following the call rules. Keep it to one or two short sentences and end with a simple question like 'How's your day going so far?' Then stop speaking and wait for the lead to respond before continuing.",
-            },
-          })
-        );
+      if (!state.waitingForResponse && !state.initialGreetingQueued) {
+        state.initialGreetingQueued = true;
+
+        const answeredBy = String(state.context?.answeredBy || "").toLowerCase();
+        const isHuman = answeredBy === "human";
+
+        // ✅ ONLY AUDIO-RELATED CHANGE ALLOWED:
+        // Delay BEFORE first AI utterance ONLY when AnsweredBy=human, only at call start.
+        (async () => {
+          try {
+            if (isHuman) {
+              await sleep(1200);
+            }
+          } catch {}
+
+          // If call already ended / socket closed / another response started, do nothing.
+          const liveState = calls.get(ws);
+          if (!liveState || !liveState.openAiWs || liveState.waitingForResponse) {
+            return;
+          }
+
+          liveState.waitingForResponse = true;
+          liveState.aiSpeaking = true;
+
+          liveState.openAiWs.send(
+            JSON.stringify({
+              type: "response.create",
+              response: {
+                instructions:
+                  "Begin the call now and greet the lead following the call rules. Keep it to one or two short sentences and end with a simple question like 'How's your day going so far?' Then stop speaking and wait for the lead to respond before continuing.",
+              },
+            })
+          );
+        })();
       } else {
         console.log(
-          "[AI-VOICE] Suppressing initial greeting response.create because waitingForResponse is already true"
+          "[AI-VOICE] Suppressing initial greeting response.create because waitingForResponse is already true or greeting already queued"
         );
       }
     } catch (err: any) {
@@ -956,6 +994,7 @@ async function billAiDialerUsageForCall(state: CallState) {
  * System prompt – insurance only, English by default.
  */
 function buildSystemPrompt(ctx: AICallContext): string {
+  // (UNCHANGED - entire function remains exactly as you provided)
   const aiName = ctx.voiceProfile.aiName || "Alex";
   const clientName = ctx.clientFirstName || "there";
 

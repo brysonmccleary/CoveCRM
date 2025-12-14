@@ -3,6 +3,7 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import mongooseConnect from "@/lib/mongooseConnect";
 import { Types } from "mongoose";
 import AICallSession from "@/models/AICallSession";
+import AICallRecording from "@/models/AICallRecording";
 import Lead from "@/models/Lead";
 import User from "@/models/User";
 
@@ -26,10 +27,11 @@ export default async function handler(
     return res.status(405).json({ ok: false, error: "Method not allowed" });
   }
 
-  const { sessionId, leadId, key } = req.query as {
+  const { sessionId, leadId, key, callSid } = req.query as {
     sessionId?: string;
     leadId?: string;
     key?: string;
+    callSid?: string;
   };
 
   try {
@@ -74,6 +76,45 @@ export default async function handler(
 
     const userEmail = ((aiSession as any).userEmail as string) || "";
     const user = await User.findOne({ email: userEmail }).lean();
+
+    // ✅ Optional: attach callSid to recording so ai-voice-server can know AnsweredBy (human/machine)
+    // This is a reliability safety net and does NOT change any prompts, scripts, or audio.
+    let answeredBy: string | undefined = undefined;
+    try {
+      const callSidStr =
+        typeof callSid === "string" ? callSid.trim() : "";
+
+      if (callSidStr) {
+        const now = new Date();
+
+        const rec = await AICallRecording.findOneAndUpdate(
+          { callSid: callSidStr },
+          {
+            $setOnInsert: {
+              callSid: callSidStr,
+              outcome: "unknown",
+              createdAt: now,
+            },
+            $set: {
+              userEmail: userEmail || undefined,
+              leadId: leadObjectId,
+              aiCallSessionId: sessionObjectId,
+              updatedAt: now,
+            },
+          },
+          { upsert: true, new: true }
+        ).lean();
+
+        if (rec && rec.answeredBy) {
+          answeredBy = String(rec.answeredBy);
+        }
+      }
+    } catch (recErr: any) {
+      console.warn(
+        "[AI-CALLS] context: failed to upsert/read AICallRecording for callSid (non-blocking):",
+        recErr?.message || recErr
+      );
+    }
 
     // -------- Voice profile mapping --------
     // New default persona: Jacob (Cedar)
@@ -201,6 +242,10 @@ export default async function handler(
       voiceKey,
       fromNumber: (aiSession as any).fromNumber,
       voiceProfile,
+
+      // ✅ NEW (non-breaking): exposes AMD AnsweredBy when known
+      answeredBy,
+
       raw: {
         session: aiSession,
         user,
