@@ -6,6 +6,7 @@ import AICallRecording from "@/models/AICallRecording";
 import AICallSession from "@/models/AICallSession";
 import User from "@/models/User";
 import Call from "@/models/Call";
+import Lead from "@/models/Lead";
 import { trackAiDialerUsage } from "@/lib/billing/trackAiDialerUsage";
 import { Types } from "mongoose";
 
@@ -17,9 +18,8 @@ const VENDOR_RATE_PER_MINUTE = Number(
 );
 
 // ✅ global hard kill switch (env)
-const AI_DIALER_DISABLED = String(process.env.AI_DIALER_DISABLED || "")
-  .trim()
-  .toLowerCase() === "true";
+const AI_DIALER_DISABLED =
+  String(process.env.AI_DIALER_DISABLED || "").trim().toLowerCase() === "true";
 
 // ✅ used to securely kick /api/ai-calls/worker
 const AI_DIALER_CRON_KEY = (process.env.AI_DIALER_CRON_KEY || "").trim();
@@ -42,7 +42,10 @@ async function kickAiWorkerOnce(req: NextApiRequest, meta: any) {
   // Only kick if we have a secret configured to authorize the worker
   const secretToUse = CRON_SECRET || AI_DIALER_CRON_KEY;
   if (!secretToUse) {
-    console.warn("[AI Dialer] Not kicking worker: CRON_SECRET/AI_DIALER_CRON_KEY missing", meta);
+    console.warn(
+      "[AI Dialer] Not kicking worker: CRON_SECRET/AI_DIALER_CRON_KEY missing",
+      meta
+    );
     return;
   }
 
@@ -72,6 +75,29 @@ async function kickAiWorkerOnce(req: NextApiRequest, meta: any) {
   }
 }
 
+function mapTerminalOutcome(callStatus: string, answeredByRaw: string) {
+  const answeredBy = (answeredByRaw || "").toLowerCase();
+
+  // Twilio AMD values can include: human, machine, fax, unknown, machine_start, machine_end_beep, etc.
+  const looksLikeMachine =
+    answeredBy.includes("machine") || answeredBy.includes("fax");
+
+  if (looksLikeMachine) return "voicemail";
+
+  switch ((callStatus || "").toLowerCase()) {
+    case "completed":
+      return "disconnected"; // completed + no explicit AI outcome => conservative terminal label
+    case "busy":
+    case "no-answer":
+      return "no_answer";
+    case "failed":
+    case "canceled":
+      return "failed";
+    default:
+      return undefined;
+  }
+}
+
 export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse
@@ -93,53 +119,15 @@ export default async function handler(
     const CallStatus = (params.get("CallStatus") || "").toLowerCase();
 
     // Twilio sends Duration or CallDuration in seconds on completed calls
-    const DurationStr =
-      params.get("CallDuration") || params.get("Duration") || "";
+    const DurationStr = params.get("CallDuration") || params.get("Duration") || "";
     const durationSec = parseIntSafe(DurationStr);
+
+    // AMD hint (if enabled on call creation)
+    const AnsweredBy = params.get("AnsweredBy") || params.get("answered_by") || "";
 
     // Optional hints from statusCallback URL
     const qs = req.query as { userEmail?: string };
     let userEmail = (qs.userEmail || "").toString().toLowerCase() || "";
-
-    // --- Update AICallRecording with status / duration for analytics ---
-
-    if (CallSid) {
-      const update: any = {
-        lastTwilioStatus: CallStatus,
-        updatedAt: new Date(),
-      };
-
-      if (typeof durationSec === "number" && durationSec >= 0) {
-        update.durationSec = durationSec;
-      }
-
-      // Map Twilio status to a simple outcome label for reporting
-      let outcome: string | undefined;
-      switch (CallStatus) {
-        case "completed":
-          outcome = "completed";
-          break;
-        case "busy":
-        case "no-answer":
-          outcome = "no_answer";
-          break;
-        case "failed":
-        case "canceled":
-          outcome = "failed";
-          break;
-        default:
-          break;
-      }
-      if (outcome) {
-        update.outcome = outcome;
-      }
-
-      await AICallRecording.updateOne(
-        { callSid: CallSid },
-        { $set: update },
-        { upsert: false }
-      ).exec();
-    }
 
     // We want to progress the session on terminal statuses too (not just "completed")
     const TERMINAL_STATUSES = new Set([
@@ -149,61 +137,140 @@ export default async function handler(
       "failed",
       "canceled",
     ]);
-
     const isTerminal = TERMINAL_STATUSES.has(CallStatus);
 
-    // If we don't have userEmail in query, try to get it from AICallRecording
-    let rec = null as any;
-    if (!userEmail && CallSid) {
-      rec = await AICallRecording.findOne({ callSid: CallSid }).lean();
-      if (rec?.userEmail) {
-        userEmail = (rec.userEmail as string).toLowerCase();
+    // ─────────────────────────────────────────────────────────────────────────────
+    // ✅ Reliability foundation:
+    // 1) Ensure there is ALWAYS an AICallRecording row for a real Twilio callSid
+    // 2) Update minimal telemetry fields (status/duration/answeredBy)
+    // NOTE: We DO NOT touch any audio transport or TwiML here.
+    // ─────────────────────────────────────────────────────────────────────────────
+
+    let recDoc: any = null;
+
+    if (CallSid) {
+      const now = new Date();
+
+      const set: any = {
+        lastTwilioStatus: CallStatus,
+        updatedAt: now,
+      };
+
+      if (typeof durationSec === "number" && durationSec >= 0) {
+        set.durationSec = durationSec;
       }
-    } else if (CallSid) {
-      rec = await AICallRecording.findOne({ callSid: CallSid }).lean();
+
+      if (AnsweredBy) {
+        set.answeredBy = AnsweredBy;
+      }
+
+      // Map Twilio status to a simple outcome label for reporting
+      // (does NOT override an existing explicit AI outcome unless it's unknown)
+      const mappedForReporting = mapTerminalOutcome(CallStatus, AnsweredBy);
+      if (mappedForReporting) {
+        set.fallbackOutcomeFromStatus = mappedForReporting;
+      }
+
+      const setOnInsert: any = {
+        callSid: CallSid,
+        outcome: "unknown",
+        createdAt: now,
+      };
+
+      // only set userEmail on insert if we actually have it (avoid overwriting real value)
+      if (userEmail) {
+        setOnInsert.userEmail = userEmail;
+      }
+
+      recDoc = await AICallRecording.findOneAndUpdate(
+        { callSid: CallSid },
+        {
+          $setOnInsert: setOnInsert,
+          $set: set,
+        },
+        { upsert: true, new: true }
+      ).lean();
+
+      // if userEmail wasn't on query, try to resolve it from the recording
+      if (!userEmail && recDoc?.userEmail) {
+        userEmail = String(recDoc.userEmail).toLowerCase();
+      }
     }
 
-    // --- Billing: only bill on completed calls with a positive duration ---
-    if (CallStatus === "completed" && durationSec && durationSec > 0) {
+    // ─────────────────────────────────────────────────────────────────────────────
+    // ✅ Billing: bill ONLY on completed calls with positive duration AND only once.
+    // We use an idempotency guard on AICallRecording.billedAt to prevent overcharging
+    // from webhook retries. (No changes to audio logic.)
+    // ─────────────────────────────────────────────────────────────────────────────
+    if (CallSid && CallStatus === "completed" && durationSec && durationSec > 0) {
       if (!userEmail) {
-        console.warn(
-          "[AI Dialer billing] No userEmail resolved for CallSid",
-          CallSid
-        );
+        console.warn("[AI Dialer billing] No userEmail resolved for CallSid", CallSid);
       } else {
-        const user = await User.findOne({ email: userEmail });
-        if (!user) {
-          console.warn(
-            "[AI Dialer billing] User not found for email",
-            userEmail,
-            "CallSid",
-            CallSid
-          );
-        } else {
-          // Bill based on **dial time** (full call duration in seconds)
-          const minutes = Math.max(1, Math.ceil(durationSec / 60));
-          const vendorCostUsd =
-            VENDOR_RATE_PER_MINUTE > 0 ? minutes * VENDOR_RATE_PER_MINUTE : 0;
+        // Acquire a one-time billing lock (Twilio may retry callbacks)
+        const billLock = await AICallRecording.updateOne(
+          {
+            callSid: CallSid,
+            $or: [{ billedAt: { $exists: false } }, { billedAt: null }],
+          },
+          { $set: { billedAt: new Date() } }
+        ).exec();
 
-          try {
-            await trackAiDialerUsage({
-              user,
-              minutes,
-              vendorCostUsd,
-            });
-          } catch (billErr) {
-            console.error(
-              "❌ AI Dialer billing error (non-blocking) in call-status-webhook:",
-              (billErr as any)?.message || billErr
+        const locked = ((billLock as any)?.modifiedCount ?? 0) > 0;
+
+        if (!locked) {
+          console.log("[AI Dialer billing] Suppressed duplicate billing (already billedAt)", {
+            callSid: CallSid,
+            userEmail,
+            durationSec,
+          });
+        } else {
+          const user = await User.findOne({ email: userEmail });
+          if (!user) {
+            console.warn(
+              "[AI Dialer billing] User not found for email",
+              userEmail,
+              "CallSid",
+              CallSid
             );
+          } else {
+            // Bill based on **dial time** (full call duration in seconds)
+            const minutes = Math.max(1, Math.ceil(durationSec / 60));
+            const vendorCostUsd =
+              VENDOR_RATE_PER_MINUTE > 0 ? minutes * VENDOR_RATE_PER_MINUTE : 0;
+
+            try {
+              await trackAiDialerUsage({
+                user,
+                minutes,
+                vendorCostUsd,
+              });
+            } catch (billErr) {
+              console.error(
+                "❌ AI Dialer billing error (non-blocking) in call-status-webhook:",
+                (billErr as any)?.message || billErr
+              );
+
+              // If billing failed, release the lock so a future retry can bill correctly
+              // (Still safe from runaway loops because Twilio retries are limited.)
+              try {
+                await AICallRecording.updateOne(
+                  { callSid: CallSid, billedAt: { $ne: null } },
+                  { $set: { billedAt: null } }
+                ).exec();
+              } catch {
+                // swallow
+              }
+            }
           }
         }
       }
     }
 
+    // ─────────────────────────────────────────────────────────────────────────────
     // --- SYNC INTO Call MODEL FOR LEAD ACTIVITY PANEL (AI DIALER ONLY) ---
+    // ─────────────────────────────────────────────────────────────────────────────
     try {
-      if (CallSid && rec && rec.leadId) {
+      if (CallSid && recDoc && recDoc.leadId) {
         const now = new Date();
         const startedAt =
           typeof durationSec === "number" && durationSec > 0
@@ -212,7 +279,7 @@ export default async function handler(
 
         const callUpdate: any = {
           userEmail,
-          leadId: rec.leadId,
+          leadId: recDoc.leadId,
           direction: "outbound",
           aiEnabledAtCallTime: true,
           completedAt: now,
@@ -224,18 +291,14 @@ export default async function handler(
           callUpdate.startedAt = startedAt;
         }
 
-        if (rec.recordingUrl) {
-          callUpdate.recordingUrl = rec.recordingUrl;
+        if (recDoc.recordingUrl) {
+          callUpdate.recordingUrl = recDoc.recordingUrl;
         }
-        if (rec.recordingSid) {
-          callUpdate.recordingSid = rec.recordingSid;
+        if (recDoc.recordingSid) {
+          callUpdate.recordingSid = recDoc.recordingSid;
         }
 
-        await Call.updateOne(
-          { callSid: CallSid },
-          { $set: callUpdate },
-          { upsert: true }
-        ).exec();
+        await Call.updateOne({ callSid: CallSid }, { $set: callUpdate }, { upsert: true }).exec();
       }
     } catch (callErr) {
       console.warn(
@@ -244,21 +307,122 @@ export default async function handler(
       );
     }
 
-    // --- SESSION COMPLETION + CHAIN NEXT LEAD ---
+    // ─────────────────────────────────────────────────────────────────────────────
+    // ✅ A) Server-side terminal fallback:
+    // On terminal call end, guarantee:
+    //  - outcome exists (if still unknown)
+    //  - lead history + notes are appended (if not already)
+    // This is ONLY a fallback when the agent never calls /api/ai-calls/outcome.
+    // ─────────────────────────────────────────────────────────────────────────────
     try {
-      if (CallSid && rec && rec.aiCallSessionId) {
-        const aiCallSessionId = rec.aiCallSessionId as Types.ObjectId;
+      if (CallSid && isTerminal && recDoc && recDoc.leadId && userEmail) {
+        const leadId = recDoc.leadId as Types.ObjectId;
+        const now = new Date();
+
+        const currentOutcome = String(recDoc.outcome || "unknown");
+        const mapped = mapTerminalOutcome(CallStatus, AnsweredBy);
+
+        // If outcome is still unknown, set a conservative fallback terminal outcome.
+        // Do NOT override a real outcome already set by the agent.
+        if ((currentOutcome === "unknown" || !currentOutcome) && mapped) {
+          await AICallRecording.updateOne(
+            { callSid: CallSid, $or: [{ outcome: { $exists: false } }, { outcome: null }, { outcome: "unknown" }] },
+            {
+              $set: {
+                outcome: mapped,
+                outcomeSource: "call_status_fallback",
+                updatedAt: now,
+              },
+            }
+          ).exec();
+        }
+
+        // Append lead history/notes only once per callSid (idempotent)
+        const outcomeToLog = mapped || currentOutcome || "unknown";
+        const historyMessageBase = `🤖 AI Dialer outcome (fallback): ${String(outcomeToLog).replace(
+          "_",
+          " "
+        )}`;
+        const statusBits = `Twilio status=${CallStatus}${AnsweredBy ? `, AnsweredBy=${AnsweredBy}` : ""}${
+          typeof durationSec === "number" ? `, durationSec=${durationSec}` : ""
+        }`;
+
+        const historyEntry = {
+          type: "ai_outcome_fallback",
+          message: `${historyMessageBase} (${statusBits})`,
+          timestamp: now,
+          userEmail,
+          meta: {
+            source: "call-status-webhook",
+            callSid: CallSid,
+            outcome: outcomeToLog,
+            recordingId: recDoc._id,
+          },
+        };
+
+        const lead = await Lead.findOne({
+          _id: leadId,
+          $or: [{ userEmail: userEmail }, { ownerEmail: userEmail }, { user: userEmail }],
+        }).exec();
+
+        if (lead) {
+          const existingHistory: any[] = Array.isArray((lead as any).history) ? (lead as any).history : [];
+          const alreadyHasEntry = existingHistory.some((h: any) => {
+            const meta = h?.meta || {};
+            return meta?.callSid === CallSid && meta?.source === "call-status-webhook";
+          });
+
+          if (!alreadyHasEntry) {
+            existingHistory.push(historyEntry);
+            (lead as any).history = existingHistory;
+          }
+
+          // Notes append behavior (also idempotent)
+          const appendLine = `[AI Dialer fallback] CallSid=${CallSid} • outcome=${outcomeToLog} • ${statusBits}`;
+          const existingNotes =
+            ((lead as any).notes as string | undefined) ||
+            ((lead as any).Notes as string | undefined) ||
+            "";
+
+          const alreadyInNotes =
+            typeof existingNotes === "string" && existingNotes.includes(`CallSid=${CallSid}`);
+
+          if (!alreadyInNotes) {
+            const combined =
+              existingNotes && existingNotes.trim().length > 0
+                ? `${existingNotes}\n${appendLine}`
+                : appendLine;
+            (lead as any).notes = combined;
+            (lead as any).Notes = combined;
+          }
+
+          (lead as any).updatedAt = now;
+          await lead.save();
+        }
+      }
+    } catch (fallbackErr: any) {
+      console.warn(
+        "⚠️ AI Dialer terminal fallback (outcome/lead history) failed (non-blocking):",
+        fallbackErr?.message || fallbackErr
+      );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────
+    // --- SESSION COMPLETION + CHAIN NEXT LEAD ---
+    // (kept intact; only uses existing lock-based dedupe)
+    // ─────────────────────────────────────────────────────────────────────────────
+    try {
+      if (CallSid && recDoc && recDoc.aiCallSessionId) {
+        const aiCallSessionId = recDoc.aiCallSessionId as Types.ObjectId;
 
         const session = await AICallSession.findById(aiCallSessionId).lean();
         if (session) {
           const s: any = session;
 
           const leadCount = Array.isArray(s.leadIds) ? s.leadIds.length : 0;
-          const total: number =
-            typeof s.total === "number" ? s.total : leadCount;
+          const total: number = typeof s.total === "number" ? s.total : leadCount;
 
-          const lastIndex: number =
-            typeof s.lastIndex === "number" ? s.lastIndex : -1;
+          const lastIndex: number = typeof s.lastIndex === "number" ? s.lastIndex : -1;
 
           const hasMoreLeads = leadCount > 0 && lastIndex < leadCount - 1;
 
@@ -275,18 +439,15 @@ export default async function handler(
               }
             ).exec();
 
-            console.log(
-              "[AI Dialer] Marked AI session completed from call-status-webhook",
-              {
-                sessionId: String(aiCallSessionId),
-                userEmail,
-                total,
-                leadCount,
-                lastIndex,
-                callSid: CallSid,
-                callStatus: CallStatus,
-              }
-            );
+            console.log("[AI Dialer] Marked AI session completed from call-status-webhook", {
+              sessionId: String(aiCallSessionId),
+              userEmail,
+              total,
+              leadCount,
+              lastIndex,
+              callSid: CallSid,
+              callStatus: CallStatus,
+            });
 
             return res.status(200).end();
           }
@@ -295,11 +456,7 @@ export default async function handler(
           // - call ended (terminal status)
           // - session is still active (queued/running)
           // - session has more leads
-          if (
-            isTerminal &&
-            hasMoreLeads &&
-            (s.status === "queued" || s.status === "running")
-          ) {
+          if (isTerminal && hasMoreLeads && (s.status === "queued" || s.status === "running")) {
             if (AI_DIALER_DISABLED) {
               console.log("[AI Dialer] Not kicking worker: AI_DIALER_DISABLED=true", {
                 sessionId: String(aiCallSessionId),
@@ -319,10 +476,7 @@ export default async function handler(
               {
                 _id: aiCallSessionId,
                 status: { $in: ["queued", "running"] },
-                $or: [
-                  { chainKickedAt: null },
-                  { chainKickedAt: { $lt: recentCutoff } },
-                ],
+                $or: [{ chainKickedAt: null }, { chainKickedAt: { $lt: recentCutoff } }],
               },
               {
                 $set: {
