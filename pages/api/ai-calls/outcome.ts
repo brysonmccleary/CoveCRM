@@ -23,6 +23,16 @@ interface OutcomeBody {
   outcome?: AllowedOutcome;
   summary?: string;
   notesAppend?: string;
+
+  // ✅ Booking confirmation fields (optional, but REQUIRED if outcome === "booked")
+  confirmedDate?: string; // e.g. "2025-12-14" or "Dec 14, 2025"
+  confirmedTime?: string; // e.g. "3:30 PM"
+  confirmedYes?: boolean; // lead explicitly confirmed "yes that works"
+  repeatBackConfirmed?: boolean; // AI repeated date/time and lead confirmed again
+}
+
+function isNonEmptyString(v: any) {
+  return typeof v === "string" && v.trim().length > 0;
 }
 
 export default async function handler(
@@ -50,8 +60,16 @@ export default async function handler(
   try {
     await mongooseConnect();
 
-    const { callSid, outcome, summary, notesAppend } =
-      (req.body || {}) as OutcomeBody;
+    const {
+      callSid,
+      outcome,
+      summary,
+      notesAppend,
+      confirmedDate,
+      confirmedTime,
+      confirmedYes,
+      repeatBackConfirmed,
+    } = (req.body || {}) as OutcomeBody;
 
     if (!callSid) {
       return res
@@ -68,9 +86,7 @@ export default async function handler(
 
     const userEmail = (rec.userEmail || "").toLowerCase();
     const leadId = rec.leadId as Types.ObjectId | undefined;
-    const aiCallSessionId = rec.aiCallSessionId as
-      | Types.ObjectId
-      | undefined;
+    const aiCallSessionId = rec.aiCallSessionId as Types.ObjectId | undefined;
 
     if (!userEmail || !leadId) {
       // Still update recording text fields, but we can't safely move folders
@@ -93,8 +109,29 @@ export default async function handler(
     const prevOutcome: AllowedOutcome = rec.outcome || "unknown";
     let normalizedOutcome: AllowedOutcome | undefined = undefined;
 
+    let bookedAccepted = true;
+    let bookedRejectedReason: string | null = null;
+
     if (outcome && allowed.includes(outcome)) {
       normalizedOutcome = outcome;
+    }
+
+    // ✅ Enforce appointment cementing server-side:
+    // Only allow "booked" when we have explicit confirmation fields.
+    if (normalizedOutcome === "booked") {
+      const hasDate = isNonEmptyString(confirmedDate);
+      const hasTime = isNonEmptyString(confirmedTime);
+      const hasYes = confirmedYes === true;
+      const hasRepeat = repeatBackConfirmed === true;
+
+      if (!hasDate || !hasTime || !hasYes || !hasRepeat) {
+        bookedAccepted = false;
+        bookedRejectedReason =
+          "booked_rejected_missing_confirmation_fields";
+
+        // Downgrade to callback (actionable) instead of incorrectly marking booked.
+        normalizedOutcome = "callback";
+      }
     }
 
     const nextOutcome: AllowedOutcome =
@@ -107,11 +144,41 @@ export default async function handler(
     if (typeof summary === "string") {
       rec.summary = summary;
     }
+
+    // Append onto AICallRecording.notes (multi-line allowed)
+    const toAppend: string[] = [];
     if (typeof notesAppend === "string" && notesAppend.trim().length > 0) {
-      // Append onto AICallRecording.notes (multi-line allowed)
-      const appended = notesAppend.trim();
+      toAppend.push(notesAppend.trim());
+    }
+
+    if (!bookedAccepted && bookedRejectedReason) {
+      // Add a visible audit note so you can diagnose false-booked attempts quickly.
+      const audit = `[AI Dialer] BOOKED rejected: missing confirmation fields (date=${String(
+        confirmedDate || ""
+      ).trim() || "missing"}, time=${String(confirmedTime || "").trim() || "missing"}, yes=${String(
+        confirmedYes === true
+      )}, repeatBack=${String(repeatBackConfirmed === true)})`;
+      toAppend.push(audit);
+    }
+
+    if (toAppend.length > 0) {
+      const appended = toAppend.join("\n");
       rec.notes = rec.notes ? `${rec.notes}\n${appended}` : appended;
     }
+
+    // Store confirmation fields if provided (non-breaking; safe for later audits)
+    // Only set if they exist so we don't overwrite prior info.
+    if (isNonEmptyString(confirmedDate)) (rec as any).confirmedDate = confirmedDate!.trim();
+    if (isNonEmptyString(confirmedTime)) (rec as any).confirmedTime = confirmedTime!.trim();
+    if (typeof confirmedYes === "boolean") (rec as any).confirmedYes = confirmedYes;
+    if (typeof repeatBackConfirmed === "boolean")
+      (rec as any).repeatBackConfirmed = repeatBackConfirmed;
+
+    if (!bookedAccepted && bookedRejectedReason) {
+      (rec as any).bookedRejectedReason = bookedRejectedReason;
+      (rec as any).bookedRejectedAt = new Date();
+    }
+
     rec.updatedAt = new Date();
     await rec.save();
 
@@ -164,11 +231,7 @@ export default async function handler(
               ? s.stats.completed
               : 0;
 
-          if (
-            total > 0 &&
-            completed >= total &&
-            s.status !== "completed"
-          ) {
+          if (total > 0 && completed >= total && s.status !== "completed") {
             await AICallSession.updateOne(
               {
                 _id: aiCallSessionId,
@@ -271,10 +334,7 @@ export default async function handler(
       try {
         const now = new Date();
         const outcomeLabel = nextOutcome || "unknown";
-        const baseMsg = `🤖 AI Dialer outcome: ${outcomeLabel.replace(
-          "_",
-          " "
-        )}`;
+        const baseMsg = `🤖 AI Dialer outcome: ${outcomeLabel.replace("_", " ")}`;
         const extra =
           typeof summary === "string" && summary.trim().length > 0
             ? ` – ${summary.trim()}`
@@ -290,6 +350,13 @@ export default async function handler(
             outcome: outcomeLabel,
             callSid,
             recordingId: rec._id,
+            bookedAccepted,
+            bookedRejectedReason,
+            confirmedDate: isNonEmptyString(confirmedDate) ? confirmedDate!.trim() : undefined,
+            confirmedTime: isNonEmptyString(confirmedTime) ? confirmedTime!.trim() : undefined,
+            confirmedYes: typeof confirmedYes === "boolean" ? confirmedYes : undefined,
+            repeatBackConfirmed:
+              typeof repeatBackConfirmed === "boolean" ? repeatBackConfirmed : undefined,
           },
         };
 
@@ -311,7 +378,7 @@ export default async function handler(
           existingHistory.push(historyEntry);
           (lead as any).history = existingHistory;
 
-          // Notes append behavior
+          // Notes append behavior (preserve existing behavior)
           if (typeof notesAppend === "string" && notesAppend.trim().length > 0) {
             const appendText = notesAppend.trim();
             const existingNotes =
@@ -326,6 +393,24 @@ export default async function handler(
 
             (lead as any).notes = combined;
             (lead as any).Notes = combined;
+          }
+
+          // Also append the booked rejection audit note if applicable (safe + small)
+          if (!bookedAccepted && bookedRejectedReason) {
+            const existingNotes =
+              ((lead as any).notes as string | undefined) ||
+              ((lead as any).Notes as string | undefined) ||
+              "";
+
+            const auditLine = `[AI Dialer] BOOKED rejected: missing confirmation (CallSid=${callSid})`;
+            if (!existingNotes.includes(`CallSid=${callSid}`) || !existingNotes.includes("BOOKED rejected")) {
+              const combined =
+                existingNotes && existingNotes.trim().length > 0
+                  ? `${existingNotes}\n${auditLine}`
+                  : auditLine;
+              (lead as any).notes = combined;
+              (lead as any).Notes = combined;
+            }
           }
 
           (lead as any).updatedAt = now;
@@ -343,6 +428,8 @@ export default async function handler(
       ok: true,
       recordingId: rec._id,
       outcome: rec.outcome,
+      bookedAccepted,
+      bookedRejectedReason,
       moved,
       targetFolderId,
     });
