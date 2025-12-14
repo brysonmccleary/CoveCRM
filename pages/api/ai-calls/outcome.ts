@@ -35,6 +35,107 @@ function isNonEmptyString(v: any) {
   return typeof v === "string" && v.trim().length > 0;
 }
 
+function normalizeBulletLines(input: string | undefined | null): string[] {
+  const raw = (input || "").trim();
+  if (!raw) return [];
+
+  // Support lines starting with "* " (current prompt), "-" or "•"
+  const lines = raw
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .map((l) => {
+      if (l.startsWith("* ")) return l.slice(2).trim();
+      if (l.startsWith("- ")) return l.slice(2).trim();
+      if (l.startsWith("• ")) return l.slice(2).trim();
+      return l;
+    })
+    .filter(Boolean);
+
+  // If it's one long paragraph, split into short bullets by sentence-ish boundaries
+  if (lines.length === 1 && lines[0].length > 140) {
+    const s = lines[0]
+      .replace(/\s+/g, " ")
+      .split(/(?<=[.!?])\s+/)
+      .map((x) => x.trim())
+      .filter(Boolean);
+    return s.slice(0, 8);
+  }
+
+  return lines.slice(0, 12);
+}
+
+function buildCloseStyleOverviewBlock(args: {
+  callSid: string;
+  outcome: string;
+  summary?: string;
+  notesAppend?: string;
+  confirmedDate?: string;
+  confirmedTime?: string;
+  confirmedYes?: boolean;
+  repeatBackConfirmed?: boolean;
+}): string {
+  const {
+    callSid,
+    outcome,
+    summary,
+    notesAppend,
+    confirmedDate,
+    confirmedTime,
+    confirmedYes,
+    repeatBackConfirmed,
+  } = args;
+
+  const header = `[AI Dialer Outcome] CallSid=${callSid} • outcome=${outcome}`;
+
+  const bullets: string[] = [];
+
+  // Summary → bullets
+  if (isNonEmptyString(summary)) {
+    const summaryBullets = normalizeBulletLines(summary);
+    if (summaryBullets.length > 0) {
+      for (const b of summaryBullets.slice(0, 4)) {
+        bullets.push(b);
+      }
+    } else {
+      bullets.push(summary!.trim());
+    }
+  }
+
+  // notesAppend → bullets (Close-style)
+  const noteBullets = normalizeBulletLines(notesAppend);
+  for (const b of noteBullets.slice(0, 8)) {
+    // avoid duplicating exact summary lines
+    if (!bullets.some((x) => x.toLowerCase() === b.toLowerCase())) {
+      bullets.push(b);
+    }
+  }
+
+  // Booking confirmation info as explicit bullets (if present)
+  if (outcome === "booked") {
+    const date = isNonEmptyString(confirmedDate) ? confirmedDate!.trim() : "";
+    const time = isNonEmptyString(confirmedTime) ? confirmedTime!.trim() : "";
+    if (date || time) {
+      bullets.push(`Appointment confirmed: ${[date, time].filter(Boolean).join(" @ ")}`);
+    }
+    if (confirmedYes === true) bullets.push(`Lead explicitly confirmed the time works (yes)`);
+    if (repeatBackConfirmed === true) bullets.push(`AI repeated date/time and lead confirmed again`);
+  }
+
+  // Always ensure we have at least one bullet to avoid empty blocks
+  if (bullets.length === 0) {
+    bullets.push("Call ended without a detailed AI summary payload.");
+  }
+
+  // Close-style formatting: "• " bullets
+  const body = bullets.map((b) => `• ${b}`).join("\n");
+
+  // A footer marker used for idempotency (prevents spam on retries)
+  const marker = `[AI_DIALER_NOTES_APPLIED] CallSid=${callSid}`;
+
+  return `${header}\n${body}\n${marker}`;
+}
+
 export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse
@@ -152,6 +253,22 @@ export default async function handler(
     const nextOutcome: AllowedOutcome =
       (normalizedOutcome as any) ?? prevOutcome ?? "unknown";
 
+    // Build the Close-style overview block ONCE (used for both recording + lead notes)
+    const overviewBlock = buildCloseStyleOverviewBlock({
+      callSid,
+      outcome: nextOutcome,
+      summary,
+      notesAppend,
+      confirmedDate,
+      confirmedTime,
+      confirmedYes,
+      repeatBackConfirmed,
+    });
+
+    const marker = `[AI_DIALER_NOTES_APPLIED] CallSid=${callSid}`;
+    const alreadyAppliedToRecording =
+      typeof rec.notes === "string" && rec.notes.includes(marker);
+
     // Update recording fields
     if (normalizedOutcome) {
       rec.outcome = normalizedOutcome as any;
@@ -160,27 +277,12 @@ export default async function handler(
       rec.summary = summary;
     }
 
-    // Append onto AICallRecording.notes (multi-line allowed)
-    const toAppend: string[] = [];
-    if (typeof notesAppend === "string" && notesAppend.trim().length > 0) {
-      toAppend.push(notesAppend.trim());
-    }
-
-    if (!bookedAccepted && bookedRejectedReason) {
-      // Add a visible audit note so you can diagnose false-booked attempts quickly.
-      const audit = `[AI Dialer] BOOKED rejected: missing confirmation fields (date=${String(
-        confirmedDate || ""
-      ).trim() || "missing"}, time=${
-        String(confirmedTime || "").trim() || "missing"
-      }, yes=${String(confirmedYes === true)}, repeatBack=${String(
-        repeatBackConfirmed === true
-      )})`;
-      toAppend.push(audit);
-    }
-
-    if (toAppend.length > 0) {
-      const appended = toAppend.join("\n");
-      rec.notes = rec.notes ? `${rec.notes}\n${appended}` : appended;
+    // ✅ Prevent AICallRecording.notes spam:
+    // Only append the overview block once per CallSid.
+    if (!alreadyAppliedToRecording) {
+      rec.notes = rec.notes ? `${rec.notes}\n${overviewBlock}` : overviewBlock;
+    } else {
+      // Still allow updating summary/outcome fields, but do not append notes again.
     }
 
     // Store confirmation fields if provided (non-breaking; safe for later audits)
@@ -276,10 +378,7 @@ export default async function handler(
               }
             );
 
-            // TODO: hook in your Resend email here:
-            //  - Load latest stats from session
-            //  - Send "Your AI dial session has finished" to userEmail
-            //  - Include folder name, total leads, booked, not_interested, no_answer, callback, etc.
+            // TODO: hook in your Resend email here
           }
         }
       } catch (sessionErr: any) {
@@ -291,13 +390,6 @@ export default async function handler(
     }
 
     // ───────────────────────── Move lead to resolution folder ─────────────────────────
-    // Rules:
-    //  - If AI is NOT 100% sure, you keep it in the same folder (handled by your agent).
-    //  - When the AI DOES send a final outcome:
-    //        "booked"        → "Booked Appointment" system folder
-    //        "not_interested"→ "Not Interested" system folder
-    //
-    // Everything else stays put for now.
     let moved = false;
     let targetFolderId: Types.ObjectId | null = null;
 
@@ -311,7 +403,6 @@ export default async function handler(
       }
 
       if (systemFolderName) {
-        // Find or create the appropriate system folder for this user
         const folderDoc =
           (await Folder.findOne({
             userEmail,
@@ -385,7 +476,6 @@ export default async function handler(
           },
         };
 
-        // Load lead so we can APPEND notesAppend instead of overwriting
         const lead = await Lead.findOne({
           _id: leadId,
           $or: [
@@ -411,42 +501,24 @@ export default async function handler(
             (lead as any).history = existingHistory;
           }
 
-          // Notes append behavior (preserve existing behavior)
-          if (typeof notesAppend === "string" && notesAppend.trim().length > 0) {
-            const appendText = notesAppend.trim();
-            const existingNotes =
-              ((lead as any).notes as string | undefined) ||
-              ((lead as any).Notes as string | undefined) ||
-              "";
+          // ✅ Prevent LEAD notes spam:
+          // Only append our Close-style block once, using the marker line.
+          const existingNotes =
+            ((lead as any).notes as string | undefined) ||
+            ((lead as any).Notes as string | undefined) ||
+            "";
 
+          const alreadyHasMarker =
+            typeof existingNotes === "string" && existingNotes.includes(marker);
+
+          if (!alreadyHasMarker) {
             const combined =
               existingNotes && existingNotes.trim().length > 0
-                ? `${existingNotes}\n${appendText}`
-                : appendText;
+                ? `${existingNotes}\n\n${overviewBlock}`
+                : overviewBlock;
 
             (lead as any).notes = combined;
             (lead as any).Notes = combined;
-          }
-
-          // Also append the booked rejection audit note if applicable (safe + small)
-          if (!bookedAccepted && bookedRejectedReason) {
-            const existingNotes =
-              ((lead as any).notes as string | undefined) ||
-              ((lead as any).Notes as string | undefined) ||
-              "";
-
-            const auditLine = `[AI Dialer] BOOKED rejected: missing confirmation (CallSid=${callSid})`;
-            if (
-              !existingNotes.includes(`CallSid=${callSid}`) ||
-              !existingNotes.includes("BOOKED rejected")
-            ) {
-              const combined =
-                existingNotes && existingNotes.trim().length > 0
-                  ? `${existingNotes}\n${auditLine}`
-                  : auditLine;
-              (lead as any).notes = combined;
-              (lead as any).Notes = combined;
-            }
           }
 
           (lead as any).updatedAt = now;
@@ -454,7 +526,7 @@ export default async function handler(
         }
       } catch (err) {
         console.warn(
-          "[ai-calls/outcome] Failed to append AI outcome to lead history (non-blocking):",
+          "[ai-calls/outcome] Failed to append AI outcome to lead history/notes (non-blocking):",
           (err as any)?.message || err
         );
       }
@@ -468,6 +540,7 @@ export default async function handler(
       bookedRejectedReason,
       moved,
       targetFolderId,
+      notesAppliedOnce: !alreadyAppliedToRecording,
     });
   } catch (err: any) {
     console.error("[ai-calls/outcome] error:", err?.message || err);

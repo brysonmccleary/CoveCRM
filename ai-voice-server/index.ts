@@ -876,6 +876,12 @@ async function handleFinalOutcomeIntent(state: CallState, control: any) {
   const summary: string | undefined = control.summary;
   const notesAppend: string | undefined = control.notesAppend;
 
+  // ✅ Cementing fields (schema only; no script changes)
+  const confirmedDate: string | undefined = control.confirmedDate;
+  const confirmedTime: string | undefined = control.confirmedTime;
+  const confirmedYes: boolean | undefined = control.confirmedYes;
+  const repeatBackConfirmed: boolean | undefined = control.repeatBackConfirmed;
+
   if (!outcomeRaw || !allowedOutcomes.includes(outcomeRaw as any)) {
     console.warn(
       "[AI-VOICE] Invalid or missing final outcome in control payload:",
@@ -885,12 +891,26 @@ async function handleFinalOutcomeIntent(state: CallState, control: any) {
   }
 
   try {
-    const body = {
+    const body: any = {
       callSid: state.callSid,
       outcome: outcomeRaw,
       summary,
       notesAppend,
     };
+
+    // Only include confirmation fields if present so we don't overwrite prior info server-side
+    if (typeof confirmedDate === "string" && confirmedDate.trim().length > 0) {
+      body.confirmedDate = confirmedDate.trim();
+    }
+    if (typeof confirmedTime === "string" && confirmedTime.trim().length > 0) {
+      body.confirmedTime = confirmedTime.trim();
+    }
+    if (typeof confirmedYes === "boolean") {
+      body.confirmedYes = confirmedYes;
+    }
+    if (typeof repeatBackConfirmed === "boolean") {
+      body.repeatBackConfirmed = repeatBackConfirmed;
+    }
 
     const resp = await fetch(OUTCOME_URL, {
       method: "POST",
