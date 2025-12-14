@@ -4,7 +4,6 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
 import mongooseConnect from "@/lib/mongooseConnect";
 import { Buffer } from "buffer";
-import twilio from "twilio"; // ✅ NEW (additive): parent TrustHub client for SupportingDocuments fallback
 import A2PProfile from "@/models/A2PProfile";
 import type { IA2PProfile } from "@/models/A2PProfile";
 import User from "@/models/User";
@@ -12,6 +11,7 @@ import {
   getClientForUser,
   TwilioResolvedAuth,
 } from "@/lib/twilio/getClientForUser";
+import twilio from "twilio";
 
 /**
  * Required ENV:
@@ -25,8 +25,6 @@ import {
  * - A2P_TRUST_PRODUCT_POLICY_SID
  * - A2P_STATUS_CALLBACK_URL
  * - A2P_NOTIFICATIONS_EMAIL
- *
- * Optional (only used if TWILIO_AUTH_TOKEN not set):
  * - TWILIO_API_KEY_SID
  * - TWILIO_API_KEY_SECRET
  */
@@ -73,9 +71,10 @@ let twilioAccountSidUsed: string = "";
 // can match tenant + auth mode correctly.
 let twilioResolvedAuth: TwilioResolvedAuth | null = null;
 
-// ✅ NEW (additive): parent/master TrustHub client ONLY for SupportingDocuments fallback
-let parentTrusthubClient: any = null;
-let parentTrusthubAuth: TwilioResolvedAuth | null = null;
+// ✅ NEW (additive): parent/master client ONLY for SupportingDocuments fallback
+let parentClient: any = null;
+let parentAuth: TwilioResolvedAuth | null = null;
+let parentAccountSid: string = "";
 
 // ---------------- helpers ----------------
 function required<T>(v: T, name: string): T {
@@ -196,11 +195,14 @@ function basicAuthHeader(username: string, password: string): string {
   return `Basic ${token}`;
 }
 
+// ✅ CHANGED (minimal): allow overriding X-Twilio-AccountSid for parent fallback,
+// and allow turning it off entirely when needed.
 async function trusthubFetch(
   auth: TwilioResolvedAuth,
   method: "POST" | "GET",
   path: string,
   form?: Record<string, string>,
+  opts?: { xTwilioAccountSid?: string | null },
 ) {
   const url = `https://trusthub.twilio.com${path}`;
 
@@ -208,9 +210,14 @@ async function trusthubFetch(
     Authorization: basicAuthHeader(auth.username, auth.password),
   };
 
-  // ✅ CRITICAL: force tenant scope. This prevents “created under parent account” mistakes.
-  // Using the same accountSid your client is scoped to.
-  headers["X-Twilio-AccountSid"] = twilioAccountSidUsed;
+  // ✅ Default behavior (existing): force tenant scope to subaccount
+  // ✅ Override allowed for parent fallback
+  const xSid =
+    opts && "xTwilioAccountSid" in opts ? opts.xTwilioAccountSid : twilioAccountSidUsed;
+
+  if (xSid) {
+    headers["X-Twilio-AccountSid"] = xSid;
+  }
 
   let body: string | undefined = undefined;
   if (method === "POST") {
@@ -231,90 +238,92 @@ async function trusthubFetch(
   if (!resp.ok) {
     const code = json?.code ?? resp.status;
     const message = json?.message ?? text ?? `HTTP ${resp.status}`;
-    throw new Error(
+    const err: any = new Error(
       `TrustHub ${method} ${path} failed (${resp.status}) code=${code} message=${message}`,
     );
+    err.status = resp.status;
+    err.code = json?.code ?? undefined;
+    err.moreInfo = json?.more_info ?? undefined;
+    throw err;
   }
 
   return json ?? text;
 }
 
-// ✅ NEW (additive): build a parent/master Twilio client ONLY for SupportingDocuments fallback.
-// This must NOT affect any per-tenant operations.
-function ensureParentTrusthubClient() {
-  if (parentTrusthubClient && parentTrusthubAuth) return;
-
+// ✅ NEW (additive): build a parent/master client ONLY for supporting-doc fallback.
+// Do NOT affect any other tenant-scoped calls.
+function getParentTrusthubClient(): {
+  client: any;
+  auth: TwilioResolvedAuth;
+  accountSid: string;
+} {
   const platformAccountSid = String(process.env.TWILIO_ACCOUNT_SID || "").trim();
   const platformAuthToken = String(process.env.TWILIO_AUTH_TOKEN || "").trim();
   const platformApiKeySid = String(process.env.TWILIO_API_KEY_SID || "").trim();
-  const platformApiKeySecret = String(
-    process.env.TWILIO_API_KEY_SECRET || "",
-  ).trim();
+  const platformApiKeySecret = String(process.env.TWILIO_API_KEY_SECRET || "").trim();
 
-  if (!platformAccountSid || !platformAccountSid.startsWith("AC")) {
+  if (!platformAccountSid.startsWith("AC")) {
     throw new Error("Missing/invalid TWILIO_ACCOUNT_SID for parent TrustHub client.");
   }
 
   if (platformAuthToken) {
-    parentTrusthubClient = twilio(platformAccountSid, platformAuthToken, {
-      accountSid: platformAccountSid,
-    });
-
-    parentTrusthubAuth = {
+    const c = twilio(platformAccountSid, platformAuthToken);
+    const a: TwilioResolvedAuth = {
       mode: "authToken",
       username: platformAccountSid,
       password: platformAuthToken,
       effectiveAccountSid: platformAccountSid,
     };
-
-    log("parent TrustHub client ready (SID+AUTH_TOKEN)", {
-      parentMasked: platformAccountSid.slice(0, 4) + "…" + platformAccountSid.slice(-4),
-    });
-
-    return;
+    return { client: c, auth: a, accountSid: platformAccountSid };
   }
 
   if (platformApiKeySid && platformApiKeySecret) {
-    // API key auth uses username=SK..., password=secret, scoped to parent accountSid
-    parentTrusthubClient = twilio(platformApiKeySid, platformApiKeySecret, {
-      accountSid: platformAccountSid,
-    });
-
-    parentTrusthubAuth = {
+    const c = twilio(platformApiKeySid, platformApiKeySecret, { accountSid: platformAccountSid });
+    const a: TwilioResolvedAuth = {
       mode: "apiKey",
       username: platformApiKeySid,
       password: platformApiKeySecret,
       effectiveAccountSid: platformAccountSid,
     };
-
-    log("parent TrustHub client ready (API_KEY_PAIR)", {
-      parentMasked: platformAccountSid.slice(0, 4) + "…" + platformAccountSid.slice(-4),
-    });
-
-    return;
+    return { client: c, auth: a, accountSid: platformAccountSid };
   }
 
-  throw new Error(
-    "Missing platform Twilio credentials for parent TrustHub client (need TWILIO_AUTH_TOKEN OR TWILIO_API_KEY_SID/TWILIO_API_KEY_SECRET).",
-  );
+  throw new Error("Missing parent credentials: set TWILIO_AUTH_TOKEN or TWILIO_API_KEY_SID/TWILIO_API_KEY_SECRET.");
 }
 
 // ✅ FIXED: SupportingDocuments must prefer SDK when present; raw TrustHub fetch as fallback.
 // Do NOT remove the raw fallback — we keep it for safety.
+// ✅ CHANGED (minimal): allow overriding client/auth + X-Twilio-AccountSid
 async function createSupportingDocumentRaw(args: {
   friendlyName: string;
   type: string;
   attributes: Record<string, any>;
+  override?: {
+    client?: any;
+    auth?: TwilioResolvedAuth;
+    xTwilioAccountSid?: string | null;
+    logLabel?: string;
+  };
 }) {
-  const { friendlyName, type, attributes } = args;
+  const { friendlyName, type, attributes, override } = args;
+
+  const useClient = override?.client || client;
+  const useAuth = override?.auth || twilioResolvedAuth;
+  const xSid =
+    override && "xTwilioAccountSid" in override
+      ? override.xTwilioAccountSid
+      : twilioAccountSidUsed;
+
+  const label = override?.logLabel || "SDK";
 
   // ---- Preferred: official SDK surface (your logs show this exists) ----
-  const sdk = (client as any)?.trusthub?.v1?.supportingDocuments;
+  const sdk = (useClient as any)?.trusthub?.v1?.supportingDocuments;
   if (sdk && typeof sdk.create === "function") {
-    log("step: supportingDocuments.create SDK", {
+    log(`step: supportingDocuments.create ${label}`, {
       type,
       attributes,
       twilioAccountSidUsed,
+      xTwilioAccountSid: xSid,
     });
 
     const created = await sdk.create({
@@ -326,7 +335,7 @@ async function createSupportingDocumentRaw(args: {
     const sid = created?.sid || created?.Sid || created?.id;
     if (!sid || typeof sid !== "string") {
       throw new Error(
-        `SupportingDocument SDK create did not return sid. Body: ${JSON.stringify(
+        `SupportingDocument ${label} create did not return sid. Body: ${JSON.stringify(
           created,
         )}`,
       );
@@ -335,29 +344,28 @@ async function createSupportingDocumentRaw(args: {
     return { sid, raw: created };
   }
 
-  // ---- Fallback: raw TrustHub host with tenant scope ----
-  if (!twilioResolvedAuth) {
+  // ---- Fallback: raw TrustHub host ----
+  if (!useAuth) {
     throw new Error(
-      "Missing twilioResolvedAuth (getClientForUser did not populate auth)",
+      "Missing auth for TrustHub SupportingDocuments (no twilioResolvedAuth / override.auth).",
     );
   }
 
-  log("step: supportingDocuments.create RAW (trusthub.twilio.com)", {
+  log(`step: supportingDocuments.create RAW ${label}`, {
     host: "trusthub.twilio.com",
     path: "/v1/SupportingDocuments",
     type,
     attributes,
     twilioAccountSidUsed,
-    authMode: twilioResolvedAuth.mode,
+    xTwilioAccountSid: xSid,
+    authMode: useAuth.mode,
     authUserMasked:
-      twilioResolvedAuth.username?.slice(0, 4) +
-      "…" +
-      twilioResolvedAuth.username?.slice(-4),
+      useAuth.username?.slice(0, 4) + "…" + useAuth.username?.slice(-4),
   });
 
   // Twilio expects x-www-form-urlencoded with these exact keys.
   const created: any = await trusthubFetch(
-    twilioResolvedAuth,
+    useAuth,
     "POST",
     "/v1/SupportingDocuments",
     {
@@ -365,63 +373,26 @@ async function createSupportingDocumentRaw(args: {
       Type: type,
       Attributes: JSON.stringify(attributes),
     },
+    { xTwilioAccountSid: xSid },
   );
 
   const sid = created?.sid || created?.Sid || created?.id;
   if (!sid || typeof sid !== "string") {
     throw new Error(
-      `SupportingDocument RAW create did not return sid. Body: ${JSON.stringify(
+      `SupportingDocument RAW ${label} create did not return sid. Body: ${JSON.stringify(
         created,
       )}`,
     );
   }
 
-  // ✅ Optional but recommended: verify existence under same scope (catches wrong account instantly)
+  // Optional verify
   try {
-    await trusthubFetch(twilioResolvedAuth, "GET", `/v1/SupportingDocuments/${sid}`);
+    await trusthubFetch(useAuth, "GET", `/v1/SupportingDocuments/${sid}`, undefined, {
+      xTwilioAccountSid: xSid,
+    });
   } catch (e: any) {
     throw new Error(
-      `SupportingDocument created but verification failed (likely wrong account scope). sid=${sid} error=${e?.message || String(e)}`,
-    );
-  }
-
-  return { sid, raw: created };
-}
-
-// ✅ NEW (additive): create SupportingDocument in PARENT account.
-// IMPORTANT: no tenant scoping header manipulation here — it is created in the parent context.
-async function createSupportingDocumentInParent(args: {
-  friendlyName: string;
-  type: string;
-  attributes: Record<string, any>;
-}) {
-  ensureParentTrusthubClient();
-
-  const { friendlyName, type, attributes } = args;
-
-  const sdk = (parentTrusthubClient as any)?.trusthub?.v1?.supportingDocuments;
-  if (!sdk || typeof sdk.create !== "function") {
-    throw new Error("Parent TrustHub client missing supportingDocuments SDK surface.");
-  }
-
-  log("step: supportingDocuments.create PARENT (fallback)", {
-    type,
-    attributes,
-    parentEffectiveSid: parentTrusthubAuth?.effectiveAccountSid,
-  });
-
-  const created = await sdk.create({
-    friendlyName,
-    type,
-    attributes,
-  });
-
-  const sid = created?.sid || created?.Sid || created?.id;
-  if (!sid || typeof sid !== "string") {
-    throw new Error(
-      `Parent SupportingDocument create did not return sid. Body: ${JSON.stringify(
-        created,
-      )}`,
+      `SupportingDocument created but verification failed. sid=${sid} error=${e?.message || String(e)}`,
     );
   }
 
@@ -1032,6 +1003,7 @@ export default async function handler(
               assignedToPrimary: 1,
               addressSid: 1,
               supportingDocumentSid: 1,
+              parentAddressSid: 1,
             },
             reason: `Recovered stale profileSid (Twilio 20404): ${secondaryProfileSid}`,
             extra: { profileSid: secondaryProfileSid },
@@ -1220,9 +1192,10 @@ export default async function handler(
     // ---------------- 1.7) SupportingDocument for address ----------------
     let supportingDocumentSid: string | undefined = (a2p as any)
       .supportingDocumentSid;
+
     if (!supportingDocumentSid && addressSid) {
       const attributes = {
-        // leave as-is: your issue is 404/host routing, not attribute validation
+        // leave as-is: your issue is scoping, not attribute validation
         address_sids: addressSid,
       };
 
@@ -1231,12 +1204,13 @@ export default async function handler(
         twilioAccountSidUsed,
       });
 
+      // First attempt: subaccount scope (expected to 20404 in ISV subaccounts)
       try {
-        // ✅ Primary attempt: subaccount (what you already do)
         const sd = await createSupportingDocumentRaw({
           friendlyName: `${setPayload.businessName} – Address SupportingDocument`,
           type: "customer_profile_address",
           attributes,
+          override: { logLabel: "SUBACCOUNT" },
         });
 
         supportingDocumentSid = sd.sid;
@@ -1246,34 +1220,9 @@ export default async function handler(
           { $set: { supportingDocumentSid } },
         );
       } catch (err: any) {
-        // ✅ FIX: If subaccount returns 20404/404 for /v1/SupportingDocuments, automatically fall back to parent/master creation.
-        if (isTwilioNotFound(err)) {
-          log(
-            "supportingDocuments.create subaccount failed with 20404/404; falling back to parent account",
-            {
-              twilioAccountSidUsed,
-              code: err?.code,
-              status: err?.status,
-              message: err?.message,
-            },
-          );
-
-          const parentSd = await createSupportingDocumentInParent({
-            friendlyName: `${setPayload.businessName} – Address SupportingDocument`,
-            type: "customer_profile_address",
-            attributes,
-          });
-
-          supportingDocumentSid = parentSd.sid;
-
-          await A2PProfile.updateOne(
-            { _id: a2p._id },
-            { $set: { supportingDocumentSid } },
-          );
-
-          // Continue: we still attach the supportingDocumentSid inside the subaccount CustomerProfile via entityAssignments below.
-        } else {
-          console.error("[A2P start] supportingDocuments create failed", {
+        // ✅ Smart fallback: ONLY on 20404/404
+        if (!isTwilioNotFound(err)) {
+          console.error("[A2P start] supportingDocuments create failed (non-404)", {
             twilioAccountSidUsed,
             code: err?.code,
             status: err?.status,
@@ -1282,6 +1231,86 @@ export default async function handler(
           });
           throw err;
         }
+
+        log(
+          "supportingDocuments.create subaccount failed with 20404/404; falling back to parent account",
+          {
+            twilioAccountSidUsed,
+            code: err?.code,
+            status: err?.status,
+            message: err?.message,
+          },
+        );
+
+        // Build parent client lazily
+        if (!parentClient || !parentAuth || !parentAccountSid) {
+          const parent = getParentTrusthubClient();
+          parentClient = parent.client;
+          parentAuth = parent.auth;
+          parentAccountSid = parent.accountSid;
+
+          log(`parent TrustHub client ready (${parentAuth.mode === "authToken" ? "SID+AUTH_TOKEN" : "API_KEY_PAIR"})`, {
+            parentMasked: parentAccountSid.slice(0, 4) + "…" + parentAccountSid.slice(-4),
+          });
+        }
+
+        // ✅ CRITICAL: parent TrustHub cannot reference a SUBACCOUNT Address SID.
+        // So we create/reuse a parent Address ONLY for this fallback path.
+        let parentAddressSid: string | undefined = (a2p as any).parentAddressSid;
+
+        if (!parentAddressSid) {
+          log("step: addresses.create PARENT (fallback for supporting doc)", {
+            customerName: setPayload.businessName,
+            parentAccountSid,
+          });
+
+          const parentAddr = await parentClient.addresses.create({
+            customerName: String(setPayload.businessName),
+            street: String(setPayload.address),
+            streetSecondary: setPayload.addressLine2 || undefined,
+            city: String(setPayload.addressCity),
+            region: String(setPayload.addressState),
+            postalCode: String(setPayload.addressPostalCode),
+            isoCountry: String(setPayload.addressCountry || "US"),
+          });
+
+          parentAddressSid = parentAddr.sid;
+
+          await A2PProfile.updateOne(
+            { _id: a2p._id },
+            { $set: { parentAddressSid } as any },
+          );
+        }
+
+        const parentAttributes = {
+          address_sids: parentAddressSid,
+        };
+
+        log("step: supportingDocuments.create PARENT (fallback)", {
+          type: "customer_profile_address",
+          attributes: parentAttributes,
+          parentEffectiveSid: parentAccountSid,
+        });
+
+        const parentSd = await createSupportingDocumentRaw({
+          friendlyName: `${setPayload.businessName} – Address SupportingDocument`,
+          type: "customer_profile_address",
+          attributes: parentAttributes,
+          override: {
+            client: parentClient,
+            auth: parentAuth,
+            // IMPORTANT: do NOT force subaccount header here
+            xTwilioAccountSid: null,
+            logLabel: "PARENT",
+          },
+        });
+
+        supportingDocumentSid = parentSd.sid;
+
+        await A2PProfile.updateOne(
+          { _id: a2p._id },
+          { $set: { supportingDocumentSid } },
+        );
       }
     }
 
