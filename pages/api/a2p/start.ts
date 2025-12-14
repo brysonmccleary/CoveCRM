@@ -193,17 +193,22 @@ async function createSupportingDocumentRaw(args: {
     twilioAccountSidUsed,
   });
 
+  // ✅ Twilio's request() in some SDK contexts will NOT send formData as expected.
+  // Send x-www-form-urlencoded payload via `data` instead.
+  const payload = new URLSearchParams();
+  payload.set("FriendlyName", friendlyName);
+  payload.set("Type", type);
+  payload.set("Attributes", JSON.stringify(attributes));
+
   const resp = await (parentClient as any).request({
     method: "POST",
     uri,
-    formData: {
-      FriendlyName: friendlyName,
-      Type: type,
-      Attributes: JSON.stringify(attributes),
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
     },
+    data: payload.toString(),
   });
-
-  // Twilio raw response body shape varies; normalize:
+// Twilio raw response body shape varies; normalize:
   const sid = resp?.body?.sid || resp?.body?.Sid || resp?.body?.id;
   if (!sid || typeof sid !== "string") {
     throw new Error(
