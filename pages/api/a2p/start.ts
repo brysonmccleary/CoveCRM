@@ -148,6 +148,20 @@ function isTwilioNotFound(err: any): boolean {
   );
 }
 
+// ✅ Added: treat “already exists / duplicate” as safe-idempotent for entity assignment
+function isTwilioDuplicateAssignment(err: any): boolean {
+  const code = Number(err?.code);
+  const status = Number(err?.status);
+  const message = String(err?.message || "");
+  return (
+    status === 409 ||
+    code === 20409 ||
+    /duplicate/i.test(message) ||
+    /already exists/i.test(message) ||
+    /already assigned/i.test(message)
+  );
+}
+
 // ✅ Added: unset stale SID(s) on profile and record lastError proof
 async function clearStaleSidOnProfile(args: {
   a2pId: string;
@@ -213,7 +227,9 @@ async function trusthubFetch(
   // ✅ Default behavior (existing): force tenant scope to subaccount
   // ✅ Override allowed for parent fallback
   const xSid =
-    opts && "xTwilioAccountSid" in opts ? opts.xTwilioAccountSid : twilioAccountSidUsed;
+    opts && "xTwilioAccountSid" in opts
+      ? opts.xTwilioAccountSid
+      : twilioAccountSidUsed;
 
   if (xSid) {
     headers["X-Twilio-AccountSid"] = xSid;
@@ -278,7 +294,9 @@ function getParentTrusthubClient(): {
   }
 
   if (platformApiKeySid && platformApiKeySecret) {
-    const c = twilio(platformApiKeySid, platformApiKeySecret, { accountSid: platformAccountSid });
+    const c = twilio(platformApiKeySid, platformApiKeySecret, {
+      accountSid: platformAccountSid,
+    });
     const a: TwilioResolvedAuth = {
       mode: "apiKey",
       username: platformApiKeySid,
@@ -288,7 +306,78 @@ function getParentTrusthubClient(): {
     return { client: c, auth: a, accountSid: platformAccountSid };
   }
 
-  throw new Error("Missing parent credentials: set TWILIO_AUTH_TOKEN or TWILIO_API_KEY_SID/TWILIO_API_KEY_SECRET.");
+  throw new Error(
+    "Missing parent credentials: set TWILIO_AUTH_TOKEN or TWILIO_API_KEY_SID/TWILIO_API_KEY_SECRET.",
+  );
+}
+
+// ✅ NEW (additive): for “seamless / automated” behavior — avoid creating duplicate
+// customer_profile_address SupportingDocuments that cause instant evaluation failures.
+// This searches existing EntityAssignments on the *secondary customer profile* for an
+// existing supporting document of type "customer_profile_address", and reuses it.
+async function findExistingCustomerProfileAddressSupportingDocSid(
+  customerProfileSid: string,
+): Promise<string | undefined> {
+  if (!twilioResolvedAuth) return undefined;
+
+  try {
+    // List entity assignments on the customer profile
+    const data: any = await trusthubFetch(
+      twilioResolvedAuth,
+      "GET",
+      `/v1/CustomerProfiles/${customerProfileSid}/EntityAssignments`,
+      undefined,
+      { xTwilioAccountSid: twilioAccountSidUsed },
+    );
+
+    const assignments: any[] =
+      (Array.isArray(data) && data) ||
+      data?.results ||
+      data?.entity_assignments ||
+      data?.entityAssignments ||
+      [];
+
+    // Collect any RD... SIDs (SupportingDocuments)
+    const rdSids: string[] = [];
+    for (const a of assignments) {
+      const sid =
+        a?.object_sid || a?.objectSid || a?.ObjectSid || a?.sid || a?.Sid;
+      if (isSidLike(sid, "RD")) rdSids.push(String(sid));
+    }
+
+    if (!rdSids.length) return undefined;
+
+    // Fetch each supporting doc and look for the address type
+    for (const rdSid of rdSids) {
+      try {
+        const sd: any = await trusthubFetch(
+          twilioResolvedAuth,
+          "GET",
+          `/v1/SupportingDocuments/${rdSid}`,
+          undefined,
+          { xTwilioAccountSid: twilioAccountSidUsed },
+        );
+
+        const type = String(sd?.type || sd?.Type || "").toLowerCase();
+        if (type === "customer_profile_address") {
+          return rdSid;
+        }
+      } catch {
+        // Ignore any single fetch issues; keep scanning
+      }
+    }
+
+    return undefined;
+  } catch (e: any) {
+    log("warn: could not list/fetch entity assignments to reuse address SD", {
+      customerProfileSid,
+      twilioAccountSidUsed,
+      message: e?.message,
+      code: e?.code,
+      status: e?.status,
+    });
+    return undefined;
+  }
 }
 
 // ✅ FIXED: SupportingDocuments must prefer SDK when present; raw TrustHub fetch as fallback.
@@ -387,9 +476,15 @@ async function createSupportingDocumentRaw(args: {
 
   // Optional verify
   try {
-    await trusthubFetch(useAuth, "GET", `/v1/SupportingDocuments/${sid}`, undefined, {
-      xTwilioAccountSid: xSid,
-    });
+    await trusthubFetch(
+      useAuth,
+      "GET",
+      `/v1/SupportingDocuments/${sid}`,
+      undefined,
+      {
+        xTwilioAccountSid: xSid,
+      },
+    );
   } catch (e: any) {
     throw new Error(
       `SupportingDocument created but verification failed. sid=${sid} error=${e?.message || String(e)}`,
@@ -459,7 +554,20 @@ async function assignEntityToCustomerProfile(
       cp?.customerProfilesEntityAssignment;
 
     if (sub && typeof sub.create === "function") {
-      await sub.create({ objectSid });
+      try {
+        await sub.create({ objectSid });
+      } catch (err: any) {
+        if (isTwilioDuplicateAssignment(err)) {
+          log("info: entity assignment already exists; skipping", {
+            customerProfileSid,
+            objectSid,
+            twilioAccountSidUsed,
+            message: err?.message,
+          });
+          return;
+        }
+        throw err;
+      }
       return;
     }
 
@@ -509,6 +617,15 @@ async function assignEntityToCustomerProfile(
       });
       return;
     }
+    if (isTwilioDuplicateAssignment(err)) {
+      log("info: entity assignment already exists (fallback); skipping", {
+        customerProfileSid,
+        objectSid,
+        twilioAccountSidUsed,
+        message: (err as any)?.message,
+      });
+      return;
+    }
     throw err;
   }
 }
@@ -533,7 +650,20 @@ async function assignEntityToTrustProduct(
       tp?.trustProductsEntityAssignment;
 
     if (sub && typeof sub.create === "function") {
-      await sub.create({ objectSid });
+      try {
+        await sub.create({ objectSid });
+      } catch (err: any) {
+        if (isTwilioDuplicateAssignment(err)) {
+          log("info: trustProduct entity assignment already exists; skipping", {
+            trustProductSid,
+            objectSid,
+            twilioAccountSidUsed,
+            message: err?.message,
+          });
+          return;
+        }
+        throw err;
+      }
       return;
     }
 
@@ -583,8 +713,53 @@ async function assignEntityToTrustProduct(
       });
       return;
     }
+    if (isTwilioDuplicateAssignment(err)) {
+      log("info: trustProduct entity assignment already exists (fallback); skipping", {
+        trustProductSid,
+        objectSid,
+        twilioAccountSidUsed,
+        message: (err as any)?.message,
+      });
+      return;
+    }
     throw err;
   }
+}
+
+// ✅ NEW (additive): evaluations via raw TrustHub so it works even when SDK surface is missing.
+// This improves “seamless” submissions and avoids the “evaluations subresource unavailable on SDK” loop.
+async function createCustomerProfileEvaluationRaw(customerProfileSid: string) {
+  if (!twilioResolvedAuth) {
+    throw new Error("Missing twilioResolvedAuth for customerProfile evaluation.");
+  }
+  log("step: customerProfiles.evaluations.create RAW", {
+    customerProfileSid,
+    twilioAccountSidUsed,
+  });
+  await trusthubFetch(
+    twilioResolvedAuth,
+    "POST",
+    `/v1/CustomerProfiles/${customerProfileSid}/Evaluations`,
+    {},
+    { xTwilioAccountSid: twilioAccountSidUsed },
+  );
+}
+
+async function createTrustProductEvaluationRaw(trustProductSid: string) {
+  if (!twilioResolvedAuth) {
+    throw new Error("Missing twilioResolvedAuth for trustProduct evaluation.");
+  }
+  log("step: trustProducts.evaluations.create RAW", {
+    trustProductSid,
+    twilioAccountSidUsed,
+  });
+  await trusthubFetch(
+    twilioResolvedAuth,
+    "POST",
+    `/v1/TrustProducts/${trustProductSid}/Evaluations`,
+    {},
+    { xTwilioAccountSid: twilioAccountSidUsed },
+  );
 }
 
 async function evaluateAndSubmitCustomerProfile(customerProfileSid: string) {
@@ -597,7 +772,8 @@ async function evaluateAndSubmitCustomerProfile(customerProfileSid: string) {
     if ((cp as any).evaluations?.create) {
       await (cp as any).evaluations.create({});
     } else {
-      throw new Error("evaluations subresource unavailable on SDK");
+      // ✅ Raw fallback (seamless)
+      await createCustomerProfileEvaluationRaw(customerProfileSid);
     }
   } catch (err: any) {
     log("warn: evaluations.create failed (customerProfile)", {
@@ -639,7 +815,8 @@ async function evaluateAndSubmitTrustProduct(trustProductSid: string) {
     if ((tp as any).evaluations?.create) {
       await (tp as any).evaluations.create({});
     } else {
-      throw new Error("evaluations subresource unavailable on SDK");
+      // ✅ Raw fallback (seamless)
+      await createTrustProductEvaluationRaw(trustProductSid);
     }
   } catch (err: any) {
     log("warn: evaluations.create failed (trustProduct)", {
@@ -810,7 +987,7 @@ export default async function handler(
     } catch (e: any) {
       log("twilio account in use", {
         sid: twilioAccountSidUsed,
-        message: e?.message,
+        message: (e as any)?.message,
       });
     }
 
@@ -1193,6 +1370,26 @@ export default async function handler(
     let supportingDocumentSid: string | undefined = (a2p as any)
       .supportingDocumentSid;
 
+    // ✅ NEW (additive): if we don’t have it in Mongo, try to reuse an already-assigned
+    // customer_profile_address supporting doc to avoid duplicate evaluation failures.
+    if (!supportingDocumentSid) {
+      const reused = await findExistingCustomerProfileAddressSupportingDocSid(
+        secondaryProfileSid!,
+      );
+      if (reused) {
+        supportingDocumentSid = reused;
+        log("reuse: found existing customer_profile_address SupportingDocument on profile", {
+          customerProfileSid: secondaryProfileSid,
+          supportingDocumentSid,
+          twilioAccountSidUsed,
+        });
+        await A2PProfile.updateOne(
+          { _id: a2p._id },
+          { $set: { supportingDocumentSid } as any },
+        );
+      }
+    }
+
     if (!supportingDocumentSid && addressSid) {
       const attributes = {
         // leave as-is: your issue is scoping, not attribute validation
@@ -1222,13 +1419,16 @@ export default async function handler(
       } catch (err: any) {
         // ✅ Smart fallback: ONLY on 20404/404
         if (!isTwilioNotFound(err)) {
-          console.error("[A2P start] supportingDocuments create failed (non-404)", {
-            twilioAccountSidUsed,
-            code: err?.code,
-            status: err?.status,
-            message: err?.message,
-            moreInfo: err?.moreInfo,
-          });
+          console.error(
+            "[A2P start] supportingDocuments create failed (non-404)",
+            {
+              twilioAccountSidUsed,
+              code: err?.code,
+              status: err?.status,
+              message: err?.message,
+              moreInfo: err?.moreInfo,
+            },
+          );
           throw err;
         }
 
@@ -1249,9 +1449,17 @@ export default async function handler(
           parentAuth = parent.auth;
           parentAccountSid = parent.accountSid;
 
-          log(`parent TrustHub client ready (${parentAuth.mode === "authToken" ? "SID+AUTH_TOKEN" : "API_KEY_PAIR"})`, {
-            parentMasked: parentAccountSid.slice(0, 4) + "…" + parentAccountSid.slice(-4),
-          });
+          log(
+            `parent TrustHub client ready (${
+              parentAuth.mode === "authToken" ? "SID+AUTH_TOKEN" : "API_KEY_PAIR"
+            })`,
+            {
+              parentMasked:
+                parentAccountSid.slice(0, 4) +
+                "…" +
+                parentAccountSid.slice(-4),
+            },
+          );
         }
 
         // ✅ CRITICAL: parent TrustHub cannot reference a SUBACCOUNT Address SID.
