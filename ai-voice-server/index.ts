@@ -433,7 +433,20 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
 
   const { payload } = msg.media;
 
-  // Track approximate user audio duration (20ms per frame)
+  // ✅ Minimal cut-out fix:
+  // - Ignore outbound (echo/AI playback) frames
+  // - Ignore inbound frames while AI is speaking (prevents barge-in / self-interrupt)
+  const track = msg.media.track;
+
+  if (track === "outbound") {
+    return;
+  }
+
+  if (state.aiSpeaking === true) {
+    return;
+  }
+
+  // Track approximate user audio duration (20ms per frame) ONLY for real user audio
   state.userAudioMsBuffered = (state.userAudioMsBuffered || 0) + 20;
 
   if (!state.debugLoggedFirstMedia) {
@@ -680,6 +693,10 @@ async function handleOpenAiEvent(
     event.type === "response.audio.delta" ||
     event.type === "response.output_audio.delta"
   ) {
+    // ✅ Minimal cut-out fix:
+    // Ensure aiSpeaking is true as soon as we begin receiving output audio deltas.
+    state.aiSpeaking = true;
+
     let payloadBase64: string | undefined;
 
     if (typeof event.delta === "string") {
