@@ -118,7 +118,8 @@ type CallState = {
   context?: AICallContext;
 
   openAiWs?: WebSocket;
-  openAiReady?: boolean;
+  openAiReady?: boolean; // ✅ Only true AFTER OpenAI confirms session settings applied
+  openAiConfigured?: boolean; // ✅ We received session.updated/session.created
   pendingAudioFrames: string[];
   finalOutcomeSent?: boolean;
 
@@ -316,6 +317,8 @@ wss.on("connection", (ws: WebSocket) => {
     aiSpeaking: false,
     userAudioMsBuffered: 0,
     initialGreetingQueued: false,
+    openAiReady: false,
+    openAiConfigured: false,
   };
   calls.set(ws, state);
 
@@ -377,6 +380,8 @@ async function handleStart(ws: WebSocket, msg: TwilioStartEvent) {
   state.aiSpeaking = false;
   state.userAudioMsBuffered = 0;
   state.initialGreetingQueued = false;
+  state.openAiReady = false;
+  state.openAiConfigured = false;
 
   const custom = msg.start.customParameters || {};
   const sessionId = custom.sessionId;
@@ -415,7 +420,7 @@ async function handleStart(ws: WebSocket, msg: TwilioStartEvent) {
     state.context = context;
 
     console.log(
-      `[AI-VOICE] Loaded context for ${context.clientFirstName} (agent: ${context.agentName}, voice: ${context.voiceProfile.aiName})`
+      `[AI-VOICE] Loaded context for ${context.clientFirstName} (agent: ${context.agentName}, voice: ${context.voiceProfile.aiName}, openAiVoiceId: ${context.voiceProfile.openAiVoiceId})`
     );
 
     await initOpenAiRealtime(ws, state);
@@ -455,10 +460,13 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
       hasOpenAi: !!state.openAiWs,
       openAiReady: !!state.openAiReady,
       payloadLength: payload?.length || 0,
+      track: track || "(undefined)",
+      aiSpeaking: !!state.aiSpeaking,
     });
     state.debugLoggedFirstMedia = true;
   }
 
+  // If OpenAI session not ready yet, buffer
   if (!state.openAiWs || !state.openAiReady) {
     state.pendingAudioFrames.push(payload);
     return;
@@ -542,25 +550,33 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
 
   openAiWs.on("open", () => {
     console.log("[AI-VOICE] OpenAI Realtime connected");
-    state.openAiReady = true;
+
+    // ✅ IMPORTANT:
+    // Do NOT mark openAiReady yet.
+    // We only set openAiReady=true AFTER OpenAI confirms session settings applied.
+    state.openAiReady = false;
+    state.openAiConfigured = false;
 
     const systemPrompt = buildSystemPrompt(state.context!);
-    const selectedVoiceId = state.context!.voiceProfile.openAiVoiceId || "alloy";
 
-    console.log("[AI-VOICE] OpenAI session voice selected:", {
-      voiceId: selectedVoiceId,
-      voiceKey: state.context?.voiceKey,
-      aiName: state.context?.voiceProfile?.aiName,
-    });
+    // ✅ English hard lock WITHOUT editing buildSystemPrompt()
+    const englishLockPrefix = `
+HARD LANGUAGE LOCK (NON-NEGOTIABLE)
+- You MUST speak ONLY English (U.S. English).
+- You MUST NOT speak Spanish, Chinese, or any other language under any circumstance unless the lead explicitly requests it.
+- Default language is ALWAYS English.
+`.trim();
 
     const sessionUpdate = {
       type: "session.update",
       session: {
-        instructions: systemPrompt,
+        instructions: `${englishLockPrefix}\n\n${systemPrompt}`,
 
         // Audio-only session
         modalities: ["audio"],
-        voice: selectedVoiceId,
+
+        // ✅ Voice must come from selected profile (this is the ONLY place we set it)
+        voice: state.context!.voiceProfile.openAiVoiceId || "alloy",
 
         // AUDIO FORMATS (UNCHANGED)
         input_audio_format: "g711_ulaw",
@@ -575,80 +591,15 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
     };
 
     try {
+      console.log("[AI-VOICE] Sending session.update with voice:", {
+        openAiVoiceId: state.context!.voiceProfile.openAiVoiceId,
+        model: OPENAI_REALTIME_MODEL,
+      });
       openAiWs.send(JSON.stringify(sessionUpdate));
-
-      if (state.pendingAudioFrames.length > 0) {
-        console.log(
-          "[AI-VOICE] Flushing buffered audio frames to OpenAI:",
-          state.pendingAudioFrames.length
-        );
-        for (const base64Chunk of state.pendingAudioFrames) {
-          const event = {
-            type: "input_audio_buffer.append",
-            audio: base64Chunk,
-          };
-          openAiWs.send(JSON.stringify(event));
-        }
-        state.pendingAudioFrames = [];
-      }
-
-      // Initial greeting – guarded so we don't send multiple on reconnects
-      if (!state.waitingForResponse && !state.initialGreetingQueued) {
-        state.initialGreetingQueued = true;
-
-        const answeredBy = String(state.context?.answeredBy || "").toLowerCase();
-        const isHuman = answeredBy === "human";
-
-        // ✅ ONLY AUDIO-RELATED CHANGE ALLOWED:
-        // Delay BEFORE first AI utterance ONLY when AnsweredBy=human, only at call start.
-        (async () => {
-          try {
-            if (isHuman) {
-              await sleep(1200);
-            }
-          } catch {}
-
-          // If call already ended / socket closed / another response started, do nothing.
-          const liveState = calls.get(ws);
-          if (
-            !liveState ||
-            !liveState.openAiWs ||
-            liveState.waitingForResponse
-          ) {
-            return;
-          }
-
-          liveState.waitingForResponse = true;
-          liveState.aiSpeaking = true;
-
-          liveState.openAiWs.send(
-            JSON.stringify({
-              type: "response.create",
-              response: {
-                // ✅ Voice lock: ensure the chosen voice is used even on the response itself
-                voice: selectedVoiceId,
-
-                // ✅ Stop-talking fix: hard cap output so it cannot ramble forever
-                max_output_tokens: 160,
-
-                // ✅ English lock without changing buildSystemPrompt()
-                instructions:
-                  "Speak ONLY clear U.S. English. " +
-                  "Begin the call now and greet the lead following the call rules. " +
-                  "Keep it to one or two short sentences and end with a simple question like 'How's your day going so far?' " +
-                  "Then stop speaking and wait for the lead to respond before continuing.",
-              },
-            })
-          );
-        })();
-      } else {
-        console.log(
-          "[AI-VOICE] Suppressing initial greeting response.create because waitingForResponse is already true or greeting already queued"
-        );
-      }
+      // ✅ Flush + greeting will happen ONLY after session.updated/session.created
     } catch (err: any) {
       console.error(
-        "[AI-VOICE] Error sending session.update / initial greeting:",
+        "[AI-VOICE] Error sending session.update:",
         err?.message || err
       );
     }
@@ -698,6 +649,73 @@ async function handleOpenAiEvent(
 ) {
   const { streamSid, context } = state;
   if (!context) return;
+
+  // ✅ Session is now configured (voice + instructions applied).
+  // We only begin forwarding audio / sending greeting AFTER this.
+  if (
+    (event.type === "session.updated" || event.type === "session.created") &&
+    !state.openAiConfigured
+  ) {
+    state.openAiConfigured = true;
+    state.openAiReady = true;
+
+    if (state.pendingAudioFrames.length > 0 && state.openAiWs) {
+      console.log(
+        "[AI-VOICE] Flushing buffered audio frames to OpenAI (post-session-ready):",
+        state.pendingAudioFrames.length
+      );
+      for (const base64Chunk of state.pendingAudioFrames) {
+        const appendEvt = {
+          type: "input_audio_buffer.append",
+          audio: base64Chunk,
+        };
+        state.openAiWs.send(JSON.stringify(appendEvt));
+      }
+      state.pendingAudioFrames = [];
+    }
+
+    // Initial greeting – guarded so we don't send multiple
+    if (!state.waitingForResponse && !state.initialGreetingQueued && state.openAiWs) {
+      state.initialGreetingQueued = true;
+
+      const answeredBy = String(state.context?.answeredBy || "").toLowerCase();
+      const isHuman = answeredBy === "human";
+
+      (async () => {
+        try {
+          if (isHuman) {
+            await sleep(1200);
+          }
+        } catch {}
+
+        const liveState = calls.get(twilioWs);
+        if (
+          !liveState ||
+          !liveState.openAiWs ||
+          liveState.waitingForResponse ||
+          !liveState.openAiReady
+        ) {
+          return;
+        }
+
+        liveState.waitingForResponse = true;
+        // We set aiSpeaking true here, AND also on first delta receive
+        liveState.aiSpeaking = true;
+
+        liveState.openAiWs.send(
+          JSON.stringify({
+            type: "response.create",
+            response: {
+              instructions:
+                "Begin the call now and greet the lead following the call rules. Keep it to one or two short sentences and end with a simple question like 'How's your day going so far?' Then stop speaking and wait for the lead to respond before continuing.",
+            },
+          })
+        );
+      })();
+    }
+
+    return;
+  }
 
   // When a response finishes, allow the next one
   if (
@@ -864,24 +882,11 @@ async function handleBookAppointmentIntent(state: CallState, control: any) {
       if (!state.waitingForResponse) {
         state.waitingForResponse = true;
         state.aiSpeaking = true;
-
-        const selectedVoiceId = ctx.voiceProfile.openAiVoiceId || "alloy";
-
         state.openAiWs.send(
           JSON.stringify({
             type: "response.create",
             response: {
-              // ✅ Voice lock: ensure chosen voice is used
-              voice: selectedVoiceId,
-
-              // ✅ Stop-talking fix: cap output so it ends cleanly
-              max_output_tokens: 200,
-
-              // ✅ English lock without touching buildSystemPrompt()
-              instructions:
-                "Speak ONLY clear U.S. English. " +
-                `Explain to the lead, in natural language, that their appointment is confirmed for ${humanReadable}. ` +
-                "Then briefly restate what the appointment will cover and end the call politely.",
+              instructions: `Explain to the lead, in natural language, that their appointment is confirmed for ${humanReadable}. Then briefly restate what the appointment will cover and end the call politely.`,
             },
           })
         );
