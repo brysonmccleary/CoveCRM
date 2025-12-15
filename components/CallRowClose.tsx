@@ -1,110 +1,109 @@
-// pages/api/recordings/proxy.ts
-import type { NextApiRequest, NextApiResponse } from "next";
-import { getServerSession } from "next-auth/next";
-import { authOptions } from "../auth/[...nextauth]";
-import dbConnect from "@/lib/mongooseConnect";
-import Call from "@/models/Call";
-import { getUserByEmail } from "@/models/User";
-import { getClientForUser } from "@/lib/twilio/getClientForUser";
+// components/CallRowClose.tsx
+import { useMemo } from "react";
 
-// ✅ Fixes "00:00 / blank" Twilio recording playback by proxying audio through our server.
-// ✅ Does NOT touch AI dialer audio streaming (<Stream>, voice server, cutout guards, etc).
+export type CallRowCloseProps = {
+  row: {
+    id: string;
+    callSid: string;
+    userEmail: string;
+    leadId?: string;
+    direction?: "inbound" | "outbound";
+    startedAt?: string;
+    completedAt?: string;
+    duration?: number;
+    talkTime?: number;
+    recordingUrl?: string;
+    hasRecording?: boolean;
+    aiSummary?: string;
+    aiActionItems?: string[];
+    aiSentiment?: "positive" | "neutral" | "negative";
+    hasAI?: boolean;
+  };
+  userHasAI: boolean;
+  defaultFromNumber?: string;
+  onOpenCall?: (callId: string) => void;
+  onRefresh?: () => void;
+};
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "GET") {
-    res.status(405).json({ message: "Method not allowed" });
-    return;
-  }
+function fmtDateTime(d?: string | Date) {
+  if (!d) return "—";
+  const dt = typeof d === "string" ? new Date(d) : d;
+  if (Number.isNaN(dt.getTime())) return "—";
+  return dt.toLocaleString();
+}
 
-  const session = (await getServerSession(req, res, authOptions as any)) as any;
-  const requesterEmail: string | undefined = session?.user?.email
-    ? String(session.user.email).toLowerCase()
-    : undefined;
+function fmtSecs(n?: number) {
+  if (!n && n !== 0) return "—";
+  const s = Math.max(0, Math.floor(n));
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return m > 0 ? `${m}m ${r}s` : `${r}s`;
+}
 
-  if (!requesterEmail) {
-    res.status(401).json({ message: "Unauthorized" });
-    return;
-  }
+function badgeClass(kind: "inbound" | "outbound") {
+  return kind === "inbound"
+    ? "bg-emerald-900/40 text-emerald-300 border border-emerald-700/40"
+    : "bg-sky-900/40 text-sky-300 border border-sky-700/40";
+}
 
-  const { callId } = req.query as { callId?: string };
+export default function CallRowClose({
+  row,
+}: CallRowCloseProps): JSX.Element {
+  const hasRecording = !!row.recordingUrl || row.hasRecording;
+  const durationLabel = useMemo(() => fmtSecs(row.duration), [row.duration]);
+  const talkTimeLabel = useMemo(() => fmtSecs(row.talkTime), [row.talkTime]);
 
-  if (!callId) {
-    res.status(400).json({ message: "Missing callId" });
-    return;
-  }
+  return (
+    <div className="rounded-lg">
+      {/* Header */}
+      <div className="flex items-center gap-3">
+        {row.direction ? (
+          <span
+            className={`px-2 py-0.5 rounded-full text-xs ${badgeClass(
+              row.direction
+            )}`}
+          >
+            {row.direction === "inbound" ? "Inbound" : "Outbound"}
+          </span>
+        ) : null}
 
-  try {
-    await dbConnect();
+        <div className="text-sm text-white">
+          {fmtDateTime(row.startedAt)}
+          <span className="text-gray-500"> • </span>
+          <span className="text-gray-300">
+            Duration: <span className="text-white">{durationLabel}</span>
+          </span>
+          <span className="text-gray-500"> • </span>
+          <span className="text-gray-300">
+            Talk: <span className="text-white">{talkTimeLabel}</span>
+          </span>
+          {hasRecording ? (
+            <>
+              <span className="text-gray-500"> • </span>
+              <span className="text-emerald-300">Recording available</span>
+            </>
+          ) : null}
+        </div>
+      </div>
 
-    const requester = await getUserByEmail(requesterEmail);
-    const isAdmin = !!requester && (requester as any).role === "admin";
-
-    const call: any = await (Call as any).findById(callId).lean();
-    if (!call) {
-      res.status(404).json({ message: "Call not found" });
-      return;
-    }
-
-    const callOwnerEmail = String(call.userEmail || "").toLowerCase();
-    if (!isAdmin && callOwnerEmail !== requesterEmail) {
-      res.status(403).json({ message: "Forbidden" });
-      return;
-    }
-
-    const recordingSid = String(call.recordingSid || "").trim();
-    const callSid = String(call.callSid || "").trim();
-
-    if (!recordingSid) {
-      res.status(404).json({ message: "No recordingSid on this call" });
-      return;
-    }
-
-    // ✅ Per-tenant Twilio routing (subaccount isolation)
-    const { client } = await getClientForUser(callOwnerEmail);
-
-    // Fetch recording so we can derive the correct media path
-    const rec: any = await (client as any).recordings(recordingSid).fetch();
-    const uri: string = String(rec?.uri || "").trim();
-    if (!uri) {
-      res.status(404).json({ message: "Recording URI missing from Twilio" });
-      return;
-    }
-
-    // Media URL is same path without .json plus .mp3
-    const mediaPath = uri.replace(/\.json$/i, "") + ".mp3";
-
-    // Twilio client.request handles auth; browser never hits Twilio directly
-    const resp: any = await (client as any).request({
-      method: "GET",
-      uri: mediaPath,
-    });
-
-    const body = resp?.body;
-    const buf: Buffer =
-      Buffer.isBuffer(body) ? body : Buffer.from(body || "", "binary");
-
-    if (!buf || buf.length === 0) {
-      res.status(502).json({
-        message: "Recording media empty from Twilio",
-        callSid,
-        recordingSid,
-      });
-      return;
-    }
-
-    res.setHeader("Cache-Control", "no-store");
-    res.setHeader("Content-Type", "audio/mpeg");
-    res.setHeader("Content-Length", String(buf.length));
-    res.setHeader(
-      "Content-Disposition",
-      `inline; filename="recording-${recordingSid}.mp3"`
-    );
-
-    res.status(200).send(buf);
-    return;
-  } catch (err: any) {
-    console.error("GET /api/recordings/proxy error:", err?.message || err);
-    res.status(500).json({ message: "Server error" });
-    return;
-  }
+      {/* Recording */}
+      <div className="mt-2 rounded-lg border border-white/10 bg-white/[0.03] p-3">
+        {row.recordingUrl ? (
+          <>
+            <div className="text-xs text-gray-400 mb-1">Recording</div>
+            <audio
+              controls
+              preload="none"
+              src={row.recordingUrl}
+              className="w-full"
+            />
+          </>
+        ) : (
+          <div className="text-xs text-gray-500">
+            No recording available for this call.
+          </div>
+        )}
+      </div>
+    </div>
+  );
 }
