@@ -51,7 +51,27 @@ export default function CallPanelClose({
       );
       const j = await r.json();
       if (!r.ok) throw new Error(j?.message || "Failed to load calls.");
-      setRows(j.rows || []);
+
+      const rawRows: Row[] = Array.isArray(j?.rows) ? j.rows : [];
+
+      // ✅ IMPORTANT: Browser playback of Twilio RecordingUrl will often be 00:00 due to auth/CORS.
+      // Route playback through our server-side proxy endpoint (per-tenant safe).
+      // We do NOT change call creation or AI dialer audio streaming — this only affects playback UI.
+      const normalized: Row[] = rawRows.map((row) => {
+        const hasRec = !!row?.recordingUrl || !!row?.hasRecording;
+        const proxyUrl = row?.id
+          ? `/api/recordings/proxy?callId=${encodeURIComponent(row.id)}`
+          : "";
+
+        return {
+          ...row,
+          hasRecording: hasRec,
+          // If a recording exists, always use the proxy for playback
+          ...(hasRec ? { recordingUrl: proxyUrl } : {}),
+        };
+      });
+
+      setRows(normalized);
       setTotal(j.total || 0);
     } catch (e: any) {
       setError(e?.message || "Failed to load calls.");

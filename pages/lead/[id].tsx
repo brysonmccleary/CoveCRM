@@ -83,7 +83,6 @@ type HistoryEvent =
       title?: string;
       startsAt?: string;
     }
-  // allow AI outcome events if /api/leads/history passes them through
   | {
       type: "ai_outcome";
       id: string;
@@ -103,6 +102,49 @@ type UICampaign = {
 };
 
 const LEADS_URL = "/dashboard?tab=leads";
+
+function toBulletLines(summary?: string, items?: string[]) {
+  const bullets: string[] = [];
+
+  if (Array.isArray(items) && items.length) {
+    items
+      .map((s) => String(s || "").trim())
+      .filter(Boolean)
+      .forEach((s) => bullets.push(s));
+  }
+
+  const s = String(summary || "").trim();
+  if (s) {
+    // If summary already contains lines/bullets, split cleanly.
+    const lines = s
+      .split(/\r?\n|•/g)
+      .map((x) => String(x || "").trim())
+      .filter(Boolean);
+
+    // If it looks like one paragraph, attempt sentence split (lightweight heuristic).
+    if (lines.length <= 1) {
+      const sentences = s
+        .split(/(?<=[.!?])\s+/g)
+        .map((x) => String(x || "").trim())
+        .filter(Boolean);
+      sentences.slice(0, 6).forEach((x) => bullets.push(x));
+    } else {
+      lines.slice(0, 8).forEach((x) => bullets.push(x));
+    }
+  }
+
+  // Deduplicate while preserving order
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const b of bullets) {
+    const key = b.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(b);
+  }
+
+  return out.slice(0, 8);
+}
 
 export default function LeadProfileDial() {
   const router = useRouter();
@@ -151,14 +193,6 @@ export default function LeadProfileDial() {
     const dt = typeof d === "string" ? new Date(d) : d;
     if (Number.isNaN(dt.getTime())) return "—";
     return dt.toLocaleString();
-  };
-
-  const fmtDuration = (sec?: number | null) => {
-    if (!sec || sec <= 0) return "";
-    if (sec < 60) return `${sec}s`;
-    const m = Math.floor(sec / 60);
-    const s = sec % 60;
-    return s ? `${m}m ${s}s` : `${m}m`;
   };
 
   const fetchLeadById = useCallback(async (lookup: string) => {
@@ -254,7 +288,7 @@ export default function LeadProfileDial() {
     loadHistory();
   }, [loadHistory]);
 
-  // ---------- Load calls (for recordings) ----------
+  // ---------- Load calls (for AI overview only; recordings are RIGHT panel only) ----------
   const loadCalls = useCallback(async () => {
     if (!resolvedId) return;
     try {
@@ -277,6 +311,26 @@ export default function LeadProfileDial() {
   useEffect(() => {
     loadCalls();
   }, [loadCalls]);
+
+  const latestAiCall = useMemo(() => {
+    const sorted = calls
+      .slice()
+      .sort((a, b) => {
+        const da = new Date(a.startedAt || a.completedAt || 0).getTime();
+        const db = new Date(b.startedAt || b.completedAt || 0).getTime();
+        return db - da;
+      });
+
+    return (
+      sorted.find((c) => !!c.aiSummary || (Array.isArray(c.aiActionItems) && c.aiActionItems.length)) ||
+      null
+    );
+  }, [calls]);
+
+  const aiOverviewBullets = useMemo(() => {
+    if (!latestAiCall) return [];
+    return toBulletLines(latestAiCall.aiSummary, latestAiCall.aiActionItems);
+  }, [latestAiCall]);
 
   // ---------- Save note ----------
   const handleSaveNote = async () => {
@@ -357,16 +411,11 @@ export default function LeadProfileDial() {
         const data = await resp.json().catch(() => ({} as any));
         const ids: string[] = Array.isArray(data?.enrollments)
           ? data.enrollments
-              .filter(
-                (e: any) =>
-                  e?.status === "active" || e?.status === "paused"
-              )
+              .filter((e: any) => e?.status === "active" || e?.status === "paused")
               .map((e: any) => String(e.campaignId))
           : [];
         setActiveDripIds([...new Set(ids)]);
-        setRemoveCampaignId((cur) =>
-          cur && ids.includes(cur) ? cur : ids[0] || ""
-        );
+        setRemoveCampaignId((cur) => (cur && ids.includes(cur) ? cur : ids[0] || ""));
         return;
       }
 
@@ -374,19 +423,13 @@ export default function LeadProfileDial() {
       if (lead?.assignedDrips?.length) {
         const ids = [...new Set(lead.assignedDrips.map(String))];
         setActiveDripIds(ids);
-        setRemoveCampaignId((cur) =>
-          cur && ids.includes(cur) ? cur : ids[0] || ""
-        );
+        setRemoveCampaignId((cur) => (cur && ids.includes(cur) ? cur : ids[0] || ""));
         return;
       }
       if (lead?.dripProgress?.length) {
-        const ids = [
-          ...new Set(lead.dripProgress.map((p) => String(p.dripId))),
-        ];
+        const ids = [...new Set(lead.dripProgress.map((p) => String(p.dripId)))];
         setActiveDripIds(ids);
-        setRemoveCampaignId((cur) =>
-          cur && ids.includes(cur) ? cur : ids[0] || ""
-        );
+        setRemoveCampaignId((cur) => (cur && ids.includes(cur) ? cur : ids[0] || ""));
         return;
       }
 
@@ -401,8 +444,7 @@ export default function LeadProfileDial() {
   }, [resolvedId, lead]);
 
   const campaignNameById = useCallback(
-    (id: string) =>
-      campaigns.find((c) => String(c._id) === String(id))?.name || id,
+    (id: string) => campaigns.find((c) => String(c._id) === String(id))?.name || id,
     [campaigns]
   );
 
@@ -428,8 +470,7 @@ export default function LeadProfileDial() {
       const body: any = { leadId: lead.id, campaignId: selectedCampaignId };
       if (startAtLocal) {
         const localDate = new Date(startAtLocal);
-        if (!Number.isNaN(localDate.getTime()))
-          body.startAt = localDate.toISOString();
+        if (!Number.isNaN(localDate.getTime())) body.startAt = localDate.toISOString();
       }
 
       const r = await fetch(`/api/drips/enroll-lead`, {
@@ -479,9 +520,7 @@ export default function LeadProfileDial() {
       toast.success("✅ Removed from drip");
       setUnenrollOpen(false);
       setHistoryLines((prev) => [
-        `🔖 Status: Removed from ${campaignNameById(
-          removeCampaignId
-        )} • ${new Date().toLocaleString()}`,
+        `🔖 Status: Removed from ${campaignNameById(removeCampaignId)} • ${new Date().toLocaleString()}`,
         ...prev,
       ]);
     } catch (e: any) {
@@ -496,7 +535,7 @@ export default function LeadProfileDial() {
     <div className="flex bg-[#0f172a] text-white min-h-screen">
       <Sidebar />
 
-      {/* LEFT */}
+      {/* LEFT (lead fields only; no call notes blob) */}
       <div className="w-[320px] p-4 border-r border-gray-700 bg-[#1e293b] overflow-y-auto">
         <div className="mb-2">
           <h2 className="text-xl font-bold">{leadName}</h2>
@@ -508,6 +547,7 @@ export default function LeadProfileDial() {
               "_id",
               "id",
               "Notes",
+              "notes",
               "First Name",
               "Last Name",
               "folderId",
@@ -529,26 +569,13 @@ export default function LeadProfileDial() {
             );
           })}
 
-        {lead?.Notes && (
-          <div className="mt-2">
-            <p className="text-sm font-semibold">Saved Notes</p>
-            <textarea
-              value={lead.Notes}
-              readOnly
-              className="bg-[#0f172a] border border-white/10 rounded p-2 w-full mt-1 text-sm"
-              rows={3}
-            />
-            <hr className="border-gray-800 my-1" />
-          </div>
-        )}
-        <p className="text-gray-500 mt-2 text-xs">
-          Click fields to edit live.
-        </p>
+        <p className="text-gray-500 mt-2 text-xs">Click fields to edit live.</p>
       </div>
 
       {/* CENTER */}
       <div className="flex-1 p-6 bg-[#0f172a] border-r border-gray-800 flex flex-col min-h-0">
         <div className="max-w-3xl flex flex-col min-h-0 flex-1">
+          {/* Lead note input stays (this is NOT AI call overview) */}
           <h3 className="text-lg font-bold mb-2">Add a Note</h3>
 
           <div className="rounded-lg mb-2 bg-[#0f172a] border border-white/10">
@@ -561,7 +588,6 @@ export default function LeadProfileDial() {
             />
           </div>
 
-          {/* Compact, symmetrical button row */}
           <div className="flex items-center gap-2 mb-4">
             <button
               onClick={handleSaveNote}
@@ -596,11 +622,40 @@ export default function LeadProfileDial() {
             </button>
           </div>
 
+          {/* ✅ Close-style AI Call Overview (middle panel) */}
+          <div className="mb-4 bg-[#0b1220] border border-white/10 rounded p-3">
+            <div className="flex items-center justify-between mb-1">
+              <h3 className="text-lg font-bold">AI Call Overview</h3>
+              {callsLoading ? <span className="text-xs text-gray-400">Loading…</span> : null}
+            </div>
+
+            {!latestAiCall ? (
+              <p className="text-gray-400 text-sm">No AI call overview yet for this lead.</p>
+            ) : aiOverviewBullets.length === 0 ? (
+              <p className="text-gray-400 text-sm">
+                AI call found, but no structured overview is available yet.
+              </p>
+            ) : (
+              <ul className="mt-2 space-y-1">
+                {aiOverviewBullets.map((b, idx) => (
+                  <li key={idx} className="text-sm text-gray-200 flex gap-2">
+                    <span className="text-gray-400">•</span>
+                    <span>{b}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            {latestAiCall?.startedAt ? (
+              <div className="mt-2 text-xs text-gray-500">
+                Based on most recent AI call • {fmtDateTime(latestAiCall.startedAt)}
+              </div>
+            ) : null}
+          </div>
+
           <div className="flex items-center justify-between">
             <h3 className="text-lg font-bold mb-2">Interaction History</h3>
-            {histLoading ? (
-              <span className="text-xs text-gray-400">Loading…</span>
-            ) : null}
+            {histLoading ? <span className="text-xs text-gray-400">Loading…</span> : null}
           </div>
 
           <div className="bg-[#0b1220] border border-white/10 rounded p-3 flex-1 min-h-0 overflow-y-auto">
@@ -608,94 +663,14 @@ export default function LeadProfileDial() {
               <p className="text-gray-400">No interactions yet.</p>
             ) : (
               historyLines.map((item, idx) => (
-                <div
-                  key={idx}
-                  className="border-b border-white/10 py-2 text-sm"
-                >
+                <div key={idx} className="border-b border-white/10 py-2 text-sm">
                   {item}
                 </div>
               ))
             )}
           </div>
 
-          {/* Recent Calls & Recordings */}
-          <div className="mt-4 bg-[#0b1220] border border-white/10 rounded p-3">
-            <div className="flex items-center justify-between mb-1">
-              <h3 className="text-lg font-bold">Recent Calls & Recordings</h3>
-              {callsLoading ? (
-                <span className="text-xs text-gray-400">Loading…</span>
-              ) : null}
-            </div>
-            {calls.length === 0 ? (
-              <p className="text-gray-400 text-sm">
-                No calls recorded yet for this lead.
-              </p>
-            ) : (
-              <div className="space-y-3 max-h-64 overflow-y-auto">
-                {calls
-                  .slice()
-                  .sort((a, b) => {
-                    const da = new Date(a.startedAt || a.completedAt || 0).getTime();
-                    const db = new Date(b.startedAt || b.completedAt || 0).getTime();
-                    return db - da;
-                  })
-                  .map((call) => {
-                    const ts = fmtDateTime(
-                      call.startedAt || call.completedAt || ""
-                    );
-                    const dirLabel =
-                      call.direction === "inbound"
-                        ? "Inbound"
-                        : call.direction === "outbound"
-                        ? "Outbound"
-                        : "Call";
-                    const durLabel = fmtDuration(
-                      call.talkTime ?? call.duration
-                    );
-                    const isAI =
-                      call.hasAI || !!call.aiSummary || !!call.aiSentiment;
-                    return (
-                      <div
-                        key={call.id || call.callSid}
-                        className="border-b border-white/10 pb-2 last:border-b-0 text-sm"
-                      >
-                        <div className="flex items-center justify-between">
-                          <div className="flex flex-col">
-                            <span className="font-semibold">
-                              {dirLabel}
-                              {isAI ? " • 🤖 AI Dialer" : ""}
-                            </span>
-                            <span className="text-xs text-gray-400">
-                              {ts}
-                              {durLabel ? ` • ${durLabel}` : ""}
-                            </span>
-                          </div>
-                        </div>
-
-                        {call.aiSummary && (
-                          <p className="mt-1 text-xs text-gray-300">
-                            {call.aiSummary}
-                          </p>
-                        )}
-
-                        {call.recordingUrl && (
-                          <div className="mt-2">
-                            <audio
-                              controls
-                              className="w-full"
-                              preload="none"
-                            >
-                              <source src={call.recordingUrl} />
-                              Your browser does not support the audio element.
-                            </audio>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-              </div>
-            )}
-          </div>
+          {/* ✅ Removed: Recent Calls & Recordings (recordings live ONLY in right panel) */}
 
           <div className="mt-4">
             <button
@@ -703,8 +678,7 @@ export default function LeadProfileDial() {
                 try {
                   router.replace(LEADS_URL);
                 } catch {
-                  if (typeof window !== "undefined")
-                    window.location.replace(LEADS_URL);
+                  if (typeof window !== "undefined") window.location.replace(LEADS_URL);
                 }
               }}
               className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded"
@@ -722,9 +696,7 @@ export default function LeadProfileDial() {
             <CallPanelClose
               leadId={lead.id}
               userHasAI={userHasAI}
-              defaultFromNumber={
-                process.env.NEXT_PUBLIC_DEFAULT_FROM as string | undefined
-              }
+              defaultFromNumber={process.env.NEXT_PUBLIC_DEFAULT_FROM as string | undefined}
               onOpenCall={(callId) => router.push(`/calls/${callId}`)}
             />
           ) : null}
@@ -734,35 +706,25 @@ export default function LeadProfileDial() {
       {/* Enroll Modal */}
       {enrollOpen ? (
         <div className="fixed inset-0 z-[70] flex items-center justify-center">
-          <div
-            className="absolute inset-0 bg-black/60"
-            onClick={() => setEnrollOpen(false)}
-          />
+          <div className="absolute inset-0 bg-black/60" onClick={() => setEnrollOpen(false)} />
           <div className="relative w-full max-w-md mx-4 rounded-lg border border-white/10 bg-[#0f172a] p-4 shadow-xl">
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-lg font-bold">Enroll in Drip</h3>
-              <button
-                onClick={() => setEnrollOpen(false)}
-                className="text-gray-300 hover:text-white"
-              >
+              <button onClick={() => setEnrollOpen(false)} className="text-gray-300 hover:text-white">
                 ✕
               </button>
             </div>
 
             <div className="space-y-3">
               <div>
-                <label className="block text-sm text-gray-300 mb-1">
-                  Campaign
-                </label>
+                <label className="block text-sm text-gray-300 mb-1">Campaign</label>
                 <select
                   value={selectedCampaignId}
                   onChange={(e) => setSelectedCampaignId(e.target.value)}
                   className="w-full bg-[#1e293b] text-white border border-white/10 rounded p-2"
                 >
                   <option value="">
-                    {campaignsLoading
-                      ? "Loading…"
-                      : "-- Select a campaign --"}
+                    {campaignsLoading ? "Loading…" : "-- Select a campaign --"}
                   </option>
                   {campaigns.map((c) => (
                     <option key={c._id} value={c._id}>
@@ -774,8 +736,7 @@ export default function LeadProfileDial() {
 
               <div>
                 <label className="block text-sm text-gray-300 mb-1">
-                  Optional Start Time{" "}
-                  <span className="text-gray-500">(local)</span>
+                  Optional Start Time <span className="text-gray-500">(local)</span>
                 </label>
                 <input
                   type="datetime-local"
@@ -784,17 +745,13 @@ export default function LeadProfileDial() {
                   className="w-full bg-[#1e293b] text-white border border-white/10 rounded p-2"
                 />
                 <p className="text-xs text-gray-500 mt-1">
-                  Leave blank to start immediately; scheduler will handle
-                  timing.
+                  Leave blank to start immediately; scheduler will handle timing.
                 </p>
               </div>
             </div>
 
             <div className="mt-4 flex items-center justify-end gap-2">
-              <button
-                onClick={() => setEnrollOpen(false)}
-                className="px-3 py-2 rounded bg-gray-700 hover:bg-gray-600"
-              >
+              <button onClick={() => setEnrollOpen(false)} className="px-3 py-2 rounded bg-gray-700 hover:bg-gray-600">
                 Cancel
               </button>
               <button
@@ -812,26 +769,18 @@ export default function LeadProfileDial() {
       {/* Unenroll Modal */}
       {unenrollOpen ? (
         <div className="fixed inset-0 z-[70] flex items-center justify-center">
-          <div
-            className="absolute inset-0 bg-black/60"
-            onClick={() => setUnenrollOpen(false)}
-          />
+          <div className="absolute inset-0 bg-black/60" onClick={() => setUnenrollOpen(false)} />
           <div className="relative w-full max-w-md mx-4 rounded-lg border border-white/10 bg-[#0f172a] p-4 shadow-xl">
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-lg font-bold">Remove from Drip</h3>
-              <button
-                onClick={() => setUnenrollOpen(false)}
-                className="text-gray-300 hover:text-white"
-              >
+              <button onClick={() => setUnenrollOpen(false)} className="text-gray-300 hover:text-white">
                 ✕
               </button>
             </div>
 
             <div className="space-y-3">
               <div>
-                <label className="block text-sm text-gray-300 mb-1">
-                  Active Campaign
-                </label>
+                <label className="block text-sm text-gray-300 mb-1">Active Campaign</label>
                 <select
                   value={removeCampaignId}
                   onChange={(e) => setRemoveCampaignId(e.target.value)}
@@ -857,10 +806,7 @@ export default function LeadProfileDial() {
             </div>
 
             <div className="mt-4 flex items-center justify-end gap-2">
-              <button
-                onClick={() => setUnenrollOpen(false)}
-                className="px-3 py-2 rounded bg-gray-700 hover:bg-gray-600"
-              >
+              <button onClick={() => setUnenrollOpen(false)} className="px-3 py-2 rounded bg-gray-700 hover:bg-gray-600">
                 Cancel
               </button>
               <button

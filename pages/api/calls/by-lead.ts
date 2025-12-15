@@ -13,31 +13,18 @@ function toInt(v: string | string[] | undefined, d = 25) {
   return Number.isFinite(n) && n > 0 ? n : d;
 }
 
-export default async function handler(
-  req: NextApiRequest,
-  res: NextApiResponse
-) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "GET")
     return res.status(405).json({ message: "Method not allowed" });
 
-  // Cast to any so TS stops complaining about session.user
-  const session = (await getServerSession(
-    req,
-    res,
-    authOptions as any
-  )) as any;
+  const session = (await getServerSession(req, res, authOptions as any)) as any;
   const requesterEmail: string | undefined = session?.user?.email
     ? String(session.user.email).toLowerCase()
     : undefined;
 
-  if (!requesterEmail)
-    return res.status(401).json({ message: "Unauthorized" });
+  if (!requesterEmail) return res.status(401).json({ message: "Unauthorized" });
 
-  const {
-    leadId,
-    page = "1",
-    pageSize = "25",
-  } = req.query as {
+  const { leadId, page = "1", pageSize = "25" } = req.query as {
     leadId?: string;
     page?: string;
     pageSize?: string;
@@ -51,14 +38,10 @@ export default async function handler(
     const requester = await getUserByEmail(requesterEmail);
     const isAdmin = !!requester && (requester as any).role === "admin";
 
-    // Ensure lead belongs to requester (unless admin)
     const lead: any = await (Lead as any).findById(leadId).lean();
     if (!lead) return res.status(404).json({ message: "Lead not found" });
 
-    if (
-      !isAdmin &&
-      String(lead.userEmail || "").toLowerCase() !== requesterEmail
-    ) {
+    if (!isAdmin && String(lead.userEmail || "").toLowerCase() !== requesterEmail) {
       return res.status(403).json({ message: "Forbidden" });
     }
 
@@ -66,7 +49,6 @@ export default async function handler(
     const s = Math.min(100, Math.max(1, toInt(pageSize, 25)));
     const skip = (p - 1) * s;
 
-    // ✅ CRITICAL FIX: match both string and ObjectId forms
     const leadIdStr = String(leadId);
     const leadIdObj = Types.ObjectId.isValid(leadIdStr)
       ? new Types.ObjectId(leadIdStr)
@@ -87,23 +69,33 @@ export default async function handler(
       (Call as any).countDocuments(q),
     ]);
 
-    const mapped = (rows as any[]).map((c: any) => ({
-      id: String(c._id),
-      callSid: c.callSid,
-      userEmail: c.userEmail,
-      leadId: c.leadId ? String(c.leadId) : undefined,
-      direction: c.direction,
-      startedAt: c.startedAt,
-      completedAt: c.completedAt,
-      duration: c.duration ?? c.recordingDuration,
-      talkTime: c.talkTime,
-      recordingUrl: c.recordingUrl || undefined,
-      hasRecording: !!c.recordingUrl,
-      aiSummary: c.aiSummary || undefined,
-      aiActionItems: Array.isArray(c.aiActionItems) ? c.aiActionItems : [],
-      aiSentiment: c.aiSentiment || undefined,
-      hasAI: !!c.aiSummary,
-    }));
+    const mapped = (rows as any[]).map((c: any) => {
+      const id = String(c._id);
+      const hasRecordingSid = !!c.recordingSid;
+
+      return {
+        id,
+        callSid: c.callSid,
+        userEmail: c.userEmail,
+        leadId: c.leadId ? String(c.leadId) : undefined,
+        direction: c.direction,
+        startedAt: c.startedAt,
+        completedAt: c.completedAt,
+        duration: c.duration ?? c.recordingDuration,
+        talkTime: c.talkTime,
+
+        // ✅ Always prefer proxied playback when recordingSid exists (fixes 00:00 / CORS/auth)
+        recordingUrl: hasRecordingSid
+          ? `/api/recordings/proxy?callId=${encodeURIComponent(id)}`
+          : c.recordingUrl || undefined,
+
+        hasRecording: hasRecordingSid || !!c.recordingUrl,
+        aiSummary: c.aiSummary || undefined,
+        aiActionItems: Array.isArray(c.aiActionItems) ? c.aiActionItems : [],
+        aiSentiment: c.aiSentiment || undefined,
+        hasAI: !!c.aiSummary,
+      };
+    });
 
     res.setHeader("Cache-Control", "no-store");
     return res.status(200).json({ page: p, pageSize: s, total, rows: mapped });

@@ -1,14 +1,15 @@
 // pages/api/recordings/proxy.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
-import { authOptions } from "../auth/[...nextauth]";
+import { authOptions } from "./auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import Call from "@/models/Call";
 import { getUserByEmail } from "@/models/User";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
 
-// ✅ Fixes "00:00 / blank" Twilio recording playback by proxying audio through our server.
-// ✅ Does NOT touch AI dialer audio streaming (<Stream>, voice server, cutout guards, etc).
+// ✅ This endpoint fixes "00:00 / blank recording" playback by proxying Twilio recording media
+// through our server (so the browser doesn't have to authenticate to Twilio or fight CORS).
+// It does NOT touch AI dialer audio streaming (Twilio <Stream> / voice server) in any way.
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "GET") {
@@ -59,27 +60,32 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return;
     }
 
-    // ✅ Per-tenant Twilio routing (subaccount isolation)
+    // ✅ Per-tenant: use the call owner's Twilio context (subaccount routing via getClientForUser)
     const { client } = await getClientForUser(callOwnerEmail);
 
-    // Fetch recording so we can derive the correct media path
+    // Fetch recording to get its media URI (this ensures we’re pointing at the real resource)
     const rec: any = await (client as any).recordings(recordingSid).fetch();
+
+    // Twilio returns something like:
+    //   /2010-04-01/Accounts/{AccountSid}/Recordings/{RecordingSid}.json
     const uri: string = String(rec?.uri || "").trim();
     if (!uri) {
       res.status(404).json({ message: "Recording URI missing from Twilio" });
       return;
     }
 
-    // Media URL is same path without .json plus .mp3
+    // Media URL is the same URI without .json, plus .mp3
     const mediaPath = uri.replace(/\.json$/i, "") + ".mp3";
 
-    // Twilio client.request handles auth; browser never hits Twilio directly
+    // Use Twilio client.request so auth is handled internally (no leaking tokens to browser)
     const resp: any = await (client as any).request({
       method: "GET",
-      uri: mediaPath,
+      uri: mediaPath, // Twilio client supports relative API URIs
     });
 
     const body = resp?.body;
+
+    // body may be Buffer or string depending on twilio helper internals
     const buf: Buffer =
       Buffer.isBuffer(body) ? body : Buffer.from(body || "", "binary");
 
@@ -95,6 +101,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     res.setHeader("Cache-Control", "no-store");
     res.setHeader("Content-Type", "audio/mpeg");
     res.setHeader("Content-Length", String(buf.length));
+
+    // Optional: nice filename
     res.setHeader(
       "Content-Disposition",
       `inline; filename="recording-${recordingSid}.mp3"`
