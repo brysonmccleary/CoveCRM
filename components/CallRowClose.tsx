@@ -46,9 +46,7 @@ function badgeClass(kind: "inbound" | "outbound") {
     : "bg-sky-900/40 text-sky-300 border border-sky-700/40";
 }
 
-export default function CallRowClose({
-  row,
-}: CallRowCloseProps): JSX.Element {
+export default function CallRowClose({ row }: CallRowCloseProps) {
   const hasRecording = !!row.recordingUrl || row.hasRecording;
   const durationLabel = useMemo(() => fmtSecs(row.duration), [row.duration]);
   const talkTimeLabel = useMemo(() => fmtSecs(row.talkTime), [row.talkTime]);
