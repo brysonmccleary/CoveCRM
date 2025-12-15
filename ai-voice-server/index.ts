@@ -546,10 +546,20 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
 
     const systemPrompt = buildSystemPrompt(state.context!);
 
+    // ✅ Hard lock to English WITHOUT editing buildSystemPrompt():
+    // We prepend a strict English-only header to the session instructions.
+    const ENGLISH_LOCK = `
+IMPORTANT LANGUAGE LOCK (NON-NEGOTIABLE)
+- You MUST speak ONLY natural U.S. English for the entire call.
+- Do NOT speak Spanish, Chinese, or any other language.
+- Do NOT use bilingual greetings.
+- Only switch languages if (and only if) the lead explicitly asks you to switch languages.
+`.trim();
+
     const sessionUpdate = {
       type: "session.update",
       session: {
-        instructions: systemPrompt,
+        instructions: `${ENGLISH_LOCK}\n\n${systemPrompt}`,
 
         // Audio-only session
         modalities: ["audio"],
@@ -603,7 +613,11 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
 
           // If call already ended / socket closed / another response started, do nothing.
           const liveState = calls.get(ws);
-          if (!liveState || !liveState.openAiWs || liveState.waitingForResponse) {
+          if (
+            !liveState ||
+            !liveState.openAiWs ||
+            liveState.waitingForResponse
+          ) {
             return;
           }
 
