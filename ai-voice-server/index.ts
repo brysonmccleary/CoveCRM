@@ -545,25 +545,22 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
     state.openAiReady = true;
 
     const systemPrompt = buildSystemPrompt(state.context!);
+    const selectedVoiceId = state.context!.voiceProfile.openAiVoiceId || "alloy";
 
-    // ✅ Hard lock to English WITHOUT editing buildSystemPrompt():
-    // We prepend a strict English-only header to the session instructions.
-    const ENGLISH_LOCK = `
-IMPORTANT LANGUAGE LOCK (NON-NEGOTIABLE)
-- You MUST speak ONLY natural U.S. English for the entire call.
-- Do NOT speak Spanish, Chinese, or any other language.
-- Do NOT use bilingual greetings.
-- Only switch languages if (and only if) the lead explicitly asks you to switch languages.
-`.trim();
+    console.log("[AI-VOICE] OpenAI session voice selected:", {
+      voiceId: selectedVoiceId,
+      voiceKey: state.context?.voiceKey,
+      aiName: state.context?.voiceProfile?.aiName,
+    });
 
     const sessionUpdate = {
       type: "session.update",
       session: {
-        instructions: `${ENGLISH_LOCK}\n\n${systemPrompt}`,
+        instructions: systemPrompt,
 
         // Audio-only session
         modalities: ["audio"],
-        voice: state.context!.voiceProfile.openAiVoiceId || "alloy",
+        voice: selectedVoiceId,
 
         // AUDIO FORMATS (UNCHANGED)
         input_audio_format: "g711_ulaw",
@@ -628,8 +625,18 @@ IMPORTANT LANGUAGE LOCK (NON-NEGOTIABLE)
             JSON.stringify({
               type: "response.create",
               response: {
+                // ✅ Voice lock: ensure the chosen voice is used even on the response itself
+                voice: selectedVoiceId,
+
+                // ✅ Stop-talking fix: hard cap output so it cannot ramble forever
+                max_output_tokens: 160,
+
+                // ✅ English lock without changing buildSystemPrompt()
                 instructions:
-                  "Begin the call now and greet the lead following the call rules. Keep it to one or two short sentences and end with a simple question like 'How's your day going so far?' Then stop speaking and wait for the lead to respond before continuing.",
+                  "Speak ONLY clear U.S. English. " +
+                  "Begin the call now and greet the lead following the call rules. " +
+                  "Keep it to one or two short sentences and end with a simple question like 'How's your day going so far?' " +
+                  "Then stop speaking and wait for the lead to respond before continuing.",
               },
             })
           );
@@ -857,11 +864,24 @@ async function handleBookAppointmentIntent(state: CallState, control: any) {
       if (!state.waitingForResponse) {
         state.waitingForResponse = true;
         state.aiSpeaking = true;
+
+        const selectedVoiceId = ctx.voiceProfile.openAiVoiceId || "alloy";
+
         state.openAiWs.send(
           JSON.stringify({
             type: "response.create",
             response: {
-              instructions: `Explain to the lead, in natural language, that their appointment is confirmed for ${humanReadable}. Then briefly restate what the appointment will cover and end the call politely.`,
+              // ✅ Voice lock: ensure chosen voice is used
+              voice: selectedVoiceId,
+
+              // ✅ Stop-talking fix: cap output so it ends cleanly
+              max_output_tokens: 200,
+
+              // ✅ English lock without touching buildSystemPrompt()
+              instructions:
+                "Speak ONLY clear U.S. English. " +
+                `Explain to the lead, in natural language, that their appointment is confirmed for ${humanReadable}. ` +
+                "Then briefly restate what the appointment will cover and end the call politely.",
             },
           })
         );
