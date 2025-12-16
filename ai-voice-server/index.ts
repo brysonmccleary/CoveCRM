@@ -265,8 +265,9 @@ function ensureOutboundPacer(twilioWs: WebSocket, state: CallState) {
         // No full frame available right now.
         // If OpenAI is done and we have drained everything meaningful, stop pacer and drop any tiny remainder.
         if (live.outboundOpenAiDone) {
-          // flush remainder if any full frames aren't possible; drop <160 bytes remainder
+          // ✅ Minimal fix: drop remainder (<160) and fully stop pacer so aiSpeaking can't get stuck true
           if ((live.outboundMuLawBuffer?.length || 0) < TWILIO_FRAME_BYTES) {
+            live.outboundMuLawBuffer = Buffer.alloc(0);
             stopOutboundPacer(twilioWs, live, "buffer drained after OpenAI done");
             setAiSpeaking(live, false, "pacer drained");
           }
@@ -280,7 +281,11 @@ function ensureOutboundPacer(twilioWs: WebSocket, state: CallState) {
   console.log("[AI-VOICE][PACE] started 20ms outbound pusher");
 }
 
-function stopOutboundPacer(twilioWs: WebSocket, state: CallState, reason: string) {
+function stopOutboundPacer(
+  twilioWs: WebSocket,
+  state: CallState,
+  reason: string
+) {
   if (state.outboundPacerTimer) {
     try {
       clearInterval(state.outboundPacerTimer);
@@ -566,15 +571,30 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
     state.debugLoggedMissingTrack = true;
   }
 
+  // ✅ Always ignore explicit outbound frames
   if (track === "outbound") {
     return;
   }
 
-  // Block any inbound audio while AI is talking OR response is in-flight
-  if (state.aiSpeaking === true || state.waitingForResponse === true) {
+  // ✅ CRITICAL CUTOUT GUARD:
+  // If the AI is speaking OR a response is in-flight OR we're actively draining outbound audio,
+  // NEVER forward Twilio frames to OpenAI (prevents OpenAI "hearing itself" / barge-in interruptions).
+  const outboundInProgress =
+    !!state.outboundPacerTimer ||
+    (state.outboundMuLawBuffer?.length || 0) > 0 ||
+    !!state.outboundOpenAiDone === false && !!state.outboundPacerTimer;
+
+  if (
+    state.aiSpeaking === true ||
+    state.waitingForResponse === true ||
+    outboundInProgress
+  ) {
     return;
   }
 
+  // ✅ If track is missing, we treat it as "unknown".
+  // We still allow it ONLY when AI output is not in progress (guard above),
+  // otherwise it can include echo/outbound and cause cutouts.
   state.userAudioMsBuffered = (state.userAudioMsBuffered || 0) + 20;
 
   if (!state.debugLoggedFirstMedia) {
@@ -899,11 +919,12 @@ async function handleOpenAiEvent(
     // mark OpenAI done; pacer will drain buffer then drop remainder and set aiSpeaking false
     state.outboundOpenAiDone = true;
 
-    // If there is no pacer running / nothing buffered, clear aiSpeaking immediately
+    // ✅ If buffer is already below 1 full frame, immediately clear + stop pacer + clear aiSpeaking
     const buffered = state.outboundMuLawBuffer?.length || 0;
-    if (!state.outboundPacerTimer || buffered < TWILIO_FRAME_BYTES) {
-      setAiSpeaking(state, false, `OpenAI ${t} (no buffered audio)`);
-      stopOutboundPacer(twilioWs, state, "OpenAI done + no buffer");
+    if (buffered < TWILIO_FRAME_BYTES) {
+      state.outboundMuLawBuffer = Buffer.alloc(0);
+      stopOutboundPacer(twilioWs, state, "OpenAI done + <1 frame buffered");
+      setAiSpeaking(state, false, `OpenAI ${t} (buffer < 1 frame)`);
     }
   }
 
