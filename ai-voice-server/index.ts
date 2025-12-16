@@ -139,6 +139,27 @@ type CallState = {
 
   // ✅ Minimal diagnostics / reliability
   debugLoggedMissingTrack?: boolean;
+
+  /**
+   * ✅ OUTBOUND PACING (core fix)
+   * We MUST pace Twilio outbound audio in real-time 20ms frames.
+   * 8k μ-law => 160 bytes per 20ms frame.
+   */
+  outboundMulawQueue?: Buffer[]; // raw μ-law bytes chunks (NOT base64)
+  outboundMulawQueueOffset?: number; // read offset into first chunk
+  outboundMulawBytesQueued?: number; // total bytes queued (for diagnostics + drain checks)
+  outboundPacerTimer?: NodeJS.Timeout;
+
+  // ✅ State markers to avoid cutouts caused by premature aiSpeaking=false
+  openAiResponseDone?: boolean; // OpenAI finished response generation (but Twilio may still be draining buffer)
+
+  // ✅ Diagnostics (no spam)
+  paceFramesSentThisSec?: number;
+  paceLastLogAtMs?: number;
+  paceFirstFrameLogged?: boolean;
+
+  deltaBytesMaxThisSec?: number;
+  deltaLastLogAtMs?: number;
 };
 
 const calls = new Map<WebSocket, CallState>();
@@ -216,6 +237,202 @@ function setWaitingForResponse(state: CallState, next: boolean, reason: string) 
   if (prev === next) return;
   state.waitingForResponse = next;
   console.log("[AI-VOICE] waitingForResponse =", next, "|", reason);
+}
+
+/**
+ * ✅ OUTBOUND PACING HELPERS (core fix)
+ */
+const TWILIO_FRAME_MS = 20;
+const MULAW_8K_BYTES_PER_20MS = 160;
+
+function ensureOutboundPacingState(state: CallState) {
+  if (!state.outboundMulawQueue) state.outboundMulawQueue = [];
+  if (typeof state.outboundMulawQueueOffset !== "number")
+    state.outboundMulawQueueOffset = 0;
+  if (typeof state.outboundMulawBytesQueued !== "number")
+    state.outboundMulawBytesQueued = 0;
+
+  if (typeof state.openAiResponseDone !== "boolean")
+    state.openAiResponseDone = false;
+
+  if (typeof state.paceFramesSentThisSec !== "number")
+    state.paceFramesSentThisSec = 0;
+  if (typeof state.paceLastLogAtMs !== "number")
+    state.paceLastLogAtMs = Date.now();
+
+  if (typeof state.deltaBytesMaxThisSec !== "number")
+    state.deltaBytesMaxThisSec = 0;
+  if (typeof state.deltaLastLogAtMs !== "number")
+    state.deltaLastLogAtMs = Date.now();
+}
+
+function enqueueOutboundMulawBytes(state: CallState, chunk: Buffer) {
+  if (!chunk || chunk.length <= 0) return;
+  ensureOutboundPacingState(state);
+  state.outboundMulawQueue!.push(chunk);
+  state.outboundMulawBytesQueued = (state.outboundMulawBytesQueued || 0) + chunk.length;
+}
+
+function tryDequeueMulawFrame(state: CallState, nBytes: number): Buffer | null {
+  ensureOutboundPacingState(state);
+
+  const total = state.outboundMulawBytesQueued || 0;
+  if (total < nBytes) return null;
+
+  const out = Buffer.alloc(nBytes);
+  let outWritten = 0;
+
+  while (outWritten < nBytes) {
+    const q = state.outboundMulawQueue!;
+    if (q.length === 0) break;
+
+    const first = q[0];
+    const off = state.outboundMulawQueueOffset || 0;
+
+    const available = first.length - off;
+    if (available <= 0) {
+      q.shift();
+      state.outboundMulawQueueOffset = 0;
+      continue;
+    }
+
+    const need = nBytes - outWritten;
+    const take = Math.min(need, available);
+
+    first.copy(out, outWritten, off, off + take);
+    outWritten += take;
+
+    state.outboundMulawQueueOffset = off + take;
+
+    if ((state.outboundMulawQueueOffset || 0) >= first.length) {
+      q.shift();
+      state.outboundMulawQueueOffset = 0;
+    }
+  }
+
+  state.outboundMulawBytesQueued = Math.max(
+    0,
+    (state.outboundMulawBytesQueued || 0) - nBytes
+  );
+
+  return outWritten === nBytes ? out : null;
+}
+
+function stopOutboundPacer(state: CallState, reason: string) {
+  if (state.outboundPacerTimer) {
+    try {
+      clearInterval(state.outboundPacerTimer);
+    } catch {}
+    state.outboundPacerTimer = undefined;
+    console.log("[AI-VOICE][PACE] stopped |", reason);
+  }
+
+  // Clear buffers
+  state.outboundMulawQueue = [];
+  state.outboundMulawQueueOffset = 0;
+  state.outboundMulawBytesQueued = 0;
+
+  state.paceFramesSentThisSec = 0;
+  state.paceLastLogAtMs = Date.now();
+  state.paceFirstFrameLogged = false;
+
+  state.deltaBytesMaxThisSec = 0;
+  state.deltaLastLogAtMs = Date.now();
+
+  state.openAiResponseDone = false;
+}
+
+function maybeLogPacingOncePerSecond(state: CallState) {
+  ensureOutboundPacingState(state);
+
+  const now = Date.now();
+  const last = state.paceLastLogAtMs || now;
+  if (now - last < 1000) return;
+
+  const bufferedBytes = state.outboundMulawBytesQueued || 0;
+  const frames = state.paceFramesSentThisSec || 0;
+
+  console.log(
+    `[AI-VOICE][PACE] bufferedBytes=${bufferedBytes} framesSentLastSec=${frames} openAiDone=${!!state.openAiResponseDone} aiSpeaking=${!!state.aiSpeaking} waiting=${!!state.waitingForResponse}`
+  );
+
+  state.paceFramesSentThisSec = 0;
+  state.paceLastLogAtMs = now;
+
+  // Also emit the "delta chunk size" proof once per second (max of the last second)
+  const maxDelta = state.deltaBytesMaxThisSec || 0;
+  if (maxDelta > 0) {
+    console.log(`[AI-VOICE][DELTA] maxMulawBytesLenLastSec=${maxDelta}`);
+  }
+  state.deltaBytesMaxThisSec = 0;
+  state.deltaLastLogAtMs = now;
+}
+
+function startOutboundPacerIfNeeded(
+  twilioWs: WebSocket,
+  state: CallState,
+  reason: string
+) {
+  ensureOutboundPacingState(state);
+
+  if (state.outboundPacerTimer) return;
+
+  console.log("[AI-VOICE][PACE] starting 20ms outbound pusher |", reason);
+
+  state.outboundPacerTimer = setInterval(() => {
+    try {
+      // If socket is gone, stop pacer.
+      // (We still rely on handleStop/ws close for cleanup, but this prevents orphan loops.)
+      if ((twilioWs as any).readyState !== WebSocket.OPEN) {
+        stopOutboundPacer(state, "twilio ws not open");
+        return;
+      }
+
+      // Try to send exactly one 20ms frame if available.
+      const frame = tryDequeueMulawFrame(state, MULAW_8K_BYTES_PER_20MS);
+      if (frame) {
+        const payloadB64 = frame.toString("base64");
+
+        if (!state.paceFirstFrameLogged) {
+          state.paceFirstFrameLogged = true;
+          console.log("[AI-VOICE][PACE] first outbound frame", {
+            frameBytes: frame.length, // should be 160
+            payloadBase64Len: payloadB64.length,
+          });
+        }
+
+        const twilioMediaMsg = {
+          event: "media",
+          streamSid: state.streamSid,
+          media: {
+            payload: payloadB64,
+            track: "outbound",
+          },
+        };
+
+        twilioWs.send(JSON.stringify(twilioMediaMsg));
+        state.paceFramesSentThisSec = (state.paceFramesSentThisSec || 0) + 1;
+      }
+
+      // ✅ Drain logic:
+      // Do NOT set aiSpeaking=false when OpenAI says done if we still have buffered audio.
+      const bufferedBytes = state.outboundMulawBytesQueued || 0;
+      if (state.openAiResponseDone === true && bufferedBytes === 0) {
+        // At this point, OpenAI is done AND Twilio buffer is drained.
+        // Safe to mark AI done speaking.
+        if (state.aiSpeaking === true) {
+          setAiSpeaking(state, false, "drained outbound buffer after OpenAI done");
+        }
+        // Reset marker so it doesn't affect next response.
+        state.openAiResponseDone = false;
+      }
+
+      // Diagnostics (once per second)
+      maybeLogPacingOncePerSecond(state);
+    } catch (err: any) {
+      console.error("[AI-VOICE][PACE] pusher error:", err?.message || err);
+    }
+  }, TWILIO_FRAME_MS);
 }
 
 /**
@@ -340,6 +557,19 @@ wss.on("connection", (ws: WebSocket) => {
     openAiReady: false,
     openAiConfigured: false,
     debugLoggedMissingTrack: false,
+
+    // ✅ pacing init
+    outboundMulawQueue: [],
+    outboundMulawQueueOffset: 0,
+    outboundMulawBytesQueued: 0,
+    openAiResponseDone: false,
+
+    paceFramesSentThisSec: 0,
+    paceLastLogAtMs: Date.now(),
+    paceFirstFrameLogged: false,
+
+    deltaBytesMaxThisSec: 0,
+    deltaLastLogAtMs: Date.now(),
   };
   calls.set(ws, state);
 
@@ -369,6 +599,12 @@ wss.on("connection", (ws: WebSocket) => {
   ws.on("close", () => {
     console.log("[AI-VOICE] WebSocket closed");
     const state = calls.get(ws);
+
+    // ✅ Stop outbound pacer + clear buffers
+    if (state) {
+      stopOutboundPacer(state, "twilio ws close");
+    }
+
     if (state?.openAiWs) {
       try {
         state.openAiWs.close();
@@ -409,6 +645,11 @@ async function handleStart(ws: WebSocket, msg: TwilioStartEvent) {
   state.debugLoggedFirstMedia = false;
   state.debugLoggedFirstOutputAudio = false;
   state.debugLoggedMissingTrack = false;
+
+  // ✅ Reset pacing buffers for new call
+  ensureOutboundPacingState(state);
+  stopOutboundPacer(state, "start/reset (ensure clean state)");
+  ensureOutboundPacingState(state);
 
   const custom = msg.start.customParameters || {};
   const sessionId = custom.sessionId;
@@ -537,6 +778,9 @@ async function handleStop(ws: WebSocket, msg: TwilioStopEvent) {
   console.log(
     `[AI-VOICE] stop: callSid=${msg.stop.callSid}, streamSid=${msg.streamSid}`
   );
+
+  // ✅ Stop outbound pacer immediately on hangup (prevents orphan pacing + any post-hangup sends)
+  stopOutboundPacer(state, "twilio stop");
 
   // COST CONTROL: call is over — don't commit buffers or generate any final OpenAI response.
   // Closing the OpenAI socket avoids extra post-hangup generation and eliminates
@@ -743,9 +987,16 @@ async function handleOpenAiEvent(
           return;
         }
 
+        // ✅ Response lifecycle markers
+        ensureOutboundPacingState(liveState);
+        liveState.openAiResponseDone = false;
+
         setWaitingForResponse(liveState, true, "response.create (greeting)");
         // Key cut-out guard: block inbound immediately, even before first audio delta.
         setAiSpeaking(liveState, true, "response.create (greeting)");
+
+        // ✅ Start pacer immediately (it will simply wait until bytes arrive)
+        startOutboundPacerIfNeeded(twilioWs, liveState, "response.create (greeting)");
 
         liveState.openAiWs.send(
           JSON.stringify({
@@ -762,7 +1013,9 @@ async function handleOpenAiEvent(
     return;
   }
 
-  // ✅ End-of-turn detection (expanded so aiSpeaking doesn't stick / drop incorrectly)
+  // ✅ End-of-turn detection:
+  // OpenAI may say "done" BEFORE Twilio has finished playing buffered audio.
+  // We mark openAiResponseDone=true, and ONLY flip aiSpeaking=false once the pacer drains the buffer.
   const t = String(event?.type || "");
   const isResponseDone =
     t === "response.completed" ||
@@ -781,11 +1034,19 @@ async function handleOpenAiEvent(
       event?.output_item?.content_type === "audio");
 
   if (isResponseDone || isAudioItemDone) {
+    ensureOutboundPacingState(state);
+    state.openAiResponseDone = true;
+
+    // waitingForResponse can be cleared now (OpenAI generation is done),
+    // BUT aiSpeaking must stay true until outbound buffer drains.
     setWaitingForResponse(state, false, `OpenAI ${t}`);
-    setAiSpeaking(state, false, `OpenAI ${t}`);
+
+    // IMPORTANT: Do NOT do setAiSpeaking(false) here.
+    // The pacer will flip aiSpeaking=false only after buffer is empty.
   }
 
-  // AUDIO BACK TO TWILIO (UNCHANGED PATH)
+  // AUDIO BACK TO TWILIO (FORMAT PATH UNCHANGED: OpenAI PCM16 -> μ-law 8k)
+  // ✅ CHANGED DELIVERY: we now BUFFER μ-law BYTES and push exactly 160 bytes/20ms to Twilio.
   if (t === "response.audio.delta" || t === "response.output_audio.delta") {
     // ✅ Ensure aiSpeaking is true as soon as output audio begins
     setAiSpeaking(state, true, `OpenAI ${t} (first/ongoing audio delta)`);
@@ -803,29 +1064,31 @@ async function handleOpenAiEvent(
     } else {
       const mulawBase64 = pcm16ToMulawBase64(payloadBase64);
 
+      // ✅ Diagnostics A: prove the burst size (raw bytes length) (aggregated to avoid spam)
+      const mulawBytesLen = Buffer.from(mulawBase64, "base64").length;
+      ensureOutboundPacingState(state);
+      state.deltaBytesMaxThisSec = Math.max(state.deltaBytesMaxThisSec || 0, mulawBytesLen);
+
       if (!state.debugLoggedFirstOutputAudio) {
-        console.log("[AI-VOICE] Sending first audio chunk to Twilio", {
+        console.log("[AI-VOICE] First OpenAI audio delta received (pre-pacing)", {
           streamSid,
           pcmLength: payloadBase64.length,
-          mulawLength: mulawBase64.length,
+          mulawBase64Len: mulawBase64.length,
+          mulawBytesLen,
         });
         state.debugLoggedFirstOutputAudio = true;
       }
 
-      try {
-        const twilioMediaMsg = {
-          event: "media",
-          streamSid,
-          media: {
-            payload: mulawBase64,
-            track: "outbound",
-          },
-        };
+      // ✅ Start the 20ms pacer if needed
+      startOutboundPacerIfNeeded(twilioWs, state, `OpenAI ${t} (audio delta)`);
 
-        twilioWs.send(JSON.stringify(twilioMediaMsg));
+      // ✅ Append raw μ-law BYTES to our per-call outbound buffer
+      try {
+        const mulawBytes = Buffer.from(mulawBase64, "base64");
+        enqueueOutboundMulawBytes(state, mulawBytes);
       } catch (err: any) {
         console.error(
-          "[AI-VOICE] Error sending audio to Twilio:",
+          "[AI-VOICE] Error buffering outbound μ-law bytes:",
           err?.message || err
         );
       }
@@ -934,6 +1197,10 @@ async function handleBookAppointmentIntent(state: CallState, control: any) {
         "your scheduled appointment time as discussed";
 
       if (!state.waitingForResponse) {
+        // ✅ Response lifecycle markers
+        ensureOutboundPacingState(state);
+        state.openAiResponseDone = false;
+
         setWaitingForResponse(state, true, "response.create (booking confirm)");
         setAiSpeaking(state, true, "response.create (booking confirm)");
 
