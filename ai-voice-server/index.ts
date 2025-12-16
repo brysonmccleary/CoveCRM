@@ -582,7 +582,7 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
   const outboundInProgress =
     !!state.outboundPacerTimer ||
     (state.outboundMuLawBuffer?.length || 0) > 0 ||
-    !!state.outboundOpenAiDone === false && !!state.outboundPacerTimer;
+    (!!state.outboundOpenAiDone === false && !!state.outboundPacerTimer);
 
   if (
     state.aiSpeaking === true ||
@@ -592,9 +592,6 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
     return;
   }
 
-  // ✅ If track is missing, we treat it as "unknown".
-  // We still allow it ONLY when AI output is not in progress (guard above),
-  // otherwise it can include echo/outbound and cause cutouts.
   state.userAudioMsBuffered = (state.userAudioMsBuffered || 0) + 20;
 
   if (!state.debugLoggedFirstMedia) {
@@ -699,22 +696,21 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
 
     const systemPrompt = buildSystemPrompt(state.context!);
 
+    // ✅ HARD ENGLISH LOCK (do not allow Spanish even if lead speaks it)
     const englishLockPrefix = `
-HARD LANGUAGE LOCK (NON-NEGOTIABLE)
+HARD ENGLISH LOCK (NON-NEGOTIABLE)
 - You MUST speak ONLY English (U.S. English).
-- You MUST NOT speak Spanish, Chinese, or any other language under any circumstance unless the lead explicitly requests it.
-- Default language is ALWAYS English.
+- You MUST NOT output ANY Spanish (or any other language) under ANY circumstance.
+- Even if the lead speaks Spanish, you still respond ONLY in English.
+- Do NOT say "Hola", do NOT use bilingual greetings, do NOT translate.
+- If the lead speaks Spanish, respond in English: politely ask if they can speak English and offer to schedule the agent to follow up.
 `.trim();
 
-    // ✅ FIX 1: modalities must be ["audio","text"] (OpenAI rejects ["audio"])
     const sessionUpdate = {
       type: "session.update",
       session: {
         instructions: `${englishLockPrefix}\n\n${systemPrompt}`,
-
-        // ✅ Supported combo
         modalities: ["audio", "text"],
-
         voice: state.context!.voiceProfile.openAiVoiceId || "alloy",
 
         // AUDIO FORMATS (UNCHANGED)
@@ -735,7 +731,6 @@ HARD LANGUAGE LOCK (NON-NEGOTIABLE)
         model: OPENAI_REALTIME_MODEL,
       });
       openAiWs.send(JSON.stringify(sessionUpdate));
-      // ✅ We will ONLY greet after session.updated confirms this applied
     } catch (err: any) {
       console.error(
         "[AI-VOICE] Error sending session.update:",
@@ -791,18 +786,17 @@ async function handleOpenAiEvent(
 
   const t = String(event?.type || "");
 
-  // ✅ FIX 2: Only mark "configured/ready" on session.updated (not session.created)
   if (t === "session.updated" && !state.openAiConfigured) {
     state.openAiConfigured = true;
     state.openAiReady = true;
 
-    // ✅ Diagnostic: confirm what OpenAI thinks voice is after update
     try {
-      console.log("[AI-VOICE] session.updated applied voice:", event?.session?.voice);
+      console.log(
+        "[AI-VOICE] session.updated applied voice:",
+        event?.session?.voice
+      );
     } catch {}
 
-    // ✅ CRITICAL: DO NOT flush pre-ready inbound audio into OpenAI right before greeting.
-    // It often triggers server_vad "speech_started" during greeting, causing cutouts.
     if (state.pendingAudioFrames.length > 0) {
       console.log(
         "[AI-VOICE] Dropping buffered inbound frames before greeting to prevent VAD interrupt:",
@@ -811,12 +805,10 @@ async function handleOpenAiEvent(
       state.pendingAudioFrames = [];
     }
 
-    // ✅ Clear any server-side audio buffer so VAD doesn't think user is speaking during greeting
     try {
       state.openAiWs?.send(JSON.stringify({ type: "input_audio_buffer.clear" }));
     } catch {}
 
-    // Initial greeting – guarded so we don't send multiple
     if (
       !state.waitingForResponse &&
       !state.initialGreetingQueued &&
@@ -844,7 +836,6 @@ async function handleOpenAiEvent(
           return;
         }
 
-        // ✅ reset inbound timer/buffer counter at start of any AI response
         liveState.userAudioMsBuffered = 0;
 
         setWaitingForResponse(liveState, true, "response.create (greeting)");
@@ -855,8 +846,9 @@ async function handleOpenAiEvent(
           JSON.stringify({
             type: "response.create",
             response: {
+              // ✅ reinforce English lock at the response level too
               instructions:
-                "Begin the call now and greet the lead following the call rules. Keep it to one or two short sentences and end with a simple question like 'How's your day going so far?' Then stop speaking and wait for the lead to respond before continuing.",
+                "Speak ONLY English. Begin the call now and greet the lead following the call rules. Keep it to one or two short sentences and end with a simple question like 'How's your day going so far?' Then stop speaking and wait for the lead to respond before continuing.",
             },
           })
         );
@@ -866,7 +858,6 @@ async function handleOpenAiEvent(
     return;
   }
 
-  // ✅ With server_vad + create_response:false, we MUST manually create a response after user speech commits.
   if (t === "input_audio_buffer.committed") {
     if (
       state.openAiWs &&
@@ -874,7 +865,6 @@ async function handleOpenAiEvent(
       !state.waitingForResponse &&
       !state.aiSpeaking
     ) {
-      // ✅ reset inbound counter for the new turn
       state.userAudioMsBuffered = 0;
 
       setWaitingForResponse(state, true, "response.create (user turn)");
@@ -885,8 +875,9 @@ async function handleOpenAiEvent(
         JSON.stringify({
           type: "response.create",
           response: {
+            // ✅ reinforce English lock at the response level too
             instructions:
-              "Respond naturally following all call rules and the script guidance. Keep it short (1–3 sentences), ask one clear question, then stop and wait for the lead to respond.",
+              "Speak ONLY English. Respond naturally following all call rules and the script guidance. Keep it short (1–3 sentences), ask one clear question, then stop and wait for the lead to respond.",
           },
         })
       );
@@ -894,7 +885,6 @@ async function handleOpenAiEvent(
     return;
   }
 
-  // AUDIO BACK TO TWILIO (same conversion path, but paced to 20ms frames)
   if (t === "response.audio.delta" || t === "response.output_audio.delta") {
     setAiSpeaking(state, true, `OpenAI ${t} (audio delta)`);
 
@@ -922,18 +912,15 @@ async function handleOpenAiEvent(
         state.debugLoggedFirstOutputAudio = true;
       }
 
-      // append to outbound buffer
       state.outboundMuLawBuffer = Buffer.concat([
         state.outboundMuLawBuffer || Buffer.alloc(0),
         mulawBytes,
       ]);
 
-      // start pacer if not running
       ensureOutboundPacer(twilioWs, state);
     }
   }
 
-  // ✅ End-of-turn detection
   const isResponseDone =
     t === "response.completed" ||
     t === "response.done" ||
@@ -952,10 +939,8 @@ async function handleOpenAiEvent(
   if (isResponseDone || isAudioItemDone) {
     setWaitingForResponse(state, false, `OpenAI ${t}`);
 
-    // mark OpenAI done; pacer will drain buffer then drop remainder and set aiSpeaking false
     state.outboundOpenAiDone = true;
 
-    // ✅ If buffer is already below 1 full frame, immediately clear + stop pacer + clear aiSpeaking
     const buffered = state.outboundMuLawBuffer?.length || 0;
     if (buffered < TWILIO_FRAME_BYTES) {
       state.outboundMuLawBuffer = Buffer.alloc(0);
@@ -964,7 +949,6 @@ async function handleOpenAiEvent(
     }
   }
 
-  // Control metadata (booking/outcome)
   try {
     const control =
       event?.control ||
@@ -1066,7 +1050,6 @@ async function handleBookAppointmentIntent(state: CallState, control: any) {
         "your scheduled appointment time as discussed";
 
       if (!state.waitingForResponse) {
-        // ✅ reset inbound counter for the new turn
         state.userAudioMsBuffered = 0;
 
         setWaitingForResponse(state, true, "response.create (booking confirm)");
@@ -1077,7 +1060,8 @@ async function handleBookAppointmentIntent(state: CallState, control: any) {
           JSON.stringify({
             type: "response.create",
             response: {
-              instructions: `Explain to the lead, in natural language, that their appointment is confirmed for ${humanReadable}. Then briefly restate what the appointment will cover and end the call politely.`,
+              // ✅ reinforce English lock at the response level too
+              instructions: `Speak ONLY English. Explain to the lead, in natural language, that their appointment is confirmed for ${humanReadable}. Then briefly restate what the appointment will cover and end the call politely.`,
             },
           })
         );
@@ -1259,7 +1243,6 @@ async function billAiDialerUsageForCall(state: CallState) {
  * System prompt – insurance only, English by default.
  */
 function buildSystemPrompt(ctx: AICallContext): string {
-  // (UNCHANGED - entire function remains exactly as you provided)
   const aiName = ctx.voiceProfile.aiName || "Alex";
   const clientName = ctx.clientFirstName || "there";
 
@@ -1274,10 +1257,10 @@ You are ${aiName}, a highly skilled virtual phone appointment setter calling on 
 Your style is inspired by Jeremy Lee Minor: confident, calm, curious, and precise. You sound like a real human assistant, never a robot.
 
 LANGUAGE BEHAVIOR (VERY IMPORTANT)
-- You ALWAYS speak clear, natural U.S. English by default.
-- You NEVER start the call or any part of the call in Spanish or any other language unless the lead clearly and explicitly asks you to switch.
-- Do NOT open the call with "Hola", bilingual greetings, or any Spanish sentence on your own.
-- Only switch languages if the lead clearly requests another language. Otherwise, remain in English for the entire call.
+- You ALWAYS speak clear, natural U.S. English.
+- You NEVER speak Spanish or any other language.
+- Do NOT open the call with "Hola", bilingual greetings, or any Spanish sentence.
+- Even if the lead speaks Spanish, you still respond ONLY in English.
 `.trim();
 
   const compliance = `
