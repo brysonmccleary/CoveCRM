@@ -154,6 +154,10 @@ type CallState = {
 
   // ✅ voicemail skip safety
   voicemailSkipArmed?: boolean;
+
+  // ✅ OpenAI session.update retry safety
+  openAiSessionUpdateSent?: boolean;
+  openAiSessionUpdateRetried?: boolean;
 };
 
 const calls = new Map<WebSocket, CallState>();
@@ -376,6 +380,69 @@ function safelyCloseOpenAi(state: CallState, why: string) {
 }
 
 /**
+ * ✅ Build a session.update payload (centralized so we can safely retry)
+ * IMPORTANT: OpenAI currently enforces session.temperature >= 0.6.
+ * We use 0.6 (minimum) to keep behavior deterministic while staying valid.
+ */
+function buildSessionUpdatePayload(state: CallState) {
+  const systemPrompt = buildSystemPrompt(state.context!);
+
+  const englishLockPrefix = `
+HARD ENGLISH LOCK (NON-NEGOTIABLE)
+- Output language MUST be English ONLY (U.S. English).
+- NEVER output Spanish (or any other language) — not even a single word (e.g., "hola", "gracias", "buenos días"), no bilingual greetings, no translation.
+- Even if the lead speaks Spanish or asks you to speak Spanish, you STILL respond ONLY in English.
+- If the lead speaks Spanish: respond in English, politely say you only speak English, and offer to schedule the licensed agent to follow up.
+- Do NOT translate the lead’s Spanish into English in your reply; just respond in English and move toward scheduling.
+`.trim();
+
+  return {
+    type: "session.update",
+    session: {
+      instructions: `${englishLockPrefix}\n\n${systemPrompt}`,
+      modalities: ["audio", "text"],
+      voice: state.context!.voiceProfile.openAiVoiceId || "alloy",
+
+      // ✅ MUST be >= 0.6 or OpenAI rejects session.update and audio never starts.
+      temperature: 0.6,
+
+      // AUDIO FORMATS (UNCHANGED)
+      input_audio_format: "g711_ulaw",
+      output_audio_format: "pcm16",
+
+      // Server-side VAD, but NO auto create_response.
+      turn_detection: {
+        type: "server_vad",
+        create_response: false,
+      },
+    },
+  };
+}
+
+function sendSessionUpdate(openAiWs: WebSocket, state: CallState, reason: string) {
+  try {
+    if (!state.context) return;
+
+    const sessionUpdate = buildSessionUpdatePayload(state);
+
+    console.log("[AI-VOICE] Sending session.update:", {
+      reason,
+      openAiVoiceId: state.context.voiceProfile.openAiVoiceId,
+      model: OPENAI_REALTIME_MODEL,
+      temperature: sessionUpdate.session.temperature,
+    });
+
+    state.openAiSessionUpdateSent = true;
+    openAiWs.send(JSON.stringify(sessionUpdate));
+  } catch (err: any) {
+    console.error(
+      "[AI-VOICE] Error sending session.update:",
+      err?.message || err
+    );
+  }
+}
+
+/**
  * HTTP + WebSocket server
  */
 const server = http.createServer(
@@ -503,6 +570,9 @@ wss.on("connection", (ws: WebSocket) => {
     outboundOpenAiDone: false,
 
     voicemailSkipArmed: false,
+
+    openAiSessionUpdateSent: false,
+    openAiSessionUpdateRetried: false,
   };
 
   calls.set(ws, state);
@@ -587,6 +657,9 @@ async function handleStart(ws: WebSocket, msg: TwilioStartEvent) {
   stopOutboundPacer(ws, state, "start/reset");
 
   state.voicemailSkipArmed = false;
+
+  state.openAiSessionUpdateSent = false;
+  state.openAiSessionUpdateRetried = false;
 
   const custom = msg.start.customParameters || {};
   const sessionId = custom.sessionId;
@@ -784,53 +857,8 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
     state.openAiReady = false;
     state.openAiConfigured = false;
 
-    const systemPrompt = buildSystemPrompt(state.context!);
-
-    // ✅ HARD ENGLISH LOCK (do not allow Spanish even if lead speaks it)
-    // This is intentionally redundant: session-level + response-level instructions.
-    const englishLockPrefix = `
-HARD ENGLISH LOCK (NON-NEGOTIABLE)
-- Output language MUST be English ONLY (U.S. English).
-- NEVER output Spanish (or any other language) — not even a single word (e.g., "hola", "gracias", "buenos días"), no bilingual greetings, no translation.
-- Even if the lead speaks Spanish or asks you to speak Spanish, you STILL respond ONLY in English.
-- If the lead speaks Spanish: respond in English, politely say you only speak English, and offer to schedule the licensed agent to follow up.
-- Do NOT translate the lead’s Spanish into English in your reply; just respond in English and move toward scheduling.
-`.trim();
-
-    const sessionUpdate = {
-      type: "session.update",
-      session: {
-        instructions: `${englishLockPrefix}\n\n${systemPrompt}`,
-        modalities: ["audio", "text"],
-        voice: state.context!.voiceProfile.openAiVoiceId || "alloy",
-
-        // ✅ Reduce "helpful" language switching / creative drift
-        temperature: 0.1,
-
-        // AUDIO FORMATS (UNCHANGED)
-        input_audio_format: "g711_ulaw",
-        output_audio_format: "pcm16",
-
-        // Server-side VAD, but NO auto create_response.
-        turn_detection: {
-          type: "server_vad",
-          create_response: false,
-        },
-      },
-    };
-
-    try {
-      console.log("[AI-VOICE] Sending session.update with voice:", {
-        openAiVoiceId: state.context!.voiceProfile.openAiVoiceId,
-        model: OPENAI_REALTIME_MODEL,
-      });
-      openAiWs.send(JSON.stringify(sessionUpdate));
-    } catch (err: any) {
-      console.error(
-        "[AI-VOICE] Error sending session.update:",
-        err?.message || err
-      );
-    }
+    // ✅ Always send session.update using a valid temperature (>= 0.6)
+    sendSessionUpdate(openAiWs, state, "open");
   });
 
   openAiWs.on("message", async (data: WebSocket.RawData) => {
@@ -879,6 +907,27 @@ async function handleOpenAiEvent(
   if (!context) return;
 
   const t = String(event?.type || "");
+
+  // ✅ If OpenAI rejected session.update (like the temperature minimum), retry ONCE safely.
+  if (t === "error") {
+    const code = String(event?.error?.code || "").trim();
+    const param = String(event?.error?.param || "").trim();
+    const msg = String(event?.error?.message || "");
+
+    const isTempTooLow =
+      code === "decimal_below_min_value" && param === "session.temperature";
+
+    if (isTempTooLow && state.openAiWs && !state.openAiSessionUpdateRetried) {
+      state.openAiSessionUpdateRetried = true;
+      console.warn("[AI-VOICE] Retrying session.update after temperature min error");
+      // resend with our centralized payload (temperature 0.6)
+      sendSessionUpdate(state.openAiWs, state, "retry after temp-min error");
+      return;
+    }
+
+    // Any other error: do not spam. Let call flow end naturally.
+    // (We keep Twilio socket alive; no refactors here.)
+  }
 
   if (t === "session.updated" && !state.openAiConfigured) {
     state.openAiConfigured = true;
