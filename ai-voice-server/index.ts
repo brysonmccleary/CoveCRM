@@ -136,6 +136,9 @@ type CallState = {
 
   // ✅ Reliability: guard initial greeting so timing logic can't double-send
   initialGreetingQueued?: boolean;
+
+  // ✅ Minimal diagnostics / reliability
+  debugLoggedMissingTrack?: boolean;
 };
 
 const calls = new Map<WebSocket, CallState>();
@@ -196,6 +199,23 @@ function pcm16ToMulawBase64(pcm16Base64: string): string {
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Cut-out guard helpers (minimal + only about aiSpeaking / waitingForResponse)
+ */
+function setAiSpeaking(state: CallState, next: boolean, reason: string) {
+  const prev = !!state.aiSpeaking;
+  if (prev === next) return;
+  state.aiSpeaking = next;
+  console.log("[AI-VOICE] aiSpeaking =", next, "|", reason);
+}
+
+function setWaitingForResponse(state: CallState, next: boolean, reason: string) {
+  const prev = !!state.waitingForResponse;
+  if (prev === next) return;
+  state.waitingForResponse = next;
+  console.log("[AI-VOICE] waitingForResponse =", next, "|", reason);
 }
 
 /**
@@ -319,6 +339,7 @@ wss.on("connection", (ws: WebSocket) => {
     initialGreetingQueued: false,
     openAiReady: false,
     openAiConfigured: false,
+    debugLoggedMissingTrack: false,
   };
   calls.set(ws, state);
 
@@ -376,12 +397,18 @@ async function handleStart(ws: WebSocket, msg: TwilioStartEvent) {
   state.callSid = msg.start.callSid;
   state.callStartedAtMs = Date.now();
   state.billedUsageSent = false;
-  state.waitingForResponse = false;
-  state.aiSpeaking = false;
+
+  setWaitingForResponse(state, false, "start/reset");
+  setAiSpeaking(state, false, "start/reset");
+
   state.userAudioMsBuffered = 0;
   state.initialGreetingQueued = false;
   state.openAiReady = false;
   state.openAiConfigured = false;
+  state.pendingAudioFrames = [];
+  state.debugLoggedFirstMedia = false;
+  state.debugLoggedFirstOutputAudio = false;
+  state.debugLoggedMissingTrack = false;
 
   const custom = msg.start.customParameters || {};
   const sessionId = custom.sessionId;
@@ -438,16 +465,29 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
 
   const { payload } = msg.media;
 
-  // ✅ Minimal cut-out fix:
-  // - Ignore outbound (echo/AI playback) frames
-  // - Ignore inbound frames while AI is speaking (prevents barge-in / self-interrupt)
-  const track = msg.media.track;
+  // ✅ Minimal cut-out hardening:
+  // 1) Ignore outbound (echo/AI playback) frames (track can be inconsistent; normalize)
+  // 2) Ignore inbound frames while AI is speaking OR while a response is in-flight
+  //    (prevents VAD barge-in during the "before first delta" window)
+  const rawTrack = msg.media.track;
+  const track = typeof rawTrack === "string" ? rawTrack.toLowerCase() : "";
+
+  if (!track && !state.debugLoggedMissingTrack) {
+    console.log("[AI-VOICE] handleMedia: track missing on inbound frame", {
+      streamSid: state.streamSid,
+      aiSpeaking: !!state.aiSpeaking,
+      waitingForResponse: !!state.waitingForResponse,
+    });
+    state.debugLoggedMissingTrack = true;
+  }
 
   if (track === "outbound") {
     return;
   }
 
-  if (state.aiSpeaking === true) {
+  // Block any inbound audio while the AI is talking OR while OpenAI is generating a response.
+  // This is the key "bulletproof" cut-out guard.
+  if (state.aiSpeaking === true || state.waitingForResponse === true) {
     return;
   }
 
@@ -460,8 +500,9 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
       hasOpenAi: !!state.openAiWs,
       openAiReady: !!state.openAiReady,
       payloadLength: payload?.length || 0,
-      track: track || "(undefined)",
+      track: rawTrack || "(undefined)",
       aiSpeaking: !!state.aiSpeaking,
+      waitingForResponse: !!state.waitingForResponse,
     });
     state.debugLoggedFirstMedia = true;
   }
@@ -675,7 +716,11 @@ async function handleOpenAiEvent(
     }
 
     // Initial greeting – guarded so we don't send multiple
-    if (!state.waitingForResponse && !state.initialGreetingQueued && state.openAiWs) {
+    if (
+      !state.waitingForResponse &&
+      !state.initialGreetingQueued &&
+      state.openAiWs
+    ) {
       state.initialGreetingQueued = true;
 
       const answeredBy = String(state.context?.answeredBy || "").toLowerCase();
@@ -698,9 +743,9 @@ async function handleOpenAiEvent(
           return;
         }
 
-        liveState.waitingForResponse = true;
-        // We set aiSpeaking true here, AND also on first delta receive
-        liveState.aiSpeaking = true;
+        setWaitingForResponse(liveState, true, "response.create (greeting)");
+        // Key cut-out guard: block inbound immediately, even before first audio delta.
+        setAiSpeaking(liveState, true, "response.create (greeting)");
 
         liveState.openAiWs.send(
           JSON.stringify({
@@ -717,24 +762,33 @@ async function handleOpenAiEvent(
     return;
   }
 
-  // When a response finishes, allow the next one
-  if (
-    event.type === "response.completed" ||
-    event.type === "response.output_audio.done" ||
-    event.type === "response.audio.done"
-  ) {
-    state.waitingForResponse = false;
-    state.aiSpeaking = false;
+  // ✅ End-of-turn detection (expanded so aiSpeaking doesn't stick / drop incorrectly)
+  const t = String(event?.type || "");
+  const isResponseDone =
+    t === "response.completed" ||
+    t === "response.done" ||
+    t === "response.output_audio.done" ||
+    t === "response.audio.done" ||
+    t === "response.cancelled" ||
+    t === "response.interrupted";
+
+  // Some streams report item completion for audio
+  const isAudioItemDone =
+    t === "response.output_item.done" &&
+    (event?.item?.type === "output_audio" ||
+      event?.output_item?.type === "output_audio" ||
+      event?.item?.content_type === "audio" ||
+      event?.output_item?.content_type === "audio");
+
+  if (isResponseDone || isAudioItemDone) {
+    setWaitingForResponse(state, false, `OpenAI ${t}`);
+    setAiSpeaking(state, false, `OpenAI ${t}`);
   }
 
   // AUDIO BACK TO TWILIO (UNCHANGED PATH)
-  if (
-    event.type === "response.audio.delta" ||
-    event.type === "response.output_audio.delta"
-  ) {
-    // ✅ Minimal cut-out fix:
-    // Ensure aiSpeaking is true as soon as we begin receiving output audio deltas.
-    state.aiSpeaking = true;
+  if (t === "response.audio.delta" || t === "response.output_audio.delta") {
+    // ✅ Ensure aiSpeaking is true as soon as output audio begins
+    setAiSpeaking(state, true, `OpenAI ${t} (first/ongoing audio delta)`);
 
     let payloadBase64: string | undefined;
 
@@ -880,8 +934,9 @@ async function handleBookAppointmentIntent(state: CallState, control: any) {
         "your scheduled appointment time as discussed";
 
       if (!state.waitingForResponse) {
-        state.waitingForResponse = true;
-        state.aiSpeaking = true;
+        setWaitingForResponse(state, true, "response.create (booking confirm)");
+        setAiSpeaking(state, true, "response.create (booking confirm)");
+
         state.openAiWs.send(
           JSON.stringify({
             type: "response.create",
