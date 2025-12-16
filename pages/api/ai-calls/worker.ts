@@ -47,6 +47,23 @@ const ADMIN_FREE_AI_EMAILS: string[] = (process.env.ADMIN_FREE_AI_EMAILS || "")
 const isAdminFreeEmail = (email?: string | null) =>
   !!email && ADMIN_FREE_AI_EMAILS.includes(String(email).toLowerCase());
 
+// ✅ TEMP DEBUG: bypass AMD/voicemail-fast-skip for specific emails (so calls don’t instantly end while testing)
+// Comma-separated list, lowercased. Example: "bryson.mccleary1@gmail.com"
+const AI_DIALER_BYPASS_AMD_EMAILS: string[] = (
+  process.env.AI_DIALER_BYPASS_AMD_EMAILS || ""
+)
+  .split(",")
+  .map((s) => s.trim().toLowerCase())
+  .filter(Boolean);
+
+const isBypassAmdEmail = (email?: string | null) => {
+  const e = String(email || "").toLowerCase();
+  if (!e) return false;
+  // Default include Bryson’s email even if env isn’t set, since you asked for it explicitly
+  if (e === "bryson.mccleary1@gmail.com") return true;
+  return AI_DIALER_BYPASS_AMD_EMAILS.includes(e);
+};
+
 function normalizeE164(p?: string) {
   const raw = String(p || "");
   const d = raw.replace(/\D/g, "");
@@ -178,6 +195,8 @@ async function autoTopupIfNeeded(userDoc: any): Promise<{
       currentBalance += AI_DIALER_AUTO_TOPUP_AMOUNT_USD;
       userDoc.aiDialerBalance = currentBalance;
       userDoc.aiDialerLastTopUpAt = new Date();
+
+      // ✅ IMPORTANT: userDoc must be a real mongoose document (NOT .lean()) for this to work
       await userDoc.save();
 
       console.info("[AI Dialer] Auto-topup succeeded", {
@@ -374,8 +393,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     // ✅ DB kill switch (User.aiDialerEnabled default true)
-    // NOTE: even if schema doesn't have it yet, reading works and admin endpoint can set it via update.
-    const userDoc: any = await User.findOne({ email: userEmail }).lean();
+    // IMPORTANT: this must be a real mongoose doc (NOT .lean()) because autoTopupIfNeeded calls userDoc.save()
+    const userDoc: any = await User.findOne({ email: userEmail });
     if (!userDoc) {
       await AICallSession.updateOne(
         { _id: sessionId },
@@ -405,6 +424,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const adminFree = isAdminFreeEmail(userEmail);
+    const bypassAmd = isBypassAmdEmail(userEmail);
+
+    if (bypassAmd) {
+      console.log("[AI WORKER] AMD bypass enabled for this user (debug)", {
+        sessionId,
+        userEmail,
+      });
+    }
 
     // Balance check before placing ANY new call
     if (AI_RATE_PER_MINUTE > 0 && !adminFree) {
@@ -692,7 +719,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const { client } = await getClientForUser(userEmail);
       console.log("[ai-calls/worker] Using Twilio client for", { userEmail });
 
-      const call = await client.calls.create({
+      const callCreate: any = {
         to,
         from,
         url: aiVoiceUrl(sessionId, leadIdStr),
@@ -705,19 +732,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         recordingStatusCallbackEvent: ["completed"],
         recordingStatusCallbackMethod: "POST",
 
-        // ✅ Enable AMD metadata (does NOT change audio streaming)
-        machineDetection: "Enable",
-        asyncAmd: true,
-
-        // ✅ IMPORTANT: ensure async AMD results (AnsweredBy=human/machine_*) hit our webhook
-        // This enables your voicemail fast-skip to actually fire ASAP.
-        asyncAmdStatusCallback: aiCallStatusUrl(userEmail),
-        asyncAmdStatusCallbackMethod: "POST",
-
-        // ✅ Send status callbacks earlier so voicemail can be skipped immediately
+        // ✅ Always keep normal status callbacks (billing + chaining next lead)
         statusCallback: aiCallStatusUrl(userEmail),
-
-        // ✅ Include terminal statuses so your webhook can chain next lead on busy/no-answer/failed/canceled too
         statusCallbackEvent: [
           "initiated",
           "ringing",
@@ -729,7 +745,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           "canceled",
         ],
         statusCallbackMethod: "POST",
-      } as any);
+      };
+
+      // ✅ Only enable AMD when NOT bypassing (bypass prevents “voicemail fast-skip” ending calls during testing)
+      if (!bypassAmd) {
+        callCreate.machineDetection = "Enable";
+        callCreate.asyncAmd = true;
+        callCreate.asyncAmdStatusCallback = aiCallStatusUrl(userEmail);
+        callCreate.asyncAmdStatusCallbackMethod = "POST";
+      }
+
+      const call = await client.calls.create(callCreate);
 
       await AICallRecording.findOneAndUpdate(
         { callSid: call.sid },

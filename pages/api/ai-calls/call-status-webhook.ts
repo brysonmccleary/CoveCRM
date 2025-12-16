@@ -26,6 +26,12 @@ const AI_DIALER_DISABLED =
 const AI_DIALER_CRON_KEY = (process.env.AI_DIALER_CRON_KEY || "").trim();
 const CRON_SECRET = (process.env.CRON_SECRET || "").trim();
 
+// ✅ launch-safe voicemail fast-skip guard window (seconds)
+// Prevents false positives ending real human calls during the first seconds.
+const VOICEMAIL_FAST_SKIP_MIN_SECONDS = Number(
+  process.env.AI_DIALER_VOICEMAIL_FAST_SKIP_MIN_SECONDS || "6"
+);
+
 function parseIntSafe(n?: string | null): number | undefined {
   if (!n) return undefined;
   const v = parseInt(n, 10);
@@ -99,9 +105,35 @@ function mapTerminalOutcome(callStatus: string, answeredByRaw: string) {
   }
 }
 
-function looksLikeVoicemail(answeredByRaw: string) {
-  const answeredBy = (answeredByRaw || "").toLowerCase();
-  return answeredBy.includes("machine") || answeredBy.includes("fax");
+// ✅ Safer voicemail detection:
+// - Do NOT treat "machine_start" as voicemail (common false positive).
+// - Prefer "machine_end_beep"/"machine_end_silence"/etc (high confidence).
+function parseAnsweredBy(answeredByRaw: string): {
+  answeredBy: string;
+  isMachineLike: boolean;
+  isHighConfidenceVoicemail: boolean;
+} {
+  const answeredBy = (answeredByRaw || "").toLowerCase().trim();
+  const isMachineLike = answeredBy.includes("machine") || answeredBy.includes("fax");
+
+  const highConfidence =
+    answeredBy === "machine" || // legacy
+    answeredBy.includes("machine_end") || // machine_end_beep / machine_end_silence / machine_end_other
+    answeredBy.includes("machine_end_beep") ||
+    answeredBy.includes("machine_end_silence") ||
+    answeredBy.includes("fax"); // treat fax as high confidence
+
+  // Explicitly NOT high confidence (can be wrong early)
+  const lowConfidence =
+    answeredBy.includes("machine_start") ||
+    answeredBy.includes("unknown") ||
+    answeredBy.length === 0;
+
+  return {
+    answeredBy,
+    isMachineLike,
+    isHighConfidenceVoicemail: isMachineLike && highConfidence && !lowConfidence,
+  };
 }
 
 async function hangupCallIfPossible(userEmail: string, callSid: string) {
@@ -236,7 +268,11 @@ export default async function handler(
             await AICallRecording.updateOne(
               {
                 callSid: CallSid,
-                $or: [{ userEmail: { $exists: false } }, { userEmail: null }, { userEmail: "" }],
+                $or: [
+                  { userEmail: { $exists: false } },
+                  { userEmail: null },
+                  { userEmail: "" },
+                ],
               },
               { $set: { userEmail, updatedAt: new Date() } }
             ).exec();
@@ -251,176 +287,205 @@ export default async function handler(
     }
 
     // ─────────────────────────────────────────────────────────────────────────────
-    // ✅ Voicemail fast-skip:
-    // If AMD says machine/voicemail, end call ASAP + set fallback outcome + kick worker once.
-    // This DOES NOT touch <Connect><Stream> or audio encoding — it only ends the call.
+    // ✅ Voicemail fast-skip (LAUNCH-SAFE):
+    // Only end the call if:
+    // - AMD is HIGH CONFIDENCE (e.g., machine_end_beep / machine_end_silence / fax / legacy "machine")
+    // - AND the call has been alive for at least VOICEMAIL_FAST_SKIP_MIN_SECONDS
+    // This prevents false positives from ending real human calls early (common on machine_start).
     // ─────────────────────────────────────────────────────────────────────────────
     try {
-      const isMachine = looksLikeVoicemail(AnsweredBy);
-      if (CallSid && isMachine && userEmail && recDoc && recDoc.aiCallSessionId) {
+      const { answeredBy, isMachineLike, isHighConfidenceVoicemail } =
+        parseAnsweredBy(AnsweredBy);
+
+      if (CallSid && isMachineLike && userEmail && recDoc && recDoc.aiCallSessionId) {
         const now = new Date();
 
-        // One-time guard per callSid (Twilio may retry status callbacks)
-        const handled = await AICallRecording.updateOne(
-          {
+        const createdAtMs = recDoc?.createdAt ? new Date(recDoc.createdAt).getTime() : now.getTime();
+        const ageMs = Math.max(0, now.getTime() - createdAtMs);
+        const ageSec = ageMs / 1000;
+
+        const meetsAgeGuard =
+          Number.isFinite(VOICEMAIL_FAST_SKIP_MIN_SECONDS) &&
+          VOICEMAIL_FAST_SKIP_MIN_SECONDS > 0
+            ? ageSec >= VOICEMAIL_FAST_SKIP_MIN_SECONDS
+            : true;
+
+        const shouldFastSkip = isHighConfidenceVoicemail && meetsAgeGuard && !isTerminal;
+
+        if (!shouldFastSkip) {
+          console.log("[AI Dialer] Voicemail fast-skip suppressed (guarded)", {
             callSid: CallSid,
-            $or: [
-              { voicemailHandledAt: { $exists: false } },
-              { voicemailHandledAt: null },
-            ],
-          },
-          {
-            $set: {
-              voicemailHandledAt: now,
-              updatedAt: now,
-            },
-          }
-        ).exec();
-
-        const firstHandle = ((handled as any)?.modifiedCount ?? 0) > 0;
-
-        if (firstHandle) {
-          // Set conservative voicemail outcome only if still unknown
-          await AICallRecording.updateOne(
+            userEmail,
+            callStatus: CallStatus,
+            answeredBy,
+            isHighConfidenceVoicemail,
+            ageSec: Math.round(ageSec * 100) / 100,
+            minSec: VOICEMAIL_FAST_SKIP_MIN_SECONDS,
+            isTerminal,
+          });
+        } else {
+          // One-time guard per callSid (Twilio may retry status callbacks)
+          const handled = await AICallRecording.updateOne(
             {
               callSid: CallSid,
               $or: [
-                { outcome: { $exists: false } },
-                { outcome: null },
-                { outcome: "unknown" },
+                { voicemailHandledAt: { $exists: false } },
+                { voicemailHandledAt: null },
               ],
             },
             {
               $set: {
-                outcome: "voicemail",
-                outcomeSource: "amd_voicemail",
+                voicemailHandledAt: now,
                 updatedAt: now,
               },
             }
           ).exec();
 
-          // Append lead history + notes once
-          if (recDoc.leadId) {
-            const leadId = recDoc.leadId as Types.ObjectId;
+          const firstHandle = ((handled as any)?.modifiedCount ?? 0) > 0;
 
-            const historyEntry = {
-              type: "ai_outcome_fallback",
-              message: `🤖 AI Dialer voicemail detected (AMD): AnsweredBy=${AnsweredBy || "machine"}`,
-              timestamp: now,
-              userEmail,
-              meta: {
-                source: "call-status-webhook",
-                callSid: CallSid,
-                outcome: "voicemail",
-                recordingId: recDoc._id,
-                answeredBy: AnsweredBy,
-              },
-            };
-
-            const lead = await Lead.findOne({
-              _id: leadId,
-              $or: [
-                { userEmail: userEmail },
-                { ownerEmail: userEmail },
-                { user: userEmail },
-              ],
-            }).exec();
-
-            if (lead) {
-              const existingHistory: any[] = Array.isArray((lead as any).history)
-                ? (lead as any).history
-                : [];
-
-              const alreadyHasEntry = existingHistory.some((h: any) => {
-                const meta = h?.meta || {};
-                return meta?.callSid === CallSid && meta?.source === "call-status-webhook";
-              });
-
-              if (!alreadyHasEntry) {
-                existingHistory.push(historyEntry);
-                (lead as any).history = existingHistory;
-              }
-
-              const appendLine = `[AI Dialer] Voicemail detected (AMD) • CallSid=${CallSid} • AnsweredBy=${AnsweredBy || "machine"}`;
-              const existingNotes =
-                ((lead as any).notes as string | undefined) ||
-                ((lead as any).Notes as string | undefined) ||
-                "";
-
-              const alreadyInNotes =
-                typeof existingNotes === "string" && existingNotes.includes(`CallSid=${CallSid}`);
-
-              if (!alreadyInNotes) {
-                const combined =
-                  existingNotes && existingNotes.trim().length > 0
-                    ? `${existingNotes}\n${appendLine}`
-                    : appendLine;
-                (lead as any).notes = combined;
-                (lead as any).Notes = combined;
-              }
-
-              (lead as any).updatedAt = now;
-              await lead.save();
-            }
-          }
-
-          // End call immediately (non-audio)
-          await hangupCallIfPossible(userEmail, CallSid);
-
-          // Chain next lead immediately (CallSid-level dedupe)
-          if (!AI_DIALER_DISABLED) {
-            const aiCallSessionId = recDoc.aiCallSessionId as Types.ObjectId;
-
-            const sessionKick = await AICallSession.updateOne(
+          if (firstHandle) {
+            // Set conservative voicemail outcome only if still unknown
+            await AICallRecording.updateOne(
               {
-                _id: aiCallSessionId,
-                status: { $in: ["queued", "running"] },
+                callSid: CallSid,
                 $or: [
-                  { chainKickCallSid: { $exists: false } },
-                  { chainKickCallSid: null },
-                  { chainKickCallSid: { $ne: CallSid } },
+                  { outcome: { $exists: false } },
+                  { outcome: null },
+                  { outcome: "unknown" },
                 ],
               },
               {
                 $set: {
-                  chainKickedAt: now,
-                  chainKickCallSid: CallSid,
+                  outcome: "voicemail",
+                  outcomeSource: "amd_voicemail",
                   updatedAt: now,
                 },
               }
             ).exec();
 
-            const kicked = ((sessionKick as any)?.modifiedCount ?? 0) > 0;
+            // Append lead history + notes once
+            if (recDoc.leadId) {
+              const leadId = recDoc.leadId as Types.ObjectId;
 
-            if (kicked) {
-              await kickAiWorkerOnce(req, {
-                reason: "amd_voicemail_fast_skip",
-                sessionId: String(aiCallSessionId),
-                callSid: CallSid,
-                callStatus: CallStatus,
-                answeredBy: AnsweredBy,
-              });
-            } else {
-              console.log(
-                "[AI Dialer] Suppressed duplicate voicemail fast-skip kick (same CallSid)",
+              const historyEntry = {
+                type: "ai_outcome_fallback",
+                message: `🤖 AI Dialer voicemail detected (AMD): AnsweredBy=${AnsweredBy || "machine"}`,
+                timestamp: now,
+                userEmail,
+                meta: {
+                  source: "call-status-webhook",
+                  callSid: CallSid,
+                  outcome: "voicemail",
+                  recordingId: recDoc._id,
+                  answeredBy: AnsweredBy,
+                },
+              };
+
+              const lead = await Lead.findOne({
+                _id: leadId,
+                $or: [
+                  { userEmail: userEmail },
+                  { ownerEmail: userEmail },
+                  { user: userEmail },
+                ],
+              }).exec();
+
+              if (lead) {
+                const existingHistory: any[] = Array.isArray((lead as any).history)
+                  ? (lead as any).history
+                  : [];
+
+                const alreadyHasEntry = existingHistory.some((h: any) => {
+                  const meta = h?.meta || {};
+                  return meta?.callSid === CallSid && meta?.source === "call-status-webhook";
+                });
+
+                if (!alreadyHasEntry) {
+                  existingHistory.push(historyEntry);
+                  (lead as any).history = existingHistory;
+                }
+
+                const appendLine = `[AI Dialer] Voicemail detected (AMD) • CallSid=${CallSid} • AnsweredBy=${AnsweredBy || "machine"}`;
+                const existingNotes =
+                  ((lead as any).notes as string | undefined) ||
+                  ((lead as any).Notes as string | undefined) ||
+                  "";
+
+                const alreadyInNotes =
+                  typeof existingNotes === "string" && existingNotes.includes(`CallSid=${CallSid}`);
+
+                if (!alreadyInNotes) {
+                  const combined =
+                    existingNotes && existingNotes.trim().length > 0
+                      ? `${existingNotes}\n${appendLine}`
+                      : appendLine;
+                  (lead as any).notes = combined;
+                  (lead as any).Notes = combined;
+                }
+
+                (lead as any).updatedAt = now;
+                await lead.save();
+              }
+            }
+
+            // End call immediately (non-audio)
+            await hangupCallIfPossible(userEmail, CallSid);
+
+            // Chain next lead immediately (CallSid-level dedupe)
+            if (!AI_DIALER_DISABLED) {
+              const aiCallSessionId = recDoc.aiCallSessionId as Types.ObjectId;
+
+              const sessionKick = await AICallSession.updateOne(
                 {
+                  _id: aiCallSessionId,
+                  status: { $in: ["queued", "running"] },
+                  $or: [
+                    { chainKickCallSid: { $exists: false } },
+                    { chainKickCallSid: null },
+                    { chainKickCallSid: { $ne: CallSid } },
+                  ],
+                },
+                {
+                  $set: {
+                    chainKickedAt: now,
+                    chainKickCallSid: CallSid,
+                    updatedAt: now,
+                  },
+                }
+              ).exec();
+
+              const kicked = ((sessionKick as any)?.modifiedCount ?? 0) > 0;
+
+              if (kicked) {
+                await kickAiWorkerOnce(req, {
+                  reason: "amd_voicemail_fast_skip",
                   sessionId: String(aiCallSessionId),
                   callSid: CallSid,
+                  callStatus: CallStatus,
                   answeredBy: AnsweredBy,
-                }
-              );
+                });
+              } else {
+                console.log(
+                  "[AI Dialer] Suppressed duplicate voicemail fast-skip kick (same CallSid)",
+                  {
+                    sessionId: String(aiCallSessionId),
+                    callSid: CallSid,
+                    answeredBy: AnsweredBy,
+                  }
+                );
+              }
             }
+          } else {
+            console.log(
+              "[AI Dialer] Suppressed duplicate voicemail handling (already voicemailHandledAt)",
+              {
+                callSid: CallSid,
+                userEmail,
+                answeredBy: AnsweredBy,
+                callStatus: CallStatus,
+              }
+            );
           }
-        } else {
-          console.log(
-            "[AI Dialer] Suppressed duplicate voicemail handling (already voicemailHandledAt)",
-            {
-              callSid: CallSid,
-              userEmail,
-              answeredBy: AnsweredBy,
-              callStatus: CallStatus,
-            }
-          );
         }
       }
     } catch (amdErr: any) {

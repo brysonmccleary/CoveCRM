@@ -151,6 +151,9 @@ type CallState = {
   outboundMuLawBuffer?: Buffer;
   outboundPacerTimer?: NodeJS.Timeout | null;
   outboundOpenAiDone?: boolean;
+
+  // ✅ voicemail skip safety
+  voicemailSkipArmed?: boolean;
 };
 
 const calls = new Map<WebSocket, CallState>();
@@ -296,6 +299,83 @@ function stopOutboundPacer(
 }
 
 /**
+ * ✅ Voicemail detection helpers (AMD AnsweredBy values vary)
+ * We only use this to PREVENT the AI from speaking into voicemail.
+ * Actual hangup/chaining is handled server-side in call-status-webhook.
+ */
+function isVoicemailAnsweredBy(answeredByRaw?: string): boolean {
+  const v = String(answeredByRaw || "").trim().toLowerCase();
+  if (!v) return false;
+  return v.includes("machine") || v.includes("fax") || v.includes("voicemail");
+}
+
+async function refreshAnsweredByFromCoveCRM(
+  state: CallState,
+  reason: string
+): Promise<string> {
+  try {
+    if (!state.context) return "";
+    if (!AI_DIALER_CRON_KEY) return "";
+
+    const sessionId = state.context.sessionId;
+    const leadId = state.context.leadId;
+    const callSid = state.callSid;
+
+    if (!sessionId || !leadId || !callSid) return "";
+
+    const url = new URL("/api/ai-calls/context", COVECRM_BASE_URL);
+    url.searchParams.set("sessionId", sessionId);
+    url.searchParams.set("leadId", leadId);
+    url.searchParams.set("key", AI_DIALER_CRON_KEY);
+    url.searchParams.set("callSid", callSid);
+
+    const resp = await fetch(url.toString());
+    const json: any = await resp.json().catch(() => ({}));
+
+    if (!resp.ok || !json?.ok || !json?.context) return "";
+
+    const answeredBy = String(json.context.answeredBy || "").trim();
+    if (answeredBy) {
+      // update in-memory context so later logic sees it
+      state.context.answeredBy = answeredBy;
+      console.log("[AI-VOICE] refreshed AnsweredBy from CoveCRM:", {
+        callSid,
+        answeredBy,
+        reason,
+      });
+      return answeredBy;
+    }
+
+    return "";
+  } catch (err: any) {
+    console.warn("[AI-VOICE] refreshAnsweredBy failed (non-blocking):", {
+      callSid: state.callSid,
+      reason,
+      error: err?.message || err,
+    });
+    return "";
+  }
+}
+
+function safelyCloseOpenAi(state: CallState, why: string) {
+  try {
+    state.outboundOpenAiDone = true;
+    state.outboundMuLawBuffer = Buffer.alloc(0);
+    state.openAiReady = false;
+    state.openAiConfigured = false;
+    setWaitingForResponse(state, false, `close openai (${why})`);
+    setAiSpeaking(state, false, `close openai (${why})`);
+
+    if (state.openAiWs) {
+      try {
+        state.openAiWs.close();
+      } catch {}
+      state.openAiWs = undefined;
+    }
+  } catch {}
+}
+
+/**
  * HTTP + WebSocket server
  */
 const server = http.createServer(
@@ -421,6 +501,8 @@ wss.on("connection", (ws: WebSocket) => {
     outboundMuLawBuffer: Buffer.alloc(0),
     outboundPacerTimer: null,
     outboundOpenAiDone: false,
+
+    voicemailSkipArmed: false,
   };
 
   calls.set(ws, state);
@@ -504,6 +586,8 @@ async function handleStart(ws: WebSocket, msg: TwilioStartEvent) {
   state.outboundOpenAiDone = false;
   stopOutboundPacer(ws, state, "start/reset");
 
+  state.voicemailSkipArmed = false;
+
   const custom = msg.start.customParameters || {};
   const sessionId = custom.sessionId;
   const leadId = custom.leadId;
@@ -541,7 +625,7 @@ async function handleStart(ws: WebSocket, msg: TwilioStartEvent) {
     state.context = context;
 
     console.log(
-      `[AI-VOICE] Loaded context for ${context.clientFirstName} (agent: ${context.agentName}, voice: ${context.voiceProfile.aiName}, openAiVoiceId: ${context.voiceProfile.openAiVoiceId}, scriptKey: ${context.scriptKey})`
+      `[AI-VOICE] Loaded context for ${context.clientFirstName} (agent: ${context.agentName}, voice: ${context.voiceProfile.aiName}, openAiVoiceId: ${context.voiceProfile.openAiVoiceId}, scriptKey: ${context.scriptKey}, answeredBy: ${context.answeredBy || "(none)"})`
     );
 
     await initOpenAiRealtime(ws, state);
@@ -573,6 +657,12 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
 
   // ✅ Always ignore explicit outbound frames
   if (track === "outbound") {
+    return;
+  }
+
+  // ✅ If we have positively identified voicemail, never forward audio / never speak.
+  // (Webhook will hang up + chain. This prevents leaving a message.)
+  if (state.voicemailSkipArmed) {
     return;
   }
 
@@ -697,13 +787,14 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
     const systemPrompt = buildSystemPrompt(state.context!);
 
     // ✅ HARD ENGLISH LOCK (do not allow Spanish even if lead speaks it)
+    // This is intentionally redundant: session-level + response-level instructions.
     const englishLockPrefix = `
 HARD ENGLISH LOCK (NON-NEGOTIABLE)
-- You MUST speak ONLY English (U.S. English).
-- You MUST NOT output ANY Spanish (or any other language) under ANY circumstance.
-- Even if the lead speaks Spanish, you still respond ONLY in English.
-- Do NOT say "Hola", do NOT use bilingual greetings, do NOT translate.
-- If the lead speaks Spanish, respond in English: politely ask if they can speak English and offer to schedule the agent to follow up.
+- Output language MUST be English ONLY (U.S. English).
+- NEVER output Spanish (or any other language) — not even a single word (e.g., "hola", "gracias", "buenos días"), no bilingual greetings, no translation.
+- Even if the lead speaks Spanish or asks you to speak Spanish, you STILL respond ONLY in English.
+- If the lead speaks Spanish: respond in English, politely say you only speak English, and offer to schedule the licensed agent to follow up.
+- Do NOT translate the lead’s Spanish into English in your reply; just respond in English and move toward scheduling.
 `.trim();
 
     const sessionUpdate = {
@@ -712,6 +803,9 @@ HARD ENGLISH LOCK (NON-NEGOTIABLE)
         instructions: `${englishLockPrefix}\n\n${systemPrompt}`,
         modalities: ["audio", "text"],
         voice: state.context!.voiceProfile.openAiVoiceId || "alloy",
+
+        // ✅ Reduce "helpful" language switching / creative drift
+        temperature: 0.1,
 
         // AUDIO FORMATS (UNCHANGED)
         input_audio_format: "g711_ulaw",
@@ -816,10 +910,40 @@ async function handleOpenAiEvent(
     ) {
       state.initialGreetingQueued = true;
 
-      const answeredBy = String(state.context?.answeredBy || "").toLowerCase();
-      const isHuman = answeredBy === "human";
-
+      // ✅ Before greeting, try to get a definitive AMD AnsweredBy.
+      // If it's voicemail/machine, we DO NOT speak at all (prevents leaving voicemails).
       (async () => {
+        try {
+          // We only need a couple quick attempts; if AMD isn't ready yet, we proceed as before.
+          const existing = String(state.context?.answeredBy || "").trim();
+          if (!existing) {
+            await refreshAnsweredByFromCoveCRM(state, "pre-greeting attempt #1");
+            await sleep(450);
+            await refreshAnsweredByFromCoveCRM(state, "pre-greeting attempt #2");
+          }
+        } catch {}
+
+        const answeredByNow = String(state.context?.answeredBy || "").toLowerCase();
+
+        if (isVoicemailAnsweredBy(answeredByNow)) {
+          console.log("[AI-VOICE] AMD indicates voicemail/machine — suppressing all speech", {
+            streamSid: state.streamSid,
+            callSid: state.callSid,
+            answeredBy: answeredByNow || "(machine)",
+          });
+
+          // Arm a local guard so we never forward audio / never create responses
+          state.voicemailSkipArmed = true;
+
+          // Close OpenAI to avoid token/audio spend while webhook hangs up + chains next
+          safelyCloseOpenAi(state, "voicemail detected pre-greeting");
+
+          return;
+        }
+
+        // If AnsweredBy is human, we delay slightly to sound natural
+        const isHuman = answeredByNow === "human";
+
         try {
           if (isHuman) {
             await sleep(1200);
@@ -836,6 +960,19 @@ async function handleOpenAiEvent(
           return;
         }
 
+        // If a late AMD update flipped to machine, still suppress
+        const lateAnsweredBy = String(liveState.context?.answeredBy || "").toLowerCase();
+        if (isVoicemailAnsweredBy(lateAnsweredBy)) {
+          console.log("[AI-VOICE] Late AMD flip to voicemail — suppressing speech", {
+            streamSid: liveState.streamSid,
+            callSid: liveState.callSid,
+            answeredBy: lateAnsweredBy || "(machine)",
+          });
+          liveState.voicemailSkipArmed = true;
+          safelyCloseOpenAi(liveState, "voicemail detected (late pre-greeting)");
+          return;
+        }
+
         liveState.userAudioMsBuffered = 0;
 
         setWaitingForResponse(liveState, true, "response.create (greeting)");
@@ -846,9 +983,9 @@ async function handleOpenAiEvent(
           JSON.stringify({
             type: "response.create",
             response: {
-              // ✅ reinforce English lock at the response level too
+              // ✅ reinforce English lock at the response level too (strict + explicit)
               instructions:
-                "Speak ONLY English. Begin the call now and greet the lead following the call rules. Keep it to one or two short sentences and end with a simple question like 'How's your day going so far?' Then stop speaking and wait for the lead to respond before continuing.",
+                'HARD ENGLISH LOCK: Speak ONLY English. Do NOT say any Spanish words. If the lead speaks Spanish, respond in English: "I’m sorry — I only speak English. Would you like me to have the licensed agent follow up with you?" Then proceed with the normal call flow in English.\n\nBegin the call now and greet the lead following the call rules. Keep it to one or two short sentences and end with a simple question like "How\'s your day going so far?" Then stop speaking and wait for the lead to respond before continuing.',
             },
           })
         );
@@ -859,6 +996,10 @@ async function handleOpenAiEvent(
   }
 
   if (t === "input_audio_buffer.committed") {
+    if (state.voicemailSkipArmed) {
+      return;
+    }
+
     if (
       state.openAiWs &&
       state.openAiReady &&
@@ -875,9 +1016,9 @@ async function handleOpenAiEvent(
         JSON.stringify({
           type: "response.create",
           response: {
-            // ✅ reinforce English lock at the response level too
+            // ✅ reinforce English lock at the response level too (strict + explicit)
             instructions:
-              "Speak ONLY English. Respond naturally following all call rules and the script guidance. Keep it short (1–3 sentences), ask one clear question, then stop and wait for the lead to respond.",
+              'HARD ENGLISH LOCK: Speak ONLY English. Do NOT say any Spanish words. If the lead speaks Spanish, respond in English: "I’m sorry — I only speak English. Would you like me to have the licensed agent follow up with you?" Then continue in English.\n\nRespond naturally following all call rules and the script guidance. Keep it short (1–3 sentences), ask one clear question, then stop and wait for the lead to respond.',
           },
         })
       );
@@ -886,6 +1027,11 @@ async function handleOpenAiEvent(
   }
 
   if (t === "response.audio.delta" || t === "response.output_audio.delta") {
+    // If voicemail skip is armed, ignore all outbound audio entirely
+    if (state.voicemailSkipArmed) {
+      return;
+    }
+
     setAiSpeaking(state, true, `OpenAI ${t} (audio delta)`);
 
     let payloadBase64: string | undefined;
@@ -1061,7 +1207,7 @@ async function handleBookAppointmentIntent(state: CallState, control: any) {
             type: "response.create",
             response: {
               // ✅ reinforce English lock at the response level too
-              instructions: `Speak ONLY English. Explain to the lead, in natural language, that their appointment is confirmed for ${humanReadable}. Then briefly restate what the appointment will cover and end the call politely.`,
+              instructions: `HARD ENGLISH LOCK: Speak ONLY English. Do NOT say any Spanish words.\n\nExplain to the lead, in natural language, that their appointment is confirmed for ${humanReadable}. Then briefly restate what the appointment will cover and end the call politely.`,
             },
           })
         );
