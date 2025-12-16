@@ -10,7 +10,7 @@ import { Types } from "mongoose";
 
 const AI_DIALER_AGENT_KEY = (process.env.AI_DIALER_AGENT_KEY || "").trim();
 
-// OpenAI (used ONLY for Close-style call overview JSON generation; no audio changes)
+// OpenAI (used ONLY for AI call overview JSON generation; no audio changes)
 const OPENAI_API_KEY = (process.env.OPENAI_API_KEY || "").trim();
 const OPENAI_MODEL = (process.env.AI_OVERVIEW_MODEL || "gpt-4o-mini").trim();
 
@@ -70,7 +70,7 @@ function normalizeBulletLines(input: string | undefined | null): string[] {
   return lines.slice(0, 12);
 }
 
-function buildCloseStyleOverviewBlock(args: {
+function buildCallOverviewBlock(args: {
   callSid: string;
   outcome: string;
   summary?: string;
@@ -107,7 +107,7 @@ function buildCloseStyleOverviewBlock(args: {
     }
   }
 
-  // notesAppend → bullets (Close-style)
+  // notesAppend → bullets (CRM-style)
   const noteBullets = normalizeBulletLines(notesAppend);
   for (const b of noteBullets.slice(0, 8)) {
     // avoid duplicating exact summary lines
@@ -136,7 +136,7 @@ function buildCloseStyleOverviewBlock(args: {
     bullets.push("Call ended without a detailed AI summary payload.");
   }
 
-  // Close-style formatting: "• " bullets
+  // Formatting: "• " bullets
   const body = bullets.map((b) => `• ${b}`).join("\n");
 
   // A footer marker used for idempotency (prevents spam on retries)
@@ -145,7 +145,7 @@ function buildCloseStyleOverviewBlock(args: {
   return `${header}\n${body}\n${marker}`;
 }
 
-// ───────────────────────── Close-style AI Overview (LOCKED SCHEMA) ─────────────────────────
+// ───────────────────────── AI Call Overview (LOCKED SCHEMA) ─────────────────────────
 
 type AICallOverviewOutcome =
   | "Booked"
@@ -221,7 +221,7 @@ function clampBulletsTotal(o: AICallOverview): AICallOverview {
 
   if (total <= 12) return o;
 
-  // Trim in a Close-ish priority order: keep overviewBullets first
+  // Trim in a priority order: keep overviewBullets first
   const trimOrder: (keyof typeof o)[] = [
     "nextSteps",
     "questions",
@@ -297,7 +297,7 @@ Call metadata:
 ${metaLines.length ? metaLines.join("\n") : "- (none)"}`;
 }
 
-async function generateCloseStyleOverview(args: {
+async function generateCallOverview(args: {
   transcript: string;
   leadName?: string;
   leadType?: string;
@@ -379,7 +379,6 @@ async function generateCloseStyleOverview(args: {
     appointmentTime: isNonEmptyString(parsed.appointmentTime)
       ? String(parsed.appointmentTime)
       : args.appointmentTime,
-    // ✅ Fix TS + enforce locked sentiment union
     sentiment: normalizeOverviewSentiment(parsed?.sentiment),
     generatedAt: new Date().toISOString(),
     version: 1,
@@ -450,7 +449,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const aiCallSessionId = rec.aiCallSessionId as Types.ObjectId | undefined;
 
     if (!userEmail || !leadId) {
-      // Still update recording text fields, but we can't safely move folders
       console.warn(
         "[ai-calls/outcome] Missing userEmail or leadId on AICallRecording; will not move lead."
       );
@@ -477,17 +475,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       normalizedOutcome = outcome;
     }
 
-    // ✅ Reliability: NEVER allow regression back to "unknown" if we already have a real outcome.
     if (normalizedOutcome === "unknown" && prevOutcome !== "unknown") {
       normalizedOutcome = undefined;
     }
 
-    // ✅ Enforce appointment cementing server-side:
-    // Only allow "booked" when we have explicit confirmation fields.
-    //
-    // CRITICAL RELIABILITY GUARD:
-    // If the lead is ALREADY "booked" from a prior valid outcome, DO NOT downgrade it
-    // due to missing confirmation fields on a later retry/partial payload.
     if (normalizedOutcome === "booked") {
       const hasDate = isNonEmptyString(confirmedDate);
       const hasTime = isNonEmptyString(confirmedTime);
@@ -496,15 +487,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       if (!hasDate || !hasTime || !hasYes || !hasRepeat) {
         if (prevOutcome === "booked") {
-          // Keep booked. Do not downgrade an already-booked lead due to partial payloads.
           bookedAccepted = true;
           bookedRejectedReason = null;
-          normalizedOutcome = undefined; // preserve prevOutcome
+          normalizedOutcome = undefined;
         } else {
           bookedAccepted = false;
           bookedRejectedReason = "booked_rejected_missing_confirmation_fields";
-
-          // Downgrade to callback (actionable) instead of incorrectly marking booked.
           normalizedOutcome = "callback";
         }
       }
@@ -513,8 +501,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const nextOutcome: AllowedOutcome =
       (normalizedOutcome as any) ?? prevOutcome ?? "unknown";
 
-    // Build the Close-style overview block ONCE (used for both recording + lead notes)
-    const overviewBlock = buildCloseStyleOverviewBlock({
+    // Build the overview block ONCE (used for both recording + lead notes)
+    const overviewBlock = buildCallOverviewBlock({
       callSid,
       outcome: nextOutcome,
       summary,
@@ -529,7 +517,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const alreadyAppliedToRecording =
       typeof rec.notes === "string" && rec.notes.includes(marker);
 
-    // Update recording fields
     if (normalizedOutcome) {
       rec.outcome = normalizedOutcome as any;
     }
@@ -537,14 +524,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       rec.summary = summary;
     }
 
-    // ✅ Prevent AICallRecording.notes spam:
-    // Only append the overview block once per CallSid.
     if (!alreadyAppliedToRecording) {
       rec.notes = rec.notes ? `${rec.notes}\n${overviewBlock}` : overviewBlock;
     }
 
-    // Store confirmation fields if provided (non-breaking; safe for later audits)
-    // Only set if they exist so we don't overwrite prior info.
     if (isNonEmptyString(confirmedDate))
       (rec as any).confirmedDate = confirmedDate!.trim();
     if (isNonEmptyString(confirmedTime))
@@ -568,7 +551,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const set: Record<string, any> = { updatedAt: now };
 
       if (prevOutcome !== nextOutcome) {
-        // Adjust per-outcome counters
         if (prevOutcome !== "unknown") {
           inc[`stats.${prevOutcome}`] = (inc[`stats.${prevOutcome}`] || 0) - 1;
         }
@@ -576,7 +558,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           inc[`stats.${nextOutcome}`] = (inc[`stats.${nextOutcome}`] || 0) + 1;
         }
 
-        // Completed only tracks leads where we have a *final* outcome
         if (prevOutcome === "unknown" && nextOutcome !== "unknown") {
           inc["stats.completed"] = (inc["stats.completed"] || 0) + 1;
         } else if (prevOutcome !== "unknown" && nextOutcome === "unknown") {
@@ -587,14 +568,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (Object.keys(inc).length > 0) {
         await AICallSession.updateOne(
           { _id: aiCallSessionId, userEmail },
-          {
-            $inc: inc,
-            $set: set,
-          }
+          { $inc: inc, $set: set }
         ).exec();
       }
 
-      // ───────────────────────── Auto-complete session when all leads resolved ─────────────────────────
       try {
         const session = await AICallSession.findOne({
           _id: aiCallSessionId,
@@ -611,11 +588,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
           if (total > 0 && completed >= total && s.status !== "completed") {
             await AICallSession.updateOne(
-              {
-                _id: aiCallSessionId,
-                userEmail,
-                status: { $ne: "completed" },
-              },
+              { _id: aiCallSessionId, userEmail, status: { $ne: "completed" } },
               {
                 $set: {
                   status: "completed",
@@ -631,8 +604,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               total,
               completed,
             });
-
-            // TODO: hook in your Resend email here
           }
         }
       } catch (sessionErr: any) {
@@ -658,10 +629,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       if (systemFolderName) {
         const folderDoc =
-          (await Folder.findOne({
-            userEmail,
-            name: systemFolderName,
-          }).exec()) ||
+          (await Folder.findOne({ userEmail, name: systemFolderName }).exec()) ||
           (await Folder.create({
             userEmail,
             name: systemFolderName,
@@ -681,19 +649,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               { user: userEmail },
             ],
           },
-          {
-            $set: {
-              folderId: targetFolderId,
-              updatedAt: new Date(),
-            },
-          }
+          { $set: { folderId: targetFolderId, updatedAt: new Date() } }
         ).exec();
 
         moved = !!updateResult.modifiedCount;
       }
     }
 
-    // ───────────────────────── Close-style AI Overview storage on Call (ONCE) ─────────────────────────
+    // ───────────────────────── AI Call Overview storage on Call (ONCE) ─────────────────────────
     let aiOverviewSaved = false;
     let aiOverviewSkippedReason: string | null = null;
 
@@ -714,7 +677,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           if (!isNonEmptyString(transcript)) {
             aiOverviewSkippedReason = "missing_transcript";
           } else {
-            // Metadata (best-effort)
             const leadName = (rec as any)?.leadName || (rec as any)?.contactName || undefined;
             const leadType = (rec as any)?.leadType || undefined;
             const durationSeconds =
@@ -729,7 +691,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 ? [confirmedDate, confirmedTime].filter(Boolean).join(" ")
                 : undefined;
 
-            const generated = await generateCloseStyleOverview({
+            const generated = await generateCallOverview({
               transcript,
               leadName,
               leadType,
@@ -799,7 +761,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }).exec();
 
         if (lead) {
-          // History (idempotent per callSid)
           const existingHistory: any[] = Array.isArray((lead as any).history)
             ? (lead as any).history
             : [];
@@ -814,8 +775,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             (lead as any).history = existingHistory;
           }
 
-          // ✅ Prevent LEAD notes spam:
-          // Only append our Close-style block once, using the marker line.
           const existingNotes =
             ((lead as any).notes as string | undefined) ||
             ((lead as any).Notes as string | undefined) ||
@@ -854,8 +813,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       moved,
       targetFolderId,
       notesAppliedOnce: !alreadyAppliedToRecording,
-
-      // New: overview storage status (debuggable, non-breaking)
       aiOverviewSaved,
       aiOverviewSkippedReason,
     });
