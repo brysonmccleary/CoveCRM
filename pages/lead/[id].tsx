@@ -48,10 +48,33 @@ type CallRow = {
   talkTime?: number;
   recordingUrl?: string;
   hasRecording?: boolean;
+
+  // legacy fields (kept)
   aiSummary?: string;
   aiActionItems?: string[];
   aiSentiment?: "positive" | "neutral" | "negative";
   hasAI?: boolean;
+
+  // ✅ new saved Close-style overview (from Call.aiOverview)
+  aiOverviewReady?: boolean;
+  aiOverview?: {
+    overviewBullets: string[];
+    keyDetails: string[];
+    objections: string[];
+    questions: string[];
+    nextSteps: string[];
+    outcome:
+      | "Booked"
+      | "Callback"
+      | "Not Interested"
+      | "No Answer"
+      | "Voicemail"
+      | "Other";
+    appointmentTime?: string;
+    sentiment?: "Positive" | "Neutral" | "Negative";
+    generatedAt: string;
+    version: 1;
+  };
 };
 
 type HistoryEvent =
@@ -103,47 +126,22 @@ type UICampaign = {
 
 const LEADS_URL = "/dashboard?tab=leads";
 
-function toBulletLines(summary?: string, items?: string[]) {
-  const bullets: string[] = [];
+function safeBullets(v: any, max = 12): string[] {
+  if (!Array.isArray(v)) return [];
+  return v
+    .map((x) => String(x || "").trim())
+    .filter(Boolean)
+    .slice(0, max);
+}
 
-  if (Array.isArray(items) && items.length) {
-    items
-      .map((s) => String(s || "").trim())
-      .filter(Boolean)
-      .forEach((s) => bullets.push(s));
-  }
-
-  const s = String(summary || "").trim();
-  if (s) {
-    // If summary already contains lines/bullets, split cleanly.
-    const lines = s
-      .split(/\r?\n|•/g)
-      .map((x) => String(x || "").trim())
-      .filter(Boolean);
-
-    // If it looks like one paragraph, attempt sentence split (lightweight heuristic).
-    if (lines.length <= 1) {
-      const sentences = s
-        .split(/(?<=[.!?])\s+/g)
-        .map((x) => String(x || "").trim())
-        .filter(Boolean);
-      sentences.slice(0, 6).forEach((x) => bullets.push(x));
-    } else {
-      lines.slice(0, 8).forEach((x) => bullets.push(x));
-    }
-  }
-
-  // Deduplicate while preserving order
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const b of bullets) {
-    const key = b.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(b);
-  }
-
-  return out.slice(0, 8);
+function outcomeBadgeClasses(outcome?: string) {
+  const o = String(outcome || "").toLowerCase();
+  if (o.includes("book")) return "bg-emerald-900/40 text-emerald-300 border border-emerald-700/40";
+  if (o.includes("callback")) return "bg-sky-900/40 text-sky-300 border border-sky-700/40";
+  if (o.includes("not")) return "bg-rose-900/40 text-rose-300 border border-rose-700/40";
+  if (o.includes("no answer")) return "bg-gray-800/60 text-gray-200 border border-gray-700/60";
+  if (o.includes("voicemail")) return "bg-gray-800/60 text-gray-200 border border-gray-700/60";
+  return "bg-white/10 text-gray-200 border border-white/10";
 }
 
 export default function LeadProfileDial() {
@@ -269,7 +267,9 @@ export default function LeadProfileDial() {
             : fmtDateTime(ev.date);
           lines.push(`📅 ${title} • ${when}`);
         } else if (ev.type === "status") {
-          lines.push(`🔖 Status: ${ev.to || "Updated"} • ${fmtDateTime(ev.date)}`);
+          lines.push(
+            `🔖 Status: ${ev.to || "Updated"} • ${fmtDateTime(ev.date)}`
+          );
         } else if (ev.type === "ai_outcome") {
           const label = ev.message || "🤖 AI Dialer outcome";
           lines.push(`🤖 ${label} • ${fmtDateTime(ev.date)}`);
@@ -293,10 +293,9 @@ export default function LeadProfileDial() {
     if (!resolvedId) return;
     try {
       setCallsLoading(true);
-      const r = await fetch(
-        `/api/calls?leadId=${encodeURIComponent(resolvedId)}`,
-        { cache: "no-store" }
-      );
+      const r = await fetch(`/api/calls?leadId=${encodeURIComponent(resolvedId)}`, {
+        cache: "no-store",
+      });
       const j = await r.json().catch(() => ({} as any));
       if (!r.ok) throw new Error(j?.message || "Failed to load calls");
       const list: CallRow[] = Array.isArray(j?.calls) ? j.calls : [];
@@ -312,7 +311,8 @@ export default function LeadProfileDial() {
     loadCalls();
   }, [loadCalls]);
 
-  const latestAiCall = useMemo(() => {
+  // ✅ Prefer saved Close-style overview on Call (aiOverviewReady + aiOverview)
+  const latestCloseOverviewCall = useMemo(() => {
     const sorted = calls
       .slice()
       .sort((a, b) => {
@@ -321,16 +321,26 @@ export default function LeadProfileDial() {
         return db - da;
       });
 
-    return (
-      sorted.find((c) => !!c.aiSummary || (Array.isArray(c.aiActionItems) && c.aiActionItems.length)) ||
-      null
-    );
+    return sorted.find((c) => (c as any).aiOverviewReady && (c as any).aiOverview) || null;
   }, [calls]);
 
-  const aiOverviewBullets = useMemo(() => {
-    if (!latestAiCall) return [];
-    return toBulletLines(latestAiCall.aiSummary, latestAiCall.aiActionItems);
-  }, [latestAiCall]);
+  const closeOverview = useMemo(() => {
+    const o = (latestCloseOverviewCall as any)?.aiOverview;
+    if (!o) return null;
+
+    return {
+      overviewBullets: safeBullets(o.overviewBullets, 6),
+      keyDetails: safeBullets(o.keyDetails, 6),
+      objections: safeBullets(o.objections, 6),
+      questions: safeBullets(o.questions, 6),
+      nextSteps: safeBullets(o.nextSteps, 6),
+      outcome: String(o.outcome || "Other"),
+      appointmentTime: o.appointmentTime ? String(o.appointmentTime) : "",
+      sentiment: o.sentiment ? String(o.sentiment) : "",
+      generatedAt: o.generatedAt ? String(o.generatedAt) : "",
+      version: 1 as const,
+    };
+  }, [latestCloseOverviewCall]);
 
   // ---------- Save note ----------
   const handleSaveNote = async () => {
@@ -626,31 +636,134 @@ export default function LeadProfileDial() {
           <div className="mb-4 bg-[#0b1220] border border-white/10 rounded p-3">
             <div className="flex items-center justify-between mb-1">
               <h3 className="text-lg font-bold">AI Call Overview</h3>
-              {callsLoading ? <span className="text-xs text-gray-400">Loading…</span> : null}
+              <div className="flex items-center gap-2">
+                {callsLoading ? (
+                  <span className="text-xs text-gray-400">Loading…</span>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => loadCalls()}
+                  className="text-xs px-2 py-1 rounded bg-white/10 hover:bg-white/20"
+                >
+                  Refresh
+                </button>
+              </div>
             </div>
 
-            {!latestAiCall ? (
-              <p className="text-gray-400 text-sm">No AI call overview yet for this lead.</p>
-            ) : aiOverviewBullets.length === 0 ? (
+            {!latestCloseOverviewCall ? (
               <p className="text-gray-400 text-sm">
-                AI call found, but no structured overview is available yet.
+                No Close-style AI call overview yet for this lead.
+              </p>
+            ) : !closeOverview ? (
+              <p className="text-gray-400 text-sm">
+                AI call found, but overview data is missing.
               </p>
             ) : (
-              <ul className="mt-2 space-y-1">
-                {aiOverviewBullets.map((b, idx) => (
-                  <li key={idx} className="text-sm text-gray-200 flex gap-2">
-                    <span className="text-gray-400">•</span>
-                    <span>{b}</span>
-                  </li>
-                ))}
-              </ul>
-            )}
+              <div className="mt-2 space-y-3">
+                {/* Top row badges */}
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span
+                    className={`px-2 py-0.5 rounded-full text-xs border ${outcomeBadgeClasses(
+                      closeOverview.outcome
+                    )}`}
+                  >
+                    {closeOverview.outcome}
+                  </span>
+                  {closeOverview.sentiment ? (
+                    <span className="px-2 py-0.5 rounded-full text-xs border bg-white/5 text-gray-200 border-white/10">
+                      Sentiment: {closeOverview.sentiment}
+                    </span>
+                  ) : null}
+                  {closeOverview.appointmentTime ? (
+                    <span className="px-2 py-0.5 rounded-full text-xs border bg-white/5 text-gray-200 border-white/10">
+                      Appt: {closeOverview.appointmentTime}
+                    </span>
+                  ) : null}
+                </div>
 
-            {latestAiCall?.startedAt ? (
-              <div className="mt-2 text-xs text-gray-500">
-                Based on most recent AI call • {fmtDateTime(latestAiCall.startedAt)}
+                {/* Sections (Close style) */}
+                {closeOverview.overviewBullets.length ? (
+                  <div>
+                    <div className="text-xs text-gray-400 mb-1">Overview</div>
+                    <ul className="space-y-1">
+                      {closeOverview.overviewBullets.map((b, idx) => (
+                        <li key={idx} className="text-sm text-gray-200 flex gap-2">
+                          <span className="text-gray-400">•</span>
+                          <span>{b}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+
+                {closeOverview.keyDetails.length ? (
+                  <div>
+                    <div className="text-xs text-gray-400 mb-1">Key details</div>
+                    <ul className="space-y-1">
+                      {closeOverview.keyDetails.map((b, idx) => (
+                        <li key={idx} className="text-sm text-gray-200 flex gap-2">
+                          <span className="text-gray-400">•</span>
+                          <span>{b}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+
+                {closeOverview.objections.length ? (
+                  <div>
+                    <div className="text-xs text-gray-400 mb-1">Objections</div>
+                    <ul className="space-y-1">
+                      {closeOverview.objections.map((b, idx) => (
+                        <li key={idx} className="text-sm text-gray-200 flex gap-2">
+                          <span className="text-gray-400">•</span>
+                          <span>{b}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+
+                {closeOverview.questions.length ? (
+                  <div>
+                    <div className="text-xs text-gray-400 mb-1">Questions</div>
+                    <ul className="space-y-1">
+                      {closeOverview.questions.map((b, idx) => (
+                        <li key={idx} className="text-sm text-gray-200 flex gap-2">
+                          <span className="text-gray-400">•</span>
+                          <span>{b}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+
+                {closeOverview.nextSteps.length ? (
+                  <div>
+                    <div className="text-xs text-gray-400 mb-1">Next steps</div>
+                    <ul className="space-y-1">
+                      {closeOverview.nextSteps.map((b, idx) => (
+                        <li key={idx} className="text-sm text-gray-200 flex gap-2">
+                          <span className="text-gray-400">•</span>
+                          <span>{b}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+
+                <div className="text-xs text-gray-500 pt-1">
+                  Based on most recent AI call •{" "}
+                  {fmtDateTime(latestCloseOverviewCall.startedAt || latestCloseOverviewCall.completedAt)}
+                  {closeOverview.generatedAt ? (
+                    <>
+                      {" "}
+                      • Overview generated {fmtDateTime(closeOverview.generatedAt)}
+                    </>
+                  ) : null}
+                </div>
               </div>
-            ) : null}
+            )}
           </div>
 
           <div className="flex items-center justify-between">
@@ -669,8 +782,6 @@ export default function LeadProfileDial() {
               ))
             )}
           </div>
-
-          {/* ✅ Removed: Recent Calls & Recordings (recordings live ONLY in right panel) */}
 
           <div className="mt-4">
             <button

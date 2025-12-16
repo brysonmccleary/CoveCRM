@@ -48,8 +48,19 @@ function badgeClass(kind: "inbound" | "outbound") {
 
 export default function CallRowClose({ row }: CallRowCloseProps) {
   const hasRecording = !!row.recordingUrl || row.hasRecording;
+
   const durationLabel = useMemo(() => fmtSecs(row.duration), [row.duration]);
   const talkTimeLabel = useMemo(() => fmtSecs(row.talkTime), [row.talkTime]);
+
+  // CRITICAL:
+  // Browser must NEVER hit api.twilio.com directly.
+  // Always use our proxy route for audio.
+  const audioSrc = useMemo(() => {
+    if (!hasRecording) return "";
+    if (row.id) return `/api/recordings/proxy?callId=${encodeURIComponent(row.id)}`;
+    if (row.callSid) return `/api/recordings/proxy?callSid=${encodeURIComponent(row.callSid)}`;
+    return "";
+  }, [hasRecording, row.id, row.callSid]);
 
   return (
     <div className="rounded-lg">
@@ -86,15 +97,10 @@ export default function CallRowClose({ row }: CallRowCloseProps) {
 
       {/* Recording */}
       <div className="mt-2 rounded-lg border border-white/10 bg-white/[0.03] p-3">
-        {row.recordingUrl ? (
+        {hasRecording && audioSrc ? (
           <>
             <div className="text-xs text-gray-400 mb-1">Recording</div>
-            <audio
-              controls
-              preload="none"
-              src={row.recordingUrl}
-              className="w-full"
-            />
+            <audio controls preload="none" src={audioSrc} className="w-full" />
           </>
         ) : (
           <div className="text-xs text-gray-500">

@@ -18,6 +18,10 @@ type Row = {
   aiActionItems?: string[];
   aiSentiment?: "positive" | "neutral" | "negative";
   hasAI?: boolean;
+
+  // ✅ optional Close-style overview on Call (for future UI usage)
+  aiOverviewReady?: boolean;
+  aiOverview?: any;
 };
 
 export default function CallPanelClose({
@@ -61,13 +65,15 @@ export default function CallPanelClose({
         const hasRec = !!row?.recordingUrl || !!row?.hasRecording;
         const proxyUrl = row?.id
           ? `/api/recordings/proxy?callId=${encodeURIComponent(row.id)}`
+          : row?.callSid
+          ? `/api/recordings/proxy?callSid=${encodeURIComponent(row.callSid)}`
           : "";
 
         return {
           ...row,
           hasRecording: hasRec,
           // If a recording exists, always use the proxy for playback
-          ...(hasRec ? { recordingUrl: proxyUrl } : {}),
+          ...(hasRec && proxyUrl ? { recordingUrl: proxyUrl } : {}),
         };
       });
 

@@ -5,9 +5,14 @@ import AICallRecording from "@/models/AICallRecording";
 import AICallSession from "@/models/AICallSession";
 import Lead from "@/models/Lead";
 import Folder from "@/models/Folder"; // same model used elsewhere
+import Call from "@/models/Call";
 import { Types } from "mongoose";
 
 const AI_DIALER_AGENT_KEY = (process.env.AI_DIALER_AGENT_KEY || "").trim();
+
+// OpenAI (used ONLY for Close-style call overview JSON generation; no audio changes)
+const OPENAI_API_KEY = (process.env.OPENAI_API_KEY || "").trim();
+const OPENAI_MODEL = (process.env.AI_OVERVIEW_MODEL || "gpt-4o-mini").trim();
 
 type AllowedOutcome =
   | "unknown"
@@ -116,10 +121,14 @@ function buildCloseStyleOverviewBlock(args: {
     const date = isNonEmptyString(confirmedDate) ? confirmedDate!.trim() : "";
     const time = isNonEmptyString(confirmedTime) ? confirmedTime!.trim() : "";
     if (date || time) {
-      bullets.push(`Appointment confirmed: ${[date, time].filter(Boolean).join(" @ ")}`);
+      bullets.push(
+        `Appointment confirmed: ${[date, time].filter(Boolean).join(" @ ")}`
+      );
     }
-    if (confirmedYes === true) bullets.push(`Lead explicitly confirmed the time works (yes)`);
-    if (repeatBackConfirmed === true) bullets.push(`AI repeated date/time and lead confirmed again`);
+    if (confirmedYes === true)
+      bullets.push(`Lead explicitly confirmed the time works (yes)`);
+    if (repeatBackConfirmed === true)
+      bullets.push(`AI repeated date/time and lead confirmed again`);
   }
 
   // Always ensure we have at least one bullet to avoid empty blocks
@@ -134,6 +143,239 @@ function buildCloseStyleOverviewBlock(args: {
   const marker = `[AI_DIALER_NOTES_APPLIED] CallSid=${callSid}`;
 
   return `${header}\n${body}\n${marker}`;
+}
+
+// ───────────────────────── Close-style AI Overview (LOCKED SCHEMA) ─────────────────────────
+
+type AICallOverviewOutcome =
+  | "Booked"
+  | "Callback"
+  | "Not Interested"
+  | "No Answer"
+  | "Voicemail"
+  | "Other";
+
+type AICallOverviewSentiment = "Positive" | "Neutral" | "Negative";
+
+interface AICallOverview {
+  overviewBullets: string[]; // 3–6 bullets (top summary)
+  keyDetails: string[]; // household, coverage, timing
+  objections: string[]; // objections + responses
+  questions: string[]; // questions asked by lead
+  nextSteps: string[]; // follow-ups / actions
+  outcome: AICallOverviewOutcome;
+  appointmentTime?: string; // ISO or display string if booked
+  sentiment?: AICallOverviewSentiment;
+  generatedAt: string; // ISO timestamp
+  version: 1;
+}
+
+function mapOutcomeToOverview(outcome: AllowedOutcome): AICallOverviewOutcome {
+  if (outcome === "booked") return "Booked";
+  if (outcome === "callback") return "Callback";
+  if (outcome === "not_interested") return "Not Interested";
+  if (outcome === "no_answer") return "No Answer";
+  // If you later have explicit voicemail detection in metadata, map it there.
+  if (outcome === "disconnected" || outcome === "do_not_call") return "Other";
+  return "Other";
+}
+
+function clampBulletsTotal(o: AICallOverview): AICallOverview {
+  // Hard rule: No more than 12 total bullets across all sections.
+  const fields: (keyof Pick<
+    AICallOverview,
+    "overviewBullets" | "keyDetails" | "objections" | "questions" | "nextSteps"
+  >)[] = ["overviewBullets", "keyDetails", "objections", "questions", "nextSteps"];
+
+  // Normalize arrays
+  for (const f of fields) {
+    const arr = Array.isArray(o[f]) ? o[f] : [];
+    o[f] = arr.map((x) => String(x || "").trim()).filter(Boolean);
+  }
+
+  let total =
+    o.overviewBullets.length +
+    o.keyDetails.length +
+    o.objections.length +
+    o.questions.length +
+    o.nextSteps.length;
+
+  if (total <= 12) return o;
+
+  // Trim in a Close-ish priority order: keep overviewBullets first
+  const trimOrder: (keyof typeof o)[] = [
+    "nextSteps",
+    "questions",
+    "objections",
+    "keyDetails",
+    "overviewBullets",
+  ];
+
+  for (const f of trimOrder) {
+    if (total <= 12) break;
+    const arr = (o as any)[f] as string[];
+    while (Array.isArray(arr) && arr.length > 0 && total > 12) {
+      arr.pop();
+      total -= 1;
+    }
+  }
+
+  return o;
+}
+
+function buildLockedPrompt(args: {
+  transcript: string;
+  leadName?: string;
+  leadType?: string;
+  durationSeconds?: number;
+  outcomeLabel?: string;
+  appointmentTime?: string;
+}): string {
+  const schema = `interface AICallOverview {
+  overviewBullets: string[];       // 3–6 bullets (top summary)
+  keyDetails: string[];             // household, coverage, timing
+  objections: string[];             // objections + responses
+  questions: string[];              // questions asked by lead
+  nextSteps: string[];              // follow-ups / actions
+  outcome: "Booked" | "Callback" | "Not Interested" | "No Answer" | "Voicemail" | "Other";
+  appointmentTime?: string;         // ISO or display string if booked
+  sentiment?: "Positive" | "Neutral" | "Negative";
+  generatedAt: string;              // ISO timestamp
+  version: 1;
+}`;
+
+  const metaLines: string[] = [];
+  if (args.leadName) metaLines.push(`- lead name: ${args.leadName}`);
+  if (args.leadType) metaLines.push(`- lead type: ${args.leadType}`);
+  if (typeof args.durationSeconds === "number")
+    metaLines.push(`- call duration: ${args.durationSeconds}s`);
+  if (args.outcomeLabel) metaLines.push(`- call outcome (if known): ${args.outcomeLabel}`);
+  if (args.appointmentTime)
+    metaLines.push(`- appointment time (if booked): ${args.appointmentTime}`);
+
+  return `You are generating a CRM call overview for a sales agent.
+
+Rules:
+- Output ONLY valid JSON matching the provided schema.
+- DO NOT include explanations.
+- DO NOT include paragraphs.
+- Every field must be concise bullet points.
+- No more than 12 total bullets across all sections.
+- Bullets must be factual, not salesy.
+- If something did not occur, return an empty array for that field.
+
+Goal:
+Match the style of Close CRM's AI Call Overview.
+
+Schema:
+${schema}
+
+Transcript:
+${args.transcript}
+
+Call metadata:
+${metaLines.length ? metaLines.join("\n") : "- (none)"}`;
+}
+
+async function generateCloseStyleOverview(args: {
+  transcript: string;
+  leadName?: string;
+  leadType?: string;
+  durationSeconds?: number;
+  outcome: AllowedOutcome;
+  appointmentTime?: string;
+}): Promise<AICallOverview | null> {
+  if (!OPENAI_API_KEY) {
+    console.warn("[ai-calls/outcome] OPENAI_API_KEY missing; skipping aiOverview generation");
+    return null;
+  }
+
+  const prompt = buildLockedPrompt({
+    transcript: args.transcript,
+    leadName: args.leadName,
+    leadType: args.leadType,
+    durationSeconds: args.durationSeconds,
+    outcomeLabel: mapOutcomeToOverview(args.outcome),
+    appointmentTime: args.appointmentTime,
+  });
+
+  const resp = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${OPENAI_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model: OPENAI_MODEL,
+      temperature: 0.1,
+      messages: [{ role: "user", content: prompt }],
+    }),
+  });
+
+  if (!resp.ok) {
+    const txt = await resp.text().catch(() => "");
+    console.warn("[ai-calls/outcome] OpenAI overview generation failed", {
+      status: resp.status,
+      body: txt ? txt.slice(0, 500) : "",
+    });
+    return null;
+  }
+
+  const data: any = await resp.json().catch(() => null);
+  const content = data?.choices?.[0]?.message?.content;
+
+  if (!isNonEmptyString(content)) return null;
+
+  let parsed: any = null;
+  try {
+    parsed = JSON.parse(String(content));
+  } catch {
+    // If model returns extra text (shouldn't), try to extract JSON block
+    const s = String(content);
+    const first = s.indexOf("{");
+    const last = s.lastIndexOf("}");
+    if (first >= 0 && last > first) {
+      try {
+        parsed = JSON.parse(s.slice(first, last + 1));
+      } catch {
+        parsed = null;
+      }
+    }
+  }
+
+  if (!parsed || typeof parsed !== "object") return null;
+
+  const overview: AICallOverview = {
+    overviewBullets: Array.isArray(parsed.overviewBullets) ? parsed.overviewBullets : [],
+    keyDetails: Array.isArray(parsed.keyDetails) ? parsed.keyDetails : [],
+    objections: Array.isArray(parsed.objections) ? parsed.objections : [],
+    questions: Array.isArray(parsed.questions) ? parsed.questions : [],
+    nextSteps: Array.isArray(parsed.nextSteps) ? parsed.nextSteps : [],
+    outcome: (parsed.outcome as any) || mapOutcomeToOverview(args.outcome),
+    appointmentTime: isNonEmptyString(parsed.appointmentTime)
+      ? String(parsed.appointmentTime)
+      : args.appointmentTime,
+    sentiment: isNonEmptyString(parsed.sentiment) ? String(parsed.sentiment) : undefined,
+    generatedAt: new Date().toISOString(),
+    version: 1,
+  };
+
+  return clampBulletsTotal(overview);
+}
+
+function getTranscriptFromRecording(rec: any): string {
+  const candidates = [
+    rec?.transcript,
+    rec?.transcriptText,
+    rec?.fullTranscript,
+    rec?.transcription,
+    rec?.text,
+  ];
+
+  for (const c of candidates) {
+    if (isNonEmptyString(c)) return String(c).trim();
+  }
+  return "";
 }
 
 export default async function handler(
@@ -281,8 +523,6 @@ export default async function handler(
     // Only append the overview block once per CallSid.
     if (!alreadyAppliedToRecording) {
       rec.notes = rec.notes ? `${rec.notes}\n${overviewBlock}` : overviewBlock;
-    } else {
-      // Still allow updating summary/outcome fields, but do not append notes again.
     }
 
     // Store confirmation fields if provided (non-breaking; safe for later audits)
@@ -439,6 +679,68 @@ export default async function handler(
       }
     }
 
+    // ───────────────────────── Close-style AI Overview storage on Call (ONCE) ─────────────────────────
+    let aiOverviewSaved = false;
+    let aiOverviewSkippedReason: string | null = null;
+
+    if (userEmail && callSid) {
+      try {
+        const callDoc: any = await (Call as any).findOne({
+          callSid: callSid,
+          userEmail: userEmail,
+        }).exec();
+
+        if (!callDoc) {
+          aiOverviewSkippedReason = "call_not_found";
+        } else if ((callDoc as any).aiOverviewReady === true && (callDoc as any).aiOverview) {
+          aiOverviewSkippedReason = "already_ready";
+        } else {
+          const transcript = getTranscriptFromRecording(rec);
+
+          if (!isNonEmptyString(transcript)) {
+            aiOverviewSkippedReason = "missing_transcript";
+          } else {
+            // Metadata (best-effort)
+            const leadName = (rec as any)?.leadName || (rec as any)?.contactName || undefined;
+            const leadType = (rec as any)?.leadType || undefined;
+            const durationSeconds =
+              typeof (rec as any)?.duration === "number"
+                ? (rec as any).duration
+                : typeof (callDoc as any)?.duration === "number"
+                ? (callDoc as any).duration
+                : undefined;
+
+            const appt =
+              nextOutcome === "booked"
+                ? [confirmedDate, confirmedTime].filter(Boolean).join(" ")
+                : undefined;
+
+            const generated = await generateCloseStyleOverview({
+              transcript,
+              leadName,
+              leadType,
+              durationSeconds,
+              outcome: nextOutcome,
+              appointmentTime: appt || undefined,
+            });
+
+            if (generated) {
+              (callDoc as any).aiOverview = generated;
+              (callDoc as any).aiOverviewReady = true;
+              (callDoc as any).updatedAt = new Date();
+              await callDoc.save();
+              aiOverviewSaved = true;
+            } else {
+              aiOverviewSkippedReason = "generation_failed";
+            }
+          }
+        }
+      } catch (e: any) {
+        console.warn("[ai-calls/outcome] aiOverview save failed (non-blocking):", e?.message || e);
+        aiOverviewSkippedReason = "save_error";
+      }
+    }
+
     // ───────────────────────── Timeline / notes on Lead ─────────────────────────
     if (userEmail && leadId) {
       try {
@@ -541,6 +843,10 @@ export default async function handler(
       moved,
       targetFolderId,
       notesAppliedOnce: !alreadyAppliedToRecording,
+
+      // New: overview storage status (debuggable, non-breaking)
+      aiOverviewSaved,
+      aiOverviewSkippedReason,
     });
   } catch (err: any) {
     console.error("[ai-calls/outcome] error:", err?.message || err);
