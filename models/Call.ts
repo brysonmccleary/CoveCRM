@@ -1,3 +1,4 @@
+// models/Call.ts
 import mongoose, { Schema, Document, models } from "mongoose";
 import { Types } from "mongoose";
 
@@ -40,6 +41,27 @@ export interface ICall extends Document {
   aiScore?: number;        // 0..100
   aiSentiment?: "positive" | "neutral" | "negative";
   aiProcessing?: "pending" | "done" | "error";
+
+  // ✅ Structured AI Call Overview (used by lead middle panel)
+  aiOverviewReady?: boolean;
+  aiOverview?: {
+    overviewBullets: string[];
+    keyDetails: string[];
+    objections: string[];
+    questions: string[];
+    nextSteps: string[];
+    outcome:
+      | "Booked"
+      | "Callback"
+      | "Not Interested"
+      | "No Answer"
+      | "Voicemail"
+      | "Other";
+    appointmentTime?: string;
+    sentiment?: "Positive" | "Neutral" | "Negative";
+    generatedAt: Date;
+    version: 1;
+  };
 }
 
 const CallSchema = new Schema<ICall>(
@@ -81,6 +103,31 @@ const CallSchema = new Schema<ICall>(
     aiScore: Number,
     aiSentiment: { type: String, enum: ["positive", "neutral", "negative"] },
     aiProcessing: { type: String, enum: ["pending", "done", "error"], default: undefined },
+
+    // ✅ AI Call Overview fields (must be in schema or Mongoose will drop them)
+    aiOverviewReady: { type: Boolean, default: false },
+    aiOverview: {
+      type: new Schema(
+        {
+          overviewBullets: { type: [String], default: [] },
+          keyDetails: { type: [String], default: [] },
+          objections: { type: [String], default: [] },
+          questions: { type: [String], default: [] },
+          nextSteps: { type: [String], default: [] },
+          outcome: {
+            type: String,
+            enum: ["Booked", "Callback", "Not Interested", "No Answer", "Voicemail", "Other"],
+            default: "Other",
+          },
+          appointmentTime: { type: String, default: "" },
+          sentiment: { type: String, enum: ["Positive", "Neutral", "Negative"], default: "Neutral" },
+          generatedAt: { type: Date, default: undefined },
+          version: { type: Number, default: 1 },
+        },
+        { _id: false }
+      ),
+      default: undefined,
+    },
   },
   { timestamps: true }
 );

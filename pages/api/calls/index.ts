@@ -78,6 +78,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const id = String(c._id);
       const hasRecordingSid = !!c.recordingSid;
 
+      const aiActionItems = Array.isArray(c.aiActionItems) ? c.aiActionItems : [];
+      const aiBullets = Array.isArray(c.aiBullets) ? c.aiBullets : [];
+      const hasOverview = !!c.aiOverviewReady && !!c.aiOverview;
+
+      const hasAI =
+        hasOverview ||
+        !!c.aiSummary ||
+        aiActionItems.length > 0 ||
+        aiBullets.length > 0;
+
       return {
         id,
         callSid: c.callSid,
@@ -95,10 +105,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           : c.recordingUrl || undefined,
 
         hasRecording: hasRecordingSid || !!c.recordingUrl,
+
+        // legacy fields (kept)
         aiSummary: c.aiSummary || undefined,
-        aiActionItems: Array.isArray(c.aiActionItems) ? c.aiActionItems : [],
+        aiActionItems,
+        aiBullets,
         aiSentiment: c.aiSentiment || undefined,
-        hasAI: !!c.aiSummary,
+
+        // ✅ structured overview (new)
+        aiOverviewReady: !!c.aiOverviewReady,
+        aiOverview: c.aiOverview || undefined,
+
+        hasAI,
       };
     });
 

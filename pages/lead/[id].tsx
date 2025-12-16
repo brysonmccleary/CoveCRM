@@ -52,10 +52,11 @@ type CallRow = {
   // legacy fields (kept)
   aiSummary?: string;
   aiActionItems?: string[];
+  aiBullets?: string[];
   aiSentiment?: "positive" | "neutral" | "negative";
   hasAI?: boolean;
 
-  // ✅ new saved Close-style overview (from Call.aiOverview)
+  // ✅ structured AI overview
   aiOverviewReady?: boolean;
   aiOverview?: {
     overviewBullets: string[];
@@ -142,6 +143,14 @@ function outcomeBadgeClasses(outcome?: string) {
   if (o.includes("no answer")) return "bg-gray-800/60 text-gray-200 border border-gray-700/60";
   if (o.includes("voicemail")) return "bg-gray-800/60 text-gray-200 border border-gray-700/60";
   return "bg-white/10 text-gray-200 border border-white/10";
+}
+
+function titleCaseSentiment(v?: string) {
+  const s = String(v || "").toLowerCase();
+  if (s === "positive") return "Positive";
+  if (s === "neutral") return "Neutral";
+  if (s === "negative") return "Negative";
+  return "";
 }
 
 export default function LeadProfileDial() {
@@ -311,8 +320,8 @@ export default function LeadProfileDial() {
     loadCalls();
   }, [loadCalls]);
 
-  // ✅ Prefer saved Close-style overview on Call (aiOverviewReady + aiOverview)
-  const latestCloseOverviewCall = useMemo(() => {
+  // ✅ Prefer structured overview; fallback to legacy (aiBullets/aiSummary)
+  const latestOverviewCall = useMemo(() => {
     const sorted = calls
       .slice()
       .sort((a, b) => {
@@ -321,26 +330,57 @@ export default function LeadProfileDial() {
         return db - da;
       });
 
-    return sorted.find((c) => (c as any).aiOverviewReady && (c as any).aiOverview) || null;
+    return (
+      sorted.find((c) => (c as any).aiOverviewReady && (c as any).aiOverview) ||
+      sorted.find(
+        (c) =>
+          !!c.aiSummary ||
+          (Array.isArray(c.aiBullets) && c.aiBullets.length > 0) ||
+          (Array.isArray(c.aiActionItems) && c.aiActionItems.length > 0)
+      ) ||
+      null
+    );
   }, [calls]);
 
   const closeOverview = useMemo(() => {
-    const o = (latestCloseOverviewCall as any)?.aiOverview;
-    if (!o) return null;
+    const c = latestOverviewCall as any;
+    if (!c) return null;
+
+    const o = c?.aiOverview;
+
+    // ✅ structured path
+    if (c?.aiOverviewReady && o) {
+      return {
+        overviewBullets: safeBullets(o.overviewBullets, 6),
+        keyDetails: safeBullets(o.keyDetails, 6),
+        objections: safeBullets(o.objections, 6),
+        questions: safeBullets(o.questions, 6),
+        nextSteps: safeBullets(o.nextSteps, 6),
+        outcome: String(o.outcome || "Other"),
+        appointmentTime: o.appointmentTime ? String(o.appointmentTime) : "",
+        sentiment: o.sentiment ? String(o.sentiment) : "",
+        generatedAt: o.generatedAt ? String(o.generatedAt) : "",
+        version: 1 as const,
+      };
+    }
+
+    // ✅ legacy fallback path
+    const legacyBullets = Array.isArray(c.aiBullets) ? c.aiBullets : [];
+    const legacyActions = Array.isArray(c.aiActionItems) ? c.aiActionItems : [];
 
     return {
-      overviewBullets: safeBullets(o.overviewBullets, 6),
-      keyDetails: safeBullets(o.keyDetails, 6),
-      objections: safeBullets(o.objections, 6),
-      questions: safeBullets(o.questions, 6),
-      nextSteps: safeBullets(o.nextSteps, 6),
-      outcome: String(o.outcome || "Other"),
-      appointmentTime: o.appointmentTime ? String(o.appointmentTime) : "",
-      sentiment: o.sentiment ? String(o.sentiment) : "",
-      generatedAt: o.generatedAt ? String(o.generatedAt) : "",
+      overviewBullets: legacyBullets.length ? safeBullets(legacyBullets, 6) : (c.aiSummary ? [String(c.aiSummary)] : []),
+      keyDetails: legacyActions.length ? safeBullets(legacyActions, 6) : [],
+      objections: [],
+      questions: [],
+      nextSteps: [],
+      outcome: "Other",
+      appointmentTime: "",
+      sentiment: titleCaseSentiment(c.aiSentiment),
+      generatedAt: c.completedAt ? String(c.completedAt) : "",
       version: 1 as const,
     };
-  }, [latestCloseOverviewCall]);
+  }, [latestOverviewCall]);
 
   // ---------- Save note ----------
   const handleSaveNote = async () => {
@@ -632,7 +672,7 @@ export default function LeadProfileDial() {
             </button>
           </div>
 
-          {/* ✅ Close-style AI Call Overview (middle panel) */}
+          {/* ✅ AI Call Overview (middle panel) */}
           <div className="mb-4 bg-[#0b1220] border border-white/10 rounded p-3">
             <div className="flex items-center justify-between mb-1">
               <h3 className="text-lg font-bold">AI Call Overview</h3>
@@ -650,9 +690,9 @@ export default function LeadProfileDial() {
               </div>
             </div>
 
-            {!latestCloseOverviewCall ? (
+            {!latestOverviewCall ? (
               <p className="text-gray-400 text-sm">
-                No Close-style AI call overview yet for this lead.
+                No AI call overview yet for this lead.
               </p>
             ) : !closeOverview ? (
               <p className="text-gray-400 text-sm">
@@ -681,7 +721,7 @@ export default function LeadProfileDial() {
                   ) : null}
                 </div>
 
-                {/* Sections (Close style) */}
+                {/* Sections */}
                 {closeOverview.overviewBullets.length ? (
                   <div>
                     <div className="text-xs text-gray-400 mb-1">Overview</div>
@@ -754,7 +794,7 @@ export default function LeadProfileDial() {
 
                 <div className="text-xs text-gray-500 pt-1">
                   Based on most recent AI call •{" "}
-                  {fmtDateTime(latestCloseOverviewCall.startedAt || latestCloseOverviewCall.completedAt)}
+                  {fmtDateTime((latestOverviewCall as any)?.startedAt || (latestOverviewCall as any)?.completedAt)}
                   {closeOverview.generatedAt ? (
                     <>
                       {" "}
