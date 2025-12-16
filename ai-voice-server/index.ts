@@ -387,6 +387,14 @@ function safelyCloseOpenAi(state: CallState, why: string) {
 function buildSessionUpdatePayload(state: CallState) {
   const systemPrompt = buildSystemPrompt(state.context!);
 
+  const scopeLockPrefix = `
+HARD SCOPE LOCK (NON-NEGOTIABLE)
+- This call is ONLY about LIFE INSURANCE (mortgage protection / final expense / income protection / leaving money behind / cash value IUL).
+- You MUST NOT mention or ask about Medicare, health insurance, auto insurance, home insurance, annuities, ACA, or any other product category.
+- If the lead asks about Medicare or anything outside life insurance: politely redirect back to life insurance and booking the licensed agent.
+- If you are unsure, default to: "life insurance information you requested" and continue the script flow.
+`.trim();
+
   const englishLockPrefix = `
 HARD ENGLISH LOCK (NON-NEGOTIABLE)
 - Output language MUST be English ONLY (U.S. English).
@@ -399,7 +407,7 @@ HARD ENGLISH LOCK (NON-NEGOTIABLE)
   return {
     type: "session.update",
     session: {
-      instructions: `${englishLockPrefix}\n\n${systemPrompt}`,
+      instructions: `${scopeLockPrefix}\n\n${englishLockPrefix}\n\n${systemPrompt}`,
       modalities: ["audio", "text"],
       voice: state.context!.voiceProfile.openAiVoiceId || "alloy",
 
@@ -419,7 +427,11 @@ HARD ENGLISH LOCK (NON-NEGOTIABLE)
   };
 }
 
-function sendSessionUpdate(openAiWs: WebSocket, state: CallState, reason: string) {
+function sendSessionUpdate(
+  openAiWs: WebSocket,
+  state: CallState,
+  reason: string
+) {
   try {
     if (!state.context) return;
 
@@ -912,14 +924,15 @@ async function handleOpenAiEvent(
   if (t === "error") {
     const code = String(event?.error?.code || "").trim();
     const param = String(event?.error?.param || "").trim();
-    const msg = String(event?.error?.message || "");
 
     const isTempTooLow =
       code === "decimal_below_min_value" && param === "session.temperature";
 
     if (isTempTooLow && state.openAiWs && !state.openAiSessionUpdateRetried) {
       state.openAiSessionUpdateRetried = true;
-      console.warn("[AI-VOICE] Retrying session.update after temperature min error");
+      console.warn(
+        "[AI-VOICE] Retrying session.update after temperature min error"
+      );
       // resend with our centralized payload (temperature 0.6)
       sendSessionUpdate(state.openAiWs, state, "retry after temp-min error");
       return;
@@ -966,20 +979,29 @@ async function handleOpenAiEvent(
           // We only need a couple quick attempts; if AMD isn't ready yet, we proceed as before.
           const existing = String(state.context?.answeredBy || "").trim();
           if (!existing) {
-            await refreshAnsweredByFromCoveCRM(state, "pre-greeting attempt #1");
+            await refreshAnsweredByFromCoveCRM(
+              state,
+              "pre-greeting attempt #1"
+            );
             await sleep(450);
-            await refreshAnsweredByFromCoveCRM(state, "pre-greeting attempt #2");
+            await refreshAnsweredByFromCoveCRM(
+              state,
+              "pre-greeting attempt #2"
+            );
           }
         } catch {}
 
         const answeredByNow = String(state.context?.answeredBy || "").toLowerCase();
 
         if (isVoicemailAnsweredBy(answeredByNow)) {
-          console.log("[AI-VOICE] AMD indicates voicemail/machine — suppressing all speech", {
-            streamSid: state.streamSid,
-            callSid: state.callSid,
-            answeredBy: answeredByNow || "(machine)",
-          });
+          console.log(
+            "[AI-VOICE] AMD indicates voicemail/machine — suppressing all speech",
+            {
+              streamSid: state.streamSid,
+              callSid: state.callSid,
+              answeredBy: answeredByNow || "(machine)",
+            }
+          );
 
           // Arm a local guard so we never forward audio / never create responses
           state.voicemailSkipArmed = true;
@@ -1012,11 +1034,14 @@ async function handleOpenAiEvent(
         // If a late AMD update flipped to machine, still suppress
         const lateAnsweredBy = String(liveState.context?.answeredBy || "").toLowerCase();
         if (isVoicemailAnsweredBy(lateAnsweredBy)) {
-          console.log("[AI-VOICE] Late AMD flip to voicemail — suppressing speech", {
-            streamSid: liveState.streamSid,
-            callSid: liveState.callSid,
-            answeredBy: lateAnsweredBy || "(machine)",
-          });
+          console.log(
+            "[AI-VOICE] Late AMD flip to voicemail — suppressing speech",
+            {
+              streamSid: liveState.streamSid,
+              callSid: liveState.callSid,
+              answeredBy: lateAnsweredBy || "(machine)",
+            }
+          );
           liveState.voicemailSkipArmed = true;
           safelyCloseOpenAi(liveState, "voicemail detected (late pre-greeting)");
           return;
@@ -1032,9 +1057,9 @@ async function handleOpenAiEvent(
           JSON.stringify({
             type: "response.create",
             response: {
-              // ✅ reinforce English lock at the response level too (strict + explicit)
+              // ✅ reinforce scope + English lock at the response level too (strict + explicit)
               instructions:
-                'HARD ENGLISH LOCK: Speak ONLY English. Do NOT say any Spanish words. If the lead speaks Spanish, respond in English: "I’m sorry — I only speak English. Would you like me to have the licensed agent follow up with you?" Then proceed with the normal call flow in English.\n\nBegin the call now and greet the lead following the call rules. Keep it to one or two short sentences and end with a simple question like "How\'s your day going so far?" Then stop speaking and wait for the lead to respond before continuing.',
+                'HARD SCOPE LOCK: This call is ONLY about LIFE INSURANCE. Do NOT mention Medicare or any other product.\nHARD ENGLISH LOCK: Speak ONLY English. Do NOT say any Spanish words. If the lead speaks Spanish, respond in English: "I’m sorry — I only speak English. Would you like me to have the licensed agent follow up with you?" Then proceed with the normal call flow in English.\n\nBegin the call now and greet the lead following the call rules. Keep it to one or two short sentences and end with a simple question like "How\'s your day going so far?" Then stop speaking and wait for the lead to respond before continuing.',
             },
           })
         );
@@ -1065,9 +1090,9 @@ async function handleOpenAiEvent(
         JSON.stringify({
           type: "response.create",
           response: {
-            // ✅ reinforce English lock at the response level too (strict + explicit)
+            // ✅ reinforce scope + English lock at the response level too (strict + explicit)
             instructions:
-              'HARD ENGLISH LOCK: Speak ONLY English. Do NOT say any Spanish words. If the lead speaks Spanish, respond in English: "I’m sorry — I only speak English. Would you like me to have the licensed agent follow up with you?" Then continue in English.\n\nRespond naturally following all call rules and the script guidance. Keep it short (1–3 sentences), ask one clear question, then stop and wait for the lead to respond.',
+              'HARD SCOPE LOCK: This call is ONLY about LIFE INSURANCE. Do NOT mention Medicare or any other product.\nHARD ENGLISH LOCK: Speak ONLY English. Do NOT say any Spanish words. If the lead speaks Spanish, respond in English: "I’m sorry — I only speak English. Would you like me to have the licensed agent follow up with you?" Then continue in English.\n\nRespond naturally following all call rules and the script guidance. Keep it short (1–3 sentences), ask one clear question, then stop and wait for the lead to respond.',
           },
         })
       );
@@ -1255,8 +1280,8 @@ async function handleBookAppointmentIntent(state: CallState, control: any) {
           JSON.stringify({
             type: "response.create",
             response: {
-              // ✅ reinforce English lock at the response level too
-              instructions: `HARD ENGLISH LOCK: Speak ONLY English. Do NOT say any Spanish words.\n\nExplain to the lead, in natural language, that their appointment is confirmed for ${humanReadable}. Then briefly restate what the appointment will cover and end the call politely.`,
+              // ✅ reinforce scope + English lock at the response level too
+              instructions: `HARD SCOPE LOCK: This call is ONLY about LIFE INSURANCE. Do NOT mention Medicare or any other product.\nHARD ENGLISH LOCK: Speak ONLY English. Do NOT say any Spanish words.\n\nExplain to the lead, in natural language, that their appointment is confirmed for ${humanReadable}. Then briefly restate what the appointment will cover and end the call politely.`,
             },
           })
         );
