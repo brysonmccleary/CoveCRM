@@ -180,6 +180,25 @@ function mapOutcomeToOverview(outcome: AllowedOutcome): AICallOverviewOutcome {
   return "Other";
 }
 
+// ✅ Type-safe normalization for locked union
+function normalizeOverviewSentiment(
+  v: any
+): AICallOverviewSentiment | undefined {
+  const s = String(v || "").trim().toLowerCase();
+  if (!s) return undefined;
+
+  if (s === "positive") return "Positive";
+  if (s === "neutral") return "Neutral";
+  if (s === "negative") return "Negative";
+
+  // tolerate common variants
+  if (s.includes("pos")) return "Positive";
+  if (s.includes("neut")) return "Neutral";
+  if (s.includes("neg")) return "Negative";
+
+  return undefined;
+}
+
 function clampBulletsTotal(o: AICallOverview): AICallOverview {
   // Hard rule: No more than 12 total bullets across all sections.
   const fields: (keyof Pick<
@@ -249,7 +268,8 @@ function buildLockedPrompt(args: {
   if (args.leadType) metaLines.push(`- lead type: ${args.leadType}`);
   if (typeof args.durationSeconds === "number")
     metaLines.push(`- call duration: ${args.durationSeconds}s`);
-  if (args.outcomeLabel) metaLines.push(`- call outcome (if known): ${args.outcomeLabel}`);
+  if (args.outcomeLabel)
+    metaLines.push(`- call outcome (if known): ${args.outcomeLabel}`);
   if (args.appointmentTime)
     metaLines.push(`- appointment time (if booked): ${args.appointmentTime}`);
 
@@ -286,7 +306,9 @@ async function generateCloseStyleOverview(args: {
   appointmentTime?: string;
 }): Promise<AICallOverview | null> {
   if (!OPENAI_API_KEY) {
-    console.warn("[ai-calls/outcome] OPENAI_API_KEY missing; skipping aiOverview generation");
+    console.warn(
+      "[ai-calls/outcome] OPENAI_API_KEY missing; skipping aiOverview generation"
+    );
     return null;
   }
 
@@ -346,7 +368,9 @@ async function generateCloseStyleOverview(args: {
   if (!parsed || typeof parsed !== "object") return null;
 
   const overview: AICallOverview = {
-    overviewBullets: Array.isArray(parsed.overviewBullets) ? parsed.overviewBullets : [],
+    overviewBullets: Array.isArray(parsed.overviewBullets)
+      ? parsed.overviewBullets
+      : [],
     keyDetails: Array.isArray(parsed.keyDetails) ? parsed.keyDetails : [],
     objections: Array.isArray(parsed.objections) ? parsed.objections : [],
     questions: Array.isArray(parsed.questions) ? parsed.questions : [],
@@ -355,7 +379,8 @@ async function generateCloseStyleOverview(args: {
     appointmentTime: isNonEmptyString(parsed.appointmentTime)
       ? String(parsed.appointmentTime)
       : args.appointmentTime,
-    sentiment: isNonEmptyString(parsed.sentiment) ? String(parsed.sentiment) : undefined,
+    // ✅ Fix TS + enforce locked sentiment union
+    sentiment: normalizeOverviewSentiment(parsed?.sentiment),
     generatedAt: new Date().toISOString(),
     version: 1,
   };
@@ -378,15 +403,10 @@ function getTranscriptFromRecording(rec: any): string {
   return "";
 }
 
-export default async function handler(
-  req: NextApiRequest,
-  res: NextApiResponse
-) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") {
     res.setHeader("Allow", "POST");
-    return res
-      .status(405)
-      .json({ ok: false, message: "Method not allowed" });
+    return res.status(405).json({ ok: false, message: "Method not allowed" });
   }
 
   if (!AI_DIALER_AGENT_KEY) {
@@ -415,9 +435,7 @@ export default async function handler(
     } = (req.body || {}) as OutcomeBody;
 
     if (!callSid) {
-      return res
-        .status(400)
-        .json({ ok: false, message: "callSid is required" });
+      return res.status(400).json({ ok: false, message: "callSid is required" });
     }
 
     const rec = await AICallRecording.findOne({ callSid }).exec();
@@ -555,8 +573,7 @@ export default async function handler(
           inc[`stats.${prevOutcome}`] = (inc[`stats.${prevOutcome}`] || 0) - 1;
         }
         if (nextOutcome !== "unknown") {
-          inc[`stats.${nextOutcome}`] =
-            (inc[`stats.${nextOutcome}`] || 0) + 1;
+          inc[`stats.${nextOutcome}`] = (inc[`stats.${nextOutcome}`] || 0) + 1;
         }
 
         // Completed only tracks leads where we have a *final* outcome
@@ -608,15 +625,12 @@ export default async function handler(
               }
             ).exec();
 
-            console.log(
-              "[ai-calls/outcome] Marked AI session completed based on stats",
-              {
-                sessionId: String(aiCallSessionId),
-                userEmail,
-                total,
-                completed,
-              }
-            );
+            console.log("[ai-calls/outcome] Marked AI session completed based on stats", {
+              sessionId: String(aiCallSessionId),
+              userEmail,
+              total,
+              completed,
+            });
 
             // TODO: hook in your Resend email here
           }
@@ -736,7 +750,10 @@ export default async function handler(
           }
         }
       } catch (e: any) {
-        console.warn("[ai-calls/outcome] aiOverview save failed (non-blocking):", e?.message || e);
+        console.warn(
+          "[ai-calls/outcome] aiOverview save failed (non-blocking):",
+          e?.message || e
+        );
         aiOverviewSkippedReason = "save_error";
       }
     }
@@ -764,17 +781,11 @@ export default async function handler(
             recordingId: rec._id,
             bookedAccepted,
             bookedRejectedReason,
-            confirmedDate: isNonEmptyString(confirmedDate)
-              ? confirmedDate!.trim()
-              : undefined,
-            confirmedTime: isNonEmptyString(confirmedTime)
-              ? confirmedTime!.trim()
-              : undefined,
+            confirmedDate: isNonEmptyString(confirmedDate) ? confirmedDate!.trim() : undefined,
+            confirmedTime: isNonEmptyString(confirmedTime) ? confirmedTime!.trim() : undefined,
             confirmedYes: typeof confirmedYes === "boolean" ? confirmedYes : undefined,
             repeatBackConfirmed:
-              typeof repeatBackConfirmed === "boolean"
-                ? repeatBackConfirmed
-                : undefined,
+              typeof repeatBackConfirmed === "boolean" ? repeatBackConfirmed : undefined,
           },
         };
 
