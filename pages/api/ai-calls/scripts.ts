@@ -11,31 +11,42 @@ type ScriptOption = {
   default?: boolean;
 };
 
+/**
+ * ✅ IMPORTANT:
+ * These keys MUST match what the voice server prompt builder understands.
+ * We return ONLY canonical keys here to prevent “wrong script” drift.
+ */
 const SCRIPTS: ScriptOption[] = [
-  {
-    key: "fex_default",
-    label: "Final Expense – Default",
-    description: "Jeremy-style FE script focused on booking a quick call.",
-    leadType: "Final Expense",
-    default: true,
-  },
   {
     key: "mortgage_protection",
     label: "Mortgage Protection",
     description: "Protecting the home / payment, appointment-driven script.",
     leadType: "Mortgage Protection",
+    default: true,
   },
   {
-    key: "iul",
-    label: "IUL – Cash Value Focus",
+    key: "final_expense",
+    label: "Final Expense",
+    description: "Final expense script focused on booking a quick call.",
+    leadType: "Final Expense",
+  },
+  {
+    key: "iul_cash_value",
+    label: "IUL (Cash Value Focus)",
     description: "Cash value, tax-free growth, retirement gap script.",
     leadType: "IUL",
   },
   {
-    key: "veterans",
+    key: "veteran_leads",
     label: "Veteran Programs",
     description: "Veteran benefit-style script.",
     leadType: "Veteran",
+  },
+  {
+    key: "trucker_leads",
+    label: "Trucker / CDL",
+    description: "Trucker lead script tailored to over-the-road drivers.",
+    leadType: "Trucker",
   },
 ];
 

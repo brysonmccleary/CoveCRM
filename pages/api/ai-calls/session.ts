@@ -30,6 +30,71 @@ type PostBody = {
   voiceKey?: string;
 };
 
+// ✅ Canonical script keys used end-to-end by the voice server prompt builder
+const CANONICAL_SCRIPTS = [
+  "mortgage_protection",
+  "final_expense",
+  "iul_cash_value",
+  "veteran_leads",
+  "trucker_leads",
+  "generic_life",
+] as const;
+
+type CanonicalScriptKey = (typeof CANONICAL_SCRIPTS)[number];
+
+function normalizeScriptKey(raw: any): CanonicalScriptKey {
+  const v = String(raw || "")
+    .trim()
+    .toLowerCase();
+
+  if (!v) return "mortgage_protection";
+
+  // ✅ Normalize older/alternate keys → canonical keys
+  if (v === "mortgage" || v === "mortgageprotect" || v === "mp") {
+    return "mortgage_protection";
+  }
+
+  // Final Expense variants
+  if (
+    v === "final_expense" ||
+    v === "finalexpense" ||
+    v === "fe" ||
+    v === "fex" ||
+    v === "fex_default" ||
+    v === "final_expense_default"
+  ) {
+    return "final_expense";
+  }
+
+  // IUL variants
+  if (v === "iul" || v === "iul_leads" || v === "iul_cash_value") {
+    return "iul_cash_value";
+  }
+
+  // Veteran variants
+  if (v === "veterans" || v === "veteran" || v === "veteran_leads") {
+    return "veteran_leads";
+  }
+
+  // Trucker variants
+  if (v === "trucker" || v === "truckers" || v === "trucker_leads") {
+    return "trucker_leads";
+  }
+
+  // Generic/catch-all
+  if (v === "generic" || v === "life" || v === "generic_life") {
+    return "generic_life";
+  }
+
+  // If they already sent canonical, accept it
+  if ((CANONICAL_SCRIPTS as readonly string[]).includes(v)) {
+    return v as CanonicalScriptKey;
+  }
+
+  // Unknown → safest default (prevents “wrong script” drift)
+  return "mortgage_protection";
+}
+
 // 🔹 Base URL for talking to the AI voice server (HTTP)
 // We derive it from AI_VOICE_STREAM_URL, which is used for wss:// streaming.
 // Example env:
@@ -234,6 +299,9 @@ export default async function handler(
           .json({ ok: false, message: "voiceKey is required" });
       }
 
+      // ✅ Normalize scriptKey BEFORE saving (this is the real fix for “wrong script”)
+      const normalizedScriptKey = normalizeScriptKey(scriptKey);
+
       const fid = new Types.ObjectId(folderId);
 
       // Pull queue snapshot from leads in that folder (per-user ownership)
@@ -271,7 +339,7 @@ export default async function handler(
           folderId: fid,
           leadIds,
           fromNumber,
-          scriptKey,
+          scriptKey: normalizedScriptKey,
           voiceKey,
           total,
           lastIndex: -1,
@@ -285,7 +353,7 @@ export default async function handler(
         aiSession.leadIds = leadIds;
         aiSession.total = total;
         aiSession.fromNumber = fromNumber;
-        aiSession.scriptKey = scriptKey;
+        aiSession.scriptKey = normalizedScriptKey;
         aiSession.voiceKey = voiceKey;
         aiSession.errorMessage = null;
 
