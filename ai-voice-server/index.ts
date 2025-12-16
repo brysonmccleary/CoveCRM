@@ -735,7 +735,7 @@ HARD LANGUAGE LOCK (NON-NEGOTIABLE)
         model: OPENAI_REALTIME_MODEL,
       });
       openAiWs.send(JSON.stringify(sessionUpdate));
-      // ✅ We will ONLY flush audio + greet after session.updated confirms this applied
+      // ✅ We will ONLY greet after session.updated confirms this applied
     } catch (err: any) {
       console.error(
         "[AI-VOICE] Error sending session.update:",
@@ -796,20 +796,25 @@ async function handleOpenAiEvent(
     state.openAiConfigured = true;
     state.openAiReady = true;
 
-    if (state.pendingAudioFrames.length > 0 && state.openAiWs) {
+    // ✅ Diagnostic: confirm what OpenAI thinks voice is after update
+    try {
+      console.log("[AI-VOICE] session.updated applied voice:", event?.session?.voice);
+    } catch {}
+
+    // ✅ CRITICAL: DO NOT flush pre-ready inbound audio into OpenAI right before greeting.
+    // It often triggers server_vad "speech_started" during greeting, causing cutouts.
+    if (state.pendingAudioFrames.length > 0) {
       console.log(
-        "[AI-VOICE] Flushing buffered audio frames to OpenAI (post-session-updated):",
+        "[AI-VOICE] Dropping buffered inbound frames before greeting to prevent VAD interrupt:",
         state.pendingAudioFrames.length
       );
-      for (const base64Chunk of state.pendingAudioFrames) {
-        const appendEvt = {
-          type: "input_audio_buffer.append",
-          audio: base64Chunk,
-        };
-        state.openAiWs.send(JSON.stringify(appendEvt));
-      }
       state.pendingAudioFrames = [];
     }
+
+    // ✅ Clear any server-side audio buffer so VAD doesn't think user is speaking during greeting
+    try {
+      state.openAiWs?.send(JSON.stringify({ type: "input_audio_buffer.clear" }));
+    } catch {}
 
     // Initial greeting – guarded so we don't send multiple
     if (
@@ -839,6 +844,9 @@ async function handleOpenAiEvent(
           return;
         }
 
+        // ✅ reset inbound timer/buffer counter at start of any AI response
+        liveState.userAudioMsBuffered = 0;
+
         setWaitingForResponse(liveState, true, "response.create (greeting)");
         setAiSpeaking(liveState, true, "response.create (greeting)");
         liveState.outboundOpenAiDone = false;
@@ -855,6 +863,34 @@ async function handleOpenAiEvent(
       })();
     }
 
+    return;
+  }
+
+  // ✅ With server_vad + create_response:false, we MUST manually create a response after user speech commits.
+  if (t === "input_audio_buffer.committed") {
+    if (
+      state.openAiWs &&
+      state.openAiReady &&
+      !state.waitingForResponse &&
+      !state.aiSpeaking
+    ) {
+      // ✅ reset inbound counter for the new turn
+      state.userAudioMsBuffered = 0;
+
+      setWaitingForResponse(state, true, "response.create (user turn)");
+      setAiSpeaking(state, true, "response.create (user turn)");
+      state.outboundOpenAiDone = false;
+
+      state.openAiWs.send(
+        JSON.stringify({
+          type: "response.create",
+          response: {
+            instructions:
+              "Respond naturally following all call rules and the script guidance. Keep it short (1–3 sentences), ask one clear question, then stop and wait for the lead to respond.",
+          },
+        })
+      );
+    }
     return;
   }
 
@@ -1030,6 +1066,9 @@ async function handleBookAppointmentIntent(state: CallState, control: any) {
         "your scheduled appointment time as discussed";
 
       if (!state.waitingForResponse) {
+        // ✅ reset inbound counter for the new turn
+        state.userAudioMsBuffered = 0;
+
         setWaitingForResponse(state, true, "response.create (booking confirm)");
         setAiSpeaking(state, true, "response.create (booking confirm)");
         state.outboundOpenAiDone = false;
