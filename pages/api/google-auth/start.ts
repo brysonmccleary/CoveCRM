@@ -23,16 +23,23 @@ export default async function handler(
     redirectUri
   );
 
+  // IMPORTANT:
+  // Request the full set so the consent screen is comprehensive and matches Cloud Console.
   const url = oauth2Client.generateAuthUrl({
     access_type: "offline",
     prompt: "consent",
     scope: [
-      // minimal identity
+      // Identity
       "https://www.googleapis.com/auth/userinfo.email",
-      // calendar events (read/write appointments)
-      "https://www.googleapis.com/auth/calendar.events",
+      "https://www.googleapis.com/auth/userinfo.profile",
+      "openid",
+      // Calendar (full access so consent wording matches)
+      "https://www.googleapis.com/auth/calendar",
       // ✅ per-file Drive access used with Sheets API
       "https://www.googleapis.com/auth/drive.file",
+      "https://www.googleapis.com/auth/drive.metadata.readonly",
+      // Sheets read-only
+      "https://www.googleapis.com/auth/spreadsheets.readonly",
     ],
   });
 

@@ -1,5 +1,4 @@
 // /pages/legal/privacy.tsx
-
 export default function PrivacyPolicy() {
   return (
     <div className="min-h-screen bg-slate-950 text-slate-50 px-4 py-10">
@@ -47,10 +46,15 @@ export default function PrivacyPolicy() {
             <span className="font-semibold">Google Sheets / Drive:</span> We use
             Google Sheets and Drive-related scopes (including{" "}
             <span className="italic">
+              https://www.googleapis.com/auth/spreadsheets.readonly
+            </span>{" "}
+            ,{" "}
+            <span className="italic">
+              https://www.googleapis.com/auth/drive.file
             </span>{" "}
             and{" "}
             <span className="italic">
-              https://www.googleapis.com/auth/drive.file
+              https://www.googleapis.com/auth/drive.metadata.readonly
             </span>
             ) to allow you to select specific spreadsheets and import lead data
             from those files into CoveCRM. We only access the spreadsheets and
@@ -58,12 +62,12 @@ export default function PrivacyPolicy() {
             Google Drive.
           </li>
           <li>
-            <span className="font-semibold">Google Calendar:</span> We use
-            calendar scopes (such as{" "}
+            <span className="font-semibold">Google Calendar:</span> We use the
+            calendar scope{" "}
             <span className="italic">
-              https://www.googleapis.com/auth/calendar.events
-            </span>
-            ) to create, update, and read events on the calendars you select so
+              https://www.googleapis.com/auth/calendar
+            </span>{" "}
+            to create, update, and read events on the calendars you select so
             that appointments booked in CoveCRM sync to your Google Calendar and
             vice versa.
           </li>

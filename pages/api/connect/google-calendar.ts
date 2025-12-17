@@ -26,13 +26,20 @@ export default async function handler(
     redirectUri,
   );
 
+  // IMPORTANT:
+  // For Google verification, the consent screen needs to match your Cloud Console requested scopes.
+  // We request the full set here so the consent screen is "comprehensive" and consistent.
   const url = oauth2.generateAuthUrl({
     access_type: "offline",
     prompt: "consent",
     scope: [
+      // Calendar (full access so consent wording matches)
+      "https://www.googleapis.com/auth/calendar",
+      // Sheets + Drive scopes used by the platform
       "https://www.googleapis.com/auth/drive.file",
-      "https://www.googleapis.com/auth/calendar.events",
-      "https://www.googleapis.com/auth/calendar.readonly",
+      "https://www.googleapis.com/auth/drive.metadata.readonly",
+      "https://www.googleapis.com/auth/spreadsheets.readonly",
+      // Identity
       "https://www.googleapis.com/auth/userinfo.email",
       "https://www.googleapis.com/auth/userinfo.profile",
       "openid",

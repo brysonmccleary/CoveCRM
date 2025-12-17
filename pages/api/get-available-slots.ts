@@ -1,8 +1,9 @@
+// pages/api/get-available-slots.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { google } from "googleapis";
 import { getCalendarIdByEmail } from "@/lib/userHelpers";
 
-const SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"];
+const SCOPES = ["https://www.googleapis.com/auth/calendar"];
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const { email } = req.query;

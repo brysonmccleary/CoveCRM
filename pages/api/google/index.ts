@@ -11,12 +11,14 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
   const clientId = process.env.GOOGLE_CLIENT_ID!;
   const redirectUri = process.env.GOOGLE_REDIRECT_URI!;
 
-  // Use env first; otherwise default to the exact scopes we need
+  // Use env first; otherwise default to the exact scopes we need (match Cloud Console)
   const scopes =
     (process.env.GOOGLE_SCOPES || "").split(/\s+/).filter(Boolean).join(" ") ||
     [
       "https://www.googleapis.com/auth/calendar",
-      "https://www.googleapis.com/auth/calendar.events",
+      "https://www.googleapis.com/auth/drive.file",
+      "https://www.googleapis.com/auth/drive.metadata.readonly",
+      "https://www.googleapis.com/auth/spreadsheets.readonly",
       "https://www.googleapis.com/auth/userinfo.email",
       "https://www.googleapis.com/auth/userinfo.profile",
       "openid",
