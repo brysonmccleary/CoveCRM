@@ -97,18 +97,10 @@ export default async function handler(
       ).lean();
 
       for (const l of leads) {
-        const first = (
-          l["First Name"] ||
-          (l as any).firstName ||
-          ""
-        )
+        const first = (l["First Name"] || (l as any).firstName || "")
           .toString()
           .trim();
-        const last = (
-          l["Last Name"] ||
-          (l as any).lastName ||
-          ""
-        )
+        const last = (l["Last Name"] || (l as any).lastName || "")
           .toString()
           .trim();
         const full = `${first} ${last}`.trim() || "Lead";
@@ -197,7 +189,7 @@ export default async function handler(
       });
     }
 
-    // Fallback invalid_grant handling (should be rare if helper caught it)
+    // Fallback invalid_grant handling
     if (msg.includes("invalid_grant")) {
       (user as any).flags = {
         ...(user as any).flags,
@@ -214,6 +206,15 @@ export default async function handler(
       "❌ Google Calendar events error:",
       googlePayload || err?.message || err
     );
-    return res.status(500).json({ error: "Failed to fetch events" });
+
+    // IMPORTANT: if it's failing, force reconnect so UI shows the button
+    (user as any).flags = {
+      ...(user as any).flags,
+      calendarConnected: false,
+      calendarNeedsReconnect: true,
+    };
+    await user.save();
+
+    return res.status(500).json({ error: "Failed to fetch events", needsReconnect: true });
   }
 }
