@@ -633,7 +633,7 @@ RULES
 - Then ask again: "Would later today or tomorrow work better — daytime or evening?"
 - Never mention rates, underwriting, carriers, approvals, eligibility, age, health.
 - Never introduce any other scenario (travel, resorts, healthcare, utilities, etc.).
-- Never apologize. Never mention scripts. Never acknowledge mistakes.
+- Never apologize. Never mention scripts/prompts. Never acknowledge mistakes.
 
 OBJECTION: "I don’t have time / I’m at work"
 REBUTTAL: "Totally understand. That’s why I’m just scheduling — it’ll be a short call with ${agent}. Would later today or tomorrow be better — daytime or evening?"
@@ -666,9 +666,6 @@ STOP. WAIT.
 `.trim();
 }
 
-/**
- * ✅ Script block returned into the prompt.
- */
 function getScriptBlock(ctx: AICallContext): string {
   const aiName = (ctx.voiceProfile.aiName || "Alex").trim() || "Alex";
   const clientRaw = (ctx.clientFirstName || "").trim();
@@ -730,7 +727,7 @@ TURN DISCIPLINE (NON-NEGOTIABLE)
 }
 
 /**
- * ✅ Strict system greeting (kept), and we re-inject full guardrails every turn too.
+ * ✅ Strict system greeting: MUST stop and wait.
  */
 function buildGreetingInstructions(ctx: AICallContext): string {
   const aiName = (ctx.voiceProfile.aiName || "Alex").trim() || "Alex";
@@ -751,48 +748,7 @@ function buildGreetingInstructions(ctx: AICallContext): string {
 }
 
 /**
- * ✅ Per-turn instructions re-inject the full script + locks EVERY time.
- */
-function buildTurnInstructions(
-  ctx: AICallContext,
-  mode: "greeting" | "next_step"
-): string {
-  const scriptBlock = getScriptBlock(ctx);
-
-  if (mode === "greeting") {
-    return [
-      "ABSOLUTE RULE: DO NOT INVENT ANY SCENARIO OR REASON FOR THIS CALL.",
-      "ABSOLUTE RULE: DO NOT mention travel, resorts, hotels, vacations, healthcare, utilities, solar, energy, Medicare, etc.",
-      "ABSOLUTE RULE: DO NOT apologize. DO NOT mention scripts/prompts. Just speak the greeting.",
-      "",
-      "You must read the greeting VERBATIM below, then stop and wait.",
-      "GREETING VERBATIM:",
-      buildGreetingInstructions(ctx),
-      "",
-      "REFERENCE SCRIPT (DO NOT START IT YET ON THIS TURN):",
-      scriptBlock,
-    ].join("\n");
-  }
-
-  return [
-    "ABSOLUTE RULE: DO NOT INVENT ANY SCENARIO OR REASON FOR THIS CALL.",
-    "ABSOLUTE RULE: This call is ONLY about the lead’s LIFE INSURANCE request.",
-    "ABSOLUTE RULE: DO NOT apologize. DO NOT mention scripts/prompts. Do NOT acknowledge mistakes.",
-    "",
-    "OUTPUT RULE (NON-NEGOTIABLE):",
-    "- Speak ONLY the next step from the BOOKING SCRIPT below.",
-    "- Read it as written. Do NOT paraphrase. Do NOT add anything new.",
-    "- After your line/question, STOP and WAIT.",
-    "- If the lead objects, use ONE rebuttal from REBUTTALS, then return to booking.",
-    "- If you are about to say anything outside allowed scope, DO NOT SAY IT. Continue with the next script line instead.",
-    "",
-    "SCRIPT TO FOLLOW (AUTHORITATIVE):",
-    scriptBlock,
-  ].join("\n");
-}
-
-/**
- * System prompt – stays, but enforcement is per-turn response.create instructions.
+ * System prompt – HARD locks + BOOKING script + rebuttals.
  */
 function buildSystemPrompt(ctx: AICallContext): string {
   const aiName = (ctx.voiceProfile.aiName || "Alex").trim() || "Alex";
@@ -803,7 +759,7 @@ function buildSystemPrompt(ctx: AICallContext): string {
 
   const base = `
 You are ${aiName}, a phone appointment-setting assistant calling on behalf of licensed life insurance agent ${agent}.
-You are calm, confident, short, and human-sounding.
+You are calm, confident, and human-sounding.
 
 HARD ENGLISH LOCK (NON-NEGOTIABLE)
 - Speak ONLY English.
@@ -828,7 +784,7 @@ BOOKING-ONLY (NON-NEGOTIABLE)
 - You are NOT the licensed agent.
 - Do NOT say you are an underwriter.
 - Do NOT mention rates, carriers, approvals, eligibility, or ask health/age/DOB/SSN/banking questions.
-- Your ONLY goal is to book a phone appointment.
+- Your ONLY goal is to follow the booking script and schedule the appointment.
 
 TURN DISCIPLINE (NON-NEGOTIABLE)
 - After you ask ANY question, STOP and WAIT.
@@ -840,12 +796,29 @@ LEAD INFO (USE ONLY WHAT IS PROVIDED)
 - Script key: ${scriptKey}
 
 MOST IMPORTANT:
-- FOLLOW THE BOOKING SCRIPT. DO NOT INVENT ANY OTHER REASON FOR THE CALL.
+- FOLLOW THE SCRIPT BELOW EXACTLY IN ORDER.
+- Use REBUTTALS only when the lead objects, then return to booking.
 `.trim();
 
   const script = getScriptBlock(ctx);
 
   return `${base}\n\n====================\nREAL CALL SCRIPT\n====================\n${script}`;
+}
+
+/**
+ * ✅ Short per-turn instruction (keeps audio reliable)
+ * We reference the system prompt’s REAL CALL SCRIPT without re-sending it every turn.
+ */
+function buildShortNextStepInstruction(): string {
+  return `
+STRICT OUTPUT RULES (NON-NEGOTIABLE):
+- Speak ONLY the next step of the REAL CALL SCRIPT already provided in the system prompt.
+- Read it as written. Do NOT paraphrase. Do NOT add anything new.
+- Do NOT invent any scenario (no resorts, no travel, no healthcare, no utilities, no other products).
+- Do NOT apologize. Do NOT mention scripts/prompts.
+- After your line/question, STOP and WAIT.
+- If the lead objects, use ONE rebuttal from REBUTTALS, then return to booking.
+`.trim();
 }
 
 /**
@@ -1270,7 +1243,7 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
         modalities: ["audio", "text"],
         voice: state.context!.voiceProfile.openAiVoiceId || "alloy",
 
-        // ✅ Lower temp reduces drift / hallucination
+        // ✅ Low temp reduces drift / hallucination
         temperature: 0.2,
 
         input_audio_format: "g711_ulaw",
@@ -1409,15 +1382,11 @@ async function handleOpenAiEvent(
         setAiSpeaking(liveState, true, "response.create (greeting)");
         liveState.outboundOpenAiDone = false;
 
-        // ✅ IMPORTANT: re-inject full guardrails + greeting verbatim
         liveState.openAiWs.send(
           JSON.stringify({
             type: "response.create",
             response: {
-              instructions: buildTurnInstructions(
-                liveState.context!,
-                "greeting"
-              ),
+              instructions: buildGreetingInstructions(liveState.context!),
             },
           })
         );
@@ -1427,11 +1396,6 @@ async function handleOpenAiEvent(
     return;
   }
 
-  /**
-   * TURN-TAKING:
-   * - After greeting, we WAIT for committed audio.
-   * - On first commit, we start the REAL SCRIPT and WAIT after questions.
-   */
   if (t === "input_audio_buffer.committed") {
     if (state.voicemailSkipArmed) return;
     if (!state.openAiWs || !state.openAiReady) return;
@@ -1443,12 +1407,11 @@ async function handleOpenAiEvent(
     setAiSpeaking(state, true, "response.create (user turn)");
     state.outboundOpenAiDone = false;
 
-    // ✅ IMPORTANT: re-inject full guardrails + full selected script EVERY turn
     state.openAiWs.send(
       JSON.stringify({
         type: "response.create",
         response: {
-          instructions: buildTurnInstructions(context, "next_step"),
+          instructions: buildShortNextStepInstruction(),
         },
       })
     );
