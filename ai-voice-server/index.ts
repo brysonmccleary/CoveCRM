@@ -159,6 +159,30 @@ type CallState = {
 
   // ✅ voicemail skip safety
   voicemailSkipArmed?: boolean;
+
+  /**
+   * ============================
+   * ✅ SCRIPT ADHERENCE (NEW)
+   * ============================
+   * We do NOT change any audio logic.
+   * We only control WHAT text the model is allowed to speak by sending the exact next script line.
+   */
+  scriptSteps?: string[];
+  scriptStepIndex?: number;
+
+  // last user text (only if OpenAI emits it; non-blocking)
+  lastUserTranscript?: string;
+
+  // instrumentation: system prompt markers
+  systemPromptLen?: number;
+  systemPromptHead300?: string;
+  systemPromptTail700?: string;
+  systemPromptMarkers?: Record<string, boolean>;
+  systemPromptUniqueLine?: string;
+
+  // instrumentation: one-time response.create logs
+  debugLoggedResponseCreateGreeting?: boolean;
+  debugLoggedResponseCreateUserTurn?: boolean;
 };
 
 const calls = new Map<WebSocket, CallState>();
@@ -424,6 +448,220 @@ function safelyCloseOpenAi(state: CallState, why: string) {
       state.openAiWs = undefined;
     }
   } catch {}
+}
+
+/**
+ * ============================
+ * ✅ SCRIPT DRIFT DIAGNOSTICS
+ * ============================
+ * We must NOT log private lead notes.
+ * So we redact the "- Notes:" line when printing prompt snippets.
+ */
+function redactPromptForLogs(prompt: string): string {
+  const p = String(prompt || "");
+  // base prompt uses single-line notes: "- Notes: <...>"
+  return p.replace(/- Notes:\s.*$/gm, "- Notes: [REDACTED]");
+}
+
+function safeSliceHead(s: string, n: number): string {
+  const t = String(s || "");
+  return t.length <= n ? t : t.slice(0, n);
+}
+
+function safeSliceTail(s: string, n: number): string {
+  const t = String(s || "");
+  return t.length <= n ? t : t.slice(Math.max(0, t.length - n));
+}
+
+function computePromptMarkers(systemPrompt: string, uniqueLine?: string) {
+  const p = String(systemPrompt || "");
+  const markers = {
+    has_REAL_CALL_SCRIPT: p.includes("REAL CALL SCRIPT"),
+    has_BOOKING_SCRIPT: p.includes("BOOKING SCRIPT"),
+    has_FOLLOW_SCRIPT_EXACTLY: p.includes("FOLLOW THE SCRIPT BELOW EXACTLY"),
+    has_BOOKING_SCRIPT_FOLLOW_EXACTLY: p.includes("BOOKING SCRIPT (FOLLOW EXACTLY)"),
+    has_unique_line: uniqueLine ? p.includes(uniqueLine) : false,
+  };
+  return markers;
+}
+
+/**
+ * ============================
+ * ✅ SERVER-DRIVEN STEPPER
+ * ============================
+ * The model never "remembers" the whole script.
+ * On each user turn, we send exactly ONE next script line (1–2 sentences).
+ */
+function extractScriptStepsFromSelectedScript(selectedScript: string): string[] {
+  const raw = String(selectedScript || "");
+
+  // Prefer "Say: "...""
+  const steps: string[] = [];
+  const pushIf = (s: string) => {
+    const t = String(s || "").trim();
+    if (!t) return;
+    // collapse spaces but keep punctuation
+    const one = t.replace(/\s+/g, " ").trim();
+    if (!one) return;
+    steps.push(one);
+  };
+
+  // "Say: "....""
+  const sayRe = /Say:\s*"([^"]+)"/g;
+  let m: RegExpExecArray | null;
+  while ((m = sayRe.exec(raw))) {
+    pushIf(m[1]);
+  }
+
+  // "Then ask: "....""
+  const thenAskRe = /Then ask:\s*"([^"]+)"/g;
+  while ((m = thenAskRe.exec(raw))) {
+    pushIf(m[1]);
+  }
+
+  // "Then say: "....""
+  const thenSayRe = /Then say:\s*"([^"]+)"/g;
+  while ((m = thenSayRe.exec(raw))) {
+    pushIf(m[1]);
+  }
+
+  // If scripts ever change and no matches are found, fallback to a safe booking-only prompt.
+  if (steps.length === 0) {
+    // NOTE: do not include any other vertical/topic
+    pushIf("I’m just calling to get you scheduled for a quick call. Would later today or tomorrow be better — daytime or evening?");
+  }
+
+  // De-dupe exact repeats while preserving order
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const s of steps) {
+    const key = s.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(s);
+  }
+  return out;
+}
+
+function getBookingFallbackLine(ctx: AICallContext): string {
+  const agentRaw = (ctx.agentName || "your agent").trim() || "your agent";
+  const agent = (agentRaw.split(" ")[0] || agentRaw).trim();
+  return `Perfect — my job is just to get you scheduled. ${agent} is the licensed agent who will go over everything with you. Would later today or tomorrow be better — daytime or evening?`;
+}
+
+function detectObjection(textRaw: string): string | null {
+  const t = String(textRaw || "").trim().toLowerCase();
+  if (!t) return null;
+
+  // Very lightweight; only triggers if we actually have a transcript.
+  // We NEVER follow them into other verticals; we keep booking-only language.
+  if (
+    t.includes("not interested") ||
+    t.includes("stop calling") ||
+    t.includes("remove") ||
+    t.includes("do not call")
+  ) {
+    return "not_interested";
+  }
+  if (t.includes("scam") || t.includes("fraud") || t.includes("spam")) {
+    return "scam";
+  }
+  if (t.includes("already have") || t.includes("got coverage") || t.includes("i have coverage")) {
+    return "already_have";
+  }
+  if (t.includes("busy") || t.includes("at work") || t.includes("no time")) {
+    return "busy";
+  }
+  if (t.includes("text me") || t.includes("send it") || t.includes("email me")) {
+    return "send_it";
+  }
+  if (t.includes("how much") || t.includes("price") || t.includes("cost")) {
+    return "how_much";
+  }
+  if (
+    t.includes("don't remember") ||
+    t.includes("do not remember") ||
+    t.includes("never filled") ||
+    t.includes("didn't fill") ||
+    t.includes("who is this")
+  ) {
+    return "dont_remember";
+  }
+
+  // If they mention disallowed topics, treat it as a "redirect" objection.
+  if (
+    t.includes("vacation") ||
+    t.includes("resort") ||
+    t.includes("timeshare") ||
+    t.includes("energy") ||
+    t.includes("utility") ||
+    t.includes("medicare") ||
+    t.includes("health") ||
+    t.includes("aca") ||
+    t.includes("obamacare") ||
+    t.includes("real estate") ||
+    t.includes("loan")
+  ) {
+    return "redirect";
+  }
+
+  return null;
+}
+
+function getRebuttalLine(ctx: AICallContext, kind: string): string {
+  const agentRaw = (ctx.agentName || "your agent").trim() || "your agent";
+  const agent = (agentRaw.split(" ")[0] || agentRaw).trim();
+
+  if (kind === "busy") {
+    return `Totally understand. That’s why I’m just scheduling — it’ll be a short call with ${agent}. Would later today or tomorrow be better — daytime or evening?`;
+  }
+  if (kind === "send_it") {
+    return `I can, but it’s usually easier to schedule a quick call so you don’t have to go back and forth. Would later today or tomorrow be better — daytime or evening?`;
+  }
+  if (kind === "already_have") {
+    return `Perfect — this is just to make sure it still lines up with what you wanted. Would later today or tomorrow be better — daytime or evening?`;
+  }
+  if (kind === "how_much") {
+    return `Good question — ${agent} covers that on the quick call because it depends on what you want it to do. Would later today or tomorrow be better — daytime or evening?`;
+  }
+  if (kind === "dont_remember") {
+    // Stay inside life-insurance context
+    return `No worries — it was just a request for information on life insurance. Was that for just you, or a spouse as well?`;
+  }
+  if (kind === "scam") {
+    return `I understand. This is just a scheduling call tied to your life insurance request. ${agent} will explain everything clearly on the phone. Would later today or tomorrow be better — daytime or evening?`;
+  }
+  if (kind === "not_interested") {
+    // Keep booking-only and let outcome logic handle later based on model control if you have it
+    return `No worries — just so I don’t waste your time, did you mean you don’t want any coverage at all, or you just don’t want a call right now?`;
+  }
+  if (kind === "redirect") {
+    // They tried to steer to other verticals. We do NOT follow them. We return to booking.
+    return getBookingFallbackLine(ctx);
+  }
+
+  return getBookingFallbackLine(ctx);
+}
+
+/**
+ * ✅ Build per-turn instruction that makes drift basically impossible.
+ * We do NOT change audio/timers/turn detection. Only the "text instructions" for response.create.
+ */
+function buildStepperTurnInstruction(ctx: AICallContext, lineToSay: string): string {
+  const leadName = (ctx.clientFirstName || "").trim() || "there";
+
+  return `
+HARD ENGLISH LOCK: Speak ONLY English.
+HARD NAME LOCK: The ONLY lead name you may use is exactly: "${leadName}" (or "there" if missing). Never invent names.
+HARD SCOPE LOCK: This call is ONLY about a LIFE INSURANCE request. Do NOT mention any other product or topic (no vacations/resorts/healthcare/real estate/utilities/etc).
+ABSOLUTE BEHAVIOR: Never apologize. Never mention scripts/prompts/system messages.
+TURN DISCIPLINE: After you ask a question, STOP and WAIT. Do NOT fill silence.
+
+YOU MUST SAY THIS EXACT LINE (read it verbatim, no paraphrase, no additions):
+"${String(lineToSay || "").trim()}"
+
+After you say that exact line, STOP talking and WAIT.
+`.trim();
 }
 
 /**
@@ -805,6 +1043,8 @@ MOST IMPORTANT:
 
 /**
  * ✅ Short per-turn instruction (keeps audio reliable)
+ * NOTE: We keep this function for backwards compatibility,
+ * but we will NOT use it for normal script turns anymore.
  */
 function buildShortNextStepInstruction(): string {
   return `
@@ -948,6 +1188,13 @@ wss.on("connection", (ws: WebSocket) => {
     outboundOpenAiDone: false,
 
     voicemailSkipArmed: false,
+
+    // script adherence defaults
+    scriptSteps: [],
+    scriptStepIndex: 0,
+    lastUserTranscript: "",
+    debugLoggedResponseCreateGreeting: false,
+    debugLoggedResponseCreateUserTurn: false,
   };
 
   calls.set(ws, state);
@@ -1032,6 +1279,20 @@ async function handleStart(ws: WebSocket, msg: TwilioStartEvent) {
   stopOutboundPacer(ws, state, "start/reset");
 
   state.voicemailSkipArmed = false;
+
+  // script adherence reset
+  state.scriptSteps = [];
+  state.scriptStepIndex = 0;
+  state.lastUserTranscript = "";
+  state.debugLoggedResponseCreateGreeting = false;
+  state.debugLoggedResponseCreateUserTurn = false;
+
+  // prompt instrumentation reset
+  state.systemPromptLen = undefined;
+  state.systemPromptHead300 = undefined;
+  state.systemPromptTail700 = undefined;
+  state.systemPromptMarkers = undefined;
+  state.systemPromptUniqueLine = undefined;
 
   const custom = msg.start.customParameters || {};
   const sessionId = custom.sessionId;
@@ -1221,6 +1482,50 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
 
     const systemPrompt = buildSystemPrompt(state.context!);
 
+    /**
+     * ============================
+     * ✅ Phase 1 — Instrumentation A
+     * ============================
+     * Right after building system prompt, log:
+     * - length
+     * - first ~300
+     * - last ~700
+     * - markers
+     * - 1 unique line from selected script
+     *
+     * IMPORTANT: do NOT log lead notes. We redact them in snippets.
+     */
+    try {
+      const selectedScript = getSelectedScriptText(state.context!);
+      const steps = extractScriptStepsFromSelectedScript(selectedScript);
+      const uniqueLine = steps?.[0] || "";
+
+      const redacted = redactPromptForLogs(systemPrompt);
+
+      state.systemPromptLen = systemPrompt.length;
+      state.systemPromptHead300 = safeSliceHead(redacted, 300);
+      state.systemPromptTail700 = safeSliceTail(redacted, 700);
+      state.systemPromptUniqueLine = uniqueLine;
+      state.systemPromptMarkers = computePromptMarkers(systemPrompt, uniqueLine);
+
+      console.log("[AI-VOICE][PROMPT-BUILD]", {
+        callSid: state.callSid,
+        streamSid: state.streamSid,
+        scriptKey: normalizeScriptKey(state.context?.scriptKey),
+        openAiVoiceId: state.context?.voiceProfile?.openAiVoiceId,
+        systemPromptLen: state.systemPromptLen,
+        markers: state.systemPromptMarkers,
+        uniqueLineIncluded: state.systemPromptMarkers?.has_unique_line,
+        head300: state.systemPromptHead300,
+        tail700: state.systemPromptTail700,
+      });
+    } catch (err: any) {
+      console.warn("[AI-VOICE][PROMPT-BUILD] logging failed (non-blocking):", {
+        callSid: state.callSid,
+        error: err?.message || err,
+      });
+    }
+
     try {
       const k = normalizeScriptKey(state.context?.scriptKey);
       const n = (state.context?.clientFirstName || "").trim() || "there";
@@ -1232,6 +1537,31 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
         scriptPreview: preview,
       });
     } catch {}
+
+    /**
+     * ✅ Phase 2 — Server-driven stepper init
+     * Build deterministic step list now (model will only ever see the next line).
+     */
+    try {
+      const selectedScript = getSelectedScriptText(state.context!);
+      state.scriptSteps = extractScriptStepsFromSelectedScript(selectedScript);
+      state.scriptStepIndex = 0;
+
+      console.log("[AI-VOICE][STEPPER-INIT]", {
+        callSid: state.callSid,
+        streamSid: state.streamSid,
+        scriptKey: normalizeScriptKey(state.context?.scriptKey),
+        stepsCount: state.scriptSteps.length,
+        firstStepPreview: (state.scriptSteps[0] || "").slice(0, 120),
+      });
+    } catch (err: any) {
+      console.warn("[AI-VOICE][STEPPER-INIT] failed (non-blocking):", {
+        callSid: state.callSid,
+        error: err?.message || err,
+      });
+      state.scriptSteps = [];
+      state.scriptStepIndex = 0;
+    }
 
     const sessionUpdate = {
       type: "session.update",
@@ -1309,11 +1639,51 @@ async function handleOpenAiEvent(
 
   const t = String(event?.type || "");
 
+  /**
+   * ✅ Optional transcript capture (non-blocking).
+   * We do NOT change any audio settings; we simply listen if OpenAI emits transcripts.
+   */
+  try {
+    // Some realtime payloads include transcription in different shapes; we accept whichever exists.
+    const maybeText =
+      event?.transcript ||
+      event?.text ||
+      event?.item?.transcript ||
+      event?.item?.text ||
+      event?.delta?.transcript ||
+      event?.delta?.text ||
+      event?.input_audio_transcription?.text ||
+      event?.input_audio_transcription?.transcript ||
+      "";
+    if (typeof maybeText === "string" && maybeText.trim()) {
+      state.lastUserTranscript = maybeText.trim();
+    }
+  } catch {}
+
   if (t === "session.updated" && !state.openAiConfigured) {
     state.openAiConfigured = true;
     state.openAiReady = true;
 
     state.phase = "awaiting_greeting_reply";
+
+    /**
+     * ============================
+     * ✅ Phase 1 — Instrumentation B
+     * ============================
+     * After OpenAI responds with session.updated, log PROMPT APPLIED
+     * using the local systemPrompt markers we computed earlier.
+     */
+    try {
+      console.log("[AI-VOICE][PROMPT-APPLIED]", {
+        callSid: state.callSid,
+        streamSid: state.streamSid,
+        scriptKey: normalizeScriptKey(state.context?.scriptKey),
+        openAiVoiceId: state.context?.voiceProfile?.openAiVoiceId,
+        systemPromptLen: state.systemPromptLen,
+        markers: state.systemPromptMarkers,
+        uniqueLine: (state.systemPromptUniqueLine || "").slice(0, 180),
+      });
+    } catch {}
 
     if (state.pendingAudioFrames.length > 0) {
       console.log(
@@ -1379,11 +1749,31 @@ async function handleOpenAiEvent(
         setAiSpeaking(liveState, true, "response.create (greeting)");
         liveState.outboundOpenAiDone = false;
 
+        const greetingInstr = buildGreetingInstructions(liveState.context!);
+
+        /**
+         * ============================
+         * ✅ Phase 1 — Instrumentation C (greeting)
+         * ============================
+         */
+        try {
+          if (!liveState.debugLoggedResponseCreateGreeting) {
+            liveState.debugLoggedResponseCreateGreeting = true;
+            console.log("[AI-VOICE][RESPONSE-CREATE][GREETING]", {
+              callSid: liveState.callSid,
+              streamSid: liveState.streamSid,
+              scriptKey: normalizeScriptKey(liveState.context?.scriptKey),
+              phase: liveState.phase,
+              instructionLen: greetingInstr.length,
+            });
+          }
+        } catch {}
+
         liveState.openAiWs.send(
           JSON.stringify({
             type: "response.create",
             response: {
-              instructions: buildGreetingInstructions(liveState.context!),
+              instructions: greetingInstr,
             },
           })
         );
@@ -1400,18 +1790,87 @@ async function handleOpenAiEvent(
 
     state.userAudioMsBuffered = 0;
 
-    setWaitingForResponse(state, true, "response.create (user turn)");
-    setAiSpeaking(state, true, "response.create (user turn)");
+    /**
+     * ✅ Phase 2 — Server-driven stepper output
+     * After greeting reply: deliver STEP 1.
+     * Every subsequent user turn: deliver next step line.
+     * If we have transcript and detect an objection: deliver 1 rebuttal, then continue.
+     */
+    let isGreetingReply = state.phase === "awaiting_greeting_reply";
+
+    // If we don't have steps for some reason, rebuild them safely.
+    if (!state.scriptSteps || state.scriptSteps.length === 0) {
+      try {
+        const selectedScript = getSelectedScriptText(state.context!);
+        state.scriptSteps = extractScriptStepsFromSelectedScript(selectedScript);
+        state.scriptStepIndex = 0;
+      } catch {
+        state.scriptSteps = [];
+        state.scriptStepIndex = 0;
+      }
+    }
+
+    const idx = typeof state.scriptStepIndex === "number" ? state.scriptStepIndex : 0;
+    const steps = state.scriptSteps || [];
+
+    // Optional objection detection only if we actually have a transcript string.
+    const lastUserText = String(state.lastUserTranscript || "").trim();
+    const objectionKind = lastUserText ? detectObjection(lastUserText) : null;
+
+    let lineToSay = "";
+    let mode: "script_step" | "rebuttal" = "script_step";
+
+    if (objectionKind) {
+      mode = "rebuttal";
+      lineToSay = getRebuttalLine(state.context!, objectionKind);
+    } else {
+      mode = "script_step";
+      lineToSay = steps[idx] || getBookingFallbackLine(state.context!);
+    }
+
+    const perTurnInstr = buildStepperTurnInstruction(state.context!, lineToSay);
+
+    setWaitingForResponse(state, true, "response.create (stepper user turn)");
+    setAiSpeaking(state, true, "response.create (stepper user turn)");
     state.outboundOpenAiDone = false;
+
+    /**
+     * ============================
+     * ✅ Phase 1 — Instrumentation C (user turn)
+     * ============================
+     */
+    try {
+      if (!state.debugLoggedResponseCreateUserTurn) {
+        state.debugLoggedResponseCreateUserTurn = true;
+        console.log("[AI-VOICE][RESPONSE-CREATE][USER-TURN]", {
+          callSid: state.callSid,
+          streamSid: state.streamSid,
+          scriptKey: normalizeScriptKey(state.context?.scriptKey),
+          phase: state.phase,
+          isGreetingReply,
+          mode,
+          stepIndex: idx,
+          stepsCount: steps.length,
+          instructionLen: perTurnInstr.length,
+          hasUserTranscript: !!lastUserText,
+          objectionKind: objectionKind || "(none)",
+        });
+      }
+    } catch {}
 
     state.openAiWs.send(
       JSON.stringify({
         type: "response.create",
         response: {
-          instructions: buildShortNextStepInstruction(),
+          instructions: perTurnInstr,
         },
       })
     );
+
+    // Only advance the script step if we emitted an actual script step (not a rebuttal).
+    if (mode === "script_step") {
+      state.scriptStepIndex = Math.min(idx + 1, Math.max(0, steps.length - 1));
+    }
 
     state.phase = "in_call";
     return;
