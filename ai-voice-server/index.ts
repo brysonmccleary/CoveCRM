@@ -112,12 +112,6 @@ type AICallContext = {
   };
 };
 
-type CallPhase =
-  | "init"
-  | "awaiting_greeting_reply"
-  | "in_call"
-  | "ended";
-
 type CallState = {
   streamSid: string;
   callSid: string;
@@ -150,9 +144,6 @@ type CallState = {
   // greeting guard
   initialGreetingQueued?: boolean;
 
-  // ✅ NEW: strict call phase to enforce “greet → WAIT → script”
-  phase?: CallPhase;
-
   // diagnostics
   debugLoggedMissingTrack?: boolean;
 
@@ -170,62 +161,6 @@ type CallState = {
 };
 
 const calls = new Map<WebSocket, CallState>();
-
-/**
- * ✅ Canonical script normalization (defensive on the voice server too)
- */
-function normalizeScriptKey(raw: any): string {
-  const v = String(raw || "")
-    .trim()
-    .toLowerCase();
-
-  if (!v) return "mortgage_protection";
-
-  if (v === "mortgage" || v === "mortgageprotect" || v === "mp") {
-    return "mortgage_protection";
-  }
-
-  if (
-    v === "final_expense" ||
-    v === "finalexpense" ||
-    v === "fe" ||
-    v === "fex" ||
-    v === "fex_default" ||
-    v === "final_expense_default"
-  ) {
-    return "final_expense";
-  }
-
-  if (v === "iul" || v === "iul_leads" || v === "iul_cash_value") {
-    return "iul_cash_value";
-  }
-
-  if (v === "veterans" || v === "veteran" || v === "veteran_leads") {
-    return "veteran_leads";
-  }
-
-  if (v === "trucker" || v === "truckers" || v === "trucker_leads") {
-    return "trucker_leads";
-  }
-
-  if (v === "generic" || v === "life" || v === "generic_life") {
-    return "generic_life";
-  }
-
-  // If already canonical, accept
-  if (
-    v === "mortgage_protection" ||
-    v === "final_expense" ||
-    v === "iul_cash_value" ||
-    v === "veteran_leads" ||
-    v === "trucker_leads" ||
-    v === "generic_life"
-  ) {
-    return v;
-  }
-
-  return "mortgage_protection";
-}
 
 /**
  * PCM16 (24k) → μ-law 8k (base64) for Twilio
@@ -432,7 +367,6 @@ function safelyCloseOpenAi(state: CallState, why: string) {
     state.outboundMuLawBuffer = Buffer.alloc(0);
     state.openAiReady = false;
     state.openAiConfigured = false;
-    state.phase = "ended";
     setWaitingForResponse(state, false, `close openai (${why})`);
     setAiSpeaking(state, false, `close openai (${why})`);
 
@@ -518,71 +452,6 @@ function sendSessionUpdate(
       err?.message || err
     );
   }
-}
-
-/**
- * ✅ Strict first-turn greeting that MUST stop and wait.
- */
-function buildGreetingInstructions(ctx: AICallContext): string {
-  const aiName = ctx.voiceProfile.aiName || "Alex";
-  const clientName = ctx.clientFirstName || "there";
-
-  return [
-    'HARD ENGLISH LOCK: Speak ONLY English. Do NOT say any Spanish words.',
-    'HARD SCOPE LOCK: This call is ONLY about LIFE INSURANCE. Do NOT mention Medicare or any other product.',
-    "",
-    "FIRST TURN REQUIREMENT (NON-NEGOTIABLE):",
-    `- Your first words MUST start with: "Hey ${clientName}."`,
-    "- Keep it SHORT: 1 sentence greeting + 1 simple question.",
-    "- Example shape (do NOT add more):",
-    `  "Hey ${clientName}. This is ${aiName}. Can you hear me okay?"`,
-    "- After the question, STOP talking and WAIT for the lead to respond.",
-    "- Do NOT begin the insurance script on this first turn.",
-  ].join("\n");
-}
-
-/**
- * ✅ Script-start turn (after the lead responds to greeting).
- * This is where we enforce: "Hey (client) this is (AI) calling about the X you were..."
- * and then STOP again.
- */
-function buildScriptStartInstructions(ctx: AICallContext): string {
-  const aiName = ctx.voiceProfile.aiName || "Alex";
-  const clientName = ctx.clientFirstName || "there";
-  const agentRawName = ctx.agentName || "your agent";
-  const agentFirstName = agentRawName.split(" ")[0] || agentRawName;
-
-  const scriptKey = normalizeScriptKey(ctx.scriptKey);
-
-  let reasonLine = "the life insurance information you requested";
-  if (scriptKey === "mortgage_protection") {
-    reasonLine = "the mortgage protection request you put in for your home";
-  } else if (scriptKey === "final_expense") {
-    reasonLine = "the final expense life insurance information you requested";
-  } else if (scriptKey === "iul_cash_value") {
-    reasonLine =
-      "the cash value life insurance request you sent in, the IUL options";
-  } else if (scriptKey === "veteran_leads") {
-    reasonLine = "the veteran life insurance programs you were looking into";
-  } else if (scriptKey === "trucker_leads") {
-    reasonLine =
-      "the life insurance information you requested as a truck driver";
-  }
-
-  return [
-    'HARD ENGLISH LOCK: Speak ONLY English. Do NOT say any Spanish words.',
-    'HARD SCOPE LOCK: This call is ONLY about LIFE INSURANCE. Do NOT mention Medicare or any other product.',
-    "",
-    "SECOND TURN REQUIREMENT (NON-NEGOTIABLE):",
-    `- You MUST start with: "Hey ${clientName}, this is ${aiName}."`,
-    `- Immediately follow with: "I’m calling about ${reasonLine}."`,
-    `- Then ask ONE discovery question based on the script.`,
-    "- Keep it to 1–3 short sentences total.",
-    "- Then STOP talking and WAIT for the lead to answer.",
-    "",
-    "ROLE REMINDER:",
-    `- You are NOT licensed. Your job is ONLY to set the appointment for ${agentFirstName}.`,
-  ].join("\n");
 }
 
 /**
@@ -708,8 +577,6 @@ wss.on("connection", (ws: WebSocket) => {
     openAiConfigured: false,
     debugLoggedMissingTrack: false,
 
-    phase: "init",
-
     outboundMuLawBuffer: Buffer.alloc(0),
     outboundPacerTimer: null,
     outboundOpenAiDone: false,
@@ -788,8 +655,6 @@ async function handleStart(ws: WebSocket, msg: TwilioStartEvent) {
   state.userAudioMsBuffered = 0;
   state.initialGreetingQueued = false;
 
-  state.phase = "init";
-
   // ✅ IMPORTANT: not ready until session.updated
   state.openAiReady = false;
   state.openAiConfigured = false;
@@ -842,16 +707,10 @@ async function handleStart(ws: WebSocket, msg: TwilioStartEvent) {
     }
 
     const context: AICallContext = json.context;
-
-    // ✅ Defensive: normalize scriptKey in-memory even if DB somehow contains legacy key
-    (context as any).scriptKey = normalizeScriptKey((context as any).scriptKey);
-
     state.context = context;
 
     console.log(
-      `[AI-VOICE] Loaded context for ${context.clientFirstName} (agent: ${context.agentName}, voice: ${context.voiceProfile.aiName}, openAiVoiceId: ${context.voiceProfile.openAiVoiceId}, scriptKey: ${context.scriptKey}, answeredBy: ${
-        context.answeredBy || "(none)"
-      })`
+      `[AI-VOICE] Loaded context for ${context.clientFirstName} (agent: ${context.agentName}, voice: ${context.voiceProfile.aiName}, openAiVoiceId: ${context.voiceProfile.openAiVoiceId}, scriptKey: ${context.scriptKey}, answeredBy: ${context.answeredBy || "(none)"})`
     );
 
     await initOpenAiRealtime(ws, state);
@@ -887,11 +746,14 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
   }
 
   // ✅ If we have positively identified voicemail, never forward audio / never speak.
+  // (Webhook will hang up + chain. This prevents leaving a message.)
   if (state.voicemailSkipArmed) {
     return;
   }
 
   // ✅ CRITICAL CUTOUT GUARD:
+  // If the AI is speaking OR a response is in-flight OR we're actively draining outbound audio,
+  // NEVER forward Twilio frames to OpenAI (prevents OpenAI "hearing itself" / barge-in interruptions).
   const outboundInProgress =
     !!state.outboundPacerTimer ||
     (state.outboundMuLawBuffer?.length || 0) > 0 ||
@@ -916,7 +778,6 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
       track: rawTrack || "(undefined)",
       aiSpeaking: !!state.aiSpeaking,
       waitingForResponse: !!state.waitingForResponse,
-      phase: state.phase,
     });
     state.debugLoggedFirstMedia = true;
   }
@@ -952,7 +813,6 @@ async function handleStop(ws: WebSocket, msg: TwilioStopEvent) {
     `[AI-VOICE] stop: callSid=${msg.stop.callSid}, streamSid=${msg.streamSid}`
   );
 
-  state.phase = "ended";
   stopOutboundPacer(ws, state, "twilio stop");
 
   if (state.openAiWs) {
@@ -1060,7 +920,7 @@ async function handleOpenAiEvent(
 
   const t = String(event?.type || "");
 
-  // ✅ If OpenAI rejected session.update, retry ONCE safely.
+  // ✅ If OpenAI rejected session.update (like the temperature minimum), retry ONCE safely.
   if (t === "error") {
     const code = String(event?.error?.code || "").trim();
     const param = String(event?.error?.param || "").trim();
@@ -1073,16 +933,18 @@ async function handleOpenAiEvent(
       console.warn(
         "[AI-VOICE] Retrying session.update after temperature min error"
       );
+      // resend with our centralized payload (temperature 0.6)
       sendSessionUpdate(state.openAiWs, state, "retry after temp-min error");
       return;
     }
+
+    // Any other error: do not spam. Let call flow end naturally.
+    // (We keep Twilio socket alive; no refactors here.)
   }
 
   if (t === "session.updated" && !state.openAiConfigured) {
     state.openAiConfigured = true;
     state.openAiReady = true;
-
-    state.phase = "awaiting_greeting_reply";
 
     try {
       console.log(
@@ -1111,8 +973,10 @@ async function handleOpenAiEvent(
       state.initialGreetingQueued = true;
 
       // ✅ Before greeting, try to get a definitive AMD AnsweredBy.
+      // If it's voicemail/machine, we DO NOT speak at all (prevents leaving voicemails).
       (async () => {
         try {
+          // We only need a couple quick attempts; if AMD isn't ready yet, we proceed as before.
           const existing = String(state.context?.answeredBy || "").trim();
           if (!existing) {
             await refreshAnsweredByFromCoveCRM(
@@ -1139,12 +1003,18 @@ async function handleOpenAiEvent(
             }
           );
 
+          // Arm a local guard so we never forward audio / never create responses
           state.voicemailSkipArmed = true;
+
+          // Close OpenAI to avoid token/audio spend while webhook hangs up + chains next
           safelyCloseOpenAi(state, "voicemail detected pre-greeting");
+
           return;
         }
 
+        // If AnsweredBy is human, we delay slightly to sound natural
         const isHuman = answeredByNow === "human";
+
         try {
           if (isHuman) {
             await sleep(1200);
@@ -1161,6 +1031,7 @@ async function handleOpenAiEvent(
           return;
         }
 
+        // If a late AMD update flipped to machine, still suppress
         const lateAnsweredBy = String(liveState.context?.answeredBy || "").toLowerCase();
         if (isVoicemailAnsweredBy(lateAnsweredBy)) {
           console.log(
@@ -1186,8 +1057,9 @@ async function handleOpenAiEvent(
           JSON.stringify({
             type: "response.create",
             response: {
-              // ✅ STRICT: greeting only, then WAIT (phase enforces next step)
-              instructions: buildGreetingInstructions(liveState.context!),
+              // ✅ reinforce scope + English lock at the response level too (strict + explicit)
+              instructions:
+                'HARD SCOPE LOCK: This call is ONLY about LIFE INSURANCE. Do NOT mention Medicare or any other product.\nHARD ENGLISH LOCK: Speak ONLY English. Do NOT say any Spanish words. If the lead speaks Spanish, respond in English: "I’m sorry — I only speak English. Would you like me to have the licensed agent follow up with you?" Then proceed with the normal call flow in English.\n\nBegin the call now.\nFIRST LINE MUST BE EXACTLY: "Hey (client name)" where (client name) is the lead’s first name.\nThen ask ONE simple question like: "How’s your day going?"\nThen STOP talking and WAIT for the lead to respond. Do not continue the script until you hear the lead.',
             },
           })
         );
@@ -1197,70 +1069,39 @@ async function handleOpenAiEvent(
     return;
   }
 
-  /**
-   * ✅ TURN-TAKING: We only create responses on committed user audio.
-   * We now enforce:
-   *   1) Greeting response (AI) → WAIT
-   *   2) On first user reply commit → Script-start response (AI) → WAIT
-   *   3) After that, normal response behavior continues
-   */
   if (t === "input_audio_buffer.committed") {
     if (state.voicemailSkipArmed) {
       return;
     }
 
-    if (!state.openAiWs || !state.openAiReady) {
-      return;
-    }
-
-    // If we’re already waiting or speaking, do nothing
-    if (state.waitingForResponse || state.aiSpeaking) {
-      return;
-    }
-
-    // ✅ If we are awaiting the greeting reply, force the “script start” response
-    if (state.phase === "awaiting_greeting_reply") {
+    if (
+      state.openAiWs &&
+      state.openAiReady &&
+      !state.waitingForResponse &&
+      !state.aiSpeaking
+    ) {
       state.userAudioMsBuffered = 0;
 
-      setWaitingForResponse(state, true, "response.create (script start)");
-      setAiSpeaking(state, true, "response.create (script start)");
+      setWaitingForResponse(state, true, "response.create (user turn)");
+      setAiSpeaking(state, true, "response.create (user turn)");
       state.outboundOpenAiDone = false;
 
       state.openAiWs.send(
         JSON.stringify({
           type: "response.create",
           response: {
-            instructions: buildScriptStartInstructions(state.context!),
+            // ✅ reinforce scope + English lock at the response level too (strict + explicit)
+            instructions:
+              'HARD SCOPE LOCK: This call is ONLY about LIFE INSURANCE. Do NOT mention Medicare or any other product.\nHARD ENGLISH LOCK: Speak ONLY English. Do NOT say any Spanish words. If the lead speaks Spanish, respond in English: "I’m sorry — I only speak English. Would you like me to have the licensed agent follow up with you?" Then continue in English.\n\nContinue the conversation following the script guidance.\nRules:\n- Keep it to 1–3 short sentences.\n- Ask ONE clear question.\n- Then STOP and WAIT for the lead to answer.\n- Do NOT monologue.\n- Do NOT ask rapid-fire lists.\n- If you need multiple details, ask ONE question per turn.',
           },
         })
       );
-
-      // After we issue the script start response, we consider ourselves "in_call"
-      state.phase = "in_call";
-      return;
     }
-
-    // Normal behavior for later turns
-    state.userAudioMsBuffered = 0;
-
-    setWaitingForResponse(state, true, "response.create (user turn)");
-    setAiSpeaking(state, true, "response.create (user turn)");
-    state.outboundOpenAiDone = false;
-
-    state.openAiWs.send(
-      JSON.stringify({
-        type: "response.create",
-        response: {
-          instructions:
-            'HARD SCOPE LOCK: This call is ONLY about LIFE INSURANCE. Do NOT mention Medicare or any other product.\nHARD ENGLISH LOCK: Speak ONLY English. Do NOT say any Spanish words. If the lead speaks Spanish, respond in English: "I’m sorry — I only speak English. Would you like me to have the licensed agent follow up with you?" Then continue in English.\n\nRespond naturally following all call rules and the script guidance. Keep it short (1–3 sentences), ask one clear question, then stop and wait for the lead to respond.',
-        },
-      })
-    );
-
     return;
   }
 
   if (t === "response.audio.delta" || t === "response.output_audio.delta") {
+    // If voicemail skip is armed, ignore all outbound audio entirely
     if (state.voicemailSkipArmed) {
       return;
     }
@@ -1287,7 +1128,6 @@ async function handleOpenAiEvent(
           pcmLength: payloadBase64.length,
           mulawBase64Len: mulawBase64.length,
           mulawBytesLen: mulawBytes.length,
-          phase: state.phase,
         });
         state.debugLoggedFirstOutputAudio = true;
       }
@@ -1440,6 +1280,7 @@ async function handleBookAppointmentIntent(state: CallState, control: any) {
           JSON.stringify({
             type: "response.create",
             response: {
+              // ✅ reinforce scope + English lock at the response level too
               instructions: `HARD SCOPE LOCK: This call is ONLY about LIFE INSURANCE. Do NOT mention Medicare or any other product.\nHARD ENGLISH LOCK: Speak ONLY English. Do NOT say any Spanish words.\n\nExplain to the lead, in natural language, that their appointment is confirmed for ${humanReadable}. Then briefly restate what the appointment will cover and end the call politely.`,
             },
           })
@@ -1621,6 +1462,30 @@ async function billAiDialerUsageForCall(state: CallState) {
 /**
  * System prompt – insurance only, English by default.
  */
+function normalizeScriptKey(raw: string): string {
+  const k = String(raw || "").trim();
+
+  // ✅ These are the keys your UI/api currently sends:
+  // - pages/api/ai-calls/scripts.ts:
+  //   mortgage_protection, veterans, iul, fex_default
+  // (We also accept legacy aliases so older sessions don’t “fall through”.)
+  const lower = k.toLowerCase();
+
+  if (lower === "mortgage_protection") return "mortgage_protection";
+  if (lower === "veterans") return "veterans";
+  if (lower === "iul") return "iul";
+  if (lower === "fex_default") return "fex_default";
+
+  // legacy aliases (older builds / old keys)
+  if (lower === "veteran_leads" || lower === "veterans_leads") return "veterans";
+  if (lower === "iul_cash_value" || lower === "iul_default") return "iul";
+  if (lower === "final_expense" || lower === "fex" || lower === "final_expense_default")
+    return "fex_default";
+
+  // default fallback
+  return "mortgage_protection";
+}
+
 function buildSystemPrompt(ctx: AICallContext): string {
   const aiName = ctx.voiceProfile.aiName || "Alex";
   const clientName = ctx.clientFirstName || "there";
@@ -1629,7 +1494,7 @@ function buildSystemPrompt(ctx: AICallContext): string {
   const agentFirstName = agentRawName.split(" ")[0] || agentRawName;
   const agentName = agentFirstName;
 
-  const scriptKey = normalizeScriptKey(ctx.scriptKey || "mortgage_protection");
+  const scriptKey = normalizeScriptKey(ctx.scriptKey);
 
   const basePersona = `
 You are ${aiName}, a highly skilled virtual phone appointment setter calling on behalf of licensed life insurance agent ${agentName}.
@@ -1693,107 +1558,241 @@ SMALL TALK, "ARE YOU REAL?", AND ORIGIN
 
 FIRST TURN (VERY IMPORTANT)
 - Your FIRST spoken turn MUST be:
-  • A short, clear greeting, AND
+  • "Hey ${clientName}" and a short greeting, AND
   • One simple question.
 - Example first turn:
-  "Hey ${clientName}. This is ${aiName}. Can you hear me okay?"
-- After this first turn, STOP talking and wait for the lead to respond.
-- Do NOT begin the insurance script on the first turn.
+  "Hey ${clientName} — it’s ${aiName}. How’s your day going?"
+- After this first turn, STOP talking and WAIT for the lead to respond.
+- Do NOT continue into the reason for the call until the lead responds.
 
 IF THEY ASK "WHERE ARE YOU CALLING FROM?" OR "WHO ARE YOU WITH?"
 - Only at that point, answer clearly once:
-  • "I'm calling from ${agentName}'s office. He's the licensed agent who'll actually go over the information with you."
+  • "I’m calling on behalf of ${agentName}’s office. He’s the licensed agent who’ll actually go over the information with you."
 - After you answer, immediately pivot back into the normal flow.
 
 "ARE YOU REAL?" / "IS THIS A ROBOT?"
 - If they ask "Are you a real person?" or "Is this a robot?":
-  • "Good question — I'm actually a scheduling assistant that works with ${agentName}'s office. My job is just to make sure you actually get the information you requested and help find a time that works."
+  • "Good question — I’m actually a scheduling assistant that works with ${agentName}’s office. My job is just to make sure you get the information you requested and help find a time that works."
 - Do NOT claim to be the licensed agent and do not say you are a human if directly asked.
 `.trim();
 
+  /**
+   * ✅ Mortgage Protection — based on Bryson’s “Mortgage Script”
+   *
+   * IMPORTANT: We keep the “feel” and flow, but:
+   * - We DO NOT claim to be an underwriter.
+   * - We DO NOT do long underwriting/health interrogation on the AI call.
+   * - We DO a few light qualifiers ONLY if the lead is engaged, then book the agent.
+   * - One-question-per-turn. Pause. Wait.
+   */
   const mortgageIntro = `
-MORTGAGE PROTECTION LEADS
-Use this as a flexible framework. Do NOT read word-for-word.
+MORTGAGE PROTECTION (BASED ON YOUR SCRIPT — APPOINTMENT-SETTER VERSION)
 
-- After the lead responds to your greeting, begin:
-  "Hey ${clientName}, this is ${aiName}. I’m calling about the mortgage protection request you put in for your home."
-  Then ask ONE question and wait.
+Core rules:
+- One question per turn.
+- After every question: STOP and WAIT for the lead’s response.
+- Keep each response 1–3 sentences.
 
-Key questions to rotate:
-- "Was that mainly for yourself, or you and a spouse as well?"
-- "What prompted you to look into this right now?"
-- "Are you mainly trying to protect the payment, or just make sure the family is covered in general?"
+FLOW
+
+A) OPENER (AFTER THEY RESPOND TO “How’s your day going?”)
+- "Perfect — I’ll be quick."
+- "I’m calling about the request you put in for mortgage protection."
+- Question: "Was that for yourself, or you and a spouse as well?"
+
+B) DISCOVERY (2 questions)
+1) "Were you looking for anything in particular, or mainly just wanting to see what’s out there for you and your family?"
+(Stop. Wait.)
+
+2) "Just so I better understand — do you mind walking me through what prompted you to reach out and feel like you might need something like this right now?"
+(Stop. Wait. If they go shallow, ask ONE follow-up:)
+- "When that crossed your mind, what were you picturing happening that made you say, ‘We should probably look into this’?"
+(Stop. Wait.)
+
+C) NORMALIZE + FRAME (short, not a monologue)
+- "Okay — that’s what most people say as well."
+- "The first part is pretty basic: it’s just to understand what you already have in place, what you’d want to happen if something ever did happen to you, and see if there’s a gap where we could help."
+- Question: "Would it help if ${agentName} did a quick call with you and laid out the options clearly?"
+(Stop. Wait.)
+
+D) ROLE CLARITY (NO “UNDERWRITER” CLAIMS)
+- "Just so you know, I’m not the licensed agent and I can’t quote exact pricing — my job is just to get the basics and line you up with ${agentName}."
+- "It doesn’t affect me personally if you get coverage or not — what matters is you’re shown the right information tailored to you, so you can make the best decision for your family."
+- Question: "Are you with me on that?"
+(Stop. Wait.)
+
+E) LIGHT QUALIFIERS (ONLY if they’re engaged)
+Pick ONE at a time:
+- "Real quick — are you a smoker or non-smoker?"
+(Stop. Wait.)
+- "Any major health issues you feel I should mention to ${agentName} before he calls — like heart issues, stroke history, cancer, or diabetes?"
+(Stop. Wait.)
+- "Ballpark — about how much is left on the mortgage?"
+(Stop. Wait.)
+
+F) APPOINTMENT TRANSITION (close like your style)
+- "Perfect. The easiest way to handle this is a quick 10–15 minute call with ${agentName}."
+- Question: "Do you normally have more time earlier in the day, or later in the evening — if we set that up for today or tomorrow?"
+(Stop. Wait.)
+
+If they say they’re busy:
+- "No problem — I caught you at a bad time. What’s a better time later today or tomorrow?"
+(Stop. Wait.)
+
+If they’re skeptical / push back:
+- "Totally fair. If we can’t find something that actually makes sense for you, we’ll fist-bump through the phone as friends — no pressure."
+- Question: "What time works better — later today or tomorrow?"
+(Stop. Wait.)
 `.trim();
 
   const veteranIntro = `
-VETERAN LIFE LEADS
-- After the lead responds to your greeting, begin:
-  "Hey ${clientName}, this is ${aiName}. I’m calling about the veteran life insurance programs you were looking into."
-  Then ask ONE question and wait.
+VETERAN PROGRAMS (APPOINTMENT-SETTER)
+
+- After greeting: "I’m getting back to you about the veteran life insurance programs you were looking into."
+- Question 1: "Was that for yourself, or you and a spouse/family as well?"
+(Stop. Wait.)
+- Question 2: "What made you look into it right now?"
+(Stop. Wait.)
+- Frame: "I can’t quote exact pricing — ${agentName} is the licensed agent who reviews the options."
+- Appointment: "Earlier today or later tomorrow usually better?"
+(Stop. Wait.)
 `.trim();
 
   const iulIntro = `
-CASH VALUE / IUL LEADS
-- After the lead responds to your greeting, begin:
-  "Hey ${clientName}, this is ${aiName}. I’m calling about the cash value life insurance request you sent in, the IUL options."
-  Then ask ONE question and wait.
+IUL / CASH VALUE (APPOINTMENT-SETTER)
+
+- After greeting: "I’m following up on the request you sent in about the cash-building life insurance options — Indexed Universal Life."
+- Question 1: "Were you more focused on building tax-favored savings, protecting income for the family, or a mix?"
+(Stop. Wait.)
+- Question 2: "What made you look into it right now?"
+(Stop. Wait.)
+- Frame: "I’m just scheduling — ${agentName} is the licensed agent who’ll cover the details and numbers."
+- Appointment: "Earlier today or later tomorrow usually better?"
+(Stop. Wait.)
 `.trim();
 
   const fexIntro = `
-FINAL EXPENSE (AGED) LEADS
-- After the lead responds to your greeting, begin:
-  "Hey ${clientName}, this is ${aiName}. I’m calling about the final expense life insurance information you requested."
-  Then ask ONE question and wait.
-`.trim();
+FINAL EXPENSE (DEFAULT) (APPOINTMENT-SETTER)
 
-  const truckerIntro = `
-TRUCKER / CDL LEADS
-- After the lead responds to your greeting, begin:
-  "Hey ${clientName}, this is ${aiName}. I’m calling about the life insurance information you requested as a truck driver."
-  Then ask ONE question and wait.
+- After greeting: "I’m following up on the request you sent in for information on life insurance to cover final expenses."
+- Question 1: "Did you ever end up getting anything in place for that, or not yet?"
+(Stop. Wait.)
+- Question 2: "What made you want to look into it now?"
+(Stop. Wait.)
+- Frame: "I’m not licensed to quote — ${agentName} will go over options."
+- Appointment: "Do mornings or evenings work better for a quick call today or tomorrow?"
+(Stop. Wait.)
 `.trim();
 
   const genericIntro = `
-GENERIC / CATCH-ALL LIFE LEADS
-- After the lead responds to your greeting, begin:
-  "Hey ${clientName}, this is ${aiName}. I’m calling about the life insurance information you requested online."
-  Then ask ONE question and wait.
+GENERIC LIFE (CATCH-ALL)
+
+- After greeting: "I’m getting back to you about the life insurance information you requested online."
+- Question 1: "Was that more for final expenses, protecting the mortgage/income, or leaving money behind?"
+(Stop. Wait.)
+- Question 2: "What made you look into it right now?"
+(Stop. Wait.)
+- Appointment: "Do you have more time earlier today or later this evening?"
+(Stop. Wait.)
 `.trim();
 
   let scriptSection = genericIntro;
   if (scriptKey === "mortgage_protection") {
     scriptSection = mortgageIntro;
-  } else if (scriptKey === "veteran_leads") {
+  } else if (scriptKey === "veterans") {
     scriptSection = veteranIntro;
-  } else if (scriptKey === "iul_cash_value") {
+  } else if (scriptKey === "iul") {
     scriptSection = iulIntro;
-  } else if (scriptKey === "final_expense") {
+  } else if (scriptKey === "fex_default") {
     scriptSection = fexIntro;
-  } else if (scriptKey === "trucker_leads") {
-    scriptSection = truckerIntro;
   }
 
   const objections = `
 OBJECTION PLAYBOOK (SHORT, NATURAL REBUTTALS)
-(unchanged)
+
+General pattern:
+1) Validate + agree.
+2) Reframe or clarify.
+3) Return confidently to the appointment or clear outcome.
+
+1) "I'm not interested"
+- "Totally fair. Just so I can close your file the right way — was it more that you already handled it, or you just don’t want a call about it?"
+- If they stay cold or ask to stop: set do_not_call / not_interested.
+
+2) "I already have coverage"
+- "Perfect — then this is usually just a quick review to make sure it still matches what you want and you’re not overpaying."
+- Offer a short review call. Respect a firm no.
+
+3) "I don't remember filling anything out"
+- "No worries — it looks like a request for life insurance information came in under your name. Does that ring a bell at all?"
+- If not and they don’t want it: mark not_interested.
+
+4) "Can you just text/email me something?"
+- "I can send a quick confirmation, but the reason we do a short call is the options depend on age, health, and budget. ${agentName} makes it clear in 10–15 minutes."
+- Offer two time windows.
+
+5) "I don't have time, I'm at work"
+- "Totally get it — when are you usually in a better spot, mornings or evenings?"
+- Set callback/appointment.
+
+Rebuttal limit:
+- Use at most 3–4 short rebuttals per call.
+- If they say "stop calling", "take me off your list", or sound angry, stop and set do_not_call.
 `.trim();
 
   const bookingOutcome = `
 BOOKING & OUTCOME SIGNALS (CONTROL METADATA)
-(unchanged)
+
+When you successfully agree on an appointment time, you MAY emit:
+{
+  "kind": "book_appointment",
+  "startTimeUtc": "<ISO8601 in UTC>",
+  "durationMinutes": 20,
+  "leadTimeZone": "<lead timezone>",
+  "agentTimeZone": "${ctx.agentTimeZone}",
+  "notes": "Short note about what they want and who will be on the call."
+}
+
+When the call is clearly finished, emit exactly ONE "final_outcome" payload:
+
+- Booked:
+  { "kind": "final_outcome", "outcome": "booked", "summary": "...", "notesAppend": "..." }
+- Not interested:
+  { "kind": "final_outcome", "outcome": "not_interested", "summary": "...", "notesAppend": "..." }
+- Callback later:
+  { "kind": "final_outcome", "outcome": "callback", "summary": "...", "notesAppend": "..." }
+- No answer:
+  { "kind": "final_outcome", "outcome": "no_answer", "summary": "...", "notesAppend": "..." }
+- Do not call:
+  { "kind": "final_outcome", "outcome": "do_not_call", "summary": "...", "notesAppend": "..." }
+- Disconnected:
+  { "kind": "final_outcome", "outcome": "disconnected", "summary": "...", "notesAppend": "..." }
+
+"summary" = 1–2 sentences of what happened.
+"notesAppend" = 1–3 short note lines, each starting with "* ".
 `.trim();
 
   const convoStyle = `
 CONVERSATION STYLE & FLOW
 
-GENERAL TURN-TAKING
-- Each time you speak, keep it concise: 1–3 sentences, then pause.
-- After you ask a question, stop and let the lead respond.
-- Do NOT talk over them.
+GENERAL TURN-TAKING (NON-NEGOTIABLE)
+- Each time you speak: 1–3 sentences MAX.
+- Ask ONE question per turn.
+- After you ask a question: STOP and WAIT for the lead’s response.
+- Do NOT talk over them. If you accidentally do, apologize and let them finish.
 
-IMPORTANT:
-- The system will handle the first greeting turn separately.
-- After the lead responds, you begin the script-start line and then continue the normal discovery → appointment flow.
+OPENING
+- First turn must be: "Hey ${clientName}" + ONE short question ("How’s your day going?") then WAIT.
+- Only after they respond, state the reason for the call.
+
+APPOINTMENT GOAL
+- Your job is to book a short call with ${agentName} today or tomorrow.
+- Do NOT do long underwriting. Light qualifiers only if engaged.
+- If they are busy, schedule a callback window.
+
+CLOSE & RECAP (when booked)
+- Repeat back: Day, Time, Timezone, and that ${agentName} will call.
+- End politely. No reselling after booking.
 `.trim();
 
   return [
