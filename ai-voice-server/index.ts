@@ -173,6 +173,12 @@ type CallState = {
   // last user text (only if OpenAI emits it; non-blocking)
   lastUserTranscript?: string;
 
+  // ✅ Human-like waiting + reprompt (NEW)
+  lastPromptSentAtMs?: number;
+  lastPromptLine?: string;
+  repromptCountForCurrentStep?: number;
+  lowSignalCommitCount?: number;
+
   // instrumentation: system prompt markers
   systemPromptLen?: number;
   systemPromptHead300?: string;
@@ -479,7 +485,9 @@ function computePromptMarkers(systemPrompt: string, uniqueLine?: string) {
     has_REAL_CALL_SCRIPT: p.includes("REAL CALL SCRIPT"),
     has_BOOKING_SCRIPT: p.includes("BOOKING SCRIPT"),
     has_FOLLOW_SCRIPT_EXACTLY: p.includes("FOLLOW THE SCRIPT BELOW EXACTLY"),
-    has_BOOKING_SCRIPT_FOLLOW_EXACTLY: p.includes("BOOKING SCRIPT (FOLLOW EXACTLY)"),
+    has_BOOKING_SCRIPT_FOLLOW_EXACTLY: p.includes(
+      "BOOKING SCRIPT (FOLLOW EXACTLY)"
+    ),
     has_unique_line: uniqueLine ? p.includes(uniqueLine) : false,
   };
   return markers;
@@ -528,7 +536,9 @@ function extractScriptStepsFromSelectedScript(selectedScript: string): string[] 
   // If scripts ever change and no matches are found, fallback to a safe booking-only prompt.
   if (steps.length === 0) {
     // NOTE: do not include any other vertical/topic
-    pushIf("I’m just calling to get you scheduled for a quick call. Would later today or tomorrow be better — daytime or evening?");
+    pushIf(
+      "I’m just calling to get you scheduled for a quick call. Would later today or tomorrow be better — daytime or evening?"
+    );
   }
 
   // De-dupe exact repeats while preserving order
@@ -549,6 +559,145 @@ function getBookingFallbackLine(ctx: AICallContext): string {
   return `Perfect — my job is just to get you scheduled. ${agent} is the licensed agent who will go over everything with you. Would later today or tomorrow be better — daytime or evening?`;
 }
 
+/**
+ * ✅ Human waiting / answer gating (NEW)
+ * We avoid stepping forward on tiny commits (e.g. "yeah", breath, comfort noise).
+ * We do NOT change audio; we only decide whether to respond + whether to advance.
+ */
+type StepType = "time_question" | "yesno_question" | "open_question" | "statement";
+
+function classifyStepType(lineRaw: string): StepType {
+  const line = String(lineRaw || "").toLowerCase();
+  if (!line) return "statement";
+
+  const isTime =
+    line.includes("later today") ||
+    line.includes("today or tomorrow") ||
+    line.includes("tomorrow") ||
+    line.includes("daytime") ||
+    line.includes("evening") ||
+    line.includes("morning") ||
+    line.includes("afternoon") ||
+    line.includes("what time") ||
+    line.includes("when would") ||
+    line.includes("around that time");
+
+  if (isTime) return "time_question";
+
+  const isQuestion = line.includes("?") || line.startsWith("did ") || line.startsWith("do you") || line.startsWith("were you");
+  if (!isQuestion) return "statement";
+
+  const looksYesNo =
+    line.startsWith("did ") ||
+    line.startsWith("do you") ||
+    line.startsWith("were you") ||
+    line.includes("did you end up") ||
+    line.includes("do you remember") ||
+    line.includes("can you hear me");
+
+  return looksYesNo ? "yesno_question" : "open_question";
+}
+
+function looksLikeTimeAnswer(textRaw: string): boolean {
+  const t = String(textRaw || "").trim().toLowerCase();
+  if (!t) return false;
+  if (/(today|tomorrow|morning|afternoon|evening|later|tonight)/i.test(t)) return true;
+  if (/\b\d{1,2}(:\d{2})?\b/.test(t)) return true;
+  if (/\b(am|pm)\b/i.test(t)) return true;
+  return false;
+}
+
+function isFillerOnly(textRaw: string): boolean {
+  const t = String(textRaw || "").trim().toLowerCase();
+  if (!t) return true;
+
+  // common tiny acknowledgements / noise
+  const fillers = new Set([
+    "yeah",
+    "yep",
+    "yup",
+    "uh",
+    "um",
+    "mm",
+    "mhm",
+    "uh huh",
+    "uh-huh",
+    "okay",
+    "ok",
+    "hello",
+    "hey",
+    "can you hear me",
+    "yeah i can hear you",
+    "i can hear you",
+  ]);
+
+  if (fillers.has(t)) return true;
+
+  // Very short responses with no content (1 word) are usually not an answer to scheduling.
+  const words = t.split(/\s+/).filter(Boolean);
+  if (words.length <= 1) return true;
+
+  return false;
+}
+
+function shouldTreatCommitAsRealAnswer(
+  stepType: StepType,
+  audioMs: number,
+  transcript: string
+): boolean {
+  const text = String(transcript || "").trim();
+
+  // If we have transcription, prefer it.
+  if (text) {
+    if (isFillerOnly(text)) return false;
+    if (stepType === "time_question") return looksLikeTimeAnswer(text);
+    // for yes/no or open questions, any non-filler multi-word answer counts
+    return true;
+  }
+
+  // No transcription available: fall back to audio duration heuristic.
+  // This avoids advancing on tiny noises.
+  if (stepType === "time_question") return audioMs >= 700;
+  if (stepType === "yesno_question") return audioMs >= 450;
+  if (stepType === "open_question") return audioMs >= 650;
+  return audioMs >= 500;
+}
+
+function getRepromptLineForStepType(ctx: AICallContext, stepType: StepType, n: number): string {
+  const agentRaw = (ctx.agentName || "your agent").trim() || "your agent";
+  const agent = (agentRaw.split(" ")[0] || agentRaw).trim();
+
+  if (stepType === "time_question") {
+    const ladder = [
+      `Totally — would later today or tomorrow be better?`,
+      `What’s easier for you — today or tomorrow?`,
+      `Morning, afternoon, or evening usually works best?`,
+      `No worries — I can put you down for a quick call with ${agent}. Is today or tomorrow better?`,
+    ];
+    return ladder[Math.min(n, ladder.length - 1)];
+  }
+
+  if (stepType === "yesno_question") {
+    const ladder = [
+      `Got you — would that be a yes, or a no?`,
+      `Just so I’m clear — is that something you already have in place?`,
+      `No worries — I can keep it simple. Yes or no?`,
+    ];
+    return ladder[Math.min(n, ladder.length - 1)];
+  }
+
+  if (stepType === "open_question") {
+    const ladder = [
+      `Real quick — what would you say is the main goal?`,
+      `Totally — what prompted you to reach out in the first place?`,
+      `Got it — was that for just you, or a spouse as well?`,
+    ];
+    return ladder[Math.min(n, ladder.length - 1)];
+  }
+
+  return getBookingFallbackLine(ctx);
+}
+
 function detectObjection(textRaw: string): string | null {
   const t = String(textRaw || "").trim().toLowerCase();
   if (!t) return null;
@@ -566,7 +715,11 @@ function detectObjection(textRaw: string): string | null {
   if (t.includes("scam") || t.includes("fraud") || t.includes("spam")) {
     return "scam";
   }
-  if (t.includes("already have") || t.includes("got coverage") || t.includes("i have coverage")) {
+  if (
+    t.includes("already have") ||
+    t.includes("got coverage") ||
+    t.includes("i have coverage")
+  ) {
     return "already_have";
   }
   if (t.includes("busy") || t.includes("at work") || t.includes("no time")) {
@@ -647,7 +800,10 @@ function getRebuttalLine(ctx: AICallContext, kind: string): string {
  * ✅ Build per-turn instruction that makes drift basically impossible.
  * We do NOT change audio/timers/turn detection. Only the "text instructions" for response.create.
  */
-function buildStepperTurnInstruction(ctx: AICallContext, lineToSay: string): string {
+function buildStepperTurnInstruction(
+  ctx: AICallContext,
+  lineToSay: string
+): string {
   const leadName = (ctx.clientFirstName || "").trim() || "there";
 
   return `
@@ -1193,6 +1349,10 @@ wss.on("connection", (ws: WebSocket) => {
     scriptSteps: [],
     scriptStepIndex: 0,
     lastUserTranscript: "",
+    lastPromptSentAtMs: 0,
+    lastPromptLine: "",
+    repromptCountForCurrentStep: 0,
+    lowSignalCommitCount: 0,
     debugLoggedResponseCreateGreeting: false,
     debugLoggedResponseCreateUserTurn: false,
   };
@@ -1284,6 +1444,10 @@ async function handleStart(ws: WebSocket, msg: TwilioStartEvent) {
   state.scriptSteps = [];
   state.scriptStepIndex = 0;
   state.lastUserTranscript = "";
+  state.lastPromptSentAtMs = Date.now();
+  state.lastPromptLine = "";
+  state.repromptCountForCurrentStep = 0;
+  state.lowSignalCommitCount = 0;
   state.debugLoggedResponseCreateGreeting = false;
   state.debugLoggedResponseCreateUserTurn = false;
 
@@ -1330,7 +1494,9 @@ async function handleStart(ws: WebSocket, msg: TwilioStartEvent) {
     state.context = context;
 
     console.log(
-      `[AI-VOICE] Loaded context for ${context.clientFirstName} (agent: ${context.agentName}, voice: ${context.voiceProfile.aiName}, openAiVoiceId: ${context.voiceProfile.openAiVoiceId}, scriptKey: ${context.scriptKey}, answeredBy: ${context.answeredBy || "(none)"})`
+      `[AI-VOICE] Loaded context for ${context.clientFirstName} (agent: ${context.agentName}, voice: ${context.voiceProfile.aiName}, openAiVoiceId: ${context.voiceProfile.openAiVoiceId}, scriptKey: ${context.scriptKey}, answeredBy: ${
+        context.answeredBy || "(none)"
+      })`
     );
 
     await initOpenAiRealtime(ws, state);
@@ -1376,7 +1542,11 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
     return;
   }
 
-  state.userAudioMsBuffered = (state.userAudioMsBuffered || 0) + 20;
+  // accumulate inbound audio while user is talking
+  state.userAudioMsBuffered = Math.min(
+    3000,
+    (state.userAudioMsBuffered || 0) + 20
+  );
 
   if (!state.debugLoggedFirstMedia) {
     console.log("[AI-VOICE] handleMedia: first audio frame received", {
@@ -1642,21 +1812,32 @@ async function handleOpenAiEvent(
   /**
    * ✅ Optional transcript capture (non-blocking).
    * We do NOT change any audio settings; we simply listen if OpenAI emits transcripts.
+   *
+   * IMPORTANT: avoid accidentally capturing the AI's own audio transcript deltas.
+   * We prefer explicit "input"/"transcription" type events when present.
    */
   try {
-    // Some realtime payloads include transcription in different shapes; we accept whichever exists.
-    const maybeText =
-      event?.transcript ||
-      event?.text ||
-      event?.item?.transcript ||
-      event?.item?.text ||
-      event?.delta?.transcript ||
-      event?.delta?.text ||
-      event?.input_audio_transcription?.text ||
-      event?.input_audio_transcription?.transcript ||
-      "";
-    if (typeof maybeText === "string" && maybeText.trim()) {
-      state.lastUserTranscript = maybeText.trim();
+    const typeLower = String(event?.type || "").toLowerCase();
+
+    const looksInputTranscription =
+      typeLower.includes("input_audio_transcription") ||
+      typeLower.includes("input.transcription") ||
+      typeLower.includes("conversation.item.input_audio_transcription");
+
+    if (looksInputTranscription) {
+      const maybeText =
+        event?.transcript ||
+        event?.text ||
+        event?.item?.transcript ||
+        event?.item?.text ||
+        event?.delta?.transcript ||
+        event?.delta?.text ||
+        event?.input_audio_transcription?.text ||
+        event?.input_audio_transcription?.transcript ||
+        "";
+      if (typeof maybeText === "string" && maybeText.trim()) {
+        state.lastUserTranscript = maybeText.trim();
+      }
     }
   } catch {}
 
@@ -1743,7 +1924,11 @@ async function handleOpenAiEvent(
           return;
         }
 
+        // Reset inbound accumulation right before we speak
         liveState.userAudioMsBuffered = 0;
+        liveState.lastUserTranscript = "";
+        liveState.lowSignalCommitCount = 0;
+        liveState.repromptCountForCurrentStep = 0;
 
         setWaitingForResponse(liveState, true, "response.create (greeting)");
         setAiSpeaking(liveState, true, "response.create (greeting)");
@@ -1769,6 +1954,9 @@ async function handleOpenAiEvent(
           }
         } catch {}
 
+        liveState.lastPromptSentAtMs = Date.now();
+        liveState.lastPromptLine = "GREETING";
+
         liveState.openAiWs.send(
           JSON.stringify({
             type: "response.create",
@@ -1788,15 +1976,15 @@ async function handleOpenAiEvent(
     if (!state.openAiWs || !state.openAiReady) return;
     if (state.waitingForResponse || state.aiSpeaking) return;
 
-    state.userAudioMsBuffered = 0;
-
     /**
-     * ✅ Phase 2 — Server-driven stepper output
-     * After greeting reply: deliver STEP 1.
-     * Every subsequent user turn: deliver next step line.
-     * If we have transcript and detect an objection: deliver 1 rebuttal, then continue.
+     * ✅ Phase 2 — Human-like gating + stepper output
+     *
+     * We DO NOT advance on tiny commits.
+     * We only advance when the inbound audio seems like a real answer.
+     * If it's not a real answer, we either ignore it OR reprompt (human-like).
      */
-    let isGreetingReply = state.phase === "awaiting_greeting_reply";
+
+    const isGreetingReply = state.phase === "awaiting_greeting_reply";
 
     // If we don't have steps for some reason, rebuild them safely.
     if (!state.scriptSteps || state.scriptSteps.length === 0) {
@@ -1810,28 +1998,169 @@ async function handleOpenAiEvent(
       }
     }
 
-    const idx = typeof state.scriptStepIndex === "number" ? state.scriptStepIndex : 0;
+    const idx =
+      typeof state.scriptStepIndex === "number" ? state.scriptStepIndex : 0;
     const steps = state.scriptSteps || [];
 
     // Optional objection detection only if we actually have a transcript string.
     const lastUserText = String(state.lastUserTranscript || "").trim();
     const objectionKind = lastUserText ? detectObjection(lastUserText) : null;
 
-    let lineToSay = "";
-    let mode: "script_step" | "rebuttal" = "script_step";
+    // Determine what step we are on (for gating/reprompt)
+    const currentStepLine = steps[idx] || getBookingFallbackLine(state.context!);
+    const stepType = classifyStepType(currentStepLine);
 
-    if (objectionKind) {
-      mode = "rebuttal";
-      lineToSay = getRebuttalLine(state.context!, objectionKind);
-    } else {
-      mode = "script_step";
-      lineToSay = steps[idx] || getBookingFallbackLine(state.context!);
+    // Greeting reply: always move into Step 0 immediately (feels natural)
+    if (isGreetingReply) {
+      const lineToSay = steps[0] || getBookingFallbackLine(state.context!);
+      const perTurnInstr = buildStepperTurnInstruction(state.context!, lineToSay);
+
+      // Reset inbound tracking right before we speak
+      state.userAudioMsBuffered = 0;
+      state.lastUserTranscript = "";
+      state.lowSignalCommitCount = 0;
+      state.repromptCountForCurrentStep = 0;
+
+      setWaitingForResponse(state, true, "response.create (stepper after greeting)");
+      setAiSpeaking(state, true, "response.create (stepper after greeting)");
+      state.outboundOpenAiDone = false;
+
+      try {
+        if (!state.debugLoggedResponseCreateUserTurn) {
+          state.debugLoggedResponseCreateUserTurn = true;
+          console.log("[AI-VOICE][RESPONSE-CREATE][USER-TURN]", {
+            callSid: state.callSid,
+            streamSid: state.streamSid,
+            scriptKey: normalizeScriptKey(state.context?.scriptKey),
+            phase: state.phase,
+            isGreetingReply: true,
+            mode: "script_step",
+            stepIndex: 0,
+            stepsCount: steps.length,
+            instructionLen: perTurnInstr.length,
+            hasUserTranscript: !!lastUserText,
+            objectionKind: objectionKind || "(none)",
+          });
+        }
+      } catch {}
+
+      state.lastPromptSentAtMs = Date.now();
+      state.lastPromptLine = lineToSay;
+
+      state.openAiWs.send(
+        JSON.stringify({
+          type: "response.create",
+          response: { instructions: perTurnInstr },
+        })
+      );
+
+      state.scriptStepIndex = Math.min(1, Math.max(0, steps.length - 1));
+      state.phase = "in_call";
+      return;
     }
 
+    // If they object and we have a transcript, send exactly ONE rebuttal (no step advance).
+    if (objectionKind) {
+      const lineToSay = getRebuttalLine(state.context!, objectionKind);
+      const perTurnInstr = buildStepperTurnInstruction(state.context!, lineToSay);
+
+      // Reset inbound tracking right before we speak
+      state.userAudioMsBuffered = 0;
+      state.lastUserTranscript = "";
+      state.lowSignalCommitCount = 0;
+
+      setWaitingForResponse(state, true, "response.create (rebuttal)");
+      setAiSpeaking(state, true, "response.create (rebuttal)");
+      state.outboundOpenAiDone = false;
+
+      state.lastPromptSentAtMs = Date.now();
+      state.lastPromptLine = lineToSay;
+
+      state.openAiWs.send(
+        JSON.stringify({
+          type: "response.create",
+          response: { instructions: perTurnInstr },
+        })
+      );
+
+      state.phase = "in_call";
+      return;
+    }
+
+    // ✅ Answer gating
+    const audioMs = Number(state.userAudioMsBuffered || 0);
+    const treatAsAnswer = shouldTreatCommitAsRealAnswer(
+      stepType,
+      audioMs,
+      lastUserText
+    );
+
+    if (!treatAsAnswer) {
+      // count low-signal commits
+      state.lowSignalCommitCount = (state.lowSignalCommitCount || 0) + 1;
+
+      // If enough time has passed since last prompt, reprompt (human-like) instead of advancing.
+      const now = Date.now();
+      const lastPromptAt = Number(state.lastPromptSentAtMs || 0);
+      const msSincePrompt = now - lastPromptAt;
+
+      // reprompt only after a moment so we don't talk over them
+      const shouldReprompt =
+        msSincePrompt >= 1200 &&
+        (state.lowSignalCommitCount || 0) >= 2 &&
+        (state.repromptCountForCurrentStep || 0) < 3;
+
+      if (shouldReprompt) {
+        const repN = Number(state.repromptCountForCurrentStep || 0);
+        const lineToSay = getRepromptLineForStepType(state.context!, stepType, repN);
+        const perTurnInstr = buildStepperTurnInstruction(state.context!, lineToSay);
+
+        state.repromptCountForCurrentStep = repN + 1;
+
+        // Reset inbound tracking right before we speak
+        state.userAudioMsBuffered = 0;
+        state.lastUserTranscript = "";
+        state.lowSignalCommitCount = 0;
+
+        // small human-like pause before reprompt (does not affect audio pipeline)
+        try {
+          await sleep(650);
+        } catch {}
+
+        setWaitingForResponse(state, true, "response.create (reprompt)");
+        setAiSpeaking(state, true, "response.create (reprompt)");
+        state.outboundOpenAiDone = false;
+
+        state.lastPromptSentAtMs = Date.now();
+        state.lastPromptLine = lineToSay;
+
+        state.openAiWs.send(
+          JSON.stringify({
+            type: "response.create",
+            response: { instructions: perTurnInstr },
+          })
+        );
+
+        state.phase = "in_call";
+        return;
+      }
+
+      // Otherwise: do nothing (keep waiting). This prevents "what time works" → instantly continuing.
+      return;
+    }
+
+    // If we got here, we treat it as a real answer: send the NEXT step line and advance index.
+    const lineToSay = steps[idx] || getBookingFallbackLine(state.context!);
     const perTurnInstr = buildStepperTurnInstruction(state.context!, lineToSay);
 
-    setWaitingForResponse(state, true, "response.create (stepper user turn)");
-    setAiSpeaking(state, true, "response.create (stepper user turn)");
+    // Reset inbound tracking right before we speak
+    state.userAudioMsBuffered = 0;
+    state.lastUserTranscript = "";
+    state.lowSignalCommitCount = 0;
+    state.repromptCountForCurrentStep = 0;
+
+    setWaitingForResponse(state, true, "response.create (script step)");
+    setAiSpeaking(state, true, "response.create (script step)");
     state.outboundOpenAiDone = false;
 
     /**
@@ -1847,16 +2176,21 @@ async function handleOpenAiEvent(
           streamSid: state.streamSid,
           scriptKey: normalizeScriptKey(state.context?.scriptKey),
           phase: state.phase,
-          isGreetingReply,
-          mode,
+          isGreetingReply: false,
+          mode: "script_step",
           stepIndex: idx,
           stepsCount: steps.length,
           instructionLen: perTurnInstr.length,
           hasUserTranscript: !!lastUserText,
-          objectionKind: objectionKind || "(none)",
+          objectionKind: "(none)",
+          stepType,
+          audioMs,
         });
       }
     } catch {}
+
+    state.lastPromptSentAtMs = Date.now();
+    state.lastPromptLine = lineToSay;
 
     state.openAiWs.send(
       JSON.stringify({
@@ -1867,11 +2201,7 @@ async function handleOpenAiEvent(
       })
     );
 
-    // Only advance the script step if we emitted an actual script step (not a rebuttal).
-    if (mode === "script_step") {
-      state.scriptStepIndex = Math.min(idx + 1, Math.max(0, steps.length - 1));
-    }
-
+    state.scriptStepIndex = Math.min(idx + 1, Math.max(0, steps.length - 1));
     state.phase = "in_call";
     return;
   }
