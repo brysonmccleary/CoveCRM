@@ -621,8 +621,6 @@ Say: "Awesome. I’ll have ${agent} call you around then. Stay blessed."
 function getRebuttalsBlock(ctx: AICallContext): string {
   const agentRaw = (ctx.agentName || "your agent").trim() || "your agent";
   const agent = (agentRaw.split(" ")[0] || agentRaw).trim();
-  const clientRaw = (ctx.clientFirstName || "").trim();
-  const client = clientRaw ? clientRaw : "there";
 
   return `
 REBUTTALS (USE ONLY IF NEEDED — THEN GO RIGHT BACK TO BOOKING)
@@ -807,7 +805,6 @@ MOST IMPORTANT:
 
 /**
  * ✅ Short per-turn instruction (keeps audio reliable)
- * We reference the system prompt’s REAL CALL SCRIPT without re-sending it every turn.
  */
 function buildShortNextStepInstruction(): string {
   return `
@@ -1243,8 +1240,8 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
         modalities: ["audio", "text"],
         voice: state.context!.voiceProfile.openAiVoiceId || "alloy",
 
-        // ✅ Low temp reduces drift / hallucination
-        temperature: 0.2,
+        // ✅ Must be >= 0.6 for this Realtime model (your log proved it)
+        temperature: 0.6,
 
         input_audio_format: "g711_ulaw",
         output_audio_format: "pcm16",
