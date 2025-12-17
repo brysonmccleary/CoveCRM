@@ -427,13 +427,8 @@ function safelyCloseOpenAi(state: CallState, why: string) {
 }
 
 /**
- * ✅ BOOKING-ONLY SCRIPTS (NO UNDERWRITING / NO PRESENTATION / NO RATES / NO HEALTH)
+ * ✅ BOOKING-ONLY SCRIPTS (NO PRESENTATION / NO UNDERWRITING / NO RATES / NO HEALTH)
  * Goal: book the appointment, nothing else.
- *
- * HARD BAN (AI must NEVER say):
- * - underwriter, rates, carriers, approvals, eligibility, health, age, DOB, SSN, banking
- * - pen & paper, license info, “verify my license”, “government licensed”, etc.
- * - any non-life-insurance products (energy plan, solar, Medicare, etc.)
  */
 function getSelectedScriptText(ctx: AICallContext): string {
   const aiName = (ctx.voiceProfile.aiName || "Alex").trim() || "Alex";
@@ -442,9 +437,6 @@ function getSelectedScriptText(ctx: AICallContext): string {
   const agentRaw = (ctx.agentName || "your agent").trim() || "your agent";
   const agent = (agentRaw.split(" ")[0] || agentRaw).trim();
   const scriptKey = normalizeScriptKey(ctx.scriptKey);
-
-  // IMPORTANT: These are fully-written, per-lead-type scripts.
-  // No "(topic)" or placeholders that can leak across lead types.
 
   const SCRIPT_MORTGAGE = `
 BOOKING SCRIPT — MORTGAGE PROTECTION (FOLLOW IN ORDER)
@@ -460,7 +452,7 @@ STOP. WAIT.
 IF THEY SAY "YES" / "I GOT IT"
 Say: "Perfect — I’m showing that on my end. Real quick, was that for just you, or a spouse as well?"
 STOP. WAIT.
-Then say: "Got it. The only reason I called is just to make sure it actually lines up with what you wanted. ${agent} can double-check everything with you on a quick call. Would later today or tomorrow be better — daytime or evening?"
+Then say: "Got it. My job is just to get you scheduled so ${agent} can double-check it matches what you wanted. Would later today or tomorrow be better — daytime or evening?"
 STOP. WAIT.
 
 IF THEY SAY "NO" / "NOT YET"
@@ -497,7 +489,7 @@ STOP. WAIT.
 IF THEY SAY "YES"
 Say: "Perfect. Real quick, was that for just you, or were you also thinking about a spouse?"
 STOP. WAIT.
-Then say: "Got it. The only reason I called is just to make sure it matches what you wanted. ${agent} can double-check everything with you on a quick call. Would later today or tomorrow be better — daytime or evening?"
+Then say: "Got it. My job is just to get you scheduled so ${agent} can double-check it matches what you wanted. Would later today or tomorrow be better — daytime or evening?"
 STOP. WAIT.
 
 IF THEY SAY "NO"
@@ -564,12 +556,8 @@ STEP 2
 Say: "I was hoping you could help me out — I’m reaching out about the veteran life insurance you were looking into. Were you looking to get the coverage on just yourself, or a spouse as well?"
 STOP. WAIT.
 
-STEP 3
-Say: "Perfect. My job is just to get you scheduled so you can go over the information on a quick call."
-STOP. WAIT.
-
 BOOK (CLOSE)
-Say: "${agent} is the licensed agent who will go over everything with you. Would later today or tomorrow be better — daytime or evening?"
+Say: "Perfect — my job is just to get you scheduled. ${agent} is the licensed agent who will go over everything with you. Would later today or tomorrow be better — daytime or evening?"
 STOP. WAIT.
 
 CONFIRM
@@ -594,7 +582,7 @@ STOP. WAIT.
 IF THEY SAY "YES"
 Say: "Perfect. Was that for just you, or a spouse as well?"
 STOP. WAIT.
-Then say: "Got it. The only reason I called is to make sure it matches what you wanted. ${agent} can double-check it with you on a quick call. Would later today or tomorrow be better — daytime or evening?"
+Then say: "Got it. My job is just to get you scheduled so ${agent} can double-check it matches what you wanted. Would later today or tomorrow be better — daytime or evening?"
 STOP. WAIT.
 
 IF THEY SAY "NO"
@@ -629,7 +617,6 @@ Say: "Awesome. I’ll have ${agent} call you around then. Stay blessed."
 
 /**
  * ✅ Rebuttals / objection handling — booking-only.
- * IMPORTANT: use these ONLY when the lead objects. After rebuttal, return to booking question.
  */
 function getRebuttalsBlock(ctx: AICallContext): string {
   const agentRaw = (ctx.agentName || "your agent").trim() || "your agent";
@@ -644,7 +631,8 @@ RULES
 - One rebuttal at a time.
 - Keep it short (1–2 sentences).
 - Then ask again: "Would later today or tomorrow work better — daytime or evening?"
-- Never argue. Never mention rates, underwriting, carriers, approvals, eligibility, age, health.
+- Never mention rates, underwriting, carriers, approvals, eligibility, age, health.
+- Never introduce any other scenario (resorts, vacations, hotels, healthcare, utilities, etc.).
 
 OBJECTION: "I don’t have time / I’m at work"
 REBUTTAL: "Totally understand, ${client}. That’s why I’m just scheduling — it’ll be a short call with ${agent}. Would later today or tomorrow be better — daytime or evening?"
@@ -667,10 +655,9 @@ STOP. WAIT.
 OBJECTION: "I don’t remember filling anything out"
 REBUTTAL: "No worries — that happens all the time. It was a request for information on life insurance. Was that for just you, or a spouse as well?"
 STOP. WAIT.
-Then go back to booking.
 
 OBJECTION: "Is this a scam?"
-REBUTTAL: "I get it — totally fair. This is just a scheduling call tied to your request. ${agent} will explain everything clearly on the phone. Would later today or tomorrow be better — daytime or evening?"
+REBUTTAL: "I get it — totally fair. This is just a scheduling call tied to your life insurance request. ${agent} will explain everything clearly on the phone. Would later today or tomorrow be better — daytime or evening?"
 
 OBJECTION: "Call my spouse"
 REBUTTAL: "Absolutely — we can include them. What time is best when you’re both available — later today or tomorrow?"
@@ -679,8 +666,7 @@ STOP. WAIT.
 }
 
 /**
- * ✅ Script block returned into the system prompt.
- * Includes hard locks + the selected lead-type booking script + rebuttals.
+ * ✅ Script block returned into the prompt.
  */
 function getScriptBlock(ctx: AICallContext): string {
   const aiName = (ctx.voiceProfile.aiName || "Alex").trim() || "Alex";
@@ -689,6 +675,9 @@ function getScriptBlock(ctx: AICallContext): string {
   const scriptKey = normalizeScriptKey(ctx.scriptKey);
 
   const HARD_LOCKS = `
+HARD ENGLISH LOCK (NON-NEGOTIABLE)
+- Speak ONLY English.
+
 HARD NAME LOCK (NON-NEGOTIABLE)
 - The ONLY name you may use for the lead is exactly: "${client}"
 - If the lead name is missing, use exactly: "there"
@@ -697,8 +686,9 @@ HARD NAME LOCK (NON-NEGOTIABLE)
 HARD SCOPE LOCK (NON-NEGOTIABLE)
 - This call is ONLY about a LIFE INSURANCE request that the lead submitted.
 - Allowed topics ONLY: mortgage protection, final expense, cash value/IUL, veteran life insurance programs.
-- You MUST NEVER mention or discuss: energy plans, utilities, solar, Medicare, health insurance, ACA/Obamacare, auto insurance, home insurance, cable/internet, phone plans, warranties, debt relief, credit repair, alarms, security systems, banking, loans.
-- If asked about any forbidden topic, say: "I can’t help with that — this is only about your life insurance request." Then immediately continue.
+- You MUST NEVER mention or discuss: resorts, hotels, vacations, timeshares, travel, energy plans, utilities, solar, Medicare, health insurance, ACA/Obamacare, auto insurance, home insurance, cable/internet, phone plans, warranties, debt relief, credit repair, alarms, security systems, banking, loans.
+- If you accidentally mention anything outside life insurance, immediately correct yourself:
+  Say: "Sorry — wrong script. This call is only about your life insurance request." Then continue the correct script.
 
 BOOKING-ONLY LOCK (NON-NEGOTIABLE)
 - You are a scheduling assistant (NOT a licensed agent).
@@ -735,15 +725,14 @@ TURN DISCIPLINE (NON-NEGOTIABLE)
 }
 
 /**
- * ✅ Strict system greeting: MUST stop and wait.
- * (This is the system greeting BEFORE the script. After lead responds, script begins.)
+ * ✅ Strict system greeting (kept), but we will now re-send full guardrails every turn too.
  */
 function buildGreetingInstructions(ctx: AICallContext): string {
   const aiName = (ctx.voiceProfile.aiName || "Alex").trim() || "Alex";
   const clientName = (ctx.clientFirstName || "").trim() || "there";
 
   return [
-    'HARD ENGLISH LOCK: Speak ONLY English. Do NOT say any Spanish words.',
+    'HARD ENGLISH LOCK: Speak ONLY English.',
     'HARD SCOPE LOCK: This call is ONLY about a LIFE INSURANCE request. Do NOT mention any other product.',
     'HARD NAME LOCK: You may ONLY use the lead name exactly as provided. If missing, say "there". Never invent names.',
     "",
@@ -757,7 +746,46 @@ function buildGreetingInstructions(ctx: AICallContext): string {
 }
 
 /**
- * System prompt – HARD locks + BOOKING script + rebuttals.
+ * ✅ NEW: Per-turn instructions that re-inject the full script + locks EVERY time.
+ * This is the key change that stops “resort stay” hallucinations.
+ */
+function buildTurnInstructions(
+  ctx: AICallContext,
+  mode: "greeting" | "next_step"
+): string {
+  const scriptBlock = getScriptBlock(ctx);
+
+  if (mode === "greeting") {
+    return [
+      "YOU MUST NOT INVENT ANY SCENARIO.",
+      "DO NOT mention resorts, hotels, travel, healthcare, utilities, or anything except life insurance request.",
+      "",
+      "You must read the greeting VERBATIM below, then stop and wait.",
+      "GREETING VERBATIM:",
+      buildGreetingInstructions(ctx),
+      "",
+      "REFERENCE SCRIPT (DO NOT START IT YET ON THIS TURN):",
+      scriptBlock,
+    ].join("\n");
+  }
+
+  return [
+    "YOU MUST NOT INVENT ANY SCENARIO.",
+    "If you mention anything outside life insurance, immediately correct: 'Sorry — wrong script. This call is only about your life insurance request.'",
+    "",
+    "RULE:",
+    "- You must speak ONLY the next step from the BOOKING SCRIPT below.",
+    "- Read it as written. Do NOT paraphrase. Do NOT add anything new.",
+    "- After your line/question, STOP and WAIT.",
+    "- If the lead objects, use ONE rebuttal from REBUTTALS, then return to booking.",
+    "",
+    "SCRIPT TO FOLLOW (AUTHORITATIVE):",
+    scriptBlock,
+  ].join("\n");
+}
+
+/**
+ * System prompt – stays, but the real enforcement is per-turn response.create instructions.
  */
 function buildSystemPrompt(ctx: AICallContext): string {
   const aiName = (ctx.voiceProfile.aiName || "Alex").trim() || "Alex";
@@ -781,8 +809,7 @@ HARD NAME LOCK (NON-NEGOTIABLE)
 HARD SCOPE LOCK (NON-NEGOTIABLE)
 - This call is ONLY about a LIFE INSURANCE request that the lead submitted.
 - Allowed topics ONLY: mortgage protection, final expense, cash value/IUL, veteran life programs.
-- You MUST NEVER mention or discuss: energy plans, utilities, solar, Medicare, health insurance, ACA/Obamacare, auto insurance, home insurance, cable/internet, phone plans, warranties, debt relief, credit repair, alarms, security systems, banking, loans.
-- If asked about any forbidden topic, say: "I can’t help with that — this is only about your life insurance request." Then immediately continue the script.
+- You MUST NEVER mention or discuss: resorts, hotels, vacations, timeshares, travel, energy plans, utilities, solar, Medicare, health insurance, ACA/Obamacare, auto insurance, home insurance, cable/internet, phone plans, warranties, debt relief, credit repair, alarms, security systems, banking, loans.
 
 BOOKING-ONLY (NON-NEGOTIABLE)
 - You are NOT the licensed agent.
@@ -800,8 +827,7 @@ LEAD INFO (USE ONLY WHAT IS PROVIDED)
 - Script key: ${scriptKey}
 
 MOST IMPORTANT:
-- FOLLOW THE BOOKING SCRIPT BELOW EXACTLY IN ORDER.
-- Use REBUTTALS only when the lead objects, then return to booking.
+- FOLLOW THE BOOKING SCRIPT. DO NOT INVENT ANY OTHER REASON FOR THE CALL.
 `.trim();
 
   const script = getScriptBlock(ctx);
@@ -1212,12 +1238,11 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
 
     const systemPrompt = buildSystemPrompt(state.context!);
 
-    // ✅ Debug proof of correct script selection (requested)
     try {
       const k = normalizeScriptKey(state.context?.scriptKey);
       const n = (state.context?.clientFirstName || "").trim() || "there";
       const s = getSelectedScriptText(state.context!);
-      const preview = String(s || "").replace(/\s+/g, " ").slice(0, 160);
+      const preview = String(s || "").replace(/\s+/g, " ").slice(0, 180);
       console.log("[AI-VOICE][SCRIPT-SELECT]", {
         scriptKey: k,
         clientFirstName: n,
@@ -1231,9 +1256,13 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
         instructions: systemPrompt,
         modalities: ["audio", "text"],
         voice: state.context!.voiceProfile.openAiVoiceId || "alloy",
-        temperature: 0.6,
+
+        // ✅ Lower temp reduces drift / hallucination
+        temperature: 0.2,
+
         input_audio_format: "g711_ulaw",
         output_audio_format: "pcm16",
+
         turn_detection: {
           type: "server_vad",
           create_response: false,
@@ -1367,11 +1396,15 @@ async function handleOpenAiEvent(
         setAiSpeaking(liveState, true, "response.create (greeting)");
         liveState.outboundOpenAiDone = false;
 
+        // ✅ IMPORTANT: re-inject full guardrails + greeting verbatim
         liveState.openAiWs.send(
           JSON.stringify({
             type: "response.create",
             response: {
-              instructions: buildGreetingInstructions(liveState.context!),
+              instructions: buildTurnInstructions(
+                liveState.context!,
+                "greeting"
+              ),
             },
           })
         );
@@ -1381,6 +1414,11 @@ async function handleOpenAiEvent(
     return;
   }
 
+  /**
+   * TURN-TAKING:
+   * - After greeting, we WAIT for committed audio.
+   * - On first commit, we start the REAL SCRIPT and WAIT after questions.
+   */
   if (t === "input_audio_buffer.committed") {
     if (state.voicemailSkipArmed) return;
     if (!state.openAiWs || !state.openAiReady) return;
@@ -1392,12 +1430,12 @@ async function handleOpenAiEvent(
     setAiSpeaking(state, true, "response.create (user turn)");
     state.outboundOpenAiDone = false;
 
+    // ✅ IMPORTANT: re-inject full guardrails + full selected script EVERY turn
     state.openAiWs.send(
       JSON.stringify({
         type: "response.create",
         response: {
-          instructions:
-            "Proceed with the NEXT step of the REAL CALL SCRIPT exactly as written. Speak only the next step, then STOP and WAIT for the lead. If the lead objects, use the REBUTTALS then return to booking.",
+          instructions: buildTurnInstructions(context, "next_step"),
         },
       })
     );
