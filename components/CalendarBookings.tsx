@@ -57,6 +57,43 @@ Modal.setAppElement("#__next");
 
 const toISO = (d: Date) => new Date(d.getTime()).toISOString();
 
+function shouldReconnect(resStatus: number, data: any) {
+  if (data?.needsReconnect === true) return true;
+  if (resStatus === 401) return true;
+
+  const err = String(data?.error || data?.code || "").trim();
+  if (!err) return false;
+
+  const errLower = err.toLowerCase();
+  if (
+    errLower === "google_reconnect_required" ||
+    errLower === "invalid_grant" ||
+    errLower === "insufficient_scopes" ||
+    errLower === "no_credentials"
+  ) {
+    return true;
+  }
+
+  if (
+    errLower.includes("google_reconnect_required") ||
+    errLower.includes("invalid_grant") ||
+    (errLower.includes("insufficient") && errLower.includes("scope")) ||
+    errLower.includes("no_credentials")
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+async function safeReadJson(res: Response) {
+  try {
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
 export default function CalendarBookings() {
   const router = useRouter();
 
@@ -70,6 +107,7 @@ export default function CalendarBookings() {
   const [calendarConnected, setCalendarConnected] = useState(false);
   const [loadingStatus, setLoadingStatus] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [needsReconnect, setNeedsReconnect] = useState(false);
 
   // View/date persistence
   const [view, setView] = useState<View>(() => {
@@ -113,17 +151,35 @@ export default function CalendarBookings() {
   // 2) Fetch events for visible range
   const fetchRange = async (start?: Date, end?: Date) => {
     if (!start || !end) return;
+
     setErrorMsg(null);
+    setNeedsReconnect(false);
 
     try {
       const url = `/api/calendar/events?start=${encodeURIComponent(
-        toISO(start),
+        toISO(start)
       )}&end=${encodeURIComponent(toISO(end))}`;
-      const res = await fetch(url);
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.error || "Failed to load events");
 
-      const parsed: EventType[] = (data.events || []).map((e: any) => ({
+      const res = await fetch(url);
+      const data = await safeReadJson(res);
+
+      // ✅ Critical: reconnect detection must use JSON flags even on non-200
+      if (!res.ok) {
+        if (shouldReconnect(res.status, data)) {
+          setNeedsReconnect(true);
+          setCalendarConnected(false);
+          setErrorMsg(
+            "Your Google Calendar authorization expired or changed. Please reconnect."
+          );
+          return;
+        }
+
+        const msg =
+          (data && (data.error || data.message)) || "Failed to load events";
+        throw new Error(String(msg));
+      }
+
+      const parsed: EventType[] = ((data && data.events) || []).map((e: any) => ({
         id: e.id,
         title: e.summary || "",
         start: new Date(e.start),
@@ -151,21 +207,12 @@ export default function CalendarBookings() {
         parsed.map((e) => ({
           ...e,
           source: matchedIds.includes(e.id) ? "crm" : "manual",
-        })),
+        }))
       );
     } catch (err: any) {
       const message = err?.message || "Failed to load events";
       console.error("❌ Calendar fetch error:", message);
       setErrorMsg(message);
-
-      // If the error indicates expired / bad grant / missing scopes,
-      // treat it as "needs reconnect" and drop connection state.
-      if (
-        typeof message === "string" &&
-        /GOOGLE_RECONNECT_REQUIRED|invalid_grant|insufficient/i.test(message)
-      ) {
-        setCalendarConnected(false);
-      }
     }
   };
 
@@ -187,7 +234,7 @@ export default function CalendarBookings() {
       23,
       59,
       59,
-      999,
+      999
     );
     const startOfWeek = (d: Date) => {
       const x = new Date(d);
@@ -294,7 +341,7 @@ export default function CalendarBookings() {
   const extractPhone = (text?: string): string | null => {
     if (!text) return null;
     const match = text.match(
-      /(?:\+?1[-.\s]?)?(\d{3})[-.\s]?(\d{3})[-.\s]?(\d{4})/,
+      /(?:\+?1[-.\s]?)?(\d{3})[-.\s]?(\d{3})[-.\s]?(\d{4})/
     );
     return match ? match.slice(1).join("") : null;
   };
@@ -335,10 +382,6 @@ export default function CalendarBookings() {
       router.push(`/dial-session?leadId=${lead._id}`);
     }
   };
-
-  const needsReconnect =
-    !!errorMsg &&
-    /GOOGLE_RECONNECT_REQUIRED|invalid_grant|insufficient/i.test(errorMsg);
 
   return (
     <div className="p-4">
@@ -391,13 +434,24 @@ export default function CalendarBookings() {
         📅 Booking Calendar
       </h2>
 
-      {!loadingStatus && !calendarConnected && (
+      {/* Always show reconnect UI if backend says so */}
+      {needsReconnect && (
+        <div className="mb-4">
+          <p className="text-red-400 text-sm mb-2">
+            Your Google Calendar authorization expired or changed. Please
+            reconnect your Google account.
+          </p>
+          <ConnectGoogleCalendarButton />
+        </div>
+      )}
+
+      {!needsReconnect && !loadingStatus && !calendarConnected && (
         <div className="mb-4">
           <ConnectGoogleCalendarButton />
         </div>
       )}
 
-      {calendarConnected && upcoming && (
+      {!needsReconnect && calendarConnected && upcoming && (
         <div className="bg-yellow-100 text-yellow-900 px-4 py-3 rounded mb-4 shadow">
           ⚠️ Upcoming appointment: <strong>{upcoming.title}</strong>{" "}
           at{" "}
@@ -408,7 +462,7 @@ export default function CalendarBookings() {
         </div>
       )}
 
-      {calendarConnected && (
+      {!needsReconnect && calendarConnected && (
         <div
           style={{ height: "calc(100vh - 12rem)" }}
           className="bg-[#0f172a] rounded-lg p-4 text-white shadow-md"
@@ -424,7 +478,6 @@ export default function CalendarBookings() {
             popup
             selectable
             onSelectEvent={onEventClick}
-            /* 👇 eliminate the interim day route; always go back to main calendar tab */
             onSelectSlot={() => router.replace("/dashboard?tab=calendar")}
             drilldownView="day"
             onDrillDown={() => router.replace("/dashboard?tab=calendar")}
@@ -481,17 +534,7 @@ export default function CalendarBookings() {
         </div>
       )}
 
-      {/* Error / reconnect messaging */}
-      {errorMsg && needsReconnect && (
-        <div className="mt-3">
-          <p className="text-red-400 text-sm mb-2">
-            Your Google Calendar authorization expired or changed. Please
-            reconnect your Google account.
-          </p>
-          <ConnectGoogleCalendarButton />
-        </div>
-      )}
-
+      {/* Non-reconnect error still shows normally */}
       {errorMsg && !needsReconnect && (
         <p className="text-red-500 mt-3 text-sm">{errorMsg}</p>
       )}
@@ -507,8 +550,7 @@ export default function CalendarBookings() {
           <div className="text-white space-y-2">
             <h2 className="text-xl font-bold">{selectedEvent.title}</h2>
             <p>
-              <strong>Start:</strong>{" "}
-              {selectedEvent.start.toLocaleString()}
+              <strong>Start:</strong> {selectedEvent.start.toLocaleString()}
             </p>
             <p>
               <strong>End:</strong> {selectedEvent.end.toLocaleString()}
@@ -526,8 +568,7 @@ export default function CalendarBookings() {
             {selectedEvent.attendeesEmails &&
               selectedEvent.attendeesEmails.length > 0 && (
                 <p>
-                  <strong>Attendee:</strong>{" "}
-                  {selectedEvent.attendeesEmails[0]}
+                  <strong>Attendee:</strong> {selectedEvent.attendeesEmails[0]}
                 </p>
               )}
 
@@ -535,8 +576,7 @@ export default function CalendarBookings() {
               <>
                 <hr className="my-2 border-[#1e293b]" />
                 <p>
-                  <strong>Lead:</strong> {lead["First Name"]}{" "}
-                  {lead["Last Name"]}
+                  <strong>Lead:</strong> {lead["First Name"]} {lead["Last Name"]}
                 </p>
                 <p>
                   <strong>Email:</strong> {lead.Email}
