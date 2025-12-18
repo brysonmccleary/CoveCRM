@@ -560,16 +560,6 @@ function getBookingFallbackLine(ctx: AICallContext): string {
 }
 
 /**
- * ✅ NEW (wording only): unified “coverage in place” → policy review pitch
- * This is intentionally booking-only and consistent across all lead types.
- */
-function getCoverageInPlacePolicyReviewLine(ctx: AICallContext): string {
-  const agentRaw = (ctx.agentName || "your agent").trim() || "your agent";
-  const agent = (agentRaw.split(" ")[0] || agentRaw).trim();
-  return `Perfect — I’m showing you do have some coverage in place, but it looks like they may have you in a higher rate class than you should be, so you could be overpaying. When do you have 5 minutes for ${agent} to take a look — later today or tomorrow?`;
-}
-
-/**
  * ✅ Human waiting / answer gating (NEW)
  * We avoid stepping forward on tiny commits (e.g. "yeah", breath, comfort noise).
  * We do NOT change audio; we only decide whether to respond + whether to advance.
@@ -615,7 +605,8 @@ function classifyStepType(lineRaw: string): StepType {
 function looksLikeTimeAnswer(textRaw: string): boolean {
   const t = String(textRaw || "").trim().toLowerCase();
   if (!t) return false;
-  if (/(today|tomorrow|morning|afternoon|evening|later|tonight)/i.test(t)) return true;
+  if (/(today|tomorrow|morning|afternoon|evening|later|tonight)/i.test(t))
+    return true;
   if (/\b\d{1,2}(:\d{2})?\b/.test(t)) return true;
   if (/\b(am|pm)\b/i.test(t)) return true;
   return false;
@@ -677,7 +668,11 @@ function shouldTreatCommitAsRealAnswer(
   return audioMs >= 500;
 }
 
-function getRepromptLineForStepType(ctx: AICallContext, stepType: StepType, n: number): string {
+function getRepromptLineForStepType(
+  ctx: AICallContext,
+  stepType: StepType,
+  n: number
+): string {
   const agentRaw = (ctx.agentName || "your agent").trim() || "your agent";
   const agent = (agentRaw.split(" ")[0] || agentRaw).trim();
 
@@ -786,8 +781,7 @@ function getRebuttalLine(ctx: AICallContext, kind: string): string {
     return `I can, but it’s usually easier to schedule a quick call so you don’t have to go back and forth. Would later today or tomorrow be better — daytime or evening?`;
   }
   if (kind === "already_have") {
-    // ✅ UPDATED (wording only): match your policy review flow
-    return getCoverageInPlacePolicyReviewLine(ctx);
+    return `Perfect — this is just to make sure it still lines up with what you wanted. Would later today or tomorrow be better — daytime or evening?`;
   }
   if (kind === "how_much") {
     return `Good question — ${agent} covers that on the quick call because it depends on what you want it to do. Would later today or tomorrow be better — daytime or evening?`;
@@ -800,9 +794,11 @@ function getRebuttalLine(ctx: AICallContext, kind: string): string {
     return `I understand. This is just a scheduling call tied to your life insurance request. ${agent} will explain everything clearly on the phone. Would later today or tomorrow be better — daytime or evening?`;
   }
   if (kind === "not_interested") {
+    // Keep booking-only and let outcome logic handle later based on model control if you have it
     return `No worries — just so I don’t waste your time, did you mean you don’t want any coverage at all, or you just don’t want a call right now?`;
   }
   if (kind === "redirect") {
+    // They tried to steer to other verticals. We do NOT follow them. We return to booking.
     return getBookingFallbackLine(ctx);
   }
 
@@ -845,43 +841,32 @@ function getSelectedScriptText(ctx: AICallContext): string {
   const agent = (agentRaw.split(" ")[0] || agentRaw).trim();
   const scriptKey = normalizeScriptKey(ctx.scriptKey);
 
-  // ✅ Unified “coverage in place” flow line (same across all lead types)
-  const COVERAGE_IN_PLACE_LINE = getCoverageInPlacePolicyReviewLine(ctx);
+  const COVERAGE_IN_PLACE_UNIVERSAL = `Perfect — I’m showing you do have something in place, but it looks like they may have you in a higher risk rate class and you could be overpaying. When do you have time for a quick 5-minute call where ${agent} can get that corrected for you?`;
 
   const SCRIPT_MORTGAGE = `
 BOOKING SCRIPT — MORTGAGE PROTECTION (FOLLOW IN ORDER)
 
 STEP 1 (FIRST script turn AFTER the system greeting + lead responds)
-Say: "Hey ${client} — it’s just ${aiName}. Appreciate you taking my call."
+Say: "Perfect — I’m calling about the request you sent in for mortgage protection information. Does that ring a bell?"
 STOP. WAIT.
 
 STEP 2
-Say: "I was hoping you could help me out. I'm reaching out regarding the request you sent in a while back for mortgage protection information. Did you end up getting the coverage in place?"
+Say: "Just so I’m on the right track — do you already have something in place right now?"
 STOP. WAIT.
 
-IF THEY SAY "YES" / "I GOT IT" / "ALREADY HAVE IT"
-Say: "${COVERAGE_IN_PLACE_LINE}"
-STOP. WAIT.
-Then say: "Okay perfect. I’ll put you down for a quick call with ${agent} around that time. Does that work?"
+STEP 3 (COVERAGE IN PLACE — UNIVERSAL)
+Say: "${COVERAGE_IN_PLACE_UNIVERSAL}"
 STOP. WAIT.
 
-IF THEY SAY "NO" / "NOT YET"
-Say: "No worries. Was this to cover just yourself, or a spouse as well?"
-STOP. WAIT.
-Then ask: "Was your main goal to help protect the mortgage if something happened, or were you just wanting to see what options were out there for the family?"
-STOP. WAIT.
-Then ask: "Do you mind walking me through what prompted you to reach out in the first place?"
+STEP 4 (BOOK)
+Say: "Would later today or tomorrow be better — daytime or evening?"
 STOP. WAIT.
 
-BOOK (CLOSE)
-Say: "Perfect — my job is just to get you scheduled. ${agent} is the licensed agent who will go over everything with you. Would you have more time later today or tomorrow — daytime or evening?"
+STEP 5 (CONFIRM)
+Say: "Okay perfect. I’ll put you down for a quick call with ${agent} around that time. Does that work?"
 STOP. WAIT.
 
-CONFIRM
-If they pick a window, say: "Okay perfect. I’ll put you down for a quick call with ${agent} around that time. Does that work?"
-STOP. WAIT.
-
-CLOSE
+STEP 6 (CLOSE)
 Say: "Awesome. I’ll have ${agent} call you around then. Stay blessed."
 `.trim();
 
@@ -889,36 +874,26 @@ Say: "Awesome. I’ll have ${agent} call you around then. Stay blessed."
 BOOKING SCRIPT — FINAL EXPENSE (FOLLOW IN ORDER)
 
 STEP 1 (FIRST script turn AFTER the system greeting + lead responds)
-Say: "Hey ${client} — it’s just ${aiName}. Appreciate you taking my call."
+Say: "Perfect — I’m calling about the request you sent in for final expense coverage information. Does that ring a bell?"
 STOP. WAIT.
 
 STEP 2
-Say: "I was hoping you could help me out. I'm reaching out regarding the request you sent in for final expense coverage information. Did you end up getting the coverage in place?"
+Say: "Just so I’m on the right track — do you already have something in place right now?"
 STOP. WAIT.
 
-IF THEY SAY "YES" / "I GOT IT" / "ALREADY HAVE IT"
-Say: "${COVERAGE_IN_PLACE_LINE}"
-STOP. WAIT.
-Then say: "Okay perfect. I’ll put you down for a quick call with ${agent} around that time. Does that work?"
+STEP 3 (COVERAGE IN PLACE — UNIVERSAL)
+Say: "${COVERAGE_IN_PLACE_UNIVERSAL}"
 STOP. WAIT.
 
-IF THEY SAY "NO" / "NOT YET"
-Say: "No worries. Would the coverage be for just yourself, or a spouse as well?"
-STOP. WAIT.
-Then ask: "Was your main goal more funeral and final arrangements, or just wanting to see what options were out there for the family?"
-STOP. WAIT.
-Then ask: "Do you mind walking me through what prompted you to reach out?"
+STEP 4 (BOOK)
+Say: "Would later today or tomorrow be better — daytime or evening?"
 STOP. WAIT.
 
-BOOK (CLOSE)
-Say: "Perfect — my job is just to get you scheduled. ${agent} is the licensed agent who will go over everything with you. Would later today or tomorrow be better — daytime or evening?"
-STOP. WAIT.
-
-CONFIRM
+STEP 5 (CONFIRM)
 Say: "Okay perfect. I’ll put you down for a quick call with ${agent} around that time. Does that work?"
 STOP. WAIT.
 
-CLOSE
+STEP 6 (CLOSE)
 Say: "Awesome. I’ll have ${agent} call you around then. Stay blessed."
 `.trim();
 
@@ -926,32 +901,26 @@ Say: "Awesome. I’ll have ${agent} call you around then. Stay blessed."
 BOOKING SCRIPT — CASH VALUE / IUL (FOLLOW IN ORDER)
 
 STEP 1 (FIRST script turn AFTER the system greeting + lead responds)
-Say: "Hey ${client} — it’s just ${aiName}. Appreciate you taking my call."
+Say: "Perfect — I’m calling about the request you sent in for cash value life insurance information — the indexed universal life options. Does that ring a bell?"
 STOP. WAIT.
 
 STEP 2
-Say: "I'm reaching out in regards to the request that you submitted to get the information on the cash growing life insurance — the indexed universal life options. Do you remember doing that?"
+Say: "Just so I’m on the right track — do you already have something in place right now?"
 STOP. WAIT.
 
-IF THEY SAY "YES"
-Say: "Awesome. When you were looking into this, was your main priority more the cash growth side, or more the protection side for the family?"
-STOP. WAIT.
-Then ask: "Would the coverage be for just yourself, or did you have a spouse and/or kids in mind too?"
+STEP 3 (COVERAGE IN PLACE — UNIVERSAL)
+Say: "${COVERAGE_IN_PLACE_UNIVERSAL}"
 STOP. WAIT.
 
-IF THEY SAY "NO" / "I DON'T REMEMBER"
-Say: "No worries. It was just a request for information on cash value life insurance options. Was that for just you, or a spouse as well?"
+STEP 4 (BOOK)
+Say: "Would later today or tomorrow be better — daytime or evening?"
 STOP. WAIT.
 
-BOOK (CLOSE)
-Say: "Perfect — my job is just to get you scheduled. ${agent} is the licensed agent who will go over the details with you on a quick call. Would later today or tomorrow be better — daytime or evening?"
-STOP. WAIT.
-
-CONFIRM
+STEP 5 (CONFIRM)
 Say: "Okay perfect. I’ll put you down for a quick call with ${agent} around that time. Does that work?"
 STOP. WAIT.
 
-CLOSE
+STEP 6 (CLOSE)
 Say: "Awesome. I’ll have ${agent} call you around then. Stay blessed."
 `.trim();
 
@@ -959,22 +928,53 @@ Say: "Awesome. I’ll have ${agent} call you around then. Stay blessed."
 BOOKING SCRIPT — VETERAN LEADS (FOLLOW IN ORDER)
 
 STEP 1 (FIRST script turn AFTER the system greeting + lead responds)
-Say: "Hey ${client} — it’s just ${aiName}. Appreciate you taking my call."
+Say: "Perfect — I’m calling about the veteran life insurance request you sent in. Does that ring a bell?"
 STOP. WAIT.
 
 STEP 2
-Say: "I was just reaching out about the veteran life insurance you were looking into. Were you looking to get the coverage on just yourself, or a spouse as well?"
+Say: "Just so I’m on the right track — do you already have something in place right now?"
 STOP. WAIT.
 
-BOOK (CLOSE)
-Say: "Perfect — my job is just to get you scheduled. ${agent} is the licensed agent who will go over everything with you. Would later today or tomorrow be better — daytime or evening?"
+STEP 3 (COVERAGE IN PLACE — UNIVERSAL)
+Say: "${COVERAGE_IN_PLACE_UNIVERSAL}"
 STOP. WAIT.
 
-CONFIRM
+STEP 4 (BOOK)
+Say: "Would later today or tomorrow be better — daytime or evening?"
+STOP. WAIT.
+
+STEP 5 (CONFIRM)
 Say: "Okay perfect. I’ll put you down for a quick call with ${agent} around that time. Does that work?"
 STOP. WAIT.
 
-CLOSE
+STEP 6 (CLOSE)
+Say: "Awesome. I’ll have ${agent} call you around then. Stay blessed."
+`.trim();
+
+  const SCRIPT_TRUCKER = `
+BOOKING SCRIPT — TRUCKER LEADS (FOLLOW IN ORDER)
+
+STEP 1 (FIRST script turn AFTER the system greeting + lead responds)
+Say: "Perfect — I’m calling about the life insurance request you sent in. Does that ring a bell?"
+STOP. WAIT.
+
+STEP 2
+Say: "Just so I’m on the right track — do you already have something in place right now?"
+STOP. WAIT.
+
+STEP 3 (COVERAGE IN PLACE — UNIVERSAL)
+Say: "${COVERAGE_IN_PLACE_UNIVERSAL}"
+STOP. WAIT.
+
+STEP 4 (BOOK)
+Say: "Would later today or tomorrow be better — daytime or evening?"
+STOP. WAIT.
+
+STEP 5 (CONFIRM)
+Say: "Okay perfect. I’ll put you down for a quick call with ${agent} around that time. Does that work?"
+STOP. WAIT.
+
+STEP 6 (CLOSE)
 Say: "Awesome. I’ll have ${agent} call you around then. Stay blessed."
 `.trim();
 
@@ -982,36 +982,26 @@ Say: "Awesome. I’ll have ${agent} call you around then. Stay blessed."
 BOOKING SCRIPT — GENERIC LIFE (FOLLOW IN ORDER)
 
 STEP 1 (FIRST script turn AFTER the system greeting + lead responds)
-Say: "Hey ${client} — it’s just ${aiName}. Appreciate you taking my call."
+Say: "Perfect — I’m calling about the life insurance request you sent in. Does that ring a bell?"
 STOP. WAIT.
 
 STEP 2
-Say: "I was hoping you could help me out. I'm reaching out regarding the request you sent in for life insurance information. Did you end up getting anything in place?"
+Say: "Just so I’m on the right track — do you already have something in place right now?"
 STOP. WAIT.
 
-IF THEY SAY "YES" / "I GOT IT" / "ALREADY HAVE IT"
-Say: "${COVERAGE_IN_PLACE_LINE}"
-STOP. WAIT.
-Then say: "Okay perfect. I’ll put you down for a quick call with ${agent} around that time. Does that work?"
+STEP 3 (COVERAGE IN PLACE — UNIVERSAL)
+Say: "${COVERAGE_IN_PLACE_UNIVERSAL}"
 STOP. WAIT.
 
-IF THEY SAY "NO" / "NOT YET"
-Say: "No worries. Would the coverage be for just yourself, or a spouse as well?"
-STOP. WAIT.
-Then ask: "What were your main goals — funeral and final arrangements, leaving money behind for the family, or covering a mortgage?"
-STOP. WAIT.
-Then ask: "Do you mind walking me through what prompted you to reach out?"
+STEP 4 (BOOK)
+Say: "Would later today or tomorrow be better — daytime or evening?"
 STOP. WAIT.
 
-BOOK (CLOSE)
-Say: "Perfect — my job is just to get you scheduled. ${agent} is the licensed agent who will go over everything with you. Would later today or tomorrow be better — daytime or evening?"
-STOP. WAIT.
-
-CONFIRM
+STEP 5 (CONFIRM)
 Say: "Okay perfect. I’ll put you down for a quick call with ${agent} around that time. Does that work?"
 STOP. WAIT.
 
-CLOSE
+STEP 6 (CLOSE)
 Say: "Awesome. I’ll have ${agent} call you around then. Stay blessed."
 `.trim();
 
@@ -1019,7 +1009,7 @@ Say: "Awesome. I’ll have ${agent} call you around then. Stay blessed."
   if (scriptKey === "final_expense") return SCRIPT_FINAL_EXPENSE;
   if (scriptKey === "iul_cash_value") return SCRIPT_IUL;
   if (scriptKey === "veteran_leads") return SCRIPT_VETERAN;
-  if (scriptKey === "trucker_leads") return SCRIPT_GENERIC;
+  if (scriptKey === "trucker_leads") return SCRIPT_TRUCKER;
   if (scriptKey === "generic_life") return SCRIPT_GENERIC;
 
   return SCRIPT_MORTGAGE;
@@ -1050,8 +1040,9 @@ OBJECTION: "Just send it / just text me"
 REBUTTAL: "I can, but it’s usually easier to schedule a quick call so you don’t have to go back and forth. Would later today or tomorrow be better — daytime or evening?"
 
 OBJECTION: "I already have coverage"
-REBUTTAL: "${getCoverageInPlacePolicyReviewLine(ctx)}"
+REBUTTAL: "Perfect — I’m showing you do have something in place, but it looks like they may have you in a higher risk rate class and you could be overpaying. When do you have time for a quick 5-minute call where ${agent} can get that corrected for you?"
 STOP. WAIT.
+Then ask again: "Would later today or tomorrow be better — daytime or evening?"
 
 OBJECTION: "How much is it?"
 REBUTTAL: "Good question — ${agent} covers that on the quick call because it depends on what you want it to do. Would later today or tomorrow be better — daytime or evening?"
@@ -1063,7 +1054,7 @@ STOP. WAIT.
 - If they say "no coverage": "Got it. I’ll mark this as not interested. Stay blessed."
 
 OBJECTION: "I don’t remember filling anything out"
-REBUTTAL: "No worries — it was just a request for information on life insurance. Was that for just you, or a spouse as well?"
+REBUTTAL: "No worries — it was just a request for information on life insurance. Does that ring a bell?"
 STOP. WAIT.
 
 OBJECTION: "Is this a scam?"
@@ -1669,6 +1660,19 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
 
     const systemPrompt = buildSystemPrompt(state.context!);
 
+    /**
+     * ============================
+     * ✅ Phase 1 — Instrumentation A
+     * ============================
+     * Right after building system prompt, log:
+     * - length
+     * - first ~300
+     * - last ~700
+     * - markers
+     * - 1 unique line from selected script
+     *
+     * IMPORTANT: do NOT log lead notes. We redact them in snippets.
+     */
     try {
       const selectedScript = getSelectedScriptText(state.context!);
       const steps = extractScriptStepsFromSelectedScript(selectedScript);
@@ -1712,6 +1716,10 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
       });
     } catch {}
 
+    /**
+     * ✅ Phase 2 — Server-driven stepper init
+     * Build deterministic step list now (model will only ever see the next line).
+     */
     try {
       const selectedScript = getSelectedScriptText(state.context!);
       state.scriptSteps = extractScriptStepsFromSelectedScript(selectedScript);
@@ -1809,6 +1817,13 @@ async function handleOpenAiEvent(
 
   const t = String(event?.type || "");
 
+  /**
+   * ✅ Optional transcript capture (non-blocking).
+   * We do NOT change any audio settings; we simply listen if OpenAI emits transcripts.
+   *
+   * IMPORTANT: avoid accidentally capturing the AI's own audio transcript deltas.
+   * We prefer explicit "input"/"transcription" type events when present.
+   */
   try {
     const typeLower = String(event?.type || "").toLowerCase();
 
@@ -1840,6 +1855,13 @@ async function handleOpenAiEvent(
 
     state.phase = "awaiting_greeting_reply";
 
+    /**
+     * ============================
+     * ✅ Phase 1 — Instrumentation B
+     * ============================
+     * After OpenAI responds with session.updated, log PROMPT APPLIED
+     * using the local systemPrompt markers we computed earlier.
+     */
     try {
       console.log("[AI-VOICE][PROMPT-APPLIED]", {
         callSid: state.callSid,
@@ -1910,6 +1932,7 @@ async function handleOpenAiEvent(
           return;
         }
 
+        // Reset inbound accumulation right before we speak
         liveState.userAudioMsBuffered = 0;
         liveState.lastUserTranscript = "";
         liveState.lowSignalCommitCount = 0;
@@ -1921,6 +1944,11 @@ async function handleOpenAiEvent(
 
         const greetingInstr = buildGreetingInstructions(liveState.context!);
 
+        /**
+         * ============================
+         * ✅ Phase 1 — Instrumentation C (greeting)
+         * ============================
+         */
         try {
           if (!liveState.debugLoggedResponseCreateGreeting) {
             liveState.debugLoggedResponseCreateGreeting = true;
@@ -1956,8 +1984,17 @@ async function handleOpenAiEvent(
     if (!state.openAiWs || !state.openAiReady) return;
     if (state.waitingForResponse || state.aiSpeaking) return;
 
+    /**
+     * ✅ Phase 2 — Human-like gating + stepper output
+     *
+     * We DO NOT advance on tiny commits.
+     * We only advance when the inbound audio seems like a real answer.
+     * If it's not a real answer, we either ignore it OR reprompt (human-like).
+     */
+
     const isGreetingReply = state.phase === "awaiting_greeting_reply";
 
+    // If we don't have steps for some reason, rebuild them safely.
     if (!state.scriptSteps || state.scriptSteps.length === 0) {
       try {
         const selectedScript = getSelectedScriptText(state.context!);
@@ -1973,22 +2010,30 @@ async function handleOpenAiEvent(
       typeof state.scriptStepIndex === "number" ? state.scriptStepIndex : 0;
     const steps = state.scriptSteps || [];
 
+    // Optional objection detection only if we actually have a transcript string.
     const lastUserText = String(state.lastUserTranscript || "").trim();
     const objectionKind = lastUserText ? detectObjection(lastUserText) : null;
 
+    // Determine what step we are on (for gating/reprompt)
     const currentStepLine = steps[idx] || getBookingFallbackLine(state.context!);
     const stepType = classifyStepType(currentStepLine);
 
+    // Greeting reply: always move into Step 0 immediately (feels natural)
     if (isGreetingReply) {
       const lineToSay = steps[0] || getBookingFallbackLine(state.context!);
       const perTurnInstr = buildStepperTurnInstruction(state.context!, lineToSay);
 
+      // Reset inbound tracking right before we speak
       state.userAudioMsBuffered = 0;
       state.lastUserTranscript = "";
       state.lowSignalCommitCount = 0;
       state.repromptCountForCurrentStep = 0;
 
-      setWaitingForResponse(state, true, "response.create (stepper after greeting)");
+      setWaitingForResponse(
+        state,
+        true,
+        "response.create (stepper after greeting)"
+      );
       setAiSpeaking(state, true, "response.create (stepper after greeting)");
       state.outboundOpenAiDone = false;
 
@@ -2026,10 +2071,12 @@ async function handleOpenAiEvent(
       return;
     }
 
+    // If they object and we have a transcript, send exactly ONE rebuttal (no step advance).
     if (objectionKind) {
       const lineToSay = getRebuttalLine(state.context!, objectionKind);
       const perTurnInstr = buildStepperTurnInstruction(state.context!, lineToSay);
 
+      // Reset inbound tracking right before we speak
       state.userAudioMsBuffered = 0;
       state.lastUserTranscript = "";
       state.lowSignalCommitCount = 0;
@@ -2052,6 +2099,7 @@ async function handleOpenAiEvent(
       return;
     }
 
+    // ✅ Answer gating
     const audioMs = Number(state.userAudioMsBuffered || 0);
     const treatAsAnswer = shouldTreatCommitAsRealAnswer(
       stepType,
@@ -2060,12 +2108,15 @@ async function handleOpenAiEvent(
     );
 
     if (!treatAsAnswer) {
+      // count low-signal commits
       state.lowSignalCommitCount = (state.lowSignalCommitCount || 0) + 1;
 
+      // If enough time has passed since last prompt, reprompt (human-like) instead of advancing.
       const now = Date.now();
       const lastPromptAt = Number(state.lastPromptSentAtMs || 0);
       const msSincePrompt = now - lastPromptAt;
 
+      // reprompt only after a moment so we don't talk over them
       const shouldReprompt =
         msSincePrompt >= 1200 &&
         (state.lowSignalCommitCount || 0) >= 2 &&
@@ -2073,15 +2124,24 @@ async function handleOpenAiEvent(
 
       if (shouldReprompt) {
         const repN = Number(state.repromptCountForCurrentStep || 0);
-        const lineToSay = getRepromptLineForStepType(state.context!, stepType, repN);
-        const perTurnInstr = buildStepperTurnInstruction(state.context!, lineToSay);
+        const lineToSay = getRepromptLineForStepType(
+          state.context!,
+          stepType,
+          repN
+        );
+        const perTurnInstr = buildStepperTurnInstruction(
+          state.context!,
+          lineToSay
+        );
 
         state.repromptCountForCurrentStep = repN + 1;
 
+        // Reset inbound tracking right before we speak
         state.userAudioMsBuffered = 0;
         state.lastUserTranscript = "";
         state.lowSignalCommitCount = 0;
 
+        // small human-like pause before reprompt (does not affect audio pipeline)
         try {
           await sleep(650);
         } catch {}
@@ -2104,12 +2164,15 @@ async function handleOpenAiEvent(
         return;
       }
 
+      // Otherwise: do nothing (keep waiting). This prevents "what time works" → instantly continuing.
       return;
     }
 
+    // If we got here, we treat it as a real answer: send the NEXT step line and advance index.
     const lineToSay = steps[idx] || getBookingFallbackLine(state.context!);
     const perTurnInstr = buildStepperTurnInstruction(state.context!, lineToSay);
 
+    // Reset inbound tracking right before we speak
     state.userAudioMsBuffered = 0;
     state.lastUserTranscript = "";
     state.lowSignalCommitCount = 0;
@@ -2119,6 +2182,11 @@ async function handleOpenAiEvent(
     setAiSpeaking(state, true, "response.create (script step)");
     state.outboundOpenAiDone = false;
 
+    /**
+     * ============================
+     * ✅ Phase 1 — Instrumentation C (user turn)
+     * ============================
+     */
     try {
       if (!state.debugLoggedResponseCreateUserTurn) {
         state.debugLoggedResponseCreateUserTurn = true;
