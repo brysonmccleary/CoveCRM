@@ -560,6 +560,17 @@ function getBookingFallbackLine(ctx: AICallContext): string {
 }
 
 /**
+ * ✅ Coverage-in-place (policy review) — SAME response for EVERY lead type.
+ * Script-only change (no backend/audio changes).
+ */
+function getCoverageInPlaceLine(ctx: AICallContext): string {
+  const agentRaw = (ctx.agentName || "your agent").trim() || "your agent";
+  const agent = (agentRaw.split(" ")[0] || agentRaw).trim();
+
+  return `Perfect — I’m showing you do have something in place, but it looks like they put you in a higher risk rate class and you may be overpaying. When do you have 5 minutes for a quick call where ${agent} can get that corrected for you — later today or tomorrow, daytime or evening?`;
+}
+
+/**
  * ✅ Human waiting / answer gating (NEW)
  * We avoid stepping forward on tiny commits (e.g. "yeah", breath, comfort noise).
  * We do NOT change audio; we only decide whether to respond + whether to advance.
@@ -579,12 +590,17 @@ function classifyStepType(lineRaw: string): StepType {
     line.includes("morning") ||
     line.includes("afternoon") ||
     line.includes("what time") ||
+    line.includes("when do you have") ||
     line.includes("when would") ||
     line.includes("around that time");
 
   if (isTime) return "time_question";
 
-  const isQuestion = line.includes("?") || line.startsWith("did ") || line.startsWith("do you") || line.startsWith("were you");
+  const isQuestion =
+    line.includes("?") ||
+    line.startsWith("did ") ||
+    line.startsWith("do you") ||
+    line.startsWith("were you");
   if (!isQuestion) return "statement";
 
   const looksYesNo =
@@ -601,7 +617,8 @@ function classifyStepType(lineRaw: string): StepType {
 function looksLikeTimeAnswer(textRaw: string): boolean {
   const t = String(textRaw || "").trim().toLowerCase();
   if (!t) return false;
-  if (/(today|tomorrow|morning|afternoon|evening|later|tonight)/i.test(t)) return true;
+  if (/(today|tomorrow|morning|afternoon|evening|later|tonight)/i.test(t))
+    return true;
   if (/\b\d{1,2}(:\d{2})?\b/.test(t)) return true;
   if (/\b(am|pm)\b/i.test(t)) return true;
   return false;
@@ -629,6 +646,10 @@ function isFillerOnly(textRaw: string): boolean {
     "can you hear me",
     "yeah i can hear you",
     "i can hear you",
+    "one sec",
+    "one second",
+    "hold on",
+    "hang on",
   ]);
 
   if (fillers.has(t)) return true;
@@ -638,6 +659,27 @@ function isFillerOnly(textRaw: string): boolean {
   if (words.length <= 1) return true;
 
   return false;
+}
+
+/**
+ * If they say filler like “um / uh / one sec / hold on”, we must NOT repeat the question.
+ * We respond with a patience line and WAIT again.
+ */
+function isPatienceFiller(textRaw: string): boolean {
+  const t = String(textRaw || "").trim().toLowerCase();
+  if (!t) return false;
+
+  // If it's only filler, and includes these, treat it as "patience filler"
+  if (!isFillerOnly(t)) return false;
+
+  return (
+    t === "um" ||
+    t === "uh" ||
+    t.includes("one sec") ||
+    t.includes("one second") ||
+    t.includes("hold on") ||
+    t.includes("hang on")
+  );
 }
 
 function shouldTreatCommitAsRealAnswer(
@@ -656,14 +698,18 @@ function shouldTreatCommitAsRealAnswer(
   }
 
   // No transcription available: fall back to audio duration heuristic.
-  // This avoids advancing on tiny noises.
-  if (stepType === "time_question") return audioMs >= 700;
+  // Be conservative on time questions so we don't "confirm/close" without a real time window.
+  if (stepType === "time_question") return audioMs >= 1100;
   if (stepType === "yesno_question") return audioMs >= 450;
   if (stepType === "open_question") return audioMs >= 650;
   return audioMs >= 500;
 }
 
-function getRepromptLineForStepType(ctx: AICallContext, stepType: StepType, n: number): string {
+function getRepromptLineForStepType(
+  ctx: AICallContext,
+  stepType: StepType,
+  n: number
+): string {
   const agentRaw = (ctx.agentName || "your agent").trim() || "your agent";
   const agent = (agentRaw.split(" ")[0] || agentRaw).trim();
 
@@ -718,7 +764,9 @@ function detectObjection(textRaw: string): string | null {
   if (
     t.includes("already have") ||
     t.includes("got coverage") ||
-    t.includes("i have coverage")
+    t.includes("i have coverage") ||
+    t.includes("i got coverage") ||
+    t.includes("i already got it")
   ) {
     return "already_have";
   }
@@ -772,7 +820,8 @@ function getRebuttalLine(ctx: AICallContext, kind: string): string {
     return `I can, but it’s usually easier to schedule a quick call so you don’t have to go back and forth. Would later today or tomorrow be better — daytime or evening?`;
   }
   if (kind === "already_have") {
-    return `Perfect — this is just to make sure it still lines up with what you wanted. Would later today or tomorrow be better — daytime or evening?`;
+    // ✅ Same policy-review pitch for every lead type
+    return getCoverageInPlaceLine(ctx);
   }
   if (kind === "how_much") {
     return `Good question — ${agent} covers that on the quick call because it depends on what you want it to do. Would later today or tomorrow be better — daytime or evening?`;
@@ -800,10 +849,7 @@ function getRebuttalLine(ctx: AICallContext, kind: string): string {
  * ✅ Build per-turn instruction that makes drift basically impossible.
  * We do NOT change audio/timers/turn detection. Only the "text instructions" for response.create.
  */
-function buildStepperTurnInstruction(
-  ctx: AICallContext,
-  lineToSay: string
-): string {
+function buildStepperTurnInstruction(ctx: AICallContext, lineToSay: string): string {
   const leadName = (ctx.clientFirstName || "").trim() || "there";
 
   return `
@@ -832,11 +878,13 @@ function getSelectedScriptText(ctx: AICallContext): string {
   const agent = (agentRaw.split(" ")[0] || agentRaw).trim();
   const scriptKey = normalizeScriptKey(ctx.scriptKey);
 
+  const coverageLine = getCoverageInPlaceLine(ctx);
+
   const SCRIPT_MORTGAGE = `
 BOOKING SCRIPT — MORTGAGE PROTECTION (FOLLOW IN ORDER)
 
 STEP 1 (FIRST script turn AFTER the system greeting + lead responds)
-Say: "Hey ${client}, ${client} it’s just ${aiName}, how’s your day going?"
+Say: "Hey ${client} — it’s just ${aiName}. Can you hear me alright?"
 STOP. WAIT.
 
 STEP 2
@@ -844,9 +892,7 @@ Say: "I was hoping you could help me out. I'm reaching out regarding the request
 STOP. WAIT.
 
 IF THEY SAY "YES" / "I GOT IT"
-Say: "Perfect. Real quick, was that for just you, or a spouse as well?"
-STOP. WAIT.
-Then say: "Got it. My job is just to get you scheduled so ${agent} can double-check it matches what you wanted. Would later today or tomorrow be better — daytime or evening?"
+Say: "${coverageLine}"
 STOP. WAIT.
 
 IF THEY SAY "NO" / "NOT YET"
@@ -861,11 +907,11 @@ BOOK (CLOSE)
 Say: "Perfect — my job is just to get you scheduled. ${agent} is the licensed agent who will go over everything with you. Would you have more time later today or tomorrow — daytime or evening?"
 STOP. WAIT.
 
-CONFIRM
+CONFIRM (ONLY after they give a time/window)
 If they pick a window, say: "Okay perfect. I’ll put you down for a quick call with ${agent} around that time. Does that work?"
 STOP. WAIT.
 
-CLOSE
+CLOSE (ONLY if they explicitly agree)
 Say: "Awesome. I’ll have ${agent} call you around then. Stay blessed."
 `.trim();
 
@@ -873,7 +919,7 @@ Say: "Awesome. I’ll have ${agent} call you around then. Stay blessed."
 BOOKING SCRIPT — FINAL EXPENSE (FOLLOW IN ORDER)
 
 STEP 1 (FIRST script turn AFTER the system greeting + lead responds)
-Say: "Hey ${client}, ${client} it’s just ${aiName}, how’s your day going?"
+Say: "Hey ${client} — it’s just ${aiName}. Can you hear me alright?"
 STOP. WAIT.
 
 STEP 2
@@ -881,9 +927,7 @@ Say: "I was hoping you could help me out. I'm reaching out regarding the request
 STOP. WAIT.
 
 IF THEY SAY "YES"
-Say: "Perfect. Real quick, was that for just you, or were you also thinking about a spouse?"
-STOP. WAIT.
-Then say: "Got it. My job is just to get you scheduled so ${agent} can double-check it matches what you wanted. Would later today or tomorrow be better — daytime or evening?"
+Say: "${coverageLine}"
 STOP. WAIT.
 
 IF THEY SAY "NO"
@@ -898,11 +942,11 @@ BOOK (CLOSE)
 Say: "Perfect — my job is just to get you scheduled. ${agent} is the licensed agent who will go over everything with you. Would later today or tomorrow be better — daytime or evening?"
 STOP. WAIT.
 
-CONFIRM
+CONFIRM (ONLY after they give a time/window)
 Say: "Okay perfect. I’ll put you down for a quick call with ${agent} around that time. Does that work?"
 STOP. WAIT.
 
-CLOSE
+CLOSE (ONLY if they explicitly agree)
 Say: "Awesome. I’ll have ${agent} call you around then. Stay blessed."
 `.trim();
 
@@ -910,7 +954,7 @@ Say: "Awesome. I’ll have ${agent} call you around then. Stay blessed."
 BOOKING SCRIPT — CASH VALUE / IUL (FOLLOW IN ORDER)
 
 STEP 1 (FIRST script turn AFTER the system greeting + lead responds)
-Say: "Hey ${client}, ${client} it’s just ${aiName}, how’s your day going?"
+Say: "Hey ${client} — it’s just ${aiName}. Can you hear me alright?"
 STOP. WAIT.
 
 STEP 2
@@ -931,11 +975,11 @@ BOOK (CLOSE)
 Say: "Perfect — my job is just to get you scheduled. ${agent} is the licensed agent who will go over the details with you on a quick call. Would later today or tomorrow be better — daytime or evening?"
 STOP. WAIT.
 
-CONFIRM
+CONFIRM (ONLY after they give a time/window)
 Say: "Okay perfect. I’ll put you down for a quick call with ${agent} around that time. Does that work?"
 STOP. WAIT.
 
-CLOSE
+CLOSE (ONLY if they explicitly agree)
 Say: "Awesome. I’ll have ${agent} call you around then. Stay blessed."
 `.trim();
 
@@ -943,7 +987,7 @@ Say: "Awesome. I’ll have ${agent} call you around then. Stay blessed."
 BOOKING SCRIPT — VETERAN LEADS (FOLLOW IN ORDER)
 
 STEP 1 (FIRST script turn AFTER the system greeting + lead responds)
-Say: "Hey ${client}, ${client} it’s just ${aiName}, how’s your day going?"
+Say: "Hey ${client} — it’s just ${aiName}. Can you hear me alright?"
 STOP. WAIT.
 
 STEP 2
@@ -954,11 +998,11 @@ BOOK (CLOSE)
 Say: "Perfect — my job is just to get you scheduled. ${agent} is the licensed agent who will go over everything with you. Would later today or tomorrow be better — daytime or evening?"
 STOP. WAIT.
 
-CONFIRM
+CONFIRM (ONLY after they give a time/window)
 Say: "Okay perfect. I’ll put you down for a quick call with ${agent} around that time. Does that work?"
 STOP. WAIT.
 
-CLOSE
+CLOSE (ONLY if they explicitly agree)
 Say: "Awesome. I’ll have ${agent} call you around then. Stay blessed."
 `.trim();
 
@@ -966,7 +1010,7 @@ Say: "Awesome. I’ll have ${agent} call you around then. Stay blessed."
 BOOKING SCRIPT — GENERIC LIFE (FOLLOW IN ORDER)
 
 STEP 1 (FIRST script turn AFTER the system greeting + lead responds)
-Say: "Hey ${client}, ${client} it’s just ${aiName}, how’s your day going?"
+Say: "Hey ${client} — it’s just ${aiName}. Can you hear me alright?"
 STOP. WAIT.
 
 STEP 2
@@ -974,9 +1018,7 @@ Say: "I was hoping you could help me out. I'm reaching out regarding the request
 STOP. WAIT.
 
 IF THEY SAY "YES"
-Say: "Perfect. Was that for just you, or a spouse as well?"
-STOP. WAIT.
-Then say: "Got it. My job is just to get you scheduled so ${agent} can double-check it matches what you wanted. Would later today or tomorrow be better — daytime or evening?"
+Say: "${coverageLine}"
 STOP. WAIT.
 
 IF THEY SAY "NO"
@@ -991,11 +1033,11 @@ BOOK (CLOSE)
 Say: "Perfect — my job is just to get you scheduled. ${agent} is the licensed agent who will go over everything with you. Would later today or tomorrow be better — daytime or evening?"
 STOP. WAIT.
 
-CONFIRM
+CONFIRM (ONLY after they give a time/window)
 Say: "Okay perfect. I’ll put you down for a quick call with ${agent} around that time. Does that work?"
 STOP. WAIT.
 
-CLOSE
+CLOSE (ONLY if they explicitly agree)
 Say: "Awesome. I’ll have ${agent} call you around then. Stay blessed."
 `.trim();
 
@@ -1034,7 +1076,8 @@ OBJECTION: "Just send it / just text me"
 REBUTTAL: "I can, but it’s usually easier to schedule a quick call so you don’t have to go back and forth. Would later today or tomorrow be better — daytime or evening?"
 
 OBJECTION: "I already have coverage"
-REBUTTAL: "Perfect — this is just to make sure it still lines up with what you wanted. Would later today or tomorrow be better — daytime or evening?"
+REBUTTAL: "${getCoverageInPlaceLine(ctx)}"
+STOP. WAIT.
 
 OBJECTION: "How much is it?"
 REBUTTAL: "Good question — ${agent} covers that on the quick call because it depends on what you want it to do. Would later today or tomorrow be better — daytime or evening?"
@@ -1120,10 +1163,28 @@ TURN DISCIPLINE (NON-NEGOTIABLE)
 
 /**
  * ✅ Strict system greeting: MUST stop and wait.
+ * Slight controlled variation (still scripted) to sound less robotic.
  */
-function buildGreetingInstructions(ctx: AICallContext): string {
+function pickGreetingLine(ctx: AICallContext): string {
   const aiName = (ctx.voiceProfile.aiName || "Alex").trim() || "Alex";
   const clientName = (ctx.clientFirstName || "").trim() || "there";
+
+  const seedSource = String(ctx.leadId || ctx.sessionId || clientName || "x");
+  let sum = 0;
+  for (let i = 0; i < seedSource.length; i++) sum += seedSource.charCodeAt(i);
+  const k = sum % 3;
+
+  const variants = [
+    `Hey ${clientName}. This is ${aiName}. Can you hear me alright?`,
+    `Hey ${clientName} — it’s ${aiName}. Can you hear me alright?`,
+    `Hey ${clientName}, it’s ${aiName}. Can you hear me alright?`,
+  ];
+
+  return variants[k] || variants[0];
+}
+
+function buildGreetingInstructions(ctx: AICallContext): string {
+  const line = pickGreetingLine(ctx);
 
   return [
     'HARD ENGLISH LOCK: Speak ONLY English.',
@@ -1131,9 +1192,8 @@ function buildGreetingInstructions(ctx: AICallContext): string {
     'HARD NAME LOCK: You may ONLY use the lead name exactly as provided. If missing, say "there". Never invent names.',
     "",
     "SYSTEM GREETING (NON-NEGOTIABLE):",
-    `- Your first words MUST start with: "Hey ${clientName}."`,
-    "- Keep it SHORT: 1 sentence greeting + 1 simple question.",
-    `- Say exactly: "Hey ${clientName}. This is ${aiName}. Can you hear me okay?"`,
+    `- Keep it SHORT: 1 sentence greeting + 1 simple question.`,
+    `- Say exactly: "${line}"`,
     "- After the question, STOP talking and WAIT for the lead to respond.",
     "- Do NOT begin the booking script on this greeting turn.",
   ].join("\n");
@@ -2004,6 +2064,40 @@ async function handleOpenAiEvent(
 
     // Optional objection detection only if we actually have a transcript string.
     const lastUserText = String(state.lastUserTranscript || "").trim();
+
+    // ✅ Filler patience guard (prevents repeating the same question on “um…” / “one sec”)
+    if (lastUserText && isPatienceFiller(lastUserText)) {
+      const lineToSay = "No worries — take your time.";
+      const perTurnInstr = buildStepperTurnInstruction(state.context!, lineToSay);
+
+      // Reset inbound tracking right before we speak
+      state.userAudioMsBuffered = 0;
+      state.lastUserTranscript = "";
+      state.lowSignalCommitCount = 0;
+
+      // small human-like pause (does not touch audio pipeline)
+      try {
+        await sleep(450);
+      } catch {}
+
+      setWaitingForResponse(state, true, "response.create (patience filler)");
+      setAiSpeaking(state, true, "response.create (patience filler)");
+      state.outboundOpenAiDone = false;
+
+      state.lastPromptSentAtMs = Date.now();
+      state.lastPromptLine = lineToSay;
+
+      state.openAiWs.send(
+        JSON.stringify({
+          type: "response.create",
+          response: { instructions: perTurnInstr },
+        })
+      );
+
+      state.phase = "in_call";
+      return;
+    }
+
     const objectionKind = lastUserText ? detectObjection(lastUserText) : null;
 
     // Determine what step we are on (for gating/reprompt)
@@ -2021,7 +2115,11 @@ async function handleOpenAiEvent(
       state.lowSignalCommitCount = 0;
       state.repromptCountForCurrentStep = 0;
 
-      setWaitingForResponse(state, true, "response.create (stepper after greeting)");
+      setWaitingForResponse(
+        state,
+        true,
+        "response.create (stepper after greeting)"
+      );
       setAiSpeaking(state, true, "response.create (stepper after greeting)");
       state.outboundOpenAiDone = false;
 
@@ -2106,13 +2204,17 @@ async function handleOpenAiEvent(
 
       // reprompt only after a moment so we don't talk over them
       const shouldReprompt =
-        msSincePrompt >= 1200 &&
+        msSincePrompt >= 1400 &&
         (state.lowSignalCommitCount || 0) >= 2 &&
         (state.repromptCountForCurrentStep || 0) < 3;
 
       if (shouldReprompt) {
         const repN = Number(state.repromptCountForCurrentStep || 0);
-        const lineToSay = getRepromptLineForStepType(state.context!, stepType, repN);
+        const lineToSay = getRepromptLineForStepType(
+          state.context!,
+          stepType,
+          repN
+        );
         const perTurnInstr = buildStepperTurnInstruction(state.context!, lineToSay);
 
         state.repromptCountForCurrentStep = repN + 1;
@@ -2145,7 +2247,7 @@ async function handleOpenAiEvent(
         return;
       }
 
-      // Otherwise: do nothing (keep waiting). This prevents "what time works" → instantly continuing.
+      // Otherwise: do nothing (keep waiting).
       return;
     }
 
@@ -2163,11 +2265,6 @@ async function handleOpenAiEvent(
     setAiSpeaking(state, true, "response.create (script step)");
     state.outboundOpenAiDone = false;
 
-    /**
-     * ============================
-     * ✅ Phase 1 — Instrumentation C (user turn)
-     * ============================
-     */
     try {
       if (!state.debugLoggedResponseCreateUserTurn) {
         state.debugLoggedResponseCreateUserTurn = true;
