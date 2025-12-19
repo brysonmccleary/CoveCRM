@@ -841,168 +841,244 @@ function getSelectedScriptText(ctx: AICallContext): string {
   const agent = (agentRaw.split(" ")[0] || agentRaw).trim();
   const scriptKey = normalizeScriptKey(ctx.scriptKey);
 
-  const COVERAGE_IN_PLACE_UNIVERSAL = `Perfect — I’m showing you do have something in place, but it looks like they may have you in a higher risk rate class and you could be overpaying. When do you have time for a quick 5-minute call where ${agent} can get that corrected for you?`;
-
   const SCRIPT_MORTGAGE = `
 BOOKING SCRIPT — MORTGAGE PROTECTION (FOLLOW IN ORDER)
 
 STEP 1 (FIRST script turn AFTER the system greeting + lead responds)
-Say: "Perfect — I’m calling about the request you sent in for mortgage protection information. Does that ring a bell?"
+Say: "Hey ${client} — it’s just ${aiName}. How’s your day going?"
 STOP. WAIT.
 
 STEP 2
-Say: "Just so I’m on the right track — do you already have something in place right now?"
+Say: "I was just giving you a quick call about the request you put in for mortgage protection. Was this for yourself, or a spouse as well?"
 STOP. WAIT.
 
-STEP 3 (COVERAGE IN PLACE — UNIVERSAL)
-Say: "${COVERAGE_IN_PLACE_UNIVERSAL}"
+STEP 3
+Then ask: "Were you looking for anything specific, or just wanting to see what was out there for you and your family?"
 STOP. WAIT.
 
-STEP 4 (BOOK)
-Say: "Would later today or tomorrow be better — daytime or evening?"
+STEP 4
+Then ask: "Just so I understand — do you mind walking me through what prompted you to reach out and feel like you might need something like this?"
 STOP. WAIT.
 
-STEP 5 (CONFIRM)
-Say: "Okay perfect. I’ll put you down for a quick call with ${agent} around that time. Does that work?"
+STEP 5
+Then say: "Okay — that’s what most people say too."
 STOP. WAIT.
 
-STEP 6 (CLOSE)
-Say: "Awesome. I’ll have ${agent} call you around then. Stay blessed."
+STEP 6 (BOOKING FRAME)
+Say: "So the next step is really simple — it’s just a quick 5-minute call to look at what you have now compared to what you were trying to protect, and see if there’s any gap. Would later today or tomorrow be better — daytime or evening?"
+STOP. WAIT.
+
+STEP 7 (IF THEY PICK A WINDOW)
+Then ask: "Perfect — what time in that window works best?"
+STOP. WAIT.
+
+STEP 8 (CONFIRM)
+Say: "Got it. I’ll have ${agent} call you around then. Does that work?"
+STOP. WAIT.
+
+STEP 9 (CLOSE)
+Say: "Perfect. I’ll have ${agent} reach out around that time. Talk soon."
+STOP. WAIT.
 `.trim();
 
   const SCRIPT_FINAL_EXPENSE = `
 BOOKING SCRIPT — FINAL EXPENSE (FOLLOW IN ORDER)
 
 STEP 1 (FIRST script turn AFTER the system greeting + lead responds)
-Say: "Perfect — I’m calling about the request you sent in for final expense coverage information. Does that ring a bell?"
+Say: "Hey ${client} — it’s just ${aiName}. How’s your day going?"
 STOP. WAIT.
 
 STEP 2
-Say: "Just so I’m on the right track — do you already have something in place right now?"
+Say: "I was just giving you a quick call about the request you put in for final expense coverage. Was this for yourself, or a spouse as well?"
 STOP. WAIT.
 
-STEP 3 (COVERAGE IN PLACE — UNIVERSAL)
-Say: "${COVERAGE_IN_PLACE_UNIVERSAL}"
+STEP 3
+Then ask: "Were you looking for anything specific, or just wanting to see what was out there for you and your family?"
 STOP. WAIT.
 
-STEP 4 (BOOK)
-Say: "Would later today or tomorrow be better — daytime or evening?"
+STEP 4
+Then ask: "Just so I understand — do you mind walking me through what prompted you to reach out and feel like you might need something like this?"
 STOP. WAIT.
 
-STEP 5 (CONFIRM)
-Say: "Okay perfect. I’ll put you down for a quick call with ${agent} around that time. Does that work?"
+STEP 5
+Then say: "Okay — that’s what most people say too."
 STOP. WAIT.
 
-STEP 6 (CLOSE)
-Say: "Awesome. I’ll have ${agent} call you around then. Stay blessed."
+STEP 6 (BOOKING FRAME)
+Say: "So the next step is really simple — it’s just a quick 5-minute call to look at what you have now compared to what you were trying to protect, and see if there’s any gap. Would later today or tomorrow be better — daytime or evening?"
+STOP. WAIT.
+
+STEP 7 (IF THEY PICK A WINDOW)
+Then ask: "Perfect — what time in that window works best?"
+STOP. WAIT.
+
+STEP 8 (CONFIRM)
+Say: "Got it. I’ll have ${agent} call you around then. Does that work?"
+STOP. WAIT.
+
+STEP 9 (CLOSE)
+Say: "Perfect. I’ll have ${agent} reach out around that time. Talk soon."
+STOP. WAIT.
 `.trim();
 
   const SCRIPT_IUL = `
 BOOKING SCRIPT — CASH VALUE / IUL (FOLLOW IN ORDER)
 
 STEP 1 (FIRST script turn AFTER the system greeting + lead responds)
-Say: "Perfect — I’m calling about the request you sent in for cash value life insurance information — the indexed universal life options. Does that ring a bell?"
+Say: "Hey ${client} — it’s just ${aiName}. How’s your day going?"
 STOP. WAIT.
 
 STEP 2
-Say: "Just so I’m on the right track — do you already have something in place right now?"
+Say: "I was just giving you a quick call about the request you put in for cash value life insurance — the IUL options. Was this for yourself, or a spouse as well?"
 STOP. WAIT.
 
-STEP 3 (COVERAGE IN PLACE — UNIVERSAL)
-Say: "${COVERAGE_IN_PLACE_UNIVERSAL}"
+STEP 3
+Then ask: "Were you looking for anything specific, or just wanting to see what was out there for you and your family?"
 STOP. WAIT.
 
-STEP 4 (BOOK)
-Say: "Would later today or tomorrow be better — daytime or evening?"
+STEP 4
+Then ask: "Just so I understand — do you mind walking me through what prompted you to reach out and feel like you might need something like this?"
 STOP. WAIT.
 
-STEP 5 (CONFIRM)
-Say: "Okay perfect. I’ll put you down for a quick call with ${agent} around that time. Does that work?"
+STEP 5
+Then say: "Okay — that’s what most people say too."
 STOP. WAIT.
 
-STEP 6 (CLOSE)
-Say: "Awesome. I’ll have ${agent} call you around then. Stay blessed."
+STEP 6 (BOOKING FRAME)
+Say: "So the next step is really simple — it’s just a quick 5-minute call to look at what you have now compared to what you were trying to protect, and see if there’s any gap. Would later today or tomorrow be better — daytime or evening?"
+STOP. WAIT.
+
+STEP 7 (IF THEY PICK A WINDOW)
+Then ask: "Perfect — what time in that window works best?"
+STOP. WAIT.
+
+STEP 8 (CONFIRM)
+Say: "Got it. I’ll have ${agent} call you around then. Does that work?"
+STOP. WAIT.
+
+STEP 9 (CLOSE)
+Say: "Perfect. I’ll have ${agent} reach out around that time. Talk soon."
+STOP. WAIT.
 `.trim();
 
   const SCRIPT_VETERAN = `
 BOOKING SCRIPT — VETERAN LEADS (FOLLOW IN ORDER)
 
 STEP 1 (FIRST script turn AFTER the system greeting + lead responds)
-Say: "Perfect — I’m calling about the veteran life insurance request you sent in. Does that ring a bell?"
+Say: "Hey ${client} — it’s just ${aiName}. How’s your day going?"
 STOP. WAIT.
 
 STEP 2
-Say: "Just so I’m on the right track — do you already have something in place right now?"
+Say: "I was just giving you a quick call about the request you put in for the veteran life insurance programs. Was this for yourself, or a spouse as well?"
 STOP. WAIT.
 
-STEP 3 (COVERAGE IN PLACE — UNIVERSAL)
-Say: "${COVERAGE_IN_PLACE_UNIVERSAL}"
+STEP 3
+Then ask: "Were you looking for anything specific, or just wanting to see what was out there for you and your family?"
 STOP. WAIT.
 
-STEP 4 (BOOK)
-Say: "Would later today or tomorrow be better — daytime or evening?"
+STEP 4
+Then ask: "Just so I understand — do you mind walking me through what prompted you to reach out and feel like you might need something like this?"
 STOP. WAIT.
 
-STEP 5 (CONFIRM)
-Say: "Okay perfect. I’ll put you down for a quick call with ${agent} around that time. Does that work?"
+STEP 5
+Then say: "Okay — that’s what most people say too."
 STOP. WAIT.
 
-STEP 6 (CLOSE)
-Say: "Awesome. I’ll have ${agent} call you around then. Stay blessed."
+STEP 6 (BOOKING FRAME)
+Say: "So the next step is really simple — it’s just a quick 5-minute call to look at what you have now compared to what you were trying to protect, and see if there’s any gap. Would later today or tomorrow be better — daytime or evening?"
+STOP. WAIT.
+
+STEP 7 (IF THEY PICK A WINDOW)
+Then ask: "Perfect — what time in that window works best?"
+STOP. WAIT.
+
+STEP 8 (CONFIRM)
+Say: "Got it. I’ll have ${agent} call you around then. Does that work?"
+STOP. WAIT.
+
+STEP 9 (CLOSE)
+Say: "Perfect. I’ll have ${agent} reach out around that time. Talk soon."
+STOP. WAIT.
 `.trim();
 
   const SCRIPT_TRUCKER = `
 BOOKING SCRIPT — TRUCKER LEADS (FOLLOW IN ORDER)
 
 STEP 1 (FIRST script turn AFTER the system greeting + lead responds)
-Say: "Perfect — I’m calling about the life insurance request you sent in. Does that ring a bell?"
+Say: "Hey ${client} — it’s just ${aiName}. How’s your day going?"
 STOP. WAIT.
 
 STEP 2
-Say: "Just so I’m on the right track — do you already have something in place right now?"
+Say: "I was just giving you a quick call about the request you put in for life insurance. Was this for yourself, or a spouse as well?"
 STOP. WAIT.
 
-STEP 3 (COVERAGE IN PLACE — UNIVERSAL)
-Say: "${COVERAGE_IN_PLACE_UNIVERSAL}"
+STEP 3
+Then ask: "Were you looking for anything specific, or just wanting to see what was out there for you and your family?"
 STOP. WAIT.
 
-STEP 4 (BOOK)
-Say: "Would later today or tomorrow be better — daytime or evening?"
+STEP 4
+Then ask: "Just so I understand — do you mind walking me through what prompted you to reach out and feel like you might need something like this?"
 STOP. WAIT.
 
-STEP 5 (CONFIRM)
-Say: "Okay perfect. I’ll put you down for a quick call with ${agent} around that time. Does that work?"
+STEP 5
+Then say: "Okay — that’s what most people say too."
 STOP. WAIT.
 
-STEP 6 (CLOSE)
-Say: "Awesome. I’ll have ${agent} call you around then. Stay blessed."
+STEP 6 (BOOKING FRAME)
+Say: "So the next step is really simple — it’s just a quick 5-minute call to look at what you have now compared to what you were trying to protect, and see if there’s any gap. Would later today or tomorrow be better — daytime or evening?"
+STOP. WAIT.
+
+STEP 7 (IF THEY PICK A WINDOW)
+Then ask: "Perfect — what time in that window works best?"
+STOP. WAIT.
+
+STEP 8 (CONFIRM)
+Say: "Got it. I’ll have ${agent} call you around then. Does that work?"
+STOP. WAIT.
+
+STEP 9 (CLOSE)
+Say: "Perfect. I’ll have ${agent} reach out around that time. Talk soon."
+STOP. WAIT.
 `.trim();
 
   const SCRIPT_GENERIC = `
 BOOKING SCRIPT — GENERIC LIFE (FOLLOW IN ORDER)
 
 STEP 1 (FIRST script turn AFTER the system greeting + lead responds)
-Say: "Perfect — I’m calling about the life insurance request you sent in. Does that ring a bell?"
+Say: "Hey ${client} — it’s just ${aiName}. How’s your day going?"
 STOP. WAIT.
 
 STEP 2
-Say: "Just so I’m on the right track — do you already have something in place right now?"
+Say: "I was just giving you a quick call about the request you put in for life insurance. Was this for yourself, or a spouse as well?"
 STOP. WAIT.
 
-STEP 3 (COVERAGE IN PLACE — UNIVERSAL)
-Say: "${COVERAGE_IN_PLACE_UNIVERSAL}"
+STEP 3
+Then ask: "Were you looking for anything specific, or just wanting to see what was out there for you and your family?"
 STOP. WAIT.
 
-STEP 4 (BOOK)
-Say: "Would later today or tomorrow be better — daytime or evening?"
+STEP 4
+Then ask: "Just so I understand — do you mind walking me through what prompted you to reach out and feel like you might need something like this?"
 STOP. WAIT.
 
-STEP 5 (CONFIRM)
-Say: "Okay perfect. I’ll put you down for a quick call with ${agent} around that time. Does that work?"
+STEP 5
+Then say: "Okay — that’s what most people say too."
 STOP. WAIT.
 
-STEP 6 (CLOSE)
-Say: "Awesome. I’ll have ${agent} call you around then. Stay blessed."
+STEP 6 (BOOKING FRAME)
+Say: "So the next step is really simple — it’s just a quick 5-minute call to look at what you have now compared to what you were trying to protect, and see if there’s any gap. Would later today or tomorrow be better — daytime or evening?"
+STOP. WAIT.
+
+STEP 7 (IF THEY PICK A WINDOW)
+Then ask: "Perfect — what time in that window works best?"
+STOP. WAIT.
+
+STEP 8 (CONFIRM)
+Say: "Got it. I’ll have ${agent} call you around then. Does that work?"
+STOP. WAIT.
+
+STEP 9 (CLOSE)
+Say: "Perfect. I’ll have ${agent} reach out around that time. Talk soon."
+STOP. WAIT.
 `.trim();
 
   if (scriptKey === "mortgage_protection") return SCRIPT_MORTGAGE;
