@@ -841,6 +841,8 @@ function getSelectedScriptText(ctx: AICallContext): string {
   const agent = (agentRaw.split(" ")[0] || agentRaw).trim();
   const scriptKey = normalizeScriptKey(ctx.scriptKey);
 
+  // ✅ ONLY CHANGE HERE: removed unnecessary “coverage-type/what prompted/specific” probing steps,
+  // so we go straight from spouse/self → booking.
   const SCRIPT_MORTGAGE = `
 BOOKING SCRIPT — MORTGAGE PROTECTION (FOLLOW IN ORDER)
 
@@ -852,31 +854,19 @@ STEP 2
 Say: "I was just giving you a quick call about the request you put in for mortgage protection. Was this for yourself, or a spouse as well?"
 STOP. WAIT.
 
-STEP 3
-Then ask: "Were you looking for anything specific, or just wanting to see what was out there for you and your family?"
-STOP. WAIT.
-
-STEP 4
-Then ask: "Just so I understand — do you mind walking me through what prompted you to reach out and feel like you might need something like this?"
-STOP. WAIT.
-
-STEP 5
-Then say: "Okay — that’s what most people say too."
-STOP. WAIT.
-
-STEP 6 (BOOKING FRAME)
+STEP 3 (BOOKING FRAME)
 Say: "So the next step is really simple — it’s just a quick 5-minute call to look at what you have now compared to what you were trying to protect, and see if there’s any gap. Would later today or tomorrow be better — daytime or evening?"
 STOP. WAIT.
 
-STEP 7 (IF THEY PICK A WINDOW)
+STEP 4 (IF THEY PICK A WINDOW)
 Then ask: "Perfect — what time in that window works best?"
 STOP. WAIT.
 
-STEP 8 (CONFIRM)
+STEP 5 (CONFIRM)
 Say: "Got it. I’ll have ${agent} call you around then. Does that work?"
 STOP. WAIT.
 
-STEP 9 (CLOSE)
+STEP 6 (CLOSE)
 Say: "Perfect. I’ll have ${agent} reach out around that time. Talk soon."
 STOP. WAIT.
 `.trim();
@@ -892,31 +882,19 @@ STEP 2
 Say: "I was just giving you a quick call about the request you put in for final expense coverage. Was this for yourself, or a spouse as well?"
 STOP. WAIT.
 
-STEP 3
-Then ask: "Were you looking for anything specific, or just wanting to see what was out there for you and your family?"
-STOP. WAIT.
-
-STEP 4
-Then ask: "Just so I understand — do you mind walking me through what prompted you to reach out and feel like you might need something like this?"
-STOP. WAIT.
-
-STEP 5
-Then say: "Okay — that’s what most people say too."
-STOP. WAIT.
-
-STEP 6 (BOOKING FRAME)
+STEP 3 (BOOKING FRAME)
 Say: "So the next step is really simple — it’s just a quick 5-minute call to look at what you have now compared to what you were trying to protect, and see if there’s any gap. Would later today or tomorrow be better — daytime or evening?"
 STOP. WAIT.
 
-STEP 7 (IF THEY PICK A WINDOW)
+STEP 4 (IF THEY PICK A WINDOW)
 Then ask: "Perfect — what time in that window works best?"
 STOP. WAIT.
 
-STEP 8 (CONFIRM)
+STEP 5 (CONFIRM)
 Say: "Got it. I’ll have ${agent} call you around then. Does that work?"
 STOP. WAIT.
 
-STEP 9 (CLOSE)
+STEP 6 (CLOSE)
 Say: "Perfect. I’ll have ${agent} reach out around that time. Talk soon."
 STOP. WAIT.
 `.trim();
@@ -932,31 +910,19 @@ STEP 2
 Say: "I was just giving you a quick call about the request you put in for cash value life insurance — the IUL options. Was this for yourself, or a spouse as well?"
 STOP. WAIT.
 
-STEP 3
-Then ask: "Were you looking for anything specific, or just wanting to see what was out there for you and your family?"
-STOP. WAIT.
-
-STEP 4
-Then ask: "Just so I understand — do you mind walking me through what prompted you to reach out and feel like you might need something like this?"
-STOP. WAIT.
-
-STEP 5
-Then say: "Okay — that’s what most people say too."
-STOP. WAIT.
-
-STEP 6 (BOOKING FRAME)
+STEP 3 (BOOKING FRAME)
 Say: "So the next step is really simple — it’s just a quick 5-minute call to look at what you have now compared to what you were trying to protect, and see if there’s any gap. Would later today or tomorrow be better — daytime or evening?"
 STOP. WAIT.
 
-STEP 7 (IF THEY PICK A WINDOW)
+STEP 4 (IF THEY PICK A WINDOW)
 Then ask: "Perfect — what time in that window works best?"
 STOP. WAIT.
 
-STEP 8 (CONFIRM)
+STEP 5 (CONFIRM)
 Say: "Got it. I’ll have ${agent} call you around then. Does that work?"
 STOP. WAIT.
 
-STEP 9 (CLOSE)
+STEP 6 (CLOSE)
 Say: "Perfect. I’ll have ${agent} reach out around that time. Talk soon."
 STOP. WAIT.
 `.trim();
@@ -972,31 +938,19 @@ STEP 2
 Say: "I was just giving you a quick call about the request you put in for the veteran life insurance programs. Was this for yourself, or a spouse as well?"
 STOP. WAIT.
 
-STEP 3
-Then ask: "Were you looking for anything specific, or just wanting to see what was out there for you and your family?"
-STOP. WAIT.
-
-STEP 4
-Then ask: "Just so I understand — do you mind walking me through what prompted you to reach out and feel like you might need something like this?"
-STOP. WAIT.
-
-STEP 5
-Then say: "Okay — that’s what most people say too."
-STOP. WAIT.
-
-STEP 6 (BOOKING FRAME)
+STEP 3 (BOOKING FRAME)
 Say: "So the next step is really simple — it’s just a quick 5-minute call to look at what you have now compared to what you were trying to protect, and see if there’s any gap. Would later today or tomorrow be better — daytime or evening?"
 STOP. WAIT.
 
-STEP 7 (IF THEY PICK A WINDOW)
+STEP 4 (IF THEY PICK A WINDOW)
 Then ask: "Perfect — what time in that window works best?"
 STOP. WAIT.
 
-STEP 8 (CONFIRM)
+STEP 5 (CONFIRM)
 Say: "Got it. I’ll have ${agent} call you around then. Does that work?"
 STOP. WAIT.
 
-STEP 9 (CLOSE)
+STEP 6 (CLOSE)
 Say: "Perfect. I’ll have ${agent} reach out around that time. Talk soon."
 STOP. WAIT.
 `.trim();
@@ -1012,31 +966,19 @@ STEP 2
 Say: "I was just giving you a quick call about the request you put in for life insurance. Was this for yourself, or a spouse as well?"
 STOP. WAIT.
 
-STEP 3
-Then ask: "Were you looking for anything specific, or just wanting to see what was out there for you and your family?"
-STOP. WAIT.
-
-STEP 4
-Then ask: "Just so I understand — do you mind walking me through what prompted you to reach out and feel like you might need something like this?"
-STOP. WAIT.
-
-STEP 5
-Then say: "Okay — that’s what most people say too."
-STOP. WAIT.
-
-STEP 6 (BOOKING FRAME)
+STEP 3 (BOOKING FRAME)
 Say: "So the next step is really simple — it’s just a quick 5-minute call to look at what you have now compared to what you were trying to protect, and see if there’s any gap. Would later today or tomorrow be better — daytime or evening?"
 STOP. WAIT.
 
-STEP 7 (IF THEY PICK A WINDOW)
+STEP 4 (IF THEY PICK A WINDOW)
 Then ask: "Perfect — what time in that window works best?"
 STOP. WAIT.
 
-STEP 8 (CONFIRM)
+STEP 5 (CONFIRM)
 Say: "Got it. I’ll have ${agent} call you around then. Does that work?"
 STOP. WAIT.
 
-STEP 9 (CLOSE)
+STEP 6 (CLOSE)
 Say: "Perfect. I’ll have ${agent} reach out around that time. Talk soon."
 STOP. WAIT.
 `.trim();
@@ -1052,31 +994,19 @@ STEP 2
 Say: "I was just giving you a quick call about the request you put in for life insurance. Was this for yourself, or a spouse as well?"
 STOP. WAIT.
 
-STEP 3
-Then ask: "Were you looking for anything specific, or just wanting to see what was out there for you and your family?"
-STOP. WAIT.
-
-STEP 4
-Then ask: "Just so I understand — do you mind walking me through what prompted you to reach out and feel like you might need something like this?"
-STOP. WAIT.
-
-STEP 5
-Then say: "Okay — that’s what most people say too."
-STOP. WAIT.
-
-STEP 6 (BOOKING FRAME)
+STEP 3 (BOOKING FRAME)
 Say: "So the next step is really simple — it’s just a quick 5-minute call to look at what you have now compared to what you were trying to protect, and see if there’s any gap. Would later today or tomorrow be better — daytime or evening?"
 STOP. WAIT.
 
-STEP 7 (IF THEY PICK A WINDOW)
+STEP 4 (IF THEY PICK A WINDOW)
 Then ask: "Perfect — what time in that window works best?"
 STOP. WAIT.
 
-STEP 8 (CONFIRM)
+STEP 5 (CONFIRM)
 Say: "Got it. I’ll have ${agent} call you around then. Does that work?"
 STOP. WAIT.
 
-STEP 9 (CLOSE)
+STEP 6 (CLOSE)
 Say: "Perfect. I’ll have ${agent} reach out around that time. Talk soon."
 STOP. WAIT.
 `.trim();
