@@ -564,7 +564,11 @@ function getBookingFallbackLine(ctx: AICallContext): string {
  * We avoid stepping forward on tiny commits (e.g. "yeah", breath, comfort noise).
  * We do NOT change audio; we only decide whether to respond + whether to advance.
  */
-type StepType = "time_question" | "yesno_question" | "open_question" | "statement";
+type StepType =
+  | "time_question"
+  | "yesno_question"
+  | "open_question"
+  | "statement";
 
 function classifyStepType(lineRaw: string): StepType {
   const line = String(lineRaw || "").toLowerCase();
@@ -750,6 +754,27 @@ function detectObjection(textRaw: string): string | null {
     return "dont_remember";
   }
 
+  // ✅ NEW (allowed): off-script confusion/questions that should get a short “Jeremy-style” redirect.
+  // NOTE: Only booking-only redirect, no discovery questions, no new topics.
+  const hasQuestionMark = t.includes("?");
+  const soundsConfused =
+    t.includes("what is this") ||
+    t.includes("what is it") ||
+    t.includes("what are you calling about") ||
+    t.includes("why are you calling") ||
+    t.includes("why is this") ||
+    t.includes("how does this work") ||
+    t.includes("explain") ||
+    t.includes("i don't understand") ||
+    t.includes("dont understand") ||
+    t.includes("confused") ||
+    t.includes("what do you mean") ||
+    t.includes("can you explain");
+  if (hasQuestionMark || soundsConfused) {
+    // IMPORTANT: do not override explicit core objections above
+    return "needs_explanation";
+  }
+
   // If they mention disallowed topics, treat it as a "redirect" objection.
   if (
     t.includes("vacation") ||
@@ -796,6 +821,11 @@ function getRebuttalLine(ctx: AICallContext, kind: string): string {
   if (kind === "not_interested") {
     // Keep booking-only and let outcome logic handle later based on model control if you have it
     return `No worries — just so I don’t waste your time, did you mean you don’t want any coverage at all, or you just don’t want a call right now?`;
+  }
+  if (kind === "needs_explanation") {
+    // ✅ “Jeremy Lee Minor” style: calm, confident, short, redirects to scheduling.
+    // 1–2 sentences, booking-only, life-insurance-only.
+    return `Totally — quick version: you put in a request for life insurance info, and my only job is to get you scheduled for a short call with ${agent} who’ll explain it clearly. Would later today or tomorrow be better — daytime or evening?`;
   }
   if (kind === "redirect") {
     // They tried to steer to other verticals. We do NOT follow them. We return to booking.
@@ -1201,6 +1231,17 @@ LEAD INFO (USE ONLY WHAT IS PROVIDED)
 - Notes: ${ctx.clientNotes || "(none)"}
 - Script key: ${scriptKey}
 
+CONTROL METADATA RULES (NON-NEGOTIABLE)
+- You MAY include control metadata ONLY for these kinds:
+  1) control.kind="book_appointment"
+  2) control.kind="final_outcome"
+- Emit control.kind="book_appointment" ONLY when the lead clearly selects a time window AND confirms the time.
+  - Include: startTimeUtc, durationMinutes, leadTimeZone, agentTimeZone, notes (optional)
+- Emit control.kind="final_outcome" ONLY when the call outcome is clearly one of:
+  booked, not_interested, do_not_call, disconnected
+  - Include: outcome, summary (optional), notesAppend (optional)
+- If it is not clear, emit NO control metadata at all.
+
 MOST IMPORTANT:
 - FOLLOW THE SCRIPT BELOW EXACTLY IN ORDER.
 - Use REBUTTALS only when the lead objects, then return to booking.
@@ -1226,6 +1267,80 @@ STRICT OUTPUT RULES (NON-NEGOTIABLE):
 - After your line/question, STOP and WAIT.
 - If the lead objects, use ONE rebuttal from REBUTTALS, then return to booking.
 `.trim();
+}
+
+/**
+ * ✅ Time / timezone helpers (NEW; isolated; no contract changes)
+ */
+function looksLikeIanaTimeZone(tzRaw: any): boolean {
+  const tz = String(tzRaw || "").trim();
+  if (!tz) return false;
+  return tz.length >= 3 && tz.includes("/");
+}
+
+function formatLocalTimeForTz(
+  utcDate: Date,
+  timeZone: string,
+  label: string
+): string {
+  try {
+    const fmt = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: true,
+    });
+    return `${label} ${fmt.format(utcDate)} (${timeZone})`;
+  } catch {
+    return `${label} (invalid tz: ${String(timeZone || "").trim() || "n/a"})`;
+  }
+}
+
+function parseStartTimeUtcStrict(startTimeUtcRaw: any): Date | null {
+  // Accept:
+  // 1) UTC ISO with 'Z' or an explicit offset (+/-HH:MM)
+  // 2) epoch seconds or milliseconds (number or numeric string)
+  const v = startTimeUtcRaw;
+
+  // epoch number
+  if (typeof v === "number" && Number.isFinite(v)) {
+    const n = v;
+    const ms = n < 1e12 ? n * 1000 : n; // seconds -> ms (rough heuristic)
+    const d = new Date(ms);
+    if (!isNaN(d.getTime())) return d;
+    return null;
+  }
+
+  // numeric string epoch
+  const s = String(v || "").trim();
+  if (!s) return null;
+
+  if (/^\d+$/.test(s)) {
+    const n = Number(s);
+    if (!Number.isFinite(n)) return null;
+    const ms = s.length <= 10 ? n * 1000 : n; // 10 digits ~ seconds; 13 digits ~ ms
+    const d = new Date(ms);
+    if (!isNaN(d.getTime())) return d;
+    return null;
+  }
+
+  // ISO string must include Z or offset
+  const hasZulu = /z$/i.test(s);
+  const hasOffset = /[+-]\d{2}:\d{2}$/.test(s);
+  if (!hasZulu && !hasOffset) {
+    return null;
+  }
+
+  const ms = Date.parse(s);
+  if (!Number.isFinite(ms)) return null;
+
+  const d = new Date(ms);
+  if (isNaN(d.getTime())) return null;
+
+  return d;
 }
 
 /**
@@ -1624,6 +1739,9 @@ async function handleStop(ws: WebSocket, msg: TwilioStopEvent) {
       err?.message || err
     );
   }
+
+  // ✅ Per your requirement: if stop happens and finalOutcomeSent is NOT true,
+  // we do NOT force an outcome here. (Existing behavior preserved.)
 
   calls.delete(ws);
 }
@@ -2338,18 +2456,77 @@ async function handleBookAppointmentIntent(state: CallState, control: any) {
   const {
     startTimeUtc,
     durationMinutes,
-    leadTimeZone,
-    agentTimeZone,
+    leadTimeZone: leadTimeZoneRaw,
+    agentTimeZone: agentTimeZoneRaw,
     notes,
   } = control;
 
-  if (!startTimeUtc || !durationMinutes || !leadTimeZone || !agentTimeZone) {
+  if (!startTimeUtc || !durationMinutes || !leadTimeZoneRaw || !agentTimeZoneRaw) {
     console.warn(
       "[AI-VOICE] Incomplete book_appointment control payload:",
-      control
+      {
+        callSid: state.callSid,
+        leadId: ctx.leadId,
+        hasStartTimeUtc: !!startTimeUtc,
+        hasDurationMinutes: !!durationMinutes,
+        hasLeadTimeZone: !!leadTimeZoneRaw,
+        hasAgentTimeZone: !!agentTimeZoneRaw,
+      }
     );
     return;
   }
+
+  // ✅ Strict startTimeUtc validation: must be UTC ISO w/ Z/offset or epoch
+  const utcDate = parseStartTimeUtcStrict(startTimeUtc);
+  if (!utcDate) {
+    console.warn("[AI-VOICE] Invalid startTimeUtc; NOT calling book-appointment", {
+      callSid: state.callSid,
+      leadId: ctx.leadId,
+      startTimeUtcRaw: String(startTimeUtc || ""),
+    });
+    return;
+  }
+
+  // ✅ Timezone sanity + safe fallbacks (only if missing/invalid)
+  const ctxAgentTz = String(ctx.agentTimeZone || "").trim();
+  const rawLeadTz =
+    String(ctx?.raw?.lead?.timeZone || ctx?.raw?.lead?.timezone || "").trim();
+
+  const leadTimeZone = looksLikeIanaTimeZone(leadTimeZoneRaw)
+    ? String(leadTimeZoneRaw).trim()
+    : looksLikeIanaTimeZone(rawLeadTz)
+    ? rawLeadTz
+    : "America/Phoenix";
+
+  const agentTimeZone = looksLikeIanaTimeZone(agentTimeZoneRaw)
+    ? String(agentTimeZoneRaw).trim()
+    : looksLikeIanaTimeZone(ctxAgentTz)
+    ? ctxAgentTz
+    : "America/Phoenix";
+
+  // ✅ Debug log: computed local times for verification (do NOT log notes)
+  try {
+    console.log("[AI-VOICE][BOOKING-TIME-DEBUG]", {
+      callSid: state.callSid,
+      leadId: ctx.leadId,
+      startTimeUtcRaw: String(startTimeUtc || ""),
+      durationMinutes: Number(durationMinutes),
+      leadLocal: formatLocalTimeForTz(utcDate, leadTimeZone, "lead"),
+      agentLocal: formatLocalTimeForTz(utcDate, agentTimeZone, "agent"),
+    });
+  } catch {}
+
+  // ✅ Safest identifier pass-through: don't add new fields to endpoint body.
+  // If notes exists, append [callSid: ...] so CoveCRM can stitch overview/recordings.
+  let safeNotes = notes;
+  try {
+    if (typeof safeNotes === "string" && safeNotes.trim()) {
+      // avoid double-appending if model retries
+      if (!safeNotes.includes("[callSid:")) {
+        safeNotes = `${safeNotes} [callSid: ${state.callSid}]`;
+      }
+    }
+  } catch {}
 
   try {
     const url = new URL(BOOK_APPOINTMENT_URL);
@@ -2358,11 +2535,11 @@ async function handleBookAppointmentIntent(state: CallState, control: any) {
     const body = {
       aiCallSessionId: ctx.sessionId,
       leadId: ctx.leadId,
-      startTimeUtc,
+      startTimeUtc: utcDate.toISOString(), // ✅ ensure canonical UTC ISO
       durationMinutes,
       leadTimeZone,
       agentTimeZone,
-      notes,
+      notes: safeNotes,
       source: "ai-dialer",
     };
 
@@ -2375,7 +2552,15 @@ async function handleBookAppointmentIntent(state: CallState, control: any) {
       body: JSON.stringify(body),
     });
 
-    const json: any = await resp.json();
+    const json: any = await resp.json().catch(() => ({}));
+
+    console.log("[AI-VOICE][BOOK-APPOINTMENT][RESP]", {
+      callSid: state.callSid,
+      leadId: ctx.leadId,
+      status: resp.status,
+      ok: !!json?.ok,
+    });
+
     if (!resp.ok || !json.ok) {
       console.error(
         "[AI-VOICE] book-appointment failed:",
@@ -2448,7 +2633,15 @@ async function handleFinalOutcomeIntent(state: CallState, control: any) {
       body: JSON.stringify(body),
     });
 
-    const json: any = await resp.json();
+    const json: any = await resp.json().catch(() => ({}));
+
+    console.log("[AI-VOICE][OUTCOME][RESP]", {
+      callSid: state.callSid,
+      leadId: state.context?.leadId,
+      status: resp.status,
+      ok: !!json?.ok,
+    });
+
     if (!resp.ok || !json.ok) {
       console.error(
         "[AI-VOICE] outcome endpoint failed:",
@@ -2511,7 +2704,16 @@ async function billAiDialerUsageForCall(state: CallState) {
       body: JSON.stringify(body),
     });
 
-    const json: any = await resp.json();
+    const json: any = await resp.json().catch(() => ({}));
+
+    console.log("[AI-VOICE][USAGE][RESP]", {
+      email: state.context.userEmail,
+      callSid: state.callSid,
+      sessionId: state.context.sessionId,
+      status: resp.status,
+      ok: !!json?.ok,
+    });
+
     if (!resp.ok || !json.ok) {
       console.error(
         "[AI-VOICE] usage endpoint failed:",
