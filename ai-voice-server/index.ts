@@ -676,23 +676,31 @@ function getRepromptLineForStepType(
   const agentRaw = (ctx.agentName || "your agent").trim() || "your agent";
   const agent = (agentRaw.split(" ")[0] || agentRaw).trim();
 
-  // ✅ Keep reprompts VERY minimal so it doesn’t feel like “more questions”.
-  // Also cap the ladder to 2 meaningful variants.
   if (stepType === "time_question") {
     const ladder = [
       `Totally — would later today or tomorrow be better?`,
       `What’s easier for you — today or tomorrow?`,
+      `Morning, afternoon, or evening usually works best?`,
+      `No worries — I can put you down for a quick call with ${agent}. Is today or tomorrow better?`,
     ];
     return ladder[Math.min(n, ladder.length - 1)];
   }
 
   if (stepType === "yesno_question") {
-    const ladder = [`Got you — would that be a yes, or a no?`];
+    const ladder = [
+      `Got you — would that be a yes, or a no?`,
+      `Just so I’m clear — is that something you already have in place?`,
+      `No worries — I can keep it simple. Yes or no?`,
+    ];
     return ladder[Math.min(n, ladder.length - 1)];
   }
 
   if (stepType === "open_question") {
-    const ladder = [`Got it — was that for just you, or a spouse as well?`];
+    const ladder = [
+      `Real quick — what would you say is the main goal?`,
+      `Totally — what prompted you to reach out in the first place?`,
+      `Got it — was that for just you, or a spouse as well?`,
+    ];
     return ladder[Math.min(n, ladder.length - 1)];
   }
 
@@ -702,29 +710,6 @@ function getRepromptLineForStepType(
 function detectObjection(textRaw: string): string | null {
   const t = String(textRaw || "").trim().toLowerCase();
   if (!t) return null;
-
-  // ✅ Outside-convo / “are you a robot” handling (tight + redirect)
-  if (
-    t.includes("are you a robot") ||
-    t.includes("are you ai") ||
-    t.includes("are you an ai") ||
-    t.includes("is this a robot") ||
-    t.includes("robot") ||
-    t.includes("real person")
-  ) {
-    return "are_you_robot";
-  }
-
-  // ✅ Outside-convo / “how are you” handling (tight + redirect)
-  if (
-    t === "how are you" ||
-    t.includes("how are you") ||
-    t.includes("how's your day") ||
-    t.includes("hows your day") ||
-    t.includes("how is your day")
-  ) {
-    return "how_are_you";
-  }
 
   // Very lightweight; only triggers if we actually have a transcript.
   // We NEVER follow them into other verticals; we keep booking-only language.
@@ -789,14 +774,6 @@ function getRebuttalLine(ctx: AICallContext, kind: string): string {
   const agentRaw = (ctx.agentName || "your agent").trim() || "your agent";
   const agent = (agentRaw.split(" ")[0] || agentRaw).trim();
 
-  if (kind === "are_you_robot") {
-    return `I’m just an assistant for ${agent} — my job is only to schedule quick calls. Would later today or tomorrow be better — daytime or evening?`;
-  }
-
-  if (kind === "how_are_you") {
-    return `It’s going great — thank you for asking. Would later today or tomorrow be better — daytime or evening?`;
-  }
-
   if (kind === "busy") {
     return `Totally understand. That’s why I’m just scheduling — it’ll be a short call with ${agent}. Would later today or tomorrow be better — daytime or evening?`;
   }
@@ -804,10 +781,10 @@ function getRebuttalLine(ctx: AICallContext, kind: string): string {
     return `I can, but it’s usually easier to schedule a quick call so you don’t have to go back and forth. Would later today or tomorrow be better — daytime or evening?`;
   }
   if (kind === "already_have") {
-    return `Perfect — this is just a quick review to make sure it still fits what you wanted. Would later today or tomorrow be better — daytime or evening?`;
+    return `Perfect — this is just to make sure it still lines up with what you wanted. Would later today or tomorrow be better — daytime or evening?`;
   }
   if (kind === "how_much") {
-    return `Good question — ${agent} covers that on the quick call because it depends on what you’re looking for. Would later today or tomorrow be better — daytime or evening?`;
+    return `Good question — ${agent} covers that on the quick call because it depends on what you want it to do. Would later today or tomorrow be better — daytime or evening?`;
   }
   if (kind === "dont_remember") {
     // Stay inside life-insurance context
@@ -818,7 +795,7 @@ function getRebuttalLine(ctx: AICallContext, kind: string): string {
   }
   if (kind === "not_interested") {
     // Keep booking-only and let outcome logic handle later based on model control if you have it
-    return `No worries — just so I don’t waste your time, did you mean you don’t want a call right now?`;
+    return `No worries — just so I don’t waste your time, did you mean you don’t want any coverage at all, or you just don’t want a call right now?`;
   }
   if (kind === "redirect") {
     // They tried to steer to other verticals. We do NOT follow them. We return to booking.
@@ -864,11 +841,8 @@ function getSelectedScriptText(ctx: AICallContext): string {
   const agent = (agentRaw.split(" ")[0] || agentRaw).trim();
   const scriptKey = normalizeScriptKey(ctx.scriptKey);
 
-  /**
-   * ✅ CHANGE: add a dedicated “acknowledge” step after the lead answers “how’s your day”
-   * ✅ CHANGE: make booking line pure scheduling (no “compare”, no “gap”, no quote vibe)
-   */
-
+  // ✅ ONLY CHANGE HERE: removed unnecessary “coverage-type/what prompted/specific” probing steps,
+  // so we go straight from spouse/self → booking.
   const SCRIPT_MORTGAGE = `
 BOOKING SCRIPT — MORTGAGE PROTECTION (FOLLOW IN ORDER)
 
@@ -876,27 +850,23 @@ STEP 1 (FIRST script turn AFTER the system greeting + lead responds)
 Say: "Hey ${client} — it’s just ${aiName}. How’s your day going?"
 STOP. WAIT.
 
-STEP 2 (ACKNOWLEDGE + CONTEXT)
-Say: "Awesome — appreciate it. I was calling about the request you put in for mortgage protection."
+STEP 2
+Say: "I was just giving you a quick call about the request you put in for mortgage protection. Was this for yourself, or a spouse as well?"
 STOP. WAIT.
 
-STEP 3 (SELF / SPOUSE)
-Then ask: "Was this for just you, or a spouse as well?"
+STEP 3 (BOOKING FRAME)
+Say: "So the next step is really simple — it’s just a quick 5-minute call to look at what you have now compared to what you were trying to protect, and see if there’s any gap. Would later today or tomorrow be better — daytime or evening?"
 STOP. WAIT.
 
-STEP 4 (BOOKING FRAME — PURE SCHEDULING)
-Say: "Perfect — my job is just to get you scheduled for a quick 5-minute call with ${agent}. Would later today or tomorrow be better — daytime or evening?"
-STOP. WAIT.
-
-STEP 5 (IF THEY PICK A WINDOW)
+STEP 4 (IF THEY PICK A WINDOW)
 Then ask: "Perfect — what time in that window works best?"
 STOP. WAIT.
 
-STEP 6 (CONFIRM)
+STEP 5 (CONFIRM)
 Say: "Got it. I’ll have ${agent} call you around then. Does that work?"
 STOP. WAIT.
 
-STEP 7 (CLOSE)
+STEP 6 (CLOSE)
 Say: "Perfect. I’ll have ${agent} reach out around that time. Talk soon."
 STOP. WAIT.
 `.trim();
@@ -908,27 +878,23 @@ STEP 1 (FIRST script turn AFTER the system greeting + lead responds)
 Say: "Hey ${client} — it’s just ${aiName}. How’s your day going?"
 STOP. WAIT.
 
-STEP 2 (ACKNOWLEDGE + CONTEXT)
-Say: "Nice — appreciate it. I was calling about the request you put in for final expense coverage."
+STEP 2
+Say: "I was just giving you a quick call about the request you put in for final expense coverage. Was this for yourself, or a spouse as well?"
 STOP. WAIT.
 
-STEP 3 (SELF / SPOUSE)
-Then ask: "Was this for just you, or a spouse as well?"
+STEP 3 (BOOKING FRAME)
+Say: "So the next step is really simple — it’s just a quick 5-minute call to look at what you have now compared to what you were trying to protect, and see if there’s any gap. Would later today or tomorrow be better — daytime or evening?"
 STOP. WAIT.
 
-STEP 4 (BOOKING FRAME — PURE SCHEDULING)
-Say: "Perfect — my job is just to get you scheduled for a quick 5-minute call with ${agent}. Would later today or tomorrow be better — daytime or evening?"
-STOP. WAIT.
-
-STEP 5 (IF THEY PICK A WINDOW)
+STEP 4 (IF THEY PICK A WINDOW)
 Then ask: "Perfect — what time in that window works best?"
 STOP. WAIT.
 
-STEP 6 (CONFIRM)
+STEP 5 (CONFIRM)
 Say: "Got it. I’ll have ${agent} call you around then. Does that work?"
 STOP. WAIT.
 
-STEP 7 (CLOSE)
+STEP 6 (CLOSE)
 Say: "Perfect. I’ll have ${agent} reach out around that time. Talk soon."
 STOP. WAIT.
 `.trim();
@@ -940,27 +906,23 @@ STEP 1 (FIRST script turn AFTER the system greeting + lead responds)
 Say: "Hey ${client} — it’s just ${aiName}. How’s your day going?"
 STOP. WAIT.
 
-STEP 2 (ACKNOWLEDGE + CONTEXT)
-Say: "Right on — appreciate it. I was calling about the request you put in for cash value life insurance — the IUL options."
+STEP 2
+Say: "I was just giving you a quick call about the request you put in for cash value life insurance — the IUL options. Was this for yourself, or a spouse as well?"
 STOP. WAIT.
 
-STEP 3 (SELF / SPOUSE)
-Then ask: "Was this for just you, or a spouse as well?"
+STEP 3 (BOOKING FRAME)
+Say: "So the next step is really simple — it’s just a quick 5-minute call to look at what you have now compared to what you were trying to protect, and see if there’s any gap. Would later today or tomorrow be better — daytime or evening?"
 STOP. WAIT.
 
-STEP 4 (BOOKING FRAME — PURE SCHEDULING)
-Say: "Perfect — my job is just to get you scheduled for a quick 5-minute call with ${agent}. Would later today or tomorrow be better — daytime or evening?"
-STOP. WAIT.
-
-STEP 5 (IF THEY PICK A WINDOW)
+STEP 4 (IF THEY PICK A WINDOW)
 Then ask: "Perfect — what time in that window works best?"
 STOP. WAIT.
 
-STEP 6 (CONFIRM)
+STEP 5 (CONFIRM)
 Say: "Got it. I’ll have ${agent} call you around then. Does that work?"
 STOP. WAIT.
 
-STEP 7 (CLOSE)
+STEP 6 (CLOSE)
 Say: "Perfect. I’ll have ${agent} reach out around that time. Talk soon."
 STOP. WAIT.
 `.trim();
@@ -972,27 +934,23 @@ STEP 1 (FIRST script turn AFTER the system greeting + lead responds)
 Say: "Hey ${client} — it’s just ${aiName}. How’s your day going?"
 STOP. WAIT.
 
-STEP 2 (ACKNOWLEDGE + CONTEXT)
-Say: "Awesome — appreciate it. I was calling about the request you put in for the veteran life insurance programs."
+STEP 2
+Say: "I was just giving you a quick call about the request you put in for the veteran life insurance programs. Was this for yourself, or a spouse as well?"
 STOP. WAIT.
 
-STEP 3 (SELF / SPOUSE)
-Then ask: "Was this for just you, or a spouse as well?"
+STEP 3 (BOOKING FRAME)
+Say: "So the next step is really simple — it’s just a quick 5-minute call to look at what you have now compared to what you were trying to protect, and see if there’s any gap. Would later today or tomorrow be better — daytime or evening?"
 STOP. WAIT.
 
-STEP 4 (BOOKING FRAME — PURE SCHEDULING)
-Say: "Perfect — my job is just to get you scheduled for a quick 5-minute call with ${agent}. Would later today or tomorrow be better — daytime or evening?"
-STOP. WAIT.
-
-STEP 5 (IF THEY PICK A WINDOW)
+STEP 4 (IF THEY PICK A WINDOW)
 Then ask: "Perfect — what time in that window works best?"
 STOP. WAIT.
 
-STEP 6 (CONFIRM)
+STEP 5 (CONFIRM)
 Say: "Got it. I’ll have ${agent} call you around then. Does that work?"
 STOP. WAIT.
 
-STEP 7 (CLOSE)
+STEP 6 (CLOSE)
 Say: "Perfect. I’ll have ${agent} reach out around that time. Talk soon."
 STOP. WAIT.
 `.trim();
@@ -1004,27 +962,23 @@ STEP 1 (FIRST script turn AFTER the system greeting + lead responds)
 Say: "Hey ${client} — it’s just ${aiName}. How’s your day going?"
 STOP. WAIT.
 
-STEP 2 (ACKNOWLEDGE + CONTEXT)
-Say: "Nice — appreciate it. I was calling about the request you put in for life insurance."
+STEP 2
+Say: "I was just giving you a quick call about the request you put in for life insurance. Was this for yourself, or a spouse as well?"
 STOP. WAIT.
 
-STEP 3 (SELF / SPOUSE)
-Then ask: "Was this for just you, or a spouse as well?"
+STEP 3 (BOOKING FRAME)
+Say: "So the next step is really simple — it’s just a quick 5-minute call to look at what you have now compared to what you were trying to protect, and see if there’s any gap. Would later today or tomorrow be better — daytime or evening?"
 STOP. WAIT.
 
-STEP 4 (BOOKING FRAME — PURE SCHEDULING)
-Say: "Perfect — my job is just to get you scheduled for a quick 5-minute call with ${agent}. Would later today or tomorrow be better — daytime or evening?"
-STOP. WAIT.
-
-STEP 5 (IF THEY PICK A WINDOW)
+STEP 4 (IF THEY PICK A WINDOW)
 Then ask: "Perfect — what time in that window works best?"
 STOP. WAIT.
 
-STEP 6 (CONFIRM)
+STEP 5 (CONFIRM)
 Say: "Got it. I’ll have ${agent} call you around then. Does that work?"
 STOP. WAIT.
 
-STEP 7 (CLOSE)
+STEP 6 (CLOSE)
 Say: "Perfect. I’ll have ${agent} reach out around that time. Talk soon."
 STOP. WAIT.
 `.trim();
@@ -1036,27 +990,23 @@ STEP 1 (FIRST script turn AFTER the system greeting + lead responds)
 Say: "Hey ${client} — it’s just ${aiName}. How’s your day going?"
 STOP. WAIT.
 
-STEP 2 (ACKNOWLEDGE + CONTEXT)
-Say: "Right on — appreciate it. I was calling about the request you put in for life insurance."
+STEP 2
+Say: "I was just giving you a quick call about the request you put in for life insurance. Was this for yourself, or a spouse as well?"
 STOP. WAIT.
 
-STEP 3 (SELF / SPOUSE)
-Then ask: "Was this for just you, or a spouse as well?"
+STEP 3 (BOOKING FRAME)
+Say: "So the next step is really simple — it’s just a quick 5-minute call to look at what you have now compared to what you were trying to protect, and see if there’s any gap. Would later today or tomorrow be better — daytime or evening?"
 STOP. WAIT.
 
-STEP 4 (BOOKING FRAME — PURE SCHEDULING)
-Say: "Perfect — my job is just to get you scheduled for a quick 5-minute call with ${agent}. Would later today or tomorrow be better — daytime or evening?"
-STOP. WAIT.
-
-STEP 5 (IF THEY PICK A WINDOW)
+STEP 4 (IF THEY PICK A WINDOW)
 Then ask: "Perfect — what time in that window works best?"
 STOP. WAIT.
 
-STEP 6 (CONFIRM)
+STEP 5 (CONFIRM)
 Say: "Got it. I’ll have ${agent} call you around then. Does that work?"
 STOP. WAIT.
 
-STEP 7 (CLOSE)
+STEP 6 (CLOSE)
 Say: "Perfect. I’ll have ${agent} reach out around that time. Talk soon."
 STOP. WAIT.
 `.trim();
@@ -1086,15 +1036,8 @@ RULES
 - Keep it short (1–2 sentences).
 - Then ask again: "Would later today or tomorrow work better — daytime or evening?"
 - Never mention rates, underwriting, carriers, approvals, eligibility, age, health.
-- Never ask mortgage balance, term length, coverage amount, quote, premium.
 - Never introduce any other scenario (travel, resorts, healthcare, utilities, etc.).
 - Never apologize. Never mention scripts/prompts. Never acknowledge mistakes.
-
-OBJECTION: "Are you a robot / are you AI?"
-REBUTTAL: "I’m just an assistant for ${agent} — my job is only to schedule quick calls. Would later today or tomorrow be better — daytime or evening?"
-
-OBJECTION: "How are you?"
-REBUTTAL: "It’s going great — thank you for asking. Would later today or tomorrow be better — daytime or evening?"
 
 OBJECTION: "I don’t have time / I’m at work"
 REBUTTAL: "Totally understand. That’s why I’m just scheduling — it’ll be a short call with ${agent}. Would later today or tomorrow be better — daytime or evening?"
@@ -1103,17 +1046,21 @@ OBJECTION: "Just send it / just text me"
 REBUTTAL: "I can, but it’s usually easier to schedule a quick call so you don’t have to go back and forth. Would later today or tomorrow be better — daytime or evening?"
 
 OBJECTION: "I already have coverage"
-REBUTTAL: "Perfect — this is just a quick review to make sure it still fits what you wanted. Would later today or tomorrow be better — daytime or evening?"
+REBUTTAL: "Perfect — I’m showing you do have something in place, but it looks like they may have you in a higher risk rate class and you could be overpaying. When do you have time for a quick 5-minute call where ${agent} can get that corrected for you?"
+STOP. WAIT.
+Then ask again: "Would later today or tomorrow be better — daytime or evening?"
 
 OBJECTION: "How much is it?"
-REBUTTAL: "Good question — ${agent} covers that on the quick call because it depends on what you’re looking for. Would later today or tomorrow be better — daytime or evening?"
+REBUTTAL: "Good question — ${agent} covers that on the quick call because it depends on what you want it to do. Would later today or tomorrow be better — daytime or evening?"
 
 OBJECTION: "I’m not interested"
-REBUTTAL: "No worries — just so I don’t waste your time, did you mean you don’t want a call right now?"
+REBUTTAL: "No worries — just so I don’t waste your time, did you mean you don’t want any coverage at all, or you just don’t want a call right now?"
 STOP. WAIT.
+- If they say "no call right now": "All good. Would later today or tomorrow be better — daytime or evening?"
+- If they say "no coverage": "Got it. I’ll mark this as not interested. Stay blessed."
 
 OBJECTION: "I don’t remember filling anything out"
-REBUTTAL: "No worries — it was just a request for information on life insurance. Was that for just you, or a spouse as well?"
+REBUTTAL: "No worries — it was just a request for information on life insurance. Does that ring a bell?"
 STOP. WAIT.
 
 OBJECTION: "Is this a scam?"
@@ -1155,7 +1102,6 @@ BOOKING-ONLY LOCK (NON-NEGOTIABLE)
 - You are a scheduling assistant (NOT a licensed agent).
 - Do NOT say you are an underwriter.
 - Do NOT mention rates, pricing details, carriers, approvals, eligibility, medical/health questions, age questions.
-- Do NOT ask mortgage balance, term length, coverage amount, quote, premium.
 - Do NOT ask DOB, SSN, banking, pen & paper, license numbers.
 - Your ONLY goal is to book a phone appointment.
 
@@ -1244,7 +1190,6 @@ BOOKING-ONLY (NON-NEGOTIABLE)
 - You are NOT the licensed agent.
 - Do NOT say you are an underwriter.
 - Do NOT mention rates, carriers, approvals, eligibility, or ask health/age/DOB/SSN/banking questions.
-- Do NOT ask mortgage balance, term length, coverage amount, quote, premium.
 - Your ONLY goal is to follow the booking script and schedule the appointment.
 
 TURN DISCIPLINE (NON-NEGOTIABLE)
@@ -1676,7 +1621,7 @@ async function handleStop(ws: WebSocket, msg: TwilioStopEvent) {
   } catch (err: any) {
     console.error(
       "[AI-VOICE] Error billing AI Dialer usage:",
-        err?.message || err
+      err?.message || err
     );
   }
 
@@ -1721,6 +1666,19 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
 
     const systemPrompt = buildSystemPrompt(state.context!);
 
+    /**
+     * ============================
+     * ✅ Phase 1 — Instrumentation A
+     * ============================
+     * Right after building system prompt, log:
+     * - length
+     * - first ~300
+     * - last ~700
+     * - markers
+     * - 1 unique line from selected script
+     *
+     * IMPORTANT: do NOT log lead notes. We redact them in snippets.
+     */
     try {
       const selectedScript = getSelectedScriptText(state.context!);
       const steps = extractScriptStepsFromSelectedScript(selectedScript);
@@ -1764,6 +1722,10 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
       });
     } catch {}
 
+    /**
+     * ✅ Phase 2 — Server-driven stepper init
+     * Build deterministic step list now (model will only ever see the next line).
+     */
     try {
       const selectedScript = getSelectedScriptText(state.context!);
       state.scriptSteps = extractScriptStepsFromSelectedScript(selectedScript);
@@ -1861,6 +1823,13 @@ async function handleOpenAiEvent(
 
   const t = String(event?.type || "");
 
+  /**
+   * ✅ Optional transcript capture (non-blocking).
+   * We do NOT change any audio settings; we simply listen if OpenAI emits transcripts.
+   *
+   * IMPORTANT: avoid accidentally capturing the AI's own audio transcript deltas.
+   * We prefer explicit "input"/"transcription" type events when present.
+   */
   try {
     const typeLower = String(event?.type || "").toLowerCase();
 
@@ -1892,6 +1861,13 @@ async function handleOpenAiEvent(
 
     state.phase = "awaiting_greeting_reply";
 
+    /**
+     * ============================
+     * ✅ Phase 1 — Instrumentation B
+     * ============================
+     * After OpenAI responds with session.updated, log PROMPT APPLIED
+     * using the local systemPrompt markers we computed earlier.
+     */
     try {
       console.log("[AI-VOICE][PROMPT-APPLIED]", {
         callSid: state.callSid,
@@ -1974,6 +1950,11 @@ async function handleOpenAiEvent(
 
         const greetingInstr = buildGreetingInstructions(liveState.context!);
 
+        /**
+         * ============================
+         * ✅ Phase 1 — Instrumentation C (greeting)
+         * ============================
+         */
         try {
           if (!liveState.debugLoggedResponseCreateGreeting) {
             liveState.debugLoggedResponseCreateGreeting = true;
@@ -2009,8 +1990,17 @@ async function handleOpenAiEvent(
     if (!state.openAiWs || !state.openAiReady) return;
     if (state.waitingForResponse || state.aiSpeaking) return;
 
+    /**
+     * ✅ Phase 2 — Human-like gating + stepper output
+     *
+     * We DO NOT advance on tiny commits.
+     * We only advance when the inbound audio seems like a real answer.
+     * If it's not a real answer, we either ignore it OR reprompt (human-like).
+     */
+
     const isGreetingReply = state.phase === "awaiting_greeting_reply";
 
+    // If we don't have steps for some reason, rebuild them safely.
     if (!state.scriptSteps || state.scriptSteps.length === 0) {
       try {
         const selectedScript = getSelectedScriptText(state.context!);
@@ -2026,16 +2016,20 @@ async function handleOpenAiEvent(
       typeof state.scriptStepIndex === "number" ? state.scriptStepIndex : 0;
     const steps = state.scriptSteps || [];
 
+    // Optional objection detection only if we actually have a transcript string.
     const lastUserText = String(state.lastUserTranscript || "").trim();
     const objectionKind = lastUserText ? detectObjection(lastUserText) : null;
 
+    // Determine what step we are on (for gating/reprompt)
     const currentStepLine = steps[idx] || getBookingFallbackLine(state.context!);
     const stepType = classifyStepType(currentStepLine);
 
+    // Greeting reply: always move into Step 0 immediately (feels natural)
     if (isGreetingReply) {
       const lineToSay = steps[0] || getBookingFallbackLine(state.context!);
       const perTurnInstr = buildStepperTurnInstruction(state.context!, lineToSay);
 
+      // Reset inbound tracking right before we speak
       state.userAudioMsBuffered = 0;
       state.lastUserTranscript = "";
       state.lowSignalCommitCount = 0;
@@ -2083,10 +2077,12 @@ async function handleOpenAiEvent(
       return;
     }
 
+    // If they object and we have a transcript, send exactly ONE rebuttal (no step advance).
     if (objectionKind) {
       const lineToSay = getRebuttalLine(state.context!, objectionKind);
       const perTurnInstr = buildStepperTurnInstruction(state.context!, lineToSay);
 
+      // Reset inbound tracking right before we speak
       state.userAudioMsBuffered = 0;
       state.lastUserTranscript = "";
       state.lowSignalCommitCount = 0;
@@ -2109,6 +2105,7 @@ async function handleOpenAiEvent(
       return;
     }
 
+    // ✅ Answer gating
     const audioMs = Number(state.userAudioMsBuffered || 0);
     const treatAsAnswer = shouldTreatCommitAsRealAnswer(
       stepType,
@@ -2117,16 +2114,19 @@ async function handleOpenAiEvent(
     );
 
     if (!treatAsAnswer) {
+      // count low-signal commits
       state.lowSignalCommitCount = (state.lowSignalCommitCount || 0) + 1;
 
+      // If enough time has passed since last prompt, reprompt (human-like) instead of advancing.
       const now = Date.now();
       const lastPromptAt = Number(state.lastPromptSentAtMs || 0);
       const msSincePrompt = now - lastPromptAt;
 
+      // reprompt only after a moment so we don't talk over them
       const shouldReprompt =
         msSincePrompt >= 1200 &&
         (state.lowSignalCommitCount || 0) >= 2 &&
-        (state.repromptCountForCurrentStep || 0) < 2; // ✅ cap to 2 (less “questioning”)
+        (state.repromptCountForCurrentStep || 0) < 3;
 
       if (shouldReprompt) {
         const repN = Number(state.repromptCountForCurrentStep || 0);
@@ -2142,10 +2142,12 @@ async function handleOpenAiEvent(
 
         state.repromptCountForCurrentStep = repN + 1;
 
+        // Reset inbound tracking right before we speak
         state.userAudioMsBuffered = 0;
         state.lastUserTranscript = "";
         state.lowSignalCommitCount = 0;
 
+        // small human-like pause before reprompt (does not affect audio pipeline)
         try {
           await sleep(650);
         } catch {}
@@ -2168,12 +2170,15 @@ async function handleOpenAiEvent(
         return;
       }
 
+      // Otherwise: do nothing (keep waiting). This prevents "what time works" → instantly continuing.
       return;
     }
 
+    // If we got here, we treat it as a real answer: send the NEXT step line and advance index.
     const lineToSay = steps[idx] || getBookingFallbackLine(state.context!);
     const perTurnInstr = buildStepperTurnInstruction(state.context!, lineToSay);
 
+    // Reset inbound tracking right before we speak
     state.userAudioMsBuffered = 0;
     state.lastUserTranscript = "";
     state.lowSignalCommitCount = 0;
@@ -2183,6 +2188,11 @@ async function handleOpenAiEvent(
     setAiSpeaking(state, true, "response.create (script step)");
     state.outboundOpenAiDone = false;
 
+    /**
+     * ============================
+     * ✅ Phase 1 — Instrumentation C (user turn)
+     * ============================
+     */
     try {
       if (!state.debugLoggedResponseCreateUserTurn) {
         state.debugLoggedResponseCreateUserTurn = true;
