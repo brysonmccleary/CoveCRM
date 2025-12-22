@@ -660,12 +660,15 @@ function shouldTreatCommitAsRealAnswer(
     return true;
   }
 
-  // No transcription available: fall back to audio duration heuristic.
-  // This avoids advancing on tiny noises.
-  if (stepType === "time_question") return audioMs >= 700;
-  if (stepType === "yesno_question") return audioMs >= 450;
-  if (stepType === "open_question") return audioMs >= 650;
-  return audioMs >= 500;
+  /**
+   * No transcription available:
+   * Be conservative to avoid cutting the caller off on "um", breaths, etc.
+   * (We are NOT changing audio/VAD. This is gating only.)
+   */
+  if (stepType === "time_question") return audioMs >= 1100;
+  if (stepType === "yesno_question") return audioMs >= 700;
+  if (stepType === "open_question") return audioMs >= 1000;
+  return audioMs >= 800;
 }
 
 function getRepromptLineForStepType(
@@ -814,18 +817,24 @@ function buildStepperTurnInstruction(
   lineToSay: string
 ): string {
   const leadName = (ctx.clientFirstName || "").trim() || "there";
+  const line = String(lineToSay || "").trim();
 
   return `
 HARD ENGLISH LOCK: Speak ONLY English.
 HARD NAME LOCK: The ONLY lead name you may use is exactly: "${leadName}" (or "there" if missing). Never invent names.
-HARD SCOPE LOCK: This call is ONLY about a LIFE INSURANCE request. Do NOT mention any other product or topic (no vacations/resorts/healthcare/real estate/utilities/etc).
+HARD SCOPE LOCK: This call is ONLY about a LIFE INSURANCE request. Do NOT mention any other product or topic (no gym, vacation, energy, healthcare, real estate, utilities, etc).
 ABSOLUTE BEHAVIOR: Never apologize. Never mention scripts/prompts/system messages.
-TURN DISCIPLINE: After you ask a question, STOP and WAIT. Do NOT fill silence.
 
-YOU MUST SAY THIS EXACT LINE (read it verbatim, no paraphrase, no additions):
-"${String(lineToSay || "").trim()}"
+OUTPUT CONSTRAINT (NON-NEGOTIABLE):
+- You MUST output EXACTLY ONE spoken line.
+- That line MUST be EXACTLY the quoted line below, verbatim.
+- Do NOT add ANY words before or after.
+- Do NOT paraphrase.
+- Do NOT add filler.
+- After you say it, STOP talking and WAIT.
 
-After you say that exact line, STOP talking and WAIT.
+YOU MUST SAY THIS EXACT LINE (verbatim):
+"${line}"
 `.trim();
 }
 
@@ -1196,6 +1205,14 @@ TURN DISCIPLINE (NON-NEGOTIABLE)
 - After you ask ANY question, STOP and WAIT.
 - Do NOT fill silence.
 
+CONTROL SCHEMA RULES (VERY IMPORTANT — KEEP SHORT)
+- Emit control.kind="book_appointment" ONLY when the lead gives a clear time AND confirms it works.
+  Include: startTimeUtc, durationMinutes, leadTimeZone, agentTimeZone, notes (optional).
+- Emit control.kind="final_outcome" ONLY when it is clearly one of:
+  booked / not_interested / do_not_call / disconnected.
+  Include: outcome, summary (optional), notesAppend (optional).
+- If not clearly booked or clearly final, emit NO control.
+
 LEAD INFO (USE ONLY WHAT IS PROVIDED)
 - Name: ${ctx.clientFirstName || ""} ${ctx.clientLastName || ""}
 - Notes: ${ctx.clientNotes || "(none)"}
@@ -1226,6 +1243,114 @@ STRICT OUTPUT RULES (NON-NEGOTIABLE):
 - After your line/question, STOP and WAIT.
 - If the lead objects, use ONE rebuttal from REBUTTALS, then return to booking.
 `.trim();
+}
+
+/**
+ * ============================
+ * ✅ Booking validation helpers
+ * ============================
+ * We do NOT change how the model decides times.
+ * We only validate/safeguard what we send to CoveCRM.
+ */
+function isValidIanaTimeZone(tzRaw: any): boolean {
+  const tz = String(tzRaw || "").trim();
+  if (!tz) return false;
+  try {
+    // Throws on invalid time zone in most JS runtimes
+    Intl.DateTimeFormat("en-US", { timeZone: tz }).format(new Date());
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function normalizeTimeZones(
+  leadTzRaw: any,
+  agentTzRaw: any,
+  ctx: AICallContext
+): { leadTz: string; agentTz: string; leadTzWasFallback: boolean; agentTzWasFallback: boolean } {
+  const ctxAgent = String(ctx?.agentTimeZone || "").trim();
+  const leadCandidate = String(leadTzRaw || "").trim();
+  const agentCandidate = String(agentTzRaw || "").trim();
+
+  let leadTz = leadCandidate;
+  let agentTz = agentCandidate;
+
+  let leadTzWasFallback = false;
+  let agentTzWasFallback = false;
+
+  // Agent tz fallback chain
+  if (!isValidIanaTimeZone(agentTz)) {
+    if (isValidIanaTimeZone(ctxAgent)) {
+      agentTz = ctxAgent;
+      agentTzWasFallback = true;
+    } else {
+      agentTz = "America/Phoenix";
+      agentTzWasFallback = true;
+    }
+  }
+
+  // Lead tz fallback chain
+  if (!isValidIanaTimeZone(leadTz)) {
+    // Prefer ctxAgent if nothing else
+    if (isValidIanaTimeZone(ctxAgent)) {
+      leadTz = ctxAgent;
+      leadTzWasFallback = true;
+    } else {
+      leadTz = "America/Phoenix";
+      leadTzWasFallback = true;
+    }
+  }
+
+  return { leadTz, agentTz, leadTzWasFallback, agentTzWasFallback };
+}
+
+function parseStartTimeUtcToDate(startTimeUtcRaw: any): Date | null {
+  const raw = startTimeUtcRaw;
+
+  // Epoch (seconds or ms)
+  if (typeof raw === "number" && Number.isFinite(raw)) {
+    const n = raw;
+    const ms = n < 1e12 ? n * 1000 : n; // if seconds, convert
+    const d = new Date(ms);
+    return Number.isFinite(d.getTime()) ? d : null;
+  }
+
+  // Numeric string epoch
+  const s = String(raw || "").trim();
+  if (!s) return null;
+
+  if (/^\d+$/.test(s)) {
+    const n = Number(s);
+    if (!Number.isFinite(n)) return null;
+    const ms = n < 1e12 ? n * 1000 : n;
+    const d = new Date(ms);
+    return Number.isFinite(d.getTime()) ? d : null;
+  }
+
+  // ISO string (assumed UTC if includes Z or offset; if not, Date will parse as local in some runtimes)
+  // We only accept it if it parses to a valid date.
+  const d = new Date(s);
+  if (!Number.isFinite(d.getTime())) return null;
+
+  return d;
+}
+
+function formatInTimeZone(d: Date, tz: string): string {
+  try {
+    const fmt = new Intl.DateTimeFormat("en-US", {
+      timeZone: tz,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: true,
+    });
+    return fmt.format(d);
+  } catch {
+    return "(format_failed)";
+  }
 }
 
 /**
@@ -1991,9 +2116,8 @@ async function handleOpenAiEvent(
     if (state.waitingForResponse || state.aiSpeaking) return;
 
     /**
-     * ✅ Phase 2 — Human-like gating + stepper output
-     *
-     * We DO NOT advance on tiny commits.
+     * ✅ Human-like gating + stepper output
+     * We do NOT advance on tiny commits.
      * We only advance when the inbound audio seems like a real answer.
      * If it's not a real answer, we either ignore it OR reprompt (human-like).
      */
@@ -2117,15 +2241,17 @@ async function handleOpenAiEvent(
       // count low-signal commits
       state.lowSignalCommitCount = (state.lowSignalCommitCount || 0) + 1;
 
-      // If enough time has passed since last prompt, reprompt (human-like) instead of advancing.
       const now = Date.now();
       const lastPromptAt = Number(state.lastPromptSentAtMs || 0);
       const msSincePrompt = now - lastPromptAt;
 
-      // reprompt only after a moment so we don't talk over them
+      /**
+       * Reprompt should NOT fire too quickly.
+       * We want to avoid cutting the caller off during natural pauses ("um ...").
+       */
       const shouldReprompt =
-        msSincePrompt >= 1200 &&
-        (state.lowSignalCommitCount || 0) >= 2 &&
+        msSincePrompt >= 3200 && // increased patience
+        (state.lowSignalCommitCount || 0) >= 3 && // require more low-signal commits
         (state.repromptCountForCurrentStep || 0) < 3;
 
       if (shouldReprompt) {
@@ -2149,7 +2275,7 @@ async function handleOpenAiEvent(
 
         // small human-like pause before reprompt (does not affect audio pipeline)
         try {
-          await sleep(650);
+          await sleep(850);
         } catch {}
 
         setWaitingForResponse(state, true, "response.create (reprompt)");
@@ -2170,7 +2296,7 @@ async function handleOpenAiEvent(
         return;
       }
 
-      // Otherwise: do nothing (keep waiting). This prevents "what time works" → instantly continuing.
+      // Otherwise: do nothing (keep waiting).
       return;
     }
 
@@ -2338,31 +2464,72 @@ async function handleBookAppointmentIntent(state: CallState, control: any) {
   const {
     startTimeUtc,
     durationMinutes,
-    leadTimeZone,
-    agentTimeZone,
+    leadTimeZone: leadTimeZoneRaw,
+    agentTimeZone: agentTimeZoneRaw,
     notes,
   } = control;
 
-  if (!startTimeUtc || !durationMinutes || !leadTimeZone || !agentTimeZone) {
-    console.warn(
-      "[AI-VOICE] Incomplete book_appointment control payload:",
-      control
-    );
+  if (!startTimeUtc || !durationMinutes) {
+    console.warn("[AI-VOICE] Incomplete book_appointment control payload:", {
+      callSid: state.callSid,
+      leadId: ctx.leadId,
+      hasStartTimeUtc: !!startTimeUtc,
+      hasDurationMinutes: !!durationMinutes,
+    });
     return;
   }
+
+  // STRICT validation of startTimeUtc
+  const startDate = parseStartTimeUtcToDate(startTimeUtc);
+  if (!startDate) {
+    console.warn("[AI-VOICE][BOOKING][SKIP] Invalid startTimeUtc (will NOT call booking):", {
+      callSid: state.callSid,
+      leadId: ctx.leadId,
+      startTimeUtcRaw: startTimeUtc,
+    });
+    return;
+  }
+
+  // STRICT tz validation + fallback
+  const tz = normalizeTimeZones(leadTimeZoneRaw, agentTimeZoneRaw, ctx);
+  const leadTimeZone = tz.leadTz;
+  const agentTimeZone = tz.agentTz;
+
+  // Safe debug logs (no sensitive notes)
+  try {
+    console.log("[AI-VOICE][BOOKING][VALIDATE]", {
+      callSid: state.callSid,
+      leadId: ctx.leadId,
+      startTimeUtcRaw: startTimeUtc,
+      startTimeUtcIso: startDate.toISOString(),
+      leadTimeZone,
+      agentTimeZone,
+      leadLocal: formatInTimeZone(startDate, leadTimeZone),
+      agentLocal: formatInTimeZone(startDate, agentTimeZone),
+      durationMinutes,
+      leadTzWasFallback: tz.leadTzWasFallback,
+      agentTzWasFallback: tz.agentTzWasFallback,
+    });
+  } catch {}
 
   try {
     const url = new URL(BOOK_APPOINTMENT_URL);
     url.searchParams.set("key", AI_DIALER_CRON_KEY);
 
+    // Only append callSid to notes if notes already exists (per your rule).
+    const safeNotes =
+      typeof notes === "string" && notes.trim()
+        ? `${notes}\n[callSid: ${state.callSid}]`
+        : notes;
+
     const body = {
       aiCallSessionId: ctx.sessionId,
       leadId: ctx.leadId,
-      startTimeUtc,
+      startTimeUtc: startDate.toISOString(),
       durationMinutes,
       leadTimeZone,
       agentTimeZone,
-      notes,
+      notes: safeNotes,
       source: "ai-dialer",
     };
 
@@ -2375,7 +2542,15 @@ async function handleBookAppointmentIntent(state: CallState, control: any) {
       body: JSON.stringify(body),
     });
 
-    const json: any = await resp.json();
+    const json: any = await resp.json().catch(() => ({}));
+
+    console.log("[AI-VOICE][BOOKING][RESPONSE]", {
+      callSid: state.callSid,
+      leadId: ctx.leadId,
+      status: resp.status,
+      ok: !!json?.ok,
+    });
+
     if (!resp.ok || !json.ok) {
       console.error(
         "[AI-VOICE] book-appointment failed:",
@@ -2448,7 +2623,16 @@ async function handleFinalOutcomeIntent(state: CallState, control: any) {
       body: JSON.stringify(body),
     });
 
-    const json: any = await resp.json();
+    const json: any = await resp.json().catch(() => ({}));
+
+    console.log("[AI-VOICE][OUTCOME][RESPONSE]", {
+      callSid: state.callSid,
+      leadId: state.context?.leadId,
+      status: resp.status,
+      ok: !!json?.ok,
+      outcome: outcomeRaw,
+    });
+
     if (!resp.ok || !json.ok) {
       console.error(
         "[AI-VOICE] outcome endpoint failed:",
@@ -2511,7 +2695,17 @@ async function billAiDialerUsageForCall(state: CallState) {
       body: JSON.stringify(body),
     });
 
-    const json: any = await resp.json();
+    const json: any = await resp.json().catch(() => ({}));
+
+    console.log("[AI-VOICE][USAGE][RESPONSE]", {
+      callSid: state.callSid,
+      sessionId: state.context.sessionId,
+      status: resp.status,
+      ok: !!json?.ok,
+      minutes,
+      vendorCostUsd,
+    });
+
     if (!resp.ok || !json.ok) {
       console.error(
         "[AI-VOICE] usage endpoint failed:",
