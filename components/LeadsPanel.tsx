@@ -12,7 +12,50 @@ interface NumberEntry {
 
 const SYSTEM_FOLDERS = ["Not Interested", "Booked Appointment", "Sold"];
 
-// --- Inline, self-contained global search (no external import) ---
+/* =========================
+   Google Sheets Wizard Utils
+========================= */
+function parseGoogleSheetUrl(input: string): {
+  spreadsheetId?: string;
+  gid?: string;
+  error?: string;
+} {
+  const raw = String(input || "").trim();
+  if (!raw) return { error: "Paste a Google Sheets URL." };
+
+  try {
+    const u = new URL(raw);
+    // Accept a few common hostnames
+    const host = u.hostname.toLowerCase();
+    const ok =
+      host.includes("docs.google.com") ||
+      host.includes("drive.google.com") ||
+      host.includes("google.com");
+    if (!ok) return { error: "That doesn’t look like a Google Sheets URL." };
+
+    // Typical: https://docs.google.com/spreadsheets/d/{ID}/edit#gid=0
+    const m = u.pathname.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
+    const spreadsheetId = m?.[1];
+
+    // gid usually in hash (#gid=0) or query (?gid=0)
+    const hash = (u.hash || "").replace(/^#/, "");
+    const gidFromHash = hash.includes("gid=")
+      ? new URLSearchParams(hash).get("gid") || undefined
+      : undefined;
+    const gidFromQuery = u.searchParams.get("gid") || undefined;
+    const gid = gidFromHash || gidFromQuery;
+
+    if (!spreadsheetId) return { error: "Could not detect spreadsheetId in that URL." };
+
+    return { spreadsheetId, gid: gid || undefined };
+  } catch {
+    return { error: "Invalid URL. Make sure you paste the full Google Sheet link." };
+  }
+}
+
+/* =========================
+   Inline, self-contained global search (no external import)
+========================= */
 function LeadSearchInline() {
   const [q, setQ] = useState("");
   const [loading, setLoading] = useState(false);
@@ -134,12 +177,16 @@ function LeadSearchInline() {
     </div>
   );
 }
-// -----------------------------------------------------------------
 
-// Minimal type just for sorting by createdAt
+/* =========================
+   Types
+========================= */
 type LeadRow = { _id: string; createdAt?: string | number | Date };
 type ResumeInfo = { lastIndex: number | null; total: number | null };
 
+/* =========================
+   Main
+========================= */
 export default function LeadsPanel() {
   const [showImport, setShowImport] = useState(false);
   const [folders, setFolders] = useState<any[]>([]);
@@ -151,7 +198,16 @@ export default function LeadsPanel() {
   const [previewLead, setPreviewLead] = useState<any | null>(null);
   const [numbers, setNumbers] = useState<NumberEntry[]>([]);
   const [selectedNumber, setSelectedNumber] = useState<string>("");
-  const [resumeInfo, setResumeInfo] = useState<ResumeInfo | null>(null); // server-side pointer
+  const [resumeInfo, setResumeInfo] = useState<ResumeInfo | null>(null);
+
+  // ✅ NEW: Wizard state
+  const [showSheetsWizard, setShowSheetsWizard] = useState(false);
+  const [wizardStep, setWizardStep] = useState(1);
+  const [sheetUrl, setSheetUrl] = useState("");
+  const [sheetParsed, setSheetParsed] = useState<{ spreadsheetId?: string; gid?: string; error?: string }>({});
+  const [connectLoading, setConnectLoading] = useState(false);
+  const [connectError, setConnectError] = useState<string | null>(null);
+  const [connectOk, setConnectOk] = useState(false);
 
   const router = useRouter();
 
@@ -160,7 +216,6 @@ export default function LeadsPanel() {
       const res = await fetch("/api/get-folders");
       const data = await res.json();
       const userFolders = Array.isArray(data.folders) ? data.folders : [];
-      // ✅ TRUST SERVER COUNTS; do NOT recompute per folder
       setFolders(userFolders);
     } catch (err) {
       console.error("Failed to fetch folders:", err);
@@ -188,7 +243,9 @@ export default function LeadsPanel() {
     if (!expandedFolder) return;
     const fetchLeads = async () => {
       try {
-        const res = await fetch(`/api/get-leads-by-folder?folderId=${encodeURIComponent(expandedFolder)}`);
+        const res = await fetch(
+          `/api/get-leads-by-folder?folderId=${encodeURIComponent(expandedFolder)}`
+        );
         const data = await res.json();
         const sortedLeads = (Array.isArray(data.leads) ? (data.leads as LeadRow[]) : []).sort(
           (a: LeadRow, b: LeadRow) =>
@@ -202,7 +259,6 @@ export default function LeadsPanel() {
         setLeads([]);
       }
 
-      // fetch server-side resume pointer for the folder
       try {
         const key = `folder:${expandedFolder}`;
         const r = await fetch(`/api/dial/progress?key=${encodeURIComponent(key)}`);
@@ -263,14 +319,12 @@ export default function LeadsPanel() {
     setSelectAll(!selectAll);
   };
 
-  // --- Local key (kept intact) ---
   const buildProgressKey = () => {
     const folder = expandedFolder || "no-folder";
     const ids = selectedLeads.join(",");
     return `dialProgress:${folder}:${ids}`;
   };
 
-  // server progress key (per-folder)
   const buildServerProgressKey = () => {
     const folder = expandedFolder || "no-folder";
     return `folder:${folder}`;
@@ -293,7 +347,6 @@ export default function LeadsPanel() {
       return;
     }
 
-    // local-storage resume prompt (your original behavior)
     const progressKey = buildProgressKey();
     const savedRaw = localStorage.getItem(progressKey);
     const saved = savedRaw ? (JSON.parse(savedRaw) as { index: number }) : null;
@@ -312,69 +365,15 @@ export default function LeadsPanel() {
 
     const serverKey = buildServerProgressKey();
 
-    // pass queue + starting point + progress keys
     const q = new URLSearchParams({
       leads: selectedLeads.join(","),
       fromNumber: selectedNumber,
       startIndex: String(startIndex),
-      progressKey: progressKey, // local key (kept)
-      serverProgressKey: serverKey, // server key (per-folder)
+      progressKey: progressKey,
+      serverProgressKey: serverKey,
     }).toString();
 
     router.push(`/dial-session?${q}`);
-  };
-
-  // Resume handlers (server-backed ribbon)
-  const handleResume = async () => {
-    if (!expandedFolder) return;
-    if (!selectedNumber) {
-      alert("Please select a number to call from before resuming.");
-      return;
-    }
-    const serverKey = buildServerProgressKey();
-    const startAt = Math.max(0, (resumeInfo?.lastIndex ?? -1) + 1);
-    localStorage.setItem("selectedDialNumber", selectedNumber);
-
-    // If no manual selection, use whole folder in current UI order
-    const ids = selectedLeads.length ? selectedLeads : leads.map((l) => l._id);
-    const params = new URLSearchParams();
-    params.set("leads", ids.join(","));
-    params.set("fromNumber", selectedNumber);
-    params.set("startIndex", String(startAt));
-    params.set("progressKey", buildProgressKey());
-    params.set("serverProgressKey", serverKey);
-    router.push(`/dial-session?${params.toString()}`);
-  };
-
-  const handleStartFreshRibbon = async () => {
-    if (!expandedFolder) return;
-    if (!selectedNumber) {
-      alert("Please select a number to call from before starting.");
-      return;
-    }
-    const serverKey = buildServerProgressKey();
-
-    // Reset server pointer using POST (no DELETE in your handler)
-    try {
-      await fetch("/api/dial/progress", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ key: serverKey, lastIndex: -1, total: leads.length }),
-      });
-      setResumeInfo(null);
-    } catch {
-      // ignore; still proceed fresh
-    }
-
-    localStorage.setItem("selectedDialNumber", selectedNumber);
-    const ids = selectedLeads.length ? selectedLeads : leads.map((l) => l._id);
-    const params = new URLSearchParams();
-    params.set("leads", ids.join(","));
-    params.set("fromNumber", selectedNumber);
-    params.set("startIndex", "0");
-    params.set("progressKey", buildProgressKey());
-    params.set("serverProgressKey", serverKey);
-    router.push(`/dial-session?${params.toString()}`);
   };
 
   const hasResume =
@@ -383,7 +382,6 @@ export default function LeadsPanel() {
   const canStart = selectedLeads.length > 0;
   const canResume = hasResume && !!selectedNumber && leads.length > 0;
 
-  // NEW: Quick Resume button beside Start Dial Session (server-backed)
   const handleResumeQuickButton = async () => {
     if (!canResume) return;
     localStorage.setItem("selectedDialNumber", selectedNumber);
@@ -429,9 +427,78 @@ export default function LeadsPanel() {
     }
   };
 
-  // 🔄 OAuth start
+  // ✅ NEW: Wizard open (replaces redirect)
   const handleConnectGoogleSheet = () => {
-    window.location.href = "/api/connect/google-sheets";
+    setShowSheetsWizard(true);
+    setWizardStep(1);
+    setSheetUrl("");
+    setSheetParsed({});
+    setConnectError(null);
+    setConnectOk(false);
+  };
+
+  const closeWizard = () => {
+    if (connectLoading) return;
+    setShowSheetsWizard(false);
+  };
+
+  const nextStep = () => {
+    setConnectError(null);
+    setWizardStep((s) => Math.min(4, s + 1));
+  };
+
+  const prevStep = () => {
+    setConnectError(null);
+    setWizardStep((s) => Math.max(1, s - 1));
+  };
+
+  const validateUrlAndContinue = () => {
+    const parsed = parseGoogleSheetUrl(sheetUrl);
+    setSheetParsed(parsed);
+    if (parsed.error) return;
+    setConnectError(null);
+    setWizardStep(3);
+  };
+
+  // Step 4: Connect (placeholder endpoint to be created next)
+  const connectSheetNow = async () => {
+    const parsed = parseGoogleSheetUrl(sheetUrl);
+    setSheetParsed(parsed);
+    if (parsed.error) {
+      setConnectError(parsed.error);
+      return;
+    }
+
+    setConnectLoading(true);
+    setConnectError(null);
+    setConnectOk(false);
+
+    try {
+      const r = await fetch("/api/sheets-sync/connect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          spreadsheetId: parsed.spreadsheetId,
+          gid: parsed.gid || null,
+          // NOTE: mapping/folder selection will be added in the next implementation pass
+        }),
+      });
+
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        setConnectError(j?.error || j?.message || "Failed to connect sheet.");
+        return;
+      }
+
+      setConnectOk(true);
+      // In the next step, we’ll show “Copy Apps Script” and setup instructions using response payload
+      // For now, just refresh folders in case it auto-created one, and keep wizard open.
+      await fetchFolders();
+    } catch (e: any) {
+      setConnectError(e?.message || "Failed to connect sheet.");
+    } finally {
+      setConnectLoading(false);
+    }
   };
 
   const handleDisposition = async (leadId: string, disposition: string) => {
@@ -450,11 +517,8 @@ export default function LeadsPanel() {
         return;
       }
 
-      // 1) Remove from current view immediately
       setLeads((prev) => prev.filter((l) => l._id !== leadId));
 
-      // 2) Refresh server-side counts
-      // 3) If a folder is open, reload that folder's leads from the server (authoritative)
       await Promise.all([
         fetchFolders(),
         expandedFolder
@@ -477,7 +541,6 @@ export default function LeadsPanel() {
     }
   };
 
-  // NEW: navigate to AI Dial Session page
   const goToAIDialSession = () => {
     router.push("/ai-dial-session").catch(() => {});
   };
@@ -492,12 +555,14 @@ export default function LeadsPanel() {
         >
           {showImport ? "Close Import" : "Import Leads"}
         </button>
+
         <button
           onClick={handleConnectGoogleSheet}
           className="bg-green-600 text-white px-4 py-2 rounded hover:opacity-90 cursor-pointer"
         >
           Connect Google Sheet
         </button>
+
         <button
           onClick={goToAIDialSession}
           className="bg-blue-600 text-white px-4 py-2 rounded hover:opacity-90 cursor-pointer"
@@ -506,7 +571,7 @@ export default function LeadsPanel() {
         </button>
       </div>
 
-      {/* Global lead search (click → /dial/[leadId]) */}
+      {/* Global lead search */}
       <LeadSearchInline />
 
       {showImport && <LeadImportPanel onImportSuccess={fetchFolders} />}
@@ -538,8 +603,6 @@ export default function LeadsPanel() {
 
             {expandedFolder === folder._id && leads.length > 0 && (
               <div className="border p-4 rounded mt-2 overflow-auto bg-gray-100 dark:bg-gray-800">
-                {/* (Banner removed by request) */}
-
                 <div className="flex flex-col space-y-2 mb-2">
                   <label className="font-semibold">Select Number to Call From:</label>
                   <select
@@ -564,7 +627,6 @@ export default function LeadsPanel() {
                     <span className="text-sm">{selectedLeads.length} leads selected</span>
                   </div>
 
-                  {/* Right-side actions: Start + Resume */}
                   <div className="flex items-center gap-2">
                     <button
                       onClick={startDialSession}
@@ -576,7 +638,6 @@ export default function LeadsPanel() {
                       Start Dial Session
                     </button>
 
-                    {/* New blue Resume button (server-backed quick resume) */}
                     <button
                       onClick={handleResumeQuickButton}
                       className={`${
@@ -652,31 +713,201 @@ export default function LeadsPanel() {
             }}
             onDispositionChange={(disposition) => handleDisposition(previewLead._id, disposition)}
           />
+        </div>
+      )}
 
-          {previewLead.hasAIAccess && Array.isArray(previewLead.callTranscripts) && (
-            <div className="mt-6 space-y-6">
+      {/* =========================
+          Google Sheets Connect Wizard Modal
+         ========================= */}
+      {showSheetsWizard && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-2xl rounded-lg bg-white dark:bg-zinc-900 shadow-lg border">
+            <div className="flex items-center justify-between px-4 py-3 border-b">
               <div>
-                <h2 className="text-lg font-semibold mb-2">🧠 AI Call Summary</h2>
-                <div className="p-3 bg-yellow-50 border rounded shadow text-sm text-gray-800">
-                  {previewLead.aiSummary || "No AI summary generated yet."}
+                <div className="font-semibold text-lg">Connect Google Sheet</div>
+                <div className="text-sm text-gray-500">
+                  Automatic lead imports when new rows are added.
                 </div>
               </div>
+              <button
+                onClick={closeWizard}
+                className="text-gray-500 hover:text-gray-700 px-2"
+                disabled={connectLoading}
+                aria-label="Close"
+              >
+                ✕
+              </button>
+            </div>
 
-              <div>
-                <h2 className="text-lg font-semibold mb-2">📞 Full Call Transcript</h2>
-                <div className="space-y-4 max-h-64 overflow-y-auto border rounded p-4 bg-gray-50">
-                  {previewLead.callTranscripts.map((entry: any, index: number) => (
-                    <div key={index} className="border-b pb-2">
-                      <p className="text-sm text-gray-700 whitespace-pre-line">{entry.text}</p>
-                      <p className="text-xs text-gray-500 mt-1">
-                        {new Date(entry.createdAt).toLocaleString()}
-                      </p>
-                    </div>
-                  ))}
+            <div className="p-4 space-y-4">
+              {/* Step indicator */}
+              <div className="text-sm text-gray-500">
+                Step {wizardStep} of 4
+              </div>
+
+              {wizardStep === 1 && (
+                <div className="space-y-3">
+                  <div className="text-base font-semibold">Step 1 — Open the Google Sheet you want to connect</div>
+                  <div className="text-sm text-gray-600 dark:text-gray-300">
+                    Open Google Sheets in another tab and click the sheet you want to sync into CoveCRM.
+                  </div>
+                  <a
+                    href="https://docs.google.com/spreadsheets/u/0/"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-block bg-zinc-800 text-white px-4 py-2 rounded hover:opacity-90"
+                  >
+                    Open Google Sheets
+                  </a>
                 </div>
+              )}
+
+              {wizardStep === 2 && (
+                <div className="space-y-3">
+                  <div className="text-base font-semibold">Step 2 — Paste the entire Google Sheet URL</div>
+                  <div className="text-sm text-gray-600 dark:text-gray-300">
+                    Copy the full URL from your browser address bar and paste it here.
+                  </div>
+
+                  <input
+                    value={sheetUrl}
+                    onChange={(e) => {
+                      setSheetUrl(e.target.value);
+                      setConnectError(null);
+                      setConnectOk(false);
+                    }}
+                    placeholder="https://docs.google.com/spreadsheets/d/.../edit#gid=0"
+                    className="border p-2 rounded w-full"
+                  />
+
+                  <div className="text-xs text-gray-500">
+                    Tip: Make sure you paste the full URL (not just the sheet name).
+                  </div>
+
+                  {connectError && (
+                    <div className="text-sm text-red-600">
+                      {connectError}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {wizardStep === 3 && (
+                <div className="space-y-3">
+                  <div className="text-base font-semibold">Step 3 — Confirm what we detected</div>
+
+                  <div className="rounded border p-3 bg-gray-50 dark:bg-zinc-800 text-sm">
+                    <div><span className="font-semibold">Spreadsheet ID:</span> {sheetParsed.spreadsheetId || "—"}</div>
+                    <div><span className="font-semibold">Tab GID:</span> {sheetParsed.gid || "(not detected — we’ll ask you to pick a tab next)"}</div>
+                  </div>
+
+                  <div className="text-sm text-gray-600 dark:text-gray-300">
+                    Next, you’ll click Connect and CoveCRM will set up automatic syncing.
+                  </div>
+                </div>
+              )}
+
+              {wizardStep === 4 && (
+                <div className="space-y-3">
+                  <div className="text-base font-semibold">Step 4 — Click Connect</div>
+
+                  <div className="text-sm text-gray-600 dark:text-gray-300">
+                    After connecting, we’ll guide you through a one-time setup inside the sheet so new rows import automatically.
+                  </div>
+
+                  {connectError && (
+                    <div className="text-sm text-red-600">
+                      {connectError}
+                    </div>
+                  )}
+
+                  {connectOk && (
+                    <div className="text-sm text-green-600">
+                      ✅ Connected. Next we’ll show the “Copy Apps Script” step (we’ll implement that next).
+                    </div>
+                  )}
+
+                  <button
+                    onClick={connectSheetNow}
+                    disabled={connectLoading}
+                    className={`${
+                      connectLoading ? "bg-gray-400 cursor-not-allowed" : "bg-green-600 hover:bg-green-700"
+                    } text-white px-4 py-2 rounded`}
+                  >
+                    {connectLoading ? "Connecting…" : "Connect Sheet"}
+                  </button>
+
+                  <div className="text-xs text-gray-500">
+                    Note: This button currently calls <code>/api/sheets-sync/connect</code> (we’ll add it next).
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center justify-between px-4 py-3 border-t">
+              <button
+                onClick={prevStep}
+                className={`px-4 py-2 rounded border ${
+                  wizardStep === 1 ? "opacity-50 cursor-not-allowed" : "hover:bg-gray-100 dark:hover:bg-zinc-800"
+                }`}
+                disabled={wizardStep === 1 || connectLoading}
+              >
+                Back
+              </button>
+
+              <div className="flex gap-2">
+                {wizardStep < 4 && (
+                  <button
+                    onClick={() => {
+                      if (wizardStep === 2) {
+                        const parsed = parseGoogleSheetUrl(sheetUrl);
+                        setSheetParsed(parsed);
+                        if (parsed.error) {
+                          setConnectError(parsed.error);
+                          return;
+                        }
+                      }
+                      nextStep();
+                    }}
+                    className="px-4 py-2 rounded bg-blue-600 text-white hover:bg-blue-700"
+                    disabled={connectLoading}
+                  >
+                    Next
+                  </button>
+                )}
+
+                {wizardStep === 2 && (
+                  <button
+                    onClick={validateUrlAndContinue}
+                    className="px-4 py-2 rounded bg-blue-600 text-white hover:bg-blue-700"
+                    disabled={connectLoading}
+                  >
+                    Validate URL
+                  </button>
+                )}
+
+                {wizardStep === 1 && (
+                  <button
+                    onClick={() => setWizardStep(2)}
+                    className="px-4 py-2 rounded bg-blue-600 text-white hover:bg-blue-700"
+                    disabled={connectLoading}
+                  >
+                    Continue
+                  </button>
+                )}
+
+                {wizardStep === 3 && (
+                  <button
+                    onClick={() => setWizardStep(4)}
+                    className="px-4 py-2 rounded bg-blue-600 text-white hover:bg-blue-700"
+                    disabled={connectLoading}
+                  >
+                    Continue
+                  </button>
+                )}
               </div>
             </div>
-          )}
+          </div>
         </div>
       )}
     </div>
