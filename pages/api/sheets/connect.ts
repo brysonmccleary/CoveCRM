@@ -11,15 +11,20 @@ function getBaseUrl(req: NextApiRequest) {
   const env = process.env.NEXT_PUBLIC_BASE_URL || process.env.COVECRM_BASE_URL;
   if (env) return env.replace(/\/+$/, "");
 
-  const xfProto = String(req.headers["x-forwarded-proto"] || "");
-  const proto = xfProto
-    ? xfProto.split(",")[0].trim()
-    : (req.socket as any)?.encrypted
-    ? "https"
-    : "http";
-
-  const host = String(req.headers["x-forwarded-host"] || req.headers.host || "");
+  const xfProto = req.headers["x-forwarded-proto"] as string | undefined;
+  const proto = xfProto || ((req.socket as any)?.encrypted ? "https" : "http");
+  const host = (req.headers["x-forwarded-host"] as string) || req.headers.host;
   return `${proto}://${host}`.replace(/\/+$/, "");
+}
+
+// Prevent breaking the Apps Script template if values contain quotes/newlines.
+function esc(s: string) {
+  return String(s || "")
+    .replace(/\\/g, "\\\\")
+    .replace(/`/g, "\\`")
+    .replace(/\$/g, "\\$")
+    .replace(/\r?\n/g, " ")
+    .replace(/"/g, '\\"');
 }
 
 function buildAppsScript(params: {
@@ -28,36 +33,38 @@ function buildAppsScript(params: {
   sheetId: string;
   gid?: string;
   tabName?: string;
-  secret: string; // used to sign payload
+  secret: string;
 }) {
-  const { webhookUrl, userEmail, sheetId, gid, tabName, secret } = params;
+  const webhookUrl = esc(params.webhookUrl);
+  const userEmail = esc(params.userEmail);
+  const sheetId = esc(params.sheetId);
+  const gid = esc(params.gid || "");
+  const tabName = esc(params.tabName || "");
+  const secret = esc(params.secret);
 
-  // NOTE: Apps Script cannot use Node crypto; we use Utilities.computeHmacSha256Signature.
-  // We keep payload stable JSON with keys in a fixed order.
   return `/**
  * CoveCRM Google Sheets → Real-time Lead Sync
  *
  * ✅ What this does:
  * - When a new row is added, it sends that row to CoveCRM instantly.
- * - CoveCRM imports it into the mapped folder you chose in the app.
+ * - CoveCRM imports it into the folder you mapped in the CoveCRM UI.
  *
- * Setup:
+ * One-time setup:
  * 1) In your Sheet: Extensions → Apps Script
- * 2) Paste this code (replace everything)
- * 3) Click Save
- * 4) Run "covecrmInstall()" once → Approve permissions
- * 5) Add a new row to test
+ * 2) Paste this code (replace everything) → Save
+ * 3) Run "covecrmInstall()" once → Approve permissions
+ * 4) Add a new row to test
  */
 
 const COVECRM_WEBHOOK_URL = "${webhookUrl}";
 const COVECRM_USER_EMAIL = "${userEmail}";
 const COVECRM_SHEET_ID = "${sheetId}";
-const COVECRM_GID = "${gid || ""}";
-const COVECRM_TAB_NAME = "${tabName || ""}";
+const COVECRM_GID = "${gid}";
+const COVECRM_TAB_NAME = "${tabName}";
 const COVECRM_SECRET = "${secret}";
 
 function covecrmInstall() {
-  // Removes old triggers to avoid duplicates
+  // Remove old triggers to avoid duplicates
   const triggers = ScriptApp.getProjectTriggers();
   triggers.forEach(t => {
     if (t.getHandlerFunction() === "covecrmOnChange") {
@@ -65,7 +72,7 @@ function covecrmInstall() {
     }
   });
 
-  // Create a change trigger (works for new rows, edits, form submits)
+  // Install change trigger
   ScriptApp.newTrigger("covecrmOnChange")
     .forSpreadsheet(COVECRM_SHEET_ID)
     .onChange()
@@ -76,17 +83,12 @@ function covecrmInstall() {
 
 function covecrmOnChange(e) {
   try {
-    // Optional: If tabName provided, only sync that sheet
-    // We'll detect active sheet name
     const ss = SpreadsheetApp.openById(COVECRM_SHEET_ID);
     const sheet = ss.getActiveSheet();
     const activeName = sheet.getName();
 
-    if (COVECRM_TAB_NAME && activeName !== COVECRM_TAB_NAME) {
-      return;
-    }
+    if (COVECRM_TAB_NAME && activeName !== COVECRM_TAB_NAME) return;
 
-    // If gid provided, ensure we are on that tab
     if (COVECRM_GID) {
       const maybeId = String(sheet.getSheetId());
       if (maybeId !== String(COVECRM_GID)) return;
@@ -94,12 +96,11 @@ function covecrmOnChange(e) {
 
     const lastRow = sheet.getLastRow();
     const lastCol = sheet.getLastColumn();
-    if (lastRow < 2) return; // assume row 1 is headers
+    if (lastRow < 2) return; // row 1 headers
 
     const headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
     const values = sheet.getRange(lastRow, 1, 1, lastCol).getValues()[0];
 
-    // Build row object using headers
     const rowObj = {};
     for (let i = 0; i < headers.length; i++) {
       const key = headers[i] ? String(headers[i]).trim() : "";
@@ -107,7 +108,6 @@ function covecrmOnChange(e) {
       rowObj[key] = values[i];
     }
 
-    // Stable payload keys (order matters for signature stability)
     const payload = {
       userEmail: COVECRM_USER_EMAIL,
       sheetId: COVECRM_SHEET_ID,
@@ -119,23 +119,19 @@ function covecrmOnChange(e) {
 
     const body = JSON.stringify(payload);
 
-    // HMAC signature
+    // HMAC SHA256 signature (hex)
     const rawSig = Utilities.computeHmacSha256Signature(body, COVECRM_SECRET);
-    const sig = rawSig.map(b => (b < 0 ? b + 256 : b).toString(16).padStart(2, "0")).join("");
+    const sig = rawSig
+      .map(b => (b < 0 ? b + 256 : b).toString(16).padStart(2, "0"))
+      .join("");
 
-    const resp = UrlFetchApp.fetch(COVECRM_WEBHOOK_URL, {
+    UrlFetchApp.fetch(COVECRM_WEBHOOK_URL, {
       method: "post",
       contentType: "application/json",
       payload: body,
       muteHttpExceptions: true,
-      headers: {
-        "x-covecrm-signature": sig
-      }
+      headers: { "x-covecrm-signature": sig }
     });
-
-    // For debugging
-    // Logger.log(resp.getResponseCode());
-    // Logger.log(resp.getContentText());
   } catch (err) {
     // Logger.log(String(err));
   }
@@ -165,18 +161,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     await dbConnect();
+
     const user = await User.findOne({ email: session.user.email });
     if (!user) return res.status(404).json({ error: "User not found" });
 
     const gs: any = (user as any).googleSheets || {};
     gs.syncedSheets = Array.isArray(gs.syncedSheets) ? gs.syncedSheets : [];
 
-    // Create a webhook secret once per user (used to verify Apps Script pushes)
+    // ✅ Fully automated forever: secret auto-created per user (no schema change required)
     if (!gs.webhookSecret) {
       gs.webhookSecret = crypto.randomBytes(32).toString("hex");
     }
 
-    const idx = gs.syncedSheets.findIndex((s: any) => s.sheetId === sheetId);
     const entry = {
       sheetId,
       folderName,
@@ -186,6 +182,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       lastEventAt: null,
     };
 
+    // Upsert mapping by sheetId (+ gid if you want; keeping simple for now)
+    const idx = gs.syncedSheets.findIndex((s: any) => String(s.sheetId) === String(sheetId));
     if (idx >= 0) gs.syncedSheets[idx] = entry;
     else gs.syncedSheets.push(entry);
 
