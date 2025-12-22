@@ -10,12 +10,15 @@ import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
 function getBaseUrl(req: NextApiRequest) {
   const env = process.env.NEXT_PUBLIC_BASE_URL || process.env.COVECRM_BASE_URL;
   if (env) return env.replace(/\/+$/, "");
-  const proto =
-    (req.headers["x-forwarded-proto"] as string) ||
-    (req.socket as any)?.encrypted
-      ? "https"
-      : "http";
-  const host = req.headers["x-forwarded-host"] || req.headers.host;
+
+  const xfProto = String(req.headers["x-forwarded-proto"] || "");
+  const proto = xfProto
+    ? xfProto.split(",")[0].trim()
+    : (req.socket as any)?.encrypted
+    ? "https"
+    : "http";
+
+  const host = String(req.headers["x-forwarded-host"] || req.headers.host || "");
   return `${proto}://${host}`.replace(/\/+$/, "");
 }
 
