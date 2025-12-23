@@ -155,7 +155,6 @@ export interface IUser {
     dripAlerts?: boolean;
     bookingConfirmations?: boolean;
     emailOnInboundSMS?: boolean;
-    emailOnInboundSMS?: boolean;
   };
 
   country?: string;
