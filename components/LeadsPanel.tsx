@@ -207,7 +207,15 @@ export default function LeadsPanel() {
   const [sheetParsed, setSheetParsed] = useState<{ spreadsheetId?: string; gid?: string; error?: string }>({});
   const [connectLoading, setConnectLoading] = useState(false);
   const [connectError, setConnectError] = useState<string | null>(null);
+
+  // ✅ NEW: folder selection + Apps Script display
+  const [wizardFolderName, setWizardFolderName] = useState<string>("");
+  const [wizardCreateNewFolder, setWizardCreateNewFolder] = useState<boolean>(false);
+  const [wizardNewFolderName, setWizardNewFolderName] = useState<string>("");
+
   const [connectOk, setConnectOk] = useState(false);
+  const [appsScriptText, setAppsScriptText] = useState<string>("");
+  const [webhookUrl, setWebhookUrl] = useState<string>("");
 
   const router = useRouter();
 
@@ -435,6 +443,16 @@ export default function LeadsPanel() {
     setSheetParsed({});
     setConnectError(null);
     setConnectOk(false);
+    setAppsScriptText("");
+    setWebhookUrl("");
+
+    // default folder selection to first non-system folder
+    const nonSystem = folders
+      .map((f) => f?.name)
+      .filter((n) => n && !SYSTEM_FOLDERS.includes(String(n)));
+    setWizardFolderName(nonSystem[0] || "");
+    setWizardCreateNewFolder(false);
+    setWizardNewFolderName("");
   };
 
   const closeWizard = () => {
@@ -444,7 +462,7 @@ export default function LeadsPanel() {
 
   const nextStep = () => {
     setConnectError(null);
-    setWizardStep((s) => Math.min(4, s + 1));
+    setWizardStep((s) => Math.min(5, s + 1));
   };
 
   const prevStep = () => {
@@ -455,12 +473,19 @@ export default function LeadsPanel() {
   const validateUrlAndContinue = () => {
     const parsed = parseGoogleSheetUrl(sheetUrl);
     setSheetParsed(parsed);
-    if (parsed.error) return;
+    if (parsed.error) {
+      setConnectError(parsed.error);
+      return;
+    }
     setConnectError(null);
     setWizardStep(3);
   };
 
-  // Step 4: Connect (placeholder endpoint to be created next)
+  const resolvedFolderName = () => {
+    const name = wizardCreateNewFolder ? wizardNewFolderName : wizardFolderName;
+    return String(name || "").trim();
+  };
+
   const connectSheetNow = async () => {
     const parsed = parseGoogleSheetUrl(sheetUrl);
     setSheetParsed(parsed);
@@ -469,18 +494,33 @@ export default function LeadsPanel() {
       return;
     }
 
+    const folderName = resolvedFolderName();
+    if (!folderName) {
+      setConnectError("Please choose a folder (or type a new folder name).");
+      return;
+    }
+    if (SYSTEM_FOLDERS.includes(folderName)) {
+      setConnectError("You can’t connect a sheet to a system folder.");
+      return;
+    }
+
     setConnectLoading(true);
     setConnectError(null);
     setConnectOk(false);
+    setAppsScriptText("");
+    setWebhookUrl("");
 
     try {
+      // ✅ IMPORTANT: call the real connect endpoint (alias is fine too),
+      // and send the correct keys it expects: sheetId + folderName.
       const r = await fetch("/api/sheets-sync/connect", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          spreadsheetId: parsed.spreadsheetId,
-          gid: parsed.gid || null,
-          // NOTE: mapping/folder selection will be added in the next implementation pass
+          sheetId: parsed.spreadsheetId,
+          folderName,
+          gid: parsed.gid || "",
+          tabName: "",
         }),
       });
 
@@ -491,9 +531,11 @@ export default function LeadsPanel() {
       }
 
       setConnectOk(true);
-      // In the next step, we’ll show “Copy Apps Script” and setup instructions using response payload
-      // For now, just refresh folders in case it auto-created one, and keep wizard open.
+      setAppsScriptText(String(j?.appsScript || ""));
+      setWebhookUrl(String(j?.webhookUrl || ""));
+
       await fetchFolders();
+      setWizardStep(5);
     } catch (e: any) {
       setConnectError(e?.message || "Failed to connect sheet.");
     } finally {
@@ -631,9 +673,11 @@ export default function LeadsPanel() {
                     <button
                       onClick={startDialSession}
                       className={`${
-                        canStart ? "bg-green-600 hover:bg-green-700" : "bg-gray-400 cursor-not-allowed"
+                        selectedLeads.length > 0
+                          ? "bg-green-600 hover:bg-green-700"
+                          : "bg-gray-400 cursor-not-allowed"
                       } text-white px-3 py-1 rounded cursor-pointer`}
-                      disabled={!canStart}
+                      disabled={selectedLeads.length === 0}
                     >
                       Start Dial Session
                     </button>
@@ -641,9 +685,11 @@ export default function LeadsPanel() {
                     <button
                       onClick={handleResumeQuickButton}
                       className={`${
-                        canResume ? "bg-blue-600 hover:bg-blue-700" : "bg-gray-400 cursor-not-allowed"
+                        hasResume && !!selectedNumber && leads.length > 0
+                          ? "bg-blue-600 hover:bg-blue-700"
+                          : "bg-gray-400 cursor-not-allowed"
                       } text-white px-3 py-1 rounded cursor-pointer`}
-                      disabled={!canResume}
+                      disabled={!(hasResume && !!selectedNumber && leads.length > 0)}
                       title={hasResume ? "Resume where you left off" : "No server resume available yet"}
                     >
                       Resume
@@ -740,10 +786,7 @@ export default function LeadsPanel() {
             </div>
 
             <div className="p-4 space-y-4">
-              {/* Step indicator */}
-              <div className="text-sm text-gray-500">
-                Step {wizardStep} of 4
-              </div>
+              <div className="text-sm text-gray-500">Step {wizardStep} of 5</div>
 
               {wizardStep === 1 && (
                 <div className="space-y-3">
@@ -775,20 +818,16 @@ export default function LeadsPanel() {
                       setSheetUrl(e.target.value);
                       setConnectError(null);
                       setConnectOk(false);
+                      setAppsScriptText("");
+                      setWebhookUrl("");
                     }}
                     placeholder="https://docs.google.com/spreadsheets/d/.../edit#gid=0"
                     className="border p-2 rounded w-full"
                   />
 
-                  <div className="text-xs text-gray-500">
-                    Tip: Make sure you paste the full URL (not just the sheet name).
-                  </div>
+                  <div className="text-xs text-gray-500">Tip: Paste the full URL (not just the sheet name).</div>
 
-                  {connectError && (
-                    <div className="text-sm text-red-600">
-                      {connectError}
-                    </div>
-                  )}
+                  {connectError && <div className="text-sm text-red-600">{connectError}</div>}
                 </div>
               )}
 
@@ -797,35 +836,70 @@ export default function LeadsPanel() {
                   <div className="text-base font-semibold">Step 3 — Confirm what we detected</div>
 
                   <div className="rounded border p-3 bg-gray-50 dark:bg-zinc-800 text-sm">
-                    <div><span className="font-semibold">Spreadsheet ID:</span> {sheetParsed.spreadsheetId || "—"}</div>
-                    <div><span className="font-semibold">Tab GID:</span> {sheetParsed.gid || "(not detected — we’ll ask you to pick a tab next)"}</div>
+                    <div>
+                      <span className="font-semibold">Spreadsheet ID:</span> {sheetParsed.spreadsheetId || "—"}
+                    </div>
+                    <div>
+                      <span className="font-semibold">Tab GID:</span>{" "}
+                      {sheetParsed.gid || "(not detected — that’s okay)"}
+                    </div>
                   </div>
 
                   <div className="text-sm text-gray-600 dark:text-gray-300">
-                    Next, you’ll click Connect and CoveCRM will set up automatic syncing.
+                    Next, choose which CoveCRM folder these sheet rows should import into.
                   </div>
                 </div>
               )}
 
               {wizardStep === 4 && (
                 <div className="space-y-3">
-                  <div className="text-base font-semibold">Step 4 — Click Connect</div>
+                  <div className="text-base font-semibold">Step 4 — Choose the CoveCRM folder</div>
 
                   <div className="text-sm text-gray-600 dark:text-gray-300">
-                    After connecting, we’ll guide you through a one-time setup inside the sheet so new rows import automatically.
+                    New sheet rows will import into this folder automatically (and will auto-enroll in the folder’s drip if
+                    a drip is attached).
                   </div>
 
-                  {connectError && (
-                    <div className="text-sm text-red-600">
-                      {connectError}
-                    </div>
-                  )}
+                  <div className="space-y-2">
+                    <label className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={wizardCreateNewFolder}
+                        onChange={(e) => {
+                          setWizardCreateNewFolder(e.target.checked);
+                          setConnectError(null);
+                        }}
+                      />
+                      Create a new folder name
+                    </label>
 
-                  {connectOk && (
-                    <div className="text-sm text-green-600">
-                      ✅ Connected. Next we’ll show the “Copy Apps Script” step (we’ll implement that next).
-                    </div>
-                  )}
+                    {!wizardCreateNewFolder ? (
+                      <select
+                        value={wizardFolderName}
+                        onChange={(e) => setWizardFolderName(e.target.value)}
+                        className="border p-2 rounded w-full"
+                      >
+                        <option value="">-- Choose a folder --</option>
+                        {folders
+                          .map((f) => String(f?.name || ""))
+                          .filter((n) => n && !SYSTEM_FOLDERS.includes(n))
+                          .map((name) => (
+                            <option key={name} value={name}>
+                              {name}
+                            </option>
+                          ))}
+                      </select>
+                    ) : (
+                      <input
+                        value={wizardNewFolderName}
+                        onChange={(e) => setWizardNewFolderName(e.target.value)}
+                        placeholder="New folder name (e.g., Facebook Leads)"
+                        className="border p-2 rounded w-full"
+                      />
+                    )}
+                  </div>
+
+                  {connectError && <div className="text-sm text-red-600">{connectError}</div>}
 
                   <button
                     onClick={connectSheetNow}
@@ -838,7 +912,68 @@ export default function LeadsPanel() {
                   </button>
 
                   <div className="text-xs text-gray-500">
-                    Note: This button currently calls <code>/api/sheets-sync/connect</code> (we’ll add it next).
+                    This will generate your Apps Script. You paste it once into the sheet and run install once.
+                  </div>
+                </div>
+              )}
+
+              {wizardStep === 5 && (
+                <div className="space-y-3">
+                  <div className="text-base font-semibold">Step 5 — One-time setup inside Google Sheets</div>
+
+                  {connectOk ? (
+                    <div className="text-sm text-green-600">✅ Connected. Do this one time to finish setup:</div>
+                  ) : (
+                    <div className="text-sm text-gray-600">Finish setup:</div>
+                  )}
+
+                  <ol className="list-decimal pl-5 text-sm text-gray-700 dark:text-gray-300 space-y-1">
+                    <li>In your Google Sheet: <b>Extensions → Apps Script</b></li>
+                    <li>Paste the full code below (replace everything), then <b>Save</b></li>
+                    <li>Run <b>covecrmInstall()</b> once and approve permissions</li>
+                    <li>Add a new row to your sheet — it should appear in CoveCRM automatically</li>
+                  </ol>
+
+                  {webhookUrl && (
+                    <div className="text-xs text-gray-500">
+                      Webhook: <span className="font-mono">{webhookUrl}</span>
+                    </div>
+                  )}
+
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <div className="font-semibold text-sm">Apps Script (copy/paste)</div>
+                      <button
+                        className="text-sm bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700"
+                        onClick={async () => {
+                          try {
+                            await navigator.clipboard.writeText(appsScriptText || "");
+                            alert("Copied Apps Script to clipboard.");
+                          } catch {
+                            alert("Could not copy automatically. Please select and copy manually.");
+                          }
+                        }}
+                        disabled={!appsScriptText}
+                      >
+                        Copy
+                      </button>
+                    </div>
+
+                    <textarea
+                      value={appsScriptText}
+                      readOnly
+                      className="w-full h-64 border rounded p-2 font-mono text-xs"
+                      placeholder="Apps Script will appear here after connecting…"
+                    />
+                  </div>
+
+                  <div className="flex justify-end">
+                    <button
+                      className="px-4 py-2 rounded bg-zinc-800 text-white hover:opacity-90"
+                      onClick={closeWizard}
+                    >
+                      Done
+                    </button>
                   </div>
                 </div>
               )}
@@ -856,36 +991,6 @@ export default function LeadsPanel() {
               </button>
 
               <div className="flex gap-2">
-                {wizardStep < 4 && (
-                  <button
-                    onClick={() => {
-                      if (wizardStep === 2) {
-                        const parsed = parseGoogleSheetUrl(sheetUrl);
-                        setSheetParsed(parsed);
-                        if (parsed.error) {
-                          setConnectError(parsed.error);
-                          return;
-                        }
-                      }
-                      nextStep();
-                    }}
-                    className="px-4 py-2 rounded bg-blue-600 text-white hover:bg-blue-700"
-                    disabled={connectLoading}
-                  >
-                    Next
-                  </button>
-                )}
-
-                {wizardStep === 2 && (
-                  <button
-                    onClick={validateUrlAndContinue}
-                    className="px-4 py-2 rounded bg-blue-600 text-white hover:bg-blue-700"
-                    disabled={connectLoading}
-                  >
-                    Validate URL
-                  </button>
-                )}
-
                 {wizardStep === 1 && (
                   <button
                     onClick={() => setWizardStep(2)}
@@ -896,6 +1001,33 @@ export default function LeadsPanel() {
                   </button>
                 )}
 
+                {wizardStep === 2 && (
+                  <>
+                    <button
+                      onClick={validateUrlAndContinue}
+                      className="px-4 py-2 rounded bg-blue-600 text-white hover:bg-blue-700"
+                      disabled={connectLoading}
+                    >
+                      Validate URL
+                    </button>
+                    <button
+                      onClick={() => {
+                        const parsed = parseGoogleSheetUrl(sheetUrl);
+                        setSheetParsed(parsed);
+                        if (parsed.error) {
+                          setConnectError(parsed.error);
+                          return;
+                        }
+                        setWizardStep(3);
+                      }}
+                      className="px-4 py-2 rounded bg-blue-600 text-white hover:bg-blue-700"
+                      disabled={connectLoading}
+                    >
+                      Next
+                    </button>
+                  </>
+                )}
+
                 {wizardStep === 3 && (
                   <button
                     onClick={() => setWizardStep(4)}
@@ -903,6 +1035,18 @@ export default function LeadsPanel() {
                     disabled={connectLoading}
                   >
                     Continue
+                  </button>
+                )}
+
+                {wizardStep === 4 && (
+                  <button
+                    onClick={connectSheetNow}
+                    className={`px-4 py-2 rounded text-white ${
+                      connectLoading ? "bg-gray-400 cursor-not-allowed" : "bg-green-600 hover:bg-green-700"
+                    }`}
+                    disabled={connectLoading}
+                  >
+                    {connectLoading ? "Connecting…" : "Connect"}
                   </button>
                 )}
               </div>

@@ -40,7 +40,14 @@ export interface IUser {
     refreshToken: string;
     expiryDate: number;
     googleEmail?: string;
+
+    // legacy/simple mapping (keep)
     sheets?: { sheetId: string; folderName: string }[];
+
+    /**
+     * Existing (more complex) synced sheet schema you already had.
+     * We are NOT changing this to avoid breaking existing logic.
+     */
     syncedSheets?: {
       spreadsheetId: string;
       title: string;
@@ -52,6 +59,25 @@ export interface IUser {
       folderName?: string;
       lastRowImported?: number;
       lastImportedAt?: Date;
+    }[];
+
+    /**
+     * ✅ NEW: per-user webhook secret for Apps Script HMAC signing.
+     * This allows fully automated multi-tenant verification on /api/sheets/webhook
+     */
+    webhookSecret?: string;
+
+    /**
+     * ✅ NEW: Folder-name mapping (A) used by /api/sheets/connect + /api/sheets/webhook
+     * This is intentionally separate from syncedSheets (complex schema) to avoid conflicts.
+     */
+    syncedSheetsSimple?: {
+      sheetId: string; // spreadsheetId (string)
+      folderName: string;
+      tabName?: string;
+      gid?: string;
+      lastSyncedAt?: Date | null;
+      lastEventAt?: Date | null;
     }[];
   };
 
@@ -129,6 +155,7 @@ export interface IUser {
     dripAlerts?: boolean;
     bookingConfirmations?: boolean;
     emailOnInboundSMS?: boolean;
+    emailOnInboundSMS?: boolean;
   };
 
   country?: string;
@@ -169,6 +196,19 @@ const SyncedSheetSchema = new Schema(
     folderName: String,
     lastRowImported: { type: Number, default: 1 },
     lastImportedAt: Date,
+  },
+  { _id: false },
+);
+
+// ✅ NEW: Simple mapping schema for folder-name mapping (A)
+const SyncedSheetSimpleSchema = new Schema(
+  {
+    sheetId: { type: String, required: true }, // spreadsheetId string
+    folderName: { type: String, required: true },
+    tabName: { type: String, default: "" },
+    gid: { type: String, default: "" },
+    lastSyncedAt: { type: Date, default: null },
+    lastEventAt: { type: Date, default: null },
   },
   { _id: false },
 );
@@ -228,7 +268,15 @@ const UserSchema = new Schema<IUser>({
     expiryDate: Number,
     googleEmail: String,
     sheets: [{ sheetId: String, folderName: String }],
+
+    // existing complex schema (keep)
     syncedSheets: { type: [SyncedSheetSchema], default: [] },
+
+    // ✅ NEW secret for webhook signing
+    webhookSecret: { type: String, default: "" },
+
+    // ✅ NEW simple mapping used by /api/sheets/connect + /api/sheets/webhook
+    syncedSheetsSimple: { type: [SyncedSheetSimpleSchema], default: [] },
   },
 
   googleTokens: {
@@ -336,10 +384,7 @@ const UserSchema = new Schema<IUser>({
 });
 
 UserSchema.index({ email: 1 }, { name: "user_email_idx" });
-UserSchema.index(
-  { "numbers.phoneNumber": 1 },
-  { name: "user_numbers_phone_idx" },
-);
+UserSchema.index({ "numbers.phoneNumber": 1 }, { name: "user_numbers_phone_idx" });
 UserSchema.index(
   { "numbers.messagingServiceSid": 1 },
   { name: "user_numbers_msid_idx", sparse: true },
@@ -351,6 +396,12 @@ UserSchema.index(
 UserSchema.index(
   { "dialProgress.key": 1 },
   { name: "user_dial_progress_key_idx", sparse: true },
+);
+
+// ✅ NEW: speed up webhook lookup by sheetId
+UserSchema.index(
+  { "googleSheets.syncedSheetsSimple.sheetId": 1 },
+  { name: "user_sheets_simple_sheetid_idx", sparse: true },
 );
 
 const User =

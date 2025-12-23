@@ -7,6 +7,9 @@ import Folder from "@/models/Folder";
 import Lead, { createLeadsFromGoogleSheet, sanitizeLeadType } from "@/models/Lead";
 import { isSystemFolderName as isSystemFolder, isSystemish } from "@/lib/systemFolders";
 
+// ✅ Auto-enroll helper (folder drip watchers)
+import { enrollOnNewLeadIfWatched } from "@/lib/drips/enrollOnNewLead";
+
 export const config = {
   api: { bodyParser: false },
 };
@@ -194,6 +197,60 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // 6) Insert via your helper (handles email lowercasing + folderId typing + defaults)
     await createLeadsFromGoogleSheet([leadDoc], userEmail, folder._id);
+
+    // ✅ 6b) Auto-enroll in folder drips if this folder is watched
+    // We need the created leadId to enroll. We'll fetch the most recent matching lead.
+    let createdLead: any = null;
+
+    // Best-effort: match by sheetMeta.ts (unique per webhook payload), then phone/email fallback.
+    const ts = payload.ts || null;
+
+    if (ts) {
+      createdLead = await (Lead as any)
+        .findOne({
+          userEmail,
+          folderId: folder._id,
+          "sheetMeta.ts": ts,
+        })
+        .sort({ createdAt: -1 })
+        .select({ _id: 1 })
+        .lean();
+    }
+
+    if (!createdLead && normalizedPhone) {
+      createdLead = await (Lead as any)
+        .findOne({
+          userEmail,
+          folderId: folder._id,
+          normalizedPhone,
+        })
+        .sort({ createdAt: -1 })
+        .select({ _id: 1 })
+        .lean();
+    }
+
+    if (!createdLead && String(emailRaw || "").trim()) {
+      const emailLower = String(emailRaw || "").trim().toLowerCase();
+      createdLead = await (Lead as any)
+        .findOne({
+          userEmail,
+          folderId: folder._id,
+          $or: [{ Email: emailLower }, { email: emailLower }],
+        })
+        .sort({ createdAt: -1 })
+        .select({ _id: 1 })
+        .lean();
+    }
+
+    if (createdLead?._id) {
+      await enrollOnNewLeadIfWatched({
+        userEmail,
+        folderId: String(folder._id),
+        leadId: String(createdLead._id),
+        source: "sheet-bulk",
+        startMode: "now",
+      });
+    }
 
     // 7) Update mapping bookkeeping
     match.lastSyncedAt = new Date();
