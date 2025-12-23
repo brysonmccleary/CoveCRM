@@ -1,5 +1,5 @@
 // components/LeadsPanel.tsx
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import LeadImportPanel from "./LeadImportPanel";
 import LeadPreviewPanel from "./LeadPreviewPanel";
 import { useRouter } from "next/router";
@@ -218,6 +218,9 @@ export default function LeadsPanel() {
   const [webhookUrl, setWebhookUrl] = useState<string>("");
 
   const router = useRouter();
+
+  // ✅ NEW: modal refs for “click outside to close”
+  const modalCardRef = useRef<HTMLDivElement | null>(null);
 
   const fetchFolders = async () => {
     try {
@@ -455,6 +458,7 @@ export default function LeadsPanel() {
   };
 
   const closeWizard = () => {
+    // don’t allow closing mid-connect to prevent partial UI states
     if (connectLoading) return;
     setShowSheetsWizard(false);
   };
@@ -578,6 +582,31 @@ export default function LeadsPanel() {
   const goToAIDialSession = () => {
     router.push("/ai-dial-session").catch(() => {});
   };
+
+  /* =========================
+     ✅ MODAL SAFETY: ESC close + body scroll lock
+  ========================= */
+  useEffect(() => {
+    if (!showSheetsWizard) return;
+
+    // lock background scroll while modal open
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        closeWizard();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      window.removeEventListener("keydown", onKeyDown);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showSheetsWizard, connectLoading]);
 
   return (
     <div className="space-y-4 p-4">
@@ -758,371 +787,389 @@ export default function LeadsPanel() {
           Google Sheets Connect Wizard Modal
          ========================= */}
       {showSheetsWizard && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="w-full max-w-2xl rounded-lg bg-white dark:bg-zinc-900 shadow-lg border">
-            <div className="flex items-center justify-between px-4 py-3 border-b">
-              <div>
-                <div className="font-semibold text-lg">Connect Google Sheet</div>
-                <div className="text-sm text-gray-500">
-                  Automatic lead imports when new rows are added.
+        <div
+          className="fixed inset-0 z-50 bg-black/50 p-4 overflow-y-auto"
+          onMouseDown={(e) => {
+            // click outside modal closes (unless connecting)
+            if (connectLoading) return;
+            if (!modalCardRef.current) return;
+            if (e.target instanceof Node && !modalCardRef.current.contains(e.target)) {
+              closeWizard();
+            }
+          }}
+        >
+          <div className="min-h-full flex items-center justify-center">
+            <div
+              ref={modalCardRef}
+              className="w-full max-w-2xl rounded-lg bg-white dark:bg-zinc-900 shadow-lg border flex flex-col max-h-[90vh]"
+            >
+              {/* Header (fixed) */}
+              <div className="flex items-center justify-between px-4 py-3 border-b shrink-0">
+                <div>
+                  <div className="font-semibold text-lg">Connect Google Sheet</div>
+                  <div className="text-sm text-gray-500">
+                    Automatic lead imports when new rows are added.
+                  </div>
                 </div>
+                <button
+                  onClick={closeWizard}
+                  className="text-gray-500 hover:text-gray-700 px-2"
+                  disabled={connectLoading}
+                  aria-label="Close"
+                >
+                  ✕
+                </button>
               </div>
-              <button
-                onClick={closeWizard}
-                className="text-gray-500 hover:text-gray-700 px-2"
-                disabled={connectLoading}
-                aria-label="Close"
-              >
-                ✕
-              </button>
-            </div>
 
-            <div className="p-4 space-y-4">
-              <div className="text-sm text-gray-500">Step {wizardStep} of 5</div>
+              {/* Body (scrollable) */}
+              <div className="p-4 space-y-4 overflow-y-auto flex-1">
+                <div className="text-sm text-gray-500">Step {wizardStep} of 5</div>
 
-              {wizardStep === 1 && (
-                <div className="space-y-3">
-                  <div className="text-base font-semibold">Step 1 — Open the Google Sheet you want to connect</div>
-                  <div className="text-sm text-gray-600 dark:text-gray-300">
-                    Open Google Sheets in another tab and click the sheet you want to sync into CoveCRM.
-                  </div>
-                  <a
-                    href="https://docs.google.com/spreadsheets/u/0/"
-                    target="_blank"
-                    rel="noreferrer"
-                    className="inline-block bg-zinc-800 text-white px-4 py-2 rounded hover:opacity-90"
-                  >
-                    Open Google Sheets
-                  </a>
-                </div>
-              )}
-
-              {wizardStep === 2 && (
-                <div className="space-y-3">
-                  <div className="text-base font-semibold">Step 2 — Paste the entire Google Sheet URL</div>
-                  <div className="text-sm text-gray-600 dark:text-gray-300">
-                    Copy the full URL from your browser address bar and paste it here.
-                  </div>
-
-                  <input
-                    value={sheetUrl}
-                    onChange={(e) => {
-                      setSheetUrl(e.target.value);
-                      setConnectError(null);
-                      setConnectOk(false);
-                      setAppsScriptText("");
-                      setWebhookUrl("");
-                    }}
-                    placeholder="https://docs.google.com/spreadsheets/d/.../edit#gid=0"
-                    className="border p-2 rounded w-full"
-                  />
-
-                  <div className="text-xs text-gray-500">Tip: Paste the full URL (not just the sheet name).</div>
-
-                  {connectError && <div className="text-sm text-red-600">{connectError}</div>}
-                </div>
-              )}
-
-              {wizardStep === 3 && (
-                <div className="space-y-3">
-                  <div className="text-base font-semibold">Step 3 — Confirm what we detected</div>
-
-                  <div className="rounded border p-3 bg-gray-50 dark:bg-zinc-800 text-sm">
-                    <div>
-                      <span className="font-semibold">Spreadsheet ID:</span> {sheetParsed.spreadsheetId || "—"}
-                    </div>
-                    <div>
-                      <span className="font-semibold">Tab GID:</span>{" "}
-                      {sheetParsed.gid || "(not detected — that’s okay)"}
-                    </div>
-                  </div>
-
-                  <div className="text-sm text-gray-600 dark:text-gray-300">
-                    Next, choose which CoveCRM folder these sheet rows should import into.
-                  </div>
-                </div>
-              )}
-
-              {wizardStep === 4 && (
-                <div className="space-y-3">
-                  <div className="text-base font-semibold">Step 4 — Choose the CoveCRM folder</div>
-
-                  <div className="text-sm text-gray-600 dark:text-gray-300">
-                    New sheet rows will import into this folder automatically (and will auto-enroll in the folder’s drip if
-                    a drip is attached).
-                  </div>
-
-                  <div className="space-y-2">
-                    <label className="flex items-center gap-2 text-sm">
-                      <input
-                        type="checkbox"
-                        checked={wizardCreateNewFolder}
-                        onChange={(e) => {
-                          setWizardCreateNewFolder(e.target.checked);
-                          setConnectError(null);
-                        }}
-                      />
-                      Create a new folder name
-                    </label>
-
-                    {!wizardCreateNewFolder ? (
-                      <select
-                        value={wizardFolderName}
-                        onChange={(e) => setWizardFolderName(e.target.value)}
-                        className="border p-2 rounded w-full"
-                      >
-                        <option value="">-- Choose a folder --</option>
-                        {folders
-                          .map((f) => String(f?.name || ""))
-                          .filter((n) => n && !SYSTEM_FOLDERS.includes(n))
-                          .map((name) => (
-                            <option key={name} value={name}>
-                              {name}
-                            </option>
-                          ))}
-                      </select>
-                    ) : (
-                      <input
-                        value={wizardNewFolderName}
-                        onChange={(e) => setWizardNewFolderName(e.target.value)}
-                        placeholder="New folder name (e.g., Facebook Leads)"
-                        className="border p-2 rounded w-full"
-                      />
-                    )}
-                  </div>
-
-                  {connectError && <div className="text-sm text-red-600">{connectError}</div>}
-
-                  <button
-                    onClick={connectSheetNow}
-                    disabled={connectLoading}
-                    className={`${
-                      connectLoading ? "bg-gray-400 cursor-not-allowed" : "bg-green-600 hover:bg-green-700"
-                    } text-white px-4 py-2 rounded`}
-                  >
-                    {connectLoading ? "Connecting…" : "Connect Sheet"}
-                  </button>
-
-                  <div className="text-xs text-gray-500">
-                    This will generate your Apps Script. You paste it once into the sheet and run install once.
-                  </div>
-                </div>
-              )}
-
-              {wizardStep === 5 && (
-                <div className="space-y-3">
-                  <div className="text-base font-semibold">Step 5 — One-time setup inside Google Sheets</div>
-
-                  <div className="text-sm text-gray-700 dark:text-gray-300">
-                    <b>All new rows added to this sheet will automatically import into CoveCRM.</b>
-                  </div>
-
-                  {connectOk ? (
-                    <div className="text-sm text-green-600">✅ Connected. Follow these steps exactly one time:</div>
-                  ) : (
-                    <div className="text-sm text-gray-600">Finish setup:</div>
-                  )}
-
-                  <ol className="list-decimal pl-5 text-sm text-gray-700 dark:text-gray-300 space-y-2">
-                    <li>
-                      In your Google Sheet: <b>Extensions → Apps Script</b>
-                    </li>
-
-                    <li>
-                      In Apps Script, click <b>Code.gs</b> on the left, then{" "}
-                      <b>select everything</b> and paste our code so it <b>replaces everything</b>.
-                      <div className="text-xs text-gray-500 mt-1">
-                        This removes any default Google code like <span className="font-mono">function myFunction()</span>.
-                      </div>
-                    </li>
-
-                    <li>
-                      <b>Save</b> your Apps Script project:
-                      <div className="mt-1 text-xs text-gray-500 space-y-1">
-                        <div>• Mac: <b>⌘ Command + S</b></div>
-                        <div>• Windows: <b>Ctrl + S</b></div>
-                        <div>
-                          • OR click the <b>floppy disk “Save”</b> icon in the <b>top toolbar</b>
-                          (tooltip says <b>“Save project to Drive”</b>)
-                        </div>
-                      </div>
-                    </li>
-
-                    <li>
-                      After you paste + save, near the top you will see a <b>function dropdown</b>.
-                      Select <b>covecrmInstall</b>.
-                      <div className="text-xs text-gray-500 mt-1">
-                        You don’t need to do anything else with the dropdown.
-                      </div>
-                    </li>
-
-                    <li>
-                      Click <b>Run</b> (▶) in the <b>top toolbar</b> (it’s right next to <b>Debug</b>, above the editor),
-                      and approve permissions.
-                    </li>
-
-                    <li className="text-red-600">
-                      <b>DO NOT CLICK DEPLOY.</b> “Deploy” is not used. This is <b>not</b> a web app deploy. You only Save + Run once.
-                    </li>
-                  </ol>
-
-                  <div className="rounded border p-3 bg-gray-50 dark:bg-zinc-800 text-sm text-gray-700 dark:text-gray-200">
-                    <div className="font-semibold mb-1">If you see “Google hasn’t verified this app”</div>
-                    <div className="text-sm">
-                      Click <b>Advanced</b> → <b>Go to (unsafe)</b> → <b>Allow</b>.
-                    </div>
-                    <div className="text-xs text-gray-500 mt-1">
-                      This is normal — you are authorizing your own Apps Script inside your own Google Sheet.
-                    </div>
-                  </div>
-
-                  {/* FAQ snippet (locked messaging) */}
-                  <div className="rounded border p-3 bg-white dark:bg-zinc-900">
-                    <div className="font-semibold text-sm mb-2">FAQ</div>
-                    <div className="space-y-2 text-sm text-gray-700 dark:text-gray-300">
-                      <div>
-                        <b>Why do I see “Google hasn’t verified this app”?</b>
-                        <div className="text-xs text-gray-500">
-                          Because this is a script you’re running in your own Google account. It’s not CoveCRM OAuth. You can proceed via Advanced.
-                        </div>
-                      </div>
-                      <div>
-                        <b>Do I need to click Deploy?</b>
-                        <div className="text-xs text-gray-500">
-                          No. Do not Deploy. You only Save + Run <b>covecrmInstall</b> one time.
-                        </div>
-                      </div>
-                      <div>
-                        <b>Does this work without Google OAuth / CASA?</b>
-                        <div className="text-xs text-gray-500">
-                          Yes. This method does not use CoveCRM OAuth and does not require Google Cloud verification/CASA.
-                          You authorize your own Apps Script inside your own sheet.
-                        </div>
-                      </div>
-                      <div>
-                        <b>What permissions does it request and why?</b>
-                        <div className="text-xs text-gray-500">
-                          It needs permission to read the sheet (to read new rows) and to make a secure HTTPS request to CoveCRM (to import the row).
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  {webhookUrl && (
-                    <div className="text-xs text-gray-500">
-                      Webhook: <span className="font-mono">{webhookUrl}</span>
-                    </div>
-                  )}
-
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <div className="font-semibold text-sm">Apps Script (copy/paste)</div>
-                      <button
-                        className="text-sm bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700"
-                        onClick={async () => {
-                          try {
-                            await navigator.clipboard.writeText(appsScriptText || "");
-                            alert("Copied Apps Script to clipboard.");
-                          } catch {
-                            alert("Could not copy automatically. Please select and copy manually.");
-                          }
-                        }}
-                        disabled={!appsScriptText}
-                      >
-                        Copy
-                      </button>
-                    </div>
-
-                    <textarea
-                      value={appsScriptText}
-                      readOnly
-                      className="w-full h-64 border rounded p-2 font-mono text-xs"
-                      placeholder="Apps Script will appear here after connecting…"
-                    />
-                  </div>
-
-                  <div className="flex justify-end">
-                    <button
-                      className="px-4 py-2 rounded bg-zinc-800 text-white hover:opacity-90"
-                      onClick={closeWizard}
-                    >
-                      Done
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            <div className="flex items-center justify-between px-4 py-3 border-t">
-              <button
-                onClick={prevStep}
-                className={`px-4 py-2 rounded border ${
-                  wizardStep === 1 ? "opacity-50 cursor-not-allowed" : "hover:bg-gray-100 dark:hover:bg-zinc-800"
-                }`}
-                disabled={wizardStep === 1 || connectLoading}
-              >
-                Back
-              </button>
-
-              <div className="flex gap-2">
                 {wizardStep === 1 && (
-                  <button
-                    onClick={() => setWizardStep(2)}
-                    className="px-4 py-2 rounded bg-blue-600 text-white hover:bg-blue-700"
-                    disabled={connectLoading}
-                  >
-                    Continue
-                  </button>
+                  <div className="space-y-3">
+                    <div className="text-base font-semibold">Step 1 — Open the Google Sheet you want to connect</div>
+                    <div className="text-sm text-gray-600 dark:text-gray-300">
+                      Open Google Sheets in another tab and click the sheet you want to sync into CoveCRM.
+                    </div>
+                    <a
+                      href="https://docs.google.com/spreadsheets/u/0/"
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-block bg-zinc-800 text-white px-4 py-2 rounded hover:opacity-90"
+                    >
+                      Open Google Sheets
+                    </a>
+                  </div>
                 )}
 
                 {wizardStep === 2 && (
-                  <>
-                    <button
-                      onClick={validateUrlAndContinue}
-                      className="px-4 py-2 rounded bg-blue-600 text-white hover:bg-blue-700"
-                      disabled={connectLoading}
-                    >
-                      Validate URL
-                    </button>
-                    <button
-                      onClick={() => {
-                        const parsed = parseGoogleSheetUrl(sheetUrl);
-                        setSheetParsed(parsed);
-                        if (parsed.error) {
-                          setConnectError(parsed.error);
-                          return;
-                        }
-                        setWizardStep(3);
+                  <div className="space-y-3">
+                    <div className="text-base font-semibold">Step 2 — Paste the entire Google Sheet URL</div>
+                    <div className="text-sm text-gray-600 dark:text-gray-300">
+                      Copy the full URL from your browser address bar and paste it here.
+                    </div>
+
+                    <input
+                      value={sheetUrl}
+                      onChange={(e) => {
+                        setSheetUrl(e.target.value);
+                        setConnectError(null);
+                        setConnectOk(false);
+                        setAppsScriptText("");
+                        setWebhookUrl("");
                       }}
-                      className="px-4 py-2 rounded bg-blue-600 text-white hover:bg-blue-700"
-                      disabled={connectLoading}
-                    >
-                      Next
-                    </button>
-                  </>
+                      placeholder="https://docs.google.com/spreadsheets/d/.../edit#gid=0"
+                      className="border p-2 rounded w-full"
+                    />
+
+                    <div className="text-xs text-gray-500">Tip: Paste the full URL (not just the sheet name).</div>
+
+                    {connectError && <div className="text-sm text-red-600">{connectError}</div>}
+                  </div>
                 )}
 
                 {wizardStep === 3 && (
-                  <button
-                    onClick={() => setWizardStep(4)}
-                    className="px-4 py-2 rounded bg-blue-600 text-white hover:bg-blue-700"
-                    disabled={connectLoading}
-                  >
-                    Continue
-                  </button>
+                  <div className="space-y-3">
+                    <div className="text-base font-semibold">Step 3 — Confirm what we detected</div>
+
+                    <div className="rounded border p-3 bg-gray-50 dark:bg-zinc-800 text-sm">
+                      <div>
+                        <span className="font-semibold">Spreadsheet ID:</span> {sheetParsed.spreadsheetId || "—"}
+                      </div>
+                      <div>
+                        <span className="font-semibold">Tab GID:</span>{" "}
+                        {sheetParsed.gid || "(not detected — that’s okay)"}
+                      </div>
+                    </div>
+
+                    <div className="text-sm text-gray-600 dark:text-gray-300">
+                      Next, choose which CoveCRM folder these sheet rows should import into.
+                    </div>
+                  </div>
                 )}
 
                 {wizardStep === 4 && (
-                  <button
-                    onClick={connectSheetNow}
-                    className={`px-4 py-2 rounded text-white ${
-                      connectLoading ? "bg-gray-400 cursor-not-allowed" : "bg-green-600 hover:bg-green-700"
-                    }`}
-                    disabled={connectLoading}
-                  >
-                    {connectLoading ? "Connecting…" : "Connect"}
-                  </button>
+                  <div className="space-y-3">
+                    <div className="text-base font-semibold">Step 4 — Choose the CoveCRM folder</div>
+
+                    <div className="text-sm text-gray-600 dark:text-gray-300">
+                      New sheet rows will import into this folder automatically (and will auto-enroll in the folder’s drip if
+                      a drip is attached).
+                    </div>
+
+                    <div className="space-y-2">
+                      <label className="flex items-center gap-2 text-sm">
+                        <input
+                          type="checkbox"
+                          checked={wizardCreateNewFolder}
+                          onChange={(e) => {
+                            setWizardCreateNewFolder(e.target.checked);
+                            setConnectError(null);
+                          }}
+                        />
+                        Create a new folder name
+                      </label>
+
+                      {!wizardCreateNewFolder ? (
+                        <select
+                          value={wizardFolderName}
+                          onChange={(e) => setWizardFolderName(e.target.value)}
+                          className="border p-2 rounded w-full"
+                        >
+                          <option value="">-- Choose a folder --</option>
+                          {folders
+                            .map((f) => String(f?.name || ""))
+                            .filter((n) => n && !SYSTEM_FOLDERS.includes(n))
+                            .map((name) => (
+                              <option key={name} value={name}>
+                                {name}
+                              </option>
+                            ))}
+                        </select>
+                      ) : (
+                        <input
+                          value={wizardNewFolderName}
+                          onChange={(e) => setWizardNewFolderName(e.target.value)}
+                          placeholder="New folder name (e.g., Facebook Leads)"
+                          className="border p-2 rounded w-full"
+                        />
+                      )}
+                    </div>
+
+                    {connectError && <div className="text-sm text-red-600">{connectError}</div>}
+
+                    <button
+                      onClick={connectSheetNow}
+                      disabled={connectLoading}
+                      className={`${
+                        connectLoading ? "bg-gray-400 cursor-not-allowed" : "bg-green-600 hover:bg-green-700"
+                      } text-white px-4 py-2 rounded`}
+                    >
+                      {connectLoading ? "Connecting…" : "Connect Sheet"}
+                    </button>
+
+                    <div className="text-xs text-gray-500">
+                      This will generate your Apps Script. You paste it once into the sheet and run install once.
+                    </div>
+                  </div>
                 )}
+
+                {wizardStep === 5 && (
+                  <div className="space-y-3">
+                    <div className="text-base font-semibold">Step 5 — One-time setup inside Google Sheets</div>
+
+                    <div className="text-sm text-gray-700 dark:text-gray-300">
+                      <b>All new rows added to this sheet will automatically import into CoveCRM.</b>
+                    </div>
+
+                    {connectOk ? (
+                      <div className="text-sm text-green-600">✅ Connected. Follow these steps exactly one time:</div>
+                    ) : (
+                      <div className="text-sm text-gray-600">Finish setup:</div>
+                    )}
+
+                    <ol className="list-decimal pl-5 text-sm text-gray-700 dark:text-gray-300 space-y-2">
+                      <li>
+                        In your Google Sheet: <b>Extensions → Apps Script</b>
+                      </li>
+
+                      <li>
+                        In Apps Script, click <b>Code.gs</b> on the left, then{" "}
+                        <b>select everything</b> and paste our code so it <b>replaces everything</b>.
+                        <div className="text-xs text-gray-500 mt-1">
+                          This removes any default Google code like <span className="font-mono">function myFunction()</span>.
+                        </div>
+                      </li>
+
+                      <li>
+                        <b>Save</b> your Apps Script project:
+                        <div className="mt-1 text-xs text-gray-500 space-y-1">
+                          <div>• Mac: <b>⌘ Command + S</b></div>
+                          <div>• Windows: <b>Ctrl + S</b></div>
+                          <div>
+                            • OR click the <b>floppy disk “Save”</b> icon in the <b>top toolbar</b>
+                            (tooltip says <b>“Save project to Drive”</b>)
+                          </div>
+                        </div>
+                      </li>
+
+                      <li>
+                        After you paste + save, near the top you will see a <b>function dropdown</b>.
+                        Select <b>covecrmInstall</b>.
+                        <div className="text-xs text-gray-500 mt-1">
+                          You don’t need to do anything else with the dropdown.
+                        </div>
+                      </li>
+
+                      <li>
+                        Click <b>Run</b> (▶) in the <b>top toolbar</b> (it’s right next to <b>Debug</b>, above the editor),
+                        and approve permissions.
+                      </li>
+
+                      <li className="text-red-600">
+                        <b>DO NOT CLICK DEPLOY.</b> “Deploy” is not used. This is <b>not</b> a web app deploy. You only Save + Run once.
+                      </li>
+                    </ol>
+
+                    <div className="rounded border p-3 bg-gray-50 dark:bg-zinc-800 text-sm text-gray-700 dark:text-gray-200">
+                      <div className="font-semibold mb-1">If you see “Google hasn’t verified this app”</div>
+                      <div className="text-sm">
+                        Click <b>Advanced</b> → <b>Go to (unsafe)</b> → <b>Allow</b>.
+                      </div>
+                      <div className="text-xs text-gray-500 mt-1">
+                        This is normal — you are authorizing your own Apps Script inside your own Google Sheet.
+                      </div>
+                    </div>
+
+                    <div className="rounded border p-3 bg-white dark:bg-zinc-900">
+                      <div className="font-semibold text-sm mb-2">FAQ</div>
+                      <div className="space-y-2 text-sm text-gray-700 dark:text-gray-300">
+                        <div>
+                          <b>Why do I see “Google hasn’t verified this app”?</b>
+                          <div className="text-xs text-gray-500">
+                            Because this is a script you’re running in your own Google account. It’s not CoveCRM OAuth. You can proceed via Advanced.
+                          </div>
+                        </div>
+                        <div>
+                          <b>Do I need to click Deploy?</b>
+                          <div className="text-xs text-gray-500">
+                            No. Do not Deploy. You only Save + Run <b>covecrmInstall</b> one time.
+                          </div>
+                        </div>
+                        <div>
+                          <b>Does this work without Google OAuth / CASA?</b>
+                          <div className="text-xs text-gray-500">
+                            Yes. This method does not use CoveCRM OAuth and does not require Google Cloud verification/CASA.
+                            You authorize your own Apps Script inside your own sheet.
+                          </div>
+                        </div>
+                        <div>
+                          <b>What permissions does it request and why?</b>
+                          <div className="text-xs text-gray-500">
+                            It needs permission to read the sheet (to read new rows) and to make a secure HTTPS request to CoveCRM (to import the row).
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {webhookUrl && (
+                      <div className="text-xs text-gray-500">
+                        Webhook: <span className="font-mono">{webhookUrl}</span>
+                      </div>
+                    )}
+
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <div className="font-semibold text-sm">Apps Script (copy/paste)</div>
+                        <button
+                          className="text-sm bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700"
+                          onClick={async () => {
+                            try {
+                              await navigator.clipboard.writeText(appsScriptText || "");
+                              alert("Copied Apps Script to clipboard.");
+                            } catch {
+                              alert("Could not copy automatically. Please select and copy manually.");
+                            }
+                          }}
+                          disabled={!appsScriptText}
+                        >
+                          Copy
+                        </button>
+                      </div>
+
+                      <textarea
+                        value={appsScriptText}
+                        readOnly
+                        className="w-full h-64 border rounded p-2 font-mono text-xs"
+                        placeholder="Apps Script will appear here after connecting…"
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Footer (fixed) */}
+              <div className="flex items-center justify-between px-4 py-3 border-t shrink-0">
+                <button
+                  onClick={prevStep}
+                  className={`px-4 py-2 rounded border ${
+                    wizardStep === 1 ? "opacity-50 cursor-not-allowed" : "hover:bg-gray-100 dark:hover:bg-zinc-800"
+                  }`}
+                  disabled={wizardStep === 1 || connectLoading}
+                >
+                  Back
+                </button>
+
+                <div className="flex gap-2">
+                  {wizardStep === 1 && (
+                    <button
+                      onClick={() => setWizardStep(2)}
+                      className="px-4 py-2 rounded bg-blue-600 text-white hover:bg-blue-700"
+                      disabled={connectLoading}
+                    >
+                      Continue
+                    </button>
+                  )}
+
+                  {wizardStep === 2 && (
+                    <>
+                      <button
+                        onClick={validateUrlAndContinue}
+                        className="px-4 py-2 rounded bg-blue-600 text-white hover:bg-blue-700"
+                        disabled={connectLoading}
+                      >
+                        Validate URL
+                      </button>
+                      <button
+                        onClick={() => {
+                          const parsed = parseGoogleSheetUrl(sheetUrl);
+                          setSheetParsed(parsed);
+                          if (parsed.error) {
+                            setConnectError(parsed.error);
+                            return;
+                          }
+                          setWizardStep(3);
+                        }}
+                        className="px-4 py-2 rounded bg-blue-600 text-white hover:bg-blue-700"
+                        disabled={connectLoading}
+                      >
+                        Next
+                      </button>
+                    </>
+                  )}
+
+                  {wizardStep === 3 && (
+                    <button
+                      onClick={() => setWizardStep(4)}
+                      className="px-4 py-2 rounded bg-blue-600 text-white hover:bg-blue-700"
+                      disabled={connectLoading}
+                    >
+                      Continue
+                    </button>
+                  )}
+
+                  {wizardStep === 4 && (
+                    <button
+                      onClick={connectSheetNow}
+                      className={`px-4 py-2 rounded text-white ${
+                        connectLoading ? "bg-gray-400 cursor-not-allowed" : "bg-green-600 hover:bg-green-700"
+                      }`}
+                      disabled={connectLoading}
+                    >
+                      {connectLoading ? "Connecting…" : "Connect"}
+                    </button>
+                  )}
+
+                  {wizardStep === 5 && (
+                    <button
+                      className="px-4 py-2 rounded bg-zinc-800 text-white hover:opacity-90"
+                      onClick={closeWizard}
+                      disabled={connectLoading}
+                    >
+                      Done
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
           </div>
