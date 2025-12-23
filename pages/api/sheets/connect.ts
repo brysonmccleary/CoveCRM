@@ -145,8 +145,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const session = await getServerSession(req, res, authOptions);
   if (!session?.user?.email) return res.status(401).json({ error: "Unauthorized" });
 
-  // ✅ Backwards compatibility:
-  // Some UI versions send "spreadsheetId" instead of "sheetId".
+  // ✅ Backwards compatibility: some UI versions send "spreadsheetId" instead of "sheetId".
   const { sheetId, spreadsheetId, folderName, tabName, gid } = (req.body || {}) as {
     sheetId?: string;
     spreadsheetId?: string;
@@ -171,28 +170,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!user) return res.status(404).json({ error: "User not found" });
 
     const gs: any = (user as any).googleSheets || {};
-    gs.syncedSheets = Array.isArray(gs.syncedSheets) ? gs.syncedSheets : [];
 
-    // ✅ Fully automated forever: secret auto-created per user (requires schema support)
+    // ✅ Ensure arrays exist
+    gs.syncedSheetsSimple = Array.isArray(gs.syncedSheetsSimple) ? gs.syncedSheetsSimple : [];
+
+    // ✅ Fully automated forever: secret auto-created per user (schema supported)
     if (!gs.webhookSecret) {
       gs.webhookSecret = crypto.randomBytes(32).toString("hex");
     }
 
     const entry = {
-      sheetId: effectiveSheetId,
-      folderName,
+      sheetId: String(effectiveSheetId),
+      folderName: String(folderName),
       tabName: tabName || "",
       gid: gid || "",
       lastSyncedAt: null,
       lastEventAt: null,
     };
 
-    // Upsert mapping by sheetId (string)
-    const idx = gs.syncedSheets.findIndex(
+    // ✅ Upsert mapping by sheetId (string)
+    const idx = gs.syncedSheetsSimple.findIndex(
       (s: any) => String(s.sheetId || "") === String(effectiveSheetId)
     );
-    if (idx >= 0) gs.syncedSheets[idx] = entry;
-    else gs.syncedSheets.push(entry);
+    if (idx >= 0) gs.syncedSheetsSimple[idx] = entry;
+    else gs.syncedSheetsSimple.push(entry);
 
     (user as any).googleSheets = gs;
     await user.save();
@@ -203,17 +204,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const appsScript = buildAppsScript({
       webhookUrl,
       userEmail: session.user.email,
-      sheetId: effectiveSheetId,
+      sheetId: String(effectiveSheetId),
       gid: gid || "",
       tabName: tabName || "",
-      secret: gs.webhookSecret,
+      secret: String(gs.webhookSecret),
     });
 
     return res.status(200).json({
       ok: true,
       webhookUrl,
       appsScript,
-      sheet: { sheetId: effectiveSheetId, folderName, tabName: tabName || "", gid: gid || "" },
+      sheet: {
+        sheetId: String(effectiveSheetId),
+        folderName,
+        tabName: tabName || "",
+        gid: gid || "",
+      },
     });
   } catch (e: any) {
     return res.status(500).json({ error: e?.message || "Failed" });

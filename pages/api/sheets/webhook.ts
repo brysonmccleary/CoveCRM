@@ -91,7 +91,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const userEmail = String(payload.userEmail || "").trim().toLowerCase();
     const sheetId = String(payload.sheetId || "").trim();
-    if (!userEmail || !sheetId) return res.status(400).json({ error: "Missing userEmail or sheetId" });
+    if (!userEmail || !sheetId) {
+      return res.status(400).json({ error: "Missing userEmail or sheetId" });
+    }
 
     // 2) Load user + verify per-user webhook secret
     await dbConnect();
@@ -108,8 +110,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(403).json({ error: "Invalid signature" });
     }
 
-    // 3) Find sheet mapping -> folder
-    const synced = Array.isArray(gs.syncedSheets) ? gs.syncedSheets : [];
+    // 3) Find sheet mapping -> folder (✅ use syncedSheetsSimple)
+    const synced = Array.isArray(gs.syncedSheetsSimple) ? gs.syncedSheetsSimple : [];
     const match = synced.find((s: any) => String(s.sheetId || "") === sheetId);
     if (!match) return res.status(404).json({ error: "No sheet mapping found for this user" });
 
@@ -144,6 +146,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (exists) {
         match.lastSyncedAt = new Date();
         match.lastEventAt = new Date();
+        gs.syncedSheetsSimple = synced;
         (user as any).googleSheets = gs;
         await user.save();
         return res.status(200).json({ ok: true, skipped: "duplicate_phone" });
@@ -158,6 +161,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (exists) {
         match.lastSyncedAt = new Date();
         match.lastEventAt = new Date();
+        gs.syncedSheetsSimple = synced;
         (user as any).googleSheets = gs;
         await user.save();
         return res.status(200).json({ ok: true, skipped: "duplicate_email" });
@@ -177,13 +181,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       Beneficiary: String(beneficiary || "").trim() || undefined,
       "Coverage Amount": String(coverageAmount || "").trim() || undefined,
 
-      // Your schema supports these (and your helper will also enforce them):
       normalizedPhone: normalizedPhone || undefined,
       phoneLast10: phoneLast10 || undefined,
       status: "New",
       leadType: sanitizeLeadType(String(leadTypeIn || "")),
 
-      // Extra metadata for traceability (allowed by strict:false)
       source: "google-sheets",
       sheetMeta: {
         sheetId,
@@ -195,14 +197,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       rawRow: row,
     };
 
-    // 6) Insert via your helper (handles email lowercasing + folderId typing + defaults)
+    // 6) Insert via your helper
     await createLeadsFromGoogleSheet([leadDoc], userEmail, folder._id);
 
     // ✅ 6b) Auto-enroll in folder drips if this folder is watched
-    // We need the created leadId to enroll. We'll fetch the most recent matching lead.
+    // We need a leadId to enroll. We'll fetch the most recent matching lead.
     let createdLead: any = null;
-
-    // Best-effort: match by sheetMeta.ts (unique per webhook payload), then phone/email fallback.
     const ts = payload.ts || null;
 
     if (ts) {
@@ -255,6 +255,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // 7) Update mapping bookkeeping
     match.lastSyncedAt = new Date();
     match.lastEventAt = new Date();
+    gs.syncedSheetsSimple = synced;
     (user as any).googleSheets = gs;
     await user.save();
 
