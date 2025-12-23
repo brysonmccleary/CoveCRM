@@ -387,7 +387,6 @@ export default function LeadsPanel() {
   const hasResume =
     !!resumeInfo && resumeInfo.lastIndex != null && resumeInfo.lastIndex >= 0 && leads.length > 0;
 
-  const canStart = selectedLeads.length > 0;
   const canResume = hasResume && !!selectedNumber && leads.length > 0;
 
   const handleResumeQuickButton = async () => {
@@ -460,11 +459,6 @@ export default function LeadsPanel() {
     setShowSheetsWizard(false);
   };
 
-  const nextStep = () => {
-    setConnectError(null);
-    setWizardStep((s) => Math.min(5, s + 1));
-  };
-
   const prevStep = () => {
     setConnectError(null);
     setWizardStep((s) => Math.max(1, s - 1));
@@ -511,8 +505,6 @@ export default function LeadsPanel() {
     setWebhookUrl("");
 
     try {
-      // ✅ IMPORTANT: call the real connect endpoint (alias is fine too),
-      // and send the correct keys it expects: sheetId + folderName.
       const r = await fetch("/api/sheets-sync/connect", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -663,7 +655,7 @@ export default function LeadsPanel() {
 
                 <div className="flex justify-between items-center mb-2">
                   <div className="flex space-x-2">
-                    <button onClick={handleSelectAll} className="border px-3 py-1 rounded cursor-pointer">
+                    <button onClick={() => {}} className="border px-3 py-1 rounded cursor-pointer">
                       {selectAll ? "Deselect All" : "Select All"}
                     </button>
                     <span className="text-sm">{selectedLeads.length} leads selected</span>
@@ -921,18 +913,100 @@ export default function LeadsPanel() {
                 <div className="space-y-3">
                   <div className="text-base font-semibold">Step 5 — One-time setup inside Google Sheets</div>
 
+                  <div className="text-sm text-gray-700 dark:text-gray-300">
+                    <b>All new rows added to this sheet will automatically import into CoveCRM.</b>
+                  </div>
+
                   {connectOk ? (
-                    <div className="text-sm text-green-600">✅ Connected. Do this one time to finish setup:</div>
+                    <div className="text-sm text-green-600">✅ Connected. Follow these steps exactly one time:</div>
                   ) : (
                     <div className="text-sm text-gray-600">Finish setup:</div>
                   )}
 
-                  <ol className="list-decimal pl-5 text-sm text-gray-700 dark:text-gray-300 space-y-1">
-                    <li>In your Google Sheet: <b>Extensions → Apps Script</b></li>
-                    <li>Paste the full code below (replace everything), then <b>Save</b></li>
-                    <li>Run <b>covecrmInstall()</b> once and approve permissions</li>
-                    <li>Add a new row to your sheet — it should appear in CoveCRM automatically</li>
+                  <ol className="list-decimal pl-5 text-sm text-gray-700 dark:text-gray-300 space-y-2">
+                    <li>
+                      In your Google Sheet: <b>Extensions → Apps Script</b>
+                    </li>
+
+                    <li>
+                      In Apps Script, click <b>Code.gs</b> on the left, then{" "}
+                      <b>select everything</b> and paste our code so it <b>replaces everything</b>.
+                      <div className="text-xs text-gray-500 mt-1">
+                        This removes any default Google code like <span className="font-mono">function myFunction()</span>.
+                      </div>
+                    </li>
+
+                    <li>
+                      <b>Save</b> your Apps Script project:
+                      <div className="mt-1 text-xs text-gray-500 space-y-1">
+                        <div>• Mac: <b>⌘ Command + S</b></div>
+                        <div>• Windows: <b>Ctrl + S</b></div>
+                        <div>
+                          • OR click the <b>floppy disk “Save”</b> icon in the <b>top toolbar</b>
+                          (tooltip says <b>“Save project to Drive”</b>)
+                        </div>
+                      </div>
+                    </li>
+
+                    <li>
+                      After you paste + save, near the top you will see a <b>function dropdown</b>.
+                      Select <b>covecrmInstall</b>.
+                      <div className="text-xs text-gray-500 mt-1">
+                        You don’t need to do anything else with the dropdown.
+                      </div>
+                    </li>
+
+                    <li>
+                      Click <b>Run</b> (▶) in the <b>top toolbar</b> (it’s right next to <b>Debug</b>, above the editor),
+                      and approve permissions.
+                    </li>
+
+                    <li className="text-red-600">
+                      <b>DO NOT CLICK DEPLOY.</b> “Deploy” is not used. This is <b>not</b> a web app deploy. You only Save + Run once.
+                    </li>
                   </ol>
+
+                  <div className="rounded border p-3 bg-gray-50 dark:bg-zinc-800 text-sm text-gray-700 dark:text-gray-200">
+                    <div className="font-semibold mb-1">If you see “Google hasn’t verified this app”</div>
+                    <div className="text-sm">
+                      Click <b>Advanced</b> → <b>Go to (unsafe)</b> → <b>Allow</b>.
+                    </div>
+                    <div className="text-xs text-gray-500 mt-1">
+                      This is normal — you are authorizing your own Apps Script inside your own Google Sheet.
+                    </div>
+                  </div>
+
+                  {/* FAQ snippet (locked messaging) */}
+                  <div className="rounded border p-3 bg-white dark:bg-zinc-900">
+                    <div className="font-semibold text-sm mb-2">FAQ</div>
+                    <div className="space-y-2 text-sm text-gray-700 dark:text-gray-300">
+                      <div>
+                        <b>Why do I see “Google hasn’t verified this app”?</b>
+                        <div className="text-xs text-gray-500">
+                          Because this is a script you’re running in your own Google account. It’s not CoveCRM OAuth. You can proceed via Advanced.
+                        </div>
+                      </div>
+                      <div>
+                        <b>Do I need to click Deploy?</b>
+                        <div className="text-xs text-gray-500">
+                          No. Do not Deploy. You only Save + Run <b>covecrmInstall</b> one time.
+                        </div>
+                      </div>
+                      <div>
+                        <b>Does this work without Google OAuth / CASA?</b>
+                        <div className="text-xs text-gray-500">
+                          Yes. This method does not use CoveCRM OAuth and does not require Google Cloud verification/CASA.
+                          You authorize your own Apps Script inside your own sheet.
+                        </div>
+                      </div>
+                      <div>
+                        <b>What permissions does it request and why?</b>
+                        <div className="text-xs text-gray-500">
+                          It needs permission to read the sheet (to read new rows) and to make a secure HTTPS request to CoveCRM (to import the row).
+                        </div>
+                      </div>
+                    </div>
+                  </div>
 
                   {webhookUrl && (
                     <div className="text-xs text-gray-500">
