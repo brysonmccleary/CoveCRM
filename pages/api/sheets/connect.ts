@@ -30,6 +30,7 @@ function esc(s: string) {
 
 function buildAppsScript(params: {
   webhookUrl: string;
+  backfillUrl: string;
   userEmail: string;
   sheetId: string;
   gid?: string;
@@ -37,6 +38,7 @@ function buildAppsScript(params: {
   secret: string;
 }) {
   const webhookUrl = esc(params.webhookUrl);
+  const backfillUrl = esc(params.backfillUrl);
   const userEmail = esc(params.userEmail);
   const sheetId = esc(params.sheetId);
   const gid = esc(params.gid || "");
@@ -47,8 +49,8 @@ function buildAppsScript(params: {
  * CoveCRM Google Sheets → Real-time Lead Sync (NO OAUTH / NO CASA)
  *
  * ✅ What this does:
- * - All NEW rows you add to this sheet will automatically import into CoveCRM.
- * - CoveCRM imports the row into the folder you selected in the CoveCRM UI.
+ * - ONE-TIME: Imports ALL existing rows in this sheet into CoveCRM (right after install).
+ * - FOREVER: All NEW rows you add to this sheet will automatically import into CoveCRM.
  *
  * ONE-TIME SETUP (do this once):
  * 1) In your Google Sheet: Extensions → Apps Script
@@ -58,33 +60,41 @@ function buildAppsScript(params: {
  *    - Windows: Ctrl + S
  *    - OR click the floppy disk “Save” icon in the top toolbar (tooltip: “Save project to Drive”)
  * 4) Near the top toolbar, use the function dropdown and select: covecrmInstall
- *    (you don’t need to do anything else with the dropdown)
  * 5) Click Run (▶) in the top toolbar (near Debug) and approve permissions
  *
  * ⚠️ DO NOT CLICK DEPLOY
  * This is NOT a web app deploy. You only Save + Run once.
- *
- * After that, imports happen automatically forever for this sheet.
  */
 
 const COVECRM_WEBHOOK_URL = "${webhookUrl}";
+const COVECRM_BACKFILL_URL = "${backfillUrl}";
 const COVECRM_USER_EMAIL = "${userEmail}";
 const COVECRM_SHEET_ID = "${sheetId}";
 const COVECRM_GID = "${gid}";
 const COVECRM_TAB_NAME = "${tabName}";
 const COVECRM_SECRET = "${secret}";
 
+// Backfill behavior
+const BACKFILL_BATCH_SIZE = 50;      // rows per request (kept conservative)
+const BACKFILL_MAX_MS = 240000;      // stop before 6-min Apps Script limit (4 min)
+const BACKFILL_TRIGGER_FN = "covecrmBackfillWorker";
+
 // Where we store last-processed info (prevents re-sending the same row repeatedly)
 function _propKey(suffix) {
   return "covecrm:" + COVECRM_SHEET_ID + ":" + (COVECRM_GID || "any") + ":" + suffix;
 }
 
+/**
+ * INSTALL (run one time manually)
+ * - Installs triggers (forever sync)
+ * - Starts a one-time backfill import of all existing rows
+ */
 function covecrmInstall() {
   // Remove our old triggers to avoid duplicates
   const triggers = ScriptApp.getProjectTriggers();
   triggers.forEach(t => {
     const fn = t.getHandlerFunction();
-    if (fn === "covecrmOnEdit" || fn === "covecrmOnChange") {
+    if (fn === "covecrmOnEdit" || fn === "covecrmOnChange" || fn === BACKFILL_TRIGGER_FN) {
       ScriptApp.deleteTrigger(t);
     }
   });
@@ -103,6 +113,229 @@ function covecrmInstall() {
     .create();
 
   Logger.log("✅ CoveCRM triggers installed. New rows will import automatically.");
+
+  // ✅ Start one-time backfill immediately after install
+  covecrmBackfillStart();
+}
+
+/**
+ * Start a one-time backfill.
+ * - Imports ALL CURRENT rows (row 2..lastRow) into CoveCRM safely in chunks
+ * - Uses PropertiesService checkpointing to resume if needed
+ * - Uses a time-based trigger only if needed (no Deploy, no OAuth verification)
+ */
+function covecrmBackfillStart() {
+  const props = PropertiesService.getScriptProperties();
+
+  // Idempotent: if already completed for this sheet mapping, don't re-run automatically.
+  const done = props.getProperty(_propKey("backfillDone"));
+  if (done === "true") {
+    Logger.log("ℹ️ Backfill already completed for this sheet. Skipping.");
+    return;
+  }
+
+  // If a backfill is already in progress, just ensure the worker trigger exists.
+  const inProgress = props.getProperty(_propKey("backfillInProgress"));
+  if (inProgress === "true") {
+    _ensureBackfillTrigger();
+    Logger.log("ℹ️ Backfill already in progress. Worker trigger ensured.");
+    return;
+  }
+
+  const runId = Utilities.getUuid();
+  props.setProperty(_propKey("backfillRunId"), runId);
+  props.setProperty(_propKey("backfillNextRow"), "2"); // row 1 is headers
+  props.setProperty(_propKey("backfillInProgress"), "true");
+  props.deleteProperty(_propKey("backfillLastError"));
+
+  // Try to run immediately (often finishes for small/medium sheets)
+  covecrmBackfillWorker();
+
+  // If not finished, the worker will keep going via trigger
+  _ensureBackfillTrigger();
+}
+
+function _ensureBackfillTrigger() {
+  const triggers = ScriptApp.getProjectTriggers();
+  const exists = triggers.some(t => t.getHandlerFunction() === BACKFILL_TRIGGER_FN);
+  if (exists) return;
+
+  // Time-driven trigger to continue if we hit execution limits
+  // (no Deploy required — runs inside user's Apps Script project)
+  ScriptApp.newTrigger(BACKFILL_TRIGGER_FN)
+    .timeBased()
+    .everyMinutes(1)
+    .create();
+}
+
+function _removeBackfillTrigger() {
+  const triggers = ScriptApp.getProjectTriggers();
+  triggers.forEach(t => {
+    if (t.getHandlerFunction() === BACKFILL_TRIGGER_FN) {
+      ScriptApp.deleteTrigger(t);
+    }
+  });
+}
+
+/**
+ * Worker: imports the next chunk(s) of rows until time is nearly up, then exits.
+ * Will be called:
+ * - immediately by covecrmBackfillStart()
+ * - later by time-driven trigger if needed
+ */
+function covecrmBackfillWorker() {
+  const start = Date.now();
+  const props = PropertiesService.getScriptProperties();
+  const lock = LockService.getScriptLock();
+
+  // Prevent overlapping runs (trigger + manual run)
+  if (!lock.tryLock(5000)) return;
+
+  try {
+    const done = props.getProperty(_propKey("backfillDone"));
+    if (done === "true") {
+      _removeBackfillTrigger();
+      props.deleteProperty(_propKey("backfillInProgress"));
+      return;
+    }
+
+    const runId = props.getProperty(_propKey("backfillRunId")) || Utilities.getUuid();
+    props.setProperty(_propKey("backfillRunId"), runId);
+
+    const ss = SpreadsheetApp.openById(COVECRM_SHEET_ID);
+
+    // Resolve the sheet we should read
+    let sheet = null;
+    if (COVECRM_GID) {
+      const sheets = ss.getSheets();
+      for (let i = 0; i < sheets.length; i++) {
+        if (String(sheets[i].getSheetId()) === String(COVECRM_GID)) {
+          sheet = sheets[i];
+          break;
+        }
+      }
+    }
+    if (!sheet) sheet = ss.getActiveSheet();
+    if (!sheet) return;
+
+    if (COVECRM_TAB_NAME && sheet.getName() !== COVECRM_TAB_NAME) return;
+    if (COVECRM_GID && String(sheet.getSheetId()) !== String(COVECRM_GID)) return;
+
+    const lastRow = sheet.getLastRow();
+    const lastCol = sheet.getLastColumn();
+    if (lastRow < 2 || lastCol < 1) {
+      // Nothing to import
+      props.setProperty(_propKey("backfillDone"), "true");
+      props.deleteProperty(_propKey("backfillInProgress"));
+      _removeBackfillTrigger();
+      return;
+    }
+
+    const headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+
+    let nextRow = parseInt(props.getProperty(_propKey("backfillNextRow")) || "2", 10);
+    if (!nextRow || nextRow < 2) nextRow = 2;
+
+    while (nextRow <= lastRow) {
+      // Stop before we hit execution limits
+      if (Date.now() - start > BACKFILL_MAX_MS) break;
+
+      const endRow = Math.min(lastRow, nextRow + BACKFILL_BATCH_SIZE - 1);
+      const numRows = endRow - nextRow + 1;
+
+      const values = sheet.getRange(nextRow, 1, numRows, lastCol).getValues();
+
+      const rows = [];
+      for (let i = 0; i < values.length; i++) {
+        const rowNumber = nextRow + i;
+        const rowVals = values[i];
+
+        // Build object from headers
+        const rowObj = {};
+        let hasAnyValue = false;
+
+        for (let c = 0; c < headers.length; c++) {
+          const key = headers[c] ? String(headers[c]).trim() : "";
+          if (!key) continue;
+          const v = rowVals[c];
+          if (v !== null && v !== undefined && String(v).trim() !== "") hasAnyValue = true;
+          rowObj[key] = v;
+        }
+
+        if (!hasAnyValue) continue;
+
+        rows.push({
+          rowNumber: rowNumber,
+          row: rowObj
+        });
+      }
+
+      if (rows.length) {
+        _postBackfillBatch(runId, rows, lastRow);
+      }
+
+      nextRow = endRow + 1;
+      props.setProperty(_propKey("backfillNextRow"), String(nextRow));
+    }
+
+    // Completed?
+    if (nextRow > lastRow) {
+      props.setProperty(_propKey("backfillDone"), "true");
+      props.deleteProperty(_propKey("backfillInProgress"));
+      props.deleteProperty(_propKey("backfillNextRow"));
+      _removeBackfillTrigger();
+      Logger.log("✅ Backfill completed.");
+    } else {
+      // Not finished yet; ensure trigger exists and exit
+      props.setProperty(_propKey("backfillInProgress"), "true");
+      _ensureBackfillTrigger();
+      Logger.log("⏳ Backfill paused (will continue). Next row: " + nextRow);
+    }
+  } catch (err) {
+    try {
+      PropertiesService.getScriptProperties().setProperty(_propKey("backfillLastError"), String(err));
+    } catch {}
+  } finally {
+    try {
+      lock.releaseLock();
+    } catch {}
+  }
+}
+
+function _postBackfillBatch(runId, rows, totalRows) {
+  const payload = {
+    userEmail: COVECRM_USER_EMAIL,
+    sheetId: COVECRM_SHEET_ID,
+    gid: COVECRM_GID || "",
+    tabName: COVECRM_TAB_NAME || "",
+    runId: runId,
+    totalRows: totalRows,
+    rows: rows,
+    ts: Date.now()
+  };
+
+  const body = JSON.stringify(payload);
+
+  // HMAC SHA256 signature (hex)
+  const rawSig = Utilities.computeHmacSha256Signature(body, COVECRM_SECRET);
+  const sig = rawSig
+    .map(b => (b < 0 ? b + 256 : b).toString(16).padStart(2, "0"))
+    .join("");
+
+  const resp = UrlFetchApp.fetch(COVECRM_BACKFILL_URL, {
+    method: "post",
+    contentType: "application/json",
+    payload: body,
+    muteHttpExceptions: true,
+    headers: { "x-covecrm-signature": sig }
+  });
+
+  const code = resp.getResponseCode ? resp.getResponseCode() : 200;
+
+  // If server errors, stop the backfill so we don’t spam.
+  if (code >= 500) {
+    throw new Error("Backfill batch failed with " + code);
+  }
 }
 
 // Trigger: runs when a user edits a cell (including pasting rows).
@@ -294,7 +527,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     // ✅ UX FIX: Create the folder immediately so it appears in CoveCRM right away.
-    // This does NOT change any lead/drip behavior — it just ensures the folder exists before first webhook.
     const existingFolder = await Folder.findOne({ userEmail: session.user.email, name: cleanFolderName });
     if (!existingFolder) {
       await Folder.create({ userEmail: session.user.email, name: cleanFolderName, source: "google-sheets" });
@@ -321,9 +553,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const baseUrl = getBaseUrl(req);
     const webhookUrl = `${baseUrl}/api/sheets/webhook`;
+    const backfillUrl = `${baseUrl}/api/sheets/backfill`;
 
     const appsScript = buildAppsScript({
       webhookUrl,
+      backfillUrl,
       userEmail: session.user.email,
       sheetId: String(effectiveSheetId),
       gid: gid || "",
@@ -334,6 +568,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(200).json({
       ok: true,
       webhookUrl,
+      backfillUrl,
       appsScript,
       sheet: {
         sheetId: String(effectiveSheetId),

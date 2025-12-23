@@ -959,7 +959,10 @@ export default function LeadsPanel() {
                     <div className="text-base font-semibold">Step 5 — One-time setup inside Google Sheets</div>
 
                     <div className="text-sm text-gray-700 dark:text-gray-300">
-                      <b>All new rows added to this sheet will automatically import into CoveCRM.</b>
+                      <b>All NEW rows added to this sheet will automatically import into CoveCRM</b> forever.
+                      <div className="text-xs text-gray-500 mt-1">
+                        Also: right after you run <b>covecrmInstall</b>, CoveCRM will import <b>all existing rows</b> already in the sheet (one-time backfill) so your folder is not empty.
+                      </div>
                     </div>
 
                     {connectOk ? (
@@ -970,7 +973,8 @@ export default function LeadsPanel() {
 
                     <ol className="list-decimal pl-5 text-sm text-gray-700 dark:text-gray-300 space-y-2">
                       <li>
-                        In your Google Sheet: <b>Extensions → Apps Script</b>
+                        The <b>Extensions</b> menu is in the row of menu tabs directly under the spreadsheet name.
+                        Then click: <b>Extensions → Apps Script</b>
                       </li>
 
                       <li>
@@ -978,6 +982,34 @@ export default function LeadsPanel() {
                         <b>select everything</b> and paste our code so it <b>replaces everything</b>.
                         <div className="text-xs text-gray-500 mt-1">
                           This removes any default Google code like <span className="font-mono">function myFunction()</span>.
+                        </div>
+
+                        {/* REQUIRED: code block directly under Step 2 */}
+                        <div className="mt-3 space-y-2">
+                          <div className="flex items-center justify-between">
+                            <div className="font-semibold text-sm">Apps Script code (copy/paste)</div>
+                            <button
+                              className="text-sm bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700"
+                              onClick={async () => {
+                                try {
+                                  await navigator.clipboard.writeText(appsScriptText || "");
+                                  alert("Copied Apps Script to clipboard.");
+                                } catch {
+                                  alert("Could not copy automatically. Please select and copy manually.");
+                                }
+                              }}
+                              disabled={!appsScriptText}
+                            >
+                              Copy
+                            </button>
+                          </div>
+
+                          <textarea
+                            value={appsScriptText}
+                            readOnly
+                            className="w-full h-64 border rounded p-2 font-mono text-xs"
+                            placeholder="Apps Script will appear here after connecting…"
+                          />
                         </div>
                       </li>
 
@@ -988,16 +1020,16 @@ export default function LeadsPanel() {
                           <div>• Windows: <b>Ctrl + S</b></div>
                           <div>
                             • OR click the <b>floppy disk “Save”</b> icon in the <b>top toolbar</b>
-                            (tooltip says <b>“Save project to Drive”</b>)
+                            (it looks like a little floppy disk, tooltip says <b>“Save project to Drive”</b>)
                           </div>
                         </div>
                       </li>
 
                       <li>
-                        After you paste + save, near the top you will see a <b>function dropdown</b>.
-                        Select <b>covecrmInstall</b>.
-                        <div className="text-xs text-gray-500 mt-1">
-                          You don’t need to do anything else with the dropdown.
+                        After you save, the <b>function dropdown</b> appears near the top of Apps Script (next to <b>Debug</b> / <b>Execution log</b>).
+                        <div className="text-xs text-gray-500 mt-1 space-y-1">
+                          <div>• It may show something like <b>“No functions”</b> until you save.</div>
+                          <div>• If it shows a different function (like <span className="font-mono">_propKey</span>), switch it to <b>covecrmInstall</b>.</div>
                         </div>
                       </li>
 
@@ -1006,84 +1038,25 @@ export default function LeadsPanel() {
                         and approve permissions.
                       </li>
 
+                      <li className="text-sm text-gray-700 dark:text-gray-300">
+                        <b>Permissions:</b> You are authorizing <b>YOUR OWN Apps Script</b> inside <b>YOUR own Google account</b>.
+                        This does <b>NOT</b> use CoveCRM Google OAuth and does <b>NOT</b> require CASA.
+                        <div className="text-xs text-gray-500 mt-1">
+                          If Google warns “not verified”, that’s the standard Apps Script warning for scripts you’re running yourself.
+                          You can proceed by clicking <b>Advanced</b> → <b>Go to (unsafe)</b> → <b>Allow</b>.
+                        </div>
+                      </li>
+
                       <li className="text-red-600">
-                        <b>DO NOT CLICK DEPLOY.</b> “Deploy” is not used. This is <b>not</b> a web app deploy. You only Save + Run once.
+                        <b>DO NOT CLICK DEPLOY.</b>
                       </li>
                     </ol>
-
-                    <div className="rounded border p-3 bg-gray-50 dark:bg-zinc-800 text-sm text-gray-700 dark:text-gray-200">
-                      <div className="font-semibold mb-1">If you see “Google hasn’t verified this app”</div>
-                      <div className="text-sm">
-                        Click <b>Advanced</b> → <b>Go to (unsafe)</b> → <b>Allow</b>.
-                      </div>
-                      <div className="text-xs text-gray-500 mt-1">
-                        This is normal — you are authorizing your own Apps Script inside your own Google Sheet.
-                      </div>
-                    </div>
-
-                    <div className="rounded border p-3 bg-white dark:bg-zinc-900">
-                      <div className="font-semibold text-sm mb-2">FAQ</div>
-                      <div className="space-y-2 text-sm text-gray-700 dark:text-gray-300">
-                        <div>
-                          <b>Why do I see “Google hasn’t verified this app”?</b>
-                          <div className="text-xs text-gray-500">
-                            Because this is a script you’re running in your own Google account. It’s not CoveCRM OAuth. You can proceed via Advanced.
-                          </div>
-                        </div>
-                        <div>
-                          <b>Do I need to click Deploy?</b>
-                          <div className="text-xs text-gray-500">
-                            No. Do not Deploy. You only Save + Run <b>covecrmInstall</b> one time.
-                          </div>
-                        </div>
-                        <div>
-                          <b>Does this work without Google OAuth / CASA?</b>
-                          <div className="text-xs text-gray-500">
-                            Yes. This method does not use CoveCRM OAuth and does not require Google Cloud verification/CASA.
-                            You authorize your own Apps Script inside your own sheet.
-                          </div>
-                        </div>
-                        <div>
-                          <b>What permissions does it request and why?</b>
-                          <div className="text-xs text-gray-500">
-                            It needs permission to read the sheet (to read new rows) and to make a secure HTTPS request to CoveCRM (to import the row).
-                          </div>
-                        </div>
-                      </div>
-                    </div>
 
                     {webhookUrl && (
                       <div className="text-xs text-gray-500">
                         Webhook: <span className="font-mono">{webhookUrl}</span>
                       </div>
                     )}
-
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between">
-                        <div className="font-semibold text-sm">Apps Script (copy/paste)</div>
-                        <button
-                          className="text-sm bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700"
-                          onClick={async () => {
-                            try {
-                              await navigator.clipboard.writeText(appsScriptText || "");
-                              alert("Copied Apps Script to clipboard.");
-                            } catch {
-                              alert("Could not copy automatically. Please select and copy manually.");
-                            }
-                          }}
-                          disabled={!appsScriptText}
-                        >
-                          Copy
-                        </button>
-                      </div>
-
-                      <textarea
-                        value={appsScriptText}
-                        readOnly
-                        className="w-full h-64 border rounded p-2 font-mono text-xs"
-                        placeholder="Apps Script will appear here after connecting…"
-                      />
-                    </div>
                   </div>
                 )}
               </div>
