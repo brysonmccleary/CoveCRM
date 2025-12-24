@@ -264,7 +264,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         userEmail,
         folderId: String(folder._id),
         leadId: String(createdLead._id),
-        source: "sheet-bulk", // ✅ FIX: must match EnrollSource union (was "sheet-row")
+        source: "sheet-bulk", // ✅ FIX: must match EnrollSource union
         startMode: "now",
       });
     }
