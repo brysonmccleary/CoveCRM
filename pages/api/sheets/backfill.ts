@@ -37,6 +37,10 @@ function hmacHex(body: string, secret: string) {
   return crypto.createHmac("sha256", secret).update(body).digest("hex");
 }
 
+function sha256Hex(input: string) {
+  return crypto.createHash("sha256").update(input).digest("hex");
+}
+
 function normalizePhone(raw: any): string {
   const s = String(raw || "").trim();
   if (!s) return "";
@@ -72,7 +76,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
   try {
+    // ✅ NEW: token + signature required (no userEmail trust)
+    const token = String(req.headers["x-covecrm-token"] || "").trim();
     const sig = String(req.headers["x-covecrm-signature"] || "").trim();
+    if (!token) return res.status(401).json({ error: "Missing token" });
     if (!sig) return res.status(401).json({ error: "Missing signature" });
 
     const rawBody = await readRawBody(req);
@@ -85,31 +92,49 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ error: "Invalid JSON body" });
     }
 
-    const userEmail = String(payload.userEmail || "").trim().toLowerCase();
+    const connectionId = String(payload.connectionId || "").trim();
     const sheetId = String(payload.sheetId || "").trim();
     const runId = String(payload.runId || "").trim() || null;
     const rows = Array.isArray(payload.rows) ? payload.rows : [];
 
-    if (!userEmail || !sheetId) return res.status(400).json({ error: "Missing userEmail or sheetId" });
+    if (!connectionId || !sheetId) return res.status(400).json({ error: "Missing connectionId or sheetId" });
     if (!rows.length) return res.status(200).json({ ok: true, inserted: 0 });
 
     await dbConnect();
 
-    const user = await User.findOne({ email: userEmail });
-    if (!user) return res.status(404).json({ error: "User not found" });
+    // ✅ Find owning user by connectionId (hard isolation)
+    const user = await User.findOne({
+      "googleSheets.syncedSheetsSimple": {
+        $elemMatch: { connectionId: connectionId },
+      },
+    });
+    if (!user) return res.status(404).json({ error: "Connection not found" });
+
+    const userEmail = String((user as any)?.email || "").trim().toLowerCase();
+    if (!userEmail) return res.status(500).json({ error: "User missing email" });
 
     const gs: any = (user as any).googleSheets || {};
-    const secret = String(gs.webhookSecret || "");
-    if (!secret) return res.status(403).json({ error: "Webhook not enabled for user" });
+    const synced = Array.isArray(gs.syncedSheetsSimple) ? gs.syncedSheetsSimple : [];
+    const match = synced.find((s: any) => String(s.connectionId || "") === connectionId);
+    if (!match) return res.status(404).json({ error: "Connection mapping missing" });
 
-    const expected = hmacHex(rawBody, secret);
+    // ✅ Safety: sheetId must match the connection
+    if (String(match.sheetId || "") !== sheetId) {
+      return res.status(403).json({ error: "Sheet mismatch for connection" });
+    }
+
+    // ✅ Verify token hash stored on the connection
+    const tokenHash = String(match.tokenHash || "");
+    if (!tokenHash) return res.status(403).json({ error: "Connection token missing" });
+
+    const gotHash = sha256Hex(token);
+    if (gotHash !== tokenHash) return res.status(403).json({ error: "Invalid token" });
+
+    // ✅ Verify signature using raw token as secret
+    const expected = hmacHex(rawBody, token);
     if (!timingSafeEqualHex(sig, expected)) {
       return res.status(403).json({ error: "Invalid signature" });
     }
-
-    const synced = Array.isArray(gs.syncedSheetsSimple) ? gs.syncedSheetsSimple : [];
-    const match = synced.find((s: any) => String(s.sheetId || "") === sheetId);
-    if (!match) return res.status(404).json({ error: "No sheet mapping found for this user" });
 
     const folderName = String(match.folderName || "").trim() || "Imported Leads";
     const folder = await getOrCreateSafeFolder(userEmail, folderName);
@@ -174,6 +199,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           tabName: payload.tabName || match.tabName || "",
           receivedAt: new Date(),
           ts: payload.ts || null,
+          connectionId, // ✅ NEW
           backfillRunId: runId,
           backfillRowNumber: rowNumber,
         },
@@ -229,7 +255,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     for (const c of candidateDocs) {
       if (c.normalizedPhone) {
         if (existingPhones.has(c.normalizedPhone)) continue;
-        // Reserve so we don't insert duplicates within the same batch
         existingPhones.add(c.normalizedPhone);
         newLeadDocs.push(c.leadDoc);
         intendedRowNumbers.push(c.rowNumber);
@@ -239,7 +264,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         newLeadDocs.push(c.leadDoc);
         intendedRowNumbers.push(c.rowNumber);
       } else {
-        // No phone and no email: safest behavior is to still import (cannot dedupe reliably)
         newLeadDocs.push(c.leadDoc);
         intendedRowNumbers.push(c.rowNumber);
       }
@@ -249,15 +273,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(200).json({ ok: true, inserted: 0, skipped: candidateDocs.length });
     }
 
-    // Insert using your existing helper (keeps behavior consistent with single-row webhook inserts)
     await createLeadsFromGoogleSheet(newLeadDocs, userEmail, folder._id);
 
-    // Enroll drips for newly created leads (idempotent on the DripEnrollment unique index)
-    // We locate them by backfill markers we just inserted.
+    // ✅ Enroll drips for newly created leads
     const created = await (Lead as any)
       .find({
         userEmail,
         folderId: folder._id,
+        "sheetMeta.connectionId": connectionId,
         "sheetMeta.backfillRunId": runId,
         "sheetMeta.backfillRowNumber": { $in: intendedRowNumbers },
       })
@@ -278,7 +301,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       );
     }
 
-    // Update mapping bookkeeping (keep your existing behavior consistent with webhook)
     match.lastSyncedAt = new Date();
     match.lastEventAt = new Date();
     gs.syncedSheetsSimple = synced;

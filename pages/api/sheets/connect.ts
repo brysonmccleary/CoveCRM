@@ -28,22 +28,26 @@ function esc(s: string) {
     .replace(/"/g, '\\"');
 }
 
+function sha256Hex(input: string) {
+  return crypto.createHash("sha256").update(input).digest("hex");
+}
+
 function buildAppsScript(params: {
   webhookUrl: string;
   backfillUrl: string;
-  userEmail: string;
   sheetId: string;
   gid?: string;
   tabName?: string;
-  secret: string;
+  connectionId: string;
+  token: string;
 }) {
   const webhookUrl = esc(params.webhookUrl);
   const backfillUrl = esc(params.backfillUrl);
-  const userEmail = esc(params.userEmail);
   const sheetId = esc(params.sheetId);
   const gid = esc(params.gid || "");
   const tabName = esc(params.tabName || "");
-  const secret = esc(params.secret);
+  const connectionId = esc(params.connectionId);
+  const token = esc(params.token);
 
   return `/**
  * CoveCRM Google Sheets → Real-time Lead Sync (NO OAUTH / NO CASA)
@@ -68,11 +72,13 @@ function buildAppsScript(params: {
 
 const COVECRM_WEBHOOK_URL = "${webhookUrl}";
 const COVECRM_BACKFILL_URL = "${backfillUrl}";
-const COVECRM_USER_EMAIL = "${userEmail}";
 const COVECRM_SHEET_ID = "${sheetId}";
 const COVECRM_GID = "${gid}";
 const COVECRM_TAB_NAME = "${tabName}";
-const COVECRM_SECRET = "${secret}";
+
+// ✅ Connection isolation (prevents cross-account imports)
+const COVECRM_CONNECTION_ID = "${connectionId}";
+const COVECRM_TOKEN = "${token}";
 
 // Backfill behavior
 const BACKFILL_BATCH_SIZE = 50;      // rows per request (kept conservative)
@@ -82,6 +88,13 @@ const BACKFILL_TRIGGER_FN = "covecrmBackfillWorker";
 // Where we store last-processed info (prevents re-sending the same row repeatedly)
 function _propKey(suffix) {
   return "covecrm:" + COVECRM_SHEET_ID + ":" + (COVECRM_GID || "any") + ":" + suffix;
+}
+
+function _hmacHex(body, secret) {
+  const rawSig = Utilities.computeHmacSha256Signature(body, secret);
+  return rawSig
+    .map(b => (b < 0 ? b + 256 : b).toString(16).padStart(2, "0"))
+    .join("");
 }
 
 /**
@@ -106,7 +119,6 @@ function covecrmInstall() {
     .create();
 
   // Optional: keep a lightweight onChange trigger as a safety net for structural changes.
-  // It will NOT spam because we also de-dupe via PropertiesService.
   ScriptApp.newTrigger("covecrmOnChange")
     .forSpreadsheet(COVECRM_SHEET_ID)
     .onChange()
@@ -118,12 +130,6 @@ function covecrmInstall() {
   covecrmBackfillStart();
 }
 
-/**
- * Start a one-time backfill.
- * - Imports ALL CURRENT rows (row 2..lastRow) into CoveCRM safely in chunks
- * - Uses PropertiesService checkpointing to resume if needed
- * - Uses a time-based trigger only if needed (no Deploy, no OAuth verification)
- */
 function covecrmBackfillStart() {
   const props = PropertiesService.getScriptProperties();
 
@@ -148,10 +154,7 @@ function covecrmBackfillStart() {
   props.setProperty(_propKey("backfillInProgress"), "true");
   props.deleteProperty(_propKey("backfillLastError"));
 
-  // Try to run immediately (often finishes for small/medium sheets)
   covecrmBackfillWorker();
-
-  // If not finished, the worker will keep going via trigger
   _ensureBackfillTrigger();
 }
 
@@ -160,8 +163,6 @@ function _ensureBackfillTrigger() {
   const exists = triggers.some(t => t.getHandlerFunction() === BACKFILL_TRIGGER_FN);
   if (exists) return;
 
-  // Time-driven trigger to continue if we hit execution limits
-  // (no Deploy required — runs inside user's Apps Script project)
   ScriptApp.newTrigger(BACKFILL_TRIGGER_FN)
     .timeBased()
     .everyMinutes(1)
@@ -177,18 +178,11 @@ function _removeBackfillTrigger() {
   });
 }
 
-/**
- * Worker: imports the next chunk(s) of rows until time is nearly up, then exits.
- * Will be called:
- * - immediately by covecrmBackfillStart()
- * - later by time-driven trigger if needed
- */
 function covecrmBackfillWorker() {
   const start = Date.now();
   const props = PropertiesService.getScriptProperties();
   const lock = LockService.getScriptLock();
 
-  // Prevent overlapping runs (trigger + manual run)
   if (!lock.tryLock(5000)) return;
 
   try {
@@ -204,7 +198,6 @@ function covecrmBackfillWorker() {
 
     const ss = SpreadsheetApp.openById(COVECRM_SHEET_ID);
 
-    // Resolve the sheet we should read
     let sheet = null;
     if (COVECRM_GID) {
       const sheets = ss.getSheets();
@@ -224,7 +217,6 @@ function covecrmBackfillWorker() {
     const lastRow = sheet.getLastRow();
     const lastCol = sheet.getLastColumn();
     if (lastRow < 2 || lastCol < 1) {
-      // Nothing to import
       props.setProperty(_propKey("backfillDone"), "true");
       props.deleteProperty(_propKey("backfillInProgress"));
       _removeBackfillTrigger();
@@ -237,7 +229,6 @@ function covecrmBackfillWorker() {
     if (!nextRow || nextRow < 2) nextRow = 2;
 
     while (nextRow <= lastRow) {
-      // Stop before we hit execution limits
       if (Date.now() - start > BACKFILL_MAX_MS) break;
 
       const endRow = Math.min(lastRow, nextRow + BACKFILL_BATCH_SIZE - 1);
@@ -250,7 +241,6 @@ function covecrmBackfillWorker() {
         const rowNumber = nextRow + i;
         const rowVals = values[i];
 
-        // Build object from headers
         const rowObj = {};
         let hasAnyValue = false;
 
@@ -264,10 +254,7 @@ function covecrmBackfillWorker() {
 
         if (!hasAnyValue) continue;
 
-        rows.push({
-          rowNumber: rowNumber,
-          row: rowObj
-        });
+        rows.push({ rowNumber: rowNumber, row: rowObj });
       }
 
       if (rows.length) {
@@ -278,7 +265,6 @@ function covecrmBackfillWorker() {
       props.setProperty(_propKey("backfillNextRow"), String(nextRow));
     }
 
-    // Completed?
     if (nextRow > lastRow) {
       props.setProperty(_propKey("backfillDone"), "true");
       props.deleteProperty(_propKey("backfillInProgress"));
@@ -286,7 +272,6 @@ function covecrmBackfillWorker() {
       _removeBackfillTrigger();
       Logger.log("✅ Backfill completed.");
     } else {
-      // Not finished yet; ensure trigger exists and exit
       props.setProperty(_propKey("backfillInProgress"), "true");
       _ensureBackfillTrigger();
       Logger.log("⏳ Backfill paused (will continue). Next row: " + nextRow);
@@ -296,15 +281,13 @@ function covecrmBackfillWorker() {
       PropertiesService.getScriptProperties().setProperty(_propKey("backfillLastError"), String(err));
     } catch {}
   } finally {
-    try {
-      lock.releaseLock();
-    } catch {}
+    try { lock.releaseLock(); } catch {}
   }
 }
 
 function _postBackfillBatch(runId, rows, totalRows) {
   const payload = {
-    userEmail: COVECRM_USER_EMAIL,
+    connectionId: COVECRM_CONNECTION_ID,
     sheetId: COVECRM_SHEET_ID,
     gid: COVECRM_GID || "",
     tabName: COVECRM_TAB_NAME || "",
@@ -316,63 +299,45 @@ function _postBackfillBatch(runId, rows, totalRows) {
 
   const body = JSON.stringify(payload);
 
-  // HMAC SHA256 signature (hex)
-  const rawSig = Utilities.computeHmacSha256Signature(body, COVECRM_SECRET);
-  const sig = rawSig
-    .map(b => (b < 0 ? b + 256 : b).toString(16).padStart(2, "0"))
-    .join("");
+  const sig = _hmacHex(body, COVECRM_TOKEN);
 
   const resp = UrlFetchApp.fetch(COVECRM_BACKFILL_URL, {
     method: "post",
     contentType: "application/json",
     payload: body,
     muteHttpExceptions: true,
-    headers: { "x-covecrm-signature": sig }
+    headers: {
+      "x-covecrm-token": COVECRM_TOKEN,
+      "x-covecrm-signature": sig
+    }
   });
 
   const code = resp.getResponseCode ? resp.getResponseCode() : 200;
-
-  // If server errors, stop the backfill so we don’t spam.
-  if (code >= 500) {
-    throw new Error("Backfill batch failed with " + code);
-  }
+  if (code >= 500) throw new Error("Backfill batch failed with " + code);
 }
 
-// Trigger: runs when a user edits a cell (including pasting rows).
 function covecrmOnEdit(e) {
   try {
     if (!e || !e.range) return;
 
     const sheet = e.range.getSheet();
-
-    // Optional tab-name filter if you ever pass tabName
     if (COVECRM_TAB_NAME && sheet.getName() !== COVECRM_TAB_NAME) return;
-
-    // Optional gid filter if provided
     if (COVECRM_GID && String(sheet.getSheetId()) !== String(COVECRM_GID)) return;
 
     const startRow = e.range.getRow();
     const numRows = e.range.getNumRows ? e.range.getNumRows() : 1;
-
-    // We assume row 1 is headers
     if (startRow < 2) return;
 
-    // Process each affected row once
     for (let r = startRow; r < startRow + numRows; r++) {
       _sendRowIfNew(sheet, r);
     }
-  } catch (err) {
-    // Logger.log(String(err));
-  }
+  } catch {}
 }
 
-// Trigger: runs on structural changes (row insert/delete, etc.)
-// We try to send the last row, but we still de-dupe using PropertiesService.
 function covecrmOnChange(e) {
   try {
     const ss = SpreadsheetApp.openById(COVECRM_SHEET_ID);
 
-    // If gid is provided, grab that sheet specifically; else use active sheet.
     let sheet = null;
     if (COVECRM_GID) {
       const sheets = ss.getSheets();
@@ -393,20 +358,16 @@ function covecrmOnChange(e) {
     if (lastRow < 2) return;
 
     _sendRowIfNew(sheet, lastRow);
-  } catch (err) {
-    // Logger.log(String(err));
-  }
+  } catch {}
 }
 
 function _sendRowIfNew(sheet, rowNumber) {
-  // Basic sanity: avoid empty rows
   const lastCol = sheet.getLastColumn();
   if (!lastCol || lastCol < 1) return;
 
   const headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
   const values = sheet.getRange(rowNumber, 1, 1, lastCol).getValues()[0];
 
-  // Build row object from headers
   const rowObj = {};
   let hasAnyValue = false;
 
@@ -418,10 +379,8 @@ function _sendRowIfNew(sheet, rowNumber) {
     rowObj[key] = v;
   }
 
-  // Don’t send completely blank rows
   if (!hasAnyValue) return;
 
-  // De-dupe key: rowNumber + a compact hash of the values
   const hash = _hashRow(values);
   const dedupeKey = String(rowNumber) + ":" + hash;
 
@@ -429,11 +388,10 @@ function _sendRowIfNew(sheet, rowNumber) {
   const lastKey = props.getProperty(_propKey("lastKey")) || "";
   if (lastKey === dedupeKey) return;
 
-  // Write it BEFORE sending to prevent accidental double sends from near-simultaneous triggers
   props.setProperty(_propKey("lastKey"), dedupeKey);
 
   const payload = {
-    userEmail: COVECRM_USER_EMAIL,
+    connectionId: COVECRM_CONNECTION_ID,
     sheetId: COVECRM_SHEET_ID,
     gid: COVECRM_GID || "",
     tabName: COVECRM_TAB_NAME || "",
@@ -442,22 +400,19 @@ function _sendRowIfNew(sheet, rowNumber) {
   };
 
   const body = JSON.stringify(payload);
-
-  // HMAC SHA256 signature (hex)
-  const rawSig = Utilities.computeHmacSha256Signature(body, COVECRM_SECRET);
-  const sig = rawSig
-    .map(b => (b < 0 ? b + 256 : b).toString(16).padStart(2, "0"))
-    .join("");
+  const sig = _hmacHex(body, COVECRM_TOKEN);
 
   const resp = UrlFetchApp.fetch(COVECRM_WEBHOOK_URL, {
     method: "post",
     contentType: "application/json",
     payload: body,
     muteHttpExceptions: true,
-    headers: { "x-covecrm-signature": sig }
+    headers: {
+      "x-covecrm-token": COVECRM_TOKEN,
+      "x-covecrm-signature": sig
+    }
   });
 
-  // Optional: if webhook failed, allow retry by clearing lastKey
   const code = resp.getResponseCode ? resp.getResponseCode() : 200;
   if (code >= 400) {
     props.deleteProperty(_propKey("lastKey"));
@@ -471,7 +426,7 @@ function _hashRow(values) {
     return bytes
       .map(b => (b < 0 ? b + 256 : b).toString(16).padStart(2, "0"))
       .join("")
-      .slice(0, 16); // short hash is fine for dedupe
+      .slice(0, 16);
   } catch {
     return String(new Date().getTime());
   }
@@ -485,7 +440,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const session = await getServerSession(req, res, authOptions);
   if (!session?.user?.email) return res.status(401).json({ error: "Unauthorized" });
 
-  // ✅ Backwards compatibility: some UI versions send "spreadsheetId" instead of "sheetId".
   const { sheetId, spreadsheetId, folderName, tabName, gid } = (req.body || {}) as {
     sheetId?: string;
     spreadsheetId?: string;
@@ -501,11 +455,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   const cleanFolderName = String(folderName || "").trim();
-  if (!cleanFolderName) {
-    return res.status(400).json({ error: "Missing folderName" });
-  }
+  if (!cleanFolderName) return res.status(400).json({ error: "Missing folderName" });
 
-  // Hard block canonical system folder names + system-ish names (safety)
   if (isSystemFolder(cleanFolderName) || isSystemish(cleanFolderName)) {
     return res.status(400).json({ error: "Cannot link a sheet to a system folder" });
   }
@@ -517,20 +468,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!user) return res.status(404).json({ error: "User not found" });
 
     const gs: any = (user as any).googleSheets || {};
-
-    // ✅ Ensure arrays exist
     gs.syncedSheetsSimple = Array.isArray(gs.syncedSheetsSimple) ? gs.syncedSheetsSimple : [];
 
-    // ✅ Fully automated forever: secret auto-created per user (schema supported)
-    if (!gs.webhookSecret) {
-      gs.webhookSecret = crypto.randomBytes(32).toString("hex");
-    }
-
-    // ✅ UX FIX: Create the folder immediately so it appears in CoveCRM right away.
+    // Ensure folder exists immediately
     const existingFolder = await Folder.findOne({ userEmail: session.user.email, name: cleanFolderName });
     if (!existingFolder) {
       await Folder.create({ userEmail: session.user.email, name: cleanFolderName, source: "google-sheets" });
     }
+
+    // ✅ Create a per-connection secret token (NOT email-based)
+    const connectionId = crypto.randomBytes(12).toString("hex"); // short but unique enough
+    const token = crypto.randomBytes(32).toString("hex");
+    const tokenHash = sha256Hex(token);
 
     const entry = {
       sheetId: String(effectiveSheetId),
@@ -539,9 +488,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       gid: gid || "",
       lastSyncedAt: null,
       lastEventAt: null,
+
+      // ✅ NEW: connection isolation
+      connectionId,
+      tokenHash,
+      createdAt: new Date(),
     };
 
-    // ✅ Upsert mapping by sheetId (string)
+    // Upsert by sheetId for this user (keeps your current behavior)
     const idx = gs.syncedSheetsSimple.findIndex(
       (s: any) => String(s.sheetId || "") === String(effectiveSheetId)
     );
@@ -558,11 +512,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const appsScript = buildAppsScript({
       webhookUrl,
       backfillUrl,
-      userEmail: session.user.email,
       sheetId: String(effectiveSheetId),
       gid: gid || "",
       tabName: tabName || "",
-      secret: String(gs.webhookSecret),
+      connectionId,
+      token,
     });
 
     return res.status(200).json({
@@ -575,6 +529,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         folderName: cleanFolderName,
         tabName: tabName || "",
         gid: gid || "",
+        connectionId,
       },
     });
   } catch (e: any) {

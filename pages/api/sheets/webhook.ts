@@ -39,6 +39,10 @@ function hmacHex(body: string, secret: string) {
   return crypto.createHmac("sha256", secret).update(body).digest("hex");
 }
 
+function sha256Hex(input: string) {
+  return crypto.createHash("sha256").update(input).digest("hex");
+}
+
 function normalizePhone(raw: any): string {
   const s = String(raw || "").trim();
   if (!s) return "";
@@ -62,7 +66,6 @@ async function getOrCreateSafeFolder(userEmail: string, folderName: string) {
   let folder = await Folder.findOne({ userEmail, name });
   if (!folder) folder = await Folder.create({ userEmail, name, source: "google-sheets" });
 
-  // Absolute post-condition: never return a system-ish folder
   if (!folder?.name || isSystemFolder(folder.name) || isSystemish(folder.name)) {
     const safe = `${name} — ${Date.now()}`;
     folder = await Folder.create({ userEmail, name: safe, source: "google-sheets" });
@@ -75,8 +78,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
   try {
-    // 1) Verify signature + parse
+    const token = String(req.headers["x-covecrm-token"] || "").trim();
     const sig = String(req.headers["x-covecrm-signature"] || "").trim();
+
+    if (!token) return res.status(401).json({ error: "Missing token" });
     if (!sig) return res.status(401).json({ error: "Missing signature" });
 
     const rawBody = await readRawBody(req);
@@ -89,36 +94,55 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ error: "Invalid JSON body" });
     }
 
-    const userEmail = String(payload.userEmail || "").trim().toLowerCase();
+    const connectionId = String(payload.connectionId || "").trim();
     const sheetId = String(payload.sheetId || "").trim();
-    if (!userEmail || !sheetId) {
-      return res.status(400).json({ error: "Missing userEmail or sheetId" });
+    if (!connectionId || !sheetId) {
+      return res.status(400).json({ error: "Missing connectionId or sheetId" });
     }
 
-    // 2) Load user + verify per-user webhook secret
     await dbConnect();
 
-    const user = await User.findOne({ email: userEmail });
-    if (!user) return res.status(404).json({ error: "User not found" });
+    // ✅ Find the owning user by connectionId
+    const user = await User.findOne({
+      "googleSheets.syncedSheetsSimple": {
+        $elemMatch: { connectionId: connectionId },
+      },
+    });
+
+    if (!user) return res.status(404).json({ error: "Connection not found" });
+
+    const userEmail = String((user as any)?.email || "").trim().toLowerCase();
+    if (!userEmail) return res.status(500).json({ error: "User missing email" });
 
     const gs: any = (user as any).googleSheets || {};
-    const secret = String(gs.webhookSecret || "");
-    if (!secret) return res.status(403).json({ error: "Webhook not enabled for user" });
+    const synced = Array.isArray(gs.syncedSheetsSimple) ? gs.syncedSheetsSimple : [];
 
-    const expected = hmacHex(rawBody, secret);
+    const match = synced.find((s: any) => String(s.connectionId || "") === connectionId);
+    if (!match) return res.status(404).json({ error: "Connection mapping missing" });
+
+    // ✅ Hard safety: sheetId must match the connection
+    if (String(match.sheetId || "") !== sheetId) {
+      return res.status(403).json({ error: "Sheet mismatch for connection" });
+    }
+
+    // ✅ Verify token hash
+    const tokenHash = String(match.tokenHash || "");
+    if (!tokenHash) return res.status(403).json({ error: "Connection token missing" });
+
+    const gotHash = sha256Hex(token);
+    if (gotHash !== tokenHash) {
+      return res.status(403).json({ error: "Invalid token" });
+    }
+
+    // ✅ Verify signature using the raw token (now safe because token was verified)
+    const expected = hmacHex(rawBody, token);
     if (!timingSafeEqualHex(sig, expected)) {
       return res.status(403).json({ error: "Invalid signature" });
     }
 
-    // 3) Find sheet mapping -> folder (✅ use syncedSheetsSimple)
-    const synced = Array.isArray(gs.syncedSheetsSimple) ? gs.syncedSheetsSimple : [];
-    const match = synced.find((s: any) => String(s.sheetId || "") === sheetId);
-    if (!match) return res.status(404).json({ error: "No sheet mapping found for this user" });
-
     const folderName = String(match.folderName || "").trim() || "Imported Leads";
     const folder = await getOrCreateSafeFolder(userEmail, folderName);
 
-    // 4) Map row -> your Lead schema (canonical fields are Title Case keys)
     const row = (payload.row || {}) as Record<string, any>;
 
     const firstName = pickRowValue(row, ["First Name", "firstName", "firstname", "First", "first"]);
@@ -135,8 +159,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const normalizedPhone = normalizePhone(phoneRaw);
     const phoneLast10 = normalizedPhone ? normalizedPhone.slice(-10) : "";
 
-    // 5) Optional de-dupe (prevents same phone being inserted repeatedly per folder)
-    //    If no phone, attempt de-dupe by email per folder.
+    // ✅ Optional de-dupe per folder
     if (normalizedPhone) {
       const exists = await (Lead as any).findOne({
         userEmail,
@@ -168,8 +191,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
-    // Build the doc using YOUR schema’s keys.
-    // Also include raw row + sheet metadata (strict:false allows extra fields safely).
     const leadDoc: any = {
       State: String(state || "").trim() || undefined,
       "First Name": String(firstName || "").trim() || undefined,
@@ -193,15 +214,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         tabName: payload.tabName || match.tabName || "",
         receivedAt: new Date(),
         ts: payload.ts || null,
+        connectionId,
       },
       rawRow: row,
     };
 
-    // 6) Insert via your helper
     await createLeadsFromGoogleSheet([leadDoc], userEmail, folder._id);
 
-    // ✅ 6b) Auto-enroll in folder drips if this folder is watched
-    // We need a leadId to enroll. We'll fetch the most recent matching lead.
+    // ✅ Auto-enroll in folder drips if watched
     let createdLead: any = null;
     const ts = payload.ts || null;
 
@@ -211,6 +231,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           userEmail,
           folderId: folder._id,
           "sheetMeta.ts": ts,
+          "sheetMeta.connectionId": connectionId,
         })
         .sort({ createdAt: -1 })
         .select({ _id: 1 })
@@ -219,11 +240,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (!createdLead && normalizedPhone) {
       createdLead = await (Lead as any)
-        .findOne({
-          userEmail,
-          folderId: folder._id,
-          normalizedPhone,
-        })
+        .findOne({ userEmail, folderId: folder._id, normalizedPhone })
         .sort({ createdAt: -1 })
         .select({ _id: 1 })
         .lean();
@@ -247,12 +264,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         userEmail,
         folderId: String(folder._id),
         leadId: String(createdLead._id),
-        source: "sheet-bulk",
+        source: "sheet-row",
         startMode: "now",
       });
     }
 
-    // 7) Update mapping bookkeeping
     match.lastSyncedAt = new Date();
     match.lastEventAt = new Date();
     gs.syncedSheetsSimple = synced;
