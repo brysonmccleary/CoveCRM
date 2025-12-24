@@ -121,8 +121,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
-    // alphabetical custom
-    custom.sort((a, b) => a.name.localeCompare(b.name));
+    // ✅ custom folders sorted by most recently updated (then createdAt, then name)
+    custom.sort((a, b) => {
+      const au = a.updatedAt?.getTime() ?? 0;
+      const bu = b.updatedAt?.getTime() ?? 0;
+      if (bu !== au) return bu - au;
+
+      const ac = a.createdAt?.getTime() ?? 0;
+      const bc = b.createdAt?.getTime() ?? 0;
+      if (bc !== ac) return bc - ac;
+
+      return a.name.localeCompare(b.name);
+    });
 
     // For each system bucket, choose canonical (oldest)
     const canonicalByKey = new Map<string, LeanFolder>();

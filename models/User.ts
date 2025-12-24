@@ -78,6 +78,14 @@ export interface IUser {
       gid?: string;
       lastSyncedAt?: Date | null;
       lastEventAt?: Date | null;
+
+      // ✅ REQUIRED for multi-tenant isolation + auth
+      connectionId?: string;
+      tokenHash?: string;
+
+      // kept as plain dates (subdocs here don't auto-timestamp)
+      createdAt?: Date;
+      updatedAt?: Date;
     }[];
   };
 
@@ -208,6 +216,14 @@ const SyncedSheetSimpleSchema = new Schema(
     gid: { type: String, default: "" },
     lastSyncedAt: { type: Date, default: null },
     lastEventAt: { type: Date, default: null },
+
+    // ✅ REQUIRED for webhook/backfill auth + isolation
+    connectionId: { type: String, default: "" },
+    tokenHash: { type: String, default: "" },
+
+    // stored explicitly by connect handler
+    createdAt: { type: Date, default: null },
+    updatedAt: { type: Date, default: null },
   },
   { _id: false },
 );
@@ -401,6 +417,12 @@ UserSchema.index(
 UserSchema.index(
   { "googleSheets.syncedSheetsSimple.sheetId": 1 },
   { name: "user_sheets_simple_sheetid_idx", sparse: true },
+);
+
+// ✅ NEW: speed up webhook/backfill lookup by connectionId
+UserSchema.index(
+  { "googleSheets.syncedSheetsSimple.connectionId": 1 },
+  { name: "user_sheets_simple_connectionid_idx", sparse: true },
 );
 
 const User =

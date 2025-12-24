@@ -72,6 +72,15 @@ async function getOrCreateSafeFolder(userEmail: string, folderName: string) {
   return folder;
 }
 
+async function touchFolderUpdatedAt(folderId: any, userEmail: string) {
+  try {
+    await Folder.updateOne(
+      { _id: folderId, userEmail },
+      { $set: { updatedAt: new Date() } }
+    ).exec();
+  } catch {}
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
@@ -199,7 +208,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           tabName: payload.tabName || match.tabName || "",
           receivedAt: new Date(),
           ts: payload.ts || null,
-          connectionId, // ✅ NEW
+          connectionId,
           backfillRunId: runId,
           backfillRowNumber: rowNumber,
         },
@@ -270,10 +279,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     if (!newLeadDocs.length) {
+      // still bump folder recency on batch activity
+      await touchFolderUpdatedAt(folder._id, userEmail);
       return res.status(200).json({ ok: true, inserted: 0, skipped: candidateDocs.length });
     }
 
     await createLeadsFromGoogleSheet(newLeadDocs, userEmail, folder._id);
+
+    // ✅ bump folder recency after inserts
+    await touchFolderUpdatedAt(folder._id, userEmail);
 
     // ✅ Enroll drips for newly created leads
     const created = await (Lead as any)
@@ -303,6 +317,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     match.lastSyncedAt = new Date();
     match.lastEventAt = new Date();
+    match.updatedAt = new Date();
+
     gs.syncedSheetsSimple = synced;
     (user as any).googleSheets = gs;
     await user.save();

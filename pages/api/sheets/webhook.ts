@@ -74,6 +74,15 @@ async function getOrCreateSafeFolder(userEmail: string, folderName: string) {
   return folder;
 }
 
+async function touchFolderUpdatedAt(folderId: any, userEmail: string) {
+  try {
+    await Folder.updateOne(
+      { _id: folderId, userEmail },
+      { $set: { updatedAt: new Date() } }
+    ).exec();
+  } catch {}
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
@@ -167,11 +176,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         normalizedPhone,
       });
       if (exists) {
+        // ✅ bump folder recency on activity
+        await touchFolderUpdatedAt(folder._id, userEmail);
+
         match.lastSyncedAt = new Date();
         match.lastEventAt = new Date();
+        match.updatedAt = new Date();
+
         gs.syncedSheetsSimple = synced;
         (user as any).googleSheets = gs;
         await user.save();
+
         return res.status(200).json({ ok: true, skipped: "duplicate_phone" });
       }
     } else if (String(emailRaw || "").trim()) {
@@ -182,11 +197,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         $or: [{ Email: emailLower }, { email: emailLower }],
       });
       if (exists) {
+        // ✅ bump folder recency on activity
+        await touchFolderUpdatedAt(folder._id, userEmail);
+
         match.lastSyncedAt = new Date();
         match.lastEventAt = new Date();
+        match.updatedAt = new Date();
+
         gs.syncedSheetsSimple = synced;
         (user as any).googleSheets = gs;
         await user.save();
+
         return res.status(200).json({ ok: true, skipped: "duplicate_email" });
       }
     }
@@ -220,6 +241,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     };
 
     await createLeadsFromGoogleSheet([leadDoc], userEmail, folder._id);
+
+    // ✅ bump folder recency after insert so folder jumps to top
+    await touchFolderUpdatedAt(folder._id, userEmail);
 
     // ✅ Auto-enroll in folder drips if watched
     let createdLead: any = null;
@@ -264,13 +288,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         userEmail,
         folderId: String(folder._id),
         leadId: String(createdLead._id),
-        source: "sheet-bulk", // ✅ FIX: must match EnrollSource union
+        source: "sheet-bulk",
         startMode: "now",
       });
     }
 
     match.lastSyncedAt = new Date();
     match.lastEventAt = new Date();
+    match.updatedAt = new Date();
+
     gs.syncedSheetsSimple = synced;
     (user as any).googleSheets = gs;
     await user.save();
