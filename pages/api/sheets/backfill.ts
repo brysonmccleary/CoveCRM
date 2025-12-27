@@ -80,32 +80,8 @@ async function getOrCreateSafeFolder(userEmail: string, folderName: string) {
 
 async function touchFolderUpdatedAt(folderId: any, userEmail: string) {
   try {
-    await Folder.updateOne(
-      { _id: folderId, userEmail },
-      { $set: { updatedAt: new Date() } }
-    ).exec();
+    await Folder.updateOne({ _id: folderId, userEmail }, { $set: { updatedAt: new Date() } }).exec();
   } catch {}
-}
-
-function buildPhoneQueryCandidates(normalizedPhone: string) {
-  const last10 = normalizedPhone ? normalizedPhone.slice(-10) : "";
-  const candidates: any[] = [];
-
-  if (normalizedPhone) {
-    candidates.push({ normalizedPhone });
-    candidates.push({ phoneLast10: last10 });
-    candidates.push({ Phone: normalizedPhone });
-    candidates.push({ phone: normalizedPhone });
-    candidates.push({ "Phone": normalizedPhone });
-  }
-
-  if (last10) {
-    candidates.push({ Phone: { $regex: `${last10}$` } });
-    candidates.push({ phone: { $regex: `${last10}$` } });
-    candidates.push({ "Phone": { $regex: `${last10}$` } });
-  }
-
-  return candidates;
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -138,9 +114,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     await dbConnect();
 
     const user = await User.findOne({
-      "googleSheets.syncedSheetsSimple": {
-        $elemMatch: { connectionId: connectionId },
-      },
+      "googleSheets.syncedSheetsSimple": { $elemMatch: { connectionId: connectionId } },
     });
     if (!user) return res.status(404).json({ error: "Connection not found" });
 
@@ -176,6 +150,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }> = [];
 
     const phones: string[] = [];
+    const last10s: string[] = [];
     const emails: string[] = [];
 
     for (const item of rows) {
@@ -198,8 +173,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const phoneLast10 = normalizedPhone ? normalizedPhone.slice(-10) : "";
       const emailLower = normalizeEmail(emailRaw);
 
-      if (normalizedPhone) phones.push(normalizedPhone);
-      else if (emailLower) emails.push(emailLower);
+      if (normalizedPhone) {
+        phones.push(normalizedPhone);
+        if (phoneLast10) last10s.push(phoneLast10);
+      } else if (emailLower) {
+        emails.push(emailLower);
+      }
 
       const leadDoc: any = {
         State: String(state || "").trim() || undefined,
@@ -236,23 +215,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (!candidateDocs.length) return res.status(200).json({ ok: true, inserted: 0 });
 
-    // ✅ Preload existing phones/emails using multi-field matching
-    const existingPhones = new Set<string>();
-    const existingEmails = new Set<string>();
+    // ✅ preload existing phone/email keys so we can dedupe within this folder BEFORE insertMany
+    const existingPhoneKeys = new Set<string>();
+    const existingEmailKeys = new Set<string>();
 
-    if (phones.length) {
+    if (phones.length || last10s.length) {
       const uniqPhones = Array.from(new Set(phones));
-      const last10s = Array.from(new Set(uniqPhones.map((p) => p.slice(-10)).filter(Boolean)));
+      const uniqLast10 = Array.from(new Set(last10s));
 
       const found = await (Lead as any)
         .find({
           userEmail,
           folderId: folder._id,
           $or: [
-            { normalizedPhone: { $in: uniqPhones } },
-            { phoneLast10: { $in: last10s } },
-            { Phone: { $in: uniqPhones } },
-            { phone: { $in: uniqPhones } },
+            ...(uniqPhones.length ? [{ normalizedPhone: { $in: uniqPhones } }] : []),
+            ...(uniqLast10.length ? [{ phoneLast10: { $in: uniqLast10 } }] : []),
+            ...(uniqPhones.length ? [{ Phone: { $in: uniqPhones } }] : []),
+            ...(uniqPhones.length ? [{ phone: { $in: uniqPhones } }] : []),
           ],
         })
         .select({ normalizedPhone: 1, phoneLast10: 1, Phone: 1, phone: 1 })
@@ -262,9 +241,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const np = String(f?.normalizedPhone || "").trim();
         const p10 = String(f?.phoneLast10 || "").trim();
         const raw = String(f?.Phone || f?.phone || "").replace(/\D+/g, "");
-        if (np) existingPhones.add(np);
-        if (raw) existingPhones.add(raw);
-        if (p10) existingPhones.add(p10);
+        if (np) existingPhoneKeys.add(np);
+        if (p10) existingPhoneKeys.add(p10);
+        if (raw) {
+          existingPhoneKeys.add(raw);
+          const raw10 = raw.slice(-10);
+          if (raw10) existingPhoneKeys.add(raw10);
+        }
       }
     }
 
@@ -281,7 +264,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       for (const f of found || []) {
         const e = String(f?.Email || f?.email || "").trim().toLowerCase();
-        if (e) existingEmails.add(e);
+        if (e) existingEmailKeys.add(e);
       }
     }
 
@@ -291,17 +274,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     for (const c of candidateDocs) {
       if (c.normalizedPhone) {
         const p10 = c.normalizedPhone.slice(-10);
-        if (existingPhones.has(c.normalizedPhone) || (p10 && existingPhones.has(p10))) continue;
-        existingPhones.add(c.normalizedPhone);
-        if (p10) existingPhones.add(p10);
+        if (existingPhoneKeys.has(c.normalizedPhone) || (p10 && existingPhoneKeys.has(p10))) continue;
+
+        existingPhoneKeys.add(c.normalizedPhone);
+        if (p10) existingPhoneKeys.add(p10);
+
         newLeadDocs.push(c.leadDoc);
         intendedRowNumbers.push(c.rowNumber);
       } else if (c.emailLower) {
-        if (existingEmails.has(c.emailLower)) continue;
-        existingEmails.add(c.emailLower);
+        if (existingEmailKeys.has(c.emailLower)) continue;
+
+        existingEmailKeys.add(c.emailLower);
         newLeadDocs.push(c.leadDoc);
         intendedRowNumbers.push(c.rowNumber);
       } else {
+        // no phone/email => allow insert
         newLeadDocs.push(c.leadDoc);
         intendedRowNumbers.push(c.rowNumber);
       }
@@ -315,6 +302,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     await createLeadsFromGoogleSheet(newLeadDocs, userEmail, folder._id);
     await touchFolderUpdatedAt(folder._id, userEmail);
 
+    // ✅ enroll drips for leads we definitely created in this run
     const created = await (Lead as any)
       .find({
         userEmail,

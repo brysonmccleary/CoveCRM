@@ -80,10 +80,7 @@ async function getOrCreateSafeFolder(userEmail: string, folderName: string) {
 
 async function touchFolderUpdatedAt(folderId: any, userEmail: string) {
   try {
-    await Folder.updateOne(
-      { _id: folderId, userEmail },
-      { $set: { updatedAt: new Date() } }
-    ).exec();
+    await Folder.updateOne({ _id: folderId, userEmail }, { $set: { updatedAt: new Date() } }).exec();
   } catch {}
 }
 
@@ -94,14 +91,12 @@ function buildPhoneQueryCandidates(normalizedPhone: string) {
   if (normalizedPhone) {
     candidates.push({ normalizedPhone });
     candidates.push({ phoneLast10: last10 });
-    // raw Phone field fallbacks
     candidates.push({ Phone: normalizedPhone });
     candidates.push({ phone: normalizedPhone });
     candidates.push({ "Phone": normalizedPhone });
   }
 
   if (last10) {
-    // if Phone is stored with formatting, match by last10 digits
     candidates.push({ Phone: { $regex: `${last10}$` } });
     candidates.push({ phone: { $regex: `${last10}$` } });
     candidates.push({ "Phone": { $regex: `${last10}$` } });
@@ -139,9 +134,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     await dbConnect();
 
     const user = await User.findOne({
-      "googleSheets.syncedSheetsSimple": {
-        $elemMatch: { connectionId: connectionId },
-      },
+      "googleSheets.syncedSheetsSimple": { $elemMatch: { connectionId: connectionId } },
     });
 
     if (!user) return res.status(404).json({ error: "Connection not found" });
@@ -192,11 +185,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // ✅ Stronger dedupe per folder (multi-field)
     if (normalizedPhone) {
-      const exists = await (Lead as any).findOne({
-        userEmail,
-        folderId: folder._id,
-        $or: buildPhoneQueryCandidates(normalizedPhone),
-      }).select({ _id: 1 }).lean();
+      const exists = await (Lead as any)
+        .findOne({
+          userEmail,
+          folderId: folder._id,
+          $or: buildPhoneQueryCandidates(normalizedPhone),
+        })
+        .select({ _id: 1 })
+        .lean();
 
       if (exists) {
         await touchFolderUpdatedAt(folder._id, userEmail);
@@ -211,11 +207,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return res.status(200).json({ ok: true, skipped: "duplicate_phone" });
       }
     } else if (emailLower) {
-      const exists = await (Lead as any).findOne({
-        userEmail,
-        folderId: folder._id,
-        $or: [{ Email: emailLower }, { email: emailLower }, { "Email": emailLower }],
-      }).select({ _id: 1 }).lean();
+      const exists = await (Lead as any)
+        .findOne({
+          userEmail,
+          folderId: folder._id,
+          $or: [{ Email: emailLower }, { email: emailLower }, { "Email": emailLower }],
+        })
+        .select({ _id: 1 })
+        .lean();
 
       if (exists) {
         await touchFolderUpdatedAt(folder._id, userEmail);
@@ -235,11 +234,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       State: String(state || "").trim() || undefined,
       "First Name": String(firstName || "").trim() || undefined,
       "Last Name": String(lastName || "").trim() || undefined,
-
-      // Keep original phone in Phone, but also store normalized + last10 for dedupe
       Phone: String(phoneRaw || "").trim() || undefined,
-
-      // ✅ store email lowercased so future comparisons are consistent
       Email: emailLower || undefined,
 
       Notes: String(notes || "").trim() || undefined,
@@ -314,7 +309,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         userEmail,
         folderId: String(folder._id),
         leadId: String(createdLead._id),
-        source: "sheet-bulk",
+        source: "sheet-bulk", // ✅ matches EnrollSource union
         startMode: "now",
       });
     }
