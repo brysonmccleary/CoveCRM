@@ -6,8 +6,6 @@ import User from "@/models/User";
 import Folder from "@/models/Folder";
 import Lead, { createLeadsFromGoogleSheet, sanitizeLeadType } from "@/models/Lead";
 import { isSystemFolderName as isSystemFolder, isSystemish } from "@/lib/systemFolders";
-
-// ✅ Auto-enroll helper (folder drip watchers)
 import { enrollOnNewLeadIfWatched } from "@/lib/drips/enrollOnNewLead";
 
 export const config = {
@@ -49,6 +47,12 @@ function normalizePhone(raw: any): string {
   return s.replace(/\D+/g, "");
 }
 
+function normalizeEmail(raw: any): string {
+  const s = String(raw || "").trim();
+  if (!s) return "";
+  return s.toLowerCase();
+}
+
 function pickRowValue(row: Record<string, any>, keys: string[]) {
   for (const k of keys) {
     if (row && Object.prototype.hasOwnProperty.call(row, k)) {
@@ -83,6 +87,29 @@ async function touchFolderUpdatedAt(folderId: any, userEmail: string) {
   } catch {}
 }
 
+function buildPhoneQueryCandidates(normalizedPhone: string) {
+  const last10 = normalizedPhone ? normalizedPhone.slice(-10) : "";
+  const candidates: any[] = [];
+
+  if (normalizedPhone) {
+    candidates.push({ normalizedPhone });
+    candidates.push({ phoneLast10: last10 });
+    // raw Phone field fallbacks
+    candidates.push({ Phone: normalizedPhone });
+    candidates.push({ phone: normalizedPhone });
+    candidates.push({ "Phone": normalizedPhone });
+  }
+
+  if (last10) {
+    // if Phone is stored with formatting, match by last10 digits
+    candidates.push({ Phone: { $regex: `${last10}$` } });
+    candidates.push({ phone: { $regex: `${last10}$` } });
+    candidates.push({ "Phone": { $regex: `${last10}$` } });
+  }
+
+  return candidates;
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
@@ -111,7 +138,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     await dbConnect();
 
-    // ✅ Find the owning user by connectionId
     const user = await User.findOne({
       "googleSheets.syncedSheetsSimple": {
         $elemMatch: { connectionId: connectionId },
@@ -129,21 +155,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const match = synced.find((s: any) => String(s.connectionId || "") === connectionId);
     if (!match) return res.status(404).json({ error: "Connection mapping missing" });
 
-    // ✅ Hard safety: sheetId must match the connection
     if (String(match.sheetId || "") !== sheetId) {
       return res.status(403).json({ error: "Sheet mismatch for connection" });
     }
 
-    // ✅ Verify token hash
     const tokenHash = String(match.tokenHash || "");
     if (!tokenHash) return res.status(403).json({ error: "Connection token missing" });
 
     const gotHash = sha256Hex(token);
-    if (gotHash !== tokenHash) {
-      return res.status(403).json({ error: "Invalid token" });
-    }
+    if (gotHash !== tokenHash) return res.status(403).json({ error: "Invalid token" });
 
-    // ✅ Verify signature using the raw token (now safe because token was verified)
     const expected = hmacHex(rawBody, token);
     if (!timingSafeEqualHex(sig, expected)) {
       return res.status(403).json({ error: "Invalid signature" });
@@ -167,43 +188,41 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const normalizedPhone = normalizePhone(phoneRaw);
     const phoneLast10 = normalizedPhone ? normalizedPhone.slice(-10) : "";
+    const emailLower = normalizeEmail(emailRaw);
 
-    // ✅ Optional de-dupe per folder
+    // ✅ Stronger dedupe per folder (multi-field)
     if (normalizedPhone) {
       const exists = await (Lead as any).findOne({
         userEmail,
         folderId: folder._id,
-        normalizedPhone,
-      });
+        $or: buildPhoneQueryCandidates(normalizedPhone),
+      }).select({ _id: 1 }).lean();
+
       if (exists) {
-        // ✅ bump folder recency on activity
         await touchFolderUpdatedAt(folder._id, userEmail);
 
         match.lastSyncedAt = new Date();
         match.lastEventAt = new Date();
         match.updatedAt = new Date();
-
         gs.syncedSheetsSimple = synced;
         (user as any).googleSheets = gs;
         await user.save();
 
         return res.status(200).json({ ok: true, skipped: "duplicate_phone" });
       }
-    } else if (String(emailRaw || "").trim()) {
-      const emailLower = String(emailRaw || "").trim().toLowerCase();
+    } else if (emailLower) {
       const exists = await (Lead as any).findOne({
         userEmail,
         folderId: folder._id,
-        $or: [{ Email: emailLower }, { email: emailLower }],
-      });
+        $or: [{ Email: emailLower }, { email: emailLower }, { "Email": emailLower }],
+      }).select({ _id: 1 }).lean();
+
       if (exists) {
-        // ✅ bump folder recency on activity
         await touchFolderUpdatedAt(folder._id, userEmail);
 
         match.lastSyncedAt = new Date();
         match.lastEventAt = new Date();
         match.updatedAt = new Date();
-
         gs.syncedSheetsSimple = synced;
         (user as any).googleSheets = gs;
         await user.save();
@@ -216,8 +235,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       State: String(state || "").trim() || undefined,
       "First Name": String(firstName || "").trim() || undefined,
       "Last Name": String(lastName || "").trim() || undefined,
+
+      // Keep original phone in Phone, but also store normalized + last10 for dedupe
       Phone: String(phoneRaw || "").trim() || undefined,
-      Email: String(emailRaw || "").trim() || undefined,
+
+      // ✅ store email lowercased so future comparisons are consistent
+      Email: emailLower || undefined,
+
       Notes: String(notes || "").trim() || undefined,
       Age: String(age || "").trim() || undefined,
       Beneficiary: String(beneficiary || "").trim() || undefined,
@@ -242,10 +266,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     await createLeadsFromGoogleSheet([leadDoc], userEmail, folder._id);
 
-    // ✅ bump folder recency after insert so folder jumps to top
     await touchFolderUpdatedAt(folder._id, userEmail);
 
-    // ✅ Auto-enroll in folder drips if watched
+    // ✅ Find the created lead reliably for drip enrollment
     let createdLead: any = null;
     const ts = payload.ts || null;
 
@@ -264,19 +287,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (!createdLead && normalizedPhone) {
       createdLead = await (Lead as any)
-        .findOne({ userEmail, folderId: folder._id, normalizedPhone })
+        .findOne({
+          userEmail,
+          folderId: folder._id,
+          $or: buildPhoneQueryCandidates(normalizedPhone),
+        })
         .sort({ createdAt: -1 })
         .select({ _id: 1 })
         .lean();
     }
 
-    if (!createdLead && String(emailRaw || "").trim()) {
-      const emailLower = String(emailRaw || "").trim().toLowerCase();
+    if (!createdLead && emailLower) {
       createdLead = await (Lead as any)
         .findOne({
           userEmail,
           folderId: folder._id,
-          $or: [{ Email: emailLower }, { email: emailLower }],
+          $or: [{ Email: emailLower }, { email: emailLower }, { "Email": emailLower }],
         })
         .sort({ createdAt: -1 })
         .select({ _id: 1 })
@@ -288,7 +314,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         userEmail,
         folderId: String(folder._id),
         leadId: String(createdLead._id),
-        source: "sheet-bulk",
+        source: "sheet-webhook",
         startMode: "now",
       });
     }
@@ -296,7 +322,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     match.lastSyncedAt = new Date();
     match.lastEventAt = new Date();
     match.updatedAt = new Date();
-
     gs.syncedSheetsSimple = synced;
     (user as any).googleSheets = gs;
     await user.save();
