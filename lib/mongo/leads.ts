@@ -78,7 +78,33 @@ const LeadSchema = new Schema(
 // -------- Indexes --------
 LeadSchema.index({ userEmail: 1, updatedAt: -1 }, { name: "lead_user_updated_desc" });
 LeadSchema.index({ userEmail: 1, Phone: 1 }, { name: "lead_user_phone_idx" });
-LeadSchema.index({ userEmail: 1, normalizedPhone: 1 }, { name: "lead_user_normalized_phone_idx" });
+
+// ✅ HARD DEDUPE (per user + folder) by normalizedPhone (only if normalizedPhone exists & not empty)
+LeadSchema.index(
+  { userEmail: 1, folderId: 1, normalizedPhone: 1 },
+  {
+    name: "lead_user_folder_normalized_phone_unique",
+    unique: true,
+    partialFilterExpression: {
+      normalizedPhone: { $type: "string", $ne: "" },
+      folderId: { $type: "objectId" },
+    },
+  }
+);
+
+// ✅ HARD DEDUPE (per user + folder) by lowercase email mirror (only if email exists & not empty)
+LeadSchema.index(
+  { userEmail: 1, folderId: 1, email: 1 },
+  {
+    name: "lead_user_folder_email_unique",
+    unique: true,
+    partialFilterExpression: {
+      email: { $type: "string", $ne: "" },
+      folderId: { $type: "objectId" },
+    },
+  }
+);
+
 LeadSchema.index({ ownerEmail: 1, Phone: 1 }, { name: "lead_owner_phone_idx" }); // legacy reads OK
 LeadSchema.index({ userEmail: 1, folderId: 1 }, { name: "lead_user_folder_idx" });
 LeadSchema.index({ State: 1 }, { name: "lead_state_idx" });
@@ -120,11 +146,13 @@ export const createLeadsFromCSV = async (
   folderId: string | Types.ObjectId
 ) => {
   const fid = toObjectId(folderId);
+
   const mapped = leads.map((lead) => {
     const emailLower =
       typeof lead.Email === "string" ? lead.Email.toLowerCase().trim() : lead.Email;
     const emailLower2 =
       typeof lead.email === "string" ? lead.email.toLowerCase().trim() : lead.email;
+
     const normalizedPhone =
       lead.normalizedPhone ??
       (typeof lead.Phone === "string" ? lead.Phone.replace(/\D+/g, "") : undefined);
@@ -140,11 +168,12 @@ export const createLeadsFromCSV = async (
       phoneLast10: lead.phoneLast10 ?? normalizedPhone?.slice(-10),
       normalizedPhone,
       Email: emailLower,
-      email: emailLower2,
+      email: emailLower2 ?? emailLower, // ✅ ensure lowercase mirror exists
       leadType: sanitizeLeadType(lead.leadType || ""),
     };
   });
 
+  // ordered:false lets Mongo insert what it can and skip dup key rows
   return await Lead.insertMany(mapped, { ordered: false });
 };
 
@@ -154,11 +183,13 @@ export const createLeadsFromGoogleSheet = async (
   folderId: string | Types.ObjectId
 ) => {
   const fid = toObjectId(folderId);
+
   const parsed = sheetLeads.map((lead) => {
     const emailLower =
       typeof lead.Email === "string" ? lead.Email.toLowerCase().trim() : lead.Email;
     const emailLower2 =
       typeof lead.email === "string" ? lead.email.toLowerCase().trim() : lead.email;
+
     const normalizedPhone =
       lead.normalizedPhone ??
       (typeof lead.Phone === "string" ? lead.Phone.replace(/\D+/g, "") : undefined);
@@ -173,11 +204,12 @@ export const createLeadsFromGoogleSheet = async (
       phoneLast10: lead.phoneLast10 ?? normalizedPhone?.slice(-10),
       normalizedPhone,
       Email: emailLower,
-      email: emailLower2,
+      email: emailLower2 ?? emailLower, // ✅ ensure lowercase mirror exists
       leadType: sanitizeLeadType(lead.leadType || ""),
     };
   });
 
+  // ordered:false lets Mongo insert what it can and skip dup key rows
   return await Lead.insertMany(parsed, { ordered: false });
 };
 

@@ -314,7 +314,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         userEmail,
         folderId: String(folder._id),
         leadId: String(createdLead._id),
-        source: "sheet-webhook",
+        source: "sheet-bulk",
         startMode: "now",
       });
     }
