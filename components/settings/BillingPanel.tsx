@@ -4,29 +4,22 @@ import { useEffect, useState } from "react";
 export default function BillingPanel() {
   const [isLoading, setIsLoading] = useState(false);
   const [buyingAI, setBuyingAI] = useState(false);
-  const [activatingAiDialer, setActivatingAiDialer] = useState(false);
 
   const [billingAmount, setBillingAmount] = useState<string | null>(null);
   const [hasAIUpgrade, setHasAIUpgrade] = useState(false);
 
-  // 🔹 AI Dialer billing state
+  // (Optional) keep showing dialer minutes + status for transparency
   const [aiDialerLoading, setAiDialerLoading] = useState(true);
   const [aiDialerError, setAiDialerError] = useState<string | null>(null);
-  const [hasAiDialer, setHasAiDialer] = useState(false);
-  const [aiMinutesRemaining, setAiMinutesRemaining] = useState<number | null>(
-    null
-  );
+  const [aiMinutesRemaining, setAiMinutesRemaining] = useState<number | null>(null);
 
   useEffect(() => {
     const fetchBilling = async () => {
       try {
-        const res = await fetch("/api/stripe/get-subscription", {
-          cache: "no-store",
-        });
+        const res = await fetch("/api/stripe/get-subscription", { cache: "no-store" });
         const data = await res.json();
         if (data.amount != null) setBillingAmount(`$${data.amount}/month`);
-        if (typeof data.hasAIUpgrade === "boolean")
-          setHasAIUpgrade(data.hasAIUpgrade);
+        if (typeof data.hasAIUpgrade === "boolean") setHasAIUpgrade(data.hasAIUpgrade);
       } catch (err) {
         console.error("Error fetching billing:", err);
       }
@@ -42,16 +35,12 @@ export default function BillingPanel() {
           throw new Error(data?.error || "Failed to load AI Dialer status");
         }
 
-        setHasAiDialer(Boolean(data.hasAiDialer));
         setAiMinutesRemaining(
-          typeof data.minutesRemaining === "number"
-            ? data.minutesRemaining
-            : null
+          typeof data.minutesRemaining === "number" ? data.minutesRemaining : null
         );
       } catch (err: any) {
         console.error("AI Dialer status error:", err);
         setAiDialerError(err?.message || "Failed to load AI Dialer status");
-        setHasAiDialer(false);
         setAiMinutesRemaining(null);
       } finally {
         setAiDialerLoading(false);
@@ -65,9 +54,7 @@ export default function BillingPanel() {
   const goToBilling = async () => {
     setIsLoading(true);
     try {
-      const res = await fetch("/api/create-stripe-portal?debug=1", {
-        method: "POST",
-      });
+      const res = await fetch("/api/create-stripe-portal?debug=1", { method: "POST" });
       const data = await res.json();
 
       if (res.status === 409 && data?.needsCheckout) {
@@ -101,9 +88,7 @@ export default function BillingPanel() {
   const buyAI = async () => {
     setBuyingAI(true);
     try {
-      const r = await fetch("/api/billing/create-ai-checkout", {
-        method: "POST",
-      });
+      const r = await fetch("/api/billing/create-ai-checkout", { method: "POST" });
       const j = await r.json();
       if (!r.ok || !j?.url) throw new Error(j?.error || "Failed to start checkout");
       window.location.href = j.url;
@@ -111,22 +96,6 @@ export default function BillingPanel() {
       alert(err?.message || "Unable to start checkout");
     } finally {
       setBuyingAI(false);
-    }
-  };
-
-  const activateAiDialer = async () => {
-    setActivatingAiDialer(true);
-    try {
-      const r = await fetch("/api/billing/create-ai-dialer-access", {
-        method: "POST",
-      });
-      const j = await r.json();
-      if (!r.ok || !j?.url) throw new Error("Failed to activate AI Dialer");
-      window.location.href = j.url;
-    } catch (err: any) {
-      alert(err?.message || "Unable to activate AI Dialer");
-    } finally {
-      setActivatingAiDialer(false);
     }
   };
 
@@ -145,17 +114,38 @@ export default function BillingPanel() {
       <div className="border rounded p-4 space-y-6">
         <h3 className="font-semibold text-lg">Add-ons</h3>
 
-        {/* SMS AI Assistant */}
+        {/* AI Suite */}
         <div className="flex justify-between">
           <div>
-            <p className="font-medium">AI Assistant (SMS)</p>
+            <p className="font-medium">AI Suite (SMS + Calls)</p>
             <p className="text-sm text-gray-500">
-              Automated texting for leads & clients.
+              Unlocks the AI SMS Assistant and the AI Dialer.
             </p>
+
             <ul className="text-sm text-gray-400 mt-1 list-disc ml-5">
               <li>$50 monthly access</li>
-              <li>plus SMS usage</li>
+              <li>SMS usage billed separately (Twilio usage)</li>
+              <li>AI Dialer billed at usage (per connected minute)</li>
+              <li>
+                Auto-reload: charges $20 only after you actually start using AI Dialer
+                and your dialer balance reaches 0
+              </li>
             </ul>
+
+            <div className="text-xs text-gray-400 mt-2">
+              {aiDialerLoading ? (
+                <>Checking AI Dialer status…</>
+              ) : aiDialerError ? (
+                <>AI Dialer status: {aiDialerError}</>
+              ) : (
+                <>
+                  AI Dialer minutes remaining:{" "}
+                  <span className="font-semibold">
+                    {Math.max(0, Math.floor(aiMinutesRemaining || 0))}
+                  </span>
+                </>
+              )}
+            </div>
           </div>
 
           {hasAIUpgrade ? (
@@ -170,53 +160,6 @@ export default function BillingPanel() {
             >
               {buyingAI ? "Loading…" : "Enable"}
             </button>
-          )}
-        </div>
-
-        {/* AI Dialer */}
-        <div className="flex justify-between border-t pt-4">
-          <div>
-            <p className="font-medium">AI Dialer (Calls)</p>
-            <p className="text-sm text-gray-500">
-              Automated calling engine that books appointments.
-            </p>
-            <ul className="text-sm text-gray-400 mt-1 list-disc ml-5">
-              <li>$50 monthly access</li>
-              <li>Includes 133 AI minutes</li>
-              <li>Automatic $20 reload when minutes reach 0</li>
-            </ul>
-
-            <div className="text-xs text-gray-400 mt-2">
-              {aiDialerLoading ? (
-                <>Checking AI Dialer status…</>
-              ) : aiDialerError ? (
-                <>Error: {aiDialerError}</>
-              ) : hasAiDialer ? (
-                <>
-                  Enabled —{" "}
-                  <span className="font-semibold">
-                    {Math.max(0, Math.floor(aiMinutesRemaining || 0))}
-                  </span>{" "}
-                  minutes remaining
-                </>
-              ) : (
-                <>AI Dialer is not yet active. Enable to begin.</>
-              )}
-            </div>
-          </div>
-
-          {!hasAiDialer ? (
-            <button
-              onClick={activateAiDialer}
-              disabled={activatingAiDialer}
-              className="px-3 py-1.5 rounded bg-blue-600 text-white text-sm"
-            >
-              {activatingAiDialer ? "Loading…" : "Enable"}
-            </button>
-          ) : (
-            <span className="px-3 py-1.5 rounded bg-emerald-600/20 text-emerald-200 text-sm">
-              Enabled
-            </span>
           )}
         </div>
       </div>

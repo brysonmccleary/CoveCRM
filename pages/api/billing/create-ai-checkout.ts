@@ -1,3 +1,4 @@
+// pages/api/billing/create-ai-checkout.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
@@ -34,12 +35,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       line_items: [{ price: AI_PRICE_ID, quantity: 1 }],
       allow_promotion_codes: true,
       payment_method_types: ["card"],
+
+      // ✅ IMPORTANT: drives webhook routing + "single upgrade" entitlement
       metadata: {
-        product: "ai",
+        purpose: "ai_suite",
+        product: "ai_suite",
         userId: (user as any)?._id?.toString?.() || "",
         email: user.email,
         referralCodeUsed: (user as any)?.referredBy || "none",
       },
+
       success_url: `${BASE_URL}/dashboard?tab=settings&ai=on`,
       cancel_url: `${BASE_URL}/dashboard?tab=settings`,
     });

@@ -156,6 +156,13 @@ export interface IUser {
   aiDialerBalance?: number;
   aiDialerLastTopUpAt?: Date;
 
+  /**
+   * ✅ NEW: "armed" flag so we ONLY auto-reload after the user actually uses AI dialer.
+   * - default false
+   * - set true on first real AI dialer usage (not on AI Suite purchase)
+   */
+  aiDialerAutoReloadArmed?: boolean;
+
   usageBalance?: number;
 
   notifications?: {
@@ -364,6 +371,9 @@ const UserSchema = new Schema<IUser>({
 
   aiDialerBalance: { type: Number, default: 0 },
   aiDialerLastTopUpAt: { type: Date, default: null },
+
+  // ✅ NEW: only allow auto-reload after first real AI dialer usage
+  aiDialerAutoReloadArmed: { type: Boolean, default: false },
 
   usageBalance: { type: Number, default: 0 },
 

@@ -19,9 +19,7 @@ const AI_DIALER_RATE_PER_MIN_USD = Number(
  * 🔹 Top-up chunk size for AI dialer:
  * Default: $20 → ~133 minutes at $0.15/min.
  */
-const AI_DIALER_TOPUP_USD = Number(
-  process.env.AI_DIALER_TOPUP_USD ?? "20"
-);
+const AI_DIALER_TOPUP_USD = Number(process.env.AI_DIALER_TOPUP_USD ?? "20");
 const AI_DIALER_TOPUP_CENTS = AI_DIALER_TOPUP_USD * 100;
 
 /** ========= Admin allow-list (same pattern as other billing) ========= */
@@ -82,7 +80,7 @@ export async function trackAiDialerUsage({
   vendorCostUsd,
 }: {
   user: any;
-  minutes: number;      // total connected minutes for this call
+  minutes: number; // total connected minutes for this call
   vendorCostUsd: number; // your raw cost (Twilio + OpenAI) for those minutes
 }) {
   await ensureDb();
@@ -116,6 +114,10 @@ export async function trackAiDialerUsage({
 
   // Admins never actually billed for AI dialer, but we keep stats
   if (isAdminEmail(userDoc.email)) {
+    // Admins should also be considered "armed" (harmless, keeps logic consistent)
+    if (typeof (userDoc as any).aiDialerAutoReloadArmed !== "boolean") {
+      (userDoc as any).aiDialerAutoReloadArmed = true;
+    }
     await userDoc.save();
     return;
   }
@@ -123,6 +125,18 @@ export async function trackAiDialerUsage({
   // Initialize balance if null/undefined
   if (typeof userDoc.aiDialerBalance !== "number") {
     userDoc.aiDialerBalance = 0;
+  }
+
+  /**
+   * ✅ IMPORTANT: Do NOT allow $20 auto-topup until the user has actually used AI Dialer.
+   * We "arm" auto-topup the first time we ever record dialer usage for this user.
+   *
+   * This prevents SMS-only AI buyers from ever being charged $20.
+   */
+  if (minutes > 0 && typeof (userDoc as any).aiDialerAutoReloadArmed !== "boolean") {
+    (userDoc as any).aiDialerAutoReloadArmed = true;
+  } else if (minutes > 0 && (userDoc as any).aiDialerAutoReloadArmed === false) {
+    (userDoc as any).aiDialerAutoReloadArmed = true;
   }
 
   // Subtract this call's billed amount from AI dialer balance
@@ -147,8 +161,11 @@ export async function trackAiDialerUsage({
     }
   }
 
+  // ✅ Gate auto-topup: only after AI Dialer has actually been used at least once
+  const autoReloadArmed = (userDoc as any).aiDialerAutoReloadArmed === true;
+
   // Auto-topup when AI dialer balance drops below $1
-  if (userDoc.aiDialerBalance < 1 && canBill) {
+  if (userDoc.aiDialerBalance < 1 && canBill && autoReloadArmed) {
     try {
       await createAndChargeInvoice({
         customerId: userDoc.stripeCustomerId!,
@@ -164,6 +181,16 @@ export async function trackAiDialerUsage({
       console.error(
         "❌ AI Dialer Stripe auto top-up failed:",
         (err as any)?.message || err
+      );
+    }
+  } else if (userDoc.aiDialerBalance < 1 && canBill && !autoReloadArmed) {
+    // This is the "no charge until they use dialer" guarantee.
+    // They only get here if they somehow have a low balance *before* first use.
+    // We intentionally do NOT charge.
+    if (!isProd) {
+      console.warn(
+        "[AI Dialer billing][DEV] Balance < $1 but auto-reload not armed yet; not charging.",
+        { email: userDoc.email }
       );
     }
   } else if (userDoc.aiDialerBalance < 1 && !canBill && !isProd) {

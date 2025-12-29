@@ -10,7 +10,11 @@ type ResponseBody =
   | { ok: true; url: string }
   | { ok: false; error: string };
 
-const PRICE_ID = process.env.AI_DIALER_ACCESS_PRICE_ID || "";
+// ✅ One upgrade: AI Suite price (use your existing AI monthly env)
+const AI_SUITE_PRICE_ID =
+  process.env.STRIPE_PRICE_ID_AI_MONTHLY ||
+  process.env.STRIPE_PRICE_ID_AI_ADDON ||
+  "";
 
 export default async function handler(
   req: NextApiRequest,
@@ -19,13 +23,13 @@ export default async function handler(
   if (req.method !== "POST")
     return res.status(405).json({ ok: false, error: "Method not allowed" });
 
-  if (!PRICE_ID)
-    return res
-      .status(500)
-      .json({ ok: false, error: "AI Dialer access price not configured" });
+  if (!AI_SUITE_PRICE_ID)
+    return res.status(500).json({
+      ok: false,
+      error: "AI Suite price not configured (set STRIPE_PRICE_ID_AI_MONTHLY)",
+    });
 
   try {
-    // Typed session so TS knows about session.user.email
     const session = (await getServerSession(
       req,
       res,
@@ -42,7 +46,7 @@ export default async function handler(
     if (!user)
       return res
         .status(404)
-        .json({ ok: false, error: "User not found for AI Dialer access" });
+        .json({ ok: false, error: "User not found for AI Suite checkout" });
 
     let customerId = user.stripeCustomerId;
     if (!customerId) {
@@ -55,26 +59,33 @@ export default async function handler(
       await user.save();
     }
 
+    const baseUrl =
+      process.env.NEXT_PUBLIC_BASE_URL ||
+      process.env.BASE_URL ||
+      process.env.NEXTAUTH_URL ||
+      "http://localhost:3000";
+
+    // ✅ Single-purpose checkout: AI Suite access (NO FREE MINUTES)
     const checkout = await stripe.checkout.sessions.create({
       mode: "subscription",
       customer: customerId,
-      line_items: [{ price: PRICE_ID, quantity: 1 }],
+      line_items: [{ price: AI_SUITE_PRICE_ID, quantity: 1 }],
       payment_method_types: ["card"],
+      allow_promotion_codes: true,
       metadata: {
-        purpose: "ai_dialer_access",
-        giveInitialCredit: "true",
+        purpose: "ai_suite",
         userId: String(user._id),
         email,
       },
-      success_url: `${process.env.NEXTAUTH_URL}/settings?tab=billing&aiDialer=activated`,
-      cancel_url: `${process.env.NEXTAUTH_URL}/settings?tab=billing&aiDialer=cancelled`,
+      success_url: `${baseUrl}/dashboard?tab=settings&ai=on`,
+      cancel_url: `${baseUrl}/dashboard?tab=settings`,
     });
 
     return res.status(200).json({ ok: true, url: checkout.url! });
   } catch (err: any) {
-    console.error("AI Dialer access error:", err);
+    console.error("AI Suite checkout error:", err);
     return res
       .status(500)
-      .json({ ok: false, error: "Failed to start AI Dialer checkout" });
+      .json({ ok: false, error: "Failed to start AI Suite checkout" });
   }
 }

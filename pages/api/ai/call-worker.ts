@@ -29,7 +29,6 @@ function parseStrictJSON(input: string): any {
   try {
     return JSON.parse(input);
   } catch {
-    // attempt to find a JSON object within content (defensive)
     const start = input.indexOf("{");
     const end = input.lastIndexOf("}");
     if (start !== -1 && end !== -1 && end > start) {
@@ -94,7 +93,6 @@ async function summarizeTranscript(transcript: string): Promise<{
       .map((s: any) => String(s).trim())
       .filter(Boolean);
   } else if (typeof parsed.actionItems === "string") {
-    // tolerate newline/bullet-delimited strings
     actionItems = parsed.actionItems
       .split(/\r?\n|•|-/g)
       .map((s: string) => s.trim())
@@ -116,7 +114,6 @@ export default async function handler(
 ) {
   if (req.method !== "POST") return errJson(res, "Method not allowed", 405);
 
-  // Worker auth
   if ((req.headers["x-worker-secret"] as string) !== WORKER_SECRET) {
     return errJson(res, "Unauthorized", 401);
   }
@@ -133,12 +130,9 @@ export default async function handler(
     const call = await Call.findOne({ callSid });
     if (!call) return errJson(res, "Call not found", 404);
 
-    // Entitlement check (align with your earlier gates: aiEnabled or plan.ai === true)
+    // ✅ Entitlement check: single source of truth
     const user = await getUserByEmail(call.userEmail);
-    const aiEnabled = !!(
-      user &&
-      ((user as any).aiEnabled === true || (user as any)?.plan?.ai === true)
-    );
+    const aiEnabled = !!(user && (user as any).hasAI === true);
     call.aiEnabledAtCallTime = aiEnabled;
 
     if (!aiEnabled) {
@@ -146,8 +140,6 @@ export default async function handler(
       return okJson(res, { skipped: "no-entitlement" });
     }
 
-    // Idempotency:
-    // - If already processed and not forcing, skip.
     if (
       !force &&
       call.aiProcessing === "done" &&
@@ -157,7 +149,6 @@ export default async function handler(
       return okJson(res, { skipped: "already-processed" });
     }
 
-    // If another worker set pending within last few minutes, skip to avoid double work
     if (!force && call.aiProcessing === "pending") {
       const pendingAgeMs =
         Date.now() - new Date(call.updatedAt as any).getTime();
@@ -167,17 +158,14 @@ export default async function handler(
     }
 
     if (!call.recordingUrl || !call.recordingSid) {
-      // Mark error but do not fail the webhook pipeline
       call.aiProcessing = "error";
       await call.save();
       return errJson(res, "No recording on call", 400);
     }
 
-    // Lock for processing
     call.aiProcessing = "pending";
     await call.save();
 
-    // Fetch audio from Twilio with basic auth
     const audioResp = await axios.get(call.recordingUrl, {
       responseType: "arraybuffer",
       auth: {
@@ -188,7 +176,6 @@ export default async function handler(
     });
     const audioBuf = Buffer.from(audioResp.data);
 
-    // Transcribe
     const transcript = await transcribeMp3Buffer(audioBuf);
     if (!transcript) {
       call.aiProcessing = "error";
@@ -196,11 +183,9 @@ export default async function handler(
       return errJson(res, "Empty transcript", 500);
     }
 
-    // Summarize
     const { summary, actionItems, sentiment } =
       await summarizeTranscript(transcript);
 
-    // Save (don’t clobber if something already present and not forcing)
     call.transcript = force || !call.transcript ? transcript : call.transcript;
     call.aiSummary = force || !call.aiSummary ? summary : call.aiSummary;
     call.aiActionItems =

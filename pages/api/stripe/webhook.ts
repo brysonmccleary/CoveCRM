@@ -41,6 +41,9 @@ const toCents = (usd: number) => Math.round(Number(usd || 0) * 100);
 const HOUSE_CODE = U(process.env.AFFILIATE_HOUSE_CODE || "COVE50");
 const isHouseCode = (code?: string | null) => !!code && U(code) === HOUSE_CODE;
 
+// AI Suite price id (single upgrade)
+const AI_PRICE_ID = (process.env.STRIPE_PRICE_ID_AI_MONTHLY || "").trim();
+
 // slim audit logger
 const audit = (msg: string, extra?: Record<string, unknown>) => {
   try {
@@ -248,6 +251,40 @@ async function maybeAutoPayout(affiliateInput: IAffiliate, invoiceId: string) {
 }
 
 /* ──────────────────────────────────────────────────────────────────────────── */
+/* AI entitlement helper: compute hasAI across ALL active subs for customer     */
+/* ──────────────────────────────────────────────────────────────────────────── */
+
+async function computeHasAIForCustomer(customerId: string): Promise<boolean> {
+  if (!customerId || !AI_PRICE_ID) return false;
+
+  try {
+    const subs = await stripe.subscriptions.list({
+      customer: customerId,
+      status: "all",
+      expand: ["data.items.data.price"],
+      limit: 100,
+    });
+
+    for (const sub of subs.data as Stripe.Subscription[]) {
+      const activeLike = sub.status === "active" || sub.status === "trialing";
+      if (!activeLike) continue;
+
+      const items = sub.items?.data || [];
+      const hasAiOnThisSub = items.some((it: any) => it?.price?.id === AI_PRICE_ID);
+      if (hasAiOnThisSub) return true;
+    }
+
+    return false;
+  } catch (e: any) {
+    audit("computeHasAIForCustomer failed", {
+      customerId,
+      message: e?.message || String(e),
+    });
+    return false;
+  }
+}
+
+/* ──────────────────────────────────────────────────────────────────────────── */
 /* Webhook handler                                                             */
 /* ──────────────────────────────────────────────────────────────────────────── */
 
@@ -398,28 +435,23 @@ export default async function handler(
           break;
         }
 
-        /* ───────────── AI DIALER ACCESS ($50/mo) ───────────── */
-        if (purpose === "ai_dialer_access") {
+        /* ───────────── AI SUITE UPGRADE (single entitlement; NO FREE MINUTES) ─────────────
+           Back-compat: treat legacy ai_dialer_access the same as ai_suite
+        */
+        if (purpose === "ai_suite" || purpose === "ai_dialer_access") {
           if (!email) {
-            audit("ai_dialer_access: missing email on session", {
-              sessionId: s.id,
-            });
+            audit("ai_suite: missing email on session", { sessionId: s.id });
             break;
           }
 
           const userIdMeta = s.metadata?.userId;
-          let user = null;
-          if (userIdMeta) {
-            user = await User.findById(userIdMeta);
-          }
+          let user: any = null;
+
+          if (userIdMeta) user = await User.findById(userIdMeta);
+          if (!user) user = await User.findOne({ email });
+
           if (!user) {
-            user = await User.findOne({ email });
-          }
-          if (!user) {
-            audit("ai_dialer_access: user not found", {
-              email,
-              sessionId: s.id,
-            });
+            audit("ai_suite: user not found", { email, sessionId: s.id });
             break;
           }
 
@@ -432,21 +464,21 @@ export default async function handler(
             user.stripeCustomerId = s.customer;
           }
 
-          // Admin-free accounts never need credits, but it doesn't hurt if they get them.
-          const INITIAL_AI_DIALER_CREDIT_USD = 20;
+          // ✅ One upgrade: enable AI features
+          user.hasAI = true;
 
-          const currentBalance = Number((user as any).aiDialerBalance || 0);
-          (user as any).aiDialerBalance =
-            currentBalance + INITIAL_AI_DIALER_CREDIT_USD;
-          (user as any).aiDialerLastTopUpAt = new Date();
+          // ✅ IMPORTANT: Do NOT grant any initial dialer credit here.
+          // ✅ Also: DO NOT “arm” auto-reload yet — that should only happen on first dialer use.
+          if (typeof (user as any).aiDialerAutoReloadArmed !== "boolean") {
+            (user as any).aiDialerAutoReloadArmed = false;
+          }
 
           await user.save();
 
-          audit("ai_dialer_access: activated + initial credit", {
+          audit("ai_suite: enabled (no initial credit)", {
             email,
             sessionId: s.id,
-            addedUSD: INITIAL_AI_DIALER_CREDIT_USD,
-            newBalanceUSD: (user as any).aiDialerBalance,
+            customerId: s.customer,
           });
 
           break;
@@ -701,14 +733,20 @@ export default async function handler(
 
         const activeLike =
           sub.status === "active" || sub.status === "trialing";
+
         const user = await User.findOne({ stripeCustomerId: customerId });
         if (user) {
           user.subscriptionStatus = activeLike ? "active" : "canceled";
-          const AI_PRICE_ID = process.env.STRIPE_PRICE_ID_AI_MONTHLY || "";
-          const hasAi = !!sub.items?.data?.some(
-            (it) => it.price?.id === AI_PRICE_ID,
-          );
-          user.hasAI = isAdminFree(user.email) ? true : activeLike && hasAi;
+
+          // ✅ CRITICAL: recompute AI entitlement across ALL active subs
+          const computedHasAI = await computeHasAIForCustomer(customerId);
+          user.hasAI = isAdminFree(user.email) ? true : computedHasAI;
+
+          // Ensure flag exists (do not arm it here)
+          if (typeof (user as any).aiDialerAutoReloadArmed !== "boolean") {
+            (user as any).aiDialerAutoReloadArmed = false;
+          }
+
           await user.save();
         }
         break;
@@ -717,10 +755,19 @@ export default async function handler(
       case "customer.subscription.deleted": {
         const sub = event.data.object as Stripe.Subscription;
         const customerId = sub.customer as string;
+
         const user = await User.findOne({ stripeCustomerId: customerId });
         if (user) {
           user.subscriptionStatus = "canceled";
-          if (!isAdminFree(user.email)) user.hasAI = false;
+
+          // ✅ If they still have an active AI sub, keep hasAI true.
+          const computedHasAI = await computeHasAIForCustomer(customerId);
+          user.hasAI = isAdminFree(user.email) ? true : computedHasAI;
+
+          if (typeof (user as any).aiDialerAutoReloadArmed !== "boolean") {
+            (user as any).aiDialerAutoReloadArmed = false;
+          }
+
           await user.save();
         }
         break;

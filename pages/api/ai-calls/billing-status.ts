@@ -8,21 +8,20 @@ import { authOptions } from "../auth/[...nextauth]";
 type BillingStatusResponse =
   | {
       ok: true;
-      hasAiDialer: boolean;
+      hasAiDialer: boolean; // ✅ access flag (entitlement)
       minutesRemaining: number;
       lastTopUpAt?: string | null;
+      needsTopUp?: boolean;
     }
   | {
       ok: false;
       error: string;
     };
 
-// Default $0.15/minute if env not set
 const RATE_PER_MINUTE = Number(
   process.env.AI_DIALER_BILL_RATE_PER_MINUTE || "0.15",
 );
 
-// 🔹 Owner / admin-free emails: Bryson hard-coded + optional env list
 const OWNER_FREE_EMAILS: string[] = [
   "bryson.mccleary1@gmail.com",
   ...(process.env.ADMIN_FREE_AI_EMAILS || "")
@@ -43,7 +42,6 @@ export default async function handler(
   }
 
   try {
-    // Typed session so TS knows about session.user.email
     const session = (await getServerSession(
       req,
       res,
@@ -65,17 +63,21 @@ export default async function handler(
         .json({ ok: false, error: "User not found for AI billing" });
     }
 
-    // 🔹 Bryson / owner accounts: always have AI Dialer enabled + effectively infinite minutes.
+    // Owner accounts: always enabled + unlimited minutes UI
     if (isOwnerFree(email)) {
       return res.status(200).json({
         ok: true,
         hasAiDialer: true,
-        minutesRemaining: 999_999, // effectively "unlimited" for UI purposes
+        minutesRemaining: 999_999,
         lastTopUpAt: null,
+        needsTopUp: false,
       });
     }
 
     const anyUser = userDoc as any;
+
+    // ✅ Access is based on AI Suite entitlement (NOT minutes)
+    const hasAiDialer = !!anyUser.hasAI;
 
     const balanceUSD = Number(anyUser.aiDialerBalance || 0);
     const minutes =
@@ -84,7 +86,6 @@ export default async function handler(
         : 0;
 
     const minutesRemaining = isNaN(minutes) ? 0 : minutes;
-    const hasAiDialer = minutesRemaining > 0;
 
     const lastTopUpAt =
       anyUser.aiDialerLastTopUpAt instanceof Date
@@ -96,6 +97,7 @@ export default async function handler(
       hasAiDialer,
       minutesRemaining,
       lastTopUpAt,
+      needsTopUp: hasAiDialer && minutesRemaining <= 0,
     });
   } catch (err) {
     console.error("AI Dialer billing-status error:", err);
