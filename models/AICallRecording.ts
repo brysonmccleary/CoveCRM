@@ -20,7 +20,12 @@ export interface IAICallRecording extends Document {
   durationSec?: number | null;
   outcome: AICallOutcome;
   notes?: string | null;
+
+  // ✅ Post-call AI Call Overview (optional only)
+  transcriptText?: string | null;
   summary?: string | null;
+  transcribedAt?: Date | null;
+
   createdAt: Date;
   updatedAt: Date;
 }
@@ -59,7 +64,11 @@ const AICallRecordingSchema = new Schema<IAICallRecording>(
       index: true,
     },
     notes: { type: String, default: null },
+
+    // ✅ Post-call transcription fields (optional only)
+    transcriptText: { type: String, default: null },
     summary: { type: String, default: null },
+    transcribedAt: { type: Date, default: null },
   },
   { timestamps: true }
 );
