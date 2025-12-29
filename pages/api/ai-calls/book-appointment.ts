@@ -148,7 +148,7 @@ export default async function handler(
     });
     const calendar = google.calendar({ version: "v3", auth: oauth2 });
 
-    // Agent timezone preference
+    // ✅ Agent timezone preference (user setting wins, else request payload)
     const agentTz: string =
       user?.bookingSettings?.timezone || agentTimeZone || "America/Los_Angeles";
 
@@ -158,11 +158,11 @@ export default async function handler(
 
     // ─────────────────────── Normalize lead data ───────────────────────
     const firstName =
-      lead.firstName || lead["First Name"] || (lead as any).First || "";
+      lead.firstName || (lead as any)["First Name"] || (lead as any).First || "";
     const lastName =
-      lead.lastName || lead["Last Name"] || (lead as any).Last || "";
-    const leadEmail = lead.email || lead.Email || "";
-    const phoneRaw = lead.phone || lead.Phone || "";
+      lead.lastName || (lead as any)["Last Name"] || (lead as any).Last || "";
+    const leadEmail = (lead as any).email || (lead as any).Email || "";
+    const phoneRaw = (lead as any).phone || (lead as any).Phone || "";
 
     const displayLeadName =
       [firstName, lastName].filter(Boolean).join(" ") || "Lead";
@@ -187,18 +187,26 @@ export default async function handler(
 
     const calendarId = user?.calendarId || "primary";
 
-    // Event is stored in agent timezone; AI brain handles parsing / UTC conversion.
+    /**
+     * ✅ CRITICAL FIX:
+     * We must NOT send a UTC ISO string (with "Z") while also claiming agentTz.
+     * Instead, convert the UTC instant into agentTz "wall time" and send that string
+     * WITH timeZone: agentTz.
+     */
+    const startAgentWall = convertUtcToTimeZone(startUtcDate, agentTz); // "YYYY-MM-DDTHH:mm:ss"
+    const endAgentWall = convertUtcToTimeZone(endUtcDate, agentTz);
+
     const event = await calendar.events.insert({
       calendarId,
       requestBody: {
         summary,
         description,
         start: {
-          dateTime: startUtcDate.toISOString(),
+          dateTime: startAgentWall,
           timeZone: agentTz,
         },
         end: {
-          dateTime: endUtcDate.toISOString(),
+          dateTime: endAgentWall,
           timeZone: agentTz,
         },
         attendees: attendees as any,
@@ -218,7 +226,6 @@ export default async function handler(
         timeZone: agentTz,
       });
 
-      // last10-style helper (kept local to this file)
       const phoneDigits = String(phoneRaw || "").replace(/\D+/g, "");
       const phoneLast10 =
         phoneDigits.length >= 10 ? phoneDigits.slice(-10) : undefined;
@@ -254,12 +261,8 @@ export default async function handler(
 
       await Lead.updateOne(
         {
-          _id: lead._id,
-          $or: [
-            { userEmail },
-            { ownerEmail: userEmail },
-            { user: userEmail },
-          ],
+          _id: (lead as any)._id,
+          $or: [{ userEmail }, { ownerEmail: userEmail }, { user: userEmail }],
         },
         update
       ).exec();
@@ -273,16 +276,14 @@ export default async function handler(
         if (sessionObjectId) {
           const rec = await AICallRecording.findOne({
             aiCallSessionId: sessionObjectId,
-            leadId: lead._id,
+            leadId: (lead as any)._id,
           })
             .sort({ createdAt: -1 })
             .exec();
 
           if (rec) {
             const bookingNote = `Appointment booked for ${nice} (${agentTz}) via AI Dialer.`;
-            rec.notes = rec.notes
-              ? `${rec.notes}\n${bookingNote}`
-              : bookingNote;
+            rec.notes = rec.notes ? `${rec.notes}\n${bookingNote}` : bookingNote;
             await rec.save();
           }
         }
@@ -314,7 +315,7 @@ export default async function handler(
       startTimeAgentTz,
       startTimeLeadTz,
       humanReadableForLead,
-      hangoutLink: eventData.hangoutLink || null,
+      hangoutLink: (eventData as any).hangoutLink || null,
       rawEvent: eventData,
     });
   } catch (err: any) {
