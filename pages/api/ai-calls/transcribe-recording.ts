@@ -107,7 +107,8 @@ async function fetchRecordingAudio(args: {
       if (!r.ok) {
         const txt = await r.text().catch(() => "");
         throw new Error(
-          `Failed to fetch recording audio (${r.status}) from ${url}. ${txt ? txt.slice(0, 200) : ""
+          `Failed to fetch recording audio (${r.status}) from ${url}. ${
+            txt ? txt.slice(0, 200) : ""
           }`
         );
       }
@@ -117,7 +118,9 @@ async function fetchRecordingAudio(args: {
       const buf = Buffer.from(ab);
 
       if (!buf || buf.length < 512) {
-        throw new Error(`Recording audio too small from ${url} (${buf?.length || 0} bytes).`);
+        throw new Error(
+          `Recording audio too small from ${url} (${buf?.length || 0} bytes).`
+        );
       }
 
       return { buffer: buf, contentType: ct, sourceUrl: url };
@@ -147,7 +150,11 @@ async function transcribeWithOpenAI(args: {
     ? "recording.mp4"
     : "recording.mp3";
 
-  const blob = new Blob([args.audio], { type: args.contentType });
+  // ✅ TS FIX: Buffer<ArrayBufferLike> isn't assignable to BlobPart in Next/TS DOM typings.
+  // Convert to a plain Uint8Array (valid BlobPart) without changing the bytes.
+  const u8 = new Uint8Array(args.audio);
+
+  const blob = new Blob([u8], { type: args.contentType });
   fd.append("file", blob, filename);
   fd.append("model", OPENAI_TRANSCRIBE_MODEL);
 
@@ -236,18 +243,22 @@ ${args.transcriptText}`;
     .filter((l) => l.length > 2)
     .slice(0, 6);
 
-  // Ensure 3–6 bullets if possible (but don’t fabricate)
   return lines.join("\n").trim();
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse<Resp>) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse<Resp>
+) {
   if (req.method !== "POST") {
     res.setHeader("Allow", "POST");
     return res.status(405).json({ ok: false, message: "Method not allowed" });
   }
 
   if (!AI_DIALER_CRON_KEY) {
-    return res.status(500).json({ ok: false, message: "AI_DIALER_CRON_KEY not configured" });
+    return res
+      .status(500)
+      .json({ ok: false, message: "AI_DIALER_CRON_KEY not configured" });
   }
 
   const hdr = (req.headers["x-cron-key"] || "") as string;
@@ -272,13 +283,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       : await AICallRecording.findOne({ callSid: String(callSid) }).exec();
 
     if (!rec) {
-      return res.status(404).json({ ok: false, message: "AICallRecording not found" });
+      return res
+        .status(404)
+        .json({ ok: false, message: "AICallRecording not found" });
     }
 
     // Idempotency: if already transcribed, don’t redo unless you later add a force flag (not part of this task)
     const existingTranscript =
-      typeof (rec as any).transcriptText === "string" ? String((rec as any).transcriptText) : "";
-    const alreadyTranscribed = isNonEmptyString(existingTranscript) && !!(rec as any).transcribedAt;
+      typeof (rec as any).transcriptText === "string"
+        ? String((rec as any).transcriptText)
+        : "";
+    const alreadyTranscribed =
+      isNonEmptyString(existingTranscript) && !!(rec as any).transcribedAt;
 
     if (alreadyTranscribed) {
       return res.status(200).json({
