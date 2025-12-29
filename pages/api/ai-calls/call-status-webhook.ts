@@ -537,6 +537,23 @@ export default async function handler(
               CallSid
             );
           } else {
+            // ✅ ARM AUTO-RELOAD ONLY AFTER FIRST REAL AI DIALER USAGE
+            // - This is real usage because we're inside: completed + durationSec > 0
+            // - Idempotent + safe under retries (only flips false -> true)
+            try {
+              if ((user as any).aiDialerAutoReloadArmed !== true) {
+                await User.updateOne(
+                  { _id: (user as any)._id, aiDialerAutoReloadArmed: { $ne: true } },
+                  { $set: { aiDialerAutoReloadArmed: true } }
+                ).exec();
+              }
+            } catch (armErr: any) {
+              console.warn(
+                "[AI Dialer] Failed to arm auto-reload (non-blocking)",
+                armErr?.message || armErr
+              );
+            }
+
             // Bill based on **dial time** (full call duration in seconds)
             const minutes = Math.max(1, Math.ceil(durationSec / 60));
             const vendorCostUsd =
