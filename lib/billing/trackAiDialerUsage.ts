@@ -112,10 +112,19 @@ export async function trackAiDialerUsage({
     lastChargedAt: new Date(),
   };
 
+  /**
+   * ✅ IMPORTANT: Arm auto-reload ONLY after real AI Dialer usage occurs.
+   * This function should only be called for real connected minutes, but we still
+   * keep the arming rule here as a second layer of safety and idempotency.
+   */
+  if (minutes > 0 && (userDoc as any).aiDialerAutoReloadArmed !== true) {
+    (userDoc as any).aiDialerAutoReloadArmed = true;
+  }
+
   // Admins never actually billed for AI dialer, but we keep stats
   if (isAdminEmail(userDoc.email)) {
-    // Admins should also be considered "armed" (harmless, keeps logic consistent)
-    if (typeof (userDoc as any).aiDialerAutoReloadArmed !== "boolean") {
+    // Admins should always be armed (harmless, keeps logic consistent)
+    if ((userDoc as any).aiDialerAutoReloadArmed !== true) {
       (userDoc as any).aiDialerAutoReloadArmed = true;
     }
     await userDoc.save();
@@ -125,18 +134,6 @@ export async function trackAiDialerUsage({
   // Initialize balance if null/undefined
   if (typeof userDoc.aiDialerBalance !== "number") {
     userDoc.aiDialerBalance = 0;
-  }
-
-  /**
-   * ✅ IMPORTANT: Do NOT allow $20 auto-topup until the user has actually used AI Dialer.
-   * We "arm" auto-topup the first time we ever record dialer usage for this user.
-   *
-   * This prevents SMS-only AI buyers from ever being charged $20.
-   */
-  if (minutes > 0 && typeof (userDoc as any).aiDialerAutoReloadArmed !== "boolean") {
-    (userDoc as any).aiDialerAutoReloadArmed = true;
-  } else if (minutes > 0 && (userDoc as any).aiDialerAutoReloadArmed === false) {
-    (userDoc as any).aiDialerAutoReloadArmed = true;
   }
 
   // Subtract this call's billed amount from AI dialer balance
@@ -185,7 +182,6 @@ export async function trackAiDialerUsage({
     }
   } else if (userDoc.aiDialerBalance < 1 && canBill && !autoReloadArmed) {
     // This is the "no charge until they use dialer" guarantee.
-    // They only get here if they somehow have a low balance *before* first use.
     // We intentionally do NOT charge.
     if (!isProd) {
       console.warn(
