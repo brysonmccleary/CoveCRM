@@ -850,8 +850,6 @@ function getSelectedScriptText(ctx: AICallContext): string {
   const agent = (agentRaw.split(" ")[0] || agentRaw).trim();
   const scriptKey = normalizeScriptKey(ctx.scriptKey);
 
-  // ✅ ONLY CHANGE HERE: removed unnecessary “coverage-type/what prompted/specific” probing steps,
-  // so we go straight from spouse/self → booking.
   const SCRIPT_MORTGAGE = `
 BOOKING SCRIPT — MORTGAGE PROTECTION (FOLLOW IN ORDER)
 
@@ -1256,7 +1254,6 @@ function isValidIanaTimeZone(tzRaw: any): boolean {
   const tz = String(tzRaw || "").trim();
   if (!tz) return false;
   try {
-    // Throws on invalid time zone in most JS runtimes
     Intl.DateTimeFormat("en-US", { timeZone: tz }).format(new Date());
     return true;
   } catch {
@@ -1264,11 +1261,40 @@ function isValidIanaTimeZone(tzRaw: any): boolean {
   }
 }
 
+/**
+ * ✅ ONLY NEEDED UPDATE:
+ * Prefer the lead time zone from CoveCRM context (ctx.raw.lead) when present.
+ * This prevents the model from accidentally inventing/guessing a time zone.
+ * (We do not change audio. Only booking payload safety.)
+ */
+function getLeadTimeZoneHintFromContext(ctx: AICallContext): string {
+  try {
+    const lead = ctx?.raw?.lead || {};
+    const candidates = [
+      lead?.timeZone,
+      lead?.timezone,
+      lead?.tz,
+      lead?.leadTimeZone,
+      lead?.lead_timezone,
+    ].map((x: any) => String(x || "").trim());
+
+    for (const c of candidates) {
+      if (c && isValidIanaTimeZone(c)) return c;
+    }
+  } catch {}
+  return "";
+}
+
 function normalizeTimeZones(
   leadTzRaw: any,
   agentTzRaw: any,
   ctx: AICallContext
-): { leadTz: string; agentTz: string; leadTzWasFallback: boolean; agentTzWasFallback: boolean } {
+): {
+  leadTz: string;
+  agentTz: string;
+  leadTzWasFallback: boolean;
+  agentTzWasFallback: boolean;
+} {
   const ctxAgent = String(ctx?.agentTimeZone || "").trim();
   const leadCandidate = String(leadTzRaw || "").trim();
   const agentCandidate = String(agentTzRaw || "").trim();
@@ -1292,7 +1318,6 @@ function normalizeTimeZones(
 
   // Lead tz fallback chain
   if (!isValidIanaTimeZone(leadTz)) {
-    // Prefer ctxAgent if nothing else
     if (isValidIanaTimeZone(ctxAgent)) {
       leadTz = ctxAgent;
       leadTzWasFallback = true;
@@ -1311,12 +1336,11 @@ function parseStartTimeUtcToDate(startTimeUtcRaw: any): Date | null {
   // Epoch (seconds or ms)
   if (typeof raw === "number" && Number.isFinite(raw)) {
     const n = raw;
-    const ms = n < 1e12 ? n * 1000 : n; // if seconds, convert
+    const ms = n < 1e12 ? n * 1000 : n;
     const d = new Date(ms);
     return Number.isFinite(d.getTime()) ? d : null;
   }
 
-  // Numeric string epoch
   const s = String(raw || "").trim();
   if (!s) return null;
 
@@ -1328,8 +1352,6 @@ function parseStartTimeUtcToDate(startTimeUtcRaw: any): Date | null {
     return Number.isFinite(d.getTime()) ? d : null;
   }
 
-  // ISO string (assumed UTC if includes Z or offset; if not, Date will parse as local in some runtimes)
-  // We only accept it if it parses to a valid date.
   const d = new Date(s);
   if (!Number.isFinite(d.getTime())) return null;
 
@@ -1791,19 +1813,6 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
 
     const systemPrompt = buildSystemPrompt(state.context!);
 
-    /**
-     * ============================
-     * ✅ Phase 1 — Instrumentation A
-     * ============================
-     * Right after building system prompt, log:
-     * - length
-     * - first ~300
-     * - last ~700
-     * - markers
-     * - 1 unique line from selected script
-     *
-     * IMPORTANT: do NOT log lead notes. We redact them in snippets.
-     */
     try {
       const selectedScript = getSelectedScriptText(state.context!);
       const steps = extractScriptStepsFromSelectedScript(selectedScript);
@@ -1847,10 +1856,6 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
       });
     } catch {}
 
-    /**
-     * ✅ Phase 2 — Server-driven stepper init
-     * Build deterministic step list now (model will only ever see the next line).
-     */
     try {
       const selectedScript = getSelectedScriptText(state.context!);
       state.scriptSteps = extractScriptStepsFromSelectedScript(selectedScript);
@@ -1878,13 +1883,9 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
         instructions: systemPrompt,
         modalities: ["audio", "text"],
         voice: state.context!.voiceProfile.openAiVoiceId || "alloy",
-
-        // ✅ Must be >= 0.6 for this Realtime model (your log proved it)
         temperature: 0.6,
-
         input_audio_format: "g711_ulaw",
         output_audio_format: "pcm16",
-
         turn_detection: {
           type: "server_vad",
           create_response: false,
@@ -1948,13 +1949,6 @@ async function handleOpenAiEvent(
 
   const t = String(event?.type || "");
 
-  /**
-   * ✅ Optional transcript capture (non-blocking).
-   * We do NOT change any audio settings; we simply listen if OpenAI emits transcripts.
-   *
-   * IMPORTANT: avoid accidentally capturing the AI's own audio transcript deltas.
-   * We prefer explicit "input"/"transcription" type events when present.
-   */
   try {
     const typeLower = String(event?.type || "").toLowerCase();
 
@@ -1986,13 +1980,6 @@ async function handleOpenAiEvent(
 
     state.phase = "awaiting_greeting_reply";
 
-    /**
-     * ============================
-     * ✅ Phase 1 — Instrumentation B
-     * ============================
-     * After OpenAI responds with session.updated, log PROMPT APPLIED
-     * using the local systemPrompt markers we computed earlier.
-     */
     try {
       console.log("[AI-VOICE][PROMPT-APPLIED]", {
         callSid: state.callSid,
@@ -2063,7 +2050,6 @@ async function handleOpenAiEvent(
           return;
         }
 
-        // Reset inbound accumulation right before we speak
         liveState.userAudioMsBuffered = 0;
         liveState.lastUserTranscript = "";
         liveState.lowSignalCommitCount = 0;
@@ -2075,11 +2061,6 @@ async function handleOpenAiEvent(
 
         const greetingInstr = buildGreetingInstructions(liveState.context!);
 
-        /**
-         * ============================
-         * ✅ Phase 1 — Instrumentation C (greeting)
-         * ============================
-         */
         try {
           if (!liveState.debugLoggedResponseCreateGreeting) {
             liveState.debugLoggedResponseCreateGreeting = true;
@@ -2115,16 +2096,8 @@ async function handleOpenAiEvent(
     if (!state.openAiWs || !state.openAiReady) return;
     if (state.waitingForResponse || state.aiSpeaking) return;
 
-    /**
-     * ✅ Human-like gating + stepper output
-     * We do NOT advance on tiny commits.
-     * We only advance when the inbound audio seems like a real answer.
-     * If it's not a real answer, we either ignore it OR reprompt (human-like).
-     */
-
     const isGreetingReply = state.phase === "awaiting_greeting_reply";
 
-    // If we don't have steps for some reason, rebuild them safely.
     if (!state.scriptSteps || state.scriptSteps.length === 0) {
       try {
         const selectedScript = getSelectedScriptText(state.context!);
@@ -2140,20 +2113,16 @@ async function handleOpenAiEvent(
       typeof state.scriptStepIndex === "number" ? state.scriptStepIndex : 0;
     const steps = state.scriptSteps || [];
 
-    // Optional objection detection only if we actually have a transcript string.
     const lastUserText = String(state.lastUserTranscript || "").trim();
     const objectionKind = lastUserText ? detectObjection(lastUserText) : null;
 
-    // Determine what step we are on (for gating/reprompt)
     const currentStepLine = steps[idx] || getBookingFallbackLine(state.context!);
     const stepType = classifyStepType(currentStepLine);
 
-    // Greeting reply: always move into Step 0 immediately (feels natural)
     if (isGreetingReply) {
       const lineToSay = steps[0] || getBookingFallbackLine(state.context!);
       const perTurnInstr = buildStepperTurnInstruction(state.context!, lineToSay);
 
-      // Reset inbound tracking right before we speak
       state.userAudioMsBuffered = 0;
       state.lastUserTranscript = "";
       state.lowSignalCommitCount = 0;
@@ -2201,12 +2170,10 @@ async function handleOpenAiEvent(
       return;
     }
 
-    // If they object and we have a transcript, send exactly ONE rebuttal (no step advance).
     if (objectionKind) {
       const lineToSay = getRebuttalLine(state.context!, objectionKind);
       const perTurnInstr = buildStepperTurnInstruction(state.context!, lineToSay);
 
-      // Reset inbound tracking right before we speak
       state.userAudioMsBuffered = 0;
       state.lastUserTranscript = "";
       state.lowSignalCommitCount = 0;
@@ -2229,7 +2196,6 @@ async function handleOpenAiEvent(
       return;
     }
 
-    // ✅ Answer gating
     const audioMs = Number(state.userAudioMsBuffered || 0);
     const treatAsAnswer = shouldTreatCommitAsRealAnswer(
       stepType,
@@ -2238,20 +2204,15 @@ async function handleOpenAiEvent(
     );
 
     if (!treatAsAnswer) {
-      // count low-signal commits
       state.lowSignalCommitCount = (state.lowSignalCommitCount || 0) + 1;
 
       const now = Date.now();
       const lastPromptAt = Number(state.lastPromptSentAtMs || 0);
       const msSincePrompt = now - lastPromptAt;
 
-      /**
-       * Reprompt should NOT fire too quickly.
-       * We want to avoid cutting the caller off during natural pauses ("um ...").
-       */
       const shouldReprompt =
-        msSincePrompt >= 3200 && // increased patience
-        (state.lowSignalCommitCount || 0) >= 3 && // require more low-signal commits
+        msSincePrompt >= 3200 &&
+        (state.lowSignalCommitCount || 0) >= 3 &&
         (state.repromptCountForCurrentStep || 0) < 3;
 
       if (shouldReprompt) {
@@ -2268,12 +2229,10 @@ async function handleOpenAiEvent(
 
         state.repromptCountForCurrentStep = repN + 1;
 
-        // Reset inbound tracking right before we speak
         state.userAudioMsBuffered = 0;
         state.lastUserTranscript = "";
         state.lowSignalCommitCount = 0;
 
-        // small human-like pause before reprompt (does not affect audio pipeline)
         try {
           await sleep(850);
         } catch {}
@@ -2296,15 +2255,12 @@ async function handleOpenAiEvent(
         return;
       }
 
-      // Otherwise: do nothing (keep waiting).
       return;
     }
 
-    // If we got here, we treat it as a real answer: send the NEXT step line and advance index.
     const lineToSay = steps[idx] || getBookingFallbackLine(state.context!);
     const perTurnInstr = buildStepperTurnInstruction(state.context!, lineToSay);
 
-    // Reset inbound tracking right before we speak
     state.userAudioMsBuffered = 0;
     state.lastUserTranscript = "";
     state.lowSignalCommitCount = 0;
@@ -2314,11 +2270,6 @@ async function handleOpenAiEvent(
     setAiSpeaking(state, true, "response.create (script step)");
     state.outboundOpenAiDone = false;
 
-    /**
-     * ============================
-     * ✅ Phase 1 — Instrumentation C (user turn)
-     * ============================
-     */
     try {
       if (!state.debugLoggedResponseCreateUserTurn) {
         state.debugLoggedResponseCreateUserTurn = true;
@@ -2479,23 +2430,37 @@ async function handleBookAppointmentIntent(state: CallState, control: any) {
     return;
   }
 
-  // STRICT validation of startTimeUtc
   const startDate = parseStartTimeUtcToDate(startTimeUtc);
   if (!startDate) {
-    console.warn("[AI-VOICE][BOOKING][SKIP] Invalid startTimeUtc (will NOT call booking):", {
-      callSid: state.callSid,
-      leadId: ctx.leadId,
-      startTimeUtcRaw: startTimeUtc,
-    });
+    console.warn(
+      "[AI-VOICE][BOOKING][SKIP] Invalid startTimeUtc (will NOT call booking):",
+      {
+        callSid: state.callSid,
+        leadId: ctx.leadId,
+        startTimeUtcRaw: startTimeUtc,
+      }
+    );
     return;
   }
 
-  // STRICT tz validation + fallback
-  const tz = normalizeTimeZones(leadTimeZoneRaw, agentTimeZoneRaw, ctx);
+  /**
+   * ✅ ONLY NEEDED UPDATE:
+   * - lead tz: prefer ctx.raw.lead tz when present; otherwise use model-provided leadTimeZone; otherwise fallback chain
+   * - agent tz: ALWAYS prefer ctx.agentTimeZone (source of truth) over model-provided agentTimeZone
+   *
+   * This guarantees:
+   * - "lead time zone" stays the lead's zone (when CoveCRM provided it)
+   * - the calendar booking always uses the agent's zone consistently
+   */
+  const leadTzHint = getLeadTimeZoneHintFromContext(ctx);
+  const tz = normalizeTimeZones(
+    leadTimeZoneRaw || leadTzHint,
+    ctx.agentTimeZone || agentTimeZoneRaw,
+    ctx
+  );
   const leadTimeZone = tz.leadTz;
   const agentTimeZone = tz.agentTz;
 
-  // Safe debug logs (no sensitive notes)
   try {
     console.log("[AI-VOICE][BOOKING][VALIDATE]", {
       callSid: state.callSid,
@@ -2509,6 +2474,8 @@ async function handleBookAppointmentIntent(state: CallState, control: any) {
       durationMinutes,
       leadTzWasFallback: tz.leadTzWasFallback,
       agentTzWasFallback: tz.agentTzWasFallback,
+      leadTzHintUsed: !!leadTzHint && leadTimeZone === leadTzHint,
+      agentTzForcedFromCtx: agentTimeZone === String(ctx.agentTimeZone || "").trim(),
     });
   } catch {}
 
@@ -2516,7 +2483,6 @@ async function handleBookAppointmentIntent(state: CallState, control: any) {
     const url = new URL(BOOK_APPOINTMENT_URL);
     url.searchParams.set("key", AI_DIALER_CRON_KEY);
 
-    // Only append callSid to notes if notes already exists (per your rule).
     const safeNotes =
       typeof notes === "string" && notes.trim()
         ? `${notes}\n[callSid: ${state.callSid}]`
