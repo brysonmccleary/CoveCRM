@@ -19,6 +19,10 @@ type ErrorResponse = {
   error: string;
 };
 
+function looksLikeIanaTz(tz?: any) {
+  return typeof tz === "string" && tz.includes("/") && tz.length <= 64;
+}
+
 export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse<OkResponse | ErrorResponse>
@@ -177,10 +181,28 @@ export default async function handler(
       (user as any)?.displayName ||
       "your agent";
 
-    const agentTimeZone =
-      (user as any)?.settings?.timeZone ||
-      (user as any)?.timeZone ||
-      "America/Chicago";
+    /**
+     * ✅ CRITICAL TIMEZONE FIX (single source of truth)
+     * Always prefer bookingSettings.timezone (your schema + detect-timezone endpoint write here).
+     * Keep legacy fallbacks for older users, but only if they look like IANA timezones.
+     */
+    const tzFromBooking =
+      (user as any)?.bookingSettings?.timezone ||
+      (user as any)?.bookingSettings?.timeZone;
+
+    const tzLegacyCandidates = [
+      (user as any)?.settings?.timeZone,
+      (user as any)?.settings?.timezone,
+      (user as any)?.timeZone,
+      (user as any)?.timezone,
+    ];
+
+    const tzLegacy = tzLegacyCandidates.find(looksLikeIanaTz);
+
+    const agentTimeZone: string =
+      (looksLikeIanaTz(tzFromBooking) ? String(tzFromBooking) : undefined) ||
+      (tzLegacy ? String(tzLegacy) : undefined) ||
+      "America/Los_Angeles";
 
     // Optional notes from lead fields
     const notesFromLead =
