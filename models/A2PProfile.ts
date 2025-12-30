@@ -10,23 +10,17 @@ export type A2PRegistrationStatus =
   | "ready"
   | "rejected";
 
-// High-level rollup used for dashboard + notifications
 export type A2PApplicationStatus = "pending" | "approved" | "declined";
 
 export interface IA2PProfile extends Document {
-  // linkage
   userId: string;
-
-  // ✅ stable lookup for tenant (some code queries by userEmail)
   userEmail?: string;
 
-  // ---- Business info collected from tenant ----
   businessName: string;
-  ein: string; // display format (e.g. 00-0000000)
+  ein: string;
   website: string;
 
-  // full address fields from the A2P form
-  address: string; // street line 1
+  address: string;
   addressLine2?: string;
   addressCity: string;
   addressState: string;
@@ -39,25 +33,22 @@ export interface IA2PProfile extends Document {
   contactFirstName: string;
   contactLastName: string;
 
-  // ---- TrustHub/Profile ----
-  profileSid: string; // Secondary Customer Profile (BU...)
+  profileSid: string;
   businessEndUserSid?: string;
   authorizedRepEndUserSid?: string;
   trustProductSid?: string;
   a2pProfileEndUserSid?: string;
   assignedToPrimary?: boolean;
 
-  // Address-related TrustHub artifacts
   addressSid?: string;
   supportingDocumentSid?: string;
 
-  // Optional legacy/use-case sid
-  useCaseSid?: string;
+  // ✅ ADD THIS (your code already uses it)
+  parentAddressSid?: string;
 
-  // ✅ selected use case code (persisted for UX + /submit-campaign default)
+  useCaseSid?: string;
   usecaseCode?: string;
 
-  // ---- Campaign content & consent ----
   sampleMessages: string;
   sampleMessagesArr?: string[];
   optInDetails: string;
@@ -68,21 +59,17 @@ export interface IA2PProfile extends Document {
   landingTosUrl?: string;
   landingPrivacyUrl?: string;
 
-  // -------------------- ISV automation fields --------------------
   brandSid?: string;
   campaignSid?: string;
   usa2pSid?: string;
   messagingServiceSid?: string;
 
-  // Twilio / TCR brand state and failure info
   brandStatus?: string;
   brandFailureReason?: string;
 
-  // ✅ NEW: capture Twilio’s actual error payload (for UI + debugging)
   brandErrors?: any[];
   brandErrorsText?: string;
 
-  // Lifecycle + health
   registrationStatus?: A2PRegistrationStatus;
   messagingReady?: boolean;
   lastError?: string;
@@ -98,7 +85,6 @@ export interface IA2PProfile extends Document {
   lastSubmittedSampleMessages?: string[];
   lastSubmittedInputs?: any;
 
-  // ✅ optional: record Twilio account used when last updating A2P (proves routing)
   twilioAccountSidLastUsed?: string;
 
   compliance?: {
@@ -122,7 +108,6 @@ export interface IA2PProfile extends Document {
 
 const A2PProfileSchema = new Schema<IA2PProfile>({
   userId: { type: String, required: true, index: true },
-
   userEmail: { type: String, index: true },
 
   businessName: { type: String, required: true },
@@ -153,6 +138,9 @@ const A2PProfileSchema = new Schema<IA2PProfile>({
   addressSid: { type: String },
   supportingDocumentSid: { type: String },
 
+  // ✅ ADD THIS
+  parentAddressSid: { type: String },
+
   useCaseSid: { type: String },
   usecaseCode: { type: String },
 
@@ -174,7 +162,6 @@ const A2PProfileSchema = new Schema<IA2PProfile>({
   brandStatus: { type: String },
   brandFailureReason: { type: String },
 
-  // ✅ NEW
   brandErrors: { type: [Schema.Types.Mixed], default: undefined },
   brandErrorsText: { type: String },
 
