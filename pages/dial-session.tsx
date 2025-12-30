@@ -500,6 +500,13 @@ export default function DialSession() {
     if (inboundMode) return;
 
     if (!numbersLoaded) { setStatus("Loading your numbers…"); return; }
+
+    // ✅ NEW: if we ran past the end (usually due to skip/quiet-hours), finish cleanly
+    if (leadQueue.length > 0 && currentLeadIndex >= leadQueue.length && !sessionEndedRef.current) {
+      showSessionSummary();
+      return;
+    }
+
     if (
       leadQueue.length > 0 &&
       readyToCall &&
@@ -510,15 +517,34 @@ export default function DialSession() {
       !callActive
     ) {
       // Quiet-hours skip (lead time zone)
-      const { allowed, zone } = isCallAllowedForLead(leadQueue[currentLeadIndex] || {});
+      const current = leadQueue[currentLeadIndex] || null;
+      const { allowed, zone } = isCallAllowedForLead(current || {});
+
+      if (!current || !current.id) {
+        // ✅ NEW: if the current slot is invalid, advance or finish (prevents "Missing lead id" dead-end)
+        if (currentLeadIndex + 1 >= leadQueue.length) return showSessionSummary();
+        serverPersist(currentLeadIndex);
+        setCurrentLeadIndex((i) => i + 1);
+        setReadyToCall(true);
+        return;
+      }
+
       if (!allowed) {
         const timeStr = localTimeString(zone);
         setHistory((prev) => [
           { kind: "text", text: `⏭️ Skipped (quiet hours) • ${timeStr}` },
           ...prev,
         ]);
+
+        // ✅ NEW: if this was the last lead, finish cleanly instead of running past the array
+        if (currentLeadIndex + 1 >= leadQueue.length) {
+          serverPersist(currentLeadIndex);
+          return showSessionSummary();
+        }
+
         serverPersist(currentLeadIndex);
         setCurrentLeadIndex((i) => i + 1);
+        setReadyToCall(true);
         return;
       }
 
