@@ -33,34 +33,15 @@ export default function PrivacyPolicy() {
 
         {/* 2. Google User Data */}
         <h2 className="text-xl font-semibold mt-6 mb-2">
-          2. Google User Data (Sheets, Drive &amp; Calendar)
+          2. Google User Data (Calendar)
         </h2>
         <p className="mb-4">
-          CoveCRM offers optional integrations with Google services. When you
+          CoveCRM offers an optional integration with Google Calendar. When you
           connect your Google account, we may access limited Google user data
-          only as necessary to provide these features:
+          only as necessary to provide this feature:
         </p>
 
         <ul className="list-disc list-inside space-y-2 mb-4">
-          <li>
-            <span className="font-semibold">Google Sheets / Drive:</span> We use
-            Google Sheets and Drive-related scopes (including{" "}
-            <span className="italic">
-              https://www.googleapis.com/auth/spreadsheets.readonly
-            </span>{" "}
-            ,{" "}
-            <span className="italic">
-              https://www.googleapis.com/auth/drive.file
-            </span>{" "}
-            and{" "}
-            <span className="italic">
-              https://www.googleapis.com/auth/drive.metadata.readonly
-            </span>
-            ) to allow you to select specific spreadsheets and import lead data
-            from those files into CoveCRM. We only access the spreadsheets and
-            files you choose, and we do not read or modify other files in your
-            Google Drive.
-          </li>
           <li>
             <span className="font-semibold">Google Calendar:</span> We use the
             calendar scope{" "}
@@ -80,18 +61,17 @@ export default function PrivacyPolicy() {
         </ul>
 
         <p className="mb-4">
-          Google user data obtained through these integrations is used solely to
-          provide CoveCRM functionality for your account (for example, lead
-          imports and calendar syncing). We do not sell Google user data, and we
-          do not use Google user data to train generalized AI or machine
-          learning models.
+          Google user data obtained through this integration is used solely to
+          provide CoveCRM functionality for your account (for example, calendar
+          syncing). We do not sell Google user data, and we do not use Google
+          user data to train generalized AI or machine learning models.
         </p>
 
         <p className="mb-6">
           You can disconnect Google at any time from within CoveCRM (where
           available) or directly in your Google Account permissions. When you
-          disconnect, we stop accessing your Google data going forward;
-          previously imported leads and events remain in your CoveCRM account
+          disconnect, we stop accessing your Google data going forward; events
+          and records already stored in CoveCRM remain in your CoveCRM account
           unless you delete them.
         </p>
 
@@ -124,10 +104,10 @@ export default function PrivacyPolicy() {
           <li>
             <span className="font-semibold">Service providers:</span> We use
             third parties such as Stripe (payments), Twilio (SMS/voice), Google
-            (Sheets, Drive, Calendar), hosting and analytics providers, and
-            email services (e.g., Resend) to operate CoveCRM. These providers
-            only receive the data needed to perform services on our behalf and
-            are contractually obligated to protect it.
+            (Calendar), hosting and analytics providers, and email services
+            (e.g., Resend) to operate CoveCRM. These providers only receive the
+            data needed to perform services on our behalf and are contractually
+            obligated to protect it.
           </li>
           <li>
             <span className="font-semibold">Legal requirements:</span> We may

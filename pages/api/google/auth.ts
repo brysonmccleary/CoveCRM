@@ -3,9 +3,6 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import { google } from "googleapis";
 
 const SCOPES = [
-  "https://www.googleapis.com/auth/drive.file",
-  "https://www.googleapis.com/auth/drive.metadata.readonly",
-  "https://www.googleapis.com/auth/spreadsheets.readonly",
   "https://www.googleapis.com/auth/calendar",
   "https://www.googleapis.com/auth/userinfo.email",
   "https://www.googleapis.com/auth/userinfo.profile",
@@ -37,13 +34,13 @@ function isHostAllowed(host: string): boolean {
   return allowed.some(
     (rule) =>
       host === rule ||
-      (rule.startsWith("*.") ? host.endsWith(rule.slice(1)) : host.endsWith(rule))
+      (rule.startsWith("*.") ? host.endsWith(rule.slice(1)) : host.endsWith(rule)),
   );
 }
 
 export default async function handler(
   req: NextApiRequest,
-  res: NextApiResponse
+  res: NextApiResponse,
 ) {
   if (req.method !== "GET")
     return res.status(405).json({ message: "Method not allowed" });
@@ -72,10 +69,10 @@ export default async function handler(
   const oauth = new google.auth.OAuth2(
     process.env.GOOGLE_CLIENT_ID!,
     process.env.GOOGLE_CLIENT_SECRET!,
-    redirectUri
+    redirectUri,
   );
 
-  const userEmail = (req.query.userEmail ? String(req.query.userEmail) : "").toLowerCase();
+  const userEmail = req.query.userEmail ? String(req.query.userEmail).toLowerCase() : "";
 
   const state = userEmail
     ? Buffer.from(JSON.stringify({ userEmail }), "utf8").toString("base64url")

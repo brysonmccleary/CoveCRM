@@ -20,26 +20,18 @@ export default async function handler(
   const oauth2Client = new google.auth.OAuth2(
     process.env.GOOGLE_CLIENT_ID!,
     process.env.GOOGLE_CLIENT_SECRET!,
-    redirectUri
+    redirectUri,
   );
 
-  // IMPORTANT:
-  // Request the full set so the consent screen is comprehensive and matches Cloud Console.
+  // Calendar-only + identity (must match Cloud Console + Google review)
   const url = oauth2Client.generateAuthUrl({
     access_type: "offline",
     prompt: "consent",
     scope: [
-      // Identity
       "https://www.googleapis.com/auth/userinfo.email",
       "https://www.googleapis.com/auth/userinfo.profile",
       "openid",
-      // Calendar (full access so consent wording matches)
       "https://www.googleapis.com/auth/calendar",
-      // ✅ per-file Drive access used with Sheets API
-      "https://www.googleapis.com/auth/drive.file",
-      "https://www.googleapis.com/auth/drive.metadata.readonly",
-      // Sheets read-only
-      "https://www.googleapis.com/auth/spreadsheets.readonly",
     ],
   });
 

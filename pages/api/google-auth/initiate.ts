@@ -21,22 +21,15 @@ export default async function handler(
       need: {
         GOOGLE_CLIENT_ID: "(set to your Web client ID)",
         GOOGLE_CLIENT_SECRET: "(set to your Web client secret)",
-        GOOGLE_REDIRECT_URI:
-          "https://www.covecrm.com/api/google/callback",
+        GOOGLE_REDIRECT_URI: "https://www.covecrm.com/api/google/callback",
       },
     });
   }
 
-  const oauth2Client = new google.auth.OAuth2(
-    clientId,
-    clientSecret,
-    redirectUri,
-  );
+  const oauth2Client = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
 
   const scopes = [
-    "https://www.googleapis.com/auth/drive.file",
-    "https://www.googleapis.com/auth/drive.metadata.readonly",
-    "https://www.googleapis.com/auth/spreadsheets.readonly",
+    "https://www.googleapis.com/auth/calendar",
     "https://www.googleapis.com/auth/userinfo.email",
     "https://www.googleapis.com/auth/userinfo.profile",
     "openid",

@@ -12,18 +12,12 @@ const CALENDAR_SCOPES = [
   "openid",
 ];
 
-const SHEETS_SCOPES = [
-  // Sheets + minimal Drive for listing & accessing user-selected files
-  "https://www.googleapis.com/auth/drive.file",
-  "https://www.googleapis.com/auth/drive.metadata.readonly",
-  "https://www.googleapis.com/auth/spreadsheets.readonly",
-  // Identity
-  "https://www.googleapis.com/auth/userinfo.email",
-  "https://www.googleapis.com/auth/userinfo.profile",
-  "openid",
-];
+// NOTE:
+// We no longer use Google Sheets / Drive OAuth scopes.
+// Sheets imports are handled via the user-installed Google Apps Script posting to our webhook.
+// We keep the target enum for backwards-compat with any older code paths, but it maps to calendar-only.
+const SHEETS_SCOPES: string[] = [];
 
-// For a "comprehensive" consent screen demo (matches Cloud Console list)
 const BOTH_SCOPES = Array.from(new Set([...CALENDAR_SCOPES, ...SHEETS_SCOPES]));
 
 function getBaseUrl() {
@@ -44,8 +38,9 @@ export function getOAuthClient() {
 }
 
 export function buildScopes(target: GoogleTarget = "calendar") {
-  if (target === "sheets") return SHEETS_SCOPES;
-  if (target === "both") return BOTH_SCOPES;
+  // Backwards-compat: any legacy "sheets" / "both" requests must not request restricted scopes.
+  if (target === "sheets") return CALENDAR_SCOPES;
+  if (target === "both") return CALENDAR_SCOPES;
   return CALENDAR_SCOPES; // default calendar-only
 }
 

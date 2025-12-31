@@ -17,7 +17,6 @@ export default async function handler(
     process.env.NEXT_PUBLIC_BASE_URL ||
     "http://localhost:3000";
 
-  // ✅ Use the calendar callback, not the sheets callback
   const redirectUri = `${base.replace(/\/$/, "")}/api/connect/google-calendar/callback`;
 
   const oauth2 = new google.auth.OAuth2(
@@ -26,20 +25,12 @@ export default async function handler(
     redirectUri,
   );
 
-  // IMPORTANT:
-  // For Google verification, the consent screen needs to match your Cloud Console requested scopes.
-  // We request the full set here so the consent screen is "comprehensive" and consistent.
+  // Calendar-only + identity (must match Cloud Console requested scopes + verification video)
   const url = oauth2.generateAuthUrl({
     access_type: "offline",
     prompt: "consent",
     scope: [
-      // Calendar (full access so consent wording matches)
       "https://www.googleapis.com/auth/calendar",
-      // Sheets + Drive scopes used by the platform
-      "https://www.googleapis.com/auth/drive.file",
-      "https://www.googleapis.com/auth/drive.metadata.readonly",
-      "https://www.googleapis.com/auth/spreadsheets.readonly",
-      // Identity
       "https://www.googleapis.com/auth/userinfo.email",
       "https://www.googleapis.com/auth/userinfo.profile",
       "openid",
