@@ -450,8 +450,13 @@ async function assignEntityToCustomerProfileRaw(args: {
   }
 }
 
-// ✅ FIX: always link secondary BU -> primary BU using parent auth (no X header)
-async function assignSecondaryCustomerProfileToPrimaryISV(args: {
+/**
+ * ✅ FIX (ISV flow):
+ * DO NOT add the secondary bundle onto the primary bundle (primary is TWILIO_APPROVED => 70002).
+ * Instead, add the PRIMARY customer profile as an entity assignment ONTO the SECONDARY bundle,
+ * executed with PARENT auth while acting on the subaccount via X-Twilio-AccountSid.
+ */
+async function assignPrimaryCustomerProfileToSecondaryISV(args: {
   secondaryProfileSid: string;
 }) {
   const { secondaryProfileSid } = args;
@@ -462,6 +467,9 @@ async function assignSecondaryCustomerProfileToPrimaryISV(args: {
   if (!secondaryProfileSid || !secondaryProfileSid.startsWith("BU")) {
     throw new Error("Missing/invalid secondaryProfileSid.");
   }
+  if (!twilioAccountSidUsed || !twilioAccountSidUsed.startsWith("AC")) {
+    throw new Error("Missing/invalid twilioAccountSidUsed for ISV assignment.");
+  }
 
   if (!parentClient || !parentAuth || !parentAccountSid) {
     const parent = getParentTrusthubClient();
@@ -470,18 +478,19 @@ async function assignSecondaryCustomerProfileToPrimaryISV(args: {
     parentAccountSid = parent.accountSid;
   }
 
-  log("step: ISV link secondary -> primary (PARENT auth)", {
+  log("step: ISV link PRIMARY -> secondary (PARENT auth acting on subaccount)", {
     primaryProfileSid: PRIMARY_PROFILE_SID,
     secondaryProfileSid,
     parentAccountSidMasked:
       parentAccountSid.slice(0, 4) + "…" + parentAccountSid.slice(-4),
+    xTwilioAccountSid: twilioAccountSidUsed,
   });
 
   await assignEntityToCustomerProfileRaw({
     auth: parentAuth!,
-    customerProfileSid: PRIMARY_PROFILE_SID,
-    objectSid: secondaryProfileSid,
-    xTwilioAccountSid: null,
+    customerProfileSid: secondaryProfileSid,
+    objectSid: PRIMARY_PROFILE_SID,
+    xTwilioAccountSid: twilioAccountSidUsed, // ✅ act on the subaccount bundle
   });
 }
 
@@ -1765,15 +1774,17 @@ export default async function handler(
           xTwilioAccountSid: twilioAccountSidUsed,
         });
       } else {
-        await assignEntityToCustomerProfile(secondaryProfileSid!, supportingDocumentSid);
+        await assignEntityToCustomerProfile(
+          secondaryProfileSid!,
+          supportingDocumentSid,
+        );
       }
     }
 
-    // ---------------- 1.9) Assign Secondary to Primary (ISV) ----------------
+    // ---------------- 1.9) Assign PRIMARY to Secondary (ISV) ----------------
     live = await A2PProfile.findOne({ userId }).lean<any>();
     if (!live?.assignedToPrimary) {
-      // ✅ CRITICAL FIX: always attempt primary linking using PARENT auth
-      await assignSecondaryCustomerProfileToPrimaryISV({
+      await assignPrimaryCustomerProfileToSecondaryISV({
         secondaryProfileSid: secondaryProfileSid!,
       });
 
