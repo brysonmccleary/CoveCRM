@@ -61,7 +61,7 @@ export default async function handler(
   const oauth2Client = new google.auth.OAuth2(
     process.env.GOOGLE_CLIENT_ID!,
     process.env.GOOGLE_CLIENT_SECRET!,
-    redirectUri, // must match the URI used to generate the auth URL
+    redirectUri,
   );
 
   try {
@@ -77,8 +77,7 @@ export default async function handler(
     } = tokens;
 
     if (!refresh_token) {
-      const base = origin;
-      return res.redirect(`${base}/settings?calendar=needs_reconnect`);
+      return res.redirect(`${origin}/settings?calendar=needs_reconnect`);
     }
 
     oauth2Client.setCredentials({ access_token, refresh_token });
@@ -108,23 +107,12 @@ export default async function handler(
       if (googleEmail && googleEmail !== targetEmail) {
         const fallbackUser = await User.findOne({ email: googleEmail });
         if (!fallbackUser) {
-          const base = origin;
           return res
             .status(404)
             .send(
               `No CRM user found for ${targetEmail} or ${googleEmail}. Make sure your CRM email matches, or start auth from your signed-in session.`,
             );
         }
-
-        (fallbackUser as any).googleTokens = {
-          ...(fallbackUser as any).googleTokens,
-          accessToken: access_token || "",
-          refreshToken: refresh_token,
-          expiryDate: expiry_date || 0,
-          scope: scope || "",
-          tokenType: token_type || "",
-          googleEmail,
-        };
 
         // Calendar metadata (primary id)
         const calendar = google.calendar({ version: "v3", auth: oauth2Client });
@@ -137,6 +125,16 @@ export default async function handler(
           /* ignore */
         }
 
+        (fallbackUser as any).googleTokens = {
+          ...(fallbackUser as any).googleTokens,
+          accessToken: access_token || "",
+          refreshToken: refresh_token,
+          expiryDate: expiry_date || 0,
+          scope: scope || "",
+          tokenType: token_type || "",
+          googleEmail,
+        };
+
         (fallbackUser as any).googleCalendar = {
           ...(fallbackUser as any).googleCalendar,
           refreshToken: refresh_token,
@@ -145,6 +143,7 @@ export default async function handler(
           googleEmail,
           calendarId: primaryCalendarId,
         };
+
         (fallbackUser as any).integrations = {
           ...(fallbackUser as any).integrations,
           googleCalendar: {
@@ -154,6 +153,7 @@ export default async function handler(
             calendarId: primaryCalendarId,
           },
         };
+
         (fallbackUser as any).flags = {
           ...(fallbackUser as any).flags,
           calendarConnected: true,
@@ -161,8 +161,7 @@ export default async function handler(
         };
 
         await fallbackUser.save();
-        const base = origin;
-        return res.redirect(`${base}/settings?calendar=connected`);
+        return res.redirect(`${origin}/settings?calendar=connected`);
       }
 
       return res
@@ -183,7 +182,7 @@ export default async function handler(
       /* ignore */
     }
 
-    // 5) Persist tokens + calendar metadata
+    // 5) Persist tokens + calendar metadata (Calendar-only)
     (user as any).googleTokens = {
       ...(user as any).googleTokens,
       accessToken: access_token || "",
@@ -191,11 +190,6 @@ export default async function handler(
       expiryDate: expiry_date || 0,
       scope: scope || "",
       tokenType: token_type || "",
-      googleEmail: googleEmail || targetEmail,
-    };
-
-    (user as any).googleSheets = {
-      ...(user as any).googleSheets,
       googleEmail: googleEmail || targetEmail,
     };
 
@@ -227,14 +221,12 @@ export default async function handler(
     await user.save();
 
     // 6) Redirect back to Settings with success
-    const base = origin;
-    return res.redirect(`${base}/settings?calendar=connected`);
+    return res.redirect(`${origin}/settings?calendar=connected`);
   } catch (err: any) {
     console.error(
       "❌ Google OAuth callback error:",
       err?.response?.data || err?.message || err,
     );
-    const base = origin;
-    return res.redirect(`${base}/settings?calendar=error`);
+    return res.redirect(`${origin}/settings?calendar=error`);
   }
 }

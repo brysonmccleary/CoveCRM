@@ -3,7 +3,6 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import { google } from "googleapis";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
-import { updateUserGoogleSheets } from "@/lib/userHelpers";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../../auth/[...nextauth]";
 
@@ -23,9 +22,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         : "";
 
     if (!email) {
-      return res.redirect(
-        "/auth/signin?reason=no_session_for_calendar_connect"
-      );
+      return res.redirect("/auth/signin?reason=no_session_for_calendar_connect");
     }
 
     const base =
@@ -39,7 +36,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const oauth2 = new google.auth.OAuth2(
       process.env.GOOGLE_CLIENT_ID!,
       process.env.GOOGLE_CLIENT_SECRET!,
-      redirectUri
+      redirectUri,
     );
 
     // Exchange code for tokens
@@ -49,9 +46,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const current = await User.findOne({ email }).lean<{
       googleTokens?: any;
-      googleSheets?: any;
       googleCalendar?: any;
       flags?: any;
+      integrations?: any;
     }>();
 
     if (!current) {
@@ -60,27 +57,37 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     // Prefer new refresh_token, fall back to any existing one if Google omits it
+    // (Google may omit refresh_token if user previously consented and prompt isn't "consent",
+    // but we DO use prompt=consent; this is still a safe fallback.)
     const refreshToken =
       tokens.refresh_token ||
       current?.googleCalendar?.refreshToken ||
       current?.googleTokens?.refreshToken ||
-      current?.googleSheets?.refreshToken ||
       "";
 
-    // Keep legacy Sheets helper in sync
-    await updateUserGoogleSheets(email, {
-      accessToken:
-        tokens.access_token ||
-        current?.googleSheets?.accessToken ||
-        current?.googleTokens?.accessToken ||
-        "",
-      refreshToken,
-      expiryDate:
-        tokens.expiry_date ??
-        current?.googleSheets?.expiryDate ??
-        current?.googleTokens?.expiryDate ??
-        null,
-    });
+    const accessToken =
+      tokens.access_token ||
+      current?.googleCalendar?.accessToken ||
+      current?.googleTokens?.accessToken ||
+      "";
+
+    const expiryDate =
+      tokens.expiry_date ??
+      current?.googleCalendar?.expiryDate ??
+      current?.googleTokens?.expiryDate ??
+      null;
+
+    // Optional: store primary calendar id (best-effort)
+    let primaryCalendarId = current?.googleCalendar?.calendarId || "primary";
+    try {
+      oauth2.setCredentials({ access_token: accessToken, refresh_token: refreshToken });
+      const calendar = google.calendar({ version: "v3", auth: oauth2 });
+      const list = await calendar.calendarList.list();
+      primaryCalendarId =
+        list.data.items?.find((c: any) => c.primary)?.id || primaryCalendarId || "primary";
+    } catch {
+      /* ignore */
+    }
 
     // Canonical storage: googleTokens + googleCalendar
     await User.findOneAndUpdate(
@@ -88,28 +95,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       {
         $set: {
           googleTokens: {
-            accessToken:
-              tokens.access_token ||
-              current?.googleTokens?.accessToken ||
-              "",
+            accessToken,
             refreshToken,
-            expiryDate:
-              tokens.expiry_date ??
-              current?.googleTokens?.expiryDate ??
-              null,
+            expiryDate,
           },
           googleCalendar: {
-            accessToken:
-              tokens.access_token ||
-              current?.googleCalendar?.accessToken ||
-              current?.googleTokens?.accessToken ||
-              "",
+            accessToken,
             refreshToken,
-            expiryDate:
-              tokens.expiry_date ??
-              current?.googleCalendar?.expiryDate ??
-              current?.googleTokens?.expiryDate ??
-              null,
+            expiryDate,
+            calendarId: primaryCalendarId,
+          },
+          integrations: {
+            ...(current as any)?.integrations,
+            googleCalendar: {
+              accessToken,
+              refreshToken,
+              expiryDate,
+              calendarId: primaryCalendarId,
+            },
           },
           flags: {
             ...(current as any)?.flags,
@@ -118,7 +121,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           },
         },
       },
-      { new: false }
+      { new: false },
     );
 
     // ✅ Send them back to the Calendar tab
@@ -127,7 +130,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   } catch (err: any) {
     console.error(
       "Calendar OAuth callback error:",
-      err?.response?.data || err?.message || err
+      err?.response?.data || err?.message || err,
     );
     return res.status(500).send("Calendar OAuth callback failed");
   }
