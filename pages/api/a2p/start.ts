@@ -12,6 +12,7 @@ import {
   TwilioResolvedAuth,
 } from "@/lib/twilio/getClientForUser";
 import twilio from "twilio";
+import { Agent } from "undici";
 
 /**
  * Required ENV:
@@ -27,6 +28,8 @@ import twilio from "twilio";
  * - A2P_NOTIFICATIONS_EMAIL
  * - TWILIO_API_KEY_SID
  * - TWILIO_API_KEY_SECRET
+ * - TWILIO_TRUSTHUB_TIMEOUT_MS (default 15000)
+ * - TWILIO_TRUSTHUB_MAX_RETRIES (default 3)
  */
 
 const SECONDARY_PROFILE_POLICY_SID =
@@ -208,11 +211,47 @@ function basicAuthHeader(username: string, password: string): string {
   return `Basic ${token}`;
 }
 
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRetryableNetworkError(err: any): boolean {
+  const msg = String(err?.message || "");
+  const code = String((err as any)?.code || "");
+  const name = String((err as any)?.name || "");
+  return (
+    code === "ETIMEDOUT" ||
+    code === "ECONNRESET" ||
+    code === "EAI_AGAIN" ||
+    code === "ENOTFOUND" ||
+    name === "AbortError" ||
+    /ETIMEDOUT/i.test(msg) ||
+    /ECONNRESET/i.test(msg) ||
+    /EAI_AGAIN/i.test(msg) ||
+    /ENOTFOUND/i.test(msg) ||
+    /network/i.test(msg) ||
+    /fetch failed/i.test(msg) ||
+    /socket/i.test(msg)
+  );
+}
+
+// Keepalive dispatcher for TrustHub (stabilizes Vercel networking)
+const TRUSTHUB_DISPATCHER = new Agent({
+  keepAliveTimeout: 60_000,
+  keepAliveMaxTimeout: 60_000,
+  connections: 50,
+});
+
 /**
  * TrustHub fetch:
  * - When calling TrustHub from a *parent* auth but acting on a *subaccount* object,
  *   Twilio expects `X-Twilio-AccountSid: <subaccountSid>`.
  * - When calling TrustHub for parent-only objects, omit X-Twilio-AccountSid.
+ *
+ * ✅ Hardening:
+ * - explicit timeout (AbortController)
+ * - small retry/backoff on transient network errors + 5xx
+ * - keepalive dispatcher
  */
 async function trusthubFetch(
   auth: TwilioResolvedAuth,
@@ -242,29 +281,88 @@ async function trusthubFetch(
     body = toFormUrlEncoded(form || {});
   }
 
-  const resp = await fetch(url, { method, headers, body });
+  const timeoutMs = Number(process.env.TWILIO_TRUSTHUB_TIMEOUT_MS || "15000");
+  const maxAttempts = Number(process.env.TWILIO_TRUSTHUB_MAX_RETRIES || "3");
 
-  const text = await resp.text();
-  let json: any = null;
-  try {
-    json = text ? JSON.parse(text) : null;
-  } catch {
-    json = null;
+  let lastErr: any = null;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const controller = new AbortController();
+    const t = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+      const resp = await fetch(url, {
+        method,
+        headers,
+        body,
+        signal: controller.signal,
+        // @ts-ignore - undici dispatcher is supported in Node runtimes
+        dispatcher: TRUSTHUB_DISPATCHER,
+      } as any);
+
+      clearTimeout(t);
+
+      const text = await resp.text();
+      let json: any = null;
+      try {
+        json = text ? JSON.parse(text) : null;
+      } catch {
+        json = null;
+      }
+
+      if (!resp.ok) {
+        const code = json?.code ?? resp.status;
+        const message = json?.message ?? text ?? `HTTP ${resp.status}`;
+
+        // Retry 5xx
+        if (resp.status >= 500 && resp.status <= 599 && attempt < maxAttempts) {
+          log("warn: TrustHub 5xx; retrying", {
+            method,
+            path,
+            status: resp.status,
+            code,
+            attempt,
+            maxAttempts,
+            xTwilioAccountSid: xSid,
+          });
+          await sleep(250 * attempt * attempt);
+          continue;
+        }
+
+        const err: any = new Error(
+          `TrustHub ${method} ${path} failed (${resp.status}) code=${code} message=${message}`,
+        );
+        err.status = resp.status;
+        err.code = json?.code ?? undefined;
+        err.moreInfo = json?.more_info ?? undefined;
+        throw err;
+      }
+
+      return json ?? text;
+    } catch (err: any) {
+      clearTimeout(t);
+      lastErr = err;
+
+      if (attempt < maxAttempts && isRetryableNetworkError(err)) {
+        log("warn: TrustHub network error; retrying", {
+          method,
+          path,
+          attempt,
+          maxAttempts,
+          message: err?.message,
+          code: err?.code,
+          name: err?.name,
+          xTwilioAccountSid: xSid,
+        });
+        await sleep(250 * attempt * attempt);
+        continue;
+      }
+
+      throw err;
+    }
   }
 
-  if (!resp.ok) {
-    const code = json?.code ?? resp.status;
-    const message = json?.message ?? text ?? `HTTP ${resp.status}`;
-    const err: any = new Error(
-      `TrustHub ${method} ${path} failed (${resp.status}) code=${code} message=${message}`,
-    );
-    err.status = resp.status;
-    err.code = json?.code ?? undefined;
-    err.moreInfo = json?.more_info ?? undefined;
-    throw err;
-  }
-
-  return json ?? text;
+  throw lastErr || new Error("TrustHub request failed after retries.");
 }
 
 // parent TrustHub client (ISV account)
@@ -315,7 +413,7 @@ function getParentTrusthubClient(): {
   );
 }
 
-// ✅ NEW (additive): raw entity assignment helper for the “Twilio recommended ISV flow”
+// ✅ RAW entity assignment helper (idempotent; does NOT skip TWILIO_APPROVED)
 async function assignEntityToCustomerProfileRaw(args: {
   auth: TwilioResolvedAuth;
   customerProfileSid: string;
@@ -348,17 +446,43 @@ async function assignEntityToCustomerProfileRaw(args: {
       });
       return;
     }
-    const msg = String(err?.message || "");
-    if (msg.includes("TWILIO_APPROVED")) {
-      log("info: bundle is TWILIO_APPROVED; skipping assignment (raw)", {
-        customerProfileSid,
-        objectSid,
-        xTwilioAccountSid,
-      });
-      return;
-    }
     throw err;
   }
+}
+
+// ✅ FIX: always link secondary BU -> primary BU using parent auth (no X header)
+async function assignSecondaryCustomerProfileToPrimaryISV(args: {
+  secondaryProfileSid: string;
+}) {
+  const { secondaryProfileSid } = args;
+
+  if (!PRIMARY_PROFILE_SID || !PRIMARY_PROFILE_SID.startsWith("BU")) {
+    throw new Error("Missing/invalid A2P_PRIMARY_PROFILE_SID.");
+  }
+  if (!secondaryProfileSid || !secondaryProfileSid.startsWith("BU")) {
+    throw new Error("Missing/invalid secondaryProfileSid.");
+  }
+
+  if (!parentClient || !parentAuth || !parentAccountSid) {
+    const parent = getParentTrusthubClient();
+    parentClient = parent.client;
+    parentAuth = parent.auth;
+    parentAccountSid = parent.accountSid;
+  }
+
+  log("step: ISV link secondary -> primary (PARENT auth)", {
+    primaryProfileSid: PRIMARY_PROFILE_SID,
+    secondaryProfileSid,
+    parentAccountSidMasked:
+      parentAccountSid.slice(0, 4) + "…" + parentAccountSid.slice(-4),
+  });
+
+  await assignEntityToCustomerProfileRaw({
+    auth: parentAuth!,
+    customerProfileSid: PRIMARY_PROFILE_SID,
+    objectSid: secondaryProfileSid,
+    xTwilioAccountSid: null,
+  });
 }
 
 // ✅ NEW (additive): avoid duplicate customer_profile_address SDs causing instant evaluation failures.
@@ -767,11 +891,9 @@ async function assignEntityToTrustProduct(
 
 /**
  * ✅ FIX: Twilio TrustHub Evaluations require PolicySid in the POST body.
- * Your logs showed 400 code=20001 Missing required parameter PolicySid.
  * We include it for BOTH SDK and RAW paths.
  */
 
-// evaluations via raw TrustHub so it works even when SDK surface is missing.
 async function createCustomerProfileEvaluationRaw(customerProfileSid: string) {
   if (!twilioResolvedAuth) {
     throw new Error("Missing twilioResolvedAuth for customerProfile evaluation.");
@@ -821,7 +943,6 @@ async function evaluateAndSubmitCustomerProfile(customerProfileSid: string) {
     });
     const cp: any = client.trusthub.v1.customerProfiles(customerProfileSid);
     if ((cp as any).evaluations?.create) {
-      // SDK typically expects camelCase
       await (cp as any).evaluations.create({
         policySid: SECONDARY_PROFILE_POLICY_SID,
       });
@@ -867,7 +988,6 @@ async function evaluateAndSubmitTrustProduct(trustProductSid: string) {
     });
     const tp: any = client.trusthub.v1.trustProducts(trustProductSid);
     if ((tp as any).evaluations?.create) {
-      // SDK typically expects camelCase
       await (tp as any).evaluations.create({
         policySid: A2P_TRUST_PRODUCT_POLICY_SID,
       });
@@ -982,7 +1102,6 @@ async function findExistingBrandForBundles(opts: {
   }
 }
 
-// ✅ NEW (additive): verify stored brand + campaign actually exist before short-circuiting
 async function verifyBrandAndCampaignExist(args: {
   brandSid?: string;
   messagingServiceSid?: string;
@@ -1212,7 +1331,6 @@ export default async function handler(
     const useCaseCodeFinal: string =
       (setPayload.usecaseCode as string) || "LOW_VOLUME";
 
-    // ✅ IMPORTANT: a2p is just the initial snapshot. Do NOT rely on it staying current.
     const a2p = await A2PProfile.findOneAndUpdate<IA2PProfile>(
       { userId },
       { $set: setPayload as any },
@@ -1263,20 +1381,23 @@ export default async function handler(
         });
       }
 
-      // If either is stale, clear so we proceed and recover automatically
       await clearStaleSidOnProfile({
         a2pId: String((a2p as any)._id),
         unset: {
-          ...(check.brandOk ? {} : { brandSid: 1, brandStatus: 1, brandFailureReason: 1 }),
+          ...(check.brandOk
+            ? {}
+            : { brandSid: 1, brandStatus: 1, brandFailureReason: 1 }),
           ...(check.campaignOk ? {} : { usa2pSid: 1, campaignSid: 1 }),
         },
         reason: `Recovered stale stored A2P objects before short-circuit: brandOk=${check.brandOk} campaignOk=${check.campaignOk}`,
-        extra: { brandSid: (a2p as any).brandSid, usa2pSid: (a2p as any).usa2pSid },
+        extra: {
+          brandSid: (a2p as any).brandSid,
+          usa2pSid: (a2p as any).usa2pSid,
+        },
       });
     }
 
     // ---------------- 1) Secondary Customer Profile (BU...) ----------------
-    // Always re-read latest doc for “exists” decisions
     let live = await A2PProfile.findOne({ userId }).lean<any>();
     const a2pId = String(live?._id || (a2p as any)._id);
 
@@ -1467,7 +1588,6 @@ export default async function handler(
     let supportingDocumentAccountSid: string | undefined =
       live?.supportingDocumentAccountSid;
 
-    // If missing in Mongo, attempt reuse from existing assignments (subaccount context)
     if (!supportingDocumentSid) {
       const reused = await findExistingCustomerProfileAddressSupportingDocSid(
         secondaryProfileSid!,
@@ -1477,14 +1597,11 @@ export default async function handler(
         supportingDocumentCreatedVia = "subaccount";
         supportingDocumentAccountSid = twilioAccountSidUsed;
 
-        log(
-          "reuse: found existing customer_profile_address SupportingDocument on profile",
-          {
-            customerProfileSid: secondaryProfileSid,
-            supportingDocumentSid,
-            twilioAccountSidUsed,
-          },
-        );
+        log("reuse: found existing customer_profile_address SupportingDocument on profile", {
+          customerProfileSid: secondaryProfileSid,
+          supportingDocumentSid,
+          twilioAccountSidUsed,
+        });
 
         await A2PProfile.updateOne(
           { _id: a2pId },
@@ -1532,28 +1649,22 @@ export default async function handler(
         );
       } catch (err: any) {
         if (!isTwilioNotFound(err)) {
-          console.error(
-            "[A2P start] supportingDocuments create failed (non-404)",
-            {
-              twilioAccountSidUsed,
-              code: err?.code,
-              status: err?.status,
-              message: err?.message,
-              moreInfo: err?.moreInfo,
-            },
-          );
-          throw err;
-        }
-
-        log(
-          "supportingDocuments.create subaccount failed with 20404/404; falling back to parent auth (Twilio ISV flow)",
-          {
+          console.error("[A2P start] supportingDocuments create failed (non-404)", {
             twilioAccountSidUsed,
             code: err?.code,
             status: err?.status,
             message: err?.message,
-          },
-        );
+            moreInfo: err?.moreInfo,
+          });
+          throw err;
+        }
+
+        log("supportingDocuments.create subaccount failed with 20404/404; falling back to parent auth (Twilio ISV flow)", {
+          twilioAccountSidUsed,
+          code: err?.code,
+          status: err?.status,
+          message: err?.message,
+        });
 
         if (!parentClient || !parentAuth || !parentAccountSid) {
           const parent = getParentTrusthubClient();
@@ -1616,7 +1727,7 @@ export default async function handler(
           override: {
             client: parentClient,
             auth: parentAuth,
-            xTwilioAccountSid: null, // parent object creation
+            xTwilioAccountSid: null,
             logLabel: "PARENT",
           },
         });
@@ -1640,9 +1751,6 @@ export default async function handler(
 
     // ---------------- 1.8) Attach SupportingDocument to Secondary profile ----
     if (supportingDocumentSid) {
-      // ✅ KEY FIX for Twilio ISV flow:
-      // If SD was created in parent context, attach it to the subaccount CustomerProfile
-      // using parent auth + X-Twilio-AccountSid=subaccount (TrustHub requirement).
       if (supportingDocumentCreatedVia === "parent") {
         if (!parentAuth) {
           const parent = getParentTrusthubClient();
@@ -1654,72 +1762,25 @@ export default async function handler(
           auth: parentAuth!,
           customerProfileSid: secondaryProfileSid!,
           objectSid: supportingDocumentSid,
-          xTwilioAccountSid: twilioAccountSidUsed, // act-on subaccount bundle
+          xTwilioAccountSid: twilioAccountSidUsed,
         });
       } else {
-        await assignEntityToCustomerProfile(
-          secondaryProfileSid!,
-          supportingDocumentSid,
-        );
+        await assignEntityToCustomerProfile(secondaryProfileSid!, supportingDocumentSid);
       }
     }
 
     // ---------------- 1.9) Assign Secondary to Primary (ISV) ----------------
     live = await A2PProfile.findOne({ userId }).lean<any>();
     if (!live?.assignedToPrimary) {
-      log("step: assign secondary to primary (attempt)", {
-        primaryProfileSid: PRIMARY_PROFILE_SID,
-        secondaryProfileSid,
-        twilioAccountSidUsed,
+      // ✅ CRITICAL FIX: always attempt primary linking using PARENT auth
+      await assignSecondaryCustomerProfileToPrimaryISV({
+        secondaryProfileSid: secondaryProfileSid!,
       });
 
-      // Try existing behavior first (safe, keeps current behavior)
-      let assigned = false;
-
-      try {
-        await assignEntityToCustomerProfile(PRIMARY_PROFILE_SID, secondaryProfileSid!);
-        // If we can fetch primary in this context, mark assigned
-        try {
-          await (client.trusthub.v1.customerProfiles(PRIMARY_PROFILE_SID) as any).fetch();
-          assigned = true;
-        } catch {
-          assigned = false;
-        }
-      } catch (err: any) {
-        // If subaccount cannot see primary profile, use parent auth to assign secondary -> primary
-        if (isTwilioNotFound(err)) {
-          if (!parentAuth) {
-            const parent = getParentTrusthubClient();
-            parentClient = parent.client;
-            parentAuth = parent.auth;
-            parentAccountSid = parent.accountSid;
-          }
-
-          // Assign in parent context (no X header) because primary lives in parent
-          await assignEntityToCustomerProfileRaw({
-            auth: parentAuth!,
-            customerProfileSid: PRIMARY_PROFILE_SID,
-            objectSid: secondaryProfileSid!,
-            xTwilioAccountSid: null,
-          });
-
-          assigned = true;
-        } else {
-          throw err;
-        }
-      }
-
-      if (assigned) {
-        await A2PProfile.updateOne(
-          { _id: a2pId },
-          { $set: { assignedToPrimary: true } },
-        );
-      } else {
-        log(
-          "info: not marking assignedToPrimary because primary profile is not accessible in this account",
-          { primaryProfileSid: PRIMARY_PROFILE_SID, twilioAccountSidUsed },
-        );
-      }
+      await A2PProfile.updateOne(
+        { _id: a2pId },
+        { $set: { assignedToPrimary: true } },
+      );
     }
 
     // Evaluate + submit Secondary
