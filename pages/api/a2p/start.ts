@@ -316,7 +316,6 @@ function getParentTrusthubClient(): {
 }
 
 // ✅ NEW (additive): raw entity assignment helper for the “Twilio recommended ISV flow”
-// where you may need parent auth + X-Twilio-AccountSid=subaccount to attach entities
 async function assignEntityToCustomerProfileRaw(args: {
   auth: TwilioResolvedAuth;
   customerProfileSid: string;
@@ -363,7 +362,6 @@ async function assignEntityToCustomerProfileRaw(args: {
 }
 
 // ✅ NEW (additive): avoid duplicate customer_profile_address SDs causing instant evaluation failures.
-// Scan existing EntityAssignments for RD with type customer_profile_address.
 async function findExistingCustomerProfileAddressSupportingDocSid(
   customerProfileSid: string,
 ): Promise<string | undefined> {
@@ -427,7 +425,6 @@ async function findExistingCustomerProfileAddressSupportingDocSid(
 }
 
 // SupportingDocuments create: prefer SDK surface when present; raw TrustHub fallback.
-// Allows override client/auth and X-Twilio-AccountSid behavior.
 async function createSupportingDocumentRaw(args: {
   friendlyName: string;
   type: string;
@@ -768,6 +765,12 @@ async function assignEntityToTrustProduct(
   }
 }
 
+/**
+ * ✅ FIX: Twilio TrustHub Evaluations require PolicySid in the POST body.
+ * Your logs showed 400 code=20001 Missing required parameter PolicySid.
+ * We include it for BOTH SDK and RAW paths.
+ */
+
 // evaluations via raw TrustHub so it works even when SDK surface is missing.
 async function createCustomerProfileEvaluationRaw(customerProfileSid: string) {
   if (!twilioResolvedAuth) {
@@ -776,12 +779,15 @@ async function createCustomerProfileEvaluationRaw(customerProfileSid: string) {
   log("step: customerProfiles.evaluations.create RAW", {
     customerProfileSid,
     twilioAccountSidUsed,
+    policySid: SECONDARY_PROFILE_POLICY_SID,
   });
   await trusthubFetch(
     twilioResolvedAuth,
     "POST",
     `/v1/CustomerProfiles/${customerProfileSid}/Evaluations`,
-    {},
+    {
+      PolicySid: SECONDARY_PROFILE_POLICY_SID,
+    },
     { xTwilioAccountSid: twilioAccountSidUsed },
   );
 }
@@ -793,12 +799,15 @@ async function createTrustProductEvaluationRaw(trustProductSid: string) {
   log("step: trustProducts.evaluations.create RAW", {
     trustProductSid,
     twilioAccountSidUsed,
+    policySid: A2P_TRUST_PRODUCT_POLICY_SID,
   });
   await trusthubFetch(
     twilioResolvedAuth,
     "POST",
     `/v1/TrustProducts/${trustProductSid}/Evaluations`,
-    {},
+    {
+      PolicySid: A2P_TRUST_PRODUCT_POLICY_SID,
+    },
     { xTwilioAccountSid: twilioAccountSidUsed },
   );
 }
@@ -808,10 +817,14 @@ async function evaluateAndSubmitCustomerProfile(customerProfileSid: string) {
     log("step: customerProfiles.evaluations.create", {
       customerProfileSid,
       twilioAccountSidUsed,
+      policySid: SECONDARY_PROFILE_POLICY_SID,
     });
     const cp: any = client.trusthub.v1.customerProfiles(customerProfileSid);
     if ((cp as any).evaluations?.create) {
-      await (cp as any).evaluations.create({});
+      // SDK typically expects camelCase
+      await (cp as any).evaluations.create({
+        policySid: SECONDARY_PROFILE_POLICY_SID,
+      });
     } else {
       await createCustomerProfileEvaluationRaw(customerProfileSid);
     }
@@ -850,10 +863,14 @@ async function evaluateAndSubmitTrustProduct(trustProductSid: string) {
     log("step: trustProducts.evaluations.create", {
       trustProductSid,
       twilioAccountSidUsed,
+      policySid: A2P_TRUST_PRODUCT_POLICY_SID,
     });
     const tp: any = client.trusthub.v1.trustProducts(trustProductSid);
     if ((tp as any).evaluations?.create) {
-      await (tp as any).evaluations.create({});
+      // SDK typically expects camelCase
+      await (tp as any).evaluations.create({
+        policySid: A2P_TRUST_PRODUCT_POLICY_SID,
+      });
     } else {
       await createTrustProductEvaluationRaw(trustProductSid);
     }
@@ -991,7 +1008,6 @@ async function verifyBrandAndCampaignExist(args: {
 
   if (messagingServiceSid && usa2pSid) {
     try {
-      // Some SDK versions support fetch via services(ms).usAppToPerson(QUE...).fetch()
       const svc: any = client.messaging.v1.services(messagingServiceSid);
       const sub =
         svc?.usAppToPerson && typeof svc.usAppToPerson === "function"
@@ -1002,7 +1018,6 @@ async function verifyBrandAndCampaignExist(args: {
         await sub.fetch();
         campaignOk = true;
       } else {
-        // Worst-case: attempt list and match
         const list = await (svc?.usAppToPerson?.list
           ? svc.usAppToPerson.list({ limit: 50 })
           : Promise.resolve([]));
@@ -1830,7 +1845,6 @@ export default async function handler(
     const isResubmit = Boolean(resubmit);
 
     // Resubmit UX:
-    // We keep the exact existing logic but ensure we update Mongo state in a schema-safe way.
     if (brandSid && normalizedStoredStatus === "FAILED" && isResubmit) {
       log(
         "resubmit requested for existing FAILED brand; updating BrandRegistration",
@@ -1838,8 +1852,6 @@ export default async function handler(
       );
 
       try {
-        // NOTE: Twilio may treat update() with no args as a no-op depending on SDK version.
-        // We keep your call for compatibility (smallest change), and rely on the corrected bundles + evaluations.
         await client.messaging.v1.brandRegistrations(brandSid).update();
 
         await A2PProfile.updateOne(
