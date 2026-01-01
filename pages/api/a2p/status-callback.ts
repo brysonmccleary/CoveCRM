@@ -5,9 +5,17 @@ import A2PProfile from "@/models/A2PProfile";
 import PhoneNumber from "@/models/PhoneNumber";
 import User from "@/models/User";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
-import { sendA2PApprovedEmail, sendA2PDeclinedEmail } from "@/lib/a2p/notifications";
+import {
+  sendA2PApprovedEmail,
+  sendA2PDeclinedEmail,
+} from "@/lib/a2p/notifications";
 
-const BASE_URL = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "").replace(/\/$/, "");
+const BASE_URL = (
+  process.env.NEXT_PUBLIC_BASE_URL ||
+  process.env.BASE_URL ||
+  // ✅ hard fallback so Twilio URLs never become relative
+  "https://www.covecrm.com"
+).replace(/\/$/, "");
 
 const APPROVED = new Set([
   "approved",
@@ -43,14 +51,18 @@ function buildCampaignDescription(opts: {
 
   if (desc.length > 1024) desc = desc.slice(0, 1024);
   if (desc.length < 40) {
-    desc += " This campaign sends compliant follow-up and reminder messages to warm leads.";
+    desc +=
+      " This campaign sends compliant follow-up and reminder messages to warm leads.";
   }
 
   return desc;
 }
 
 function getSamplesFromProfile(a2p: any): string[] {
-  if (Array.isArray(a2p.lastSubmittedSampleMessages) && a2p.lastSubmittedSampleMessages.length > 0) {
+  if (
+    Array.isArray(a2p.lastSubmittedSampleMessages) &&
+    a2p.lastSubmittedSampleMessages.length > 0
+  ) {
     return a2p.lastSubmittedSampleMessages
       .map((s: any) => String(s || "").trim())
       .filter(Boolean)
@@ -73,11 +85,15 @@ function getSamplesFromProfile(a2p: any): string[] {
 }
 
 function getMessageFlowFromProfile(a2p: any): string {
-  return String(a2p.lastSubmittedOptInDetails || a2p.optInDetails || a2p.messageFlow || "").trim();
+  return String(
+    a2p.lastSubmittedOptInDetails || a2p.optInDetails || a2p.messageFlow || "",
+  ).trim();
 }
 
 function getUseCaseFromProfile(a2p: any): string {
-  return String(a2p.lastSubmittedUseCase || a2p.useCase || a2p.usecaseCode || "LOW_VOLUME")
+  return String(
+    a2p.lastSubmittedUseCase || a2p.useCase || a2p.usecaseCode || "LOW_VOLUME",
+  )
     .trim()
     .toUpperCase();
 }
@@ -89,7 +105,9 @@ function hasEmbeddedLinksFromText(flow: string, samples: string[]): boolean {
 
 function hasEmbeddedPhoneFromText(flow: string, samples: string[]): boolean {
   const text = [flow, ...samples].join(" ");
-  return /\+\d{7,}/.test(text) || /\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b/.test(text);
+  return (
+    /\+\d{7,}/.test(text) || /\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b/.test(text)
+  );
 }
 
 async function ensureTenantMessagingServiceForProfile(args: {
@@ -100,44 +118,102 @@ async function ensureTenantMessagingServiceForProfile(args: {
 }) {
   const { client, a2pId, userLabel, existingMsSid } = args;
 
+  const inboundRequestUrl = `${BASE_URL}/api/twilio/inbound-sms`;
+  const statusCallback = `${BASE_URL}/api/twilio/status-callback`;
+
+  // ✅ If we have an existing service sid, verify/update it. If it’s stale, create a fresh one.
   if (existingMsSid) {
-    await client.messaging.v1.services(existingMsSid).update({
-      friendlyName: `CoveCRM – ${userLabel || a2pId}`,
-      inboundRequestUrl: `${BASE_URL}/api/twilio/inbound-sms`,
-      statusCallback: `${BASE_URL}/api/twilio/status-callback`,
-    });
-    return existingMsSid;
+    try {
+      await client.messaging.v1.services(existingMsSid).fetch();
+      await client.messaging.v1.services(existingMsSid).update({
+        friendlyName: `CoveCRM – ${userLabel || a2pId}`,
+        inboundRequestUrl,
+        statusCallback,
+      });
+      return existingMsSid;
+    } catch (e: any) {
+      console.warn("status-callback: existing Messaging Service SID invalid; recreating", {
+        existingMsSid,
+        message: e?.message,
+        code: e?.code,
+        status: e?.status,
+      });
+      // fall through to create
+    }
   }
 
   const svc = await client.messaging.v1.services.create({
     friendlyName: `CoveCRM – ${userLabel || a2pId}`,
-    inboundRequestUrl: `${BASE_URL}/api/twilio/inbound-sms`,
-    statusCallback: `${BASE_URL}/api/twilio/status-callback`,
+    inboundRequestUrl,
+    statusCallback,
   });
 
-  await A2PProfile.updateOne({ _id: a2pId }, { $set: { messagingServiceSid: svc.sid } });
+  await A2PProfile.updateOne(
+    { _id: a2pId },
+    { $set: { messagingServiceSid: svc.sid } },
+  );
   return svc.sid;
 }
 
-async function addNumberToMessagingService(args: { client: any; serviceSid: string; numberSid: string }) {
+/**
+ * ✅ Correct “21712 number already in a Messaging Service” handling:
+ * - We must remove the *service association* SID (not the IncomingPhoneNumber SID).
+ */
+async function detachNumberFromAllServices(args: {
+  client: any;
+  numberSid: string;
+}) {
+  const { client, numberSid } = args;
+
+  const services = await client.messaging.v1.services.list({ limit: 200 });
+
+  for (const svc of services) {
+    try {
+      const attached = await client.messaging.v1
+        .services(svc.sid)
+        .phoneNumbers.list({ limit: 200 });
+
+      for (const assoc of attached) {
+        const assocIncomingSid =
+          (assoc as any).phoneNumberSid || (assoc as any).phone_number_sid;
+
+        if (String(assocIncomingSid || "") === String(numberSid)) {
+          const assocSid = (assoc as any).sid; // ✅ association SID
+          if (assocSid) {
+            await client.messaging.v1
+              .services(svc.sid)
+              .phoneNumbers(assocSid)
+              .remove();
+          }
+        }
+      }
+    } catch {
+      // ignore per-service failures (best effort)
+    }
+  }
+}
+
+async function addNumberToMessagingService(args: {
+  client: any;
+  serviceSid: string;
+  numberSid: string;
+}) {
   const { client, serviceSid, numberSid } = args;
 
   try {
-    await client.messaging.v1.services(serviceSid).phoneNumbers.create({ phoneNumberSid: numberSid });
+    await client.messaging.v1
+      .services(serviceSid)
+      .phoneNumbers.create({ phoneNumberSid: numberSid });
   } catch (err: any) {
+    // 21712 = number already associated with a messaging service
     if (err?.code === 21712) {
-      const services = await client.messaging.v1.services.list({ limit: 100 });
-      for (const svc of services) {
-        try {
-          await client.messaging.v1.services(svc.sid).phoneNumbers(numberSid).remove();
-        } catch {
-          // ignore
-        }
-      }
-      await client.messaging.v1.services(serviceSid).phoneNumbers.create({ phoneNumberSid: numberSid });
-    } else {
-      throw err;
+      await detachNumberFromAllServices({ client, numberSid });
+      await client.messaging.v1
+        .services(serviceSid)
+        .phoneNumbers.create({ phoneNumberSid: numberSid });
+      return;
     }
+    throw err;
   }
 }
 
@@ -159,7 +235,12 @@ async function ensureCampaignForProfile(args: {
   if (!samples.length) {
     await A2PProfile.updateOne(
       { _id: a2p._id },
-      { $set: { lastError: "A2P status callback: unable to create campaign - no sample messages on profile." } }
+      {
+        $set: {
+          lastError:
+            "A2P status callback: unable to create campaign - no sample messages on profile.",
+        },
+      },
     );
     return;
   }
@@ -187,8 +268,14 @@ async function ensureCampaignForProfile(args: {
   };
 
   try {
-    const usa2p = await client.messaging.v1.services(messagingServiceSid).usAppToPerson.create(createPayload);
-    const usa2pSid = (usa2p as any).sid || (usa2p as any).campaignId || (usa2p as any).campaign_id;
+    const usa2p = await client.messaging.v1
+      .services(messagingServiceSid)
+      .usAppToPerson.create(createPayload);
+
+    const usa2pSid =
+      (usa2p as any).sid ||
+      (usa2p as any).campaignId ||
+      (usa2p as any).campaign_id;
 
     await A2PProfile.updateOne(
       { _id: a2p._id },
@@ -205,7 +292,7 @@ async function ensureCampaignForProfile(args: {
             note: "A2P campaign auto-created from status callback",
           },
         },
-      }
+      },
     );
   } catch (err: any) {
     console.warn("A2P status-callback: campaign create failed:", {
@@ -216,7 +303,7 @@ async function ensureCampaignForProfile(args: {
     });
     await A2PProfile.updateOne(
       { _id: a2p._id },
-      { $set: { lastError: `campaign_create: ${err?.message || err}` } }
+      { $set: { lastError: `campaign_create: ${err?.message || err}` } },
     );
   }
 }
@@ -252,9 +339,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         ...(anySid ? { anySid } : {}),
       };
       debug.statusRaw = statusRaw;
+      debug.baseUrl = BASE_URL;
     }
 
-    if (!anySid) return res.status(200).json({ ok: true, ...(debugEnabled ? { debug } : {}) });
+    if (!anySid)
+      return res.status(200).json({ ok: true, ...(debugEnabled ? { debug } : {}) });
 
     const a2p = await A2PProfile.findOne({
       $or: [
@@ -267,12 +356,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       ],
     }).lean();
 
-    if (!a2p) return res.status(200).json({ ok: true, ...(debugEnabled ? { debug } : {}) });
+    if (!a2p)
+      return res.status(200).json({ ok: true, ...(debugEnabled ? { debug } : {}) });
 
     const user = a2p.userId ? await User.findById(a2p.userId).lean<any>() : null;
-    if (!user?.email) return res.status(200).json({ ok: true, ...(debugEnabled ? { debug } : {}) });
+    if (!user?.email)
+      return res.status(200).json({ ok: true, ...(debugEnabled ? { debug } : {}) });
 
-    // ✅ CRITICAL: getClientForUser now hard-fails if user is missing. For webhook, never 500.
     let resolved: any = null;
     try {
       resolved = await getClientForUser(String(user.email));
@@ -288,7 +378,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         debug.userEmail = user?.email;
       }
 
-      // Always acknowledge webhook to prevent retries storm
       return res.status(200).json({ ok: true, ...(debugEnabled ? { debug } : {}) });
     }
 
@@ -311,11 +400,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       if (brandSid) {
         try {
-          const brand: any = await client.messaging.v1.brandRegistrations(brandSid).fetch();
+          const brand: any = await client.messaging.v1
+            .brandRegistrations(brandSid)
+            .fetch();
           brandStatus = brand?.status || brand?.state;
 
           const rawFailure =
-            brand?.failureReason || brand?.failureReasons || brand?.errorCodes || undefined;
+            brand?.failureReason ||
+            brand?.failureReasons ||
+            brand?.errorCodes ||
+            undefined;
 
           if (!rawFailure) brandFailureReason = undefined;
           else if (typeof rawFailure === "string") brandFailureReason = rawFailure;
@@ -339,7 +433,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const normalBrandStatus = lc(brandStatus || "");
       const brandIsApproved = !!normalBrandStatus && APPROVED.has(normalBrandStatus);
 
-      // Ensure Messaging Service (in the SAME tenant account)
       let msSid: string | undefined;
       try {
         msSid = await ensureTenantMessagingServiceForProfile({
@@ -352,15 +445,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         console.warn("MS ensure failed in status-callback (non-fatal):", e?.message || e);
       }
 
-      // Auto-create campaign once brand approved
       if (brandIsApproved && msSid) {
-        await ensureCampaignForProfile({ client, a2p, messagingServiceSid: msSid, brandSid });
+        await ensureCampaignForProfile({
+          client,
+          a2p,
+          messagingServiceSid: msSid,
+          brandSid,
+        });
       }
 
       const updatedAfterCampaign = await A2PProfile.findById(a2p._id).lean<any>();
-      const hasCampaign = Boolean(updatedAfterCampaign?.usa2pSid || (a2p as any).usa2pSid);
+      const hasCampaign = Boolean(
+        updatedAfterCampaign?.usa2pSid || (a2p as any).usa2pSid,
+      );
 
-      // Attach all numbers (best effort) in SAME tenant account
       try {
         if (user?._id && msSid) {
           const owned = await PhoneNumber.find({ userId: user._id }).lean<any[]>();
@@ -368,9 +466,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             const numSid = (num as any).twilioSid as string | undefined;
             if (!numSid) continue;
             try {
-              await addNumberToMessagingService({ client, serviceSid: msSid, numberSid: numSid });
+              await addNumberToMessagingService({
+                client,
+                serviceSid: msSid,
+                numberSid: numSid,
+              });
               if ((num as any).messagingServiceSid !== msSid) {
-                await PhoneNumber.updateOne({ _id: (num as any)._id }, { $set: { messagingServiceSid: msSid } });
+                await PhoneNumber.updateOne(
+                  { _id: (num as any)._id },
+                  { $set: { messagingServiceSid: msSid } },
+                );
               }
             } catch (e) {
               console.warn(`Attach failed for ${num.phoneNumber} → ${msSid}:`, e);
@@ -400,7 +505,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             applicationStatus: messagingReady ? "approved" : "pending",
             registrationStatus,
             brandStatus: brandStatus || updatedAfterCampaign?.brandStatus,
-            brandFailureReason: brandFailureReason || updatedAfterCampaign?.brandFailureReason,
+            brandFailureReason:
+              brandFailureReason || updatedAfterCampaign?.brandFailureReason,
             lastSyncedAt: new Date(),
           },
           $unset: { lastError: 1, declinedReason: 1 },
@@ -413,10 +519,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 : "Brand approved via callback",
             },
           },
-        }
+        },
       );
 
-      // Mirror to User.a2p
       try {
         const userDoc = await User.findById(user._id);
         if (userDoc) {
@@ -427,10 +532,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           if (msSid) ua2p.messagingServiceSid = msSid;
           if (brandSid) ua2p.brandSid = brandSid;
           if (updatedAfterCampaign?.usa2pSid || (a2p as any).usa2pSid) {
-            ua2p.usa2pSid = updatedAfterCampaign?.usa2pSid || (a2p as any).usa2pSid;
+            ua2p.usa2pSid =
+              updatedAfterCampaign?.usa2pSid || (a2p as any).usa2pSid;
           }
           if (updatedAfterCampaign?.profileSid || (a2p as any).profileSid) {
-            ua2p.profileSid = updatedAfterCampaign?.profileSid || (a2p as any).profileSid;
+            ua2p.profileSid =
+              updatedAfterCampaign?.profileSid || (a2p as any).profileSid;
           }
           ua2p.registrationStatus = registrationStatus;
           ua2p.applicationStatus = messagingReady ? "approved" : "pending";
@@ -439,10 +546,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           await userDoc.save();
         }
       } catch (e: any) {
-        console.warn("A2P status-callback: failed to mirror A2P state into User.a2p:", e?.message || e);
+        console.warn(
+          "A2P status-callback: failed to mirror A2P state into User.a2p:",
+          e?.message || e,
+        );
       }
 
-      // Notify once when fully ready
       try {
         if (messagingReady && !updatedAfterCampaign?.approvalNotifiedAt) {
           await sendA2PApprovedEmail({
@@ -450,11 +559,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             name: user.name || undefined,
             dashboardUrl: `${BASE_URL}/settings/messaging`,
           });
-          await A2PProfile.updateOne({ _id: a2p._id }, { $set: { approvalNotifiedAt: new Date() } });
+          await A2PProfile.updateOne(
+            { _id: a2p._id },
+            { $set: { approvalNotifiedAt: new Date() } },
+          );
         }
       } catch (e: any) {
         console.warn("A2P approved email failed:", e?.message || e);
-        await A2PProfile.updateOne({ _id: a2p._id }, { $set: { lastError: `notify: ${e?.message || e}` } });
+        await A2PProfile.updateOne(
+          { _id: a2p._id },
+          { $set: { lastError: `notify: ${e?.message || e}` } },
+        );
       }
 
       return res.status(200).json({ ok: true, messagingReady, ...(debugEnabled ? { debug } : {}) });
@@ -462,7 +577,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // DECLINED / FAILED
     if (DECLINED_MATCH.test(statusRaw)) {
-      const declinedReason = String(body.Reason || body.reason || body.Error || "Rejected by reviewers");
+      const declinedReason = String(
+        body.Reason || body.reason || body.Error || "Rejected by reviewers",
+      );
 
       await A2PProfile.updateOne(
         { _id: a2p._id },
@@ -483,10 +600,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               note: declinedReason,
             },
           },
-        }
+        },
       );
 
-      // Mirror decline into User.a2p
       try {
         const userDoc = await User.findById(user._id);
         if (userDoc) {
@@ -503,13 +619,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         console.warn("A2P declined mirror to User.a2p failed:", e?.message || e);
       }
 
-      // idempotent email
       let shouldNotify = false;
       try {
         const newlyFlagged = await A2PProfile.findOneAndUpdate(
           { _id: a2p._id, declineNotifiedAt: { $exists: false } },
           { $set: { declineNotifiedAt: new Date() } },
-          { new: true }
+          { new: true },
         ).lean();
         shouldNotify = !!newlyFlagged;
       } catch (e: any) {
@@ -526,15 +641,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           });
         } catch (e: any) {
           console.warn("A2P declined email failed:", e?.message || e);
-          await A2PProfile.updateOne({ _id: a2p._id }, { $set: { lastError: `notify: ${e?.message || e}` } });
+          await A2PProfile.updateOne(
+            { _id: a2p._id },
+            { $set: { lastError: `notify: ${e?.message || e}` } },
+          );
         }
       }
 
       return res.status(200).json({ ok: true, messagingReady: false, ...(debugEnabled ? { debug } : {}) });
     }
 
-    // Other events
-    await A2PProfile.updateOne({ _id: a2p._id }, { $set: { lastSyncedAt: new Date() } });
+    await A2PProfile.updateOne(
+      { _id: a2p._id },
+      { $set: { lastSyncedAt: new Date() } },
+    );
     return res.status(200).json({ ok: true, ...(debugEnabled ? { debug } : {}) });
   } catch (err: any) {
     console.error("A2P status-callback error:", err);
