@@ -1,16 +1,13 @@
 // /lib/twilio/trusthubPrimaryLink.ts
 /**
  * TrustHub Customer Profile -> EntityAssignments helper
- * This is the hard gate that prevents "Primary customer profile bundle is null"
+ * Hard gate to prevent: "Primary customer profile bundle is null"
  *
- * Uses raw fetch + basic auth derived from getClientForUser().auth
- * so we don't accidentally use the wrong Twilio scope.
- *
- * ✅ Fix in this version:
- * - Support optional `X-Twilio-AccountSid` header so the SAME helper works for:
- *   - subaccount auth
- *   - parent auth acting on a subaccount (ISV flow)
- * This removes “it linked but verify can’t see it” edge cases.
+ * ISV-critical behavior:
+ * - When doing parent acting on subaccount, MUST use:
+ *   - parent auth
+ *   - X-Twilio-AccountSid: <subaccount AC...>
+ * - And MUST block brand creation until TrustHub returns primary BU in assignments.
  */
 
 import { Buffer } from "buffer";
@@ -25,18 +22,21 @@ function basicAuthHeader(auth: TrustHubAuth) {
   return `Basic ${token}`;
 }
 
-async function trusthubFetch<T>(
+async function trusthubFetchRaw(
   auth: TrustHubAuth,
   path: string,
   init?: RequestInit,
   opts?: { xTwilioAccountSid?: string | null }
-): Promise<T> {
+): Promise<{ status: number; ok: boolean; text: string }> {
   const url = `https://trusthub.twilio.com/v1${path}`;
 
   const headers: Record<string, string> = {
     Authorization: basicAuthHeader(auth),
-    "Content-Type": "application/x-www-form-urlencoded",
   };
+
+  // Only set content-type if we actually have a body (POST)
+  const hasBody = !!(init as any)?.body;
+  if (hasBody) headers["Content-Type"] = "application/x-www-form-urlencoded";
 
   const xSid = opts?.xTwilioAccountSid;
   if (xSid) headers["X-Twilio-AccountSid"] = xSid;
@@ -50,31 +50,35 @@ async function trusthubFetch<T>(
   });
 
   const text = await res.text();
+  return { status: res.status, ok: res.ok, text };
+}
 
-  if (!res.ok) {
-    // keep body for debugging
-    throw new Error(`TrustHub ${res.status} ${res.statusText}: ${text}`);
+async function trusthubFetchJson<T>(
+  auth: TrustHubAuth,
+  path: string,
+  init?: RequestInit,
+  opts?: { xTwilioAccountSid?: string | null }
+): Promise<T> {
+  const r = await trusthubFetchRaw(auth, path, init, opts);
+
+  if (!r.ok) {
+    throw new Error(`TrustHub ${r.status}: ${r.text}`);
   }
 
+  // Some responses can be empty
+  if (!r.text) return ({} as any) as T;
+
   try {
-    return JSON.parse(text) as T;
+    return JSON.parse(r.text) as T;
   } catch {
-    // some responses can be empty; return as any
-    return (text as any) as T;
+    return (r.text as any) as T;
   }
 }
 
-type EntityAssignment = {
-  sid?: string;
-  objectSid?: string; // commonly used
-  ObjectSid?: string; // sometimes capitalized
-  object_sid?: string; // sometimes snake_case
-};
-
 type EntityAssignmentsList = {
-  entity_assignments?: EntityAssignment[];
-  entityAssignments?: EntityAssignment[];
-  results?: EntityAssignment[];
+  entity_assignments?: any[];
+  entityAssignments?: any[];
+  results?: any[];
   meta?: any;
 };
 
@@ -85,9 +89,7 @@ export async function listEntityAssignmentsForCustomerProfile(params: {
 }): Promise<string[]> {
   const { customerProfileSid, auth, xTwilioAccountSid } = params;
 
-  // Twilio TrustHub endpoint shape:
-  // GET /CustomerProfiles/{CPxxxx}/EntityAssignments
-  const data = await trusthubFetch<EntityAssignmentsList>(
+  const data = await trusthubFetchJson<EntityAssignmentsList>(
     auth,
     `/CustomerProfiles/${encodeURIComponent(customerProfileSid)}/EntityAssignments`,
     { method: "GET" },
@@ -115,16 +117,27 @@ export async function createEntityAssignmentForCustomerProfile(params: {
 }): Promise<void> {
   const { customerProfileSid, objectSid, auth, xTwilioAccountSid } = params;
 
-  // POST /CustomerProfiles/{CP}/EntityAssignments  body: ObjectSid=CPxxxx
   const body = new URLSearchParams();
   body.set("ObjectSid", objectSid);
 
-  await trusthubFetch<any>(
+  // Twilio can return 409 if the assignment already exists; treat that as OK.
+  const r = await trusthubFetchRaw(
     auth,
     `/CustomerProfiles/${encodeURIComponent(customerProfileSid)}/EntityAssignments`,
     { method: "POST", body },
     { xTwilioAccountSid: xTwilioAccountSid ?? null }
   );
+
+  if (r.ok) return;
+
+  // Common safe-to-ignore cases
+  if (r.status === 409) return;
+
+  // Some deployments return 400 with "already exists" text
+  const lower = (r.text || "").toLowerCase();
+  if (r.status === 400 && lower.includes("already") && lower.includes("exist")) return;
+
+  throw new Error(`TrustHub ${r.status}: ${r.text}`);
 }
 
 export async function ensurePrimaryLinkedToSecondary(params: {
@@ -138,6 +151,7 @@ export async function ensurePrimaryLinkedToSecondary(params: {
   alreadyLinked: boolean;
   linkedNow: boolean;
   assignments: string[];
+  attempts: number;
 }> {
   const {
     secondaryCustomerProfileSid,
@@ -151,30 +165,33 @@ export async function ensurePrimaryLinkedToSecondary(params: {
     console.log("[A2P PrimaryLink]", requestId || "-", ...args);
   };
 
-  // 1) list
+  const scope = {
+    authUsernamePrefix: (auth.username || "").slice(0, 2),
+    xTwilioAccountSid: xTwilioAccountSid ?? null,
+    secondaryCustomerProfileSid,
+    primaryCustomerProfileSid,
+  };
+
+  // 1) initial list
   let assignments = await listEntityAssignmentsForCustomerProfile({
     customerProfileSid: secondaryCustomerProfileSid,
     auth,
     xTwilioAccountSid: xTwilioAccountSid ?? null,
   });
 
-  const alreadyLinked = assignments.includes(primaryCustomerProfileSid);
-  if (alreadyLinked) {
-    log("already linked ✅", {
-      secondaryCustomerProfileSid,
-      primaryCustomerProfileSid,
-      count: assignments.length,
-      xTwilioAccountSid: xTwilioAccountSid ?? null,
-    });
-    return { ok: true, alreadyLinked: true, linkedNow: false, assignments };
+  if (assignments.includes(primaryCustomerProfileSid)) {
+    log("already linked ✅", { ...scope, count: assignments.length });
+    return {
+      ok: true,
+      alreadyLinked: true,
+      linkedNow: false,
+      assignments,
+      attempts: 0,
+    };
   }
 
-  // 2) attempt create
-  log("link missing -> creating assignment…", {
-    secondaryCustomerProfileSid,
-    primaryCustomerProfileSid,
-    xTwilioAccountSid: xTwilioAccountSid ?? null,
-  });
+  // 2) create
+  log("link missing -> creating assignment…", scope);
 
   await createEntityAssignmentForCustomerProfile({
     customerProfileSid: secondaryCustomerProfileSid,
@@ -183,8 +200,9 @@ export async function ensurePrimaryLinkedToSecondary(params: {
     xTwilioAccountSid: xTwilioAccountSid ?? null,
   });
 
-  // 3) re-check (a couple times to avoid Twilio eventual consistency)
-  for (let i = 0; i < 3; i++) {
+  // 3) poll until TrustHub shows it (ISV consistency can take time)
+  const maxAttempts = 12; // ~45s with backoff
+  for (let i = 0; i < maxAttempts; i++) {
     assignments = await listEntityAssignmentsForCustomerProfile({
       customerProfileSid: secondaryCustomerProfileSid,
       auth,
@@ -192,17 +210,27 @@ export async function ensurePrimaryLinkedToSecondary(params: {
     });
 
     if (assignments.includes(primaryCustomerProfileSid)) {
-      log("linked after create ✅", { attempt: i + 1 });
-      return { ok: true, alreadyLinked: false, linkedNow: true, assignments };
+      log("linked after create ✅", { ...scope, attempt: i + 1, count: assignments.length });
+      return {
+        ok: true,
+        alreadyLinked: false,
+        linkedNow: true,
+        assignments,
+        attempts: i + 1,
+      };
     }
 
-    await new Promise((r) => setTimeout(r, 500));
+    // exponential-ish backoff: 0.5s, 0.8s, 1.2s, 1.8s, 2.6s... capped ~5s
+    const waitMs = Math.min(5000, Math.floor(500 * Math.pow(1.45, i)));
+    await new Promise((r) => setTimeout(r, waitMs));
   }
 
-  log("still not linked ❌", {
-    assignmentsCount: assignments.length,
-    xTwilioAccountSid: xTwilioAccountSid ?? null,
-  });
-
-  return { ok: false, alreadyLinked: false, linkedNow: false, assignments };
+  log("still not linked ❌", { ...scope, assignmentsCount: assignments.length });
+  return {
+    ok: false,
+    alreadyLinked: false,
+    linkedNow: false,
+    assignments,
+    attempts: maxAttempts,
+  };
 }

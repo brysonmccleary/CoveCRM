@@ -1184,7 +1184,8 @@ export default async function handler(
     if (!user) return res.status(404).json({ message: "User not found" });
 
     // Resolve the Twilio client in the *user subaccount* context (or self-billing creds).
-    let resolvedTwilio: Awaited<ReturnType<typeof getClientForUser>> | null = null;
+    let resolvedTwilio: Awaited<ReturnType<typeof getClientForUser>> | null =
+      null;
     try {
       resolvedTwilio = await getClientForUser(session.user.email);
       client = resolvedTwilio.client;
@@ -1212,9 +1213,7 @@ export default async function handler(
     log("twilioAccountSidUsed", { twilioAccountSidUsed });
 
     try {
-      const acct = await client.api.v2010
-        .accounts(twilioAccountSidUsed)
-        .fetch();
+      const acct = await client.api.v2010.accounts(twilioAccountSidUsed).fetch();
       log("twilio account in use", {
         sid: acct?.sid,
         friendlyName: acct?.friendlyName,
@@ -1610,11 +1609,14 @@ export default async function handler(
         supportingDocumentCreatedVia = "subaccount";
         supportingDocumentAccountSid = twilioAccountSidUsed;
 
-        log("reuse: found existing customer_profile_address SupportingDocument on profile", {
-          customerProfileSid: secondaryProfileSid,
-          supportingDocumentSid,
-          twilioAccountSidUsed,
-        });
+        log(
+          "reuse: found existing customer_profile_address SupportingDocument on profile",
+          {
+            customerProfileSid: secondaryProfileSid,
+            supportingDocumentSid,
+            twilioAccountSidUsed,
+          },
+        );
 
         await A2PProfile.updateOne(
           { _id: a2pId },
@@ -1662,22 +1664,28 @@ export default async function handler(
         );
       } catch (err: any) {
         if (!isTwilioNotFound(err)) {
-          console.error("[A2P start] supportingDocuments create failed (non-404)", {
+          console.error(
+            "[A2P start] supportingDocuments create failed (non-404)",
+            {
+              twilioAccountSidUsed,
+              code: err?.code,
+              status: err?.status,
+              message: err?.message,
+              moreInfo: err?.moreInfo,
+            },
+          );
+          throw err;
+        }
+
+        log(
+          "supportingDocuments.create subaccount failed with 20404/404; falling back to parent auth (Twilio ISV flow)",
+          {
             twilioAccountSidUsed,
             code: err?.code,
             status: err?.status,
             message: err?.message,
-            moreInfo: err?.moreInfo,
-          });
-          throw err;
-        }
-
-        log("supportingDocuments.create subaccount failed with 20404/404; falling back to parent auth (Twilio ISV flow)", {
-          twilioAccountSidUsed,
-          code: err?.code,
-          status: err?.status,
-          message: err?.message,
-        });
+          },
+        );
 
         if (!parentClient || !parentAuth || !parentAccountSid) {
           const parent = getParentTrusthubClient();
@@ -1794,9 +1802,12 @@ export default async function handler(
         secondaryProfileSid: secondaryProfileSid!,
       });
 
-      // ✅ HARD VERIFY WITH YOUR NEW HELPER
-      if (!resolvedTwilio?.auth) {
-        throw new Error("Missing resolved Twilio auth for primary-link verification.");
+      // ✅ CRITICAL FIX: verify using PARENT/ISV auth (not tenant auth), acting on the subaccount
+      if (!parentClient || !parentAuth || !parentAccountSid) {
+        const parent = getParentTrusthubClient();
+        parentClient = parent.client;
+        parentAuth = parent.auth;
+        parentAccountSid = parent.accountSid;
       }
 
       const requestId = String(req.headers["x-request-id"] || Date.now());
@@ -1804,8 +1815,8 @@ export default async function handler(
         secondaryCustomerProfileSid: secondaryProfileSid!,
         primaryCustomerProfileSid: PRIMARY_PROFILE_SID,
         auth: {
-          username: resolvedTwilio.auth.username,
-          password: resolvedTwilio.auth.password,
+          username: parentAuth!.username,
+          password: parentAuth!.password,
         },
         requestId,
         // ✅ REQUIRED: verify in the subaccount scope
@@ -1861,16 +1872,21 @@ export default async function handler(
       // Even if Mongo says true, we can optionally verify before brand creation when resubmitting.
       // We keep it minimal: only do it when resubmit is requested.
       if (resubmit) {
-        if (!resolvedTwilio?.auth) {
-          throw new Error("Missing resolved Twilio auth for primary-link verification.");
+        // ✅ CRITICAL FIX: verify using PARENT/ISV auth (not tenant auth), acting on the subaccount
+        if (!parentClient || !parentAuth || !parentAccountSid) {
+          const parent = getParentTrusthubClient();
+          parentClient = parent.client;
+          parentAuth = parent.auth;
+          parentAccountSid = parent.accountSid;
         }
+
         const requestId = String(req.headers["x-request-id"] || Date.now());
         const verify = await ensurePrimaryLinkedToSecondary({
           secondaryCustomerProfileSid: secondaryProfileSid!,
           primaryCustomerProfileSid: PRIMARY_PROFILE_SID,
           auth: {
-            username: resolvedTwilio.auth.username,
-            password: resolvedTwilio.auth.password,
+            username: parentAuth!.username,
+            password: parentAuth!.password,
           },
           requestId,
           // ✅ REQUIRED: verify in the subaccount scope
@@ -2078,17 +2094,22 @@ export default async function handler(
 
     // ✅ HARD GATE: confirm primary link exists in Twilio BEFORE creating brand
     // This is what prevents "Primary customer profile bundle is null"
-    if (!resolvedTwilio?.auth) {
-      throw new Error("Missing resolved Twilio auth for primary-link verification.");
+    // ✅ CRITICAL FIX: verify using PARENT/ISV auth (not tenant auth), acting on the subaccount
+    if (!parentClient || !parentAuth || !parentAccountSid) {
+      const parent = getParentTrusthubClient();
+      parentClient = parent.client;
+      parentAuth = parent.auth;
+      parentAccountSid = parent.accountSid;
     }
+
     {
       const requestId = String(req.headers["x-request-id"] || Date.now());
       const verify = await ensurePrimaryLinkedToSecondary({
         secondaryCustomerProfileSid: secondaryProfileSid!,
         primaryCustomerProfileSid: PRIMARY_PROFILE_SID,
         auth: {
-          username: resolvedTwilio.auth.username,
-          password: resolvedTwilio.auth.password,
+          username: parentAuth!.username,
+          password: parentAuth!.password,
         },
         requestId,
         // ✅ REQUIRED: verify in the subaccount scope
