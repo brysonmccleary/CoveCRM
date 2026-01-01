@@ -946,7 +946,50 @@ async function createTrustProductEvaluationRaw(trustProductSid: string) {
   );
 }
 
+/**
+ * ✅ NEW (smallest-change): skip status update when the bundle is already locked/submitted.
+ * This prevents noisy 400s like: "User cannot perform this status update" and avoids touching TWILIO_APPROVED bundles.
+ */
+function normalizeTrustHubStatus(s: any): string {
+  const raw = String(s || "").trim().toUpperCase();
+  // TrustHub sometimes uses different separators/strings; normalize common ones.
+  if (raw === "PENDING_REVIEW") return "PENDING-REVIEW";
+  if (raw === "IN_REVIEW") return "IN-REVIEW";
+  return raw;
+}
+
+async function getCustomerProfileStatus(customerProfileSid: string): Promise<string | undefined> {
+  try {
+    const cp: any = await client.trusthub.v1.customerProfiles(customerProfileSid).fetch();
+    return normalizeTrustHubStatus(cp?.status);
+  } catch {
+    return undefined;
+  }
+}
+
+async function getTrustProductStatus(trustProductSid: string): Promise<string | undefined> {
+  try {
+    const tp: any = await client.trusthub.v1.trustProducts(trustProductSid).fetch();
+    return normalizeTrustHubStatus(tp?.status);
+  } catch {
+    return undefined;
+  }
+}
+
 async function evaluateAndSubmitCustomerProfile(customerProfileSid: string) {
+  // ✅ NEW: preflight status
+  const currentStatus = await getCustomerProfileStatus(customerProfileSid);
+
+  // If already locked, don't attempt evaluations/update (it will fail anyway).
+  if (currentStatus === "TWILIO_APPROVED") {
+    log("info: customerProfile is TWILIO_APPROVED; skipping eval + status update", {
+      customerProfileSid,
+      twilioAccountSidUsed,
+      currentStatus,
+    });
+    return;
+  }
+
   try {
     log("step: customerProfiles.evaluations.create", {
       customerProfileSid,
@@ -971,6 +1014,23 @@ async function evaluateAndSubmitCustomerProfile(customerProfileSid: string) {
       message: err?.message,
     });
   }
+
+  // ✅ NEW: only try to set pending-review if it isn't already there / in-review / approved
+  const postEvalStatus = await getCustomerProfileStatus(customerProfileSid);
+  if (
+    postEvalStatus === "PENDING-REVIEW" ||
+    postEvalStatus === "IN-REVIEW" ||
+    postEvalStatus === "APPROVED" ||
+    postEvalStatus === "TWILIO_APPROVED"
+  ) {
+    log("info: customerProfile already submitted/approved; skipping status update", {
+      customerProfileSid,
+      twilioAccountSidUsed,
+      status: postEvalStatus,
+    });
+    return;
+  }
+
   try {
     log("step: customerProfiles.update(pending-review)", {
       customerProfileSid,
@@ -992,6 +1052,18 @@ async function evaluateAndSubmitCustomerProfile(customerProfileSid: string) {
 }
 
 async function evaluateAndSubmitTrustProduct(trustProductSid: string) {
+  // ✅ NEW: preflight status
+  const currentStatus = await getTrustProductStatus(trustProductSid);
+
+  if (currentStatus === "TWILIO_APPROVED") {
+    log("info: trustProduct is TWILIO_APPROVED; skipping eval + status update", {
+      trustProductSid,
+      twilioAccountSidUsed,
+      currentStatus,
+    });
+    return;
+  }
+
   try {
     log("step: trustProducts.evaluations.create", {
       trustProductSid,
@@ -1016,6 +1088,22 @@ async function evaluateAndSubmitTrustProduct(trustProductSid: string) {
       message: err?.message,
     });
   }
+
+  const postEvalStatus = await getTrustProductStatus(trustProductSid);
+  if (
+    postEvalStatus === "PENDING-REVIEW" ||
+    postEvalStatus === "IN-REVIEW" ||
+    postEvalStatus === "APPROVED" ||
+    postEvalStatus === "TWILIO_APPROVED"
+  ) {
+    log("info: trustProduct already submitted/approved; skipping status update", {
+      trustProductSid,
+      twilioAccountSidUsed,
+      status: postEvalStatus,
+    });
+    return;
+  }
+
   try {
     log("step: trustProducts.update(pending-review)", {
       trustProductSid,
@@ -1794,15 +1882,12 @@ export default async function handler(
     }
 
     // ---------------- 1.9) Assign PRIMARY to Secondary (ISV) ----------------
-    // ✅ We still attempt assignment through your existing logic,
-    // BUT we only mark assignedToPrimary=true after Twilio confirms it via ensurePrimaryLinkedToSecondary().
     live = await A2PProfile.findOne({ userId }).lean<any>();
     if (!live?.assignedToPrimary) {
       await assignPrimaryCustomerProfileToSecondaryISV({
         secondaryProfileSid: secondaryProfileSid!,
       });
 
-      // ✅ CRITICAL FIX: verify using PARENT/ISV auth (not tenant auth), acting on the subaccount
       if (!parentClient || !parentAuth || !parentAccountSid) {
         const parent = getParentTrusthubClient();
         parentClient = parent.client;
@@ -1819,7 +1904,6 @@ export default async function handler(
           password: parentAuth!.password,
         },
         requestId,
-        // ✅ REQUIRED: verify in the subaccount scope
         xTwilioAccountSid: twilioAccountSidUsed,
       });
 
@@ -1834,7 +1918,6 @@ export default async function handler(
           twilioAccountSidUsed,
         });
       } else {
-        // DO NOT lie in Mongo. This is the whole bug.
         log("primary link NOT confirmed; refusing to proceed to brand create", {
           secondaryProfileSid,
           primaryProfileSid: PRIMARY_PROFILE_SID,
@@ -1869,10 +1952,7 @@ export default async function handler(
         });
       }
     } else {
-      // Even if Mongo says true, we can optionally verify before brand creation when resubmitting.
-      // We keep it minimal: only do it when resubmit is requested.
       if (resubmit) {
-        // ✅ CRITICAL FIX: verify using PARENT/ISV auth (not tenant auth), acting on the subaccount
         if (!parentClient || !parentAuth || !parentAccountSid) {
           const parent = getParentTrusthubClient();
           parentClient = parent.client;
@@ -1889,7 +1969,6 @@ export default async function handler(
             password: parentAuth!.password,
           },
           requestId,
-          // ✅ REQUIRED: verify in the subaccount scope
           xTwilioAccountSid: twilioAccountSidUsed,
         });
 
@@ -2045,7 +2124,6 @@ export default async function handler(
     const normalizedStoredStatus = String(storedBrandStatus || "").toUpperCase();
     const isResubmit = Boolean(resubmit);
 
-    // Resubmit UX:
     if (brandSid && normalizedStoredStatus === "FAILED" && isResubmit) {
       log(
         "resubmit requested for existing FAILED brand; updating BrandRegistration",
@@ -2092,9 +2170,6 @@ export default async function handler(
       }
     }
 
-    // ✅ HARD GATE: confirm primary link exists in Twilio BEFORE creating brand
-    // This is what prevents "Primary customer profile bundle is null"
-    // ✅ CRITICAL FIX: verify using PARENT/ISV auth (not tenant auth), acting on the subaccount
     if (!parentClient || !parentAuth || !parentAccountSid) {
       const parent = getParentTrusthubClient();
       parentClient = parent.client;
@@ -2112,7 +2187,6 @@ export default async function handler(
           password: parentAuth!.password,
         },
         requestId,
-        // ✅ REQUIRED: verify in the subaccount scope
         xTwilioAccountSid: twilioAccountSidUsed,
       });
 
@@ -2144,7 +2218,6 @@ export default async function handler(
         });
       }
 
-      // If Twilio says it’s linked, ensure Mongo reflects reality.
       await A2PProfile.updateOne(
         { _id: a2pId },
         { $set: { assignedToPrimary: true } },
