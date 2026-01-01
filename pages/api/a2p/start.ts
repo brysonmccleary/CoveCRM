@@ -203,6 +203,79 @@ async function clearStaleSidOnProfile(args: {
   );
 }
 
+/**
+ * ✅ NEW (additive): rotate the entire A2P object chain if the secondary bundle is locked.
+ * Why:
+ * - TWILIO_APPROVED CustomerProfiles (BU...) cannot accept new EntityAssignments.
+ * - Any attempt to "reuse" them causes missing assignments => instant brand rejection.
+ */
+async function rotateA2PChainBecauseSecondaryLocked(args: {
+  a2pId: string;
+  userId: string;
+  secondaryProfileSid: string;
+  status: string;
+  reason: string;
+}) {
+  const { a2pId, userId, secondaryProfileSid, status, reason } = args;
+
+  log("recover: secondary profile is locked; rotating A2P chain", {
+    a2pId,
+    userId,
+    secondaryProfileSid,
+    status,
+    reason,
+    twilioAccountSidUsed,
+  });
+
+  // We MUST clear everything derived from the secondary bundle because:
+  // - EndUsers + SupportingDocs were attached to the old bundle
+  // - TrustProduct often has the secondary assigned to it
+  // - Brand + campaign are tied to the old bundle(s)
+  await A2PProfile.updateOne(
+    { _id: a2pId },
+    {
+      $unset: {
+        profileSid: 1,
+
+        businessEndUserSid: 1,
+        authorizedRepEndUserSid: 1,
+        assignedToPrimary: 1,
+
+        addressSid: 1,
+        supportingDocumentSid: 1,
+        parentAddressSid: 1,
+        supportingDocumentCreatedVia: 1,
+        supportingDocumentAccountSid: 1,
+
+        trustProductSid: 1,
+        a2pProfileEndUserSid: 1,
+
+        brandSid: 1,
+        brandStatus: 1,
+        brandFailureReason: 1,
+
+        usa2pSid: 1,
+        campaignSid: 1,
+      } as any,
+      $set: {
+        lastError: reason,
+        lastSyncedAt: new Date(),
+        twilioAccountSidLastUsed: twilioAccountSidUsed,
+      } as any,
+      $push: {
+        approvalHistory: {
+          stage: "recovered_locked_secondary",
+          at: new Date(),
+          note: `${reason} (oldSecondary=${secondaryProfileSid} status=${status})`,
+        },
+      },
+    },
+  );
+
+  // NOTE: we intentionally do NOT clear messagingServiceSid.
+  // That can remain stable per-user while A2P objects rebuild.
+}
+
 function toFormUrlEncoded(body: Record<string, string>): string {
   const params = new URLSearchParams();
   for (const [k, v] of Object.entries(body)) params.append(k, v);
@@ -740,6 +813,19 @@ async function assignEntityToCustomerProfile(
           });
           return;
         }
+
+        // ✅ IMPORTANT: only "skip" TWILIO_APPROVED for PRIMARY. For SECONDARY, this is a real failure.
+        const msg = String(err?.message || "");
+        if (msg.includes("TWILIO_APPROVED") && customerProfileSid === PRIMARY_PROFILE_SID) {
+          log("info: primary bundle is TWILIO_APPROVED; skipping assignment", {
+            customerProfileSid,
+            objectSid,
+            twilioAccountSidUsed,
+            message: msg,
+          });
+          return;
+        }
+
         throw err;
       }
       return;
@@ -751,8 +837,10 @@ async function assignEntityToCustomerProfile(
     );
   } catch (err: any) {
     const msg = String(err?.message || "");
-    if (msg.includes("TWILIO_APPROVED")) {
-      log("info: bundle is TWILIO_APPROVED; skipping assignment", {
+
+    // ✅ IMPORTANT: only skip TWILIO_APPROVED for PRIMARY. For SECONDARY we want it to error so our rotation logic can kick in.
+    if (msg.includes("TWILIO_APPROVED") && customerProfileSid === PRIMARY_PROFILE_SID) {
+      log("info: primary bundle is TWILIO_APPROVED; skipping assignment", {
         customerProfileSid,
         objectSid,
         message: msg,
@@ -760,6 +848,7 @@ async function assignEntityToCustomerProfile(
       });
       return;
     }
+
     log(
       "warn: error accessing customerProfiles entityAssignments; falling back to raw request",
       {
@@ -782,8 +871,10 @@ async function assignEntityToCustomerProfile(
     });
   } catch (err: any) {
     const msg = String(err?.message || "");
-    if (msg.includes("TWILIO_APPROVED")) {
-      log("info: bundle is TWILIO_APPROVED (fallback); skipping assignment", {
+
+    // ✅ IMPORTANT: only skip TWILIO_APPROVED for PRIMARY
+    if (msg.includes("TWILIO_APPROVED") && customerProfileSid === PRIMARY_PROFILE_SID) {
+      log("info: primary bundle is TWILIO_APPROVED (fallback); skipping assignment", {
         customerProfileSid,
         objectSid,
         message: msg,
@@ -791,6 +882,7 @@ async function assignEntityToCustomerProfile(
       });
       return;
     }
+
     if (isTwilioDuplicateAssignment(err)) {
       log("info: entity assignment already exists (fallback); skipping", {
         customerProfileSid,
@@ -800,6 +892,7 @@ async function assignEntityToCustomerProfile(
       });
       return;
     }
+
     throw err;
   }
 }
@@ -958,18 +1051,26 @@ function normalizeTrustHubStatus(s: any): string {
   return raw;
 }
 
-async function getCustomerProfileStatus(customerProfileSid: string): Promise<string | undefined> {
+async function getCustomerProfileStatus(
+  customerProfileSid: string,
+): Promise<string | undefined> {
   try {
-    const cp: any = await client.trusthub.v1.customerProfiles(customerProfileSid).fetch();
+    const cp: any = await client.trusthub.v1
+      .customerProfiles(customerProfileSid)
+      .fetch();
     return normalizeTrustHubStatus(cp?.status);
   } catch {
     return undefined;
   }
 }
 
-async function getTrustProductStatus(trustProductSid: string): Promise<string | undefined> {
+async function getTrustProductStatus(
+  trustProductSid: string,
+): Promise<string | undefined> {
   try {
-    const tp: any = await client.trusthub.v1.trustProducts(trustProductSid).fetch();
+    const tp: any = await client.trusthub.v1
+      .trustProducts(trustProductSid)
+      .fetch();
     return normalizeTrustHubStatus(tp?.status);
   } catch {
     return undefined;
@@ -1503,11 +1604,50 @@ export default async function handler(
 
     let secondaryProfileSid: string | undefined = live?.profileSid;
 
+    // ✅ NEW: if we are resubmitting, we MUST ensure the secondary is still editable.
+    // If it's already submitted/locked, we rotate and rebuild clean.
+    const isResubmit = Boolean(resubmit);
+
     if (secondaryProfileSid) {
       try {
-        await (
+        const cp: any = await (
           client.trusthub.v1.customerProfiles(secondaryProfileSid) as any
         ).fetch();
+
+        const status = normalizeTrustHubStatus(cp?.status);
+
+        log("secondary customerProfile fetched", {
+          secondaryProfileSid,
+          status,
+          twilioAccountSidUsed,
+          isResubmit,
+        });
+
+        // ✅ CRITICAL:
+        // - TWILIO_APPROVED cannot accept new assignments at all
+        // - PENDING-REVIEW / IN-REVIEW / APPROVED are effectively "submitted" states too
+        //   and often cannot be modified reliably (depends on Twilio state machine).
+        //
+        // We only *force* rotation on these states if resubmit=true OR if it is TWILIO_APPROVED.
+        const submittedLike = new Set(["PENDING-REVIEW", "IN-REVIEW", "APPROVED", "TWILIO_APPROVED"]);
+        const shouldRotate =
+          status === "TWILIO_APPROVED" || (isResubmit && submittedLike.has(status));
+
+        if (shouldRotate) {
+          await rotateA2PChainBecauseSecondaryLocked({
+            a2pId,
+            userId,
+            secondaryProfileSid,
+            status,
+            reason:
+              status === "TWILIO_APPROVED"
+                ? "Secondary Business Profile bundle is TWILIO_APPROVED (locked). Must recreate."
+                : "Resubmit requested but existing Secondary Business Profile is already submitted/locked-like. Recreating clean bundle to avoid instant failure.",
+          });
+
+          secondaryProfileSid = undefined;
+          live = await A2PProfile.findOne({ userId }).lean<any>();
+        }
       } catch (err: any) {
         if (isTwilioNotFound(err)) {
           await clearStaleSidOnProfile({
@@ -1522,6 +1662,15 @@ export default async function handler(
               parentAddressSid: 1,
               supportingDocumentAccountSid: 1,
               supportingDocumentCreatedVia: 1,
+
+              trustProductSid: 1,
+              a2pProfileEndUserSid: 1,
+
+              brandSid: 1,
+              brandStatus: 1,
+              brandFailureReason: 1,
+              usa2pSid: 1,
+              campaignSid: 1,
             },
             reason: `Recovered stale profileSid (Twilio 20404): ${secondaryProfileSid}`,
             extra: { profileSid: secondaryProfileSid },
@@ -2122,7 +2271,6 @@ export default async function handler(
     }
 
     const normalizedStoredStatus = String(storedBrandStatus || "").toUpperCase();
-    const isResubmit = Boolean(resubmit);
 
     if (brandSid && normalizedStoredStatus === "FAILED" && isResubmit) {
       log(
