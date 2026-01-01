@@ -5,7 +5,15 @@
  *
  * Uses raw fetch + basic auth derived from getClientForUser().auth
  * so we don't accidentally use the wrong Twilio scope.
+ *
+ * ✅ Fix in this version:
+ * - Support optional `X-Twilio-AccountSid` header so the SAME helper works for:
+ *   - subaccount auth
+ *   - parent auth acting on a subaccount (ISV flow)
+ * This removes “it linked but verify can’t see it” edge cases.
  */
+
+import { Buffer } from "buffer";
 
 export type TrustHubAuth = {
   username: string; // AC... or SK...
@@ -20,16 +28,25 @@ function basicAuthHeader(auth: TrustHubAuth) {
 async function trusthubFetch<T>(
   auth: TrustHubAuth,
   path: string,
-  init?: RequestInit
+  init?: RequestInit,
+  opts?: { xTwilioAccountSid?: string | null }
 ): Promise<T> {
   const url = `https://trusthub.twilio.com/v1${path}`;
+
+  const headers: Record<string, string> = {
+    Authorization: basicAuthHeader(auth),
+    "Content-Type": "application/x-www-form-urlencoded",
+  };
+
+  const xSid = opts?.xTwilioAccountSid;
+  if (xSid) headers["X-Twilio-AccountSid"] = xSid;
+
   const res = await fetch(url, {
     ...(init || {}),
     headers: {
-      Authorization: basicAuthHeader(auth),
-      "Content-Type": "application/x-www-form-urlencoded",
+      ...headers,
       ...(init?.headers || {}),
-    },
+    } as any,
   });
 
   const text = await res.text();
@@ -51,35 +68,40 @@ type EntityAssignment = {
   sid?: string;
   objectSid?: string; // commonly used
   ObjectSid?: string; // sometimes capitalized
+  object_sid?: string; // sometimes snake_case
 };
 
 type EntityAssignmentsList = {
   entity_assignments?: EntityAssignment[];
   entityAssignments?: EntityAssignment[];
+  results?: EntityAssignment[];
   meta?: any;
 };
 
 export async function listEntityAssignmentsForCustomerProfile(params: {
   customerProfileSid: string;
   auth: TrustHubAuth;
+  xTwilioAccountSid?: string | null;
 }): Promise<string[]> {
-  const { customerProfileSid, auth } = params;
+  const { customerProfileSid, auth, xTwilioAccountSid } = params;
 
   // Twilio TrustHub endpoint shape:
   // GET /CustomerProfiles/{CPxxxx}/EntityAssignments
   const data = await trusthubFetch<EntityAssignmentsList>(
     auth,
     `/CustomerProfiles/${encodeURIComponent(customerProfileSid)}/EntityAssignments`,
-    { method: "GET" }
+    { method: "GET" },
+    { xTwilioAccountSid: xTwilioAccountSid ?? null }
   );
 
   const arr =
     (data as any)?.entity_assignments ||
     (data as any)?.entityAssignments ||
+    (data as any)?.results ||
     [];
 
   const sids = (arr || [])
-    .map((a: any) => a?.objectSid || a?.ObjectSid || "")
+    .map((a: any) => a?.objectSid || a?.ObjectSid || a?.object_sid || "")
     .filter(Boolean);
 
   return Array.from(new Set(sids));
@@ -89,8 +111,9 @@ export async function createEntityAssignmentForCustomerProfile(params: {
   customerProfileSid: string;
   objectSid: string;
   auth: TrustHubAuth;
+  xTwilioAccountSid?: string | null;
 }): Promise<void> {
-  const { customerProfileSid, objectSid, auth } = params;
+  const { customerProfileSid, objectSid, auth, xTwilioAccountSid } = params;
 
   // POST /CustomerProfiles/{CP}/EntityAssignments  body: ObjectSid=CPxxxx
   const body = new URLSearchParams();
@@ -99,7 +122,8 @@ export async function createEntityAssignmentForCustomerProfile(params: {
   await trusthubFetch<any>(
     auth,
     `/CustomerProfiles/${encodeURIComponent(customerProfileSid)}/EntityAssignments`,
-    { method: "POST", body }
+    { method: "POST", body },
+    { xTwilioAccountSid: xTwilioAccountSid ?? null }
   );
 }
 
@@ -108,13 +132,20 @@ export async function ensurePrimaryLinkedToSecondary(params: {
   primaryCustomerProfileSid: string;
   auth: TrustHubAuth;
   requestId?: string;
+  xTwilioAccountSid?: string | null;
 }): Promise<{
   ok: boolean;
   alreadyLinked: boolean;
   linkedNow: boolean;
   assignments: string[];
 }> {
-  const { secondaryCustomerProfileSid, primaryCustomerProfileSid, auth, requestId } = params;
+  const {
+    secondaryCustomerProfileSid,
+    primaryCustomerProfileSid,
+    auth,
+    requestId,
+    xTwilioAccountSid,
+  } = params;
 
   const log = (...args: any[]) => {
     console.log("[A2P PrimaryLink]", requestId || "-", ...args);
@@ -124,6 +155,7 @@ export async function ensurePrimaryLinkedToSecondary(params: {
   let assignments = await listEntityAssignmentsForCustomerProfile({
     customerProfileSid: secondaryCustomerProfileSid,
     auth,
+    xTwilioAccountSid: xTwilioAccountSid ?? null,
   });
 
   const alreadyLinked = assignments.includes(primaryCustomerProfileSid);
@@ -132,6 +164,7 @@ export async function ensurePrimaryLinkedToSecondary(params: {
       secondaryCustomerProfileSid,
       primaryCustomerProfileSid,
       count: assignments.length,
+      xTwilioAccountSid: xTwilioAccountSid ?? null,
     });
     return { ok: true, alreadyLinked: true, linkedNow: false, assignments };
   }
@@ -140,12 +173,14 @@ export async function ensurePrimaryLinkedToSecondary(params: {
   log("link missing -> creating assignment…", {
     secondaryCustomerProfileSid,
     primaryCustomerProfileSid,
+    xTwilioAccountSid: xTwilioAccountSid ?? null,
   });
 
   await createEntityAssignmentForCustomerProfile({
     customerProfileSid: secondaryCustomerProfileSid,
     objectSid: primaryCustomerProfileSid,
     auth,
+    xTwilioAccountSid: xTwilioAccountSid ?? null,
   });
 
   // 3) re-check (a couple times to avoid Twilio eventual consistency)
@@ -153,6 +188,7 @@ export async function ensurePrimaryLinkedToSecondary(params: {
     assignments = await listEntityAssignmentsForCustomerProfile({
       customerProfileSid: secondaryCustomerProfileSid,
       auth,
+      xTwilioAccountSid: xTwilioAccountSid ?? null,
     });
 
     if (assignments.includes(primaryCustomerProfileSid)) {
@@ -163,7 +199,10 @@ export async function ensurePrimaryLinkedToSecondary(params: {
     await new Promise((r) => setTimeout(r, 500));
   }
 
-  log("still not linked ❌", { assignmentsCount: assignments.length });
+  log("still not linked ❌", {
+    assignmentsCount: assignments.length,
+    xTwilioAccountSid: xTwilioAccountSid ?? null,
+  });
 
   return { ok: false, alreadyLinked: false, linkedNow: false, assignments };
 }

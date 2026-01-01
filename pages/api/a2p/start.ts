@@ -1808,6 +1808,8 @@ export default async function handler(
           password: resolvedTwilio.auth.password,
         },
         requestId,
+        // ✅ REQUIRED: verify in the subaccount scope
+        xTwilioAccountSid: twilioAccountSidUsed,
       });
 
       if (verify.ok) {
@@ -1871,6 +1873,8 @@ export default async function handler(
             password: resolvedTwilio.auth.password,
           },
           requestId,
+          // ✅ REQUIRED: verify in the subaccount scope
+          xTwilioAccountSid: twilioAccountSidUsed,
         });
 
         if (!verify.ok) {
@@ -2087,6 +2091,8 @@ export default async function handler(
           password: resolvedTwilio.auth.password,
         },
         requestId,
+        // ✅ REQUIRED: verify in the subaccount scope
+        xTwilioAccountSid: twilioAccountSidUsed,
       });
 
       if (!verify.ok) {

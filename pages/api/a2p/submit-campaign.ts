@@ -3,22 +3,42 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
 import mongooseConnect from "@/lib/mongooseConnect";
-import User from "@/models/User";
 import A2PProfile from "@/models/A2PProfile";
+import type { IA2PProfile } from "@/models/A2PProfile";
+import User from "@/models/User";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
 
-const APPROVED = new Set(["approved", "verified", "active", "in_use", "registered"]);
+const baseUrl =
+  process.env.NEXT_PUBLIC_BASE_URL ||
+  process.env.BASE_URL ||
+  "http://localhost:3000";
 
-type Body = {
-  useCase?: string; // e.g. "LOW_VOLUME" | "MIXED" | "MARKETING" ...
-  messageFlow?: string; // override flow text (else use optInDetails)
-  sampleMessages?: string[]; // override samples (else use stored)
-  hasEmbeddedLinks?: boolean;
-  hasEmbeddedPhone?: boolean;
-  subscriberOptIn?: boolean;
-  ageGated?: boolean;
-  directLending?: boolean;
-};
+const BRAND_OK_FOR_CAMPAIGN = new Set([
+  "APPROVED",
+  "ACTIVE",
+  "IN_USE",
+  "REGISTERED",
+]);
+
+function log(...args: any[]) {
+  console.log("[A2P submit-campaign]", ...args);
+}
+
+function isSidLike(v: any, prefix: string) {
+  return typeof v === "string" && v.startsWith(prefix);
+}
+
+function isTwilioNotFound(err: any): boolean {
+  const code = Number(err?.code);
+  const status = Number(err?.status);
+  const message = String(err?.message || "");
+  return (
+    code === 20404 ||
+    status === 404 ||
+    /20404/.test(message) ||
+    /not found/i.test(message)
+  );
+}
 
 function buildCampaignDescription(opts: {
   businessName: string;
@@ -29,7 +49,6 @@ function buildCampaignDescription(opts: {
   const useCase = (opts.useCase || "").trim() || "LOW_VOLUME";
 
   let desc = `Life insurance lead follow-up and appointment reminder SMS campaign for ${businessName}. Use case: ${useCase}. `;
-
   const flowSnippet = (opts.messageFlow || "").replace(/\s+/g, " ").trim();
   if (flowSnippet) {
     desc += `Opt-in and message flow: ${flowSnippet.slice(0, 300)}`;
@@ -43,237 +62,252 @@ function buildCampaignDescription(opts: {
     desc +=
       " This campaign sends compliant follow-up and reminder messages to warm leads.";
   }
-
   return desc;
 }
 
+function parseSamplesFromProfile(a2p: IA2PProfile): string[] {
+  if (Array.isArray(a2p.sampleMessagesArr) && a2p.sampleMessagesArr.length) {
+    return a2p.sampleMessagesArr.map((s) => String(s).trim()).filter(Boolean);
+  }
+  const raw = String(a2p.sampleMessages || "");
+  const samples = raw
+    .split("\n")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  // You were joining them with \n\n in start.ts; this keeps it tolerant.
+  return samples.length >= 2 ? samples : raw.split("\n\n").map((s) => s.trim()).filter(Boolean);
+}
+
+async function ensureMessagingService(args: {
+  client: any;
+  userId: string;
+  userEmail: string;
+  a2pId: string;
+}): Promise<string> {
+  const { client, userId, userEmail, a2pId } = args;
+
+  const live = await A2PProfile.findOne({ userId }).lean<any>();
+  if (live?.messagingServiceSid) {
+    try {
+      await client.messaging.v1.services(live.messagingServiceSid).fetch();
+      return live.messagingServiceSid;
+    } catch (err: any) {
+      if (!isTwilioNotFound(err)) throw err;
+      await A2PProfile.updateOne(
+        { _id: a2pId },
+        { $unset: { messagingServiceSid: 1 } },
+      );
+    }
+  }
+
+  const ms = await client.messaging.v1.services.create({
+    friendlyName: `CoveCRM Service – ${userEmail}`,
+    inboundRequestUrl: `${baseUrl}/api/twilio/inbound-sms`,
+    statusCallback: `${baseUrl}/api/twilio/status-callback`,
+  });
+
+  await A2PProfile.updateOne(
+    { _id: a2pId },
+    { $set: { messagingServiceSid: ms.sid } },
+  );
+
+  return ms.sid;
+}
+
+export async function submitCampaignIfReadyForUserEmail(userEmail: string) {
+  await mongooseConnect();
+
+  const user = await User.findOne({ email: userEmail });
+  if (!user) throw new Error("User not found");
+
+  const userId = String(user._id);
+  const a2p = await A2PProfile.findOne({ userId }).lean<IA2PProfile | null>();
+  if (!a2p) {
+    return { ok: false, reason: "no_a2p_profile" as const };
+  }
+
+  const a2pId = String((a2p as any)._id);
+
+  const resolved = await getClientForUser(userEmail);
+  const client = resolved.client;
+  const twilioAccountSidUsed = resolved.accountSid;
+
+  // If we already have a campaign SID, verify it exists, else unset it.
+  if (a2p.usa2pSid && a2p.messagingServiceSid) {
+    try {
+      const svc: any = client.messaging.v1.services(a2p.messagingServiceSid);
+      const sub =
+        svc?.usAppToPerson && typeof svc.usAppToPerson === "function"
+          ? svc.usAppToPerson(a2p.usa2pSid)
+          : null;
+
+      if (sub?.fetch) {
+        await sub.fetch();
+        return {
+          ok: true,
+          didCreate: false,
+          usa2pSid: a2p.usa2pSid,
+          twilioAccountSidUsed,
+        };
+      }
+    } catch (err: any) {
+      if (!isTwilioNotFound(err)) throw err;
+      await A2PProfile.updateOne(
+        { _id: a2pId },
+        { $unset: { usa2pSid: 1, campaignSid: 1 } },
+      );
+    }
+  }
+
+  if (!a2p.brandSid) return { ok: false, reason: "missing_brandSid" as const };
+  if (!a2p.profileSid) return { ok: false, reason: "missing_profileSid" as const };
+  if (!a2p.trustProductSid) return { ok: false, reason: "missing_trustProductSid" as const };
+
+  // Fetch brand status live
+  const brand: any = await client.messaging.v1
+    .brandRegistrations(a2p.brandSid)
+    .fetch();
+
+  const brandStatus = String(brand?.status || "").toUpperCase();
+  const canCreateCampaign = BRAND_OK_FOR_CAMPAIGN.has(brandStatus);
+
+  await A2PProfile.updateOne(
+    { _id: a2pId },
+    {
+      $set: {
+        brandStatus: brand?.status || undefined,
+        brandFailureReason: brand?.failureReason || undefined,
+        lastSyncedAt: new Date(),
+        twilioAccountSidLastUsed: twilioAccountSidUsed,
+        ...(brandStatus === "FAILED"
+          ? {
+              registrationStatus: "rejected",
+              applicationStatus: "declined",
+              declinedReason: String(brand?.failureReason || "Brand FAILED"),
+              messagingReady: false,
+              lastError: String(brand?.failureReason || "Brand FAILED"),
+            }
+          : {}),
+      } as any,
+    },
+  );
+
+  if (!canCreateCampaign) {
+    return {
+      ok: false,
+      reason: "brand_not_ready" as const,
+      brandStatus,
+      twilioAccountSidUsed,
+    };
+  }
+
+  // Ensure messaging service exists
+  const messagingServiceSid = await ensureMessagingService({
+    client,
+    userId,
+    userEmail,
+    a2pId,
+  });
+
+  const samples = parseSamplesFromProfile(a2p);
+  if (samples.length < 2) {
+    throw new Error("A2P profile is missing sample messages (need at least 2).");
+  }
+
+  const useCaseCode = String((a2p as any).usecaseCode || "LOW_VOLUME");
+  const messageFlowText = String(a2p.optInDetails || "");
+
+  const description = buildCampaignDescription({
+    businessName: a2p.businessName || "",
+    useCase: useCaseCode,
+    messageFlow: messageFlowText,
+  });
+
+  const createPayload: any = {
+    brandRegistrationSid: a2p.brandSid,
+    usAppToPersonUsecase: useCaseCode,
+    description,
+    messageFlow: messageFlowText,
+    messageSamples: samples,
+    hasEmbeddedLinks: true,
+    hasEmbeddedPhone: false,
+    subscriberOptIn: true,
+    ageGated: false,
+    directLending: false,
+  };
+
+  log("creating usa2p campaign", {
+    userEmail,
+    messagingServiceSid,
+    brandSid: a2p.brandSid,
+    useCaseCode,
+    samplesCount: samples.length,
+    twilioAccountSidUsed,
+  });
+
+  const usa2p = await client.messaging.v1
+    .services(messagingServiceSid)
+    .usAppToPerson.create(createPayload);
+
+  const usa2pSid = (usa2p as any)?.sid;
+  if (!isSidLike(usa2pSid, "QE")) {
+    throw new Error(
+      `usAppToPerson.create did not return a QE sid. Body: ${JSON.stringify(
+        usa2p,
+      )}`,
+    );
+  }
+
+  await A2PProfile.updateOne(
+    { _id: a2pId },
+    {
+      $set: {
+        usa2pSid,
+        campaignSid: usa2pSid,
+        messagingServiceSid,
+        registrationStatus: "ready",
+        applicationStatus: "approved",
+        messagingReady: true,
+        lastSyncedAt: new Date(),
+        twilioAccountSidLastUsed: twilioAccountSidUsed,
+      } as any,
+      $push: {
+        approvalHistory: {
+          stage: "campaign_submitted",
+          at: new Date(),
+          note: "Campaign auto-submitted after brand approval",
+        },
+      },
+    },
+  );
+
+  return {
+    ok: true,
+    didCreate: true,
+    usa2pSid,
+    messagingServiceSid,
+    brandStatus,
+    twilioAccountSidUsed,
+  };
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed" });
+  if (req.method !== "POST")
+    return res.status(405).json({ message: "Method not allowed" });
 
   try {
     const session = await getServerSession(req, res, authOptions);
-    if (!session?.user?.email) return res.status(401).json({ message: "Unauthorized" });
+    if (!session?.user?.email)
+      return res.status(401).json({ message: "Unauthorized" });
 
-    await mongooseConnect();
-
-    const user = await User.findOne({ email: session.user.email }).lean();
-    if (!user) return res.status(404).json({ message: "User not found" });
-
-    const a2p = await A2PProfile.findOne({ userId: String((user as any)._id) });
-    if (!a2p) {
-      return res
-        .status(400)
-        .json({ message: "A2P profile not found—call /api/a2p/start first." });
-    }
-
-    if (!a2p.brandSid) return res.status(400).json({ message: "Brand not created yet." });
-    if (!a2p.messagingServiceSid) {
-      return res.status(400).json({ message: "Messaging Service missing. Re-run /api/a2p/start." });
-    }
-
-    // ✅ CRITICAL: use the user's scoped Twilio client (subaccount/personal/platform routing)
-    let client: any;
-    let twilioAccountSidUsed = "";
-    try {
-      const resolved = await getClientForUser(String((user as any).email));
-      client = resolved.client as any;
-      twilioAccountSidUsed = resolved.accountSid;
-    } catch (e: any) {
-      return res.status(400).json({
-        message:
-          e?.message ||
-          "Twilio is not connected for this user. Missing subaccount SID or platform credentials.",
-      });
-    }
-
-    // ✅ Always fetch live brand status before attempting campaign creation.
-    // This makes submit-campaign safe to call repeatedly from your UI polling.
-    let brandStatusLive = "unknown";
-    try {
-      const brand: any = await (client as any).messaging.v1
-        .brandRegistrations(a2p.brandSid)
-        .fetch();
-
-      brandStatusLive = String(brand?.status || "unknown").toUpperCase();
-
-      await A2PProfile.updateOne(
-        { _id: (a2p as any)._id },
-        {
-          $set: {
-            brandStatus: brandStatusLive,
-            lastSyncedAt: new Date(),
-            twilioAccountSidLastUsed: twilioAccountSidUsed,
-          } as any,
-        }
-      );
-    } catch {
-      // best-effort; if fetch fails, proceed with stored status
-      brandStatusLive = String((a2p as any).brandStatus || "unknown").toUpperCase();
-    }
-
-    // Brand must be approved-ish before campaign
-    if (!APPROVED.has(brandStatusLive.toLowerCase())) {
-      return res.status(200).json({
-        ok: true,
-        message:
-          "Your brand registration is not yet approved. We created/updated your A2P profile; once Twilio approves your brand, we can create the campaign.",
-        brandStatus: brandStatusLive,
-        start: {
-          messagingServiceSid: (a2p as any).messagingServiceSid,
-          brandSid: (a2p as any).brandSid,
-          brandStatus: brandStatusLive,
-          canCreateCampaign: false,
-          twilioAccountSidUsed,
-        },
-      });
-    }
-
-    const body = (req.body || {}) as Body;
-
-    const useCase = body.useCase || (a2p as any).usecaseCode || "LOW_VOLUME";
-
-    const storedSamples =
-      (a2p as any).sampleMessagesArr && (a2p as any).sampleMessagesArr.length
-        ? (a2p as any).sampleMessagesArr
-        : String(a2p.sampleMessages || "")
-            .split("\n")
-            .map((s) => s.trim())
-            .filter(Boolean);
-
-    const messageSamples =
-      body.sampleMessages && body.sampleMessages.length > 0 ? body.sampleMessages : storedSamples;
-
-    if (!messageSamples || messageSamples.length < 2) {
-      return res.status(400).json({ message: "Please provide at least 2 sample messages." });
-    }
-
-    const messageFlow =
-      (body.messageFlow && body.messageFlow.trim()) || String(a2p.optInDetails || "").trim();
-
-    if (!messageFlow) {
-      return res.status(400).json({ message: "Missing message flow (opt-in details)." });
-    }
-
-    const description = buildCampaignDescription({
-      businessName: String(a2p.businessName || ""),
-      useCase,
-      messageFlow,
-    });
-
-    const createPayload: any = {
-      brandRegistrationSid: a2p.brandSid,
-      usAppToPersonUsecase: useCase,
-      description,
-      messageFlow,
-      messageSamples,
-      hasEmbeddedLinks: typeof body.hasEmbeddedLinks === "boolean" ? body.hasEmbeddedLinks : true,
-      hasEmbeddedPhone: typeof body.hasEmbeddedPhone === "boolean" ? body.hasEmbeddedPhone : false,
-      subscriberOptIn: typeof body.subscriberOptIn === "boolean" ? body.subscriberOptIn : true,
-      ageGated: typeof body.ageGated === "boolean" ? body.ageGated : false,
-      directLending: typeof body.directLending === "boolean" ? body.directLending : false,
-    };
-
-    // ✅ Additive: persist last submitted campaign inputs for auditing/debug
-    try {
-      (a2p as any).lastSubmittedAt = new Date();
-      (a2p as any).lastSubmittedUseCase = useCase;
-      (a2p as any).lastSubmittedOptInDetails = messageFlow;
-      (a2p as any).lastSubmittedSampleMessages = messageSamples;
-      (a2p as any).twilioAccountSidUsed = twilioAccountSidUsed;
-      (a2p as any).lastSyncedAt = new Date();
-      await (a2p as any).save();
-    } catch {
-      // If schema is strict and drops fields, it's fine — core flow still works.
-    }
-
-    if ((a2p as any).usecaseCode !== useCase) {
-      (a2p as any).usecaseCode = useCase;
-      await (a2p as any).save();
-    }
-
-    let campaignSid = (a2p as any).usa2pSid || (a2p as any).campaignSid;
-
-    if (campaignSid) {
-      try {
-        const updated = await (client as any).messaging.v1
-          .services(a2p.messagingServiceSid)
-          .usAppToPerson(campaignSid)
-          .update({
-            messageFlow,
-            messageSamples,
-            hasEmbeddedLinks: createPayload.hasEmbeddedLinks,
-            hasEmbeddedPhone: createPayload.hasEmbeddedPhone,
-            subscriberOptIn: createPayload.subscriberOptIn,
-            ageGated: createPayload.ageGated,
-            directLending: createPayload.directLending,
-            description: createPayload.description,
-          });
-
-        const status = (updated as any).status || (updated as any).state || "unknown";
-        (a2p as any).usa2pSid = campaignSid;
-        (a2p as any).registrationStatus = APPROVED.has(String(status).toLowerCase())
-          ? "campaign_approved"
-          : "campaign_submitted";
-        (a2p as any).messagingReady = APPROVED.has(String(status).toLowerCase());
-        (a2p as any).lastSyncedAt = new Date();
-
-        (a2p as any).sampleMessagesArr = messageSamples;
-        (a2p as any).sampleMessages = messageSamples.join("\n\n");
-        await (a2p as any).save();
-
-        return res.status(200).json({
-          ok: true,
-          action: "updated",
-          campaign: { sid: campaignSid, status },
-          messagingReady: (a2p as any).messagingReady,
-          twilioAccountSidUsed,
-        });
-      } catch (e) {
-        campaignSid = undefined as any;
-      }
-    }
-
-    const created = await (client as any).messaging.v1
-      .services(a2p.messagingServiceSid)
-      .usAppToPerson.create(createPayload);
-
-    const newSid = (created as any).sid || (created as any).campaignId || (created as any).campaign_id;
-    const status = (created as any).status || (created as any).state || "unknown";
-
-    await A2PProfile.updateOne(
-      { _id: (a2p as any)._id },
-      {
-        $set: {
-          usa2pSid: newSid,
-          messagingServiceSid: a2p.messagingServiceSid,
-          registrationStatus: APPROVED.has(String(status).toLowerCase())
-            ? "campaign_approved"
-            : "campaign_submitted",
-          messagingReady: APPROVED.has(String(status).toLowerCase()),
-          lastSyncedAt: new Date(),
-          sampleMessagesArr: messageSamples,
-          sampleMessages: messageSamples.join("\n\n"),
-          usecaseCode: useCase,
-
-          // additive audit fields (safe even if schema drops them)
-          lastSubmittedAt: new Date(),
-          lastSubmittedUseCase: useCase,
-          lastSubmittedOptInDetails: messageFlow,
-          lastSubmittedSampleMessages: messageSamples,
-          twilioAccountSidUsed,
-        },
-      }
-    );
-
-    return res.status(200).json({
-      ok: true,
-      action: "created",
-      campaign: { sid: newSid, status },
-      messagingReady: APPROVED.has(String(status).toLowerCase()),
-      twilioAccountSidUsed,
-    });
+    const result = await submitCampaignIfReadyForUserEmail(session.user.email);
+    return res.status(200).json({ ok: true, result });
   } catch (err: any) {
-    console.error("A2P submit-campaign error:", err);
-    return res.status(500).json({ message: err?.message || "Failed to submit campaign" });
+    console.error("[A2P submit-campaign] error:", err);
+    return res.status(500).json({
+      ok: false,
+      message: "Submit campaign failed",
+      error: err?.message || String(err),
+    });
   }
 }

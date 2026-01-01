@@ -38,12 +38,21 @@ export interface IA2PProfile extends Document {
   authorizedRepEndUserSid?: string;
   trustProductSid?: string;
   a2pProfileEndUserSid?: string;
+
+  // ✅ you said you already have this and you're using it
   assignedToPrimary?: boolean;
 
   addressSid?: string;
+
+  // Supporting document created for customer_profile_address
   supportingDocumentSid?: string;
 
+  // ✅ ADD (your start.ts uses these fields)
   parentAddressSid?: string;
+
+  // ✅ ADD (your start.ts reads/writes these but your schema was missing them)
+  supportingDocumentCreatedVia?: "subaccount" | "parent";
+  supportingDocumentAccountSid?: string;
 
   useCaseSid?: string;
   usecaseCode?: string;
@@ -133,13 +142,17 @@ const A2PProfileSchema = new Schema<IA2PProfile>({
   trustProductSid: { type: String },
   a2pProfileEndUserSid: { type: String },
 
-  // ✅ default false so we never “lie” in Mongo by accident
-  assignedToPrimary: { type: Boolean, default: false },
+  assignedToPrimary: { type: Boolean },
 
   addressSid: { type: String },
   supportingDocumentSid: { type: String },
 
+  // ✅ already present in your interface; used in start.ts fallback
   parentAddressSid: { type: String },
+
+  // ✅ add missing fields used by start.ts
+  supportingDocumentCreatedVia: { type: String, enum: ["subaccount", "parent"] },
+  supportingDocumentAccountSid: { type: String },
 
   useCaseSid: { type: String },
   usecaseCode: { type: String },
@@ -178,6 +191,7 @@ const A2PProfileSchema = new Schema<IA2PProfile>({
     ],
     default: "not_started",
   },
+
   messagingReady: { type: Boolean, default: false },
   lastError: { type: String },
 
@@ -187,6 +201,7 @@ const A2PProfileSchema = new Schema<IA2PProfile>({
     default: "pending",
     index: true,
   },
+
   approvalNotifiedAt: { type: Date },
   declinedReason: { type: String },
   declineNotifiedAt: { type: Date },

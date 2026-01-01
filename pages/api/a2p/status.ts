@@ -243,14 +243,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             brandFailureReason ||
             "Brand rejected. Please review and resubmit.";
 
-          // store a string (or undefined) — NOT null (fixes your Vercel TS error)
+          // store a string (or undefined) — NOT null
           (a2p as any).declinedReason = realReason;
           (a2p as any).applicationStatus = "declined";
         } else if (APPROVED.has(lower)) {
           (a2p as any).registrationStatus = "brand_approved";
 
-          // ✅ IMPORTANT: if Twilio says approved, clear stale decline flags
-          // (Fix: TypeScript expects string | undefined, not null)
+          // ✅ clear stale decline flags
           (a2p as any).declinedReason = undefined;
           (a2p as any).applicationStatus = "pending";
         } else if (PENDING.has(lower)) {
