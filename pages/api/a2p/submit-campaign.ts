@@ -86,6 +86,48 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
+    // ✅ Always fetch live brand status before attempting campaign creation.
+    // This makes submit-campaign safe to call repeatedly from your UI polling.
+    let brandStatusLive = "unknown";
+    try {
+      const brand: any = await (client as any).messaging.v1
+        .brandRegistrations(a2p.brandSid)
+        .fetch();
+
+      brandStatusLive = String(brand?.status || "unknown").toUpperCase();
+
+      await A2PProfile.updateOne(
+        { _id: (a2p as any)._id },
+        {
+          $set: {
+            brandStatus: brandStatusLive,
+            lastSyncedAt: new Date(),
+            twilioAccountSidLastUsed: twilioAccountSidUsed,
+          } as any,
+        }
+      );
+    } catch {
+      // best-effort; if fetch fails, proceed with stored status
+      brandStatusLive = String((a2p as any).brandStatus || "unknown").toUpperCase();
+    }
+
+    // Brand must be approved-ish before campaign
+    if (!APPROVED.has(brandStatusLive.toLowerCase())) {
+      return res.status(200).json({
+        ok: true,
+        message:
+          "Your brand registration is not yet approved. We created/updated your A2P profile; once Twilio approves your brand, we can create the campaign.",
+        brandStatus: brandStatusLive,
+        start: {
+          messagingServiceSid: (a2p as any).messagingServiceSid,
+          brandSid: (a2p as any).brandSid,
+          brandStatus: brandStatusLive,
+          canCreateCampaign: false,
+          twilioAccountSidUsed,
+        },
+      });
+    }
+
     const body = (req.body || {}) as Body;
 
     const useCase = body.useCase || (a2p as any).usecaseCode || "LOW_VOLUME";

@@ -14,6 +14,9 @@ import {
 import twilio from "twilio";
 import { Agent } from "undici";
 
+// ✅ NEW: hard-gate the primary linking before brand creation
+import { ensurePrimaryLinkedToSecondary } from "@/lib/twilio/trusthubPrimaryLink";
+
 /**
  * Required ENV:
  * - TWILIO_ACCOUNT_SID
@@ -1181,11 +1184,12 @@ export default async function handler(
     if (!user) return res.status(404).json({ message: "User not found" });
 
     // Resolve the Twilio client in the *user subaccount* context (or self-billing creds).
+    let resolvedTwilio: Awaited<ReturnType<typeof getClientForUser>> | null = null;
     try {
-      const resolved = await getClientForUser(session.user.email);
-      client = resolved.client;
-      twilioAccountSidUsed = resolved.accountSid;
-      twilioResolvedAuth = resolved.auth;
+      resolvedTwilio = await getClientForUser(session.user.email);
+      client = resolvedTwilio.client;
+      twilioAccountSidUsed = resolvedTwilio.accountSid;
+      twilioResolvedAuth = resolvedTwilio.auth;
 
       log("TrustHub SDK surface", {
         hasSupportingDocuments: Boolean(
@@ -1782,16 +1786,121 @@ export default async function handler(
     }
 
     // ---------------- 1.9) Assign PRIMARY to Secondary (ISV) ----------------
+    // ✅ We still attempt assignment through your existing logic,
+    // BUT we only mark assignedToPrimary=true after Twilio confirms it via ensurePrimaryLinkedToSecondary().
     live = await A2PProfile.findOne({ userId }).lean<any>();
     if (!live?.assignedToPrimary) {
       await assignPrimaryCustomerProfileToSecondaryISV({
         secondaryProfileSid: secondaryProfileSid!,
       });
 
-      await A2PProfile.updateOne(
-        { _id: a2pId },
-        { $set: { assignedToPrimary: true } },
-      );
+      // ✅ HARD VERIFY WITH YOUR NEW HELPER
+      if (!resolvedTwilio?.auth) {
+        throw new Error("Missing resolved Twilio auth for primary-link verification.");
+      }
+
+      const requestId = String(req.headers["x-request-id"] || Date.now());
+      const verify = await ensurePrimaryLinkedToSecondary({
+        secondaryCustomerProfileSid: secondaryProfileSid!,
+        primaryCustomerProfileSid: PRIMARY_PROFILE_SID,
+        auth: {
+          username: resolvedTwilio.auth.username,
+          password: resolvedTwilio.auth.password,
+        },
+        requestId,
+      });
+
+      if (verify.ok) {
+        await A2PProfile.updateOne(
+          { _id: a2pId },
+          { $set: { assignedToPrimary: true } },
+        );
+        log("primary link verified; assignedToPrimary=true", {
+          secondaryProfileSid,
+          primaryProfileSid: PRIMARY_PROFILE_SID,
+          twilioAccountSidUsed,
+        });
+      } else {
+        // DO NOT lie in Mongo. This is the whole bug.
+        log("primary link NOT confirmed; refusing to proceed to brand create", {
+          secondaryProfileSid,
+          primaryProfileSid: PRIMARY_PROFILE_SID,
+          twilioAccountSidUsed,
+          assignments: verify.assignments,
+        });
+
+        await A2PProfile.updateOne(
+          { _id: a2pId },
+          {
+            $set: {
+              assignedToPrimary: false,
+              lastError:
+                "Primary bundle link could not be confirmed in Twilio yet. Try again shortly.",
+              lastSyncedAt: new Date(),
+              twilioAccountSidLastUsed: twilioAccountSidUsed,
+            } as any,
+          },
+        );
+
+        return res.status(409).json({
+          ok: false,
+          message:
+            "Primary Customer Profile link could not be confirmed in Twilio yet. Please retry in ~60 seconds.",
+          debug: {
+            requestId,
+            secondaryProfileSid,
+            primaryProfileSid: PRIMARY_PROFILE_SID,
+            assignments: verify.assignments,
+            twilioAccountSidUsed,
+          },
+        });
+      }
+    } else {
+      // Even if Mongo says true, we can optionally verify before brand creation when resubmitting.
+      // We keep it minimal: only do it when resubmit is requested.
+      if (resubmit) {
+        if (!resolvedTwilio?.auth) {
+          throw new Error("Missing resolved Twilio auth for primary-link verification.");
+        }
+        const requestId = String(req.headers["x-request-id"] || Date.now());
+        const verify = await ensurePrimaryLinkedToSecondary({
+          secondaryCustomerProfileSid: secondaryProfileSid!,
+          primaryCustomerProfileSid: PRIMARY_PROFILE_SID,
+          auth: {
+            username: resolvedTwilio.auth.username,
+            password: resolvedTwilio.auth.password,
+          },
+          requestId,
+        });
+
+        if (!verify.ok) {
+          await A2PProfile.updateOne(
+            { _id: a2pId },
+            {
+              $set: {
+                assignedToPrimary: false,
+                lastError:
+                  "Primary bundle link could not be confirmed in Twilio yet (resubmit).",
+                lastSyncedAt: new Date(),
+                twilioAccountSidLastUsed: twilioAccountSidUsed,
+              } as any,
+            },
+          );
+
+          return res.status(409).json({
+            ok: false,
+            message:
+              "Primary Customer Profile link could not be confirmed in Twilio yet (resubmit). Please retry shortly.",
+            debug: {
+              requestId,
+              secondaryProfileSid,
+              primaryProfileSid: PRIMARY_PROFILE_SID,
+              assignments: verify.assignments,
+              twilioAccountSidUsed,
+            },
+          });
+        }
+      }
     }
 
     // Evaluate + submit Secondary
@@ -1961,6 +2070,58 @@ export default async function handler(
           message: err?.message,
         });
       }
+    }
+
+    // ✅ HARD GATE: confirm primary link exists in Twilio BEFORE creating brand
+    // This is what prevents "Primary customer profile bundle is null"
+    if (!resolvedTwilio?.auth) {
+      throw new Error("Missing resolved Twilio auth for primary-link verification.");
+    }
+    {
+      const requestId = String(req.headers["x-request-id"] || Date.now());
+      const verify = await ensurePrimaryLinkedToSecondary({
+        secondaryCustomerProfileSid: secondaryProfileSid!,
+        primaryCustomerProfileSid: PRIMARY_PROFILE_SID,
+        auth: {
+          username: resolvedTwilio.auth.username,
+          password: resolvedTwilio.auth.password,
+        },
+        requestId,
+      });
+
+      if (!verify.ok) {
+        await A2PProfile.updateOne(
+          { _id: a2pId },
+          {
+            $set: {
+              assignedToPrimary: false,
+              lastError:
+                "Primary bundle link could not be confirmed in Twilio. Brand creation blocked to prevent instant rejection.",
+              lastSyncedAt: new Date(),
+              twilioAccountSidLastUsed: twilioAccountSidUsed,
+            } as any,
+          },
+        );
+
+        return res.status(409).json({
+          ok: false,
+          message:
+            "Primary Customer Profile link not confirmed in Twilio yet. Please retry in ~60 seconds.",
+          debug: {
+            requestId,
+            secondaryProfileSid,
+            primaryProfileSid: PRIMARY_PROFILE_SID,
+            assignments: verify.assignments,
+            twilioAccountSidUsed,
+          },
+        });
+      }
+
+      // If Twilio says it’s linked, ensure Mongo reflects reality.
+      await A2PProfile.updateOne(
+        { _id: a2pId },
+        { $set: { assignedToPrimary: true } },
+      );
     }
 
     if (!brandSid) {

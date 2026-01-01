@@ -43,7 +43,6 @@ export interface IA2PProfile extends Document {
   addressSid?: string;
   supportingDocumentSid?: string;
 
-  // ✅ ADD THIS (your code already uses it)
   parentAddressSid?: string;
 
   useCaseSid?: string;
@@ -133,12 +132,13 @@ const A2PProfileSchema = new Schema<IA2PProfile>({
   authorizedRepEndUserSid: { type: String },
   trustProductSid: { type: String },
   a2pProfileEndUserSid: { type: String },
-  assignedToPrimary: { type: Boolean },
+
+  // ✅ default false so we never “lie” in Mongo by accident
+  assignedToPrimary: { type: Boolean, default: false },
 
   addressSid: { type: String },
   supportingDocumentSid: { type: String },
 
-  // ✅ ADD THIS
   parentAddressSid: { type: String },
 
   useCaseSid: { type: String },
