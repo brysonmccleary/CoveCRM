@@ -1,4 +1,4 @@
-// /pages/api/a2p/start.ts
+// pages/api/a2p/start.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
@@ -244,6 +244,8 @@ async function rotateA2PChainBecauseSecondaryLocked(args: {
         addressSid: 1,
         supportingDocumentSid: 1,
         parentAddressSid: 1,
+        supportingDocumentCreatedVia: 1,
+        supportingDocumentAccountSid: 1,
         supportingDocumentCreatedVia: 1,
         supportingDocumentAccountSid: 1,
 
@@ -760,7 +762,9 @@ async function assignEntityToCustomerProfile(
       const primary = await (client.trusthub.v1.customerProfiles(
         customerProfileSid,
       ) as any).fetch();
-      const status = String(primary?.status || "").toUpperCase().replace(/-/g, "_");
+      const status = String(primary?.status || "")
+        .toUpperCase()
+        .replace(/-/g, "_");
 
       if (status === "TWILIO_APPROVED") {
         log(

@@ -1,4 +1,4 @@
-// /lib/twilio/trusthubPrimaryLink.ts
+// lib/twilio/trusthubPrimaryLink.ts
 /**
  * TrustHub Customer Profile -> EntityAssignments helper
  * Hard gate to prevent: "Primary customer profile bundle is null"
@@ -18,7 +18,9 @@ export type TrustHubAuth = {
 };
 
 function basicAuthHeader(auth: TrustHubAuth) {
-  const token = Buffer.from(`${auth.username}:${auth.password}`).toString("base64");
+  const token = Buffer.from(`${auth.username}:${auth.password}`).toString(
+    "base64",
+  );
   return `Basic ${token}`;
 }
 
@@ -26,7 +28,7 @@ async function trusthubFetchRaw(
   auth: TrustHubAuth,
   path: string,
   init?: RequestInit,
-  opts?: { xTwilioAccountSid?: string | null }
+  opts?: { xTwilioAccountSid?: string | null },
 ): Promise<{ status: number; ok: boolean; text: string }> {
   const url = `https://trusthub.twilio.com/v1${path}`;
 
@@ -57,7 +59,7 @@ async function trusthubFetchJson<T>(
   auth: TrustHubAuth,
   path: string,
   init?: RequestInit,
-  opts?: { xTwilioAccountSid?: string | null }
+  opts?: { xTwilioAccountSid?: string | null },
 ): Promise<T> {
   const r = await trusthubFetchRaw(auth, path, init, opts);
 
@@ -93,7 +95,7 @@ export async function listEntityAssignmentsForCustomerProfile(params: {
     auth,
     `/CustomerProfiles/${encodeURIComponent(customerProfileSid)}/EntityAssignments`,
     { method: "GET" },
-    { xTwilioAccountSid: xTwilioAccountSid ?? null }
+    { xTwilioAccountSid: xTwilioAccountSid ?? null },
   );
 
   const arr =
@@ -125,7 +127,7 @@ export async function createEntityAssignmentForCustomerProfile(params: {
     auth,
     `/CustomerProfiles/${encodeURIComponent(customerProfileSid)}/EntityAssignments`,
     { method: "POST", body },
-    { xTwilioAccountSid: xTwilioAccountSid ?? null }
+    { xTwilioAccountSid: xTwilioAccountSid ?? null },
   );
 
   if (r.ok) return;
@@ -135,7 +137,8 @@ export async function createEntityAssignmentForCustomerProfile(params: {
 
   // Some deployments return 400 with "already exists" text
   const lower = (r.text || "").toLowerCase();
-  if (r.status === 400 && lower.includes("already") && lower.includes("exist")) return;
+  if (r.status === 400 && lower.includes("already") && lower.includes("exist"))
+    return;
 
   throw new Error(`TrustHub ${r.status}: ${r.text}`);
 }
@@ -210,7 +213,11 @@ export async function ensurePrimaryLinkedToSecondary(params: {
     });
 
     if (assignments.includes(primaryCustomerProfileSid)) {
-      log("linked after create ✅", { ...scope, attempt: i + 1, count: assignments.length });
+      log("linked after create ✅", {
+        ...scope,
+        attempt: i + 1,
+        count: assignments.length,
+      });
       return {
         ok: true,
         alreadyLinked: false,
