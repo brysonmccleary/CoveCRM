@@ -76,7 +76,7 @@ let twilioAccountSidUsed: string = "";
 // ✅ capture exact auth used by getClientForUser so raw TrustHub fetch can match tenant correctly.
 let twilioResolvedAuth: TwilioResolvedAuth | null = null;
 
-// ✅ parent/master client ONLY for ISV-level fallback calls (SupportingDocuments + primary assignment)
+// ✅ parent/master client ONLY for ISV primary-link verification (NOT for customer objects)
 let parentClient: any = null;
 let parentAuth: TwilioResolvedAuth | null = null;
 let parentAccountSid: string = "";
@@ -320,14 +320,8 @@ const TRUSTHUB_DISPATCHER = new Agent({
 
 /**
  * TrustHub fetch:
- * - When calling TrustHub from a *parent* auth but acting on a *subaccount* object,
- *   Twilio expects `X-Twilio-AccountSid: <subaccountSid>`.
- * - When calling TrustHub for parent-only objects, omit X-Twilio-AccountSid.
- *
- * ✅ Hardening:
- * - explicit timeout (AbortController)
- * - small retry/backoff on transient network errors + 5xx
- * - keepalive dispatcher
+ * - For SUBACCOUNT customer objects: MUST include `X-Twilio-AccountSid: <subaccountSid>`
+ *   when using platform creds or parent creds.
  */
 async function trusthubFetch(
   auth: TwilioResolvedAuth,
@@ -441,7 +435,7 @@ async function trusthubFetch(
   throw lastErr || new Error("TrustHub request failed after retries.");
 }
 
-// parent TrustHub client (ISV account)
+// parent TrustHub client (ISV account) - ONLY used for primary-link checks/assignment
 function getParentTrusthubClient(): {
   client: any;
   auth: TwilioResolvedAuth;
@@ -527,10 +521,11 @@ async function assignEntityToCustomerProfileRaw(args: {
 }
 
 /**
- * ✅ FIX (ISV flow):
- * DO NOT add the secondary bundle onto the primary bundle (primary is TWILIO_APPROVED => 70002).
- * Instead, add the PRIMARY customer profile as an entity assignment ONTO the SECONDARY bundle,
+ * ✅ ISV link:
+ * Assign the PRIMARY customer profile as an entity assignment ONTO the SECONDARY bundle,
  * executed with PARENT auth while acting on the subaccount via X-Twilio-AccountSid.
+ *
+ * NOTE: This does NOT create customer A2P objects in parent.
  */
 async function assignPrimaryCustomerProfileToSecondaryISV(args: {
   secondaryProfileSid: string;
@@ -633,76 +628,36 @@ async function findExistingCustomerProfileAddressSupportingDocSid(
   }
 }
 
-// SupportingDocuments create: prefer SDK surface when present; raw TrustHub fallback.
-async function createSupportingDocumentRaw(args: {
+/**
+ * ✅ CRITICAL FIX:
+ * SupportingDocuments MUST be created in the SUBACCOUNT context.
+ * - NO parent fallback.
+ * - Always use raw TrustHub request with X-Twilio-AccountSid = subaccountSid.
+ */
+async function createSupportingDocumentSubaccountOnly(args: {
   friendlyName: string;
   type: string;
   attributes: Record<string, any>;
-  override?: {
-    client?: any;
-    auth?: TwilioResolvedAuth;
-    xTwilioAccountSid?: string | null;
-    logLabel?: string;
-  };
 }) {
-  const { friendlyName, type, attributes, override } = args;
+  const { friendlyName, type, attributes } = args;
 
-  const useClient = override?.client || client;
-  const useAuth = override?.auth || twilioResolvedAuth;
-  const xSid =
-    override && "xTwilioAccountSid" in override
-      ? override.xTwilioAccountSid
-      : twilioAccountSidUsed;
-
-  const label = override?.logLabel || "SDK";
-
-  const sdk = (useClient as any)?.trusthub?.v1?.supportingDocuments;
-  if (sdk && typeof sdk.create === "function") {
-    log(`step: supportingDocuments.create ${label}`, {
-      type,
-      attributes,
-      twilioAccountSidUsed,
-      xTwilioAccountSid: xSid,
-    });
-
-    const created = await sdk.create({
-      friendlyName,
-      type,
-      attributes,
-    });
-
-    const sid = created?.sid || created?.Sid || created?.id;
-    if (!sid || typeof sid !== "string") {
-      throw new Error(
-        `SupportingDocument ${label} create did not return sid. Body: ${JSON.stringify(
-          created,
-        )}`,
-      );
-    }
-
-    return { sid, raw: created };
+  if (!twilioResolvedAuth) {
+    throw new Error("Missing twilioResolvedAuth for SupportingDocuments.");
+  }
+  if (!twilioAccountSidUsed || !twilioAccountSidUsed.startsWith("AC")) {
+    throw new Error("Missing/invalid subaccount SID for SupportingDocuments.");
   }
 
-  if (!useAuth) {
-    throw new Error(
-      "Missing auth for TrustHub SupportingDocuments (no twilioResolvedAuth / override.auth).",
-    );
-  }
-
-  log(`step: supportingDocuments.create RAW ${label}`, {
+  log("step: supportingDocuments.create RAW (SUBACCOUNT ONLY)", {
     host: "trusthub.twilio.com",
     path: "/v1/SupportingDocuments",
     type,
-    attributes,
     twilioAccountSidUsed,
-    xTwilioAccountSid: xSid,
-    authMode: useAuth.mode,
-    authUserMasked:
-      useAuth.username?.slice(0, 4) + "…" + useAuth.username?.slice(-4),
+    authMode: twilioResolvedAuth.mode,
   });
 
   const created: any = await trusthubFetch(
-    useAuth,
+    twilioResolvedAuth,
     "POST",
     "/v1/SupportingDocuments",
     {
@@ -710,34 +665,26 @@ async function createSupportingDocumentRaw(args: {
       Type: type,
       Attributes: JSON.stringify(attributes),
     },
-    { xTwilioAccountSid: xSid },
+    { xTwilioAccountSid: twilioAccountSidUsed },
   );
 
   const sid = created?.sid || created?.Sid || created?.id;
   if (!sid || typeof sid !== "string") {
     throw new Error(
-      `SupportingDocument RAW ${label} create did not return sid. Body: ${JSON.stringify(
+      `SupportingDocument SUBACCOUNT create did not return sid. Body: ${JSON.stringify(
         created,
       )}`,
     );
   }
 
-  // optional verify
-  try {
-    await trusthubFetch(
-      useAuth,
-      "GET",
-      `/v1/SupportingDocuments/${sid}`,
-      undefined,
-      {
-        xTwilioAccountSid: xSid,
-      },
-    );
-  } catch (e: any) {
-    throw new Error(
-      `SupportingDocument created but verification failed. sid=${sid} error=${e?.message || String(e)}`,
-    );
-  }
+  // verify (subaccount-scoped)
+  await trusthubFetch(
+    twilioResolvedAuth,
+    "GET",
+    `/v1/SupportingDocuments/${sid}`,
+    undefined,
+    { xTwilioAccountSid: twilioAccountSidUsed },
+  );
 
   return { sid, raw: created };
 }
@@ -1055,30 +1002,13 @@ async function createTrustProductEvaluationRaw(trustProductSid: string) {
   );
 }
 
-/**
- * ✅ FIX (critical):
- * Twilio returns BOTH of these in the wild:
- * - "TWILIO_APPROVED"  (underscore)
- * - "TWILIO-APPROVED"  (hyphen)
- *
- * If we don’t normalize hyphens -> underscores, the "rotate locked secondary bundle"
- * logic never triggers, and Twilio blocks EntityAssignments with:
- * "Cannot add bundle item to a TWILIO_APPROVED bundle"
- *
- * So: always normalize to underscore-separated UPPERCASE tokens.
- */
 function normalizeTrustHubStatus(s: any): string {
   let raw = String(s || "").trim().toUpperCase();
-
-  // ✅ normalize Twilio hyphenated statuses (e.g., TWILIO-APPROVED)
   raw = raw.replace(/-/g, "_");
-
-  // ✅ normalize common variants (keep underscore style)
   if (raw === "PENDING_REVIEW") return "PENDING_REVIEW";
   if (raw === "PENDINGREVIEW") return "PENDING_REVIEW";
   if (raw === "IN_REVIEW") return "IN_REVIEW";
   if (raw === "INREVIEW") return "IN_REVIEW";
-
   return raw;
 }
 
@@ -1107,10 +1037,8 @@ async function getTrustProductStatus(
 }
 
 async function evaluateAndSubmitCustomerProfile(customerProfileSid: string) {
-  // ✅ NEW: preflight status
   const currentStatus = await getCustomerProfileStatus(customerProfileSid);
 
-  // If already locked, don't attempt evaluations/update (it will fail anyway).
   if (currentStatus === "TWILIO_APPROVED") {
     log(
       "info: customerProfile is TWILIO_APPROVED; skipping eval + status update",
@@ -1148,7 +1076,6 @@ async function evaluateAndSubmitCustomerProfile(customerProfileSid: string) {
     });
   }
 
-  // ✅ NEW: only try to set pending-review if it isn't already there / in-review / approved
   const postEvalStatus = await getCustomerProfileStatus(customerProfileSid);
   if (
     postEvalStatus === "PENDING_REVIEW" ||
@@ -1185,7 +1112,6 @@ async function evaluateAndSubmitCustomerProfile(customerProfileSid: string) {
 }
 
 async function evaluateAndSubmitTrustProduct(trustProductSid: string) {
-  // ✅ NEW: preflight status
   const currentStatus = await getTrustProductStatus(trustProductSid);
 
   if (currentStatus === "TWILIO_APPROVED") {
@@ -1636,8 +1562,6 @@ export default async function handler(
 
     let secondaryProfileSid: string | undefined = live?.profileSid;
 
-    // ✅ NEW: if we are resubmitting, we MUST ensure the secondary is still editable.
-    // If it's already submitted/locked, we rotate and rebuild clean.
     const isResubmit = Boolean(resubmit);
 
     if (secondaryProfileSid) {
@@ -1655,12 +1579,6 @@ export default async function handler(
           isResubmit,
         });
 
-        // ✅ CRITICAL:
-        // - TWILIO_APPROVED cannot accept new assignments at all
-        // - PENDING_REVIEW / IN_REVIEW / APPROVED are effectively "submitted" states too
-        //   and often cannot be modified reliably (depends on Twilio state machine).
-        //
-        // We only *force* rotation on these states if resubmit=true OR if it is TWILIO_APPROVED.
         const submittedLike = new Set([
           "PENDING_REVIEW",
           "IN_REVIEW",
@@ -1870,10 +1788,6 @@ export default async function handler(
     // ---------------- 1.7) SupportingDocument for address ----------------
     live = await A2PProfile.findOne({ userId }).lean<any>();
     let supportingDocumentSid: string | undefined = live?.supportingDocumentSid;
-    let supportingDocumentCreatedVia: "subaccount" | "parent" | undefined =
-      live?.supportingDocumentCreatedVia;
-    let supportingDocumentAccountSid: string | undefined =
-      live?.supportingDocumentAccountSid;
 
     if (!supportingDocumentSid) {
       const reused = await findExistingCustomerProfileAddressSupportingDocSid(
@@ -1881,8 +1795,6 @@ export default async function handler(
       );
       if (reused) {
         supportingDocumentSid = reused;
-        supportingDocumentCreatedVia = "subaccount";
-        supportingDocumentAccountSid = twilioAccountSidUsed;
 
         log(
           "reuse: found existing customer_profile_address SupportingDocument on profile",
@@ -1898,8 +1810,8 @@ export default async function handler(
           {
             $set: {
               supportingDocumentSid,
-              supportingDocumentCreatedVia,
-              supportingDocumentAccountSid,
+              supportingDocumentCreatedVia: "subaccount",
+              supportingDocumentAccountSid: twilioAccountSidUsed,
             } as any,
           },
         );
@@ -1914,158 +1826,30 @@ export default async function handler(
         twilioAccountSidUsed,
       });
 
-      // Attempt subaccount create first
-      try {
-        const sd = await createSupportingDocumentRaw({
-          friendlyName: `${setPayload.businessName} – Address SupportingDocument`,
-          type: "customer_profile_address",
-          attributes,
-          override: { logLabel: "SUBACCOUNT" },
-        });
+      // ✅ SUBACCOUNT ONLY. No parent fallback. Stop on failure.
+      const sd = await createSupportingDocumentSubaccountOnly({
+        friendlyName: `${setPayload.businessName} – Address SupportingDocument`,
+        type: "customer_profile_address",
+        attributes,
+      });
 
-        supportingDocumentSid = sd.sid;
-        supportingDocumentCreatedVia = "subaccount";
-        supportingDocumentAccountSid = twilioAccountSidUsed;
+      supportingDocumentSid = sd.sid;
 
-        await A2PProfile.updateOne(
-          { _id: a2pId },
-          {
-            $set: {
-              supportingDocumentSid,
-              supportingDocumentCreatedVia,
-              supportingDocumentAccountSid,
-            } as any,
-          },
-        );
-      } catch (err: any) {
-        if (!isTwilioNotFound(err)) {
-          console.error(
-            "[A2P start] supportingDocuments create failed (non-404)",
-            {
-              twilioAccountSidUsed,
-              code: err?.code,
-              status: err?.status,
-              message: err?.message,
-              moreInfo: err?.moreInfo,
-            },
-          );
-          throw err;
-        }
-
-        log(
-          "supportingDocuments.create subaccount failed with 20404/404; falling back to parent auth (Twilio ISV flow)",
-          {
-            twilioAccountSidUsed,
-            code: err?.code,
-            status: err?.status,
-            message: err?.message,
-          },
-        );
-
-        if (!parentClient || !parentAuth || !parentAccountSid) {
-          const parent = getParentTrusthubClient();
-          parentClient = parent.client;
-          parentAuth = parent.auth;
-          parentAccountSid = parent.accountSid;
-
-          log(
-            `parent TrustHub client ready (${
-              parentAuth.mode === "authToken" ? "SID+AUTH_TOKEN" : "API_KEY_PAIR"
-            })`,
-            {
-              parentMasked:
-                parentAccountSid.slice(0, 4) +
-                "…" +
-                parentAccountSid.slice(-4),
-            },
-          );
-        }
-
-        // Parent TrustHub cannot reference a SUBACCOUNT Address SID, so create/reuse a parent Address
-        let parentAddressSid: string | undefined = live?.parentAddressSid;
-
-        if (!parentAddressSid) {
-          log("step: addresses.create PARENT (fallback)", {
-            customerName: setPayload.businessName,
-            parentAccountSid,
-          });
-
-          const parentAddr = await parentClient.addresses.create({
-            customerName: String(setPayload.businessName),
-            street: String(setPayload.address),
-            streetSecondary: setPayload.addressLine2 || undefined,
-            city: String(setPayload.addressCity),
-            region: String(setPayload.addressState),
-            postalCode: String(setPayload.addressPostalCode),
-            isoCountry: String(setPayload.addressCountry || "US"),
-          });
-
-          parentAddressSid = parentAddr.sid;
-
-          await A2PProfile.updateOne(
-            { _id: a2pId },
-            { $set: { parentAddressSid } as any },
-          );
-        }
-
-        const parentAttributes = { address_sids: parentAddressSid };
-
-        log("step: supportingDocuments.create PARENT (fallback)", {
-          type: "customer_profile_address",
-          attributes: parentAttributes,
-          parentEffectiveSid: parentAccountSid,
-        });
-
-        const parentSd = await createSupportingDocumentRaw({
-          friendlyName: `${setPayload.businessName} – Address SupportingDocument`,
-          type: "customer_profile_address",
-          attributes: parentAttributes,
-          override: {
-            client: parentClient,
-            auth: parentAuth,
-            xTwilioAccountSid: null,
-            logLabel: "PARENT",
-          },
-        });
-
-        supportingDocumentSid = parentSd.sid;
-        supportingDocumentCreatedVia = "parent";
-        supportingDocumentAccountSid = parentAccountSid;
-
-        await A2PProfile.updateOne(
-          { _id: a2pId },
-          {
-            $set: {
-              supportingDocumentSid,
-              supportingDocumentCreatedVia,
-              supportingDocumentAccountSid,
-            } as any,
-          },
-        );
-      }
+      await A2PProfile.updateOne(
+        { _id: a2pId },
+        {
+          $set: {
+            supportingDocumentSid,
+            supportingDocumentCreatedVia: "subaccount",
+            supportingDocumentAccountSid: twilioAccountSidUsed,
+          } as any,
+        },
+      );
     }
 
     // ---------------- 1.8) Attach SupportingDocument to Secondary profile ----
     if (supportingDocumentSid) {
-      if (supportingDocumentCreatedVia === "parent") {
-        if (!parentAuth) {
-          const parent = getParentTrusthubClient();
-          parentClient = parent.client;
-          parentAuth = parent.auth;
-          parentAccountSid = parent.accountSid;
-        }
-        await assignEntityToCustomerProfileRaw({
-          auth: parentAuth!,
-          customerProfileSid: secondaryProfileSid!,
-          objectSid: supportingDocumentSid,
-          xTwilioAccountSid: twilioAccountSidUsed,
-        });
-      } else {
-        await assignEntityToCustomerProfile(
-          secondaryProfileSid!,
-          supportingDocumentSid,
-        );
-      }
+      await assignEntityToCustomerProfile(secondaryProfileSid!, supportingDocumentSid);
     }
 
     // ---------------- 1.9) Assign PRIMARY to Secondary (ISV) ----------------
