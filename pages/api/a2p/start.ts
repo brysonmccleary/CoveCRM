@@ -629,10 +629,10 @@ async function findExistingCustomerProfileAddressSupportingDocSid(
 }
 
 /**
- * ✅ CRITICAL FIX:
- * SupportingDocuments MUST be created in the SUBACCOUNT context.
- * - NO parent fallback.
- * - Always use raw TrustHub request with X-Twilio-AccountSid = subaccountSid.
+ * ✅ CRITICAL FIX (ACTUAL):
+ * SupportingDocuments creation must use PARENT (platform) auth and act on the SUBACCOUNT
+ * via X-Twilio-AccountSid. This avoids TrustHub 20404 “resource not found” on sub surfaces
+ * (especially when tenant auth is API-key based).
  */
 async function createSupportingDocumentSubaccountOnly(args: {
   friendlyName: string;
@@ -641,23 +641,27 @@ async function createSupportingDocumentSubaccountOnly(args: {
 }) {
   const { friendlyName, type, attributes } = args;
 
-  if (!twilioResolvedAuth) {
-    throw new Error("Missing twilioResolvedAuth for SupportingDocuments.");
-  }
   if (!twilioAccountSidUsed || !twilioAccountSidUsed.startsWith("AC")) {
     throw new Error("Missing/invalid subaccount SID for SupportingDocuments.");
   }
 
-  log("step: supportingDocuments.create RAW (SUBACCOUNT ONLY)", {
+  if (!parentClient || !parentAuth || !parentAccountSid) {
+    const parent = getParentTrusthubClient();
+    parentClient = parent.client;
+    parentAuth = parent.auth;
+    parentAccountSid = parent.accountSid;
+  }
+
+  log("step: supportingDocuments.create RAW (PARENT auth acting on SUBACCOUNT)", {
     host: "trusthub.twilio.com",
     path: "/v1/SupportingDocuments",
     type,
-    twilioAccountSidUsed,
-    authMode: twilioResolvedAuth.mode,
+    xTwilioAccountSid: twilioAccountSidUsed,
+    authMode: parentAuth!.mode,
   });
 
   const created: any = await trusthubFetch(
-    twilioResolvedAuth,
+    parentAuth!,
     "POST",
     "/v1/SupportingDocuments",
     {
@@ -671,15 +675,15 @@ async function createSupportingDocumentSubaccountOnly(args: {
   const sid = created?.sid || created?.Sid || created?.id;
   if (!sid || typeof sid !== "string") {
     throw new Error(
-      `SupportingDocument SUBACCOUNT create did not return sid. Body: ${JSON.stringify(
+      `SupportingDocument create did not return sid. Body: ${JSON.stringify(
         created,
       )}`,
     );
   }
 
-  // verify (subaccount-scoped)
+  // verify (still acting on subaccount)
   await trusthubFetch(
-    twilioResolvedAuth,
+    parentAuth!,
     "GET",
     `/v1/SupportingDocuments/${sid}`,
     undefined,
@@ -1029,7 +1033,9 @@ async function getTrustProductStatus(
   trustProductSid: string,
 ): Promise<string | undefined> {
   try {
-    const tp: any = await client.trusthub.v1.trustProducts(trustProductSid).fetch();
+    const tp: any = await client.trusthub.v1
+      .trustProducts(trustProductSid)
+      .fetch();
     return normalizeTrustHubStatus(tp?.status);
   } catch {
     return undefined;
@@ -1826,7 +1832,7 @@ export default async function handler(
         twilioAccountSidUsed,
       });
 
-      // ✅ SUBACCOUNT ONLY. No parent fallback. Stop on failure.
+      // ✅ PARENT auth acting on SUBACCOUNT. Stop on failure.
       const sd = await createSupportingDocumentSubaccountOnly({
         friendlyName: `${setPayload.businessName} – Address SupportingDocument`,
         type: "customer_profile_address",
@@ -1840,7 +1846,7 @@ export default async function handler(
         {
           $set: {
             supportingDocumentSid,
-            supportingDocumentCreatedVia: "subaccount",
+            supportingDocumentCreatedVia: "parent_acting_subaccount",
             supportingDocumentAccountSid: twilioAccountSidUsed,
           } as any,
         },
@@ -1849,7 +1855,10 @@ export default async function handler(
 
     // ---------------- 1.8) Attach SupportingDocument to Secondary profile ----
     if (supportingDocumentSid) {
-      await assignEntityToCustomerProfile(secondaryProfileSid!, supportingDocumentSid);
+      await assignEntityToCustomerProfile(
+        secondaryProfileSid!,
+        supportingDocumentSid,
+      );
     }
 
     // ---------------- 1.9) Assign PRIMARY to Secondary (ISV) ----------------
