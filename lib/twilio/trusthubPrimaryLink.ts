@@ -93,7 +93,9 @@ export async function listEntityAssignmentsForCustomerProfile(params: {
 
   const data = await trusthubFetchJson<EntityAssignmentsList>(
     auth,
-    `/CustomerProfiles/${encodeURIComponent(customerProfileSid)}/EntityAssignments`,
+    `/CustomerProfiles/${encodeURIComponent(
+      customerProfileSid,
+    )}/EntityAssignments`,
     { method: "GET" },
     { xTwilioAccountSid: xTwilioAccountSid ?? null },
   );
@@ -125,7 +127,9 @@ export async function createEntityAssignmentForCustomerProfile(params: {
   // Twilio can return 409 if the assignment already exists; treat that as OK.
   const r = await trusthubFetchRaw(
     auth,
-    `/CustomerProfiles/${encodeURIComponent(customerProfileSid)}/EntityAssignments`,
+    `/CustomerProfiles/${encodeURIComponent(
+      customerProfileSid,
+    )}/EntityAssignments`,
     { method: "POST", body },
     { xTwilioAccountSid: xTwilioAccountSid ?? null },
   );

@@ -246,8 +246,6 @@ async function rotateA2PChainBecauseSecondaryLocked(args: {
         parentAddressSid: 1,
         supportingDocumentCreatedVia: 1,
         supportingDocumentAccountSid: 1,
-        supportingDocumentCreatedVia: 1,
-        supportingDocumentAccountSid: 1,
 
         trustProductSid: 1,
         a2pProfileEndUserSid: 1,
@@ -887,12 +885,15 @@ async function assignEntityToCustomerProfile(
       msg.includes("TWILIO_APPROVED") &&
       customerProfileSid === PRIMARY_PROFILE_SID
     ) {
-      log("info: primary bundle is TWILIO_APPROVED (fallback); skipping assignment", {
-        customerProfileSid,
-        objectSid,
-        message: msg,
-        twilioAccountSidUsed,
-      });
+      log(
+        "info: primary bundle is TWILIO_APPROVED (fallback); skipping assignment",
+        {
+          customerProfileSid,
+          objectSid,
+          message: msg,
+          twilioAccountSidUsed,
+        },
+      );
       return;
     }
 
@@ -1014,7 +1015,9 @@ async function assignEntityToTrustProduct(
 
 async function createCustomerProfileEvaluationRaw(customerProfileSid: string) {
   if (!twilioResolvedAuth) {
-    throw new Error("Missing twilioResolvedAuth for customerProfile evaluation.");
+    throw new Error(
+      "Missing twilioResolvedAuth for customerProfile evaluation.",
+    );
   }
   log("step: customerProfiles.evaluations.create RAW", {
     customerProfileSid,
@@ -1096,9 +1099,7 @@ async function getTrustProductStatus(
   trustProductSid: string,
 ): Promise<string | undefined> {
   try {
-    const tp: any = await client.trusthub.v1
-      .trustProducts(trustProductSid)
-      .fetch();
+    const tp: any = await client.trusthub.v1.trustProducts(trustProductSid).fetch();
     return normalizeTrustHubStatus(tp?.status);
   } catch {
     return undefined;
