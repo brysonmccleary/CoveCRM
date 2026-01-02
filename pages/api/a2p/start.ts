@@ -760,7 +760,7 @@ async function assignEntityToCustomerProfile(
       const primary = await (client.trusthub.v1.customerProfiles(
         customerProfileSid,
       ) as any).fetch();
-      const status = String(primary?.status || "").toUpperCase();
+      const status = String(primary?.status || "").toUpperCase().replace(/-/g, "_");
 
       if (status === "TWILIO_APPROVED") {
         log(
@@ -816,7 +816,10 @@ async function assignEntityToCustomerProfile(
 
         // ✅ IMPORTANT: only "skip" TWILIO_APPROVED for PRIMARY. For SECONDARY, this is a real failure.
         const msg = String(err?.message || "");
-        if (msg.includes("TWILIO_APPROVED") && customerProfileSid === PRIMARY_PROFILE_SID) {
+        if (
+          msg.includes("TWILIO_APPROVED") &&
+          customerProfileSid === PRIMARY_PROFILE_SID
+        ) {
           log("info: primary bundle is TWILIO_APPROVED; skipping assignment", {
             customerProfileSid,
             objectSid,
@@ -839,7 +842,10 @@ async function assignEntityToCustomerProfile(
     const msg = String(err?.message || "");
 
     // ✅ IMPORTANT: only skip TWILIO_APPROVED for PRIMARY. For SECONDARY we want it to error so our rotation logic can kick in.
-    if (msg.includes("TWILIO_APPROVED") && customerProfileSid === PRIMARY_PROFILE_SID) {
+    if (
+      msg.includes("TWILIO_APPROVED") &&
+      customerProfileSid === PRIMARY_PROFILE_SID
+    ) {
       log("info: primary bundle is TWILIO_APPROVED; skipping assignment", {
         customerProfileSid,
         objectSid,
@@ -873,7 +879,10 @@ async function assignEntityToCustomerProfile(
     const msg = String(err?.message || "");
 
     // ✅ IMPORTANT: only skip TWILIO_APPROVED for PRIMARY
-    if (msg.includes("TWILIO_APPROVED") && customerProfileSid === PRIMARY_PROFILE_SID) {
+    if (
+      msg.includes("TWILIO_APPROVED") &&
+      customerProfileSid === PRIMARY_PROFILE_SID
+    ) {
       log("info: primary bundle is TWILIO_APPROVED (fallback); skipping assignment", {
         customerProfileSid,
         objectSid,
@@ -1040,14 +1049,29 @@ async function createTrustProductEvaluationRaw(trustProductSid: string) {
 }
 
 /**
- * ✅ NEW (smallest-change): skip status update when the bundle is already locked/submitted.
- * This prevents noisy 400s like: "User cannot perform this status update" and avoids touching TWILIO_APPROVED bundles.
+ * ✅ FIX (critical):
+ * Twilio returns BOTH of these in the wild:
+ * - "TWILIO_APPROVED"  (underscore)
+ * - "TWILIO-APPROVED"  (hyphen)
+ *
+ * If we don’t normalize hyphens -> underscores, the "rotate locked secondary bundle"
+ * logic never triggers, and Twilio blocks EntityAssignments with:
+ * "Cannot add bundle item to a TWILIO_APPROVED bundle"
+ *
+ * So: always normalize to underscore-separated UPPERCASE tokens.
  */
 function normalizeTrustHubStatus(s: any): string {
-  const raw = String(s || "").trim().toUpperCase();
-  // TrustHub sometimes uses different separators/strings; normalize common ones.
-  if (raw === "PENDING_REVIEW") return "PENDING-REVIEW";
-  if (raw === "IN_REVIEW") return "IN-REVIEW";
+  let raw = String(s || "").trim().toUpperCase();
+
+  // ✅ normalize Twilio hyphenated statuses (e.g., TWILIO-APPROVED)
+  raw = raw.replace(/-/g, "_");
+
+  // ✅ normalize common variants (keep underscore style)
+  if (raw === "PENDING_REVIEW") return "PENDING_REVIEW";
+  if (raw === "PENDINGREVIEW") return "PENDING_REVIEW";
+  if (raw === "IN_REVIEW") return "IN_REVIEW";
+  if (raw === "INREVIEW") return "IN_REVIEW";
+
   return raw;
 }
 
@@ -1083,11 +1107,14 @@ async function evaluateAndSubmitCustomerProfile(customerProfileSid: string) {
 
   // If already locked, don't attempt evaluations/update (it will fail anyway).
   if (currentStatus === "TWILIO_APPROVED") {
-    log("info: customerProfile is TWILIO_APPROVED; skipping eval + status update", {
-      customerProfileSid,
-      twilioAccountSidUsed,
-      currentStatus,
-    });
+    log(
+      "info: customerProfile is TWILIO_APPROVED; skipping eval + status update",
+      {
+        customerProfileSid,
+        twilioAccountSidUsed,
+        currentStatus,
+      },
+    );
     return;
   }
 
@@ -1119,8 +1146,8 @@ async function evaluateAndSubmitCustomerProfile(customerProfileSid: string) {
   // ✅ NEW: only try to set pending-review if it isn't already there / in-review / approved
   const postEvalStatus = await getCustomerProfileStatus(customerProfileSid);
   if (
-    postEvalStatus === "PENDING-REVIEW" ||
-    postEvalStatus === "IN-REVIEW" ||
+    postEvalStatus === "PENDING_REVIEW" ||
+    postEvalStatus === "IN_REVIEW" ||
     postEvalStatus === "APPROVED" ||
     postEvalStatus === "TWILIO_APPROVED"
   ) {
@@ -1192,8 +1219,8 @@ async function evaluateAndSubmitTrustProduct(trustProductSid: string) {
 
   const postEvalStatus = await getTrustProductStatus(trustProductSid);
   if (
-    postEvalStatus === "PENDING-REVIEW" ||
-    postEvalStatus === "IN-REVIEW" ||
+    postEvalStatus === "PENDING_REVIEW" ||
+    postEvalStatus === "IN_REVIEW" ||
     postEvalStatus === "APPROVED" ||
     postEvalStatus === "TWILIO_APPROVED"
   ) {
@@ -1625,13 +1652,19 @@ export default async function handler(
 
         // ✅ CRITICAL:
         // - TWILIO_APPROVED cannot accept new assignments at all
-        // - PENDING-REVIEW / IN-REVIEW / APPROVED are effectively "submitted" states too
+        // - PENDING_REVIEW / IN_REVIEW / APPROVED are effectively "submitted" states too
         //   and often cannot be modified reliably (depends on Twilio state machine).
         //
         // We only *force* rotation on these states if resubmit=true OR if it is TWILIO_APPROVED.
-        const submittedLike = new Set(["PENDING-REVIEW", "IN-REVIEW", "APPROVED", "TWILIO_APPROVED"]);
+        const submittedLike = new Set([
+          "PENDING_REVIEW",
+          "IN_REVIEW",
+          "APPROVED",
+          "TWILIO_APPROVED",
+        ]);
         const shouldRotate =
-          status === "TWILIO_APPROVED" || (isResubmit && submittedLike.has(status));
+          status === "TWILIO_APPROVED" ||
+          (isResubmit && submittedLike.has(status));
 
         if (shouldRotate) {
           await rotateA2PChainBecauseSecondaryLocked({
