@@ -1,10 +1,7 @@
 // lib/twilioClient.ts
-import twilio from "twilio";
+import { getPlatformTwilioClient } from "@/lib/twilio/getPlatformClient";
 
-const accountSid = process.env.TWILIO_ACCOUNT_SID!;
-const authToken = process.env.TWILIO_AUTH_TOKEN!;
-
-const twilioClient = twilio(accountSid, authToken);
+const twilioClient = getPlatformTwilioClient();
 
 export const sendSMS = async ({ to, body }: { to: string; body: string }) => {
   try {

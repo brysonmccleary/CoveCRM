@@ -3,6 +3,7 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import A2PProfile from "@/models/A2PProfile";
+import { getPlatformTwilioClient } from "@/lib/twilio/getPlatformClient";
 
 const BASE_URL = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "").replace(/\/$/, "");
 const STATUS_CALLBACK =
@@ -10,16 +11,6 @@ const STATUS_CALLBACK =
   (BASE_URL ? `${BASE_URL}/api/twilio/status-callback` : undefined);
 const INBOUND_WEBHOOK = BASE_URL ? `${BASE_URL}/api/twilio/inbound-sms` : undefined;
 const SHARED_MSID = process.env.TWILIO_MESSAGING_SERVICE_SID || "";
-
-function getPlatformClient() {
-  const twilio = require("twilio");
-  const accountSid = process.env.TWILIO_ACCOUNT_SID!;
-  const authToken = process.env.TWILIO_AUTH_TOKEN!;
-  const keySid = process.env.TWILIO_API_KEY_SID;
-  const keySecret = process.env.TWILIO_API_KEY_SECRET;
-  if (keySid && keySecret) return twilio(keySid, keySecret, { accountSid });
-  return twilio(accountSid, authToken);
-}
 
 async function ensureServiceHooks(client: any, msid: string) {
   if (!msid || !INBOUND_WEBHOOK) return;
@@ -109,7 +100,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     await dbConnect();
-    const client = getPlatformClient();
+    const client = getPlatformTwilioClient();
 
     const users = await User.find({})
       .select({ email: 1, name: 1, numbers: 1, a2p: 1 })

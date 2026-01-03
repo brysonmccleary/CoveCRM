@@ -1,10 +1,8 @@
 // lib/voice.ts
-import twilio from "twilio";
+import { getPlatformTwilioClient } from "@/lib/twilio/getPlatformClient";
 import { getUserByEmail } from "@/models/User";
 
-const accountSid = process.env.TWILIO_ACCOUNT_SID!;
-const authToken  = process.env.TWILIO_AUTH_TOKEN!;
-export const twilioClient = twilio(accountSid, authToken);
+export const twilioClient = getPlatformTwilioClient();
 
 // --- Small helpers -----------------------------------------------------------
 export function toE164(raw: string | undefined | null): string {

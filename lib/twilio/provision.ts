@@ -2,15 +2,10 @@
 import twilio, { Twilio } from "twilio";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
+import { getPlatformTwilioAuth } from "@/lib/twilio/getPlatformClient";
 
-const PLATFORM_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID || "";
-const PLATFORM_AUTH_TOKEN  = process.env.TWILIO_AUTH_TOKEN  || "";
 const BASE_URL = (process.env.NEXT_PUBLIC_BASE_URL || "https://www.covecrm.com").replace(/\/$/, "");
 const DEFAULT_AREA_CODE = (process.env.TWILIO_DEFAULT_AREA_CODE || "").trim();
-
-if (!PLATFORM_ACCOUNT_SID || !PLATFORM_AUTH_TOKEN) {
-  throw new Error("Missing TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN envs.");
-}
 
 type ProvisionResult =
   | {
@@ -22,6 +17,22 @@ type ProvisionResult =
 
 function buildStatusCallback(email: string) {
   return `${BASE_URL}/api/twilio/voice-status?userEmail=${encodeURIComponent(email)}`;
+}
+
+function getMasterClient(): Twilio {
+  const auth = getPlatformTwilioAuth();
+  if (auth.mode === "authToken") {
+    return twilio(auth.accountSid, auth.authToken);
+  }
+  return twilio(auth.apiKeySid, auth.apiKeySecret, { accountSid: auth.accountSid });
+}
+
+function getSubScopedClient(subAccountSid: string): Twilio {
+  const auth = getPlatformTwilioAuth();
+  if (auth.mode === "authToken") {
+    return twilio(auth.accountSid, auth.authToken, { accountSid: subAccountSid });
+  }
+  return twilio(auth.apiKeySid, auth.apiKeySecret, { accountSid: subAccountSid });
 }
 
 async function ensureSubaccount(master: Twilio, email: string) {
@@ -118,7 +129,7 @@ export async function provisionUserTwilio(email: string): Promise<ProvisionResul
     const user = await User.findOne({ email: String(email || "").toLowerCase().trim() });
     if (!user) return { ok: false, message: "User not found." };
 
-    const master = twilio(PLATFORM_ACCOUNT_SID, PLATFORM_AUTH_TOKEN);
+    const master = getMasterClient();
 
     // 1) Subaccount
     let subSid = user?.twilio?.accountSid || "";
@@ -130,8 +141,8 @@ export async function provisionUserTwilio(email: string): Promise<ProvisionResul
       await user.save();
     }
 
-    // Scoped client to subaccount using master creds
-    const subScoped = twilio(PLATFORM_ACCOUNT_SID, PLATFORM_AUTH_TOKEN, { accountSid: subSid });
+    // Scoped client to subaccount using platform creds
+    const subScoped = getSubScopedClient(subSid);
 
     // 2) API Key
     let keySid = user?.twilio?.apiKeySid || "";

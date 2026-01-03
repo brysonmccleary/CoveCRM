@@ -5,19 +5,17 @@ import GoogleProvider from "next-auth/providers/google";
 import bcrypt from "bcryptjs";
 import mongooseConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
-import twilio from "twilio";
 import A2PProfile from "@/models/A2PProfile";
 import { syncA2PForUser } from "@/lib/twilio/syncA2P";
 import { sendWelcomeEmail } from "@/lib/email";
+import { getPlatformTwilioClient } from "@/lib/twilio/getPlatformClient";
 
 const isDev =
   process.env.NODE_ENV === "development" ||
   process.env.NEXTAUTH_URL?.includes("localhost") ||
   process.env.NEXTAUTH_URL?.includes("ngrok");
 
-const accountSid = process.env.TWILIO_ACCOUNT_SID!;
-const authToken = process.env.TWILIO_AUTH_TOKEN!;
-const client = twilio(accountSid, authToken);
+const client = getPlatformTwilioClient();
 
 // Canonical public base URL (do NOT throw if missing — auth must not crash)
 function getBaseUrl() {

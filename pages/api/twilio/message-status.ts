@@ -2,11 +2,9 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
-import twilio from "twilio";
+import { getPlatformTwilioClient } from "@/lib/twilio/getPlatformClient";
 
-const accountSid = process.env.TWILIO_ACCOUNT_SID!;
-const authToken = process.env.TWILIO_AUTH_TOKEN!;
-const client = twilio(accountSid, authToken);
+const client = getPlatformTwilioClient();
 
 export default async function handler(
   req: NextApiRequest,

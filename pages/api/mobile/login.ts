@@ -8,7 +8,7 @@ import User from "@/models/User";
 import A2PProfile from "@/models/A2PProfile";
 import { syncA2PForUser } from "@/lib/twilio/syncA2P";
 import { sendWelcomeEmail } from "@/lib/email";
-import twilio from "twilio";
+import { getPlatformTwilioClient } from "@/lib/twilio/getPlatformClient";
 
 // ---------- helpers copied from [...nextauth].ts (no changes to web auth) ----------
 
@@ -17,9 +17,7 @@ const isDev =
   process.env.NEXTAUTH_URL?.includes("localhost") ||
   process.env.NEXTAUTH_URL?.includes("ngrok");
 
-const accountSid = process.env.TWILIO_ACCOUNT_SID!;
-const authToken = process.env.TWILIO_AUTH_TOKEN!;
-const client = twilio(accountSid, authToken);
+const client = getPlatformTwilioClient();
 
 // Canonical public base URL (do NOT throw if missing)
 function getBaseUrl() {
