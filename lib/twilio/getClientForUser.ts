@@ -83,6 +83,76 @@ function buildTwilioClient(params: {
   throw new Error("Missing Twilio credentials: need AUTH TOKEN or API Key pair.");
 }
 
+function basicAuthHeader(username: string, password: string) {
+  const token = Buffer.from(`${username}:${password}`, "utf8").toString("base64");
+  return `Basic ${token}`;
+}
+
+/**
+ * ✅ NEW (minimal + surgical):
+ * Create a subaccount API Key via RAW REST (not the Twilio SDK).
+ * Reason: in some Twilio SDK builds, accounts(sid).keys.create is NOT implemented at runtime.
+ *
+ * Endpoint:
+ *   POST https://api.twilio.com/2010-04-01/Accounts/{SubSid}/Keys.json
+ *
+ * Returns:
+ *   { sid: "SK...", secret: "..." }
+ */
+async function createSubaccountApiKeyRaw(args: {
+  subSid: string;
+  friendlyName: string;
+  platformAuth: { username: string; password: string };
+}): Promise<{ apiKeySid: string; apiKeySecret: string }> {
+  const { subSid, friendlyName, platformAuth } = args;
+
+  const url = `https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(
+    subSid,
+  )}/Keys.json`;
+
+  const body = new URLSearchParams();
+  body.set("FriendlyName", friendlyName);
+
+  const resp = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: basicAuthHeader(platformAuth.username, platformAuth.password),
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body,
+  });
+
+  const text = await resp.text();
+  let data: any = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    data = { raw: text };
+  }
+
+  if (!resp.ok) {
+    const msg =
+      data?.message ||
+      data?.Message ||
+      `Twilio Keys.create RAW failed (${resp.status})`;
+    const code = data?.code || data?.Code;
+    throw new Error(
+      `Twilio Keys.create RAW failed (${resp.status}) code=${code ?? "?"} message=${msg}`,
+    );
+  }
+
+  const apiKeySid = sanitizeId(data?.sid || data?.Sid || "");
+  const apiKeySecret = String(data?.secret || data?.Secret || "").trim();
+
+  if (!apiKeySid.startsWith("SK") || !apiKeySecret) {
+    throw new Error(
+      `Twilio Keys.create RAW succeeded but missing sid/secret. Response: ${text}`,
+    );
+  }
+
+  return { apiKeySid, apiKeySecret };
+}
+
 // ✅ NEW (minimal + surgical):
 // If a user only has a subaccount SID, automatically create a subaccount API Key
 // via platform creds, store it on the user, and then use it for all future calls.
@@ -124,24 +194,21 @@ async function ensureSubaccountApiKeyForUser(args: {
     throw new Error("Missing/invalid TWILIO_ACCOUNT_SID for platform.");
   }
 
-  // Build a platform client we can use to create a Key under the subaccount
-  let platformClient: Twilio | null = null;
+  // Decide which platform auth to use for RAW key creation
+  // - Prefer AuthToken if present
+  // - Else use platform API key pair
+  let platformAuth: { username: string; password: string } | null = null;
 
   if (platformAuthToken) {
-    platformClient = twilio(platformAccountSid, platformAuthToken, {
-      accountSid: platformAccountSid,
-    });
+    platformAuth = { username: platformAccountSid, password: platformAuthToken };
   } else if (platformApiKeySid && platformApiKeySecret) {
-    platformClient = twilio(platformApiKeySid, platformApiKeySecret, {
-      accountSid: platformAccountSid,
-    });
+    platformAuth = { username: platformApiKeySid, password: platformApiKeySecret };
   } else {
     throw new Error(
       "Missing platform Twilio credentials for subaccount key creation.",
     );
   }
 
-  // Create key inside the subaccount. Secret is only returned once.
   const friendlyName = `CoveCRM Subaccount Key – ${normalizedEmail}`;
 
   console.log(
@@ -153,27 +220,17 @@ async function ensureSubaccountApiKeyForUser(args: {
     }),
   );
 
-  // ✅ FIX: Twilio typings sometimes don't expose keys.create even though it exists at runtime.
-  const created: any = await (platformClient as any).api.v2010
-    .accounts(subSid)
-    .keys.create({ friendlyName });
-
-  const apiKeySid = sanitizeId(created?.sid || created?.Sid || "");
-  const apiKeySecret = String(created?.secret || created?.Secret || "").trim();
-
-  if (!apiKeySid.startsWith("SK") || !apiKeySecret) {
-    throw new Error(
-      `Failed to create subaccount API key (missing sid/secret). Response: ${JSON.stringify(
-        created,
-      )}`,
-    );
-  }
+  const created = await createSubaccountApiKeyRaw({
+    subSid,
+    friendlyName,
+    platformAuth,
+  });
 
   // Store on user for future use
   fresh.twilio = fresh.twilio || {};
   fresh.twilio.accountSid = sanitizeId(fresh.twilio.accountSid || subSid);
-  fresh.twilio.apiKeySid = apiKeySid;
-  fresh.twilio.apiKeySecret = apiKeySecret;
+  fresh.twilio.apiKeySid = created.apiKeySid;
+  fresh.twilio.apiKeySecret = created.apiKeySecret;
 
   await fresh.save();
 
@@ -182,11 +239,11 @@ async function ensureSubaccountApiKeyForUser(args: {
       msg: "ensureSubaccountApiKeyForUser: stored subaccount API key on user",
       email: normalizedEmail,
       subSidMasked: maskSid(subSid),
-      apiKeySidMasked: maskSid(apiKeySid),
+      apiKeySidMasked: maskSid(created.apiKeySid),
     }),
   );
 
-  return { apiKeySid, apiKeySecret };
+  return created;
 }
 
 export async function getClientForUser(
