@@ -630,9 +630,10 @@ async function findExistingCustomerProfileAddressSupportingDocSid(
 
 /**
  * ✅ CRITICAL FIX (ACTUAL):
- * SupportingDocuments creation must use PARENT (platform) auth and act on the SUBACCOUNT
- * via X-Twilio-AccountSid. This avoids TrustHub 20404 “resource not found” on sub surfaces
- * (especially when tenant auth is API-key based).
+ * SupportingDocuments creation should use the Twilio SDK surface in the *subaccount-scoped* client first.
+ * This avoids TrustHub “20404 resource not found” quirks caused by subtle encoding/casing issues in raw fetch.
+ *
+ * We only fall back to raw TrustHub fetch if the SDK surface is unavailable.
  */
 async function createSupportingDocumentSubaccountOnly(args: {
   friendlyName: string;
@@ -645,6 +646,59 @@ async function createSupportingDocumentSubaccountOnly(args: {
     throw new Error("Missing/invalid subaccount SID for SupportingDocuments.");
   }
 
+  // 1) ✅ Prefer SDK on the already-scoped client (getClientForUser gave us the correct scoping)
+  try {
+    const sdk = (client as any)?.trusthub?.v1?.supportingDocuments;
+    if (sdk && typeof sdk.create === "function") {
+      log("step: supportingDocuments.create via SDK (subaccount-scoped client)", {
+        type,
+        twilioAccountSidUsed,
+        hasSdk: true,
+      });
+
+      const created: any = await sdk.create({
+        friendlyName,
+        type,
+        // Twilio SDK will handle encoding; attributes should be an object here.
+        attributes,
+      });
+
+      const sid = created?.sid || created?.Sid || created?.id;
+      if (!sid || typeof sid !== "string") {
+        throw new Error(
+          `SupportingDocument SDK create did not return sid. Body: ${JSON.stringify(
+            created,
+          )}`,
+        );
+      }
+
+      // Verify it exists (still via SDK)
+      try {
+        await (client as any).trusthub.v1.supportingDocuments(sid).fetch();
+      } catch (verifyErr: any) {
+        log("warn: supportingDocuments.fetch verify failed (SDK)", {
+          sid,
+          twilioAccountSidUsed,
+          code: verifyErr?.code,
+          status: verifyErr?.status,
+          message: verifyErr?.message,
+        });
+        // Don’t fail here — creation succeeded; verification can lag.
+      }
+
+      return { sid, raw: created, createdVia: "sdk_subaccount_scoped" };
+    }
+  } catch (sdkErr: any) {
+    log("warn: supportingDocuments.create via SDK failed; will fallback to raw", {
+      twilioAccountSidUsed,
+      code: sdkErr?.code,
+      status: sdkErr?.status,
+      message: sdkErr?.message,
+    });
+    // continue to raw fallback below
+  }
+
+  // 2) Raw fallback (kept) — only used if SDK surface missing or SDK call failed
   if (!parentClient || !parentAuth || !parentAccountSid) {
     const parent = getParentTrusthubClient();
     parentClient = parent.client;
@@ -652,7 +706,7 @@ async function createSupportingDocumentSubaccountOnly(args: {
     parentAccountSid = parent.accountSid;
   }
 
-  log("step: supportingDocuments.create RAW (PARENT auth acting on SUBACCOUNT)", {
+  log("step: supportingDocuments.create RAW fallback (PARENT auth acting on SUBACCOUNT)", {
     host: "trusthub.twilio.com",
     path: "/v1/SupportingDocuments",
     type,
@@ -675,22 +729,32 @@ async function createSupportingDocumentSubaccountOnly(args: {
   const sid = created?.sid || created?.Sid || created?.id;
   if (!sid || typeof sid !== "string") {
     throw new Error(
-      `SupportingDocument create did not return sid. Body: ${JSON.stringify(
+      `SupportingDocument RAW create did not return sid. Body: ${JSON.stringify(
         created,
       )}`,
     );
   }
 
   // verify (still acting on subaccount)
-  await trusthubFetch(
-    parentAuth!,
-    "GET",
-    `/v1/SupportingDocuments/${sid}`,
-    undefined,
-    { xTwilioAccountSid: twilioAccountSidUsed },
-  );
+  try {
+    await trusthubFetch(
+      parentAuth!,
+      "GET",
+      `/v1/SupportingDocuments/${sid}`,
+      undefined,
+      { xTwilioAccountSid: twilioAccountSidUsed },
+    );
+  } catch (verifyErr: any) {
+    log("warn: supportingDocuments.fetch verify failed (RAW)", {
+      sid,
+      twilioAccountSidUsed,
+      code: verifyErr?.code,
+      status: verifyErr?.status,
+      message: verifyErr?.message,
+    });
+  }
 
-  return { sid, raw: created };
+  return { sid, raw: created, createdVia: "raw_parent_acting_subaccount" };
 }
 
 // Twilio's TS typings for TrustHub vary across SDK versions; cast at the boundary.
@@ -1352,7 +1416,7 @@ export default async function handler(
         trusthubV1Keys: Object.keys((client as any)?.trusthub?.v1 || {}),
       });
     } catch (e: any) {
-      console.error("[A2P start] getClientForUser failed:", {
+      console.error("[A2P start]", "getClientForUser failed:", {
         email: session.user.email,
         message: e?.message,
       });
@@ -1846,7 +1910,7 @@ export default async function handler(
         {
           $set: {
             supportingDocumentSid,
-            supportingDocumentCreatedVia: "parent_acting_subaccount",
+            supportingDocumentCreatedVia: sd.createdVia,
             supportingDocumentAccountSid: twilioAccountSidUsed,
           } as any,
         },
