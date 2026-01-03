@@ -852,7 +852,7 @@ async function assignEntityToCustomerProfile(
     }
 
     log(
-      "warn: customerProfiles entityAssignments subresource unavailable; falling back to raw request",
+      "warn: customerProfiles entityAssignments subresource unavailable; falling back to RAW TrustHub fetch",
       { customerProfileSid, objectSid, twilioAccountSidUsed },
     );
   } catch (err: any) {
@@ -872,26 +872,26 @@ async function assignEntityToCustomerProfile(
       return;
     }
 
-    log(
-      "warn: error accessing customerProfiles entityAssignments; falling back to raw request",
-      {
-        customerProfileSid,
-        message: err?.message,
-        twilioAccountSidUsed,
-      },
-    );
+    log("warn: error accessing customerProfiles entityAssignments; falling back to RAW TrustHub fetch", {
+      customerProfileSid,
+      message: err?.message,
+      twilioAccountSidUsed,
+    });
   }
 
-  // Fallback: direct HTTP call
+  // ✅ FIX: Raw fallback MUST include X-Twilio-AccountSid so it lands in the SUBACCOUNT bundle
+  if (!twilioResolvedAuth) {
+    throw new Error("Missing twilioResolvedAuth for raw entity assignment.");
+  }
+
   try {
-    const url = `https://trusthub.twilio.com/v1/CustomerProfiles/${customerProfileSid}/EntityAssignments`;
-    await (client as any).request({
-      method: "POST",
-      uri: url,
-      formData: {
-        ObjectSid: objectSid,
-      },
-    });
+    await trusthubFetch(
+      twilioResolvedAuth,
+      "POST",
+      `/v1/CustomerProfiles/${customerProfileSid}/EntityAssignments`,
+      { ObjectSid: objectSid },
+      { xTwilioAccountSid: twilioAccountSidUsed },
+    );
   } catch (err: any) {
     const msg = String(err?.message || "");
 
@@ -901,7 +901,7 @@ async function assignEntityToCustomerProfile(
       customerProfileSid === PRIMARY_PROFILE_SID
     ) {
       log(
-        "info: primary bundle is TWILIO_APPROVED (fallback); skipping assignment",
+        "info: primary bundle is TWILIO_APPROVED (raw fallback); skipping assignment",
         {
           customerProfileSid,
           objectSid,
@@ -913,7 +913,7 @@ async function assignEntityToCustomerProfile(
     }
 
     if (isTwilioDuplicateAssignment(err)) {
-      log("info: entity assignment already exists (fallback); skipping", {
+      log("info: entity assignment already exists (raw fallback); skipping", {
         customerProfileSid,
         objectSid,
         twilioAccountSidUsed,
@@ -963,7 +963,7 @@ async function assignEntityToTrustProduct(
     }
 
     log(
-      "warn: trustProducts entityAssignments subresource unavailable; falling back to raw request",
+      "warn: trustProducts entityAssignments subresource unavailable; falling back to RAW TrustHub fetch",
       { trustProductSid, objectSid, twilioAccountSidUsed },
     );
   } catch (err: any) {
@@ -978,7 +978,7 @@ async function assignEntityToTrustProduct(
       return;
     }
     log(
-      "warn: error accessing trustProducts entityAssignments; falling back to raw request",
+      "warn: error accessing trustProducts entityAssignments; falling back to RAW TrustHub fetch",
       {
         trustProductSid,
         message: err?.message,
@@ -987,19 +987,23 @@ async function assignEntityToTrustProduct(
     );
   }
 
+  // ✅ FIX: Raw fallback MUST include X-Twilio-AccountSid so it lands in the SUBACCOUNT TrustProduct
+  if (!twilioResolvedAuth) {
+    throw new Error("Missing twilioResolvedAuth for raw trustProduct assignment.");
+  }
+
   try {
-    const url = `https://trusthub.twilio.com/v1/TrustProducts/${trustProductSid}/EntityAssignments`;
-    await (client as any).request({
-      method: "POST",
-      uri: url,
-      formData: {
-        ObjectSid: objectSid,
-      },
-    });
+    await trusthubFetch(
+      twilioResolvedAuth,
+      "POST",
+      `/v1/TrustProducts/${trustProductSid}/EntityAssignments`,
+      { ObjectSid: objectSid },
+      { xTwilioAccountSid: twilioAccountSidUsed },
+    );
   } catch (err: any) {
     const msg = String(err?.message || "");
     if (msg.includes("TWILIO_APPROVED")) {
-      log("info: trustProduct TWILIO_APPROVED (fallback); skipping assignment", {
+      log("info: trustProduct TWILIO_APPROVED (raw fallback); skipping assignment", {
         trustProductSid,
         objectSid,
         message: msg,
@@ -1009,7 +1013,7 @@ async function assignEntityToTrustProduct(
     }
     if (isTwilioDuplicateAssignment(err)) {
       log(
-        "info: trustProduct entity assignment already exists (fallback); skipping",
+        "info: trustProduct entity assignment already exists (raw fallback); skipping",
         {
           trustProductSid,
           objectSid,
@@ -1896,7 +1900,6 @@ export default async function handler(
         twilioAccountSidUsed,
       });
 
-      // ✅ PARENT auth acting on SUBACCOUNT. Stop on failure.
       const sd = await createSupportingDocumentSubaccountOnly({
         friendlyName: `${setPayload.businessName} – Address SupportingDocument`,
         type: "customer_profile_address",

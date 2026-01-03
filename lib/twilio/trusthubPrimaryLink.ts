@@ -3,11 +3,12 @@
  * TrustHub Customer Profile -> EntityAssignments helper
  * Hard gate to prevent: "Primary customer profile bundle is null"
  *
- * ISV-critical behavior:
- * - When doing parent acting on subaccount, MUST use:
- *   - parent auth
- *   - X-Twilio-AccountSid: <subaccount AC...>
- * - And MUST block brand creation until TrustHub returns primary BU in assignments.
+ * ✅ Correct ISV Architecture #1 behavior:
+ * - Perform the link in the CUSTOMER SUBACCOUNT context (subaccount API key auth)
+ * - Do NOT rely on parent-acting-on-subaccount via X-Twilio-AccountSid for TrustHub CustomerProfiles.
+ *
+ * This helper supports optional xTwilioAccountSid header, but for the ISV primary-link
+ * you should pass it as null/undefined when using subaccount auth.
  */
 
 import { Buffer } from "buffer";
@@ -231,7 +232,6 @@ export async function ensurePrimaryLinkedToSecondary(params: {
       };
     }
 
-    // exponential-ish backoff: 0.5s, 0.8s, 1.2s, 1.8s, 2.6s... capped ~5s
     const waitMs = Math.min(5000, Math.floor(500 * Math.pow(1.45, i)));
     await new Promise((r) => setTimeout(r, waitMs));
   }
