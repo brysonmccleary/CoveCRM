@@ -2,6 +2,7 @@
 import twilio, { Twilio } from "twilio";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
+import { Buffer } from "buffer";
 
 export type TwilioResolvedAuth = {
   // "authToken" = SID + Auth Token
