@@ -227,10 +227,6 @@ async function rotateA2PChainBecauseSecondaryLocked(args: {
     twilioAccountSidUsed,
   });
 
-  // We MUST clear everything derived from the secondary bundle because:
-  // - EndUsers + SupportingDocs were attached to the old bundle
-  // - TrustProduct often has the secondary assigned to it
-  // - Brand + campaign are tied to the old bundle(s)
   await A2PProfile.updateOne(
     { _id: a2pId },
     {
@@ -271,9 +267,6 @@ async function rotateA2PChainBecauseSecondaryLocked(args: {
       },
     },
   );
-
-  // NOTE: we intentionally do NOT clear messagingServiceSid.
-  // That can remain stable per-user while A2P objects rebuild.
 }
 
 function toFormUrlEncoded(body: Record<string, string>): string {
@@ -319,9 +312,14 @@ const TRUSTHUB_DISPATCHER = new Agent({
 });
 
 /**
- * TrustHub fetch:
- * - For SUBACCOUNT customer objects: MUST include `X-Twilio-AccountSid: <subaccountSid>`
- *   when using platform creds or parent creds.
+ * TrustHub fetch
+ *
+ * IMPORTANT:
+ * For YOUR failing case, TrustHub is returning 20404 when we try to "act on subaccount"
+ * using parent auth + X-Twilio-AccountSid.
+ *
+ * So we only use this raw helper with the SAME auth that owns the resource (subaccount auth),
+ * unless the endpoint is known-good with parent auth (we do NOT assume that for TrustHub).
  */
 async function trusthubFetch(
   auth: TwilioResolvedAuth,
@@ -336,10 +334,9 @@ async function trusthubFetch(
     Authorization: basicAuthHeader(auth.username, auth.password),
   };
 
+  // If explicitly provided, use it; otherwise omit.
   const xSid =
-    opts && "xTwilioAccountSid" in opts
-      ? opts.xTwilioAccountSid
-      : twilioAccountSidUsed;
+    opts && "xTwilioAccountSid" in opts ? opts.xTwilioAccountSid : undefined;
 
   if (xSid) {
     headers["X-Twilio-AccountSid"] = xSid;
@@ -435,7 +432,7 @@ async function trusthubFetch(
   throw lastErr || new Error("TrustHub request failed after retries.");
 }
 
-// parent TrustHub client (ISV account) - ONLY used for primary-link checks/assignment
+// parent TrustHub client (ISV account) - ONLY used for primary-link checks/verification
 function getParentTrusthubClient(): {
   client: any;
   auth: TwilioResolvedAuth;
@@ -483,49 +480,14 @@ function getParentTrusthubClient(): {
   );
 }
 
-// ✅ RAW entity assignment helper (idempotent; does NOT skip TWILIO_APPROVED)
-async function assignEntityToCustomerProfileRaw(args: {
-  auth: TwilioResolvedAuth;
-  customerProfileSid: string;
-  objectSid: string;
-  xTwilioAccountSid: string | null;
-}) {
-  const { auth, customerProfileSid, objectSid, xTwilioAccountSid } = args;
-
-  log("step: entityAssignments.create RAW (customerProfile)", {
-    customerProfileSid,
-    objectSid,
-    xTwilioAccountSid,
-    authMode: auth.mode,
-  });
-
-  try {
-    await trusthubFetch(
-      auth,
-      "POST",
-      `/v1/CustomerProfiles/${customerProfileSid}/EntityAssignments`,
-      { ObjectSid: objectSid },
-      { xTwilioAccountSid },
-    );
-  } catch (err: any) {
-    if (isTwilioDuplicateAssignment(err)) {
-      log("info: entity assignment already exists (raw); skipping", {
-        customerProfileSid,
-        objectSid,
-        xTwilioAccountSid,
-      });
-      return;
-    }
-    throw err;
-  }
-}
-
 /**
- * ✅ ISV link:
- * Assign the PRIMARY customer profile as an entity assignment ONTO the SECONDARY bundle,
- * executed with PARENT auth while acting on the subaccount via X-Twilio-AccountSid.
+ * ✅ FIXED (ACTUAL):
+ * Connect SECONDARY (subaccount BU...) to PRIMARY (parent BU...) using the SUBACCOUNT-scoped TrustHub client/auth.
  *
- * NOTE: This does NOT create customer A2P objects in parent.
+ * Your failure was caused by trying to do this with PARENT auth + X-Twilio-AccountSid, which TrustHub is 20404’ing.
+ * So:
+ *  1) Use the Twilio SDK subresource on the subaccount client first
+ *  2) Fallback to raw TrustHub fetch using the SAME subaccount auth (twilioResolvedAuth), with NO X header
  */
 async function assignPrimaryCustomerProfileToSecondaryISV(args: {
   secondaryProfileSid: string;
@@ -538,31 +500,103 @@ async function assignPrimaryCustomerProfileToSecondaryISV(args: {
   if (!secondaryProfileSid || !secondaryProfileSid.startsWith("BU")) {
     throw new Error("Missing/invalid secondaryProfileSid.");
   }
-  if (!twilioAccountSidUsed || !twilioAccountSidUsed.startsWith("AC")) {
-    throw new Error("Missing/invalid twilioAccountSidUsed for ISV assignment.");
+  if (!twilioResolvedAuth) {
+    throw new Error("Missing twilioResolvedAuth for ISV bundle link.");
   }
 
-  if (!parentClient || !parentAuth || !parentAccountSid) {
-    const parent = getParentTrusthubClient();
-    parentClient = parent.client;
-    parentAuth = parent.auth;
-    parentAccountSid = parent.accountSid;
-  }
-
-  log("step: ISV link PRIMARY -> secondary (PARENT auth acting on subaccount)", {
+  log("step: ISV link PRIMARY -> secondary (SUBACCOUNT auth)", {
     primaryProfileSid: PRIMARY_PROFILE_SID,
     secondaryProfileSid,
-    parentAccountSidMasked:
-      parentAccountSid.slice(0, 4) + "…" + parentAccountSid.slice(-4),
-    xTwilioAccountSid: twilioAccountSidUsed,
+    twilioAccountSidUsed,
+    authMode: twilioResolvedAuth.mode,
   });
 
-  await assignEntityToCustomerProfileRaw({
-    auth: parentAuth!,
-    customerProfileSid: secondaryProfileSid,
-    objectSid: PRIMARY_PROFILE_SID,
-    xTwilioAccountSid: twilioAccountSidUsed, // ✅ act on the subaccount bundle
-  });
+  // 1) ✅ Prefer SDK path on the subaccount-scoped client
+  try {
+    const cp: any = client?.trusthub?.v1?.customerProfiles
+      ? (client.trusthub.v1.customerProfiles(secondaryProfileSid) as any)
+      : null;
+
+    const sub =
+      cp?.customerProfilesEntityAssignments ||
+      cp?.entityAssignments ||
+      cp?.customerProfilesEntityAssignment ||
+      null;
+
+    if (sub && typeof sub.create === "function") {
+      try {
+        await sub.create({ objectSid: PRIMARY_PROFILE_SID });
+      } catch (err: any) {
+        if (isTwilioDuplicateAssignment(err)) {
+          log("info: primary already linked to secondary; skipping", {
+            secondaryProfileSid,
+            primaryProfileSid: PRIMARY_PROFILE_SID,
+            twilioAccountSidUsed,
+            message: err?.message,
+          });
+          return;
+        }
+        throw err;
+      }
+
+      log("ok: linked primary -> secondary via SDK (subaccount)", {
+        secondaryProfileSid,
+        primaryProfileSid: PRIMARY_PROFILE_SID,
+        twilioAccountSidUsed,
+      });
+      return;
+    }
+
+    log("warn: SDK entity-assignment subresource unavailable; falling back to raw (subaccount auth)", {
+      secondaryProfileSid,
+      twilioAccountSidUsed,
+    });
+  } catch (sdkErr: any) {
+    if (isTwilioDuplicateAssignment(sdkErr)) {
+      log("info: primary already linked to secondary; skipping (sdk)", {
+        secondaryProfileSid,
+        primaryProfileSid: PRIMARY_PROFILE_SID,
+        twilioAccountSidUsed,
+        message: sdkErr?.message,
+      });
+      return;
+    }
+    log("warn: SDK primary->secondary link failed; falling back to raw (subaccount auth)", {
+      secondaryProfileSid,
+      twilioAccountSidUsed,
+      code: sdkErr?.code,
+      status: sdkErr?.status,
+      message: sdkErr?.message,
+    });
+  }
+
+  // 2) ✅ Raw fallback using SUBACCOUNT auth; DO NOT use X-Twilio-AccountSid here
+  try {
+    await trusthubFetch(
+      twilioResolvedAuth,
+      "POST",
+      `/v1/CustomerProfiles/${secondaryProfileSid}/EntityAssignments`,
+      { ObjectSid: PRIMARY_PROFILE_SID },
+      { xTwilioAccountSid: null },
+    );
+
+    log("ok: linked primary -> secondary via RAW (subaccount auth)", {
+      secondaryProfileSid,
+      primaryProfileSid: PRIMARY_PROFILE_SID,
+      twilioAccountSidUsed,
+    });
+  } catch (err: any) {
+    if (isTwilioDuplicateAssignment(err)) {
+      log("info: primary already linked to secondary; skipping (raw)", {
+        secondaryProfileSid,
+        primaryProfileSid: PRIMARY_PROFILE_SID,
+        twilioAccountSidUsed,
+        message: err?.message,
+      });
+      return;
+    }
+    throw err;
+  }
 }
 
 // ✅ NEW (additive): avoid duplicate customer_profile_address SDs causing instant evaluation failures.
@@ -577,7 +611,7 @@ async function findExistingCustomerProfileAddressSupportingDocSid(
       "GET",
       `/v1/CustomerProfiles/${customerProfileSid}/EntityAssignments`,
       undefined,
-      { xTwilioAccountSid: twilioAccountSidUsed },
+      { xTwilioAccountSid: null },
     );
 
     const assignments: any[] =
@@ -603,7 +637,7 @@ async function findExistingCustomerProfileAddressSupportingDocSid(
           "GET",
           `/v1/SupportingDocuments/${rdSid}`,
           undefined,
-          { xTwilioAccountSid: twilioAccountSidUsed },
+          { xTwilioAccountSid: null },
         );
 
         const type = String(sd?.type || sd?.Type || "").toLowerCase();
@@ -631,8 +665,6 @@ async function findExistingCustomerProfileAddressSupportingDocSid(
 /**
  * ✅ CRITICAL FIX (ACTUAL):
  * SupportingDocuments creation should use the Twilio SDK surface in the *subaccount-scoped* client first.
- * This avoids TrustHub “20404 resource not found” quirks caused by subtle encoding/casing issues in raw fetch.
- *
  * We only fall back to raw TrustHub fetch if the SDK surface is unavailable.
  */
 async function createSupportingDocumentSubaccountOnly(args: {
@@ -646,7 +678,7 @@ async function createSupportingDocumentSubaccountOnly(args: {
     throw new Error("Missing/invalid subaccount SID for SupportingDocuments.");
   }
 
-  // 1) ✅ Prefer SDK on the already-scoped client (getClientForUser gave us the correct scoping)
+  // 1) ✅ Prefer SDK on the already-scoped client
   try {
     const sdk = (client as any)?.trusthub?.v1?.supportingDocuments;
     if (sdk && typeof sdk.create === "function") {
@@ -659,7 +691,6 @@ async function createSupportingDocumentSubaccountOnly(args: {
       const created: any = await sdk.create({
         friendlyName,
         type,
-        // Twilio SDK will handle encoding; attributes should be an object here.
         attributes,
       });
 
@@ -683,7 +714,6 @@ async function createSupportingDocumentSubaccountOnly(args: {
           status: verifyErr?.status,
           message: verifyErr?.message,
         });
-        // Don’t fail here — creation succeeded; verification can lag.
       }
 
       return { sid, raw: created, createdVia: "sdk_subaccount_scoped" };
@@ -695,27 +725,23 @@ async function createSupportingDocumentSubaccountOnly(args: {
       status: sdkErr?.status,
       message: sdkErr?.message,
     });
-    // continue to raw fallback below
   }
 
-  // 2) Raw fallback (kept) — only used if SDK surface missing or SDK call failed
-  if (!parentClient || !parentAuth || !parentAccountSid) {
-    const parent = getParentTrusthubClient();
-    parentClient = parent.client;
-    parentAuth = parent.auth;
-    parentAccountSid = parent.accountSid;
+  // 2) Raw fallback using SUBACCOUNT auth (NOT parent)
+  if (!twilioResolvedAuth) {
+    throw new Error("Missing twilioResolvedAuth for SupportingDocument RAW fallback.");
   }
 
-  log("step: supportingDocuments.create RAW fallback (PARENT auth acting on SUBACCOUNT)", {
+  log("step: supportingDocuments.create RAW fallback (SUBACCOUNT auth)", {
     host: "trusthub.twilio.com",
     path: "/v1/SupportingDocuments",
     type,
-    xTwilioAccountSid: twilioAccountSidUsed,
-    authMode: parentAuth!.mode,
+    twilioAccountSidUsed,
+    authMode: twilioResolvedAuth.mode,
   });
 
   const created: any = await trusthubFetch(
-    parentAuth!,
+    twilioResolvedAuth,
     "POST",
     "/v1/SupportingDocuments",
     {
@@ -723,7 +749,7 @@ async function createSupportingDocumentSubaccountOnly(args: {
       Type: type,
       Attributes: JSON.stringify(attributes),
     },
-    { xTwilioAccountSid: twilioAccountSidUsed },
+    { xTwilioAccountSid: null },
   );
 
   const sid = created?.sid || created?.Sid || created?.id;
@@ -735,14 +761,14 @@ async function createSupportingDocumentSubaccountOnly(args: {
     );
   }
 
-  // verify (still acting on subaccount)
+  // verify
   try {
     await trusthubFetch(
-      parentAuth!,
+      twilioResolvedAuth,
       "GET",
       `/v1/SupportingDocuments/${sid}`,
       undefined,
-      { xTwilioAccountSid: twilioAccountSidUsed },
+      { xTwilioAccountSid: null },
     );
   } catch (verifyErr: any) {
     log("warn: supportingDocuments.fetch verify failed (RAW)", {
@@ -754,7 +780,7 @@ async function createSupportingDocumentSubaccountOnly(args: {
     });
   }
 
-  return { sid, raw: created, createdVia: "raw_parent_acting_subaccount" };
+  return { sid, raw: created, createdVia: "raw_subaccount_auth" };
 }
 
 // Twilio's TS typings for TrustHub vary across SDK versions; cast at the boundary.
@@ -831,7 +857,6 @@ async function assignEntityToCustomerProfile(
           return;
         }
 
-        // ✅ IMPORTANT: only "skip" TWILIO_APPROVED for PRIMARY. For SECONDARY, this is a real failure.
         const msg = String(err?.message || "");
         if (
           msg.includes("TWILIO_APPROVED") &&
@@ -852,13 +877,12 @@ async function assignEntityToCustomerProfile(
     }
 
     log(
-      "warn: customerProfiles entityAssignments subresource unavailable; falling back to RAW TrustHub fetch",
+      "warn: customerProfiles entityAssignments subresource unavailable; falling back to raw request",
       { customerProfileSid, objectSid, twilioAccountSidUsed },
     );
   } catch (err: any) {
     const msg = String(err?.message || "");
 
-    // ✅ IMPORTANT: only skip TWILIO_APPROVED for PRIMARY. For SECONDARY we want it to error so our rotation logic can kick in.
     if (
       msg.includes("TWILIO_APPROVED") &&
       customerProfileSid === PRIMARY_PROFILE_SID
@@ -872,36 +896,35 @@ async function assignEntityToCustomerProfile(
       return;
     }
 
-    log("warn: error accessing customerProfiles entityAssignments; falling back to RAW TrustHub fetch", {
-      customerProfileSid,
-      message: err?.message,
-      twilioAccountSidUsed,
-    });
-  }
-
-  // ✅ FIX: Raw fallback MUST include X-Twilio-AccountSid so it lands in the SUBACCOUNT bundle
-  if (!twilioResolvedAuth) {
-    throw new Error("Missing twilioResolvedAuth for raw entity assignment.");
-  }
-
-  try {
-    await trusthubFetch(
-      twilioResolvedAuth,
-      "POST",
-      `/v1/CustomerProfiles/${customerProfileSid}/EntityAssignments`,
-      { ObjectSid: objectSid },
-      { xTwilioAccountSid: twilioAccountSidUsed },
+    log(
+      "warn: error accessing customerProfiles entityAssignments; falling back to raw request",
+      {
+        customerProfileSid,
+        message: err?.message,
+        twilioAccountSidUsed,
+      },
     );
+  }
+
+  // Fallback: direct HTTP call via Twilio client request (same auth)
+  try {
+    const url = `https://trusthub.twilio.com/v1/CustomerProfiles/${customerProfileSid}/EntityAssignments`;
+    await (client as any).request({
+      method: "POST",
+      uri: url,
+      formData: {
+        ObjectSid: objectSid,
+      },
+    });
   } catch (err: any) {
     const msg = String(err?.message || "");
 
-    // ✅ IMPORTANT: only skip TWILIO_APPROVED for PRIMARY
     if (
       msg.includes("TWILIO_APPROVED") &&
       customerProfileSid === PRIMARY_PROFILE_SID
     ) {
       log(
-        "info: primary bundle is TWILIO_APPROVED (raw fallback); skipping assignment",
+        "info: primary bundle is TWILIO_APPROVED (fallback); skipping assignment",
         {
           customerProfileSid,
           objectSid,
@@ -913,7 +936,7 @@ async function assignEntityToCustomerProfile(
     }
 
     if (isTwilioDuplicateAssignment(err)) {
-      log("info: entity assignment already exists (raw fallback); skipping", {
+      log("info: entity assignment already exists (fallback); skipping", {
         customerProfileSid,
         objectSid,
         twilioAccountSidUsed,
@@ -963,7 +986,7 @@ async function assignEntityToTrustProduct(
     }
 
     log(
-      "warn: trustProducts entityAssignments subresource unavailable; falling back to RAW TrustHub fetch",
+      "warn: trustProducts entityAssignments subresource unavailable; falling back to raw request",
       { trustProductSid, objectSid, twilioAccountSidUsed },
     );
   } catch (err: any) {
@@ -978,7 +1001,7 @@ async function assignEntityToTrustProduct(
       return;
     }
     log(
-      "warn: error accessing trustProducts entityAssignments; falling back to RAW TrustHub fetch",
+      "warn: error accessing trustProducts entityAssignments; falling back to raw request",
       {
         trustProductSid,
         message: err?.message,
@@ -987,23 +1010,19 @@ async function assignEntityToTrustProduct(
     );
   }
 
-  // ✅ FIX: Raw fallback MUST include X-Twilio-AccountSid so it lands in the SUBACCOUNT TrustProduct
-  if (!twilioResolvedAuth) {
-    throw new Error("Missing twilioResolvedAuth for raw trustProduct assignment.");
-  }
-
   try {
-    await trusthubFetch(
-      twilioResolvedAuth,
-      "POST",
-      `/v1/TrustProducts/${trustProductSid}/EntityAssignments`,
-      { ObjectSid: objectSid },
-      { xTwilioAccountSid: twilioAccountSidUsed },
-    );
+    const url = `https://trusthub.twilio.com/v1/TrustProducts/${trustProductSid}/EntityAssignments`;
+    await (client as any).request({
+      method: "POST",
+      uri: url,
+      formData: {
+        ObjectSid: objectSid,
+      },
+    });
   } catch (err: any) {
     const msg = String(err?.message || "");
     if (msg.includes("TWILIO_APPROVED")) {
-      log("info: trustProduct TWILIO_APPROVED (raw fallback); skipping assignment", {
+      log("info: trustProduct TWILIO_APPROVED (fallback); skipping assignment", {
         trustProductSid,
         objectSid,
         message: msg,
@@ -1013,7 +1032,7 @@ async function assignEntityToTrustProduct(
     }
     if (isTwilioDuplicateAssignment(err)) {
       log(
-        "info: trustProduct entity assignment already exists (raw fallback); skipping",
+        "info: trustProduct entity assignment already exists (fallback); skipping",
         {
           trustProductSid,
           objectSid,
@@ -1050,7 +1069,7 @@ async function createCustomerProfileEvaluationRaw(customerProfileSid: string) {
     {
       PolicySid: SECONDARY_PROFILE_POLICY_SID,
     },
-    { xTwilioAccountSid: twilioAccountSidUsed },
+    { xTwilioAccountSid: null },
   );
 }
 
@@ -1070,7 +1089,7 @@ async function createTrustProductEvaluationRaw(trustProductSid: string) {
     {
       PolicySid: A2P_TRUST_PRODUCT_POLICY_SID,
     },
-    { xTwilioAccountSid: twilioAccountSidUsed },
+    { xTwilioAccountSid: null },
   );
 }
 
@@ -1931,6 +1950,7 @@ export default async function handler(
     // ---------------- 1.9) Assign PRIMARY to Secondary (ISV) ----------------
     live = await A2PProfile.findOne({ userId }).lean<any>();
     if (!live?.assignedToPrimary) {
+      // ✅ FIXED: this no longer uses parent auth + X-Twilio-AccountSid (which was 20404’ing)
       await assignPrimaryCustomerProfileToSecondaryISV({
         secondaryProfileSid: secondaryProfileSid!,
       });
