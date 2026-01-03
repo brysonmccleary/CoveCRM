@@ -136,7 +136,9 @@ async function ensureSubaccountApiKeyForUser(args: {
       accountSid: platformAccountSid,
     });
   } else {
-    throw new Error("Missing platform Twilio credentials for subaccount key creation.");
+    throw new Error(
+      "Missing platform Twilio credentials for subaccount key creation.",
+    );
   }
 
   // Create key inside the subaccount. Secret is only returned once.
@@ -151,7 +153,8 @@ async function ensureSubaccountApiKeyForUser(args: {
     }),
   );
 
-  const created: any = await platformClient.api.v2010
+  // ✅ FIX: Twilio typings sometimes don't expose keys.create even though it exists at runtime.
+  const created: any = await (platformClient as any).api.v2010
     .accounts(subSid)
     .keys.create({ friendlyName });
 
@@ -433,5 +436,11 @@ export async function getClientForUser(
     }),
   );
 
-  return { client, accountSid: platformAccountSid, usingPersonal: false, user, auth };
+  return {
+    client,
+    accountSid: platformAccountSid,
+    usingPersonal: false,
+    user,
+    auth,
+  };
 }
