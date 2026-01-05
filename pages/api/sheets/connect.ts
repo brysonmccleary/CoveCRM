@@ -81,9 +81,15 @@ const COVECRM_CONNECTION_ID = "${connectionId}";
 const COVECRM_TOKEN = "${token}";
 
 // Backfill behavior
+// NOTE: We intentionally keep batches moderate to avoid oversized payloads/timeouts,
+// but we ALSO make the worker self-schedule reliably until it finishes.
 const BACKFILL_BATCH_SIZE = 50;
-const BACKFILL_MAX_MS = 240000;
+const BACKFILL_MAX_MS = 240000; // ~4 min per run (safe under Apps Script limits)
 const BACKFILL_TRIGGER_FN = "covecrmBackfillWorker";
+
+// How soon to re-run the worker when there's more work.
+// This avoids the "only 50/100 imported" issue when minute-based triggers don't fire consistently.
+const BACKFILL_RETRY_MS = 30000; // 30s
 
 function _propKey(suffix) {
   return "covecrm:" + COVECRM_SHEET_ID + ":" + (COVECRM_GID || "any") + ":" + suffix;
@@ -104,6 +110,10 @@ function _hmacHex(body, secret) {
     .join("");
 }
 
+function _safeJsonParse(str) {
+  try { return JSON.parse(str); } catch { return null; }
+}
+
 /**
  * INSTALL (run one time manually)
  * - Installs onEdit trigger (forever sync)
@@ -120,8 +130,10 @@ function covecrmInstall() {
   });
 
   // ✅ Installable onEdit trigger
+  // (Keep your existing behavior, but ensure we pass a Spreadsheet object to be safest.)
+  const ss = SpreadsheetApp.openById(COVECRM_SHEET_ID);
   ScriptApp.newTrigger("covecrmOnEdit")
-    .forSpreadsheet(COVECRM_SHEET_ID)
+    .forSpreadsheet(ss)
     .onEdit()
     .create();
 
@@ -142,8 +154,8 @@ function covecrmBackfillStart() {
 
   const inProgress = props.getProperty(_propKey("backfillInProgress"));
   if (inProgress === "true") {
-    _ensureBackfillTrigger();
-    Logger.log("ℹ️ Backfill already in progress. Worker trigger ensured.");
+    _scheduleBackfillSoon();
+    Logger.log("ℹ️ Backfill already in progress. Worker scheduled.");
     return;
   }
 
@@ -154,21 +166,29 @@ function covecrmBackfillStart() {
   props.deleteProperty(_propKey("backfillLastError"));
 
   covecrmBackfillWorker();
-  _ensureBackfillTrigger();
+  _scheduleBackfillSoon();
 }
 
-function _ensureBackfillTrigger() {
+// ✅ IMPORTANT CHANGE:
+// Instead of relying on "everyMinutes(1)" (which can be flaky or delayed),
+// we self-schedule a single time-based trigger shortly in the future.
+// Each worker run re-schedules itself if more rows remain.
+function _scheduleBackfillSoon() {
+  // Remove any existing backfill worker triggers first (avoid piling up)
   const triggers = ScriptApp.getProjectTriggers();
-  const exists = triggers.some(t => t.getHandlerFunction() === BACKFILL_TRIGGER_FN);
-  if (exists) return;
+  triggers.forEach(t => {
+    if (t.getHandlerFunction() === BACKFILL_TRIGGER_FN) {
+      ScriptApp.deleteTrigger(t);
+    }
+  });
 
   ScriptApp.newTrigger(BACKFILL_TRIGGER_FN)
     .timeBased()
-    .everyMinutes(1)
+    .after(BACKFILL_RETRY_MS)
     .create();
 }
 
-function _removeBackfillTrigger() {
+function _clearBackfillScheduling() {
   const triggers = ScriptApp.getProjectTriggers();
   triggers.forEach(t => {
     if (t.getHandlerFunction() === BACKFILL_TRIGGER_FN) {
@@ -186,7 +206,7 @@ function covecrmBackfillWorker() {
   try {
     const done = props.getProperty(_propKey("backfillDone"));
     if (done === "true") {
-      _removeBackfillTrigger();
+      _clearBackfillScheduling();
       props.deleteProperty(_propKey("backfillInProgress"));
       return;
     }
@@ -218,7 +238,7 @@ function covecrmBackfillWorker() {
     if (lastRow < 2 || lastCol < 1) {
       props.setProperty(_propKey("backfillDone"), "true");
       props.deleteProperty(_propKey("backfillInProgress"));
-      _removeBackfillTrigger();
+      _clearBackfillScheduling();
       return;
     }
 
@@ -227,14 +247,8 @@ function covecrmBackfillWorker() {
     let nextRow = parseInt(props.getProperty(_propKey("backfillNextRow")) || "2", 10);
     if (!nextRow || nextRow < 2) nextRow = 2;
 
-    // ✅ FIX: Process ONLY ONE batch per invocation to avoid burst requests (prevents upstream 403 throttles)
-    if (nextRow <= lastRow) {
-      if (Date.now() - start > BACKFILL_MAX_MS) {
-        props.setProperty(_propKey("backfillInProgress"), "true");
-        _ensureBackfillTrigger();
-        Logger.log("⏳ Backfill paused (will continue). Next row: " + nextRow);
-        return;
-      }
+    while (nextRow <= lastRow) {
+      if (Date.now() - start > BACKFILL_MAX_MS) break;
 
       const endRow = Math.min(lastRow, nextRow + BACKFILL_BATCH_SIZE - 1);
       const numRows = endRow - nextRow + 1;
@@ -263,7 +277,7 @@ function covecrmBackfillWorker() {
       }
 
       if (rows.length) {
-        _postBackfillBatch(runId, rows, lastRow);
+        _postBackfillBatch(runId, rows, lastRow, nextRow, endRow);
       }
 
       nextRow = endRow + 1;
@@ -274,23 +288,29 @@ function covecrmBackfillWorker() {
       props.setProperty(_propKey("backfillDone"), "true");
       props.deleteProperty(_propKey("backfillInProgress"));
       props.deleteProperty(_propKey("backfillNextRow"));
-      _removeBackfillTrigger();
+      _clearBackfillScheduling();
       Logger.log("✅ Backfill completed.");
     } else {
       props.setProperty(_propKey("backfillInProgress"), "true");
-      _ensureBackfillTrigger();
+      _scheduleBackfillSoon(); // ✅ keep going until done
       Logger.log("⏳ Backfill queued. Next row: " + nextRow);
     }
   } catch (err) {
     try {
       PropertiesService.getScriptProperties().setProperty(_propKey("backfillLastError"), String(err));
     } catch {}
+    // ✅ On error, keep the worker scheduled so it can retry after transient failures
+    try { _scheduleBackfillSoon(); } catch {}
   } finally {
     try { lock.releaseLock(); } catch {}
   }
 }
 
-function _postBackfillBatch(runId, rows, totalRows) {
+// ✅ IMPORTANT CHANGE:
+// - We now treat ANY non-2xx as an error (not just 500+).
+//   This prevents the script from "advancing nextRow" while the API rejected the batch (403/400),
+//   which is a very common reason people end up stuck at exactly 50/100 imported.
+function _postBackfillBatch(runId, rows, totalRows, startRow, endRow) {
   const payload = {
     connectionId: COVECRM_CONNECTION_ID,
     sheetId: COVECRM_SHEET_ID,
@@ -298,6 +318,8 @@ function _postBackfillBatch(runId, rows, totalRows) {
     tabName: COVECRM_TAB_NAME || "",
     runId: runId,
     totalRows: totalRows,
+    startRow: startRow,
+    endRow: endRow,
     rows: rows,
     ts: Date.now()
   };
@@ -317,10 +339,16 @@ function _postBackfillBatch(runId, rows, totalRows) {
   });
 
   const code = resp.getResponseCode ? resp.getResponseCode() : 200;
-
-  // ✅ FIX: fail loudly on ANY 4xx/5xx so the trigger retries next minute (instead of silently "completing")
   const text = resp.getContentText ? resp.getContentText() : "";
-  if (code >= 400) throw new Error("Backfill batch failed " + code + " :: " + text);
+
+  // Non-2xx => throw so we STOP and retry, instead of silently skipping rows.
+  if (code < 200 || code >= 300) {
+    let msg = "Backfill batch failed with " + code;
+    const parsed = _safeJsonParse(text);
+    if (parsed && (parsed.error || parsed.message)) msg += " - " + (parsed.error || parsed.message);
+    if (text && !parsed) msg += " - " + String(text).slice(0, 200);
+    throw new Error(msg);
+  }
 }
 
 function covecrmOnEdit(e) {
