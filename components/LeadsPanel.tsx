@@ -217,6 +217,9 @@ export default function LeadsPanel() {
   const [appsScriptText, setAppsScriptText] = useState<string>("");
   const [webhookUrl, setWebhookUrl] = useState<string>("");
 
+  // ✅ NEW: user acknowledgement for "unverified app" warning
+  const [ackUnverifiedWarning, setAckUnverifiedWarning] = useState<boolean>(false);
+
   const router = useRouter();
 
   // ✅ NEW: modal refs for “click outside to close”
@@ -447,6 +450,7 @@ export default function LeadsPanel() {
     setConnectOk(false);
     setAppsScriptText("");
     setWebhookUrl("");
+    setAckUnverifiedWarning(false);
 
     // default folder selection to first non-system folder
     const nonSystem = folders
@@ -498,6 +502,12 @@ export default function LeadsPanel() {
     }
     if (SYSTEM_FOLDERS.includes(folderName)) {
       setConnectError("You can’t connect a sheet to a system folder.");
+      return;
+    }
+
+    // If user tries to connect without acknowledging, fail fast with a clear message.
+    if (!ackUnverifiedWarning) {
+      setConnectError("Please confirm you understand the 'App not verified' warning is expected.");
       return;
     }
 
@@ -605,6 +615,71 @@ export default function LeadsPanel() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showSheetsWizard, connectLoading]);
+
+  const UnverifiedAppNotice = ({ compact }: { compact?: boolean }) => {
+    return (
+      <div className="rounded-lg border border-yellow-300 bg-yellow-50 dark:bg-yellow-950/20 dark:border-yellow-900 p-4">
+        <div className="flex items-start gap-3">
+          <div className="text-xl leading-none">⚠️</div>
+          <div className="space-y-2">
+            <div className={`font-bold ${compact ? "text-base" : "text-lg"} text-yellow-900 dark:text-yellow-100`}>
+              Google will show “App not verified” — this is expected.
+            </div>
+
+            <div className="text-sm text-yellow-900/90 dark:text-yellow-100/90 space-y-1">
+              <div>
+                CoveCRM is verified for <b>Google Calendar</b> only.
+              </div>
+              <div>
+                Google Sheets Sync uses a <b>third-party Google Apps Script</b> that you install inside{" "}
+                <b>your own Google account</b>.
+              </div>
+              <div>
+                Google shows the warning because the script requests access to <b>Google Sheets</b> and permission to{" "}
+                <b>send data to CoveCRM</b> (HTTPS/webhook + triggers).
+              </div>
+              <div>
+                CoveCRM <b>does not</b> read your Google Drive directly and <b>never</b> stores your Google password.
+              </div>
+              <div className="pt-1">
+                <b>Note:</b> This will show <b>YOUR email</b> at the top because you are authorizing from your Google
+                account.
+              </div>
+            </div>
+
+            {!compact && (
+              <div className="text-sm text-yellow-900/90 dark:text-yellow-100/90">
+                <div className="font-semibold mt-2">Security reassurance</div>
+                <ul className="list-disc pl-5 space-y-1 mt-1">
+                  <li>The script only accesses the sheet you paste it into.</li>
+                  <li>It only sends new rows/updates to CoveCRM through a secure HTTPS webhook.</li>
+                  <li>
+                    You can revoke permissions anytime in{" "}
+                    <b>Google Account → Security → Third-party access</b> (or Apps Script access), and you can delete the
+                    script project.
+                  </li>
+                </ul>
+
+                <div className="font-semibold mt-3">Exactly what to click on Google’s warning screen</div>
+                <ol className="list-decimal pl-5 space-y-1 mt-1">
+                  <li>Click <b>Continue</b></li>
+                  <li>If you see “Google hasn’t verified this app”, click <b>Advanced</b></li>
+                  <li>
+                    Click <b>“Go to [your script project name] (unsafe)”</b>
+                    <div className="text-xs opacity-80 mt-1">
+                      (It may say something like <b>“Untitled project (unsafe)”</b> — that’s normal.)
+                    </div>
+                  </li>
+                  <li>Click <b>Allow</b></li>
+                  <li>Return to CoveCRM and continue setup</li>
+                </ol>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  };
 
   return (
     <div className="space-y-4 p-4">
@@ -824,11 +899,15 @@ export default function LeadsPanel() {
 
                 {wizardStep === 1 && (
                   <div className="space-y-3">
-                    <div className="text-base font-semibold">Step 1 — Make sure you are logged into the SAME Google account you use for CoveCRM</div>
+                    <div className="text-base font-semibold">
+                      Step 1 — Make sure you are logged into the SAME Google account you use for CoveCRM
+                    </div>
                     <div className="text-sm text-gray-600 dark:text-gray-300">
-                      This setup installs a small script inside <b>your Google account</b> so it can watch your lead sheet.
+                      This setup installs a small script inside <b>your Google account</b> so it can watch your lead
+                      sheet.
                       <div className="mt-2 text-xs text-gray-500">
-                        Important: Your lead vendor usually <b>owns the sheet</b>. That’s normal. You just need to be added to it (preferably as <b>Editor</b>) so the script can read new rows.
+                        Important: Your lead vendor usually <b>owns the sheet</b>. That’s normal. You just need to be
+                        added to it (preferably as <b>Editor</b>) so the script can read new rows.
                       </div>
                     </div>
                     <a
@@ -936,14 +1015,37 @@ export default function LeadsPanel() {
                       )}
                     </div>
 
+                    {/* ✅ REQUIRED: Big notice directly above the Connect action */}
+                    <UnverifiedAppNotice />
+
+                    {/* ✅ OPTIONAL helper: checkbox acknowledgement (keeps it idiot-proof) */}
+                    <label className="flex items-start gap-2 text-sm rounded border bg-white dark:bg-zinc-900 p-3">
+                      <input
+                        type="checkbox"
+                        checked={ackUnverifiedWarning}
+                        onChange={(e) => {
+                          setAckUnverifiedWarning(e.target.checked);
+                          setConnectError(null);
+                        }}
+                        className="mt-1"
+                      />
+                      <span className="text-gray-700 dark:text-gray-200">
+                        I understand the <b>“Google hasn’t verified this app”</b> warning is expected during setup, and I
+                        will click <b>Advanced → Go to (unsafe) → Allow</b>.
+                      </span>
+                    </label>
+
                     {connectError && <div className="text-sm text-red-600">{connectError}</div>}
 
                     <button
                       onClick={connectSheetNow}
-                      disabled={connectLoading}
+                      disabled={connectLoading || !ackUnverifiedWarning}
                       className={`${
-                        connectLoading ? "bg-gray-400 cursor-not-allowed" : "bg-green-600 hover:bg-green-700"
+                        connectLoading || !ackUnverifiedWarning
+                          ? "bg-gray-400 cursor-not-allowed"
+                          : "bg-green-600 hover:bg-green-700"
                       } text-white px-4 py-2 rounded`}
+                      title={!ackUnverifiedWarning ? "Please confirm the unverified warning acknowledgement." : ""}
                     >
                       {connectLoading ? "Connecting…" : "Connect Sheet"}
                     </button>
@@ -957,6 +1059,9 @@ export default function LeadsPanel() {
                 {wizardStep === 5 && (
                   <div className="space-y-3">
                     <div className="text-base font-semibold">Step 5 — One-time setup (IMPORTANT: do it this exact way)</div>
+
+                    {/* ✅ REQUIRED: Also place notice on the Apps Script instructions step */}
+                    <UnverifiedAppNotice />
 
                     <div className="text-sm text-gray-700 dark:text-gray-300">
                       <b>Goal:</b> Your Google account must own the script. Your lead vendor can still own the sheet — that’s normal.
@@ -1156,9 +1261,12 @@ export default function LeadsPanel() {
                     <button
                       onClick={connectSheetNow}
                       className={`px-4 py-2 rounded text-white ${
-                        connectLoading ? "bg-gray-400 cursor-not-allowed" : "bg-green-600 hover:bg-green-700"
+                        connectLoading || !ackUnverifiedWarning
+                          ? "bg-gray-400 cursor-not-allowed"
+                          : "bg-green-600 hover:bg-green-700"
                       }`}
-                      disabled={connectLoading}
+                      disabled={connectLoading || !ackUnverifiedWarning}
+                      title={!ackUnverifiedWarning ? "Please confirm the unverified warning acknowledgement." : ""}
                     >
                       {connectLoading ? "Connecting…" : "Connect"}
                     </button>
