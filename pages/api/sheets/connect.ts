@@ -227,8 +227,14 @@ function covecrmBackfillWorker() {
     let nextRow = parseInt(props.getProperty(_propKey("backfillNextRow")) || "2", 10);
     if (!nextRow || nextRow < 2) nextRow = 2;
 
-    while (nextRow <= lastRow) {
-      if (Date.now() - start > BACKFILL_MAX_MS) break;
+    // ✅ FIX: Process ONLY ONE batch per invocation to avoid burst requests (prevents upstream 403 throttles)
+    if (nextRow <= lastRow) {
+      if (Date.now() - start > BACKFILL_MAX_MS) {
+        props.setProperty(_propKey("backfillInProgress"), "true");
+        _ensureBackfillTrigger();
+        Logger.log("⏳ Backfill paused (will continue). Next row: " + nextRow);
+        return;
+      }
 
       const endRow = Math.min(lastRow, nextRow + BACKFILL_BATCH_SIZE - 1);
       const numRows = endRow - nextRow + 1;
@@ -273,7 +279,7 @@ function covecrmBackfillWorker() {
     } else {
       props.setProperty(_propKey("backfillInProgress"), "true");
       _ensureBackfillTrigger();
-      Logger.log("⏳ Backfill paused (will continue). Next row: " + nextRow);
+      Logger.log("⏳ Backfill queued. Next row: " + nextRow);
     }
   } catch (err) {
     try {
@@ -311,7 +317,10 @@ function _postBackfillBatch(runId, rows, totalRows) {
   });
 
   const code = resp.getResponseCode ? resp.getResponseCode() : 200;
-  if (code >= 500) throw new Error("Backfill batch failed with " + code);
+
+  // ✅ FIX: fail loudly on ANY 4xx/5xx so the trigger retries next minute (instead of silently "completing")
+  const text = resp.getContentText ? resp.getContentText() : "";
+  if (code >= 400) throw new Error("Backfill batch failed " + code + " :: " + text);
 }
 
 function covecrmOnEdit(e) {
