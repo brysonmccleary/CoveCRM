@@ -432,7 +432,7 @@ export default function LeadsPanel() {
         alert(data.message || "Failed to delete folder.");
       }
     } catch (error) {
-      console.error("Error deleting folder:", error);
+      console.error("Error deleting the folder:", error);
       alert("An error occurred while deleting the folder.");
     }
   };
@@ -458,7 +458,6 @@ export default function LeadsPanel() {
   };
 
   const closeWizard = () => {
-    // don’t allow closing mid-connect to prevent partial UI states
     if (connectLoading) return;
     setShowSheetsWizard(false);
   };
@@ -589,7 +588,6 @@ export default function LeadsPanel() {
   useEffect(() => {
     if (!showSheetsWizard) return;
 
-    // lock background scroll while modal open
     const prevOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
 
@@ -790,7 +788,6 @@ export default function LeadsPanel() {
         <div
           className="fixed inset-0 z-50 bg-black/50 p-4 overflow-y-auto"
           onMouseDown={(e) => {
-            // click outside modal closes (unless connecting)
             if (connectLoading) return;
             if (!modalCardRef.current) return;
             if (e.target instanceof Node && !modalCardRef.current.contains(e.target)) {
@@ -827,9 +824,12 @@ export default function LeadsPanel() {
 
                 {wizardStep === 1 && (
                   <div className="space-y-3">
-                    <div className="text-base font-semibold">Step 1 — Open the Google Sheet you want to connect</div>
+                    <div className="text-base font-semibold">Step 1 — Make sure you are logged into the SAME Google account you use for CoveCRM</div>
                     <div className="text-sm text-gray-600 dark:text-gray-300">
-                      Open Google Sheets in another tab and click the sheet you want to sync into CoveCRM.
+                      This setup installs a small script inside <b>your Google account</b> so it can watch your lead sheet.
+                      <div className="mt-2 text-xs text-gray-500">
+                        Important: Your lead vendor usually <b>owns the sheet</b>. That’s normal. You just need to be added to it (preferably as <b>Editor</b>) so the script can read new rows.
+                      </div>
                     </div>
                     <a
                       href="https://docs.google.com/spreadsheets/u/0/"
@@ -846,7 +846,7 @@ export default function LeadsPanel() {
                   <div className="space-y-3">
                     <div className="text-base font-semibold">Step 2 — Paste the entire Google Sheet URL</div>
                     <div className="text-sm text-gray-600 dark:text-gray-300">
-                      Copy the full URL from your browser address bar and paste it here.
+                      Open the vendor sheet, then copy the full URL from your browser address bar and paste it here.
                     </div>
 
                     <input
@@ -949,19 +949,20 @@ export default function LeadsPanel() {
                     </button>
 
                     <div className="text-xs text-gray-500">
-                      This will generate your Apps Script. You paste it once into the sheet and run install once.
+                      This generates your Apps Script. You paste it once and run install once.
                     </div>
                   </div>
                 )}
 
                 {wizardStep === 5 && (
                   <div className="space-y-3">
-                    <div className="text-base font-semibold">Step 5 — One-time setup inside Google Sheets</div>
+                    <div className="text-base font-semibold">Step 5 — One-time setup (IMPORTANT: do it this exact way)</div>
 
                     <div className="text-sm text-gray-700 dark:text-gray-300">
-                      <b>All NEW rows added to this sheet will automatically import into CoveCRM</b> forever.
-                      <div className="text-xs text-gray-500 mt-1">
-                        Also: right after you run <b>covecrmInstall</b>, CoveCRM will import <b>all existing rows</b> already in the sheet (one-time backfill) so your folder is not empty.
+                      <b>Goal:</b> Your Google account must own the script. Your lead vendor can still own the sheet — that’s normal.
+                      <div className="mt-2 text-xs text-gray-500">
+                        If you do this wrong, you may see an error like: <b>“This script is owned by a service account”</b>.
+                        That happens when you accidentally opened the vendor’s script. The steps below prevent that.
                       </div>
                     </div>
 
@@ -971,20 +972,40 @@ export default function LeadsPanel() {
                       <div className="text-sm text-gray-600">Finish setup:</div>
                     )}
 
+                    <div className="flex flex-wrap gap-2">
+                      <a
+                        href="https://script.google.com/home/projects/create"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-block bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
+                      >
+                        Open Apps Script (New Project)
+                      </a>
+                      <a
+                        href="https://docs.google.com/spreadsheets/u/0/"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-block bg-zinc-800 text-white px-4 py-2 rounded hover:opacity-90"
+                      >
+                        Open Google Sheets
+                      </a>
+                    </div>
+
                     <ol className="list-decimal pl-5 text-sm text-gray-700 dark:text-gray-300 space-y-2">
                       <li>
-                        The <b>Extensions</b> menu is in the row of menu tabs directly under the spreadsheet name.
-                        Then click: <b>Extensions → Apps Script</b>
+                        Click <b>Open Apps Script (New Project)</b> above.
+                        <div className="text-xs text-gray-500 mt-1">
+                          This is required because vendors often attach scripts owned by “robot accounts”. A brand new project ensures you own it.
+                        </div>
                       </li>
 
                       <li>
-                        In Apps Script, click <b>Code.gs</b> on the left, then{" "}
+                        In the new Apps Script project, click <b>Code.gs</b> on the left, then{" "}
                         <b>select everything</b> and paste our code so it <b>replaces everything</b>.
                         <div className="text-xs text-gray-500 mt-1">
-                          This removes any default Google code like <span className="font-mono">function myFunction()</span>.
+                          Do not paste into a vendor-owned script project.
                         </div>
 
-                        {/* REQUIRED: code block directly under Step 2 */}
                         <div className="mt-3 space-y-2">
                           <div className="flex items-center justify-between">
                             <div className="font-semibold text-sm">Apps Script code (copy/paste)</div>
@@ -1014,43 +1035,53 @@ export default function LeadsPanel() {
                       </li>
 
                       <li>
-                        <b>Save</b> your Apps Script project:
+                        <b>Save</b> the Apps Script project:
                         <div className="mt-1 text-xs text-gray-500 space-y-1">
                           <div>• Mac: <b>⌘ Command + S</b></div>
                           <div>• Windows: <b>Ctrl + S</b></div>
                           <div>
-                            • OR click the <b>floppy disk “Save”</b> icon in the <b>top toolbar</b>
-                            (it looks like a little floppy disk, tooltip says <b>“Save project to Drive”</b>)
+                            • OR click the <b>floppy disk “Save”</b> icon in the toolbar
                           </div>
                         </div>
                       </li>
 
                       <li>
-                        After you save, the <b>function dropdown</b> appears near the top of Apps Script (next to <b>Debug</b> / <b>Execution log</b>).
-                        <div className="text-xs text-gray-500 mt-1 space-y-1">
-                          <div>• It may show something like <b>“No functions”</b> until you save.</div>
-                          <div>• If it shows a different function (like <span className="font-mono">_propKey</span>), switch it to <b>covecrmInstall</b>.</div>
+                        After saving, use the function dropdown near the top and select <b>covecrmInstall</b>, then click <b>Run</b> (▶).
+                        <div className="text-xs text-gray-500 mt-1">
+                          If it says “No functions”, you didn’t save yet.
                         </div>
                       </li>
 
                       <li>
-                        Click <b>Run</b> (▶) in the <b>top toolbar</b> (it’s right next to <b>Debug</b>, above the editor),
-                        and approve permissions.
-                      </li>
-
-                      <li className="text-sm text-gray-700 dark:text-gray-300">
-                        <b>Permissions:</b> You are authorizing <b>YOUR OWN Apps Script</b> inside <b>YOUR own Google account</b>.
-                        This does <b>NOT</b> use CoveCRM Google OAuth and does <b>NOT</b> require CASA.
+                        Approve permissions when prompted.
                         <div className="text-xs text-gray-500 mt-1">
-                          If Google warns “not verified”, that’s the standard Apps Script warning for scripts you’re running yourself.
-                          You can proceed by clicking <b>Advanced</b> → <b>Go to (unsafe)</b> → <b>Allow</b>.
+                          This is normal: you are approving <b>your own script</b> to read the sheet and send new rows to CoveCRM.
                         </div>
                       </li>
 
                       <li className="text-red-600">
                         <b>DO NOT CLICK DEPLOY.</b>
                       </li>
+
+                      <li>
+                        Finally, go back to the vendor sheet and leave it open.
+                        <div className="text-xs text-gray-500 mt-1">
+                          New rows added by your lead vendor will now import into your CoveCRM folder automatically.
+                        </div>
+                      </li>
                     </ol>
+
+                    <div className="rounded border p-3 bg-gray-50 dark:bg-zinc-800 text-xs text-gray-600 dark:text-gray-300 space-y-1">
+                      <div className="font-semibold text-sm text-gray-700 dark:text-gray-200">Troubleshooting (fast)</div>
+                      <div>
+                        <b>If you see:</b> “The script cannot be run because it is owned by a service account”
+                        <div className="ml-3">→ You opened the vendor’s script. Close it and use <b>Open Apps Script (New Project)</b> above.</div>
+                      </div>
+                      <div>
+                        <b>If nothing imports:</b>
+                        <div className="ml-3">→ Make sure you have <b>Edit</b> access to the vendor sheet (Viewer/Commenter often won’t work).</div>
+                      </div>
+                    </div>
 
                     {webhookUrl && (
                       <div className="text-xs text-gray-500">
