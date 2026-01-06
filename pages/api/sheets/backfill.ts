@@ -178,7 +178,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // ✅ Verify BEFORE parsing JSON
     if (!verifySignatureFlexible(rawBody, token, sig)) {
-      return res.status(403).json({ error: "Invalid signature" });
+      // ✅ DEBUG payload to prove whether the body changed in transit/read
+      // (Does NOT expose token, does NOT log full body)
+      const expectedHex = hmacHex(rawBody, token);
+      const bodySha = crypto.createHash("sha256").update(rawBody).digest("hex");
+
+      return res.status(403).json({
+        error: "Invalid signature",
+        debug: {
+          rawBodyLen: rawBody.length,
+          rawBodySha256: bodySha,
+          sigReceivedPrefix: sig.slice(0, 12),
+          expectedSigPrefix: expectedHex.slice(0, 12),
+          sigIsHex: isHexSig(sig),
+        },
+      });
     }
 
     let payload: any = {};
@@ -339,7 +353,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         .find({
           userEmail,
           folderId: folder._id,
-          $or: [{ Email: { $in: uniqEmails } }, { email: { $in: uniqEmails } }, { "Email": { $in: uniqEmails } }],
+          $or: [{ Email: { $in: uniqEmails } }, { email: { $in: uniqEmails } }, { Email: { $in: uniqEmails } }],
         })
         .select({ Email: 1, email: 1 })
         .lean();
