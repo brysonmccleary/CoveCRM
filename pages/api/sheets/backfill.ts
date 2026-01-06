@@ -325,6 +325,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (!candidateDocs.length) return res.status(200).json({ ok: true, inserted: 0 });
 
+    // ✅ preload existing phone/email keys so we can dedupe within this folder BEFORE insertMany
     const existingPhoneKeys = new Set<string>();
     const existingEmailKeys = new Set<string>();
 
@@ -410,6 +411,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     await createLeadsFromGoogleSheet(newLeadDocs, userEmail, folder._id);
     await touchFolderUpdatedAt(folder._id, userEmail);
 
+    // ✅ enroll drips for leads we definitely created in this run
     const created = await (Lead as any)
       .find({
         userEmail,
