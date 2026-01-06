@@ -52,6 +52,19 @@ function hmacB64(body: string, secret: string) {
   return crypto.createHmac("sha256", secret).update(body).digest("base64");
 }
 
+// ✅ OPTIONAL fallback: treat secret as hex bytes (only if it looks like hex)
+function hmacHex_keyAsHexBytes(body: string, secretHex: string) {
+  const clean = String(secretHex || "").trim();
+  if (!/^[0-9a-f]+$/i.test(clean)) return "";
+  if (clean.length < 2 || clean.length % 2 !== 0) return "";
+  try {
+    const keyBytes = Buffer.from(clean, "hex");
+    return crypto.createHmac("sha256", keyBytes).update(body).digest("hex");
+  } catch {
+    return "";
+  }
+}
+
 function sha256Hex(input: string) {
   return crypto.createHash("sha256").update(input).digest("hex");
 }
@@ -108,8 +121,15 @@ function verifySignatureAgainstBody(body: string, token: string, sig: string) {
   if (!trimmed) return false;
 
   if (isHexSig(trimmed)) {
+    // Primary (current): key is token string
     const expected = hmacHex(body, token);
-    return timingSafeEqualHex(trimmed.toLowerCase(), expected.toLowerCase());
+    if (timingSafeEqualHex(trimmed.toLowerCase(), expected.toLowerCase())) return true;
+
+    // Fallback: key interpreted as hex bytes (only if token looks like hex)
+    const expectedAlt = hmacHex_keyAsHexBytes(body, token);
+    if (expectedAlt && timingSafeEqualHex(trimmed.toLowerCase(), expectedAlt.toLowerCase())) return true;
+
+    return false;
   }
 
   if (isB64Sig(trimmed)) {
@@ -178,19 +198,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // ✅ Verify BEFORE parsing JSON
     if (!verifySignatureFlexible(rawBody, token, sig)) {
-      // ✅ DEBUG payload to prove whether the body changed in transit/read
-      // (Does NOT expose token, does NOT log full body)
-      const expectedHex = hmacHex(rawBody, token);
-      const bodySha = crypto.createHash("sha256").update(rawBody).digest("hex");
+      // ✅ Return high-signal debug for Apps Script logs
+      const rawBodySha256 = sha256Hex(rawBody);
+      const sigReceivedPrefix = String(sig || "").slice(0, 24);
+
+      const expectedUtf8Hex = isHexSig(sig) ? hmacHex(rawBody, token) : "";
+      const expectedAltHex = isHexSig(sig) ? hmacHex_keyAsHexBytes(rawBody, token) : "";
 
       return res.status(403).json({
         error: "Invalid signature",
         debug: {
           rawBodyLen: rawBody.length,
-          rawBodySha256: bodySha,
-          sigReceivedPrefix: sig.slice(0, 12),
-          expectedSigPrefix: expectedHex.slice(0, 12),
+          rawBodySha256,
           sigIsHex: isHexSig(sig),
+          sigIsB64: isB64Sig(sig),
+          sigReceivedPrefix,
+          expectedUtf8Prefix: expectedUtf8Hex ? expectedUtf8Hex.slice(0, 24) : "",
+          expectedAltPrefix: expectedAltHex ? expectedAltHex.slice(0, 24) : "",
+          tokenLen: token.length,
+          tokenPrefix: token.slice(0, 8),
         },
       });
     }
@@ -311,7 +337,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (!candidateDocs.length) return res.status(200).json({ ok: true, inserted: 0 });
 
-    // ✅ preload existing phone/email keys so we can dedupe within this folder BEFORE insertMany
     const existingPhoneKeys = new Set<string>();
     const existingEmailKeys = new Set<string>();
 
@@ -353,7 +378,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         .find({
           userEmail,
           folderId: folder._id,
-          $or: [{ Email: { $in: uniqEmails } }, { email: { $in: uniqEmails } }, { Email: { $in: uniqEmails } }],
+          $or: [{ Email: { $in: uniqEmails } }, { email: { $in: uniqEmails } }, { "Email": { $in: uniqEmails } }],
         })
         .select({ Email: 1, email: 1 })
         .lean();
@@ -397,7 +422,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     await createLeadsFromGoogleSheet(newLeadDocs, userEmail, folder._id);
     await touchFolderUpdatedAt(folder._id, userEmail);
 
-    // ✅ enroll drips for leads we definitely created in this run
     const created = await (Lead as any)
       .find({
         userEmail,
