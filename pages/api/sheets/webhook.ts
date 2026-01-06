@@ -86,7 +86,26 @@ function isB64Sig(sig: string) {
   return /^[A-Za-z0-9+/=]+$/.test(sig) && sig.length >= 40;
 }
 
-function verifySignatureSingle(body: string, token: string, sig: string) {
+/**
+ * Deterministic JSON string with keys sorted recursively.
+ * This allows verification even if the sender serializes object keys in a different order.
+ */
+function stableStringify(value: any): string {
+  if (value === null || value === undefined) return "null";
+  const t = typeof value;
+  if (t === "number" || t === "boolean") return JSON.stringify(value);
+  if (t === "string") return JSON.stringify(value);
+  if (Array.isArray(value)) return "[" + value.map((v) => stableStringify(v)).join(",") + "]";
+  if (t === "object") {
+    const keys = Object.keys(value).sort();
+    const parts = keys.map((k) => JSON.stringify(k) + ":" + stableStringify(value[k]));
+    return "{" + parts.join(",") + "}";
+  }
+  // functions/symbols not expected; fall back
+  return JSON.stringify(value);
+}
+
+function verifySignatureAgainstBody(body: string, token: string, sig: string) {
   const trimmed = String(sig || "").trim();
   if (!trimmed) return false;
 
@@ -103,21 +122,29 @@ function verifySignatureSingle(body: string, token: string, sig: string) {
   return false;
 }
 
-// ✅ NEW: accept either legacy rawBody HMAC or canonical JSON.stringify(payload) HMAC
-function verifySignature(rawBody: string, payload: any, token: string, sig: string) {
-  const canonical = (() => {
-    try {
-      return JSON.stringify(payload ?? {});
-    } catch {
-      return "";
-    }
-  })();
+/**
+ * ✅ Accept multiple deterministic representations so we don't "cap at 100" when one batch
+ * is signed over a slightly different JSON string than the raw body we receive.
+ *
+ * Order:
+ *  1) raw body (legacy / exact bytes-as-string)
+ *  2) JSON minified stringify(JSON.parse(rawBody))
+ *  3) stable-key stringify (sorted keys recursively)
+ */
+function verifySignatureFlexible(rawBody: string, token: string, sig: string) {
+  if (verifySignatureAgainstBody(rawBody, token, sig)) return true;
 
-  // Legacy (raw)
-  if (verifySignatureSingle(rawBody, token, sig)) return true;
+  // Try JSON-derived canonical forms
+  try {
+    const obj = JSON.parse(rawBody || "{}");
+    const minified = JSON.stringify(obj);
+    if (verifySignatureAgainstBody(minified, token, sig)) return true;
 
-  // Canonical (JSON.stringify)
-  if (canonical && verifySignatureSingle(canonical, token, sig)) return true;
+    const stable = stableStringify(obj);
+    if (verifySignatureAgainstBody(stable, token, sig)) return true;
+  } catch {
+    // ignore
+  }
 
   return false;
 }
@@ -177,16 +204,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const rawBody = await readRawBody(req);
     if (!rawBody) return res.status(400).json({ error: "Missing body" });
 
+    // ✅ Verify BEFORE parsing JSON
+    if (!verifySignatureFlexible(rawBody, token, sig)) {
+      return res.status(403).json({ error: "Invalid signature" });
+    }
+
     let payload: any = {};
     try {
       payload = JSON.parse(rawBody || "{}");
     } catch {
       return res.status(400).json({ error: "Invalid JSON body" });
-    }
-
-    // ✅ Verify (canonical + legacy)
-    if (!verifySignature(rawBody, payload, token, sig)) {
-      return res.status(403).json({ error: "Invalid signature" });
     }
 
     const connectionId = String(payload.connectionId || "").trim();
