@@ -88,23 +88,42 @@ function isB64Sig(sig: string) {
   return /^[A-Za-z0-9+/=]+$/.test(sig) && sig.length >= 40;
 }
 
-function verifySignature(rawBody: string, token: string, sig: string) {
+function verifySignatureSingle(body: string, token: string, sig: string) {
   const trimmed = String(sig || "").trim();
   if (!trimmed) return false;
 
   // ✅ Hex path (Apps Script template currently uses hex)
   if (isHexSig(trimmed)) {
-    const expected = hmacHex(rawBody, token);
+    const expected = hmacHex(body, token);
     return timingSafeEqualHex(trimmed.toLowerCase(), expected.toLowerCase());
   }
 
   // ✅ Base64 fallback (durability)
   if (isB64Sig(trimmed)) {
-    const expected = hmacB64(rawBody, token);
+    const expected = hmacB64(body, token);
     return timingSafeEqualB64(trimmed, expected);
   }
 
   // Unknown format
+  return false;
+}
+
+// ✅ NEW: accept either legacy rawBody HMAC or canonical JSON.stringify(payload) HMAC
+function verifySignature(rawBody: string, payload: any, token: string, sig: string) {
+  const canonical = (() => {
+    try {
+      return JSON.stringify(payload ?? {});
+    } catch {
+      return "";
+    }
+  })();
+
+  // Legacy (raw)
+  if (verifySignatureSingle(rawBody, token, sig)) return true;
+
+  // Canonical (JSON.stringify)
+  if (canonical && verifySignatureSingle(canonical, token, sig)) return true;
+
   return false;
 }
 
@@ -141,16 +160,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const rawBody = await readRawBody(req);
     if (!rawBody) return res.status(400).json({ error: "Missing body" });
 
-    // ✅ Verify BEFORE parsing JSON (signature must match raw bytes-as-string)
-    if (!verifySignature(rawBody, token, sig)) {
-      return res.status(403).json({ error: "Invalid signature" });
-    }
-
     let payload: any = {};
     try {
       payload = JSON.parse(rawBody || "{}");
     } catch {
       return res.status(400).json({ error: "Invalid JSON body" });
+    }
+
+    // ✅ Verify (canonical + legacy)
+    if (!verifySignature(rawBody, payload, token, sig)) {
+      return res.status(403).json({ error: "Invalid signature" });
     }
 
     const connectionId = String(payload.connectionId || "").trim();
