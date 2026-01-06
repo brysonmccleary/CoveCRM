@@ -1,4 +1,4 @@
-// /pages/api/sheets/webhook.ts
+// pages/api/sheets/webhook.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import crypto from "crypto";
 import dbConnect from "@/lib/mongooseConnect";
@@ -33,8 +33,23 @@ function timingSafeEqualHex(a: string, b: string) {
   }
 }
 
+function timingSafeEqualB64(a: string, b: string) {
+  try {
+    const ab = Buffer.from(a, "base64");
+    const bb = Buffer.from(b, "base64");
+    if (ab.length !== bb.length) return false;
+    return crypto.timingSafeEqual(ab, bb);
+  } catch {
+    return false;
+  }
+}
+
 function hmacHex(body: string, secret: string) {
   return crypto.createHmac("sha256", secret).update(body).digest("hex");
+}
+
+function hmacB64(body: string, secret: string) {
+  return crypto.createHmac("sha256", secret).update(body).digest("base64");
 }
 
 function sha256Hex(input: string) {
@@ -61,6 +76,31 @@ function pickRowValue(row: Record<string, any>, keys: string[]) {
     }
   }
   return "";
+}
+
+function isHexSig(sig: string) {
+  return /^[0-9a-f]{64}$/i.test(sig);
+}
+
+function isB64Sig(sig: string) {
+  return /^[A-Za-z0-9+/=]+$/.test(sig) && sig.length >= 40;
+}
+
+function verifySignature(rawBody: string, token: string, sig: string) {
+  const trimmed = String(sig || "").trim();
+  if (!trimmed) return false;
+
+  if (isHexSig(trimmed)) {
+    const expected = hmacHex(rawBody, token);
+    return timingSafeEqualHex(trimmed.toLowerCase(), expected.toLowerCase());
+  }
+
+  if (isB64Sig(trimmed)) {
+    const expected = hmacB64(rawBody, token);
+    return timingSafeEqualB64(trimmed, expected);
+  }
+
+  return false;
 }
 
 async function getOrCreateSafeFolder(userEmail: string, folderName: string) {
@@ -118,6 +158,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const rawBody = await readRawBody(req);
     if (!rawBody) return res.status(400).json({ error: "Missing body" });
 
+    // ✅ Verify BEFORE parsing JSON
+    if (!verifySignature(rawBody, token, sig)) {
+      return res.status(403).json({ error: "Invalid signature" });
+    }
+
     let payload: any = {};
     try {
       payload = JSON.parse(rawBody || "{}");
@@ -157,11 +202,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const gotHash = sha256Hex(token);
     if (gotHash !== tokenHash) return res.status(403).json({ error: "Invalid token" });
-
-    const expected = hmacHex(rawBody, token);
-    if (!timingSafeEqualHex(sig, expected)) {
-      return res.status(403).json({ error: "Invalid signature" });
-    }
 
     const folderName = String(match.folderName || "").trim() || "Imported Leads";
     const folder = await getOrCreateSafeFolder(userEmail, folderName);
@@ -260,7 +300,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     };
 
     await createLeadsFromGoogleSheet([leadDoc], userEmail, folder._id);
-
     await touchFolderUpdatedAt(folder._id, userEmail);
 
     // ✅ Find the created lead reliably for drip enrollment
@@ -309,7 +348,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         userEmail,
         folderId: String(folder._id),
         leadId: String(createdLead._id),
-        source: "sheet-bulk", // ✅ matches EnrollSource union
+        source: "sheet-bulk",
         startMode: "now",
       });
     }
