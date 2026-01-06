@@ -457,7 +457,9 @@ export default function LeadsPanel() {
       .map((f) => f?.name)
       .filter((n) => n && !SYSTEM_FOLDERS.includes(String(n)));
     setWizardFolderName(nonSystem[0] || "");
-    setWizardCreateNewFolder(false);
+
+    // ✅ CHANGE: default is "Create a new folder" (input shown first)
+    setWizardCreateNewFolder(true);
     setWizardNewFolderName("");
   };
 
@@ -977,18 +979,7 @@ export default function LeadsPanel() {
                     </div>
 
                     <div className="space-y-2">
-                      <label className="flex items-center gap-2 text-sm">
-                        <input
-                          type="checkbox"
-                          checked={wizardCreateNewFolder}
-                          onChange={(e) => {
-                            setWizardCreateNewFolder(e.target.checked);
-                            setConnectError(null);
-                          }}
-                        />
-                        Create a new folder name
-                      </label>
-
+                      {/* ✅ CHANGE: default is "Create a new folder" input first */}
                       {!wizardCreateNewFolder ? (
                         <select
                           value={wizardFolderName}
@@ -1013,6 +1004,20 @@ export default function LeadsPanel() {
                           className="border p-2 rounded w-full"
                         />
                       )}
+
+                      {/* ✅ CHANGE: checkbox now means "Import into existing folder" */}
+                      <label className="flex items-center gap-2 text-sm">
+                        <input
+                          type="checkbox"
+                          checked={!wizardCreateNewFolder}
+                          onChange={(e) => {
+                            const importExisting = e.target.checked;
+                            setWizardCreateNewFolder(!importExisting);
+                            setConnectError(null);
+                          }}
+                        />
+                        Import into an existing folder
+                      </label>
                     </div>
 
                     {/* ✅ REQUIRED: Big notice directly above the Connect action */}
