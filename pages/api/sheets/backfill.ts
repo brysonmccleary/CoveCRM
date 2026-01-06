@@ -12,12 +12,12 @@ export const config = {
   api: { bodyParser: false },
 };
 
-async function readRawBody(req: NextApiRequest): Promise<string> {
+// ✅ Read RAW BYTES (Buffer) so HMAC can be verified byte-perfect.
+async function readRawBodyBuffer(req: NextApiRequest): Promise<Buffer> {
   return await new Promise((resolve, reject) => {
-    let data = "";
-    req.setEncoding("utf8");
-    req.on("data", (chunk) => (data += chunk));
-    req.on("end", () => resolve(data));
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+    req.on("end", () => resolve(Buffer.concat(chunks)));
     req.on("error", reject);
   });
 }
@@ -44,25 +44,12 @@ function timingSafeEqualB64(a: string, b: string) {
   }
 }
 
-function hmacHex(body: string, secret: string) {
-  return crypto.createHmac("sha256", secret).update(body).digest("hex");
+function hmacHexBytes(bodyBytes: Buffer, secret: string) {
+  return crypto.createHmac("sha256", secret).update(bodyBytes).digest("hex");
 }
 
-function hmacB64(body: string, secret: string) {
-  return crypto.createHmac("sha256", secret).update(body).digest("base64");
-}
-
-// ✅ OPTIONAL fallback: treat secret as hex bytes (only if it looks like hex)
-function hmacHex_keyAsHexBytes(body: string, secretHex: string) {
-  const clean = String(secretHex || "").trim();
-  if (!/^[0-9a-f]+$/i.test(clean)) return "";
-  if (clean.length < 2 || clean.length % 2 !== 0) return "";
-  try {
-    const keyBytes = Buffer.from(clean, "hex");
-    return crypto.createHmac("sha256", keyBytes).update(body).digest("hex");
-  } catch {
-    return "";
-  }
+function hmacB64Bytes(bodyBytes: Buffer, secret: string) {
+  return crypto.createHmac("sha256", secret).update(bodyBytes).digest("base64");
 }
 
 function sha256Hex(input: string) {
@@ -116,24 +103,18 @@ function stableStringify(value: any): string {
   return JSON.stringify(value);
 }
 
-function verifySignatureAgainstBody(body: string, token: string, sig: string) {
+function verifySignatureAgainstBytes(bodyBytes: Buffer, token: string, sig: string) {
   const trimmed = String(sig || "").trim();
   if (!trimmed) return false;
 
+  // ✅ Decide which encoding the sender used based on the received signature format.
   if (isHexSig(trimmed)) {
-    // Primary (current): key is token string
-    const expected = hmacHex(body, token);
-    if (timingSafeEqualHex(trimmed.toLowerCase(), expected.toLowerCase())) return true;
-
-    // Fallback: key interpreted as hex bytes (only if token looks like hex)
-    const expectedAlt = hmacHex_keyAsHexBytes(body, token);
-    if (expectedAlt && timingSafeEqualHex(trimmed.toLowerCase(), expectedAlt.toLowerCase())) return true;
-
-    return false;
+    const expected = hmacHexBytes(bodyBytes, token);
+    return timingSafeEqualHex(trimmed.toLowerCase(), expected.toLowerCase());
   }
 
   if (isB64Sig(trimmed)) {
-    const expected = hmacB64(body, token);
+    const expected = hmacB64Bytes(bodyBytes, token);
     return timingSafeEqualB64(trimmed, expected);
   }
 
@@ -141,21 +122,26 @@ function verifySignatureAgainstBody(body: string, token: string, sig: string) {
 }
 
 /**
- * ✅ Accept multiple deterministic representations:
- *  1) raw body
- *  2) JSON minified stringify(JSON.parse(rawBody))
- *  3) stable-key stringify (sorted keys)
+ * ✅ Flexible verification:
+ *  1) RAW BYTES (the correct baseline)
+ *  2) minified JSON bytes
+ *  3) stable-key JSON bytes
+ *
+ * Note: #2/#3 are only attempted if JSON parsing succeeds.
  */
-function verifySignatureFlexible(rawBody: string, token: string, sig: string) {
-  if (verifySignatureAgainstBody(rawBody, token, sig)) return true;
+function verifySignatureFlexibleBytes(rawBytes: Buffer, rawBodyText: string, token: string, sig: string) {
+  // 1) exact bytes-as-received
+  if (verifySignatureAgainstBytes(rawBytes, token, sig)) return true;
 
+  // 2/3) canonical JSON forms (bytes)
   try {
-    const obj = JSON.parse(rawBody || "{}");
+    const obj = JSON.parse(rawBodyText || "{}");
+
     const minified = JSON.stringify(obj);
-    if (verifySignatureAgainstBody(minified, token, sig)) return true;
+    if (verifySignatureAgainstBytes(Buffer.from(minified, "utf8"), token, sig)) return true;
 
     const stable = stableStringify(obj);
-    if (verifySignatureAgainstBody(stable, token, sig)) return true;
+    if (verifySignatureAgainstBytes(Buffer.from(stable, "utf8"), token, sig)) return true;
   } catch {
     // ignore
   }
@@ -193,37 +179,39 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!token) return res.status(401).json({ error: "Missing token" });
     if (!sig) return res.status(401).json({ error: "Missing signature" });
 
-    const rawBody = await readRawBody(req);
-    if (!rawBody) return res.status(400).json({ error: "Missing body" });
+    // ✅ RAW BYTES
+    const rawBytes = await readRawBodyBuffer(req);
+    if (!rawBytes || !rawBytes.length) return res.status(400).json({ error: "Missing body" });
 
-    // ✅ Verify BEFORE parsing JSON
-    if (!verifySignatureFlexible(rawBody, token, sig)) {
-      // ✅ Return high-signal debug for Apps Script logs
-      const rawBodySha256 = sha256Hex(rawBody);
-      const sigReceivedPrefix = String(sig || "").slice(0, 24);
+    // ✅ Parse text (only for JSON parsing / canonical forms)
+    const rawBodyText = rawBytes.toString("utf8");
 
-      const expectedUtf8Hex = isHexSig(sig) ? hmacHex(rawBody, token) : "";
-      const expectedAltHex = isHexSig(sig) ? hmacHex_keyAsHexBytes(rawBody, token) : "";
+    // ✅ Verify signature byte-perfect BEFORE parsing JSON
+    if (!verifySignatureFlexibleBytes(rawBytes, rawBodyText, token, sig)) {
+      // Helpful debug for logs / Apps Script visibility (kept small)
+      const rawBodySha256 = crypto.createHash("sha256").update(rawBytes).digest("hex");
+      const sigIsHex = isHexSig(sig);
+      const sigIsB64 = isB64Sig(sig);
+      const expectedHexPrefix = hmacHexBytes(rawBytes, token).slice(0, 12);
+      const expectedB64Prefix = hmacB64Bytes(rawBytes, token).slice(0, 12);
 
       return res.status(403).json({
         error: "Invalid signature",
         debug: {
-          rawBodyLen: rawBody.length,
+          rawBodyLen: rawBytes.length,
           rawBodySha256,
-          sigIsHex: isHexSig(sig),
-          sigIsB64: isB64Sig(sig),
-          sigReceivedPrefix,
-          expectedUtf8Prefix: expectedUtf8Hex ? expectedUtf8Hex.slice(0, 24) : "",
-          expectedAltPrefix: expectedAltHex ? expectedAltHex.slice(0, 24) : "",
-          tokenLen: token.length,
-          tokenPrefix: token.slice(0, 8),
+          sigIsHex,
+          sigIsB64,
+          sigReceivedPrefix: String(sig || "").slice(0, 12),
+          expectedHexPrefix,
+          expectedB64Prefix,
         },
       });
     }
 
     let payload: any = {};
     try {
-      payload = JSON.parse(rawBody || "{}");
+      payload = JSON.parse(rawBodyText || "{}");
     } catch {
       return res.status(400).json({ error: "Invalid JSON body" });
     }
