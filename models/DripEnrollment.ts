@@ -1,3 +1,4 @@
+// models/DripEnrollment.ts
 import mongoose, { Schema, InferSchemaType, models, model } from "mongoose";
 
 const DripEnrollmentSchema = new Schema(

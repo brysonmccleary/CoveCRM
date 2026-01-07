@@ -49,6 +49,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const session = (await getServerSession(req, res, authOptions as any)) as any;
     if (!session?.user?.email) return res.status(401).json({ error: "Unauthorized" });
 
+    const email = String(session.user.email).toLowerCase();
+
     const { leadId, campaignId, startAt }: Body = (req.body || {}) as any;
     if (!leadId || !campaignId) {
       return res.status(400).json({ error: "leadId and campaignId are required" });
@@ -57,7 +59,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     await dbConnect();
 
     // Fetch separately (clean TS) and validate scope
-    const lead = await Lead.findOne({ _id: leadId, userEmail: session.user.email })
+    const lead = await Lead.findOne({ _id: leadId, userEmail: email })
       .select("_id Phone `First Name` `Last Name` userEmail")
       .lean();
     if (!lead) return res.status(404).json({ error: "Lead not found" });
@@ -77,7 +79,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ error: "Campaign is not an active SMS campaign" });
     }
 
-    const user = await User.findOne({ email: session.user.email }).select("_id email name").lean();
+    const user = await User.findOne({ email }).select("_id email name").lean();
     if (!user?._id) return res.status(404).json({ error: "User not found" });
 
     // Compute initial nextSendAt (immediate if unspecified)
@@ -93,7 +95,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       leadId,
       campaignId,
       status: { $in: ["active", "paused"] },
-      userEmail: session.user.email,
+      userEmail: email,
     };
 
     const up = await DripEnrollment.updateOne(
@@ -102,7 +104,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         $setOnInsert: {
           leadId,
           campaignId,
-          userEmail: session.user.email,
+          userEmail: email,
           status: "active",
           cursorStep: 0,
           nextSendAt,

@@ -20,6 +20,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(401).json({ error: "Unauthorized" });
     }
 
+    const email = String(session.user.email).toLowerCase();
+
     const { leadId, campaignId }: Body = req.body || {};
     if (!leadId || !campaignId) {
       return res.status(400).json({ error: "leadId and campaignId are required" });
@@ -30,7 +32,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // 1. Ensure this lead belongs to the user (tenant safety)
     const lead = await Lead.findOne({
       _id: leadId,
-      userEmail: session.user.email.toLowerCase(),
+      userEmail: email,
     });
 
     if (!lead) {
@@ -40,15 +42,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // 2. Kill any active/paused DripEnrollment for this lead+campaign
     const upd = await DripEnrollment.updateMany(
       {
-        userEmail: session.user.email,
+        userEmail: email,
         leadId,
         campaignId,
         status: { $in: ["active", "paused"] },
       },
       {
         $set: {
-          status: "canceled",      // <-- valid enum value
-          nextSendAt: null,        // <-- correct field name
+          status: "canceled",
+          nextSendAt: null,
           isActive: false,
           isPaused: true,
           stopAll: true,
@@ -61,7 +63,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     );
 
     // 3. Remove drip assignment from Lead (legacy fields)
-    //    This guarantees the legacy engine and any UI see "no active drip".
     (lead as any).assignedDrips = [];
     (lead as any).dripProgress = [];
     (lead as any).isAIEngaged = false;
