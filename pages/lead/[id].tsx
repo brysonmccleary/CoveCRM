@@ -556,7 +556,6 @@ export default function LeadProfileDial() {
 
     pushField("Phone", ["Phone", "phone", "Phone Number", "phoneNumber", "Mobile", "Cell", "Home", "Work", "Other Phone 1"], formatPhone);
     pushField("Email", ["Email", "email", "Email Address"]);
-    pushField("Lead Type", ["Lead Type", "leadType", "Lead vendor", "Lead Vendor", "Lead Type "]);
     pushField("Status", ["Status", "status"]);
 
     pushField("DOB", ["DOB", "Date Of Birth", "Birthday", "birthdate", "Birth Date", "Date of birth"]);
