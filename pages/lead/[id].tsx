@@ -119,6 +119,7 @@ type UICampaign = {
 
 const LEADS_URL = "/dashboard?tab=leads";
 
+/* ---------------- helpers ---------------- */
 function safeBullets(v: any, max = 12): string[] {
   if (!Array.isArray(v)) return [];
   return v
@@ -164,9 +165,23 @@ function formatDisplayValue(v: any): string {
   if (typeof v === "number") return String(v);
   if (typeof v === "boolean") return v ? "Yes" : "No";
 
-  // For UI sanity: do NOT render objects/arrays as big blobs in the left panel.
-  // If it's structured data, skip it and keep left panel "legit CRM style".
-  return "";
+  try {
+    if (Array.isArray(v)) {
+      const cleaned = v
+        .map((x) => (x === null || x === undefined ? "" : String(x).trim()))
+        .filter(Boolean);
+      if (cleaned.length === 0) return "";
+      if (cleaned.length <= 6) return cleaned.join(", ");
+      return `${cleaned.slice(0, 6).join(", ")} … (+${cleaned.length - 6})`;
+    }
+
+    const s = JSON.stringify(v);
+    if (!s || s === "{}") return "";
+    if (s.length <= 140) return s;
+    return s.slice(0, 140) + "…";
+  } catch {
+    return String(v);
+  }
 }
 
 function looksLikeNotesKey(rawKey: string) {
@@ -182,7 +197,6 @@ function looksLikeNotesKey(rawKey: string) {
 
 function looksLikeSystemKey(rawKey: string) {
   const nk = normalizeKey(rawKey);
-
   const blockedExact = new Set([
     "_id",
     "id",
@@ -197,22 +211,35 @@ function looksLikeSystemKey(rawKey: string) {
     "__v",
     "history",
     "interactionhistory",
-
-    // common internal / computed
-    "phonelast10",
     "normalizedphone",
-    "isaiengaged",
-    "reminderssent",
-    "rawrow",
-    "source",
-    "v",
+    "phonelast10",
   ]);
-
   if (blockedExact.has(nk)) return true;
   return false;
 }
 
+function tryParseJsonObject(v: any): Record<string, any> | null {
+  if (!v) return null;
+  if (typeof v === "object" && !Array.isArray(v)) return v as Record<string, any>;
+  if (typeof v !== "string") return null;
+  const s = v.trim();
+  if (!s) return null;
+  if (!(s.startsWith("{") && s.endsWith("}"))) return null;
+  try {
+    const obj = JSON.parse(s);
+    if (obj && typeof obj === "object" && !Array.isArray(obj)) return obj;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 function flattenDisplayFields(lead: any) {
+  // display-only flatten:
+  // - includes top-level fields
+  // - includes common nested containers (1 level)
+  // - parses rawRow JSON (Google Sheets sync) so headers like "Mortgage Balance" appear
+  // DOES NOT change database/import logic.
   const out: Record<string, any> = {};
   if (!lead || typeof lead !== "object") return out;
 
@@ -220,7 +247,6 @@ function flattenDisplayFields(lead: any) {
     out[k] = lead[k];
   });
 
-  // if any import stored under nested containers, expose them for UI (display-only)
   const candidates = ["customFields", "fields", "data", "sheet", "payload"];
   for (const c of candidates) {
     const obj = lead?.[c];
@@ -231,26 +257,21 @@ function flattenDisplayFields(lead: any) {
     }
   }
 
+  // ✅ VERY IMPORTANT: Google Sheets synced leads often store original row in rawRow (stringified JSON)
+  const rawRowObj = tryParseJsonObject(lead?.rawRow);
+  if (rawRowObj) {
+    Object.keys(rawRowObj).forEach((k) => {
+      if (out[k] === undefined) out[k] = rawRowObj[k];
+    });
+  }
+
   return out;
 }
 
-function isScalarDisplayable(v: any) {
-  if (v === null || v === undefined) return false;
-  const t = typeof v;
-  if (t === "string") {
-    const s = v.trim();
-    if (!s) return false;
-
-    // kill giant blobs / JSON-ish strings
-    if (s.length > 220) return false;
-    if ((s.startsWith("{") && s.endsWith("}")) || (s.startsWith("[") && s.endsWith("]"))) return false;
-    if (s.includes("[AI Dialer fallback]")) return false;
-
-    return true;
-  }
-  if (t === "number" || t === "boolean") return true;
-  return false;
+function labelFromKey(k: string) {
+  return String(k || "").replace(/_/g, " ").trim();
 }
+/* ---------------------------------------- */
 
 export default function LeadProfileDial() {
   const router = useRouter();
@@ -346,24 +367,22 @@ export default function LeadProfileDial() {
       if (!r.ok) throw new Error(j?.message || "Failed to load history");
 
       const lines: string[] = [];
-      (j.events || []).forEach((ev: any) => {
-        const e = ev as HistoryEvent;
-        if (e.type === "note") {
-          lines.push(`📝 ${e.text} • ${fmtDateTime(e.date)}`);
-        } else if (e.type === "sms") {
-          const dir =
-            e.dir === "inbound" ? "⬅️ Inbound SMS" : e.dir === "outbound" ? "➡️ Outbound SMS" : "🤖 AI SMS";
-          const status = e.status ? ` • ${e.status}` : "";
-          lines.push(`${dir}: ${e.text}${status} • ${fmtDateTime(e.date)}`);
-        } else if (e.type === "booking") {
-          const title = e.title || "Booked Appointment";
-          const when = e.startsAt ? fmtDateTime(e.startsAt) : fmtDateTime(e.date);
+      (j.events || []).forEach((ev: HistoryEvent) => {
+        if (ev.type === "note") {
+          lines.push(`📝 ${ev.text} • ${fmtDateTime(ev.date)}`);
+        } else if (ev.type === "sms") {
+          const dir = ev.dir === "inbound" ? "⬅️ Inbound SMS" : ev.dir === "outbound" ? "➡️ Outbound SMS" : "🤖 AI SMS";
+          const status = ev.status ? ` • ${ev.status}` : "";
+          lines.push(`${dir}: ${ev.text}${status} • ${fmtDateTime(ev.date)}`);
+        } else if (ev.type === "booking") {
+          const title = ev.title || "Booked Appointment";
+          const when = ev.startsAt ? fmtDateTime(ev.startsAt) : fmtDateTime(ev.date);
           lines.push(`📅 ${title} • ${when}`);
-        } else if (e.type === "status") {
-          lines.push(`🔖 Status: ${e.to || "Updated"} • ${fmtDateTime(e.date)}`);
-        } else if (e.type === "ai_outcome") {
-          const label = e.message || "🤖 AI Dialer outcome";
-          lines.push(`🤖 ${label} • ${fmtDateTime(e.date)}`);
+        } else if (ev.type === "status") {
+          lines.push(`🔖 Status: ${ev.to || "Updated"} • ${fmtDateTime(ev.date)}`);
+        } else if (ev.type === "ai_outcome") {
+          const label = ev.message || "🤖 AI Dialer outcome";
+          lines.push(`🤖 ${label} • ${fmtDateTime(ev.date)}`);
         }
       });
 
@@ -481,28 +500,180 @@ export default function LeadProfileDial() {
     router.push({ pathname: "/dial-session", query: { leadId: lead.id } });
   };
 
-  // Find best underlying key so edits update the real stored field
-  const bestKeyFor = useCallback(
-    (candidates: string[]) => {
-      const l = lead || ({} as any);
-      const flat = flattenDisplayFields(l);
+  // Build one “Lead Info” list like Dial Session:
+  // - important fields first (in a predictable order)
+  // - then remaining fields (deduped + filtered)
+  const leadInfoRows = useMemo(() => {
+    const l = lead || ({} as any);
+    const flat = flattenDisplayFields(l);
 
-      for (const k of candidates) {
-        if (flat[k] !== undefined) return k;
-        const target = normalizeKey(k);
-        const found = Object.keys(flat).find((kk) => normalizeKey(kk) === target);
-        if (found) return found;
+    // Map normalized key -> original keys present (first match used)
+    const mapNormToKeys: Record<string, string[]> = {};
+    Object.keys(flat).forEach((k) => {
+      const nk = normalizeKey(k);
+      if (!mapNormToKeys[nk]) mapNormToKeys[nk] = [];
+      mapNormToKeys[nk].push(k);
+    });
+
+    const getByAliases = (aliases: string[]) => {
+      for (const a of aliases) {
+        const nk = normalizeKey(a);
+        const keys = mapNormToKeys[nk];
+        if (!keys || !keys.length) continue;
+        for (const realKey of keys) {
+          const rendered = formatDisplayValue(flat[realKey]);
+          if (rendered) return { key: realKey, value: rendered };
+        }
       }
-      return candidates[0];
-    },
-    [lead],
-  );
+      return null;
+    };
+
+    const usedNorm = new Set<string>();
+    const rows: { label: string; key: string; value: string; editable: boolean }[] = [];
+
+    const pushField = (label: string, aliases: string[], transform?: (v: string) => string) => {
+      const found = getByAliases(aliases);
+      if (!found) return;
+      const nk = normalizeKey(found.key);
+      if (usedNorm.has(nk)) return;
+
+      const v = transform ? transform(found.value) : found.value;
+      if (!v) return;
+
+      usedNorm.add(nk);
+      rows.push({ label, key: found.key, value: v, editable: true });
+    };
+
+    // ---- Important fields in the order you expect ----
+    // Name: prefer separate first/last; if not present, use Name
+    pushField("First Name", ["First Name", "firstName", "first name", "First name", "FName", "Given Name"]);
+    pushField("Last Name", ["Last Name", "lastName", "last name", "Last name", "LName", "Surname"]);
+
+    // If there is only a single “Name” field (some imports)
+    if (!rows.find((r) => r.label === "First Name") && !rows.find((r) => r.label === "Last Name")) {
+      pushField("Name", ["Name", "name", "Full Name", "fullName"]);
+    }
+
+    pushField("Phone", ["Phone", "phone", "Phone Number", "phoneNumber", "Mobile", "Cell", "Home", "Work", "Other Phone 1"], formatPhone);
+    pushField("Email", ["Email", "email", "Email Address"]);
+    pushField("Lead Type", ["Lead Type", "leadType", "Lead vendor", "Lead Vendor", "Lead Type "]);
+    pushField("Status", ["Status", "status"]);
+
+    pushField("DOB", ["DOB", "Date Of Birth", "Birthday", "birthdate", "Birth Date", "Date of birth"]);
+    pushField("Age", ["Age", "age"]);
+
+    // Address-ish
+    pushField("Street Address", ["Street Address", "street", "street address", "Address", "address", "Address 1"]);
+    pushField("City", ["City", "city"]);
+    pushField("State", ["State", "state", "ST", "RR State", "RRState"]);
+    pushField("Zip", ["Zip", "ZIP", "ZIP code", "Zip code", "postal", "postalCode"]);
+
+    // Mortgage / coverage (this is what was missing because it often lives inside rawRow)
+    pushField("Mortgage Amount", ["Mortgage Amount", "mortgage amount", "Mortgage Balance", "mortgage balance", "Mortgage", "mortgage"]);
+    pushField("Mortgage Payment", ["Mortgage Payment", "mortgage payment"]);
+    pushField("Coverage Amount", ["Coverage Amount", "coverageAmount", "coverage", "How Much Coverage Do You Need?"]);
+
+    pushField("Lender", ["Lender", "lender"]);
+    pushField("County", ["County", "county"]);
+    pushField("Beneficiary", ["Beneficiary", "beneficiary"]);
+    pushField("Beneficiary Name", ["Beneficiary Name", "beneficiary name"]);
+
+    // ---- Now add remaining fields (custom/imported) ----
+    const hardBlockNorm = new Set<string>([
+      // internal/system
+      "_id",
+      "id",
+      "userid",
+      "ownerid",
+      "useremail",
+      "folderid",
+      "assigneddrips",
+      "dripprogress",
+      "createdat",
+      "updatedat",
+      "__v",
+      "history",
+      "interactionhistory",
+      "phonelast10",
+      "normalizedphone",
+
+      // junk or UI-only
+      "rawrow",
+      "reminderssent",
+      "isaiengaged",
+      "v",
+    ]);
+
+    const alreadyUsedAliasesNorm = new Set<string>();
+    rows.forEach((r) => alreadyUsedAliasesNorm.add(normalizeKey(r.key)));
+
+    const extras = Object.entries(flat)
+      .filter(([k, v]) => {
+        const nk = normalizeKey(k);
+
+        if (!k) return false;
+        if (hardBlockNorm.has(nk)) return false;
+        if (looksLikeSystemKey(k)) return false;
+        if (looksLikeNotesKey(k)) return false;
+
+        // dedupe against anything already selected above
+        if (usedNorm.has(nk)) return false;
+        if (alreadyUsedAliasesNorm.has(nk)) return false;
+
+        const rendered = formatDisplayValue(v);
+        if (!rendered) return false;
+
+        // kill the AI fallback junk (content-based)
+        const lower = rendered.toLowerCase();
+        if (lower.includes("[ai dialer fallback]")) return false;
+        if (lower.includes("callSid=".toLowerCase()) && lower.includes("twilio status".toLowerCase())) return false;
+
+        return true;
+      })
+      .map(([k, v]) => ({
+        label: labelFromKey(k),
+        key: k,
+        value: formatDisplayValue(v),
+        editable: true,
+      }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+
+    return [...rows, ...extras];
+  }, [lead]);
+
+  const leadName = useMemo(() => {
+    // Prefer what we’re already showing at top
+    const l = lead || ({} as any);
+    const flat = flattenDisplayFields(l);
+
+    const first =
+      formatDisplayValue(flat["First Name"]) ||
+      formatDisplayValue(flat["firstName"]) ||
+      formatDisplayValue(flat["First name"]) ||
+      formatDisplayValue(flat["first name"]);
+
+    const last =
+      formatDisplayValue(flat["Last Name"]) ||
+      formatDisplayValue(flat["lastName"]) ||
+      formatDisplayValue(flat["Last name"]) ||
+      formatDisplayValue(flat["last name"]);
+
+    const full = `${first} ${last}`.replace(/\s+/g, " ").trim();
+    if (full) return full;
+
+    const name = formatDisplayValue(flat["Name"]) || formatDisplayValue(flat["name"]);
+    return name || lead?.name || "Lead";
+  }, [lead]);
 
   const openEditor = useCallback(
     (fieldKey: string, label: string, currentValue: any) => {
       if (!lead?.id) return;
+
       if (looksLikeSystemKey(fieldKey)) return;
       if (looksLikeNotesKey(fieldKey)) return;
+
+      const nk = normalizeKey(fieldKey);
+      if (nk === "rawrow" || nk === "reminderssent" || nk === "v") return;
 
       setEditingKey(fieldKey);
       setEditingLabel(label);
@@ -531,7 +702,8 @@ export default function LeadProfileDial() {
       const j = await r.json().catch(() => ({} as any));
       if (!r.ok) throw new Error(j?.message || "Failed to update");
 
-      // optimistic UI update (only affects this page state)
+      // optimistic UI update: write the edited field onto the lead top-level
+      // (If it was previously only inside rawRow, this makes it persist without touching import logic.)
       setLead((prev) => {
         if (!prev) return prev;
         return { ...prev, [editingKey]: editingValue };
@@ -545,149 +717,6 @@ export default function LeadProfileDial() {
       setSavingEdit(false);
     }
   }, [lead, editingKey, editingValue]);
-
-  // ✅ One "CRM style" panel:
-  // - Show prioritized important fields via synonym map
-  // - Then show any remaining scalar imported fields (incl. user-created CSV "custom fields")
-  // - Never show duplicates or junk/internal/blob keys
-  const leftRows = useMemo(() => {
-    const l = lead || ({} as any);
-    const flat = flattenDisplayFields(l);
-
-    // Build normalized map: normalizedKey -> { rawKey, value }
-    const normMap = new Map<string, { rawKey: string; value: any }>();
-    Object.keys(flat).forEach((k) => {
-      normMap.set(normalizeKey(k), { rawKey: k, value: flat[k] });
-    });
-
-    const shownNormKeys = new Set<string>();
-    const rows: { label: string; key: string; value: string; editable: boolean }[] = [];
-
-    const pull = (label: string, candidates: string[], opts?: { format?: (v: any) => string }) => {
-      for (const c of candidates) {
-        const hit = normMap.get(normalizeKey(c));
-        if (!hit) continue;
-
-        const rawKey = hit.rawKey;
-        const value = hit.value;
-
-        if (looksLikeSystemKey(rawKey)) continue;
-        if (looksLikeNotesKey(rawKey)) continue;
-        if (!isScalarDisplayable(value)) continue;
-
-        const formatted = opts?.format ? opts.format(value) : String(value).trim();
-        if (!formatted) continue;
-
-        const nk = normalizeKey(rawKey);
-        shownNormKeys.add(nk);
-
-        rows.push({
-          label,
-          key: rawKey,
-          value: formatted,
-          editable: true,
-        });
-        return;
-      }
-    };
-
-    // IMPORTANT FIELD MAP (covers your header examples)
-    pull("First Name", ["First Name", "First name", "firstName", "firstname", "First_Name"]);
-    pull("Last Name", ["Last Name", "Last name", "lastName", "lastname", "Last_Name"]);
-    pull("Name", ["Name", "name"], {
-      format: (v) => String(v).replace(/\s+/g, " ").trim(),
-    });
-
-    pull("Phone", ["Phone", "Phone Number", "Phone number", "phone", "phoneNumber", "Mobile", "Home", "Work"], {
-      format: (v) => formatPhone(String(v)),
-    });
-
-    pull("Email", ["Email", "email", "Email Address", "E-mail"]);
-
-    pull("Lead Type", ["Lead Type", "Lead type", "leadType", "Lead vendor", "Lead Vendor", "vendor", "lead vendor"]);
-
-    pull("Status", ["Status", "status"]);
-
-    pull("DOB", ["DOB", "Date Of Birth", "Date of Birth", "Birthday", "birthdate", "Birth Date"]);
-    pull("Age", ["Age", "age", "Client Age"]);
-    pull("State", ["State", "state", "ST", "RR State", "RRState"]);
-    pull("City", ["City", "city"]);
-    pull("Zip", ["Zip", "ZIP", "ZIP code", "Zip code", "postal", "Postal Code"]);
-
-    pull("Street Address", ["Street Address", "Street address", "address", "Address", "streetAddress"]);
-
-    // Mortgage / Coverage (all your variants)
-    pull("Mortgage Amount", [
-      "Mortgage Amount",
-      "mortgage amount",
-      "Mortgage Balance",
-      "mortgage balance",
-      "Mortgage",
-      "mortgage",
-      "mortgageAmount",
-      "MortgageAmount",
-    ]);
-    pull("Mortgage Payment", ["Mortgage Payment", "mortgage payment", "MortgagePayment", "mortgagePayment"]);
-    pull("Coverage Amount", [
-      "Coverage",
-      "coverage",
-      "Coverage Amount",
-      "coverageAmount",
-      "How Much Coverage Do You Need?",
-      "Policy Amount",
-      "Face Amount",
-    ]);
-
-    // After important rows, show remaining scalar imported fields (includes user-entered “custom fields”)
-    // while hiding duplicates + junk + blobs.
-    const remainder = Object.keys(flat)
-      .filter((k) => {
-        const nk = normalizeKey(k);
-        if (shownNormKeys.has(nk)) return false;
-
-        if (looksLikeSystemKey(k)) return false;
-        if (looksLikeNotesKey(k)) return false;
-
-        const v = flat[k];
-        if (!isScalarDisplayable(v)) return false;
-
-        // don’t show empty-ish
-        const s = String(v).trim();
-        if (!s) return false;
-
-        return true;
-      })
-      .map((k) => ({
-        key: k,
-        label: String(k).replace(/_/g, " "),
-        value: String(flat[k]).trim(),
-      }))
-      .sort((a, b) => a.label.localeCompare(b.label));
-
-    remainder.forEach((f) => {
-      rows.push({
-        label: f.label,
-        key: f.key,
-        value: f.value,
-        editable: true,
-      });
-    });
-
-    // Name shown at top should be “best available”
-    const nameTop = (() => {
-      const first = rows.find((r) => r.label === "First Name")?.value || "";
-      const last = rows.find((r) => r.label === "Last Name")?.value || "";
-      const full = `${first} ${last}`.replace(/\s+/g, " ").trim();
-      if (full) return full;
-
-      const name = rows.find((r) => r.label === "Name")?.value || "";
-      if (name) return name;
-
-      return lead?.name || "Lead";
-    })();
-
-    return { nameTop, rows };
-  }, [lead]);
 
   // ---------- Campaigns list ----------
   useEffect(() => {
@@ -825,8 +854,7 @@ export default function LeadProfileDial() {
     }
   };
 
-  // ✅ compact rows: label + value close together (like your old UI)
-  const CompactRow = ({
+  const LeadInfoRow = ({
     label,
     value,
     fieldKey,
@@ -847,12 +875,13 @@ export default function LeadProfileDial() {
           if (!canEdit) return;
           openEditor(fieldKey!, label, value);
         }}
-        className={`w-full text-left py-1 ${canEdit ? "hover:bg-white/5 rounded px-1 -mx-1" : ""}`}
+        className="w-full text-left"
       >
-        <div className="flex items-baseline gap-2">
-          <div className="text-[12px] text-gray-400 w-[130px] shrink-0">{label}</div>
-          <div className="text-[13px] text-white break-words leading-snug">
-            {v || "—"} {canEdit ? <span className="text-gray-500 text-[11px] ml-2">Edit</span> : null}
+        <div className="flex items-center justify-between py-2 border-b border-white/10">
+          <div className="text-sm text-gray-300">{label}:</div>
+          <div className="text-sm text-white font-medium break-words text-right max-w-[60%]">
+            {v || "—"}{" "}
+            {canEdit ? <span className="text-gray-500 text-xs ml-2">Edit</span> : null}
           </div>
         </div>
       </button>
@@ -867,25 +896,32 @@ export default function LeadProfileDial() {
       {/* LEFT */}
       <div className="w-[360px] p-4 border-r border-gray-800 bg-[#1e293b] overflow-y-auto">
         {/* VERIFICATION MARKER: search this in prod to confirm correct build */}
-        <div className="hidden">LEAD_PROFILE_LEFT_PANEL_PRIORITY_FIELDS_V1</div>
+        <div className="hidden">LEAD_INFO_LEFT_PANEL_DIALSESSION_STYLE_V1</div>
 
         <div className="mb-3">
-          <h2 className="text-xl font-bold">{leftRows.nameTop}</h2>
-          <div className="text-xs text-gray-400 mt-1">Click any field to edit.</div>
+          <h2 className="text-xl font-bold">{leadName}</h2>
+          <div className="text-xs text-gray-400 mt-1">Click fields to edit live.</div>
         </div>
 
-        <div className="rounded-lg border border-white/10 bg-[#0b1220]">
+        <div className="rounded-lg border border-white/10 bg-[#0b1220] overflow-hidden">
           <div className="px-3 py-2 border-b border-white/10 flex items-center justify-between">
             <div className="text-sm font-semibold">Lead Info</div>
-            <div className="text-xs text-gray-500">{leftRows.rows.length}</div>
+            <div className="text-xs text-gray-500">{leadInfoRows.length || "—"}</div>
           </div>
-          <div className="px-3 py-2">
-            {leftRows.rows.length ? (
-              leftRows.rows.map((f) => (
-                <CompactRow key={`${f.label}:${f.key}`} label={f.label} value={f.value} fieldKey={f.key} editable={f.editable} />
+
+          <div className="px-3">
+            {leadInfoRows.length ? (
+              leadInfoRows.map((r) => (
+                <LeadInfoRow
+                  key={`${r.label}-${r.key}`}
+                  label={r.label}
+                  value={r.value}
+                  fieldKey={r.key}
+                  editable={r.editable}
+                />
               ))
             ) : (
-              <div className="text-sm text-gray-400 py-1">No fields found.</div>
+              <div className="text-sm text-gray-400 py-3">No lead fields found.</div>
             )}
           </div>
         </div>
@@ -1186,7 +1222,11 @@ export default function LeadProfileDial() {
                   className="w-full bg-[#1e293b] text-white border border-white/10 rounded p-2"
                 >
                   <option value="">
-                    {activeDripsLoading ? "Loading…" : activeDripIds.length ? "-- Select a campaign --" : "No active drips"}
+                    {activeDripsLoading
+                      ? "Loading…"
+                      : activeDripIds.length
+                        ? "-- Select a campaign --"
+                        : "No active drips"}
                   </option>
                   {activeDripIds.map((cid) => (
                     <option key={cid} value={cid}>
