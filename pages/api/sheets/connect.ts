@@ -98,8 +98,10 @@ function _rowImportedKey(rowNumber) {
 }
 
 // ✅ HMAC over BYTES (UTF-8) to match what UrlFetch actually sends.
+// IMPORTANT: Apps Script requires (number[], number[]) for bytes mode.
 function _hmacHex(bodyBytes, secret) {
-  const rawSig = Utilities.computeHmacSha256Signature(bodyBytes, secret);
+  const secretBytes = Utilities.newBlob(String(secret || ""), "text/plain").getBytes();
+  const rawSig = Utilities.computeHmacSha256Signature(bodyBytes, secretBytes);
   return rawSig
     .map(b => (b < 0 ? b + 256 : b).toString(16).padStart(2, "0"))
     .join("");
@@ -315,9 +317,6 @@ function _postBackfillBatch(runId, rows, totalRows) {
 
   const code = resp.getResponseCode ? resp.getResponseCode() : 200;
 
-  // ✅ CRITICAL FIX:
-  // If CoveCRM returns 401/403/400/etc, DO NOT advance nextRow.
-  // Throw so the worker retries the SAME batch next minute.
   if (code < 200 || code >= 300) {
     let snippet = "";
     try {
