@@ -1,4 +1,4 @@
-// /pages/api/get-lead.ts
+// pages/api/get-lead.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "./auth/[...nextauth]";
@@ -10,8 +10,7 @@ import { Types } from "mongoose";
 function pick(obj: any, keys: string[]) {
   for (const k of keys) {
     const v = obj?.[k];
-    if (v !== undefined && v !== null && String(v).trim() !== "")
-      return String(v).trim();
+    if (v !== undefined && v !== null && String(v).trim() !== "") return String(v).trim();
   }
   return "";
 }
@@ -39,12 +38,8 @@ function escRe(s: string) {
 }
 /* -------------------------------- */
 
-export default async function handler(
-  req: NextApiRequest,
-  res: NextApiResponse,
-) {
-  if (req.method !== "GET")
-    return res.status(405).json({ message: "Method not allowed" });
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  if (req.method !== "GET") return res.status(405).json({ message: "Method not allowed" });
 
   const session = await getServerSession(req, res, authOptions);
   const userEmail = session?.user?.email?.toLowerCase();
@@ -90,10 +85,7 @@ export default async function handler(
     // 4) Explicit email
     if (emailParam) {
       const e = emailParam.toLowerCase();
-      or.push(
-        { Email: new RegExp(`^${escRe(e)}$`, "i") },
-        { email: new RegExp(`^${escRe(e)}$`, "i") },
-      );
+      or.push({ Email: new RegExp(`^${escRe(e)}$`, "i") }, { email: new RegExp(`^${escRe(e)}$`, "i") });
     }
 
     if (or.length === 0) {
@@ -103,60 +95,31 @@ export default async function handler(
     const leadDoc: any = await Lead.findOne({ userEmail, $or: or });
     if (!leadDoc) return res.status(404).json({ message: "Lead not found" });
 
-    /* ------- present normalized fields ------- */
+    /* ------- present normalized fields (but DO NOT drop custom fields) ------- */
     const firstName =
-      leadDoc.firstName ??
-      pick(leadDoc, [
-        "First Name",
-        "First_Name",
-        "First",
-        "Given Name",
-        "FName",
-      ]);
+      leadDoc.firstName ?? pick(leadDoc, ["First Name", "First_Name", "First", "Given Name", "FName"]);
     const lastName =
-      leadDoc.lastName ??
-      pick(leadDoc, ["Last Name", "Last_Name", "Last", "Surname", "LName"]);
+      leadDoc.lastName ?? pick(leadDoc, ["Last Name", "Last_Name", "Last", "Surname", "LName"]);
     const phone =
       leadDoc.phone ??
       normalizeUSPhone(
-        pick(leadDoc, [
-          "phone",
-          "Phone",
-          "Phone Number",
-          "Primary Phone",
-          "Mobile",
-          "Cell",
-        ]),
+        pick(leadDoc, ["phone", "Phone", "Phone Number", "Primary Phone", "Mobile", "Cell"]),
       );
-    const email =
-      leadDoc.email ?? pick(leadDoc, ["email", "Email", "Email Address"]);
+    const email = leadDoc.email ?? pick(leadDoc, ["email", "Email", "Email Address"]);
     const state = leadDoc.state ?? pick(leadDoc, ["State", "ST"]);
     const age = leadDoc.age ?? toNumber(pick(leadDoc, ["Age", "Client Age"]));
     const coverageAmount =
       leadDoc.coverageAmount ??
-      toNumber(
-        pick(leadDoc, [
-          "Coverage Amount",
-          "Coverage",
-          "Policy Amount",
-          "Face Amount",
-        ]),
-      );
+      toNumber(pick(leadDoc, ["Coverage Amount", "Coverage", "Policy Amount", "Face Amount"]));
     const notes =
-      typeof leadDoc.notes === "string"
-        ? leadDoc.notes
-        : pick(leadDoc, ["Notes", "Comments", "Remarks"]);
+      typeof leadDoc.notes === "string" ? leadDoc.notes : pick(leadDoc, ["Notes", "Comments", "Remarks"]);
     const status = leadDoc.status || "New";
     const folderId = leadDoc.folderId ?? null;
 
     // History newest-first (limit 50)
     const rawHistory = Array.isArray(leadDoc.history) ? leadDoc.history : [];
     const history = [...rawHistory]
-      .sort(
-        (a: any, b: any) =>
-          new Date(b?.timestamp || 0).getTime() -
-          new Date(a?.timestamp || 0).getTime(),
-      )
+      .sort((a: any, b: any) => new Date(b?.timestamp || 0).getTime() - new Date(a?.timestamp || 0).getTime())
       .slice(0, 50)
       .map((h: any) => ({
         type: h?.type || "system",
@@ -166,21 +129,23 @@ export default async function handler(
         meta: h?.meta || {},
       }));
 
-    const rawInteractions = Array.isArray(leadDoc.interactionHistory)
-      ? leadDoc.interactionHistory
-      : [];
+    const rawInteractions = Array.isArray(leadDoc.interactionHistory) ? leadDoc.interactionHistory : [];
     const interactionHistory = [...rawInteractions]
-      .sort(
-        (a: any, b: any) =>
-          new Date(b?.date || 0).getTime() - new Date(a?.date || 0).getTime(),
-      )
+      .sort((a: any, b: any) => new Date(b?.date || 0).getTime() - new Date(a?.date || 0).getTime())
       .slice(0, 50);
+
+    // ✅ RETURN FULL LEAD DOC so UI can show ALL imported/synced fields
+    // (This does NOT change imports — only what the API returns.)
+    const full = typeof leadDoc.toObject === "function" ? leadDoc.toObject() : { ...leadDoc };
 
     res.setHeader("Cache-Control", "no-store");
     return res.status(200).json({
       lead: {
+        ...full,
         _id: String(leadDoc._id),
         id: String(leadDoc._id),
+
+        // normalized convenience fields (kept)
         firstName,
         lastName,
         phone,
@@ -191,6 +156,8 @@ export default async function handler(
         notes,
         status,
         folderId: folderId ? String(folderId) : null,
+
+        // keep these for your UI
         history,
         interactionHistory,
       },

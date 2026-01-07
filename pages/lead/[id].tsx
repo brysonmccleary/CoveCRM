@@ -19,21 +19,31 @@ type Lead = {
   id: string;
   _id?: string;
   userEmail?: string;
+
   name?: string;
   firstName?: string;
   lastName?: string;
+
   ["First Name"]?: string;
   ["Last Name"]?: string;
+
   Phone?: string;
   phone?: string;
+  ["Phone Number"]?: string;
+  ["phoneNumber"]?: string;
+
   Email?: string;
   email?: string;
+
   Notes?: string;
   notes?: string;
+
   status?: string;
   folderId?: string | null;
+
   assignedDrips?: string[];
   dripProgress?: { dripId: string; startedAt?: string; lastSentIndex?: number }[];
+
   [key: string]: any;
 };
 
@@ -50,14 +60,12 @@ type CallRow = {
   recordingUrl?: string;
   hasRecording?: boolean;
 
-  // legacy fields (kept)
   aiSummary?: string;
   aiActionItems?: string[];
   aiBullets?: string[];
   aiSentiment?: "positive" | "neutral" | "negative";
   hasAI?: boolean;
 
-  // ✅ structured AI overview
   aiOverviewReady?: boolean;
   aiOverview?: {
     overviewBullets: string[];
@@ -89,25 +97,9 @@ type HistoryEvent =
       sid?: string;
       status?: string;
     }
-  | {
-      type: "call";
-      id: string;
-      date: string;
-      durationSec?: number;
-      status?: string;
-      recordingUrl?: string;
-      summary?: string;
-      sentiment?: string;
-    }
   | { type: "note"; id: string; date: string; text: string }
   | { type: "status"; id: string; date: string; from?: string; to?: string }
-  | {
-      type: "booking";
-      id: string;
-      date: string;
-      title?: string;
-      startsAt?: string;
-    }
+  | { type: "booking"; id: string; date: string; title?: string; startsAt?: string }
   | {
       type: "ai_outcome";
       id: string;
@@ -117,7 +109,6 @@ type HistoryEvent =
       recordingId?: string;
     };
 
-// ---- Campaigns (UI-only)
 type UICampaign = {
   _id: string;
   name: string;
@@ -127,16 +118,6 @@ type UICampaign = {
 };
 
 const LEADS_URL = "/dashboard?tab=leads";
-
-// ✅ Only hide true internal/system keys
-const HIDDEN_LEAD_KEYS = new Set([
-  "_id",
-  "id",
-  "folderId",
-  "createdAt",
-  "ownerId",
-  "userEmail",
-]);
 
 function safeBullets(v: any, max = 12): string[] {
   if (!Array.isArray(v)) return [];
@@ -148,16 +129,11 @@ function safeBullets(v: any, max = 12): string[] {
 
 function outcomeBadgeClasses(outcome?: string) {
   const o = String(outcome || "").toLowerCase();
-  if (o.includes("book"))
-    return "bg-emerald-900/40 text-emerald-300 border border-emerald-700/40";
-  if (o.includes("callback"))
-    return "bg-sky-900/40 text-sky-300 border border-sky-700/40";
-  if (o.includes("not"))
-    return "bg-rose-900/40 text-rose-300 border border-rose-700/40";
-  if (o.includes("no answer"))
-    return "bg-gray-800/60 text-gray-200 border border-gray-700/60";
-  if (o.includes("voicemail"))
-    return "bg-gray-800/60 text-gray-200 border border-gray-700/60";
+  if (o.includes("book")) return "bg-emerald-900/40 text-emerald-300 border border-emerald-700/40";
+  if (o.includes("callback")) return "bg-sky-900/40 text-sky-300 border border-sky-700/40";
+  if (o.includes("not")) return "bg-rose-900/40 text-rose-300 border border-rose-700/40";
+  if (o.includes("no answer")) return "bg-gray-800/60 text-gray-200 border border-gray-700/60";
+  if (o.includes("voicemail")) return "bg-gray-800/60 text-gray-200 border border-gray-700/60";
   return "bg-white/10 text-gray-200 border border-white/10";
 }
 
@@ -169,16 +145,107 @@ function titleCaseSentiment(v?: string) {
   return "";
 }
 
-function normalizeDisplayValue(value: any) {
-  if (value === null || value === undefined) return "—";
-  if (typeof value === "string") return value.trim() ? value : "—";
-  if (typeof value === "number" || typeof value === "boolean") return String(value);
-  // arrays/objects
+function normalizeKey(k: string) {
+  return String(k || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_-]+/g, "");
+}
+
+function isEmptyValue(v: any) {
+  if (v === null || v === undefined) return true;
+  if (typeof v === "string" && v.trim() === "") return true;
+  return false;
+}
+
+function formatDisplayValue(v: any): string {
+  if (v === null || v === undefined) return "";
+  if (typeof v === "string") return v.trim();
+  if (typeof v === "number") return String(v);
+  if (typeof v === "boolean") return v ? "Yes" : "No";
+
   try {
-    return JSON.stringify(value, null, 2);
+    if (Array.isArray(v)) {
+      const cleaned = v
+        .map((x) => (x === null || x === undefined ? "" : String(x).trim()))
+        .filter(Boolean);
+      if (cleaned.length === 0) return "";
+      if (cleaned.length <= 6) return cleaned.join(", ");
+      return `${cleaned.slice(0, 6).join(", ")} … (+${cleaned.length - 6})`;
+    }
+
+    const s = JSON.stringify(v);
+    if (!s || s === "{}") return "";
+    if (s.length <= 140) return s;
+    return s.slice(0, 140) + "…";
   } catch {
-    return String(value);
+    return String(v);
   }
+}
+
+function looksLikeNotesKey(rawKey: string) {
+  const nk = normalizeKey(rawKey);
+
+  // aggressive block of note-ish keys (handles " Notes ", "lead_notes", "AI Dialer Notes", etc.)
+  // This is intentional to kill the blob + any variants.
+  if (nk.includes("note")) return true;
+  if (nk.includes("aidhistory")) return true;
+  if (nk.includes("aicall")) return true;
+  if (nk.includes("dialer")) return true;
+  if (nk.includes("fallback")) return true;
+
+  return false;
+}
+
+function looksLikeSystemKey(rawKey: string) {
+  const nk = normalizeKey(rawKey);
+
+  const blockedExact = new Set([
+    "_id",
+    "id",
+    "userid",
+    "ownerid",
+    "useremail",
+    "folderid",
+    "assigneddrips",
+    "dripprogress",
+    "createdat",
+    "updatedat",
+    "__v",
+    "history",
+    "interactionhistory",
+  ]);
+
+  if (blockedExact.has(nk)) return true;
+  return false;
+}
+
+function flattenDisplayFields(lead: any) {
+  // display-only flatten:
+  // if imports stored custom fields under nested containers, we expose them for UI.
+  // DOES NOT change database or import logic.
+  const out: Record<string, any> = {};
+
+  if (!lead || typeof lead !== "object") return out;
+
+  // 1) include top-level
+  Object.keys(lead).forEach((k) => {
+    out[k] = lead[k];
+  });
+
+  // 2) flatten common nested containers (only one level deep)
+  const candidates = ["customFields", "fields", "data", "sheet", "payload"];
+  for (const c of candidates) {
+    const obj = lead?.[c];
+    if (obj && typeof obj === "object" && !Array.isArray(obj)) {
+      Object.keys(obj).forEach((k) => {
+        // don't override top-level if it exists
+        if (out[k] === undefined) out[k] = obj[k];
+      });
+    }
+  }
+
+  return out;
 }
 
 export default function LeadProfileDial() {
@@ -195,7 +262,6 @@ export default function LeadProfileDial() {
 
   const userHasAI = true;
 
-  // ---- Enroll modal UI state
   const [enrollOpen, setEnrollOpen] = useState(false);
   const [campaigns, setCampaigns] = useState<UICampaign[]>([]);
   const [campaignsLoading, setCampaignsLoading] = useState(false);
@@ -203,23 +269,21 @@ export default function LeadProfileDial() {
   const [startAtLocal, setStartAtLocal] = useState<string>("");
   const [enrolling, setEnrolling] = useState(false);
 
-  // ---- Unenroll modal UI state
   const [unenrollOpen, setUnenrollOpen] = useState(false);
   const [activeDripIds, setActiveDripIds] = useState<string[]>([]);
   const [activeDripsLoading, setActiveDripsLoading] = useState(false);
   const [removeCampaignId, setRemoveCampaignId] = useState<string>("");
   const [removing, setRemoving] = useState(false);
 
-  // ✅ Inline edit state (LEFT panel)
+  // ✅ Live edit state
   const [editingKey, setEditingKey] = useState<string | null>(null);
+  const [editingLabel, setEditingLabel] = useState<string>("");
   const [editingValue, setEditingValue] = useState<string>("");
-  const [savingKey, setSavingKey] = useState<string | null>(null);
+  const [savingEdit, setSavingEdit] = useState(false);
 
-  // ---------- helpers ----------
   const formatPhone = (phone = "") => {
     const clean = String(phone).replace(/\D/g, "");
-    if (clean.length === 10)
-      return `${clean.slice(0, 3)}-${clean.slice(3, 6)}-${clean.slice(6)}`;
+    if (clean.length === 10) return `${clean.slice(0, 3)}-${clean.slice(3, 6)}-${clean.slice(6)}`;
     if (clean.length === 11 && clean.startsWith("1"))
       return `${clean.slice(0, 1)}-${clean.slice(1, 4)}-${clean.slice(4, 7)}-${clean.slice(7)}`;
     return phone;
@@ -233,9 +297,7 @@ export default function LeadProfileDial() {
   };
 
   const fetchLeadById = useCallback(async (lookup: string) => {
-    const r = await fetch(`/api/get-lead?id=${encodeURIComponent(lookup)}`, {
-      cache: "no-store",
-    });
+    const r = await fetch(`/api/get-lead?id=${encodeURIComponent(lookup)}`, { cache: "no-store" });
     const j = await r.json().catch(() => ({} as any));
     if (r.ok && j?.lead) {
       setLead({ id: j.lead._id, ...j.lead });
@@ -252,12 +314,9 @@ export default function LeadProfileDial() {
 
       if (await fetchLeadById(idStr)) return;
 
-      // fallback by phone if looks like a phone
       const digits = idStr.replace(/\D+/g, "");
       if (digits.length >= 10) {
-        const r = await fetch(`/api/get-lead?phone=${encodeURIComponent(idStr)}`, {
-          cache: "no-store",
-        });
+        const r = await fetch(`/api/get-lead?phone=${encodeURIComponent(idStr)}`, { cache: "no-store" });
         const j = await r.json().catch(() => ({} as any));
         if (r.ok && j?.lead) {
           setLead({ id: j.lead._id, ...j.lead });
@@ -278,9 +337,7 @@ export default function LeadProfileDial() {
 
     try {
       setHistLoading(true);
-      const r = await fetch(`/api/leads/history?id=${encodeURIComponent(key)}&limit=50`, {
-        cache: "no-store",
-      });
+      const r = await fetch(`/api/leads/history?id=${encodeURIComponent(key)}&limit=50`, { cache: "no-store" });
       const j = await r.json();
       if (!r.ok) throw new Error(j?.message || "Failed to load history");
 
@@ -289,12 +346,7 @@ export default function LeadProfileDial() {
         if (ev.type === "note") {
           lines.push(`📝 ${ev.text} • ${fmtDateTime(ev.date)}`);
         } else if (ev.type === "sms") {
-          const dir =
-            ev.dir === "inbound"
-              ? "⬅️ Inbound SMS"
-              : ev.dir === "outbound"
-              ? "➡️ Outbound SMS"
-              : "🤖 AI SMS";
+          const dir = ev.dir === "inbound" ? "⬅️ Inbound SMS" : ev.dir === "outbound" ? "➡️ Outbound SMS" : "🤖 AI SMS";
           const status = ev.status ? ` • ${ev.status}` : "";
           lines.push(`${dir}: ${ev.text}${status} • ${fmtDateTime(ev.date)}`);
         } else if (ev.type === "booking") {
@@ -321,14 +373,11 @@ export default function LeadProfileDial() {
     loadHistory();
   }, [loadHistory]);
 
-  // ---------- Load calls (for AI overview only; recordings are RIGHT panel only) ----------
   const loadCalls = useCallback(async () => {
     if (!resolvedId) return;
     try {
       setCallsLoading(true);
-      const r = await fetch(`/api/calls?leadId=${encodeURIComponent(resolvedId)}`, {
-        cache: "no-store",
-      });
+      const r = await fetch(`/api/calls?leadId=${encodeURIComponent(resolvedId)}`, { cache: "no-store" });
       const j = await r.json().catch(() => ({} as any));
       if (!r.ok) throw new Error(j?.message || "Failed to load calls");
       const list: CallRow[] = Array.isArray(j?.calls) ? j.calls : [];
@@ -344,7 +393,6 @@ export default function LeadProfileDial() {
     loadCalls();
   }, [loadCalls]);
 
-  // ✅ Prefer structured overview; fallback to legacy (aiBullets/aiSummary)
   const latestOverviewCall = useMemo(() => {
     const sorted = calls.slice().sort((a, b) => {
       const da = new Date(a.startedAt || a.completedAt || 0).getTime();
@@ -358,7 +406,7 @@ export default function LeadProfileDial() {
         (c) =>
           !!c.aiSummary ||
           (Array.isArray(c.aiBullets) && c.aiBullets.length > 0) ||
-          (Array.isArray(c.aiActionItems) && c.aiActionItems.length > 0)
+          (Array.isArray(c.aiActionItems) && c.aiActionItems.length > 0),
       ) ||
       null
     );
@@ -370,7 +418,6 @@ export default function LeadProfileDial() {
 
     const o = c?.aiOverview;
 
-    // ✅ structured path
     if (c?.aiOverviewReady && o) {
       return {
         overviewBullets: safeBullets(o.overviewBullets, 6),
@@ -386,16 +433,11 @@ export default function LeadProfileDial() {
       };
     }
 
-    // ✅ legacy fallback path
     const legacyBullets = Array.isArray(c.aiBullets) ? c.aiBullets : [];
     const legacyActions = Array.isArray(c.aiActionItems) ? c.aiActionItems : [];
 
     return {
-      overviewBullets: legacyBullets.length
-        ? safeBullets(legacyBullets, 6)
-        : c.aiSummary
-        ? [String(c.aiSummary)]
-        : [],
+      overviewBullets: legacyBullets.length ? safeBullets(legacyBullets, 6) : c.aiSummary ? [String(c.aiSummary)] : [],
       keyDetails: legacyActions.length ? safeBullets(legacyActions, 6) : [],
       objections: [],
       questions: [],
@@ -408,18 +450,13 @@ export default function LeadProfileDial() {
     };
   }, [latestOverviewCall]);
 
-  // ---------- Save note ----------
   const handleSaveNote = async () => {
     if (!notes.trim() || !lead?.id) return toast.error("❌ Cannot save an empty note");
     try {
       const r = await fetch("/api/leads/add-history", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          leadId: lead.id,
-          type: "note",
-          message: notes.trim(),
-        }),
+        body: JSON.stringify({ leadId: lead.id, type: "note", message: notes.trim() }),
       });
       if (!r.ok) {
         const j = await r.json().catch(() => ({}));
@@ -433,21 +470,219 @@ export default function LeadProfileDial() {
     }
   };
 
-  // ---------- call ----------
   const startCall = () => {
     if (!lead?.id) return toast.error("Lead not loaded");
     router.push({ pathname: "/dial-session", query: { leadId: lead.id } });
   };
 
-  const leadName = useMemo(() => {
-    const full =
-      `${lead?.firstName || lead?.["First Name"] || ""} ${lead?.lastName || lead?.["Last Name"] || ""}`.trim() ||
-      lead?.name ||
-      "";
-    return full || "Lead";
+  // ---- normalize lead keys for consistent contact fields (Sheets + CSV)
+  const leadNormalized = useMemo(() => {
+    const l = lead || ({} as any);
+
+    const flattened = flattenDisplayFields(l);
+
+    const map: Record<string, any> = {};
+    Object.keys(flattened).forEach((k) => {
+      map[normalizeKey(k)] = flattened[k];
+    });
+
+    const pickFromMap = (keys: string[]) => {
+      for (const k of keys) {
+        const v = map[normalizeKey(k)];
+        if (!isEmptyValue(v)) return v;
+      }
+      return "";
+    };
+
+    const first = pickFromMap(["firstName", "First Name", "firstname", "first_name"]);
+    const last = pickFromMap(["lastName", "Last Name", "lastname", "last_name"]);
+    const phone = pickFromMap(["phone", "Phone", "phoneNumber", "Phone Number"]);
+    const email = pickFromMap(["email", "Email", "e-mail"]);
+    const status = pickFromMap(["status", "Status"]);
+    const age = pickFromMap(["age", "Age"]);
+    const coverage = pickFromMap(["coverageAmount", "coverage", "Coverage", "Coverage Amount", "coverage_amount"]);
+
+    return {
+      firstName: String(first || ""),
+      lastName: String(last || ""),
+      phone: String(phone || ""),
+      email: String(email || ""),
+      status: String(status || ""),
+      age,
+      coverageAmount: coverage,
+    };
   }, [lead]);
 
-  // ---------- Campaigns list (for names + enroll modal) ----------
+  const leadName = useMemo(() => {
+    const full = `${leadNormalized.firstName} ${leadNormalized.lastName}`.replace(/\s+/g, " ").trim();
+    return full || lead?.name || "Lead";
+  }, [lead, leadNormalized]);
+
+  // find best underlying key so edits update the real stored field
+  const bestKeyFor = useCallback(
+    (candidates: string[]) => {
+      const l = lead || ({} as any);
+      const flat = flattenDisplayFields(l);
+      for (const k of candidates) {
+        // exact match
+        if (flat[k] !== undefined) return k;
+        // normalized match
+        const target = normalizeKey(k);
+        const found = Object.keys(flat).find((kk) => normalizeKey(kk) === target);
+        if (found) return found;
+      }
+      // fallback to first candidate
+      return candidates[0];
+    },
+    [lead],
+  );
+
+  const openEditor = useCallback(
+    (fieldKey: string, label: string, currentValue: any) => {
+      if (!lead?.id) return;
+
+      // block any system keys
+      if (looksLikeSystemKey(fieldKey)) return;
+      if (looksLikeNotesKey(fieldKey)) return;
+
+      setEditingKey(fieldKey);
+      setEditingLabel(label);
+      setEditingValue(String(currentValue ?? "").trim());
+    },
+    [lead],
+  );
+
+  const closeEditor = () => {
+    setEditingKey(null);
+    setEditingLabel("");
+    setEditingValue("");
+  };
+
+  const saveEdit = useCallback(async () => {
+    if (!lead?.id || !editingKey) return;
+    try {
+      setSavingEdit(true);
+
+      const r = await fetch("/api/update-lead", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ leadId: lead.id, field: editingKey, value: editingValue }),
+      });
+
+      const j = await r.json().catch(() => ({} as any));
+      if (!r.ok) throw new Error(j?.message || "Failed to update");
+
+      // optimistic UI update
+      setLead((prev) => {
+        if (!prev) return prev;
+        return { ...prev, [editingKey]: editingValue };
+      });
+
+      toast.success("✅ Updated");
+      closeEditor();
+    } catch (e: any) {
+      toast.error(e?.message || "Failed to update");
+    } finally {
+      setSavingEdit(false);
+    }
+  }, [lead, editingKey, editingValue]);
+
+  // ---- Compact + “legit” field layout + show ALL sheet fields
+  const structuredLeft = useMemo(() => {
+    const l = lead || ({} as any);
+    const flat = flattenDisplayFields(l);
+
+    // canonical keys for edits
+    const firstKey = bestKeyFor(["firstName", "First Name", "firstname", "first_name"]);
+    const lastKey = bestKeyFor(["lastName", "Last Name", "lastname", "last_name"]);
+    const phoneKey = bestKeyFor(["phone", "Phone", "phoneNumber", "Phone Number"]);
+    const emailKey = bestKeyFor(["email", "Email", "Email Address"]);
+    const statusKey = bestKeyFor(["status", "Status"]);
+    const ageKey = bestKeyFor(["age", "Age"]);
+    const coverageKey = bestKeyFor(["coverageAmount", "Coverage Amount", "coverage", "Coverage"]);
+
+    const contact = [
+      { label: "Phone", key: phoneKey, value: leadNormalized.phone ? formatPhone(leadNormalized.phone) : "" },
+      { label: "Email", key: emailKey, value: leadNormalized.email },
+    ].filter((x) => !isEmptyValue(x.value));
+
+    const details = [
+      { label: "Status", key: statusKey, value: leadNormalized.status },
+      { label: "Age", key: ageKey, value: leadNormalized.age },
+      { label: "Coverage Amount", key: coverageKey, value: leadNormalized.coverageAmount },
+    ].filter((x) => !isEmptyValue(x.value));
+
+    // keys we never show (internal + notes blobs + name parts)
+    const blockedNormalized = new Set([
+      "_id",
+      "id",
+      "userid",
+      "ownerid",
+      "useremail",
+      "folderid",
+      "assigneddrips",
+      "dripprogress",
+      "createdat",
+      "updatedat",
+      "__v",
+      "history",
+      "interactionhistory",
+
+      // do not render as separate fields
+      "firstname",
+      "lastname",
+      "name",
+      "phone",
+      "phonenumber",
+      "email",
+      "status",
+      "age",
+      "coverageamount",
+      "coverage",
+      "coverage_amount",
+    ]);
+
+    const custom = Object.entries(flat)
+      .filter(([k, v]) => {
+        const nk = normalizeKey(k);
+
+        if (blockedNormalized.has(nk)) return false;
+        if (looksLikeSystemKey(k)) return false;
+
+        // kill notes blob variants hard
+        if (looksLikeNotesKey(k)) return false;
+
+        const rendered = formatDisplayValue(v);
+        if (!rendered) return false;
+
+        // kill AI fallback junk anywhere it appears
+        if (rendered.includes("[AI Dialer fallback]")) return false;
+
+        return true;
+      })
+      .map(([k, v]) => ({
+        key: k,
+        label: String(k).replace(/_/g, " "),
+        value: formatDisplayValue(v),
+      }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+
+    return {
+      name: {
+        display: leadName,
+        // allow editing first/last via modal-like inline editor (two fields) — handled in UI
+        firstKey,
+        lastKey,
+        firstVal: String(flat[firstKey] ?? leadNormalized.firstName ?? ""),
+        lastVal: String(flat[lastKey] ?? leadNormalized.lastName ?? ""),
+      },
+      contact,
+      details,
+      custom,
+    };
+  }, [lead, leadName, leadNormalized, bestKeyFor]);
+
+  // ---------- Campaigns list ----------
   useEffect(() => {
     const loadAllCampaigns = async () => {
       try {
@@ -466,16 +701,12 @@ export default function LeadProfileDial() {
     loadAllCampaigns();
   }, []);
 
-  // ---------- Load active drips for UNENROLL modal only ----------
   const loadActiveForLead = useCallback(async () => {
     if (!resolvedId) return;
     try {
       setActiveDripsLoading(true);
 
-      // Preferred: /api/drips/enrollments
-      const resp = await fetch(`/api/drips/enrollments?leadId=${encodeURIComponent(resolvedId)}`, {
-        cache: "no-store",
-      });
+      const resp = await fetch(`/api/drips/enrollments?leadId=${encodeURIComponent(resolvedId)}`, { cache: "no-store" });
       if (resp.ok) {
         const data = await resp.json().catch(() => ({} as any));
         const ids: string[] = Array.isArray(data?.enrollments)
@@ -488,7 +719,6 @@ export default function LeadProfileDial() {
         return;
       }
 
-      // Fallbacks
       if (lead?.assignedDrips?.length) {
         const ids = [...new Set(lead.assignedDrips.map(String))];
         setActiveDripIds(ids);
@@ -514,10 +744,9 @@ export default function LeadProfileDial() {
 
   const campaignNameById = useCallback(
     (id: string) => campaigns.find((c) => String(c._id) === String(id))?.name || id,
-    [campaigns]
+    [campaigns],
   );
 
-  // ---------- Open modals ----------
   const openEnrollModal = () => {
     if (!resolvedId) return toast.error("Lead not loaded");
     setEnrollOpen(true);
@@ -529,7 +758,6 @@ export default function LeadProfileDial() {
     setUnenrollOpen(true);
   };
 
-  // ---------- Enroll submit ----------
   const submitEnroll = async () => {
     if (!lead?.id) return toast.error("Lead not loaded");
     if (!selectedCampaignId) return toast.error("Pick a campaign");
@@ -550,8 +778,7 @@ export default function LeadProfileDial() {
       const j = await r.json().catch(() => ({} as any));
       if (!r.ok || !j?.success) throw new Error(j?.error || j?.message || "Failed to enroll lead");
 
-      const enrolledName =
-        j?.campaign?.name || campaigns.find((c) => c._id === selectedCampaignId)?.name || "campaign";
+      const enrolledName = j?.campaign?.name || campaigns.find((c) => c._id === selectedCampaignId)?.name || "campaign";
       setHistoryLines((prev) => [`🔖 Status: Enrolled to ${enrolledName} • ${new Date().toLocaleString()}`, ...prev]);
 
       toast.success(`✅ Enrolled in ${enrolledName}`);
@@ -565,7 +792,6 @@ export default function LeadProfileDial() {
     }
   };
 
-  // ---------- Unenroll submit ----------
   const submitUnenroll = async () => {
     if (!lead?.id) return toast.error("Lead not loaded");
     if (!removeCampaignId) return toast.error("Select a drip to remove");
@@ -592,224 +818,122 @@ export default function LeadProfileDial() {
     }
   };
 
-  // ---------- LEFT panel: inline edit helpers ----------
-  const startEditingField = (key: string, rawValue: any) => {
-    if (!lead?.id) return toast.error("Lead not loaded");
-    setEditingKey(key);
+  // ✅ compact rows: label + value close together (like your old UI)
+  const CompactRow = ({
+    label,
+    value,
+    fieldKey,
+    editable = true,
+  }: {
+    label: string;
+    value: string;
+    fieldKey?: string;
+    editable?: boolean;
+  }) => {
+    const v = String(value || "").trim();
+    const canEdit = !!fieldKey && editable;
 
-    // For phone keys, store digits/pretty? -> store the raw string as displayed (editable)
-    const display = normalizeDisplayValue(rawValue);
-    setEditingValue(display === "—" ? "" : display);
+    return (
+      <button
+        type="button"
+        onClick={() => {
+          if (!canEdit) return;
+          openEditor(fieldKey!, label, value);
+        }}
+        className={`w-full text-left py-1 ${canEdit ? "hover:bg-white/5 rounded px-1 -mx-1" : ""}`}
+      >
+        <div className="flex items-baseline gap-2">
+          <div className="text-[12px] text-gray-400 w-[110px] shrink-0">{label}</div>
+          <div className="text-[13px] text-white break-words leading-snug">
+            {v || "—"} {canEdit ? <span className="text-gray-500 text-[11px] ml-2">Edit</span> : null}
+          </div>
+        </div>
+      </button>
+    );
   };
 
-  const cancelEditingField = () => {
-    setEditingKey(null);
-    setEditingValue("");
-    setSavingKey(null);
-  };
-
-  const saveEditingField = async () => {
-    if (!lead?.id) return toast.error("Lead not loaded");
-    if (!editingKey) return;
-
-    const field = editingKey;
-    const value = editingValue;
-
-    try {
-      setSavingKey(field);
-
-      const r = await fetch("/api/leads/update-field", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ leadId: lead.id, field, value }),
-      });
-
-      const j = await r.json().catch(() => ({} as any));
-      if (!r.ok || j?.success === false) {
-        throw new Error(j?.message || j?.error || "Failed to update field");
-      }
-
-      // Update local state immediately
-      setLead((prev) => {
-        if (!prev) return prev;
-        return { ...prev, [field]: value };
-      });
-
-      toast.success("✅ Updated");
-      setEditingKey(null);
-      setEditingValue("");
-    } catch (e: any) {
-      toast.error(e?.message || "Failed to update field");
-    } finally {
-      setSavingKey(null);
-    }
-  };
-
-  const leftPanelEntries = useMemo(() => {
-    const obj = lead || {};
-    const entries = Object.entries(obj).filter(([key]) => !HIDDEN_LEAD_KEYS.has(key));
-
-    // Stable ordering: common keys first, then everything else alphabetically
-    const preferredOrder = [
-      "firstName",
-      "lastName",
-      "First Name",
-      "Last Name",
-      "name",
-      "Phone",
-      "phone",
-      "Email",
-      "email",
-      "status",
-      "Notes",
-      "notes",
-    ];
-
-    const prefSet = new Set(preferredOrder);
-
-    const preferred: Array<[string, any]> = [];
-    for (const k of preferredOrder) {
-      const found = entries.find(([key]) => key === k);
-      if (found) preferred.push(found);
-    }
-
-    const rest = entries
-      .filter(([key]) => !prefSet.has(key))
-      .sort(([a], [b]) => a.localeCompare(b));
-
-    // Remove dupes if both name/firstName etc exist (keep the first occurrence)
-    const seen = new Set<string>();
-    const merged = [...preferred, ...rest].filter(([k]) => {
-      if (seen.has(k)) return false;
-      seen.add(k);
-      return true;
-    });
-
-    return merged;
-  }, [lead]);
+  const Section = ({
+    title,
+    right,
+    children,
+  }: {
+    title: string;
+    right?: React.ReactNode;
+    children: React.ReactNode;
+  }) => (
+    <div className="mb-3 rounded-lg border border-white/10 bg-[#0b1220]">
+      <div className="px-3 py-2 border-b border-white/10 flex items-center justify-between">
+        <div className="text-sm font-semibold">{title}</div>
+        {right}
+      </div>
+      <div className="px-3 py-2">{children}</div>
+    </div>
+  );
 
   // ---------- Render ----------
   return (
     <div className="flex bg-[#0f172a] text-white min-h-screen">
       <Sidebar />
 
-      {/* LEFT (lead fields only; editable) */}
-      <div className="w-[320px] p-4 border-r border-gray-700 bg-[#1e293b] overflow-y-auto">
-        <div className="mb-2">
-          <h2 className="text-xl font-bold">{leadName}</h2>
+      {/* LEFT */}
+      <div className="w-[360px] p-4 border-r border-gray-800 bg-[#1e293b] overflow-y-auto">
+        {/* VERIFICATION MARKER: search this in prod to confirm correct build */}
+        <div className="hidden">CUSTOM_FIELDS_PANEL_V3_LIVE_EDIT</div>
+
+        <div className="mb-3">
+          <h2 className="text-xl font-bold">{structuredLeft.name.display}</h2>
+          <div className="text-xs text-gray-400 mt-1">Click fields to edit live.</div>
         </div>
 
-        {leftPanelEntries.map(([key, rawValue]) => {
-          let displayValue = rawValue;
+        <Section title="Contact">
+          {structuredLeft.contact.length ? (
+            structuredLeft.contact.map((f) => (
+              <CompactRow
+                key={f.label}
+                label={f.label}
+                value={String(f.value || "")}
+                fieldKey={String(f.key || "")}
+                editable={true}
+              />
+            ))
+          ) : (
+            <div className="text-sm text-gray-400 py-1">No contact fields found.</div>
+          )}
+        </Section>
 
-          // Pretty phone formatting for display (still editable)
-          if (key === "Phone" || key.toLowerCase() === "phone") {
-            displayValue = formatPhone(String(rawValue || ""));
-          }
+        <Section title="Lead Details">
+          {structuredLeft.details.length ? (
+            structuredLeft.details.map((f) => (
+              <CompactRow
+                key={f.label}
+                label={f.label}
+                value={formatDisplayValue(f.value)}
+                fieldKey={String(f.key || "")}
+                editable={true}
+              />
+            ))
+          ) : (
+            <div className="text-sm text-gray-400 py-1">No additional details.</div>
+          )}
+        </Section>
 
-          const isEditing = editingKey === key;
-          const isSaving = savingKey === key;
-
-          const valueText = normalizeDisplayValue(displayValue);
-          const label = key.replace(/_/g, " ");
-
-          const isLong =
-            typeof rawValue === "string" ? rawValue.length > 60 : valueText.length > 80;
-
-          return (
-            <div key={key} className="py-1">
-              <p className="text-xs text-gray-400 mb-1">{label}</p>
-
-              {!isEditing ? (
-                <button
-                  type="button"
-                  onClick={() => startEditingField(key, rawValue)}
-                  className="w-full text-left rounded px-2 py-1.5 bg-white/0 hover:bg-white/5 border border-white/0 hover:border-white/10 transition"
-                  title="Click to edit"
-                >
-                  <span className="text-sm text-gray-100 whitespace-pre-wrap break-words">
-                    {valueText}
-                  </span>
-                </button>
-              ) : (
-                <div className="rounded border border-white/10 bg-[#0f172a] p-2">
-                  {isLong ? (
-                    <textarea
-                      value={editingValue}
-                      onChange={(e) => setEditingValue(e.target.value)}
-                      className="w-full text-sm text-white bg-transparent border-none focus:outline-none resize-y min-h-[72px]"
-                      autoFocus
-                      onKeyDown={(e) => {
-                        if (e.key === "Escape") {
-                          e.preventDefault();
-                          cancelEditingField();
-                        }
-                        // (No Enter-to-save for textarea; users can click Save / blur)
-                      }}
-                      onBlur={() => {
-                        // save on blur (matches your “edit live” intent)
-                        saveEditingField();
-                      }}
-                    />
-                  ) : (
-                    <input
-                      value={editingValue}
-                      onChange={(e) => setEditingValue(e.target.value)}
-                      className="w-full text-sm text-white bg-transparent border-none focus:outline-none"
-                      autoFocus
-                      onKeyDown={(e) => {
-                        if (e.key === "Escape") {
-                          e.preventDefault();
-                          cancelEditingField();
-                        }
-                        if (e.key === "Enter") {
-                          e.preventDefault();
-                          saveEditingField();
-                        }
-                      }}
-                      onBlur={() => {
-                        saveEditingField();
-                      }}
-                    />
-                  )}
-
-                  <div className="mt-2 flex items-center justify-end gap-2">
-                    <button
-                      type="button"
-                      onMouseDown={(e) => e.preventDefault()}
-                      onClick={cancelEditingField}
-                      className="text-xs px-2 py-1 rounded bg-white/10 hover:bg-white/20"
-                      disabled={isSaving}
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="button"
-                      onMouseDown={(e) => e.preventDefault()}
-                      onClick={saveEditingField}
-                      className="text-xs px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50"
-                      disabled={isSaving}
-                    >
-                      {isSaving ? "Saving…" : "Save"}
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              <hr className="border-gray-800 my-2" />
-            </div>
-          );
-        })}
-
-        <p className="text-gray-500 mt-2 text-xs">
-          Click any field value to edit live. Enter saves, Esc cancels.
-        </p>
+        <Section
+          title="Custom Fields (Imported)"
+          right={<div className="text-xs text-gray-500">{structuredLeft.custom.length || "—"}</div>}
+        >
+          {structuredLeft.custom.length ? (
+            structuredLeft.custom.map((f) => (
+              <CompactRow key={f.key} label={f.label} value={String(f.value || "")} fieldKey={f.key} editable={true} />
+            ))
+          ) : (
+            <div className="text-sm text-gray-400 py-1">No custom fields found for this lead.</div>
+          )}
+        </Section>
       </div>
 
       {/* CENTER */}
       <div className="flex-1 p-6 bg-[#0f172a] border-r border-gray-800 flex flex-col min-h-0">
         <div className="max-w-3xl flex flex-col min-h-0 flex-1">
-          {/* Lead note input stays (this is NOT AI call overview) */}
           <h3 className="text-lg font-bold mb-2">Add a Note</h3>
 
           <div className="rounded-lg mb-2 bg-[#0f172a] border border-white/10">
@@ -856,7 +980,7 @@ export default function LeadProfileDial() {
             </button>
           </div>
 
-          {/* ✅ AI Call Overview (middle panel) */}
+          {/* AI Call Overview */}
           <div className="mb-4 bg-[#0b1220] border border-white/10 rounded p-3">
             <div className="flex items-center justify-between mb-1">
               <h3 className="text-lg font-bold">AI Call Overview</h3>
@@ -878,13 +1002,8 @@ export default function LeadProfileDial() {
               <p className="text-gray-400 text-sm">AI call found, but overview data is missing.</p>
             ) : (
               <div className="mt-2 space-y-3">
-                {/* Top row badges */}
                 <div className="flex items-center gap-2 flex-wrap">
-                  <span
-                    className={`px-2 py-0.5 rounded-full text-xs border ${outcomeBadgeClasses(
-                      closeOverview.outcome
-                    )}`}
-                  >
+                  <span className={`px-2 py-0.5 rounded-full text-xs border ${outcomeBadgeClasses(closeOverview.outcome)}`}>
                     {closeOverview.outcome}
                   </span>
                   {closeOverview.sentiment ? (
@@ -899,7 +1018,6 @@ export default function LeadProfileDial() {
                   ) : null}
                 </div>
 
-                {/* Sections */}
                 {closeOverview.overviewBullets.length ? (
                   <div>
                     <div className="text-xs text-gray-400 mb-1">Overview</div>
@@ -928,59 +1046,10 @@ export default function LeadProfileDial() {
                   </div>
                 ) : null}
 
-                {closeOverview.objections.length ? (
-                  <div>
-                    <div className="text-xs text-gray-400 mb-1">Objections</div>
-                    <ul className="space-y-1">
-                      {closeOverview.objections.map((b, idx) => (
-                        <li key={idx} className="text-sm text-gray-200 flex gap-2">
-                          <span className="text-gray-400">•</span>
-                          <span>{b}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                ) : null}
-
-                {closeOverview.questions.length ? (
-                  <div>
-                    <div className="text-xs text-gray-400 mb-1">Questions</div>
-                    <ul className="space-y-1">
-                      {closeOverview.questions.map((b, idx) => (
-                        <li key={idx} className="text-sm text-gray-200 flex gap-2">
-                          <span className="text-gray-400">•</span>
-                          <span>{b}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                ) : null}
-
-                {closeOverview.nextSteps.length ? (
-                  <div>
-                    <div className="text-xs text-gray-400 mb-1">Next steps</div>
-                    <ul className="space-y-1">
-                      {closeOverview.nextSteps.map((b, idx) => (
-                        <li key={idx} className="text-sm text-gray-200 flex gap-2">
-                          <span className="text-gray-400">•</span>
-                          <span>{b}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                ) : null}
-
                 <div className="text-xs text-gray-500 pt-1">
                   Based on most recent AI call •{" "}
-                  {fmtDateTime(
-                    (latestOverviewCall as any)?.startedAt || (latestOverviewCall as any)?.completedAt
-                  )}
-                  {closeOverview.generatedAt ? (
-                    <>
-                      {" "}
-                      • Overview generated {fmtDateTime(closeOverview.generatedAt)}
-                    </>
-                  ) : null}
+                  {fmtDateTime((latestOverviewCall as any)?.startedAt || (latestOverviewCall as any)?.completedAt)}
+                  {closeOverview.generatedAt ? <> • Overview generated {fmtDateTime(closeOverview.generatedAt)}</> : null}
                 </div>
               </div>
             )}
@@ -1034,6 +1103,51 @@ export default function LeadProfileDial() {
         </div>
       </div>
 
+      {/* ✅ Live Edit Modal */}
+      {editingKey ? (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/60" onClick={savingEdit ? undefined : closeEditor} />
+          <div className="relative w-full max-w-md mx-4 rounded-lg border border-white/10 bg-[#0f172a] p-4 shadow-xl">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-lg font-bold">Edit Field</h3>
+              <button onClick={savingEdit ? undefined : closeEditor} className="text-gray-300 hover:text-white">
+                ✕
+              </button>
+            </div>
+
+            <div className="text-sm text-gray-300 mb-2">{editingLabel}</div>
+
+            <input
+              value={editingValue}
+              onChange={(e) => setEditingValue(e.target.value)}
+              className="w-full bg-[#1e293b] text-white border border-white/10 rounded p-2"
+              placeholder="Enter value…"
+            />
+
+            <div className="mt-4 flex items-center justify-end gap-2">
+              <button
+                onClick={closeEditor}
+                disabled={savingEdit}
+                className="px-3 py-2 rounded bg-gray-700 hover:bg-gray-600 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={saveEdit}
+                disabled={savingEdit}
+                className="px-4 py-2 rounded bg-green-600 hover:bg-green-700 disabled:opacity-50"
+              >
+                {savingEdit ? "Saving…" : "Save"}
+              </button>
+            </div>
+
+            <div className="text-xs text-gray-500 mt-2">
+              Updates are saved instantly and only apply to your lead records.
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       {/* Enroll Modal */}
       {enrollOpen ? (
         <div className="fixed inset-0 z-[70] flex items-center justify-center">
@@ -1054,9 +1168,7 @@ export default function LeadProfileDial() {
                   onChange={(e) => setSelectedCampaignId(e.target.value)}
                   className="w-full bg-[#1e293b] text-white border border-white/10 rounded p-2"
                 >
-                  <option value="">
-                    {campaignsLoading ? "Loading…" : "-- Select a campaign --"}
-                  </option>
+                  <option value="">{campaignsLoading ? "Loading…" : "-- Select a campaign --"}</option>
                   {campaigns.map((c) => (
                     <option key={c._id} value={c._id}>
                       {c.name}
@@ -1075,17 +1187,12 @@ export default function LeadProfileDial() {
                   onChange={(e) => setStartAtLocal(e.target.value)}
                   className="w-full bg-[#1e293b] text-white border border-white/10 rounded p-2"
                 />
-                <p className="text-xs text-gray-500 mt-1">
-                  Leave blank to start immediately; scheduler will handle timing.
-                </p>
+                <p className="text-xs text-gray-500 mt-1">Leave blank to start immediately; scheduler will handle timing.</p>
               </div>
             </div>
 
             <div className="mt-4 flex items-center justify-end gap-2">
-              <button
-                onClick={() => setEnrollOpen(false)}
-                className="px-3 py-2 rounded bg-gray-700 hover:bg-gray-600"
-              >
+              <button onClick={() => setEnrollOpen(false)} className="px-3 py-2 rounded bg-gray-700 hover:bg-gray-600">
                 Cancel
               </button>
               <button
@@ -1124,8 +1231,8 @@ export default function LeadProfileDial() {
                     {activeDripsLoading
                       ? "Loading…"
                       : activeDripIds.length
-                      ? "-- Select a campaign --"
-                      : "No active drips"}
+                        ? "-- Select a campaign --"
+                        : "No active drips"}
                   </option>
                   {activeDripIds.map((cid) => (
                     <option key={cid} value={cid}>
@@ -1133,17 +1240,12 @@ export default function LeadProfileDial() {
                     </option>
                   ))}
                 </select>
-                <p className="text-xs text-gray-500 mt-1">
-                  Only campaigns this lead is currently enrolled in are shown.
-                </p>
+                <p className="text-xs text-gray-500 mt-1">Only campaigns this lead is currently enrolled in are shown.</p>
               </div>
             </div>
 
             <div className="mt-4 flex items-center justify-end gap-2">
-              <button
-                onClick={() => setUnenrollOpen(false)}
-                className="px-3 py-2 rounded bg-gray-700 hover:bg-gray-600"
-              >
+              <button onClick={() => setUnenrollOpen(false)} className="px-3 py-2 rounded bg-gray-700 hover:bg-gray-600">
                 Cancel
               </button>
               <button
