@@ -153,12 +153,6 @@ function normalizeKey(k: string) {
     .replace(/[\s_-]+/g, "");
 }
 
-function isEmptyValue(v: any) {
-  if (v === null || v === undefined) return true;
-  if (typeof v === "string" && v.trim() === "") return true;
-  return false;
-}
-
 function formatDisplayValue(v: any): string {
   if (v === null || v === undefined) return "";
   if (typeof v === "string") return v.trim();
@@ -235,11 +229,6 @@ function tryParseJsonObject(v: any): Record<string, any> | null {
 }
 
 function flattenDisplayFields(lead: any) {
-  // display-only flatten:
-  // - includes top-level fields
-  // - includes common nested containers (1 level)
-  // - parses rawRow JSON (Google Sheets sync) so headers like "Mortgage Balance" appear
-  // DOES NOT change database/import logic.
   const out: Record<string, any> = {};
   if (!lead || typeof lead !== "object") return out;
 
@@ -257,7 +246,6 @@ function flattenDisplayFields(lead: any) {
     }
   }
 
-  // ✅ VERY IMPORTANT: Google Sheets synced leads often store original row in rawRow (stringified JSON)
   const rawRowObj = tryParseJsonObject(lead?.rawRow);
   if (rawRowObj) {
     Object.keys(rawRowObj).forEach((k) => {
@@ -500,14 +488,10 @@ export default function LeadProfileDial() {
     router.push({ pathname: "/dial-session", query: { leadId: lead.id } });
   };
 
-  // Build one “Lead Info” list like Dial Session:
-  // - important fields first (in a predictable order)
-  // - then remaining fields (deduped + filtered)
   const leadInfoRows = useMemo(() => {
     const l = lead || ({} as any);
     const flat = flattenDisplayFields(l);
 
-    // Map normalized key -> original keys present (first match used)
     const mapNormToKeys: Record<string, string[]> = {};
     Object.keys(flat).forEach((k) => {
       const nk = normalizeKey(k);
@@ -544,12 +528,9 @@ export default function LeadProfileDial() {
       rows.push({ label, key: found.key, value: v, editable: true });
     };
 
-    // ---- Important fields in the order you expect ----
-    // Name: prefer separate first/last; if not present, use Name
     pushField("First Name", ["First Name", "firstName", "first name", "First name", "FName", "Given Name"]);
     pushField("Last Name", ["Last Name", "lastName", "last name", "Last name", "LName", "Surname"]);
 
-    // If there is only a single “Name” field (some imports)
     if (!rows.find((r) => r.label === "First Name") && !rows.find((r) => r.label === "Last Name")) {
       pushField("Name", ["Name", "name", "Full Name", "fullName"]);
     }
@@ -561,13 +542,11 @@ export default function LeadProfileDial() {
     pushField("DOB", ["DOB", "Date Of Birth", "Birthday", "birthdate", "Birth Date", "Date of birth"]);
     pushField("Age", ["Age", "age"]);
 
-    // Address-ish
     pushField("Street Address", ["Street Address", "street", "street address", "Address", "address", "Address 1"]);
     pushField("City", ["City", "city"]);
     pushField("State", ["State", "state", "ST", "RR State", "RRState"]);
     pushField("Zip", ["Zip", "ZIP", "ZIP code", "Zip code", "postal", "postalCode"]);
 
-    // Mortgage / coverage (this is what was missing because it often lives inside rawRow)
     pushField("Mortgage Amount", ["Mortgage Amount", "mortgage amount", "Mortgage Balance", "mortgage balance", "Mortgage", "mortgage"]);
     pushField("Mortgage Payment", ["Mortgage Payment", "mortgage payment"]);
     pushField("Coverage Amount", ["Coverage Amount", "coverageAmount", "coverage", "How Much Coverage Do You Need?"]);
@@ -577,9 +556,7 @@ export default function LeadProfileDial() {
     pushField("Beneficiary", ["Beneficiary", "beneficiary"]);
     pushField("Beneficiary Name", ["Beneficiary Name", "beneficiary name"]);
 
-    // ---- Now add remaining fields (custom/imported) ----
     const hardBlockNorm = new Set<string>([
-      // internal/system
       "_id",
       "id",
       "userid",
@@ -595,8 +572,6 @@ export default function LeadProfileDial() {
       "interactionhistory",
       "phonelast10",
       "normalizedphone",
-
-      // junk or UI-only
       "rawrow",
       "reminderssent",
       "isaiengaged",
@@ -615,17 +590,15 @@ export default function LeadProfileDial() {
         if (looksLikeSystemKey(k)) return false;
         if (looksLikeNotesKey(k)) return false;
 
-        // dedupe against anything already selected above
         if (usedNorm.has(nk)) return false;
         if (alreadyUsedAliasesNorm.has(nk)) return false;
 
         const rendered = formatDisplayValue(v);
         if (!rendered) return false;
 
-        // kill the AI fallback junk (content-based)
         const lower = rendered.toLowerCase();
         if (lower.includes("[ai dialer fallback]")) return false;
-        if (lower.includes("callSid=".toLowerCase()) && lower.includes("twilio status".toLowerCase())) return false;
+        if (lower.includes("callsid=") && lower.includes("twilio status")) return false;
 
         return true;
       })
@@ -641,7 +614,6 @@ export default function LeadProfileDial() {
   }, [lead]);
 
   const leadName = useMemo(() => {
-    // Prefer what we’re already showing at top
     const l = lead || ({} as any);
     const flat = flattenDisplayFields(l);
 
@@ -701,8 +673,6 @@ export default function LeadProfileDial() {
       const j = await r.json().catch(() => ({} as any));
       if (!r.ok) throw new Error(j?.message || "Failed to update");
 
-      // optimistic UI update: write the edited field onto the lead top-level
-      // (If it was previously only inside rawRow, this makes it persist without touching import logic.)
       setLead((prev) => {
         if (!prev) return prev;
         return { ...prev, [editingKey]: editingValue };
@@ -853,6 +823,7 @@ export default function LeadProfileDial() {
     }
   };
 
+  // ✅ Styling-only change: make rows look like Dial Session left panel
   const LeadInfoRow = ({
     label,
     value,
@@ -876,13 +847,12 @@ export default function LeadProfileDial() {
         }}
         className="w-full text-left"
       >
-        <div className="flex items-center justify-between py-2 border-b border-white/10">
-          <div className="text-sm text-gray-300">{label}:</div>
-          <div className="text-sm text-white font-medium break-words text-right max-w-[60%]">
-            {v || "—"}{" "}
-            {canEdit ? <span className="text-gray-500 text-xs ml-2">Edit</span> : null}
-          </div>
-        </div>
+        <p className="text-sm text-white">
+          <strong>{label}:</strong>{" "}
+          <span className="text-white">{v || "—"}</span>
+          {canEdit ? <span className="text-gray-500 text-xs ml-2">Edit</span> : null}
+        </p>
+        <hr className="border-gray-700 my-1" />
       </button>
     );
   };
@@ -895,34 +865,29 @@ export default function LeadProfileDial() {
       {/* LEFT */}
       <div className="w-[360px] p-4 border-r border-gray-800 bg-[#1e293b] overflow-y-auto">
         {/* VERIFICATION MARKER: search this in prod to confirm correct build */}
-        <div className="hidden">LEAD_INFO_LEFT_PANEL_DIALSESSION_STYLE_V1</div>
+        <div className="hidden">LEAD_INFO_LEFT_PANEL_DIALSESSION_STYLE_V2</div>
 
         <div className="mb-3">
           <h2 className="text-xl font-bold">{leadName}</h2>
           <div className="text-xs text-gray-400 mt-1">Click fields to edit live.</div>
+          <hr className="border-gray-700 my-2" />
         </div>
 
-        <div className="rounded-lg border border-white/10 bg-[#0b1220] overflow-hidden">
-          <div className="px-3 py-2 border-b border-white/10 flex items-center justify-between">
-            <div className="text-sm font-semibold">Lead Info</div>
-            <div className="text-xs text-gray-500">{leadInfoRows.length || "—"}</div>
-          </div>
-
-          <div className="px-3">
-            {leadInfoRows.length ? (
-              leadInfoRows.map((r) => (
-                <LeadInfoRow
-                  key={`${r.label}-${r.key}`}
-                  label={r.label}
-                  value={r.value}
-                  fieldKey={r.key}
-                  editable={r.editable}
-                />
-              ))
-            ) : (
-              <div className="text-sm text-gray-400 py-3">No lead fields found.</div>
-            )}
-          </div>
+        {/* ✅ Removed the inner black “card/box” entirely — render like Dial Session */}
+        <div>
+          {leadInfoRows.length ? (
+            leadInfoRows.map((r) => (
+              <LeadInfoRow
+                key={`${r.label}-${r.key}`}
+                label={r.label}
+                value={r.value}
+                fieldKey={r.key}
+                editable={r.editable}
+              />
+            ))
+          ) : (
+            <div className="text-sm text-gray-400 py-2">No lead fields found.</div>
+          )}
         </div>
       </div>
 
