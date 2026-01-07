@@ -1,5 +1,5 @@
 // components/LeadsPanel.tsx
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import LeadImportPanel from "./LeadImportPanel";
 import LeadPreviewPanel from "./LeadPreviewPanel";
 import { useRouter } from "next/router";
@@ -332,6 +332,17 @@ export default function LeadsPanel() {
     }
     setSelectAll(!selectAll);
   };
+
+  // ✅ Keep the Select All button label/state correct even if selection changes manually
+  useEffect(() => {
+    if (!leads.length) {
+      if (selectAll) setSelectAll(false);
+      return;
+    }
+    const allSelected = leads.every((l) => selectedLeads.includes(l._id));
+    if (allSelected !== selectAll) setSelectAll(allSelected);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [leads, selectedLeads]);
 
   const buildProgressKey = () => {
     const folder = expandedFolder || "no-folder";
@@ -683,6 +694,32 @@ export default function LeadsPanel() {
     );
   };
 
+  // ✅ UI-only helper: treat empty values as "empty" for column hiding
+  const isEffectivelyEmpty = (v: any) => {
+    if (v === null || v === undefined) return true;
+    if (typeof v === "string") return v.trim() === "" || v.trim() === "-" || v.trim().toLowerCase() === "null";
+    if (typeof v === "number") return v === 0 || Number.isNaN(v);
+    return false;
+  };
+
+  const getLeadValue = (lead: any, key: "firstName" | "lastName" | "phone" | "email" | "state" | "age") => {
+    if (!lead) return undefined;
+    if (key === "firstName") return lead.firstName ?? lead["First Name"];
+    if (key === "lastName") return lead.lastName ?? lead["Last Name"];
+    if (key === "phone") return lead.phone ?? lead["Phone"];
+    if (key === "email") return lead.email ?? lead["Email"];
+    if (key === "state") return lead.state ?? lead["State"];
+    if (key === "age") return lead.age ?? lead["Age"];
+    return undefined;
+  };
+
+  const showColFirstName = useMemo(() => leads.some((l) => !isEffectivelyEmpty(getLeadValue(l, "firstName"))), [leads]);
+  const showColLastName = useMemo(() => leads.some((l) => !isEffectivelyEmpty(getLeadValue(l, "lastName"))), [leads]);
+  const showColPhone = useMemo(() => leads.some((l) => !isEffectivelyEmpty(getLeadValue(l, "phone"))), [leads]);
+  const showColEmail = useMemo(() => leads.some((l) => !isEffectivelyEmpty(getLeadValue(l, "email"))), [leads]);
+  const showColState = useMemo(() => leads.some((l) => !isEffectivelyEmpty(getLeadValue(l, "state"))), [leads]);
+  const showColAge = useMemo(() => leads.some((l) => !isEffectivelyEmpty(getLeadValue(l, "age"))), [leads]);
+
   return (
     <div className="space-y-4 p-4">
       {/* Top actions */}
@@ -759,7 +796,11 @@ export default function LeadsPanel() {
 
                 <div className="flex justify-between items-center mb-2">
                   <div className="flex space-x-2">
-                    <button onClick={() => {}} className="border px-3 py-1 rounded cursor-pointer">
+                    {/* ✅ FIX: this button now actually works */}
+                    <button
+                      onClick={handleSelectAll}
+                      className="border px-3 py-1 rounded cursor-pointer"
+                    >
                       {selectAll ? "Deselect All" : "Select All"}
                     </button>
                     <span className="text-sm">{selectedLeads.length} leads selected</span>
@@ -798,12 +839,12 @@ export default function LeadsPanel() {
                     <tr>
                       <th></th>
                       <th>#</th>
-                      <th>First Name</th>
-                      <th>Last Name</th>
-                      <th>Phone</th>
-                      <th>Email</th>
-                      <th>State</th>
-                      <th>Age</th>
+                      {showColFirstName && <th>First Name</th>}
+                      {showColLastName && <th>Last Name</th>}
+                      {showColPhone && <th>Phone</th>}
+                      {showColEmail && <th>Email</th>}
+                      {showColState && <th>State</th>}
+                      {showColAge && <th>Age</th>}
                     </tr>
                   </thead>
                   <tbody>
@@ -818,19 +859,23 @@ export default function LeadsPanel() {
                           />
                         </td>
                         <td>{index + 1}</td>
-                        <td>
-                          <button
-                            onClick={() => setPreviewLead(lead)}
-                            className="text-blue-500 underline cursor-pointer"
-                          >
-                            {lead.firstName || lead["First Name"] || "-"}
-                          </button>
-                        </td>
-                        <td>{lead.lastName || lead["Last Name"] || "-"}</td>
-                        <td>{lead.phone || lead["Phone"] || "-"}</td>
-                        <td>{lead.email || lead["Email"] || "-"}</td>
-                        <td>{lead.state || lead["State"] || "-"}</td>
-                        <td>{lead.age ?? lead["Age"] ?? "-"}</td>
+
+                        {showColFirstName && (
+                          <td>
+                            <button
+                              onClick={() => setPreviewLead(lead)}
+                              className="text-blue-500 underline cursor-pointer"
+                            >
+                              {getLeadValue(lead, "firstName") || "-"}
+                            </button>
+                          </td>
+                        )}
+
+                        {showColLastName && <td>{getLeadValue(lead, "lastName") || "-"}</td>}
+                        {showColPhone && <td>{getLeadValue(lead, "phone") || "-"}</td>}
+                        {showColEmail && <td>{getLeadValue(lead, "email") || "-"}</td>}
+                        {showColState && <td>{getLeadValue(lead, "state") || "-"}</td>}
+                        {showColAge && <td>{getLeadValue(lead, "age") ?? "-"}</td>}
                       </tr>
                     ))}
                   </tbody>
