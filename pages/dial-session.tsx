@@ -35,6 +35,12 @@ const normalizeKeyLabel = (k: string) => {
   return toTitle(k);
 };
 
+const normalizeKey = (k: string) =>
+  String(k || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_-]+/g, "");
+
 const isEmptyDisplay = (v: any) => {
   if (v === null || v === undefined) return true;
   if (typeof v === "string") {
@@ -50,6 +56,85 @@ const isEmptyDisplay = (v: any) => {
 };
 
 const looksLikePhoneKey = (k: string) => /phone|mobile|cell|number/i.test(k);
+
+const isMeaninglessZero = (key: string, value: any) => {
+  const nk = normalizeKey(key);
+  const isZero =
+    value === 0 ||
+    (typeof value === "string" && value.trim() === "0") ||
+    (typeof value === "string" && value.trim() === "0.0");
+  if (!isZero) return false;
+
+  // Only treat zero as "empty" for fields where 0 is almost always junk
+  if (nk.includes("coverage") && nk.includes("amount")) return true;
+  if (nk.includes("mortgage") && (nk.includes("amount") || nk.includes("balance") || nk.includes("payment"))) return true;
+  if (nk === "age") return true;
+  return false;
+};
+
+const tryParseJsonObject = (v: any): Record<string, any> | null => {
+  if (!v) return null;
+  if (typeof v === "object" && !Array.isArray(v)) return v as Record<string, any>;
+  if (typeof v !== "string") return null;
+  const s = v.trim();
+  if (!s) return null;
+  if (!(s.startsWith("{") && s.endsWith("}"))) return null;
+  try {
+    const obj = JSON.parse(s);
+    if (obj && typeof obj === "object" && !Array.isArray(obj)) return obj;
+    return null;
+  } catch {
+    return null;
+  }
+};
+
+// display-only flatten: includes top-level + common nested containers + parses rawRow JSON (Google Sheets)
+const flattenDisplayFields = (lead: any) => {
+  const out: Record<string, any> = {};
+  if (!lead || typeof lead !== "object") return out;
+
+  Object.keys(lead).forEach((k) => {
+    out[k] = lead[k];
+  });
+
+  const candidates = ["customFields", "fields", "data", "sheet", "payload"];
+  for (const c of candidates) {
+    const obj = lead?.[c];
+    if (obj && typeof obj === "object" && !Array.isArray(obj)) {
+      Object.keys(obj).forEach((k) => {
+        if (out[k] === undefined) out[k] = obj[k];
+      });
+    }
+  }
+
+  const rawRowObj = tryParseJsonObject(lead?.rawRow);
+  if (rawRowObj) {
+    Object.keys(rawRowObj).forEach((k) => {
+      if (out[k] === undefined) out[k] = rawRowObj[k];
+    });
+  }
+
+  return out;
+};
+
+const isJunkHistoryText = (t: string) => {
+  const s = String(t || "").toLowerCase();
+  if (!s.trim()) return true;
+
+  // known “code-looking” / fallback junk patterns
+  if (s.includes("[ai dialer fallback]")) return true;
+  if (s.includes("callsid=")) return true;
+  if (s.includes("twilio status=")) return true;
+  if (s.includes("answeredby=machine")) return true;
+  if (s.includes("voicemail detected") && s.includes("(amd)")) return true;
+  if (s.includes("durationsec=")) return true;
+  if (s.includes("outcome=disconnected")) return true;
+
+  // extremely long machine blocks are almost never useful in UI
+  if (s.length > 600 && (s.includes("callsid") || s.includes("twilio") || s.includes("duration"))) return true;
+
+  return false;
+};
 
 /** --------------------------------------------------------------- **/
 
@@ -128,6 +213,39 @@ export default function DialSession() {
   const callLoggedRef = useRef<boolean>(false);
 
   const tooEarly = () => !callStartAtRef.current || Date.now() - callStartAtRef.current < EARLY_STATUS_MS;
+
+  /** ✅ Ringback keep-alive (do NOT touch ringAudio utils; only re-trigger playRingback while truly ringing) **/
+  const ringbackDesiredRef = useRef<boolean>(false);
+  const ringbackLoopRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const stopRingbackLoop = () => {
+    ringbackDesiredRef.current = false;
+    if (ringbackLoopRef.current) {
+      clearInterval(ringbackLoopRef.current);
+      ringbackLoopRef.current = null;
+    }
+  };
+
+  const startRingbackLoop = () => {
+    if (ringbackLoopRef.current) return; // already running
+    ringbackLoopRef.current = setInterval(() => {
+      try {
+        if (!ringbackDesiredRef.current) return;
+        if (sessionEndedRef.current) return;
+        if (!callActive) return;
+        if (hasConnectedRef.current) return;
+        // keep it alive while Twilio is actually ringing/queued
+        ensureUnlocked();
+        playRingback();
+      } catch {}
+    }, 4000); // re-trigger every few seconds to prevent “rings once then silent”
+  };
+
+  const setRingbackDesired = (on: boolean) => {
+    ringbackDesiredRef.current = on;
+    if (on) startRingbackLoop();
+    else stopRingbackLoop();
+  };
 
   /** helpers **/
   const formatPhone = (phone: string) => {
@@ -278,6 +396,7 @@ export default function DialSession() {
     callWatchdogRef.current = setTimeout(async () => {
       if (advanceScheduledRef.current || sessionEndedRef.current) return;
       setStatus("No answer (timeout)");
+      setRingbackDesired(false);
       stopRingback();
       // mark no-answer outcome for logging
       callOutcomeRef.current = { status: "No Answer", source: "watchdog-timeout" };
@@ -460,21 +579,27 @@ export default function DialSession() {
 
         const rows: HistoryRow[] = [];
 
-        // 🔒 PINNED SAVED NOTES — always first in the dial-session history
+        // 🔒 PINNED SAVED NOTES — only if it looks like a real human note (not fallback junk)
         const savedNotes = (lead as any)?.Notes;
-        if (typeof savedNotes === "string" && savedNotes.trim()) {
+        if (typeof savedNotes === "string" && savedNotes.trim() && !isJunkHistoryText(savedNotes.trim())) {
           rows.push({ kind: "text", text: `📌 Saved Notes (Pinned) — ${savedNotes.trim()}` });
         }
 
         for (const ev of (j?.events || [])) {
           const when = new Date((ev as any).date).toLocaleString();
           if ((ev as any).type === "note") {
-            rows.push({ kind: "text", text: `📝 Note • ${when} — ${(ev as any).text}` });
+            const t = String((ev as any).text || "");
+            if (isJunkHistoryText(t)) continue;
+            rows.push({ kind: "text", text: `📝 Note • ${when} — ${t}` });
           } else if ((ev as any).type === "sms") {
             const sms = ev as any;
-            rows.push({ kind: "text", text: `💬 ${sms.dir.toUpperCase()} • ${when} — ${sms.text}` });
+            const t = String(sms.text || "");
+            if (isJunkHistoryText(t)) continue;
+            rows.push({ kind: "text", text: `💬 ${sms.dir.toUpperCase()} • ${when} — ${t}` });
           } else if ((ev as any).type === "status") {
-            rows.push({ kind: "text", text: `📌 Status • ${when} — ${(ev as any).to || "-"}` });
+            const t = String((ev as any).to || "");
+            if (isJunkHistoryText(t)) continue;
+            rows.push({ kind: "text", text: `📌 Status • ${when} — ${t || "-"}` });
           } else if ((ev as any).type === "call") {
             const c = ev as any;
             const pieces = [`📞 Call • ${when}`];
@@ -585,14 +710,16 @@ export default function DialSession() {
         const s = interpret(j?.status);
         // queued | ringing | in-progress | completed | busy | failed | no-answer | canceled
 
-        // UI copy — do not say Connected until we truly are
+        // While truly ringing/queued => keep ringback alive
         if (s === "queued" || s === "ringing") {
-          setStatus("Ringing…");               // keep ringback on
+          setStatus("Ringing…");
+          setRingbackDesired(true);
           return;
         }
 
         if (s === "in-progress") {
           // TRUE bridge — stop ringback & timers, mark connected, keep polling
+          setRingbackDesired(false);
           stopRingback();
           clearWatchdog();
           hasConnectedRef.current = true;
@@ -602,6 +729,7 @@ export default function DialSession() {
 
         // terminal states: stop all audio/timers
         if (s === "completed" || s === "busy" || s === "failed" || s === "no-answer" || s === "canceled") {
+          setRingbackDesired(false);
           stopRingback();
           clearWatchdog();
           const label =
@@ -625,6 +753,7 @@ export default function DialSession() {
 
   // Centralized "Disconnected now" path
   const markDisconnected = async (reason: string) => {
+    setRingbackDesired(false);
     stopRingback();
     killAllTimers();
     await hangupActiveCall(reason);
@@ -716,6 +845,7 @@ export default function DialSession() {
 
       // Ensure audio is gesture-unlocked; then start ringback.
       ensureUnlocked();
+      setRingbackDesired(true);
       playRingback();
 
       callStartAtRef.current = Date.now();
@@ -727,6 +857,7 @@ export default function DialSession() {
         await hangupActiveCall("ended-during-start");
         await leaveIfJoined("ended-during-start");
         setCallActive(false);
+        setRingbackDesired(false);
         stopRingback();
         return;
       }
@@ -762,9 +893,9 @@ export default function DialSession() {
           safeOn("hangup", () => { markDisconnected("twilio-hangup"); });
 
           // Defensive cuts for non-success paths
-          safeOn("cancel", () => stopRingback());
-          safeOn("reject", () => stopRingback());
-          safeOn("error", () => stopRingback());
+          safeOn("cancel", () => { setRingbackDesired(false); stopRingback(); });
+          safeOn("reject", () => { setRingbackDesired(false); stopRingback(); });
+          safeOn("error", () => { setRingbackDesired(false); stopRingback(); });
         } catch (e) {
           console.warn("Failed to pre-join conference:", e);
         }
@@ -780,6 +911,7 @@ export default function DialSession() {
     } catch (err: any) {
       console.error(err);
       setStatus(err?.message || "Call failed");
+      setRingbackDesired(false);
       stopRingback();
       killAllTimers();
       await leaveIfJoined("start-failed");
@@ -862,6 +994,7 @@ export default function DialSession() {
 
     try {
       setStatus(`Saving disposition: ${label}…`);
+      setRingbackDesired(false);
       stopRingback();
       killAllTimers();
 
@@ -880,7 +1013,9 @@ export default function DialSession() {
       setStatus(`Disposition saved: ${label}`);
       toast.success(`Saved: ${label}`);
 
-      if (label === "Booked Appointment") setShowBookModal(true);
+      // ✅ IMPORTANT: disposition button must NOT open calendar (prevents double booking)
+      // (Left-side "Book Appointment" button still opens the modal.)
+      // if (label === "Booked Appointment") setShowBookModal(true);
 
       if (!sessionEndedRef.current) scheduleNextLead(); // advance to next lead
     } catch (e: any) {
@@ -906,6 +1041,7 @@ export default function DialSession() {
 
   const disconnectAndNext = () => {
     if (sessionEndedRef.current) return;
+    setRingbackDesired(false);
     stopRingback();
     killAllTimers();
     hangupActiveCall("advance-next");
@@ -922,6 +1058,7 @@ export default function DialSession() {
   const togglePause = () => {
     setIsPaused((p) => !p);
     if (!isPaused) {
+      setRingbackDesired(false);
       stopRingback();
       killAllTimers();
       hangupActiveCall("pause");
@@ -942,6 +1079,7 @@ export default function DialSession() {
     if (!ok) return;
 
     sessionEndedRef.current = true;
+    setRingbackDesired(false);
     stopRingback();
     killAllTimers();
     placingCallRef.current = false;
@@ -1022,11 +1160,15 @@ export default function DialSession() {
             if (fromNum && ownerNum && fromNum !== ownerNum) return;
 
             if (s === "initiated") setStatus("Dial initiated…");
-            if (s === "ringing") setStatus("Ringing…");
+            if (s === "ringing") {
+              setStatus("Ringing…");
+              setRingbackDesired(true);
+            }
 
             // ✅ Only treat ANSWERED as a real connection; ignore in-progress
             if (s === "answered") {
               setStatus("Connected");
+              setRingbackDesired(false);
               stopRingback();
               clearWatchdog();
               hasConnectedRef.current = true;
@@ -1034,7 +1176,9 @@ export default function DialSession() {
 
             if (s === "no-answer" || s === "busy" || s === "failed") {
               if (s === "no-answer" && tooEarly()) return;
-              stopRingback(); clearWatchdog();
+              setRingbackDesired(false);
+              stopRingback();
+              clearWatchdog();
 
               const label = s === "no-answer" ? "No Answer" : s === "busy" ? "Busy" : "Failed";
               callOutcomeRef.current = { status: label, source: `socket-${s}` };
@@ -1066,6 +1210,7 @@ export default function DialSession() {
     return () => {
       mounted = false;
       try { socketRef.current?.off?.("call:status"); socketRef.current?.disconnect?.(); } catch {}
+      setRingbackDesired(false);
       stopRingback();
       killAllTimers();
       leaveIfJoined("unmount");
@@ -1075,7 +1220,120 @@ export default function DialSession() {
   }, [currentLeadIndex, leadQueue.length, fromNumber]);
 
   /** render **/
-  // Derive best-effort First/Last Name from any common variants on the lead
+
+  // ✅ Build lead info rows like /lead/[id] (ordered + extras, hide empties, dedupe, include rawRow headers)
+  const leadInfoRows = useMemo(() => {
+    const l = lead || ({} as any);
+    const flat = flattenDisplayFields(l);
+
+    const mapNormToKeys: Record<string, string[]> = {};
+    Object.keys(flat).forEach((k) => {
+      const nk = normalizeKey(k);
+      if (!mapNormToKeys[nk]) mapNormToKeys[nk] = [];
+      mapNormToKeys[nk].push(k);
+    });
+
+    const getByAliases = (aliases: string[]) => {
+      for (const a of aliases) {
+        const nk = normalizeKey(a);
+        const keys = mapNormToKeys[nk];
+        if (!keys || !keys.length) continue;
+        for (const realKey of keys) {
+          const v = flat[realKey];
+          if (isEmptyDisplay(v)) continue;
+          if (isMeaninglessZero(realKey, v)) continue;
+          return { key: realKey, value: v };
+        }
+      }
+      return null;
+    };
+
+    const usedNorm = new Set<string>();
+    const rows: Array<{ label: string; key: string; value: any }> = [];
+
+    const pushField = (label: string, aliases: string[], transform?: (v: any) => any) => {
+      const found = getByAliases(aliases);
+      if (!found) return;
+      const nk = normalizeKey(found.key);
+      if (usedNorm.has(nk)) return;
+
+      const raw = transform ? transform(found.value) : found.value;
+      if (isEmptyDisplay(raw)) return;
+      if (isMeaninglessZero(found.key, raw)) return;
+
+      usedNorm.add(nk);
+      rows.push({ label, key: found.key, value: raw });
+    };
+
+    // ---- Important fields (top) ----
+    pushField("First Name", ["First Name", "firstName", "first_name", "firstname", "first name"]);
+    pushField("Last Name", ["Last Name", "lastName", "last_name", "lastname", "last name"]);
+
+    // If only a single Name field exists
+    if (!rows.find((r) => r.label === "First Name") && !rows.find((r) => r.label === "Last Name")) {
+      pushField("Name", ["Name", "name", "Full Name", "fullName"]);
+    }
+
+    pushField("Phone", ["Phone", "phone", "Phone Number", "phoneNumber", "Mobile", "Cell"], (v) => formatPhone(String(v || "")));
+    pushField("Email", ["Email", "email", "Email Address"]);
+    pushField("DOB", ["DOB", "Date Of Birth", "Birthday", "birthdate", "Birth Date", "Date of birth"]);
+    pushField("Age", ["Age", "age"]);
+    pushField("Street Address", ["Street Address", "street address", "Address", "address", "Address 1", "address1"]);
+    pushField("City", ["City", "city"]);
+    pushField("State", ["State", "state", "ST"]);
+    pushField("Zip", ["Zip", "ZIP", "Zip code", "postal", "postalCode"]);
+
+    pushField("Mortgage Amount", ["Mortgage Amount", "Mortgage Balance", "mortgage amount", "mortgage balance", "Mortgage", "mortgage"]);
+    pushField("Mortgage Payment", ["Mortgage Payment", "mortgage payment"]);
+    pushField("Coverage Amount", ["Coverage Amount", "coverageAmount", "coverage", "How Much Coverage Do You Need?"]);
+
+    // ---- Extras (imported/custom), deduped + filtered ----
+    const hardBlockNorm = new Set<string>([
+      "_id","id","folderid","createdat","updatedat","__v","ownerid","userid","useremail",
+      "assigneddrips","dripprogress","history","interactionhistory",
+      "normalizedphone","phonelast10",
+      "rawrow",
+    ]);
+
+    const bannedTopNorm = new Set<string>();
+    rows.forEach((r) => bannedTopNorm.add(normalizeKey(r.key)));
+
+    const extras = Object.entries(flat)
+      .filter(([k, v]) => {
+        const nk = normalizeKey(k);
+        if (!k) return false;
+        if (hardBlockNorm.has(nk)) return false;
+        if (bannedTopNorm.has(nk)) return false;
+
+        // hide common junk keys seen in the screenshot
+        if (nk.includes("aidhistory")) return false;
+        if (nk.includes("aicall")) return false;
+        if (nk.includes("fallback")) return false;
+        if (nk.includes("transcript")) return false;
+        if (nk.includes("call")) {
+          // avoid dumping internal call tracking blobs in left panel
+          if (nk.includes("sid") || nk.includes("status") || nk.includes("duration")) return false;
+        }
+
+        if (isEmptyDisplay(v)) return false;
+        if (isMeaninglessZero(k, v)) return false;
+
+        // no objects/arrays dumped into left panel
+        if (typeof v === "object") return false;
+
+        return true;
+      })
+      .map(([k, v]) => ({
+        label: normalizeKeyLabel(k),
+        key: k,
+        value: v,
+      }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+
+    return [...rows, ...extras];
+  }, [lead]);
+
+  // Derive best-effort First/Last Name from any common variants on the lead (for display only)
   const firstName =
     (lead as any)?.["First Name"] ??
     (lead as any)?.first_name ??
@@ -1125,42 +1383,34 @@ export default function DialSession() {
             </div>
           )}
 
-          {/* Dynamic fields — show ALL imported/custom fields that have values; hide empties */}
+          {/* ✅ Ordered + extras (hide empties, no duplicates, include rawRow headers) */}
           {lead &&
-            Object.entries(lead)
-              .filter(([key]) => {
-                // hide internal/system keys and ones we show elsewhere
-                const banned = [
-                  "_id", "id", "folderId", "createdAt", "ownerId", "userEmail",
-                  "Notes",
-                  "First Name", "first_name", "firstname", "firstName",
-                  "Last Name", "last_name", "lastname", "lastName",
-                ];
-                return !banned.includes(key);
-              })
-              .filter(([, value]) => !isEmptyDisplay(value))
-              .map(([key, value]) => {
-                const label = normalizeKeyLabel(key);
-                let display: string = "";
+            leadInfoRows.map((r) => {
+              const key = r.key;
+              const label = r.label;
+              const value = r.value;
 
-                if (typeof value === "string") {
-                  display = looksLikePhoneKey(key) ? formatPhone(value) : value;
-                } else if (typeof value === "number" || typeof value === "boolean") {
-                  display = String(value);
-                } else {
-                  // Avoid dumping JSON blobs; skip objects/arrays entirely for left panel
-                  return null;
-                }
+              let display: string = "";
 
-                return (
-                  <div key={key}>
-                    <p>
-                      <strong>{label}:</strong> {display}
-                    </p>
-                    <hr className="border-gray-700 my-1" />
-                  </div>
-                );
-              })}
+              if (typeof value === "string") {
+                display = looksLikePhoneKey(key) ? formatPhone(value) : value;
+              } else if (typeof value === "number" || typeof value === "boolean") {
+                display = String(value);
+              } else {
+                return null;
+              }
+
+              if (!display || isJunkHistoryText(display)) return null;
+
+              return (
+                <div key={key}>
+                  <p>
+                    <strong>{label}:</strong> {display}
+                  </p>
+                  <hr className="border-gray-700 my-1" />
+                </div>
+              );
+            })}
 
           <div className="flex flex-col space-y-2 mt-4">
             <button
@@ -1208,15 +1458,20 @@ export default function DialSession() {
               {history.length === 0 ? (
                 <p className="text-gray-400">No interactions yet.</p>
               ) : (
-                history.map((item, idx) =>
-                  item.kind === "text" ? (
-                    <p key={idx} className="border-b border-gray-700 py-1">{item.text}</p>
-                  ) : (
-                    <p key={idx} className="border-b border-gray-700 py-1">
-                      <a href={item.href} target="_blank" rel="noreferrer" className="text-blue-400 underline">{item.text}</a>
-                    </p>
+                history
+                  .filter((item) => {
+                    if (item.kind !== "text") return true;
+                    return !isJunkHistoryText(item.text);
+                  })
+                  .map((item, idx) =>
+                    item.kind === "text" ? (
+                      <p key={idx} className="border-b border-gray-700 py-1">{item.text}</p>
+                    ) : (
+                      <p key={idx} className="border-b border-gray-700 py-1">
+                        <a href={item.href} target="_blank" rel="noreferrer" className="text-blue-400 underline">{item.text}</a>
+                      </p>
+                    )
                   )
-                )
               )}
             </div>
           </div>
