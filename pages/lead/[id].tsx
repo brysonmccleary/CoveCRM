@@ -163,36 +163,27 @@ function formatDisplayValue(v: any): string {
   if (typeof v === "string") return v.trim();
   if (typeof v === "number") return String(v);
   if (typeof v === "boolean") return v ? "Yes" : "No";
+  return "";
+}
 
-  try {
-    if (Array.isArray(v)) {
-      const cleaned = v
-        .map((x) => (x === null || x === undefined ? "" : String(x).trim()))
-        .filter(Boolean);
-      if (cleaned.length === 0) return "";
-      if (cleaned.length <= 6) return cleaned.join(", ");
-      return `${cleaned.slice(0, 6).join(", ")} … (+${cleaned.length - 6})`;
-    }
-
-    const s = JSON.stringify(v);
-    if (!s || s === "{}") return "";
-    if (s.length <= 140) return s;
-    return s.slice(0, 140) + "…";
-  } catch {
-    return String(v);
-  }
+function isScalar(v: any) {
+  return typeof v === "string" || typeof v === "number" || typeof v === "boolean";
 }
 
 function looksLikeNotesKey(rawKey: string) {
   const nk = normalizeKey(rawKey);
 
   // aggressive block of note-ish keys (handles " Notes ", "lead_notes", "AI Dialer Notes", etc.)
-  // This is intentional to kill the blob + any variants.
   if (nk.includes("note")) return true;
+
+  // kill dialer/ai/transcript/log-ish keys
   if (nk.includes("aidhistory")) return true;
   if (nk.includes("aicall")) return true;
   if (nk.includes("dialer")) return true;
   if (nk.includes("fallback")) return true;
+  if (nk.includes("transcript")) return true;
+  if (nk.includes("recording")) return true;
+  if (nk.includes("summary")) return true;
 
   return false;
 }
@@ -214,9 +205,38 @@ function looksLikeSystemKey(rawKey: string) {
     "__v",
     "history",
     "interactionhistory",
+
+    // call/call panel related stored fields that should never render as profile fields
+    "calls",
+    "callhistory",
+    "recordings",
+    "events",
+    "logs",
+    "metas",
+    "metadata",
   ]);
 
   if (blockedExact.has(nk)) return true;
+  return false;
+}
+
+function looksLikeJunkContent(v: any) {
+  if (typeof v !== "string") return false;
+  const s = v.trim();
+  if (!s) return false;
+
+  // hard-kill known junk markers
+  const lower = s.toLowerCase();
+  if (lower.includes("ai dialer fallback")) return true;
+  if (lower.includes("transcript")) return true;
+  if (lower.includes("twilio")) return true && lower.includes("sid"); // transcript/log style often contains sids
+
+  // kill huge blobs (notes/log dumps)
+  if (s.length >= 800) return true;
+
+  // kill "json/log looking" content
+  if ((s.startsWith("{") && s.endsWith("}")) || (s.startsWith("[") && s.endsWith("]"))) return true;
+
   return false;
 }
 
@@ -246,6 +266,18 @@ function flattenDisplayFields(lead: any) {
   }
 
   return out;
+}
+
+function getHeaderOrder(lead: any): string[] {
+  const candidates = ["headers", "header", "columns", "fieldOrder", "importHeaders", "sheetHeaders"];
+  for (const key of candidates) {
+    const v = lead?.[key];
+    if (Array.isArray(v) && v.every((x) => typeof x === "string")) {
+      const cleaned = v.map((x) => String(x).trim()).filter(Boolean);
+      if (cleaned.length) return cleaned;
+    }
+  }
+  return [];
 }
 
 export default function LeadProfileDial() {
@@ -501,6 +533,7 @@ export default function LeadProfileDial() {
     const status = pickFromMap(["status", "Status"]);
     const age = pickFromMap(["age", "Age"]);
     const coverage = pickFromMap(["coverageAmount", "coverage", "Coverage", "Coverage Amount", "coverage_amount"]);
+    const dob = pickFromMap(["dob", "DOB", "dateofbirth", "date_of_birth", "Date of Birth"]);
 
     return {
       firstName: String(first || ""),
@@ -510,6 +543,7 @@ export default function LeadProfileDial() {
       status: String(status || ""),
       age,
       coverageAmount: coverage,
+      dob: String(dob || ""),
     };
   }, [lead]);
 
@@ -541,7 +575,6 @@ export default function LeadProfileDial() {
     (fieldKey: string, label: string, currentValue: any) => {
       if (!lead?.id) return;
 
-      // block any system keys
       if (looksLikeSystemKey(fieldKey)) return;
       if (looksLikeNotesKey(fieldKey)) return;
 
@@ -572,7 +605,7 @@ export default function LeadProfileDial() {
       const j = await r.json().catch(() => ({} as any));
       if (!r.ok) throw new Error(j?.message || "Failed to update");
 
-      // optimistic UI update
+      // optimistic UI update (top-level key; display flattening prefers top-level anyway)
       setLead((prev) => {
         if (!prev) return prev;
         return { ...prev, [editingKey]: editingValue };
@@ -587,32 +620,14 @@ export default function LeadProfileDial() {
     }
   }, [lead, editingKey, editingValue]);
 
-  // ---- Compact + “legit” field layout + show ALL sheet fields
-  const structuredLeft = useMemo(() => {
+  // ✅ One compact CRM-style list: Label : Value (shows ALL real fields, filters junk)
+  const leftRows = useMemo(() => {
     const l = lead || ({} as any);
     const flat = flattenDisplayFields(l);
 
-    // canonical keys for edits
-    const firstKey = bestKeyFor(["firstName", "First Name", "firstname", "first_name"]);
-    const lastKey = bestKeyFor(["lastName", "Last Name", "lastname", "last_name"]);
-    const phoneKey = bestKeyFor(["phone", "Phone", "phoneNumber", "Phone Number"]);
-    const emailKey = bestKeyFor(["email", "Email", "Email Address"]);
-    const statusKey = bestKeyFor(["status", "Status"]);
-    const ageKey = bestKeyFor(["age", "Age"]);
-    const coverageKey = bestKeyFor(["coverageAmount", "Coverage Amount", "coverage", "Coverage"]);
+    const headerOrder = getHeaderOrder(l);
 
-    const contact = [
-      { label: "Phone", key: phoneKey, value: leadNormalized.phone ? formatPhone(leadNormalized.phone) : "" },
-      { label: "Email", key: emailKey, value: leadNormalized.email },
-    ].filter((x) => !isEmptyValue(x.value));
-
-    const details = [
-      { label: "Status", key: statusKey, value: leadNormalized.status },
-      { label: "Age", key: ageKey, value: leadNormalized.age },
-      { label: "Coverage Amount", key: coverageKey, value: leadNormalized.coverageAmount },
-    ].filter((x) => !isEmptyValue(x.value));
-
-    // keys we never show (internal + notes blobs + name parts)
+    // protected keys that should never display as profile fields
     const blockedNormalized = new Set([
       "_id",
       "id",
@@ -620,67 +635,141 @@ export default function LeadProfileDial() {
       "ownerid",
       "useremail",
       "folderid",
-      "assigneddrips",
-      "dripprogress",
       "createdat",
       "updatedat",
       "__v",
+      "assigneddrips",
+      "dripprogress",
       "history",
       "interactionhistory",
 
-      // do not render as separate fields
-      "firstname",
-      "lastname",
-      "name",
-      "phone",
-      "phonenumber",
-      "email",
-      "status",
-      "age",
-      "coverageamount",
-      "coverage",
-      "coverage_amount",
+      // containers themselves (we flatten their contents)
+      "customfields",
+      "fields",
+      "data",
+      "sheet",
+      "payload",
     ]);
 
-    const custom = Object.entries(flat)
+    const coreSpecs: Array<{ label: string; candidates: string[]; format?: (v: any) => string }> = [
+      { label: "First Name", candidates: ["First Name", "firstName", "firstname", "first_name"] },
+      { label: "Last Name", candidates: ["Last Name", "lastName", "lastname", "last_name"] },
+      { label: "Phone", candidates: ["Phone", "phone", "Phone Number", "phoneNumber"], format: (v) => formatPhone(String(v || "")) },
+      { label: "Email", candidates: ["Email", "email", "Email Address"] },
+      { label: "DOB", candidates: ["DOB", "dob", "Date of Birth", "dateOfBirth", "date_of_birth"] },
+      { label: "Age", candidates: ["Age", "age"] },
+      { label: "State", candidates: ["State", "state", "ST"] },
+      { label: "Status", candidates: ["Status", "status"] },
+    ];
+
+    const usedKeys = new Set<string>();
+
+    const takeFirstPresent = (cands: string[]) => {
+      for (const cand of cands) {
+        if (flat[cand] !== undefined && !isEmptyValue(flat[cand])) return { key: cand, value: flat[cand] };
+        const target = normalizeKey(cand);
+        const found = Object.keys(flat).find((kk) => normalizeKey(kk) === target && !isEmptyValue(flat[kk]));
+        if (found) return { key: found, value: flat[found] };
+      }
+      return null;
+    };
+
+    const rows: Array<{ key: string; label: string; value: string }> = [];
+
+    // 1) Core rows first (keeps "legit CRM" feel)
+    for (const spec of coreSpecs) {
+      const hit = takeFirstPresent(spec.candidates);
+      if (!hit) continue;
+      if (looksLikeSystemKey(hit.key) || looksLikeNotesKey(hit.key)) continue;
+      if (!isScalar(hit.value)) continue;
+
+      const val = spec.format ? spec.format(hit.value) : formatDisplayValue(hit.value);
+      if (!val) continue;
+      if (looksLikeJunkContent(val)) continue;
+
+      usedKeys.add(hit.key);
+      rows.push({ key: hit.key, label: spec.label, value: val });
+    }
+
+    // 2) Build remaining candidates (ALL existing fields on this lead)
+    const remaining = Object.entries(flat)
       .filter(([k, v]) => {
+        if (!k) return false;
         const nk = normalizeKey(k);
 
+        if (usedKeys.has(k)) return false;
         if (blockedNormalized.has(nk)) return false;
-        if (looksLikeSystemKey(k)) return false;
 
-        // kill notes blob variants hard
+        if (looksLikeSystemKey(k)) return false;
         if (looksLikeNotesKey(k)) return false;
+
+        // block non-scalars entirely (prevents history arrays / blobs)
+        if (!isScalar(v)) return false;
 
         const rendered = formatDisplayValue(v);
         if (!rendered) return false;
 
-        // kill AI fallback junk anywhere it appears
-        if (rendered.includes("[AI Dialer fallback]")) return false;
+        if (looksLikeJunkContent(rendered)) return false;
 
         return true;
       })
       .map(([k, v]) => ({
         key: k,
-        label: String(k).replace(/_/g, " "),
+        label: String(k).replace(/_/g, " ").trim(),
         value: formatDisplayValue(v),
-      }))
-      .sort((a, b) => a.label.localeCompare(b.label));
+      }));
 
-    return {
-      name: {
-        display: leadName,
-        // allow editing first/last via modal-like inline editor (two fields) — handled in UI
-        firstKey,
-        lastKey,
-        firstVal: String(flat[firstKey] ?? leadNormalized.firstName ?? ""),
-        lastVal: String(flat[lastKey] ?? leadNormalized.lastName ?? ""),
-      },
-      contact,
-      details,
-      custom,
-    };
-  }, [lead, leadName, leadNormalized, bestKeyFor]);
+    // 3) Ordering: prefer stored header order if present; else alphabetical
+    if (headerOrder.length) {
+      const orderIndex = new Map<string, number>();
+      headerOrder.forEach((h, idx) => orderIndex.set(normalizeKey(h), idx));
+
+      remaining.sort((a, b) => {
+        const ai = orderIndex.has(normalizeKey(a.key)) ? (orderIndex.get(normalizeKey(a.key)) as number) : 999999;
+        const bi = orderIndex.has(normalizeKey(b.key)) ? (orderIndex.get(normalizeKey(b.key)) as number) : 999999;
+        if (ai !== bi) return ai - bi;
+        return a.label.localeCompare(b.label);
+      });
+    } else {
+      remaining.sort((a, b) => a.label.localeCompare(b.label));
+    }
+
+    return [...rows, ...remaining];
+  }, [lead]);
+
+  // ✅ compact rows: label + value close together (old CRM vibe)
+  const CompactRow = ({
+    label,
+    value,
+    fieldKey,
+    editable = true,
+  }: {
+    label: string;
+    value: string;
+    fieldKey?: string;
+    editable?: boolean;
+  }) => {
+    const v = String(value || "").trim();
+    const canEdit = !!fieldKey && editable;
+
+    return (
+      <button
+        type="button"
+        onClick={() => {
+          if (!canEdit) return;
+          openEditor(fieldKey!, label, value);
+        }}
+        className={`w-full text-left py-1 ${canEdit ? "hover:bg-white/5 rounded px-1 -mx-1" : ""}`}
+      >
+        <div className="flex items-baseline gap-2">
+          <div className="text-[12px] text-gray-400 w-[130px] shrink-0">{label}</div>
+          <div className="text-[13px] text-white break-words leading-snug">
+            {v || "—"} {canEdit ? <span className="text-gray-500 text-[11px] ml-2">Edit</span> : null}
+          </div>
+        </div>
+      </button>
+    );
+  };
 
   // ---------- Campaigns list ----------
   useEffect(() => {
@@ -818,58 +907,6 @@ export default function LeadProfileDial() {
     }
   };
 
-  // ✅ compact rows: label + value close together (like your old UI)
-  const CompactRow = ({
-    label,
-    value,
-    fieldKey,
-    editable = true,
-  }: {
-    label: string;
-    value: string;
-    fieldKey?: string;
-    editable?: boolean;
-  }) => {
-    const v = String(value || "").trim();
-    const canEdit = !!fieldKey && editable;
-
-    return (
-      <button
-        type="button"
-        onClick={() => {
-          if (!canEdit) return;
-          openEditor(fieldKey!, label, value);
-        }}
-        className={`w-full text-left py-1 ${canEdit ? "hover:bg-white/5 rounded px-1 -mx-1" : ""}`}
-      >
-        <div className="flex items-baseline gap-2">
-          <div className="text-[12px] text-gray-400 w-[110px] shrink-0">{label}</div>
-          <div className="text-[13px] text-white break-words leading-snug">
-            {v || "—"} {canEdit ? <span className="text-gray-500 text-[11px] ml-2">Edit</span> : null}
-          </div>
-        </div>
-      </button>
-    );
-  };
-
-  const Section = ({
-    title,
-    right,
-    children,
-  }: {
-    title: string;
-    right?: React.ReactNode;
-    children: React.ReactNode;
-  }) => (
-    <div className="mb-3 rounded-lg border border-white/10 bg-[#0b1220]">
-      <div className="px-3 py-2 border-b border-white/10 flex items-center justify-between">
-        <div className="text-sm font-semibold">{title}</div>
-        {right}
-      </div>
-      <div className="px-3 py-2">{children}</div>
-    </div>
-  );
-
   // ---------- Render ----------
   return (
     <div className="flex bg-[#0f172a] text-white min-h-screen">
@@ -878,57 +915,28 @@ export default function LeadProfileDial() {
       {/* LEFT */}
       <div className="w-[360px] p-4 border-r border-gray-800 bg-[#1e293b] overflow-y-auto">
         {/* VERIFICATION MARKER: search this in prod to confirm correct build */}
-        <div className="hidden">CUSTOM_FIELDS_PANEL_V3_LIVE_EDIT</div>
+        <div className="hidden">LEAD_PROFILE_LEFT_COMPACT_V1</div>
 
         <div className="mb-3">
-          <h2 className="text-xl font-bold">{structuredLeft.name.display}</h2>
-          <div className="text-xs text-gray-400 mt-1">Click fields to edit live.</div>
+          <h2 className="text-xl font-bold">{leadName}</h2>
+          <div className="text-xs text-gray-400 mt-1">Click any field to edit.</div>
         </div>
 
-        <Section title="Contact">
-          {structuredLeft.contact.length ? (
-            structuredLeft.contact.map((f) => (
+        <div className="rounded-lg border border-white/10 bg-[#0b1220] px-3 py-2">
+          {leftRows.length ? (
+            leftRows.map((f) => (
               <CompactRow
-                key={f.label}
+                key={`${f.key}::${f.label}`}
                 label={f.label}
-                value={String(f.value || "")}
+                value={f.value}
                 fieldKey={String(f.key || "")}
                 editable={true}
               />
             ))
           ) : (
-            <div className="text-sm text-gray-400 py-1">No contact fields found.</div>
+            <div className="text-sm text-gray-400 py-2">No fields found for this lead.</div>
           )}
-        </Section>
-
-        <Section title="Lead Details">
-          {structuredLeft.details.length ? (
-            structuredLeft.details.map((f) => (
-              <CompactRow
-                key={f.label}
-                label={f.label}
-                value={formatDisplayValue(f.value)}
-                fieldKey={String(f.key || "")}
-                editable={true}
-              />
-            ))
-          ) : (
-            <div className="text-sm text-gray-400 py-1">No additional details.</div>
-          )}
-        </Section>
-
-        <Section
-          title="Custom Fields (Imported)"
-          right={<div className="text-xs text-gray-500">{structuredLeft.custom.length || "—"}</div>}
-        >
-          {structuredLeft.custom.length ? (
-            structuredLeft.custom.map((f) => (
-              <CompactRow key={f.key} label={f.label} value={String(f.value || "")} fieldKey={f.key} editable={true} />
-            ))
-          ) : (
-            <div className="text-sm text-gray-400 py-1">No custom fields found for this lead.</div>
-          )}
-        </Section>
+        </div>
       </div>
 
       {/* CENTER */}
@@ -1141,9 +1149,7 @@ export default function LeadProfileDial() {
               </button>
             </div>
 
-            <div className="text-xs text-gray-500 mt-2">
-              Updates are saved instantly and only apply to your lead records.
-            </div>
+            <div className="text-xs text-gray-500 mt-2">Updates are saved instantly and only apply to your lead records.</div>
           </div>
         </div>
       ) : null}
