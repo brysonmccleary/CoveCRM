@@ -29,6 +29,7 @@ type Lead = {
   Email?: string;
   email?: string;
   Notes?: string;
+  notes?: string;
   status?: string;
   folderId?: string | null;
   assignedDrips?: string[];
@@ -127,6 +128,16 @@ type UICampaign = {
 
 const LEADS_URL = "/dashboard?tab=leads";
 
+// ✅ Only hide true internal/system keys
+const HIDDEN_LEAD_KEYS = new Set([
+  "_id",
+  "id",
+  "folderId",
+  "createdAt",
+  "ownerId",
+  "userEmail",
+]);
+
 function safeBullets(v: any, max = 12): string[] {
   if (!Array.isArray(v)) return [];
   return v
@@ -137,11 +148,16 @@ function safeBullets(v: any, max = 12): string[] {
 
 function outcomeBadgeClasses(outcome?: string) {
   const o = String(outcome || "").toLowerCase();
-  if (o.includes("book")) return "bg-emerald-900/40 text-emerald-300 border border-emerald-700/40";
-  if (o.includes("callback")) return "bg-sky-900/40 text-sky-300 border border-sky-700/40";
-  if (o.includes("not")) return "bg-rose-900/40 text-rose-300 border border-rose-700/40";
-  if (o.includes("no answer")) return "bg-gray-800/60 text-gray-200 border border-gray-700/60";
-  if (o.includes("voicemail")) return "bg-gray-800/60 text-gray-200 border border-gray-700/60";
+  if (o.includes("book"))
+    return "bg-emerald-900/40 text-emerald-300 border border-emerald-700/40";
+  if (o.includes("callback"))
+    return "bg-sky-900/40 text-sky-300 border border-sky-700/40";
+  if (o.includes("not"))
+    return "bg-rose-900/40 text-rose-300 border border-rose-700/40";
+  if (o.includes("no answer"))
+    return "bg-gray-800/60 text-gray-200 border border-gray-700/60";
+  if (o.includes("voicemail"))
+    return "bg-gray-800/60 text-gray-200 border border-gray-700/60";
   return "bg-white/10 text-gray-200 border border-white/10";
 }
 
@@ -151,6 +167,18 @@ function titleCaseSentiment(v?: string) {
   if (s === "neutral") return "Neutral";
   if (s === "negative") return "Negative";
   return "";
+}
+
+function normalizeDisplayValue(value: any) {
+  if (value === null || value === undefined) return "—";
+  if (typeof value === "string") return value.trim() ? value : "—";
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  // arrays/objects
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
 }
 
 export default function LeadProfileDial() {
@@ -182,16 +210,18 @@ export default function LeadProfileDial() {
   const [removeCampaignId, setRemoveCampaignId] = useState<string>("");
   const [removing, setRemoving] = useState(false);
 
+  // ✅ Inline edit state (LEFT panel)
+  const [editingKey, setEditingKey] = useState<string | null>(null);
+  const [editingValue, setEditingValue] = useState<string>("");
+  const [savingKey, setSavingKey] = useState<string | null>(null);
+
   // ---------- helpers ----------
   const formatPhone = (phone = "") => {
     const clean = String(phone).replace(/\D/g, "");
     if (clean.length === 10)
       return `${clean.slice(0, 3)}-${clean.slice(3, 6)}-${clean.slice(6)}`;
     if (clean.length === 11 && clean.startsWith("1"))
-      return `${clean.slice(0, 1)}-${clean.slice(1, 4)}-${clean.slice(
-        4,
-        7
-      )}-${clean.slice(7)}`;
+      return `${clean.slice(0, 1)}-${clean.slice(1, 4)}-${clean.slice(4, 7)}-${clean.slice(7)}`;
     return phone;
   };
 
@@ -225,10 +255,9 @@ export default function LeadProfileDial() {
       // fallback by phone if looks like a phone
       const digits = idStr.replace(/\D+/g, "");
       if (digits.length >= 10) {
-        const r = await fetch(
-          `/api/get-lead?phone=${encodeURIComponent(idStr)}`,
-          { cache: "no-store" }
-        );
+        const r = await fetch(`/api/get-lead?phone=${encodeURIComponent(idStr)}`, {
+          cache: "no-store",
+        });
         const j = await r.json().catch(() => ({} as any));
         if (r.ok && j?.lead) {
           setLead({ id: j.lead._id, ...j.lead });
@@ -249,10 +278,9 @@ export default function LeadProfileDial() {
 
     try {
       setHistLoading(true);
-      const r = await fetch(
-        `/api/leads/history?id=${encodeURIComponent(key)}&limit=50`,
-        { cache: "no-store" }
-      );
+      const r = await fetch(`/api/leads/history?id=${encodeURIComponent(key)}&limit=50`, {
+        cache: "no-store",
+      });
       const j = await r.json();
       if (!r.ok) throw new Error(j?.message || "Failed to load history");
 
@@ -271,14 +299,10 @@ export default function LeadProfileDial() {
           lines.push(`${dir}: ${ev.text}${status} • ${fmtDateTime(ev.date)}`);
         } else if (ev.type === "booking") {
           const title = ev.title || "Booked Appointment";
-          const when = ev.startsAt
-            ? fmtDateTime(ev.startsAt)
-            : fmtDateTime(ev.date);
+          const when = ev.startsAt ? fmtDateTime(ev.startsAt) : fmtDateTime(ev.date);
           lines.push(`📅 ${title} • ${when}`);
         } else if (ev.type === "status") {
-          lines.push(
-            `🔖 Status: ${ev.to || "Updated"} • ${fmtDateTime(ev.date)}`
-          );
+          lines.push(`🔖 Status: ${ev.to || "Updated"} • ${fmtDateTime(ev.date)}`);
         } else if (ev.type === "ai_outcome") {
           const label = ev.message || "🤖 AI Dialer outcome";
           lines.push(`🤖 ${label} • ${fmtDateTime(ev.date)}`);
@@ -322,13 +346,11 @@ export default function LeadProfileDial() {
 
   // ✅ Prefer structured overview; fallback to legacy (aiBullets/aiSummary)
   const latestOverviewCall = useMemo(() => {
-    const sorted = calls
-      .slice()
-      .sort((a, b) => {
-        const da = new Date(a.startedAt || a.completedAt || 0).getTime();
-        const db = new Date(b.startedAt || b.completedAt || 0).getTime();
-        return db - da;
-      });
+    const sorted = calls.slice().sort((a, b) => {
+      const da = new Date(a.startedAt || a.completedAt || 0).getTime();
+      const db = new Date(b.startedAt || b.completedAt || 0).getTime();
+      return db - da;
+    });
 
     return (
       sorted.find((c) => (c as any).aiOverviewReady && (c as any).aiOverview) ||
@@ -369,7 +391,11 @@ export default function LeadProfileDial() {
     const legacyActions = Array.isArray(c.aiActionItems) ? c.aiActionItems : [];
 
     return {
-      overviewBullets: legacyBullets.length ? safeBullets(legacyBullets, 6) : (c.aiSummary ? [String(c.aiSummary)] : []),
+      overviewBullets: legacyBullets.length
+        ? safeBullets(legacyBullets, 6)
+        : c.aiSummary
+        ? [String(c.aiSummary)]
+        : [],
       keyDetails: legacyActions.length ? safeBullets(legacyActions, 6) : [],
       objections: [],
       questions: [],
@@ -384,8 +410,7 @@ export default function LeadProfileDial() {
 
   // ---------- Save note ----------
   const handleSaveNote = async () => {
-    if (!notes.trim() || !lead?.id)
-      return toast.error("❌ Cannot save an empty note");
+    if (!notes.trim() || !lead?.id) return toast.error("❌ Cannot save an empty note");
     try {
       const r = await fetch("/api/leads/add-history", {
         method: "POST",
@@ -400,10 +425,7 @@ export default function LeadProfileDial() {
         const j = await r.json().catch(() => ({}));
         throw new Error(j?.message || "Failed to save note");
       }
-      setHistoryLines((prev) => [
-        `📝 ${notes.trim()} • ${new Date().toLocaleString()}`,
-        ...prev,
-      ]);
+      setHistoryLines((prev) => [`📝 ${notes.trim()} • ${new Date().toLocaleString()}`, ...prev]);
       setNotes("");
       toast.success("✅ Note saved!");
     } catch (e: any) {
@@ -419,9 +441,9 @@ export default function LeadProfileDial() {
 
   const leadName = useMemo(() => {
     const full =
-      `${lead?.firstName || lead?.["First Name"] || ""} ${
-        lead?.lastName || lead?.["Last Name"] || ""
-      }`.trim() || lead?.name || "";
+      `${lead?.firstName || lead?.["First Name"] || ""} ${lead?.lastName || lead?.["Last Name"] || ""}`.trim() ||
+      lead?.name ||
+      "";
     return full || "Lead";
   }, [lead]);
 
@@ -433,9 +455,7 @@ export default function LeadProfileDial() {
         const r = await fetch(`/api/drips/campaigns`, { cache: "no-store" });
         const j = await r.json().catch(() => ({} as any));
         if (!r.ok) throw new Error(j?.error || "Failed to load campaigns");
-        const list: UICampaign[] = Array.isArray(j?.campaigns)
-          ? j.campaigns
-          : [];
+        const list: UICampaign[] = Array.isArray(j?.campaigns) ? j.campaigns : [];
         setCampaigns(list);
       } catch (e: any) {
         toast.error(e?.message || "Failed to load campaigns");
@@ -453,10 +473,9 @@ export default function LeadProfileDial() {
       setActiveDripsLoading(true);
 
       // Preferred: /api/drips/enrollments
-      const resp = await fetch(
-        `/api/drips/enrollments?leadId=${encodeURIComponent(resolvedId)}`,
-        { cache: "no-store" }
-      );
+      const resp = await fetch(`/api/drips/enrollments?leadId=${encodeURIComponent(resolvedId)}`, {
+        cache: "no-store",
+      });
       if (resp.ok) {
         const data = await resp.json().catch(() => ({} as any));
         const ids: string[] = Array.isArray(data?.enrollments)
@@ -529,17 +548,11 @@ export default function LeadProfileDial() {
         body: JSON.stringify(body),
       });
       const j = await r.json().catch(() => ({} as any));
-      if (!r.ok || !j?.success)
-        throw new Error(j?.error || j?.message || "Failed to enroll lead");
+      if (!r.ok || !j?.success) throw new Error(j?.error || j?.message || "Failed to enroll lead");
 
       const enrolledName =
-        j?.campaign?.name ||
-        campaigns.find((c) => c._id === selectedCampaignId)?.name ||
-        "campaign";
-      setHistoryLines((prev) => [
-        `🔖 Status: Enrolled to ${enrolledName} • ${new Date().toLocaleString()}`,
-        ...prev,
-      ]);
+        j?.campaign?.name || campaigns.find((c) => c._id === selectedCampaignId)?.name || "campaign";
+      setHistoryLines((prev) => [`🔖 Status: Enrolled to ${enrolledName} • ${new Date().toLocaleString()}`, ...prev]);
 
       toast.success(`✅ Enrolled in ${enrolledName}`);
       setEnrollOpen(false);
@@ -564,8 +577,7 @@ export default function LeadProfileDial() {
         body: JSON.stringify({ leadId: lead.id, campaignId: removeCampaignId }),
       });
       const j = await r.json().catch(() => ({} as any));
-      if (!r.ok || !j?.success)
-        throw new Error(j?.error || j?.message || "Failed to remove");
+      if (!r.ok || !j?.success) throw new Error(j?.error || j?.message || "Failed to remove");
 
       toast.success("✅ Removed from drip");
       setUnenrollOpen(false);
@@ -580,46 +592,218 @@ export default function LeadProfileDial() {
     }
   };
 
+  // ---------- LEFT panel: inline edit helpers ----------
+  const startEditingField = (key: string, rawValue: any) => {
+    if (!lead?.id) return toast.error("Lead not loaded");
+    setEditingKey(key);
+
+    // For phone keys, store digits/pretty? -> store the raw string as displayed (editable)
+    const display = normalizeDisplayValue(rawValue);
+    setEditingValue(display === "—" ? "" : display);
+  };
+
+  const cancelEditingField = () => {
+    setEditingKey(null);
+    setEditingValue("");
+    setSavingKey(null);
+  };
+
+  const saveEditingField = async () => {
+    if (!lead?.id) return toast.error("Lead not loaded");
+    if (!editingKey) return;
+
+    const field = editingKey;
+    const value = editingValue;
+
+    try {
+      setSavingKey(field);
+
+      const r = await fetch("/api/leads/update-field", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ leadId: lead.id, field, value }),
+      });
+
+      const j = await r.json().catch(() => ({} as any));
+      if (!r.ok || j?.success === false) {
+        throw new Error(j?.message || j?.error || "Failed to update field");
+      }
+
+      // Update local state immediately
+      setLead((prev) => {
+        if (!prev) return prev;
+        return { ...prev, [field]: value };
+      });
+
+      toast.success("✅ Updated");
+      setEditingKey(null);
+      setEditingValue("");
+    } catch (e: any) {
+      toast.error(e?.message || "Failed to update field");
+    } finally {
+      setSavingKey(null);
+    }
+  };
+
+  const leftPanelEntries = useMemo(() => {
+    const obj = lead || {};
+    const entries = Object.entries(obj).filter(([key]) => !HIDDEN_LEAD_KEYS.has(key));
+
+    // Stable ordering: common keys first, then everything else alphabetically
+    const preferredOrder = [
+      "firstName",
+      "lastName",
+      "First Name",
+      "Last Name",
+      "name",
+      "Phone",
+      "phone",
+      "Email",
+      "email",
+      "status",
+      "Notes",
+      "notes",
+    ];
+
+    const prefSet = new Set(preferredOrder);
+
+    const preferred: Array<[string, any]> = [];
+    for (const k of preferredOrder) {
+      const found = entries.find(([key]) => key === k);
+      if (found) preferred.push(found);
+    }
+
+    const rest = entries
+      .filter(([key]) => !prefSet.has(key))
+      .sort(([a], [b]) => a.localeCompare(b));
+
+    // Remove dupes if both name/firstName etc exist (keep the first occurrence)
+    const seen = new Set<string>();
+    const merged = [...preferred, ...rest].filter(([k]) => {
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
+
+    return merged;
+  }, [lead]);
+
   // ---------- Render ----------
   return (
     <div className="flex bg-[#0f172a] text-white min-h-screen">
       <Sidebar />
 
-      {/* LEFT (lead fields only; no call notes blob) */}
+      {/* LEFT (lead fields only; editable) */}
       <div className="w-[320px] p-4 border-r border-gray-700 bg-[#1e293b] overflow-y-auto">
         <div className="mb-2">
           <h2 className="text-xl font-bold">{leadName}</h2>
         </div>
 
-        {Object.entries(lead || {})
-          .filter(([key]) =>
-            ![
-              "_id",
-              "id",
-              "Notes",
-              "notes",
-              "First Name",
-              "Last Name",
-              "folderId",
-              "createdAt",
-              "ownerId",
-              "userEmail",
-            ].includes(key)
-          )
-          .map(([key, value]) => {
-            if (key === "Phone" || key.toLowerCase() === "phone")
-              value = formatPhone(String(value || ""));
-            return (
-              <div key={key}>
-                <p className="text-sm">
-                  <strong>{key.replace(/_/g, " ")}:</strong> {String(value)}
-                </p>
-                <hr className="border-gray-800 my-1" />
-              </div>
-            );
-          })}
+        {leftPanelEntries.map(([key, rawValue]) => {
+          let displayValue = rawValue;
 
-        <p className="text-gray-500 mt-2 text-xs">Click fields to edit live.</p>
+          // Pretty phone formatting for display (still editable)
+          if (key === "Phone" || key.toLowerCase() === "phone") {
+            displayValue = formatPhone(String(rawValue || ""));
+          }
+
+          const isEditing = editingKey === key;
+          const isSaving = savingKey === key;
+
+          const valueText = normalizeDisplayValue(displayValue);
+          const label = key.replace(/_/g, " ");
+
+          const isLong =
+            typeof rawValue === "string" ? rawValue.length > 60 : valueText.length > 80;
+
+          return (
+            <div key={key} className="py-1">
+              <p className="text-xs text-gray-400 mb-1">{label}</p>
+
+              {!isEditing ? (
+                <button
+                  type="button"
+                  onClick={() => startEditingField(key, rawValue)}
+                  className="w-full text-left rounded px-2 py-1.5 bg-white/0 hover:bg-white/5 border border-white/0 hover:border-white/10 transition"
+                  title="Click to edit"
+                >
+                  <span className="text-sm text-gray-100 whitespace-pre-wrap break-words">
+                    {valueText}
+                  </span>
+                </button>
+              ) : (
+                <div className="rounded border border-white/10 bg-[#0f172a] p-2">
+                  {isLong ? (
+                    <textarea
+                      value={editingValue}
+                      onChange={(e) => setEditingValue(e.target.value)}
+                      className="w-full text-sm text-white bg-transparent border-none focus:outline-none resize-y min-h-[72px]"
+                      autoFocus
+                      onKeyDown={(e) => {
+                        if (e.key === "Escape") {
+                          e.preventDefault();
+                          cancelEditingField();
+                        }
+                        // (No Enter-to-save for textarea; users can click Save / blur)
+                      }}
+                      onBlur={() => {
+                        // save on blur (matches your “edit live” intent)
+                        saveEditingField();
+                      }}
+                    />
+                  ) : (
+                    <input
+                      value={editingValue}
+                      onChange={(e) => setEditingValue(e.target.value)}
+                      className="w-full text-sm text-white bg-transparent border-none focus:outline-none"
+                      autoFocus
+                      onKeyDown={(e) => {
+                        if (e.key === "Escape") {
+                          e.preventDefault();
+                          cancelEditingField();
+                        }
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          saveEditingField();
+                        }
+                      }}
+                      onBlur={() => {
+                        saveEditingField();
+                      }}
+                    />
+                  )}
+
+                  <div className="mt-2 flex items-center justify-end gap-2">
+                    <button
+                      type="button"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={cancelEditingField}
+                      className="text-xs px-2 py-1 rounded bg-white/10 hover:bg-white/20"
+                      disabled={isSaving}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={saveEditingField}
+                      className="text-xs px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50"
+                      disabled={isSaving}
+                    >
+                      {isSaving ? "Saving…" : "Save"}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              <hr className="border-gray-800 my-2" />
+            </div>
+          );
+        })}
+
+        <p className="text-gray-500 mt-2 text-xs">
+          Click any field value to edit live. Enter saves, Esc cancels.
+        </p>
       </div>
 
       {/* CENTER */}
@@ -677,9 +861,7 @@ export default function LeadProfileDial() {
             <div className="flex items-center justify-between mb-1">
               <h3 className="text-lg font-bold">AI Call Overview</h3>
               <div className="flex items-center gap-2">
-                {callsLoading ? (
-                  <span className="text-xs text-gray-400">Loading…</span>
-                ) : null}
+                {callsLoading ? <span className="text-xs text-gray-400">Loading…</span> : null}
                 <button
                   type="button"
                   onClick={() => loadCalls()}
@@ -691,13 +873,9 @@ export default function LeadProfileDial() {
             </div>
 
             {!latestOverviewCall ? (
-              <p className="text-gray-400 text-sm">
-                No AI call overview yet for this lead.
-              </p>
+              <p className="text-gray-400 text-sm">No AI call overview yet for this lead.</p>
             ) : !closeOverview ? (
-              <p className="text-gray-400 text-sm">
-                AI call found, but overview data is missing.
-              </p>
+              <p className="text-gray-400 text-sm">AI call found, but overview data is missing.</p>
             ) : (
               <div className="mt-2 space-y-3">
                 {/* Top row badges */}
@@ -794,7 +972,9 @@ export default function LeadProfileDial() {
 
                 <div className="text-xs text-gray-500 pt-1">
                   Based on most recent AI call •{" "}
-                  {fmtDateTime((latestOverviewCall as any)?.startedAt || (latestOverviewCall as any)?.completedAt)}
+                  {fmtDateTime(
+                    (latestOverviewCall as any)?.startedAt || (latestOverviewCall as any)?.completedAt
+                  )}
                   {closeOverview.generatedAt ? (
                     <>
                       {" "}
@@ -902,7 +1082,10 @@ export default function LeadProfileDial() {
             </div>
 
             <div className="mt-4 flex items-center justify-end gap-2">
-              <button onClick={() => setEnrollOpen(false)} className="px-3 py-2 rounded bg-gray-700 hover:bg-gray-600">
+              <button
+                onClick={() => setEnrollOpen(false)}
+                className="px-3 py-2 rounded bg-gray-700 hover:bg-gray-600"
+              >
                 Cancel
               </button>
               <button
@@ -957,7 +1140,10 @@ export default function LeadProfileDial() {
             </div>
 
             <div className="mt-4 flex items-center justify-end gap-2">
-              <button onClick={() => setUnenrollOpen(false)} className="px-3 py-2 rounded bg-gray-700 hover:bg-gray-600">
+              <button
+                onClick={() => setUnenrollOpen(false)}
+                className="px-3 py-2 rounded bg-gray-700 hover:bg-gray-600"
+              >
                 Cancel
               </button>
               <button
