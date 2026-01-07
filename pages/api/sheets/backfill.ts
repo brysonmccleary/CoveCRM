@@ -188,24 +188,46 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // ✅ Verify signature byte-perfect BEFORE parsing JSON
     if (!verifySignatureFlexibleBytes(rawBytes, rawBodyText, token, sig)) {
-      // Helpful debug for logs / Apps Script visibility (kept small)
+      // ----------------------------
+      // 🔎 TARGETED DEBUG (minimal)
+      // ----------------------------
       const rawBodySha256 = crypto.createHash("sha256").update(rawBytes).digest("hex");
-      const sigIsHex = isHexSig(sig);
-      const sigIsB64 = isB64Sig(sig);
-      const expectedHexPrefix = hmacHexBytes(rawBytes, token).slice(0, 12);
-      const expectedB64Prefix = hmacB64Bytes(rawBytes, token).slice(0, 12);
+
+      const rawTextFirst64 = String(rawBodyText || "").slice(0, 64);
+      const rawTextLast64 = String(rawBodyText || "").slice(Math.max(0, rawBodyText.length - 64));
+      const rawTextTrimEnd = String(rawBodyText || "").trimEnd();
+
+      const sigTrimmed = String(sig || "").trim();
+      const sigIsHex = isHexSig(sigTrimmed);
+      const sigIsB64 = isB64Sig(sigTrimmed);
+
+      const expectedHexPrefixRaw = hmacHexBytes(rawBytes, token).slice(0, 12);
+      const expectedHexPrefixTrimEnd = hmacHexBytes(Buffer.from(rawTextTrimEnd, "utf8"), token).slice(0, 12);
+
+      const expectedB64PrefixRaw = hmacB64Bytes(rawBytes, token).slice(0, 12);
+      const expectedB64PrefixTrimEnd = hmacB64Bytes(Buffer.from(rawTextTrimEnd, "utf8"), token).slice(0, 12);
+
+      const debug = {
+        rawBodyLen: rawBytes.length,
+        rawBodySha256,
+        rawTextFirst64,
+        rawTextLast64,
+        sigIsHex,
+        sigIsB64,
+        sigLen: sigTrimmed.length,
+        sigReceivedPrefix: sigTrimmed.slice(0, 12),
+        expectedHexPrefixRaw,
+        expectedHexPrefixTrimEnd,
+        expectedB64PrefixRaw,
+        expectedB64PrefixTrimEnd,
+      };
+
+      // Vercel log capture (this is what you’ll use to prove exactly what’s wrong)
+      console.warn("[sheets/backfill] Invalid signature debug", debug);
 
       return res.status(403).json({
         error: "Invalid signature",
-        debug: {
-          rawBodyLen: rawBytes.length,
-          rawBodySha256,
-          sigIsHex,
-          sigIsB64,
-          sigReceivedPrefix: String(sig || "").slice(0, 12),
-          expectedHexPrefix,
-          expectedB64Prefix,
-        },
+        debug,
       });
     }
 
