@@ -9,24 +9,47 @@ import { sendA2PApprovedEmail, sendA2PDeclinedEmail } from "@/lib/a2p/notificati
 const BASE_URL = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "").replace(/\/$/, "");
 const CRON_SECRET = process.env.CRON_SECRET || "";
 
-const APPROVED = new Set([
-  "approved",
-  "verified",
-  "active",
-  "in_use",
-  "registered",
-  "campaign_approved",
-]);
+/**
+ * IMPORTANT SEMANTICS CHANGE:
+ * - Brand "approved/active/in_use/registered" DOES NOT mean texting is ready.
+ * - Only CAMPAIGN approval should set messagingReady=true and applicationStatus=approved.
+ */
+
+// Brand statuses we treat as "approved enough to create campaign"
+const BRAND_APPROVED = new Set(["approved", "verified", "active", "in_use", "registered"]);
+const BRAND_PENDING = new Set(["pending", "submitted", "under_review", "pending-review", "in_progress"]);
+const BRAND_FAILED = new Set(["failed", "rejected", "declined", "terminated"]);
+
+// Campaign statuses we treat as "approved and live"
+const CAMPAIGN_APPROVED = new Set(["approved", "verified", "active", "in_use", "registered", "campaign_approved"]);
+const CAMPAIGN_PENDING = new Set(["pending", "submitted", "under_review", "pending-review", "in_progress", "campaign_submitted"]);
+const CAMPAIGN_FAILED = new Set(["failed", "rejected", "declined", "terminated", "campaign_failed"]);
 
 const DECLINED_MATCH = /(reject|denied|declined|failed|error)/i;
 
 type AnyDoc = Record<string, any>;
 
+/**
+ * NOTE:
+ * Previously classifyFromDoc would treat doc.state/appStatus "approved" as approved.
+ * That’s dangerous because docs can become "approved" incorrectly (or from brand-only).
+ *
+ * New rule:
+ * - "approved" only if doc.messagingReady === true OR registrationStatus indicates campaign-approved.
+ */
 function classifyFromDoc(p: AnyDoc) {
   const docState = String(p?.state || "").toLowerCase();
   const appStatus = String(p?.applicationStatus || "").toLowerCase();
-  if (docState === "approved" || appStatus === "approved") return { state: "approved" as const };
+  const reg = String(p?.registrationStatus || "").toLowerCase();
+  const messagingReady = Boolean(p?.messagingReady);
+
+  const isCampaignApprovedByDoc =
+    messagingReady || reg === "campaign_approved" || reg === "ready";
+
+  if (isCampaignApprovedByDoc) return { state: "approved" as const };
+
   if (docState === "declined" || appStatus === "declined") return { state: "declined" as const };
+
   return { state: "pending" as const };
 }
 
@@ -73,6 +96,7 @@ function deriveMessageSamples(doc: AnyDoc): string[] {
       .slice(0, 3);
   }
 
+  // NOTE: doc.sampleMessages is often a string, but you had this branch; keeping it.
   if (Array.isArray(doc.sampleMessages) && doc.sampleMessages.length) {
     return doc.sampleMessages
       .map((s: any) => String(s || "").trim())
@@ -155,7 +179,7 @@ async function ensureCampaignForApprovedBrandTenant(args: {
   if (existingCampaignSid) return { created: false, campaignSid: existingCampaignSid };
 
   const lowerBrand = (brandStatus || "").toLowerCase();
-  if (!lowerBrand || !APPROVED.has(lowerBrand)) return { created: false, campaignSid: null };
+  if (!lowerBrand || !BRAND_APPROVED.has(lowerBrand)) return { created: false, campaignSid: null };
 
   const useCase = deriveUseCase(doc);
   const messageSamples = deriveMessageSamples(doc);
@@ -194,13 +218,17 @@ async function ensureCampaignForApprovedBrandTenant(args: {
     const status = usA2p?.status || "pending";
 
     if (campaignSid) {
+      // IMPORTANT:
+      // - creating campaign does NOT mean approved; keep as pending/submitted state.
       await A2PProfile.updateOne(
         { _id: doc._id },
         {
           $set: {
             campaignSid,
             usa2pSid: campaignSid,
-            registrationStatus: status,
+            registrationStatus: "campaign_submitted",
+            messagingReady: false,
+            applicationStatus: "pending",
             lastError: undefined,
             lastSyncedAt: new Date(),
           },
@@ -328,7 +356,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       continue;
     }
 
-    // Fast-path: already approved by webhook/state
+    /**
+     * Fast-path: ALREADY campaign-approved (by our doc fields).
+     * Old version would auto-approve if doc.state/appStatus says approved.
+     * New version only fast-paths when campaign-approved signals are present.
+     */
     if (baseClass.state === "approved") {
       try {
         await A2PProfile.updateOne(
@@ -419,13 +451,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       // ignore
     }
 
+    // Auto-create campaign once brand is approved (but DO NOT mark approved here)
     try {
       if (
         brandSid &&
         messagingServiceSid &&
         !campaignSid &&
         brandStatus &&
-        APPROVED.has(String(brandStatus).toLowerCase())
+        BRAND_APPROVED.has(String(brandStatus).toLowerCase())
       ) {
         const auto = await ensureCampaignForApprovedBrandTenant({
           client,
@@ -453,29 +486,31 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       // ignore
     }
 
-    const statusStrings = [brandStatus, campStatus].filter(Boolean).map((s) => String(s).toLowerCase());
+    const brandLower = String(brandStatus || "").toLowerCase();
+    const campLower = String(campStatus || "").toLowerCase();
 
-    const isApproved = statusStrings.some((s) => APPROVED.has(s));
-    const isDeclined = statusStrings.some((s) => DECLINED_MATCH.test(s));
+    // ✅ APPROVED ONLY if CAMPAIGN is approved
+    const isCampaignApproved = Boolean(campLower && CAMPAIGN_APPROVED.has(campLower));
+
+    // Decline if either is explicitly declined/failed
+    const isDeclined =
+      Boolean(brandLower && (BRAND_FAILED.has(brandLower) || DECLINED_MATCH.test(brandLower))) ||
+      Boolean(campLower && (CAMPAIGN_FAILED.has(campLower) || DECLINED_MATCH.test(campLower)));
 
     const missing = listMissingSids({ ...doc, brandSid, campaignSid });
 
     try {
-      if (isApproved) {
+      if (isCampaignApproved) {
         await A2PProfile.updateOne(
           { _id: doc._id },
           {
             $set: {
               messagingReady: true,
               applicationStatus: "approved",
-              registrationStatus: statusStrings.some(
-                (s) => s === "campaign_approved" || s === "in_use" || s === "registered"
-              )
-                ? "campaign_approved"
-                : "ready",
+              registrationStatus: "campaign_approved",
               lastSyncedAt: new Date(),
             },
-            $unset: { lastError: 1 },
+            $unset: { lastError: 1, declinedReason: 1 },
           }
         );
 
@@ -556,7 +591,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         continue;
       }
 
-      await A2PProfile.updateOne({ _id: doc._id }, { $set: { lastSyncedAt: new Date() } });
+      // Pending (most common)
+      // OPTIONAL: keep doc fields in sync so UI doesn't lie.
+      // - If brand approved but campaign not approved => keep messagingReady false, appStatus pending.
+      // - If we have campaignSid but it's pending => mark campaign_submitted.
+      const nextRegistration =
+        campaignSid
+          ? (campLower && CAMPAIGN_PENDING.has(campLower) ? "campaign_submitted" : doc.registrationStatus)
+          : (brandLower && BRAND_APPROVED.has(brandLower) ? "brand_approved" : doc.registrationStatus);
+
+      await A2PProfile.updateOne(
+        { _id: doc._id },
+        {
+          $set: {
+            messagingReady: false,
+            applicationStatus: "pending",
+            registrationStatus: nextRegistration || "pending",
+            lastSyncedAt: new Date(),
+          },
+        }
+      );
 
       results.push({
         id,

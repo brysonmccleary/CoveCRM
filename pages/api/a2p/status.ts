@@ -7,16 +7,14 @@ import A2PProfile from "@/models/A2PProfile";
 import User from "@/models/User";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
 
-const APPROVED = new Set([
-  "approved",
-  "verified",
-  "active",
-  "in_use",
-  "registered",
-  "campaign_approved",
-]);
+// Brand statuses that indicate brand approved (NOT texting-ready)
+const BRAND_APPROVED = new Set(["approved", "verified", "active", "in_use", "registered"]);
+const BRAND_PENDING = new Set(["pending", "submitted", "under_review", "pending-review", "in_progress"]);
+const BRAND_FAILED = new Set(["failed", "rejected", "declined", "terminated", "brand_failed"]);
 
-const PENDING = new Set([
+// Campaign statuses that indicate campaign approved (texting-ready)
+const CAMPAIGN_APPROVED = new Set(["approved", "verified", "active", "in_use", "registered", "campaign_approved"]);
+const CAMPAIGN_PENDING = new Set([
   "pending",
   "submitted",
   "under_review",
@@ -24,23 +22,15 @@ const PENDING = new Set([
   "in_progress",
   "campaign_submitted",
 ]);
-
-const FAILED = new Set([
-  "failed",
-  "rejected",
-  "declined",
-  "brand_failed",
-  "campaign_failed",
-  "terminated",
-]);
+const CAMPAIGN_FAILED = new Set(["failed", "rejected", "declined", "terminated", "campaign_failed"]);
 
 type NextAction =
   | "start_profile"
   | "submit_brand"
   | "brand_pending"
+  | "create_messaging_service"
   | "submit_campaign"
   | "campaign_pending"
-  | "create_messaging_service"
   | "ready";
 
 function safeLower(v: any) {
@@ -126,13 +116,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       // ✅ Optional proof: list brands in this scoped context
       if ((process.env.A2P_DEBUG_BRANDS || "") === "1") {
         try {
-          const brands = await (client.messaging.v1 as any).brandRegistrations.list(
-            { limit: 20 }
-          );
-          console.log(
-            "[A2P status] debug: brandRegistrations.list count",
-            brands?.length || 0
-          );
+          const brands = await (client.messaging.v1 as any).brandRegistrations.list({ limit: 20 });
+          console.log("[A2P status] debug: brandRegistrations.list count", brands?.length || 0);
           console.log(
             "[A2P status] debug: brandRegistrations.list sids",
             (brands || []).map((b: any) => ({ sid: b?.sid, status: b?.status }))
@@ -189,7 +174,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         brandStatus = String((brand as any).status || brandStatus);
 
-        // capture failure reason(s)
         const rawFailure =
           brand?.failureReason ||
           brand?.failureReasons ||
@@ -223,7 +207,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           brandFailureReason = null;
         }
 
-        // capture errors array (Twilio often uses .errors)
         brandErrors = Array.isArray(brand?.errors) ? brand.errors : [];
         brandErrorsText = flattenErrorsText(brandErrors);
 
@@ -234,7 +217,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         const lower = safeLower(brandStatus);
 
-        if (FAILED.has(lower)) {
+        if (BRAND_FAILED.has(lower)) {
           (a2p as any).registrationStatus = "rejected";
           (a2p as any).messagingReady = false;
 
@@ -243,16 +226,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             brandFailureReason ||
             "Brand rejected. Please review and resubmit.";
 
-          // store a string (or undefined) — NOT null
           (a2p as any).declinedReason = realReason;
           (a2p as any).applicationStatus = "declined";
-        } else if (APPROVED.has(lower)) {
+        } else if (BRAND_APPROVED.has(lower)) {
           (a2p as any).registrationStatus = "brand_approved";
-
-          // ✅ clear stale decline flags
           (a2p as any).declinedReason = undefined;
           (a2p as any).applicationStatus = "pending";
-        } else if (PENDING.has(lower)) {
+        } else if (BRAND_PENDING.has(lower)) {
           (a2p as any).registrationStatus = "brand_submitted";
         }
       } catch {
@@ -260,6 +240,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
+    // --- Campaign status (this controls "approved/live") ---
     let campaignStatus = "unknown";
     const campaignSid = (a2p as any).usa2pSid || (a2p as any).campaignSid;
 
@@ -270,13 +251,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           .usAppToPerson(campaignSid)
           .fetch();
 
-        campaignStatus = String(
-          (camp as any).status || (camp as any).state || campaignStatus
-        );
+        campaignStatus = String((camp as any).status || (camp as any).state || campaignStatus);
 
         const lower = safeLower(campaignStatus);
 
-        if (FAILED.has(lower)) {
+        if (CAMPAIGN_FAILED.has(lower)) {
           (a2p as any).registrationStatus = "rejected";
           (a2p as any).messagingReady = false;
 
@@ -284,14 +263,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             (a2p as any).declinedReason =
               "Your A2P campaign registration was rejected by carriers. Please review your use case description, sample messages, and opt-in/opt-out details, then resubmit.";
           }
-        } else if (APPROVED.has(lower)) {
+
+          (a2p as any).applicationStatus = "declined";
+        } else if (CAMPAIGN_APPROVED.has(lower)) {
           (a2p as any).registrationStatus = "campaign_approved";
           (a2p as any).messagingReady = true;
-
-          // campaign approved => clear stale declined flags too
           (a2p as any).declinedReason = undefined;
-        } else if (PENDING.has(lower)) {
+          (a2p as any).applicationStatus = "approved";
+        } else if (CAMPAIGN_PENDING.has(lower)) {
           (a2p as any).registrationStatus = "campaign_submitted";
+          (a2p as any).messagingReady = false;
+          (a2p as any).applicationStatus = "pending";
         }
       } catch {
         // best-effort
@@ -338,23 +320,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
-    // --- Derive applicationStatus ---
+    // --- Derive applicationStatus (FIXED semantics) ---
     (a2p as any).lastSyncedAt = new Date();
     (a2p as any).twilioAccountSidLastUsed = twilioAccountSidUsed || undefined;
 
-    let applicationStatus = (a2p as any).applicationStatus || "pending";
     const isRejected =
       (a2p as any).registrationStatus === "rejected" ||
       Boolean((a2p as any).declinedReason);
 
+    let applicationStatus = "pending";
+
     if (isRejected) {
       applicationStatus = "declined";
       (a2p as any).messagingReady = false;
-    } else if (
-      (a2p as any).messagingReady ||
-      (a2p as any).registrationStatus === "ready" ||
-      (a2p as any).registrationStatus === "campaign_approved"
-    ) {
+    } else if (Boolean((a2p as any).messagingReady)) {
+      // ✅ ONLY when campaign-approved (messagingReady true)
       applicationStatus = "approved";
     } else {
       applicationStatus = "pending";
@@ -370,11 +350,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    // --- Decide next action for the wizard/UI ---
+    // --- Decide next action for the wizard/UI (FIXED ordering) ---
     const lowerBrand = safeLower(brandStatus);
     const lowerCampaign = safeLower(campaignStatus);
-    const brandFailed = Boolean((a2p as any).brandSid && FAILED.has(lowerBrand));
-    const campaignFailed = Boolean(campaignSid && FAILED.has(lowerCampaign));
+
+    const brandFailed = Boolean((a2p as any).brandSid && BRAND_FAILED.has(lowerBrand));
+    const campaignFailed = Boolean(campaignSid && CAMPAIGN_FAILED.has(lowerCampaign));
 
     let nextAction: NextAction = "ready";
 
@@ -382,14 +363,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       nextAction = "start_profile";
     } else if (!(a2p as any).brandSid || brandFailed) {
       nextAction = "submit_brand";
-    } else if ((a2p as any).brandSid && !APPROVED.has(lowerBrand)) {
+    } else if ((a2p as any).brandSid && !BRAND_APPROVED.has(lowerBrand)) {
       nextAction = "brand_pending";
+    } else if (!(a2p as any).messagingServiceSid) {
+      // ✅ before campaign submit
+      nextAction = "create_messaging_service";
     } else if (!campaignSid || campaignFailed) {
       nextAction = "submit_campaign";
-    } else if (campaignSid && !APPROVED.has(lowerCampaign)) {
+    } else if (campaignSid && !CAMPAIGN_APPROVED.has(lowerCampaign)) {
       nextAction = "campaign_pending";
-    } else if (!(a2p as any).messagingServiceSid) {
-      nextAction = "create_messaging_service";
     } else {
       nextAction = "ready";
     }

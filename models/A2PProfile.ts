@@ -39,18 +39,13 @@ export interface IA2PProfile extends Document {
   trustProductSid?: string;
   a2pProfileEndUserSid?: string;
 
-  // ✅ you said you already have this and you're using it
   assignedToPrimary?: boolean;
 
   addressSid?: string;
-
-  // Supporting document created for customer_profile_address
   supportingDocumentSid?: string;
 
-  // ✅ ADD (your start.ts uses these fields)
   parentAddressSid?: string;
 
-  // ✅ ADD (your start.ts reads/writes these but your schema was missing them)
   supportingDocumentCreatedVia?: "subaccount" | "parent";
   supportingDocumentAccountSid?: string;
 
@@ -68,8 +63,8 @@ export interface IA2PProfile extends Document {
   landingPrivacyUrl?: string;
 
   brandSid?: string;
-  campaignSid?: string;
-  usa2pSid?: string;
+  campaignSid?: string; // QE...
+  usa2pSid?: string; // (legacy, keep)
   messagingServiceSid?: string;
 
   brandStatus?: string;
@@ -110,6 +105,11 @@ export interface IA2PProfile extends Document {
     note?: string;
   }[];
 
+  // ✅ NEW: campaign-catcher idempotency + throttle (additive fields)
+  campaignSubmitLockUntil?: Date;
+  campaignSubmitLastAttemptAt?: Date;
+  campaignSubmitAttempts?: number;
+
   createdAt: Date;
   updatedAt?: Date;
 }
@@ -147,10 +147,8 @@ const A2PProfileSchema = new Schema<IA2PProfile>({
   addressSid: { type: String },
   supportingDocumentSid: { type: String },
 
-  // ✅ already present in your interface; used in start.ts fallback
   parentAddressSid: { type: String },
 
-  // ✅ add missing fields used by start.ts
   supportingDocumentCreatedVia: { type: String, enum: ["subaccount", "parent"] },
   supportingDocumentAccountSid: { type: String },
 
@@ -230,6 +228,11 @@ const A2PProfileSchema = new Schema<IA2PProfile>({
       note: { type: String },
     },
   ],
+
+  // ✅ NEW lock fields
+  campaignSubmitLockUntil: { type: Date },
+  campaignSubmitLastAttemptAt: { type: Date },
+  campaignSubmitAttempts: { type: Number, default: 0 },
 
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },

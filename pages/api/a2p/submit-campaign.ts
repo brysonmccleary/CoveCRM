@@ -75,7 +75,19 @@ function parseSamplesFromProfile(a2p: IA2PProfile): string[] {
     .map((s) => s.trim())
     .filter(Boolean);
   // You were joining them with \n\n in start.ts; this keeps it tolerant.
-  return samples.length >= 2 ? samples : raw.split("\n\n").map((s) => s.trim()).filter(Boolean);
+  return samples.length >= 2
+    ? samples
+    : raw.split("\n\n").map((s) => s.trim()).filter(Boolean);
+}
+
+function detectEmbeddedLinks(flow: string, samples: string[]) {
+  const text = `${flow || ""} ${samples.join(" ")}`.trim();
+  return /https?:\/\//i.test(text);
+}
+
+function detectEmbeddedPhone(flow: string, samples: string[]) {
+  const text = `${flow || ""} ${samples.join(" ")}`.trim();
+  return /\+\d{7,}/.test(text) || /\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b/.test(text);
 }
 
 async function ensureMessagingService(args: {
@@ -171,6 +183,14 @@ export async function submitCampaignIfReadyForUserEmail(userEmail: string) {
   const brandStatus = String(brand?.status || "").toUpperCase();
   const canCreateCampaign = BRAND_OK_FOR_CAMPAIGN.has(brandStatus);
 
+  // IMPORTANT: be tolerant of FAILED / failed / rejected, etc.
+  const brandStatusLower = String(brand?.status || "").toLowerCase();
+  const isBrandFailed =
+    brandStatus === "FAILED" ||
+    brandStatusLower === "failed" ||
+    brandStatusLower === "rejected" ||
+    brandStatusLower === "declined";
+
   await A2PProfile.updateOne(
     { _id: a2pId },
     {
@@ -179,7 +199,7 @@ export async function submitCampaignIfReadyForUserEmail(userEmail: string) {
         brandFailureReason: brand?.failureReason || undefined,
         lastSyncedAt: new Date(),
         twilioAccountSidLastUsed: twilioAccountSidUsed,
-        ...(brandStatus === "FAILED"
+        ...(isBrandFailed
           ? {
               registrationStatus: "rejected",
               applicationStatus: "declined",
@@ -223,14 +243,17 @@ export async function submitCampaignIfReadyForUserEmail(userEmail: string) {
     messageFlow: messageFlowText,
   });
 
+  const hasEmbeddedLinks = detectEmbeddedLinks(messageFlowText, samples);
+  const hasEmbeddedPhone = detectEmbeddedPhone(messageFlowText, samples);
+
   const createPayload: any = {
     brandRegistrationSid: a2p.brandSid,
     usAppToPersonUsecase: useCaseCode,
     description,
     messageFlow: messageFlowText,
     messageSamples: samples,
-    hasEmbeddedLinks: true,
-    hasEmbeddedPhone: false,
+    hasEmbeddedLinks,
+    hasEmbeddedPhone,
     subscriberOptIn: true,
     ageGated: false,
     directLending: false,
@@ -243,6 +266,8 @@ export async function submitCampaignIfReadyForUserEmail(userEmail: string) {
     useCaseCode,
     samplesCount: samples.length,
     twilioAccountSidUsed,
+    hasEmbeddedLinks,
+    hasEmbeddedPhone,
   });
 
   const usa2p = await client.messaging.v1
@@ -252,12 +277,13 @@ export async function submitCampaignIfReadyForUserEmail(userEmail: string) {
   const usa2pSid = (usa2p as any)?.sid;
   if (!isSidLike(usa2pSid, "QE")) {
     throw new Error(
-      `usAppToPerson.create did not return a QE sid. Body: ${JSON.stringify(
-        usa2p,
-      )}`,
+      `usAppToPerson.create did not return a QE sid. Body: ${JSON.stringify(usa2p)}`,
     );
   }
 
+  // IMPORTANT SEMANTICS FIX:
+  // Creating the campaign is NOT approval. It is "submitted/pending".
+  // Only sync/status should flip messagingReady/applicationStatus once Twilio shows campaign approved.
   await A2PProfile.updateOne(
     { _id: a2pId },
     {
@@ -265,9 +291,9 @@ export async function submitCampaignIfReadyForUserEmail(userEmail: string) {
         usa2pSid,
         campaignSid: usa2pSid,
         messagingServiceSid,
-        registrationStatus: "ready",
-        applicationStatus: "approved",
-        messagingReady: true,
+        registrationStatus: "campaign_submitted",
+        applicationStatus: "pending",
+        messagingReady: false,
         lastSyncedAt: new Date(),
         twilioAccountSidLastUsed: twilioAccountSidUsed,
       } as any,
@@ -277,6 +303,10 @@ export async function submitCampaignIfReadyForUserEmail(userEmail: string) {
           at: new Date(),
           note: "Campaign auto-submitted after brand approval",
         },
+      },
+      $unset: {
+        lastError: 1,
+        declinedReason: 1,
       },
     },
   );
