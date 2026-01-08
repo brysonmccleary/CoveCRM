@@ -18,6 +18,114 @@ const SEND_HOUR_PT = 9;
 const PER_LEAD_CONCURRENCY =
   Math.max(1, parseInt(process.env.DRIP_CONCURRENCY || "10", 10)) || 10;
 
+/** -----------------------------
+ *  NEW: Variant-key extraction helpers
+ *  (drip-only; minimal; no refactors)
+ * ----------------------------- */
+function normKey(k: string) {
+  return String(k || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, ""); // strip spaces/punct/underscores
+}
+
+function candidateObjectsFromLead(lead: any): any[] {
+  // Try common containers where sheet payload may live.
+  const cands: any[] = [];
+  if (lead && typeof lead === "object") cands.push(lead);
+
+  const maybeKeys = [
+    "data",
+    "fields",
+    "customFields",
+    "payload",
+    "raw",
+    "sheetRow",
+    "row",
+    "meta",
+  ];
+  for (const key of maybeKeys) {
+    const v = (lead as any)?.[key];
+    if (v && typeof v === "object") cands.push(v);
+  }
+
+  // Also handle cases where a single container holds the row under another property
+  // (this is intentionally light-touch; no deep recursion).
+  const innerKeys = ["values", "record", "lead", "contact"];
+  for (const obj of [...cands]) {
+    for (const k of innerKeys) {
+      const v = obj?.[k];
+      if (v && typeof v === "object") cands.push(v);
+    }
+  }
+
+  // De-dupe references
+  return Array.from(new Set(cands));
+}
+
+function pickByNormalizedKey(objs: any[], keySet: Set<string>): string | null {
+  for (const obj of objs) {
+    if (!obj || typeof obj !== "object") continue;
+    for (const [k, v] of Object.entries(obj)) {
+      if (!keySet.has(normKey(k))) continue;
+      if (v == null) continue;
+      const s = String(v).trim();
+      if (!s) continue;
+      return s;
+    }
+  }
+  return null;
+}
+
+const PHONE_KEYS = new Set([
+  "phone",
+  "phonenumber",
+  "mobile",
+  "mobilenumber",
+  "cell",
+  "cellnumber",
+  "telephone",
+  "tel",
+]);
+
+const FIRST_KEYS = new Set([
+  "firstname",
+  "first",
+  "fname",
+  "givenname",
+  "given",
+]);
+
+const LAST_KEYS = new Set([
+  "lastname",
+  "last",
+  "lname",
+  "surname",
+  "familyname",
+  "family",
+]);
+
+function pickLeadPhoneRaw(lead: any): string | null {
+  const objs = candidateObjectsFromLead(lead);
+  // Prefer explicit Phone field first if present
+  const direct = (lead as any)?.Phone;
+  if (direct != null && String(direct).trim()) return String(direct).trim();
+  return pickByNormalizedKey(objs, PHONE_KEYS);
+}
+function pickLeadFirstName(lead: any): string | null {
+  const objs = candidateObjectsFromLead(lead);
+  const direct = (lead as any)?.["First Name"];
+  if (direct != null && String(direct).trim()) return String(direct).trim();
+  return pickByNormalizedKey(objs, FIRST_KEYS);
+}
+function pickLeadLastName(lead: any): string | null {
+  const objs = candidateObjectsFromLead(lead);
+  const direct = (lead as any)?.["Last Name"];
+  if (direct != null && String(direct).trim()) return String(direct).trim();
+  return pickByNormalizedKey(objs, LAST_KEYS);
+}
+
+/** ----------------------------- */
+
 function isValidObjectId(id: string) {
   return /^[a-f0-9]{24}$/i.test(id);
 }
@@ -146,10 +254,7 @@ function applyLegacyTokens(
   msg = msg
     .replace(/<client_first_name>/gi, firstName || "")
     .replace(/<client_last_name>/gi, lastName || "")
-    .replace(
-      /<client_full_name>/gi,
-      fullName || (firstName || "")
-    )
+    .replace(/<client_full_name>/gi, fullName || (firstName || ""))
     .replace(/<agent_name>/gi, effectiveAgentName)
     .replace(/<agent_first_name>/gi, effectiveAgentFirst)
     .replace(/<agent_phone>/gi, effectiveAgentPhone)
@@ -252,7 +357,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       enrollFailed = 0,
       enrollCompleted = 0,
       enrollClaimMiss = 0,
-      enrollAlreadySent = 0;
+      enrollAlreadySent = 0,
+      enrollNoPhone = 0;
 
     const dueEnrollmentsQ = DripEnrollment.find({
       status: "active",
@@ -316,15 +422,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
 
         const [lead, user, campaign] = await Promise.all([
-          Lead.findById(claim.leadId)
-            .select({
-              _id: 1,
-              Phone: 1,
-              "First Name": 1,
-              "Last Name": 1,
-              userEmail: 1,
-            })
-            .lean(),
+          // ✅ IMPORTANT: do NOT narrow projections here; sheet leads may store fields elsewhere
+          Lead.findById(claim.leadId).lean(),
           User.findOne({ email: claim.userEmail })
             .select({ _id: 1, email: 1, name: 1 })
             .lean(),
@@ -353,18 +452,39 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           return;
         }
 
-        const to = normalizeToE164Maybe((lead as any).Phone);
+        // ✅ NEW: extract phone from any variant header / container
+        const phoneRaw = pickLeadPhoneRaw(lead);
+        const to = normalizeToE164Maybe(phoneRaw || undefined);
+
         if (!to) {
+          enrollNoPhone++;
+          console.log(
+            "[run-drips] skip: missing phone",
+            JSON.stringify({
+              enrollmentId: String(claim._id),
+              leadId: String((lead as any)?._id || claim.leadId),
+              campaignId: String((campaign as any)?._id || claim.campaignId),
+              cursorStep: claim.cursorStep ?? 0,
+              phoneRaw: phoneRaw ? String(phoneRaw).slice(0, 32) : null,
+              source: (claim as any)?.source || null,
+            })
+          );
           await DripEnrollment.updateOne(
             { _id: claim._id },
-            { $set: { processing: false }, $unset: { processingAt: 1 } }
+            {
+              $set: {
+                processing: false,
+                lastError: "missing_phone",
+              },
+              $unset: { processingAt: 1 },
+            }
           );
           return;
         }
 
         const { first: agentFirst, last: agentLast } = splitName(user.name || "");
-        const firstName = (lead as any)["First Name"] || null;
-        const lastName = (lead as any)["Last Name"] || null;
+        const firstName = pickLeadFirstName(lead);
+        const lastName = pickLeadLastName(lead);
         const fullName =
           [firstName, lastName].filter(Boolean).join(" ") || null;
         const agentCtx = {
@@ -473,13 +593,32 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         try {
           if (!dry) {
-            const ok = await acquireLock(
-              "enroll",
-              `${String(user.email)}:${String(
-                (lead as any)._id
-              )}:${String((campaign as any)._id)}:${String(idx)}`,
-              600
+            const lockKey = `${String(user.email)}:${String(
+              (lead as any)._id
+            )}:${String((campaign as any)._id)}:${String(idx)}`;
+
+            console.log(
+              "[run-drips] attempt send",
+              JSON.stringify({
+                enrollmentId: String(claim._id),
+                campaignId: String((campaign as any)._id),
+                leadId: String((lead as any)._id),
+                cursorStep: idx,
+                to,
+                lockKey,
+              })
             );
+
+            const ok = await acquireLock("enroll", lockKey, 600);
+
+            console.log(
+              "[run-drips] lock",
+              JSON.stringify({
+                enrollmentId: String(claim._id),
+                lockAcquired: ok,
+              })
+            );
+
             if (ok) {
               const result = await sendSms({
                 to,
@@ -491,6 +630,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 campaignId: String((campaign as any)._id),
                 stepIndex: idx,
               });
+
+              console.log(
+                "[run-drips] send result",
+                JSON.stringify({
+                  enrollmentId: String(claim._id),
+                  sid: result?.sid || null,
+                  scheduledAt: result?.scheduledAt || null,
+                })
+              );
+
               if (result?.scheduledAt) enrollScheduled++;
               else if (result?.sid) enrollSent++;
               else enrollSuppressed++;
@@ -498,8 +647,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               enrollSuppressed++;
             }
           }
-        } catch {
+        } catch (err: any) {
           enrollFailed++;
+          console.error(
+            "[run-drips] send error",
+            JSON.stringify({
+              enrollmentId: String(claim._id),
+              campaignId: String((campaign as any)?._id || claim.campaignId),
+              leadId: String((lead as any)?._id || claim.leadId),
+              cursorStep: idx,
+              error: err?.message || String(err),
+            })
+          );
+          await DripEnrollment.updateOne(
+            { _id: claim._id },
+            { $set: { lastError: err?.message || "send_failed" } }
+          );
         }
 
         const nextIndex = idx + 1;
@@ -508,6 +671,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             cursorStep: nextIndex,
             processing: false,
             [`sentAtByIndex.${idx}`]: new Date(), // <-- durable once-only marker
+            lastError: undefined,
           },
           $unset: { processingAt: 1 },
         };
@@ -555,23 +719,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             { assignedDrips: { $exists: true, $ne: [] } },
           ],
         })
-          .select({
-            _id: 1,
-            userEmail: 1,
-            Phone: 1,
-            "First Name": 1,
-            "Last Name": 1,
-            assignedDrips: 1,
-            dripProgress: 1,
-          })
+          // ✅ IMPORTANT: do NOT narrow projections; sheet leads may store fields elsewhere
           .lean();
 
         const leads =
           limit > 0 ? await leadsQ.limit(limit) : await leadsQ;
 
-        await runBatched(leads, PER_LEAD_CONCURRENCY, async (lead) => {
+        await runBatched(leads as any[], PER_LEAD_CONCURRENCY, async (lead) => {
           checked++;
-          const to = normalizeToE164Maybe((lead as any).Phone);
+
+          const phoneRaw = pickLeadPhoneRaw(lead);
+          const to = normalizeToE164Maybe(phoneRaw || undefined);
           if (!to) return;
 
           const user = await User.findOne({ email: (lead as any).userEmail })
@@ -587,19 +745,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             first_name: agentFirst,
             last_name: agentLast,
           };
-          const firstName = (lead as any)["First Name"] || null;
-          const lastName = (lead as any)["Last Name"] || null;
+
+          const firstName = pickLeadFirstName(lead);
+          const lastName = pickLeadLastName(lead);
           const fullName =
             [firstName, lastName].filter(Boolean).join(" ") || null;
 
-          const assigned: string[] = Array.isArray(
-            (lead as any).assignedDrips
-          )
+          const assigned: string[] = Array.isArray((lead as any).assignedDrips)
             ? (lead as any).assignedDrips
             : [];
-          const progressArr: any[] = Array.isArray(
-            (lead as any).dripProgress
-          )
+          const progressArr: any[] = Array.isArray((lead as any).dripProgress)
             ? (lead as any).dripProgress
             : [];
           if (!assigned.length) return;
@@ -624,12 +779,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             if (!steps.length) continue;
 
             let prog =
-              progressArr.find(
-                (p) => String(p.dripId) === String(campaignId)
-              ) ||
-              progressArr.find(
-                (p) => String(p.dripId) === String(dripId)
-              );
+              progressArr.find((p) => String(p.dripId) === String(campaignId)) ||
+              progressArr.find((p) => String(p.dripId) === String(dripId));
 
             if (!prog || !prog.startedAt) {
               if (dry) {
@@ -659,9 +810,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             }
 
             let nextIndex =
-              (typeof prog.lastSentIndex === "number"
-                ? prog.lastSentIndex
-                : -1) + 1;
+              (typeof prog.lastSentIndex === "number" ? prog.lastSentIndex : -1) + 1;
             if (nextIndex >= steps.length) continue;
 
             while (true) {
@@ -706,11 +855,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                   `${String(user.email)}:${String(
                     (lead as any)._id
                   )}:${String(campaignId)}:${stepKey}`,
-                600
+                  600
                 );
                 if (!ok) break;
 
-                const idKey = `legacy:${String(lead._id)}:${String(
+                const idKey = `legacy:${String((lead as any)._id)}:${String(
                   campaignId
                 )}:${nextIndex}`;
                 const result = await sendSms({
@@ -735,8 +884,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                   { $set: { "dripProgress.$.lastSentIndex": nextIndex } }
                 );
                 nextIndex++;
-              } catch {
+              } catch (err: any) {
                 failed++;
+                console.error(
+                  "[run-drips] legacy send error",
+                  JSON.stringify({
+                    leadId: String((lead as any)._id),
+                    campaignId: String(campaignId),
+                    stepIndex: nextIndex,
+                    error: err?.message || String(err),
+                  })
+                );
                 break;
               }
             }
@@ -751,9 +909,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       forced: force,
       dryRun: dry,
       limit,
+      stats: {
+        primary: {
+          enrollChecked,
+          enrollSent,
+          enrollScheduled,
+          enrollSuppressed,
+          enrollFailed,
+          enrollCompleted,
+          enrollClaimMiss,
+          enrollAlreadySent,
+          enrollNoPhone,
+        },
+      },
     });
-  } catch (error) {
+  } catch (error: any) {
     console.error("❌ run-drips error:", error);
-    return res.status(500).json({ message: "Server error" });
+    return res.status(500).json({ message: "Server error", detail: error?.message || "Unknown error" });
   }
 }

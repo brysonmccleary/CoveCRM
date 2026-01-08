@@ -19,7 +19,10 @@ const SEND_HOUR_PT = 9;
 type Body = {
   folderId?: string;
   campaignId?: string;
-  startMode?: "immediate" | "nextWindow"; // default immediate
+
+  // NOTE: UI might send variants like "immediately" or "now"
+  startMode?: any;
+
   dry?: boolean;
   limit?: number; // optional cap when seeding (safety)
 };
@@ -31,11 +34,13 @@ function nextWindowPT(): Date {
     .set({ hour: SEND_HOUR_PT, minute: 0, second: 0, millisecond: 0 })
     .toJSDate();
 }
+
 function parseStepDayNumber(dayField?: string): number {
   if (!dayField) return NaN;
   const m = String(dayField).match(/(\d+)/);
   return m ? parseInt(m[1], 10) : NaN;
 }
+
 function computeNextWhenPTFromToday(nextDay: number, prevDay = 0): Date {
   const base = DateTime.now().setZone(PT_ZONE).startOf("day");
   const delta = Math.max(
@@ -47,6 +52,7 @@ function computeNextWhenPTFromToday(nextDay: number, prevDay = 0): Date {
     .plus({ days: delta })
     .toJSDate();
 }
+
 function normalizeToE164Maybe(phone?: string): string | null {
   if (!phone) return null;
   const digits = String(phone || "").replace(/[^\d+]/g, "");
@@ -56,6 +62,35 @@ function normalizeToE164Maybe(phone?: string): string | null {
   if (just.length === 10) return `+1${just}`;
   if (just.length === 11 && just.startsWith("1")) return `+${just}`;
   return null;
+}
+
+/** -------------------------
+ *  startMode normalization
+ *  ------------------------- */
+function normalizeStartMode(raw: any): "immediate" | "nextWindow" {
+  const v = String(raw || "")
+    .trim()
+    .toLowerCase();
+
+  // Treat any of these as immediate
+  if (
+    !v ||
+    v === "immediate" ||
+    v === "immediately" ||
+    v === "now" ||
+    v === "rightnow" ||
+    v === "instant" ||
+    v === "instantly"
+  ) {
+    return "immediate";
+  }
+
+  if (v === "nextwindow" || v === "next_window" || v === "next") {
+    return "nextWindow";
+  }
+
+  // Default safe behavior: immediate
+  return "immediate";
 }
 
 /** -------------------------
@@ -72,7 +107,6 @@ function buildKeyMap(obj: Record<string, any>): Map<string, string> {
   for (const k of Object.keys(obj || {})) {
     const nk = normKey(k);
     if (!nk) continue;
-    // keep the first occurrence
     if (!m.has(nk)) m.set(nk, k);
   }
   return m;
@@ -144,8 +178,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!session?.user?.email)
       return res.status(401).json({ error: "Unauthorized" });
 
-    const { folderId, campaignId, startMode = "immediate", dry, limit }: Body =
-      req.body || {};
+    const email = String(session.user.email).toLowerCase();
+    const { folderId, campaignId, dry, limit }: Body = req.body || {};
+
+    // Normalize startMode variants from UI
+    const startMode = normalizeStartMode((req.body || {})?.startMode);
+
+    console.log(
+      "[drips/enroll-folder] request",
+      JSON.stringify({
+        email,
+        folderId,
+        campaignId,
+        startModeRaw: (req.body || {})?.startMode,
+        startModeNormalized: startMode,
+        dry: !!dry,
+        limit: limit ?? null,
+      })
+    );
+
     if (!folderId || !campaignId)
       return res
         .status(400)
@@ -166,17 +217,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (campaign.isActive !== true)
       return res.status(400).json({ error: "Campaign is not active" });
 
-    const user = await User.findOne({ email: session.user.email })
+    const user = await User.findOne({ email })
       .select("_id email name")
       .lean();
     if (!user?._id) return res.status(404).json({ error: "User not found" });
 
     // Create / update the folder watcher
     const watcher = await DripFolderEnrollment.findOneAndUpdate(
-      { userEmail: session.user.email, folderId, campaignId, active: true },
+      { userEmail: email, folderId, campaignId, active: true },
       {
         $setOnInsert: {
-          userEmail: session.user.email,
+          userEmail: email,
           folderId,
           campaignId,
           active: true,
@@ -188,21 +239,32 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     ).lean();
 
     // ✅ IMPORTANT: do NOT project only Phone/First/Last
-    // Google Sheet imports vary; we need the full doc to reliably pick name/phone variants.
-    const leads = await Lead.find({ userEmail: session.user.email, folderId })
+    const leads = await Lead.find({ userEmail: email, folderId })
       .limit(Math.max(0, Number(limit) || 10_000))
       .lean();
 
     let created = 0,
       deduped = 0,
       immediateSent = 0,
-      immediateSkippedNoPhone = 0;
+      immediateSkippedNoPhone = 0,
+      immediateLockMiss = 0,
+      immediateFailed = 0;
 
     const nextSendAt = startMode === "nextWindow" ? nextWindowPT() : new Date();
     const steps: Array<{ text?: string; day?: string }> = Array.isArray(campaign.steps)
       ? campaign.steps
       : [];
     const firstStep = steps[0];
+
+    console.log(
+      "[drips/enroll-folder] seed",
+      JSON.stringify({
+        watcherId: watcher?._id ? String(watcher._id) : null,
+        leadsFound: leads?.length || 0,
+        firstStepExists: !!firstStep,
+        nextSendAt: nextSendAt.toISOString(),
+      })
+    );
 
     for (const lead of leads as any[]) {
       if (dry) {
@@ -212,7 +274,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       const before = await DripEnrollment.findOne(
         {
-          userEmail: session.user.email,
+          userEmail: email,
           leadId: lead._id,
           campaignId,
           status: { $in: ["active", "paused"] },
@@ -227,7 +289,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       // Create enrollment
       const ins = await DripEnrollment.create({
-        userEmail: session.user.email,
+        userEmail: email,
         leadId: lead._id,
         campaignId,
         status: "active",
@@ -245,6 +307,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         if (!to) {
           immediateSkippedNoPhone++;
+          console.log(
+            "[drips/enroll-folder] skip immediate: no phone",
+            JSON.stringify({
+              enrollmentId: String(ins._id),
+              leadId: String(lead._id),
+              phoneRaw: phoneRaw ? String(phoneRaw).slice(0, 32) : null,
+            })
+          );
           continue;
         }
 
@@ -259,47 +329,100 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         });
         const finalBody = ensureOptOut(rendered);
 
-        const idKey = `${String(ins._id)}:0:${new Date(
-          nextSendAt || Date.now()
-        ).toISOString()}`;
+        // IMPORTANT: use a stable key that won't change if nextSendAt later changes.
+        const idKey = `${String(ins._id)}:0`;
 
-        const locked = await acquireLock(
-          "enroll",
-          `${String(user.email)}:${String(lead._id)}:${String(campaign._id)}:0`,
-          600
+        const lockKey = `${String(user.email)}:${String(lead._id)}:${String(
+          campaign._id
+        )}:0`;
+
+        console.log(
+          "[drips/enroll-folder] immediate attempt",
+          JSON.stringify({
+            enrollmentId: String(ins._id),
+            leadId: String(lead._id),
+            campaignId: String(campaign._id),
+            to,
+            lockKey,
+          })
         );
 
-        if (locked) {
-          try {
-            await sendSms({
-              to,
-              body: finalBody,
-              userEmail: user.email,
-              leadId: String(lead._id),
-              idempotencyKey: idKey,
-              enrollmentId: String(ins._id),
-              campaignId: String(campaign._id),
-              stepIndex: 0,
-            });
-            immediateSent++;
+        const locked = await acquireLock("enroll", lockKey, 600);
 
-            // Advance cursor and schedule next (if any)
-            const nextIndex = 1;
-            const update: any = {
-              $set: { cursorStep: nextIndex, lastSentAt: new Date() },
-            };
-            if (steps.length > 1) {
-              const prevDay = parseStepDayNumber(firstStep.day);
-              const nextDay = parseStepDayNumber(steps[1].day);
-              update.$set.nextSendAt = computeNextWhenPTFromToday(nextDay, prevDay);
-            } else {
-              update.$set.status = "completed";
-              update.$unset = { nextSendAt: 1 };
-            }
-            await DripEnrollment.updateOne({ _id: ins._id, cursorStep: 0 }, update);
-          } catch {
-            // Leave for cron to retry later
+        console.log(
+          "[drips/enroll-folder] immediate lock",
+          JSON.stringify({
+            enrollmentId: String(ins._id),
+            lockAcquired: locked,
+          })
+        );
+
+        if (!locked) {
+          immediateLockMiss++;
+          continue;
+        }
+
+        try {
+          const result = await sendSms({
+            to,
+            body: finalBody,
+            userEmail: user.email,
+            leadId: String(lead._id),
+            idempotencyKey: idKey,
+            enrollmentId: String(ins._id),
+            campaignId: String(campaign._id),
+            stepIndex: 0,
+          });
+
+          console.log(
+            "[drips/enroll-folder] immediate send result",
+            JSON.stringify({
+              enrollmentId: String(ins._id),
+              sid: result?.sid || null,
+              scheduledAt: result?.scheduledAt || null,
+            })
+          );
+
+          immediateSent++;
+
+          // Advance cursor and schedule next (if any)
+          const nextIndex = 1;
+          const update: any = {
+            $set: {
+              cursorStep: nextIndex,
+              lastSentAt: new Date(),
+              // ✅ durable once-only marker so cron cannot re-send step 0
+              [`sentAtByIndex.0`]: new Date(),
+            },
+          };
+
+          if (steps.length > 1) {
+            const prevDay = parseStepDayNumber(firstStep.day);
+            const nextDay = parseStepDayNumber(steps[1].day);
+            update.$set.nextSendAt = computeNextWhenPTFromToday(nextDay, prevDay);
+          } else {
+            update.$set.status = "completed";
+            update.$unset = { nextSendAt: 1 };
           }
+
+          await DripEnrollment.updateOne({ _id: ins._id, cursorStep: 0 }, update);
+        } catch (err: any) {
+          immediateFailed++;
+          console.error(
+            "[drips/enroll-folder] immediate send error",
+            JSON.stringify({
+              enrollmentId: String(ins._id),
+              leadId: String(lead._id),
+              campaignId: String(campaign._id),
+              to,
+              error: err?.message || String(err),
+            })
+          );
+          // Leave enrollment at cursorStep 0 for cron to retry.
+          await DripEnrollment.updateOne(
+            { _id: ins._id },
+            { $set: { lastError: err?.message || "send_failed" } }
+          );
         }
       }
     }
@@ -312,15 +435,36 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       );
     }
 
+    console.log(
+      "[drips/enroll-folder] done",
+      JSON.stringify({
+        created,
+        deduped,
+        immediateSent,
+        immediateSkippedNoPhone,
+        immediateLockMiss,
+        immediateFailed,
+        startMode,
+      })
+    );
+
     return res.status(200).json({
       success: true,
       watcherId: watcher?._id,
       campaign: { id: String(campaign._id), name: campaign.name },
-      seeded: { created, deduped, immediateSent, immediateSkippedNoPhone },
+      seeded: {
+        created,
+        deduped,
+        immediateSent,
+        immediateSkippedNoPhone,
+        immediateLockMiss,
+        immediateFailed,
+      },
       startMode,
       nextSendAt,
     });
   } catch (err: any) {
+    console.error("[drips/enroll-folder] fatal", err);
     return res.status(500).json({ error: "Server error", detail: err?.message });
   }
 }
