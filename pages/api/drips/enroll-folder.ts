@@ -49,6 +49,78 @@ function normalizeToE164Maybe(phone?: string): string | null {
   return null;
 }
 
+/** ---------- robust lead field resolution (generic across any sheet headers) ---------- **/
+function normalizeAnyKey(raw: string): string {
+  return String(raw || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[`"'’]/g, "")
+    .replace(/[^a-z0-9]+/g, "_") // spaces, punctuation -> underscores
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function buildNormalizedKeyMap(obj: Record<string, any>): Record<string, any> {
+  const out: Record<string, any> = {};
+  if (!obj || typeof obj !== "object") return out;
+
+  for (const k of Object.keys(obj)) {
+    const nk = normalizeAnyKey(k);
+    if (!nk) continue;
+    // Keep the first non-empty value we see for a normalized key
+    const v = (obj as any)[k];
+    if (out[nk] == null || out[nk] === "") out[nk] = v;
+  }
+  return out;
+}
+
+function pickFirstNonEmpty(map: Record<string, any>, keys: string[]): string | null {
+  for (const k of keys) {
+    const v = map[k];
+    if (v != null && String(v).trim() !== "") return String(v).trim();
+  }
+  return null;
+}
+
+function resolveLeadNameFields(leadDoc: any): { first: string | null; last: string | null; full: string | null } {
+  const raw = (leadDoc || {}) as Record<string, any>;
+  const norm = buildNormalizedKeyMap(raw);
+
+  // Common “first name” variants across vendors/sheets
+  const firstCandidates = [
+    "first_name", "firstname", "first", "fname", "given_name", "givenname",
+    "client_first_name", "clientfirstname", "lead_first_name", "borrower_first_name",
+    "insured_first_name", "prospect_first_name", "customer_first_name", "contact_first_name",
+    "applicant_first_name", "primary_first_name",
+  ];
+
+  // Common “last name” variants across vendors/sheets
+  const lastCandidates = [
+    "last_name", "lastname", "last", "lname", "surname", "family_name", "familyname",
+    "client_last_name", "clientlastname", "lead_last_name", "borrower_last_name",
+    "insured_last_name", "prospect_last_name", "customer_last_name", "contact_last_name",
+    "applicant_last_name", "primary_last_name",
+  ];
+
+  // Common “full name” variants
+  const fullCandidates = [
+    "full_name", "fullname", "name", "client_name", "clientname", "lead_name",
+    "borrower_name", "insured_name", "prospect_name", "customer_name", "contact_name",
+    "applicant_name", "primary_name",
+  ];
+
+  const first = pickFirstNonEmpty(norm, firstCandidates);
+  const last = pickFirstNonEmpty(norm, lastCandidates);
+
+  const composed = [first, last].filter(Boolean).join(" ").trim();
+  const fullRaw = pickFirstNonEmpty(norm, fullCandidates);
+
+  const full = composed || fullRaw || null;
+
+  return { first, last, full };
+}
+/** ----------------------------------------------------------------------------------- **/
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method Not Allowed" });
 
@@ -90,30 +162,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     ).lean();
 
     // Seed enrollments for existing leads in the folder (idempotent)
-    // ✅ IMPORTANT: pull common name variants so templates can render correctly
-    const leads = await Lead.find(
-      { userEmail: session.user.email, folderId },
-      {
-        _id: 1,
-        Phone: 1,
-
-        // common name headers with spaces
-        "First Name": 1,
-        "Last Name": 1,
-        "Full Name": 1,
-
-        // common name headers without spaces / casing variants
-        FirstName: 1,
-        LastName: 1,
-        FullName: 1,
-        first_name: 1,
-        last_name: 1,
-        firstname: 1,
-        lastname: 1,
-        name: 1,
-        Name: 1,
-      }
-    )
+    // NOTE: we need the full lead doc (or at least its keys) to support "any variation"
+    const leads = await Lead.find({ userEmail: session.user.email, folderId })
       .limit(Math.max(0, Number(limit) || 10_000))
       .lean();
 
@@ -128,7 +178,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       const before = await DripEnrollment.findOne({
         userEmail: session.user.email,
-        leadId: lead._id,
+        leadId: (lead as any)._id,
         campaignId,
         status: { $in: ["active", "paused"] },
       }, { _id: 1 }).lean();
@@ -138,7 +188,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       // Create enrollment
       const ins = await DripEnrollment.create({
         userEmail: session.user.email,
-        leadId: lead._id,
+        leadId: (lead as any)._id,
         campaignId,
         status: "active",
         cursorStep: 0,
@@ -154,30 +204,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (to) {
           const { first: agentFirst, last: agentLast } = splitName(user.name || "");
 
-          // ✅ Fallback extraction for many import header variants
-          const L: any = lead;
-
-          const leadFirst =
-            L["First Name"] ??
-            L.FirstName ??
-            L.first_name ??
-            L.firstname ??
-            null;
-
-          const leadLast =
-            L["Last Name"] ??
-            L.LastName ??
-            L.last_name ??
-            L.lastname ??
-            null;
-
-          const fullName =
-            [leadFirst, leadLast].filter(Boolean).join(" ") ||
-            L["Full Name"] ||
-            L.FullName ||
-            L.name ||
-            L.Name ||
-            null;
+          const { first: leadFirst, last: leadLast, full: fullName } = resolveLeadNameFields(lead);
 
           const rendered = renderTemplate(String(firstStep.text || ""), {
             contact: { first_name: leadFirst, last_name: leadLast, full_name: fullName },
@@ -188,7 +215,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           const idKey = `${String(ins._id)}:0:${new Date(nextSendAt || Date.now()).toISOString()}`;
           const locked = await acquireLock(
             "enroll",
-            `${String(user.email)}:${String(lead._id)}:${String(campaign._id)}:0`,
+            `${String(user.email)}:${String((lead as any)._id)}:${String((campaign as any)._id)}:0`,
             600
           );
 
@@ -198,10 +225,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 to,
                 body: finalBody,
                 userEmail: user.email,
-                leadId: String(lead._id),
+                leadId: String((lead as any)._id),
                 idempotencyKey: idKey,
                 enrollmentId: String(ins._id),
-                campaignId: String(campaign._id),
+                campaignId: String((campaign as any)._id),
                 stepIndex: 0,
               });
               immediateSent++;
@@ -237,7 +264,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(200).json({
       success: true,
       watcherId: watcher?._id,
-      campaign: { id: String(campaign._id), name: campaign.name },
+      campaign: { id: String((campaign as any)._id), name: (campaign as any).name },
       seeded: { created, deduped, immediateSent },
       startMode,
       nextSendAt,

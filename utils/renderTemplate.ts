@@ -23,14 +23,10 @@ export type TemplateContext = {
 };
 
 function normalizeFieldPath(raw: string): string {
-  // Example inputs:
-  // " contact.first_name ", "Contact.First_Name", "AGENT . LAST NAME"
-  // -> "contact.first_name", "contact.first_name", "agent.last_name"
   const cleaned = String(raw || "")
-    .replace(/\s+/g, " ") // collapse runs of whitespace
+    .replace(/\s+/g, " ")
     .trim();
 
-  // Split on dot, normalize segments
   const parts = cleaned.split(".").map((seg) =>
     seg
       .trim()
@@ -66,7 +62,6 @@ function getValue(expr: string, ctx: TemplateContext): string | undefined {
 }
 
 function parseDefaultFilter(part: string): string | undefined {
-  // Accept: default:"there"  |  default:'there'  |  default:there
   const m =
     part.match(/default\s*:\s*"([^"]*)"/i) ||
     part.match(/default\s*:\s*'([^']*)'/i) ||
@@ -79,7 +74,6 @@ export function renderTemplate(template: string, ctx: TemplateContext): string {
 
   return template.replace(/\{\{\s*([^}]+)\s*\}\}/g, (_full, inner: string) => {
     try {
-      // Split filters: left-most is the field, rest can be filters (we only support default)
       const parts = String(inner)
         .split("|")
         .map((p: string) => p.trim())
@@ -90,7 +84,6 @@ export function renderTemplate(template: string, ctx: TemplateContext): string {
       const fieldExpr = parts[0];
       let value = getValue(fieldExpr, ctx);
 
-      // Apply filters from left to right after field resolution
       for (let i = 1; i < parts.length; i++) {
         const filter = parts[i];
         if (/^default\s*:/.test(filter)) {
@@ -101,7 +94,6 @@ export function renderTemplate(template: string, ctx: TemplateContext): string {
         }
       }
 
-      // If still empty, return empty string (don’t leave raw handlebars in output)
       return value == null ? "" : String(value);
     } catch {
       return "";
@@ -114,10 +106,7 @@ export function ensureOptOut(message: string): string {
   const optOut = " Reply STOP to opt out.";
   const body = String(message || "").trim();
   if (!body) return optOut.trim();
-
-  // If the exact opt-out is already present (case-sensitive check), don't duplicate
   if (body.endsWith(optOut.trim())) return body;
-
   return `${body}${optOut}`;
 }
 

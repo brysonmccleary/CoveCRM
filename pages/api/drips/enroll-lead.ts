@@ -42,6 +42,74 @@ function normalizeToE164Maybe(phone?: string): string | null {
   return null;
 }
 
+/** ---------- robust lead field resolution (generic across any sheet headers) ---------- **/
+function normalizeAnyKey(raw: string): string {
+  return String(raw || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[`"'’]/g, "")
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function buildNormalizedKeyMap(obj: Record<string, any>): Record<string, any> {
+  const out: Record<string, any> = {};
+  if (!obj || typeof obj !== "object") return out;
+
+  for (const k of Object.keys(obj)) {
+    const nk = normalizeAnyKey(k);
+    if (!nk) continue;
+    const v = (obj as any)[k];
+    if (out[nk] == null || out[nk] === "") out[nk] = v;
+  }
+  return out;
+}
+
+function pickFirstNonEmpty(map: Record<string, any>, keys: string[]): string | null {
+  for (const k of keys) {
+    const v = map[k];
+    if (v != null && String(v).trim() !== "") return String(v).trim();
+  }
+  return null;
+}
+
+function resolveLeadNameFields(leadDoc: any): { first: string | null; last: string | null; full: string | null } {
+  const raw = (leadDoc || {}) as Record<string, any>;
+  const norm = buildNormalizedKeyMap(raw);
+
+  const firstCandidates = [
+    "first_name", "firstname", "first", "fname", "given_name", "givenname",
+    "client_first_name", "clientfirstname", "lead_first_name", "borrower_first_name",
+    "insured_first_name", "prospect_first_name", "customer_first_name", "contact_first_name",
+    "applicant_first_name", "primary_first_name",
+  ];
+
+  const lastCandidates = [
+    "last_name", "lastname", "last", "lname", "surname", "family_name", "familyname",
+    "client_last_name", "clientlastname", "lead_last_name", "borrower_last_name",
+    "insured_last_name", "prospect_last_name", "customer_last_name", "contact_last_name",
+    "applicant_last_name", "primary_last_name",
+  ];
+
+  const fullCandidates = [
+    "full_name", "fullname", "name", "client_name", "clientname", "lead_name",
+    "borrower_name", "insured_name", "prospect_name", "customer_name", "contact_name",
+    "applicant_name", "primary_name",
+  ];
+
+  const first = pickFirstNonEmpty(norm, firstCandidates);
+  const last = pickFirstNonEmpty(norm, lastCandidates);
+
+  const composed = [first, last].filter(Boolean).join(" ").trim();
+  const fullRaw = pickFirstNonEmpty(norm, fullCandidates);
+
+  const full = composed || fullRaw || null;
+
+  return { first, last, full };
+}
+/** ----------------------------------------------------------------------------------- **/
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method Not Allowed" });
 
@@ -58,32 +126,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     await dbConnect();
 
-    // Fetch separately (clean TS) and validate scope
-    // ✅ IMPORTANT: pull common name variants so templates can render correctly
-    const lead = await Lead.findOne({ _id: leadId, userEmail: email })
-      .select([
-        "_id",
-        "Phone",
-        "userEmail",
-
-        // common name headers with spaces
-        "First Name",
-        "Last Name",
-        "Full Name",
-
-        // common name headers without spaces / casing variants
-        "FirstName",
-        "LastName",
-        "FullName",
-        "first_name",
-        "last_name",
-        "firstname",
-        "lastname",
-        "name",
-        "Name",
-      ].join(" "))
-      .lean();
-
+    // ✅ IMPORTANT: we need the full lead doc keys so "any variation" works reliably
+    const lead = await Lead.findOne({ _id: leadId, userEmail: email }).lean();
     if (!lead) return res.status(404).json({ error: "Lead not found" });
 
     const campaign = (await DripCampaign.findOne({ _id: campaignId })
@@ -96,7 +140,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         type?: string;
         steps?: Array<{ text?: string; day?: string }>;
       } | null;
-
     if (!campaign) return res.status(404).json({ error: "Campaign not found" });
     if (campaign.isActive !== true || campaign.type !== "sms") {
       return res.status(400).json({ error: "Campaign is not an active SMS campaign" });
@@ -140,11 +183,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const wasUpserted = Boolean((up as any).upsertedCount || (up as any).upsertedId);
     const enrollment = await DripEnrollment.findOne(filter as any).lean();
 
-    // Safe string ids for TS (avoid tuple/union widening complaints)
     const leadIdStr = String((lead as any)._id);
     const campaignIdStr = String((campaign as any)._id);
 
-    // History entry (for UI)
     const historyEntry = {
       type: "status",
       subType: "drip-enrolled",
@@ -163,30 +204,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (to) {
           const { first: agentFirst, last: agentLast } = splitName(user.name || "");
 
-          // ✅ Fallback extraction for many import header variants
-          const L: any = lead;
-
-          const leadFirst =
-            L["First Name"] ??
-            L.FirstName ??
-            L.first_name ??
-            L.firstname ??
-            null;
-
-          const leadLast =
-            L["Last Name"] ??
-            L.LastName ??
-            L.last_name ??
-            L.lastname ??
-            null;
-
-          const fullName =
-            [leadFirst, leadLast].filter(Boolean).join(" ") ||
-            L["Full Name"] ||
-            L.FullName ||
-            L.name ||
-            L.Name ||
-            null;
+          const { first: leadFirst, last: leadLast, full: fullName } = resolveLeadNameFields(lead);
 
           const rendered = renderTemplate(String(firstStep.text || ""), {
             contact: { first_name: leadFirst, last_name: leadLast, full_name: fullName },
@@ -194,9 +212,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           });
           const finalBody = ensureOptOut(rendered);
 
-          const idKey = `${String(enrollment._id)}:0:${new Date(enrollment.nextSendAt || Date.now()).toISOString()}`;
+          const idKey = `${String(enrollment._id)}:0:${new Date((enrollment as any).nextSendAt || Date.now()).toISOString()}`;
 
-          // Same lock pattern as cron to avoid double-sends
           const locked = await acquireLock(
             "enroll",
             `${String(user.email)}:${leadIdStr}:${campaignIdStr}:0`,
@@ -211,12 +228,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 userEmail: user.email,
                 leadId: leadIdStr,
                 idempotencyKey: idKey,
-                enrollmentId: String(enrollment._id),
+                enrollmentId: String((enrollment as any)._id),
                 campaignId: campaignIdStr,
                 stepIndex: 0,
               });
 
-              // Advance cursor + schedule next step (if any)
               const nextIndex = 1;
               const update: any = { $set: { cursorStep: nextIndex, lastSentAt: new Date() } };
               if (steps.length > 1) {
@@ -227,7 +243,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 update.$set.status = "completed";
                 update.$unset = { nextSendAt: 1 };
               }
-              await DripEnrollment.updateOne({ _id: enrollment._id, cursorStep: 0 }, update);
+              await DripEnrollment.updateOne({ _id: (enrollment as any)._id, cursorStep: 0 }, update);
             } catch {
               // If SMS send fails, leave enrollment; cron will retry later.
             }
@@ -238,7 +254,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     return res.status(200).json({
       success: true,
-      enrollmentId: String(enrollment?._id),
+      enrollmentId: String((enrollment as any)?._id),
       campaign: { id: campaignIdStr, name: campaign.name, key: campaign.key },
       nextSendAt,
       wasUpserted,
