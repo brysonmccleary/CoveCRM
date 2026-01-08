@@ -1,3 +1,4 @@
+// pages/drip-campaigns/[id].tsx
 import { useRouter } from "next/router";
 import { useState, useEffect } from "react";
 import axios from "axios";
