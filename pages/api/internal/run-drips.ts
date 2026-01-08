@@ -1,4 +1,4 @@
-// pages/api/cron/run-drips.ts
+// pages/api/internal/run-drips.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import dbConnect from "@/lib/mongooseConnect";
 import Lead from "@/models/Lead";
