@@ -27,20 +27,29 @@ type Body = {
 function nextWindowPT(): Date {
   const nowPT = DateTime.now().setZone(PT_ZONE);
   const base = nowPT.hour < SEND_HOUR_PT ? nowPT : nowPT.plus({ days: 1 });
-  return base.set({ hour: SEND_HOUR_PT, minute: 0, second: 0, millisecond: 0 }).toJSDate();
+  return base
+    .set({ hour: SEND_HOUR_PT, minute: 0, second: 0, millisecond: 0 })
+    .toJSDate();
 }
 function parseStepDayNumber(dayField?: string): number {
   if (!dayField) return NaN;
-  const m = String(dayField).match(/(\d+)/); return m ? parseInt(m[1], 10) : NaN;
+  const m = String(dayField).match(/(\d+)/);
+  return m ? parseInt(m[1], 10) : NaN;
 }
 function computeNextWhenPTFromToday(nextDay: number, prevDay = 0): Date {
   const base = DateTime.now().setZone(PT_ZONE).startOf("day");
-  const delta = Math.max(0, (isNaN(nextDay) ? 1 : nextDay) - (isNaN(prevDay) ? 0 : prevDay));
-  return base.set({ hour: SEND_HOUR_PT, minute: 0, second: 0, millisecond: 0 }).plus({ days: delta }).toJSDate();
+  const delta = Math.max(
+    0,
+    (isNaN(nextDay) ? 1 : nextDay) - (isNaN(prevDay) ? 0 : prevDay)
+  );
+  return base
+    .set({ hour: SEND_HOUR_PT, minute: 0, second: 0, millisecond: 0 })
+    .plus({ days: delta })
+    .toJSDate();
 }
 function normalizeToE164Maybe(phone?: string): string | null {
   if (!phone) return null;
-  const digits = (phone || "").replace(/[^\d+]/g, "");
+  const digits = String(phone || "").replace(/[^\d+]/g, "");
   if (!digits) return null;
   if (digits.startsWith("+")) return digits;
   const just = digits.replace(/\D/g, "");
@@ -49,100 +58,117 @@ function normalizeToE164Maybe(phone?: string): string | null {
   return null;
 }
 
-/** ---------- robust lead field resolution (generic across any sheet headers) ---------- **/
-function normalizeAnyKey(raw: string): string {
-  return String(raw || "")
-    .trim()
+/** -------------------------
+ *  Lead field normalization
+ *  ------------------------- */
+function normKey(k: string): string {
+  return String(k || "")
     .toLowerCase()
-    .replace(/[`"'’]/g, "")
-    .replace(/[^a-z0-9]+/g, "_") // spaces, punctuation -> underscores
-    .replace(/_+/g, "_")
-    .replace(/^_+|_+$/g, "");
+    .trim()
+    .replace(/[^a-z0-9]/g, ""); // remove spaces, underscores, punctuation
 }
-
-function buildNormalizedKeyMap(obj: Record<string, any>): Record<string, any> {
-  const out: Record<string, any> = {};
-  if (!obj || typeof obj !== "object") return out;
-
-  for (const k of Object.keys(obj)) {
-    const nk = normalizeAnyKey(k);
+function buildKeyMap(obj: Record<string, any>): Map<string, string> {
+  const m = new Map<string, string>();
+  for (const k of Object.keys(obj || {})) {
+    const nk = normKey(k);
     if (!nk) continue;
-    // Keep the first non-empty value we see for a normalized key
-    const v = (obj as any)[k];
-    if (out[nk] == null || out[nk] === "") out[nk] = v;
+    // keep the first occurrence
+    if (!m.has(nk)) m.set(nk, k);
   }
-  return out;
+  return m;
 }
-
-function pickFirstNonEmpty(map: Record<string, any>, keys: string[]): string | null {
-  for (const k of keys) {
-    const v = map[k];
-    if (v != null && String(v).trim() !== "") return String(v).trim();
+function getAnyField(obj: Record<string, any>, candidates: string[]): any {
+  if (!obj) return undefined;
+  const map = buildKeyMap(obj);
+  for (const c of candidates) {
+    const hit = map.get(normKey(c));
+    if (hit && obj[hit] != null && obj[hit] !== "") return obj[hit];
   }
-  return null;
+  return undefined;
 }
-
-function resolveLeadNameFields(leadDoc: any): { first: string | null; last: string | null; full: string | null } {
-  const raw = (leadDoc || {}) as Record<string, any>;
-  const norm = buildNormalizedKeyMap(raw);
-
-  // Common “first name” variants across vendors/sheets
-  const firstCandidates = [
-    "first_name", "firstname", "first", "fname", "given_name", "givenname",
-    "client_first_name", "clientfirstname", "lead_first_name", "borrower_first_name",
-    "insured_first_name", "prospect_first_name", "customer_first_name", "contact_first_name",
-    "applicant_first_name", "primary_first_name",
-  ];
-
-  // Common “last name” variants across vendors/sheets
-  const lastCandidates = [
-    "last_name", "lastname", "last", "lname", "surname", "family_name", "familyname",
-    "client_last_name", "clientlastname", "lead_last_name", "borrower_last_name",
-    "insured_last_name", "prospect_last_name", "customer_last_name", "contact_last_name",
-    "applicant_last_name", "primary_last_name",
-  ];
-
-  // Common “full name” variants
-  const fullCandidates = [
-    "full_name", "fullname", "name", "client_name", "clientname", "lead_name",
-    "borrower_name", "insured_name", "prospect_name", "customer_name", "contact_name",
-    "applicant_name", "primary_name",
-  ];
-
-  const first = pickFirstNonEmpty(norm, firstCandidates);
-  const last = pickFirstNonEmpty(norm, lastCandidates);
-
-  const composed = [first, last].filter(Boolean).join(" ").trim();
-  const fullRaw = pickFirstNonEmpty(norm, fullCandidates);
-
-  const full = composed || fullRaw || null;
-
-  return { first, last, full };
+function pickLeadFirstName(lead: Record<string, any>): string | null {
+  const v = getAnyField(lead, [
+    "First Name",
+    "FirstName",
+    "First",
+    "FName",
+    "first_name",
+    "firstname",
+    "given_name",
+    "givenname",
+    "contact_first_name",
+  ]);
+  const s = v == null ? "" : String(v).trim();
+  return s ? s : null;
 }
-/** ----------------------------------------------------------------------------------- **/
+function pickLeadLastName(lead: Record<string, any>): string | null {
+  const v = getAnyField(lead, [
+    "Last Name",
+    "LastName",
+    "Last",
+    "LName",
+    "last_name",
+    "lastname",
+    "surname",
+    "family_name",
+    "familyname",
+    "contact_last_name",
+  ]);
+  const s = v == null ? "" : String(v).trim();
+  return s ? s : null;
+}
+function pickLeadPhoneRaw(lead: Record<string, any>): string | null {
+  const v = getAnyField(lead, [
+    "Phone",
+    "Phone Number",
+    "PhoneNumber",
+    "phone_number",
+    "phone",
+    "mobile",
+    "mobile_phone",
+    "cell",
+    "cell_phone",
+    "contact_phone",
+    "primary_phone",
+  ]);
+  const s = v == null ? "" : String(v).trim();
+  return s ? s : null;
+}
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "POST") return res.status(405).json({ error: "Method Not Allowed" });
+  if (req.method !== "POST")
+    return res.status(405).json({ error: "Method Not Allowed" });
 
   try {
     const session = (await getServerSession(req, res, authOptions as any)) as any;
-    if (!session?.user?.email) return res.status(401).json({ error: "Unauthorized" });
+    if (!session?.user?.email)
+      return res.status(401).json({ error: "Unauthorized" });
 
-    const { folderId, campaignId, startMode = "immediate", dry, limit }: Body = req.body || {};
-    if (!folderId || !campaignId) return res.status(400).json({ error: "folderId and campaignId are required" });
+    const { folderId, campaignId, startMode = "immediate", dry, limit }: Body =
+      req.body || {};
+    if (!folderId || !campaignId)
+      return res
+        .status(400)
+        .json({ error: "folderId and campaignId are required" });
 
     await dbConnect();
 
     // Validate campaign
     const campaign = (await DripCampaign.findOne({ _id: campaignId })
       .select("_id name isActive type steps")
-      .lean()) as (null | { _id: any; name?: string; isActive?: boolean; type?: string; steps?: any[] });
+      .lean()) as
+      | null
+      | { _id: any; name?: string; isActive?: boolean; type?: string; steps?: any[] };
 
     if (!campaign) return res.status(404).json({ error: "Campaign not found" });
-    if (campaign.type !== "sms") return res.status(400).json({ error: "Campaign must be SMS type" });
-    if (campaign.isActive !== true) return res.status(400).json({ error: "Campaign is not active" });
+    if (campaign.type !== "sms")
+      return res.status(400).json({ error: "Campaign must be SMS type" });
+    if (campaign.isActive !== true)
+      return res.status(400).json({ error: "Campaign is not active" });
 
-    const user = await User.findOne({ email: session.user.email }).select("_id email name").lean();
+    const user = await User.findOne({ email: session.user.email })
+      .select("_id email name")
+      .lean();
     if (!user?._id) return res.status(404).json({ error: "User not found" });
 
     // Create / update the folder watcher
@@ -161,34 +187,48 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       { upsert: true, new: true }
     ).lean();
 
-    // Seed enrollments for existing leads in the folder (idempotent)
-    // NOTE: we need the full lead doc (or at least its keys) to support "any variation"
+    // ✅ IMPORTANT: do NOT project only Phone/First/Last
+    // Google Sheet imports vary; we need the full doc to reliably pick name/phone variants.
     const leads = await Lead.find({ userEmail: session.user.email, folderId })
       .limit(Math.max(0, Number(limit) || 10_000))
       .lean();
 
-    let created = 0, deduped = 0, immediateSent = 0;
+    let created = 0,
+      deduped = 0,
+      immediateSent = 0,
+      immediateSkippedNoPhone = 0;
 
     const nextSendAt = startMode === "nextWindow" ? nextWindowPT() : new Date();
-    const steps: Array<{ text?: string; day?: string }> = Array.isArray(campaign.steps) ? campaign.steps : [];
+    const steps: Array<{ text?: string; day?: string }> = Array.isArray(campaign.steps)
+      ? campaign.steps
+      : [];
     const firstStep = steps[0];
 
-    for (const lead of leads) {
-      if (dry) { created++; continue; }
+    for (const lead of leads as any[]) {
+      if (dry) {
+        created++;
+        continue;
+      }
 
-      const before = await DripEnrollment.findOne({
-        userEmail: session.user.email,
-        leadId: (lead as any)._id,
-        campaignId,
-        status: { $in: ["active", "paused"] },
-      }, { _id: 1 }).lean();
+      const before = await DripEnrollment.findOne(
+        {
+          userEmail: session.user.email,
+          leadId: lead._id,
+          campaignId,
+          status: { $in: ["active", "paused"] },
+        },
+        { _id: 1 }
+      ).lean();
 
-      if (before?._id) { deduped++; continue; }
+      if (before?._id) {
+        deduped++;
+        continue;
+      }
 
       // Create enrollment
       const ins = await DripEnrollment.create({
         userEmail: session.user.email,
-        leadId: (lead as any)._id,
+        leadId: lead._id,
         campaignId,
         status: "active",
         cursorStep: 0,
@@ -200,54 +240,65 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       // Immediate first message only if startMode === "immediate"
       if (startMode === "immediate" && firstStep) {
-        const to = normalizeToE164Maybe((lead as any).Phone);
-        if (to) {
-          const { first: agentFirst, last: agentLast } = splitName(user.name || "");
+        const phoneRaw = pickLeadPhoneRaw(lead);
+        const to = normalizeToE164Maybe(phoneRaw || undefined);
 
-          const { first: leadFirst, last: leadLast, full: fullName } = resolveLeadNameFields(lead);
+        if (!to) {
+          immediateSkippedNoPhone++;
+          continue;
+        }
 
-          const rendered = renderTemplate(String(firstStep.text || ""), {
-            contact: { first_name: leadFirst, last_name: leadLast, full_name: fullName },
-            agent: { name: user.name || null, first_name: agentFirst, last_name: agentLast },
-          });
-          const finalBody = ensureOptOut(rendered);
+        const { first: agentFirst, last: agentLast } = splitName(user.name || "");
+        const leadFirst = pickLeadFirstName(lead);
+        const leadLast = pickLeadLastName(lead);
+        const fullName = [leadFirst, leadLast].filter(Boolean).join(" ") || null;
 
-          const idKey = `${String(ins._id)}:0:${new Date(nextSendAt || Date.now()).toISOString()}`;
-          const locked = await acquireLock(
-            "enroll",
-            `${String(user.email)}:${String((lead as any)._id)}:${String((campaign as any)._id)}:0`,
-            600
-          );
+        const rendered = renderTemplate(String(firstStep.text || ""), {
+          contact: { first_name: leadFirst, last_name: leadLast, full_name: fullName },
+          agent: { name: user.name || null, first_name: agentFirst, last_name: agentLast },
+        });
+        const finalBody = ensureOptOut(rendered);
 
-          if (locked) {
-            try {
-              await sendSms({
-                to,
-                body: finalBody,
-                userEmail: user.email,
-                leadId: String((lead as any)._id),
-                idempotencyKey: idKey,
-                enrollmentId: String(ins._id),
-                campaignId: String((campaign as any)._id),
-                stepIndex: 0,
-              });
-              immediateSent++;
+        const idKey = `${String(ins._id)}:0:${new Date(
+          nextSendAt || Date.now()
+        ).toISOString()}`;
 
-              // Advance cursor and schedule next (if any)
-              const nextIndex = 1;
-              const update: any = { $set: { cursorStep: nextIndex, lastSentAt: new Date() } };
-              if (steps.length > 1) {
-                const prevDay = parseStepDayNumber(firstStep.day);
-                const nextDay = parseStepDayNumber(steps[1].day);
-                update.$set.nextSendAt = computeNextWhenPTFromToday(nextDay, prevDay);
-              } else {
-                update.$set.status = "completed";
-                update.$unset = { nextSendAt: 1 };
-              }
-              await DripEnrollment.updateOne({ _id: ins._id, cursorStep: 0 }, update);
-            } catch {
-              // Leave for cron to retry later
+        const locked = await acquireLock(
+          "enroll",
+          `${String(user.email)}:${String(lead._id)}:${String(campaign._id)}:0`,
+          600
+        );
+
+        if (locked) {
+          try {
+            await sendSms({
+              to,
+              body: finalBody,
+              userEmail: user.email,
+              leadId: String(lead._id),
+              idempotencyKey: idKey,
+              enrollmentId: String(ins._id),
+              campaignId: String(campaign._id),
+              stepIndex: 0,
+            });
+            immediateSent++;
+
+            // Advance cursor and schedule next (if any)
+            const nextIndex = 1;
+            const update: any = {
+              $set: { cursorStep: nextIndex, lastSentAt: new Date() },
+            };
+            if (steps.length > 1) {
+              const prevDay = parseStepDayNumber(firstStep.day);
+              const nextDay = parseStepDayNumber(steps[1].day);
+              update.$set.nextSendAt = computeNextWhenPTFromToday(nextDay, prevDay);
+            } else {
+              update.$set.status = "completed";
+              update.$unset = { nextSendAt: 1 };
             }
+            await DripEnrollment.updateOne({ _id: ins._id, cursorStep: 0 }, update);
+          } catch {
+            // Leave for cron to retry later
           }
         }
       }
@@ -264,8 +315,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(200).json({
       success: true,
       watcherId: watcher?._id,
-      campaign: { id: String((campaign as any)._id), name: (campaign as any).name },
-      seeded: { created, deduped, immediateSent },
+      campaign: { id: String(campaign._id), name: campaign.name },
+      seeded: { created, deduped, immediateSent, immediateSkippedNoPhone },
       startMode,
       nextSendAt,
     });
