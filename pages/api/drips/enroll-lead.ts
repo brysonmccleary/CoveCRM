@@ -59,9 +59,31 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     await dbConnect();
 
     // Fetch separately (clean TS) and validate scope
+    // ✅ IMPORTANT: pull common name variants so templates can render correctly
     const lead = await Lead.findOne({ _id: leadId, userEmail: email })
-      .select("_id Phone `First Name` `Last Name` userEmail")
+      .select([
+        "_id",
+        "Phone",
+        "userEmail",
+
+        // common name headers with spaces
+        "First Name",
+        "Last Name",
+        "Full Name",
+
+        // common name headers without spaces / casing variants
+        "FirstName",
+        "LastName",
+        "FullName",
+        "first_name",
+        "last_name",
+        "firstname",
+        "lastname",
+        "name",
+        "Name",
+      ].join(" "))
       .lean();
+
     if (!lead) return res.status(404).json({ error: "Lead not found" });
 
     const campaign = (await DripCampaign.findOne({ _id: campaignId })
@@ -74,6 +96,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         type?: string;
         steps?: Array<{ text?: string; day?: string }>;
       } | null;
+
     if (!campaign) return res.status(404).json({ error: "Campaign not found" });
     if (campaign.isActive !== true || campaign.type !== "sms") {
       return res.status(400).json({ error: "Campaign is not an active SMS campaign" });
@@ -139,9 +162,31 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const to = normalizeToE164Maybe((lead as any).Phone);
         if (to) {
           const { first: agentFirst, last: agentLast } = splitName(user.name || "");
-          const leadFirst = (lead as any)["First Name"] || null;
-          const leadLast  = (lead as any)["Last Name"]  || null;
-          const fullName  = [leadFirst, leadLast].filter(Boolean).join(" ") || null;
+
+          // ✅ Fallback extraction for many import header variants
+          const L: any = lead;
+
+          const leadFirst =
+            L["First Name"] ??
+            L.FirstName ??
+            L.first_name ??
+            L.firstname ??
+            null;
+
+          const leadLast =
+            L["Last Name"] ??
+            L.LastName ??
+            L.last_name ??
+            L.lastname ??
+            null;
+
+          const fullName =
+            [leadFirst, leadLast].filter(Boolean).join(" ") ||
+            L["Full Name"] ||
+            L.FullName ||
+            L.name ||
+            L.Name ||
+            null;
 
           const rendered = renderTemplate(String(firstStep.text || ""), {
             contact: { first_name: leadFirst, last_name: leadLast, full_name: fullName },

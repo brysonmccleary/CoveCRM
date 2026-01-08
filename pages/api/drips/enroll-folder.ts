@@ -90,9 +90,29 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     ).lean();
 
     // Seed enrollments for existing leads in the folder (idempotent)
+    // ✅ IMPORTANT: pull common name variants so templates can render correctly
     const leads = await Lead.find(
       { userEmail: session.user.email, folderId },
-      { _id: 1, Phone: 1, "First Name": 1, "Last Name": 1 }
+      {
+        _id: 1,
+        Phone: 1,
+
+        // common name headers with spaces
+        "First Name": 1,
+        "Last Name": 1,
+        "Full Name": 1,
+
+        // common name headers without spaces / casing variants
+        FirstName: 1,
+        LastName: 1,
+        FullName: 1,
+        first_name: 1,
+        last_name: 1,
+        firstname: 1,
+        lastname: 1,
+        name: 1,
+        Name: 1,
+      }
     )
       .limit(Math.max(0, Number(limit) || 10_000))
       .lean();
@@ -133,9 +153,31 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const to = normalizeToE164Maybe((lead as any).Phone);
         if (to) {
           const { first: agentFirst, last: agentLast } = splitName(user.name || "");
-          const leadFirst = (lead as any)["First Name"] || null;
-          const leadLast  = (lead as any)["Last Name"]  || null;
-          const fullName  = [leadFirst, leadLast].filter(Boolean).join(" ") || null;
+
+          // ✅ Fallback extraction for many import header variants
+          const L: any = lead;
+
+          const leadFirst =
+            L["First Name"] ??
+            L.FirstName ??
+            L.first_name ??
+            L.firstname ??
+            null;
+
+          const leadLast =
+            L["Last Name"] ??
+            L.LastName ??
+            L.last_name ??
+            L.lastname ??
+            null;
+
+          const fullName =
+            [leadFirst, leadLast].filter(Boolean).join(" ") ||
+            L["Full Name"] ||
+            L.FullName ||
+            L.name ||
+            L.Name ||
+            null;
 
           const rendered = renderTemplate(String(firstStep.text || ""), {
             contact: { first_name: leadFirst, last_name: leadLast, full_name: fullName },
@@ -152,7 +194,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
           if (locked) {
             try {
-              const result = await sendSms({
+              await sendSms({
                 to,
                 body: finalBody,
                 userEmail: user.email,

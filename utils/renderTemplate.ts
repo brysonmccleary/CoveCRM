@@ -1,4 +1,4 @@
-// /utils/renderTemplate.ts
+// utils/renderTemplate.ts
 
 /**
  * Minimal, safe template renderer for SMS drips.
