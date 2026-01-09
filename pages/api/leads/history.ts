@@ -69,14 +69,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const idObj = Types.ObjectId.isValid(leadId) ? new Types.ObjectId(leadId) : null;
       const timeOr = [{ startedAt: { $lte: cutoff } }, { completedAt: { $lte: cutoff } }, { createdAt: { $lte: cutoff } }];
 
-      // ✅ FIX: enforce BOTH lead filter and time filter (no $or overwrite possible)
+      // ✅ enforce BOTH lead filter and time filter
       const leadOr = [{ leadId }, ...(idObj ? [{ leadId: idObj }] : [])];
+
+      // ✅ recording-only filter (your requirement)
+      const recordingOr = [
+        { recordingUrl: { $exists: true, $ne: "" } },
+        { recordingSid: { $exists: true, $ne: "" } },
+        { hasRecording: true },
+      ];
 
       const calls: any[] = await Call.find({
         userEmail,
         $and: [
           { $or: leadOr },
           { $or: timeOr },
+          { $or: recordingOr },
         ],
       }).sort({ createdAt: -1 }).limit(limit).lean();
 

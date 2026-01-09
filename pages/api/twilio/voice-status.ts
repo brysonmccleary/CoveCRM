@@ -38,6 +38,37 @@ function normStatus(s?: string) {
   return x;
 }
 
+/** Twilio recording URL is often returned as .json; convert to a playable asset URL */
+function normalizeRecordingUrl(raw?: string): string | undefined {
+  if (!raw) return undefined;
+  const s = String(raw).trim();
+  if (!s) return undefined;
+
+  // If Twilio gives a JSON resource URL, convert to mp3
+  // Examples:
+  //  - https://api.twilio.com/2010-04-01/Accounts/.../Recordings/RE... -> append .mp3
+  //  - https://api.twilio.com/.../Recordings/RE....json -> replace with .mp3
+  const hasQuery = s.includes("?");
+  const [base, query] = hasQuery ? s.split("?", 2) : [s, ""];
+  const lower = base.toLowerCase();
+
+  let outBase = base;
+
+  if (lower.endsWith(".json")) {
+    outBase = base.slice(0, -5) + ".mp3";
+  } else if (
+    !lower.endsWith(".mp3") &&
+    !lower.endsWith(".wav") &&
+    !lower.endsWith(".m4a") &&
+    !lower.endsWith(".aac")
+  ) {
+    // If it has no known extension, Twilio usually supports .mp3
+    outBase = base + ".mp3";
+  }
+
+  return query ? `${outBase}?${query}` : outBase;
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST" && req.method !== "PUT") {
     return res.status(200).json({ ok: false, ignored: true, reason: "method" });
@@ -74,6 +105,41 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       : typeof q.userEmail === "string"
       ? String(q.userEmail).toLowerCase()
       : undefined;
+
+  // ✅ Recording fields (Twilio Recording Status Callback / Recording events)
+  const recordingSid = firstDefined(
+    b.recordingSid,
+    b.RecordingSid,
+    q.recordingSid,
+    q.RecordingSid,
+  ) as string | undefined;
+
+  const recordingUrlRaw = firstDefined(
+    b.recordingUrl,
+    b.RecordingUrl,
+    q.recordingUrl,
+    q.RecordingUrl,
+  ) as string | undefined;
+
+  const recordingUrl = normalizeRecordingUrl(recordingUrlRaw);
+
+  const recordingStatus = firstDefined(
+    b.recordingStatus,
+    b.RecordingStatus,
+    q.recordingStatus,
+    q.RecordingStatus,
+  ) as string | undefined;
+
+  const recordingDuration = toNumber(
+    firstDefined(
+      b.recordingDuration,
+      b.RecordingDuration,
+      q.recordingDuration,
+      q.RecordingDuration,
+    ),
+  );
+
+  const hasRecording = Boolean(recordingSid || recordingUrl);
 
   // 🔎 Pull any inbound metadata (ownerEmail + leadId) for this callSid
   let inboundOwnerEmail: string | undefined;
@@ -144,6 +210,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // If we learned a leadId from InboundCall and the Call doc doesn't have one yet, attach it
     ...(leadId && !existing?.leadId ? { leadId } : {}),
+
+    // ✅ Recording persistence (this is the missing piece)
+    ...(recordingSid ? { recordingSid } : {}),
+    ...(recordingUrl ? { recordingUrl } : {}),
+    ...(recordingStatus ? { recordingStatus } : {}),
+    ...(recordingDuration !== undefined ? { recordingDuration } : {}),
+    ...(hasRecording ? { hasRecording: true } : {}),
   });
 
   try {
@@ -164,7 +237,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     console.log(
       `[voice-status] callSid=${callSid} status=${status} hadUserEmail=${Boolean(
         userEmail,
-      )} leadId=${leadId || existing?.leadId || ""}`,
+      )} leadId=${leadId || existing?.leadId || ""} hasRecording=${hasRecording}`,
     );
 
     res.setHeader("Cache-Control", "no-store");
