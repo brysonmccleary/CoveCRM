@@ -1371,10 +1371,7 @@ export default function DialSession() {
         {/* ✅ STEP 1: left column split — top scrolls, bottom pinned */}
         <div className="w-1/4 p-4 border-r border-gray-600 bg-[#1e293b] flex flex-col h-full min-h-0">
           {/* Top (scrollable) */}
-          <div className="flex-1 overflow-y-auto min-h-0">
-            <p className="text-green-400">
-              Calling from: {fromNumber ? formatPhone(fromNumber) : "Resolving…"}
-            </p>
+          <div className="overflow-y-auto pr-2" style={{ maxHeight: "calc(100vh - 310px)" }}>
             <p className="text-yellow-500 mb-2">Status: {status}</p>
 
             <p className="text-sm text-gray-400 mb-2">
