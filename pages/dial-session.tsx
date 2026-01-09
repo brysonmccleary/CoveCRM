@@ -1029,8 +1029,6 @@ export default function DialSession() {
       toast.success(`Saved: ${label}`);
 
       // ✅ IMPORTANT: disposition button must NOT open calendar (prevents double booking)
-      // (Left-side "Book Appointment" button still opens the modal.)
-      // if (label === "Booked Appointment") setShowBookModal(true);
 
       if (!sessionEndedRef.current) scheduleNextLead(); // advance to next lead
     } catch (e: any) {
@@ -1360,18 +1358,16 @@ export default function DialSession() {
     "";
 
   return (
-    <div className="flex bg-[#0f172a] text:white min-h-screen flex-col">
-      <div className="bg-[#1e293b] p-4 border-b border-gray-700 flex justify-between items-center">
-        <h1 className="text-xl font-bold">Dial Session</h1>
-      </div>
+    // ✅ UI ONLY: remove top header + let the 3 columns fill full height
+    <div className="flex bg-[#0f172a] text:white min-h-screen">
+      <Sidebar />
 
-      <div className="flex flex-1">
-        <Sidebar />
-
-        {/* ✅ STEP 1: left column split — top scrolls, bottom pinned */}
-        <div className="w-1/4 p-4 border-r border-gray-600 bg-[#1e293b] flex flex-col h-full min-h-0">
+      {/* ✅ main content wrapper (full height) */}
+      <div className="flex flex-1 min-h-screen">
+        {/* ✅ left column split — top scrolls, bottom pinned (now stretches to bottom) */}
+        <div className="w-1/4 p-4 border-r border-gray-600 bg-[#1e293b] flex flex-col min-h-screen min-h-0">
           {/* Top (scrollable) */}
-          <div className="overflow-y-auto pr-2" style={{ maxHeight: "calc(100vh - 310px)" }}>
+          <div className="flex-1 overflow-y-auto min-h-0">
             <p className="text-yellow-500 mb-2">Status: {status}</p>
 
             <p className="text-sm text-gray-400 mb-2">
@@ -1451,7 +1447,9 @@ export default function DialSession() {
           </div>
         </div>
 
-        <div className="flex-1 p-6 bg-[#1e293b] flex flex-col justify-between">
+        {/* ✅ right panel: make bottom controls stick to bottom like screenshot #2 */}
+        <div className="flex-1 p-6 bg-[#1e293b] flex flex-col min-h-screen min-h-0">
+          {/* Top content */}
           <div>
             <h3 className="text-lg font-bold mb-2">Notes</h3>
             <div className="border border-gray-500 rounded p-2 mb-2">
@@ -1490,7 +1488,8 @@ export default function DialSession() {
             </div>
           </div>
 
-          <div className="flex flex-col items-center mt-8 space-y-4">
+          {/* Bottom content (pinned to bottom) */}
+          <div className="flex flex-col items-center space-y-4 mt-auto pt-6">
             <div className="flex justify-center flex-wrap gap-2">
               <button onClick={() => handleDisposition("Sold")} className="bg-gray-600 hover:bg-gray-700 px-3 py-2 rounded">Sold</button>
               <button onClick={() => handleDisposition("No Answer")} className="bg-gray-600 hover:bg-gray-700 px-3 py-2 rounded">No Answer</button>
