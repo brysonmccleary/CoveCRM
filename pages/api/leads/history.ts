@@ -24,6 +24,12 @@ function parseBool(v: any): boolean {
   return s === "1" || s === "true" || s === "yes";
 }
 
+function isTwilioApiUrl(url?: any): boolean {
+  if (!url) return false;
+  const s = String(url).toLowerCase();
+  return s.includes("api.twilio.com");
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "GET") { res.status(405).json({ message: "Method not allowed" }); return; }
 
@@ -69,14 +75,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const idObj = Types.ObjectId.isValid(leadId) ? new Types.ObjectId(leadId) : null;
       const timeOr = [{ startedAt: { $lte: cutoff } }, { completedAt: { $lte: cutoff } }, { createdAt: { $lte: cutoff } }];
 
-      // ✅ enforce BOTH lead filter and time filter
       const leadOr = [{ leadId }, ...(idObj ? [{ leadId: idObj }] : [])];
 
-      // ✅ recording-only filter (your requirement)
-      const recordingOr = [
-        { recordingUrl: { $exists: true, $ne: "" } },
+      // ✅ Only calls that actually have a recording
+      const hasRecordingOr = [
         { recordingSid: { $exists: true, $ne: "" } },
-        { hasRecording: true },
+        { recordingUrl: { $exists: true, $ne: "" } },
       ];
 
       const calls: any[] = await Call.find({
@@ -84,7 +88,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         $and: [
           { $or: leadOr },
           { $or: timeOr },
-          { $or: recordingOr },
+          { $or: hasRecordingOr },
         ],
       }).sort({ createdAt: -1 }).limit(limit).lean();
 
@@ -94,13 +98,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const talk = typeof c.talkTime === "number" ? c.talkTime : undefined;
         let status: string | undefined;
         if (c.completedAt) status = (talk ?? 0) > 0 ? "completed" : "no-answer";
+
+        const shouldProxy = !!c.recordingSid || isTwilioApiUrl(c.recordingUrl);
+        const recordingUrl =
+          (c.recordingSid || c.recordingUrl)
+            ? (shouldProxy ? `/api/recordings/proxy?callId=${encodeURIComponent(String(c._id))}` : c.recordingUrl)
+            : undefined;
+
         events.push({
           type: "call",
           id: String(c._id),
           date: coerceDateISO(when),
           durationSec: dur,
           status,
-          recordingUrl: c.recordingUrl,
+          recordingUrl,
           summary: c.aiSummary,
           sentiment: c.aiSentiment,
         });
@@ -143,7 +154,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     to: leadDoc.status || "New",
   });
 
-  // Sort DESC by date, then slice
   events.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
   const sliced = events.slice(0, limit);
 

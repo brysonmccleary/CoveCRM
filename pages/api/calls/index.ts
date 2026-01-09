@@ -13,6 +13,17 @@ function toInt(v: string | string[] | undefined, d = 25) {
   return Number.isFinite(n) && n > 0 ? n : d;
 }
 
+function parseBool(v: any): boolean {
+  const s = String(v ?? "").toLowerCase().trim();
+  return s === "1" || s === "true" || s === "yes";
+}
+
+function isTwilioApiUrl(url?: any): boolean {
+  if (!url) return false;
+  const s = String(url).toLowerCase();
+  return s.includes("api.twilio.com");
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "GET") {
     return res.status(405).json({ message: "Method not allowed" });
@@ -59,10 +70,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       ? new Types.ObjectId(leadIdStr)
       : null;
 
+    // ✅ Default behavior for lead-scoped calls: only return calls with a recording
+    // Escape hatch: ?includeNoRecording=1
+    const includeNoRecording = parseBool((req.query as any).includeNoRecording);
+    const recordingsOnly = !includeNoRecording;
+
     const q: any = {
       leadId: leadIdObj ? { $in: [leadIdStr, leadIdObj] } : leadIdStr,
     };
     if (!isAdmin) q.userEmail = requesterEmail;
+
+    if (recordingsOnly) {
+      // ✅ Only calls with either recordingSid or recordingUrl
+      q.$and = [
+        ...(Array.isArray(q.$and) ? q.$and : []),
+        {
+          $or: [
+            { recordingSid: { $exists: true, $ne: "" } },
+            { recordingUrl: { $exists: true, $ne: "" } },
+          ],
+        },
+      ];
+    }
 
     const [rows, total] = await Promise.all([
       (Call as any)
@@ -76,7 +105,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const calls = (rows as any[]).map((c: any) => {
       const id = String(c._id);
+
       const hasRecordingSid = !!c.recordingSid;
+      const hasRecordingUrl = !!c.recordingUrl;
 
       const aiActionItems = Array.isArray(c.aiActionItems) ? c.aiActionItems : [];
       const aiBullets = Array.isArray(c.aiBullets) ? c.aiBullets : [];
@@ -87,6 +118,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         !!c.aiSummary ||
         aiActionItems.length > 0 ||
         aiBullets.length > 0;
+
+      // ✅ If recording is Twilio-protected (api.twilio.com) OR we have recordingSid,
+      // always use proxy playback so the UI can actually play it.
+      const shouldProxyRecording = hasRecordingSid || isTwilioApiUrl(c.recordingUrl);
 
       return {
         id,
@@ -99,12 +134,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         duration: c.duration ?? c.recordingDuration,
         talkTime: c.talkTime,
 
-        // ✅ Always prefer proxied playback when recordingSid exists (fixes 00:00 / CORS/auth)
-        recordingUrl: hasRecordingSid
-          ? `/api/recordings/proxy?callId=${encodeURIComponent(id)}`
-          : c.recordingUrl || undefined,
+        recordingUrl: (hasRecordingSid || hasRecordingUrl)
+          ? (shouldProxyRecording
+              ? `/api/recordings/proxy?callId=${encodeURIComponent(id)}`
+              : (c.recordingUrl || undefined))
+          : undefined,
 
-        hasRecording: hasRecordingSid || !!c.recordingUrl,
+        hasRecording: hasRecordingSid || hasRecordingUrl,
 
         // legacy fields (kept)
         aiSummary: c.aiSummary || undefined,
@@ -112,7 +148,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         aiBullets,
         aiSentiment: c.aiSentiment || undefined,
 
-        // ✅ structured overview (new)
+        // structured overview (kept)
         aiOverviewReady: !!c.aiOverviewReady,
         aiOverview: c.aiOverview || undefined,
 
