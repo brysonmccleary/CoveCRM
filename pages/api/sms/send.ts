@@ -36,7 +36,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       if (last10) {
         // Find the lead (same tenant) by phone ending
-        const lead = await Lead.findOne({
+        const lead: { _id: any } | null = await Lead.findOne({
           userEmail: user.email,
           $or: [
             { Phone: { $regex: last10 + "$" } },
