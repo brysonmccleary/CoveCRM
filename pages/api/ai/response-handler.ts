@@ -9,7 +9,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // Keeping this route as a NO-OP prevents duplicate AI sends / double-texting
   // if any old webhook or client still posts here.
 
-  if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed" });
+  // Always ACK to prevent retries from any legacy callers.
+  if (req.method !== "POST") {
+    return res.status(200).json({ ok: true, deprecated: true });
+  }
 
   try {
     return res.status(200).json({ ok: true, deprecated: true });
