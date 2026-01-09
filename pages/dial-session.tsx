@@ -1368,63 +1368,68 @@ export default function DialSession() {
       <div className="flex flex-1">
         <Sidebar />
 
-        <div className="w-1/4 p-4 border-r border-gray-600 bg-[#1e293b] overflow-y-auto">
-          <p className="text-green-400">
-            Calling from: {fromNumber ? formatPhone(fromNumber) : "Resolving…"}
-          </p>
-          <p className="text-yellow-500 mb-2">Status: {status}</p>
+        {/* ✅ STEP 1: left column split — top scrolls, bottom pinned */}
+        <div className="w-1/4 p-4 border-r border-gray-600 bg-[#1e293b] flex flex-col h-full min-h-0">
+          {/* Top (scrollable) */}
+          <div className="flex-1 overflow-y-auto min-h-0">
+            <p className="text-green-400">
+              Calling from: {fromNumber ? formatPhone(fromNumber) : "Resolving…"}
+            </p>
+            <p className="text-yellow-500 mb-2">Status: {status}</p>
 
-          <p className="text-sm text-gray-400 mb-2">
-            Lead {Math.min(currentLeadIndex + 1, Math.max(leadQueue.length, 1))} of {leadQueue.length || 1}
-          </p>
+            <p className="text-sm text-gray-400 mb-2">
+              Lead {Math.min(currentLeadIndex + 1, Math.max(leadQueue.length, 1))} of {leadQueue.length || 1}
+            </p>
 
-          {/* Top-name block with correct spacing */}
-          {(firstName || lastName) && (
-            <div className="mb-3">
-              {firstName && (
-                <p>
-                  <strong>First Name:</strong> {firstName}
-                </p>
-              )}
-              {lastName && (
-                <p>
-                  <strong>Last Name:</strong> {lastName}
-                </p>
-              )}
-              <hr className="border-gray-700 my-2" />
-            </div>
-          )}
-
-          {/* ✅ Ordered + extras (hide empties, no duplicates, include rawRow headers) */}
-          {lead &&
-            leadInfoRows.map((r) => {
-              const key = r.key;
-              const label = r.label;
-              const value = r.value;
-
-              let display: string = "";
-
-              if (typeof value === "string") {
-                display = looksLikePhoneKey(key) ? formatPhone(value) : value;
-              } else if (typeof value === "number" || typeof value === "boolean") {
-                display = String(value);
-              } else {
-                return null;
-              }
-
-              if (!display || isJunkHistoryText(display)) return null;
-
-              return (
-                <div key={key}>
+            {/* Top-name block with correct spacing */}
+            {(firstName || lastName) && (
+              <div className="mb-3">
+                {firstName && (
                   <p>
-                    <strong>{label}:</strong> {display}
+                    <strong>First Name:</strong> {firstName}
                   </p>
-                  <hr className="border-gray-700 my-1" />
-                </div>
-              );
-            })}
+                )}
+                {lastName && (
+                  <p>
+                    <strong>Last Name:</strong> {lastName}
+                  </p>
+                )}
+                <hr className="border-gray-700 my-2" />
+              </div>
+            )}
 
-          <div className="flex flex-col space-y-2 mt-4">
+            {/* ✅ Ordered + extras (hide empties, no duplicates, include rawRow headers) */}
+            {lead &&
+              leadInfoRows.map((r) => {
+                const key = r.key;
+                const label = r.label;
+                const value = r.value;
+
+                let display: string = "";
+
+                if (typeof value === "string") {
+                  display = looksLikePhoneKey(key) ? formatPhone(value) : value;
+                } else if (typeof value === "number" || typeof value === "boolean") {
+                  display = String(value);
+                } else {
+                  return null;
+                }
+
+                if (!display || isJunkHistoryText(display)) return null;
+
+                return (
+                  <div key={key}>
+                    <p>
+                      <strong>{label}:</strong> {display}
+                    </p>
+                    <hr className="border-gray-700 my-1" />
+                  </div>
+                );
+              })}
+          </div>
+
+          {/* Bottom (pinned) */}
+          <div className="flex flex-col space-y-2 mt-4 flex-none">
             <button
               onClick={() => {
                 const next = !sdkGetMuted();
