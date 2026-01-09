@@ -17,10 +17,10 @@ const MAX_ATTEMPTS = 5;
 // If the lead hasn't replied since last human outbound, reschedule AI for a few days later
 const DEFAULT_COOLDOWN_HOURS = 72;
 
-export default async function handler(
-  req: NextApiRequest,
-  res: NextApiResponse
-) {
+// Ensure reschedules never land "immediately" (avoid jitter / clock drift)
+const MIN_RESCHEDULE_MINUTES = 5;
+
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   // Vercel cron hits with GET
   if (req.method !== "GET") {
     return res.status(405).json({ message: "Method not allowed" });
@@ -66,6 +66,7 @@ export default async function handler(
         processed: 0,
         sent: 0,
         failed: 0,
+        rescheduled: 0,
         remaining: 0,
       });
     }
@@ -79,13 +80,24 @@ export default async function handler(
     let rescheduled = 0;
 
     const COOLDOWN_HOURS =
-      Math.max(1, parseInt(process.env.AI_NO_REPLY_COOLDOWN_HOURS || String(DEFAULT_COOLDOWN_HOURS), 10)) ||
-      DEFAULT_COOLDOWN_HOURS;
+      Math.max(
+        1,
+        parseInt(
+          process.env.AI_NO_REPLY_COOLDOWN_HOURS || String(DEFAULT_COOLDOWN_HOURS),
+          10
+        )
+      ) || DEFAULT_COOLDOWN_HOURS;
+
+    const clampFuture = (d: Date) => {
+      const min = new Date(Date.now() + MIN_RESCHEDULE_MINUTES * 60 * 1000);
+      return d.getTime() < min.getTime() ? min : d;
+    };
 
     for (const job of due) {
       const id = String(job._id);
+
       try {
-        // ✅ NEW: suppression gate — if lead hasn't replied since last human outbound,
+        // ✅ suppression gate — if lead hasn't replied since last human outbound,
         // do NOT send now. Push sendAfter out by COOLDOWN_HOURS from lastHumanOutboundAt.
         try {
           const state = await LeadAIState.findOne({
@@ -100,10 +112,15 @@ export default async function handler(
           const leadHasNotRepliedSinceHuman =
             !!lastHuman && (!lastInbound || lastInbound.getTime() <= lastHuman.getTime());
 
-          const stillSuppressed = !!suppressedUntil && suppressedUntil.getTime() > now.getTime();
+          const stillSuppressed =
+            !!suppressedUntil && suppressedUntil.getTime() > now.getTime();
 
+          // Case A: normal expected path (human outbound exists, lead hasn't replied, suppression active)
           if (leadHasNotRepliedSinceHuman && stillSuppressed) {
-            const newSendAfter = new Date(lastHuman!.getTime() + COOLDOWN_HOURS * 60 * 60 * 1000);
+            const newSendAfterRaw = new Date(
+              lastHuman!.getTime() + COOLDOWN_HOURS * 60 * 60 * 1000
+            );
+            const newSendAfter = clampFuture(newSendAfterRaw);
 
             await AiQueuedReply.updateOne(
               { _id: job._id, status: "queued" },
@@ -121,8 +138,35 @@ export default async function handler(
             );
             continue;
           }
+
+          // Case B (edge): suppression exists but lastHuman missing (partial state write)
+          // Still treat as suppressed and push out from "now" so it never leaks.
+          if (!lastHuman && stillSuppressed) {
+            const newSendAfter = clampFuture(
+              new Date(now.getTime() + COOLDOWN_HOURS * 60 * 60 * 1000)
+            );
+
+            await AiQueuedReply.updateOne(
+              { _id: job._id, status: "queued" },
+              {
+                $set: {
+                  sendAfter: newSendAfter,
+                  failReason: `cooldown_state_missing_lastHuman_until_${newSendAfter.toISOString()}`,
+                },
+              }
+            );
+
+            rescheduled++;
+            console.log(
+              `[send-ai-queued] ⏭️ Rescheduled queuedId=${id} (suppressed but missing lastHuman) -> ${newSendAfter.toISOString()}`
+            );
+            continue;
+          }
         } catch (gateErr: any) {
-          console.warn(`[send-ai-queued] ⚠️ gate check failed for ${id}:`, gateErr?.message || gateErr);
+          console.warn(
+            `[send-ai-queued] ⚠️ gate check failed for ${id}:`,
+            gateErr?.message || gateErr
+          );
           // gate failure should NOT block sending; proceed
         }
 
@@ -171,20 +215,14 @@ export default async function handler(
         );
 
         sent++;
-        console.log(
-          `[send-ai-queued] ✅ Sent queuedId=${id} to=${updated.to}`
-        );
+        console.log(`[send-ai-queued] ✅ Sent queuedId=${id} to=${updated.to}`);
       } catch (err: any) {
-        console.error(
-          `[send-ai-queued] ❌ Error sending queuedId=${id}:`,
-          err?.message || err
-        );
+        console.error(`[send-ai-queued] ❌ Error sending queuedId=${id}:`, err?.message || err);
 
         failed++;
 
         const reason =
-          (err && (err.message || (err as any).toString())) ||
-          "Unknown error";
+          (err && (err.message || (err as any).toString())) || "Unknown error";
 
         // If we hit max attempts, mark as permanently failed; else put back to queued
         const doc = await AiQueuedReply.findById(job._id);
