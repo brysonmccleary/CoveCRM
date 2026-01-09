@@ -4,6 +4,7 @@ import dbConnect from "@/lib/mongooseConnect";
 import { checkCronAuth } from "@/lib/cronAuth";
 import { acquireLock } from "@/lib/locks";
 import { AiQueuedReply } from "@/models/AiQueuedReply";
+import { LeadAIState } from "@/models/LeadAIState";
 import { sendSms } from "@/lib/twilio/sendSMS";
 
 export const config = {
@@ -12,6 +13,9 @@ export const config = {
 
 const MAX_PER_RUN = 25;
 const MAX_ATTEMPTS = 5;
+
+// If the lead hasn't replied since last human outbound, reschedule AI for a few days later
+const DEFAULT_COOLDOWN_HOURS = 72;
 
 export default async function handler(
   req: NextApiRequest,
@@ -72,10 +76,56 @@ export default async function handler(
 
     let sent = 0;
     let failed = 0;
+    let rescheduled = 0;
+
+    const COOLDOWN_HOURS =
+      Math.max(1, parseInt(process.env.AI_NO_REPLY_COOLDOWN_HOURS || String(DEFAULT_COOLDOWN_HOURS), 10)) ||
+      DEFAULT_COOLDOWN_HOURS;
 
     for (const job of due) {
       const id = String(job._id);
       try {
+        // ✅ NEW: suppression gate — if lead hasn't replied since last human outbound,
+        // do NOT send now. Push sendAfter out by COOLDOWN_HOURS from lastHumanOutboundAt.
+        try {
+          const state = await LeadAIState.findOne({
+            userEmail: job.userEmail,
+            leadId: job.leadId,
+          }).lean();
+
+          const lastHuman = state?.lastHumanOutboundAt ? new Date(state.lastHumanOutboundAt) : null;
+          const lastInbound = state?.lastLeadInboundAt ? new Date(state.lastLeadInboundAt) : null;
+          const suppressedUntil = state?.aiSuppressedUntil ? new Date(state.aiSuppressedUntil) : null;
+
+          const leadHasNotRepliedSinceHuman =
+            !!lastHuman && (!lastInbound || lastInbound.getTime() <= lastHuman.getTime());
+
+          const stillSuppressed = !!suppressedUntil && suppressedUntil.getTime() > now.getTime();
+
+          if (leadHasNotRepliedSinceHuman && stillSuppressed) {
+            const newSendAfter = new Date(lastHuman!.getTime() + COOLDOWN_HOURS * 60 * 60 * 1000);
+
+            await AiQueuedReply.updateOne(
+              { _id: job._id, status: "queued" },
+              {
+                $set: {
+                  sendAfter: newSendAfter,
+                  failReason: `cooldown_no_reply_until_${newSendAfter.toISOString()}`,
+                },
+              }
+            );
+
+            rescheduled++;
+            console.log(
+              `[send-ai-queued] ⏭️ Rescheduled queuedId=${id} (no reply since human outbound) -> ${newSendAfter.toISOString()}`
+            );
+            continue;
+          }
+        } catch (gateErr: any) {
+          console.warn(`[send-ai-queued] ⚠️ gate check failed for ${id}:`, gateErr?.message || gateErr);
+          // gate failure should NOT block sending; proceed
+        }
+
         // Mark as "sending" and bump attempts, but only if still queued
         const updated = await AiQueuedReply.findOneAndUpdate(
           {
@@ -162,6 +212,7 @@ export default async function handler(
       processed: due.length,
       sent,
       failed,
+      rescheduled,
       remaining,
     });
   } catch (err: any) {
