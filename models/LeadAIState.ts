@@ -5,14 +5,12 @@ export interface ILeadAIState extends Document {
   leadId: mongoose.Types.ObjectId;
   userEmail: string;
 
-  // helpful for lookup/debug; optional
   phoneLast10?: string;
 
   lastHumanOutboundAt?: Date | null;
   lastLeadInboundAt?: Date | null;
 
-  // if now < aiSuppressedUntil and lead hasn't replied since human outbound,
-  // AI must not send anything proactive
+  // If set, AI must not proactively send unless lead replies.
   aiSuppressedUntil?: Date | null;
 
   createdAt: Date;
@@ -33,7 +31,6 @@ const LeadAIStateSchema = new Schema<ILeadAIState>(
   { timestamps: true }
 );
 
-// One row per (userEmail + leadId)
 LeadAIStateSchema.index({ userEmail: 1, leadId: 1 }, { unique: true });
 
 export const LeadAIState: Model<ILeadAIState> =

@@ -1,6 +1,7 @@
 // /pages/api/twilio/inbound-sms.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import mongooseConnect from "@/lib/mongooseConnect";
+import { LeadAIState } from "@/models/LeadAIState";
 import Lead from "@/models/Lead";
 import User from "@/models/User";
 import A2PProfile from "@/models/A2PProfile";
@@ -1286,6 +1287,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     console.log(`[inbound-sms] RESOLVED leadId=${lead?._id || null} from=${fromNumber} to=${toNumber}`);
+        // ✅ NEW: lead replied inbound — clear AI suppression and record inbound timestamp
+    try {
+      const fromDigits2 = normalizeDigits(fromNumber);
+      const last10Inbound = fromDigits2.slice(-10);
+      await LeadAIState.updateOne(
+        { userEmail: user.email, leadId: lead._id },
+        {
+          $set: {
+            userEmail: user.email,
+            leadId: lead._id,
+            phoneLast10: last10Inbound,
+            lastLeadInboundAt: new Date(),
+            aiSuppressedUntil: null, // lead replied, allow AI responses again
+          },
+        },
+        { upsert: true }
+      );
+    } catch (e: any) {
+      console.warn("⚠️ inbound-sms LeadAIState update failed:", e?.message || e);
+    }
     // ======================================================================
 
     // Pause any active DripEnrollments for this lead (drip → AI handoff),
