@@ -36,7 +36,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       if (last10) {
         // Find the lead (same tenant) by phone ending
-        const lead: { _id: any } | null = await Lead.findOne({
+        const lead = (await Lead.findOne({
           userEmail: user.email,
           $or: [
             { Phone: { $regex: last10 + "$" } },
@@ -49,7 +49,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           ],
         })
           .select({ _id: 1 })
-          .lean();
+          .lean()) as any; // ✅ cast to avoid broken model typings that include array unions
 
         if (lead?._id) {
           const hours =
