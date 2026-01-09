@@ -214,37 +214,34 @@ export default function DialSession() {
 
   const tooEarly = () => !callStartAtRef.current || Date.now() - callStartAtRef.current < EARLY_STATUS_MS;
 
-  /** ✅ Ringback keep-alive (do NOT touch ringAudio utils; only re-trigger playRingback while truly ringing) **/
+  /** ✅ Ringback state machine (ONLY controls play/stop; does not touch conference/streaming) **/
   const ringbackDesiredRef = useRef<boolean>(false);
-  const ringbackLoopRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const ringbackIsOnRef = useRef<boolean>(false);
+  const lastCallStatusRef = useRef<string>("");
 
-  const stopRingbackLoop = () => {
-    ringbackDesiredRef.current = false;
-    if (ringbackLoopRef.current) {
-      clearInterval(ringbackLoopRef.current);
-      ringbackLoopRef.current = null;
+  const isTerminalStatus = (s: string) =>
+    ["completed", "busy", "failed", "no-answer", "canceled"].includes(String(s || "").toLowerCase());
+
+  const applyRingbackDesired = async (desired: boolean) => {
+    ringbackDesiredRef.current = desired;
+
+    if (desired) {
+      if (!ringbackIsOnRef.current) {
+        ringbackIsOnRef.current = true;
+        try { await ensureUnlocked(); } catch {}
+        try { playRingback(); } catch {}
+      }
+    } else {
+      if (ringbackIsOnRef.current) {
+        ringbackIsOnRef.current = false;
+        try { stopRingback(); } catch {}
+      }
     }
   };
 
-  const startRingbackLoop = () => {
-    if (ringbackLoopRef.current) return; // already running
-    ringbackLoopRef.current = setInterval(() => {
-      try {
-        if (!ringbackDesiredRef.current) return;
-        if (sessionEndedRef.current) return;
-        if (!callActive) return;
-        if (hasConnectedRef.current) return;
-        // keep it alive while Twilio is actually ringing/queued
-        ensureUnlocked();
-        playRingback();
-      } catch {}
-    }, 4000); // re-trigger every few seconds to prevent “rings once then silent”
-  };
-
   const setRingbackDesired = (on: boolean) => {
-    ringbackDesiredRef.current = on;
-    if (on) startRingbackLoop();
-    else stopRingbackLoop();
+    // preserve existing call sites; route through the state machine
+    applyRingbackDesired(!!on);
   };
 
   /** helpers **/
@@ -443,6 +440,24 @@ export default function DialSession() {
       primeAudioContext();
       ensureUnlocked();
     } catch {}
+  }, []);
+
+  // ✅ Re-prime + re-assert ringback on focus/visibility changes (Safari-safe), only if ringback should be ON
+  useEffect(() => {
+    const onVis = async () => {
+      if (!ringbackDesiredRef.current) return;
+      try { await primeAudioContext(); } catch {}
+      try { await ensureUnlocked(); } catch {}
+      try { await applyRingbackDesired(true); } catch {}
+    };
+
+    document.addEventListener("visibilitychange", onVis);
+    window.addEventListener("focus", onVis);
+    return () => {
+      document.removeEventListener("visibilitychange", onVis);
+      window.removeEventListener("focus", onVis);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Load selected number + agent phone
@@ -708,19 +723,25 @@ export default function DialSession() {
       try {
         const j = await fetch(`/api/twilio/calls/status?sid=${encodeURIComponent(sid)}`, { cache: "no-store" }).then(r => r.json());
         const s = interpret(j?.status);
+        lastCallStatusRef.current = s;
         // queued | ringing | in-progress | completed | busy | failed | no-answer | canceled
 
-        // While truly ringing/queued => keep ringback alive
-        if (s === "queued" || s === "ringing") {
+        // While truly ringing => ringback ON (and re-assert if needed)
+        if (s === "ringing") {
           setStatus("Ringing…");
-          setRingbackDesired(true);
+          await applyRingbackDesired(true);
+          return;
+        }
+
+        // For queued/initiated/etc: do not force stop or start (avoid false toggles)
+        if (s === "queued" || s === "initiated") {
+          // no-op
           return;
         }
 
         if (s === "in-progress") {
           // TRUE bridge — stop ringback & timers, mark connected, keep polling
-          setRingbackDesired(false);
-          stopRingback();
+          await applyRingbackDesired(false);
           clearWatchdog();
           hasConnectedRef.current = true;
           setStatus("Connected");
@@ -728,9 +749,8 @@ export default function DialSession() {
         }
 
         // terminal states: stop all audio/timers
-        if (s === "completed" || s === "busy" || s === "failed" || s === "no-answer" || s === "canceled") {
-          setRingbackDesired(false);
-          stopRingback();
+        if (isTerminalStatus(s)) {
+          await applyRingbackDesired(false);
           clearWatchdog();
           const label =
             s === "completed" ? "Completed" :
@@ -753,8 +773,7 @@ export default function DialSession() {
 
   // Centralized "Disconnected now" path
   const markDisconnected = async (reason: string) => {
-    setRingbackDesired(false);
-    stopRingback();
+    await applyRingbackDesired(false);
     killAllTimers();
     await hangupActiveCall(reason);
     await leaveIfJoined(reason);
@@ -845,8 +864,7 @@ export default function DialSession() {
 
       // Ensure audio is gesture-unlocked; then start ringback.
       ensureUnlocked();
-      setRingbackDesired(true);
-      playRingback();
+      await applyRingbackDesired(true);
 
       callStartAtRef.current = Date.now();
 
@@ -857,8 +875,7 @@ export default function DialSession() {
         await hangupActiveCall("ended-during-start");
         await leaveIfJoined("ended-during-start");
         setCallActive(false);
-        setRingbackDesired(false);
-        stopRingback();
+        await applyRingbackDesired(false);
         return;
       }
 
@@ -893,9 +910,9 @@ export default function DialSession() {
           safeOn("hangup", () => { markDisconnected("twilio-hangup"); });
 
           // Defensive cuts for non-success paths
-          safeOn("cancel", () => { setRingbackDesired(false); stopRingback(); });
-          safeOn("reject", () => { setRingbackDesired(false); stopRingback(); });
-          safeOn("error", () => { setRingbackDesired(false); stopRingback(); });
+          safeOn("cancel", async () => { await applyRingbackDesired(false); });
+          safeOn("reject", async () => { await applyRingbackDesired(false); });
+          safeOn("error", async () => { await applyRingbackDesired(false); });
         } catch (e) {
           console.warn("Failed to pre-join conference:", e);
         }
@@ -911,8 +928,7 @@ export default function DialSession() {
     } catch (err: any) {
       console.error(err);
       setStatus(err?.message || "Call failed");
-      setRingbackDesired(false);
-      stopRingback();
+      await applyRingbackDesired(false);
       killAllTimers();
       await leaveIfJoined("start-failed");
       setCallActive(false);
@@ -994,8 +1010,7 @@ export default function DialSession() {
 
     try {
       setStatus(`Saving disposition: ${label}…`);
-      setRingbackDesired(false);
-      stopRingback();
+      await applyRingbackDesired(false);
       killAllTimers();
 
       const reasonKey = `disposition-${label.replace(/\s+/g, "-").toLowerCase()}`;
@@ -1041,8 +1056,7 @@ export default function DialSession() {
 
   const disconnectAndNext = () => {
     if (sessionEndedRef.current) return;
-    setRingbackDesired(false);
-    stopRingback();
+    applyRingbackDesired(false);
     killAllTimers();
     hangupActiveCall("advance-next");
     leaveIfJoined("advance-next");
@@ -1058,8 +1072,7 @@ export default function DialSession() {
   const togglePause = () => {
     setIsPaused((p) => !p);
     if (!isPaused) {
-      setRingbackDesired(false);
-      stopRingback();
+      applyRingbackDesired(false);
       killAllTimers();
       hangupActiveCall("pause");
       leaveIfJoined("pause");
@@ -1079,8 +1092,7 @@ export default function DialSession() {
     if (!ok) return;
 
     sessionEndedRef.current = true;
-    setRingbackDesired(false);
-    stopRingback();
+    applyRingbackDesired(false);
     killAllTimers();
     placingCallRef.current = false;
     setReadyToCall(false);
@@ -1144,6 +1156,8 @@ export default function DialSession() {
             if (sessionEndedRef.current) return;
 
             const s = String(payload?.status || "").toLowerCase();
+            lastCallStatusRef.current = s;
+
             const sid = activeCallSidRef.current;
             if (sid && payload?.callSid && sid !== payload.callSid) return;
 
@@ -1160,24 +1174,23 @@ export default function DialSession() {
             if (fromNum && ownerNum && fromNum !== ownerNum) return;
 
             if (s === "initiated") setStatus("Dial initiated…");
+
             if (s === "ringing") {
               setStatus("Ringing…");
-              setRingbackDesired(true);
+              await applyRingbackDesired(true);
             }
 
             // ✅ Only treat ANSWERED as a real connection; ignore in-progress
             if (s === "answered") {
               setStatus("Connected");
-              setRingbackDesired(false);
-              stopRingback();
+              await applyRingbackDesired(false);
               clearWatchdog();
               hasConnectedRef.current = true;
             }
 
             if (s === "no-answer" || s === "busy" || s === "failed") {
               if (s === "no-answer" && tooEarly()) return;
-              setRingbackDesired(false);
-              stopRingback();
+              await applyRingbackDesired(false);
               clearWatchdog();
 
               const label = s === "no-answer" ? "No Answer" : s === "busy" ? "Busy" : "Failed";
@@ -1210,8 +1223,7 @@ export default function DialSession() {
     return () => {
       mounted = false;
       try { socketRef.current?.off?.("call:status"); socketRef.current?.disconnect?.(); } catch {}
-      setRingbackDesired(false);
-      stopRingback();
+      applyRingbackDesired(false);
       killAllTimers();
       leaveIfJoined("unmount");
       clearStatusPoll();

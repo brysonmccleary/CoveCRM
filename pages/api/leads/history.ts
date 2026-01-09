@@ -1,3 +1,4 @@
+// pages/api/leads/history.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import type { Session } from "next-auth";
@@ -67,8 +68,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     try {
       const idObj = Types.ObjectId.isValid(leadId) ? new Types.ObjectId(leadId) : null;
       const timeOr = [{ startedAt: { $lte: cutoff } }, { completedAt: { $lte: cutoff } }, { createdAt: { $lte: cutoff } }];
-      const query: any = { userEmail, $or: [{ leadId }, ...(idObj ? [{ leadId: idObj }] : [])] };
-      const calls: any[] = await Call.find({ ...query, $or: timeOr }).sort({ createdAt: -1 }).limit(limit).lean();
+
+      // ✅ FIX: enforce BOTH lead filter and time filter (no $or overwrite possible)
+      const leadOr = [{ leadId }, ...(idObj ? [{ leadId: idObj }] : [])];
+
+      const calls: any[] = await Call.find({
+        userEmail,
+        $and: [
+          { $or: leadOr },
+          { $or: timeOr },
+        ],
+      }).sort({ createdAt: -1 }).limit(limit).lean();
+
       for (const c of calls) {
         const when = c.startedAt || c.completedAt || c.createdAt;
         const dur = typeof c.duration === "number" ? c.duration : undefined;
