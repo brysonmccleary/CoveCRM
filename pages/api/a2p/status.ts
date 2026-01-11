@@ -135,9 +135,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(200).json({
         nextAction: "start_profile" as NextAction,
         registrationStatus: a2p.registrationStatus || "unknown",
-        messagingReady: Boolean(a2p.messagingReady),
+        messagingReady: false, // ✅ never claim ready if we couldn't verify campaign status
         canSendSms: false,
-        applicationStatus: (a2p as any).applicationStatus || "pending",
+        applicationStatus: "pending", // ✅ never approved on error path
         a2pStatusLabel: "Pending",
         declinedReason: (a2p as any).declinedReason || null,
         brand: {
@@ -243,6 +243,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // --- Campaign status (this controls "approved/live") ---
     let campaignStatus = "unknown";
     const campaignSid = (a2p as any).usa2pSid || (a2p as any).campaignSid;
+    let campaignStatusFetched = false; // ✅ NEW: track whether we actually verified campaign status
 
     if ((a2p as any).messagingServiceSid && campaignSid) {
       try {
@@ -252,6 +253,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           .fetch();
 
         campaignStatus = String((camp as any).status || (camp as any).state || campaignStatus);
+        campaignStatusFetched = true;
 
         const lower = safeLower(campaignStatus);
 
@@ -274,9 +276,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           (a2p as any).registrationStatus = "campaign_submitted";
           (a2p as any).messagingReady = false;
           (a2p as any).applicationStatus = "pending";
+        } else {
+          // ✅ NEW: unknown campaign state => never treat as approved
+          (a2p as any).messagingReady = false;
+          (a2p as any).applicationStatus = "pending";
         }
       } catch {
-        // best-effort
+        // ✅ NEW: fetch failed => we did NOT verify approval => never treat as approved
+        campaignStatusFetched = false;
       }
     }
 
@@ -333,11 +340,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (isRejected) {
       applicationStatus = "declined";
       (a2p as any).messagingReady = false;
-    } else if (Boolean((a2p as any).messagingReady)) {
-      // ✅ ONLY when campaign-approved (messagingReady true)
-      applicationStatus = "approved";
     } else {
-      applicationStatus = "pending";
+      // ✅ CRITICAL: approved only if we VERIFIED campaign approval this request
+      const lowerCampaign = safeLower(campaignStatus);
+      const verifiedCampaignApproved =
+        Boolean(campaignSid) && campaignStatusFetched && CAMPAIGN_APPROVED.has(lowerCampaign);
+
+      if (verifiedCampaignApproved) {
+        (a2p as any).messagingReady = true;
+        applicationStatus = "approved";
+      } else {
+        // If we didn't verify approval (or it isn't approved), force pending + not-ready
+        (a2p as any).messagingReady = false;
+        applicationStatus = "pending";
+      }
     }
 
     (a2p as any).applicationStatus = applicationStatus;

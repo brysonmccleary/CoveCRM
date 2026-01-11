@@ -2320,13 +2320,15 @@ export default async function handler(
             messagingServiceSid,
             usecaseCode: code,
             registrationStatus: "campaign_submitted",
+            applicationStatus: "pending",
+            messagingReady: false,
             twilioAccountSidLastUsed: twilioAccountSidUsed,
           } as any,
           $push: {
             approvalHistory: {
               stage: "campaign_submitted",
               at: new Date(),
-              note: "Initial A2P campaign created",
+              note: "Initial A2P campaign created (submitted/pending)",
             },
           },
         },
@@ -2338,25 +2340,25 @@ export default async function handler(
       );
     }
 
+    // ✅ CRITICAL FIX:
+    // If campaign exists, we STILL do NOT mark approved here.
+    // Campaign creation/submission is not carrier approval.
     if (usa2pSid && canCreateCampaign) {
-      const appStatus =
-        normalizedBrandStatus === "FAILED" ? "declined" : "approved";
-
       await A2PProfile.updateOne(
         { _id: a2pId },
         {
           $set: {
-            registrationStatus: "ready",
-            applicationStatus: appStatus,
-            messagingReady: appStatus === "approved",
+            registrationStatus: "campaign_submitted",
+            applicationStatus: "pending",
+            messagingReady: false,
             lastSyncedAt: new Date(),
             twilioAccountSidLastUsed: twilioAccountSidUsed,
           } as any,
           $push: {
             approvalHistory: {
-              stage: "ready",
+              stage: "campaign_submitted",
               at: new Date(),
-              note: "Brand + campaign ready from start.ts",
+              note: "Campaign exists; awaiting carrier approval (do not mark approved from start.ts)",
             },
           },
         },
