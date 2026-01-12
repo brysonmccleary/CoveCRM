@@ -97,7 +97,7 @@ function stableStringify(value: any): string {
   if (Array.isArray(value)) return "[" + value.map((v) => stableStringify(v)).join(",") + "]";
   if (t === "object") {
     const keys = Object.keys(value).sort();
-    const parts = keys.map((k) => JSON.stringify(k) + ":" + stableStringify((value as any)[k]));
+    const parts = keys.map((k) => JSON.stringify(k) + ":" + stableStringify(value[k]));
     return "{" + parts.join(",") + "}";
   }
   return JSON.stringify(value);
@@ -107,7 +107,6 @@ function verifySignatureAgainstBytes(bodyBytes: Buffer, token: string, sig: stri
   const trimmed = String(sig || "").trim();
   if (!trimmed) return false;
 
-  // ✅ Decide which encoding the sender used based on the received signature format.
   if (isHexSig(trimmed)) {
     const expected = hmacHexBytes(bodyBytes, token);
     return timingSafeEqualHex(trimmed.toLowerCase(), expected.toLowerCase());
@@ -121,26 +120,17 @@ function verifySignatureAgainstBytes(bodyBytes: Buffer, token: string, sig: stri
   return false;
 }
 
-/**
- * ✅ Flexible verification:
- *  1) RAW BYTES (baseline)
- *  2) minified JSON bytes
- *  3) stable-key JSON bytes
- */
 function verifySignatureFlexibleBytes(rawBytes: Buffer, rawBodyText: string, token: string, sig: string) {
   if (verifySignatureAgainstBytes(rawBytes, token, sig)) return true;
 
   try {
     const obj = JSON.parse(rawBodyText || "{}");
-
     const minified = JSON.stringify(obj);
     if (verifySignatureAgainstBytes(Buffer.from(minified, "utf8"), token, sig)) return true;
 
     const stable = stableStringify(obj);
     if (verifySignatureAgainstBytes(Buffer.from(stable, "utf8"), token, sig)) return true;
-  } catch {
-    // ignore
-  }
+  } catch {}
 
   return false;
 }
@@ -187,30 +177,21 @@ function buildPhoneQueryCandidates(normalizedPhone: string) {
   return candidates;
 }
 
-// Prevent Mongo key issues (keys containing "." or starting with "$")
-function isSafeMongoKey(k: string) {
-  if (!k) return false;
-  if (k.startsWith("$")) return false;
-  if (k.includes(".")) return false;
-  return true;
-}
-
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
   try {
     const token = String(req.headers["x-covecrm-token"] || "").trim();
     const sig = String(req.headers["x-covecrm-signature"] || "").trim();
+
     if (!token) return res.status(401).json({ error: "Missing token" });
     if (!sig) return res.status(401).json({ error: "Missing signature" });
 
-    // ✅ RAW BYTES
     const rawBytes = await readRawBodyBuffer(req);
     if (!rawBytes || !rawBytes.length) return res.status(400).json({ error: "Missing body" });
 
     const rawBodyText = rawBytes.toString("utf8");
 
-    // ✅ Verify signature byte-perfect BEFORE parsing JSON
     if (!verifySignatureFlexibleBytes(rawBytes, rawBodyText, token, sig)) {
       return res.status(403).json({ error: "Invalid signature" });
     }
@@ -233,6 +214,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const user = await User.findOne({
       "googleSheets.syncedSheetsSimple": { $elemMatch: { connectionId: connectionId } },
     });
+
     if (!user) return res.status(404).json({ error: "Connection not found" });
 
     const userEmail = String((user as any)?.email || "").trim().toLowerCase();
@@ -240,6 +222,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const gs: any = (user as any).googleSheets || {};
     const synced = Array.isArray(gs.syncedSheetsSimple) ? gs.syncedSheetsSimple : [];
+
     const match = synced.find((s: any) => String(s.connectionId || "") === connectionId);
     if (!match) return res.status(404).json({ error: "Connection mapping missing" });
 
@@ -257,9 +240,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const folder = await getOrCreateSafeFolder(userEmail, folderName);
 
     const row = (payload.row || {}) as Record<string, any>;
-    if (!row || typeof row !== "object") return res.status(400).json({ error: "Missing row" });
 
-    // Pull canonical fields (same as backfill)
+    // ✅ pull common fields, but DO NOT drop other columns
     const firstName = pickRowValue(row, ["First Name", "firstName", "firstname", "First", "first"]);
     const lastName = pickRowValue(row, ["Last Name", "lastName", "lastname", "Last", "last"]);
     const phoneRaw = pickRowValue(row, ["Phone", "phone", "phoneNumber", "Phone Number", "PhoneNumber"]);
@@ -322,45 +304,37 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
-    // ✅ Import EVERYTHING from the row (safe keys only) + canonical fields like backfill
-    const leadDoc: any = {};
+    // ✅ Import EVERYTHING: spread full row first, then overlay normalized canonical fields
+    const leadDoc: any = {
+      ...row,
 
-    // copy row fields to top-level so Lead Profile can display everything
-    for (const k of Object.keys(row)) {
-      const key = String(k || "").trim();
-      if (!key) continue;
-      if (!isSafeMongoKey(key)) continue;
+      State: String(state || "").trim() || row.State || row["State"] || undefined,
+      "First Name": String(firstName || "").trim() || row["First Name"] || row.FirstName || undefined,
+      "Last Name": String(lastName || "").trim() || row["Last Name"] || row.LastName || undefined,
+      Phone: String(phoneRaw || "").trim() || row.Phone || row["Phone"] || undefined,
+      Email: emailLower || row.Email || row["Email"] || undefined,
 
-      // keep original values (Sheets may send numbers/bools); UI rendering can stringify as needed
-      leadDoc[key] = (row as any)[k];
-    }
+      Notes: String(notes || "").trim() || row.Notes || row["Notes"] || undefined,
+      Age: String(age || "").trim() || row.Age || row["Age"] || undefined,
+      Beneficiary: String(beneficiary || "").trim() || row.Beneficiary || row["Beneficiary"] || undefined,
+      "Coverage Amount": String(coverageAmount || "").trim() || row["Coverage Amount"] || undefined,
 
-    // canonical overrides (so lists/tables always have expected keys)
-    leadDoc.State = String(state || "").trim() || undefined;
-    leadDoc["First Name"] = String(firstName || "").trim() || undefined;
-    leadDoc["Last Name"] = String(lastName || "").trim() || undefined;
-    leadDoc.Phone = String(phoneRaw || "").trim() || undefined;
-    leadDoc.Email = emailLower || undefined;
-    leadDoc.Notes = String(notes || "").trim() || undefined;
-    leadDoc.Age = String(age || "").trim() || undefined;
-    leadDoc.Beneficiary = String(beneficiary || "").trim() || undefined;
-    leadDoc["Coverage Amount"] = String(coverageAmount || "").trim() || undefined;
+      normalizedPhone: normalizedPhone || undefined,
+      phoneLast10: phoneLast10 || undefined,
+      status: "New",
+      leadType: sanitizeLeadType(String(leadTypeIn || "")),
 
-    leadDoc.normalizedPhone = normalizedPhone || undefined;
-    leadDoc.phoneLast10 = phoneLast10 || undefined;
-    leadDoc.status = "New";
-    leadDoc.leadType = sanitizeLeadType(String(leadTypeIn || ""));
-
-    leadDoc.source = "google-sheets";
-    leadDoc.sheetMeta = {
-      sheetId,
-      gid: payload.gid || "",
-      tabName: payload.tabName || match.tabName || "",
-      receivedAt: new Date(),
-      ts: payload.ts || null,
-      connectionId,
+      source: "google-sheets",
+      sheetMeta: {
+        sheetId,
+        gid: payload.gid || "",
+        tabName: payload.tabName || match.tabName || "",
+        receivedAt: new Date(),
+        ts: payload.ts || null,
+        connectionId,
+      },
+      rawRow: row,
     };
-    leadDoc.rawRow = row;
 
     await createLeadsFromGoogleSheet([leadDoc], userEmail, folder._id);
     await touchFolderUpdatedAt(folder._id, userEmail);

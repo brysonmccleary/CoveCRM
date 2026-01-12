@@ -97,8 +97,10 @@ function _rowImportedKey(rowNumber) {
   return _propKey("rowImported:" + String(rowNumber));
 }
 
-// ✅ HMAC over the EXACT STRING that we send as the HTTP body.
-// This guarantees the server verifies the same bytes it receives.
+/**
+ * ✅ HMAC over the EXACT JSON STRING we send.
+ * This avoids byte-array normalization differences in UrlFetchApp.
+ */
 function _hmacHexFromString(bodyString, secret) {
   const rawSig = Utilities.computeHmacSha256Signature(String(bodyString || ""), String(secret || ""));
   return rawSig
@@ -299,14 +301,14 @@ function _postBackfillBatch(runId, rows, totalRows) {
     ts: Date.now()
   };
 
-  // ✅ IMPORTANT: Sign the EXACT string that we send.
+  // ✅ send JSON STRING (not byte array)
   const body = JSON.stringify(payload);
   const sig = _hmacHexFromString(body, COVECRM_TOKEN);
 
   const resp = UrlFetchApp.fetch(COVECRM_BACKFILL_URL, {
     method: "post",
     contentType: "application/json",
-    payload: body, // ✅ send string, not byte array
+    payload: body,
     muteHttpExceptions: true,
     headers: {
       "x-covecrm-token": COVECRM_TOKEN,
@@ -388,14 +390,14 @@ function _sendRowIfNew(sheet, rowNumber) {
       ts: Date.now()
     };
 
-    // ✅ IMPORTANT: Sign the EXACT string that we send.
+    // ✅ send JSON STRING (not byte array)
     const body = JSON.stringify(payload);
     const sig = _hmacHexFromString(body, COVECRM_TOKEN);
 
     const resp = UrlFetchApp.fetch(COVECRM_WEBHOOK_URL, {
       method: "post",
       contentType: "application/json",
-      payload: body, // ✅ send string, not byte array
+      payload: body,
       muteHttpExceptions: true,
       headers: {
         "x-covecrm-token": COVECRM_TOKEN,
