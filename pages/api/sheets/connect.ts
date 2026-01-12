@@ -97,11 +97,10 @@ function _rowImportedKey(rowNumber) {
   return _propKey("rowImported:" + String(rowNumber));
 }
 
-// ✅ HMAC over BYTES (UTF-8) to match what UrlFetch actually sends.
-// IMPORTANT: Apps Script requires (number[], number[]) for bytes mode.
-function _hmacHex(bodyBytes, secret) {
-  const secretBytes = Utilities.newBlob(String(secret || ""), "text/plain").getBytes();
-  const rawSig = Utilities.computeHmacSha256Signature(bodyBytes, secretBytes);
+// ✅ HMAC over the EXACT STRING that we send as the HTTP body.
+// This guarantees the server verifies the same bytes it receives.
+function _hmacHexFromString(bodyString, secret) {
+  const rawSig = Utilities.computeHmacSha256Signature(String(bodyString || ""), String(secret || ""));
   return rawSig
     .map(b => (b < 0 ? b + 256 : b).toString(16).padStart(2, "0"))
     .join("");
@@ -300,14 +299,14 @@ function _postBackfillBatch(runId, rows, totalRows) {
     ts: Date.now()
   };
 
+  // ✅ IMPORTANT: Sign the EXACT string that we send.
   const body = JSON.stringify(payload);
-  const bodyBytes = Utilities.newBlob(body, "application/json").getBytes();
-  const sig = _hmacHex(bodyBytes, COVECRM_TOKEN);
+  const sig = _hmacHexFromString(body, COVECRM_TOKEN);
 
   const resp = UrlFetchApp.fetch(COVECRM_BACKFILL_URL, {
     method: "post",
     contentType: "application/json",
-    payload: bodyBytes,
+    payload: body, // ✅ send string, not byte array
     muteHttpExceptions: true,
     headers: {
       "x-covecrm-token": COVECRM_TOKEN,
@@ -389,14 +388,14 @@ function _sendRowIfNew(sheet, rowNumber) {
       ts: Date.now()
     };
 
+    // ✅ IMPORTANT: Sign the EXACT string that we send.
     const body = JSON.stringify(payload);
-    const bodyBytes = Utilities.newBlob(body, "application/json").getBytes();
-    const sig = _hmacHex(bodyBytes, COVECRM_TOKEN);
+    const sig = _hmacHexFromString(body, COVECRM_TOKEN);
 
     const resp = UrlFetchApp.fetch(COVECRM_WEBHOOK_URL, {
       method: "post",
       contentType: "application/json",
-      payload: bodyBytes,
+      payload: body, // ✅ send string, not byte array
       muteHttpExceptions: true,
       headers: {
         "x-covecrm-token": COVECRM_TOKEN,
