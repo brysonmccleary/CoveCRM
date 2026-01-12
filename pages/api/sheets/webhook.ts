@@ -68,13 +68,50 @@ function normalizeEmail(raw: any): string {
   return s.toLowerCase();
 }
 
+/**
+ * ✅ Normalize header keys so ANY vendor header variation matches:
+ * - lowercases
+ * - removes spaces/underscores/dashes/punctuation
+ * Examples:
+ *  "Phone Number" -> "phonenumber"
+ *  "E-mail Address" -> "emailaddress"
+ *  "Last_Name" -> "lastname"
+ */
+function normalizeHeaderKey(k: any): string {
+  return String(k ?? "")
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]/g, "");
+}
+
+/**
+ * ✅ Pick a value by matching against many header variations.
+ * This now matches both:
+ * - exact header strings
+ * - normalized header strings (case/space/punct insensitive)
+ */
 function pickRowValue(row: Record<string, any>, keys: string[]) {
+  if (!row || typeof row !== "object") return "";
+
+  // Fast path: exact key
   for (const k of keys) {
-    if (row && Object.prototype.hasOwnProperty.call(row, k)) {
+    if (Object.prototype.hasOwnProperty.call(row, k)) {
       const v = row[k];
       if (v !== undefined && v !== null && String(v).trim() !== "") return v;
     }
   }
+
+  // ✅ Flexible path: normalized header matching
+  const want = new Set(keys.map((k) => normalizeHeaderKey(k)));
+  for (const actualKey of Object.keys(row)) {
+    const nk = normalizeHeaderKey(actualKey);
+    if (!nk) continue;
+    if (!want.has(nk)) continue;
+
+    const v = (row as any)[actualKey];
+    if (v !== undefined && v !== null && String(v).trim() !== "") return v;
+  }
+
   return "";
 }
 
@@ -97,7 +134,7 @@ function stableStringify(value: any): string {
   if (Array.isArray(value)) return "[" + value.map((v) => stableStringify(v)).join(",") + "]";
   if (t === "object") {
     const keys = Object.keys(value).sort();
-    const parts = keys.map((k) => JSON.stringify(k) + ":" + stableStringify(value[k]));
+    const parts = keys.map((k) => JSON.stringify(k) + ":" + stableStringify((value as any)[k]));
     return "{" + parts.join(",") + "}";
   }
   return JSON.stringify(value);
@@ -241,16 +278,50 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const row = (payload.row || {}) as Record<string, any>;
 
-    // ✅ pull common fields, but DO NOT drop other columns
-    const firstName = pickRowValue(row, ["First Name", "firstName", "firstname", "First", "first"]);
-    const lastName = pickRowValue(row, ["Last Name", "lastName", "lastname", "Last", "last"]);
-    const phoneRaw = pickRowValue(row, ["Phone", "phone", "phoneNumber", "Phone Number", "PhoneNumber"]);
-    const emailRaw = pickRowValue(row, ["Email", "email", "Email Address", "EmailAddress"]);
-    const state = pickRowValue(row, ["State", "state"]);
+    // ✅ pull common fields (NOW variation-proof), but DO NOT drop other columns
+    const firstName = pickRowValue(row, [
+      "First Name",
+      "First",
+      "FName",
+      "Given Name",
+      "firstname",
+      "first_name",
+      "first",
+    ]);
+    const lastName = pickRowValue(row, [
+      "Last Name",
+      "Last",
+      "LName",
+      "Surname",
+      "lastname",
+      "last_name",
+      "last",
+    ]);
+    const phoneRaw = pickRowValue(row, [
+      "Phone",
+      "Phone Number",
+      "Mobile",
+      "Cell",
+      "Primary Phone",
+      "phone",
+      "phoneNumber",
+      "phonenumber",
+      "mobilephone",
+    ]);
+    const emailRaw = pickRowValue(row, [
+      "Email",
+      "Email Address",
+      "E-mail",
+      "E-mail Address",
+      "email",
+      "emailAddress",
+      "email_address",
+    ]);
+    const state = pickRowValue(row, ["State", "ST", "state"]);
     const age = pickRowValue(row, ["Age", "age"]);
-    const notes = pickRowValue(row, ["Notes", "notes", "Note", "note"]);
-    const beneficiary = pickRowValue(row, ["Beneficiary", "beneficiary"]);
-    const coverageAmount = pickRowValue(row, ["Coverage Amount", "coverageAmount", "Coverage", "coverage"]);
+    const notes = pickRowValue(row, ["Notes", "Note", "notes", "note"]);
+    const beneficiary = pickRowValue(row, ["Beneficiary", "Beneficiary Name", "beneficiary"]);
+    const coverageAmount = pickRowValue(row, ["Coverage Amount", "Coverage", "coverage", "coverageamount"]);
     const leadTypeIn = pickRowValue(row, ["leadType", "Lead Type", "LeadType", "Type", "type"]);
 
     const normalizedPhone = normalizePhone(phoneRaw);
@@ -304,7 +375,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
-    // ✅ Import EVERYTHING: spread full row first, then overlay normalized canonical fields
+    // ✅ Import EVERYTHING: spread full row first, then overlay canonical fields
     const leadDoc: any = {
       ...row,
 
