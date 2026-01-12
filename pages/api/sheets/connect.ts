@@ -85,6 +85,12 @@ const BACKFILL_BATCH_SIZE = 50;
 const BACKFILL_MAX_MS = 240000;
 const BACKFILL_TRIGGER_FN = "covecrmBackfillWorker";
 
+// ✅ Catch-up behavior (guarantees rows are not missed if onEdit events are flaky)
+const CATCHUP_TRIGGER_FN = "covecrmCatchupWorker";
+const CATCHUP_EVERY_MINUTES = 5;
+const CATCHUP_MAX_ROWS_PER_RUN = 25;
+const CATCHUP_MAX_MS = 20000;
+
 function _propKey(suffix) {
   return "covecrm:" + COVECRM_SHEET_ID + ":" + (COVECRM_GID || "any") + ":" + suffix;
 }
@@ -111,6 +117,7 @@ function _hmacHexFromString(bodyString, secret) {
 /**
  * INSTALL (run one time manually)
  * - Installs onEdit trigger (forever sync)
+ * - Installs catch-up trigger (guarantees missing rows import)
  * - Starts a one-time backfill import of all existing rows
  */
 function covecrmInstall() {
@@ -118,7 +125,7 @@ function covecrmInstall() {
   const triggers = ScriptApp.getProjectTriggers();
   triggers.forEach(t => {
     const fn = t.getHandlerFunction();
-    if (fn === "covecrmOnEdit" || fn === BACKFILL_TRIGGER_FN) {
+    if (fn === "covecrmOnEdit" || fn === BACKFILL_TRIGGER_FN || fn === CATCHUP_TRIGGER_FN) {
       ScriptApp.deleteTrigger(t);
     }
   });
@@ -129,7 +136,13 @@ function covecrmInstall() {
     .onEdit()
     .create();
 
-  Logger.log("✅ CoveCRM trigger installed. New rows will import automatically.");
+  // ✅ Catch-up trigger
+  ScriptApp.newTrigger(CATCHUP_TRIGGER_FN)
+    .timeBased()
+    .everyMinutes(CATCHUP_EVERY_MINUTES)
+    .create();
+
+  Logger.log("✅ CoveCRM triggers installed. New rows will import automatically + catch-up safety enabled.");
 
   // ✅ Start one-time backfill
   covecrmBackfillStart();
@@ -341,18 +354,84 @@ function covecrmOnEdit(e) {
     if (startRow < 2) return;
 
     for (let r = startRow; r < startRow + numRows; r++) {
-      _sendRowIfNew(sheet, r);
+      _sendRowIfChanged(sheet, r);
     }
   } catch {}
 }
 
-function _sendRowIfNew(sheet, rowNumber) {
+function covecrmCatchupWorker() {
+  const start = Date.now();
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(5000)) return;
 
   try {
+    const ss = SpreadsheetApp.openById(COVECRM_SHEET_ID);
+
+    let sheet = null;
+    if (COVECRM_GID) {
+      const sheets = ss.getSheets();
+      for (let i = 0; i < sheets.length; i++) {
+        if (String(sheets[i].getSheetId()) === String(COVECRM_GID)) {
+          sheet = sheets[i];
+          break;
+        }
+      }
+    }
+    if (!sheet) sheet = ss.getActiveSheet();
+    if (!sheet) return;
+
+    if (COVECRM_TAB_NAME && sheet.getName() !== COVECRM_TAB_NAME) return;
+    if (COVECRM_GID && String(sheet.getSheetId()) !== String(COVECRM_GID)) return;
+
+    const lastRow = sheet.getLastRow();
+    if (!lastRow || lastRow < 2) return;
+
+    let processed = 0;
+    for (let r = 2; r <= lastRow; r++) {
+      if (Date.now() - start > CATCHUP_MAX_MS) break;
+      if (processed >= CATCHUP_MAX_ROWS_PER_RUN) break;
+
+      // Only attempt rows not marked imported yet
+      const props = PropertiesService.getScriptProperties();
+      const imported = props.getProperty(_rowImportedKey(r)) === "true";
+      if (imported) continue;
+
+      const sent = _sendRowIfChanged(sheet, r);
+      if (sent) processed++;
+    }
+  } catch (err) {
+    try {
+      PropertiesService.getScriptProperties().setProperty(_propKey("catchupLastError"), String(err));
+    } catch {}
+  } finally {
+    try { lock.releaseLock(); } catch {}
+  }
+}
+
+// ✅ Helper: detect phone/email presence so we only "lock" imported when row is actually populated
+function _rowHasPhoneOrEmail(rowObj) {
+  try {
+    const keys = Object.keys(rowObj || {});
+    for (let i = 0; i < keys.length; i++) {
+      const k = String(keys[i] || "").toLowerCase();
+      const v = rowObj[keys[i]];
+      const s = String(v ?? "").trim();
+      if (!s) continue;
+      if (k === "phone" || k === "email") return true;
+      if (k.indexOf("phone") >= 0) return true;
+      if (k.indexOf("email") >= 0) return true;
+    }
+  } catch {}
+  return false;
+}
+
+function _sendRowIfChanged(sheet, rowNumber) {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(5000)) return false;
+
+  try {
     const lastCol = sheet.getLastColumn();
-    if (!lastCol || lastCol < 1) return;
+    if (!lastCol || lastCol < 1) return false;
 
     const headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
     const values = sheet.getRange(rowNumber, 1, 1, lastCol).getValues()[0];
@@ -368,16 +447,14 @@ function _sendRowIfNew(sheet, rowNumber) {
       rowObj[key] = v;
     }
 
-    if (!hasAnyValue) return;
+    if (!hasAnyValue) return false;
 
     const props = PropertiesService.getScriptProperties();
 
-    const imported = props.getProperty(_rowImportedKey(rowNumber)) === "true";
-    if (imported) return;
-
+    // ✅ Use hash-based change detection (NOT "imported => return")
     const hash = _hashRow(values);
     const lastHash = props.getProperty(_rowHashKey(rowNumber)) || "";
-    if (lastHash === hash) return;
+    if (lastHash === hash) return false;
 
     props.setProperty(_rowHashKey(rowNumber), hash);
 
@@ -386,6 +463,7 @@ function _sendRowIfNew(sheet, rowNumber) {
       sheetId: COVECRM_SHEET_ID,
       gid: COVECRM_GID || "",
       tabName: COVECRM_TAB_NAME || "",
+      rowNumber: rowNumber, // ✅ critical: lets webhook prove + trace + optionally upsert by row
       row: rowObj,
       ts: Date.now()
     };
@@ -407,16 +485,27 @@ function _sendRowIfNew(sheet, rowNumber) {
 
     const code = resp.getResponseCode ? resp.getResponseCode() : 200;
 
+    // ✅ Only mark imported when row has phone/email (prevents first-name-only locking)
     if (code < 400) {
-      props.setProperty(_rowImportedKey(rowNumber), "true");
+      const completeEnough = _rowHasPhoneOrEmail(rowObj);
+      if (completeEnough) {
+        props.setProperty(_rowImportedKey(rowNumber), "true");
+      } else {
+        // keep imported false so later edits can update the CRM record once the row is fully populated
+        props.deleteProperty(_rowImportedKey(rowNumber));
+      }
+      return true;
     } else {
+      // allow retry on next edit/catchup
       props.deleteProperty(_rowHashKey(rowNumber));
       props.deleteProperty(_rowImportedKey(rowNumber));
+      return false;
     }
   } catch (err) {
     try {
       PropertiesService.getScriptProperties().setProperty(_propKey("lastError"), String(err));
     } catch {}
+    return false;
   } finally {
     try { lock.releaseLock(); } catch {}
   }
@@ -496,9 +585,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       createdAt: new Date(),
     };
 
-    const idx = gs.syncedSheetsSimple.findIndex(
-      (s: any) => String(s.sheetId || "") === String(effectiveSheetId)
-    );
+    const idx = gs.syncedSheetsSimple.findIndex((s: any) => String(s.sheetId || "") === String(effectiveSheetId));
     if (idx >= 0) gs.syncedSheetsSimple[idx] = entry;
     else gs.syncedSheetsSimple.push(entry);
 

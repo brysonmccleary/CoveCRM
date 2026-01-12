@@ -72,10 +72,6 @@ function normalizeEmail(raw: any): string {
  * ✅ Normalize header keys so ANY vendor header variation matches:
  * - lowercases
  * - removes spaces/underscores/dashes/punctuation
- * Examples:
- *  "Phone Number" -> "phonenumber"
- *  "E-mail Address" -> "emailaddress"
- *  "Last_Name" -> "lastname"
  */
 function normalizeHeaderKey(k: any): string {
   return String(k ?? "")
@@ -84,16 +80,10 @@ function normalizeHeaderKey(k: any): string {
     .replace(/[^a-z0-9]/g, "");
 }
 
-/**
- * ✅ Pick a value by matching against many header variations.
- * This now matches both:
- * - exact header strings
- * - normalized header strings (case/space/punct insensitive)
- */
 function pickRowValue(row: Record<string, any>, keys: string[]) {
   if (!row || typeof row !== "object") return "";
 
-  // Fast path: exact key
+  // exact key
   for (const k of keys) {
     if (Object.prototype.hasOwnProperty.call(row, k)) {
       const v = row[k];
@@ -101,7 +91,7 @@ function pickRowValue(row: Record<string, any>, keys: string[]) {
     }
   }
 
-  // ✅ Flexible path: normalized header matching
+  // normalized match
   const want = new Set(keys.map((k) => normalizeHeaderKey(k)));
   for (const actualKey of Object.keys(row)) {
     const nk = normalizeHeaderKey(actualKey);
@@ -123,9 +113,6 @@ function isB64Sig(sig: string) {
   return /^[A-Za-z0-9+/=]+$/.test(sig) && sig.length >= 40;
 }
 
-/**
- * Deterministic JSON string with keys sorted recursively.
- */
 function stableStringify(value: any): string {
   if (value === null || value === undefined) return "null";
   const t = typeof value;
@@ -214,7 +201,25 @@ function buildPhoneQueryCandidates(normalizedPhone: string) {
   return candidates;
 }
 
+function maskPhone(p: string) {
+  const d = String(p || "").replace(/\D+/g, "");
+  if (!d) return "";
+  if (d.length <= 4) return "****";
+  return `${"*".repeat(Math.max(0, d.length - 4))}${d.slice(-4)}`;
+}
+
+function maskEmail(e: string) {
+  const s = String(e || "").trim().toLowerCase();
+  if (!s) return "";
+  const at = s.indexOf("@");
+  if (at <= 1) return "***";
+  return `${s.slice(0, 1)}***${s.slice(at)}`;
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  const startedAt = Date.now();
+  const requestId = `sh_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
   try {
@@ -230,6 +235,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const rawBodyText = rawBytes.toString("utf8");
 
     if (!verifySignatureFlexibleBytes(rawBytes, rawBodyText, token, sig)) {
+      console.warn("[sheets/webhook] invalid signature", { requestId, rawLen: rawBytes.length });
       return res.status(403).json({ error: "Invalid signature" });
     }
 
@@ -242,7 +248,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const connectionId = String(payload.connectionId || "").trim();
     const sheetId = String(payload.sheetId || "").trim();
+    const gid = String(payload.gid || "").trim();
+    const tabName = String(payload.tabName || "").trim();
+    const ts = payload.ts || null;
+    const rowNumber = Number(payload.rowNumber || 0) || 0;
+
+    const row = (payload.row || {}) as Record<string, any>;
+
+    const rowKeys = row && typeof row === "object" ? Object.keys(row) : [];
+    console.log("[sheets/webhook] recv", {
+      requestId,
+      connectionId,
+      sheetId,
+      gid,
+      tabName,
+      ts,
+      rowNumber: rowNumber || undefined,
+      rowKeysCount: rowKeys.length,
+      rowKeysSample: rowKeys.slice(0, 20),
+    });
+
     if (!connectionId || !sheetId) {
+      console.warn("[sheets/webhook] missing ids", { requestId });
       return res.status(400).json({ error: "Missing connectionId or sheetId" });
     }
 
@@ -276,47 +303,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const folderName = String(match.folderName || "").trim() || "Imported Leads";
     const folder = await getOrCreateSafeFolder(userEmail, folderName);
 
-    const row = (payload.row || {}) as Record<string, any>;
-
-    // ✅ pull common fields (NOW variation-proof), but DO NOT drop other columns
-    const firstName = pickRowValue(row, [
-      "First Name",
-      "First",
-      "FName",
-      "Given Name",
-      "firstname",
-      "first_name",
-      "first",
-    ]);
-    const lastName = pickRowValue(row, [
-      "Last Name",
-      "Last",
-      "LName",
-      "Surname",
-      "lastname",
-      "last_name",
-      "last",
-    ]);
-    const phoneRaw = pickRowValue(row, [
-      "Phone",
-      "Phone Number",
-      "Mobile",
-      "Cell",
-      "Primary Phone",
-      "phone",
-      "phoneNumber",
-      "phonenumber",
-      "mobilephone",
-    ]);
-    const emailRaw = pickRowValue(row, [
-      "Email",
-      "Email Address",
-      "E-mail",
-      "E-mail Address",
-      "email",
-      "emailAddress",
-      "email_address",
-    ]);
+    // ✅ Extract common fields (variation-proof)
+    const firstName = pickRowValue(row, ["First Name", "First", "FName", "Given Name", "firstname", "first_name", "first"]);
+    const lastName = pickRowValue(row, ["Last Name", "Last", "LName", "Surname", "lastname", "last_name", "last"]);
+    const phoneRaw = pickRowValue(row, ["Phone", "Phone Number", "Mobile", "Cell", "Primary Phone", "phone", "phoneNumber", "phonenumber"]);
+    const emailRaw = pickRowValue(row, ["Email", "Email Address", "E-mail", "E-mail Address", "email", "emailAddress", "email_address"]);
     const state = pickRowValue(row, ["State", "ST", "state"]);
     const age = pickRowValue(row, ["Age", "age"]);
     const notes = pickRowValue(row, ["Notes", "Note", "notes", "note"]);
@@ -328,7 +319,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const phoneLast10 = normalizedPhone ? normalizedPhone.slice(-10) : "";
     const emailLower = normalizeEmail(emailRaw);
 
-    // ✅ Stronger dedupe per folder (multi-field)
+    console.log("[sheets/webhook] extracted", {
+      requestId,
+      firstName: String(firstName || "").slice(0, 40),
+      lastName: String(lastName || "").slice(0, 40),
+      phone: maskPhone(normalizedPhone),
+      email: maskEmail(emailLower),
+      hasRowNumber: !!rowNumber,
+    });
+
+    // ✅ Dedupe (log WHY)
     if (normalizedPhone) {
       const exists = await (Lead as any)
         .findOne({
@@ -340,6 +340,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         .lean();
 
       if (exists) {
+        console.log("[sheets/webhook] skip dedupe", {
+          requestId,
+          reason: "duplicate_phone",
+          existingLeadId: String(exists._id),
+        });
+
         await touchFolderUpdatedAt(folder._id, userEmail);
 
         match.lastSyncedAt = new Date();
@@ -362,6 +368,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         .lean();
 
       if (exists) {
+        console.log("[sheets/webhook] skip dedupe", {
+          requestId,
+          reason: "duplicate_email",
+          existingLeadId: String(exists._id),
+        });
+
         await touchFolderUpdatedAt(folder._id, userEmail);
 
         match.lastSyncedAt = new Date();
@@ -403,6 +415,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         receivedAt: new Date(),
         ts: payload.ts || null,
         connectionId,
+        rowNumber: rowNumber || undefined,
       },
       rawRow: row,
     };
@@ -410,10 +423,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     await createLeadsFromGoogleSheet([leadDoc], userEmail, folder._id);
     await touchFolderUpdatedAt(folder._id, userEmail);
 
-    // ✅ Find the created lead reliably for drip enrollment
+    // ✅ best-effort: confirm created lead id
     let createdLead: any = null;
-    const ts = payload.ts || null;
-
     if (ts) {
       createdLead = await (Lead as any)
         .findOne({
@@ -421,6 +432,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           folderId: folder._id,
           "sheetMeta.ts": ts,
           "sheetMeta.connectionId": connectionId,
+        })
+        .sort({ createdAt: -1 })
+        .select({ _id: 1 })
+        .lean();
+    }
+
+    if (!createdLead && rowNumber) {
+      createdLead = await (Lead as any)
+        .findOne({
+          userEmail,
+          folderId: folder._id,
+          "sheetMeta.connectionId": connectionId,
+          "sheetMeta.rowNumber": rowNumber,
         })
         .sort({ createdAt: -1 })
         .select({ _id: 1 })
@@ -451,6 +475,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         .lean();
     }
 
+    console.log("[sheets/webhook] created", {
+      requestId,
+      createdLeadId: createdLead?._id ? String(createdLead._id) : null,
+      durationMs: Date.now() - startedAt,
+    });
+
     if (createdLead?._id) {
       await enrollOnNewLeadIfWatched({
         userEmail,
@@ -470,6 +500,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     return res.status(200).json({ ok: true });
   } catch (e: any) {
+    console.error("[sheets/webhook] error", { requestId, error: e?.message || String(e) });
     return res.status(500).json({ error: e?.message || "Webhook failed" });
   }
 }
