@@ -237,6 +237,14 @@ function applyLegacyTokens(
 
 // ---------------------------------------------------------------------------
 
+function readBearerToken(req: NextApiRequest): string {
+  const raw = req.headers["authorization"];
+  const auth = Array.isArray(raw) ? raw[0] : raw;
+  if (!auth) return "";
+  const m = String(auth).match(/^Bearer\s+(.+)$/i);
+  return m ? String(m[1]).trim() : "";
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   // ---------- AUTH SHIM ----------
   if (!["GET", "POST"].includes(req.method || "")) {
@@ -247,23 +255,36 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const secret = process.env.CRON_SECRET || "";
   const queryToken = (req.query?.token as string) || "";
   const headerToken = (req.headers["x-cron-key"] as string) || "";
-  const vercelCron = Boolean(req.headers["x-vercel-cron"]);
+  const bearerToken = readBearerToken(req);
+
+  const vercelCron =
+    Boolean(req.headers["x-vercel-cron"]) ||
+    Boolean(req.headers["x-vercel-cron-job"]) ||
+    Boolean(req.headers["x-vercel-cron-signature"]);
 
   const authorized =
-    (!!secret && (queryToken === secret || headerToken === secret)) || vercelCron;
+    !!secret &&
+    (queryToken === secret || headerToken === secret || bearerToken === secret);
 
-  if (!authorized) {
+  // If Vercel marks it as a cron request, allow it only when a secret is configured.
+  // (Prevents “anyone can add x-vercel-cron” from being enough on its own.)
+  const authorizedViaVercelCron = !!secret && vercelCron;
+
+  if (!(authorized || authorizedViaVercelCron)) {
     res.setHeader("x-run-drips-auth", "fail");
     res.setHeader("x-run-drips-secret-len", String(secret.length));
     res.setHeader("x-run-drips-query-token-len", String(queryToken?.length || 0));
     res.setHeader("x-run-drips-header-token-len", String(headerToken?.length || 0));
+    res.setHeader("x-run-drips-bearer-token-len", String(bearerToken?.length || 0));
     res.setHeader("cache-control", "private, no-store, max-age=0");
     return res.status(401).json({
       ok: false,
       error: "unauthorized",
-      hint: "pass ?token=CRON_SECRET, or header x-cron-key: CRON_SECRET, or run from a Vercel Cron (x-vercel-cron).",
+      hint:
+        "pass ?token=CRON_SECRET, or header x-cron-key: CRON_SECRET, or Authorization: Bearer CRON_SECRET, or run from a Vercel Cron (x-vercel-cron).",
     });
   }
+
   res.setHeader("x-run-drips-auth", "ok");
 
   // ---------- ORIGINAL LOGIC ----------
