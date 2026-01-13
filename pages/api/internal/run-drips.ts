@@ -18,6 +18,10 @@ const SEND_HOUR_PT = 9;
 const PER_LEAD_CONCURRENCY =
   Math.max(1, parseInt(process.env.DRIP_CONCURRENCY || "10", 10)) || 10;
 
+// ✅ NEW: retry delay when a step send fails (keeps automation moving)
+const RETRY_MINUTES =
+  Math.max(1, parseInt(process.env.DRIPS_RETRY_MINUTES || "30", 10)) || 30;
+
 /** -----------------------------
  *  Variant-key extraction helpers
  * ----------------------------- */
@@ -110,7 +114,7 @@ function parseStepDayNumber(dayField?: string): number {
   return m ? parseInt(m[1], 10) : NaN;
 }
 
-/** ✅ NEW: stable step order before indexing by cursorStep */
+/** ✅ stable step order before indexing by cursorStep */
 function sortStepsStable(steps: Array<{ text?: string; day?: string }>) {
   const scored = steps.map((s, i) => {
     const n = parseStepDayNumber(s?.day);
@@ -159,13 +163,7 @@ function computeStepWhenPTFromBase(
     .set({ hour: SEND_HOUR_PT, minute: 0, second: 0, millisecond: 0 })
     .plus({ days: delta });
 }
-function computeStepWhenPT(startedAt: Date, dayNumber: number): DateTime {
-  const startPT = DateTime.fromJSDate(startedAt, { zone: PT_ZONE }).startOf("day");
-  const offsetDays = Math.max(0, dayNumber - 1);
-  return startPT
-    .plus({ days: offsetDays })
-    .set({ hour: SEND_HOUR_PT, minute: 0, second: 0, millisecond: 0 });
-}
+
 function shouldRunWindowPT(): boolean {
   return DateTime.now().setZone(PT_ZONE).hour === SEND_HOUR_PT;
 }
@@ -293,7 +291,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const dueCount = await DripEnrollment.countDocuments({
       status: "active",
       nextSendAt: { $lte: new Date() },
-      processing: { $ne: true }, // ✅ NEW: processing guard
+      processing: { $ne: true },
       $and: [
         { $or: [{ active: { $ne: false } }, { isActive: true }, { enabled: true }] },
         { $or: [{ paused: { $ne: true } }, { isPaused: { $ne: true } }] },
@@ -322,7 +320,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       } due=${dueCount}`
     );
 
-    // -------- PRIMARY: ENROLLMENT ENGINE --------
     let enrollChecked = 0,
       enrollSent = 0,
       enrollScheduled = 0,
@@ -331,12 +328,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       enrollCompleted = 0,
       enrollClaimMiss = 0,
       enrollAlreadySent = 0,
-      enrollNoPhone = 0;
+      enrollNoPhone = 0,
+      enrollDryWouldSend = 0,
+      enrollRetryScheduled = 0;
 
     const dueEnrollmentsQ = DripEnrollment.find({
       status: "active",
       nextSendAt: { $lte: new Date() },
-      processing: { $ne: true }, // ✅ NEW
+      processing: { $ne: true },
       $and: [
         { $or: [{ active: { $ne: false } }, { isActive: true }, { enabled: true }] },
         { $or: [{ paused: { $ne: true } }, { isPaused: { $ne: true } }] },
@@ -370,21 +369,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             status: "active",
             nextSendAt: { $lte: new Date() },
             cursorStep: enr.cursorStep ?? 0,
-            processing: { $ne: true }, // ✅ NEW
+            processing: { $ne: true },
             $and: [
-              {
-                $or: [
-                  { active: { $ne: false } },
-                  { isActive: true },
-                  { enabled: true },
-                ],
-              },
-              {
-                $or: [
-                  { paused: { $ne: true } },
-                  { isPaused: { $ne: true } },
-                ],
-              },
+              { $or: [{ active: { $ne: false } }, { isActive: true }, { enabled: true }] },
+              { $or: [{ paused: { $ne: true } }, { isPaused: { $ne: true } }] },
               { stopAll: { $ne: true } },
             ],
           },
@@ -422,7 +410,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           (campaign as any).isActive !== true ||
           (campaign as any).type !== "sms"
         ) {
-          // mark not processing and exit
           await DripEnrollment.updateOne(
             { _id: claim._id },
             { $set: { processing: false }, $unset: { processingAt: 1 } }
@@ -456,7 +443,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           last_name: agentLast,
         };
 
-        // ✅ NEW: stable order before indexing by cursorStep
         const stepsRaw: Array<{ text?: string; day?: string }> = Array.isArray((campaign as any).steps)
           ? (campaign as any).steps
           : [];
@@ -466,13 +452,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const step = steps[idx];
 
         if (!step) {
-          await DripEnrollment.updateOne(
-            { _id: claim._id },
-            {
-              $set: { status: "completed", processing: false },
-              $unset: { nextSendAt: 1, processingAt: 1 },
-            }
-          );
+          // ✅ only mutate to completed on real runs; on dry run, just report
+          if (!dry) {
+            await DripEnrollment.updateOne(
+              { _id: claim._id },
+              {
+                $set: { status: "completed", processing: false },
+                $unset: { nextSendAt: 1, processingAt: 1 },
+              }
+            );
+          } else {
+            await DripEnrollment.updateOne(
+              { _id: claim._id },
+              { $set: { processing: false }, $unset: { processingAt: 1 } }
+            );
+          }
           enrollCompleted++;
           return;
         }
@@ -486,24 +480,33 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
 
         if (alreadySent) {
-          const nextIndex = idx + 1;
-          const update: any = {
-            $set: { cursorStep: nextIndex, processing: false, lastSentAt: new Date() },
-            $unset: { processingAt: 1 },
-          };
+          // ✅ skipping is safe, but do not advance state on dry runs
+          if (!dry) {
+            const nextIndex = idx + 1;
+            const update: any = {
+              $set: { cursorStep: nextIndex, processing: false, lastSentAt: new Date() },
+              $unset: { processingAt: 1 },
+            };
 
-          if (nextIndex >= steps.length) {
-            update.$set.status = "completed";
-            update.$unset = { ...(update.$unset || {}), nextSendAt: 1 };
+            if (nextIndex >= steps.length) {
+              update.$set.status = "completed";
+              update.$unset = { ...(update.$unset || {}), nextSendAt: 1 };
+            } else {
+              const prevDay = parseStepDayNumber(step.day);
+              const nextDay = parseStepDayNumber(steps[nextIndex].day);
+              const base = DateTime.now().setZone(PT_ZONE).startOf("day");
+              const nextWhen = computeStepWhenPTFromBase(base, nextDay, prevDay);
+              update.$set.nextSendAt = nextWhen.toJSDate();
+            }
+
+            await DripEnrollment.updateOne({ _id: claim._id, cursorStep: idx }, update);
           } else {
-            const prevDay = parseStepDayNumber(step.day);
-            const nextDay = parseStepDayNumber(steps[nextIndex].day);
-            const base = DateTime.now().setZone(PT_ZONE).startOf("day");
-            const nextWhen = computeStepWhenPTFromBase(base, nextDay, prevDay);
-            update.$set.nextSendAt = nextWhen.toJSDate();
+            await DripEnrollment.updateOne(
+              { _id: claim._id },
+              { $set: { processing: false }, $unset: { processingAt: 1 } }
+            );
           }
 
-          await DripEnrollment.updateOne({ _id: claim._id, cursorStep: idx }, update);
           enrollAlreadySent++;
           return;
         }
@@ -526,9 +529,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         const finalBody = ensureOptOut(rendered);
 
-        const idKey = `${String(claim._id)}:${idx}:${new Date(
-          claim.nextSendAt || Date.now()
-        ).toISOString()}`;
+        // ✅ idempotencyKey should be stable per enrollment+step.
+        // Using nextSendAt in the key can create false “new sends” after reschedules.
+        const idKey = `${String(claim._id)}:${idx}`;
 
         // Still active right before send
         const fresh = await DripEnrollment.findById(claim._id)
@@ -549,41 +552,92 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           return;
         }
 
-        try {
-          if (!dry) {
-            const lockKey = `${String(user.email)}:${String((lead as any)._id)}:${String(
-              (campaign as any)._id
-            )}:${String(idx)}`;
-
-            const ok = await acquireLock("enroll", lockKey, 600);
-
-            if (ok) {
-              const result = await sendSms({
-                to,
-                body: finalBody,
-                userEmail: user.email,
-                leadId: String((lead as any)._id),
-                idempotencyKey: idKey,
-                enrollmentId: String(claim._id),
-                campaignId: String((campaign as any)._id),
-                stepIndex: idx,
-              });
-
-              if (result?.scheduledAt) enrollScheduled++;
-              else if (result?.sid) enrollSent++;
-              else enrollSuppressed++;
-            } else {
-              enrollSuppressed++;
-            }
-          }
-        } catch (err: any) {
-          enrollFailed++;
+        // ✅ DRY RUN: do not send and do not advance; just record that it would send.
+        if (dry) {
+          enrollDryWouldSend++;
           await DripEnrollment.updateOne(
             { _id: claim._id },
-            { $set: { lastError: err?.message || "send_failed" } }
+            { $set: { processing: false }, $unset: { processingAt: 1 } }
           );
+          return;
         }
 
+        // real send attempt
+        let sendSucceeded = false;
+        let sendScheduled = false;
+        let sendSuppressed = false;
+
+        try {
+          const lockKey = `${String(user.email)}:${String((lead as any)._id)}:${String(
+            (campaign as any)._id
+          )}:${String(idx)}`;
+
+          const ok = await acquireLock("enroll", lockKey, 600);
+
+          if (ok) {
+            const result = await sendSms({
+              to,
+              body: finalBody,
+              userEmail: user.email,
+              leadId: String((lead as any)._id),
+              idempotencyKey: idKey,
+              enrollmentId: String(claim._id),
+              campaignId: String((campaign as any)._id),
+              stepIndex: idx,
+            });
+
+            // If sendSms did not throw, we treat it as a successful “send outcome”
+            // (could be immediate send, scheduled, suppressed, or deduped).
+            sendSucceeded = true;
+            if (result?.scheduledAt) {
+              sendScheduled = true;
+              enrollScheduled++;
+            } else if (result?.sid) {
+              enrollSent++;
+            } else {
+              // suppressed or deduped (still “handled”)
+              sendSuppressed = true;
+              enrollSuppressed++;
+            }
+          } else {
+            // couldn't acquire lock — treat as suppressed for this tick, but DO NOT advance.
+            enrollSuppressed++;
+          }
+        } catch (err: any) {
+          // ✅ FAILURE: do NOT advance cursorStep / sentAtByIndex.
+          enrollFailed++;
+
+          const retryAt = DateTime.now()
+            .setZone(PT_ZONE)
+            .plus({ minutes: RETRY_MINUTES })
+            .toJSDate();
+
+          await DripEnrollment.updateOne(
+            { _id: claim._id },
+            {
+              $set: {
+                processing: false,
+                lastError: err?.message || "send_failed",
+                nextSendAt: retryAt,
+              },
+              $unset: { processingAt: 1 },
+            }
+          );
+
+          enrollRetryScheduled++;
+          return;
+        }
+
+        // ✅ If lock miss, we purposely did not send; do NOT advance.
+        if (!sendSucceeded) {
+          await DripEnrollment.updateOne(
+            { _id: claim._id },
+            { $set: { processing: false }, $unset: { processingAt: 1 } }
+          );
+          return;
+        }
+
+        // ✅ SUCCESS PATH ONLY: advance cursor + schedule next
         const nextIndex = idx + 1;
 
         const update: any = {
@@ -593,7 +647,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             [`sentAtByIndex.${idx}`]: new Date(),
             lastSentAt: new Date(),
           },
-          $unset: { processingAt: 1, lastError: 1 }, // ✅ NEW: reliably clear lastError
+          $unset: { processingAt: 1, lastError: 1 },
         };
 
         if (nextIndex >= steps.length) {
@@ -609,7 +663,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         await DripEnrollment.updateOne({ _id: claim._id, cursorStep: idx }, update);
       } finally {
-        // ✅ NEW: best-effort safety clear if anything exited unexpectedly
+        // best-effort safety clear if anything exited unexpectedly
         if (claimedId) {
           await DripEnrollment.updateOne(
             { _id: claimedId, processing: true },
@@ -619,7 +673,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     });
 
-    // legacy block unchanged (you already gate it)
     const legacyEnabled = process.env.DRIPS_LEGACY_ENABLED === "1";
 
     return res.status(200).json({
@@ -639,6 +692,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           enrollClaimMiss,
           enrollAlreadySent,
           enrollNoPhone,
+          enrollDryWouldSend,
+          enrollRetryScheduled,
+          retryMinutes: RETRY_MINUTES,
         },
         legacyEnabled,
       },
