@@ -442,6 +442,12 @@ export default function DialSession() {
     } catch {}
   }, []);
 
+  // ✅ ADDITIVE: warm the server/DB/Twilio selection path so the FIRST outbound call doesn't lag.
+  useEffect(() => {
+    // best-effort only; must never affect dial logic
+    fetch("/api/internal/warm-dialer", { method: "GET", cache: "no-store" }).catch(() => {});
+  }, []);
+
   // ✅ Re-prime + re-assert ringback on focus/visibility changes (Safari-safe), only if ringback should be ON
   useEffect(() => {
     const onVis = async () => {
