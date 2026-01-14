@@ -1,4 +1,5 @@
-import { useEffect, useState, useRef } from "react";
+// components/ConversationsPanel.tsx
+import { useEffect, useState, useRef, useMemo } from "react";
 import axios from "axios";
 import { useNotifStore } from "@/lib/notificationsStore";
 import { formatStamp } from "@/lib/format";
@@ -15,6 +16,75 @@ interface Lead {
   }[];
 }
 
+function getAgentTimeZone(): string {
+  // Matches iMessage on the agent's device (Mac) because it uses device timezone.
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  } catch {
+    return "UTC";
+  }
+}
+
+function startOfDayMs(d: Date) {
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+}
+
+function formatListStampIMessage(isoOrDate: string | Date, timeZone: string) {
+  const d = isoOrDate instanceof Date ? isoOrDate : new Date(isoOrDate);
+  if (!d || isNaN(d.getTime())) return "";
+
+  const now = new Date();
+
+  const dDay = startOfDayMs(d);
+  const nowDay = startOfDayMs(now);
+  const diffDays = Math.round((nowDay - dDay) / (24 * 60 * 60 * 1000));
+
+  if (diffDays === 0) {
+    return new Intl.DateTimeFormat(undefined, {
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+      timeZone,
+    }).format(d);
+  }
+
+  if (diffDays === 1) return "Yesterday";
+
+  if (diffDays >= 2 && diffDays <= 6) {
+    return new Intl.DateTimeFormat(undefined, {
+      weekday: "long",
+      timeZone,
+    }).format(d);
+  }
+
+  return new Intl.DateTimeFormat(undefined, {
+    month: "numeric",
+    day: "numeric",
+    year: "2-digit",
+    timeZone,
+  }).format(d);
+}
+
+function formatThreadDividerIMessage(isoOrDate: string | Date, timeZone: string) {
+  const d = isoOrDate instanceof Date ? isoOrDate : new Date(isoOrDate);
+  if (!d || isNaN(d.getTime())) return "";
+
+  // "Sunday 4:31 PM" (weekday + time)
+  const weekday = new Intl.DateTimeFormat(undefined, {
+    weekday: "long",
+    timeZone,
+  }).format(d);
+
+  const time = new Intl.DateTimeFormat(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+    timeZone,
+  }).format(d);
+
+  return `${weekday} ${time}`;
+}
+
 export default function ConversationsPanel() {
   const [leads, setLeads] = useState<Lead[]>([]);
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
@@ -26,6 +96,8 @@ export default function ConversationsPanel() {
   // 🔔 unread store
   const unreadByLead = useNotifStore((s) => s.unreadByLead);
   const clearUnread = useNotifStore((s) => s.clear);
+
+  const timeZone = useMemo(() => getAgentTimeZone(), []);
 
   useEffect(() => {
     loadLeads();
@@ -118,7 +190,11 @@ export default function ConversationsPanel() {
 
               <p className="font-bold pr-6">{lead["First Name"]}</p>
               <p className="text-sm text-gray-600 truncate">{lastMsg?.text}</p>
-              <p className="text-xs text-gray-400">{formatStamp(listTime)}</p>
+
+              {/* ✅ iMessage-style list stamp */}
+              <p className="text-xs text-gray-400">
+                {formatListStampIMessage(listTime, timeZone)}
+              </p>
             </div>
           );
         })}
@@ -154,11 +230,36 @@ export default function ConversationsPanel() {
                   ? "bg-green-500 text-white self-end"
                   : "bg-white text-black self-start";
 
+                // ✅ iMessage-style divider when day changes (or first message)
+                const prev = idx > 0 ? selectedLead.interactionHistory[idx - 1] : null;
+                const curDate = new Date(msg.date);
+                const prevDate = prev ? new Date(prev.date) : null;
+
+                const curDay = !isNaN(curDate.getTime()) ? startOfDayMs(curDate) : null;
+                const prevDay =
+                  prevDate && !isNaN(prevDate.getTime()) ? startOfDayMs(prevDate) : null;
+
+                const showDivider =
+                  !!curDay && (idx === 0 || (prevDay !== null && curDay !== prevDay));
+
                 return (
                   <div key={idx} className={`flex flex-col gap-1 ${containerAlign}`}>
+                    {showDivider && (
+                      <div className="w-full flex justify-center py-1">
+                        <span className="text-xs text-gray-500 bg-gray-100 border border-gray-200 rounded-full px-3 py-1">
+                          {formatThreadDividerIMessage(msg.date, timeZone)}
+                        </span>
+                      </div>
+                    )}
+
                     <div className={`p-2 rounded-2xl max-w-[75%] ${bubbleClasses}`}>
                       <p className="text-sm whitespace-pre-line">{msg.text}</p>
-                      <p className="text-[10px] mt-1 text-right">{formatStamp(msg.date)}</p>
+
+                      {/* NOTE:
+                         We leave your existing formatStamp import untouched (no refactor),
+                         but we do NOT render per-bubble timestamps anymore so it matches iMessage.
+                      */}
+                      {/* <p className="text-[10px] mt-1 text-right">{formatStamp(msg.date)}</p> */}
                     </div>
 
                     {(isReceived || msg.type === "ai") && (

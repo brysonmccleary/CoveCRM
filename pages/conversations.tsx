@@ -14,6 +14,60 @@ interface Conversation {
   unread?: boolean; // legacy flag (fallback only)
 }
 
+function getAgentTimeZone(): string {
+  // iMessage uses the device timezone; this matches that perfectly.
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  } catch {
+    return "UTC";
+  }
+}
+
+function startOfDayMs(d: Date) {
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+}
+
+function formatListStampIMessage(isoOrDate: string | Date, timeZone: string) {
+  const d = isoOrDate instanceof Date ? isoOrDate : new Date(isoOrDate);
+  if (!d || isNaN(d.getTime())) return "";
+
+  const now = new Date();
+
+  // Compute "today" and "yesterday" boundaries in local device terms
+  // (iMessage behavior). We still format output using Intl + timezone.
+  const dDay = startOfDayMs(d);
+  const nowDay = startOfDayMs(now);
+  const diffDays = Math.round((nowDay - dDay) / (24 * 60 * 60 * 1000));
+
+  if (diffDays === 0) {
+    // Today -> time
+    return new Intl.DateTimeFormat(undefined, {
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+      timeZone,
+    }).format(d);
+  }
+
+  if (diffDays === 1) return "Yesterday";
+
+  if (diffDays >= 2 && diffDays <= 6) {
+    // Within last 7 days -> weekday
+    return new Intl.DateTimeFormat(undefined, {
+      weekday: "long",
+      timeZone,
+    }).format(d);
+  }
+
+  // Older -> short date
+  return new Intl.DateTimeFormat(undefined, {
+    month: "numeric",
+    day: "numeric",
+    year: "2-digit",
+    timeZone,
+  }).format(d);
+}
+
 export default function ConversationsPage() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [loading, setLoading] = useState(true);
@@ -44,6 +98,8 @@ export default function ConversationsPage() {
     [unreadByLead]
   );
 
+  const timeZone = useMemo(() => getAgentTimeZone(), []);
+
   return (
     <DashboardLayout>
       <div className="p-4">
@@ -67,6 +123,8 @@ export default function ConversationsPage() {
                 (unreadByLead?.[conv._id] as number | undefined) ||
                 (conv.unread ? 1 : 0); // fallback to legacy boolean if present
 
+              const stamp = formatListStampIMessage(conv.lastMessageTime, timeZone);
+
               return (
                 <li
                   key={conv._id}
@@ -83,7 +141,7 @@ export default function ConversationsPage() {
                       </div>
                       <div className="flex flex-col items-end gap-1 shrink-0">
                         <span className="text-xs text-gray-500 whitespace-nowrap">
-                          {new Date(conv.lastMessageTime).toLocaleString()}
+                          {stamp}
                         </span>
                         {unreadCount > 0 && (
                           <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-pink-500 px-1 text-xs font-semibold text-white">
