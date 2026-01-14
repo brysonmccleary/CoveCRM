@@ -93,7 +93,7 @@ function baseMatchCI(userEmailLower: string, timeOr: any[]) {
  * IMPORTANT:
  * - Many rows use durationSec (alias) instead of duration
  * - We must treat durationSec as a valid talk-time source for KPI
- * - Connects should not count voicemail/machine (only human answered)
+ * - Connects should not count voicemail/machine (only actual people)
  */
 function addDerivedFields(connectThreshold: number) {
   return [
@@ -118,7 +118,16 @@ function addDerivedFields(connectThreshold: number) {
             },
           ],
         },
-        _amdAnsweredBy: { $toLower: { $toString: "$amd.answeredBy" } },
+
+        // ✅ CRITICAL FIX:
+        // If amd.answeredBy is missing, we must use "" NOT "null"
+        _amdAnsweredBy: {
+          $toLower: {
+            $toString: {
+              $ifNull: ["$amd.answeredBy", ""],
+            },
+          },
+        },
       },
     },
     { $addFields: { _talkTimeNum: { $toDouble: "$_talkSrc" } } },
@@ -129,7 +138,7 @@ function addDerivedFields(connectThreshold: number) {
         // ✅ Human connect via AMD
         _connectedHumanByAMD: { $regexMatch: { input: "$_amdAnsweredBy", regex: /human/i } },
 
-        // ✅ Treat machine/voicemail as NOT connected
+        // ✅ Machine/voicemail
         _isMachineByAMD: { $regexMatch: { input: "$_amdAnsweredBy", regex: /machine/i } },
         _isVoicemailFlag: {
           $or: [{ $eq: ["$isVoicemail", true] }, "$_isMachineByAMD"],
@@ -162,7 +171,7 @@ function addDerivedFields(connectThreshold: number) {
     },
     {
       $addFields: {
-        // ✅ Fallback connect definition when AMD isn't present (older calls):
+        // ✅ Fallback connect definition when AMD isn't present:
         // talk >= threshold AND not voicemail/machine
         _connectedByTalkFallback: {
           $and: [{ $gte: ["$_talkTimeNum", connectThreshold] }, { $eq: ["$_isVoicemailFlag", false] }],
@@ -185,16 +194,9 @@ function dedupeByCallSid() {
     {
       $group: {
         _id: "$callSid",
-        // If any row says dial, the call is a dial
         isDial: { $max: { $cond: ["$_isDialFlag", 1, 0] } },
-
-        // ✅ connected is now "human only" when AMD exists, else fallback
         connected: { $max: { $cond: ["$_connectedFinal", 1, 0] } },
-
-        // Take the max talk time we have across rows (still fine for talk-time KPI)
         talkTime: { $max: "$_talkTimeNum" },
-
-        // Canonical timestamp for bucketing
         ts: { $max: "$_ts" },
       },
     },
@@ -342,7 +344,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       { $group: { _id: "$_bucket", dials: { $sum: "$isDial" }, connects: { $sum: "$connected" } } },
       { $sort: { _id: 1 } },
     ]);
-
     const hourlyToday: TrendPoint[] = Array.from({ length: 24 }, (_, h) => {
       const label = `${String(h).padStart(2, "0")}:00`;
       const f = hourlyAgg.find((r: any) => r._id === label);
