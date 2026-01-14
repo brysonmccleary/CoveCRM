@@ -1,5 +1,5 @@
 // /components/messages/InboxSidebar.tsx
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import axios from "axios";
 import { Socket } from "socket.io-client";
 
@@ -14,6 +14,58 @@ interface Conversation {
   lastMessageDirection?: string | null;
 }
 
+function getAgentTimeZone(): string {
+  // Match iMessage on the agent's device (Mac) by using the browser/device timezone.
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  } catch {
+    return "UTC";
+  }
+}
+
+function startOfDayMs(d: Date) {
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+}
+
+function formatListStampIMessage(isoOrDate: string | Date, timeZone: string) {
+  const d = isoOrDate instanceof Date ? isoOrDate : new Date(isoOrDate);
+  if (!d || isNaN(d.getTime())) return "";
+
+  const now = new Date();
+
+  const dDay = startOfDayMs(d);
+  const nowDay = startOfDayMs(now);
+  const diffDays = Math.round((nowDay - dDay) / (24 * 60 * 60 * 1000));
+
+  if (diffDays === 0) {
+    // Today -> time (iMessage style)
+    return new Intl.DateTimeFormat(undefined, {
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+      timeZone,
+    }).format(d);
+  }
+
+  if (diffDays === 1) return "Yesterday";
+
+  if (diffDays >= 2 && diffDays <= 6) {
+    // Within last 7 days -> weekday
+    return new Intl.DateTimeFormat(undefined, {
+      weekday: "long",
+      timeZone,
+    }).format(d);
+  }
+
+  // Older -> short date
+  return new Intl.DateTimeFormat(undefined, {
+    month: "numeric",
+    day: "numeric",
+    year: "2-digit",
+    timeZone,
+  }).format(d);
+}
+
 export default function InboxSidebar({
   onSelect,
   selectedId,
@@ -25,6 +77,8 @@ export default function InboxSidebar({
 }) {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [loading, setLoading] = useState(true);
+
+  const timeZone = useMemo(() => getAgentTimeZone(), []);
 
   const fetchConversations = async () => {
     try {
@@ -68,6 +122,8 @@ export default function InboxSidebar({
       {conversations.map((conv) => {
         const isActive = selectedId === conv._id;
 
+        const stamp = formatListStampIMessage(conv.lastMessageTime, timeZone);
+
         return (
           <div
             key={conv._id}
@@ -81,10 +137,7 @@ export default function InboxSidebar({
                 {conv.name || conv.phone || "Unknown"}
               </div>
               <div className="text-xs text-gray-400 whitespace-nowrap">
-                {new Date(conv.lastMessageTime).toLocaleTimeString([], {
-                  hour: "numeric",
-                  minute: "2-digit",
-                })}
+                {stamp}
               </div>
             </div>
             <div className="text-sm text-gray-300 truncate">{conv.lastMessage}</div>
