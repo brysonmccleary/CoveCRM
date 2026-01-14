@@ -95,7 +95,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // ✅ If UI sent a from number, prefer it IF it exists on this user's subaccount.
     const requestedFrom = normalizeE164(fromNumber || from || "");
-    let chosenFrom: string | null = ...
+    let chosenFrom: string | null = null;
 
     if (requestedFrom) {
       const ok = await validateFromOnSubaccount(client, requestedFrom);
