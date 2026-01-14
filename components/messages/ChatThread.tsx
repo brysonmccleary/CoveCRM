@@ -1,5 +1,5 @@
 // components/messages/ChatThread.tsx
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import axios from "axios";
 import { Socket } from "socket.io-client";
 
@@ -15,10 +15,45 @@ interface ChatThreadProps {
   socket: Socket | null;
 }
 
+function getAgentTimeZone(): string {
+  // Matches iMessage on the agent's device because it uses device timezone.
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  } catch {
+    return "UTC";
+  }
+}
+
+function startOfDayMs(d: Date) {
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+}
+
+function formatThreadDividerIMessage(isoOrDate: string | Date, timeZone: string) {
+  const d = isoOrDate instanceof Date ? isoOrDate : new Date(isoOrDate);
+  if (!d || isNaN(d.getTime())) return "";
+
+  // "Sunday 4:31 PM" (weekday + time)
+  const weekday = new Intl.DateTimeFormat(undefined, {
+    weekday: "long",
+    timeZone,
+  }).format(d);
+
+  const time = new Intl.DateTimeFormat(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+    timeZone,
+  }).format(d);
+
+  return `${weekday} ${time}`;
+}
+
 export default function ChatThread({ leadId, socket }: ChatThreadProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const bottomRef = useRef<HTMLDivElement | null>(null);
+
+  const timeZone = useMemo(() => getAgentTimeZone(), []);
 
   const scrollToBottom = () =>
     setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: "smooth" }), 80);
@@ -63,7 +98,7 @@ export default function ChatThread({ leadId, socket }: ChatThreadProps) {
       }
     };
 
-    socket.on("newMessage", handleNewMessage);     // local echo for outbound
+    socket.on("newMessage", handleNewMessage); // local echo for outbound
     socket.on("message:new", handleServerMessageNew); // server inbound
 
     return () => {
@@ -99,9 +134,30 @@ export default function ChatThread({ leadId, socket }: ChatThreadProps) {
             ? "self-end ml-auto text-white bg-green-600"
             : "self-start text-white bg-[#334155]";
 
+          // ✅ iMessage-style divider when day changes (or first message)
+          const curDate = msg.date ? new Date(msg.date) : null;
+          const prev = idx > 0 ? messages[idx - 1] : null;
+          const prevDate = prev?.date ? new Date(prev.date) : null;
+
+          const curDay =
+            curDate && !isNaN(curDate.getTime()) ? startOfDayMs(curDate) : null;
+          const prevDay =
+            prevDate && !isNaN(prevDate.getTime()) ? startOfDayMs(prevDate) : null;
+
+          const showDivider =
+            !!curDay && (idx === 0 || (prevDay !== null && curDay !== prevDay));
+
           return (
-            <div key={idx} className={`${base} ${alignment}`}>
-              {msg.text}
+            <div key={idx} className="flex flex-col gap-2">
+              {showDivider && (
+                <div className="w-full flex justify-center py-1">
+                  <span className="text-xs text-gray-300 bg-[#111827] border border-gray-700 rounded-full px-3 py-1">
+                    {msg.date ? formatThreadDividerIMessage(msg.date, timeZone) : ""}
+                  </span>
+                </div>
+              )}
+
+              <div className={`${base} ${alignment}`}>{msg.text}</div>
             </div>
           );
         })}
