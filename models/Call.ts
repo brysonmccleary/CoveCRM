@@ -9,44 +9,43 @@ export interface ICall extends Document {
   callSid: string;
 
   // numbers + routing
-  ownerNumber?: string;
-  otherNumber?: string;
-  from?: string;
-  to?: string;
-  conferenceName?: string;
+  ownerNumber?: string;    // our Twilio DID that owns the call
+  otherNumber?: string;    // the external/lead number
+  from?: string;           // alias for ownerNumber (some code sets from/to)
+  to?: string;             // alias for otherNumber
+  conferenceName?: string; // name we dialed into
 
   startedAt?: Date;
   completedAt?: Date;
-  endedAt?: Date;
-  duration?: number;
-  durationSec?: number;
-  talkTime?: number;
-  isVoicemail?: boolean;
+  endedAt?: Date;          // lifecycle alias
+  duration?: number;       // total seconds
+  durationSec?: number;    // alias
+  talkTime?: number;       // seconds with speech (optional)
 
-  // ✅ AMD persistence (AnsweredBy)
-  amd?: {
-    answeredBy?: string;
-  };
+  // ✅ Twilio AMD / AnsweredBy capture
+  answeredBy?: string;     // "human" | "machine_*" | "fax" | "unknown" | etc.
+  isVoicemail?: boolean;   // AMD or AnsweredBy indicates machine
 
   recordingSid?: string;
-  recordingUrl?: string;
-  recordingDuration?: number;
-  recordingStatus?: string;
-  recordingFormat?: string;
-  recordingChannels?: string;
-  recordingSource?: string;
-  recordingType?: string;
-  recordingSizeBytes?: number;
+  recordingUrl?: string;         // final https URL (mp3/wav)
+  recordingDuration?: number;    // seconds
+  recordingStatus?: string;      // completed | in-progress | failed | ...
+  recordingFormat?: string;      // mp3 | wav | unknown
+  recordingChannels?: string;    // mono | dual | ...
+  recordingSource?: string;      // RecordVerb | DialVerb | ...
+  recordingType?: string;        // audio | ...
+  recordingSizeBytes?: number;   // HEAD content-length when available
 
   aiEnabledAtCallTime?: boolean;
   transcript?: string;
   aiSummary?: string;
   aiActionItems?: string[];
-  aiBullets?: string[];
-  aiScore?: number;
+  aiBullets?: string[];    // key points list
+  aiScore?: number;        // 0..100
   aiSentiment?: "positive" | "neutral" | "negative";
   aiProcessing?: "pending" | "done" | "error";
 
+  // ✅ Structured AI Call Overview (used by lead middle panel)
   aiOverviewReady?: boolean;
   aiOverview?: {
     overviewBullets: string[];
@@ -54,7 +53,13 @@ export interface ICall extends Document {
     objections: string[];
     questions: string[];
     nextSteps: string[];
-    outcome: "Booked" | "Callback" | "Not Interested" | "No Answer" | "Voicemail" | "Other";
+    outcome:
+      | "Booked"
+      | "Callback"
+      | "Not Interested"
+      | "No Answer"
+      | "Voicemail"
+      | "Other";
     appointmentTime?: string;
     sentiment?: "Positive" | "Neutral" | "Negative";
     generatedAt: Date;
@@ -81,18 +86,10 @@ const CallSchema = new Schema<ICall>(
     duration: Number,
     durationSec: Number,
     talkTime: Number,
-    isVoicemail: { type: Boolean, default: false },
 
-    // ✅ Add AMD to schema so Mongoose does not drop it
-    amd: {
-      type: new Schema(
-        {
-          answeredBy: { type: String, default: "" }, // "human" | "machine_*"
-        },
-        { _id: false },
-      ),
-      default: undefined,
-    },
+    // ✅ store AnsweredBy so dashboard can exclude machines/voicemail
+    answeredBy: String,
+    isVoicemail: { type: Boolean, default: false },
 
     recordingSid: String,
     recordingUrl: String,
@@ -113,6 +110,7 @@ const CallSchema = new Schema<ICall>(
     aiSentiment: { type: String, enum: ["positive", "neutral", "negative"] },
     aiProcessing: { type: String, enum: ["pending", "done", "error"], default: undefined },
 
+    // ✅ AI Call Overview fields (must be in schema or Mongoose will drop them)
     aiOverviewReady: { type: Boolean, default: false },
     aiOverview: {
       type: new Schema(
@@ -132,12 +130,12 @@ const CallSchema = new Schema<ICall>(
           generatedAt: { type: Date, default: undefined },
           version: { type: Number, default: 1 },
         },
-        { _id: false },
+        { _id: false }
       ),
       default: undefined,
     },
   },
-  { timestamps: true },
+  { timestamps: true }
 );
 
 // Helpful indexes
@@ -147,5 +145,8 @@ CallSchema.index({ leadId: 1, completedAt: -1 }, { name: "call_by_lead_completed
 CallSchema.index({ userEmail: 1, direction: 1, startedAt: -1 }, { name: "call_user_dir_started_desc" });
 CallSchema.index({ userEmail: 1, recordingUrl: 1 }, { name: "call_user_has_recording" });
 CallSchema.index({ userEmail: 1, isVoicemail: 1, completedAt: -1 }, { name: "call_user_voicemail" });
+
+// ✅ optional index for analysis/debugging (does not change behavior)
+CallSchema.index({ userEmail: 1, answeredBy: 1, completedAt: -1 }, { name: "call_user_answeredBy" });
 
 export default models.Call || mongoose.model<ICall>("Call", CallSchema);
