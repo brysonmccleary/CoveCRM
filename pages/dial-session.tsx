@@ -701,7 +701,8 @@ export default function DialSession() {
     const r = await fetch("/api/twilio/voice/call", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ leadId }),
+      // ✅ ONLY CHANGE: send selected fromNumber so backend uses the right caller ID
+      body: JSON.stringify({ leadId, fromNumber }),
     });
     if (!r.ok) {
       let msg = `Failed to start call`;
