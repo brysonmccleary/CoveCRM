@@ -7,7 +7,14 @@ interface Message {
   text: string;
   direction: "inbound" | "outbound" | "ai";
   leadId?: string;
+
+  // old/optional
   date?: string;
+
+  // ✅ what your API actually returns
+  sentAt?: string;
+  createdAt?: string;
+  queuedAt?: string;
 }
 
 interface ChatThreadProps {
@@ -32,7 +39,6 @@ function formatThreadDividerIMessage(isoOrDate: string | Date, timeZone: string)
   const d = isoOrDate instanceof Date ? isoOrDate : new Date(isoOrDate);
   if (!d || isNaN(d.getTime())) return "";
 
-  // "Sunday 4:31 PM" (weekday + time)
   const weekday = new Intl.DateTimeFormat(undefined, {
     weekday: "long",
     timeZone,
@@ -46,6 +52,11 @@ function formatThreadDividerIMessage(isoOrDate: string | Date, timeZone: string)
   }).format(d);
 
   return `${weekday} ${time}`;
+}
+
+// ✅ normalize timestamp because API returns sentAt/createdAt not `date`
+function getMsgIso(m: Message): string | undefined {
+  return m.date || m.sentAt || m.createdAt || m.queuedAt;
 }
 
 export default function ChatThread({ leadId, socket }: ChatThreadProps) {
@@ -68,7 +79,6 @@ export default function ChatThread({ leadId, socket }: ChatThreadProps) {
     try {
       await axios.post("/api/messages/mark-read", { leadId });
     } catch (e) {
-      // non-fatal; badge/polling will recover
       console.warn("mark-read failed (fetch)", e);
     }
   };
@@ -85,7 +95,7 @@ export default function ChatThread({ leadId, socket }: ChatThreadProps) {
       if (message.leadId === leadId) {
         setMessages((prev) => [...prev, message]);
         scrollToBottom();
-        // If inbound, ensure we mark as read for this open thread
+
         if (message.direction === "inbound") {
           axios.post("/api/messages/mark-read", { leadId }).catch(() => {});
         }
@@ -98,8 +108,8 @@ export default function ChatThread({ leadId, socket }: ChatThreadProps) {
       }
     };
 
-    socket.on("newMessage", handleNewMessage); // local echo for outbound
-    socket.on("message:new", handleServerMessageNew); // server inbound
+    socket.on("newMessage", handleNewMessage);
+    socket.on("message:new", handleServerMessageNew);
 
     return () => {
       socket.off("newMessage", handleNewMessage);
@@ -134,10 +144,13 @@ export default function ChatThread({ leadId, socket }: ChatThreadProps) {
             ? "self-end ml-auto text-white bg-green-600"
             : "self-start text-white bg-[#334155]";
 
-          // ✅ iMessage-style divider when day changes (or first message)
-          const curDate = msg.date ? new Date(msg.date) : null;
+          // ✅ use normalized timestamp
+          const curIso = getMsgIso(msg);
           const prev = idx > 0 ? messages[idx - 1] : null;
-          const prevDate = prev?.date ? new Date(prev.date) : null;
+          const prevIso = prev ? getMsgIso(prev) : undefined;
+
+          const curDate = curIso ? new Date(curIso) : null;
+          const prevDate = prevIso ? new Date(prevIso) : null;
 
           const curDay =
             curDate && !isNaN(curDate.getTime()) ? startOfDayMs(curDate) : null;
@@ -152,7 +165,7 @@ export default function ChatThread({ leadId, socket }: ChatThreadProps) {
               {showDivider && (
                 <div className="w-full flex justify-center py-1">
                   <span className="text-xs text-gray-300 bg-[#111827] border border-gray-700 rounded-full px-3 py-1">
-                    {msg.date ? formatThreadDividerIMessage(msg.date, timeZone) : ""}
+                    {curIso ? formatThreadDividerIMessage(curIso, timeZone) : ""}
                   </span>
                 </div>
               )}
