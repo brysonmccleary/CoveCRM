@@ -9,40 +9,44 @@ export interface ICall extends Document {
   callSid: string;
 
   // numbers + routing
-  ownerNumber?: string;    // our Twilio DID that owns the call
-  otherNumber?: string;    // the external/lead number
-  from?: string;           // alias for ownerNumber (some code sets from/to)
-  to?: string;             // alias for otherNumber
-  conferenceName?: string; // name we dialed into
+  ownerNumber?: string;
+  otherNumber?: string;
+  from?: string;
+  to?: string;
+  conferenceName?: string;
 
   startedAt?: Date;
   completedAt?: Date;
-  endedAt?: Date;          // lifecycle alias
-  duration?: number;       // total seconds
-  durationSec?: number;    // alias
-  talkTime?: number;       // seconds with speech (optional)
-  isVoicemail?: boolean;   // AMD or AnsweredBy indicates machine
+  endedAt?: Date;
+  duration?: number;
+  durationSec?: number;
+  talkTime?: number;
+  isVoicemail?: boolean;
+
+  // ✅ AMD persistence (AnsweredBy)
+  amd?: {
+    answeredBy?: string;
+  };
 
   recordingSid?: string;
-  recordingUrl?: string;         // final https URL (mp3/wav)
-  recordingDuration?: number;    // seconds
-  recordingStatus?: string;      // completed | in-progress | failed | ...
-  recordingFormat?: string;      // mp3 | wav | unknown
-  recordingChannels?: string;    // mono | dual | ...
-  recordingSource?: string;      // RecordVerb | DialVerb | ...
-  recordingType?: string;        // audio | ...
-  recordingSizeBytes?: number;   // HEAD content-length when available
+  recordingUrl?: string;
+  recordingDuration?: number;
+  recordingStatus?: string;
+  recordingFormat?: string;
+  recordingChannels?: string;
+  recordingSource?: string;
+  recordingType?: string;
+  recordingSizeBytes?: number;
 
   aiEnabledAtCallTime?: boolean;
   transcript?: string;
   aiSummary?: string;
   aiActionItems?: string[];
-  aiBullets?: string[];    // key points list
-  aiScore?: number;        // 0..100
+  aiBullets?: string[];
+  aiScore?: number;
   aiSentiment?: "positive" | "neutral" | "negative";
   aiProcessing?: "pending" | "done" | "error";
 
-  // ✅ Structured AI Call Overview (used by lead middle panel)
   aiOverviewReady?: boolean;
   aiOverview?: {
     overviewBullets: string[];
@@ -50,13 +54,7 @@ export interface ICall extends Document {
     objections: string[];
     questions: string[];
     nextSteps: string[];
-    outcome:
-      | "Booked"
-      | "Callback"
-      | "Not Interested"
-      | "No Answer"
-      | "Voicemail"
-      | "Other";
+    outcome: "Booked" | "Callback" | "Not Interested" | "No Answer" | "Voicemail" | "Other";
     appointmentTime?: string;
     sentiment?: "Positive" | "Neutral" | "Negative";
     generatedAt: Date;
@@ -85,6 +83,17 @@ const CallSchema = new Schema<ICall>(
     talkTime: Number,
     isVoicemail: { type: Boolean, default: false },
 
+    // ✅ Add AMD to schema so Mongoose does not drop it
+    amd: {
+      type: new Schema(
+        {
+          answeredBy: { type: String, default: "" }, // "human" | "machine_*"
+        },
+        { _id: false },
+      ),
+      default: undefined,
+    },
+
     recordingSid: String,
     recordingUrl: String,
     recordingDuration: Number,
@@ -104,7 +113,6 @@ const CallSchema = new Schema<ICall>(
     aiSentiment: { type: String, enum: ["positive", "neutral", "negative"] },
     aiProcessing: { type: String, enum: ["pending", "done", "error"], default: undefined },
 
-    // ✅ AI Call Overview fields (must be in schema or Mongoose will drop them)
     aiOverviewReady: { type: Boolean, default: false },
     aiOverview: {
       type: new Schema(
@@ -124,12 +132,12 @@ const CallSchema = new Schema<ICall>(
           generatedAt: { type: Date, default: undefined },
           version: { type: Number, default: 1 },
         },
-        { _id: false }
+        { _id: false },
       ),
       default: undefined,
     },
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
 // Helpful indexes
