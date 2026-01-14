@@ -92,22 +92,53 @@ function baseMatchCI(userEmailLower: string, timeOr: any[]) {
 }
 
 /**
- * Fields we compute repeatedly, before dedup
- * IMPORTANT:
- * - Many rows use durationSec (alias) instead of duration
- * - We must treat durationSec as a valid talk-time source for KPI + connects
- *
  * Option A connect rules:
  * - connect = talkTime >= threshold
  * - AND NOT voicemail (Call.isVoicemail !== true)
  * - AND if answeredBy exists: must be "human"
- *   (if answeredBy missing, we allow talkTime rule to cover older records)
+ *
+ * IMPORTANT FIX:
+ * - If talkTime/duration/durationSec are missing or wrong (common in conference legs),
+ *   compute duration from timestamps and use the max() as talk time source.
  */
 function addDerivedFields(connectThreshold: number) {
   return [
+    // timestamps for duration fallback
     {
       $addFields: {
-        _talkSrc: {
+        _tsStart: { $ifNull: ["$startedAt", "$createdAt"] },
+        _tsEnd: { $ifNull: ["$completedAt", { $ifNull: ["$endedAt", "$createdAt"] }] },
+      },
+    },
+    {
+      $addFields: {
+        _durFromTs: {
+          $cond: [
+            {
+              $and: [
+                { $ne: ["$_tsStart", null] },
+                { $ne: ["$_tsStart", undefined] },
+                { $ne: ["$_tsEnd", null] },
+                { $ne: ["$_tsEnd", undefined] },
+              ],
+            },
+            {
+              $dateDiff: {
+                startDate: "$_tsStart",
+                endDate: "$_tsEnd",
+                unit: "second",
+              },
+            },
+            0,
+          ],
+        },
+      },
+    },
+
+    // your original talk source
+    {
+      $addFields: {
+        _talkSrcRaw: {
           $cond: [
             { $and: [{ $ne: ["$talkTime", null] }, { $ne: ["$talkTime", undefined] }] },
             "$talkTime",
@@ -128,21 +159,17 @@ function addDerivedFields(connectThreshold: number) {
         },
       },
     },
-    { $addFields: { _talkTimeNum: { $toDouble: "$_talkSrc" } } },
+    { $addFields: { _talkRawNum: { $toDouble: "$_talkSrcRaw" } } },
+
+    // ✅ use max(raw, timestamp-derived)
+    { $addFields: { _talkTimeNum: { $max: ["$_talkRawNum", { $toDouble: "$_durFromTs" }] } } },
+
     {
       $addFields: {
         _connectedByTalk: { $gte: ["$_talkTimeNum", connectThreshold] },
-
-        // Keep this for backwards compatibility, but we will NOT use it to count connects anymore
-        _connectedByAMD: {
-          $regexMatch: { input: { $toString: "$amd.answeredBy" }, regex: /human/i },
-        },
-
-        // ✅ voicemail + answeredBy support
         _isVoicemailFlag: { $ifNull: ["$isVoicemail", false] },
         _answeredByLower: { $toLower: { $ifNull: ["$answeredBy", ""] } },
 
-        // Treat missing/empty direction as outbound to preserve historical rows
         _isDialFlag: {
           $or: [
             { $eq: ["$direction", "outbound"] },
@@ -155,7 +182,6 @@ function addDerivedFields(connectThreshold: number) {
           ],
         },
 
-        // Prefer startedAt/completedAt/createdAt, but include endedAt as a fallback too
         _ts: {
           $ifNull: [
             "$startedAt",
@@ -166,15 +192,14 @@ function addDerivedFields(connectThreshold: number) {
     },
     {
       $addFields: {
-        // ✅ Option A: human connect
         _connectedHuman: {
           $and: [
             "$_connectedByTalk",
             { $ne: ["$_isVoicemailFlag", true] },
             {
               $or: [
-                { $eq: ["$_answeredByLower", ""] },       // answeredBy missing -> allow talkTime-only (old calls)
-                { $eq: ["$_answeredByLower", "human"] },  // answeredBy present -> must be human
+                { $eq: ["$_answeredByLower", ""] },
+                { $eq: ["$_answeredByLower", "human"] },
               ],
             },
           ],
@@ -190,16 +215,9 @@ function dedupeByCallSid() {
     {
       $group: {
         _id: "$callSid",
-        // If any row says dial, the call is a dial
         isDial: { $max: { $cond: ["$_isDialFlag", 1, 0] } },
-
-        // ✅ Only count human connects (Option A)
         connected: { $max: { $cond: ["$_connectedHuman", 1, 0] } },
-
-        // Take the max talk time we have across rows
         talkTime: { $max: "$_talkTimeNum" },
-
-        // Canonical timestamp for bucketing
         ts: { $max: "$_ts" },
       },
     },
@@ -218,12 +236,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!session?.user?.email) return res.status(401).json({ error: "Unauthorized" });
   const userEmail = String(session.user.email).toLowerCase();
 
-  const tz =
-    typeof req.query.tz === "string" && req.query.tz ? req.query.tz : DEFAULT_TZ;
+  const tz = typeof req.query.tz === "string" && req.query.tz ? req.query.tz : DEFAULT_TZ;
   const connectThreshold = Math.max(
     0,
-    parseInt(String(req.query.connectThreshold || CONNECT_THRESHOLD_DEFAULT), 10) ||
-      CONNECT_THRESHOLD_DEFAULT
+    parseInt(String(req.query.connectThreshold || CONNECT_THRESHOLD_DEFAULT), 10) || CONNECT_THRESHOLD_DEFAULT
   );
 
   const { from, to } = rangeFromQuery(req, tz);
@@ -238,7 +254,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const debugMode = String(req.query.debug || "") === "1";
 
   try {
-    // ---------- KPIs (dedup by callSid) ----------
     const kpiAgg = await (Call as any).aggregate([
       { $match: baseMatchCI(userEmail, callTimeOr) },
       ...addDerivedFields(connectThreshold),
@@ -272,8 +287,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       longestTalkSec: 0,
       sampleCountForAvg: 0,
     };
-    const avgTalkSec =
-      k.sampleCountForAvg > 0 ? Math.round(k.totalTalkSec / k.sampleCountForAvg) : 0;
+    const avgTalkSec = k.sampleCountForAvg > 0 ? Math.round(k.totalTalkSec / k.sampleCountForAvg) : 0;
     const contactRate = k.dials > 0 ? k.connects / k.dials : 0;
 
     const kpis: KPI = {
@@ -285,7 +299,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       contactRate,
     };
 
-    // ---------- Dispositions (unchanged) ----------
     const dispAgg = await (Lead as any).aggregate([
       { $match: { userEmail } },
       { $unwind: "$history" },
@@ -300,19 +313,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       {
         $group: {
           _id: null,
-          sold: {
-            $sum: { $cond: [{ $regexMatch: { input: "$message", regex: /sold/i } }, 1, 0] },
-          },
-          booked: {
-            $sum: {
-              $cond: [{ $regexMatch: { input: "$message", regex: /booked\s*appointment/i } }, 1, 0],
-            },
-          },
-          notInterested: {
-            $sum: {
-              $cond: [{ $regexMatch: { input: "$message", regex: /not\s*interested/i } }, 1, 0],
-            },
-          },
+          sold: { $sum: { $cond: [{ $regexMatch: { input: "$message", regex: /sold/i } }, 1, 0] } },
+          booked: { $sum: { $cond: [{ $regexMatch: { input: "$message", regex: /booked\s*appointment/i } }, 1, 0] } },
+          notInterested: { $sum: { $cond: [{ $regexMatch: { input: "$message", regex: /not\s*interested/i } }, 1, 0] } },
         },
       },
       { $project: { _id: 0, sold: 1, booked: 1, notInterested: 1 } },
@@ -334,9 +337,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       dispositions.noAnswer = noAns || 0;
     } catch {}
 
-    // ---------- Hourly (today) with dedup ----------
     const todayFrom = startOfTodayUTC(tz);
     const todayTo = addDaysUTC(todayFrom, 1);
+
     const hourlyAgg = await (Call as any).aggregate([
       {
         $match: baseMatchCI(userEmail, [
@@ -350,31 +353,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       ...dedupeByCallSid(),
       {
         $addFields: {
-          _bucket: {
-            $dateToString: {
-              format: "%H:00",
-              date: "$ts",
-              timezone: tz,
-            },
-          },
+          _bucket: { $dateToString: { format: "%H:00", date: "$ts", timezone: tz } },
         },
       },
-      {
-        $group: {
-          _id: "$_bucket",
-          dials: { $sum: "$isDial" },
-          connects: { $sum: "$connected" },
-        },
-      },
+      { $group: { _id: "$_bucket", dials: { $sum: "$isDial" }, connects: { $sum: "$connected" } } },
       { $sort: { _id: 1 } },
     ]);
+
     const hourlyToday: TrendPoint[] = Array.from({ length: 24 }, (_, h) => {
       const label = `${String(h).padStart(2, "0")}:00`;
       const f = hourlyAgg.find((r: any) => r._id === label);
       return { hour: label, label, dials: f?.dials || 0, connects: f?.connects || 0 };
     });
 
-    // ---------- Daily (7 & 30) with dedup ----------
     async function dailyAgg(days: number): Promise<TrendPoint[]> {
       const end = addDaysUTC(todayFrom, 1);
       const start = addDaysUTC(end, -days);
@@ -391,22 +382,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         ...dedupeByCallSid(),
         {
           $addFields: {
-            _day: {
-              $dateToString: {
-                format: "%Y-%m-%d",
-                date: "$ts",
-                timezone: tz,
-              },
-            },
+            _day: { $dateToString: { format: "%Y-%m-%d", date: "$ts", timezone: tz } },
           },
         },
-        {
-          $group: {
-            _id: "$_day",
-            dials: { $sum: "$isDial" },
-            connects: { $sum: "$connected" },
-          },
-        },
+        { $group: { _id: "$_day", dials: { $sum: "$isDial" }, connects: { $sum: "$connected" } } },
         { $sort: { _id: 1 } },
       ]);
 
@@ -423,7 +402,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const [daily7, daily30] = await Promise.all([dailyAgg(7), dailyAgg(30)]);
 
-    // ---------- Recent ----------
     const recentRows = await (Call as any).aggregate([
       { $match: baseMatchCI(userEmail, callTimeOr) },
       ...addDerivedFields(connectThreshold),
@@ -435,20 +413,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const recentDispos = await (Lead as any).aggregate([
       { $match: { userEmail } },
       { $unwind: "$history" },
-      {
-        $match: {
-          "history.type": "disposition",
-          "history.timestamp": { $gte: from, $lt: to },
-        },
-      },
-      {
-        $project: {
-          _id: 0,
-          leadId: "$_id",
-          at: "$history.timestamp",
-          message: "$history.message",
-        },
-      },
+      { $match: { "history.type": "disposition", "history.timestamp": { $gte: from, $lt: to } } },
+      { $project: { _id: 0, leadId: "$_id", at: "$history.timestamp", message: "$history.message" } },
       { $sort: { at: -1 } },
       { $limit: 15 },
     ]);
@@ -475,7 +441,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime())
       .slice(0, 20);
 
-    // Optional debug block (only when debug=1)
     let debug: any = undefined;
     if (debugMode) {
       const sample = await (Call as any).find({ userEmail }).sort({ completedAt: -1 }).limit(10).lean();
@@ -487,6 +452,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           callSid: c.callSid,
           startedAt: c.startedAt,
           completedAt: c.completedAt,
+          endedAt: c.endedAt,
           duration: c.duration,
           durationSec: c.durationSec,
           talkTime: c.talkTime,
