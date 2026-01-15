@@ -40,8 +40,12 @@ export default function DripCampaignsPanel() {
   const [showModal, setShowModal] = useState(false);
   const [selectedDripId, setSelectedDripId] = useState<string | null>(null);
 
-  const [expandedDrips, setExpandedDrips] = useState<Record<string, boolean>>({});
-  const [editableDrips, setEditableDrips] = useState<Record<string, MessageStep[]>>({});
+  const [expandedDrips, setExpandedDrips] = useState<Record<string, boolean>>(
+    {},
+  );
+  const [editableDrips, setEditableDrips] = useState<
+    Record<string, MessageStep[]>
+  >({});
 
   const [backendCampaigns, setBackendCampaigns] = useState<ApiCampaign[]>([]);
   const [loadingCampaigns, setLoadingCampaigns] = useState(false);
@@ -84,7 +88,9 @@ export default function DripCampaignsPanel() {
     if (!currentText) return;
 
     const numericDay =
-      currentDay === "immediately" ? 0 : parseInt(currentDay.replace("Day ", ""), 10);
+      currentDay === "immediately"
+        ? 0
+        : parseInt(currentDay.replace("Day ", ""), 10);
 
     const optOut = " Reply STOP to opt out.";
     const enforcedText = currentText.trim().endsWith(optOut)
@@ -140,18 +146,35 @@ export default function DripCampaignsPanel() {
     }
   };
 
-  // ---- Prebuilt drips (static definition) ----
+  // ---- Expand / edit helpers (works for BOTH prebuilt + custom) ----
   const toggleExpand = (dripId: string) => {
     const isExpanded = expandedDrips[dripId] || false;
-    const nextExpanded = { ...expandedDrips, [dripId]: !isExpanded };
-    setExpandedDrips(nextExpanded);
+    setExpandedDrips((prev) => ({ ...prev, [dripId]: !isExpanded }));
 
+    // If we don't have an editable copy loaded, seed it from either:
+    // - prebuiltDrips (static)
+    // - backendCampaigns (custom/global)
     if (!editableDrips[dripId]) {
-      const found = prebuiltDrips.find((d) => d.id === dripId);
-      if (found) {
+      const foundPrebuilt = prebuiltDrips.find((d) => d.id === dripId);
+      if (foundPrebuilt) {
         setEditableDrips((prev) => ({
           ...prev,
-          [dripId]: [...found.messages],
+          [dripId]: [...foundPrebuilt.messages],
+        }));
+        return;
+      }
+
+      const foundBackend = backendCampaigns.find((c) => c._id === dripId);
+      if (foundBackend) {
+        const seeded = Array.isArray(foundBackend.steps)
+          ? foundBackend.steps.map((s) => ({
+              day: String(s.day || "immediately"),
+              text: String(s.text || ""),
+            }))
+          : [];
+        setEditableDrips((prev) => ({
+          ...prev,
+          [dripId]: seeded,
         }));
       }
     }
@@ -161,10 +184,11 @@ export default function DripCampaignsPanel() {
     dripId: string,
     index: number,
     key: "text" | "day",
-    value: string
+    value: string,
   ) => {
     const updated = [...(editableDrips[dripId] || [])];
-    updated[index][key] = value;
+    if (!updated[index]) return;
+    updated[index] = { ...updated[index], [key]: value };
     setEditableDrips({ ...editableDrips, [dripId]: updated });
   };
 
@@ -174,12 +198,13 @@ export default function DripCampaignsPanel() {
     toast.success("✅ Drip selected — now assign it!");
   };
 
-  const handleSaveDrip = (dripId: string) => {
-    // Still a mock save; real persistence would require wiring into backend
+  // Prebuilt: still mock save (unchanged behavior)
+  const handleSavePrebuiltDrip = (dripId: string) => {
     toast.success("✅ Changes saved (mock save — hook backend if needed)");
   };
 
-  const handleDeleteDrip = (dripId: string) => {
+  // Prebuilt: still mock delete (unchanged behavior)
+  const handleDeletePrebuiltDrip = (dripId: string) => {
     const newExpanded = { ...expandedDrips };
     const newEditable = { ...editableDrips };
     delete newExpanded[dripId];
@@ -187,6 +212,76 @@ export default function DripCampaignsPanel() {
     setExpandedDrips(newExpanded);
     setEditableDrips(newEditable);
     toast.success("🗑️ Drip cleared from view (mock delete)");
+  };
+
+  // Custom: REAL save to backend (user-scoped in API)
+  const handleSaveCustomDrip = async (dripId: string) => {
+    const steps = editableDrips[dripId] || [];
+
+    if (!Array.isArray(steps) || steps.length === 0) {
+      toast.error("❌ Add at least one message before saving.");
+      return;
+    }
+
+    // Enforce opt-out on every message (same rule as builder)
+    const optOut = " Reply STOP to opt out.";
+    const normalized = steps.map((s) => {
+      const day = String(s.day || "immediately");
+      const textRaw = String(s.text || "").trim();
+      const text = textRaw.endsWith(optOut) ? textRaw : `${textRaw}${optOut}`;
+      return { day, text };
+    });
+
+    try {
+      const res = await axios.put(`/api/drips/${dripId}`, { steps: normalized });
+
+      // Keep UI in sync with backend response
+      const updated = res.data;
+      setBackendCampaigns((prev) =>
+        prev.map((c) =>
+          c._id === dripId
+            ? {
+                ...c,
+                steps: Array.isArray(updated?.steps) ? updated.steps : normalized,
+              }
+            : c,
+        ),
+      );
+
+      // Ensure editable reflects what we saved
+      setEditableDrips((prev) => ({
+        ...prev,
+        [dripId]: normalized,
+      }));
+
+      toast.success("✅ Custom drip updated!");
+    } catch (err: any) {
+      console.error("Error saving custom drip campaign", err);
+      toast.error("❌ Error saving custom drip campaign");
+    }
+  };
+
+  // Custom: REAL delete (user-scoped in API)
+  const handleDeleteCustomDrip = async (dripId: string) => {
+    if (!confirm("Delete this custom drip campaign? This cannot be undone.")) return;
+
+    try {
+      await axios.delete(`/api/drips/${dripId}`);
+
+      setBackendCampaigns((prev) => prev.filter((c) => c._id !== dripId));
+
+      const newExpanded = { ...expandedDrips };
+      const newEditable = { ...editableDrips };
+      delete newExpanded[dripId];
+      delete newEditable[dripId];
+      setExpandedDrips(newExpanded);
+      setEditableDrips(newEditable);
+
+      toast.success("🗑️ Custom drip deleted!");
+    } catch (err: any) {
+      console.error("Error deleting custom drip campaign", err);
+      toast.error("❌ Error deleting custom drip campaign");
+    }
   };
 
   const handleAssignConfirm = async (folderId: string) => {
@@ -210,7 +305,7 @@ export default function DripCampaignsPanel() {
 
   // ---- Custom campaigns derived from backend data ----
   const customCampaigns: ApiCampaign[] = backendCampaigns.filter(
-    (c) => !prebuiltNames.has(c.name) && !c.isGlobal
+    (c) => !prebuiltNames.has(c.name) && !c.isGlobal,
   );
 
   return (
@@ -346,13 +441,13 @@ export default function DripCampaignsPanel() {
               ))}
               <div className="flex space-x-2 pt-2">
                 <button
-                  onClick={() => handleSaveDrip(drip.id)}
+                  onClick={() => handleSavePrebuiltDrip(drip.id)}
                   className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded cursor-pointer"
                 >
                   Save Changes
                 </button>
                 <button
-                  onClick={() => handleDeleteDrip(drip.id)}
+                  onClick={() => handleDeletePrebuiltDrip(drip.id)}
                   className="bg-red-600 hover:bg-red-700 text-white px-3 py-1 rounded cursor-pointer"
                 >
                   Delete Drip
@@ -363,7 +458,7 @@ export default function DripCampaignsPanel() {
         </div>
       ))}
 
-      {/* Custom Campaigns from backend */}
+      {/* Custom Campaigns from backend (NOW expandable + editable like prebuilt) */}
       <h2 className="text-xl font-bold mt-8">
         Your Custom Campaigns{" "}
         {loadingCampaigns && (
@@ -375,13 +470,19 @@ export default function DripCampaignsPanel() {
           You don&apos;t have any custom drip campaigns yet.
         </p>
       )}
+
       {customCampaigns.map((camp) => (
         <div
           key={camp._id}
           className="border border-black dark:border-white p-3 rounded mb-4"
         >
-          <div className="flex items-center justify-between mb-2">
-            <h3 className="font-semibold">{camp.name}</h3>
+          <div className="flex justify-between items-center">
+            <button
+              onClick={() => toggleExpand(camp._id)}
+              className="text-left font-semibold text-lg cursor-pointer"
+            >
+              {camp.name} — {(camp.steps || []).length} messages
+            </button>
             <button
               onClick={() => handleAssignDrip(camp._id)}
               className="bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded text-sm cursor-pointer"
@@ -390,13 +491,43 @@ export default function DripCampaignsPanel() {
             </button>
           </div>
 
-          <ul className="list-disc pl-5 text-sm">
-            {(camp.steps || []).map((msg: MessageStep, idx: number) => (
-              <li key={idx}>
-                <strong>{msg.day}:</strong> {msg.text}
-              </li>
-            ))}
-          </ul>
+          {expandedDrips[camp._id] && (
+            <div className="mt-4 space-y-3">
+              {editableDrips[camp._id]?.map((msg, idx) => (
+                <div key={idx} className="space-y-1">
+                  <input
+                    value={msg.day}
+                    onChange={(e) =>
+                      handleEditMessage(camp._id, idx, "day", e.target.value)
+                    }
+                    className="border border-black dark:border-white p-1 rounded w-32 text-sm"
+                  />
+                  <textarea
+                    value={msg.text}
+                    onChange={(e) =>
+                      handleEditMessage(camp._id, idx, "text", e.target.value)
+                    }
+                    className="border border-black dark:border-white p-2 rounded w-full text-sm"
+                  />
+                </div>
+              ))}
+
+              <div className="flex space-x-2 pt-2">
+                <button
+                  onClick={() => handleSaveCustomDrip(camp._id)}
+                  className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded cursor-pointer"
+                >
+                  Save Changes
+                </button>
+                <button
+                  onClick={() => handleDeleteCustomDrip(camp._id)}
+                  className="bg-red-600 hover:bg-red-700 text-white px-3 py-1 rounded cursor-pointer"
+                >
+                  Delete Drip
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       ))}
 
