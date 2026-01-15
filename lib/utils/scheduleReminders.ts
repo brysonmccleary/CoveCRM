@@ -8,12 +8,61 @@ import { DateTime } from "luxon";
 type LuxonDateTime = ReturnType<typeof DateTime.fromJSDate>;
 
 // Format: "2:30 PM"
-const formatTime = (dt: LuxonDateTime) =>
-  dt.toLocaleString(DateTime.TIME_SIMPLE);
+const formatTime = (dt: LuxonDateTime) => dt.toLocaleString(DateTime.TIME_SIMPLE);
 
 // Format: "August 5, 2025"
 const formatDate = (dt: LuxonDateTime) =>
   dt.toLocaleString({ month: "long", day: "numeric", year: "numeric" });
+
+function safeTz(input: any) {
+  const tz = (typeof input === "string" && input.trim()) ? input.trim() : "";
+  // Luxon will treat invalid zones as "invalid"; we can guard by checking isValid.
+  const test = DateTime.utc().setZone(tz || "America/New_York");
+  return test.isValid ? (tz || "America/New_York") : "America/New_York";
+}
+
+/**
+ * Atomic "claim" for a reminder so multiple invocations don't double-send.
+ * We only proceed if we successfully flipped the flag from false->true.
+ *
+ * NOTE: If sendSMS fails, we revert the flag so a later run can retry.
+ */
+async function claimReminder(bookingId: any, key: "confirm" | "morning" | "hour" | "fifteen") {
+  // Ensure reminderSent exists AND the target key is not true.
+  const updated = await Booking.findOneAndUpdate(
+    {
+      _id: bookingId,
+      $or: [
+        { reminderSent: { $exists: false } },
+        { [`reminderSent.${key}`]: { $ne: true } },
+      ],
+    },
+    {
+      $setOnInsert: {
+        reminderSent: { confirm: false, morning: false, hour: false, fifteen: false },
+      },
+      $set: {
+        [`reminderSent.${key}`]: true,
+      },
+    },
+    { new: true }
+  );
+
+  // If null, someone else already claimed/sent it.
+  return updated;
+}
+
+async function revertReminder(bookingId: any, key: "confirm" | "morning" | "hour" | "fifteen") {
+  try {
+    await Booking.updateOne(
+      { _id: bookingId },
+      { $set: { [`reminderSent.${key}`]: false } }
+    );
+  } catch (e) {
+    // non-blocking; we tried
+    console.warn("⚠️ Failed to revert reminder flag after send failure:", e);
+  }
+}
 
 export async function checkAndSendReminders() {
   await dbConnect();
@@ -28,25 +77,14 @@ export async function checkAndSendReminders() {
   });
 
   for (const booking of upcoming) {
-    const { date, leadPhone, agentPhone, agentEmail, timezone } =
-      booking as any;
+    const { date, leadPhone, agentPhone, agentEmail, timezone } = booking as any;
 
     if (!agentEmail) {
       console.warn("⚠️ Skipping reminder: booking has no agentEmail.");
       continue;
     }
 
-    // Ensure reminder flags object exists
-    if (!booking.reminderSent) {
-      booking.reminderSent = {
-        confirm: false,
-        morning: false,
-        hour: false,
-        fifteen: false,
-      };
-    }
-
-    const tz = timezone || "America/New_York";
+    const tz = safeTz(timezone);
     const bookingTime = DateTime.fromJSDate(date, { zone: tz });
     const nowLocal = nowUTC.setZone(tz);
     const timeDiffMs = bookingTime.toMillis() - nowLocal.toMillis();
@@ -55,14 +93,23 @@ export async function checkAndSendReminders() {
     const timeStr = formatTime(bookingTime);
 
     // ✅ 1. Confirmation (send once, any time > 1 minute before)
-    if (!booking.reminderSent.confirm && timeDiffMs > 60 * 1000) {
-      console.log(`📨 Sending confirmation to ${leadPhone}`);
-      await sendSMS(
-        leadPhone,
-        `We’re all set! Quick details:\n\n📅 ${dateStr}\n⏰ ${timeStr}\n📞 Call from ${agentPhone || "your agent"}`,
-        agentEmail,
-      );
-      booking.reminderSent.confirm = true;
+    if (timeDiffMs > 60 * 1000) {
+      // Concurrency-safe claim
+      const claimed = await claimReminder(booking._id, "confirm");
+      if (claimed) {
+        try {
+          console.log(`📨 Sending confirmation to ${leadPhone}`);
+          await sendSMS(
+            leadPhone,
+            `We’re all set! Quick details:\n\n📅 ${dateStr}\n⏰ ${timeStr}\n📞 Call from ${agentPhone || "your agent"}`,
+            agentEmail
+          );
+        } catch (err) {
+          console.error("❌ Confirmation SMS failed:", err);
+          // Allow retry next run
+          await revertReminder(booking._id, "confirm");
+        }
+      }
     }
 
     // ✅ 2. Morning-of (7–9am local time, same day)
@@ -72,47 +119,63 @@ export async function checkAndSendReminders() {
       nowLocal.hour <= 9 &&
       timeDiffMs > 60 * 60 * 1000;
 
-    if (!booking.reminderSent.morning && isMorningOf) {
-      console.log(`🌅 Sending morning-of reminder to ${leadPhone}`);
-      await sendSMS(
-        leadPhone,
-        `Good morning! Just a quick reminder of your appointment with ${agentEmail} today at ${timeStr}.`,
-        agentEmail,
-      );
-      booking.reminderSent.morning = true;
+    if (isMorningOf) {
+      const claimed = await claimReminder(booking._id, "morning");
+      if (claimed) {
+        try {
+          console.log(`🌅 Sending morning-of reminder to ${leadPhone}`);
+          await sendSMS(
+            leadPhone,
+            `Good morning! Just a quick reminder of your appointment with ${agentEmail} today at ${timeStr}.`,
+            agentEmail
+          );
+        } catch (err) {
+          console.error("❌ Morning-of SMS failed:", err);
+          await revertReminder(booking._id, "morning");
+        }
+      }
     }
 
     // ✅ 3. 1 hour before
-    if (
-      !booking.reminderSent.hour &&
-      timeDiffMs <= 60 * 60 * 1000 &&
-      timeDiffMs > 30 * 60 * 1000
-    ) {
-      console.log(`⏰ Sending 1-hour reminder to ${leadPhone}`);
-      await sendSMS(
-        leadPhone,
-        `Heads up! ${agentEmail} will be calling in about an hour.`,
-        agentEmail,
-      );
-      booking.reminderSent.hour = true;
+    const isHourBefore =
+      timeDiffMs <= 60 * 60 * 1000 && timeDiffMs > 30 * 60 * 1000;
+
+    if (isHourBefore) {
+      const claimed = await claimReminder(booking._id, "hour");
+      if (claimed) {
+        try {
+          console.log(`⏰ Sending 1-hour reminder to ${leadPhone}`);
+          await sendSMS(
+            leadPhone,
+            `Heads up! ${agentEmail} will be calling in about an hour.`,
+            agentEmail
+          );
+        } catch (err) {
+          console.error("❌ 1-hour SMS failed:", err);
+          await revertReminder(booking._id, "hour");
+        }
+      }
     }
 
     // ✅ 4. 15 minutes before
-    if (
-      !booking.reminderSent.fifteen &&
-      timeDiffMs <= 15 * 60 * 1000 &&
-      timeDiffMs > 0
-    ) {
-      console.log(`⚠️ Sending 15-min reminder to ${leadPhone}`);
-      await sendSMS(
-        leadPhone,
-        `Just another heads up — your appointment is in 15 minutes. Talk soon!`,
-        agentEmail,
-      );
-      booking.reminderSent.fifteen = true;
-    }
+    const isFifteenBefore = timeDiffMs <= 15 * 60 * 1000 && timeDiffMs > 0;
 
-    await booking.save();
+    if (isFifteenBefore) {
+      const claimed = await claimReminder(booking._id, "fifteen");
+      if (claimed) {
+        try {
+          console.log(`⚠️ Sending 15-min reminder to ${leadPhone}`);
+          await sendSMS(
+            leadPhone,
+            `Just another heads up — your appointment is in 15 minutes. Talk soon!`,
+            agentEmail
+          );
+        } catch (err) {
+          console.error("❌ 15-min SMS failed:", err);
+          await revertReminder(booking._id, "fifteen");
+        }
+      }
+    }
   }
 
   console.log("✅ All reminders processed");
