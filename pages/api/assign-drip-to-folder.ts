@@ -18,9 +18,16 @@ function isValidObjectId(id: string) {
   return /^[a-f0-9]{24}$/i.test(id);
 }
 
-async function resolveDrip(dripId: string) {
-  // If dripId is an actual DripCampaign _id
-  if (isValidObjectId(dripId)) return await DripCampaign.findById(dripId).lean();
+async function resolveDrip(dripId: string, userEmail: string) {
+  // If dripId is an actual DripCampaign _id, enforce tenant scoping:
+  // - allow global campaigns
+  // - allow only campaigns owned by this user (userEmail/user)
+  if (isValidObjectId(dripId)) {
+    return await DripCampaign.findOne({
+      _id: new ObjectId(dripId),
+      $or: [{ isGlobal: true }, { userEmail }, { user: userEmail }],
+    }).lean();
+  }
 
   // Otherwise it’s a prebuilt ID -> map to global campaign by name
   const def = prebuiltDrips.find((d) => d.id === dripId);
@@ -46,20 +53,31 @@ function isQuietHoursPT(now = DateTime.now().setZone(PT_ZONE)) {
 
 // Next 9:00am PT
 function nextWindowPT(now = DateTime.now().setZone(PT_ZONE)): Date {
-  const today9 = now.set({ hour: SEND_HOUR_PT, minute: 0, second: 0, millisecond: 0 });
+  const today9 = now.set({
+    hour: SEND_HOUR_PT,
+    minute: 0,
+    second: 0,
+    millisecond: 0,
+  });
   const when = now < today9 ? today9 : today9.plus({ days: 1 });
   return when.toJSDate();
 }
 
 // ---------- handler ----------
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed" });
+  if (req.method !== "POST")
+    return res.status(405).json({ message: "Method not allowed" });
 
   const session: any = await getServerSession(req, res, authOptions as any);
-  if (!session?.user?.email) return res.status(401).json({ message: "Unauthorized" });
+  if (!session?.user?.email)
+    return res.status(401).json({ message: "Unauthorized" });
 
-  const { dripId, folderId } = (req.body || {}) as { dripId?: string; folderId?: string };
-  if (!dripId || !folderId) return res.status(400).json({ message: "Missing dripId or folderId" });
+  const { dripId, folderId } = (req.body || {}) as {
+    dripId?: string;
+    folderId?: string;
+  };
+  if (!dripId || !folderId)
+    return res.status(400).json({ message: "Missing dripId or folderId" });
 
   try {
     await dbConnect();
@@ -76,23 +94,31 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .lean();
     if (!folder) return res.status(404).json({ message: "Folder not found" });
 
-    // 2) Resolve drip campaign
-    const dripDoc: any = await resolveDrip(dripId);
-    if (!dripDoc?._id) return res.status(404).json({ message: "Drip campaign not found" });
+    // 2) Resolve drip campaign (TENANT-SAFE)
+    const dripDoc: any = await resolveDrip(dripId, userEmail);
+    if (!dripDoc?._id)
+      return res.status(404).json({ message: "Drip campaign not found" });
 
     const campaignId = String(dripDoc._id);
 
     // 3) Always attach/ensure watcher (idempotent)
     await DripFolderEnrollment.updateOne(
-      { userEmail, folderId: new ObjectId(folderId), campaignId: new ObjectId(campaignId) },
-      { $set: { active: true, startMode: "immediate" }, $setOnInsert: { lastScanAt: new Date(0) } },
-      { upsert: true }
+      {
+        userEmail,
+        folderId: new ObjectId(folderId),
+        campaignId: new ObjectId(campaignId),
+      },
+      {
+        $set: { active: true, startMode: "immediate" },
+        $setOnInsert: { lastScanAt: new Date(0) },
+      },
+      { upsert: true },
     );
 
     // 4) Add the drip to the folder metadata (idempotent)
     await Folder.updateOne(
       { _id: new ObjectId(folderId), userEmail },
-      { $addToSet: { assignedDrips: campaignId } }
+      { $addToSet: { assignedDrips: campaignId } },
     );
 
     // If not a sendable SMS campaign, stop here (watcher still active for future logic)
@@ -104,7 +130,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (!isSendableSms) {
       return res.status(200).json({
-        message: "Drip assigned, watcher enabled. Campaign is not an active SMS drip with steps; no backfill performed.",
+        message:
+          "Drip assigned, watcher enabled. Campaign is not an active SMS drip with steps; no backfill performed.",
         campaignId,
       });
     }
@@ -161,18 +188,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           });
 
           created++;
-        })
+        }),
       );
     }
 
     // Prime watcher scan time so folder-watch doesn't immediately re-seed everything
     await DripFolderEnrollment.updateOne(
       { userEmail, folderId: new ObjectId(folderId), campaignId: new ObjectId(campaignId) },
-      { $set: { lastScanAt: new Date() } }
+      { $set: { lastScanAt: new Date() } },
     );
 
     return res.status(200).json({
-      message: "Drip assigned; watcher active; existing leads seeded into DripEnrollment (runner will send).",
+      message:
+        "Drip assigned; watcher active; existing leads seeded into DripEnrollment (runner will send).",
       campaignId,
       quietHours: isQuietHoursPT(nowPT),
       seedNextSendAt,
