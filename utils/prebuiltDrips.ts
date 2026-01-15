@@ -1,4 +1,4 @@
-// /constants/prebuiltDrips.ts
+// /utils/prebuiltDrips.ts
 
 export interface Drip {
   id: string;
@@ -130,13 +130,17 @@ export const prebuiltDrips: Drip[] = [
     type: "sms",
     messages: [
       { text: appendOptOut("🎉 Happy Birthday {{ contact.first_name }}! Hope you have an amazing day. Thank you for being such a valued client!"), day: "Birthday" },
+
+      // You said this one is okay to leave as-is
       { text: appendOptOut("🎄 Happy Holidays, {{ contact.first_name }}! Wishing you and your loved ones a wonderful season and new year ahead."), day: "December 15" },
-      { text: appendOptOut("🦃 Happy Thanksgiving, {{ contact.first_name }}! Grateful to have you as a client. Enjoy your time with family!"), day: "November 20" },
-      { text: appendOptOut("🇺🇸 Happy 4th of July, {{ contact.first_name }}! Hope you're enjoying some fun and relaxation today."), day: "July 3" },
-      { text: appendOptOut("💖 Happy Valentine's Day, {{ contact.first_name }}! Hope you have a wonderful day!"), day: "February 13" },
-      { text: appendOptOut("🌸 Happy Mother's Day to all the amazing moms! Thank you for all you do."), day: "May 9" },
-      { text: appendOptOut("👨‍👧‍👦 Happy Father's Day! Hope you enjoy your day, {{ contact.first_name }}."), day: "June 18" },
-      { text: appendOptOut("🎆 Happy New Year, {{ contact.first_name }}! Wishing you a fantastic year ahead."), day: "December 31" }
+
+      // Fixed-date holidays (stable every year)
+      { text: appendOptOut("🎆 Happy New Year, {{ contact.first_name }}! Wishing you a fantastic year ahead."), day: "January 1" },
+      { text: appendOptOut("💖 Happy Valentine's Day, {{ contact.first_name }}! Hope you have a wonderful day!"), day: "February 14" },
+      { text: appendOptOut("🇺🇸 Happy 4th of July, {{ contact.first_name }}! Hope you're enjoying some fun and relaxation today."), day: "July 4" },
+      { text: appendOptOut("🎃 Happy Halloween, {{ contact.first_name }}! Hope you have a fun and safe day."), day: "October 31" },
+      { text: appendOptOut("🇺🇸 Happy Veterans Day, {{ contact.first_name }}! Thank you for your service."), day: "November 11" },
+      { text: appendOptOut("🎄 Merry Christmas, {{ contact.first_name }}! Wishing you a wonderful day with family and loved ones."), day: "December 25" }
     ]
   },
   {
@@ -154,4 +158,3 @@ export const prebuiltDrips: Drip[] = [
     ]
   }
 ];
-
