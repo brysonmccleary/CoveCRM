@@ -1798,7 +1798,10 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
    * - keep a tiny frame buffer so we don't lose the start of their reply
    * - after cancel, forward audio normally
    */
-  const blockedByAiTurn = state.aiSpeaking === true || state.waitingForResponse === true || outboundInProgress;
+  const blockedByAiTurn =
+    state.aiSpeaking === true ||
+    state.waitingForResponse === true ||
+    outboundInProgress;
 
   if (blockedByAiTurn) {
     // Track that the user started speaking (barge-in)
@@ -1815,7 +1818,10 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
     state.bargeInFrames = ring;
 
     // Cancel OpenAI as soon as barge-in starts (ChatGPT voice behavior)
-    tryCancelOpenAiResponse(state, outboundInProgress ? "outbound-drain" : "ai-speaking");
+    tryCancelOpenAiResponse(
+      state,
+      outboundInProgress ? "outbound-drain" : "ai-speaking"
+    );
 
     // After cancel, allow subsequent frames to flow; but for THIS frame,
     // we do not append until we have a ready OpenAI ws below.
@@ -2230,6 +2236,7 @@ async function handleOpenAiEvent(
           JSON.stringify({
             type: "response.create",
             response: {
+              modalities: ["audio"],
               instructions: greetingInstr,
             },
           })
@@ -2304,7 +2311,11 @@ async function handleOpenAiEvent(
         "response.create (stepper after greeting)"
       );
       setAiSpeaking(state, true, "response.create (stepper after greeting)");
-      setResponseInFlight(state, true, "response.create (stepper after greeting)");
+      setResponseInFlight(
+        state,
+        true,
+        "response.create (stepper after greeting)"
+      );
       state.outboundOpenAiDone = false;
 
       try {
@@ -2333,7 +2344,7 @@ async function handleOpenAiEvent(
       state.openAiWs.send(
         JSON.stringify({
           type: "response.create",
-          response: { instructions: perTurnInstr },
+          response: { modalities: ["audio"], instructions: perTurnInstr },
         })
       );
 
@@ -2368,7 +2379,7 @@ async function handleOpenAiEvent(
       state.openAiWs.send(
         JSON.stringify({
           type: "response.create",
-          response: { instructions: perTurnInstr },
+          response: { modalities: ["audio"], instructions: perTurnInstr },
         })
       );
 
@@ -2431,7 +2442,7 @@ async function handleOpenAiEvent(
         state.openAiWs.send(
           JSON.stringify({
             type: "response.create",
-            response: { instructions: perTurnInstr },
+            response: { modalities: ["audio"], instructions: perTurnInstr },
           })
         );
 
@@ -2486,6 +2497,7 @@ async function handleOpenAiEvent(
       JSON.stringify({
         type: "response.create",
         response: {
+          modalities: ["audio"],
           instructions: perTurnInstr,
         },
       })
