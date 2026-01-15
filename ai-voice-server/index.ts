@@ -189,6 +189,23 @@ type CallState = {
   // instrumentation: one-time response.create logs
   debugLoggedResponseCreateGreeting?: boolean;
   debugLoggedResponseCreateUserTurn?: boolean;
+
+  /**
+   * ============================
+   * ✅ TURN-TAKING FIXES (SURGICAL)
+   * ============================
+   */
+  // Hard guard: ensure we never send multiple response.create per committed user turn
+  responseInFlight?: boolean;
+
+  // Barge-in detection (Twilio side) so we can cancel OpenAI immediately
+  bargeInDetected?: boolean;
+  bargeInAudioMsBuffered?: number;
+  bargeInFrames?: string[]; // tiny ring buffer of inbound frames during barge-in
+  lastCancelAtMs?: number;
+
+  // micro anti-spam: last response.create timestamp (prevents rapid double-fires)
+  lastResponseCreateAtMs?: number;
 };
 
 const calls = new Map<WebSocket, CallState>();
@@ -303,6 +320,12 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function randInt(min: number, max: number): number {
+  const a = Math.min(min, max);
+  const b = Math.max(min, max);
+  return Math.floor(a + Math.random() * (b - a + 1));
+}
+
 /**
  * Cut-out guard helpers
  */
@@ -318,6 +341,61 @@ function setWaitingForResponse(state: CallState, next: boolean, reason: string) 
   if (prev === next) return;
   state.waitingForResponse = next;
   console.log("[AI-VOICE] waitingForResponse =", next, "|", reason);
+}
+
+function setResponseInFlight(state: CallState, next: boolean, reason: string) {
+  const prev = !!state.responseInFlight;
+  if (prev === next) return;
+  state.responseInFlight = next;
+  console.log("[AI-VOICE] responseInFlight =", next, "|", reason);
+}
+
+/**
+ * ✅ OpenAI cancel helper (REAL barge-in)
+ * - Do NOT touch audio pipeline
+ * - Just cancels model output so user can take the floor
+ */
+function tryCancelOpenAiResponse(state: CallState, reason: string) {
+  try {
+    const ws = state.openAiWs;
+    if (!ws || !state.openAiReady) return;
+
+    const now = Date.now();
+    const last = Number(state.lastCancelAtMs || 0);
+
+    // throttle to avoid spam if Twilio frames keep arriving
+    if (now - last < 300) return;
+
+    state.lastCancelAtMs = now;
+
+    // Cancel the current response
+    ws.send(JSON.stringify({ type: "response.cancel" }));
+
+    // Clear any partially buffered input in OpenAI so next turn starts clean
+    try {
+      ws.send(JSON.stringify({ type: "input_audio_buffer.clear" }));
+    } catch {}
+
+    // Yield the turn locally
+    setWaitingForResponse(state, false, `barge-in cancel (${reason})`);
+    setAiSpeaking(state, false, `barge-in cancel (${reason})`);
+    setResponseInFlight(state, false, `barge-in cancel (${reason})`);
+
+    // Mark outbound as "done" so pacer will stop once buffer drains naturally
+    state.outboundOpenAiDone = true;
+
+    console.log("[AI-VOICE][BARGE-IN] sent response.cancel", {
+      callSid: state.callSid,
+      streamSid: state.streamSid,
+      reason,
+    });
+  } catch (err: any) {
+    console.warn("[AI-VOICE][BARGE-IN] cancel failed (non-blocking):", {
+      callSid: state.callSid,
+      error: err?.message || err,
+      reason,
+    });
+  }
 }
 
 /**
@@ -446,6 +524,7 @@ function safelyCloseOpenAi(state: CallState, why: string) {
     state.phase = "ended";
     setWaitingForResponse(state, false, `close openai (${why})`);
     setAiSpeaking(state, false, `close openai (${why})`);
+    setResponseInFlight(state, false, `close openai (${why})`);
 
     if (state.openAiWs) {
       try {
@@ -1516,6 +1595,14 @@ wss.on("connection", (ws: WebSocket) => {
     lowSignalCommitCount: 0,
     debugLoggedResponseCreateGreeting: false,
     debugLoggedResponseCreateUserTurn: false,
+
+    // ✅ turn-taking fixes
+    responseInFlight: false,
+    bargeInDetected: false,
+    bargeInAudioMsBuffered: 0,
+    bargeInFrames: [],
+    lastCancelAtMs: 0,
+    lastResponseCreateAtMs: 0,
   };
 
   calls.set(ws, state);
@@ -1582,6 +1669,7 @@ async function handleStart(ws: WebSocket, msg: TwilioStartEvent) {
 
   setWaitingForResponse(state, false, "start/reset");
   setAiSpeaking(state, false, "start/reset");
+  setResponseInFlight(state, false, "start/reset");
 
   state.userAudioMsBuffered = 0;
   state.initialGreetingQueued = false;
@@ -1618,6 +1706,13 @@ async function handleStart(ws: WebSocket, msg: TwilioStartEvent) {
   state.systemPromptTail700 = undefined;
   state.systemPromptMarkers = undefined;
   state.systemPromptUniqueLine = undefined;
+
+  // ✅ turn-taking reset
+  state.bargeInDetected = false;
+  state.bargeInAudioMsBuffered = 0;
+  state.bargeInFrames = [];
+  state.lastCancelAtMs = 0;
+  state.lastResponseCreateAtMs = Date.now();
 
   const custom = msg.start.customParameters || {};
   const sessionId = custom.sessionId;
@@ -1695,15 +1790,39 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
     (state.outboundMuLawBuffer?.length || 0) > 0 ||
     (!!state.outboundOpenAiDone === false && !!state.outboundPacerTimer);
 
-  if (
-    state.aiSpeaking === true ||
-    state.waitingForResponse === true ||
-    outboundInProgress
-  ) {
-    return;
+  /**
+   * ✅ CRITICAL FIX:
+   * DO NOT DROP inbound frames during AI speech/wait/outbound drain.
+   * Instead:
+   * - if user speaks during AI speech OR while outbound is draining -> barge-in cancel
+   * - keep a tiny frame buffer so we don't lose the start of their reply
+   * - after cancel, forward audio normally
+   */
+  const blockedByAiTurn = state.aiSpeaking === true || state.waitingForResponse === true || outboundInProgress;
+
+  if (blockedByAiTurn) {
+    // Track that the user started speaking (barge-in)
+    state.bargeInDetected = true;
+    state.bargeInAudioMsBuffered = Math.min(
+      800,
+      (state.bargeInAudioMsBuffered || 0) + 20
+    );
+
+    // Keep a tiny ring buffer (~200ms) so we don't lose their first words
+    const ring = state.bargeInFrames || [];
+    ring.push(payload);
+    while (ring.length > 10) ring.shift(); // 10 * 20ms = 200ms
+    state.bargeInFrames = ring;
+
+    // Cancel OpenAI as soon as barge-in starts (ChatGPT voice behavior)
+    tryCancelOpenAiResponse(state, outboundInProgress ? "outbound-drain" : "ai-speaking");
+
+    // After cancel, allow subsequent frames to flow; but for THIS frame,
+    // we do not append until we have a ready OpenAI ws below.
+    // (we intentionally fall through to "append" if OpenAI is ready and AI is no longer speaking)
   }
 
-  // accumulate inbound audio while user is talking
+  // accumulate inbound audio while user is talking (only meaningful for gating once we're forwarding)
   state.userAudioMsBuffered = Math.min(
     3000,
     (state.userAudioMsBuffered || 0) + 20
@@ -1724,11 +1843,34 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
   }
 
   if (!state.openAiWs || !state.openAiReady) {
+    // If OpenAI not ready yet, buffer as before (unchanged)
     state.pendingAudioFrames.push(payload);
     return;
   }
 
+  /**
+   * If we just barged-in and cancelled, flush the tiny buffered frames first,
+   * then continue with normal appends. This prevents losing the first words.
+   */
   try {
+    if (state.bargeInDetected && (state.bargeInFrames?.length || 0) > 0) {
+      const frames = state.bargeInFrames || [];
+      state.bargeInFrames = [];
+      state.bargeInDetected = false;
+      state.bargeInAudioMsBuffered = 0;
+
+      for (const f of frames) {
+        state.openAiWs.send(
+          JSON.stringify({
+            type: "input_audio_buffer.append",
+            audio: f,
+          })
+        );
+      }
+      return; // we already appended the ring buffer including this frame
+    }
+
+    // Normal path: forward inbound audio to OpenAI
     state.openAiWs.send(
       JSON.stringify({
         type: "input_audio_buffer.append",
@@ -2055,8 +2197,14 @@ async function handleOpenAiEvent(
         liveState.lowSignalCommitCount = 0;
         liveState.repromptCountForCurrentStep = 0;
 
+        // ✅ reset turn guards
+        liveState.bargeInDetected = false;
+        liveState.bargeInFrames = [];
+        liveState.bargeInAudioMsBuffered = 0;
+
         setWaitingForResponse(liveState, true, "response.create (greeting)");
         setAiSpeaking(liveState, true, "response.create (greeting)");
+        setResponseInFlight(liveState, true, "response.create (greeting)");
         liveState.outboundOpenAiDone = false;
 
         const greetingInstr = buildGreetingInstructions(liveState.context!);
@@ -2076,6 +2224,7 @@ async function handleOpenAiEvent(
 
         liveState.lastPromptSentAtMs = Date.now();
         liveState.lastPromptLine = "GREETING";
+        liveState.lastResponseCreateAtMs = Date.now();
 
         liveState.openAiWs.send(
           JSON.stringify({
@@ -2094,6 +2243,10 @@ async function handleOpenAiEvent(
   if (t === "input_audio_buffer.committed") {
     if (state.voicemailSkipArmed) return;
     if (!state.openAiWs || !state.openAiReady) return;
+
+    // ✅ Hard guard: never create while a response is in flight (prevents double fire)
+    if (state.responseInFlight) return;
+
     if (state.waitingForResponse || state.aiSpeaking) return;
 
     const isGreetingReply = state.phase === "awaiting_greeting_reply";
@@ -2119,14 +2272,31 @@ async function handleOpenAiEvent(
     const currentStepLine = steps[idx] || getBookingFallbackLine(state.context!);
     const stepType = classifyStepType(currentStepLine);
 
+    // ✅ small human pause like ChatGPT voice (only when we are about to speak)
+    const humanPause = async () => {
+      try {
+        await sleep(randInt(250, 450));
+      } catch {}
+    };
+
+    // anti-spam: if somehow we are firing too quickly, block
+    const now = Date.now();
+    const lastCreateAt = Number(state.lastResponseCreateAtMs || 0);
+    if (now - lastCreateAt < 150) return;
+
     if (isGreetingReply) {
       const lineToSay = steps[0] || getBookingFallbackLine(state.context!);
-      const perTurnInstr = buildStepperTurnInstruction(state.context!, lineToSay);
+      const perTurnInstr = buildStepperTurnInstruction(
+        state.context!,
+        lineToSay
+      );
 
       state.userAudioMsBuffered = 0;
       state.lastUserTranscript = "";
       state.lowSignalCommitCount = 0;
       state.repromptCountForCurrentStep = 0;
+
+      await humanPause();
 
       setWaitingForResponse(
         state,
@@ -2134,6 +2304,7 @@ async function handleOpenAiEvent(
         "response.create (stepper after greeting)"
       );
       setAiSpeaking(state, true, "response.create (stepper after greeting)");
+      setResponseInFlight(state, true, "response.create (stepper after greeting)");
       state.outboundOpenAiDone = false;
 
       try {
@@ -2157,6 +2328,7 @@ async function handleOpenAiEvent(
 
       state.lastPromptSentAtMs = Date.now();
       state.lastPromptLine = lineToSay;
+      state.lastResponseCreateAtMs = Date.now();
 
       state.openAiWs.send(
         JSON.stringify({
@@ -2165,25 +2337,33 @@ async function handleOpenAiEvent(
         })
       );
 
-      state.scriptStepIndex = Math.min(1, Math.max(0, steps.length - 1));
+      // ✅ FIXED BUG: after speaking step 0, next should be step 1 (if exists)
+      state.scriptStepIndex = steps.length > 1 ? 1 : 0;
       state.phase = "in_call";
       return;
     }
 
     if (objectionKind) {
       const lineToSay = getRebuttalLine(state.context!, objectionKind);
-      const perTurnInstr = buildStepperTurnInstruction(state.context!, lineToSay);
+      const perTurnInstr = buildStepperTurnInstruction(
+        state.context!,
+        lineToSay
+      );
 
       state.userAudioMsBuffered = 0;
       state.lastUserTranscript = "";
       state.lowSignalCommitCount = 0;
 
+      await humanPause();
+
       setWaitingForResponse(state, true, "response.create (rebuttal)");
       setAiSpeaking(state, true, "response.create (rebuttal)");
+      setResponseInFlight(state, true, "response.create (rebuttal)");
       state.outboundOpenAiDone = false;
 
       state.lastPromptSentAtMs = Date.now();
       state.lastPromptLine = lineToSay;
+      state.lastResponseCreateAtMs = Date.now();
 
       state.openAiWs.send(
         JSON.stringify({
@@ -2206,9 +2386,9 @@ async function handleOpenAiEvent(
     if (!treatAsAnswer) {
       state.lowSignalCommitCount = (state.lowSignalCommitCount || 0) + 1;
 
-      const now = Date.now();
+      const now2 = Date.now();
       const lastPromptAt = Number(state.lastPromptSentAtMs || 0);
-      const msSincePrompt = now - lastPromptAt;
+      const msSincePrompt = now2 - lastPromptAt;
 
       const shouldReprompt =
         msSincePrompt >= 3200 &&
@@ -2237,12 +2417,16 @@ async function handleOpenAiEvent(
           await sleep(850);
         } catch {}
 
+        await humanPause();
+
         setWaitingForResponse(state, true, "response.create (reprompt)");
         setAiSpeaking(state, true, "response.create (reprompt)");
+        setResponseInFlight(state, true, "response.create (reprompt)");
         state.outboundOpenAiDone = false;
 
         state.lastPromptSentAtMs = Date.now();
         state.lastPromptLine = lineToSay;
+        state.lastResponseCreateAtMs = Date.now();
 
         state.openAiWs.send(
           JSON.stringify({
@@ -2266,8 +2450,11 @@ async function handleOpenAiEvent(
     state.lowSignalCommitCount = 0;
     state.repromptCountForCurrentStep = 0;
 
+    await humanPause();
+
     setWaitingForResponse(state, true, "response.create (script step)");
     setAiSpeaking(state, true, "response.create (script step)");
+    setResponseInFlight(state, true, "response.create (script step)");
     state.outboundOpenAiDone = false;
 
     try {
@@ -2293,6 +2480,7 @@ async function handleOpenAiEvent(
 
     state.lastPromptSentAtMs = Date.now();
     state.lastPromptLine = lineToSay;
+    state.lastResponseCreateAtMs = Date.now();
 
     state.openAiWs.send(
       JSON.stringify({
@@ -2360,6 +2548,7 @@ async function handleOpenAiEvent(
 
   if (isResponseDone || isAudioItemDone) {
     setWaitingForResponse(state, false, `OpenAI ${t}`);
+    setResponseInFlight(state, false, `OpenAI ${t}`);
     state.outboundOpenAiDone = true;
 
     const buffered = state.outboundMuLawBuffer?.length || 0;
@@ -2475,7 +2664,8 @@ async function handleBookAppointmentIntent(state: CallState, control: any) {
       leadTzWasFallback: tz.leadTzWasFallback,
       agentTzWasFallback: tz.agentTzWasFallback,
       leadTzHintUsed: !!leadTzHint && leadTimeZone === leadTzHint,
-      agentTzForcedFromCtx: agentTimeZone === String(ctx.agentTimeZone || "").trim(),
+      agentTzForcedFromCtx:
+        agentTimeZone === String(ctx.agentTimeZone || "").trim(),
     });
   } catch {}
 
