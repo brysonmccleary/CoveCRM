@@ -1761,6 +1761,28 @@ async function handleStart(ws: WebSocket, msg: TwilioStartEvent) {
   }
 }
 
+function isLikelySilenceMulawBase64(payloadB64: string): boolean {
+  try {
+    if (!payloadB64) return true;
+    const buf = Buffer.from(payloadB64, "base64");
+    if (buf.length === 0) return true;
+
+    // For G.711 u-law, digital silence is commonly 0xFF (and sometimes 0x7F).
+    // Treat as silence only if the frame is overwhelmingly silence bytes.
+    let silence = 0;
+    for (let i = 0; i < buf.length; i++) {
+      const b = buf[i];
+      if (b === 0xff || b === 0x7f) silence++;
+    }
+
+    return silence / buf.length >= 0.9;
+  } catch {
+    // If decoding fails, do NOT treat it as silence (safer for barge-in behavior)
+    return false;
+  }
+}
+
+
 /**
  * MEDIA
  */
