@@ -203,6 +203,7 @@ type CallState = {
   bargeInAudioMsBuffered?: number;
   bargeInFrames?: string[]; // tiny ring buffer of inbound frames during barge-in
   lastCancelAtMs?: number;
+  aiAudioStartedAtMs?: number; // first outbound audio delta timestamp (per response)
 
   // micro anti-spam: last response.create timestamp (prevents rapid double-fires)
   lastResponseCreateAtMs?: number;
@@ -335,11 +336,20 @@ function setAiSpeaking(state: CallState, next: boolean, reason: string) {
   state.aiSpeaking = next;
   console.log("[AI-VOICE] aiSpeaking =", next, "|", reason);
 }
-
 function setWaitingForResponse(state: CallState, next: boolean, reason: string) {
   const prev = !!state.waitingForResponse;
   if (prev === next) return;
   state.waitingForResponse = next;
+
+  // Per-response reset: a new response.create is starting. Audio has NOT begun yet.
+  // This is used only for barge-in cancel gating (prevents instant cancels before first audio delta).
+  if (next === true && reason.includes("response.create")) {
+    state.aiAudioStartedAtMs = 0;
+    state.bargeInDetected = false;
+    state.bargeInAudioMsBuffered = 0;
+    state.bargeInFrames = [];
+  }
+
   console.log("[AI-VOICE] waitingForResponse =", next, "|", reason);
 }
 
@@ -360,11 +370,21 @@ function tryCancelOpenAiResponse(state: CallState, reason: string) {
     const ws = state.openAiWs;
     if (!ws || !state.openAiReady) return;
 
+    // Only cancel if the AI is actually speaking (not just waiting/outbound pacing).
+    if (state.aiSpeaking !== true) return;
+
     const now = Date.now();
+
+    // Cooldown + pre-audio guard: never cancel before AI audio has actually started.
+    const startedAt = Number(state.aiAudioStartedAtMs || 0);
+    if (startedAt <= 0) return;
+    if (now - startedAt < 650) return;
+
+
     const last = Number(state.lastCancelAtMs || 0);
 
     // throttle to avoid spam if Twilio frames keep arriving
-    if (now - last < 300) return;
+    if (now - last < 500) return;
 
     state.lastCancelAtMs = now;
 
@@ -1828,8 +1848,10 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
   if (blockedByAiTurn) {
     const isSilence = isLikelySilenceMulawBase64(payload);
 
-    if (!isSilence) {
-      // Track that the user started speaking (barge-in)
+    // Only consider barge-in if the AI is actively speaking.
+    // (waitingForResponse / outbound draining is NOT a reason to cancel)
+    if (state.aiSpeaking === true && !isSilence) {
+      // Track sustained caller speech while AI is speaking.
       state.bargeInDetected = true;
       state.bargeInAudioMsBuffered = Math.min(
         800,
@@ -1842,11 +1864,19 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
       while (ring.length > 10) ring.shift(); // 10 * 20ms = 200ms
       state.bargeInFrames = ring;
 
-      // Cancel OpenAI as soon as REAL barge-in starts
-      tryCancelOpenAiResponse(
-        state,
-        outboundInProgress ? "outbound-drain" : "ai-speaking"
-      );
+      const now = Date.now();
+      const aiAudioStartedAt = Number(state.aiAudioStartedAtMs || 0);
+
+      // Barge-in cooldown: ignore the first ~650ms after AI audio actually starts
+      const cooldownOk = aiAudioStartedAt > 0 && (now - aiAudioStartedAt) >= 650;
+
+      // Require sustained speech: at least 200ms of non-silence while AI is speaking
+      const sustainedOk = Number(state.bargeInAudioMsBuffered || 0) >= 200;
+
+      if (cooldownOk && sustainedOk) {
+        // Cancel only for validated barge-in while AI is speaking
+        tryCancelOpenAiResponse(state, "ai-speaking");
+      }
     }
   }
 
@@ -2533,6 +2563,13 @@ async function handleOpenAiEvent(
 
   if (t === "response.audio.delta" || t === "response.output_audio.delta") {
     if (state.voicemailSkipArmed) return;
+    if (!state.aiAudioStartedAtMs) {
+      state.aiAudioStartedAtMs = Date.now();
+      // Fresh response is now audibly speaking; reset barge-in counters for clean measurement.
+      state.bargeInDetected = false;
+      state.bargeInAudioMsBuffered = 0;
+      state.bargeInFrames = [];
+    }
 
     setAiSpeaking(state, true, `OpenAI ${t} (audio delta)`);
 
