@@ -1803,7 +1803,7 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
     state.waitingForResponse === true ||
     outboundInProgress;
 
-    if (blockedByAiTurn) {
+  if (blockedByAiTurn) {
     const isSilence = isLikelySilenceMulawBase64(payload);
 
     if (!isSilence) {
@@ -1814,23 +1814,20 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
         (state.bargeInAudioMsBuffered || 0) + 20
       );
 
+      // Keep a tiny ring buffer (~200ms) so we don't lose their first words
+      const ring = state.bargeInFrames || [];
+      ring.push(payload);
+      while (ring.length > 10) ring.shift(); // 10 * 20ms = 200ms
+      state.bargeInFrames = ring;
 
-    // Keep a tiny ring buffer (~200ms) so we don't lose their first words
-    const ring = state.bargeInFrames || [];
-    ring.push(payload);
-    while (ring.length > 10) ring.shift(); // 10 * 20ms = 200ms
-    state.bargeInFrames = ring;
-
-    // Cancel OpenAI as soon as barge-in starts (ChatGPT voice behavior)
-    tryCancelOpenAiResponse(
-      state,
-      outboundInProgress ? "outbound-drain" : "ai-speaking"
-    );
-
-    // After cancel, allow subsequent frames to flow; but for THIS frame,
-    // we do not append until we have a ready OpenAI ws below.
-    // (we intentionally fall through to "append" if OpenAI is ready and AI is no longer speaking)
+      // Cancel OpenAI as soon as REAL barge-in starts
+      tryCancelOpenAiResponse(
+        state,
+        outboundInProgress ? "outbound-drain" : "ai-speaking"
+      );
+    }
   }
+
 
   // accumulate inbound audio while user is talking (only meaningful for gating once we're forwarding)
   state.userAudioMsBuffered = Math.min(
