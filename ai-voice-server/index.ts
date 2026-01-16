@@ -1803,13 +1803,17 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
     state.waitingForResponse === true ||
     outboundInProgress;
 
-  if (blockedByAiTurn) {
-    // Track that the user started speaking (barge-in)
-    state.bargeInDetected = true;
-    state.bargeInAudioMsBuffered = Math.min(
-      800,
-      (state.bargeInAudioMsBuffered || 0) + 20
-    );
+    if (blockedByAiTurn) {
+    const isSilence = isLikelySilenceMulawBase64(payload);
+
+    if (!isSilence) {
+      // Track that the user started speaking (barge-in)
+      state.bargeInDetected = true;
+      state.bargeInAudioMsBuffered = Math.min(
+        800,
+        (state.bargeInAudioMsBuffered || 0) + 20
+      );
+
 
     // Keep a tiny ring buffer (~200ms) so we don't lose their first words
     const ring = state.bargeInFrames || [];
