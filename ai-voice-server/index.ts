@@ -207,6 +207,18 @@ type CallState = {
 
   // micro anti-spam: last response.create timestamp (prevents rapid double-fires)
   lastResponseCreateAtMs?: number;
+
+
+  /**
+   * ============================
+   * ✅ TURN-TAKING STATE (NEW)
+   * ============================
+   */
+  lastUserSpeechStartedAtMs?: number;
+  lastUserSpeechStoppedAtMs?: number;
+  lastAiDoneAtMs?: number;
+  awaitingUserAnswer?: boolean;
+  awaitingAnswerForStepIndex?: number;
 };
 
 const calls = new Map<WebSocket, CallState>();
@@ -1728,6 +1740,19 @@ async function handleStart(ws: WebSocket, msg: TwilioStartEvent) {
   state.systemPromptUniqueLine = undefined;
 
   // ✅ turn-taking reset
+  // ✅ turn-taking answer gating reset
+  state.lastUserSpeechStartedAtMs = undefined;
+  state.lastUserSpeechStoppedAtMs = undefined;
+  state.lastAiDoneAtMs = undefined;
+  state.awaitingUserAnswer = false;
+  state.awaitingAnswerForStepIndex = undefined;
+
+  // ✅ reset one-time TURN-GATE logs for this call
+  (state as any).__turnGateLogAwaitingFalse = false;
+  (state as any).__turnGateLogNoStopped = false;
+  (state as any).__turnGateLogSettle = false;
+  (state as any).__turnGateLogAiOverlap = false;
+
   state.bargeInDetected = false;
   state.bargeInAudioMsBuffered = 0;
   state.bargeInFrames = [];
@@ -2150,6 +2175,30 @@ async function handleOpenAiEvent(
 
   const t = String(event?.type || "");
 
+  // ============================
+  // TURN-TAKING TIMING SIGNALS
+  // ============================
+
+  if (t === "input_audio_buffer.speech_started") {
+    state.lastUserSpeechStartedAtMs = Date.now();
+    return;
+  }
+
+  if (t === "input_audio_buffer.speech_stopped") {
+    state.lastUserSpeechStoppedAtMs = Date.now();
+    return;
+  }
+
+  if (
+    t === "response.audio.done" ||
+    t === "response.done" ||
+    t === "response.output_item.done"
+  ) {
+    state.lastAiDoneAtMs = Date.now();
+    // do NOT return — allow existing cleanup logic
+  }
+
+
   try {
     const typeLower = String(event?.type || "").toLowerCase();
 
@@ -2266,7 +2315,10 @@ async function handleOpenAiEvent(
         setResponseInFlight(liveState, true, "response.create (greeting)");
         liveState.outboundOpenAiDone = false;
 
-        const greetingInstr = buildGreetingInstructions(liveState.context!);
+        const aiName = (liveState.context!.voiceProfile.aiName || "Alex").trim() || "Alex";
+        const clientName = (liveState.context!.clientFirstName || "").trim() || "there";
+        const greetingLine = `Hey ${clientName}. This is ${aiName}. Can you hear me alright?`;
+        const greetingInstr = buildStepperTurnInstruction(liveState.context!, greetingLine);
 
         try {
           if (!liveState.debugLoggedResponseCreateGreeting) {
@@ -2294,6 +2346,10 @@ async function handleOpenAiEvent(
             },
           })
         );
+
+        // ✅ turn-taking gate: we just asked a question, wait for a real user answer
+        liveState.awaitingUserAnswer = true;
+        liveState.awaitingAnswerForStepIndex = -1;
       })();
     }
 
@@ -2301,6 +2357,47 @@ async function handleOpenAiEvent(
   }
 
   if (t === "input_audio_buffer.committed") {
+    // ============================
+    // HARD TURN-TAKING GATE
+    // ============================
+
+    if (state.awaitingUserAnswer !== true) {
+      if (!(state as any).__turnGateLogAwaitingFalse) {
+        console.log("[TURN-GATE] commit ignored: not awaiting answer");
+        (state as any).__turnGateLogAwaitingFalse = true;
+      }
+      return;
+    }
+
+    const nowGate = Date.now();
+
+    if (!state.lastUserSpeechStoppedAtMs) {
+      if (!(state as any).__turnGateLogNoStopped) {
+        console.log("[TURN-GATE] commit ignored: no speech_stopped");
+        (state as any).__turnGateLogNoStopped = true;
+      }
+      return;
+    }
+
+    if (nowGate - state.lastUserSpeechStoppedAtMs < 300) {
+      if (!(state as any).__turnGateLogSettle) {
+        console.log("[TURN-GATE] commit ignored: settle <300ms");
+        (state as any).__turnGateLogSettle = true;
+      }
+      return;
+    }
+
+    if (state.lastAiDoneAtMs && nowGate - state.lastAiDoneAtMs < 150) {
+      if (!(state as any).__turnGateLogAiOverlap) {
+        console.log("[TURN-GATE] commit ignored: AI overlap");
+        (state as any).__turnGateLogAiOverlap = true;
+      }
+      return;
+    }
+
+    // ✅ consume this answer so we cannot double-advance on multiple commits
+    state.awaitingUserAnswer = false;
+
     if (state.voicemailSkipArmed) return;
     if (!state.openAiWs || !state.openAiReady) return;
 
