@@ -2379,12 +2379,14 @@ async function handleOpenAiEvent(
       return;
     }
 
-    if (nowGate - state.lastUserSpeechStoppedAtMs < 300) {
+    const settleDeltaMs = nowGate - state.lastUserSpeechStoppedAtMs;
+    if (settleDeltaMs < 300) {
       if (!(state as any).__turnGateLogSettle) {
-        console.log("[TURN-GATE] commit ignored: settle <300ms");
+        console.log("[TURN-GATE] settle wait <300ms (delaying commit processing)");
         (state as any).__turnGateLogSettle = true;
       }
-      return;
+      const waitMs = 300 - settleDeltaMs;
+      await new Promise((r) => setTimeout(r, waitMs));
     }
 
     if (state.lastAiDoneAtMs && nowGate - state.lastAiDoneAtMs < 150) {
