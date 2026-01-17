@@ -2397,14 +2397,15 @@ async function handleOpenAiEvent(
       return;
     }
 
-    // ✅ consume this answer so we cannot double-advance on multiple commits
-    state.awaitingUserAnswer = false;
-
     if (state.voicemailSkipArmed) return;
     if (!state.openAiWs || !state.openAiReady) return;
 
     // ✅ Hard guard: never create while a response is in flight (prevents double fire)
     if (state.responseInFlight) return;
+
+    // ✅ consume this answer only once we know we can actually proceed
+    state.awaitingUserAnswer = false;
+
 
     if (state.waitingForResponse || state.aiSpeaking) return;
 
