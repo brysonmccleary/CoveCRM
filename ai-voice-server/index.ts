@@ -2403,11 +2403,23 @@ async function handleOpenAiEvent(
     // ✅ Hard guard: never create while a response is in flight (prevents double fire)
     if (state.responseInFlight) return;
 
-    // ✅ consume this answer only once we know we can actually proceed
+    // ✅ IMPORTANT: Do NOT drop/consume the user turn while the pacer is still draining.
+    // Greeting often finishes at OpenAI (response.audio.done) while aiSpeaking stays true until the outbound
+    // buffer drains. If we consume awaitingUserAnswer and return here, we get post-greeting dead silence.
+    const waitStartMs = Date.now();
+    while (state.waitingForResponse || state.aiSpeaking) {
+      if (Date.now() - waitStartMs > 2500) {
+        if (!(state as any).__turnGateLogStillSpeaking) {
+          console.log("[TURN-GATE] commit delayed: still speaking after 2.5s (dropping this commit)");
+          (state as any).__turnGateLogStillSpeaking = true;
+        }
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 50));
+    }
+
+    // ✅ consume this answer only once we can actually proceed
     state.awaitingUserAnswer = false;
-
-
-    if (state.waitingForResponse || state.aiSpeaking) return;
 
     const isGreetingReply = state.phase === "awaiting_greeting_reply";
 
