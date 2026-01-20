@@ -842,16 +842,17 @@ function getRepromptLineForStepType(
     const ladder = [
       `Got you — would that be a yes, or a no?`,
       `Just so I’m clear — is that something you already have in place?`,
-      `No worries — I can keep it simple. Yes or no?`,
+      `No worries — to keep it simple: yes or no? If it’s easier, we can just schedule and ${agent} will cover everything. Would later today or tomorrow be better — daytime or evening?`,
     ];
     return ladder[Math.min(n, ladder.length - 1)];
   }
 
   if (stepType === "open_question") {
+    // ✅ Patch: booking-only reprompts (no discovery)
     const ladder = [
-      `Real quick — what would you say is the main goal?`,
-      `Totally — what prompted you to reach out in the first place?`,
-      `Got it — was that for just you, or a spouse as well?`,
+      `Real quick — was this for just you, or a spouse as well?`,
+      `Perfect — my job is just to set up a quick call with ${agent}. Would later today or tomorrow be better — daytime or evening?`,
+      `No worries — just to get you scheduled, is later today or tomorrow better — daytime or evening?`,
     ];
     return ladder[Math.min(n, ladder.length - 1)];
   }
@@ -1939,7 +1940,7 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
       const cooldownOk = aiAudioStartedAt > 0 && (now - aiAudioStartedAt) >= 650;
 
       // Require sustained speech: at least 200ms of non-silence while AI is speaking
-      const sustainedOk = Number(state.bargeInAudioMsBuffered || 0) >= 200;
+      const sustainedOk = Number(state.bargeInAudioMsBuffered || 0) >= 320;
 
       if (cooldownOk && sustainedOk) {
         // Cancel only for validated barge-in while AI is speaking
