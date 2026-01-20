@@ -219,6 +219,10 @@ type CallState = {
   lastAiDoneAtMs?: number;
   awaitingUserAnswer?: boolean;
   awaitingAnswerForStepIndex?: number;
+  // ✅ Patch 3: remember the last *accepted* user text so we can validate booking + step advance
+  lastAcceptedUserText?: string;
+  lastAcceptedStepType?: StepType;
+  lastAcceptedStepIndex?: number;
 };
 
 const calls = new Map<WebSocket, CallState>();
@@ -738,6 +742,24 @@ function looksLikeTimeAnswer(textRaw: string): boolean {
   return false;
 }
 
+// ✅ Patch 3: time indicator detector used to reject premature bookings
+function isTimeMentioned(textRaw: string): boolean {
+  const t = String(textRaw || "").trim().toLowerCase();
+  if (!t) return false;
+
+  // relative windows
+  if (/(today|tomorrow|tonight|later today|later|morning|afternoon|evening)/i.test(t)) return true;
+
+  // explicit clock times like 3, 3pm, 3:30, 3:30pm
+  if (/\b\d{1,2}(:\d{2})?\s?(am|pm)\b/i.test(t)) return true;
+
+  // bare hour/minute mentions (less strict, but still useful)
+  if (/\b\d{1,2}(:\d{2})\b/.test(t)) return true;
+
+  return false;
+}
+
+
 function isFillerOnly(textRaw: string): boolean {
   const t = String(textRaw || "").trim().toLowerCase();
   if (!t) return true;
@@ -778,24 +800,25 @@ function shouldTreatCommitAsRealAnswer(
 ): boolean {
   const text = String(transcript || "").trim();
 
-  // If we have transcription, prefer it.
+  // If we have transcription, prefer it and be strict about filler.
   if (text) {
     if (isFillerOnly(text)) return false;
     if (stepType === "time_question") return looksLikeTimeAnswer(text);
-    // for yes/no or open questions, any non-filler multi-word answer counts
+    // For yes/no or open questions, any non-filler multi-word answer counts
     return true;
   }
 
   /**
-   * No transcription available:
-   * Be conservative to avoid cutting the caller off on "um", breaths, etc.
-   * (We are NOT changing audio/VAD. This is gating only.)
+   * ✅ Patch 3 (critical):
+   * No transcription available → be VERY conservative.
+   * This prevents "yeah" / noise / low-signal commits from advancing steps (especially time steps).
    */
-  if (stepType === "time_question") return audioMs >= 1100;
-  if (stepType === "yesno_question") return audioMs >= 700;
-  if (stepType === "open_question") return audioMs >= 1000;
-  return audioMs >= 800;
+  if (stepType === "time_question") return audioMs >= 2400; // extremely conservative
+  if (stepType === "yesno_question") return audioMs >= 1200;
+  if (stepType === "open_question") return audioMs >= 1600;
+  return audioMs >= 1400;
 }
+
 
 function getRepromptLineForStepType(
   ctx: AICallContext,
@@ -2540,12 +2563,31 @@ async function handleOpenAiEvent(
     }
 
     const audioMs = Number(state.userAudioMsBuffered || 0);
+
+    const hasTranscript = lastUserText.length > 0;
+
+    // ✅ Patch 3: don't respond/advance on low-signal commits unless we have transcript OR very strong audio.
+    const canSpeak = hasTranscript || audioMs >= 1400;
+
+    // ✅ Patch 3: ONLY advance when we have transcript, and time_question must contain a time indicator.
+    const canAdvance =
+      hasTranscript &&
+      (stepType !== "time_question"
+        ? !isFillerOnly(lastUserText)
+        : looksLikeTimeAnswer(lastUserText) || isTimeMentioned(lastUserText));
+
     const treatAsAnswer = shouldTreatCommitAsRealAnswer(
       stepType,
       audioMs,
       lastUserText
     );
 
+
+    // ✅ Patch 3: if we can't confidently speak yet, treat it as low-signal and wait/reprompt later.
+    if (!canSpeak) {
+      state.lowSignalCommitCount = (state.lowSignalCommitCount || 0) + 1;
+      return;
+    }
     if (!treatAsAnswer) {
       state.lowSignalCommitCount = (state.lowSignalCommitCount || 0) + 1;
 
@@ -2612,6 +2654,13 @@ async function handleOpenAiEvent(
     const lineToSay = steps[idx] || getBookingFallbackLine(state.context!);
     const perTurnInstr = buildStepperTurnInstruction(state.context!, lineToSay);
 
+    // ✅ Patch 3: remember what we accepted from the user BEFORE clearing transcript
+    if (lastUserText) {
+      state.lastAcceptedUserText = lastUserText;
+      state.lastAcceptedStepType = stepType;
+      state.lastAcceptedStepIndex = idx;
+    }
+
     // ✅ consume awaitingUserAnswer ONLY when we are about to speak
     state.awaitingUserAnswer = false;
     state.awaitingAnswerForStepIndex = undefined;
@@ -2663,7 +2712,13 @@ async function handleOpenAiEvent(
       })
     );
 
-    state.scriptStepIndex = Math.min(idx + 1, Math.max(0, steps.length - 1));
+    // ✅ Patch 3: only advance when we have a real transcript answer for this step
+    if (canAdvance) {
+      state.scriptStepIndex = Math.min(idx + 1, Math.max(0, steps.length - 1));
+    } else {
+      // hold position; next turn will reprompt / ask again
+      state.scriptStepIndex = idx;
+    }
     state.phase = "in_call";
     return;
   }
@@ -2746,7 +2801,16 @@ async function handleOpenAiEvent(
 
     if (control && typeof control === "object") {
       if (control.kind === "book_appointment" && !state.finalOutcomeSent) {
-        await handleBookAppointmentIntent(state, control);
+        // ✅ Patch 3: ignore premature bookings unless the user explicitly mentioned a time
+        const lastAccepted = String(state.lastAcceptedUserText || "").trim();
+        if (!lastAccepted || !isTimeMentioned(lastAccepted)) {
+          console.log("[AI-VOICE][BOOKING][IGNORE] book_appointment without explicit time in lastAcceptedUserText", {
+            callSid: state.callSid,
+            lastAcceptedUserText: (lastAccepted || "").slice(0, 140),
+          });
+        } else {
+          await handleBookAppointmentIntent(state, control);
+        }
       }
 
       if (
