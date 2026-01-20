@@ -1006,7 +1006,7 @@ function getSelectedScriptText(ctx: AICallContext): string {
 BOOKING SCRIPT — MORTGAGE PROTECTION (FOLLOW IN ORDER)
 
 STEP 1 (FIRST script turn AFTER the system greeting + lead responds)
-Say: "Hey ${client} — it’s just ${aiName}. How’s your day going?"
+Say: "Hey ${client} — it’s just ${aiName}. I’ll be quick."
 STOP. WAIT.
 
 STEP 2
@@ -1014,7 +1014,7 @@ Say: "I was just giving you a quick call about the request you put in for mortga
 STOP. WAIT.
 
 STEP 3 (BOOKING FRAME)
-Say: "So the next step is really simple — it’s just a quick 5-minute call to look at what you have now compared to what you were trying to protect, and see if there’s any gap. Would later today or tomorrow be better — daytime or evening?"
+Say: "So the next step is really simple — I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Would later today or tomorrow be better — daytime or evening?"
 STOP. WAIT.
 
 STEP 4 (IF THEY PICK A WINDOW)
@@ -1034,7 +1034,7 @@ STOP. WAIT.
 BOOKING SCRIPT — FINAL EXPENSE (FOLLOW IN ORDER)
 
 STEP 1 (FIRST script turn AFTER the system greeting + lead responds)
-Say: "Hey ${client} — it’s just ${aiName}. How’s your day going?"
+Say: "Hey ${client} — it’s just ${aiName}. I’ll be quick."
 STOP. WAIT.
 
 STEP 2
@@ -1042,7 +1042,7 @@ Say: "I was just giving you a quick call about the request you put in for final 
 STOP. WAIT.
 
 STEP 3 (BOOKING FRAME)
-Say: "So the next step is really simple — it’s just a quick 5-minute call to look at what you have now compared to what you were trying to protect, and see if there’s any gap. Would later today or tomorrow be better — daytime or evening?"
+Say: "So the next step is really simple — I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Would later today or tomorrow be better — daytime or evening?"
 STOP. WAIT.
 
 STEP 4 (IF THEY PICK A WINDOW)
@@ -1062,7 +1062,7 @@ STOP. WAIT.
 BOOKING SCRIPT — CASH VALUE / IUL (FOLLOW IN ORDER)
 
 STEP 1 (FIRST script turn AFTER the system greeting + lead responds)
-Say: "Hey ${client} — it’s just ${aiName}. How’s your day going?"
+Say: "Hey ${client} — it’s just ${aiName}. I’ll be quick."
 STOP. WAIT.
 
 STEP 2
@@ -1070,7 +1070,7 @@ Say: "I was just giving you a quick call about the request you put in for cash v
 STOP. WAIT.
 
 STEP 3 (BOOKING FRAME)
-Say: "So the next step is really simple — it’s just a quick 5-minute call to look at what you have now compared to what you were trying to protect, and see if there’s any gap. Would later today or tomorrow be better — daytime or evening?"
+Say: "So the next step is really simple — I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Would later today or tomorrow be better — daytime or evening?"
 STOP. WAIT.
 
 STEP 4 (IF THEY PICK A WINDOW)
@@ -1090,7 +1090,7 @@ STOP. WAIT.
 BOOKING SCRIPT — VETERAN LEADS (FOLLOW IN ORDER)
 
 STEP 1 (FIRST script turn AFTER the system greeting + lead responds)
-Say: "Hey ${client} — it’s just ${aiName}. How’s your day going?"
+Say: "Hey ${client} — it’s just ${aiName}. I’ll be quick."
 STOP. WAIT.
 
 STEP 2
@@ -1098,7 +1098,7 @@ Say: "I was just giving you a quick call about the request you put in for the ve
 STOP. WAIT.
 
 STEP 3 (BOOKING FRAME)
-Say: "So the next step is really simple — it’s just a quick 5-minute call to look at what you have now compared to what you were trying to protect, and see if there’s any gap. Would later today or tomorrow be better — daytime or evening?"
+Say: "So the next step is really simple — I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Would later today or tomorrow be better — daytime or evening?"
 STOP. WAIT.
 
 STEP 4 (IF THEY PICK A WINDOW)
@@ -1118,7 +1118,7 @@ STOP. WAIT.
 BOOKING SCRIPT — TRUCKER LEADS (FOLLOW IN ORDER)
 
 STEP 1 (FIRST script turn AFTER the system greeting + lead responds)
-Say: "Hey ${client} — it’s just ${aiName}. How’s your day going?"
+Say: "Hey ${client} — it’s just ${aiName}. I’ll be quick."
 STOP. WAIT.
 
 STEP 2
@@ -1126,7 +1126,7 @@ Say: "I was just giving you a quick call about the request you put in for life i
 STOP. WAIT.
 
 STEP 3 (BOOKING FRAME)
-Say: "So the next step is really simple — it’s just a quick 5-minute call to look at what you have now compared to what you were trying to protect, and see if there’s any gap. Would later today or tomorrow be better — daytime or evening?"
+Say: "So the next step is really simple — I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Would later today or tomorrow be better — daytime or evening?"
 STOP. WAIT.
 
 STEP 4 (IF THEY PICK A WINDOW)
@@ -1146,7 +1146,7 @@ STOP. WAIT.
 BOOKING SCRIPT — GENERIC LIFE (FOLLOW IN ORDER)
 
 STEP 1 (FIRST script turn AFTER the system greeting + lead responds)
-Say: "Hey ${client} — it’s just ${aiName}. How’s your day going?"
+Say: "Hey ${client} — it’s just ${aiName}. I’ll be quick."
 STOP. WAIT.
 
 STEP 2
@@ -1154,7 +1154,7 @@ Say: "I was just giving you a quick call about the request you put in for life i
 STOP. WAIT.
 
 STEP 3 (BOOKING FRAME)
-Say: "So the next step is really simple — it’s just a quick 5-minute call to look at what you have now compared to what you were trying to protect, and see if there’s any gap. Would later today or tomorrow be better — daytime or evening?"
+Say: "So the next step is really simple — I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Would later today or tomorrow be better — daytime or evening?"
 STOP. WAIT.
 
 STEP 4 (IF THEY PICK A WINDOW)
@@ -1940,11 +1940,15 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
       const cooldownOk = aiAudioStartedAt > 0 && (now - aiAudioStartedAt) >= 650;
 
       // Require sustained speech: at least 200ms of non-silence while AI is speaking
-      const sustainedOk = Number(state.bargeInAudioMsBuffered || 0) >= 320;
+      const sustainedOk = Number(state.bargeInAudioMsBuffered || 0) >= 700;
 
       if (cooldownOk && sustainedOk) {
-        // Cancel only for validated barge-in while AI is speaking
-        tryCancelOpenAiResponse(state, "ai-speaking");
+        // ✅ Patch 5: ignore micro-interjections ("um", quick noises). Require truly sustained speech.
+        const ms = Number(state.bargeInAudioMsBuffered || 0);
+        if (ms >= 700) {
+          // Cancel only for validated barge-in while AI is speaking
+          tryCancelOpenAiResponse(state, "ai-speaking");
+        }
       }
     }
   }
@@ -2402,8 +2406,8 @@ async function handleOpenAiEvent(
     if (state.voicemailSkipArmed) return;
     if (!state.openAiWs || !state.openAiReady) return;
 
-    // ✅ Hard guard: never create while a response is in flight (prevents double fire)
-    if (state.responseInFlight) return;
+    // ✅ Hard guard: never create while a response is in flight / still waiting (prevents double fire)
+    if (state.responseInFlight || state.waitingForResponse) return;
 
     // ✅ IMPORTANT: Do NOT drop/consume the user turn while the pacer is still draining.
     // Greeting often finishes at OpenAI (response.audio.done) while aiSpeaking stays true until the outbound
