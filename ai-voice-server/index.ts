@@ -274,6 +274,21 @@ function normalizeScriptKey(raw: any): string {
 
   return "mortgage_protection";
 }
+/**
+ * ✅ Script-aware scope label (prevents cross-script wording drift)
+ * We keep the hard lock, but we match the selected scriptKey.
+ */
+function getScopeLabelForScriptKey(scriptKeyRaw: any): string {
+  const k = normalizeScriptKey(scriptKeyRaw);
+  if (k === "mortgage_protection") return "mortgage protection";
+  if (k === "final_expense") return "final expense coverage";
+  if (k === "iul_cash_value") return "cash value life insurance (IUL)";
+  if (k === "veteran_leads") return "veteran life insurance programs";
+  if (k === "trucker_leads") return "life insurance";
+  if (k === "generic_life") return "life insurance";
+  return "life insurance";
+}
+
 
 /**
  * PCM16 (24k) → μ-law 8k (base64) for Twilio
@@ -929,11 +944,12 @@ function buildStepperTurnInstruction(
 ): string {
   const leadName = (ctx.clientFirstName || "").trim() || "there";
   const line = String(lineToSay || "").trim();
+  const scope = getScopeLabelForScriptKey(ctx.scriptKey);
 
   return `
 HARD ENGLISH LOCK: Speak ONLY English.
 HARD NAME LOCK: The ONLY lead name you may use is exactly: "${leadName}" (or "there" if missing). Never invent names.
-HARD SCOPE LOCK: This call is ONLY about a LIFE INSURANCE request. Do NOT mention any other product or topic (no gym, vacation, energy, healthcare, real estate, utilities, etc).
+HARD SCOPE LOCK: This call is ONLY about a ${scope} request. Do NOT mention any other product or topic (no gym, vacation, energy, healthcare, real estate, utilities, etc).
 ABSOLUTE BEHAVIOR: Never apologize. Never mention scripts/prompts/system messages.
 
 OUTPUT CONSTRAINT (NON-NEGOTIABLE):
@@ -960,6 +976,7 @@ function getSelectedScriptText(ctx: AICallContext): string {
   const agentRaw = (ctx.agentName || "your agent").trim() || "your agent";
   const agent = (agentRaw.split(" ")[0] || agentRaw).trim();
   const scriptKey = normalizeScriptKey(ctx.scriptKey);
+  const scope = getScopeLabelForScriptKey(scriptKey);
 
   const SCRIPT_MORTGAGE = `
 BOOKING SCRIPT — MORTGAGE PROTECTION (FOLLOW IN ORDER)
@@ -1195,6 +1212,7 @@ function getScriptBlock(ctx: AICallContext): string {
   const clientRaw = (ctx.clientFirstName || "").trim();
   const client = clientRaw ? clientRaw : "there";
   const scriptKey = normalizeScriptKey(ctx.scriptKey);
+  const scope = getScopeLabelForScriptKey(scriptKey);
 
   const HARD_LOCKS = `
 HARD ENGLISH LOCK (NON-NEGOTIABLE)
@@ -1206,7 +1224,7 @@ HARD NAME LOCK (NON-NEGOTIABLE)
 - NEVER invent or guess a name. NEVER use any other name.
 
 HARD SCOPE LOCK (NON-NEGOTIABLE)
-- This call is ONLY about a LIFE INSURANCE request that the lead submitted.
+- This call is ONLY about the lead’s ${scope} request that the lead submitted.
 - Allowed topics ONLY: mortgage protection, final expense, cash value/IUL, veteran life insurance programs.
 - You MUST NEVER mention or discuss: resorts, hotels, vacations, timeshares, travel, energy plans, utilities, solar, Medicare, health insurance, ACA/Obamacare, auto insurance, home insurance, cable/internet, phone plans, warranties, debt relief, credit repair, alarms, security systems, banking, loans.
 
@@ -1256,10 +1274,11 @@ TURN DISCIPLINE (NON-NEGOTIABLE)
 function buildGreetingInstructions(ctx: AICallContext): string {
   const aiName = (ctx.voiceProfile.aiName || "Alex").trim() || "Alex";
   const clientName = (ctx.clientFirstName || "").trim() || "there";
+  const scope = getScopeLabelForScriptKey(ctx.scriptKey);
 
   return [
     'HARD ENGLISH LOCK: Speak ONLY English.',
-    'HARD SCOPE LOCK: This call is ONLY about a LIFE INSURANCE request. Do NOT mention any other product.',
+    `HARD SCOPE LOCK: This call is ONLY about a ${scope} request. Do NOT mention any other product.`,
     'HARD NAME LOCK: You may ONLY use the lead name exactly as provided. If missing, say "there". Never invent names.',
     "",
     "SYSTEM GREETING (NON-NEGOTIABLE):",
@@ -1280,6 +1299,7 @@ function buildSystemPrompt(ctx: AICallContext): string {
   const agent = (agentRaw.split(" ")[0] || agentRaw).trim();
   const scriptKey = normalizeScriptKey(ctx.scriptKey);
   const leadName = (ctx.clientFirstName || "").trim() || "there";
+  const scope = getScopeLabelForScriptKey(scriptKey);
 
   const base = `
 You are ${aiName}, a phone appointment-setting assistant calling on behalf of licensed life insurance agent ${agent}.
@@ -1294,7 +1314,7 @@ HARD NAME LOCK (NON-NEGOTIABLE)
 - NEVER invent or guess a name.
 
 HARD SCOPE LOCK (NON-NEGOTIABLE)
-- This call is ONLY about a LIFE INSURANCE request that the lead submitted.
+- This call is ONLY about the lead’s ${scope} request that the lead submitted.
 - Allowed topics ONLY: mortgage protection, final expense, cash value/IUL, veteran life programs.
 - You MUST NEVER mention or discuss: resorts, hotels, vacations, timeshares, travel, energy plans, utilities, solar, Medicare, health insurance, ACA/Obamacare, auto insurance, home insurance, cable/internet, phone plans, warranties, debt relief, credit repair, alarms, security systems, banking, loans.
 
