@@ -2396,8 +2396,9 @@ async function handleOpenAiEvent(
       await new Promise((r) => setTimeout(r, 50));
     }
 
-    // ✅ consume this answer only once we can actually proceed
-    state.awaitingUserAnswer = false;
+    // ✅ IMPORTANT: Do NOT clear awaitingUserAnswer unless we actually accept a real answer
+    // OR we are about to speak. Low-signal commits must NOT clear awaitingUserAnswer, otherwise
+    // subsequent commits can be ignored and the stepper can skip ahead.
 
     const isGreetingReply = state.phase === "awaiting_greeting_reply";
 
@@ -2440,6 +2441,10 @@ async function handleOpenAiEvent(
         state.context!,
         lineToSay
       );
+
+      // ✅ consume awaitingUserAnswer ONLY when we are about to speak
+      state.awaitingUserAnswer = false;
+      state.awaitingAnswerForStepIndex = undefined;
 
       state.userAudioMsBuffered = 0;
       state.lastUserTranscript = "";
@@ -2504,6 +2509,10 @@ async function handleOpenAiEvent(
         lineToSay
       );
 
+      // ✅ consume awaitingUserAnswer ONLY when we are about to speak
+      state.awaitingUserAnswer = false;
+      state.awaitingAnswerForStepIndex = undefined;
+
       state.userAudioMsBuffered = 0;
       state.lastUserTranscript = "";
       state.lowSignalCommitCount = 0;
@@ -2561,6 +2570,10 @@ async function handleOpenAiEvent(
           lineToSay
         );
 
+      // ✅ consume awaitingUserAnswer ONLY when we are about to speak
+      state.awaitingUserAnswer = false;
+      state.awaitingAnswerForStepIndex = undefined;
+
         state.repromptCountForCurrentStep = repN + 1;
 
         state.userAudioMsBuffered = 0;
@@ -2598,6 +2611,10 @@ async function handleOpenAiEvent(
 
     const lineToSay = steps[idx] || getBookingFallbackLine(state.context!);
     const perTurnInstr = buildStepperTurnInstruction(state.context!, lineToSay);
+
+    // ✅ consume awaitingUserAnswer ONLY when we are about to speak
+    state.awaitingUserAnswer = false;
+    state.awaitingAnswerForStepIndex = undefined;
 
     state.userAudioMsBuffered = 0;
     state.lastUserTranscript = "";
