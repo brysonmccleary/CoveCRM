@@ -2347,9 +2347,6 @@ async function handleOpenAiEvent(
           })
         );
 
-        // ✅ turn-taking gate: we just asked a question, wait for a real user answer
-        liveState.awaitingUserAnswer = true;
-        liveState.awaitingAnswerForStepIndex = -1;
       })();
     }
 
@@ -2357,45 +2354,6 @@ async function handleOpenAiEvent(
   }
 
   if (t === "input_audio_buffer.committed") {
-    // ============================
-    // HARD TURN-TAKING GATE
-    // ============================
-
-    if (state.awaitingUserAnswer !== true) {
-      if (!(state as any).__turnGateLogAwaitingFalse) {
-        console.log("[TURN-GATE] commit ignored: not awaiting answer");
-        (state as any).__turnGateLogAwaitingFalse = true;
-      }
-      return;
-    }
-
-    const nowGate = Date.now();
-
-    if (!state.lastUserSpeechStoppedAtMs) {
-      if (!(state as any).__turnGateLogNoStopped) {
-        console.log("[TURN-GATE] commit ignored: no speech_stopped");
-        (state as any).__turnGateLogNoStopped = true;
-      }
-      return;
-    }
-
-    const settleDeltaMs = nowGate - state.lastUserSpeechStoppedAtMs;
-    if (settleDeltaMs < 300) {
-      if (!(state as any).__turnGateLogSettle) {
-        console.log("[TURN-GATE] settle wait <300ms (delaying commit processing)");
-        (state as any).__turnGateLogSettle = true;
-      }
-      const waitMs = 300 - settleDeltaMs;
-      await new Promise((r) => setTimeout(r, waitMs));
-    }
-
-    if (state.lastAiDoneAtMs && nowGate - state.lastAiDoneAtMs < 150) {
-      if (!(state as any).__turnGateLogAiOverlap) {
-        console.log("[TURN-GATE] commit ignored: AI overlap");
-        (state as any).__turnGateLogAiOverlap = true;
-      }
-      return;
-    }
 
     if (state.voicemailSkipArmed) return;
     if (!state.openAiWs || !state.openAiReady) return;
