@@ -2448,7 +2448,7 @@ async function handleOpenAiEvent(
       // buffer drains. Do NOT drop the user's commit; if we time out, proceed anyway to avoid dead silence.
       if (Date.now() - waitStartMs > 8000) {
         if (!(state as any).__turnGateLogStillSpeaking) {
-          console.log("[TURN-GATE] commit delayed: still speaking after 8s (continuing anyway)");
+          console.log("[TURN-GATE][DEPLOY-CHECK 0d4e7c4] commit delayed: still speaking after 8s (continuing anyway)");
           (state as any).__turnGateLogStillSpeaking = true;
         }
         break;
