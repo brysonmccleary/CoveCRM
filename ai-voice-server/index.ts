@@ -218,6 +218,12 @@ type CallState = {
   lastUserSpeechStoppedAtMs?: number;
   lastAiDoneAtMs?: number;
   awaitingUserAnswer?: boolean;
+  // ✅ Auto-advance after STATEMENT steps (prevents dead-stalls when lead stays silent)
+  lastSpokenStepIndex?: number;
+  lastSpokenStepType?: StepType;
+  autoAdvanceTimer?: NodeJS.Timeout | null;
+  autoAdvanceArmedAtMs?: number;
+
   awaitingAnswerForStepIndex?: number;
   // ✅ Patch 3: remember the last *accepted* user text so we can validate booking + step advance
   lastAcceptedUserText?: string;
@@ -435,6 +441,94 @@ function tryCancelOpenAiResponse(state: CallState, reason: string) {
     // Mark outbound as "done" so pacer will stop once buffer drains naturally
     state.outboundOpenAiDone = true;
 
+
+    // ✅ AUTO-ADVANCE: After a STATEMENT step, move to the next step automatically unless user starts speaking.
+    // Prevents dead-stalls when the script has non-question statements (lead often stays silent).
+    try {
+      // Clear any existing timer first
+      if (state.autoAdvanceTimer) {
+        clearTimeout(state.autoAdvanceTimer);
+        state.autoAdvanceTimer = null;
+      }
+    } catch {}
+
+    try {
+      const steps = state.scriptSteps || [];
+      const nextIdx =
+        typeof state.scriptStepIndex === "number" ? state.scriptStepIndex : 0;
+
+      const canAutoAdvance =
+        !state.voicemailSkipArmed &&
+        state.phase === "in_call" &&
+        state.lastSpokenStepType === "statement" &&
+        Array.isArray(steps) &&
+        steps.length > 0 &&
+        nextIdx >= 0 &&
+        nextIdx < steps.length &&
+        !state.waitingForResponse &&
+        !state.responseInFlight &&
+        !state.aiSpeaking;
+
+      if (canAutoAdvance) {
+        // Arm time marker; speech_started will cancel timer and we check the marker again before firing.
+        state.autoAdvanceArmedAtMs = Date.now();
+
+        // ~900–1300ms human pause total
+        const delayMs = randInt(900, 1300);
+
+        state.autoAdvanceTimer = setTimeout(async () => {
+          try {
+            // If the user started speaking after we armed, skip.
+            const armedAt = Number(state.autoAdvanceArmedAtMs || 0);
+            if (!armedAt) return;
+
+            // Still safe to proceed?
+            if (state.voicemailSkipArmed) return;
+            if (!state.openAiWs || !state.openAiReady) return;
+            if (state.waitingForResponse || state.responseInFlight || state.aiSpeaking) return;
+
+            const ctx = state.context!;
+            const steps2 = state.scriptSteps || [];
+            const idx2 =
+              typeof state.scriptStepIndex === "number" ? state.scriptStepIndex : 0;
+            if (!Array.isArray(steps2) || steps2.length === 0) return;
+            if (idx2 < 0 || idx2 >= steps2.length) return;
+
+            const lineToSay = steps2[idx2] || getBookingFallbackLine(ctx);
+            const perTurnInstr = buildStepperTurnInstruction(ctx, lineToSay);
+
+            // ✅ record last spoken step + clear any pending auto-advance (this timer)
+            try {
+              if (state.autoAdvanceTimer) {
+                clearTimeout(state.autoAdvanceTimer);
+                state.autoAdvanceTimer = null;
+              }
+            } catch {}
+            state.lastSpokenStepIndex = idx2;
+            state.lastSpokenStepType = classifyStepType(lineToSay);
+
+            setWaitingForResponse(state, true, "response.create (auto-advance)");
+            setAiSpeaking(state, true, "response.create (auto-advance)");
+            setResponseInFlight(state, true, "response.create (auto-advance)");
+            state.outboundOpenAiDone = false;
+
+            state.lastPromptSentAtMs = Date.now();
+            state.lastPromptLine = lineToSay;
+            state.lastResponseCreateAtMs = Date.now();
+
+            state.openAiWs.send(
+              JSON.stringify({
+                type: "response.create",
+                response: { modalities: ["audio", "text"], instructions: perTurnInstr },
+              })
+            );
+
+            // We just spoke idx2. Advance by 1 for next step.
+            state.scriptStepIndex = Math.min(idx2 + 1, Math.max(0, steps2.length - 1));
+          } catch {}
+        }, delayMs);
+      }
+    } catch {}
     console.log("[AI-VOICE][BARGE-IN] sent response.cancel", {
       callSid: state.callSid,
       streamSid: state.streamSid,
@@ -1738,6 +1832,15 @@ async function handleStart(ws: WebSocket, msg: TwilioStartEvent) {
   const state = calls.get(ws);
   if (!state) return;
 
+
+  // ✅ cancel any pending auto-advance (safe: state is defined)
+  try {
+    if (state.autoAdvanceTimer) {
+      clearTimeout(state.autoAdvanceTimer);
+      state.autoAdvanceTimer = null;
+    }
+  } catch {}
+
   state.streamSid = msg.streamSid;
   state.callSid = msg.start.callSid;
   state.callStartedAtMs = Date.now();
@@ -1789,7 +1892,18 @@ async function handleStart(ws: WebSocket, msg: TwilioStartEvent) {
   state.lastUserSpeechStoppedAtMs = undefined;
   state.lastAiDoneAtMs = undefined;
   state.awaitingUserAnswer = false;
-  state.awaitingAnswerForStepIndex = undefined;
+  state.awaitingAnswerForStepIndex = undefined;      // ✅ cancel any pending auto-advance
+      try {
+        if (state.autoAdvanceTimer) {
+          clearTimeout(state.autoAdvanceTimer);
+          state.autoAdvanceTimer = null;
+        }
+      } catch {}
+      state.autoAdvanceArmedAtMs = undefined;
+      state.lastSpokenStepIndex = undefined;
+      state.lastSpokenStepType = undefined;
+
+
 
   // ✅ reset one-time TURN-GATE logs for this call
   (state as any).__turnGateLogAwaitingFalse = false;
@@ -2206,6 +2320,14 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
   });
 
   openAiWs.on("close", () => {
+    // ✅ cancel any pending auto-advance
+    try {
+      if (state.autoAdvanceTimer) {
+        clearTimeout(state.autoAdvanceTimer);
+        state.autoAdvanceTimer = null;
+      }
+    } catch {}
+
     console.log("[AI-VOICE] OpenAI Realtime closed");
   });
 
@@ -2232,6 +2354,14 @@ async function handleOpenAiEvent(
   // ============================
 
   if (t === "input_audio_buffer.speech_started") {
+    // ✅ If the user starts speaking, cancel any pending auto-advance immediately.
+    try {
+      if (state.autoAdvanceTimer) {
+        clearTimeout(state.autoAdvanceTimer);
+        state.autoAdvanceTimer = null;
+      }
+    } catch {}
+
     state.lastUserSpeechStartedAtMs = Date.now();
     return;
   }
@@ -2514,6 +2644,15 @@ async function handleOpenAiEvent(
         lineToSay
       );
 
+      // ✅ record last spoken step + clear any pending auto-advance
+      try {
+        if (state.autoAdvanceTimer) {
+          clearTimeout(state.autoAdvanceTimer);
+          state.autoAdvanceTimer = null;
+        }
+      } catch {}
+      state.lastSpokenStepIndex = 0;
+      state.lastSpokenStepType = classifyStepType(lineToSay);
       // ✅ consume awaitingUserAnswer ONLY when we are about to speak
       state.awaitingUserAnswer = false;
       state.awaitingAnswerForStepIndex = undefined;
@@ -2581,6 +2720,15 @@ async function handleOpenAiEvent(
         lineToSay
       );
 
+      // ✅ record last spoken step + clear any pending auto-advance
+      try {
+        if (state.autoAdvanceTimer) {
+          clearTimeout(state.autoAdvanceTimer);
+          state.autoAdvanceTimer = null;
+        }
+      } catch {}
+      state.lastSpokenStepIndex = -1;
+      state.lastSpokenStepType = classifyStepType(lineToSay);
       // ✅ consume awaitingUserAnswer ONLY when we are about to speak
       state.awaitingUserAnswer = false;
       state.awaitingAnswerForStepIndex = undefined;
@@ -2661,6 +2809,15 @@ async function handleOpenAiEvent(
           lineToSay
         );
 
+      // ✅ record last spoken step + clear any pending auto-advance
+      try {
+        if (state.autoAdvanceTimer) {
+          clearTimeout(state.autoAdvanceTimer);
+          state.autoAdvanceTimer = null;
+        }
+      } catch {}
+      state.lastSpokenStepIndex = -1;
+      state.lastSpokenStepType = classifyStepType(lineToSay);
       // ✅ consume awaitingUserAnswer ONLY when we are about to speak
       state.awaitingUserAnswer = false;
       state.awaitingAnswerForStepIndex = undefined;
@@ -2703,6 +2860,15 @@ async function handleOpenAiEvent(
     const lineToSay = steps[idx] || getBookingFallbackLine(state.context!);
     const perTurnInstr = buildStepperTurnInstruction(state.context!, lineToSay);
 
+      // ✅ record last spoken step + clear any pending auto-advance
+      try {
+        if (state.autoAdvanceTimer) {
+          clearTimeout(state.autoAdvanceTimer);
+          state.autoAdvanceTimer = null;
+        }
+      } catch {}
+      state.lastSpokenStepIndex = idx;
+      state.lastSpokenStepType = classifyStepType(lineToSay);
     // ✅ Patch 3: remember what we accepted from the user BEFORE clearing transcript
     if (lastUserText) {
       state.lastAcceptedUserText = lastUserText;
