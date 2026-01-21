@@ -409,7 +409,7 @@ function tryCancelOpenAiResponse(state: CallState, reason: string) {
     // Cooldown + pre-audio guard: never cancel before AI audio has actually started.
     const startedAt = Number(state.aiAudioStartedAtMs || 0);
     if (startedAt <= 0) return;
-    if (now - startedAt < 450) return;
+    if (now - startedAt < 650) return;
 
 
     const last = Number(state.lastCancelAtMs || 0);
@@ -1930,22 +1930,22 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
       // Keep a tiny ring buffer (~200ms) so we don't lose their first words
       const ring = state.bargeInFrames || [];
       ring.push(payload);
-      while (ring.length > 15) ring.shift(); // 15 * 20ms = 300ms
+      while (ring.length > 10) ring.shift(); // 10 * 20ms = 200ms
       state.bargeInFrames = ring;
 
       const now = Date.now();
       const aiAudioStartedAt = Number(state.aiAudioStartedAtMs || 0);
 
       // Barge-in cooldown: ignore the first ~650ms after AI audio actually starts
-      const cooldownOk = aiAudioStartedAt > 0 && (now - aiAudioStartedAt) >= 450;
+      const cooldownOk = aiAudioStartedAt > 0 && (now - aiAudioStartedAt) >= 650;
 
       // Require sustained speech: at least 200ms of non-silence while AI is speaking
-      const sustainedOk = Number(state.bargeInAudioMsBuffered || 0) >= 300;
+      const sustainedOk = Number(state.bargeInAudioMsBuffered || 0) >= 700;
 
       if (cooldownOk && sustainedOk) {
         // ✅ Patch 5: ignore micro-interjections ("um", quick noises). Require truly sustained speech.
         const ms = Number(state.bargeInAudioMsBuffered || 0);
-        if (ms >= 300) {
+        if (ms >= 700) {
           // Cancel only for validated barge-in while AI is speaking
           tryCancelOpenAiResponse(state, "ai-speaking");
         }
