@@ -2444,12 +2444,14 @@ async function handleOpenAiEvent(
     // buffer drains. If we consume awaitingUserAnswer and return here, we get post-greeting dead silence.
     const waitStartMs = Date.now();
     while (state.waitingForResponse || state.aiSpeaking) {
-      if (Date.now() - waitStartMs > 2500) {
+      // Greeting often finishes at OpenAI (response.audio.done) while aiSpeaking stays true until the outbound
+      // buffer drains. Do NOT drop the user's commit; if we time out, proceed anyway to avoid dead silence.
+      if (Date.now() - waitStartMs > 8000) {
         if (!(state as any).__turnGateLogStillSpeaking) {
-          console.log("[TURN-GATE] commit delayed: still speaking after 2.5s (dropping this commit)");
+          console.log("[TURN-GATE] commit delayed: still speaking after 8s (continuing anyway)");
           (state as any).__turnGateLogStillSpeaking = true;
         }
-        return;
+        break;
       }
       await new Promise((r) => setTimeout(r, 50));
     }
