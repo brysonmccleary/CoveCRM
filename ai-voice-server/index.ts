@@ -409,7 +409,7 @@ function tryCancelOpenAiResponse(state: CallState, reason: string) {
     // Cooldown + pre-audio guard: never cancel before AI audio has actually started.
     const startedAt = Number(state.aiAudioStartedAtMs || 0);
     if (startedAt <= 0) return;
-    if (now - startedAt < 650) return;
+    if (now - startedAt < 450) return;
 
 
     const last = Number(state.lastCancelAtMs || 0);
@@ -1930,22 +1930,22 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
       // Keep a tiny ring buffer (~200ms) so we don't lose their first words
       const ring = state.bargeInFrames || [];
       ring.push(payload);
-      while (ring.length > 10) ring.shift(); // 10 * 20ms = 200ms
+      while (ring.length > 15) ring.shift(); // 15 * 20ms = 300ms
       state.bargeInFrames = ring;
 
       const now = Date.now();
       const aiAudioStartedAt = Number(state.aiAudioStartedAtMs || 0);
 
       // Barge-in cooldown: ignore the first ~650ms after AI audio actually starts
-      const cooldownOk = aiAudioStartedAt > 0 && (now - aiAudioStartedAt) >= 650;
+      const cooldownOk = aiAudioStartedAt > 0 && (now - aiAudioStartedAt) >= 450;
 
       // Require sustained speech: at least 200ms of non-silence while AI is speaking
-      const sustainedOk = Number(state.bargeInAudioMsBuffered || 0) >= 700;
+      const sustainedOk = Number(state.bargeInAudioMsBuffered || 0) >= 300;
 
       if (cooldownOk && sustainedOk) {
         // ✅ Patch 5: ignore micro-interjections ("um", quick noises). Require truly sustained speech.
         const ms = Number(state.bargeInAudioMsBuffered || 0);
-        if (ms >= 700) {
+        if (ms >= 300) {
           // Cancel only for validated barge-in while AI is speaking
           tryCancelOpenAiResponse(state, "ai-speaking");
         }
@@ -2164,6 +2164,10 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
           type: "server_vad",
           create_response: false,
         },
+        input_audio_transcription: {
+          model: "gpt-4o-mini-transcribe",
+          language: "en",
+        },
       },
     };
 
@@ -2271,6 +2275,32 @@ async function handleOpenAiEvent(
       }
     }
   } catch {}
+
+  // ✅ Finalized input transcription event (most reliable)
+  if (t === "conversation.item.input_audio_transcription.completed") {
+    const transcript = String(
+      event?.transcript ||
+      event?.text ||
+      event?.item?.transcript ||
+      event?.item?.text ||
+      ""
+    ).trim();
+
+    if (transcript) {
+      state.lastUserTranscript = transcript;
+      (state as any).lastUserTranscriptAtMs = Date.now();
+
+      if (!(state as any).__loggedTranscriptCompletedOnce) {
+        (state as any).__loggedTranscriptCompletedOnce = true;
+        console.log("[AI-VOICE][TRANSCRIPT][COMPLETED]", {
+          callSid: state.callSid,
+          streamSid: state.streamSid,
+          len: transcript.length,
+          sample: transcript.slice(0, 140),
+        });
+      }
+    }
+  }
 
   if (t === "session.updated" && !state.openAiConfigured) {
     state.openAiConfigured = true;
@@ -2427,6 +2457,18 @@ async function handleOpenAiEvent(
     // ✅ IMPORTANT: Do NOT clear awaitingUserAnswer unless we actually accept a real answer
     // OR we are about to speak. Low-signal commits must NOT clear awaitingUserAnswer, otherwise
     // subsequent commits can be ignored and the stepper can skip ahead.
+    // ✅ Wait briefly for async transcription to land after commit
+    async function waitForTranscriptAfterCommit(s: CallState) {
+      const start = Date.now();
+      while (Date.now() - start < 900) {
+        const txt = String(s.lastUserTranscript || "").trim();
+        if (txt) return;
+        await new Promise((r) => setTimeout(r, 50));
+      }
+    }
+
+    await waitForTranscriptAfterCommit(state);
+
 
     const isGreetingReply = state.phase === "awaiting_greeting_reply";
 
