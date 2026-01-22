@@ -2489,7 +2489,7 @@ async function handleOpenAiEvent(
             type: "response.create",
             response: {
               modalities: ["audio", "text"],
-              temperature: 0,
+
               instructions: greetingInstr,
             },
           })
@@ -2599,7 +2599,7 @@ async function handleOpenAiEvent(
         state.openAiWs.send(
           JSON.stringify({
             type: "response.create",
-            response: { modalities: ["audio", "text"], temperature: 0, instructions: retryInstr },
+            response: { modalities: ["audio", "text"], temperature: 0.6, instructions: retryInstr },
           })
         );
 
@@ -2664,7 +2664,7 @@ async function handleOpenAiEvent(
       state.openAiWs.send(
         JSON.stringify({
           type: "response.create",
-          response: { modalities: ["audio", "text"], temperature: 0, instructions: perTurnInstr },
+          response: { modalities: ["audio", "text"], temperature: 0.6, instructions: perTurnInstr },
         })
       );
 
@@ -2703,7 +2703,7 @@ async function handleOpenAiEvent(
       state.openAiWs.send(
         JSON.stringify({
           type: "response.create",
-          response: { modalities: ["audio", "text"], temperature: 0, instructions: perTurnInstr },
+          response: { modalities: ["audio", "text"], temperature: 0.6, instructions: perTurnInstr },
         })
       );
 
@@ -2789,7 +2789,7 @@ async function handleOpenAiEvent(
         state.openAiWs.send(
           JSON.stringify({
             type: "response.create",
-            response: { modalities: ["audio", "text"], temperature: 0, instructions: perTurnInstr },
+            response: { modalities: ["audio", "text"], temperature: 0.6, instructions: perTurnInstr },
           })
         );
 
@@ -2856,7 +2856,7 @@ async function handleOpenAiEvent(
         type: "response.create",
         response: {
           modalities: ["audio", "text"],
-              temperature: 0,
+
           instructions: perTurnInstr,
         },
       })
