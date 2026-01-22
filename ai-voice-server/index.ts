@@ -731,6 +731,27 @@ function getGreetingAckPrefix(userTextRaw: string): string {
   return "Got it.";
 }
 
+function getHumanAckPrefixForStepAnswer(
+  prevStepType: StepType | undefined,
+  userTextRaw: string
+): string {
+  const t = String(userTextRaw || "").trim().toLowerCase();
+  if (!t) return "";
+
+  // Time answers -> "Perfect."
+  if (prevStepType === "time_question") return "Perfect.";
+
+  // Yes/no or open -> quick human acknowledgement
+  if (prevStepType === "yesno_question" || prevStepType === "open_question") {
+    // If they sound confused, don't do a cheery ack
+    if (t.includes("what") || t.includes("huh") || t.includes("confused")) return "";
+    return "Got it.";
+  }
+
+  return "";
+}
+
+
 function isGreetingNegativeHearing(userTextRaw: string): boolean {
   const t = String(userTextRaw || "").trim().toLowerCase();
   if (!t) return false;
@@ -954,6 +975,38 @@ function getRepromptLineForStepType(
 
 function detectObjection(textRaw: string): string | null {
   const t = String(textRaw || "").trim().toLowerCase();
+
+  // Confusion / identity / "what is this"
+  if (
+    t.includes("who are you") ||
+    t.includes("who is this") ||
+    t.includes("what is this") ||
+    t.includes("im confused") ||
+    t.includes("i'm confused") ||
+    (t.includes("confused") && (t.includes("who") || t.includes("why") || t.includes("what"))) ||
+    t.includes("why are you calling") ||
+    t.includes("when did i") && (t.includes("request") || t.includes("fill") || t.includes("sign")) ||
+    t.includes("i dont remember") ||
+    t.includes("i don't remember") ||
+    t.includes("dont remember") ||
+    t.includes("don't remember") ||
+    t.includes("doesn't ring a bell") ||
+    t.includes("doesnt ring a bell")
+  ) return "confused_identity";
+
+  // "What does this call entail / how long?"
+  if (
+    t.includes("what does this entail") ||
+    t.includes("what is this about") ||
+    t.includes("what is it about") ||
+    t.includes("how does this work") ||
+    t.includes("how long does it take") ||
+    t.includes("how long will it take") ||
+    t.includes("what happens on the call") ||
+    t.includes("what do you cover") ||
+    t.includes("what do we talk about") ||
+    t.includes("what are we going over")
+  ) return "what_entails";
   if (!t) return null;
 
   // Very lightweight; only triggers if we actually have a transcript.
@@ -1034,6 +1087,15 @@ function getRebuttalLine(ctx: AICallContext, kind: string): string {
   if (kind === "dont_remember") {
     // Stay inside life-insurance context
     return `No worries — it was just a request for information on life insurance. Was that for just you, or a spouse as well?`;
+  }
+  if (kind === "confused_identity") {
+    const aiName = (ctx.voiceProfile.aiName || "Alex").trim() || "Alex";
+    const scope = getScopeLabelForScriptKey(ctx.scriptKey);
+    return `My apologies — my name is ${aiName}. I’m calling about the ${scope} request. Does that ring a bell?`;
+  }
+  if (kind === "what_entails") {
+    const scope = getScopeLabelForScriptKey(ctx.scriptKey);
+    return `It’s a short call — ${agent} just goes over what you might have available for ${scope} and answers any questions. Would later today or tomorrow be better — daytime or evening?`;
   }
   if (kind === "scam") {
     return `I understand. This is just a scheduling call tied to your life insurance request. ${agent} will explain everything clearly on the phone. Would later today or tomorrow be better — daytime or evening?`;
@@ -2800,9 +2862,41 @@ async function handleOpenAiEvent(
       return;
     }
 
-    const lineToSay = steps[idx] || getBookingFallbackLine(state.context!);
-    const perTurnInstr = buildStepperTurnInstruction(state.context!, lineToSay);
+    let lineToSay = steps[idx] || getBookingFallbackLine(state.context!);
 
+
+    const prevIdx = idx - 1;
+
+
+    if (
+
+
+      prevIdx >= 0 &&
+
+
+      state.lastAcceptedUserText &&
+
+
+      state.lastAcceptedStepIndex === prevIdx
+
+
+    ) {
+
+
+      const prevLine = steps[prevIdx] || "";
+
+
+      const prevType = classifyStepType(prevLine);
+
+
+      const ack2 = getHumanAckPrefixForStepAnswer(prevType, state.lastAcceptedUserText);
+
+
+      if (ack2) lineToSay = `${ack2} ${lineToSay}`;
+
+
+    }
+    const perTurnInstr = buildStepperTurnInstruction(state.context!, lineToSay);
     // ✅ Patch 3: remember what we accepted from the user BEFORE clearing transcript
     if (lastUserText) {
       state.lastAcceptedUserText = lastUserText;
