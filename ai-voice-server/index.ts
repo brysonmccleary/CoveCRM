@@ -218,6 +218,11 @@ type CallState = {
   lastUserSpeechStoppedAtMs?: number;
   lastAiDoneAtMs?: number;
   awaitingUserAnswer?: boolean;
+  // Pending committed turn (non-blocking): avoids dead-silence by not awaiting inside committed handler
+  pendingCommittedUserTurn?: boolean;
+  pendingCommitRetryTimer?: any;
+  pendingCommittedAtMs?: number;
+
   // ✅ Auto-advance after STATEMENT steps (prevents dead-stalls when lead stays silent)
   lastSpokenStepIndex?: number;
   lastSpokenStepType?: StepType;
@@ -2339,6 +2344,32 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
 /**
  * OpenAI events → Twilio + control metadata
  */
+/**
+ * Non-blocking pending-turn processor.
+ * This prevents dead-silence by NEVER awaiting inside input_audio_buffer.committed.
+ */
+async function tryProcessPendingCommittedTurn(state: CallState, reason: string) {
+  try {
+    if (!state.pendingCommittedUserTurn) return;
+    if (state.voicemailSkipArmed) { state.pendingCommittedUserTurn = false; return; }
+    if (!state.openAiWs || !state.openAiReady) return;
+
+    // must be idle (do NOT barge into active playback)
+    if (state.responseInFlight || state.waitingForResponse || state.aiSpeaking) return;
+
+    const lastUserText = String(state.lastUserTranscript || "").trim();
+    const audioMs = Number(state.userAudioMsBuffered || 0);
+
+    // Only fire when we actually have something to work with
+    if (!lastUserText && audioMs < 1400) return;
+
+    // Consume pending + signal that committed logic should run now
+    state.pendingCommittedUserTurn = false;
+    state.pendingCommittedAtMs = undefined;
+    (state as any).__runCommittedLogicNow = true;
+  } catch {}
+}
+
 async function handleOpenAiEvent(
   twilioWs: WebSocket,
   state: CallState,
@@ -2418,6 +2449,9 @@ async function handleOpenAiEvent(
 
     if (transcript) {
       state.lastUserTranscript = transcript;
+
+      // ✅ Non-blocking: if a commit is pending, try to process it now
+      await tryProcessPendingCommittedTurn(state, "transcription.completed");
       (state as any).lastUserTranscriptAtMs = Date.now();
 
       if (!(state as any).__loggedTranscriptCompletedOnce) {
@@ -2569,38 +2603,43 @@ async function handleOpenAiEvent(
     // ✅ Hard guard: never create while a response is in flight / still waiting (prevents double fire)
     if (state.responseInFlight || state.waitingForResponse) return;
 
-    // ✅ IMPORTANT: Do NOT drop/consume the user turn while the pacer is still draining.
-    // Greeting often finishes at OpenAI (response.audio.done) while aiSpeaking stays true until the outbound
-    // buffer drains. If we consume awaitingUserAnswer and return here, we get post-greeting dead silence.
-    const waitStartMs = Date.now();
-    while (state.waitingForResponse || state.aiSpeaking) {
-      // Greeting often finishes at OpenAI (response.audio.done) while aiSpeaking stays true until the outbound
-      // buffer drains. Do NOT drop the user's commit; if we time out, proceed anyway to avoid dead silence.
-      if (Date.now() - waitStartMs > 8000) {
-        if (!(state as any).__turnGateLogStillSpeaking) {
-          console.log("[TURN-GATE][DEPLOY-CHECK 0d4e7c4] commit delayed: still speaking after 8s (continuing anyway)");
-          (state as any).__turnGateLogStillSpeaking = true;
-        }
-        break;
+    // ✅ Non-blocking pending-turn: NEVER await here (prevents dead-silence)
+    state.pendingCommittedUserTurn = true;
+    state.pendingCommittedAtMs = Date.now();
+
+    // If we're not idle yet, retry shortly until we are idle AND have transcript/strong audio.
+    // This avoids the old blocking while-loop that prevented transcription events from being processed.
+    try {
+      if (state.pendingCommitRetryTimer) clearTimeout(state.pendingCommitRetryTimer);
+    } catch {}
+
+    const retryStartMs = Date.now();
+    const retry = async () => {
+      // Give up after 10s so we never stall forever
+      if (Date.now() - retryStartMs > 10000) {
+        state.pendingCommittedUserTurn = false;
+        try { state.pendingCommitRetryTimer = null; } catch {}
+        return;
       }
-      await new Promise((r) => setTimeout(r, 50));
+
+      await tryProcessPendingCommittedTurn(state, "commit.retry");
+
+      if (state.pendingCommittedUserTurn) {
+        state.pendingCommitRetryTimer = setTimeout(() => { retry().catch(() => {}); }, 120);
+      } else {
+        try { state.pendingCommitRetryTimer = null; } catch {}
+      }
+    };
+
+    // Attempt immediately in case transcript already exists and we're idle
+    await tryProcessPendingCommittedTurn(state, "commit.immediate");
+    if (state.pendingCommittedUserTurn) {
+      state.pendingCommitRetryTimer = setTimeout(() => { retry().catch(() => {}); }, 120);
     }
 
-    // ✅ IMPORTANT: Do NOT clear awaitingUserAnswer unless we actually accept a real answer
-    // OR we are about to speak. Low-signal commits must NOT clear awaitingUserAnswer, otherwise
-    // subsequent commits can be ignored and the stepper can skip ahead.
-    // ✅ Wait briefly for async transcription to land after commit
-    async function waitForTranscriptAfterCommit(s: CallState) {
-      const start = Date.now();
-      while (Date.now() - start < 900) {
-        const txt = String(s.lastUserTranscript || "").trim();
-        if (txt) return;
-        await new Promise((r) => setTimeout(r, 50));
-      }
-    }
-
-    await waitForTranscriptAfterCommit(state);
-
+    // ✅ Only run committed logic when explicitly triggered (prevents accidental double fires)
+    if (!(state as any).__runCommittedLogicNow) return;
+    (state as any).__runCommittedLogicNow = false;
 
     const isGreetingReply = state.phase === "awaiting_greeting_reply";
 
