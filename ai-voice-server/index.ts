@@ -683,10 +683,102 @@ function extractScriptStepsFromSelectedScript(selectedScript: string): string[] 
   return out;
 }
 
+function getGreetingAckPrefix(userTextRaw: string): string {
+  const t = String(userTextRaw || "").trim().toLowerCase();
+  if (!t) return "Awesome.";
+
+  // If they sound upset / stressed
+  if (
+    t.includes("bad day") ||
+    t.includes("not good") ||
+    t.includes("terrible") ||
+    t.includes("stressed") ||
+    t.includes("pissed") ||
+    t.includes("angry") ||
+    t.includes("frustrated") ||
+    t.includes("annoyed")
+  ) return "I hear you.";
+
+  // If they say they're busy
+  if (t.includes("busy") || t.includes("at work") || t.includes("can't talk") || t.includes("in a meeting"))
+    return "Got you.";
+
+  // If they clearly confirm they can hear
+  if (
+    t == "yes" ||
+    t == "yeah" ||
+    t == "yep" ||
+    t == "yup" ||
+    t.includes("i can hear") ||
+    t.includes("hear you") ||
+    t.includes("yes i can") ||
+    t.includes("loud and clear")
+  ) return "Awesome.";
+
+  // If they clearly cannot hear
+  if (
+    t == "no" ||
+    t.includes("can't hear") ||
+    t.includes("cannot hear") ||
+    t.includes("can not hear") ||
+    t.includes("hard to hear") ||
+    t.includes("barely hear") ||
+    t.includes("what") ||
+    t.includes("huh")
+  ) return "Okay.";
+
+  // Neutral default that won't sound weird
+  return "Got it.";
+}
+
+function isGreetingNegativeHearing(userTextRaw: string): boolean {
+  const t = String(userTextRaw || "").trim().toLowerCase();
+  if (!t) return false;
+
+  // Strong "can't hear" signals
+  if (
+    t === "no" ||
+    t === "nope" ||
+    t === "nah" ||
+    t.includes("can't hear") ||
+    t.includes("cant hear") ||
+    t.includes("cannot hear") ||
+    t.includes("can not hear") ||
+    t.includes("barely hear") ||
+    t.includes("hard to hear") ||
+    t.includes("hardly hear") ||
+    t.includes("not hearing") ||
+    t.includes("i can't hear") ||
+    t.includes("i cant hear") ||
+    t.includes("i cannot hear") ||
+    t.includes("you're breaking up") ||
+    t.includes("youre breaking up") ||
+    t.includes("cutting out") ||
+    t.includes("static") ||
+    t.includes("too quiet") ||
+    t.includes("quiet") ||
+    t.includes("speak up") ||
+    t.includes("say that again") ||
+    t.includes("repeat that")
+  ) {
+    return true;
+  }
+
+  // Short confusion responses to "can you hear me?"
+  if (new Set(["what","huh","pardon","sorry","hello"]).has(t)) return true;
+  if (new Set(["what?","huh?","pardon?","sorry?","hello?"]).has(t)) return true;
+
+  // Fallback phrase patterns (no regex escapes in TS needed here)
+  if (t.includes("can not hear") || t.includes("cannot hear")) return true;
+  if (t.includes("difficult to hear") || t.includes("hard to hear")) return true;
+
+  return false;
+}
+
 function getBookingFallbackLine(ctx: AICallContext): string {
   const agentRaw = (ctx.agentName || "your agent").trim() || "your agent";
   const agent = (agentRaw.split(" ")[0] || agentRaw).trim();
-  return `Perfect — my job is just to get you scheduled. ${agent} is the licensed agent who will go over everything with you. Would later today or tomorrow be better — daytime or evening?`;
+  return `Got it — my job is just to get you scheduled. ${agent} is the licensed agent who will go over everything with you. Would later today or tomorrow be better — daytime or evening?`;
 }
 
 /**
@@ -934,7 +1026,7 @@ function getRebuttalLine(ctx: AICallContext, kind: string): string {
     return `I can, but it’s usually easier to schedule a quick call so you don’t have to go back and forth. Would later today or tomorrow be better — daytime or evening?`;
   }
   if (kind === "already_have") {
-    return `Perfect — this is just to make sure it still lines up with what you wanted. Would later today or tomorrow be better — daytime or evening?`;
+    return `Got it — this is just a quick scheduling call. Would later today or tomorrow be better — daytime or evening?`;
   }
   if (kind === "how_much") {
     return `Good question — ${agent} covers that on the quick call because it depends on what you want it to do. Would later today or tomorrow be better — daytime or evening?`;
@@ -948,7 +1040,7 @@ function getRebuttalLine(ctx: AICallContext, kind: string): string {
   }
   if (kind === "not_interested") {
     // Keep booking-only and let outcome logic handle later based on model control if you have it
-    return `No worries — just so I don’t waste your time, did you mean you don’t want any coverage at all, or you just don’t want a call right now?`;
+    return `No worries at all. Would you like me to close this out, or would a quick call later today or tomorrow be better?`;
   }
   if (kind === "redirect") {
     // They tried to steer to other verticals. We do NOT follow them. We return to booking.
@@ -1352,7 +1444,14 @@ BOOKING-ONLY (NON-NEGOTIABLE)
 - You are NOT the licensed agent.
 - Do NOT say you are an underwriter.
 - Do NOT mention rates, carriers, approvals, eligibility, or ask health/age/DOB/SSN/banking questions.
+- Do NOT ask or discuss ANY discovery or qualification topics, including but not limited to:
+  age, date of birth, loan balance, mortgage amount, income, budget, coverage amount,
+  policy type, health, medications, underwriting, rates, carriers, approvals, eligibility.
 - Your ONLY goal is to follow the booking script and schedule the appointment.
+
+MANDATORY REDIRECT RULE (NON-NEGOTIABLE)
+- If the lead volunteers ANY of the above information, acknowledge briefly (e.g. "Got it"),
+  then IMMEDIATELY return to booking without asking follow-up questions.
 
 TURN DISCIPLINE (NON-NEGOTIABLE)
 - After you ask ANY question, STOP and WAIT.
@@ -2390,6 +2489,7 @@ async function handleOpenAiEvent(
             type: "response.create",
             response: {
               modalities: ["audio", "text"],
+              temperature: 0,
               instructions: greetingInstr,
             },
           })
@@ -2465,9 +2565,53 @@ async function handleOpenAiEvent(
 
     if (isGreetingReply) {
       const lineToSay = steps[0] || getBookingFallbackLine(state.context!);
-      const perTurnInstr = buildStepperTurnInstruction(
+
+      // ✅ Human-sounding deterministic acknowledgment after "Can you hear me?"
+      // We ONLY do this on the very first step after the greeting.
+      const ack = getGreetingAckPrefix(lastUserText);
+      if (isGreetingNegativeHearing(lastUserText)) {
+        // If they couldn't hear, re-ask hearing check instead of advancing steps.
+        const aiName2 = (state.context!.voiceProfile.aiName || "Alex").trim() || "Alex";
+        const clientName2 = (state.context!.clientFirstName || "").trim() || "there";
+        const retryLine = `Okay — can you hear me now, ${clientName2}? This is ${aiName2}.`;
+        const retryInstr = buildStepperTurnInstruction(state.context!, retryLine);
+
+        // consume awaitingUserAnswer ONLY when we are about to speak
+        state.awaitingUserAnswer = false;
+        state.awaitingAnswerForStepIndex = undefined;
+
+        state.userAudioMsBuffered = 0;
+        state.lastUserTranscript = "";
+        state.lowSignalCommitCount = 0;
+        state.repromptCountForCurrentStep = 0;
+
+        await humanPause();
+
+        setWaitingForResponse(state, true, "response.create (greeting retry)");
+        setAiSpeaking(state, true, "response.create (greeting retry)");
+        setResponseInFlight(state, true, "response.create (greeting retry)");
+        state.outboundOpenAiDone = false;
+
+        state.lastPromptSentAtMs = Date.now();
+        state.lastPromptLine = retryLine;
+        state.lastResponseCreateAtMs = Date.now();
+
+        state.openAiWs.send(
+          JSON.stringify({
+            type: "response.create",
+            response: { modalities: ["audio", "text"], temperature: 0, instructions: retryInstr },
+          })
+        );
+
+        // Stay in greeting phase; do NOT advance steps.
+        state.phase = "awaiting_greeting_reply";
+        return;
+      }
+
+      // prefix the first script step with a safe ack
+      const lineToSay2 = `${ack} ${lineToSay}`;      const perTurnInstr = buildStepperTurnInstruction(
         state.context!,
-        lineToSay
+        lineToSay2
       );
 
       // ✅ consume awaitingUserAnswer ONLY when we are about to speak
@@ -2514,13 +2658,13 @@ async function handleOpenAiEvent(
       } catch {}
 
       state.lastPromptSentAtMs = Date.now();
-      state.lastPromptLine = lineToSay;
+      state.lastPromptLine = lineToSay2;
       state.lastResponseCreateAtMs = Date.now();
 
       state.openAiWs.send(
         JSON.stringify({
           type: "response.create",
-          response: { modalities: ["audio", "text"], instructions: perTurnInstr },
+          response: { modalities: ["audio", "text"], temperature: 0, instructions: perTurnInstr },
         })
       );
 
@@ -2559,7 +2703,7 @@ async function handleOpenAiEvent(
       state.openAiWs.send(
         JSON.stringify({
           type: "response.create",
-          response: { modalities: ["audio", "text"], instructions: perTurnInstr },
+          response: { modalities: ["audio", "text"], temperature: 0, instructions: perTurnInstr },
         })
       );
 
@@ -2645,7 +2789,7 @@ async function handleOpenAiEvent(
         state.openAiWs.send(
           JSON.stringify({
             type: "response.create",
-            response: { modalities: ["audio", "text"], instructions: perTurnInstr },
+            response: { modalities: ["audio", "text"], temperature: 0, instructions: perTurnInstr },
           })
         );
 
@@ -2712,6 +2856,7 @@ async function handleOpenAiEvent(
         type: "response.create",
         response: {
           modalities: ["audio", "text"],
+              temperature: 0,
           instructions: perTurnInstr,
         },
       })
