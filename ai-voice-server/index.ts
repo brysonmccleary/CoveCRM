@@ -2831,12 +2831,16 @@ async function handleOpenAiEvent(
       const lastPromptAt = Number(state.lastPromptSentAtMs || 0);
       const msSincePrompt = now2 - lastPromptAt;
 
+      const repN = Number(state.repromptCountForCurrentStep || 0);
+
+      // ✅ Never go silent when we HAVE a transcript but it's not a valid answer for this step type.
+      // Reprompt quickly (human-like) instead of waiting for 3 bad commits / 3.2s.
       const shouldReprompt =
-        msSincePrompt >= 3200 &&
-        (state.lowSignalCommitCount || 0) >= 3 &&
-        (state.repromptCountForCurrentStep || 0) < 3;
+        (hasTranscript && msSincePrompt >= 650 && repN < 3) ||
+        (msSincePrompt >= 3200 && (state.lowSignalCommitCount || 0) >= 2 && repN < 3);
 
       if (shouldReprompt) {
+
         const repN = Number(state.repromptCountForCurrentStep || 0);
         const lineToSay = getRepromptLineForStepType(
           state.context!,
