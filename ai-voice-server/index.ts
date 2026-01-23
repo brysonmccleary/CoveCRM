@@ -173,6 +173,10 @@ type CallState = {
   // last user text (only if OpenAI emits it; non-blocking)
   lastUserTranscript?: string;
 
+  // ✅ Realtime transcription aggregation (OpenAI events may stream deltas per item_id)
+  lastUserTranscriptByItemId?: Record<string, string>;
+  lastUserTranscriptPartialByItemId?: Record<string, string>;
+
   // ✅ Human-like waiting + reprompt (NEW)
   lastPromptSentAtMs?: number;
   lastPromptLine?: string;
@@ -2416,24 +2420,68 @@ async function handleOpenAiEvent(
   try {
     const typeLower = String(event?.type || "").toLowerCase();
 
-    const looksInputTranscription =
-      typeLower.includes("input_audio_transcription") ||
-      typeLower.includes("input.transcription") ||
-      typeLower.includes("conversation.item.input_audio_transcription");
+    // ✅ Realtime input audio transcription (delta + completed)
+    // OpenAI may send:
+    // - conversation.item.input_audio_transcription.delta { item_id, delta }
+    // - conversation.item.input_audio_transcription.completed { item_id, transcript }
+    // - conversation.item.input_audio_transcription.failed { item_id }
+    //
+    // We aggregate deltas per item_id and finalize on completed. We also keep
+    // a best-effort fallback for other transcription-ish events.
+    const isItemTranscriptionEvent =
+      typeLower === "conversation.item.input_audio_transcription.delta" ||
+      typeLower === "conversation.item.input_audio_transcription.completed" ||
+      typeLower === "conversation.item.input_audio_transcription.failed";
 
-    if (looksInputTranscription) {
-      const maybeText =
-        event?.transcript ||
-        event?.text ||
-        event?.item?.transcript ||
-        event?.item?.text ||
-        event?.delta?.transcript ||
-        event?.delta?.text ||
-        event?.input_audio_transcription?.text ||
-        event?.input_audio_transcription?.transcript ||
-        "";
-      if (typeof maybeText === "string" && maybeText.trim()) {
-        state.lastUserTranscript = maybeText.trim();
+    if (isItemTranscriptionEvent) {
+      const itemId = String((event as any)?.item_id || "").trim();
+      if (!state.lastUserTranscriptByItemId) state.lastUserTranscriptByItemId = {};
+      if (!state.lastUserTranscriptPartialByItemId) state.lastUserTranscriptPartialByItemId = {};
+
+      if (typeLower === "conversation.item.input_audio_transcription.delta") {
+        const d = String((event as any)?.delta || "").trim();
+        if (itemId && d) {
+          const prev = state.lastUserTranscriptPartialByItemId[itemId] || "";
+          const next = (prev + d).replace(/\s+/g, " ").trim();
+          state.lastUserTranscriptPartialByItemId[itemId] = next;
+          state.lastUserTranscript = next;
+        }
+      } else if (typeLower === "conversation.item.input_audio_transcription.completed") {
+        const tr = String((event as any)?.transcript || "").trim();
+        if (itemId && tr) {
+          const clean = tr.replace(/\s+/g, " ").trim();
+          state.lastUserTranscriptByItemId[itemId] = clean;
+          state.lastUserTranscriptPartialByItemId[itemId] = "";
+          state.lastUserTranscript = clean;
+        }
+      } else {
+        if (itemId && state.lastUserTranscriptPartialByItemId) {
+          state.lastUserTranscriptPartialByItemId[itemId] = "";
+        }
+      }
+    } else {
+      // ✅ Best-effort fallback for other transcription events.
+      // We do NOT depend on these existing; they vary by model/settings.
+      const looksInputTranscription =
+        typeLower.includes("input_audio_transcription") ||
+        typeLower.includes("input.transcription") ||
+        typeLower.includes("conversation.item.input_audio_transcription");
+
+      if (looksInputTranscription) {
+        const maybeText =
+          (event as any)?.transcript ||
+          (event as any)?.text ||
+          (event as any)?.item?.transcript ||
+          (event as any)?.item?.text ||
+          (event as any)?.delta?.transcript ||
+          (event as any)?.delta?.text ||
+          (event as any)?.input_audio_transcription?.text ||
+          (event as any)?.input_audio_transcription?.transcript ||
+          "";
+
+        if (typeof maybeText === "string" && maybeText.trim()) {
+          state.lastUserTranscript = maybeText.trim();
+        }
       }
     }
   } catch {}
@@ -2572,6 +2620,57 @@ async function handleOpenAiEvent(
 
     if (state.voicemailSkipArmed) return;
     if (!state.openAiWs || !state.openAiReady) return;
+    // ✅ BEST transcript selection (smooth gating)
+    // Prefer completed per-item transcript if present; else partial; else lastUserTranscript.
+    // This avoids reacting to empty/noisy commits and keeps turn-taking natural.
+    let bestTranscript = "";
+    try {
+      const byId = (state.lastUserTranscriptByItemId || {}) as Record<string,string>;
+      const partialById = (state.lastUserTranscriptPartialByItemId || {}) as Record<string,string>;
+
+      // pick the most recently updated entry (best-effort: last key iteration)
+      const ids = Object.keys(byId);
+      if (ids.length) {
+        const lastId = ids[ids.length - 1];
+        bestTranscript = String(byId[lastId] || "").trim();
+      }
+
+      if (!bestTranscript) {
+        const pids = Object.keys(partialById);
+        if (pids.length) {
+          const lastPid = pids[pids.length - 1];
+          bestTranscript = String(partialById[lastPid] || "").trim();
+        }
+      }
+
+      if (!bestTranscript) bestTranscript = String(state.lastUserTranscript || "").trim();
+      bestTranscript = bestTranscript.replace(/\s+/g, " ").trim();
+    } catch {}
+
+    // Instrument once per process if needed (safe + tiny)
+    if (!(state as any).__bestTranscriptLogOnce) {
+      (state as any).__bestTranscriptLogOnce = true;
+      console.log("[AI-VOICE][TURN-GATE][BEST-TRANSCRIPT]", {
+        callSid: state.callSid,
+        hasBestTranscript: !!bestTranscript,
+        bestLen: bestTranscript ? bestTranscript.length : 0,
+      });
+    }
+
+    // ✅ If commit is too small AND transcript is empty, do nothing and wait.
+    // This prevents the AI from "jumping in" on comfort noise / micro-utterances.
+    const audioMsCommitGate = Number(state.userAudioMsBuffered || 0);
+    const tooLittleAudio = audioMsCommitGate > 0 && audioMsCommitGate < 280; // <~0.28s is usually not a real answer
+    const tooLittleText = !bestTranscript || bestTranscript.length < 2;
+
+    if (tooLittleText && tooLittleAudio) {
+      // Keep counting low-signal commits, but do not respond yet.
+      state.lowSignalCommitCount = (state.lowSignalCommitCount || 0) + 1;
+      return;
+    }
+
+    // ✅ Use bestTranscript as the canonical lastUserTranscript for this turn
+    if (bestTranscript) state.lastUserTranscript = bestTranscript;
 
     // ✅ Hard guard: never create while a response is in flight / still waiting (prevents double fire)
     if (state.responseInFlight || state.waitingForResponse) return;
