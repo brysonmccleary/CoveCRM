@@ -1080,7 +1080,7 @@ function getRebuttalLine(ctx: AICallContext, kind: string): string {
   if (kind === "confused_identity") {
     const aiName = (ctx.voiceProfile?.aiName || "Alex").trim() || "Alex";
     const scope = getScopeLabelForScriptKey(ctx.scriptKey);
-    return `My apologies — my name is ${aiName}. I’m calling about the ${scope} request. Does that ring a bell?`;
+    return `Hey — my name is ${aiName}. I’m calling about the ${scope} request. Does that ring a bell?`;
   }
 
   // ✅ NEW: "What does this call entail / how long?" handling
@@ -1368,7 +1368,7 @@ OBJECTION: "Just send it / just text me"
 REBUTTAL: "I can, but it’s usually easier to schedule a quick call so you don’t have to go back and forth. Would later today or tomorrow be better — daytime or evening?"
 
 OBJECTION: "I already have coverage"
-REBUTTAL: "Perfect — I’m showing you do have something in place, but it looks like they may have you in a higher risk rate class and you could be overpaying. When do you have time for a quick 5-minute call where ${agent} can get that corrected for you?"
+REBUTTAL: "Got it — my job is just scheduling. It’ll be a short call with ${agent} to go over what you requested and answer any questions. Would later today or tomorrow be better — daytime or evening?"
 STOP. WAIT.
 Then ask again: "Would later today or tomorrow be better — daytime or evening?"
 
