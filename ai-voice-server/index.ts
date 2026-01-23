@@ -1072,6 +1072,20 @@ function getRebuttalLine(ctx: AICallContext, kind: string): string {
   const agentRaw = (ctx.agentName || "your agent").trim() || "your agent";
   const agent = (agentRaw.split(" ")[0] || agentRaw).trim();
 
+  // ✅ NEW: "Who are you / I'm confused" handling (human + on-scope)
+  if (kind === "confused_identity") {
+    const aiName = (ctx.voiceProfile?.aiName || "Alex").trim() || "Alex";
+    const scope = getScopeLabelForScriptKey(ctx.scriptKey);
+    return `My apologies — my name is ${aiName}. I’m calling about the ${scope} request. Does that ring a bell?`;
+  }
+
+  // ✅ NEW: "What does this call entail / how long?" handling
+  if (kind === "what_entails") {
+    const scope = getScopeLabelForScriptKey(ctx.scriptKey);
+    return `It’s a short call — ${agent} just goes over what you might have available for ${scope} and answers any questions. Would later today or tomorrow be better — daytime or evening?`;
+  }
+
+  // Existing objections
   if (kind === "busy") {
     return `Totally understand. That’s why I’m just scheduling — it’ll be a short call with ${agent}. Would later today or tomorrow be better — daytime or evening?`;
   }
@@ -1088,24 +1102,15 @@ function getRebuttalLine(ctx: AICallContext, kind: string): string {
     // Stay inside life-insurance context
     return `No worries — it was just a request for information on life insurance. Was that for just you, or a spouse as well?`;
   }
-  if (kind === "confused_identity") {
-    const aiName = (ctx.voiceProfile.aiName || "Alex").trim() || "Alex";
-    const scope = getScopeLabelForScriptKey(ctx.scriptKey);
-    return `My apologies — my name is ${aiName}. I’m calling about the ${scope} request. Does that ring a bell?`;
-  }
-  if (kind === "what_entails") {
-    const scope = getScopeLabelForScriptKey(ctx.scriptKey);
-    return `It’s a short call — ${agent} just goes over what you might have available for ${scope} and answers any questions. Would later today or tomorrow be better — daytime or evening?`;
-  }
   if (kind === "scam") {
     return `I understand. This is just a scheduling call tied to your life insurance request. ${agent} will explain everything clearly on the phone. Would later today or tomorrow be better — daytime or evening?`;
   }
   if (kind === "not_interested") {
-    // Keep booking-only and let outcome logic handle later based on model control if you have it
     return `No worries at all. Would you like me to close this out, or would a quick call later today or tomorrow be better?`;
   }
+
+  // ✅ IMPORTANT: redirect stays booking-only, never follows disallowed topics
   if (kind === "redirect") {
-    // They tried to steer to other verticals. We do NOT follow them. We return to booking.
     return getBookingFallbackLine(ctx);
   }
 
