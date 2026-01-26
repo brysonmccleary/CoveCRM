@@ -2708,9 +2708,14 @@ async function handleOpenAiEvent(
 
     const lastUserText = String(state.lastUserTranscript || "").trim();
     const objectionKind = lastUserText ? detectObjection(lastUserText) : null;
-
     const currentStepLine = steps[idx] || getBookingFallbackLine(state.context!);
-    const stepType = classifyStepType(currentStepLine);
+
+    // ✅ FIX: The user is answering the LAST asked step, not the NEXT step-to-say.
+    // idx = next script line we will say.
+    // expectedAnswerIdx = step we most recently asked (usually idx-1).
+    const expectedAnswerIdx = Math.max(0, idx - 1);
+    const expectedStepLine = steps[expectedAnswerIdx] || currentStepLine;
+    const stepType = classifyStepType(expectedStepLine);
 
     // ✅ small human pause like ChatGPT voice (only when we are about to speak)
     const humanPause = async () => {
@@ -2962,9 +2967,7 @@ async function handleOpenAiEvent(
     }
 
     let lineToSay = steps[idx] || getBookingFallbackLine(state.context!);
-
-
-    const prevIdx = idx - 1;
+    const prevIdx = expectedAnswerIdx;
 
 
     if (
@@ -2992,15 +2995,25 @@ async function handleOpenAiEvent(
 
 
       if (ack2) lineToSay = `${ack2} ${lineToSay}`;
-
-
     }
+
+    // ✅ Anti-loop: do not repeat the exact same outbound line back-to-back.
+    // If we detect a duplicate within a short window, force a booking-only fallback question.
+    try {
+      const prev = String(state.lastPromptLine || "").replace(/\s+/g, " ").trim().toLowerCase();
+      const next = String(lineToSay || "").replace(/\s+/g, " ").trim().toLowerCase();
+      const lastAt = Number(state.lastPromptSentAtMs || 0);
+      if (prev && next && prev === next && (Date.now() - lastAt) < 10000) {
+        lineToSay = getBookingFallbackLine(state.context!);
+      }
+    } catch {}
+
     const perTurnInstr = buildStepperTurnInstruction(state.context!, lineToSay);
     // ✅ Patch 3: remember what we accepted from the user BEFORE clearing transcript
     if (lastUserText) {
       state.lastAcceptedUserText = lastUserText;
       state.lastAcceptedStepType = stepType;
-      state.lastAcceptedStepIndex = idx;
+      state.lastAcceptedStepIndex = expectedAnswerIdx;
     }
 
     // ✅ consume awaitingUserAnswer ONLY when we are about to speak
