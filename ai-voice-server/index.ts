@@ -557,7 +557,7 @@ async function refreshAnsweredByFromCoveCRM(
         reason,
       });
       return answeredBy;
-    }
+}
 
     return "";
   } catch (err: any) {
@@ -1125,7 +1125,7 @@ function getRebuttalLine(ctx: AICallContext, kind: string): string {
  * ✅ Build per-turn instruction that makes drift basically impossible.
  * We do NOT change audio/timers/turn detection. Only the "text instructions" for response.create.
  */
-function buildStepperTurnInstruction(
+function buildStepperTurnInstructionLegacy(
   ctx: AICallContext,
   lineToSay: string
 ): string {
@@ -1152,6 +1152,22 @@ YOU MUST SAY THIS EXACT LINE (verbatim):
 `.trim();
 }
 
+function buildStepperTurnInstruction(ctx: any, arg2: any): string {
+  if (typeof arg2 === "string") return buildStepperTurnInstructionLegacy(ctx, arg2);
+  return buildStepperTurnInstructionNew(ctx, arg2 as CallState);
+}
+
+
+function getCurrentStepperLine(state: CallState): { idx: number; line: string } {
+  const idx =
+    typeof state.scriptStepIndex === "number" ? state.scriptStepIndex : 0;
+  const steps = state.scriptSteps || [];
+  const safeIdx = Math.max(0, Math.min(idx, Math.max(0, steps.length - 1)));
+  const line = String(steps[safeIdx] || "").trim();
+  return { idx: safeIdx, line };
+}
+
+
 /**
  * ✅ BOOKING-ONLY SCRIPTS (NO PRESENTATION / NO UNDERWRITING / NO RATES / NO HEALTH)
  * Goal: book the appointment, nothing else.
@@ -1168,27 +1184,23 @@ function getSelectedScriptText(ctx: AICallContext): string {
   const SCRIPT_MORTGAGE = `
 BOOKING SCRIPT — MORTGAGE PROTECTION (FOLLOW IN ORDER)
 
-STEP 1 (FIRST script turn AFTER the system greeting + lead responds)
-Say: "Hey ${client} — it’s just ${aiName}. I’ll be quick."
-STOP. WAIT.
-
-STEP 2
+STEP 1
 Say: "I was just giving you a quick call about the request you put in for mortgage protection. Was this for yourself, or a spouse as well?"
 STOP. WAIT.
 
-STEP 3 (BOOKING FRAME)
+STEP 2 (BOOKING FRAME)
 Say: "So the next step is really simple — I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Would later today or tomorrow be better — daytime or evening?"
 STOP. WAIT.
 
-STEP 4 (IF THEY PICK A WINDOW)
+STEP 3 (IF THEY PICK A WINDOW)
 Then ask: "Perfect — what time in that window works best?"
 STOP. WAIT.
 
-STEP 5 (CONFIRM)
+STEP 4 (CONFIRM)
 Say: "Got it. I’ll have ${agent} call you around then. Does that work?"
 STOP. WAIT.
 
-STEP 6 (CLOSE)
+STEP 5 (CLOSE)
 Say: "Perfect. I’ll have ${agent} reach out around that time. Talk soon."
 STOP. WAIT.
 `.trim();
@@ -1196,27 +1208,23 @@ STOP. WAIT.
   const SCRIPT_FINAL_EXPENSE = `
 BOOKING SCRIPT — FINAL EXPENSE (FOLLOW IN ORDER)
 
-STEP 1 (FIRST script turn AFTER the system greeting + lead responds)
-Say: "Hey ${client} — it’s just ${aiName}. I’ll be quick."
-STOP. WAIT.
-
-STEP 2
+STEP 1
 Say: "I was just giving you a quick call about the request you put in for final expense coverage. Was this for yourself, or a spouse as well?"
 STOP. WAIT.
 
-STEP 3 (BOOKING FRAME)
+STEP 2 (BOOKING FRAME)
 Say: "So the next step is really simple — I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Would later today or tomorrow be better — daytime or evening?"
 STOP. WAIT.
 
-STEP 4 (IF THEY PICK A WINDOW)
+STEP 3 (IF THEY PICK A WINDOW)
 Then ask: "Perfect — what time in that window works best?"
 STOP. WAIT.
 
-STEP 5 (CONFIRM)
+STEP 4 (CONFIRM)
 Say: "Got it. I’ll have ${agent} call you around then. Does that work?"
 STOP. WAIT.
 
-STEP 6 (CLOSE)
+STEP 5 (CLOSE)
 Say: "Perfect. I’ll have ${agent} reach out around that time. Talk soon."
 STOP. WAIT.
 `.trim();
@@ -1224,27 +1232,23 @@ STOP. WAIT.
   const SCRIPT_IUL = `
 BOOKING SCRIPT — CASH VALUE / IUL (FOLLOW IN ORDER)
 
-STEP 1 (FIRST script turn AFTER the system greeting + lead responds)
-Say: "Hey ${client} — it’s just ${aiName}. I’ll be quick."
-STOP. WAIT.
-
-STEP 2
+STEP 1
 Say: "I was just giving you a quick call about the request you put in for cash value life insurance — the IUL options. Was this for yourself, or a spouse as well?"
 STOP. WAIT.
 
-STEP 3 (BOOKING FRAME)
+STEP 2 (BOOKING FRAME)
 Say: "So the next step is really simple — I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Would later today or tomorrow be better — daytime or evening?"
 STOP. WAIT.
 
-STEP 4 (IF THEY PICK A WINDOW)
+STEP 3 (IF THEY PICK A WINDOW)
 Then ask: "Perfect — what time in that window works best?"
 STOP. WAIT.
 
-STEP 5 (CONFIRM)
+STEP 4 (CONFIRM)
 Say: "Got it. I’ll have ${agent} call you around then. Does that work?"
 STOP. WAIT.
 
-STEP 6 (CLOSE)
+STEP 5 (CLOSE)
 Say: "Perfect. I’ll have ${agent} reach out around that time. Talk soon."
 STOP. WAIT.
 `.trim();
@@ -1252,27 +1256,23 @@ STOP. WAIT.
   const SCRIPT_VETERAN = `
 BOOKING SCRIPT — VETERAN LEADS (FOLLOW IN ORDER)
 
-STEP 1 (FIRST script turn AFTER the system greeting + lead responds)
-Say: "Hey ${client} — it’s just ${aiName}. I’ll be quick."
-STOP. WAIT.
-
-STEP 2
+STEP 1
 Say: "I was just giving you a quick call about the request you put in for the veteran life insurance programs. Was this for yourself, or a spouse as well?"
 STOP. WAIT.
 
-STEP 3 (BOOKING FRAME)
+STEP 2 (BOOKING FRAME)
 Say: "So the next step is really simple — I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Would later today or tomorrow be better — daytime or evening?"
 STOP. WAIT.
 
-STEP 4 (IF THEY PICK A WINDOW)
+STEP 3 (IF THEY PICK A WINDOW)
 Then ask: "Perfect — what time in that window works best?"
 STOP. WAIT.
 
-STEP 5 (CONFIRM)
+STEP 4 (CONFIRM)
 Say: "Got it. I’ll have ${agent} call you around then. Does that work?"
 STOP. WAIT.
 
-STEP 6 (CLOSE)
+STEP 5 (CLOSE)
 Say: "Perfect. I’ll have ${agent} reach out around that time. Talk soon."
 STOP. WAIT.
 `.trim();
@@ -1280,27 +1280,23 @@ STOP. WAIT.
   const SCRIPT_TRUCKER = `
 BOOKING SCRIPT — TRUCKER LEADS (FOLLOW IN ORDER)
 
-STEP 1 (FIRST script turn AFTER the system greeting + lead responds)
-Say: "Hey ${client} — it’s just ${aiName}. I’ll be quick."
-STOP. WAIT.
-
-STEP 2
+STEP 1
 Say: "I was just giving you a quick call about the request you put in for life insurance. Was this for yourself, or a spouse as well?"
 STOP. WAIT.
 
-STEP 3 (BOOKING FRAME)
+STEP 2 (BOOKING FRAME)
 Say: "So the next step is really simple — I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Would later today or tomorrow be better — daytime or evening?"
 STOP. WAIT.
 
-STEP 4 (IF THEY PICK A WINDOW)
+STEP 3 (IF THEY PICK A WINDOW)
 Then ask: "Perfect — what time in that window works best?"
 STOP. WAIT.
 
-STEP 5 (CONFIRM)
+STEP 4 (CONFIRM)
 Say: "Got it. I’ll have ${agent} call you around then. Does that work?"
 STOP. WAIT.
 
-STEP 6 (CLOSE)
+STEP 5 (CLOSE)
 Say: "Perfect. I’ll have ${agent} reach out around that time. Talk soon."
 STOP. WAIT.
 `.trim();
@@ -1308,27 +1304,23 @@ STOP. WAIT.
   const SCRIPT_GENERIC = `
 BOOKING SCRIPT — GENERIC LIFE (FOLLOW IN ORDER)
 
-STEP 1 (FIRST script turn AFTER the system greeting + lead responds)
-Say: "Hey ${client} — it’s just ${aiName}. I’ll be quick."
-STOP. WAIT.
-
-STEP 2
+STEP 1
 Say: "I was just giving you a quick call about the request you put in for life insurance. Was this for yourself, or a spouse as well?"
 STOP. WAIT.
 
-STEP 3 (BOOKING FRAME)
+STEP 2 (BOOKING FRAME)
 Say: "So the next step is really simple — I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Would later today or tomorrow be better — daytime or evening?"
 STOP. WAIT.
 
-STEP 4 (IF THEY PICK A WINDOW)
+STEP 3 (IF THEY PICK A WINDOW)
 Then ask: "Perfect — what time in that window works best?"
 STOP. WAIT.
 
-STEP 5 (CONFIRM)
+STEP 4 (CONFIRM)
 Say: "Got it. I’ll have ${agent} call you around then. Does that work?"
 STOP. WAIT.
 
-STEP 6 (CLOSE)
+STEP 5 (CLOSE)
 Say: "Perfect. I’ll have ${agent} reach out around that time. Talk soon."
 STOP. WAIT.
 `.trim();
@@ -1556,7 +1548,10 @@ MOST IMPORTANT:
  * NOTE: We keep this function for backwards compatibility,
  * but we will NOT use it for normal script turns anymore.
  */
-function buildShortNextStepInstruction(): string {
+function buildStepperTurnInstructionNew(context: any, state: CallState): string {
+  const stepLine = getCurrentStepperLine(state)?.line;
+  const line = stepLine || getBookingFallbackLine(context);
+
   return `
 STRICT OUTPUT RULES (NON-NEGOTIABLE):
 - Speak ONLY the next step of the REAL CALL SCRIPT already provided in the system prompt.
