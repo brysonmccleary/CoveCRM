@@ -183,6 +183,10 @@ type CallState = {
   repromptCountForCurrentStep?: number;
   lowSignalCommitCount?: number;
 
+  // ✅ time indecision handling (availability / 'you pick')
+  timeOfferCountForStepIndex?: number;
+  timeOfferCount?: number;
+
   // instrumentation: system prompt markers
   systemPromptLen?: number;
   systemPromptHead300?: string;
@@ -910,6 +914,71 @@ function isFillerOnly(textRaw: string): boolean {
   return false;
 }
 
+
+function isTimeIndecisionOrAvailability(textRaw: string): boolean {
+  const t = String(textRaw || "").trim().toLowerCase();
+  if (!t) return false;
+
+  // Questions about our availability
+  if (
+    t.includes("what do you have") ||
+    t.includes("what times do you have") ||
+    t.includes("what time do you have") ||
+    t.includes("what are your times") ||
+    t.includes("what's available") ||
+    t.includes("whats available") ||
+    t.includes("what do you guys have") ||
+    t.includes("what do yall have") ||
+    t.includes("any openings") ||
+    t.includes("any slots") ||
+    t.includes("available tomorrow") ||
+    t.includes("tomorrow available")
+  ) return true;
+
+  // Indecision / "you pick"
+  if (
+    t.includes("you pick") ||
+    t.includes("you choose") ||
+    t.includes("doesn't matter") ||
+    t.includes("doesnt matter") ||
+    t.includes("either one") ||
+    t.includes("either is fine") ||
+    t.includes("whatever works") ||
+    t.includes("anytime") ||
+    t.includes("whenever") ||
+    t.includes("i'm flexible") ||
+    t.includes("im flexible")
+  ) return true;
+
+  // Generic "not sure" answers to time questions
+  if (
+    t == "not sure" ||
+    t.startsWith("not sure") ||
+    t.includes("not sure") ||
+    t.includes("not certain") ||
+    t.includes("i don't know") ||
+    t.includes("idk")
+  ) return true;
+
+  return false;
+}
+
+function getTimeOfferLine(ctx: AICallContext, n: number): string {
+  const agentRaw = (ctx.agentName || "your agent").trim() || "your agent";
+  const agent = (agentRaw.split(" ")[0] || agentRaw).trim();
+
+  // Keep it human, give concrete options, always end with a question.
+  const ladder = [
+    `Totally — for tomorrow, would you prefer morning or afternoon?`,
+    `No problem — I can do two quick options: tomorrow late morning or tomorrow mid-afternoon. Which is better?`,
+    `If you’re flexible, I can just lock in the next open slot tomorrow afternoon — does that work for you?`,
+    `No worries — to keep it easy, should I put you down for tomorrow morning, or tomorrow afternoon?`,
+    `Got it — my job is just to get you scheduled with ${agent}. Morning or afternoon tomorrow usually better?`,
+  ];
+
+  return ladder[Math.min(n, ladder.length - 1)];
+}
+
 function shouldTreatCommitAsRealAnswer(
   stepType: StepType,
   audioMs: number,
@@ -920,7 +989,7 @@ function shouldTreatCommitAsRealAnswer(
   // If we have transcription, prefer it and be strict about filler.
   if (text) {
     if (isFillerOnly(text)) return false;
-    if (stepType === "time_question") return looksLikeTimeAnswer(text);
+    if (stepType === "time_question") return looksLikeTimeAnswer(text) || isTimeIndecisionOrAvailability(text);
     // For yes/no or open questions, any non-filler multi-word answer counts
     return true;
   }
@@ -2967,6 +3036,16 @@ async function handleOpenAiEvent(
     }
 
     let lineToSay = steps[idx] || getBookingFallbackLine(state.context!);
+
+    // ✅ Time indecision: user asked "what do you have available" / "you pick" etc.
+    // We should answer with options, but NOT advance the script step until a real time is given.
+    if (stepType === "time_question" && isTimeIndecisionOrAvailability(lastUserText)) {
+      const sameStep = Number(state.timeOfferCountForStepIndex ?? -1) === Number(idx);
+      const n = sameStep ? Number(state.timeOfferCount || 0) : 0;
+      lineToSay = getTimeOfferLine(state.context!, n);
+      state.timeOfferCountForStepIndex = idx;
+      state.timeOfferCount = n + 1;
+    }
     const prevIdx = expectedAnswerIdx;
 
 
@@ -3071,6 +3150,9 @@ async function handleOpenAiEvent(
     // ✅ Patch 3: only advance when we have a real transcript answer for this step
     if (canAdvance) {
       state.scriptStepIndex = Math.min(idx + 1, Math.max(0, steps.length - 1));
+      // reset time offer ladder once we actually received a real time
+      state.timeOfferCountForStepIndex = undefined;
+      state.timeOfferCount = 0;
     } else {
       // hold position; next turn will reprompt / ask again
       state.scriptStepIndex = idx;
