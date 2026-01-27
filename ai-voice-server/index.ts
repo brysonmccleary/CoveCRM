@@ -617,6 +617,17 @@ function safeSliceTail(s: string, n: number): string {
   return t.length <= n ? t : t.slice(Math.max(0, t.length - n));
 }
 
+function hash8(s: string): string {
+  try {
+    const t = String(s || "");
+    let h = 0;
+    for (let i = 0; i < t.length; i++) h = ((h << 5) - h + t.charCodeAt(i)) | 0;
+    return (h >>> 0).toString(16).slice(0, 8);
+  } catch {
+    return "00000000";
+  }
+}
+
 function computePromptMarkers(systemPrompt: string, uniqueLine?: string) {
   const p = String(systemPrompt || "");
   const markers = {
@@ -881,6 +892,65 @@ function isTimeMentioned(textRaw: string): boolean {
 }
 
 
+function enforceBookingOnlyLine(ctx: AICallContext, lineRaw: string): string {
+  const line = String(lineRaw || "").replace(/\s+/g, " ").trim();
+  if (!line) return getBookingFallbackLine(ctx);
+
+  const t = line.toLowerCase();
+
+  // Hard block discovery / underwriting / coverage details
+  const banned = [
+    "how much is left",
+    "how much do you owe",
+    "mortgage balance",
+    "coverage amount",
+    "how much coverage",
+    "what coverage",
+    "portion of it",
+    "are you currently covered",
+    "what is your age",
+    "how old are you",
+    "date of birth",
+    "dob",
+    "health",
+    "medical",
+    "smoke",
+    "tobacco",
+    "medications",
+    "height",
+    "weight",
+    "income",
+    "beneficiary",
+    "ssn",
+    "social security",
+    "driver's license",
+    "drivers license",
+  ];
+
+  for (const b of banned) {
+    if (t.includes(b)) return getBookingFallbackLine(ctx);
+  }
+
+  // Must remain scheduling-focused (if it drifts, snap back)
+  const hasScheduleIntent =
+    t.includes("schedule") ||
+    t.includes("scheduled") ||
+    t.includes("quick call") ||
+    t.includes("licensed agent") ||
+    t.includes("later today") ||
+    t.includes("today or tomorrow") ||
+    t.includes("daytime") ||
+    t.includes("evening") ||
+    t.includes("morning") ||
+    t.includes("afternoon") ||
+    t.includes("what time") ||
+    t.includes("what time works") ||
+    t.includes("does that work");
+
+  if (!hasScheduleIntent) return getBookingFallbackLine(ctx);
+
+  return line;
+}
 function isFillerOnly(textRaw: string): boolean {
   const t = String(textRaw || "").trim().toLowerCase();
   if (!t) return true;
@@ -986,11 +1056,15 @@ function shouldTreatCommitAsRealAnswer(
 ): boolean {
   const text = String(transcript || "").trim();
 
-  // If we have transcription, prefer it and be strict about filler.
+  // If we have transcription:
   if (text) {
+    // Time questions: allow 1-word answers like "afternoon", "tomorrow", etc.
+    if (stepType === "time_question") {
+      return looksLikeTimeAnswer(text) || isTimeIndecisionOrAvailability(text);
+    }
+
+    // Non-time questions: be strict about filler.
     if (isFillerOnly(text)) return false;
-    if (stepType === "time_question") return looksLikeTimeAnswer(text) || isTimeIndecisionOrAvailability(text);
-    // For yes/no or open questions, any non-filler multi-word answer counts
     return true;
   }
 
@@ -1048,6 +1122,18 @@ function getRepromptLineForStepType(
 
 function detectObjection(textRaw: string): string | null {
   const t = String(textRaw || "").trim().toLowerCase();
+
+  // "Are you an AI / robot?"
+  if (
+    t.includes("are you ai") ||
+    t.includes("are you an ai") ||
+    t.includes("are you a robot") ||
+    t.includes("are you real") ||
+    t.includes("is this ai") ||
+    t.includes("is this a robot") ||
+    (t.includes("robot") && t.includes("?")) ||
+    (t.includes("ai") && t.includes("?"))
+  ) return "are_you_ai";
 
   // Confusion / identity / "what is this"
   if (
@@ -1145,6 +1231,12 @@ function getRebuttalLine(ctx: AICallContext, kind: string): string {
   const agentRaw = (ctx.agentName || "your agent").trim() || "your agent";
   const agent = (agentRaw.split(" ")[0] || agentRaw).trim();
 
+  // "Are you AI / robot?" -> quick human answer + redirect to booking
+  if (kind === "are_you_ai") {
+    const aiName = (ctx.voiceProfile?.aiName || "Alex").trim() || "Alex";
+    return `(laugh) haha I get that a lot. I\'m ${aiName} - just an assistant trained to set up appointments for the licensed agent. Would later today or tomorrow be better - daytime or evening?`;
+  }
+
   // ✅ NEW: "Who are you / I'm confused" handling (human + on-scope)
   if (kind === "confused_identity") {
     const aiName = (ctx.voiceProfile?.aiName || "Alex").trim() || "Alex";
@@ -1222,9 +1314,10 @@ YOU MUST SAY THIS EXACT LINE (verbatim):
 }
 
 function buildStepperTurnInstruction(ctx: any, arg2: any): string {
-  if (typeof arg2 === "string") return buildStepperTurnInstructionLegacy(ctx, arg2);
-  return buildStepperTurnInstructionNew(ctx, arg2 as CallState);
+  const line = String(arg2 || "").trim();
+  return buildStepperTurnInstructionLegacy(ctx, line);
 }
+
 
 
 function getCurrentStepperLine(state: CallState): { idx: number; line: string } {
@@ -2910,7 +3003,7 @@ async function handleOpenAiEvent(
     }
 
     if (objectionKind) {
-      const lineToSay = getRebuttalLine(state.context!, objectionKind);
+      const lineToSay = enforceBookingOnlyLine(state.context!, getRebuttalLine(state.context!, objectionKind));
       const perTurnInstr = buildStepperTurnInstruction(
         state.context!,
         lineToSay
@@ -2986,11 +3079,12 @@ async function handleOpenAiEvent(
 
       if (shouldReprompt) {
         const repN = Number(state.repromptCountForCurrentStep || 0);
-        const lineToSay = getRepromptLineForStepType(
+        const lineToSayRaw = getRepromptLineForStepType(
           state.context!,
           stepType,
           repN
-        );
+);
+        const lineToSay = enforceBookingOnlyLine(state.context!, lineToSayRaw);
         const perTurnInstr = buildStepperTurnInstruction(
           state.context!,
           lineToSay
@@ -3035,7 +3129,7 @@ async function handleOpenAiEvent(
       return;
     }
 
-    let lineToSay = steps[idx] || getBookingFallbackLine(state.context!);
+    let lineToSay = enforceBookingOnlyLine(state.context!, steps[idx] || getBookingFallbackLine(state.context!));
 
     // ✅ Time indecision: user asked "what do you have available" / "you pick" etc.
     // We should answer with options, but NOT advance the script step until a real time is given.
@@ -3088,6 +3182,7 @@ async function handleOpenAiEvent(
     } catch {}
 
     const perTurnInstr = buildStepperTurnInstruction(state.context!, lineToSay);
+    try { console.log("[AI-VOICE][STEPPER][SEND]", { callSid: state.callSid, stepIndex: idx, expectedAnswerIdx, stepType, lineToSay }); } catch {}
     // ✅ Patch 3: remember what we accepted from the user BEFORE clearing transcript
     if (lastUserText) {
       state.lastAcceptedUserText = lastUserText;
@@ -3110,6 +3205,7 @@ async function handleOpenAiEvent(
     setAiSpeaking(state, true, "response.create (script step)");
     setResponseInFlight(state, true, "response.create (script step)");
     state.outboundOpenAiDone = false;
+    try { console.log("[AI-VOICE][RESPONSE-CREATE][SCRIPT]", { callSid: state.callSid, phase: state.phase, waitingForResponse: !!state.waitingForResponse, responseInFlight: !!state.responseInFlight, aiSpeaking: !!state.aiSpeaking, stepIndex: idx, stepType, lineHash: hash8(lineToSay), instructionLen: perTurnInstr.length }); } catch {}
 
     try {
       if (!state.debugLoggedResponseCreateUserTurn) {
