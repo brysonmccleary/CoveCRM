@@ -346,7 +346,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           existingLeadId: String(exists._id),
         });
 
-        await touchFolderUpdatedAt(folder._id, userEmail);
+        await touchFolderUpdatedAt(folder._id as any, userEmail);
 
         match.lastSyncedAt = new Date();
         match.lastEventAt = new Date();
@@ -374,7 +374,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           existingLeadId: String(exists._id),
         });
 
-        await touchFolderUpdatedAt(folder._id, userEmail);
+        await touchFolderUpdatedAt(folder._id as any, userEmail);
 
         match.lastSyncedAt = new Date();
         match.lastEventAt = new Date();
@@ -420,8 +420,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       rawRow: row,
     };
 
-    await createLeadsFromGoogleSheet([leadDoc], userEmail, folder._id);
-    await touchFolderUpdatedAt(folder._id, userEmail);
+    await createLeadsFromGoogleSheet([leadDoc], userEmail, folder._id as any);
+    await touchFolderUpdatedAt(folder._id as any, userEmail);
 
     // ✅ best-effort: confirm created lead id
     let createdLead: any = null;

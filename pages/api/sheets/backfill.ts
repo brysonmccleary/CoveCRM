@@ -426,12 +426,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     if (!newLeadDocs.length) {
-      await touchFolderUpdatedAt(folder._id, userEmail);
+      await touchFolderUpdatedAt(folder._id as any, userEmail);
       return res.status(200).json({ ok: true, inserted: 0, skipped: candidateDocs.length });
     }
 
-    await createLeadsFromGoogleSheet(newLeadDocs, userEmail, folder._id);
-    await touchFolderUpdatedAt(folder._id, userEmail);
+    await createLeadsFromGoogleSheet(newLeadDocs, userEmail, folder._id as any);
+    await touchFolderUpdatedAt(folder._id as any, userEmail);
 
     // ✅ enroll drips for leads we definitely created in this run
     const created = await (Lead as any)

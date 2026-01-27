@@ -436,10 +436,55 @@ export default function DialSession() {
 
   /** bootstrap **/
   useEffect(() => {
-    try {
-      primeAudioContext();
-      ensureUnlocked();
-    } catch {}
+    // Safari/WebKit: audio + WebRTC often won't start until a user gesture.
+    // We try immediately (and with tiny delays) to "inherit" the navigation click that opened this page.
+    // Fallback: first pointer/key gesture will re-attempt unlock and nudge auto-dial if it was waiting.
+    let raf: number | null = null;
+    let t0: ReturnType<typeof setTimeout> | null = null;
+    let t1: ReturnType<typeof setTimeout> | null = null;
+
+    const attemptUnlock = async () => {
+      try { await primeAudioContext(); } catch {}
+      try { await ensureUnlocked(); } catch {}
+    };
+
+    // Immediate + micro-delay + next paint attempts
+    attemptUnlock();
+    t0 = setTimeout(() => { attemptUnlock(); }, 0);
+    t1 = setTimeout(() => { attemptUnlock(); }, 250);
+    raf = window.requestAnimationFrame(() => { attemptUnlock(); });
+
+    const onFirstGesture = () => {
+      attemptUnlock();
+
+      // If Safari was blocking until gesture, ensure the auto-dial driver gets a state nudge.
+      // This does not alter normal flow — only prevents "idle until click" when everything is ready.
+      try {
+        if (
+          !inboundMode &&
+          numbersLoaded &&
+          leadQueue.length > 0 &&
+          sessionStarted &&
+          !sessionEndedRef.current &&
+          !isPaused &&
+          !placingCallRef.current &&
+          !callActive
+        ) {
+          setReadyToCall(true);
+        }
+      } catch {}
+    };
+
+    window.addEventListener("pointerdown", onFirstGesture, { once: true, passive: true } as any);
+    window.addEventListener("keydown", onFirstGesture, { once: true } as any);
+
+    return () => {
+      try { if (t0) clearTimeout(t0); } catch {}
+      try { if (t1) clearTimeout(t1); } catch {}
+      try { if (raf !== null) cancelAnimationFrame(raf); } catch {}
+      try { window.removeEventListener("pointerdown", onFirstGesture as any); } catch {}
+      try { window.removeEventListener("keydown", onFirstGesture as any); } catch {}
+    };
   }, []);
 
   // ✅ ADDITIVE: warm the server/DB/Twilio selection path so the FIRST outbound call doesn't lag.
