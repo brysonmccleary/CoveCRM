@@ -175,6 +175,7 @@ export default function DialSession() {
   const [muted, setMuted] = useState(false);
   const [sessionStarted, setSessionStarted] = useState(false);
   const [sessionStartedCount, setSessionStartedCount] = useState(0);
+  const [tapToStart, setTapToStart] = useState(false);
 
   // UI
   const [showBookModal, setShowBookModal] = useState(false);
@@ -449,6 +450,14 @@ export default function DialSession() {
     };
 
     // Immediate + micro-delay + next paint attempts
+    // Safari often requires an explicit gesture; show a small banner until the first click/key.
+    try {
+      const ua = String(navigator.userAgent || "");
+      const isSafari =
+        /Safari/i.test(ua) &&
+        !/Chrome|Chromium|Edg|OPR|CriOS|FxiOS|SamsungBrowser/i.test(ua);
+      if (isSafari) setTapToStart(true);
+    } catch {}
     attemptUnlock();
     t0 = setTimeout(() => { attemptUnlock(); }, 0);
     t1 = setTimeout(() => { attemptUnlock(); }, 250);
@@ -456,6 +465,7 @@ export default function DialSession() {
 
     const onFirstGesture = () => {
       attemptUnlock();
+      try { setTapToStart(false); } catch {}
 
       // If Safari was blocking until gesture, ensure the auto-dial driver gets a state nudge.
       // This does not alter normal flow — only prevents "idle until click" when everything is ready.
@@ -1413,6 +1423,31 @@ export default function DialSession() {
     // ✅ UI ONLY: make the area to the right of Sidebar a constrained flex container (Safari-safe scroll)
     <div className="flex bg-[#0f172a] text:white h-screen min-h-0">
       <Sidebar />
+
+      {/* Safari gesture banner: audio/WebRTC requires a user interaction to begin */}
+      {tapToStart && (
+        <div
+          onClick={() => {
+            try { ensureUnlocked(); } catch {}
+            try { primeAudioContext(); } catch {}
+            try { setTapToStart(false); } catch {}
+            try { setReadyToCall(true); } catch {}
+          }}
+          className="fixed top-4 left-1/2 -translate-x-1/2 z-50 bg-yellow-400 text-black px-4 py-2 rounded shadow cursor-pointer"
+          role="button"
+          tabIndex={0}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              try { ensureUnlocked(); } catch {}
+              try { primeAudioContext(); } catch {}
+              try { setTapToStart(false); } catch {}
+              try { setReadyToCall(true); } catch {}
+            }
+          }}
+        >
+          Click anywhere to start dialing
+        </div>
+      )}
 
       {/* ✅ main content wrapper (full viewport height + allow children to shrink) */}
       <div className="flex flex-1 h-full min-h-0">
