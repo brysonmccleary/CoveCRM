@@ -1241,7 +1241,7 @@ function getRebuttalLine(ctx: AICallContext, kind: string): string {
   if (kind === "confused_identity") {
     const aiName = (ctx.voiceProfile?.aiName || "Alex").trim() || "Alex";
     const scope = getScopeLabelForScriptKey(ctx.scriptKey);
-    return `Hey — my name is ${aiName}. I’m calling about the ${scope} request. Does that ring a bell?`;
+    return `Hey — my name is ${aiName}. I’m calling about the ${scope} request. Would later today or tomorrow be better — daytime or evening?`;
   }
 
   // ✅ NEW: "What does this call entail / how long?" handling
@@ -1260,7 +1260,7 @@ function getRebuttalLine(ctx: AICallContext, kind: string): string {
     return `I can, but it’s usually easier to schedule a quick call so you don’t have to go back and forth. Would later today or tomorrow be better — daytime or evening?`;
   }
   if (kind === "already_have") {
-    return `Got it — this is just a quick scheduling call. Would later today or tomorrow be better — daytime or evening?`;
+    return `I hear you — a lot of people we talk to already have something in place and find out they’re overpaying. Let’s set up a quick 3–5 minute call with ${agent} to see if we can save you at least $20 a month — is that fair? Would later today or tomorrow be better — daytime or evening?`;
   }
   if (kind === "how_much") {
     return `Good question — ${agent} covers that on the quick call because it depends on what you want it to do. Would later today or tomorrow be better — daytime or evening?`;
@@ -1288,6 +1288,78 @@ function getRebuttalLine(ctx: AICallContext, kind: string): string {
  * ✅ Build per-turn instruction that makes drift basically impossible.
  * We do NOT change audio/timers/turn detection. Only the "text instructions" for response.create.
  */
+
+/**
+ * Conversational rebuttal instruction (GPT-like but BOOKING-ONLY)
+ * Used ONLY for objections/micro-intents, NOT for deterministic script steps.
+ *
+ * Goals:
+ * - Allow a short, natural 1–2 sentence answer to the user's immediate question/concern
+ * - Immediately pivot back to scheduling
+ * - End with a booking question (later today vs tomorrow + daytime/evening)
+ *
+ * Hard constraints:
+ * - Not licensed; no underwriting/discovery (no age/DOB, coverage amounts, mortgage balance, health, meds, quotes, pricing)
+ * - No mentioning prompts/scripts/system
+ * - No repetitive verbatim loops; rephrase if you just said the same thing
+ */
+function buildConversationalRebuttalInstruction(
+  ctx: AICallContext,
+  baseLineToUse: string,
+  opts?: {
+    objectionKind?: string;
+    userText?: string;
+    lastOutboundLine?: string;
+    lastOutboundAtMs?: number;
+  }
+): string {
+  const leadName = (ctx.clientFirstName || "").trim() || "there";
+  const scope = getScopeLabelForScriptKey(ctx.scriptKey);
+  const agentRaw = (ctx.agentName || "your agent").trim() || "your agent";
+  const agent = (agentRaw.split(" ")[0] || agentRaw).trim() || agentRaw;
+
+  const baseLine = String(baseLineToUse || "").replace(/\s+/g, " ").trim();
+
+  const lastLine = String(opts?.lastOutboundLine || "").replace(/\s+/g, " ").trim().toLowerCase();
+  const lastAt = Number(opts?.lastOutboundAtMs || 0);
+  const now = Date.now();
+
+  const bookingPrompts: string[] = [
+    "Would later today or tomorrow be better — daytime or evening?",
+    "Do you want to do later today or tomorrow — daytime or evening?",
+    "What works better for you — later today or tomorrow?",
+    `Is later today or tomorrow better for a quick call with ${agent} — daytime or evening?`,
+  ];
+
+  const recentlyRepeated = !!lastLine && !!baseLine && (now - lastAt) < 10000 && lastLine === baseLine.toLowerCase();
+  const bookingQ = recentlyRepeated ? bookingPrompts[1] : bookingPrompts[0];
+
+  return `
+HARD ENGLISH LOCK: Speak ONLY English.
+HARD NAME LOCK: The ONLY lead name you may use is exactly: "${leadName}" (or "there" if missing). Never invent names.
+HARD SCOPE LOCK: This call is ONLY about a ${scope} request. Do NOT mention any other product or topic (no gym, vacation, energy, healthcare, real estate, utilities, etc).
+ROLE LOCK: You are an appointment-setting assistant. You are NOT licensed. You cannot give quotes/pricing or discuss underwriting.
+
+ABSOLUTE BEHAVIOR:
+- Never mention scripts/prompts/system messages.
+- Sound natural like ChatGPT voice: friendly, coherent, not robotic.
+- Do NOT repeat the exact same sentence verbatim back-to-back; rephrase if needed.
+
+OUTPUT CONSTRAINT (NON-NEGOTIABLE):
+- Output 1 short message total, 2–4 sentences MAX.
+- You may briefly answer the user's immediate question/concern in 1–2 sentences.
+- You MUST pivot back to scheduling.
+- You MUST end with a booking question that offers later today vs tomorrow and daytime vs evening.
+- You MUST NOT ask discovery/underwriting questions: NO age/DOB, NO coverage amount, NO mortgage balance, NO health/meds, NO smoking, NO income, NO SSN, NO address.
+- If the user asks for cost/coverage details, you deflect: "${agent} will cover that on the quick call" and then schedule.
+
+SAFE BASE IDEA (you can rephrase naturally, do not repeat verbatim if it would be repetitive):
+"${baseLine}"
+
+END YOUR MESSAGE WITH THIS BOOKING QUESTION (use exactly one of these wordings):
+"${bookingQ}"
+`.trim();
+}
 function buildStepperTurnInstructionLegacy(
   ctx: AICallContext,
   lineToSay: string
@@ -3006,10 +3078,12 @@ async function handleOpenAiEvent(
 
     if (objectionKind) {
       const lineToSay = enforceBookingOnlyLine(state.context!, getRebuttalLine(state.context!, objectionKind));
-      const perTurnInstr = buildStepperTurnInstruction(
-        state.context!,
-        lineToSay
-      );
+      const perTurnInstr = buildConversationalRebuttalInstruction(state.context!, lineToSay, {
+        objectionKind,
+        userText: lastUserText,
+        lastOutboundLine: state.lastPromptLine,
+        lastOutboundAtMs: state.lastPromptSentAtMs,
+      });
 
       // ✅ consume awaitingUserAnswer ONLY when we are about to speak
       state.awaitingUserAnswer = false;
