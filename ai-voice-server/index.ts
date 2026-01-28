@@ -1247,7 +1247,9 @@ function getRebuttalLine(ctx: AICallContext, kind: string): string {
   // ✅ NEW: "What does this call entail / how long?" handling
   if (kind === "what_entails") {
     const scope = getScopeLabelForScriptKey(ctx.scriptKey);
-    return `It’s a short call — ${agent} just goes over what you might have available for ${scope} and answers any questions. Would later today or tomorrow be better — daytime or evening?`;
+    // Be specific + satisfying, then go right back to booking.
+    // Keep it booking-only: no rates, no underwriting, no age/health questions.
+    return `Totally — it’s quick, usually about 5 to 10 minutes. ${agent} just goes over what you requested for ${scope} and answers your questions. Would later today or tomorrow be better — daytime or evening?`;
   }
 
   // Existing objections
