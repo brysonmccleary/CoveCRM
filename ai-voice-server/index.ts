@@ -864,29 +864,98 @@ function classifyStepType(lineRaw: string): StepType {
   return looksYesNo ? "yesno_question" : "open_question";
 }
 
-function looksLikeTimeAnswer(textRaw: string): boolean {
+function isDayReferenceMentioned(textRaw: string): boolean {
   const t = String(textRaw || "").trim().toLowerCase();
   if (!t) return false;
-  if (/(today|tomorrow|morning|afternoon|evening|later|tonight)/i.test(t))
-    return true;
-  if (/\b\d{1,2}(:\d{2})?\b/.test(t)) return true;
-  if (/\b(am|pm)\b/i.test(t)) return true;
+  return /(today|tomorrow|tonight|later today|later)/i.test(t);
+}
+
+function isTimeWindowMentioned(textRaw: string): boolean {
+  const t = String(textRaw || "").trim().toLowerCase();
+  if (!t) return false;
+  return /(morning|afternoon|evening|tonight|late morning|late afternoon|early evening)/i.test(t);
+}
+
+/**
+ * ✅ Exact clock-time detector (USED ONLY for allowing book_appointment control).
+ * We require an unambiguous time like:
+ * - 3pm / 3 pm
+ * - 3:30pm / 3:30 pm
+ * - 3:30
+ * - 3 o'clock
+ *
+ * We intentionally do NOT treat "tomorrow" / "evening" alone as an exact time.
+ */
+function isExactClockTimeMentioned(textRaw: string): boolean {
+  const t = String(textRaw || "").trim().toLowerCase();
+  if (!t) return false;
+
+  // 3pm / 3 pm
+  if (/\b\d{1,2}\s?(am|pm)\b/i.test(t)) return true;
+
+  // 3:30pm / 3:30 pm
+  if (/\b\d{1,2}:\d{2}\s?(am|pm)\b/i.test(t)) return true;
+
+  // 3:30 (still fairly unambiguous)
+  if (/\b\d{1,2}:\d{2}\b/.test(t)) return true;
+
+  // 3 o'clock / 3 oclock
+  if (/\b\d{1,2}\s?o'?clock\b/i.test(t)) return true;
+
   return false;
 }
 
-// ✅ Patch 3: time indicator detector used to reject premature bookings
-function isTimeMentioned(textRaw: string): boolean {
+function looksLikeTimeAnswer(textRaw: string): boolean {
   const t = String(textRaw || "").trim().toLowerCase();
   if (!t) return false;
 
-  // relative windows
-  if (/(today|tomorrow|tonight|later today|later|morning|afternoon|evening)/i.test(t)) return true;
+  // Accept "tomorrow", "afternoon", etc. as a time-answer to a time question (for stepper progression),
+  // but do NOT confuse this with an exact time for booking.
+  if (isDayReferenceMentioned(t)) return true;
+  if (isTimeWindowMentioned(t)) return true;
+  if (isExactClockTimeMentioned(t)) return true;
 
-  // explicit clock times like 3, 3pm, 3:30, 3:30pm
-  if (/\b\d{1,2}(:\d{2})?\s?(am|pm)\b/i.test(t)) return true;
+  return false;
+}
 
-  // bare hour/minute mentions (less strict, but still useful)
-  if (/\b\d{1,2}(:\d{2})\b/.test(t)) return true;
+// ✅ Stepper-time detector (broad). DO NOT use for booking control.
+function isTimeMentioned(textRaw: string): boolean {
+  const t = String(textRaw || "").trim().toLowerCase();
+  if (!t) return false;
+  return isDayReferenceMentioned(t) || isTimeWindowMentioned(t) || isExactClockTimeMentioned(t);
+}
+
+
+// ✅ Confirmation detector (used to allow booking on the confirm step after a prior exact time)
+function isAffirmativeConfirmation(textRaw: string): boolean {
+  const t = String(textRaw || "").trim().toLowerCase();
+  if (!t) return false;
+
+  // very common confirmations
+  if (
+    t === "yes" ||
+    t === "yeah" ||
+    t === "yep" ||
+    t === "yup" ||
+    t === "ok" ||
+    t === "okay" ||
+    t === "sure" ||
+    t === "correct" ||
+    t === "perfect" ||
+    t === "alright" ||
+    t === "all right"
+  ) return true;
+
+  // short phrases
+  if (
+    t.includes("that works") ||
+    t.includes("works for me") ||
+    t.includes("sounds good") ||
+    t.includes("that's fine") ||
+    t.includes("that’s fine") ||
+    t.includes("fine") ||
+    t.includes("go ahead")
+  ) return true;
 
   return false;
 }
@@ -1183,8 +1252,17 @@ function detectObjection(textRaw: string): string | null {
   }
   if (
     t.includes("already have") ||
+    t.includes("already have it") ||
     t.includes("got coverage") ||
-    t.includes("i have coverage")
+    t.includes("i have coverage") ||
+    t.includes("im covered") ||
+    t.includes("i'm covered") ||
+    t.includes("covered already") ||
+    t.includes("taken care of") ||
+    t.includes("already taken care of") ||
+    t.includes("already handled") ||
+    t.includes("already got it") ||
+    t.includes("all set")
   ) {
     return "already_have";
   }
@@ -3264,6 +3342,12 @@ async function handleOpenAiEvent(
       state.lastAcceptedUserText = lastUserText;
       state.lastAcceptedStepType = stepType;
       state.lastAcceptedStepIndex = expectedAnswerIdx;
+
+      // ✅ Track last exact clock time (for booking control that triggers on the confirm "yes")
+      if (isExactClockTimeMentioned(lastUserText)) {
+        (state as any).lastExactTimeText = lastUserText;
+        (state as any).lastExactTimeAtMs = Date.now();
+      }
     }
 
     // ✅ consume awaitingUserAnswer ONLY when we are about to speak
@@ -3411,12 +3495,27 @@ async function handleOpenAiEvent(
 
     if (control && typeof control === "object") {
       if (control.kind === "book_appointment" && !state.finalOutcomeSent) {
-        // ✅ Patch 3: ignore premature bookings unless the user explicitly mentioned a time
+        // ✅ Patch 3+: allow booking only when we have an exact time (or a confirm "yes" after a recent exact time)
         const lastAccepted = String(state.lastAcceptedUserText || "").trim();
-        if (!lastAccepted || !isTimeMentioned(lastAccepted)) {
-          console.log("[AI-VOICE][BOOKING][IGNORE] book_appointment without explicit time in lastAcceptedUserText", {
+        const lastExactTime = String((state as any).lastExactTimeText || "").trim();
+        const lastExactAt = Number((state as any).lastExactTimeAtMs || 0);
+
+        const hasRecentExactTime =
+          !!lastExactTime &&
+          isExactClockTimeMentioned(lastExactTime) &&
+          lastExactAt > 0 &&
+          (Date.now() - lastExactAt) < 5 * 60 * 1000; // 5 minutes
+
+        const allowBooking =
+          (!!lastAccepted && isExactClockTimeMentioned(lastAccepted)) ||
+          (!!lastAccepted && isAffirmativeConfirmation(lastAccepted) && hasRecentExactTime);
+
+        if (!allowBooking) {
+          console.log("[AI-VOICE][BOOKING][IGNORE] book_appointment without explicit time/confirm gate", {
             callSid: state.callSid,
             lastAcceptedUserText: (lastAccepted || "").slice(0, 140),
+            lastExactTimeText: (lastExactTime || "").slice(0, 140),
+            hasRecentExactTime: !!hasRecentExactTime,
           });
         } else {
           await handleBookAppointmentIntent(state, control);
