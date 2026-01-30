@@ -1,3 +1,32 @@
+// ---- env bootstrap (ai-voice-server) ----
+// Loads env vars for local/dev & non-vercel runtimes.
+// NOTE: Vercel env vars do NOT exist in your local shell unless you export them.
+import fs from "fs";
+import path from "path";
+import dotenv from "dotenv";
+
+function loadEnvForAiVoiceServer() {
+  // index.ts is in ai-voice-server/, so repo root is one level up
+  const here = __dirname;
+  const candidates = [
+    path.resolve(here, ".env"),
+    path.resolve(here, "../.env.local"),
+    path.resolve(here, "../.env.live"),
+    path.resolve(here, "../.env"),
+  ];
+
+  for (const fp of candidates) {
+    try {
+      if (fs.existsSync(fp)) {
+        dotenv.config({ path: fp });
+      }
+    } catch {}
+  }
+}
+
+loadEnvForAiVoiceServer();
+// ---- end env bootstrap ----
+
 // ai-voice-server/index.ts
 import http, { IncomingMessage, ServerResponse } from "http";
 import WebSocket, { WebSocketServer } from "ws";
@@ -2190,7 +2219,16 @@ wss.on("connection", (ws: WebSocket) => {
     const st = calls.get(ws);
 
     if (st) {
+      st.phase = "ended";
       stopOutboundPacer(ws, st, "twilio ws close");
+
+      // ✅ best-effort billing on close (Twilio may not always deliver a clean `stop`)
+      billAiDialerUsageForCall(st).catch((err: any) => {
+        console.error(
+          "[AI-VOICE] Error billing AI Dialer usage (ws close):",
+          err?.message || err
+        );
+      });
     }
 
     if (st?.openAiWs) {
