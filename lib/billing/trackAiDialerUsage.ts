@@ -139,9 +139,7 @@ export async function trackAiDialerUsage({
   // Subtract this call's billed amount from AI dialer balance
   userDoc.aiDialerBalance = (userDoc.aiDialerBalance || 0) - billableAmountUsd;
 
-  const canBill =
-    !!userDoc.stripeCustomerId &&
-    !(DEV_SKIP_BILLING && isProd);
+  const canBill = !!userDoc.stripeCustomerId && !DEV_SKIP_BILLING;
 
   // If no Stripe customer, we just track usage but do not auto-topup here
   if (!userDoc.stripeCustomerId) {
