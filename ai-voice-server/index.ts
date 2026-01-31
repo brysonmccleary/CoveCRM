@@ -1125,6 +1125,27 @@ function classifyStepType(lineRaw: string): StepType {
   return looksYesNo ? "yesno_question" : "open_question";
 }
 
+// ✅ Exact-time question detector:
+// Some time questions are just "today vs tomorrow" or "daytime vs evening" (broad answers OK).
+// Others REQUIRE an exact clock time before we can advance (e.g., "what time works best?").
+// This prevents "tomorrow afternoon" / "afternoon" from being treated as a final scheduled time.
+function isExactTimeQuestion(lineRaw: string): boolean {
+  const line = String(lineRaw || "").toLowerCase();
+  if (!line) return false;
+
+  // Strong "exact time" signals
+  if (line.includes("exact time")) return true;
+  if (line.includes("what time")) return true;
+  if (line.includes("which time")) return true;
+  if (line.includes("at what time")) return true;
+  if (line.includes("around what time")) return true;
+  if (line.includes("what time works")) return true;
+  if (line.includes("what time would")) return true;
+
+  return false;
+}
+
+
 function isDayReferenceMentioned(textRaw: string): boolean {
   const t = String(textRaw || "").trim().toLowerCase();
   if (!t) return false;
@@ -3479,12 +3500,21 @@ async function handleOpenAiEvent(
     // ✅ Patch 3: don't respond/advance on low-signal commits unless we have transcript OR very strong audio.
     const canSpeak = hasTranscript || audioMs >= 1400;
 
-    // ✅ Patch 3: ONLY advance when we have transcript, and time_question must contain a time indicator.
+    // ✅ Patch 3: ONLY advance when we have transcript.
+    // For time_question:
+    // - Broad time questions (today vs tomorrow, daytime vs evening) can advance on "tomorrow"/"afternoon"/etc.
+    // - Exact-time questions MUST have an exact clock time (e.g., 2pm) before advancing.
+    const stepLine = String(steps[idx] || "");
+    const exactTimeRequired =
+      stepType === "time_question" && isExactTimeQuestion(stepLine);
+
     const canAdvance =
       hasTranscript &&
       (stepType !== "time_question"
         ? !isFillerOnly(lastUserText)
-        : looksLikeTimeAnswer(lastUserText) || isTimeMentioned(lastUserText));
+        : exactTimeRequired
+          ? isExactClockTimeMentioned(lastUserText)
+          : (looksLikeTimeAnswer(lastUserText) || isTimeMentioned(lastUserText)));
 
     const treatAsAnswer = shouldTreatCommitAsRealAnswer(
       stepType,
@@ -3564,9 +3594,34 @@ async function handleOpenAiEvent(
 
     let lineToSay = enforceBookingOnlyLine(state.context!, steps[idx] || getBookingFallbackLine(state.context!));
 
+    // ✅ Exact-time enforcement:
+    // If the current line is an exact-time question ("what time works best?") and the user answers with
+    // a window ("afternoon") or day reference ("tomorrow") WITHOUT an exact clock time, we must offer
+    // exact options and HOLD position (never finalize from a window).
+    let forcedExactTimeOffer = false;
+    if (stepType === "time_question") {
+      const stepLine2 = String(steps[idx] || "");
+      const exactRequired2 = isExactTimeQuestion(stepLine2);
+
+      if (exactRequired2 && hasTranscript && !isExactClockTimeMentioned(lastUserText)) {
+        if (
+          isTimeWindowMentioned(lastUserText) ||
+          isDayReferenceMentioned(lastUserText) ||
+          looksLikeTimeAnswer(lastUserText)
+        ) {
+          const sameStep = Number(state.timeOfferCountForStepIndex ?? -1) === Number(idx);
+          const n = sameStep ? Number(state.timeOfferCount || 0) : 0;
+          lineToSay = getTimeOfferLine(state.context!, n);
+          state.timeOfferCountForStepIndex = idx;
+          state.timeOfferCount = n + 1;
+          forcedExactTimeOffer = true;
+        }
+      }
+    }
+
     // ✅ Time indecision: user asked "what do you have available" / "you pick" etc.
     // We should answer with options, but NOT advance the script step until a real time is given.
-    if (stepType === "time_question" && isTimeIndecisionOrAvailability(lastUserText)) {
+    if (!forcedExactTimeOffer && stepType === "time_question" && isTimeIndecisionOrAvailability(lastUserText)) {
       const sameStep = Number(state.timeOfferCountForStepIndex ?? -1) === Number(idx);
       const n = sameStep ? Number(state.timeOfferCount || 0) : 0;
       lineToSay = getTimeOfferLine(state.context!, n);
