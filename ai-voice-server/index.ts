@@ -185,6 +185,9 @@ type CallState = {
   outboundMuLawBuffer?: Buffer;
   outboundPacerTimer?: NodeJS.Timeout | null;
   outboundOpenAiDone?: boolean;
+  // ✅ If user commits while outbound pacer is still draining (aiSpeaking true), we must NOT drop the turn.
+  // We queue it here and replay immediately when pacer drains and aiSpeaking flips to false.
+  pendingCommittedTurn?: { bestTranscript: string; audioMs: number; atMs: number } | null;
 
   // ✅ voicemail skip safety
   voicemailSkipArmed?: boolean;
@@ -522,6 +525,7 @@ function ensureOutboundPacer(twilioWs: WebSocket, state: CallState) {
             live.outboundMuLawBuffer = Buffer.alloc(0);
             stopOutboundPacer(twilioWs, live, "buffer drained after OpenAI done");
             setAiSpeaking(live, false, "pacer drained");
+            void replayPendingCommittedTurn(twilioWs, live, "pacer drained");
           }
         }
       }
@@ -546,6 +550,234 @@ function stopOutboundPacer(
     console.log("[AI-VOICE][PACE] stopped |", reason);
   }
 }
+
+
+
+async function replayPendingCommittedTurn(
+  twilioWs: WebSocket,
+  state: CallState,
+  reason: string
+) {
+  try {
+    const pending = state.pendingCommittedTurn;
+    if (!pending) return;
+
+    // Only replay when the AI is truly done speaking/draining and we are able to create a response
+    if (state.aiSpeaking) return;
+    if (state.waitingForResponse || state.responseInFlight) return;
+    if (!state.openAiWs || !state.openAiReady) return;
+    if (state.voicemailSkipArmed) {
+      state.pendingCommittedTurn = null;
+      return;
+    }
+
+    // Clear pending first (prevents double replay)
+    state.pendingCommittedTurn = null;
+
+    // Restore the exact accepted input for the turn
+    const restoredTranscript = String(pending.bestTranscript || "").trim();
+    const restoredAudioMs = Number(pending.audioMs || 0);
+
+    if (restoredTranscript) state.lastUserTranscript = restoredTranscript;
+    if (restoredAudioMs > 0) state.userAudioMsBuffered = restoredAudioMs;
+
+    console.log("[AI-VOICE][TURN-GATE][REPLAY]", {
+      callSid: state.callSid,
+      streamSid: state.streamSid,
+      reason,
+      restoredLen: restoredTranscript ? restoredTranscript.length : 0,
+      restoredAudioMs,
+    });
+
+    // ✅ Re-run the same commit logic path by directly invoking the same response.create decision logic
+    // We do NOT touch audio streaming; we only create a response now that drain is complete.
+
+    const lastUserText = String(state.lastUserTranscript || "").trim();
+    const objectionKind = lastUserText ? detectObjection(lastUserText) : null;
+
+    // Ensure script steps loaded
+    if (!state.scriptSteps || state.scriptSteps.length === 0) {
+      try {
+        const selectedScript = getSelectedScriptText(state.context!);
+        state.scriptSteps = extractScriptStepsFromSelectedScript(selectedScript);
+        state.scriptStepIndex = 0;
+      } catch {
+        state.scriptSteps = [];
+        state.scriptStepIndex = 0;
+      }
+    }
+
+    const idx = typeof state.scriptStepIndex === "number" ? state.scriptStepIndex : 0;
+    const steps = state.scriptSteps || [];
+
+    const currentStepLine = steps[idx] || getBookingFallbackLine(state.context!);
+    const expectedAnswerIdx = Math.max(0, idx - 1);
+    const expectedStepLine = steps[expectedAnswerIdx] || currentStepLine;
+    const stepType = classifyStepType(expectedStepLine);
+
+    const humanPause = async () => {
+      try {
+        await sleep(randInt(250, 450));
+      } catch {}
+    };
+
+    const now = Date.now();
+    const lastCreateAt = Number(state.lastResponseCreateAtMs || 0);
+    if (now - lastCreateAt < 150) return;
+
+    const isGreetingReply = state.phase === "awaiting_greeting_reply";
+
+    if (isGreetingReply) {
+      const lineToSay = steps[0] || getBookingFallbackLine(state.context!);
+      const ack = getGreetingAckPrefix(lastUserText);
+
+      if (isGreetingNegativeHearing(lastUserText)) {
+        const aiName2 = (state.context!.voiceProfile.aiName || "Alex").trim() || "Alex";
+        const clientName2 = (state.context!.clientFirstName || "").trim() || "there";
+        const retryLine = `Okay — can you hear me now, ${clientName2}? This is ${aiName2}.`;
+        const retryInstr = buildStepperTurnInstruction(state.context!, retryLine);
+
+        state.awaitingUserAnswer = false;
+        state.awaitingAnswerForStepIndex = undefined;
+        state.userAudioMsBuffered = 0;
+        state.lastUserTranscript = "";
+        state.lowSignalCommitCount = 0;
+        state.repromptCountForCurrentStep = 0;
+
+        await humanPause();
+
+        setWaitingForResponse(state, true, "response.create (greeting retry)");
+        setAiSpeaking(state, true, "response.create (greeting retry)");
+        setResponseInFlight(state, true, "response.create (greeting retry)");
+        state.outboundOpenAiDone = false;
+
+        state.lastPromptSentAtMs = Date.now();
+        state.lastPromptLine = retryLine;
+        state.lastResponseCreateAtMs = Date.now();
+
+        state.openAiWs.send(
+          JSON.stringify({
+            type: "response.create",
+            response: { modalities: ["audio", "text"], temperature: 0.6, instructions: retryInstr },
+          })
+        );
+
+        state.phase = "awaiting_greeting_reply";
+        return;
+      }
+
+      const lineToSay2 = `${ack} ${lineToSay}`;
+      const perTurnInstr = buildStepperTurnInstruction(state.context!, lineToSay2);
+
+      state.awaitingUserAnswer = false;
+      state.awaitingAnswerForStepIndex = undefined;
+      state.userAudioMsBuffered = 0;
+      state.lastUserTranscript = "";
+      state.lowSignalCommitCount = 0;
+      state.repromptCountForCurrentStep = 0;
+
+      await humanPause();
+
+      setWaitingForResponse(state, true, "response.create (stepper after greeting)");
+      setAiSpeaking(state, true, "response.create (stepper after greeting)");
+      setResponseInFlight(state, true, "response.create (stepper after greeting)");
+      state.outboundOpenAiDone = false;
+
+      state.lastPromptSentAtMs = Date.now();
+      state.lastPromptLine = lineToSay2;
+      state.lastResponseCreateAtMs = Date.now();
+
+      state.openAiWs.send(
+        JSON.stringify({
+          type: "response.create",
+          response: { modalities: ["audio", "text"], temperature: 0.6, instructions: perTurnInstr },
+        })
+      );
+
+      state.scriptStepIndex = steps.length > 1 ? 1 : 0;
+      state.phase = "in_call";
+      return;
+    }
+
+    if (objectionKind) {
+      const lineToSay = enforceBookingOnlyLine(state.context!, getRebuttalLine(state.context!, objectionKind));
+      const perTurnInstr = buildConversationalRebuttalInstruction(state.context!, lineToSay, {
+        objectionKind,
+        userText: lastUserText,
+        lastOutboundLine: state.lastPromptLine,
+        lastOutboundAtMs: state.lastPromptSentAtMs,
+      });
+
+      state.awaitingUserAnswer = false;
+      state.awaitingAnswerForStepIndex = undefined;
+      state.userAudioMsBuffered = 0;
+      state.lastUserTranscript = "";
+      state.lowSignalCommitCount = 0;
+      state.repromptCountForCurrentStep = 0;
+
+      await humanPause();
+
+      setWaitingForResponse(state, true, "response.create (objection)");
+      setAiSpeaking(state, true, "response.create (objection)");
+      setResponseInFlight(state, true, "response.create (objection)");
+      state.outboundOpenAiDone = false;
+
+      state.lastPromptSentAtMs = Date.now();
+      state.lastPromptLine = lineToSay;
+      state.lastResponseCreateAtMs = Date.now();
+
+      state.openAiWs.send(
+        JSON.stringify({
+          type: "response.create",
+          response: { modalities: ["audio", "text"], temperature: 0.6, instructions: perTurnInstr },
+        })
+      );
+
+      state.phase = "in_call";
+      return;
+    }
+
+    // Default: continue script step flow (same as normal commit path)
+    let lineToSay = steps[idx] || getBookingFallbackLine(state.context!);
+
+    const perTurnInstr = buildStepperTurnInstruction(state.context!, lineToSay);
+
+    state.awaitingUserAnswer = false;
+    state.awaitingAnswerForStepIndex = undefined;
+    state.userAudioMsBuffered = 0;
+    state.lastUserTranscript = "";
+    state.lowSignalCommitCount = 0;
+    state.repromptCountForCurrentStep = 0;
+
+    await humanPause();
+
+    setWaitingForResponse(state, true, "response.create (script step)");
+    setAiSpeaking(state, true, "response.create (script step)");
+    setResponseInFlight(state, true, "response.create (script step)");
+    state.outboundOpenAiDone = false;
+
+    state.lastPromptSentAtMs = Date.now();
+    state.lastPromptLine = lineToSay;
+    state.lastResponseCreateAtMs = Date.now();
+
+    state.openAiWs.send(
+      JSON.stringify({
+        type: "response.create",
+        response: { modalities: ["audio", "text"], instructions: perTurnInstr },
+      })
+    );
+
+    state.phase = "in_call";
+    return;
+  } catch (err: any) {
+    console.warn("[AI-VOICE][TURN-GATE][REPLAY] failed (non-blocking):", {
+      callSid: state.callSid,
+      error: err?.message || err,
+      reason,
+    });
+  }
+}
+
 
 /**
  * ✅ Voicemail detection helpers
@@ -3025,16 +3257,25 @@ async function handleOpenAiEvent(
     // ✅ IMPORTANT: Do NOT drop/consume the user turn while the pacer is still draining.
     // Greeting often finishes at OpenAI (response.audio.done) while aiSpeaking stays true until the outbound
     // buffer drains. If we consume awaitingUserAnswer and return here, we get post-greeting dead silence.
-    const waitStartMs = Date.now();
-    while (state.waitingForResponse || state.aiSpeaking) {
-      if (Date.now() - waitStartMs > 2500) {
-        if (!(state as any).__turnGateLogStillSpeaking) {
-          console.log("[TURN-GATE] commit delayed: still speaking after 2.5s (dropping this commit)");
-          (state as any).__turnGateLogStillSpeaking = true;
-        }
-        return;
-      }
-      await new Promise((r) => setTimeout(r, 50));
+    // ✅ NEVER drop user turns.
+    // If the user commits while outbound audio is still draining, queue it and replay when pacer drains.
+    if (state.aiSpeaking) {
+      state.pendingCommittedTurn = {
+        bestTranscript: String(state.lastUserTranscript || bestTranscript || "").trim(),
+        audioMs: Number(audioMsCommitGate || 0),
+        atMs: Date.now(),
+      };
+      try {
+        console.log("[AI-VOICE][TURN-GATE] queued commit while aiSpeaking", {
+          callSid: state.callSid,
+          streamSid: state.streamSid,
+          queuedLen: state.pendingCommittedTurn.bestTranscript
+            ? state.pendingCommittedTurn.bestTranscript.length
+            : 0,
+          queuedAudioMs: state.pendingCommittedTurn.audioMs,
+        });
+      } catch {}
+      return;
     }
 
     // ✅ IMPORTANT: Do NOT clear awaitingUserAnswer unless we actually accept a real answer
@@ -3522,6 +3763,7 @@ async function handleOpenAiEvent(
       state.outboundMuLawBuffer = Buffer.alloc(0);
       stopOutboundPacer(twilioWs, state, "OpenAI done + <1 frame buffered");
       setAiSpeaking(state, false, `OpenAI ${t} (buffer < 1 frame)`);
+      void replayPendingCommittedTurn(twilioWs, state, `OpenAI ${t} (buffer < 1 frame)`);
     }
   }
 
