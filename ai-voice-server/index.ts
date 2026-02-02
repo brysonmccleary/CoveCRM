@@ -3533,69 +3533,59 @@ async function handleOpenAiEvent(
       state.lowSignalCommitCount = (state.lowSignalCommitCount || 0) + 1;
       return;
     }
+
     if (!treatAsAnswer) {
-      state.lowSignalCommitCount = (state.lowSignalCommitCount || 0) + 1;
-
-      const now2 = Date.now();
-      const lastPromptAt = Number(state.lastPromptSentAtMs || 0);
-      const msSincePrompt = now2 - lastPromptAt;
-
-      const shouldReprompt =
-        msSincePrompt >= 3200 &&
-        (state.lowSignalCommitCount || 0) >= 3 &&
-        (state.repromptCountForCurrentStep || 0) < 3;
-
-      if (shouldReprompt) {
-        const repN = Number(state.repromptCountForCurrentStep || 0);
-        const lineToSayRaw = getRepromptLineForStepType(
-          state.context!,
+      // ✅ HOTFIX: Never go silent after a committed user turn.
+      // If we didn't accept it as a real answer, immediately reprompt.
+      const repromptN = Number(state.repromptCountForCurrentStep || 0);
+      state.repromptCountForCurrentStep = repromptN + 1;
+      const repromptLine = getRepromptLineForStepType(state.context!, stepType, repromptN);
+    
+      try {
+        console.log("[AI-VOICE][TURN-GATE] not-real-answer -> reprompt", {
+          callSid: state.callSid,
+          streamSid: state.streamSid,
           stepType,
-          repN
-);
-        const lineToSay = enforceBookingOnlyLine(state.context!, lineToSayRaw);
-        const perTurnInstr = buildStepperTurnInstruction(
-          state.context!,
-          lineToSay
-        );
-
-      // ✅ consume awaitingUserAnswer ONLY when we are about to speak
-      state.awaitingUserAnswer = false;
-      state.awaitingAnswerForStepIndex = undefined;
-
-        state.repromptCountForCurrentStep = repN + 1;
-
-        state.userAudioMsBuffered = 0;
-        state.lastUserTranscript = "";
-        state.lowSignalCommitCount = 0;
-
+          audioMs: Number(audioMs || 0),
+          hasText: !!String(lastUserText || "").trim(),
+          n: repromptN,
+        });
+      } catch {}
+    
+      (async () => {
         try {
-          await sleep(850);
+          await humanPause();
         } catch {}
-
-        await humanPause();
-
-        setWaitingForResponse(state, true, "response.create (reprompt)");
-        setAiSpeaking(state, true, "response.create (reprompt)");
-        setResponseInFlight(state, true, "response.create (reprompt)");
-        state.outboundOpenAiDone = false;
-
-        state.lastPromptSentAtMs = Date.now();
-        state.lastPromptLine = lineToSay;
-        state.lastResponseCreateAtMs = Date.now();
-
-        state.openAiWs.send(
-          JSON.stringify({
+    
+        // mark state as speaking/in-flight
+        try {
+          state.lastPromptSentAtMs = Date.now();
+          state.lastPromptLine = "REPROMPT";
+          state.lastResponseCreateAtMs = Date.now();
+          state.waitingForResponse = true;
+          state.aiSpeaking = true;
+          state.responseInFlight = true;
+        } catch {}
+    
+        try {
+          const instr = buildStepperTurnInstruction(state.context!, repromptLine);
+          state.openAiWs!.send(JSON.stringify({
             type: "response.create",
-            response: { modalities: ["audio", "text"], temperature: 0.6, instructions: perTurnInstr },
-          })
-        );
-
-        state.phase = "in_call";
-        return;
-      }
-
+            response: {
+              modalities: ["audio", "text"],
+              instructions: instr,
+            },
+          }));
+        } catch (e) {
+          try {
+            console.log("[AI-VOICE] Error sending reprompt response.create:", String(e));
+          } catch {}
+        }
+      })();
+    
       return;
     }
+
 
     let lineToSay = enforceBookingOnlyLine(state.context!, steps[idx] || getBookingFallbackLine(state.context!));
 
