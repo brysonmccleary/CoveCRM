@@ -1420,13 +1420,18 @@ function shouldTreatCommitAsRealAnswer(
   }
 
   /**
-   * ✅ Patch 3 (critical):
-   * No transcription available → be VERY conservative.
-   * This prevents "yeah" / noise / low-signal commits from advancing steps (especially time steps).
+   * ✅ Patch (critical):
+   * No transcription available → do NOT advance booking steps that require semantic understanding.
+   * If we don't know what they said, we cannot detect objections like "already taken care of",
+   * so advancing here causes loops/repeats.
+   *
+   * Rule:
+   * - time_question + open_question require text (transcript) to count as a real answer.
+   * - yes/no can still be inferred from audio length if needed.
    */
-  if (stepType === "time_question") return audioMs >= 2400; // extremely conservative
+  if (stepType === "time_question") return false;
+  if (stepType === "open_question") return false;
   if (stepType === "yesno_question") return audioMs >= 1200;
-  if (stepType === "open_question") return audioMs >= 1600;
   return audioMs >= 1400;
 }
 
@@ -1463,7 +1468,7 @@ function getRepromptLineForStepType(
     const ladder = [
       `Real quick — was this for just you, or a spouse as well?`,
       `Perfect — my job is just to set up a quick call with ${agent}. Would later today or tomorrow be better?`,
-      `No worries — just to get you scheduled, is later today or tomorrow better — daytime or evening?`,
+      `No worries — just to get you scheduled, is later today or tomorrow better?`,
     ];
     return ladder[Math.min(n, ladder.length - 1)];
   }
@@ -1594,7 +1599,7 @@ function getRebuttalLine(ctx: AICallContext, kind: string): string {
   // "Are you AI / robot?" -> quick human answer + redirect to booking
   if (kind === "are_you_ai") {
     const aiName = (ctx.voiceProfile?.aiName || "Alex").trim() || "Alex";
-    return `(laugh) haha I get that a lot. I\'m ${aiName} - just an assistant trained to set up appointments for the licensed agent. Would later today or tomorrow be better - daytime or evening?`;
+    return `(laugh) haha I get that a lot. I\'m ${aiName} - just an assistant trained to set up appointments for the licensed agent. Would later today or tomorrow be better?`;
   }
 
   // ✅ NEW: "Who are you / I'm confused" handling (human + on-scope)
@@ -1686,9 +1691,9 @@ function buildConversationalRebuttalInstruction(
 
   const bookingPrompts: string[] = [
     "Would later today or tomorrow be better?",
-    "Do you want to do later today or tomorrow — daytime or evening?",
+    "Do you want to do later today or tomorrow?",
     "What works better for you — later today or tomorrow?",
-    `Is later today or tomorrow better for a quick call with ${agent} — daytime or evening?`,
+    `Is later today or tomorrow better for a quick call with ${agent}?`,
   ];
 
   const recentlyRepeated = !!lastLine && !!baseLine && (now - lastAt) < 10000 && lastLine === baseLine.toLowerCase();
@@ -1709,7 +1714,7 @@ OUTPUT CONSTRAINT (NON-NEGOTIABLE):
 - Output 1 short message total, 2–4 sentences MAX.
 - You may briefly answer the user's immediate question/concern in 1–2 sentences.
 - You MUST pivot back to scheduling.
-- You MUST end with a booking question that offers later today vs tomorrow and daytime vs evening.
+- You MUST end with a booking question that offers later today vs tomorrow.
 - You MUST NOT ask discovery/underwriting questions: NO age/DOB, NO coverage amount, NO mortgage balance, NO health/meds, NO smoking, NO income, NO SSN, NO address.
 - If the user asks for cost/coverage details, you deflect: "${agent} will cover that on the quick call" and then schedule.
 
@@ -1944,7 +1949,7 @@ REBUTTALS (USE ONLY IF NEEDED — THEN GO RIGHT BACK TO BOOKING)
 RULES
 - One rebuttal at a time.
 - Keep it short (1–2 sentences).
-- Then ask again: "Would later today or tomorrow work better — daytime or evening?"
+- Then ask again: "Would later today or tomorrow work better?"
 - Never mention rates, underwriting, carriers, approvals, eligibility, age, health.
 - Never introduce any other scenario (travel, resorts, healthcare, utilities, etc.).
 - Never apologize. Never mention scripts/prompts. Never acknowledge mistakes.
