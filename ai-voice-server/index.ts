@@ -1142,6 +1142,14 @@ function isExactTimeQuestion(lineRaw: string): boolean {
   if (line.includes("what time works")) return true;
   if (line.includes("what time would")) return true;
 
+  // Also treat "specific time / works best" phrasing as exact-time required.
+  // (Your scripts use: "is there a specific time you're available, or what works best for you?")
+  if (line.includes("specific time")) return true;
+  if (line.includes("time you're available")) return true;
+  if (line.includes("time you are available")) return true;
+  if (line.includes("what works best")) return true;
+  if (line.includes("works best for you")) return true;
+
   return false;
 }
 
@@ -2935,6 +2943,10 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
         temperature: 0.6,
         input_audio_format: "g711_ulaw",
         output_audio_format: "pcm16",
+        input_audio_transcription: {
+          model: "gpt-4o-transcribe",
+          language: "en",
+        },
         turn_detection: {
           type: "server_vad",
           create_response: false,
@@ -3519,13 +3531,29 @@ async function handleOpenAiEvent(
         ? !isFillerOnly(lastUserText)
         : exactTimeRequired
           ? isExactClockTimeMentioned(lastUserText)
-          : (looksLikeTimeAnswer(lastUserText) || isTimeMentioned(lastUserText)));
+          : (
+              isDayReferenceMentioned(lastUserText) ||
+              isExactClockTimeMentioned(lastUserText) ||
+              (isDayReferenceMentioned(lastUserText) && isTimeWindowMentioned(lastUserText))
+            ));
 
     const treatAsAnswer = shouldTreatCommitAsRealAnswer(
       stepType,
       audioMs,
       lastUserText
     );
+
+    // ✅ Guard: For broad time questions (Step 2 like "later today or tomorrow"),
+    // a window-only reply ("afternoon") is NOT a valid answer unless it includes a day reference ("tomorrow afternoon")
+    // or an exact clock time. Window-only should reprompt Step 2.
+    const forceNotAnswer =
+      stepType === "time_question" &&
+      !exactTimeRequired &&
+      hasTranscript &&
+      isTimeWindowMentioned(lastUserText) &&
+      !isDayReferenceMentioned(lastUserText) &&
+      !isExactClockTimeMentioned(lastUserText);
+
 
 
     // ✅ Patch 3: if we can't confidently speak yet, treat it as low-signal and wait/reprompt later.
@@ -3534,7 +3562,7 @@ async function handleOpenAiEvent(
       return;
     }
 
-    if (!treatAsAnswer) {
+    if (!treatAsAnswer || forceNotAnswer) {
       // ✅ HOTFIX: Never go silent after a committed user turn.
       // If we didn't accept it as a real answer, immediately reprompt.
       const repromptN = Number(state.repromptCountForCurrentStep || 0);
