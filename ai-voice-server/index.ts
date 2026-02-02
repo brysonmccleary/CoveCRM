@@ -947,7 +947,7 @@ function extractScriptStepsFromSelectedScript(selectedScript: string): string[] 
   if (steps.length === 0) {
     // NOTE: do not include any other vertical/topic
     pushIf(
-      "I’m just calling to get you scheduled for a quick call. Would later today or tomorrow be better — daytime or evening?"
+      "I’m just calling to get you scheduled for a quick call. Would later today or tomorrow be better?"
     );
   }
 
@@ -1079,7 +1079,7 @@ function isGreetingNegativeHearing(userTextRaw: string): boolean {
 function getBookingFallbackLine(ctx: AICallContext): string {
   const agentRaw = (ctx.agentName || "your agent").trim() || "your agent";
   const agent = (agentRaw.split(" ")[0] || agentRaw).trim();
-  return `Got it — my job is just to get you scheduled. ${agent} is the licensed agent who will go over everything with you. Would later today or tomorrow be better — daytime or evening?`;
+  return `Got it — my job is just to get you scheduled. ${agent} is the licensed agent who will go over everything with you. Would later today or tomorrow be better?`;
 }
 
 /**
@@ -1453,7 +1453,7 @@ function getRepromptLineForStepType(
     const ladder = [
       `Got you — would that be a yes, or a no?`,
       `Just so I’m clear — is that something you already have in place?`,
-      `No worries — to keep it simple: yes or no? If it’s easier, we can just schedule and ${agent} will cover everything. Would later today or tomorrow be better — daytime or evening?`,
+      `No worries — to keep it simple: yes or no? If it’s easier, we can just schedule and ${agent} will cover everything. Would later today or tomorrow be better?`,
     ];
     return ladder[Math.min(n, ladder.length - 1)];
   }
@@ -1462,7 +1462,7 @@ function getRepromptLineForStepType(
     // ✅ Patch: booking-only reprompts (no discovery)
     const ladder = [
       `Real quick — was this for just you, or a spouse as well?`,
-      `Perfect — my job is just to set up a quick call with ${agent}. Would later today or tomorrow be better — daytime or evening?`,
+      `Perfect — my job is just to set up a quick call with ${agent}. Would later today or tomorrow be better?`,
       `No worries — just to get you scheduled, is later today or tomorrow better — daytime or evening?`,
     ];
     return ladder[Math.min(n, ladder.length - 1)];
@@ -1601,7 +1601,7 @@ function getRebuttalLine(ctx: AICallContext, kind: string): string {
   if (kind === "confused_identity") {
     const aiName = (ctx.voiceProfile?.aiName || "Alex").trim() || "Alex";
     const scope = getScopeLabelForScriptKey(ctx.scriptKey);
-    return `Hey — my name is ${aiName}. I’m calling about the ${scope} request. Would later today or tomorrow be better — daytime or evening?`;
+    return `Hey — my name is ${aiName}. I’m calling about the ${scope} request. Would later today or tomorrow be better?`;
   }
 
   // ✅ NEW: "What does this call entail / how long?" handling
@@ -1609,28 +1609,28 @@ function getRebuttalLine(ctx: AICallContext, kind: string): string {
     const scope = getScopeLabelForScriptKey(ctx.scriptKey);
     // Be specific + satisfying, then go right back to booking.
     // Keep it booking-only: no rates, no underwriting, no age/health questions.
-    return `Totally — it’s quick, usually about 5 to 10 minutes. ${agent} just goes over what you requested for ${scope} and answers your questions. Would later today or tomorrow be better — daytime or evening?`;
+    return `Totally — it’s quick, usually about 5 to 10 minutes. ${agent} just goes over what you requested for ${scope} and answers your questions. Would later today or tomorrow be better?`;
   }
 
   // Existing objections
   if (kind === "busy") {
-    return `Totally understand. That’s why I’m just scheduling — it’ll be a short call with ${agent}. Would later today or tomorrow be better — daytime or evening?`;
+    return `Totally understand. That’s why I’m just scheduling — it’ll be a short call with ${agent}. Would later today or tomorrow be better?`;
   }
   if (kind === "send_it") {
-    return `I can, but it’s usually easier to schedule a quick call so you don’t have to go back and forth. Would later today or tomorrow be better — daytime or evening?`;
+    return `I can, but it’s usually easier to schedule a quick call so you don’t have to go back and forth. Would later today or tomorrow be better?`;
   }
   if (kind === "already_have") {
-    return `I hear you — a lot of people we talk to already have something in place and find out they’re overpaying. Let’s set up a quick 3–5 minute call with ${agent} to see if we can save you at least $20 a month — is that fair? Would later today or tomorrow be better — daytime or evening?`;
+    return `I hear you — a lot of people we talk to already have something in place and find out they’re overpaying. Let’s set up a quick 3–5 minute call with ${agent} to see if we can save you at least $20 a month — is that fair? Would later today or tomorrow be better?`;
   }
   if (kind === "how_much") {
-    return `Good question — ${agent} covers that on the quick call because it depends on what you want it to do. Would later today or tomorrow be better — daytime or evening?`;
+    return `Good question — ${agent} covers that on the quick call because it depends on what you want it to do. Would later today or tomorrow be better?`;
   }
   if (kind === "dont_remember") {
     // Stay inside life-insurance context
     return `No worries — it was just a request for information on life insurance. Was that for just you, or a spouse as well?`;
   }
   if (kind === "scam") {
-    return `I understand. This is just a scheduling call tied to your life insurance request. ${agent} will explain everything clearly on the phone. Would later today or tomorrow be better — daytime or evening?`;
+    return `I understand. This is just a scheduling call tied to your life insurance request. ${agent} will explain everything clearly on the phone. Would later today or tomorrow be better?`;
   }
   if (kind === "not_interested") {
     return `No worries at all. Would you like me to close this out, or would a quick call later today or tomorrow be better?`;
@@ -1685,7 +1685,7 @@ function buildConversationalRebuttalInstruction(
   const now = Date.now();
 
   const bookingPrompts: string[] = [
-    "Would later today or tomorrow be better — daytime or evening?",
+    "Would later today or tomorrow be better?",
     "Do you want to do later today or tomorrow — daytime or evening?",
     "What works better for you — later today or tomorrow?",
     `Is later today or tomorrow better for a quick call with ${agent} — daytime or evening?`,
@@ -1785,11 +1785,11 @@ Say: "I was just giving you a quick call about the request you put in for mortga
 STOP. WAIT.
 
 STEP 2 (BOOKING FRAME)
-Say: "So the next step is really simple — I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Would later today or tomorrow be better — daytime or evening?"
+Say: "So the next step is really simple — I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Would later today or tomorrow be better?"
 STOP. WAIT.
 
-STEP 3 (IF THEY PICK A WINDOW)
-Then ask: "Perfect — what time in that window works best?"
+STEP 3 (TIME)
+Then ask: "Perfect — is there a specific time you're available, or what works best for you?"
 STOP. WAIT.
 
 STEP 4 (CONFIRM)
@@ -1809,11 +1809,11 @@ Say: "I was just giving you a quick call about the request you put in for final 
 STOP. WAIT.
 
 STEP 2 (BOOKING FRAME)
-Say: "So the next step is really simple — I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Would later today or tomorrow be better — daytime or evening?"
+Say: "So the next step is really simple — I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Would later today or tomorrow be better?"
 STOP. WAIT.
 
-STEP 3 (IF THEY PICK A WINDOW)
-Then ask: "Perfect — what time in that window works best?"
+STEP 3 (TIME)
+Then ask: "Perfect — is there a specific time you're available, or what works best for you?"
 STOP. WAIT.
 
 STEP 4 (CONFIRM)
@@ -1833,11 +1833,11 @@ Say: "I was just giving you a quick call about the request you put in for cash v
 STOP. WAIT.
 
 STEP 2 (BOOKING FRAME)
-Say: "So the next step is really simple — I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Would later today or tomorrow be better — daytime or evening?"
+Say: "So the next step is really simple — I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Would later today or tomorrow be better?"
 STOP. WAIT.
 
-STEP 3 (IF THEY PICK A WINDOW)
-Then ask: "Perfect — what time in that window works best?"
+STEP 3 (TIME)
+Then ask: "Perfect — is there a specific time you're available, or what works best for you?"
 STOP. WAIT.
 
 STEP 4 (CONFIRM)
@@ -1857,11 +1857,11 @@ Say: "I was just giving you a quick call about the request you put in for the ve
 STOP. WAIT.
 
 STEP 2 (BOOKING FRAME)
-Say: "So the next step is really simple — I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Would later today or tomorrow be better — daytime or evening?"
+Say: "So the next step is really simple — I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Would later today or tomorrow be better?"
 STOP. WAIT.
 
-STEP 3 (IF THEY PICK A WINDOW)
-Then ask: "Perfect — what time in that window works best?"
+STEP 3 (TIME)
+Then ask: "Perfect — is there a specific time you're available, or what works best for you?"
 STOP. WAIT.
 
 STEP 4 (CONFIRM)
@@ -1881,11 +1881,11 @@ Say: "I was just giving you a quick call about the request you put in for life i
 STOP. WAIT.
 
 STEP 2 (BOOKING FRAME)
-Say: "So the next step is really simple — I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Would later today or tomorrow be better — daytime or evening?"
+Say: "So the next step is really simple — I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Would later today or tomorrow be better?"
 STOP. WAIT.
 
-STEP 3 (IF THEY PICK A WINDOW)
-Then ask: "Perfect — what time in that window works best?"
+STEP 3 (TIME)
+Then ask: "Perfect — is there a specific time you're available, or what works best for you?"
 STOP. WAIT.
 
 STEP 4 (CONFIRM)
@@ -1905,11 +1905,11 @@ Say: "I was just giving you a quick call about the request you put in for life i
 STOP. WAIT.
 
 STEP 2 (BOOKING FRAME)
-Say: "So the next step is really simple — I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Would later today or tomorrow be better — daytime or evening?"
+Say: "So the next step is really simple — I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Would later today or tomorrow be better?"
 STOP. WAIT.
 
-STEP 3 (IF THEY PICK A WINDOW)
-Then ask: "Perfect — what time in that window works best?"
+STEP 3 (TIME)
+Then ask: "Perfect — is there a specific time you're available, or what works best for you?"
 STOP. WAIT.
 
 STEP 4 (CONFIRM)
@@ -1950,23 +1950,23 @@ RULES
 - Never apologize. Never mention scripts/prompts. Never acknowledge mistakes.
 
 OBJECTION: "I don’t have time / I’m at work"
-REBUTTAL: "Totally understand. That’s why I’m just scheduling — it’ll be a short call with ${agent}. Would later today or tomorrow be better — daytime or evening?"
+REBUTTAL: "Totally understand. That’s why I’m just scheduling — it’ll be a short call with ${agent}. Would later today or tomorrow be better?"
 
 OBJECTION: "Just send it / just text me"
-REBUTTAL: "I can, but it’s usually easier to schedule a quick call so you don’t have to go back and forth. Would later today or tomorrow be better — daytime or evening?"
+REBUTTAL: "I can, but it’s usually easier to schedule a quick call so you don’t have to go back and forth. Would later today or tomorrow be better?"
 
 OBJECTION: "I already have coverage"
-REBUTTAL: "Got it — my job is just scheduling. It’ll be a short call with ${agent} to go over what you requested and answer any questions. Would later today or tomorrow be better — daytime or evening?"
+REBUTTAL: "Got it — my job is just scheduling. It’ll be a short call with ${agent} to go over what you requested and answer any questions. Would later today or tomorrow be better?"
 STOP. WAIT.
-Then ask again: "Would later today or tomorrow be better — daytime or evening?"
+Then ask again: "Would later today or tomorrow be better?"
 
 OBJECTION: "How much is it?"
-REBUTTAL: "Good question — ${agent} covers that on the quick call because it depends on what you want it to do. Would later today or tomorrow be better — daytime or evening?"
+REBUTTAL: "Good question — ${agent} covers that on the quick call because it depends on what you want it to do. Would later today or tomorrow be better?"
 
 OBJECTION: "I’m not interested"
 REBUTTAL: "No worries — just so I don’t waste your time, did you mean you don’t want any coverage at all, or you just don’t want a call right now?"
 STOP. WAIT.
-- If they say "no call right now": "All good. Would later today or tomorrow be better — daytime or evening?"
+- If they say "no call right now": "All good. Would later today or tomorrow be better?"
 - If they say "no coverage": "Got it. I’ll mark this as not interested. Stay blessed."
 
 OBJECTION: "I don’t remember filling anything out"
@@ -1974,7 +1974,7 @@ REBUTTAL: "No worries — it was just a request for information on life insuranc
 STOP. WAIT.
 
 OBJECTION: "Is this a scam?"
-REBUTTAL: "I understand. This is just a scheduling call tied to your life insurance request. ${agent} will explain everything clearly on the phone. Would later today or tomorrow be better — daytime or evening?"
+REBUTTAL: "I understand. This is just a scheduling call tied to your life insurance request. ${agent} will explain everything clearly on the phone. Would later today or tomorrow be better?"
 
 OBJECTION: "Call my spouse"
 REBUTTAL: "Absolutely — we can include them. What time is best when you’re both available — later today or tomorrow?"
