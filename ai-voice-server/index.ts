@@ -737,13 +737,155 @@ async function replayPendingCommittedTurn(
       return;
     }
 
-    // Default: continue script step flow (same as normal commit path)
-    let lineToSay = steps[idx] || getBookingFallbackLine(state.context!);
+    // Default: continue script step flow — MUST mirror normal commit path (guards + time logic + reprompt).
+    const audioMs = Number(state.userAudioMsBuffered || 0);
+    const hasTranscript = lastUserText.length > 0;
+
+    // don't speak unless transcript OR very strong audio
+    const canSpeak = hasTranscript || audioMs >= 1400;
+
+    const stepLine = String(steps[idx] || "");
+    const exactTimeRequired =
+      stepType === "time_question" && isExactTimeQuestion(stepLine);
+
+    const canAdvance =
+      hasTranscript &&
+      (stepType !== "time_question"
+        ? !isFillerOnly(lastUserText)
+        : exactTimeRequired
+          ? isExactClockTimeMentioned(lastUserText)
+          : (
+              isDayReferenceMentioned(lastUserText) ||
+              isExactClockTimeMentioned(lastUserText) ||
+              (isDayReferenceMentioned(lastUserText) && isTimeWindowMentioned(lastUserText))
+            ));
+
+    const treatAsAnswer = shouldTreatCommitAsRealAnswer(
+      stepType,
+      audioMs,
+      lastUserText
+    );
+
+    // Window-only reply ("afternoon") is NOT valid for broad day/time question unless it includes day reference or exact time.
+    const forceNotAnswer =
+      stepType === "time_question" &&
+      !exactTimeRequired &&
+      hasTranscript &&
+      isTimeWindowMentioned(lastUserText) &&
+      !isDayReferenceMentioned(lastUserText) &&
+      !isExactClockTimeMentioned(lastUserText);
+
+    if (!canSpeak) {
+      state.lowSignalCommitCount = (state.lowSignalCommitCount || 0) + 1;
+      return;
+    }
+
+    if (!treatAsAnswer || forceNotAnswer) {
+      const repromptN = Number(state.repromptCountForCurrentStep || 0);
+      state.repromptCountForCurrentStep = repromptN + 1;
+      const repromptLine = getRepromptLineForStepType(state.context!, stepType, repromptN);
+
+      try {
+        console.log("[AI-VOICE][TURN-GATE][REPLAY] not-real-answer -> reprompt", {
+          callSid: state.callSid,
+          streamSid: state.streamSid,
+          stepType,
+          audioMs: Number(audioMs || 0),
+          hasText: !!String(lastUserText || "").trim(),
+          n: repromptN,
+        });
+      } catch {}
+
+      await humanPause();
+
+      const instr = buildStepperTurnInstruction(state.context!, repromptLine);
+
+      setWaitingForResponse(state, true, "response.create (replay reprompt)");
+      setAiSpeaking(state, true, "response.create (replay reprompt)");
+      setResponseInFlight(state, true, "response.create (replay reprompt)");
+      state.outboundOpenAiDone = false;
+
+      state.lastPromptSentAtMs = Date.now();
+      state.lastPromptLine = "REPROMPT";
+      state.lastResponseCreateAtMs = Date.now();
+
+      state.openAiWs.send(JSON.stringify({
+        type: "response.create",
+        response: { modalities: ["audio", "text"], instructions: instr },
+      }));
+
+      state.phase = "in_call";
+      return;
+    }
+
+    let lineToSay = enforceBookingOnlyLine(state.context!, steps[idx] || getBookingFallbackLine(state.context!));
+
+    // Exact-time enforcement (mirror normal path)
+    let forcedExactTimeOffer = false;
+    if (stepType === "time_question") {
+      const stepLine2 = String(steps[idx] || "");
+      const exactRequired2 = isExactTimeQuestion(stepLine2);
+
+      if (exactRequired2 && hasTranscript && !isExactClockTimeMentioned(lastUserText)) {
+        if (
+          isTimeWindowMentioned(lastUserText) ||
+          isDayReferenceMentioned(lastUserText) ||
+          looksLikeTimeAnswer(lastUserText)
+        ) {
+          const sameStep = Number(state.timeOfferCountForStepIndex ?? -1) === Number(idx);
+          const n = sameStep ? Number(state.timeOfferCount || 0) : 0;
+          lineToSay = getTimeOfferLine(state.context!, n);
+          state.timeOfferCountForStepIndex = idx;
+          state.timeOfferCount = n + 1;
+          forcedExactTimeOffer = true;
+        }
+      }
+    }
+
+    if (!forcedExactTimeOffer && stepType === "time_question" && isTimeIndecisionOrAvailability(lastUserText)) {
+      const sameStep = Number(state.timeOfferCountForStepIndex ?? -1) === Number(idx);
+      const n = sameStep ? Number(state.timeOfferCount || 0) : 0;
+      lineToSay = getTimeOfferLine(state.context!, n);
+      state.timeOfferCountForStepIndex = idx;
+      state.timeOfferCount = n + 1;
+    }
+
+    // ack prefix based on last accepted step (mirror normal path)
+    const prevIdx = expectedAnswerIdx;
+    if (prevIdx >= 0 && state.lastAcceptedUserText && state.lastAcceptedStepIndex === prevIdx) {
+      const prevLine = steps[prevIdx] || "";
+      const prevType = classifyStepType(prevLine);
+      const ack2 = getHumanAckPrefixForStepAnswer(prevType, state.lastAcceptedUserText);
+      if (ack2) lineToSay = `${ack2} ${lineToSay}`;
+    }
+
+    // anti-loop (mirror normal path)
+    try {
+      const prev = String(state.lastPromptLine || "").replace(/\s+/g, " ").trim().toLowerCase();
+      const next = String(lineToSay || "").replace(/\s+/g, " ").trim().toLowerCase();
+      const lastAt = Number(state.lastPromptSentAtMs || 0);
+      if (prev && next && prev === next && (Date.now() - lastAt) < 10000) {
+        lineToSay = getBookingFallbackLine(state.context!);
+      }
+    } catch {}
 
     const perTurnInstr = buildStepperTurnInstruction(state.context!, lineToSay);
+    try { console.log("[AI-VOICE][STEPPER][REPLAY-SEND]", { callSid: state.callSid, stepIndex: idx, expectedAnswerIdx, stepType, lineToSay }); } catch {}
+
+    if (lastUserText) {
+      state.lastAcceptedUserText = lastUserText;
+      state.lastAcceptedStepType = stepType;
+      state.lastAcceptedStepIndex = expectedAnswerIdx;
+
+      if (isExactClockTimeMentioned(lastUserText)) {
+        (state as any).lastExactTimeText = lastUserText;
+        (state as any).lastExactTimeAtMs = Date.now();
+      }
+    }
 
     state.awaitingUserAnswer = false;
     state.awaitingAnswerForStepIndex = undefined;
+
     state.userAudioMsBuffered = 0;
     state.lastUserTranscript = "";
     state.lowSignalCommitCount = 0;
@@ -751,21 +893,28 @@ async function replayPendingCommittedTurn(
 
     await humanPause();
 
-    setWaitingForResponse(state, true, "response.create (script step)");
-    setAiSpeaking(state, true, "response.create (script step)");
-    setResponseInFlight(state, true, "response.create (script step)");
+    setWaitingForResponse(state, true, "response.create (replay script step)");
+    setAiSpeaking(state, true, "response.create (replay script step)");
+    setResponseInFlight(state, true, "response.create (replay script step)");
     state.outboundOpenAiDone = false;
 
     state.lastPromptSentAtMs = Date.now();
     state.lastPromptLine = lineToSay;
     state.lastResponseCreateAtMs = Date.now();
 
-    state.openAiWs.send(
-      JSON.stringify({
-        type: "response.create",
-        response: { modalities: ["audio", "text"], instructions: perTurnInstr },
-      })
-    );
+    state.openAiWs.send(JSON.stringify({
+      type: "response.create",
+      response: { modalities: ["audio", "text"], instructions: perTurnInstr },
+    }));
+
+    // advance logic (mirror normal path)
+    if (canAdvance) {
+      state.scriptStepIndex = Math.min(idx + 1, Math.max(0, steps.length - 1));
+      state.timeOfferCountForStepIndex = undefined;
+      state.timeOfferCount = 0;
+    } else {
+      state.scriptStepIndex = idx;
+    }
 
     state.phase = "in_call";
     return;
@@ -3585,26 +3734,39 @@ async function handleOpenAiEvent(
           await humanPause();
         } catch {}
     
-        // mark state as speaking/in-flight
+        // mark state as speaking/in-flight (use canonical setters)
+
         try {
-          state.lastPromptSentAtMs = Date.now();
-          state.lastPromptLine = "REPROMPT";
-          state.lastResponseCreateAtMs = Date.now();
-          state.waitingForResponse = true;
-          state.aiSpeaking = true;
-          state.responseInFlight = true;
-        } catch {}
-    
-        try {
+
           const instr = buildStepperTurnInstruction(state.context!, repromptLine);
+
+
+          setWaitingForResponse(state, true, "response.create (reprompt)");
+
+          setAiSpeaking(state, true, "response.create (reprompt)");
+
+          setResponseInFlight(state, true, "response.create (reprompt)");
+
+          state.outboundOpenAiDone = false;
+
+
+          state.lastPromptSentAtMs = Date.now();
+
+          state.lastPromptLine = "REPROMPT";
+
+          state.lastResponseCreateAtMs = Date.now();
+
+
           state.openAiWs!.send(JSON.stringify({
+
             type: "response.create",
-            response: {
-              modalities: ["audio", "text"],
-              instructions: instr,
-            },
+
+            response: { modalities: ["audio", "text"], instructions: instr },
+
           }));
+
         } catch (e) {
+
           try {
             console.log("[AI-VOICE] Error sending reprompt response.create:", String(e));
           } catch {}
