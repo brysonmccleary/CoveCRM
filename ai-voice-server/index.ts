@@ -330,7 +330,7 @@ function getScopeLabelForScriptKey(scriptKeyRaw: any): string {
   if (k === "final_expense") return "final expense coverage";
   if (k === "iul_cash_value") return "cash value life insurance (IUL)";
   if (k === "veteran_leads") return "veteran life insurance programs";
-  if (k === "trucker_leads") return "life insurance";
+  if (k === "trucker_leads") return "life insurance for truckers";
   if (k === "generic_life") return "life insurance";
   return "life insurance";
 }
@@ -660,7 +660,7 @@ async function replayPendingCommittedTurn(
         state.openAiWs.send(
           JSON.stringify({
             type: "response.create",
-            response: { modalities: ["audio", "text"], temperature: 0.6, instructions: retryInstr },
+            response: { modalities: ["audio", "text"], temperature: 0.0, instructions: retryInstr },
           })
         );
 
@@ -692,7 +692,7 @@ async function replayPendingCommittedTurn(
       state.openAiWs.send(
         JSON.stringify({
           type: "response.create",
-          response: { modalities: ["audio", "text"], temperature: 0.6, instructions: perTurnInstr },
+          response: { modalities: ["audio", "text"], temperature: 0.0, instructions: perTurnInstr },
         })
       );
 
@@ -731,7 +731,7 @@ async function replayPendingCommittedTurn(
       state.openAiWs.send(
         JSON.stringify({
           type: "response.create",
-          response: { modalities: ["audio", "text"], temperature: 0.6, instructions: perTurnInstr },
+          response: { modalities: ["audio", "text"], temperature: 0.0, instructions: perTurnInstr },
         })
       );
 
@@ -2041,7 +2041,7 @@ STOP. WAIT.
 BOOKING SCRIPT — TRUCKER LEADS (FOLLOW IN ORDER)
 
 STEP 1
-Say: "I was just giving you a quick call about the request you put in for life insurance. Was this for yourself, or a spouse as well?"
+Say: "I was just giving you a quick call about the request you put in for life insurance for truckers. Was this for yourself, or a spouse as well?"
 STOP. WAIT.
 
 STEP 2 (BOOKING FRAME)
@@ -3605,7 +3605,7 @@ async function handleOpenAiEvent(
         state.openAiWs.send(
           JSON.stringify({
             type: "response.create",
-            response: { modalities: ["audio", "text"], temperature: 0.6, instructions: retryInstr },
+            response: { modalities: ["audio", "text"], temperature: 0.0, instructions: retryInstr },
           })
         );
 
