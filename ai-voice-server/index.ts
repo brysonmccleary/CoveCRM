@@ -56,7 +56,7 @@ const AI_DIALER_VENDOR_COST_PER_MIN_USD = Number(
 // OpenAI Realtime
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
 const OPENAI_REALTIME_MODEL =
-  process.env.OPENAI_REALTIME_MODEL || "gpt-4o-realtime-preview";
+  process.env.OPENAI_REALTIME_MODEL || "gpt-realtime";
 
 // Endpoints
 const BOOK_APPOINTMENT_URL = new URL(
