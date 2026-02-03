@@ -2662,45 +2662,54 @@ wss.on("connection", (ws: WebSocket) => {
 });
 
 async function assertRealtimeModelAccessible() {
-  // Hard guard: if the configured model is not visible to this key, do not boot.
-  const key = (process.env.OPENAI_API_KEY || "").trim();
-  const model = (process.env.OPENAI_REALTIME_MODEL || "gpt-realtime").trim();
-
-  console.log("[AI-VOICE] Realtime model resolved:", model, "(env:", process.env.OPENAI_REALTIME_MODEL ? "set" : "default", ")");
+  // IMPORTANT: do NOT use /v1/models here.
+  // Some keys (including certain admin/service keys) can be blocked from listing models (403),
+  // even though they CAN use the model. Instead, we do a real canary: create a realtime session.
+  const key = OPENAI_API_KEY;
+  const model = OPENAI_REALTIME_MODEL;
 
   if (!key) {
-    throw new Error("OPENAI_API_KEY is missing. Refusing to start.");
+    throw new Error("BLOCK DEPLOY: OPENAI_API_KEY is missing.");
+  }
+  if (!model) {
+    throw new Error("BLOCK DEPLOY: OPENAI_REALTIME_MODEL is missing.");
   }
 
-  const controller = new AbortController();
-  const t = setTimeout(() => controller.abort(), 12000);
-
+  const url = "https://api.openai.com/v1/realtime/sessions";
+  let bodyText = "";
   try {
-    const resp = await fetch("https://api.openai.com/v1/models", {
-      method: "GET",
-      headers: { Authorization: `Bearer ${key}` },
-      // @ts-ignore (node-fetch v2 supports signal)
-      signal: controller.signal,
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${key}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model,
+        modalities: ["audio", "text"],
+        // Keep this minimal — we only want to validate access + model name.
+      }),
     });
 
+    bodyText = await resp.text().catch(() => "");
+
     if (!resp.ok) {
-      const txt = await resp.text().catch(() => "");
-      throw new Error(`OpenAI /v1/models failed: ${resp.status} ${resp.statusText} ${txt ? "- " + txt.slice(0,200) : ""}`);
+      // Surface the body because OpenAI typically explains model/permission issues there.
+      throw new Error(
+        `BLOCK DEPLOY: realtime session canary failed for model='${model}' status=${resp.status} body=${bodyText.slice(0, 400)}`
+      );
     }
 
-    const data: any = await resp.json().catch(() => ({}));
-    const ids = new Set((data?.data || []).map((m: any) => m?.id).filter(Boolean));
-    if (!ids.has(model)) {
-      // Print a small hint set (realtime-ish)
-      const realtime = Array.from(ids).filter((id: any) => String(id).includes("realtime")).slice(0, 50);
-      throw new Error(`BLOCK DEPLOY: OPENAI_REALTIME_MODEL '${model}' not in /v1/models for this key. realtime-ish visible: ${realtime.join(", ") || "(none)"}`);
-    }
-
-    console.log("[AI-VOICE] OK: OpenAI key can access model:", model);
-  } finally {
-    clearTimeout(t);
+    // Success: nothing else to do.
+    try {
+      console.log("[AI-VOICE] Startup guard OK: realtime session canary succeeded for model:", model);
+    } catch {}
+  } catch (err: any) {
+    const msg = err?.message || String(err);
+    throw new Error(`BLOCK DEPLOY: realtime session canary errored for model='${model}': ${msg}` + (bodyText ? ` body=${bodyText.slice(0, 400)}` : ""));
   }
 }
+
 
 async function startServer() {
   await assertRealtimeModelAccessible();
