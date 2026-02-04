@@ -3499,7 +3499,27 @@ async function handleOpenAiEvent(
     if (bestTranscript) state.lastUserTranscript = bestTranscript;
 
     // ✅ Hard guard: never create while a response is in flight / still waiting (prevents double fire)
-    if (state.responseInFlight || state.waitingForResponse) return;
+    // IMPORTANT: do NOT drop/consume the user turn. Queue it and replay when safe.
+    if (state.responseInFlight || state.waitingForResponse) {
+      state.pendingCommittedTurn = {
+        bestTranscript: String(state.lastUserTranscript || bestTranscript || "").trim(),
+        audioMs: Number(audioMsCommitGate || 0),
+        atMs: Date.now(),
+      };
+      try {
+        console.log("[AI-VOICE][TURN-GATE] queued commit while response active", {
+          callSid: state.callSid,
+          streamSid: state.streamSid,
+          queuedLen: state.pendingCommittedTurn.bestTranscript
+            ? state.pendingCommittedTurn.bestTranscript.length
+            : 0,
+          queuedAudioMs: state.pendingCommittedTurn.audioMs,
+          responseInFlight: !!state.responseInFlight,
+          waitingForResponse: !!state.waitingForResponse,
+        });
+      } catch {}
+      return;
+    }
 
     // ✅ IMPORTANT: Do NOT drop/consume the user turn while the pacer is still draining.
     // Greeting often finishes at OpenAI (response.audio.done) while aiSpeaking stays true until the outbound
