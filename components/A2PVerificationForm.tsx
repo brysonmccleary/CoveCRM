@@ -116,6 +116,7 @@ export default function A2PVerificationForm() {
     privacyUrl: string;
   } | null>(null);
   const [loadingHostedLinks, setLoadingHostedLinks] = useState<boolean>(false);
+  const [useHostedCompliancePages, setUseHostedCompliancePages] = useState(true);
   useEffect(() => {
     let cancelled = false;
 
@@ -309,9 +310,6 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
   const [optInScreenshotUrl, setOptInScreenshotUrl] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-
-  const [useHostedCompliancePages, setUseHostedCompliancePages] = useState(true);
-
   useEffect(() => {
     let cancelled = false;
 
