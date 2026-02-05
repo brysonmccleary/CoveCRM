@@ -22,8 +22,7 @@ export default function OptInPage(props: Props) {
 
       <h2>Disclosure</h2>
       <p>
-        By submitting your information, you agree to receive SMS messages from <strong>{businessName}</strong> and its licensed representatives
-        regarding your insurance request.
+        By submitting your information, you agree to receive SMS messages from <strong>{businessName}</strong> — <strong>your licensed agent</strong> using CoveCRM — regarding your current policy, policy updates/changes, and future policy options.
       </p>
       <ul>
         <li>Message frequency varies.</li>
