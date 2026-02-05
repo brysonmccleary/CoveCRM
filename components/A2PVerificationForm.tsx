@@ -304,6 +304,7 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
   const [uploading, setUploading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
+  const [useHostedCompliancePages, setUseHostedCompliancePages] = useState(true);
   // ---------- Errors ----------
   const [errors, setErrors] = useState<FieldErrors>({});
 
@@ -535,7 +536,7 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
       return;
     }
 
-    if (!landingOptInUrl) {
+    if (!useHostedCompliancePages && !landingOptInUrl) {
       toast(
         (t) => (
           <span>
@@ -703,6 +704,23 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
             )}
           </div>
         ) : null}
+      </div>
+
+      
+      {/* Hosted compliance toggle */}
+      <div className="border p-3 rounded bg-gray-50 dark:bg-gray-900">
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={useHostedCompliancePages}
+            onChange={(e) => setUseHostedCompliancePages(e.target.checked)}
+          />
+          Use CoveCRM hosted compliance pages (recommended)
+        </label>
+        <p className="text-xs mt-1 opacity-70">
+          When enabled, CoveCRM provides compliant opt-in, Terms, and Privacy pages automatically.
+          Disable only if you host your own compliance pages.
+        </p>
       </div>
 
       {/* Business */}
