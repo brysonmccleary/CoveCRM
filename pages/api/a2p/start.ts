@@ -91,8 +91,8 @@ function resolveComplianceUrls(args: {
   const hosted = args.useHostedCompliancePages !== false;
 
   const hostedOptIn = `${baseUrl}/sms/optin/${args.userId}`;
-  const hostedTos = `${baseUrl}/legal/terms`;
-  const hostedPrivacy = `${baseUrl}/legal/privacy`;
+  const hostedTos = `${baseUrl}/sms/optin-terms/${args.userId}`;
+  const hostedPrivacy = `${baseUrl}/sms/optin-privacy/${args.userId}`;
 
   const optInUrl = hosted ? hostedOptIn : (String(args.landingOptInUrl || "") || hostedOptIn);
   const tosUrl = hosted ? hostedTos : (String(args.landingTosUrl || "") || hostedTos);

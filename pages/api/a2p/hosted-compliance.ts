@@ -29,7 +29,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
 
   return res.status(200).json({
     optInUrl: `${baseUrl}/sms/optin/${userId}`,
-    tosUrl: `${baseUrl}/legal/terms`,
-    privacyUrl: `${baseUrl}/legal/privacy`,
+    tosUrl: `${baseUrl}/sms/optin-terms/${userId}`,
+    privacyUrl: `${baseUrl}/sms/optin-privacy/${userId}`,
   });
 }
