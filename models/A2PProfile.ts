@@ -112,6 +112,7 @@ export interface IA2PProfile extends Document {
 
   createdAt: Date;
   updatedAt?: Date;
+  useHostedCompliancePages?: boolean;
 }
 
 const A2PProfileSchema = new Schema<IA2PProfile>({
@@ -164,6 +165,7 @@ const A2PProfileSchema = new Schema<IA2PProfile>({
   landingOptInUrl: { type: String },
   landingTosUrl: { type: String },
   landingPrivacyUrl: { type: String },
+  useHostedCompliancePages: { type: Boolean, default: false },
 
   brandSid: { type: String },
   campaignSid: { type: String },

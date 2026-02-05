@@ -275,7 +275,7 @@ export default function A2PVerificationForm() {
 
   // ---------- Sample Messages ----------
   const [msg1, setMsg1] = useState(
-    `Hi {{first_name}}, it’s {{agent_name}} from our insurance team. You requested info on your life insurance options – when’s a good time for a quick call? Reply STOP to opt out.`,
+    `Hi {{first_name}}, it’s {{agent_name}}. You requested info about your life insurance options — when’s a good time for a quick call? Reply STOP to opt out.`,
   );
   const [msg2, setMsg2] = useState(
     `Hi {{first_name}}, you’re pre-approved for benefits this week through the program you opted into. Want to review options now or later today? Reply STOP to unsubscribe.`,
