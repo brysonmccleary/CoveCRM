@@ -110,7 +110,12 @@ export default function A2PVerificationForm() {
   // ---------- Status banner ----------
   const [statusView, setStatusView] = useState<A2PStatusView | null>(null);
   const [loadingStatus, setLoadingStatus] = useState<boolean>(true);
-
+  const [hostedComplianceLinks, setHostedComplianceLinks] = useState<{
+    optInUrl: string;
+    tosUrl: string;
+    privacyUrl: string;
+  } | null>(null);
+  const [loadingHostedLinks, setLoadingHostedLinks] = useState<boolean>(false);
   useEffect(() => {
     let cancelled = false;
 
@@ -227,6 +232,7 @@ export default function A2PVerificationForm() {
     };
   }, []);
 
+
   const statusClasses = (() => {
     if (!statusView) return "border border-gray-600 bg-gray-800 text-gray-100";
     switch (statusView.state) {
@@ -305,6 +311,37 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
   const [submitting, setSubmitting] = useState(false);
 
   const [useHostedCompliancePages, setUseHostedCompliancePages] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const run = async () => {
+      if (!useHostedCompliancePages) return;
+      setLoadingHostedLinks(true);
+      try {
+        const res = await fetch("/api/a2p/hosted-compliance", {
+          method: "GET",
+          credentials: "same-origin",
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!cancelled && res.ok && data?.optInUrl) {
+          setHostedComplianceLinks({
+            optInUrl: String(data.optInUrl || ""),
+            tosUrl: String(data.tosUrl || ""),
+            privacyUrl: String(data.privacyUrl || ""),
+          });
+        }
+      } finally {
+        if (!cancelled) setLoadingHostedLinks(false);
+      }
+    };
+
+    run();
+    return () => {
+      cancelled = true;
+    };
+  }, [useHostedCompliancePages]);
+
   // ---------- Errors ----------
   const [errors, setErrors] = useState<FieldErrors>({});
 
@@ -414,6 +451,16 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
       toast.error("Upload failed");
     } finally {
       setUploading(false);
+    }
+  };
+
+
+  const copyToClipboard = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast.success("Copied");
+    } catch {
+      toast.error("Could not copy");
     }
   };
 
@@ -922,6 +969,78 @@ The form uses click-wrap consent and displays Privacy Policy and Terms & Conditi
           marketing, and informational messages at modest volumes.
         </p>
       </div>
+
+      
+      {/* Hosted compliance links (copy/fill convenience) */}
+      {useHostedCompliancePages && (
+        <div className="border p-3 rounded bg-gray-50 dark:bg-gray-900">
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-sm font-semibold">Hosted compliance links</div>
+            {loadingHostedLinks ? (
+              <div className="text-xs opacity-70">Loading…</div>
+            ) : null}
+          </div>
+
+          {hostedComplianceLinks?.optInUrl ? (
+            <div className="mt-2 space-y-2">
+              <div className="text-xs opacity-80">Opt-in URL</div>
+              <div className="flex gap-2">
+                <input
+                  readOnly
+                  value={hostedComplianceLinks.optInUrl}
+                  className="border p-2 rounded w-full text-xs"
+                />
+                <button
+                  type="button"
+                  onClick={() => copyToClipboard(hostedComplianceLinks.optInUrl)}
+                  className="border px-3 rounded text-xs"
+                >
+                  Copy
+                </button>
+              </div>
+
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!hostedComplianceLinks) return;
+                    setLandingOptInUrl((v) => (v ? v : hostedComplianceLinks.optInUrl));
+                    setLandingTosUrl((v) => (v ? v : hostedComplianceLinks.tosUrl));
+                    setLandingPrivacyUrl((v) => (v ? v : hostedComplianceLinks.privacyUrl));
+                    toast.success("Filled hosted URLs");
+                  }}
+                  className="border px-3 py-2 rounded text-xs"
+                >
+                  Fill URL fields
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!hostedComplianceLinks) return;
+                    setLandingOptInUrl(hostedComplianceLinks.optInUrl);
+                    setLandingTosUrl(hostedComplianceLinks.tosUrl);
+                    setLandingPrivacyUrl(hostedComplianceLinks.privacyUrl);
+                    toast.success("Replaced URL fields");
+                  }}
+                  className="border px-3 py-2 rounded text-xs"
+                >
+                  Replace fields
+                </button>
+              </div>
+
+              <p className="text-xs mt-1 opacity-70">
+                Use “Fill URL fields” to avoid overwriting any existing URLs. “Replace fields” forces hosted values.
+              </p>
+            </div>
+          ) : (
+            <p className="text-xs mt-2 opacity-70">
+              Could not load hosted links. You can still submit; the backend will use hosted pages when enabled.
+            </p>
+          )}
+        </div>
+      )}
+
 
       {/* Links */}
       <div className="grid md:grid-cols-2 gap-3">
