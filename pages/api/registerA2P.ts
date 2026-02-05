@@ -60,6 +60,8 @@ type BodyIn = {
   landingOptInUrl?: string;
   landingTosUrl?: string;
   landingPrivacyUrl?: string;
+
+  useHostedCompliancePages?: boolean;
 };
 
 type ValidationErrors = {
@@ -80,6 +82,9 @@ type ValidationErrors = {
   sampleMessage1?: string;
   sampleMessage2?: string;
   sampleMessage3?: string;
+  landingOptInUrl?: string;
+  landingTosUrl?: string;
+  landingPrivacyUrl?: string;
 };
 
 function isUsState(value: string | undefined): boolean {
@@ -125,6 +130,18 @@ function isValidZip(value: string | undefined): boolean {
 
 function ensureHasStopLanguage(text: string): boolean {
   return /reply\s+stop/i.test(text) || /text\s+stop/i.test(text);
+}
+
+function ensureHasHelpLanguage(text: string): boolean {
+  return /\bhelp\b/i.test(text);
+}
+
+function ensureHasFrequency(text: string): boolean {
+  return /frequency\s+varies/i.test(text);
+}
+
+function ensureHasMsgDataRates(text: string): boolean {
+  return /msg\s*&\s*data\s*rates\s*may\s*apply/i.test(text);
 }
 
 function getRequestBaseUrl(req: NextApiRequest) {
@@ -173,6 +190,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     volume,
   } = body;
 
+  const useHostedCompliancePages = body.useHostedCompliancePages !== false;
+
   if (!businessName || !businessName.trim()) {
     errors.businessName = "Business name is required.";
   } else if (businessName.trim().length < 3) {
@@ -216,6 +235,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     errors.website = "Website URL is required.";
   } else if (!isValidHttpsUrl(website)) {
     errors.website = 'Website must be a real, public HTTPS URL (starting with "https://").';
+  }
+
+  // If NOT using CoveCRM-hosted compliance pages, require public opt-in + terms + privacy URLs
+  if (!useHostedCompliancePages) {
+    if (!isValidHttpsUrl(body.landingOptInUrl)) {
+      errors.landingOptInUrl = 'Opt-in page URL is required (must start with https://).';
+    }
+    if (!isValidHttpsUrl(body.landingTosUrl)) {
+      errors.landingTosUrl = 'Terms of Service URL is required (must start with https://).';
+    }
+    if (!isValidHttpsUrl(body.landingPrivacyUrl)) {
+      errors.landingPrivacyUrl = 'Privacy Policy URL is required (must start with https://).';
+    }
   }
 
   if (!email || !email.trim()) {
@@ -275,7 +307,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       errors[key] = "Sample messages must be between 20 and 320 characters.";
     }
     if (!ensureHasStopLanguage(trimmed)) {
-      errors[key] = 'Sample messages must include opt-out language like "Reply STOP to opt out".';
+      errors[key] = 'Sample messages must include opt-out language like "Reply STOP to cancel".';
+    }
+    if (!ensureHasHelpLanguage(trimmed)) {
+      errors[key] = 'Sample messages must include HELP language (e.g., "HELP for help").';
+    }
+    if (!ensureHasFrequency(trimmed)) {
+      errors[key] = 'Sample messages must include message frequency (e.g., "Message frequency varies").';
+    }
+    if (!ensureHasMsgDataRates(trimmed)) {
+      errors[key] = 'Sample messages must include "Msg & data rates may apply." ';
     }
   });
 
@@ -285,7 +326,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         errors.sampleMessage1 = "Sample messages must be between 20 and 320 characters.";
       }
       if (!ensureHasStopLanguage(m) && !errors.sampleMessage1) {
-        errors.sampleMessage1 = 'Sample messages must include opt-out language like "Reply STOP to opt out".';
+        errors.sampleMessage1 = 'Sample messages must include opt-out language like "Reply STOP to cancel".';
+      }
+      if (!ensureHasHelpLanguage(m) && !errors.sampleMessage1) {
+        errors.sampleMessage1 = 'Sample messages must include HELP language (e.g., "HELP for help").';
+      }
+      if (!ensureHasFrequency(m) && !errors.sampleMessage1) {
+        errors.sampleMessage1 = 'Sample messages must include message frequency (e.g., "Message frequency varies").';
+      }
+      if (!ensureHasMsgDataRates(m) && !errors.sampleMessage1) {
+        errors.sampleMessage1 = 'Sample messages must include "Msg & data rates may apply." ';
       }
     });
   }
@@ -371,6 +421,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     optInDetails: optInDetails!,
     volume: volDigits,
     resubmit,
+    useHostedCompliancePages,
 
     ...(body.optInScreenshotUrl ? { optInScreenshotUrl: body.optInScreenshotUrl } : {}),
     ...(body.landingOptInUrl ? { landingOptInUrl: body.landingOptInUrl } : {}),

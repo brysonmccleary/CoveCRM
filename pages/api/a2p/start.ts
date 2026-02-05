@@ -78,6 +78,46 @@ let parentClient: any = null;
 let parentAuth: TwilioResolvedAuth | null = null;
 let parentAccountSid: string = "";
 
+
+function resolveComplianceUrls(args: {
+  baseUrl: string;
+  userId: string;
+  landingOptInUrl?: string;
+  landingTosUrl?: string;
+  landingPrivacyUrl?: string;
+  useHostedCompliancePages?: boolean;
+}) {
+  const baseUrl = (args.baseUrl || "").replace(/\/$/, "");
+  const hosted = args.useHostedCompliancePages !== false;
+
+  const hostedOptIn = `${baseUrl}/sms/optin/${args.userId}`;
+  const hostedTos = `${baseUrl}/legal/terms`;
+  const hostedPrivacy = `${baseUrl}/legal/privacy`;
+
+  const optInUrl = hosted ? hostedOptIn : (String(args.landingOptInUrl || "") || hostedOptIn);
+  const tosUrl = hosted ? hostedTos : (String(args.landingTosUrl || "") || hostedTos);
+  const privacyUrl = hosted ? hostedPrivacy : (String(args.landingPrivacyUrl || "") || hostedPrivacy);
+
+  return { optInUrl, tosUrl, privacyUrl, hosted };
+}
+
+function applyComplianceTokens(messageFlow: string, urls: { optInUrl: string; tosUrl: string; privacyUrl: string }) {
+  let out = String(messageFlow || "");
+
+  out = out.replace(/\{\{\s*terms_url\s*\}\}/gi, urls.tosUrl);
+  out = out.replace(/\{\{\s*privacy_url\s*\}\}/gi, urls.privacyUrl);
+  out = out.replace(/\{\{\s*optin_url\s*\}\}/gi, urls.optInUrl);
+
+  const hasTerms = /terms/i.test(out);
+  const hasPrivacy = /privacy/i.test(out);
+
+  if (!hasTerms || !hasPrivacy) {
+    out = `${out}\n\nTerms: ${urls.tosUrl} Privacy: ${urls.privacyUrl}`;
+  }
+
+  return out;
+}
+
 // ---------------- helpers ----------------
 function required<T>(v: T, name: string): T {
   if (!v) throw new Error(`Missing required field: ${name}`);
@@ -1436,6 +1476,7 @@ export default async function handler(
       landingOptInUrl,
       landingTosUrl,
       landingPrivacyUrl,
+      useHostedCompliancePages,
     } = (req.body || {}) as Record<string, unknown>;
 
     required(businessName, "businessName");
@@ -1474,6 +1515,15 @@ export default async function handler(
     }
 
     const userId = String(user._id);
+
+    const compliance = resolveComplianceUrls({
+      baseUrl,
+      userId,
+      landingOptInUrl: typeof landingOptInUrl === 'string' ? landingOptInUrl : undefined,
+      landingTosUrl: typeof landingTosUrl === 'string' ? landingTosUrl : undefined,
+      landingPrivacyUrl: typeof landingPrivacyUrl === 'string' ? landingPrivacyUrl : undefined,
+      useHostedCompliancePages: (useHostedCompliancePages as any) !== false,
+    });
     const existing = await A2PProfile.findOne({ userId }).lean<
       IA2PProfile | null
     >();
@@ -1504,14 +1554,18 @@ export default async function handler(
       optInDetails: String(optInDetails),
       volume: (volume as string) || "Low",
       optInScreenshotUrl: (optInScreenshotUrl as string) || "",
-      landingOptInUrl: (landingOptInUrl as string) || "",
-      landingTosUrl: (landingTosUrl as string) || "",
-      landingPrivacyUrl: (landingPrivacyUrl as string) || "",
-      usecaseCode: normalizedUseCase,
+      landingOptInUrl: compliance.optInUrl,
+      landingTosUrl: compliance.tosUrl,
+      landingPrivacyUrl: compliance.privacyUrl,
+usecaseCode: normalizedUseCase,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
       lastSyncedAt: now,
     };
+
+
+    // store hosted compliance flag without widening IA2PProfile type
+    (setPayload as any).useHostedCompliancePages = compliance.hosted;
 
     (setPayload as any).userEmail = user.email;
     (setPayload as any).lastSubmittedAt = now;
@@ -1522,7 +1576,11 @@ export default async function handler(
     (setPayload as any).lastSubmittedSampleMessages = samples;
     (setPayload as any).twilioAccountSidLastUsed = twilioAccountSidUsed;
 
-    const messageFlowText: string = setPayload.optInDetails!;
+    const messageFlowText: string = applyComplianceTokens(setPayload.optInDetails!, {
+      optInUrl: compliance.optInUrl,
+      tosUrl: compliance.tosUrl,
+      privacyUrl: compliance.privacyUrl,
+    });
     const useCaseCodeFinal: string =
       (setPayload.usecaseCode as string) || "LOW_VOLUME";
 

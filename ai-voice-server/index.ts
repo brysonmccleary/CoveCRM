@@ -697,6 +697,22 @@ async function replayPendingCommittedTurn(
       );
 
       state.scriptStepIndex = steps.length > 1 ? 1 : 0;
+
+      // ✅ Keep stepper alignment: rebuttals end with a booking question.
+      // If the objection happens early (Step 1), we just asked the Step 2 booking question in the rebuttal.
+      // Move scriptStepIndex forward so the NEXT user reply is interpreted as answering Step 2 (not Step 1).
+      try {
+        const lt = String(lineToSay || "").toLowerCase();
+        const askedBookingQ =
+          lt.includes("later today") || lt.includes("today or tomorrow") || lt.includes("tomorrow be better");
+        if (askedBookingQ) {
+          // idx is the NEXT step-to-say; expectedAnswerIdx = idx - 1.
+          // We want expectedAnswerIdx to be Step 2 after this rebuttal, so idx must be 2.
+          if (idx <= 1) {
+            state.scriptStepIndex = Math.min(2, Math.max(0, (steps.length || 0) - 1));
+          }
+        }
+      } catch {}
       state.phase = "in_call";
       return;
     }
