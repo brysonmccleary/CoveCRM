@@ -779,7 +779,7 @@ async function replayPendingCommittedTurn(
           ? isExactClockTimeMentioned(lastUserText)
           : (
               isDayReferenceMentioned(lastUserText) ||
-              isExactClockTimeMentioned(lastUserText) ||
+              isExactClockTimeMentioned(lastUserText)
               (isDayReferenceMentioned(lastUserText) && isTimeWindowMentioned(lastUserText))
             ));
 
@@ -3815,9 +3815,7 @@ async function handleOpenAiEvent(
           ? isExactClockTimeMentioned(lastUserText)
           : (
               isDayReferenceMentioned(lastUserText) ||
-              isExactClockTimeMentioned(lastUserText) ||
-              (isDayReferenceMentioned(lastUserText) && isTimeWindowMentioned(lastUserText))
-            ));
+              isExactClockTimeMentioned(lastUserText)));
 
     const treatAsAnswer = shouldTreatCommitAsRealAnswer(
       stepType,
@@ -3935,6 +3933,25 @@ async function handleOpenAiEvent(
           forcedExactTimeOffer = true;
         }
       }
+    }
+
+    // ✅ Broad day+window answer to a broad time question (e.g. "tomorrow afternoon"):
+    // Offer concrete exact options and HOLD position (do not advance).
+    if (
+      !forcedExactTimeOffer &&
+      stepType === "time_question" &&
+      hasTranscript &&
+      !isExactTimeQuestion(String(steps[idx] || "")) &&
+      isDayReferenceMentioned(lastUserText) &&
+      isTimeWindowMentioned(lastUserText) &&
+      !isExactClockTimeMentioned(lastUserText)
+    ) {
+      const sameStep = Number(state.timeOfferCountForStepIndex ?? -1) === Number(idx);
+      const n = sameStep ? Number(state.timeOfferCount || 0) : 0;
+      lineToSay = getTimeOfferLine(state.context!, n);
+      state.timeOfferCountForStepIndex = idx;
+      state.timeOfferCount = n + 1;
+      forcedExactTimeOffer = true;
     }
 
     // ✅ Time indecision: user asked "what do you have available" / "you pick" etc.
