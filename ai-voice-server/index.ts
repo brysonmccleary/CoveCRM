@@ -3246,6 +3246,11 @@ async function handleOpenAiEvent(
 
   if (t === "input_audio_buffer.speech_started") {
     state.lastUserSpeechStartedAtMs = Date.now();
+    // ✅ Prevent stale transcript from previous turn contaminating this new utterance
+    state.lastUserTranscript = "";
+    try {
+      if (state.lastUserTranscriptPartialByItemId) state.lastUserTranscriptPartialByItemId = {};
+    } catch {}
     return;
   }
 
@@ -3519,6 +3524,33 @@ async function handleOpenAiEvent(
     // ✅ Use bestTranscript as the canonical lastUserTranscript for this turn
     if (bestTranscript) state.lastUserTranscript = bestTranscript;
 
+    // ✅ If commit fires before transcription arrives, avoid using stale lastUserTranscript.
+    // Queue and replay shortly to capture the real transcript (e.g., objections like 'taken care of').
+    try {
+      const nowMs = Date.now();
+      const hasTextNow = !!String(state.lastUserTranscript || "").trim();
+      const recentStopMs = Number(state.lastUserSpeechStoppedAtMs || 0);
+      const stoppedRecently = recentStopMs > 0 && (nowMs - recentStopMs) <= 1500;
+      const audioStrong = Number(audioMsCommitGate || 0) >= 1400;
+      if (!bestTranscript && !hasTextNow && stoppedRecently && audioStrong) {
+        state.pendingCommittedTurn = {
+          bestTranscript: "",
+          audioMs: Number(audioMsCommitGate || 0),
+          atMs: nowMs,
+        };
+        setTimeout(() => {
+          try {
+            if (!state.pendingCommittedTurn) return;
+            if (state.aiSpeaking) return;
+            if (state.waitingForResponse || state.responseInFlight) return;
+            const latest = String(state.lastUserTranscript || "").trim();
+            if (latest) state.pendingCommittedTurn.bestTranscript = latest;
+            void replayPendingCommittedTurn(twilioWs, state, "await transcript");
+          } catch {}
+        }, 250);
+        return;
+      }
+    } catch {}
     // ✅ Hard guard: never create while a response is in flight / still waiting (prevents double fire)
     // IMPORTANT: do NOT drop/consume the user turn. Queue it and replay when safe.
     if (state.responseInFlight || state.waitingForResponse) {
