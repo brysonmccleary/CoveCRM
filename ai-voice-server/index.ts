@@ -595,11 +595,6 @@ async function replayPendingCommittedTurn(
     // We do NOT touch audio streaming; we only create a response now that drain is complete.
 
     const lastUserText = String(state.lastUserTranscript || "").trim();
-    const audioMs = Number(state.userAudioMsBuffered || 0);
-    const hasTranscript = lastUserText.length > 0;
-    // ✅ Guard: never advance the greeting phase on an empty/noisy commit.
-    // Require real words OR strong audio (fallback) before treating it as a reply.
-    if (!hasTranscript && audioMs < 1400) return;
     const objectionKind = lastUserText ? detectObjection(lastUserText) : null;
 
     // Ensure script steps loaded
@@ -636,6 +631,11 @@ async function replayPendingCommittedTurn(
 
     if (isGreetingReply) {
       const lineToSay = steps[0] || getBookingFallbackLine(state.context!);
+
+      // ✅ Guard: do NOT treat empty/noisy commits as a greeting reply.
+      // Require real words OR strong audio (fallback) before advancing past greeting.
+      const greetAudioMs = Number(state.userAudioMsBuffered || 0);
+      if (!lastUserText && greetAudioMs < 1400) return;
       const ack = getGreetingAckPrefix(lastUserText);
 
       if (isGreetingNegativeHearing(lastUserText)) {
