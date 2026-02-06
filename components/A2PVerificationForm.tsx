@@ -282,26 +282,26 @@ export default function A2PVerificationForm() {
 
   // ---------- Sample Messages ----------
   const [msg1, setMsg1] = useState(
-    `Hi {{first_name}}, it’s {{agent_name}}. You requested info about your life insurance options — when’s a good time for a quick call? Reply STOP to opt out.`,
+    `Hey {{first_name}}, it’s {{agent_name}} — your insurance agent. Hope you’re doing well. If you have any questions about your current policy or need anything updated, just reply here. Reply STOP to opt out.`,
   );
   const [msg2, setMsg2] = useState(
-    `Hi {{first_name}}, you’re pre-approved for benefits this week through the program you opted into. Want to review options now or later today? Reply STOP to unsubscribe.`,
+    `Hi {{first_name}}, it’s {{agent_name}}. Just checking in to make sure your coverage info is up to date (beneficiaries, address, etc.). If you’d like a quick review, tell me a good time. Reply STOP to opt out.`,
   );
   const [msg3, setMsg3] = useState(
-    `Hi {{first_name}}, just following up from your Facebook request for a life insurance quote. This is {{agent_name}} – can I call you real quick? Reply STOP to opt out.`,
+    `Hey {{first_name}}, it’s {{agent_name}} — your insurance agent. I’m here if you need help with your policy, changes, or a quick review. Just reply with what you need. Reply STOP to opt out.`,
   );
 
   // ---------- Opt-in Details ----------
   const [optInDetails, setOptInDetails] = useState(
-    `This campaign sends follow-up messages to users who request life insurance information through TCPA-compliant Facebook lead forms or vendor landing pages. Messages include appointment scheduling, policy information, and benefits reminders for users who have explicitly opted in.
+    `This campaign sends follow-up SMS messages to existing customers who currently have an active life insurance policy with their licensed agent. Messages are used to provide policy updates, confirm or update customer information, answer policy-related questions, and offer optional policy reviews. Messages are sent only to customers who have explicitly opted in.
 
-End users opt in by submitting their contact information through a TCPA-compliant lead form hosted on a vendor or agency landing page. The form collects full name, email, and phone number, and includes an electronic signature agreement directly above the “Confirm” button.
+End users opt in by submitting their contact information through this SMS opt-in page provided by CoveCRM for the licensed agent. The opt-in form collects name and mobile phone number (and optionally email) and requires click-wrap consent via a checkbox directly above the Submit button.
 
 Before submission, users see a disclosure similar to:
 
-“By entering your name and information above and clicking this button, you are consenting to receive calls or emails regarding your life insurance options (at any phone number or email address you provide) from a licensed insurance agent or one of our business partners. You agree such calls may use an automatic telephone dialing system or a prerecorded voice to deliver messages even if you are on a government do-not-call registry. This agreement is not a condition of enrollment.”
+“By checking the box and submitting this form, you consent to receive SMS messages from your licensed insurance agent using CoveCRM regarding your current policy, policy updates/changes, and optional policy reviews. Message frequency varies. Msg & data rates may apply. Reply STOP to cancel. Reply HELP for help. Consent is not a condition of purchase.”
 
-The form uses click-wrap consent and displays Privacy Policy and Terms & Conditions links on the same page as the form submission. This campaign is exclusive to me. Leads are never resold, reused, or shared with other agents or organizations. Vendors maintain timestamped proof of consent, IP address, and full submission metadata to ensure compliance.`,
+The opt-in page displays SMS Opt-In Terms and SMS Opt-In Privacy links on the same page as the form submission. Consent records may be retained as needed for compliance and audit purposes.`,
   );
 
   // ---------- Volume + screenshot ----------
