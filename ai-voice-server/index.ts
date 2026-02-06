@@ -595,6 +595,11 @@ async function replayPendingCommittedTurn(
     // We do NOT touch audio streaming; we only create a response now that drain is complete.
 
     const lastUserText = String(state.lastUserTranscript || "").trim();
+    const audioMs = Number(state.userAudioMsBuffered || 0);
+    const hasTranscript = lastUserText.length > 0;
+    // ✅ Guard: never advance the greeting phase on an empty/noisy commit.
+    // Require real words OR strong audio (fallback) before treating it as a reply.
+    if (!hasTranscript && audioMs < 1400) return;
     const objectionKind = lastUserText ? detectObjection(lastUserText) : null;
 
     // Ensure script steps loaded
@@ -3502,7 +3507,7 @@ async function handleOpenAiEvent(
     // ✅ If commit is too small AND transcript is empty, do nothing and wait.
     // This prevents the AI from "jumping in" on comfort noise / micro-utterances.
     const audioMsCommitGate = Number(state.userAudioMsBuffered || 0);
-    const tooLittleAudio = audioMsCommitGate > 0 && audioMsCommitGate < 280; // <~0.28s is usually not a real answer
+    const tooLittleAudio = audioMsCommitGate < 280; // <~0.28s is usually not a real answer
     const tooLittleText = !bestTranscript || bestTranscript.length < 2;
 
     if (tooLittleText && tooLittleAudio) {
