@@ -780,7 +780,6 @@ async function replayPendingCommittedTurn(
           : (
               isDayReferenceMentioned(lastUserText) ||
               isExactClockTimeMentioned(lastUserText)
-              (isDayReferenceMentioned(lastUserText) && isTimeWindowMentioned(lastUserText))
             ));
 
     const treatAsAnswer = shouldTreatCommitAsRealAnswer(
