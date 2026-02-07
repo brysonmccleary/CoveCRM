@@ -775,12 +775,7 @@ async function replayPendingCommittedTurn(
       hasTranscript &&
       (stepType !== "time_question"
         ? !isFillerOnly(lastUserText)
-        : exactTimeRequired
-          ? isExactClockTimeMentioned(lastUserText)
-          : (
-              isDayReferenceMentioned(lastUserText) ||
-              isExactClockTimeMentioned(lastUserText)
-            ));
+        : isExactClockTimeMentioned(lastUserText));
 
     const treatAsAnswer = shouldTreatCommitAsRealAnswer(
       stepType,
@@ -842,34 +837,44 @@ async function replayPendingCommittedTurn(
 
     let lineToSay = enforceBookingOnlyLine(state.context!, steps[idx] || getBookingFallbackLine(state.context!));
 
-    // Exact-time enforcement (mirror normal path)
+        // Exact-time enforcement (mirror normal path)
     let forcedExactTimeOffer = false;
     if (stepType === "time_question") {
-      const stepLine2 = String(steps[idx] || "");
-      const exactRequired2 = isExactTimeQuestion(stepLine2);
-
-      if (exactRequired2 && hasTranscript && !isExactClockTimeMentioned(lastUserText)) {
-        if (
-          isTimeWindowMentioned(lastUserText) ||
-          isDayReferenceMentioned(lastUserText) ||
-          looksLikeTimeAnswer(lastUserText)
-        ) {
-          const sameStep = Number(state.timeOfferCountForStepIndex ?? -1) === Number(idx);
-          const n = sameStep ? Number(state.timeOfferCount || 0) : 0;
-          lineToSay = getTimeOfferLine(state.context!, n);
-          state.timeOfferCountForStepIndex = idx;
-          state.timeOfferCount = n + 1;
-          forcedExactTimeOffer = true;
-        }
-      }
-    }
-
-    if (!forcedExactTimeOffer && stepType === "time_question" && isTimeIndecisionOrAvailability(lastUserText)) {
       const sameStep = Number(state.timeOfferCountForStepIndex ?? -1) === Number(idx);
-      const n = sameStep ? Number(state.timeOfferCount || 0) : 0;
-      lineToSay = getTimeOfferLine(state.context!, n);
-      state.timeOfferCountForStepIndex = idx;
-      state.timeOfferCount = n + 1;
+      const prevCount = sameStep ? Number(state.timeOfferCount || 0) : 0;
+
+      const priorAccepted = String(state.lastAcceptedUserText || "");
+      const hasPriorDay = priorAccepted ? isDayReferenceMentioned(priorAccepted) : false;
+
+      const hasDayNow = hasTranscript && isDayReferenceMentioned(lastUserText);
+      const hasWindowNow = hasTranscript && isTimeWindowMentioned(lastUserText);
+
+      // ✅ Do not advance the script on "tomorrow"/"afternoon"/"whenever".
+      // Instead: day -> ask morning/afternoon; window -> offer exact times; indecision -> offer times.
+      if (hasTranscript && !isExactClockTimeMentioned(lastUserText)) {
+        let n = prevCount;
+
+        // If they only gave a day ("tomorrow"), start at the window-choice rung.
+        if (hasDayNow && !hasWindowNow) {
+          n = 0;
+        }
+
+        // If they gave a window ("afternoon") (with or without day), jump to exact-time offers.
+        // Also allow window-only if they previously already picked a day.
+        if (hasWindowNow || (hasPriorDay && isTimeWindowMentioned(lastUserText))) {
+          n = Math.max(n, 1);
+        }
+
+        // If they’re vague ("either / whenever"), keep offering concrete options.
+        if (isTimeIndecisionOrAvailability(lastUserText)) {
+          n = Math.max(n, 1);
+        }
+
+        lineToSay = getTimeOfferLine(state.context!, n);
+        state.timeOfferCountForStepIndex = idx;
+        state.timeOfferCount = n + 1;
+        forcedExactTimeOffer = true;
+      }
     }
 
     // ack prefix based on last accepted step (mirror normal path)
