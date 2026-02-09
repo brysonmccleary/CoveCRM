@@ -3279,6 +3279,15 @@ async function handleOpenAiEvent(
   // ============================
 
   if (t === "input_audio_buffer.speech_started") {
+    // ✅ Clear pending filler commit (user continued speaking)
+    try {
+      if ((state as any).pendingFillerTimer) {
+        clearTimeout((state as any).pendingFillerTimer);
+        (state as any).pendingFillerTimer = null;
+      }
+      (state as any).pendingFillerCommit = null;
+    } catch {}
+
     state.lastUserSpeechStartedAtMs = Date.now();
     // ✅ Prevent stale transcript from previous turn contaminating this new utterance
     state.lastUserTranscript = "";
@@ -3561,7 +3570,87 @@ async function handleOpenAiEvent(
       return;
     }
 
+    // ✅ FILLER GRACE WINDOW (um/uh/what + short pause)
+    // If they say "um/uh/what/sorry" and pause briefly, do NOT reprompt immediately.
+    // Hold the commit for a short grace window to see if they continue speaking.
+    const isFillerTranscript = (txt: string): boolean => {
+      const t = String(txt || "").trim().toLowerCase();
+      if (!t) return true;
+      const cleaned = t.replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+      if (!cleaned) return true;
+
+      // Single-token filler
+      if (cleaned.length <= 5) {
+        return ["um","uh","er","ah","hm","hmm","what","huh","sorry","wait"].includes(cleaned);
+      }
+
+      // Common short phrases
+      if (cleaned.length <= 20) {
+        const phrases = new Set([
+          "hold on",
+          "one sec",
+          "one second",
+          "wait a sec",
+          "wait a second",
+          "what was that",
+          "say that again",
+        ]);
+        if (phrases.has(cleaned)) return true;
+      }
+
+      return false;
+    };
+
+    const filler = isFillerTranscript(bestTranscript || String(state.lastUserTranscript || ""));
+    const fillerAudioMs = Number(audioMsCommitGate || 0);
+
+    // Only apply grace when it's not a real answer (filler) and not strong audio.
+    if (filler && fillerAudioMs < 1700) {
+      try {
+        // If we already have a pending filler commit, replace it with the newest one.
+        (state as any).pendingFillerCommit = {
+          bestTranscript: String(bestTranscript || state.lastUserTranscript || "").trim(),
+          audioMs: fillerAudioMs,
+          atMs: Date.now(),
+        };
+
+        // Clear any existing timer and restart (latest commit wins)
+        if ((state as any).pendingFillerTimer) {
+          clearTimeout((state as any).pendingFillerTimer);
+        }
+
+        (state as any).pendingFillerTimer = setTimeout(() => {
+          try {
+            (state as any).pendingFillerTimer = null;
+
+            // If we no longer have a pending filler commit, nothing to do.
+            if (!(state as any).pendingFillerCommit) return;
+
+            // Don't fire while model is busy.
+            if (state.aiSpeaking) return;
+            if (state.waitingForResponse || state.responseInFlight) return;
+
+            // Promote filler commit into the normal pendingCommittedTurn pipeline and replay.
+            state.pendingCommittedTurn = (state as any).pendingFillerCommit;
+            (state as any).pendingFillerCommit = null;
+
+            // Best effort: use any transcript we have by now.
+            const latest = String(state.lastUserTranscript || "").trim();
+            if (latest && state.pendingCommittedTurn) {
+              state.pendingCommittedTurn.bestTranscript = latest;
+            }
+
+            void replayPendingCommittedTurn(twilioWs, state, "filler grace expired");
+          } catch {}
+        }, 950);
+      } catch {}
+
+      // IMPORTANT: do NOT process this commit yet.
+      return;
+    }
+
     // ✅ Use bestTranscript as the canonical lastUserTranscript for this turn
+
     if (bestTranscript) state.lastUserTranscript = bestTranscript;
 
     // ✅ If commit fires before transcription arrives, avoid using stale lastUserTranscript.
@@ -4125,6 +4214,7 @@ async function handleOpenAiEvent(
     state.phase = "in_call";
     return;
   }
+
 
   if (t === "response.audio.delta" || t === "response.output_audio.delta") {
     if (state.voicemailSkipArmed) return;
