@@ -242,6 +242,16 @@ function clampBulletsTotal(o: AICallOverview): AICallOverview {
   return o;
 }
 
+function capSections(o: AICallOverview): AICallOverview {
+  // Keep it tight (Close-style) and avoid overwhelming the agent
+  o.overviewBullets = (Array.isArray(o.overviewBullets) ? o.overviewBullets : []).slice(0, 6);
+  o.keyDetails = (Array.isArray(o.keyDetails) ? o.keyDetails : []).slice(0, 4);
+  o.objections = (Array.isArray(o.objections) ? o.objections : []).slice(0, 3);
+  o.questions = (Array.isArray(o.questions) ? o.questions : []).slice(0, 3);
+  o.nextSteps = (Array.isArray(o.nextSteps) ? o.nextSteps : []).slice(0, 3);
+  return o;
+}
+
 function buildLockedPrompt(args: {
   transcript: string;
   leadName?: string;
@@ -280,6 +290,13 @@ Rules:
 - DO NOT include explanations.
 - DO NOT include paragraphs.
 - Every field must be concise bullet points.
+- Pick ONLY the most important points (no filler).
+- Keep it tight (Close-style):
+  - overviewBullets: max 6
+  - keyDetails: max 4
+  - objections: max 3
+  - questions: max 3
+  - nextSteps: max 3
 - No more than 12 total bullets across all sections.
 - Bullets must be factual, not salesy.
 - If something did not occur, return an empty array for that field.
@@ -384,7 +401,7 @@ async function generateCallOverview(args: {
     version: 1,
   };
 
-  return clampBulletsTotal(overview);
+  return clampBulletsTotal(capSections(overview));
 }
 
 function getTranscriptFromRecording(rec: any): string {

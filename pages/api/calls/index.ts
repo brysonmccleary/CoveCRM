@@ -81,18 +81,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!isAdmin) q.userEmail = requesterEmail;
 
     if (recordingsOnly) {
-      // ✅ Only calls with either recordingSid or recordingUrl
+      // ✅ Default: show calls that are actionable in the UI:
+      // - have a recording (playback)
+      // - OR have AI generated content (overview/summary/bullets/actions) even if no recording
+      // Escape hatch: ?includeNoRecording=1 will include everything.
       q.$and = [
         ...(Array.isArray(q.$and) ? q.$and : []),
         {
           $or: [
             { recordingSid: { $exists: true, $ne: "" } },
             { recordingUrl: { $exists: true, $ne: "" } },
+    
+            // AI content present (covers "regular calls" without recordings)
+            { aiOverviewReady: true },
+            { aiOverview: { $exists: true, $ne: null } },
+            { aiSummary: { $exists: true, $ne: "" } },
+            { aiBullets: { $exists: true, $not: { $size: 0 } } },
+            { aiActionItems: { $exists: true, $not: { $size: 0 } } },
           ],
         },
       ];
     }
-
     const [rows, total] = await Promise.all([
       (Call as any)
         .find(q)
