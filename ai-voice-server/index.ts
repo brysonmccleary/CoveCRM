@@ -808,7 +808,8 @@ async function replayPendingCommittedTurn(
 
       const repromptN = Number(state.repromptCountForCurrentStep || 0);
       state.repromptCountForCurrentStep = repromptN + 1;
-      const repromptLine = getRepromptLineForStepType(state.context!, stepType, repromptN);
+      const repromptLineRaw = getRepromptLineForStepType(state.context!, stepType, repromptN);
+      const repromptLine = applyDiscoveryCap(state, repromptLineRaw);
 
       try {
         console.log("[AI-VOICE][TURN-GATE][REPLAY] not-real-answer -> reprompt", {
@@ -844,6 +845,12 @@ async function replayPendingCommittedTurn(
     }
 
     let lineToSay = enforceBookingOnlyLine(state.context!, steps[idx] || getBookingFallbackLine(state.context!));
+
+    // ✅ hard cap discovery questions (max 2) before sending
+    lineToSay = applyDiscoveryCap(state, lineToSay);
+
+    // ✅ hard cap discovery questions (max 2) before sending
+    lineToSay = applyDiscoveryCap(state, lineToSay);
 
         // Exact-time enforcement (mirror normal path)
     let forcedExactTimeOffer = false;
@@ -1265,6 +1272,67 @@ function getBookingFallbackLine(ctx: AICallContext): string {
   const agent = (agentRaw.split(" ")[0] || agentRaw).trim();
   return `Got it — my job is just to get you scheduled. ${agent} is the licensed agent who will go over everything with you. Would later today or tomorrow be better?`;
 }
+
+// ✅ Discovery-question hard cap (max 2 per call)
+// If the model tries to keep asking discovery questions (coverage/underwriting/etc),
+// we force booking fallback after 2.
+function isDiscoveryQuestionLine(lineRaw: string): boolean {
+  const t = String(lineRaw || "").toLowerCase();
+
+  // "spouse/yourself" style discovery
+  if (t.includes("for yourself") || t.includes("yourself") || t.includes("spouse")) return true;
+
+  // coverage / underwriting style discovery
+  const discovery = [
+    "what kind of coverage",
+    "what type of coverage",
+    "coverage are you looking for",
+    "type of coverage",
+    "how much coverage",
+    "coverage amount",
+    "what coverage",
+    "mortgage balance",
+    "how much do you owe",
+    "how much is left",
+    "health",
+    "medical",
+    "smoke",
+    "tobacco",
+    "medications",
+    "height",
+    "weight",
+    "income",
+    "beneficiary",
+    "date of birth",
+    "dob",
+    "social security",
+    "ssn",
+    "driver's license",
+    "drivers license",
+  ];
+  for (const d of discovery) {
+    if (t.includes(d)) return true;
+  }
+
+  return false;
+}
+
+function applyDiscoveryCap(state: CallState, lineRaw: string): string {
+  if (!state?.context) return String(lineRaw || "");
+  const line = String(lineRaw || "").trim();
+  if (!line) return getBookingFallbackLine(state.context);
+
+  // Only count discovery questions (not time-window / scheduling questions)
+  if (!isDiscoveryQuestionLine(line)) return line;
+
+  const n = Number((state as any).discoveryQuestionCount || 0) + 1;
+  (state as any).discoveryQuestionCount = n;
+
+  // Allow 2, force booking on 3+
+  if (n > 2) return getBookingFallbackLine(state.context);
+  return line;
+}
+
 
 /**
  * ✅ Human waiting / answer gating (NEW)
