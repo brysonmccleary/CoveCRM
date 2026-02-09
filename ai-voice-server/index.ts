@@ -1729,11 +1729,29 @@ function detectObjection(textRaw: string): string | null {
     t.includes("im covered") ||
     t.includes("i'm covered") ||
     t.includes("covered already") ||
+
+    // "already taken care of" variants (common real speech)
     t.includes("taken care of") ||
     t.includes("already taken care of") ||
+    t.includes("it's taken care of") ||
+    t.includes("its taken care of") ||
+    t.includes("been taken care of") ||
+    t.includes("i took care of") ||
+    t.includes("i already took care") ||
+    t.includes("took care of it") ||
+
+    // "handled it" variants
     t.includes("already handled") ||
+    t.includes("i handled it") ||
+    t.includes("i already handled") ||
+    t.includes("handled it already") ||
+    t.includes("got it handled") ||
     t.includes("already got it") ||
-    t.includes("all set")
+
+    // short closers
+    t.includes("all set") ||
+    t.includes("i'm all set") ||
+    t.includes("im all set")
   ) {
     return "already_have";
   }
