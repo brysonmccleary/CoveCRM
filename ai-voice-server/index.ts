@@ -798,6 +798,14 @@ async function replayPendingCommittedTurn(
     }
 
     if (!treatAsAnswer || forceNotAnswer) {
+      // ✅ Guard: do NOT reprompt on filler-only commits (prevents "um" cutoff)
+      try {
+        if (hasTranscript && isFillerOnly(lastUserText) && Number(audioMs || 0) < 1700) {
+          state.lowSignalCommitCount = (state.lowSignalCommitCount || 0) + 1;
+          return;
+        }
+      } catch {}
+
       const repromptN = Number(state.repromptCountForCurrentStep || 0);
       state.repromptCountForCurrentStep = repromptN + 1;
       const repromptLine = getRepromptLineForStepType(state.context!, stepType, repromptN);
@@ -3630,12 +3638,32 @@ async function handleOpenAiEvent(
             if (state.aiSpeaking) return;
             if (state.waitingForResponse || state.responseInFlight) return;
 
+            // Best effort: use any transcript we have by now.
+            const latest = String(state.lastUserTranscript || "").trim();
+
+            // If it's STILL just filler after the grace window, do nothing (wait for user to continue).
+            // This prevents the assistant from "cutting off" after a short pause on "um/uh/hold on".
+            try {
+              const check = String(latest || (state as any).pendingFillerCommit?.bestTranscript || "").trim();
+              const cleaned = check.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+              const phrases = new Set([
+                "hold on","one sec","one second","wait a sec","wait a second","what was that","say that again",
+              ]);
+              const isFillerStill =
+                !cleaned ||
+                (cleaned.length <= 5 && ["um","uh","er","ah","hm","hmm","what","huh","sorry","wait"].includes(cleaned)) ||
+                (cleaned.length <= 20 && phrases.has(cleaned));
+
+              if (isFillerStill) {
+                (state as any).pendingFillerCommit = null;
+                return;
+              }
+            } catch {}
+
             // Promote filler commit into the normal pendingCommittedTurn pipeline and replay.
             state.pendingCommittedTurn = (state as any).pendingFillerCommit;
             (state as any).pendingFillerCommit = null;
 
-            // Best effort: use any transcript we have by now.
-            const latest = String(state.lastUserTranscript || "").trim();
             if (latest && state.pendingCommittedTurn) {
               state.pendingCommittedTurn.bestTranscript = latest;
             }
