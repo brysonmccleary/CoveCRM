@@ -3504,6 +3504,12 @@ async function handleOpenAiEvent(
 
   if (t === "input_audio_buffer.committed") {
 
+    // ✅ Guard: ignore committed user turns until the greeting has actually been sent.
+    // Pre-greeting noise/buffer flush can produce committed events and trigger REPLAY, knocking the stepper off-script.
+    if (state.phase === "awaiting_greeting_reply" && !state.debugLoggedResponseCreateGreeting) {
+      return;
+    }
+
     if (state.voicemailSkipArmed) return;
     if (!state.openAiWs || !state.openAiReady) return;
     // ✅ BEST transcript selection (smooth gating)
