@@ -1449,6 +1449,10 @@ function enforceBookingOnlyLine(ctx: AICallContext, lineRaw: string): string {
     "coverage amount",
     "how much coverage",
     "what coverage",
+    "what kind of coverage",
+    "what type of coverage",
+    "coverage are you looking for",
+    "type of coverage",
     "portion of it",
     "are you currently covered",
     "what is your age",
@@ -1482,15 +1486,20 @@ function enforceBookingOnlyLine(ctx: AICallContext, lineRaw: string): string {
     t.includes("licensed agent") ||
     t.includes("later today") ||
     t.includes("today or tomorrow") ||
+    t.includes("tomorrow") ||
     t.includes("daytime") ||
     t.includes("evening") ||
     t.includes("morning") ||
     t.includes("afternoon") ||
+    t.includes("available") ||
     t.includes("what time") ||
     t.includes("what time works") ||
     t.includes("does that work");
 
   if (!hasScheduleIntent) return getBookingFallbackLine(ctx);
+
+  // ALWAYS end with a question to keep the call moving (no dead air, no statements)
+  if (!line.endsWith("?")) return getBookingFallbackLine(ctx);
 
   return line;
 }
