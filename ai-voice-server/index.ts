@@ -2972,10 +2972,22 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
 
 
   // accumulate inbound audio while user is talking (only meaningful for gating once we're forwarding)
-  state.userAudioMsBuffered = Math.min(
-    3000,
-    (state.userAudioMsBuffered || 0) + 20
-  );
+  // Count ONLY non-silence frames; silence can inflate audioMs gates and cause premature turn-taking.
+  try {
+    const isSilenceForGate = isLikelySilenceMulawBase64(payload);
+    if (!isSilenceForGate) {
+      state.userAudioMsBuffered = Math.min(
+        3000,
+        (state.userAudioMsBuffered || 0) + 20
+      );
+    }
+  } catch {
+    // Fallback: if silence detector fails, keep prior behavior (should be rare)
+    state.userAudioMsBuffered = Math.min(
+      3000,
+      (state.userAudioMsBuffered || 0) + 20
+    );
+  }
 
   if (!state.debugLoggedFirstMedia) {
     console.log("[AI-VOICE] handleMedia: first audio frame received", {
