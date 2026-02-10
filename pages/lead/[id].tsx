@@ -447,6 +447,23 @@ export default function LeadProfileDial() {
     );
   }, [calls]);
 
+  const latestCallNeedingOverview = useMemo(() => {
+    const sorted = calls.slice().sort((a, b) => {
+      const da = new Date(a.startedAt || a.completedAt || 0).getTime();
+      const db = new Date(b.startedAt || b.completedAt || 0).getTime();
+      return db - da;
+    });
+
+    return (
+      sorted.find((c: any) => {
+        const hasRecording = !!c?.hasRecording || !!c?.recordingSid || !!c?.recordingUrl;
+        const ready = !!c?.aiOverviewReady;
+        return hasRecording && !ready;
+      }) || null
+    );
+  }, [calls]);
+
+
   const closeOverview = useMemo(() => {
     const c = latestOverviewCall as any;
     if (!c) return null;
@@ -975,10 +992,10 @@ export default function LeadProfileDial() {
                 >
                   Refresh
                 </button>
-                {latestOverviewCall && !(latestOverviewCall as any)?.aiOverviewReady ? (
+                {latestCallNeedingOverview ? (
                   <button
                     type="button"
-                    onClick={() => generateOverviewForCall(String((latestOverviewCall as any)?.id || ""))}
+                    onClick={() => generateOverviewForCall(String((latestCallNeedingOverview as any)?.id || ""))}
                     disabled={generatingOverview}
                     className="text-xs px-2 py-1 rounded bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/20 text-emerald-200 disabled:opacity-50"
                   >
