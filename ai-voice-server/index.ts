@@ -771,7 +771,7 @@ async function replayPendingCommittedTurn(
     const exactTimeRequired =
       stepType === "time_question" && isExactTimeQuestion(stepLine);
 
-    let canAdvance =
+    const canAdvance =
       hasTranscript &&
       (stepType !== "time_question"
         ? !isFillerOnly(lastUserText)
@@ -891,12 +891,6 @@ async function replayPendingCommittedTurn(
         forcedExactTimeOffer = true;
       }
     }
-    // ✅ If we just generated concrete time options (day/window/availability), HOLD this step.
-    // Keeps stepper aligned on replies like "tomorrow evening".
-    if (forcedExactTimeOffer) {
-      canAdvance = false;
-    }
-
 
     // ack prefix based on last accepted step (mirror normal path)
     const prevIdx = expectedAnswerIdx;
@@ -4047,7 +4041,7 @@ async function handleOpenAiEvent(
     const exactTimeRequired =
       stepType === "time_question" && isExactTimeQuestion(stepLine);
 
-    let canAdvance =
+    const canAdvance =
       hasTranscript &&
       (stepType !== "time_question"
         ? !isFillerOnly(lastUserText)
@@ -4203,13 +4197,6 @@ async function handleOpenAiEvent(
       state.timeOfferCountForStepIndex = idx;
       state.timeOfferCount = n + 1;
     }
-    // ✅ If we just generated concrete time options (day/window/availability), HOLD this step.
-    // Prevents advancing on broad answers like "tomorrow evening" and keeps the stepper aligned.
-    if (forcedExactTimeOffer) {
-      canAdvance = false;
-    }
-
-
     const prevIdx = expectedAnswerIdx;
 
 
