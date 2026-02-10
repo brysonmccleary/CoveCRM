@@ -304,7 +304,7 @@ function clampBulletsTotal(o: AICallOverview): AICallOverview {
 function capSections(o: AICallOverview): AICallOverview {
   // Keep it tight (Close-style) and avoid overwhelming the agent
   o.overviewBullets = (Array.isArray(o.overviewBullets) ? o.overviewBullets : []).slice(0, 6);
-  o.keyDetails = (Array.isArray(o.keyDetails) ? o.keyDetails : []).slice(0, 4);
+  o.keyDetails = (Array.isArray(o.keyDetails) ? o.keyDetails : []).slice(0, 6);
   o.objections = (Array.isArray(o.objections) ? o.objections : []).slice(0, 3);
   o.questions = (Array.isArray(o.questions) ? o.questions : []).slice(0, 3);
   o.nextSteps = (Array.isArray(o.nextSteps) ? o.nextSteps : []).slice(0, 3);
@@ -347,12 +347,26 @@ Rules:
 - Pick ONLY the most important points (no filler).
 - Keep it tight (Close-style):
   - overviewBullets: max 6
-  - keyDetails: max 4
+  - keyDetails: max 6
   - objections: max 3
   - questions: max 3
   - nextSteps: max 3
 - No more than 12 total bullets across all sections.
 - Bullets must be factual, not salesy.
+- Prioritize HARD FACTS over summaries. If present in the transcript, extract exact values and place them in keyDetails first:
+  - Coverage amount(s) (e.g., $250k, $500,000)
+  - Price/premium/budget (e.g., $65/mo, budget under $100/month)
+  - Timing + availability windows + specific times (e.g., "tomorrow 6–8pm", "Tue at 6:30pm")
+  - Household info (spouse/children), ages/DOB, smoker status, major health notes (if mentioned)
+  - State/location and any carrier/plan mentions (if mentioned)
+- Use compact labels in keyDetails (examples):
+  - "Coverage: $250k"
+  - "Budget: $80/mo"
+  - "Time: Tomorrow 6–8pm"
+  - "Smoker: No"
+- If an appointment time is explicitly agreed/confirmed, set appointmentTime and set outcome="Booked".
+- If the lead gives a callback window/time but not a confirmed booking, set outcome="Callback" and put the time window in keyDetails.
+- (Optional) If a direct quote is especially useful, include at most 1–2 short bullets prefixed with "QUOTE:" (keep under ~12 words each).
 - If something did not occur, return an empty array for that field.
 - If voicemail is detected, set outcome="Voicemail".
 
