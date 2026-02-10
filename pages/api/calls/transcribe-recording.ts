@@ -2,7 +2,10 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import dbConnect from "@/lib/mongooseConnect";
 import Call from "@/models/Call";
-import User from "@/models/User";
+import UserModel from "@/models/User";
+import { getServerSession } from "next-auth/next";
+import { authOptions } from "../auth/[...nextauth]";
+import { getUserByEmail } from "@/models/User";
 
 const AI_DIALER_CRON_KEY = (process.env.AI_DIALER_CRON_KEY || "").trim();
 
@@ -99,7 +102,7 @@ async function fetchRecordingAudio(args: {
   const userEmail = asLowerEmail(args.userEmail);
   if (userEmail) {
     try {
-      const userDoc: any = await (User as any).findOne({ email: userEmail }).lean();
+      const userDoc: any = await (UserModel as any).findOne({ email: userEmail }).lean();
       const acct = (userDoc as any)?.twilio?.accountSid;
       const tok = (userDoc as any)?.twilio?.authToken;
       if (isNonEmptyString(acct) && isNonEmptyString(tok)) {
@@ -445,14 +448,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     res.setHeader("Allow", "POST");
     return res.status(405).json({ ok: false, message: "Method not allowed" });
   }
-
-  if (!AI_DIALER_CRON_KEY) {
-    return res.status(500).json({ ok: false, message: "AI_DIALER_CRON_KEY not configured" });
-  }
-
+  // Auth: allow either cron-key (server automation) OR signed-in user (manual UI)
   const hdr = (req.headers["x-cron-key"] || "") as string;
-  if (!hdr || hdr !== AI_DIALER_CRON_KEY) {
-    return res.status(403).json({ ok: false, message: "Forbidden" });
+  const cronOk = !!AI_DIALER_CRON_KEY && !!hdr && hdr === AI_DIALER_CRON_KEY;
+
+  let requesterEmail: string | null = null;
+  let requesterIsAdmin = false;
+
+  if (!cronOk) {
+    const session = (await getServerSession(req, res, authOptions as any)) as any;
+    requesterEmail = session?.user?.email ? String(session.user.email).toLowerCase() : null;
+    if (!requesterEmail) {
+      return res.status(401).json({ ok: false, message: "Unauthorized" });
+    }
   }
 
   try {
@@ -461,14 +469,31 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     if (!isNonEmptyString(callId) && !isNonEmptyString(callSid)) {
       return res.status(400).json({ ok: false, message: "Provide callId or callSid" });
     }
-
     await dbConnect();
+
+    // If this is a user-initiated call (no cron key), determine admin status
+    if (requesterEmail) {
+      try {
+        const requester: any = await getUserByEmail(requesterEmail);
+        requesterIsAdmin = !!requester && (requester as any).role === "admin";
+      } catch {
+        requesterIsAdmin = false;
+      }
+    }
 
     const call: any = isNonEmptyString(callId)
       ? await (Call as any).findById(String(callId)).exec()
       : await (Call as any).findOne({ callSid: String(callSid) }).exec();
 
     if (!call) return res.status(404).json({ ok: false, message: "Call not found" });
+
+    // Ownership: signed-in users may only process their own calls (admins can process any)
+    if (!cronOk && !requesterIsAdmin) {
+      const callEmail = isNonEmptyString(call?.userEmail) ? String(call.userEmail).toLowerCase() : "";
+      if (!requesterEmail || !callEmail || callEmail !== requesterEmail) {
+        return res.status(403).json({ ok: false, message: "Forbidden" });
+      }
+    }
 
     const alreadyHasOverview =
       call.aiOverviewReady === true && call.aiOverview && typeof call.aiOverview === "object";

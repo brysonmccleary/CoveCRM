@@ -272,6 +272,7 @@ export default function LeadProfileDial() {
   const [calls, setCalls] = useState<CallRow[]>([]);
   const [histLoading, setHistLoading] = useState(false);
   const [callsLoading, setCallsLoading] = useState(false);
+  const [generatingOverview, setGeneratingOverview] = useState(false);
 
   const userHasAI = true;
 
@@ -401,6 +402,27 @@ export default function LeadProfileDial() {
       setCallsLoading(false);
     }
   }, [resolvedId]);
+
+    const generateOverviewForCall = useCallback(async (callId: string) => {
+    const id = String(callId || "").trim();
+    if (!id) return;
+    try {
+      setGeneratingOverview(true);
+      const r = await fetch("/api/calls/transcribe-recording", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ callId: id }),
+      });
+      const j = await r.json().catch(() => ({} as any));
+      if (!r.ok) throw new Error(j?.message || "Failed to generate overview");
+      await loadCalls();
+      try { toast.success("✅ Overview generated"); } catch {}
+    } catch (e: any) {
+      try { toast.error(e?.message || "Failed to generate overview"); } catch {}
+    } finally {
+      setGeneratingOverview(false);
+    }
+  }, [loadCalls]);
 
   useEffect(() => {
     loadCalls();
@@ -953,6 +975,17 @@ export default function LeadProfileDial() {
                 >
                   Refresh
                 </button>
+                {latestOverviewCall && !(latestOverviewCall as any)?.aiOverviewReady ? (
+                  <button
+                    type="button"
+                    onClick={() => generateOverviewForCall(String((latestOverviewCall as any)?.id || ""))}
+                    disabled={generatingOverview}
+                    className="text-xs px-2 py-1 rounded bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/20 text-emerald-200 disabled:opacity-50"
+                  >
+                    {generatingOverview ? "Generating…" : "Generate Overview"}
+                  </button>
+                ) : null}
+
               </div>
             </div>
 
