@@ -770,7 +770,7 @@ async function replayPendingCommittedTurn(
         }
       } catch {}
 
-state.phase = "in_call";
+      state.phase = "in_call";
       return;
     }
 
