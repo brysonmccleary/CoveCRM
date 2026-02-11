@@ -756,7 +756,21 @@ async function replayPendingCommittedTurn(
         })
       );
 
-      state.phase = "in_call";
+      // ✅ Keep stepper alignment: rebuttals end with a booking question.
+      // If the rebuttal asked the Step 2 booking question (today vs tomorrow),
+      // move scriptStepIndex forward so the NEXT user reply is interpreted as answering Step 2.
+      try {
+        const lt = String(lineToSay || "").toLowerCase();
+        const askedBookingQ =
+          lt.includes("later today") || lt.includes("today or tomorrow") || lt.includes("tomorrow be better");
+        if (askedBookingQ) {
+          if (idx <= 1) {
+            state.scriptStepIndex = Math.min(2, Math.max(0, (steps.length || 0) - 1));
+          }
+        }
+      } catch {}
+
+state.phase = "in_call";
       return;
     }
 
@@ -855,7 +869,7 @@ async function replayPendingCommittedTurn(
       state.outboundOpenAiDone = false;
 
       state.lastPromptSentAtMs = Date.now();
-      state.lastPromptLine = "REPROMPT";
+      state.lastPromptLine = repromptLine;
       state.lastResponseCreateAtMs = Date.now();
 
       state.openAiWs.send(JSON.stringify({
@@ -4200,7 +4214,7 @@ async function handleOpenAiEvent(
 
           state.lastPromptSentAtMs = Date.now();
 
-          state.lastPromptLine = "REPROMPT";
+          state.lastPromptLine = repromptLine;
 
           state.lastResponseCreateAtMs = Date.now();
 
