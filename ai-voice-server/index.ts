@@ -808,7 +808,30 @@ async function replayPendingCommittedTurn(
 
       const repromptN = Number(state.repromptCountForCurrentStep || 0);
       state.repromptCountForCurrentStep = repromptN + 1;
-      const repromptLineRaw = getRepromptLineForStepType(state.context!, stepType, repromptN);
+
+      // ✅ Keep booking ladder stable on replay too.
+      // If the user is clearly talking about times/availability, do NOT reset to "today or tomorrow".
+      let repromptLineRaw = getRepromptLineForStepType(state.context!, stepType, repromptN);
+      try {
+        if (hasTranscript) {
+          const wantsTime =
+            stepType === "time_question" ||
+            isTimeIndecisionOrAvailability(lastUserText) ||
+            isTimeMentioned(lastUserText);
+          if (wantsTime) {
+            const sameStep = Number(state.timeOfferCountForStepIndex ?? -1) === Number(idx);
+            const n = sameStep ? Number(state.timeOfferCount || 0) : 0;
+            repromptLineRaw = getTimeOfferLine(
+              state.context!,
+              n,
+              pickDayHint(lastUserText, String(state.lastAcceptedUserText || ""))
+            );
+            state.timeOfferCountForStepIndex = idx;
+            state.timeOfferCount = n + 1;
+          }
+        }
+      } catch {}
+
       const repromptLine = applyDiscoveryCap(state, repromptLineRaw);
 
       try {
@@ -885,7 +908,7 @@ async function replayPendingCommittedTurn(
           n = Math.max(n, 1);
         }
 
-        lineToSay = getTimeOfferLine(state.context!, n);
+        lineToSay = getTimeOfferLine(state.context!, n, pickDayHint(lastUserText, String(state.lastAcceptedUserText || "")));
         state.timeOfferCountForStepIndex = idx;
         state.timeOfferCount = n + 1;
         forcedExactTimeOffer = true;
@@ -1406,6 +1429,29 @@ function isExactTimeQuestion(lineRaw: string): boolean {
 }
 
 
+function isDayChoiceQuestion(lineRaw: string): boolean {
+  const line = String(lineRaw || "").toLowerCase();
+  if (!line) return false;
+  return (
+    line.includes("later today") ||
+    line.includes("today or tomorrow") ||
+    line.includes("today vs tomorrow") ||
+    (line.includes("would") && line.includes("today") && line.includes("tomorrow"))
+  );
+}
+
+function pickDayHint(lastUserText: string, priorAccepted: string): "today" | "tomorrow" | null {
+  const a = String(lastUserText || "").toLowerCase();
+  const b = String(priorAccepted || "").toLowerCase();
+  const t = (a + " " + b).trim();
+
+  if (t.includes("today") || t.includes("later today") || t.includes("tonight")) return "today";
+  if (t.includes("tomorrow")) return "tomorrow";
+  return null;
+}
+
+
+
 function isDayReferenceMentioned(textRaw: string): boolean {
   const t = String(textRaw || "").trim().toLowerCase();
   if (!t) return false;
@@ -1653,18 +1699,30 @@ function isTimeIndecisionOrAvailability(textRaw: string): boolean {
   return false;
 }
 
-function getTimeOfferLine(ctx: AICallContext, n: number): string {
+function getTimeOfferLine(ctx: AICallContext, n: number, dayHint: "today" | "tomorrow" | null): string {
   const agentRaw = (ctx.agentName || "your agent").trim() || "your agent";
   const agent = (agentRaw.split(" ")[0] || agentRaw).trim();
 
   // Keep it human, give concrete options, always end with a question.
-  const ladder = [
-    `Totally — for tomorrow, would you prefer morning or afternoon?`,
-    `No problem — I can do two quick options: tomorrow late morning or tomorrow mid-afternoon. Which is better?`,
-    `If you’re flexible, I can just lock in the next open slot tomorrow afternoon — does that work for you?`,
-    `No worries — to keep it easy, should I put you down for tomorrow morning, or tomorrow afternoon?`,
-    `Got it — my job is just to get you scheduled with ${agent}. Morning or afternoon tomorrow usually better?`,
-  ];
+  const day = dayHint === "today" ? "later today" : (dayHint === "tomorrow" ? "tomorrow" : "tomorrow");
+
+  const isToday = dayHint === "today";
+
+  const ladder = isToday
+    ? [
+        `Totally — for ${day}, would you prefer this afternoon or this evening?`,
+        `No problem — I can do two quick options: ${day} late afternoon or ${day} early evening. Which is better?`,
+        `If you’re flexible, I can just lock in the next open slot ${day} this evening — does that work for you?`,
+        `No worries — to keep it easy, should I put you down for ${day} this afternoon, or ${day} this evening?`,
+        `Got it — my job is just to get you scheduled with ${agent}. Afternoon or evening ${day} usually better?`,
+      ]
+    : [
+        `Totally — for ${day}, would you prefer morning or afternoon?`,
+        `No problem — I can do two quick options: ${day} late morning or ${day} mid-afternoon. Which is better?`,
+        `If you’re flexible, I can just lock in the next open slot ${day} afternoon — does that work for you?`,
+        `No worries — to keep it easy, should I put you down for ${day} morning, or ${day} afternoon?`,
+        `Got it — my job is just to get you scheduled with ${agent}. Morning or afternoon ${day} usually better?`,
+      ];
 
   return ladder[Math.min(n, ladder.length - 1)];
 }
@@ -1717,7 +1775,6 @@ function getRepromptLineForStepType(
     const ladder = [
       `Totally — would later today or tomorrow be better?`,
       `What’s easier for you — today or tomorrow?`,
-      `Morning, afternoon, or evening usually works best?`,
       `No worries — I can put you down for a quick call with ${agent}. Is today or tomorrow better?`,
     ];
     return ladder[Math.min(n, ladder.length - 1)];
@@ -4048,8 +4105,11 @@ async function handleOpenAiEvent(
         : exactTimeRequired
           ? isExactClockTimeMentioned(lastUserText)
           : (
-              isDayReferenceMentioned(lastUserText) ||
-              isExactClockTimeMentioned(lastUserText)));
+              // Booking Step 2 (later today vs tomorrow) must NOT advance on "tomorrow"/"today"/"tomorrow afternoon".
+              // We HOLD and present options until an exact clock time is selected.
+              isDayChoiceQuestion(stepLine)
+                ? isExactClockTimeMentioned(lastUserText)
+                : (isDayReferenceMentioned(lastUserText) || isExactClockTimeMentioned(lastUserText))));
 
     const treatAsAnswer = shouldTreatCommitAsRealAnswer(
       stepType,
@@ -4081,7 +4141,30 @@ async function handleOpenAiEvent(
       // If we didn't accept it as a real answer, immediately reprompt.
       const repromptN = Number(state.repromptCountForCurrentStep || 0);
       state.repromptCountForCurrentStep = repromptN + 1;
-      const repromptLine = getRepromptLineForStepType(state.context!, stepType, repromptN);
+
+      // ✅ Keep booking ladder stable:
+      // If the user is clearly talking about availability/times (e.g. "what times do you have tomorrow evening"),
+      // do NOT reset to "today or tomorrow" — offer concrete options and hold position.
+      let repromptLine = getRepromptLineForStepType(state.context!, stepType, repromptN);
+      try {
+        if (hasTranscript) {
+          const wantsTime =
+            stepType === "time_question" ||
+            isTimeIndecisionOrAvailability(lastUserText) ||
+            isTimeMentioned(lastUserText);
+          if (wantsTime) {
+            const sameStep = Number(state.timeOfferCountForStepIndex ?? -1) === Number(idx);
+            const n = sameStep ? Number(state.timeOfferCount || 0) : 0;
+            repromptLine = getTimeOfferLine(
+              state.context!,
+              n,
+              pickDayHint(lastUserText, String(state.lastAcceptedUserText || ""))
+            );
+            state.timeOfferCountForStepIndex = idx;
+            state.timeOfferCount = n + 1;
+          }
+        }
+      } catch {}
     
       try {
         console.log("[AI-VOICE][TURN-GATE] not-real-answer -> reprompt", {
@@ -4161,7 +4244,7 @@ async function handleOpenAiEvent(
         ) {
           const sameStep = Number(state.timeOfferCountForStepIndex ?? -1) === Number(idx);
           const n = sameStep ? Number(state.timeOfferCount || 0) : 0;
-          lineToSay = getTimeOfferLine(state.context!, n);
+          lineToSay = getTimeOfferLine(state.context!, n, pickDayHint(lastUserText, String(state.lastAcceptedUserText || "")));
           state.timeOfferCountForStepIndex = idx;
           state.timeOfferCount = n + 1;
           forcedExactTimeOffer = true;
@@ -4182,7 +4265,7 @@ async function handleOpenAiEvent(
     ) {
       const sameStep = Number(state.timeOfferCountForStepIndex ?? -1) === Number(idx);
       const n = sameStep ? Number(state.timeOfferCount || 0) : 0;
-      lineToSay = getTimeOfferLine(state.context!, n);
+      lineToSay = getTimeOfferLine(state.context!, n, pickDayHint(lastUserText, String(state.lastAcceptedUserText || "")));
       state.timeOfferCountForStepIndex = idx;
       state.timeOfferCount = n + 1;
       forcedExactTimeOffer = true;
@@ -4193,7 +4276,7 @@ async function handleOpenAiEvent(
     if (!forcedExactTimeOffer && stepType === "time_question" && isTimeIndecisionOrAvailability(lastUserText)) {
       const sameStep = Number(state.timeOfferCountForStepIndex ?? -1) === Number(idx);
       const n = sameStep ? Number(state.timeOfferCount || 0) : 0;
-      lineToSay = getTimeOfferLine(state.context!, n);
+      lineToSay = getTimeOfferLine(state.context!, n, pickDayHint(lastUserText, String(state.lastAcceptedUserText || "")));
       state.timeOfferCountForStepIndex = idx;
       state.timeOfferCount = n + 1;
     }
