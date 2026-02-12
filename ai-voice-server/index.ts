@@ -1253,11 +1253,33 @@ function getHumanAckPrefixForStepAnswer(
   if (prevStepType === "yesno_question" || prevStepType === "open_question") {
     // If they sound confused, don't do a cheery ack
     if (t.includes("what") || t.includes("huh") || t.includes("confused")) return "";
+
+    // ✅ Spouse / just-me answers should bridge cleanly into the next line
+    // (prevents the next scripted sentence from sounding abrupt)
+    const spouseSignals = [
+      "spouse",
+      "wife",
+      "husband",
+      "me and",
+      "my wife",
+      "my husband",
+      "for me",
+      "for my",
+      "just me",
+      "only me",
+      "both of us",
+      "us both",
+    ];
+    for (const k of spouseSignals) {
+      if (t.includes(k)) return "Perfect.";
+    }
+
     return "Got it.";
   }
 
   return "";
 }
+
 
 
 function isGreetingNegativeHearing(userTextRaw: string): boolean {
@@ -1911,7 +1933,14 @@ function detectObjection(textRaw: string): string | null {
   ) {
     return "already_have";
   }
-  if (t.includes("busy") || t.includes("at work") || t.includes("no time")) {
+  if (
+    t.includes("busy") ||
+    t.includes("at work") ||
+    t.includes("no time") ||
+    t.includes("dont have time") ||
+    t.includes("don't have time") ||
+    t.includes("do not have time")
+  ) {
     return "busy";
   }
   if (t.includes("text me") || t.includes("send it") || t.includes("email me")) {
