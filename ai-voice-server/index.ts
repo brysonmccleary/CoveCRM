@@ -839,12 +839,13 @@ async function replayPendingCommittedTurn(
             repromptLineRaw = getTimeOfferLine(
               state.context!,
               n,
-              pickDayHint(lastUserText, String(state.lastAcceptedUserText || ""))
+              pickDayHint(lastUserText, String(state.lastAcceptedUserText || "")),
+              pickTimeWindowHint(lastUserText, String(state.lastAcceptedUserText || "")),
+              lastUserText
             );
             state.timeOfferCountForStepIndex = idx;
             state.timeOfferCount = n + 1;
           }
-        }
       } catch {}
 
       const repromptLine = applyDiscoveryCap(state, repromptLineRaw);
@@ -4419,7 +4420,7 @@ async function handleOpenAiEvent(
     if (!forcedExactTimeOffer && stepType === "time_question" && isTimeIndecisionOrAvailability(lastUserText)) {
       const sameStep = Number(state.timeOfferCountForStepIndex ?? -1) === Number(idx);
       const n = sameStep ? Number(state.timeOfferCount || 0) : 0;
-      lineToSay = getTimeOfferLine(state.context!, n, pickDayHint(lastUserText, String(state.lastAcceptedUserText || "")));
+      lineToSay = getTimeOfferLine(state.context!, n, pickDayHint(lastUserText, String(state.lastAcceptedUserText || "")), pickTimeWindowHint(lastUserText, String(state.lastAcceptedUserText || "")), lastUserText);
       state.timeOfferCountForStepIndex = idx;
       state.timeOfferCount = n + 1;
     }
