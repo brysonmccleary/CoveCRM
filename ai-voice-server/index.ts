@@ -804,7 +804,7 @@ async function replayPendingCommittedTurn(
       hasTranscript &&
       isTimeWindowMentioned(lastUserText) &&
       !isDayReferenceMentioned(lastUserText) &&
-      !isExactClockTimeMentioned(lastUserText);
+      !isExactOrOfferedClockTime(String(state.lastPromptLine || ""), lastUserText);
 
     if (!canSpeak) {
       state.lowSignalCommitCount = (state.lowSignalCommitCount || 0) + 1;
@@ -884,6 +884,27 @@ async function replayPendingCommittedTurn(
     }
 
     let lineToSay = enforceBookingOnlyLine(state.context!, steps[idx] || getBookingFallbackLine(state.context!));
+
+    // ✅ Day-choice answer handling:
+    // If the current step is "today or tomorrow" and they answer with a day ("tomorrow")
+    // but not an exact clock time yet, offer concrete options and HOLD position.
+    if (stepType === "time_question" && hasTranscript) {
+      const stepLineDay = String(steps[idx] || "");
+      if (isDayChoiceQuestion(stepLineDay) && isDayReferenceMentioned(lastUserText) && !isExactOrOfferedClockTime(String(state.lastPromptLine || ""), lastUserText)) {
+        const sameStep = Number(state.timeOfferCountForStepIndex ?? -1) === Number(idx);
+        const n = sameStep ? Number(state.timeOfferCount || 0) : 0;
+        lineToSay = getTimeOfferLine(
+          state.context!,
+          n,
+          pickDayHint(lastUserText, String(state.lastAcceptedUserText || "")),
+          pickTimeWindowHint(lastUserText, String(state.lastAcceptedUserText || "")),
+          lastUserText
+        );
+        state.timeOfferCountForStepIndex = idx;
+        state.timeOfferCount = n + 1;
+      }
+    }
+
 
     // ✅ hard cap discovery questions (max 2) before sending
     lineToSay = applyDiscoveryCap(state, lineToSay);
@@ -1586,6 +1607,44 @@ function isExactClockTimeMentioned(textRaw: string): boolean {
   return false;
 }
 
+function pickOfferedClockTimeFromPrompt(lastPromptLineRaw: string, userTextRaw: string): string | null {
+  const lastPromptLine = String(lastPromptLineRaw || "").toLowerCase();
+  const userText = String(userTextRaw || "").toLowerCase();
+  if (!lastPromptLine || !userText) return null;
+
+  const choosingFirst =
+    userText.includes("first") ||
+    userText.includes("the first") ||
+    userText.includes("earlier") ||
+    userText.includes("earliest");
+  const choosingSecond =
+    userText.includes("second") ||
+    userText.includes("the second") ||
+    userText.includes("later") ||
+    userText.includes("latest");
+
+  if (!choosingFirst && !choosingSecond) return null;
+
+  // Pull the first two clock-like times from the last prompt line.
+  const times: string[] = [];
+  const reTime = /\b(\d{1,2}:\d{2}\s?(?:am|pm)?|\d{1,2}\s?(?:am|pm))\b/gi;
+  for (const m of lastPromptLineRaw.matchAll(reTime)) {
+    const t = String(m[1] || "").trim();
+    if (t) times.push(t);
+    if (times.length >= 2) break;
+  }
+  if (times.length < 2) return null;
+
+  return choosingFirst ? times[0] : times[1];
+}
+
+function isExactOrOfferedClockTime(stateLastPromptLine: string, userTextRaw: string): boolean {
+  if (isExactClockTimeMentioned(userTextRaw)) return true;
+  const picked = pickOfferedClockTimeFromPrompt(stateLastPromptLine, userTextRaw);
+  return !!picked;
+}
+
+
 function looksLikeTimeAnswer(textRaw: string): boolean {
   const t = String(textRaw || "").trim().toLowerCase();
   if (!t) return false;
@@ -2018,9 +2077,14 @@ function detectObjection(textRaw: string): string | null {
     t.includes("i'm all set") ||
     t.includes("im all set")
   ) {
-    return "already_have";
-  }
-  if (
+      // If they are still actively scheduling (e.g. "what times do you have tomorrow"),
+  // don't treat this as an objection — let the stepper offer time options.
+  try {
+    if (isTimeIndecisionOrAvailability(t) || isTimeMentioned(t)) return null;
+  } catch {}
+  return "already_have";
+}
+if (
     t.includes("busy") ||
     t.includes("at work") ||
     t.includes("no time") ||
@@ -2028,12 +2092,27 @@ function detectObjection(textRaw: string): string | null {
     t.includes("don't have time") ||
     t.includes("do not have time")
   ) {
+    // If they are still actively scheduling (e.g. "tomorrow evening" / "what times do you have"),
+    // do NOT treat this as an objection — let the stepper offer concrete time options.
+    try {
+      if (isTimeIndecisionOrAvailability(t) || isTimeMentioned(t)) return null;
+    } catch {}
     return "busy";
   }
   if (t.includes("text me") || t.includes("send it") || t.includes("email me")) {
+    // If they are still actively scheduling ("text me the times you have tomorrow"),
+    // keep booking flow and offer options instead of rebuttal.
+    try {
+      if (isTimeIndecisionOrAvailability(t) || isTimeMentioned(t)) return null;
+    } catch {}
     return "send_it";
   }
   if (t.includes("how much") || t.includes("price") || t.includes("cost")) {
+    // If they're still scheduling ("how much — tomorrow evening works"),
+    // don't derail booking; offer times and keep it moving.
+    try {
+      if (isTimeIndecisionOrAvailability(t) || isTimeMentioned(t)) return null;
+    } catch {}
     return "how_much";
   }
   if (
@@ -4233,13 +4312,12 @@ async function handleOpenAiEvent(
       (stepType !== "time_question"
         ? !isFillerOnly(lastUserText)
         : exactTimeRequired
-          ? isExactClockTimeMentioned(lastUserText)
+          ? isExactOrOfferedClockTime(String(state.lastPromptLine || ""), lastUserText)
           : (
-              // Booking Step 2 (later today vs tomorrow) must NOT advance on "tomorrow"/"today"/"tomorrow afternoon".
-              // We HOLD and present options until an exact clock time is selected.
+              // Booking Step 2 (later today vs tomorrow): HOLD and present options until an exact clock time is selected.
               isDayChoiceQuestion(stepLine)
-                ? isExactClockTimeMentioned(lastUserText)
-                : (isDayReferenceMentioned(lastUserText) || isExactClockTimeMentioned(lastUserText))));
+                ? isExactOrOfferedClockTime(String(state.lastPromptLine || ""), lastUserText)
+                : (isDayReferenceMentioned(lastUserText) || isExactOrOfferedClockTime(String(state.lastPromptLine || ""), lastUserText))));
 
     const treatAsAnswer = shouldTreatCommitAsRealAnswer(
       stepType,
@@ -4256,7 +4334,7 @@ async function handleOpenAiEvent(
       hasTranscript &&
       isTimeWindowMentioned(lastUserText) &&
       !isDayReferenceMentioned(lastUserText) &&
-      !isExactClockTimeMentioned(lastUserText);
+      !isExactOrOfferedClockTime(String(state.lastPromptLine || ""), lastUserText);
 
 
 
@@ -4359,6 +4437,27 @@ async function handleOpenAiEvent(
 
     let lineToSay = enforceBookingOnlyLine(state.context!, steps[idx] || getBookingFallbackLine(state.context!));
 
+    // ✅ Day-choice answer handling:
+    // If the current step is "today or tomorrow" and they answer with a day ("tomorrow")
+    // but not an exact clock time yet, offer concrete options and HOLD position.
+    if (stepType === "time_question" && hasTranscript) {
+      const stepLineDay = String(steps[idx] || "");
+      if (isDayChoiceQuestion(stepLineDay) && isDayReferenceMentioned(lastUserText) && !isExactOrOfferedClockTime(String(state.lastPromptLine || ""), lastUserText)) {
+        const sameStep = Number(state.timeOfferCountForStepIndex ?? -1) === Number(idx);
+        const n = sameStep ? Number(state.timeOfferCount || 0) : 0;
+        lineToSay = getTimeOfferLine(
+          state.context!,
+          n,
+          pickDayHint(lastUserText, String(state.lastAcceptedUserText || "")),
+          pickTimeWindowHint(lastUserText, String(state.lastAcceptedUserText || "")),
+          lastUserText
+        );
+        state.timeOfferCountForStepIndex = idx;
+        state.timeOfferCount = n + 1;
+      }
+    }
+
+
     // ✅ Exact-time enforcement:
     // If the current line is an exact-time question ("what time works best?") and the user answers with
     // a window ("afternoon") or day reference ("tomorrow") WITHOUT an exact clock time, we must offer
@@ -4368,7 +4467,7 @@ async function handleOpenAiEvent(
       const stepLine2 = String(steps[idx] || "");
       const exactRequired2 = isExactTimeQuestion(stepLine2);
 
-      if (exactRequired2 && hasTranscript && !isExactClockTimeMentioned(lastUserText)) {
+      if (exactRequired2 && hasTranscript && !isExactOrOfferedClockTime(String(state.lastPromptLine || ""), lastUserText)) {
         if (
           isTimeWindowMentioned(lastUserText) ||
           isDayReferenceMentioned(lastUserText) ||
@@ -4399,7 +4498,7 @@ async function handleOpenAiEvent(
       !isExactTimeQuestion(String(steps[idx] || "")) &&
       isDayReferenceMentioned(lastUserText) &&
       isTimeWindowMentioned(lastUserText) &&
-      !isExactClockTimeMentioned(lastUserText)
+      !isExactOrOfferedClockTime(String(state.lastPromptLine || ""), lastUserText)
     ) {
       const sameStep = Number(state.timeOfferCountForStepIndex ?? -1) === Number(idx);
       const n = sameStep ? Number(state.timeOfferCount || 0) : 0;
