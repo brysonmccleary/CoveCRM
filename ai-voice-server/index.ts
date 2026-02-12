@@ -827,12 +827,13 @@ async function replayPendingCommittedTurn(
       // If the user is clearly talking about times/availability, do NOT reset to "today or tomorrow".
       let repromptLineRaw = getRepromptLineForStepType(state.context!, stepType, repromptN);
       try {
-        if (hasTranscript) {
-          const wantsTime =
-            stepType === "time_question" ||
+        const wantsTime =
+          stepType === "time_question" ||
+          (hasTranscript && (
             isTimeIndecisionOrAvailability(lastUserText) ||
-            isTimeMentioned(lastUserText);
-          if (wantsTime) {
+            isTimeMentioned(lastUserText)
+          ));
+        if (wantsTime) {
             const sameStep = Number(state.timeOfferCountForStepIndex ?? -1) === Number(idx);
             const n = sameStep ? Number(state.timeOfferCount || 0) : 0;
             repromptLineRaw = getTimeOfferLine(
@@ -922,7 +923,13 @@ async function replayPendingCommittedTurn(
           n = Math.max(n, 1);
         }
 
-        lineToSay = getTimeOfferLine(state.context!, n, pickDayHint(lastUserText, String(state.lastAcceptedUserText || "")));
+        lineToSay = getTimeOfferLine(
+            state.context!,
+            n,
+            pickDayHint(lastUserText, String(state.lastAcceptedUserText || "")),
+            pickTimeWindowHint(lastUserText, String(state.lastAcceptedUserText || "")),
+            lastUserText
+          );
         state.timeOfferCountForStepIndex = idx;
         state.timeOfferCount = n + 1;
         forcedExactTimeOffer = true;
@@ -1487,6 +1494,55 @@ function pickDayHint(lastUserText: string, priorAccepted: string): "today" | "to
 }
 
 
+type TimeWindowHint =
+  | "morning"
+  | "late_morning"
+  | "mid_afternoon"
+  | "afternoon"
+  | "late_afternoon"
+  | "evening"
+  | "late_evening"
+  | "soon_hours"
+  | null;
+
+function pickTimeWindowHint(textRaw: string, priorAccepted: string): TimeWindowHint {
+  const a = String(textRaw || "").toLowerCase();
+  const b = String(priorAccepted || "").toLowerCase();
+  const t = (a + " " + b).trim();
+  if (!t) return null;
+
+  // Relative time: "in an hour", "in 5 hours", "in 3 hrs"
+  // We don't know the user's exact clock/timezone reliably here, so we offer RELATIVE slots.
+  if (/\bin\s+an?\s+hour\b/.test(t) || /\bin\s+1\s*(hour|hr|hrs)\b/.test(t)) return "soon_hours";
+  if (/\bin\s+\d{1,2}\s*(hours|hour|hr|hrs)\b/.test(t)) return "soon_hours";
+
+  // Windows (prefer more specific)
+  if (t.includes("late evening")) return "late_evening";
+  if (t.includes("mid afternoon") || t.includes("mid-afternoon")) return "mid_afternoon";
+  if (t.includes("late afternoon")) return "late_afternoon";
+  if (t.includes("late morning")) return "late_morning";
+
+  if (t.includes("evening") || t.includes("tonight")) return "evening";
+  if (t.includes("morning")) return "morning";
+  if (t.includes("afternoon")) return "afternoon";
+
+  return null;
+}
+
+function extractSoonHours(textRaw: string): number | null {
+  const t = String(textRaw || "").toLowerCase();
+  if (!t) return null;
+  if (/\bin\s+an?\s+hour\b/.test(t)) return 1;
+
+  const m = t.match(/\bin\s+(\d{1,2})\s*(hours|hour|hr|hrs)\b/);
+  if (!m) return null;
+    const n = Number(m[1] || 0);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  const clamped = Math.max(1, Math.min(12, Math.floor(n)));
+  return clamped;
+}
+
+
 
 function isDayReferenceMentioned(textRaw: string): boolean {
   const t = String(textRaw || "").trim().toLowerCase();
@@ -1735,30 +1791,60 @@ function isTimeIndecisionOrAvailability(textRaw: string): boolean {
   return false;
 }
 
-function getTimeOfferLine(ctx: AICallContext, n: number, dayHint: "today" | "tomorrow" | null): string {
+function getTimeOfferLine(
+  ctx: AICallContext,
+  n: number,
+  dayHint: "today" | "tomorrow" | null,
+  windowHint: TimeWindowHint,
+  rawUserText: string
+): string {
   const agentRaw = (ctx.agentName || "your agent").trim() || "your agent";
   const agent = (agentRaw.split(" ")[0] || agentRaw).trim();
 
-  // Keep it human, give concrete options, always end with a question.
   const day = dayHint === "today" ? "later today" : (dayHint === "tomorrow" ? "tomorrow" : "tomorrow");
 
-  const isToday = dayHint === "today";
+  // If they asked relative ("in X hours"), offer relative slots (we can't trust server timezone).
+  if (windowHint === "soon_hours") {
+    const h = extractSoonHours(rawUserText) || 1;
+    const h2 = Math.min(12, h + 1);
+    const ladder = [
+      `Totally — if you mean about ${h} hour${h === 1 ? "" : "s"} from now, I can do roughly ${h} hour${h === 1 ? "" : "s"} from now or about ${h2} hours from now. Which is better?`,
+      `No problem — I’ve got two quick options: about ${h} hour${h === 1 ? "" : "s"} from now or about ${h2} hours from now. Which one works?`,
+      `If you’re flexible, I can grab the next open slot around ${h}–${h2} hours from now — does that work for you?`,
+      `To keep it easy, should I put you down for about ${h} hours from now, or about ${h2} hours from now?`,
+      `Got it — my job is just to get you scheduled with ${agent}. About ${h} hours from now or about ${h2} hours from now better?`,
+    ];
+    return ladder[Math.min(n, ladder.length - 1)];
+  }
 
-  const ladder = isToday
-    ? [
-        `Totally — for ${day}, would you prefer this afternoon or this evening?`,
-        `No problem — I can do two quick options: ${day} late afternoon or ${day} early evening. Which is better?`,
-        `If you’re flexible, I can just lock in the next open slot ${day} this evening — does that work for you?`,
-        `No worries — to keep it easy, should I put you down for ${day} this afternoon, or ${day} this evening?`,
-        `Got it — my job is just to get you scheduled with ${agent}. Afternoon or evening ${day} usually better?`,
-      ]
-    : [
-        `Totally — for ${day}, would you prefer morning or afternoon?`,
-        `No problem — I can do two quick options: ${day} late morning or ${day} mid-afternoon. Which is better?`,
-        `If you’re flexible, I can just lock in the next open slot ${day} afternoon — does that work for you?`,
-        `No worries — to keep it easy, should I put you down for ${day} morning, or ${day} afternoon?`,
-        `Got it — my job is just to get you scheduled with ${agent}. Morning or afternoon ${day} usually better?`,
-      ];
+  // Concrete clock-time slots by window (these are "offer options", not confirming a final booking yet).
+  // Keep it human, always end with a question.
+  const slotsByWindow: Record<string, [string, string]> = {
+    morning: ["9:30am", "11:00am"],
+    late_morning: ["10:30am", "11:30am"],
+    afternoon: ["1:30pm", "3:00pm"],
+    mid_afternoon: ["2:00pm", "3:30pm"],
+    late_afternoon: ["4:00pm", "5:30pm"],
+    evening: ["6:30pm", "7:30pm"],
+    late_evening: ["8:00pm", "8:30pm"],
+  };
+
+  // Default window if none provided: today→afternoon/evening, tomorrow→morning/afternoon
+  const isToday = dayHint === "today";
+  const defaultWindow: TimeWindowHint = isToday ? "evening" : "afternoon";
+  const w: TimeWindowHint = windowHint || defaultWindow;
+
+  const pair = slotsByWindow[String(w)] || (isToday ? slotsByWindow["evening"] : slotsByWindow["afternoon"]);
+  const a = pair[0];
+  const b = pair[1];
+
+  const ladder = [
+    `Totally — for ${day}, I can do ${a} or ${b}. Which one works better?`,
+    `No problem — two quick options for ${day}: ${a} or ${b}. Which is better for you?`,
+    `If you’re flexible, I can lock in ${day} at ${a} — does that work?`,
+    `To keep it easy, should I put you down for ${day} at ${a}, or ${day} at ${b}?`,
+    `Got it — my job is just to get you scheduled with ${agent}. ${day} at ${a} or ${b} usually better?`,
+  ];
 
   return ladder[Math.min(n, ladder.length - 1)];
 }
@@ -4201,7 +4287,9 @@ async function handleOpenAiEvent(
             repromptLine = getTimeOfferLine(
               state.context!,
               n,
-              pickDayHint(lastUserText, String(state.lastAcceptedUserText || ""))
+              pickDayHint(lastUserText, String(state.lastAcceptedUserText || "")),
+              pickTimeWindowHint(lastUserText, String(state.lastAcceptedUserText || "")),
+              lastUserText
             );
             state.timeOfferCountForStepIndex = idx;
             state.timeOfferCount = n + 1;
@@ -4287,7 +4375,13 @@ async function handleOpenAiEvent(
         ) {
           const sameStep = Number(state.timeOfferCountForStepIndex ?? -1) === Number(idx);
           const n = sameStep ? Number(state.timeOfferCount || 0) : 0;
-          lineToSay = getTimeOfferLine(state.context!, n, pickDayHint(lastUserText, String(state.lastAcceptedUserText || "")));
+          lineToSay = getTimeOfferLine(
+        state.context!,
+        n,
+        pickDayHint(lastUserText, String(state.lastAcceptedUserText || "")),
+        pickTimeWindowHint(lastUserText, String(state.lastAcceptedUserText || "")),
+        lastUserText
+      );
           state.timeOfferCountForStepIndex = idx;
           state.timeOfferCount = n + 1;
           forcedExactTimeOffer = true;
@@ -4308,7 +4402,13 @@ async function handleOpenAiEvent(
     ) {
       const sameStep = Number(state.timeOfferCountForStepIndex ?? -1) === Number(idx);
       const n = sameStep ? Number(state.timeOfferCount || 0) : 0;
-      lineToSay = getTimeOfferLine(state.context!, n, pickDayHint(lastUserText, String(state.lastAcceptedUserText || "")));
+      lineToSay = getTimeOfferLine(
+        state.context!,
+        n,
+        pickDayHint(lastUserText, String(state.lastAcceptedUserText || "")),
+        pickTimeWindowHint(lastUserText, String(state.lastAcceptedUserText || "")),
+        lastUserText
+      );
       state.timeOfferCountForStepIndex = idx;
       state.timeOfferCount = n + 1;
       forcedExactTimeOffer = true;
