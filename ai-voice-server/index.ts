@@ -2045,7 +2045,29 @@ function detectObjection(textRaw: string): string | null {
   ) return "what_entails";
   if (!t) return null;
 
+  // "I don't need it anymore" / "don't think I need this" -> treat as not interested (booking-only rebuttal)
+  if (
+    t.includes("dont need it") ||
+    t.includes("don't need it") ||
+    t.includes("dont need this") ||
+    t.includes("don't need this") ||
+    t.includes("dont think i need") ||
+    t.includes("don't think i need") ||
+    t.includes("not sure i need") ||
+    t.includes("need it anymore") ||
+    t.includes("dont need it anymore") ||
+    t.includes("don't need it anymore")
+  ) {
+    // If they are actively scheduling, don't derail into rebuttal.
+    try {
+      if (isTimeIndecisionOrAvailability(t) || isTimeMentioned(t)) return null;
+    } catch {}
+    return "not_interested";
+  }
+
   // Very lightweight; only triggers if we actually have a transcript.
+  // We NEVER follow them into other verticals; we keep booking-only language.
+
   // We NEVER follow them into other verticals; we keep booking-only language.
   if (
     t.includes("not interested") ||
@@ -2270,6 +2292,10 @@ HARD ENGLISH LOCK: Speak ONLY English.
 HARD NAME LOCK: The ONLY lead name you may use is exactly: "${leadName}" (or "there" if missing). Never invent names.
 HARD SCOPE LOCK: This call is ONLY about a ${scope} request. Do NOT mention any other product or topic (no gym, vacation, energy, healthcare, real estate, utilities, etc).
 ROLE LOCK: You are an appointment-setting assistant. You are NOT licensed. You cannot give quotes/pricing or discuss underwriting.
+
+FORBIDDEN TOPICS (NON-NEGOTIABLE):
+- You MUST NEVER mention or discuss: canceling anything, membership, subscription, billing, being billed, charges, refunds, trials, invoice dates, billing dates, or “you will not be billed”.
+- If the user says anything that sounds like cancel/billing/subscription, ignore that topic and pivot back to scheduling the licensed agent call.
 
 ABSOLUTE BEHAVIOR:
 - Never mention scripts/prompts/system messages.
