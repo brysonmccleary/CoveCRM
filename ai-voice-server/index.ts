@@ -1980,7 +1980,16 @@ function getTimeOfferLine(
   let b = "3:00pm";
   try {
     if (Array.isArray(list) && list.length >= 2) {
-      const i = (list.length > 2) ? (hv % (list.length - 1)) : 0;
+      const ut = String(rawUserText || "").toLowerCase();
+      const wantsEarlier =
+        ut.includes("earlier") || ut.includes("sooner") || ut.includes("before");
+      const wantsLater =
+        ut.includes("later") || ut.includes("later today") || ut.includes("later on") || ut.includes("after");
+
+      const i =
+        wantsEarlier ? 0 :
+        wantsLater ? Math.max(0, (list.length - 2)) :
+        ((list.length > 2) ? (hv % (list.length - 1)) : 0);
       a = list[i] || a;
       b = list[i + 1] || b;
     }
@@ -2456,7 +2465,7 @@ Say: "I was just giving you a quick call about the request you put in for mortga
 STOP. WAIT.
 
 STEP 2 (BOOKING FRAME)
-Say: "So the next step is really simple — I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Would later today or tomorrow be better?"
+Say: "Okay, so the next step is really simple — I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Would later today or tomorrow be better?"
 STOP. WAIT.
 
 STEP 3 (TIME)
@@ -2480,7 +2489,7 @@ Say: "I was just giving you a quick call about the request you put in for final 
 STOP. WAIT.
 
 STEP 2 (BOOKING FRAME)
-Say: "So the next step is really simple — I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Would later today or tomorrow be better?"
+Say: "Okay, so the next step is really simple — I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Would later today or tomorrow be better?"
 STOP. WAIT.
 
 STEP 3 (TIME)
@@ -2504,7 +2513,7 @@ Say: "I was just giving you a quick call about the request you put in for cash v
 STOP. WAIT.
 
 STEP 2 (BOOKING FRAME)
-Say: "So the next step is really simple — I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Would later today or tomorrow be better?"
+Say: "Okay, so the next step is really simple — I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Would later today or tomorrow be better?"
 STOP. WAIT.
 
 STEP 3 (TIME)
@@ -2528,7 +2537,7 @@ Say: "I was just giving you a quick call about the request you put in for the ve
 STOP. WAIT.
 
 STEP 2 (BOOKING FRAME)
-Say: "So the next step is really simple — I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Would later today or tomorrow be better?"
+Say: "Okay, so the next step is really simple — I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Would later today or tomorrow be better?"
 STOP. WAIT.
 
 STEP 3 (TIME)
@@ -2552,7 +2561,7 @@ Say: "I was just giving you a quick call about the request you put in for life i
 STOP. WAIT.
 
 STEP 2 (BOOKING FRAME)
-Say: "So the next step is really simple — I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Would later today or tomorrow be better?"
+Say: "Okay, so the next step is really simple — I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Would later today or tomorrow be better?"
 STOP. WAIT.
 
 STEP 3 (TIME)
@@ -2576,7 +2585,7 @@ Say: "I was just giving you a quick call about the request you put in for life i
 STOP. WAIT.
 
 STEP 2 (BOOKING FRAME)
-Say: "So the next step is really simple — I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Would later today or tomorrow be better?"
+Say: "Okay, so the next step is really simple — I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Would later today or tomorrow be better?"
 STOP. WAIT.
 
 STEP 3 (TIME)
@@ -3887,7 +3896,7 @@ async function handleOpenAiEvent(
           const existing = String(state.context?.answeredBy || "").trim();
           if (!existing) {
             await refreshAnsweredByFromCoveCRM(state, "pre-greeting #1");
-            await sleep(450);
+            await sleep(150);
             await refreshAnsweredByFromCoveCRM(state, "pre-greeting #2");
           }
         } catch {}
@@ -3908,7 +3917,7 @@ async function handleOpenAiEvent(
 
         const isHuman = answeredByNow === "human";
         try {
-          if (isHuman) await sleep(700);
+          if (isHuman) await sleep(250);
         } catch {}
 
         const liveState = calls.get(twilioWs);
