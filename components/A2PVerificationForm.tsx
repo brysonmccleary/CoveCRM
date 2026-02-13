@@ -885,7 +885,7 @@ The opt-in page displays SMS Opt-In Terms and SMS Opt-In Privacy links on the sa
       <div>
         <input
           type="url"
-          placeholder="Website URL (must start with https://)"
+          placeholder="Website URL (https:// — should match your legal business/LLC brand name)"
           value={website}
           onChange={(e) => {
             setWebsite(e.target.value);
@@ -894,12 +894,17 @@ The opt-in page displays SMS Opt-In Terms and SMS Opt-In Privacy links on the sa
           className="border p-2 rounded w-full"
         />
         {errors.website && <p className="text-xs text-red-500 mt-1">{errors.website}</p>}
+        {!errors.website && (
+          <p className="text-xs text-gray-500 mt-1">
+            Must start with https:// and should align with the legal business/LLC name used for your A2P Brand.
+          </p>
+        )}
       </div>
 
       <div>
         <input
           type="email"
-          placeholder="Business Email"
+          placeholder="Business Email (should match your brand/LLC contact)"
           value={email}
           onChange={(e) => {
             setEmail(e.target.value);
@@ -908,6 +913,11 @@ The opt-in page displays SMS Opt-In Terms and SMS Opt-In Privacy links on the sa
           className="border p-2 rounded w-full"
         />
         {errors.email && <p className="text-xs text-red-500 mt-1">{errors.email}</p>}
+        {!errors.email && (
+          <p className="text-xs text-gray-500 mt-1">
+            Use an email that matches the business/brand details you submit for A2P (helps avoid carrier rejections).
+          </p>
+        )}
       </div>
 
       <div>
