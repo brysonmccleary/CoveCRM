@@ -19,6 +19,7 @@ export default function OptInPage(props: Props) {
   const [mobile, setMobile] = useState("");
   const [leadEmail, setLeadEmail] = useState("");
   const [consent, setConsent] = useState(false);
+  const [marketingConsent, setMarketingConsent] = useState(false);
   const [submitted, setSubmitted] = useState(false);
 
   const contactLine = useMemo(() => {
@@ -122,6 +123,23 @@ export default function OptInPage(props: Props) {
                   data rates may apply. Reply STOP to cancel. Reply HELP for help. Consent is not a condition of purchase.
                 </span>
               </label>
+
+              <div className="mt-4 border-t border-slate-800 pt-4">
+                <label className="flex gap-3 items-start">
+                  <input
+                    type="checkbox"
+                    checked={marketingConsent}
+                    onChange={(e) => setMarketingConsent(e.target.checked)}
+                    className="mt-1 h-4 w-4"
+                  />
+                  <span className="text-sm text-slate-200 leading-5">
+                    <span className="font-semibold">Optional marketing consent:</span> By checking this box, you also agree to receive
+                    promotional/marketing SMS from <span className="font-semibold">{agentName}</span> about optional coverage,
+                    new products, or special offers. Message frequency varies. Msg &amp; data rates may apply. Reply STOP to cancel.
+                    Reply HELP for help. This box is optional and not required to submit the form.
+                  </span>
+                </label>
+              </div>
 
               <div className="text-xs text-slate-400 mt-3">
                 <a className="underline text-slate-300 hover:text-white" href={`/sms/optin-terms/${encodeURIComponent(String((props as any).userId || ""))}`}>Opt-in Terms</a>
