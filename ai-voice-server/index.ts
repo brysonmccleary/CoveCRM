@@ -177,6 +177,11 @@ type CallState = {
   // greeting guard
   initialGreetingQueued?: boolean;
 
+  // ✅ Delay advancing out of greeting until we confirm OpenAI actually produced audio (prevents Step 0 skip)
+  greetingAdvancePending?: boolean;
+  greetingAdvanceNextIndex?: number;
+  greetingAdvanceNextPhase?: CallPhase;
+
   // ✅ strict call phase to enforce “greet → WAIT → script”
   phase?: CallPhase;
 
@@ -714,7 +719,9 @@ async function replayPendingCommittedTurn(
         })
       );
 
-      state.scriptStepIndex = steps.length > 1 ? 1 : 0;
+      // ✅ Do NOT advance out of greeting yet.
+      // We only advance after we confirm OpenAI actually produced outbound audio (first audio.delta).
+      let nextIdx = steps.length > 1 ? 1 : 0;
 
       // ✅ Keep stepper alignment: rebuttals end with a booking question.
       // If the objection happens early (Step 1), we just asked the Step 2 booking question in the rebuttal.
@@ -727,11 +734,17 @@ async function replayPendingCommittedTurn(
           // idx is the NEXT step-to-say; expectedAnswerIdx = idx - 1.
           // We want expectedAnswerIdx to be Step 2 after this rebuttal, so idx must be 2.
           if (idx <= 1) {
-            state.scriptStepIndex = Math.min(2, Math.max(0, (steps.length || 0) - 1));
+            nextIdx = Math.min(2, Math.max(0, (steps.length || 0) - 1));
           }
         }
       } catch {}
-      state.phase = "in_call";
+
+      state.greetingAdvancePending = true;
+      state.greetingAdvanceNextIndex = nextIdx;
+      state.greetingAdvanceNextPhase = "in_call";
+
+      // Stay in greeting phase until we see outbound audio actually start.
+      state.phase = "awaiting_greeting_reply";
       return;
     }
 
@@ -4307,9 +4320,14 @@ async function handleOpenAiEvent(
         })
       );
 
-      // ✅ FIXED BUG: after speaking step 0, next should be step 1 (if exists)
-      state.scriptStepIndex = steps.length > 1 ? 1 : 0;
-      state.phase = "in_call";
+      // ✅ Do NOT advance out of greeting yet.
+      // We only advance after we confirm OpenAI actually produced outbound audio (first audio.delta).
+      state.greetingAdvancePending = true;
+      state.greetingAdvanceNextIndex = steps.length > 1 ? 1 : 0;
+      state.greetingAdvanceNextPhase = "in_call";
+
+      // Stay in greeting phase until we see outbound audio actually start.
+      state.phase = "awaiting_greeting_reply";
       return;
     }
 
@@ -4715,6 +4733,21 @@ async function handleOpenAiEvent(
       state.bargeInDetected = false;
       state.bargeInAudioMsBuffered = 0;
       state.bargeInFrames = [];
+
+      // ✅ If we were waiting to advance out of greeting, do it ONLY after we confirm audio started.
+      if (state.greetingAdvancePending) {
+        try {
+          const ni = typeof state.greetingAdvanceNextIndex === "number" ? state.greetingAdvanceNextIndex : 0;
+          const np = (state.greetingAdvanceNextPhase as any) || "in_call";
+          state.scriptStepIndex = ni;
+          state.phase = np;
+        } catch {
+          state.phase = "in_call";
+        }
+        state.greetingAdvancePending = false;
+        state.greetingAdvanceNextIndex = undefined;
+        state.greetingAdvanceNextPhase = undefined;
+      }
     }
 
     setAiSpeaking(state, true, `OpenAI ${t} (audio delta)`);
@@ -4774,6 +4807,17 @@ async function handleOpenAiEvent(
       state.outboundMuLawBuffer = Buffer.alloc(0);
       stopOutboundPacer(twilioWs, state, "OpenAI done + <1 frame buffered");
       setAiSpeaking(state, false, `OpenAI ${t} (buffer < 1 frame)`);
+
+      // ✅ If we never produced audible greeting audio, do NOT advance steps/phases.
+      if (state.greetingAdvancePending) {
+        state.greetingAdvancePending = false;
+        state.greetingAdvanceNextIndex = undefined;
+        state.greetingAdvanceNextPhase = undefined;
+        // Stay aligned to greeting (Step 0) so we don't skip straight to Step 1.
+        state.phase = "awaiting_greeting_reply";
+        state.scriptStepIndex = 0;
+      }
+
       void replayPendingCommittedTurn(twilioWs, state, `OpenAI ${t} (buffer < 1 frame)`);
     }
   }
