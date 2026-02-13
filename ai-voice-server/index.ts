@@ -377,10 +377,23 @@ function pcm16ToMulawBase64(pcm16Base64: string): string {
 
   let outIndex = 0;
   for (let i = 0; i < sampleCount && outIndex < outSampleCount; i += 3) {
-    const offset = i * 2;
-    if (offset + 1 >= pcmBuf.length) break;
-    const sample = pcmBuf.readInt16LE(offset);
-    const mu = linearToMulaw(sample);
+    const o0 = i * 2;
+    if (o0 + 1 >= pcmBuf.length) break;
+
+    // Tiny anti-aliasing low-pass for 24k -> 8k:
+    // Use a 3-tap triangular filter: (s0 + 2*s1 + s2) / 4, then decimate by 3.
+    const s0 = pcmBuf.readInt16LE(o0);
+
+    let s1 = s0;
+    const o1 = o0 + 2;
+    if (o1 + 1 < pcmBuf.length) s1 = pcmBuf.readInt16LE(o1);
+
+    let s2 = s1;
+    const o2 = o0 + 4;
+    if (o2 + 1 < pcmBuf.length) s2 = pcmBuf.readInt16LE(o2);
+
+    const filtered = (s0 + (2 * s1) + s2) / 4;
+    const mu = linearToMulaw(filtered | 0);
     mulawBytes[outIndex++] = mu;
   }
 
