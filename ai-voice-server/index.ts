@@ -825,6 +825,22 @@ async function replayPendingCommittedTurn(
     }
 
     if (!treatAsAnswer || forceNotAnswer) {
+
+      // ✅ Guard: if we only got a hesitation fragment, DO NOT reprompt (reprompts cause cut-offs).
+      // Examples: "um", "uh", "uhh", "umm", "probably", "maybe"
+      // Treat this like low-signal and WAIT for the next commit.
+      const hes = String(lastUserText || "").trim().toLowerCase();
+      const isHesitationFragment =
+        isFillerOnly(hes) ||
+        hes === "probably" ||
+        hes === "maybe" ||
+        hes === "i think" ||
+        hes === "not sure";
+      if (hasTranscript && isHesitationFragment) {
+        state.lowSignalCommitCount = (state.lowSignalCommitCount || 0) + 1;
+        return;
+      }
+
       // ✅ Guard: do NOT reprompt on filler-only commits (prevents "um" cutoff)
       try {
         if (hasTranscript && isFillerOnly(lastUserText) && Number(audioMs || 0) < 1700) {
@@ -1792,9 +1808,12 @@ function isFillerOnly(textRaw: string): boolean {
     "yep",
     "yup",
     "uh",
+    "uhh",
     "um",
+    "umm",
     "mm",
     "mhm",
+    "hmm",
     "uh huh",
     "uh-huh",
     "okay",
@@ -1808,10 +1827,12 @@ function isFillerOnly(textRaw: string): boolean {
 
   if (fillers.has(t)) return true;
 
-  // Very short responses with no content (1 word) are usually not an answer to scheduling.
-  const words = t.split(/\s+/).filter(Boolean);
-  if (words.length <= 1) return true;
+  // Regex catch for stretched fillers: "uhhh", "ummm", "hmmmm", etc.
+  if (/^(uh+|um+|mm+|mhm+|hmm+|er+|ah+|eh+)$/.test(t)) return true;
 
+  // IMPORTANT:
+  // Do NOT treat every 1-word reply as filler.
+  // Words like "probably", "both", "tomorrow", "evening", "yes" can be meaningful depending on step type.
   return false;
 }
 
