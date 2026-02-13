@@ -1915,8 +1915,8 @@ function getTimeOfferLine(
     const h = extractSoonHours(rawUserText) || 1;
     const h2 = Math.min(12, h + 1);
     const ladder = [
-      `Totally — if you mean about ${h} hour${h === 1 ? "" : "s"} from now, I can do roughly ${h} hour${h === 1 ? "" : "s"} from now or about ${h2} hours from now. Which is better?`,
-      `No problem — I’ve got two quick options: about ${h} hour${h === 1 ? "" : "s"} from now or about ${h2} hours from now. Which one works?`,
+      `Okay — it looks like I have availability about ${h} hour${h === 1 ? "" : "s"} from now or about ${h2} hours from now. Which would work better for you?`,
+      `Okay — it looks like I have availability about ${h} hour${h === 1 ? "" : "s"} from now or about ${h2} hours from now. Which would work better for you?`,
       `If you’re flexible, I can grab the next open slot around ${h}–${h2} hours from now — does that work for you?`,
       `To keep it easy, should I put you down for about ${h} hours from now, or about ${h2} hours from now?`,
       `Got it — my job is just to get you scheduled with ${agent}. About ${h} hours from now or about ${h2} hours from now better?`,
@@ -1946,8 +1946,8 @@ function getTimeOfferLine(
   const b = pair[1];
 
   const ladder = [
-    `Totally — for ${day}, I can do ${a} or ${b}. Which one works better?`,
-    `No problem — two quick options for ${day}: ${a} or ${b}. Which is better for you?`,
+    `Okay — it looks like they have availability at ${a} or ${b}. Which would work better for you?`,
+    `Okay — it looks like they have availability at ${a} or ${b}. Which would work better for you?`,
     `If you’re flexible, I can lock in ${day} at ${a} — does that work?`,
     `To keep it easy, should I put you down for ${day} at ${a}, or ${day} at ${b}?`,
     `Got it — my job is just to get you scheduled with ${agent}. ${day} at ${a} or ${b} usually better?`,
@@ -3868,7 +3868,7 @@ async function handleOpenAiEvent(
 
         const isHuman = answeredByNow === "human";
         try {
-          if (isHuman) await sleep(1200);
+          if (isHuman) await sleep(700);
         } catch {}
 
         const liveState = calls.get(twilioWs);
