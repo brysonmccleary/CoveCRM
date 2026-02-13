@@ -1926,25 +1926,65 @@ function getTimeOfferLine(
 
   // Concrete clock-time slots by window (these are "offer options", not confirming a final booking yet).
   // Keep it human, always end with a question.
-  const slotsByWindow: Record<string, [string, string]> = {
-    morning: ["9:30am", "11:00am"],
-    late_morning: ["10:30am", "11:30am"],
-    afternoon: ["1:30pm", "3:00pm"],
-    mid_afternoon: ["2:00pm", "3:30pm"],
-    late_afternoon: ["4:00pm", "5:30pm"],
-    evening: ["6:30pm", "7:30pm"],
-    late_evening: ["8:00pm", "8:30pm"],
+  //
+  // ✅ IMPORTANT:
+  // We MUST NOT offer the same exact times to everyone.
+  // So we vary the offered pair deterministically per lead/session/day/window/rung (stable within a call).
+  function stableHash32(input: string): number {
+    const str = String(input || "");
+    let h = 2166136261; // FNV-1a 32-bit
+    for (let i = 0; i < str.length; i++) {
+      h ^= str.charCodeAt(i);
+      h = Math.imul(h, 16777619);
+    }
+    return (h >>> 0);
+  }
+
+  const slotsByWindow: Record<string, string[]> = {
+    morning: ["9:00am", "9:30am", "10:00am", "10:30am", "11:00am"],
+    late_morning: ["10:00am", "10:30am", "11:00am", "11:30am"],
+    afternoon: ["12:30pm", "1:00pm", "1:30pm", "2:00pm", "2:30pm", "3:00pm"],
+    mid_afternoon: ["1:30pm", "2:00pm", "2:30pm", "3:00pm", "3:30pm"],
+    late_afternoon: ["3:30pm", "4:00pm", "4:30pm", "5:00pm", "5:30pm"],
+    evening: ["5:30pm", "6:00pm", "6:30pm", "7:00pm", "7:30pm", "8:00pm"],
+    late_evening: ["7:30pm", "8:00pm", "8:30pm", "9:00pm"],
   };
 
-  // Default window if none provided: today→afternoon/evening, tomorrow→morning/afternoon
+  // Default window if none provided: today→evening, tomorrow→afternoon
   const isToday = dayHint === "today";
   const defaultWindow: TimeWindowHint = isToday ? "evening" : "afternoon";
   const w: TimeWindowHint = windowHint || defaultWindow;
 
-  const pair = slotsByWindow[String(w)] || (isToday ? slotsByWindow["evening"] : slotsByWindow["afternoon"]);
-  const a = pair[0];
-  const b = pair[1];
+  const list =
+    slotsByWindow[String(w)] ||
+    (isToday ? slotsByWindow["evening"] : slotsByWindow["afternoon"]);
 
+  // Seed: best-effort stable identifiers + day/window + rung
+  const seed = [
+    String((ctx as any)?.leadId || ""),
+    String((ctx as any)?.sessionId || ""),
+    String((ctx as any)?.callSid || ""),
+    String((ctx as any)?.clientPhone || (ctx as any)?.phone || ""),
+    String((ctx as any)?.userEmail || ""),
+    String(ctx.clientFirstName || ""),
+    String(agentRaw || ""),
+    String(dayHint || ""),
+    String(windowHint || ""),
+    String(n || 0),
+  ].join("|");
+
+  const hv = stableHash32(seed);
+
+  // Pick an adjacent pair (chronological) so it sounds natural.
+  let a = "1:30pm";
+  let b = "3:00pm";
+  try {
+    if (Array.isArray(list) && list.length >= 2) {
+      const i = (list.length > 2) ? (hv % (list.length - 1)) : 0;
+      a = list[i] || a;
+      b = list[i + 1] || b;
+    }
+  } catch {}
   const ladder = [
     `Okay — it looks like they have availability at ${a} or ${b}. Which would work better for you?`,
     `Okay — it looks like they have availability at ${a} or ${b}. Which would work better for you?`,
