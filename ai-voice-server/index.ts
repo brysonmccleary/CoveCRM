@@ -56,7 +56,7 @@ const AI_DIALER_VENDOR_COST_PER_MIN_USD = Number(
 // OpenAI Realtime
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
 const OPENAI_REALTIME_MODEL =
-  process.env.OPENAI_REALTIME_MODEL || "gpt-realtime";
+  process.env.OPENAI_REALTIME_MODEL || "gpt-realtime-mini";
 
 console.log("[AI-VOICE] Realtime model resolved:", OPENAI_REALTIME_MODEL, "(env:", process.env.OPENAI_REALTIME_MODEL ? "set" : "default", ")");
 
@@ -254,6 +254,8 @@ type CallState = {
 
   // micro anti-spam: last response.create timestamp (prevents rapid double-fires)
   lastResponseCreateAtMs?: number;
+  // cost control: throttle silence frames we forward to OpenAI (keep VAD working)
+  lastSilenceSentAtMs?: number;
 
 
   /**
@@ -3147,6 +3149,7 @@ wss.on("connection", (ws: WebSocket) => {
     bargeInFrames: [],
     lastCancelAtMs: 0,
     lastResponseCreateAtMs: 0,
+    lastSilenceSentAtMs: 0,
   };
 
   calls.set(ws, state);
@@ -3337,6 +3340,7 @@ async function handleStart(ws: WebSocket, msg: TwilioStartEvent) {
   state.bargeInFrames = [];
   state.lastCancelAtMs = 0;
   state.lastResponseCreateAtMs = Date.now();
+  state.lastSilenceSentAtMs = 0;
 
   const custom = msg.start.customParameters || {};
   const sessionId = custom.sessionId;
@@ -3486,6 +3490,14 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
         }
       }
     }
+
+    // ✅ COST CUT: while AI is in-control (speaking / waiting / draining), do NOT stream silence to OpenAI.
+    // BUT: if the user has actually started talking, we must allow some silence through so server_vad can detect speech end.
+    const userHasSpokenRecently = Number(state.userAudioMsBuffered || 0) >= 40; // ~2 frames
+    if (isSilence && !userHasSpokenRecently) return;
+
+    // While AI is actively speaking, never forward live user audio to OpenAI (we buffer for barge-in instead).
+    if (state.aiSpeaking === true) return;
   }
 
 
@@ -3550,6 +3562,17 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
     }
 
     // Normal path: forward inbound audio to OpenAI
+    // ✅ COST CUT: throttle silence frames so we don't burn tokens 24/7, but keep VAD working.
+    // We still send *some* silence (~1 frame / 200ms) so server_vad can detect end-of-speech and commit turns.
+    const isSilenceToSend = isLikelySilenceMulawBase64(payload);
+    if (isSilenceToSend) {
+      const nowMs = Date.now();
+      const lastMs = Number(state.lastSilenceSentAtMs || 0);
+      if (nowMs - lastMs < 200) {
+        return;
+      }
+      state.lastSilenceSentAtMs = nowMs;
+    }
     state.openAiWs.send(
       JSON.stringify({
         type: "input_audio_buffer.append",
@@ -3708,7 +3731,7 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
         input_audio_format: "g711_ulaw",
         output_audio_format: "pcm16",
         input_audio_transcription: {
-          model: "gpt-4o-transcribe",
+          model: "gpt-4o-mini-transcribe",
           language: "en",
         },
         turn_detection: {
