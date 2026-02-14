@@ -3403,21 +3403,56 @@ async function handleStart(ws: WebSocket, msg: TwilioStartEvent) {
   }
 }
 
+let _mulawToPcm16Lut: Int16Array | null = null;
+
 function isLikelySilenceMulawBase64(payloadB64: string): boolean {
   try {
     if (!payloadB64) return true;
     const buf = Buffer.from(payloadB64, "base64");
     if (buf.length === 0) return true;
 
-    // For G.711 u-law, digital silence is commonly 0xFF (and sometimes 0x7F).
-    // Treat as silence only if the frame is overwhelmingly silence bytes.
-    let silence = 0;
+    // Fast path: true digital silence frames are often all/mostly 0xFF (sometimes 0x7F).
+    let silenceBytes = 0;
     for (let i = 0; i < buf.length; i++) {
       const b = buf[i];
-      if (b === 0xff || b === 0x7f) silence++;
+      if (b === 0xff || b === 0x7f) silenceBytes++;
+    }
+    if (silenceBytes / buf.length >= 0.95) return true;
+
+    // Build μ-law decode LUT once (cheap + avoids per-sample math each frame)
+    if (!_mulawToPcm16Lut) {
+      const lut = new Int16Array(256);
+      for (let i = 0; i < 256; i++) {
+        // Standard G.711 μ-law to 16-bit PCM decode
+        let mu = (~i) & 0xff;
+        const sign = (mu & 0x80) ? -1 : 1;
+        const exponent = (mu >> 4) & 0x07;
+        const mantissa = mu & 0x0f;
+        let sample = ((mantissa << 4) + 0x08) << (exponent + 3);
+        sample = sample - 0x84;
+        lut[i] = (sign * sample) as any;
+      }
+      _mulawToPcm16Lut = lut;
     }
 
-    return silence / buf.length >= 0.9;
+    const lut = _mulawToPcm16Lut!;
+    let sumAbs = 0;
+    let quiet = 0;
+
+    // Treat as silence if energy is very low for most samples.
+    // This avoids false "speech" from Twilio comfort-noise during AI playback.
+    for (let i = 0; i < buf.length; i++) {
+      const v = lut[buf[i]];
+      const a = v < 0 ? -v : v;
+      sumAbs += a;
+      if (a < 600) quiet++;
+    }
+
+    const avgAbs = sumAbs / buf.length;
+    const quietRatio = quiet / buf.length;
+
+    // Tuned to be conservative: classify comfort-noise as silence, but keep real speech as non-silence.
+    return avgAbs < 900 && quietRatio >= 0.85;
   } catch {
     // If decoding fails, do NOT treat it as silence (safer for barge-in behavior)
     return false;
