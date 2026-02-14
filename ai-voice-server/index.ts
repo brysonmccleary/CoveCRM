@@ -543,7 +543,17 @@ function ensureOutboundPacer(twilioWs: WebSocket, state: CallState) {
         );
       } else {
         if (live.outboundOpenAiDone) {
-          if ((live.outboundMuLawBuffer?.length || 0) < TWILIO_FRAME_BYTES) {
+          const remaining = live.outboundMuLawBuffer?.length || 0;
+
+          // ✅ Do NOT drop partial tail audio (<1 frame). Pad with μ-law silence to a full 20ms frame.
+          // Dropping this tail causes audible clipping/click/static at the end of AI speech.
+          if (remaining > 0 && remaining < TWILIO_FRAME_BYTES) {
+            const pad = Buffer.alloc(TWILIO_FRAME_BYTES - remaining, 0xFF);
+            live.outboundMuLawBuffer = Buffer.concat([live.outboundMuLawBuffer || Buffer.alloc(0), pad]);
+            return; // next pacer tick will send the final padded frame
+          }
+
+          if (remaining < TWILIO_FRAME_BYTES) {
             live.outboundMuLawBuffer = Buffer.alloc(0);
             stopOutboundPacer(twilioWs, live, "buffer drained after OpenAI done");
             setAiSpeaking(live, false, "pacer drained");
@@ -4902,6 +4912,16 @@ async function handleOpenAiEvent(
     state.outboundOpenAiDone = true;
 
     const buffered = state.outboundMuLawBuffer?.length || 0;
+
+    // ✅ Do NOT drop partial tail audio (<1 frame). Pad with μ-law silence to a full 20ms frame.
+    // This prevents end-of-speech clipping/click/static and keeps timing consistent.
+    if (buffered > 0 && buffered < TWILIO_FRAME_BYTES) {
+      const pad = Buffer.alloc(TWILIO_FRAME_BYTES - buffered, 0xFF);
+      state.outboundMuLawBuffer = Buffer.concat([state.outboundMuLawBuffer || Buffer.alloc(0), pad]);
+      ensureOutboundPacer(twilioWs, state);
+      return; // let pacer send final frame; stop will happen on next drain tick
+    }
+
     if (buffered < TWILIO_FRAME_BYTES) {
       state.outboundMuLawBuffer = Buffer.alloc(0);
       stopOutboundPacer(twilioWs, state, "OpenAI done + <1 frame buffered");
