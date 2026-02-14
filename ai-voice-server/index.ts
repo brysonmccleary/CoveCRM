@@ -637,7 +637,7 @@ async function replayPendingCommittedTurn(
 
     const humanPause = async () => {
       try {
-        await sleep(randInt(250, 450));
+        await sleep(randInt(120, 220));
       } catch {}
     };
 
@@ -1808,6 +1808,22 @@ function enforceBookingOnlyLine(ctx: AICallContext, lineRaw: string): string {
 
   // ALWAYS end with a question to keep the call moving (no dead air, no statements)
   if (!line.endsWith("?")) return getBookingFallbackLine(ctx);
+  // ✅ Make the agent handoff line sound natural everywhere:
+  // Add "Okay," before: "so the next step is to get you with an agent"
+  try {
+    const lower = line.toLowerCase();
+    if (
+      lower.includes("so the next step is to get you with an agent") &&
+      !lower.includes("okay, so the next step is to get you with an agent") &&
+      !lower.includes("okay so the next step is to get you with an agent")
+    ) {
+      line = line.replace(
+        /so the next step is to get you with an agent/i,
+        "Okay, so the next step is to get you with an agent"
+      );
+    }
+  } catch {}
+
 
   return line;
 }
@@ -1994,10 +2010,12 @@ function getTimeOfferLine(
       b = list[i + 1] || b;
     }
   } catch {}
+
+  const lock = wantsLater ? b : a;
   const ladder = [
     `Okay — it looks like they have availability at ${a} or ${b}. Which would work better for you?`,
     `Okay — it looks like they have availability at ${a} or ${b}. Which would work better for you?`,
-    `If you’re flexible, I can lock in ${day} at ${a} — does that work?`,
+    `If you’re flexible, I can lock in ${day} at ${lock} — does that work?`,
     `To keep it easy, should I put you down for ${day} at ${a}, or ${day} at ${b}?`,
     `Got it — my job is just to get you scheduled with ${agent}. ${day} at ${a} or ${b} usually better?`,
   ];
@@ -4255,7 +4273,7 @@ async function handleOpenAiEvent(
     // ✅ small human pause like ChatGPT voice (only when we are about to speak)
     const humanPause = async () => {
       try {
-        await sleep(randInt(250, 450));
+        await sleep(randInt(120, 220));
       } catch {}
     };
 
