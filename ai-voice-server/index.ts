@@ -3925,6 +3925,31 @@ async function handleOpenAiEvent(
           state.lastUserTranscriptByItemId[itemId] = clean;
           state.lastUserTranscriptPartialByItemId[itemId] = "";
           state.lastUserTranscript = clean;
+        
+
+          // ✅ FIX: If a user turn was committed before transcription arrived,
+          // replay it immediately as soon as transcription completes (no need for the user to speak again).
+          try {
+            const pending = (state as any).pendingCommittedTurn;
+            const pendingHasNoText =
+              pending &&
+              !String(pending.bestTranscript || "").trim() &&
+              !!String(state.lastUserTranscript || "").trim();
+
+            if (
+              pendingHasNoText &&
+              !state.aiSpeaking &&
+              !state.waitingForResponse &&
+              !state.responseInFlight &&
+              state.openAiWs &&
+              state.openAiReady &&
+              !state.voicemailSkipArmed
+            ) {
+              pending.bestTranscript = String(state.lastUserTranscript || "").trim();
+              console.log("[AI-VOICE][TURN-GATE] TRANSCRIPT-COMPLETED->REPLAY", { callSid: state.callSid, streamSid: state.streamSid, len: String(state.lastUserTranscript || "").trim().length });
+              void replayPendingCommittedTurn(twilioWs, state, "transcript completed");
+            }
+          } catch {}
         }
       } else {
         if (itemId && state.lastUserTranscriptPartialByItemId) {
@@ -4257,7 +4282,7 @@ async function handleOpenAiEvent(
       const hasTextNow = !!String(state.lastUserTranscript || "").trim();
       const recentStopMs = Number(state.lastUserSpeechStoppedAtMs || 0);
       const stoppedRecently = recentStopMs > 0 && (nowMs - recentStopMs) <= 1500;
-      const audioStrong = Number(audioMsCommitGate || 0) >= 1400;
+      const audioStrong = Number(audioMsCommitGate || 0) >= 400;
       if (!bestTranscript && !hasTextNow && stoppedRecently && audioStrong) {
         state.pendingCommittedTurn = {
           bestTranscript: "",
@@ -4273,7 +4298,7 @@ async function handleOpenAiEvent(
             if (latest) state.pendingCommittedTurn.bestTranscript = latest;
             void replayPendingCommittedTurn(twilioWs, state, "await transcript");
           } catch {}
-        }, 250);
+        }, 320);
         return;
       }
     } catch {}
