@@ -1744,7 +1744,7 @@ function isAffirmativeConfirmation(textRaw: string): boolean {
 
 
 function enforceBookingOnlyLine(ctx: AICallContext, lineRaw: string): string {
-  const line = String(lineRaw || "").replace(/\s+/g, " ").trim();
+  let line = String(lineRaw || "").replace(/\s+/g, " ").trim();
   if (!line) return getBookingFallbackLine(ctx);
 
   const t = line.toLowerCase();
@@ -1806,26 +1806,27 @@ function enforceBookingOnlyLine(ctx: AICallContext, lineRaw: string): string {
 
   if (!hasScheduleIntent) return getBookingFallbackLine(ctx);
 
-  // ALWAYS end with a question to keep the call moving (no dead air, no statements)
-  if (!line.endsWith("?")) return getBookingFallbackLine(ctx);
-  // ✅ Make the agent handoff line sound natural everywhere:
-  // Add "Okay," before: "so the next step is to get you with an agent"
-  try {
-    const lower = line.toLowerCase();
-    if (
-      lower.includes("so the next step is to get you with an agent") &&
-      !lower.includes("okay, so the next step is to get you with an agent") &&
-      !lower.includes("okay so the next step is to get you with an agent")
-    ) {
-      line = line.replace(
-        /so the next step is to get you with an agent/i,
-        "Okay, so the next step is to get you with an agent"
-      );
-    }
-  } catch {}
+ 
+ // ALWAYS end with a question to keep the call moving (no dead air, no statements)
+ let outLine = line;
+ if (!outLine.endsWith("?")) return getBookingFallbackLine(ctx);
+ // ✅ Make the agent handoff line sound natural everywhere:
+ // Add "Okay," before: "so the next step is to get you with an agent"
+ try {
+   const lower = outLine.toLowerCase();
+   if (
+     lower.includes("so the next step is to get you with an agent") &&
+     !lower.includes("okay, so the next step is to get you with an agent") &&
+     !lower.includes("okay so the next step is to get you with an agent")
+   ) {
+     outLine = outLine.replace(
+       /so the next step is to get you with an agent/i,
+       "Okay, so the next step is to get you with an agent"
+     );
+   }
+ } catch {}
 
-
-  return line;
+ return outLine;
 }
 function isFillerOnly(textRaw: string): boolean {
   const t = String(textRaw || "").trim().toLowerCase();
@@ -2011,7 +2012,9 @@ function getTimeOfferLine(
     }
   } catch {}
 
-  const lock = wantsLater ? b : a;
+  const utLock = String(rawUserText || "").toLowerCase();
+  const wantsLaterLock = utLock.includes("later") || utLock.includes("latest") || utLock.includes("after");
+  const lock = wantsLaterLock ? b : a;
   const ladder = [
     `Okay — it looks like they have availability at ${a} or ${b}. Which would work better for you?`,
     `Okay — it looks like they have availability at ${a} or ${b}. Which would work better for you?`,
