@@ -2658,6 +2658,12 @@ REBUTTAL: "I can, but it’s usually easier to schedule a quick call so you don�
 
 OBJECTION: "I already have coverage"
 REBUTTAL: "Got it — my job is just scheduling. It’ll be a short call with ${agent} to go over what you requested and answer any questions. Would later today or tomorrow be better?"
+
+OBJECTION: "I already talked to someone / already spoke to someone"
+REBUTTAL: "Got it — totally understand. Real quick, I’m just the scheduler. Do you remember if you already got that quick call with ${agent}, or was it someone else?"
+STOP. WAIT.
+- If they say they already spoke with ${agent}: "Perfect — you’re all set. I’ll mark this as already contacted. Have a good one."
+- If they say it was someone else / not sure: "No worries. Would later today or tomorrow be better for a quick call with ${agent}?"
 STOP. WAIT.
 Then ask again: "Would later today or tomorrow be better?"
 
