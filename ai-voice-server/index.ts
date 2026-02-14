@@ -466,6 +466,10 @@ function tryCancelOpenAiResponse(state: CallState, reason: string) {
     // Only cancel if the AI is actually speaking (not just waiting/outbound pacing).
     if (state.aiSpeaking !== true) return;
 
+    // ✅ Prevent tail-chops: only cancel when a response is actively in-flight (not draining / not already done).
+    if (state.responseInFlight !== true) return;
+    if (state.outboundOpenAiDone === true) return;
+
     const now = Date.now();
 
     // Cooldown + pre-audio guard: never cancel before AI audio has actually started.
@@ -3466,9 +3470,14 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
   if (blockedByAiTurn) {
     const isSilence = isLikelySilenceMulawBase64(payload);
 
-    // Only consider barge-in if the AI is actively speaking.
-    // (waitingForResponse / outbound draining is NOT a reason to cancel)
-    if (state.aiSpeaking === true && !isSilence) {
+    // Only consider barge-in if the AI is actively speaking AND an OpenAI response is still active.
+    // (waitingForResponse / outbound draining / already-done is NOT a reason to cancel)
+    if (
+      state.aiSpeaking === true &&
+      state.responseInFlight === true &&
+      state.outboundOpenAiDone !== true &&
+      !isSilence
+    ) {
       // Track sustained caller speech while AI is speaking.
       state.bargeInDetected = true;
       state.bargeInAudioMsBuffered = Math.min(
