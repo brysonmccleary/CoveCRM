@@ -4224,6 +4224,55 @@ async function handleOpenAiEvent(
       return;
     }
 
+
+    // ✅ TRANSCRIPT-LATE FAST PATH (mid-signal)
+    // If commit fires before any transcript text exists, do NOT treat it as filler.
+    // Arm a pending turn so transcription delta/completed can replay immediately when text arrives.
+    const hasAnyTextNow = !!String(bestTranscript || state.lastUserTranscript || "").trim();
+
+    if (!hasAnyTextNow) {
+      let looksLikeRealUtterance = false;
+
+      try {
+        const nowMs = Date.now();
+        const startMs = Number(state.lastUserSpeechStartedAtMs || 0);
+        const stopMs = Number(state.lastUserSpeechStoppedAtMs || 0);
+        const spokeDurationMs =
+          startMs > 0 && stopMs > 0 ? (stopMs - startMs) : 0;
+        const stoppedRecently = stopMs > 0 && (nowMs - stopMs) <= 1500;
+
+        // Only arm pending when it looks like a real utterance (not comfort noise).
+        // We intentionally do NOT rely only on userAudioMsBuffered (it can be 0 in some cases).
+        looksLikeRealUtterance = stoppedRecently && spokeDurationMs >= 250;
+
+        if (looksLikeRealUtterance && !state.pendingCommittedTurn) {
+          state.pendingCommittedTurn = {
+            bestTranscript: "",
+            audioMs: Number(audioMsCommitGate || 0),
+            atMs: nowMs,
+          };
+
+          // Safety cleanup: if transcript never arrives, clear the pending after ~2s.
+          setTimeout(() => {
+            try {
+              if (!state.pendingCommittedTurn) return;
+              const stillEmpty = !String(
+                state.pendingCommittedTurn.bestTranscript || ""
+              ).trim();
+              const age =
+                Date.now() - Number(state.pendingCommittedTurn.atMs || 0);
+              if (stillEmpty && age >= 1800) state.pendingCommittedTurn = null;
+            } catch {}
+          }, 2000);
+        }
+      } catch {}
+
+      // If it looks like they spoke a real utterance but transcript is late, wait for delta/completed replay.
+      if (looksLikeRealUtterance) {
+        return;
+      }
+    }
+
     // ✅ FILLER GRACE WINDOW (um/uh/what + short pause)
     // If they say "um/uh/what/sorry" and pause briefly, do NOT reprompt immediately.
     // Hold the commit for a short grace window to see if they continue speaking.
