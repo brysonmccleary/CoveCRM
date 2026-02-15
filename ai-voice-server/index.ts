@@ -4188,6 +4188,38 @@ async function handleOpenAiEvent(
 
     if (tooLittleText && tooLittleAudio) {
       // Keep counting low-signal commits, but do not respond yet.
+      // BUT: if the user actually spoke and transcription is late, arm a pending turn
+      // so the delta/completed transcription handler can replay immediately when text arrives.
+      try {
+        const nowMs = Date.now();
+        const startMs = Number(state.lastUserSpeechStartedAtMs || 0);
+        const stopMs = Number(state.lastUserSpeechStoppedAtMs || 0);
+        const spokeDurationMs = (startMs > 0 && stopMs > 0) ? (stopMs - startMs) : 0;
+        const stoppedRecently = stopMs > 0 && (nowMs - stopMs) <= 1500;
+
+        // Only arm pending when it looks like a real utterance (not comfort noise).
+        // We intentionally do NOT rely only on userAudioMsBuffered (it can be 0 in some cases).
+        const looksLikeRealUtterance = stoppedRecently && spokeDurationMs >= 250;
+
+        if (looksLikeRealUtterance && !state.pendingCommittedTurn) {
+          state.pendingCommittedTurn = {
+            bestTranscript: "",
+            audioMs: Number(audioMsCommitGate || 0),
+            atMs: nowMs,
+          };
+
+          // Safety cleanup: if transcript never arrives, clear the pending after ~2s.
+          setTimeout(() => {
+            try {
+              if (!state.pendingCommittedTurn) return;
+              const stillEmpty = !String(state.pendingCommittedTurn.bestTranscript || "").trim();
+              const age = Date.now() - Number(state.pendingCommittedTurn.atMs || 0);
+              if (stillEmpty && age >= 1800) state.pendingCommittedTurn = null;
+            } catch {}
+          }, 2000);
+        }
+      } catch {}
+
       state.lowSignalCommitCount = (state.lowSignalCommitCount || 0) + 1;
       return;
     }
