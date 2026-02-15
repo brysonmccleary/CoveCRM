@@ -532,6 +532,8 @@ function ensureOutboundPacer(twilioWs: WebSocket, state: CallState) {
 
       const buf = live.outboundMuLawBuffer || Buffer.alloc(0);
 
+      // ✅ Always send a full 20ms μ-law frame every tick while pacer is running.
+      // Missing frames (underruns) can sound like clicks/static and can delay the first words.
       if (buf.length >= TWILIO_FRAME_BYTES) {
         const frame = buf.subarray(0, TWILIO_FRAME_BYTES);
         live.outboundMuLawBuffer = buf.subarray(TWILIO_FRAME_BYTES);
@@ -545,25 +547,58 @@ function ensureOutboundPacer(twilioWs: WebSocket, state: CallState) {
             media: { payload },
           })
         );
-      } else {
-        if (live.outboundOpenAiDone) {
-          const remaining = live.outboundMuLawBuffer?.length || 0;
+        return;
+      }
 
-          // ✅ Do NOT drop partial tail audio (<1 frame). Pad with μ-law silence to a full 20ms frame.
-          // Dropping this tail causes audible clipping/click/static at the end of AI speech.
-          if (remaining > 0 && remaining < TWILIO_FRAME_BYTES) {
-            const pad = Buffer.alloc(TWILIO_FRAME_BYTES - remaining, 0xFF);
-            live.outboundMuLawBuffer = Buffer.concat([live.outboundMuLawBuffer || Buffer.alloc(0), pad]);
-            return; // next pacer tick will send the final padded frame
-          }
+      // If OpenAI is done, flush any remaining tail (pad to full frame) and stop immediately.
+      if (live.outboundOpenAiDone) {
+        const remaining = buf.length;
 
-          if (remaining < TWILIO_FRAME_BYTES) {
-            live.outboundMuLawBuffer = Buffer.alloc(0);
-            stopOutboundPacer(twilioWs, live, "buffer drained after OpenAI done");
-            setAiSpeaking(live, false, "pacer drained");
-            void replayPendingCommittedTurn(twilioWs, live, "pacer drained");
-          }
+        if (remaining > 0) {
+          // ✅ Pad tail to a full frame so we don't clip/click at the end.
+          const frame = Buffer.alloc(TWILIO_FRAME_BYTES, 0xFF);
+          buf.copy(frame, 0, 0, Math.min(remaining, TWILIO_FRAME_BYTES));
+          live.outboundMuLawBuffer = Buffer.alloc(0);
+
+          twilioWs.send(
+            JSON.stringify({
+              event: "media",
+              streamSid: live.streamSid,
+              media: { payload: frame.toString("base64") },
+            })
+          );
         }
+
+        stopOutboundPacer(twilioWs, live, "buffer drained after OpenAI done");
+        setAiSpeaking(live, false, "pacer drained");
+        void replayPendingCommittedTurn(twilioWs, live, "pacer drained");
+        return;
+      }
+
+      // OpenAI not done, but we don't have a full frame yet:
+      // - If we have *some* bytes, pad to full frame and send now (reduces start-lag + prevents underrun clicks).
+      // - If we have none, send μ-law silence to maintain cadence.
+      if (buf.length > 0) {
+        const frame = Buffer.alloc(TWILIO_FRAME_BYTES, 0xFF);
+        buf.copy(frame, 0, 0, Math.min(buf.length, TWILIO_FRAME_BYTES));
+        live.outboundMuLawBuffer = Buffer.alloc(0);
+
+        twilioWs.send(
+          JSON.stringify({
+            event: "media",
+            streamSid: live.streamSid,
+            media: { payload: frame.toString("base64") },
+          })
+        );
+      } else {
+        const silence = Buffer.alloc(TWILIO_FRAME_BYTES, 0xFF);
+        twilioWs.send(
+          JSON.stringify({
+            event: "media",
+            streamSid: live.streamSid,
+            media: { payload: silence.toString("base64") },
+          })
+        );
       }
     } catch (err: any) {
       console.error("[AI-VOICE][PACE] error:", err?.message || err);
@@ -5006,6 +5041,13 @@ async function handleOpenAiEvent(
 
   if (t === "response.audio.delta" || t === "response.output_audio.delta") {
     if (state.voicemailSkipArmed) return;
+
+    // ✅ Guard: ignore late/tail audio deltas after cancel/done.
+    // Without this, a late delta can resurrect aiSpeaking=true after response.cancel.
+    if (state.responseInFlight !== true || state.outboundOpenAiDone === true) {
+      return;
+    }
+
     if (!state.aiAudioStartedAtMs) {
       state.aiAudioStartedAtMs = Date.now();
       // Fresh response is now audibly speaking; reset barge-in counters for clean measurement.
