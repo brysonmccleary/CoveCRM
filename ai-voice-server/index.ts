@@ -3917,6 +3917,29 @@ async function handleOpenAiEvent(
           const next = (prev + d).replace(/\s+/g, " ").trim();
           state.lastUserTranscriptPartialByItemId[itemId] = next;
           state.lastUserTranscript = next;
+
+          // ✅ FIX: delta arrives before completed; if we are waiting on a committed turn,
+          // replay immediately once we have *any* text.
+          try {
+            const pending = (state as any).pendingCommittedTurn;
+            const pendingHasNoText =
+              pending && !String(pending.bestTranscript || "").trim();
+
+            const got = String(next || "").trim();
+            if (
+              pendingHasNoText &&
+              got &&
+              !state.aiSpeaking &&
+              !state.waitingForResponse &&
+              !state.responseInFlight &&
+              state.openAiWs &&
+              state.openAiReady &&
+              !state.voicemailSkipArmed
+            ) {
+              pending.bestTranscript = got;
+              void replayPendingCommittedTurn(twilioWs, state, "transcript delta");
+            }
+          } catch {}
         }
       } else if (typeLower === "conversation.item.input_audio_transcription.completed") {
         const tr = String((event as any)?.transcript || "").trim();
@@ -3925,19 +3948,17 @@ async function handleOpenAiEvent(
           state.lastUserTranscriptByItemId[itemId] = clean;
           state.lastUserTranscriptPartialByItemId[itemId] = "";
           state.lastUserTranscript = clean;
-        
-
           // ✅ FIX: If a user turn was committed before transcription arrived,
-          // replay it immediately as soon as transcription completes (no need for the user to speak again).
+          // replay it as soon as we have ANY transcript text (delta or completed).
           try {
             const pending = (state as any).pendingCommittedTurn;
             const pendingHasNoText =
-              pending &&
-              !String(pending.bestTranscript || "").trim() &&
-              !!String(state.lastUserTranscript || "").trim();
+              pending && !String(pending.bestTranscript || "").trim();
 
+            const got = String(clean || "").trim();
             if (
               pendingHasNoText &&
+              got &&
               !state.aiSpeaking &&
               !state.waitingForResponse &&
               !state.responseInFlight &&
@@ -3945,8 +3966,7 @@ async function handleOpenAiEvent(
               state.openAiReady &&
               !state.voicemailSkipArmed
             ) {
-              pending.bestTranscript = String(state.lastUserTranscript || "").trim();
-              console.log("[AI-VOICE][TURN-GATE] TRANSCRIPT-COMPLETED->REPLAY", { callSid: state.callSid, streamSid: state.streamSid, len: String(state.lastUserTranscript || "").trim().length });
+              pending.bestTranscript = got;
               void replayPendingCommittedTurn(twilioWs, state, "transcript completed");
             }
           } catch {}
@@ -4282,7 +4302,7 @@ async function handleOpenAiEvent(
       const hasTextNow = !!String(state.lastUserTranscript || "").trim();
       const recentStopMs = Number(state.lastUserSpeechStoppedAtMs || 0);
       const stoppedRecently = recentStopMs > 0 && (nowMs - recentStopMs) <= 1500;
-      const audioStrong = Number(audioMsCommitGate || 0) >= 400;
+      const audioStrong = Number(audioMsCommitGate || 0) >= 1400;
       if (!bestTranscript && !hasTextNow && stoppedRecently && audioStrong) {
         state.pendingCommittedTurn = {
           bestTranscript: "",
@@ -4298,7 +4318,7 @@ async function handleOpenAiEvent(
             if (latest) state.pendingCommittedTurn.bestTranscript = latest;
             void replayPendingCommittedTurn(twilioWs, state, "await transcript");
           } catch {}
-        }, 320);
+        }, 250);
         return;
       }
     } catch {}
