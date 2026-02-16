@@ -444,6 +444,10 @@ function setWaitingForResponse(state: CallState, next: boolean, reason: string) 
     state.bargeInDetected = false;
     state.bargeInAudioMsBuffered = 0;
     state.bargeInFrames = [];
+
+    // ✅ Per-response reset: ensure we don't treat a prior response as already "done"
+    // (prevents pacer from stopping late / cancel from firing against an already-finished response)
+    state.outboundOpenAiDone = false;
   }
 
   console.log("[AI-VOICE] waitingForResponse =", next, "|", reason);
@@ -479,6 +483,11 @@ function tryCancelOpenAiResponse(state: CallState, reason: string) {
     const startedAt = Number(state.aiAudioStartedAtMs || 0);
     if (startedAt <= 0) return;
     if (now - startedAt < 650) return;
+
+    // ✅ If OpenAI already signaled DONE for this response, do NOT cancel.
+    // This prevents "response_cancel_not_active" when local flags lag behind OpenAI timing.
+    const doneAt = Number(state.lastAiDoneAtMs || 0);
+    if (doneAt > 0 && doneAt >= startedAt) return;
 
 
     const last = Number(state.lastCancelAtMs || 0);
@@ -534,6 +543,19 @@ function ensureOutboundPacer(twilioWs: WebSocket, state: CallState) {
       if (!live) return;
 
       const buf = live.outboundMuLawBuffer || Buffer.alloc(0);
+
+      // ✅ Fallback: OpenAI may signal done before our outboundOpenAiDone flag flips.
+      // If OpenAI already signaled DONE for the current response, treat outbound as done
+      // so the pacer can flush/pad and stop immediately (prevents multi-second silence drain).
+      if (!live.outboundOpenAiDone) {
+        try {
+          const doneAt = Number(live.lastAiDoneAtMs || 0);
+          const startedAt = Number(live.aiAudioStartedAtMs || 0);
+          if (doneAt > 0 && (startedAt <= 0 || doneAt >= startedAt)) {
+            live.outboundOpenAiDone = true;
+          }
+        } catch {}
+      }
 
       // ✅ Always send a full 20ms μ-law frame every tick while pacer is running.
       // Missing frames (underruns) can sound like clicks/static and can delay the first words.
