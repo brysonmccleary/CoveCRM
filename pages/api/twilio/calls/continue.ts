@@ -4,18 +4,26 @@ import { buffer as microBuffer } from "micro";
 import twilio from "twilio";
 const { validateRequest } = twilio;
 
+const CANONICAL_BASE = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "").replace(/\/$/, "");
+
 export const config = {
   api: { bodyParser: false }, // Twilio posts x-www-form-urlencoded; keep raw for signature check
 };
 
 function resolveFullUrl(req: NextApiRequest): string {
+  const path = req.url || "/api/twilio/calls/continue";
+
+  // If you set a canonical base (and answer.ts uses the same), validate against it to avoid host/proto mismatches.
+  if (CANONICAL_BASE) {
+    return `${CANONICAL_BASE}${path.startsWith("/") ? "" : "/"}${path}`;
+  }
+
   const proto =
     (req.headers["x-forwarded-proto"] as string) ||
     (process.env.NEXT_PUBLIC_BASE_URL?.startsWith("https") ? "https" : "http") ||
     "https";
   const host = (req.headers["x-forwarded-host"] as string) || (req.headers.host as string);
-  const path = req.url || "/api/twilio/calls/continue";
-  return `${proto}://${host}${path}`;
+  return `${proto}://${host}${path.startsWith("/") ? "" : "/"}${path}`;
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
