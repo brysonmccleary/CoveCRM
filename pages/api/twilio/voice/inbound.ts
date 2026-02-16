@@ -7,7 +7,6 @@ import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import Lead from "@/models/Lead";
 import InboundCall from "@/models/InboundCall";
-import { initSocket } from "@/lib/socket";
 
 // optional models (tolerant)
 let PhoneNumberModel: any = null;
@@ -154,6 +153,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     console.error("DB mapping/upsert error:", e);
   }
 
+  // inbound debug (incoming-only)
+  try {
+    console.log("[inbound] map", {
+      callSid,
+      to,
+      from,
+      ownerEmail: ownerEmail || null,
+      leadId: leadDoc?._id?.toString() || null,
+    });
+  } catch {}
+
   // save short-lived InboundCall doc
   try {
     if (callSid) {
@@ -175,19 +185,57 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     console.error("InboundCall upsert error:", e);
   }
 
-  // emit banner (Vercel Socket.IO)
+  // emit banner
   try {
     if (ownerEmail) {
-      const io = initSocket(res as any);
-      const leadNameFull = leadDoc ? buildLeadFullName(leadDoc) : undefined;
-      io.to(ownerEmail).emit("call:incoming", {
-        leadId: leadDoc?._id?.toString(),
-        leadName: leadNameFull,
-        phone: from,
-      });
+      const EMIT_URL =
+        process.env.RENDER_EMIT_URL || "https:\/\/covecrm.onrender.com\/emit\/call-incoming";
+      const secret = process.env.EMIT_BEARER_SECRET;
+
+      // inbound debug (incoming-only)
+      try {
+        console.log("[inbound] emit:attempt", {
+          ownerEmail,
+          hasSecret: !!secret,
+          emitUrl: EMIT_URL,
+          callSid,
+          leadId: leadDoc?._id?.toString() || null,
+        });
+      } catch {}
+
+      if (!secret) {
+        console.error("Missing EMIT_BEARER_SECRET");
+      } else {
+        const leadNameFull = leadDoc ? buildLeadFullName(leadDoc) : undefined;
+        const resp = await fetch(EMIT_URL, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: "Bearer " + secret,
+          },
+          body: JSON.stringify({
+            email: ownerEmail,
+            leadId: leadDoc?._id?.toString(),
+            leadName: leadNameFull,
+            phone: from,
+          }),
+        });
+        if (!resp.ok) {
+          const text = await resp.text().catch(() => "");
+          console.error(`Render emit failed (${resp.status}): ${text || resp.statusText}`);
+        } else {
+          try {
+            console.log("[inbound] emit:ok", { status: resp.status, ownerEmail });
+          } catch {}
+        }
+      }
+    } else {
+      try {
+        console.warn("[inbound] emit:skip (missing ownerEmail)", { callSid, to, from });
+      } catch {}
     }
   } catch (e) {
-    console.error("Socket emit error:", e);
+    console.error("Render emit error:", e);
   }
 
   // keep the call IN-PROGRESS with YOUR ringback until agent clicks Answer.
