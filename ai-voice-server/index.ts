@@ -579,6 +579,16 @@ function ensureOutboundPacer(twilioWs: WebSocket, state: CallState) {
       if (live.outboundOpenAiDone) {
         const remaining = buf.length;
 
+        // ✅ If OpenAI is done and there is nothing left to flush, stop immediately.
+        // This prevents multi-second silence drain that feels like "slow responses".
+        if (remaining <= 0) {
+          stopOutboundPacer(twilioWs, live, "OpenAI done + buffer empty");
+          setAiSpeaking(live, false, "pacer drained");
+          void replayPendingCommittedTurn(twilioWs, live, "pacer drained");
+          return;
+        }
+
+
         if (remaining > 0) {
           // ✅ Pad tail to a full frame so we don't clip/click at the end.
           const frame = Buffer.alloc(TWILIO_FRAME_BYTES, 0xFF);
@@ -3951,7 +3961,7 @@ async function handleOpenAiEvent(
 
           state.openAiWs.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
         } catch {}
-      }, 3500);
+      }, 1200);
     } catch {}
 
     // ✅ Clear pending filler commit (user continued speaking)
@@ -3991,6 +4001,7 @@ async function handleOpenAiEvent(
     t === "response.output_item.done"
   ) {
     state.lastAiDoneAtMs = Date.now();
+    state.outboundOpenAiDone = true;
     // do NOT return — allow existing cleanup logic
   }
 
