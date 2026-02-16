@@ -215,6 +215,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           },
           body: JSON.stringify({
             email: ownerEmail,
+            callSid,
             leadId: leadDoc?._id?.toString(),
             leadName: leadNameFull,
             phone: from,

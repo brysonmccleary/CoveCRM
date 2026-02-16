@@ -14,7 +14,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const ownerEmail = session?.user?.email?.toLowerCase();
   if (!ownerEmail) return res.status(401).json({ message: "Unauthorized" });
 
-  const { phone } = (req.body || {}) as { phone?: string };
+  const { phone, callSid } = (req.body || {}) as { phone?: string; callSid?: string };
 
   const { TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN } = process.env;
   if (!TWILIO_ACCOUNT_SID || !TWILIO_AUTH_TOKEN || !BASE) {
@@ -25,13 +25,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     await dbConnect();
 
-    // find the live inbound
+    // find the live inbound (prefer exact callSid if provided)
     const q: any = { ownerEmail, state: "ringing", expiresAt: { $gt: new Date() } };
-    if (phone) q.from = phone;
+    if (callSid) q.callSid = callSid;
+    else if (phone) q.from = phone;
     const ic = await InboundCall.findOne(q).sort({ _id: -1 }).lean();
 
     if (!ic?.callSid) {
-      return res.status(200).json({ ok: true, message: "No active inbound call found" });
+      return res.status(200).json({ ok: false, message: "No active inbound call found" });
     }
 
     // create/reuse a conference name and persist it

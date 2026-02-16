@@ -89,7 +89,7 @@ app.post("/emit/call-incoming", (req, res) => {
     }
 
     // Validate body
-    const { email, leadId, leadName, phone } = req.body || {};
+    const { email, callSid, leadId, leadName, phone } = req.body || {};
     const normEmail = String(email || "").trim().toLowerCase();
     if (!normEmail) {
       return res.status(400).json({ ok: false, error: "Missing email" });
@@ -97,6 +97,7 @@ app.post("/emit/call-incoming", (req, res) => {
 
     const payload = {
       email: normEmail,
+      callSid: String(callSid || ""),
       leadId: String(leadId || ""),
       leadName: String(leadName || ""),
       phone: String(phone || ""),

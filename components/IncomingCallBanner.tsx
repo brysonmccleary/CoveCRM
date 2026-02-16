@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/router";
 
 type Payload = {
+  callSid?: string;
   leadId?: string;
   leadName?: string; // already includes first + last on your server emit
   phone: string;     // E.164
@@ -22,11 +23,14 @@ export default function IncomingCallBanner() {
   const chimeRef = useRef<HTMLAudioElement>(null);
 
   useEffect(() => {
-    const sock: any = (globalThis as any).__crm_socket__;
-    if (!sock) return;
+    let mounted = true;
+    let attached = false;
+    let tries = 0;
+    const maxTries = 80; // ~20s at 250ms
 
     const onIncoming = (data: any) => {
       const next: Payload = {
+        callSid: data?.callSid || undefined,
         leadId: data?.leadId || undefined,
         leadName: data?.leadName || undefined,
         phone: data?.phone || "",
@@ -40,9 +44,32 @@ export default function IncomingCallBanner() {
       hideTimer.current = setTimeout(() => setVisible(false), 10_000);
     };
 
-    sock.on?.("call:incoming", onIncoming);
+    const attach = () => {
+      if (!mounted || attached) return;
+      const sock: any = (globalThis as any).__crm_socket__;
+      if (!sock || !sock.on) return;
+      sock.on?.("call:incoming", onIncoming);
+      attached = true;
+    };
+
+    const interval = setInterval(() => {
+      tries++;
+      attach();
+      if (attached || tries >= maxTries) {
+        clearInterval(interval);
+      }
+    }, 250);
+
+    // try immediately too
+    attach();
+
     return () => {
-      sock.off?.("call:incoming", onIncoming);
+      mounted = false;
+      clearInterval(interval);
+      try {
+        const sock: any = (globalThis as any).__crm_socket__;
+        sock?.off?.("call:incoming", onIncoming);
+      } catch {}
       if (hideTimer.current) clearTimeout(hideTimer.current);
     };
   }, []);
@@ -60,16 +87,23 @@ export default function IncomingCallBanner() {
       const r = await fetch("/api/twilio/calls/answer", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phone: payload.phone }),
+        body: JSON.stringify({ phone: payload.phone, callSid: payload.callSid }),
       });
       const j = await r.json().catch(() => ({}));
       if (j?.conferenceName) conf = j.conferenceName;
     } catch {}
 
+    if (!conf) {
+      // inbound-only safety: do NOT navigate into dial-session without a conference
+      // (prevents outbound-like behavior when the inbound leg wasn't found)
+      try { console.warn("Answer failed: missing conferenceName"); } catch {}
+      return;
+    }
+
     setVisible(false);
     const params = new URLSearchParams();
     params.set("inbound", "1");
-    if (conf) params.set("conference", conf);
+    params.set("conference", conf);
     if (payload.leadId) params.set("leadId", payload.leadId);
 
     router.push(`/dial-session?${params.toString()}`);
@@ -80,7 +114,7 @@ export default function IncomingCallBanner() {
       await fetch("/api/twilio/calls/decline", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phone: payload.phone }),
+        body: JSON.stringify({ phone: payload.phone, callSid: payload.callSid }),
       });
     } catch {}
     setVisible(false);
