@@ -192,6 +192,9 @@ type CallState = {
   outboundMuLawBuffer?: Buffer;
   outboundPacerTimer?: NodeJS.Timeout | null;
   outboundOpenAiDone?: boolean;
+  // ✅ User-turn watchdog (prevents "stuck VAD" -> dead silence)
+  userSpeechInProgress?: boolean;
+  userSpeechCommitWatchdog?: NodeJS.Timeout | null;
   // ✅ If user commits while outbound pacer is still draining (aiSpeaking true), we must NOT drop the turn.
   // We queue it here and replay immediately when pacer drains and aiSpeaking flips to false.
   pendingCommittedTurn?: { bestTranscript: string; audioMs: number; atMs: number } | null;
@@ -3826,6 +3829,13 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
         turn_detection: {
           type: "server_vad",
           create_response: false,
+
+          // ✅ HOTFIX: Reduce end-of-turn silence so we don't get 3–5s dead air after the user talks.
+          // Default can be too slow; this makes "speech_stopped/committed" fire faster.
+          silence_duration_ms: 550,
+
+          // ✅ Helps keep the start of user speech from being clipped.
+          prefix_padding_ms: 300,
         },
       },
     };
@@ -3891,6 +3901,37 @@ async function handleOpenAiEvent(
   // ============================
 
   if (t === "input_audio_buffer.speech_started") {
+    try {
+      // Mark speech in progress
+      state.userSpeechInProgress = true;
+
+      // Clear any previous watchdog
+      if (state.userSpeechCommitWatchdog) {
+        clearTimeout(state.userSpeechCommitWatchdog);
+        state.userSpeechCommitWatchdog = null;
+      }
+
+      // ✅ HARD CAP: If VAD/transcription gets stuck and never commits, force a commit so the AI responds.
+      // This prevents the “I have to say hello again” dead-air behavior.
+      state.userSpeechCommitWatchdog = setTimeout(() => {
+        try {
+          if (!state.userSpeechInProgress) return;
+          if (!state.openAiWs || !state.openAiReady) return;
+          if (state.voicemailSkipArmed) return;
+
+          // Don't force-commit during outbound or in-flight responses
+          if (state.aiSpeaking || state.waitingForResponse || (state as any).responseInFlight) return;
+
+          console.log("[AI-VOICE][VAD] watchdog forcing input_audio_buffer.commit", {
+            callSid: state.callSid,
+            streamSid: state.streamSid,
+          });
+
+          state.openAiWs.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
+        } catch {}
+      }, 3500);
+    } catch {}
+
     // ✅ Clear pending filler commit (user continued speaking)
     try {
       if ((state as any).pendingFillerTimer) {
@@ -3910,6 +3951,14 @@ async function handleOpenAiEvent(
   }
 
   if (t === "input_audio_buffer.speech_stopped") {
+    try {
+      state.userSpeechInProgress = false;
+      if (state.userSpeechCommitWatchdog) {
+        clearTimeout(state.userSpeechCommitWatchdog);
+        state.userSpeechCommitWatchdog = null;
+      }
+    } catch {}
+
     state.lastUserSpeechStoppedAtMs = Date.now();
     return;
   }
