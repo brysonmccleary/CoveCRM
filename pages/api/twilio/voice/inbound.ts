@@ -7,6 +7,7 @@ import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import Lead from "@/models/Lead";
 import InboundCall from "@/models/InboundCall";
+import { initSocket } from "@/lib/socket";
 
 // optional models (tolerant)
 let PhoneNumberModel: any = null;
@@ -174,37 +175,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     console.error("InboundCall upsert error:", e);
   }
 
-  // emit banner
+  // emit banner (Vercel Socket.IO)
   try {
     if (ownerEmail) {
-      const EMIT_URL =
-        process.env.RENDER_EMIT_URL || "https://covecrm.onrender.com/emit/call-incoming";
-      const secret = process.env.EMIT_BEARER_SECRET;
-      if (!secret) {
-        console.error("Missing EMIT_BEARER_SECRET");
-      } else {
-        const leadNameFull = leadDoc ? buildLeadFullName(leadDoc) : undefined;
-        const resp = await fetch(EMIT_URL, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${secret}`,
-          },
-          body: JSON.stringify({
-            email: ownerEmail,
-            leadId: leadDoc?._id?.toString(),
-            leadName: leadNameFull,
-            phone: from,
-          }),
-        });
-        if (!resp.ok) {
-          const text = await resp.text().catch(() => "");
-          console.error(`Render emit failed (${resp.status}): ${text || resp.statusText}`);
-        }
-      }
+      const io = initSocket(res as any);
+      const leadNameFull = leadDoc ? buildLeadFullName(leadDoc) : undefined;
+      io.to(ownerEmail).emit("call:incoming", {
+        leadId: leadDoc?._id?.toString(),
+        leadName: leadNameFull,
+        phone: from,
+      });
     }
   } catch (e) {
-    console.error("Render emit error:", e);
+    console.error("Socket emit error:", e);
   }
 
   // keep the call IN-PROGRESS with YOUR ringback until agent clicks Answer.
