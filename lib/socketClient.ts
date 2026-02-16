@@ -26,17 +26,21 @@ function resolveEndpoint() {
     return { base: envBase, path: envPath || "/socket/" };
   }
 
-  // ---- 2) Safe default in PRODUCTION: always use Render service ----
-  // This guarantees correctness even if envs are missing or a cached bundle is served.
+  // ---- 2) Safe default in PRODUCTION: same-origin (Vercel Next.js) ----
+  // This ensures all realtime events emitted by /api/* routes (messages, inbound banners, etc.) reach the UI.
+  // If you intentionally want a different socket host, set NEXT_PUBLIC_SOCKET_URL / NEXT_PUBLIC_SOCKET_PATH.
   if (process.env.NODE_ENV === "production") {
-    return { base: "https://covecrm.onrender.com", path: "/socket/" };
+    const base =
+      (typeof window !== "undefined" && window.location.origin) ||
+      (process.env.NEXT_PUBLIC_BASE_URL || "").replace(/\/$/, "");
+    return { base, path: "/api/socket/" };
   }
 
   // ---- 3) Dev fallback: same-origin (works locally) ----
   const base =
     (typeof window !== "undefined" && window.location.origin) ||
     (process.env.NEXT_PUBLIC_BASE_URL || "").replace(/\/$/, "");
-  return { base, path: "/api/socket" };
+  return { base, path: "/api/socket/" };
 }
 
 function createClient(): Socket {
