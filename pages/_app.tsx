@@ -12,6 +12,7 @@ import axios from "axios";
 import Head from "next/head";
 import { useRouter } from "next/router";
 import SoftphoneProvider from "@/components/telephony/SoftphoneProvider";
+import IncomingCallBanner from "@/components/IncomingCallBanner";
 
 // 🔌 client socket + unread store
 import { connectAndJoin } from "@/lib/socketClient";
@@ -136,6 +137,7 @@ function InnerApp({
 
       {authed && !isPublic && (
         <>
+          <IncomingCallBanner />
           <InternalSync />
           <ReminderBanner leads={leads} inDialSession={isDialing} />
         </>
