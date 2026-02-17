@@ -39,9 +39,13 @@ function parseHHMM(hhmm: string): { hour: number; minute: number } | null {
 }
 
 function getDaySchedule(workingHours: WorkingHours | undefined, dtAgent: DateTime) {
-  if (!workingHours) return null;
+  // If the agent has not configured working hours, treat as 24/7 availability.
+  // (This prevents blocking bookings with "outside_working_hours" by default.)
+  const wh = workingHours || {};
+  const hasAny = Object.keys(wh).length > 0;
+  if (!hasAny) return { start: "00:00", end: "23:59" };
   const { long, short } = normalizeWeekdayKey(dtAgent);
-  return workingHours[long] || workingHours[short] || null;
+  return wh[long] || wh[short] || null;
 }
 
 function isWithinWorkingHours(
