@@ -3,7 +3,8 @@ import mongoose, { Schema, models, model } from "mongoose";
 
 const BookingSchema = new Schema(
   {
-    leadEmail: { type: String, required: true },
+    // Lead email is optional (many leads have no email)
+    leadEmail: { type: String, required: false, default: "" },
     leadPhone: { type: String, required: true },
     agentEmail: { type: String, required: true }, // Who they're meeting with
     agentPhone: { type: String }, // Optional, for reminder content

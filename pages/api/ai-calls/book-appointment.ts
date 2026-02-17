@@ -7,6 +7,8 @@ import Lead from "@/models/Lead";
 import User from "@/models/User";
 import { google } from "googleapis";
 import { Types } from "mongoose";
+import { DateTime } from "luxon";
+import * as BookingEnforcer from "@/lib/booking/enforceBookingSettings";
 
 const AI_DIALER_CRON_KEY = process.env.AI_DIALER_CRON_KEY;
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID!;
@@ -195,6 +197,42 @@ export default async function handler(
      */
     const startAgentWall = convertUtcToTimeZone(startUtcDate, agentTz); // "YYYY-MM-DDTHH:mm:ss"
     const endAgentWall = convertUtcToTimeZone(endUtcDate, agentTz);
+
+    // ✅ Enforce booking rules in AGENT TZ (bookingSettings belong to agent)
+    try {
+      const enforceFn =
+        (BookingEnforcer as any).enforceBookingSettings ||
+        (BookingEnforcer as any).default;
+      if (typeof enforceFn === "function") {
+        const dur = Math.max(15, Math.min(240, Number(durationMinutes || 30)));
+        const startAgent = DateTime.fromJSDate(startUtcDate, { zone: "utc" })
+          .setZone(agentTz)
+          .set({ second: 0, millisecond: 0 });
+
+        const out = await enforceFn(
+          calendar,
+          calendarId,
+          (user as any)?.bookingSettings || {},
+          startAgent,
+          dur,
+          leadTimeZone,
+          5,
+        );
+        if (out && out.ok === false) {
+          return res.status(200).json({
+            ok: false,
+            error: out.reason || "invalid",
+            // Keep shape predictable for the caller (voice) — suggestions are lead-facing
+            ...(Array.isArray(out.suggestions) ? { suggestions: out.suggestions } : {}),
+          } as any);
+        }
+      }
+    } catch (e: any) {
+      console.warn(
+        "[AI-CALLS][BOOK-APPOINTMENT] Booking enforcement failed (non-blocking):",
+        e?.message || e
+      );
+    }
 
     const event = await calendar.events.insert({
       calendarId,
