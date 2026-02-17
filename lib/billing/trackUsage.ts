@@ -3,20 +3,10 @@ import mongoose from "mongoose";
 import User from "@/models/User";
 import { stripe } from "@/lib/stripe";
 
+
 /** ========= Env / Flags ========= */
 const isProd = process.env.NODE_ENV === "production";
 const DEV_SKIP_BILLING = process.env.DEV_SKIP_BILLING === "1";
-
-/**
- * Percentage markup you want to charge over your raw vendor cost.
- * Example: 33 => 33% markup. If unset/invalid, defaults to 0.
- */
-const USAGE_MARKUP_PCT = Number(process.env.USAGE_MARKUP_PCT ?? "33");
-const MARKUP_FACTOR =
-  Number.isFinite(USAGE_MARKUP_PCT) && USAGE_MARKUP_PCT > 0
-    ? 1 + USAGE_MARKUP_PCT / 100
-    : 1;
-
 const TOPUP_AMOUNT_USD = 10; // Auto top-up when balance < $1
 const TOPUP_AMOUNT_CENTS = TOPUP_AMOUNT_USD * 100;
 
@@ -117,63 +107,64 @@ export async function trackUsage({
     totalCost: (userDoc.aiUsage?.totalCost || 0) + amount,
   };
 
-  // Admins never charged
+    // Admins never charged
   if (!shouldBill(userDoc.email)) {
     await userDoc.save();
     return;
   }
 
-  // If it's explicitly self-billed (amount typically 0), don't decrement balance
+  // Platform-billed sources only (twilio, twilio-voice, openai). Self-billed should pass amount=0.
   const platformBilled =
     source === "twilio" || source === "twilio-voice" || source === "openai";
 
-  // Hard freeze if too negative
-  if ((userDoc.usageBalance || 0) < -20) {
-    console.warn(`⛔ Usage frozen for ${userDoc.email} — balance too negative.`);
-    if (isProd)
-      throw new Error("Usage suspended. Please update your payment method.");
-    await userDoc.save();
-    return;
-  }
-
-  // ----- Decrement balance by the BILLED amount (raw * markup) -----
-  const billedAmount = platformBilled ? amount * MARKUP_FACTOR : 0;
-  userDoc.usageBalance = (userDoc.usageBalance || 0) - billedAmount;
-
   const canBill = !!userDoc.stripeCustomerId && !(DEV_SKIP_BILLING && isProd);
 
+  // Missing Stripe linkage in prod should block billing
   if (!userDoc.stripeCustomerId) {
-    if (isProd) {
+    if (isProd && platformBilled && amount > 0) {
       await userDoc.save();
       throw new Error("User missing or not linked to Stripe");
-    } else {
-      console.warn("[DEV billing] No Stripe customer; skipping auto top-up.");
     }
   }
 
-  // Auto-topup if needed (balance < $1)
-  if (userDoc.usageBalance < 1 && canBill) {
+  // ✅ GHL-style: accrue billed usage (NOT vendor cost) and invoice only when threshold reached.
+  // Amount is USD you charge (no markup).
+  const addCents = platformBilled && amount > 0 ? Math.max(0, Math.round(amount * 100)) : 0;
+
+  if (addCents > 0) {
+    userDoc.usageAccruedCents = (userDoc.usageAccruedCents || 0) + addCents;
+  }
+
+  // Invoice in $10 increments when accrued reaches threshold
+  if (platformBilled && canBill && (userDoc.usageAccruedCents || 0) >= TOPUP_AMOUNT_CENTS) {
     try {
-      await createAndChargeInvoice({
-        customerId: userDoc.stripeCustomerId!,
-        amountCents: TOPUP_AMOUNT_CENTS,
-        description: `Cove CRM usage top-up ($${TOPUP_AMOUNT_USD})`,
-      });
-      userDoc.usageBalance += TOPUP_AMOUNT_USD;
-      console.log(
-        `💰 Auto-topup: $${TOPUP_AMOUNT_USD} charged to ${userDoc.email}`,
-      );
+      const accrued = Number(userDoc.usageAccruedCents || 0);
+      const increments = Math.floor(accrued / TOPUP_AMOUNT_CENTS);
+      const billCents = increments * TOPUP_AMOUNT_CENTS;
+
+      if (billCents > 0) {
+        await createAndChargeInvoice({
+          customerId: userDoc.stripeCustomerId!,
+          amountCents: billCents,
+          description: `Cove CRM usage charge ($${(billCents / 100).toFixed(2)})`,
+        });
+
+        userDoc.usageAccruedCents = accrued - billCents;
+        userDoc.usageBilledTotalCents = (userDoc.usageBilledTotalCents || 0) + billCents;
+        userDoc.usageLastInvoicedAt = new Date();
+        console.log(`💳 Usage invoice: $${(billCents / 100).toFixed(2)} charged to ${userDoc.email}`);
+      }
     } catch (err) {
-      console.error("❌ Stripe auto top-up failed:", err);
+      console.error("❌ Stripe usage threshold charge failed:", err);
+      // Do not throw; keep accrued so we can retry next usage
     }
-  } else if (userDoc.usageBalance < 1 && !canBill && !isProd) {
-    console.warn(
-      "[DEV billing] Balance < $1 but billing disabled/unavailable; continuing for testing.",
-    );
+  } else if (!canBill && !isProd && platformBilled && (userDoc.usageAccruedCents || 0) >= TOPUP_AMOUNT_CENTS) {
+    console.warn("[DEV billing] Threshold reached but billing disabled/unavailable; accrued will remain until enabled.");
   }
 
   await userDoc.save();
 }
+
 
 /**
  * One-time A2P approval charge (idempotent)

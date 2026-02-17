@@ -1,8 +1,13 @@
 // pages/api/twilio/voice-status.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import dbConnect from "@/lib/mongooseConnect";
+import User from "@/models/User";
+import { trackUsage } from "@/lib/billing/trackUsage";
+import { getClientForUser } from "@/lib/twilio/getClientForUser";
 import Call from "@/models/Call";
 import InboundCall from "@/models/InboundCall";
+
+const VOICE_COST_PER_MIN = Number(process.env.CRM_VOICE_COST_PER_MIN || 0.015);
 
 /** Helpers */
 function firstDefined<T = any>(...vals: T[]): T | undefined {
@@ -37,6 +42,13 @@ function normStatus(s?: string) {
   if (x === "answered") return "in-progress";
   return x;
 }
+
+function ceilMinutesFromSeconds(seconds: number) {
+  if (!Number.isFinite(seconds) || seconds <= 0) return 0;
+  return Math.ceil(seconds / 60);
+}
+
+
 
 /** Twilio recording URL is often returned as .json; convert to a playable asset URL */
 function normalizeRecordingUrl(raw?: string): string | undefined {
@@ -157,6 +169,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // Load existing to preserve attribution
   const existing = await (Call as any).findOne({ callSid }).lean();
 
+  // ✅ GHL-style billing window
+  // Start billing when call starts truly 'ringing' (or in-progress if ringing never arrives)
+  const wantStartBill = (status === "ringing" || status === "in-progress") && !existing?.billStartAt;
+  const wantMarkRinging = status === "ringing" && !existing?.ringingAt;
+  const terminalForBilling = ["completed", "busy", "failed", "no-answer", "canceled"].includes(status);
+  const wantStopBill = terminalForBilling && !existing?.billStopAt;
+
   const userEmail = (existing?.userEmail || userEmailParam || inboundOwnerEmail || "").toLowerCase();
   const effDirection: "outbound" | "inbound" = (existing?.direction || direction) as any;
   const leadId = existing?.leadId ? String(existing.leadId) : inboundLeadId;
@@ -182,6 +201,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const set = prune({
     status,
+
+    ...(wantMarkRinging ? { ringingAt: existing?.ringingAt || now } : {}),
+    ...(wantStartBill ? { billStartAt: existing?.billStartAt || now } : {}),
+    ...(wantStopBill ? { billStopAt: existing?.billStopAt || now } : {}),
 
     // keep latest numbers (do NOT duplicate in $setOnInsert)
     ownerNumber: existing?.ownerNumber || from,
@@ -233,6 +256,36 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     await (Call as any).updateOne({ callSid }, { $set: set, $setOnInsert: setOnInsert }, { upsert: true });
+
+    // ✅ Finalize billing once, when terminal status arrives
+    // Idempotent: only bill if billedAt is not set
+    if (terminalForBilling) {
+      try {
+        const updated = await (Call as any).findOne({ callSid }).lean();
+        if (updated && !updated?.billedAt && updated?.billStartAt) {
+          const start = new Date(updated.billStartAt).getTime();
+          const stop = new Date(updated.billStopAt || now).getTime();
+          const seconds = Math.max(0, (stop - start) / 1000);
+          const mins = ceilMinutesFromSeconds(seconds);
+
+          if (mins > 0) {
+            const uEmail = String(updated.userEmail || "").toLowerCase();
+            if (uEmail) {
+              const user = await (User as any).findOne({ email: uEmail });
+              if (user) {
+                const { usingPersonal } = await getClientForUser(user.email);
+                if (!usingPersonal) {
+                  await trackUsage({ user, amount: mins * VOICE_COST_PER_MIN, source: "twilio-voice" });
+                  await (Call as any).updateOne({ callSid, billedAt: { $exists: false } }, { $set: { billedAt: now } });
+                }
+              }
+            }
+          }
+        }
+      } catch (e) {
+        console.error("[voice-status] billing finalize error", (e as any)?.message || e);
+      }
+    }
 
     console.log(
       `[voice-status] callSid=${callSid} status=${status} hadUserEmail=${Boolean(

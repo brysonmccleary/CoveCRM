@@ -9,6 +9,12 @@ export interface ICall extends Document {
   callSid: string;
   billedAt?: Date;
 
+  // ✅ dial session + GHL-style billing window
+  dialKey?: string;
+  ringingAt?: Date;
+  billStartAt?: Date;
+  billStopAt?: Date;
+
   // numbers + routing
   ownerNumber?: string;    // our Twilio DID that owns the call
   otherNumber?: string;    // the external/lead number
@@ -76,6 +82,12 @@ const CallSchema = new Schema<ICall>(
     callSid: { type: String, required: true, unique: true },
 
     billedAt: Date,
+
+    // ✅ dial session + GHL-style billing window
+    dialKey: String,
+    ringingAt: Date,
+    billStartAt: Date,
+    billStopAt: Date,
 
     ownerNumber: String,
     otherNumber: String,

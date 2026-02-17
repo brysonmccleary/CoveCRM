@@ -763,7 +763,7 @@ export default function DialSession() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       // ✅ ONLY CHANGE: send selected fromNumber so backend uses the right caller ID
-      body: JSON.stringify({ leadId, fromNumber }),
+      body: JSON.stringify({ leadId, fromNumber, dialKey: serverProgressKey || "" }),
     });
     if (!r.ok) {
       let msg = `Failed to start call`;
