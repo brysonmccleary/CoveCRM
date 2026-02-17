@@ -32,7 +32,9 @@ const MIN_SCHEDULE_LEAD_MINUTES = 15;
 const AI_TEST_MODE = process.env.AI_TEST_MODE === "1";
 function humanDelayMinutes() {
   if (AI_TEST_MODE) return 0;
-  const base = 3;
+  // Twilio scheduled sendAt must be >= 300 seconds (5 minutes) in the future.
+  // Keep confirmations human-like while always meeting Twilio's minimum.
+  const base = 5;
   const extra = Math.floor(Math.random() * 3); // 0,1,2 => 3–5
   return base + extra;
 }
