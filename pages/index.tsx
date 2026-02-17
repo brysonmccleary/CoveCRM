@@ -48,7 +48,7 @@ export default function Home() {
               Start Free Trial
             </button>
           </Link>
-          <p className="text-sm mt-4 opacity-70">7-day free trial</p>
+          <p className="text-sm mt-4 opacity-70">3-day free trial</p>
         </section>
 
         {/* Features + Flagship AI Section */}
@@ -149,6 +149,37 @@ export default function Home() {
             </div>
           </div>
 
+          {/* Flagship: AI Call Overview */}
+          <div className="bg-[#020617] text-white rounded-3xl px-8 py-10 md:px-12 md:py-12 shadow-xl flex flex-col md:flex-row items-start md:items-center justify-between gap-8">
+            <div className="max-w-xl">
+              <p className="text-xs tracking-[0.2em] uppercase text-gray-400 mb-3">
+                Flagship Feature
+              </p>
+              <h3 className="text-2xl md:text-3xl font-bold mb-4">
+                AI Call Overview – Every Call Auto-Summarized
+              </h3>
+              <p className="text-sm md:text-base text-gray-200 mb-5 leading-relaxed">
+                Every call is automatically summarized so you can scan what happened in seconds and know exactly what to do next.
+              </p>
+              <ul className="text-xs md:text-sm text-gray-300 space-y-2">
+                <li>• AI Call Overview: every call auto-summarized with key details, objections, next steps</li>
+                <li>• Saves time for agents and makes follow-up way faster.</li>
+                <li>• Stored directly inside the lead profile for quick review.</li>
+              </ul>
+            </div>
+
+            <div className="border border-gray-700/70 rounded-2xl px-6 py-5 text-xs md:text-sm text-gray-200 max-w-xs self-stretch flex flex-col justify-between">
+              <div>
+                <p className="text-[10px] tracking-[0.25em] uppercase text-gray-400 mb-2 text-center">
+                  Instant Call Recap
+                </p>
+                <p className="text-center leading-relaxed">
+                  Get the highlights, objections, and next steps without replaying recordings.
+                </p>
+              </div>
+            </div>
+          </div>
+
           {/* Core CRM Features Grid */}
           <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
             {[
@@ -214,7 +245,7 @@ export default function Home() {
               <li className="mb-2">
                 ✔ Includes dialer, texting, and lead management
               </li>
-              <li className="mb-2">✔ 7-day free trial included</li>
+              <li className="mb-2">✔ 3-day free trial included</li>
             </ul>
             <p className="text-lg font-medium mb-4">
               AI Upgrade (optional): +$50/month

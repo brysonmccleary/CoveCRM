@@ -68,11 +68,12 @@ async function resolveCouponId(codeText: string): Promise<string | null> {
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") return res.status(405).end("Method not allowed");
 
-  const { email: bodyEmail, aiUpgrade, affiliateEmail, promoCode } = (req.body || {}) as {
+  const { email: bodyEmail, aiUpgrade, affiliateEmail, promoCode, trialDays } = (req.body || {}) as {
     email?: string;
     aiUpgrade?: boolean;
     affiliateEmail?: string;
     promoCode?: string;
+    trialDays?: number;
   };
 
   try {
@@ -153,6 +154,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       expand: ["latest_invoice.payment_intent"],
     };
 
+    // Trial enforcement (ONLY when UI requests trial)
+    const trialDaysNum = typeof trialDays === "number" ? trialDays : Number(trialDays || 0);
+    if (trialDaysNum > 0) {
+      // Do NOT charge the base subscription until trial ends.
+      (params as any).trial_period_days = trialDaysNum;
+    }
+
+
     // Attach discount at subscription-time (Stripe-preferred, works with product-restricted coupons)
     if (promotionCodeId) {
       params.discounts = [{ promotion_code: promotionCodeId }];
@@ -166,8 +175,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const clientSecret =
       (latest && (latest as any).payment_intent && (latest as any).payment_intent.client_secret) || null;
 
+    // If trial produced no PaymentIntent, collect a card via SetupIntent so usage can still bill.
+    let setupClientSecret: string | null = null;
+    if (!clientSecret) {
+      const trialDaysNum = typeof trialDays === "number" ? trialDays : Number(trialDays || 0);
+      if (trialDaysNum > 0) {
+        const si = await stripe.setupIntents.create({
+          customer: customerId,
+          payment_method_types: ["card"],
+          usage: "off_session",
+          metadata: {
+            userId: userIdMeta,
+            subscriptionId: subscription.id,
+            email: effectiveEmail,
+          },
+        });
+        setupClientSecret = si.client_secret || null;
+      }
+    }
+
     return res.status(200).json({
       clientSecret,
+      setupClientSecret,
       discount: discountLabel,
       discountAmount,
       promoCode: enteredCode || null,

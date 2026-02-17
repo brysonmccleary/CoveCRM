@@ -9,6 +9,11 @@ interface CheckoutFormProps {
   affiliateEmail?: string;
   promoCode?: string;
   discount?: string;
+
+  // Trial support
+  clientSecret?: string | null;
+  mode?: "payment" | "setup";
+  subscriptionId?: string | null;
 }
 
 export default function CheckoutForm({
@@ -17,6 +22,9 @@ export default function CheckoutForm({
   affiliateEmail,
   promoCode,
   discount,
+  clientSecret,
+  mode = "payment",
+  subscriptionId,
 }: CheckoutFormProps) {
   const stripe = useStripe();
   const elements = useElements();
@@ -41,8 +49,59 @@ export default function CheckoutForm({
     setLoading(true);
 
     try {
+      if (!clientSecret) {
+        toast.error("Missing Stripe client secret.");
+        return;
+      }
+
+      if (mode === "setup") {
+        const { error, setupIntent } = await stripe.confirmCardSetup(
+          clientSecret,
+          {
+            payment_method: {
+              card: cardElement,
+              billing_details: { email },
+            },
+          }
+        );
+
+        if (error) {
+          toast.error(error.message || "Card setup failed.");
+          return;
+        }
+
+        if (setupIntent?.status === "succeeded") {
+          const pm = (setupIntent as any).payment_method;
+          if (!pm) {
+            toast.error("Card saved, but payment method missing.");
+            return;
+          }
+
+          try {
+            await fetch("/api/stripe/set-default-payment-method", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                email,
+                subscriptionId,
+                paymentMethodId: pm,
+              }),
+            });
+          } catch {
+            // non-blocking
+          }
+
+          toast.success("✅ Trial started! Card saved for usage billing.");
+          router.push("/dashboard");
+        } else {
+          toast.error("Card setup did not complete.");
+        }
+
+        return;
+      }
+
       const { error, paymentIntent } = await stripe.confirmCardPayment(
-        (stripe as any)._options.clientSecret,
+        clientSecret,
         {
           payment_method: {
             card: cardElement,

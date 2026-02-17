@@ -194,7 +194,7 @@ export default function SignUp() {
           </button>
 
           <p className="text-xs text-center text-gray-400 mt-3">
-            7-day free trial • CRM access is free, phone usage may still bill
+            3-day free trial • CRM access is free, phone usage may still bill
           </p>
         </form>
       </div>
