@@ -15,6 +15,7 @@ import { getTimezoneFromState } from "@/utils/timezone";
 import { DateTime } from "luxon";
 import { sendAppointmentBookedEmail } from "@/lib/email";
 import { sendSms } from "@/lib/twilio/sendSMS"; // thread-sticky sender for confirmation
+import { enforceBookingSettings } from "@/lib/booking/enforceBookingSettings";
 
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID!;
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET!;
@@ -377,6 +378,11 @@ export default async function handler(
       });
 
       // Fake a successful calendar response
+      const agentZone =
+        (user as any)?.bookingSettings?.timezone || "America/Los_Angeles";
+      const agentLocalStart = clientStart.setZone(agentZone);
+      const agentLocalEnd = clientEnd.setZone(agentZone);
+
       res.status(200).json({
         success: true,
         eventId: "dev-stub-event",
@@ -384,9 +390,9 @@ export default async function handler(
         clientStartISO: clientStart.toISO(),
         clientEndISO: clientEnd.toISO(),
         clientZone,
-        agentLocalStartISO: clientStart.toISO(),
-        agentLocalEndISO: clientEnd.toISO(),
-        agentZone: (user as any)?.bookingSettings?.timezone || "America/Los_Angeles",
+        agentLocalStartISO: agentLocalStart.toISO(),
+        agentLocalEndISO: agentLocalEnd.toISO(),
+        agentZone,
         leadId: lead._id,
         stub: true,
       });
@@ -495,6 +501,34 @@ export default async function handler(
   }
 
   try {
+    // ---- Enforce agent booking settings (working hours, step, busy, max/day) ----
+    try {
+      const out = await enforceBookingSettings({
+        calendar,
+        calendarId,
+        bookingSettings: (user as any)?.bookingSettings,
+        requestedStart: clientStart, // instant is client-facing; enforcer converts to agent tz internally
+        durationMinutes: dur,
+        outputZone: clientZone, // suggestions should be lead/client facing
+        suggestionLimit: 5,
+      });
+
+      if (!out.ok) {
+        return res.status(409).json({
+          success: false,
+          message: "Requested time unavailable",
+          reason: out.reason || "invalid",
+          ...(Array.isArray(out.suggestions) ? { suggestions: out.suggestions } : {}),
+        } as any);
+      }
+    } catch (e: any) {
+      console.warn(
+        "[BOOK-APPOINTMENT] Booking enforcement failed (non-blocking):",
+        e?.message || e,
+      );
+      // If enforcement fails unexpectedly, do NOT block booking to avoid breaking launch flows.
+    }
+
     // ---- Insert Calendar Event (client TZ; Google converts for agent) ----
     const requestBody = {
       summary: `Call with ${name}`,
@@ -516,8 +550,14 @@ export default async function handler(
     });
 
     // ---- Save booking metadata -------------------------------------------
+    // NOTE: Many leads are phone-only. Also, some deployed bundles may still
+    // have leadEmail marked required, so we guarantee a non-empty value here.
+    const leadEmailSafe =
+      typeof email === "string" && email.trim()
+        ? email.trim()
+        : `noemail+${to.slice(-10)}@covecrm.local`;
     await Booking.create({
-      leadEmail: email || "",
+      leadEmail: leadEmailSafe,
       leadPhone: to,
       agentEmail: user.email,
       agentPhone: (user as any)?.phoneNumber || "",
