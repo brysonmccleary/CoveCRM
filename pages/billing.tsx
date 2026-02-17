@@ -33,9 +33,11 @@ const RETURN_PATH =
 
 export default function BillingPage() {
   const router = useRouter();
-  const { email, ai, affiliateEmail, promoCode } = router.query;
+  const { email, ai, affiliateEmail, promoCode, trial } = router.query;
 
   const [clientSecret, setClientSecret] = useState<string | null>(null);
+  const [setupClientSecret, setSetupClientSecret] = useState<string | null>(null);
+  const [intentMode, setIntentMode] = useState<"payment" | "setup">("payment");
   const [subscriptionId, setSubscriptionId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -65,6 +67,11 @@ export default function BillingPage() {
     [promoCode],
   );
 
+  const isTrial = useMemo(() => {
+    const v = Array.isArray(trial) ? trial[0] : trial;
+    return v === "1" || v === "true";
+  }, [trial]);
+
   useEffect(() => {
     // Wait until we have email (required by your API)
     if (!emailStr) return;
@@ -81,6 +88,7 @@ export default function BillingPage() {
             aiUpgrade,
             affiliateEmail: affiliateEmailStr || undefined,
             promoCode: promoCodeStr || undefined, // server treats empty as "no code"
+            trialDays: isTrial ? 3 : 0,
           }),
         });
 
@@ -95,6 +103,8 @@ export default function BillingPage() {
         if (cancelled) return;
 
         setClientSecret(data.clientSecret ?? null);
+        setSetupClientSecret(data.setupClientSecret ?? null);
+        setIntentMode(data.clientSecret ? "payment" : (data.setupClientSecret ? "setup" : "payment"));
         setSubscriptionId(data.subscriptionId ?? null);
 
         // Optional UI info
@@ -105,7 +115,7 @@ export default function BillingPage() {
           setTotalAfter(data.totalAfterDiscount);
 
         // If clientSecret is null, Stripe made a $0 invoice: auto-success → redirect
-        if (!data.clientSecret) {
+        if (!data.clientSecret && !data.setupClientSecret) {
           toast.success("Subscription started! Redirecting…");
           setTimeout(() => {
             if (typeof window !== "undefined")
@@ -123,21 +133,20 @@ export default function BillingPage() {
     return () => {
       cancelled = true;
     };
-  }, [emailStr, aiUpgrade, affiliateEmailStr, promoCodeStr]);
+  }, [emailStr, aiUpgrade, affiliateEmailStr, promoCodeStr, isTrial]);
 
-  const elementsOptions = useMemo<StripeElementsOptions | undefined>(
-    () =>
-      clientSecret
-        ? {
-            clientSecret,
-            appearance: {
-              // must be a string literal, not string
-              labels: "floating" as const,
-            },
-          }
-        : undefined,
-    [clientSecret],
-  );
+  const elementsOptions = useMemo<StripeElementsOptions | undefined>(() => {
+    const activeSecret = intentMode === "setup" ? setupClientSecret : clientSecret;
+    return activeSecret
+      ? {
+          clientSecret: activeSecret,
+          appearance: {
+            // must be a string literal, not string
+            labels: "floating" as const,
+          },
+        }
+      : undefined;
+  }, [clientSecret, setupClientSecret, intentMode]);
 
   // Render
   return (
@@ -160,7 +169,7 @@ export default function BillingPage() {
         )}
 
         {/* Payment required */}
-        {!loading && clientSecret && elementsOptions && (
+        {!loading && (clientSecret || setupClientSecret) && elementsOptions && (
           <>
             <div className="mb-4 text-center">
               {promoCodeStr && (
@@ -191,13 +200,16 @@ export default function BillingPage() {
                 affiliateEmail={affiliateEmailStr}
                 discount={discount}
                 promoCode={promoCodeStr}
+                clientSecret={intentMode === "setup" ? setupClientSecret : clientSecret}
+                mode={intentMode}
+                subscriptionId={subscriptionId}
               />
             </Elements>
           </>
         )}
 
         {/* Zero-amount success path (no clientSecret) */}
-        {!loading && !clientSecret && (
+        {!loading && !clientSecret && !setupClientSecret && (
           <div className="text-center space-y-2">
             {promoCodeStr && (
               <p className="text-green-600 dark:text-green-400 font-semibold">

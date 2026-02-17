@@ -165,6 +165,15 @@ export interface IUser {
 
   usageBalance?: number;
 
+  /**
+   * ✅ Usage billing (GHL-style): accrue billed usage and charge $10 when threshold reached.
+   * - usageAccruedCents: unbilled running total (cents)
+   * - usageBilledTotalCents: lifetime billed total (cents)
+   */
+  usageAccruedCents?: number;
+  usageBilledTotalCents?: number;
+  usageLastInvoicedAt?: Date;
+
   notifications?: {
     emailReminders?: boolean;
     dripAlerts?: boolean;
@@ -376,6 +385,11 @@ const UserSchema = new Schema<IUser>({
   aiDialerAutoReloadArmed: { type: Boolean, default: false },
 
   usageBalance: { type: Number, default: 0 },
+
+  // ✅ Usage billing accrual (charge in $10 thresholds)
+  usageAccruedCents: { type: Number, default: 0 },
+  usageBilledTotalCents: { type: Number, default: 0 },
+  usageLastInvoicedAt: { type: Date, default: null },
 
   notifications: {
     emailReminders: { type: Boolean, default: true },

@@ -7,6 +7,13 @@ export interface ICall extends Document {
   leadId?: Types.ObjectId | string;
   direction: "outbound" | "inbound";
   callSid: string;
+  billedAt?: Date;
+
+  // ✅ dial session + GHL-style billing window
+  dialKey?: string;
+  ringingAt?: Date;
+  billStartAt?: Date;
+  billStopAt?: Date;
 
   // numbers + routing
   ownerNumber?: string;    // our Twilio DID that owns the call
@@ -73,6 +80,14 @@ const CallSchema = new Schema<ICall>(
     leadId: { type: Schema.Types.Mixed },
     direction: { type: String, enum: ["outbound", "inbound"], default: "outbound" },
     callSid: { type: String, required: true, unique: true },
+
+    billedAt: Date,
+
+    // ✅ dial session + GHL-style billing window
+    dialKey: String,
+    ringingAt: Date,
+    billStartAt: Date,
+    billStopAt: Date,
 
     ownerNumber: String,
     otherNumber: String,

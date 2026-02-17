@@ -56,11 +56,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const email = String(session?.user?.email ?? "").toLowerCase();
   if (!email) return res.status(401).json({ message: "Unauthorized" });
 
-  const { leadId, fromNumber, from } = (req.body || {}) as {
+  const { leadId, fromNumber, from, dialKey } = (req.body || {}) as {
     leadId?: string;
     // allow either key so UI can send either
     fromNumber?: string;
     from?: string;
+    dialKey?: string;
   };
 
   if (!leadId) return res.status(400).json({ message: "Missing leadId" });
@@ -134,7 +135,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           to,
           from: chosenFrom,
           createdAt: now,
-          startedAt: now, // treat placement as "started" for metrics
+          startedAt: now, // treat placement as "started" for metrics,
+          dialKey: (typeof dialKey === "string" && dialKey.trim()) ? dialKey.trim() : undefined
         },
         $set: { lastStatus: "initiated" },
       },
