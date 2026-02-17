@@ -7,7 +7,7 @@ export default function PrivacyPolicy() {
         <p className="mb-4">Effective Date: July 22, 2025</p>
 
         <p className="mb-6">
-          CRM Cove (&quot;CoveCRM&quot;, &quot;we&quot;, &quot;us&quot;, or
+          Cove CRM (&quot;CoveCRM&quot;, &quot;we&quot;, &quot;us&quot;, or
           &quot;our&quot;) respects your privacy. This policy explains how we
           collect, use, share, and protect your information when you use
           covecrm.com and related services.

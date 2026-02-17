@@ -16,7 +16,7 @@ export default function Success() {
     <div className="max-w-md mx-auto mt-20 p-6 bg-white rounded shadow text-center">
       <h1 className="text-2xl font-bold mb-4">Success!</h1>
       <p className="mb-4">
-        Thank you for subscribing to <strong>CRM Cove</strong>. Your account is
+        Thank you for subscribing to <strong>Cove CRM</strong>. Your account is
         now active.
       </p>
       <button

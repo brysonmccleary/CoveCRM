@@ -4,7 +4,7 @@ export default function AcceptableUsePolicy() {
       <h1 className="text-3xl font-bold mb-4">Acceptable Use Policy</h1>
       <p className="mb-4">Effective Date: July 22, 2025</p>
       <p className="mb-4">
-        By using CRM Cove, you agree to use the platform responsibly and in
+        By using Cove CRM, you agree to use the platform responsibly and in
         accordance with all applicable laws and regulations.
       </p>
 

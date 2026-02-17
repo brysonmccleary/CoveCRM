@@ -4,7 +4,7 @@ export default function RefundPolicy() {
       <h1 className="text-3xl font-bold mb-4">Refund Policy</h1>
       <p className="mb-4">Effective Date: July 22, 2025</p>
       <p className="mb-4">
-        All subscriptions to CRM Cove are billed in advance (monthly or
+        All subscriptions to Cove CRM are billed in advance (monthly or
         annually) via Stripe. By purchasing a subscription, you agree to the
         billing terms.
       </p>

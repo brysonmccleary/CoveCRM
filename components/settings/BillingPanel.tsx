@@ -106,7 +106,7 @@ export default function BillingPanel() {
       {/* Current Plan */}
       <div className="border rounded p-4">
         <h3 className="font-semibold text-lg">Current Plan</h3>
-        <p>🟢 CRM Cove – {billingAmount || "Loading..."}</p>
+        <p>🟢 Cove CRM – {billingAmount || "Loading..."}</p>
         <p className="text-sm text-gray-500">Includes full CRM access.</p>
       </div>
 

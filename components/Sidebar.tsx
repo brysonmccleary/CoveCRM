@@ -63,13 +63,13 @@ export default function Sidebar() {
         <div className="flex items-center gap-2 mb-6">
           <Image
             src="/logo.png"
-            alt="CRM Cove Logo"
+            alt="Cove CRM Logo"
             width={32}
             height={32}
             className="rounded"
             priority
           />
-          <h1 className="text-xl font-bold">CRM Cove</h1>
+          <h1 className="text-xl font-bold">Cove CRM</h1>
         </div>
 
         <nav className="space-y-2">

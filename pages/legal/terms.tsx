@@ -4,13 +4,13 @@ export default function Terms() {
       <h1 className="text-3xl font-bold mb-4">Terms of Service</h1>
       <p className="mb-4">Effective Date: July 22, 2025</p>
       <p className="mb-4">
-        These Terms of Service govern your use of the CRM Cove platform. By
+        These Terms of Service govern your use of the Cove CRM platform. By
         creating an account, you agree to these terms.
       </p>
 
       <h2 className="text-xl font-semibold mt-6 mb-2">1. Use of Service</h2>
       <p className="mb-4">
-        You agree to use CRM Cove lawfully and in compliance with all marketing,
+        You agree to use Cove CRM lawfully and in compliance with all marketing,
         privacy, and telecommunication laws including TCPA, CAN-SPAM, and A2P
         10DLC regulations.
       </p>
@@ -49,7 +49,7 @@ export default function Terms() {
         6. Limitation of Liability
       </h2>
       <p className="mb-4">
-        CRM Cove is not responsible for lost data, leads, or income due to
+        Cove CRM is not responsible for lost data, leads, or income due to
         misuse or technical failure.
       </p>
     </div>

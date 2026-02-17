@@ -129,7 +129,7 @@ function InnerApp({
   const pageContent = (
     <>
       <Head>
-        <title>CRM Cove</title>
+        <title>Cove CRM</title>
       </Head>
 
       {/* Auth-only banners */}

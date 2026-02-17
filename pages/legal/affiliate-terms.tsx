@@ -6,7 +6,7 @@ export default function AffiliateTerms() {
 
       <h2 className="text-xl font-semibold mt-6 mb-2">1. Overview</h2>
       <p className="mb-4">
-        CRM Cove offers an affiliate program that pays $25 per referred user who
+        Cove CRM offers an affiliate program that pays $25 per referred user who
         signs up for a paid subscription. Payouts are processed weekly through
         Stripe Connect, with a minimum payout threshold of $50.
       </p>
@@ -22,7 +22,7 @@ export default function AffiliateTerms() {
         3. Promotional Requirements
       </h2>
       <ul className="list-disc ml-6 mb-4">
-        <li>Affiliates must not misrepresent CRM Cove in any way.</li>
+        <li>Affiliates must not misrepresent Cove CRM in any way.</li>
         <li>
           Deceptive ads, fake testimonials, or misleading claims are strictly
           prohibited.

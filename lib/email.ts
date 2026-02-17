@@ -259,7 +259,7 @@ export function renderLeadBookingEmail(opts: {
       </ul>
       ${description ? `<p>${escapeHtml(description)}</p>` : ""}
       ${eventUrl ? `<p><a href="${eventUrl}">View event</a></p>` : ""}
-      <p>Talk soon,<br/>CRM Cove</p>
+      <p>Talk soon,<br/>Cove CRM</p>
     </div>
   `;
 }
@@ -306,7 +306,7 @@ export function renderAgentBookingEmail(opts: {
       </ul>
       ${description ? `<p>${escapeHtml(description)}</p>` : ""}
       ${eventUrl ? `<p><a href="${eventUrl}">View calendar event</a></p>` : ""}
-      <p>— CRM Cove</p>
+      <p>— Cove CRM</p>
     </div>
   `;
 }
@@ -345,7 +345,7 @@ export function renderAgentAppointmentNotice(opts: {
             : ""
         }
       </table>
-      <p style="margin:16px 0 0 0">Have a great call! — CRM Cove</p>
+      <p style="margin:16px 0 0 0">Have a great call! — Cove CRM</p>
     </div>
   `;
 }
@@ -402,7 +402,7 @@ function renderPasswordResetEmail(resetUrl: string) {
         </a>
       </p>
       <p>This link will expire in 1 hour. If you didn’t request this, you can safely ignore this email.</p>
-      <p>— CRM Cove</p>
+      <p>— Cove CRM</p>
     </div>
   `;
 }
@@ -411,7 +411,7 @@ export async function sendPasswordResetEmail(opts: {
   to: string;
   resetUrl: string;
 }): Promise<SendEmailResult> {
-  const subject = "Reset your CRM Cove password";
+  const subject = "Reset your Cove CRM password";
   const html = renderPasswordResetEmail(opts.resetUrl);
   return sendViaResend({
     to: opts.to,

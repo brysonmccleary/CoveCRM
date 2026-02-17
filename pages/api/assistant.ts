@@ -22,7 +22,7 @@ export default async function handler(
         {
           role: "system",
           content:
-            "You are CRM Cove’s AI assistant. Always provide step-by-step, clear, actionable answers tailored to CRM Cove features only. Never mention generic CRMs.",
+            "You are Cove CRM’s AI assistant. Always provide step-by-step, clear, actionable answers tailored to Cove CRM features only. Never mention generic CRMs.",
         },
         ...messages,
       ],

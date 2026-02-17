@@ -45,7 +45,7 @@ export default function ResetPasswordPage() {
   return (
     <>
       <Head>
-        <title>Reset Password — CRM Cove</title>
+        <title>Reset Password — Cove CRM</title>
       </Head>
       <div className="min-h-screen flex items-center justify-center bg-neutral-950 text-white">
         <form

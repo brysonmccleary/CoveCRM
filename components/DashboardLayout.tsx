@@ -75,13 +75,13 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           <div className="flex items-center gap-2 mb-6">
             <Image
               src="/logo.png"
-              alt="CRM Cove Logo"
+              alt="Cove CRM Logo"
               width={32}
               height={32}
               className="rounded"
               priority
             />
-            <h1 className="text-xl font-bold text-white">CRM Cove</h1>
+            <h1 className="text-xl font-bold text-white">Cove CRM</h1>
           </div>
           <nav className="space-y-2">
             {links.map((link) => (

@@ -112,7 +112,7 @@ export default function SignUp() {
       <div className="max-w-md w-full p-6 rounded-2xl shadow-xl
                       bg-[var(--cove-card)] text-white border border-[#1e293b]">
         <h1 className="text-3xl font-bold mb-6 text-center">
-          Create Your CRM Cove Account
+          Create Your Cove CRM Account
         </h1>
 
         <form onSubmit={handleSubmit} className="space-y-5">

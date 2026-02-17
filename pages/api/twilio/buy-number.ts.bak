@@ -40,7 +40,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // ✅ Ensure Messaging Service (update without running validators)
     if (!a2p.messagingServiceSid) {
       const newService = await twilioClient.messaging.services.create({
-        friendlyName: `CRM Cove – ${user.name || "User"}`,
+        friendlyName: `Cove CRM – ${user.name || "User"}`,
         useInboundWebhookOnNumber: true,
         statusCallback: `${process.env.NEXT_PUBLIC_BASE_URL}/api/twilio/status`,
       });

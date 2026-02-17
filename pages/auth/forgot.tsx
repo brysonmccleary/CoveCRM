@@ -31,7 +31,7 @@ export default function ForgotPassword() {
   return (
     <>
       <Head>
-        <title>Forgot Password — CRM Cove</title>
+        <title>Forgot Password — Cove CRM</title>
       </Head>
       <div className="flex items-center justify-center min-h-screen bg-[#0f172a]">
         <div className="bg-[#1e293b] p-8 rounded shadow-md w-full max-w-md text-white">

@@ -28,8 +28,8 @@ export default async function handler(
             currency: "usd",
             unit_amount: Math.round(Number(price) * 100), // to cents
             product_data: {
-              name: "CRM Cove Monthly Subscription",
-              description: "Full access to CRM Cove with affiliate system",
+              name: "Cove CRM Monthly Subscription",
+              description: "Full access to Cove CRM with affiliate system",
             },
             recurring: { interval: "month" },
           },

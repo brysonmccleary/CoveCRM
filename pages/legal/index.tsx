@@ -5,7 +5,7 @@ export default function LegalCenter() {
     <div className="p-6 max-w-4xl mx-auto">
       <h1 className="text-3xl font-bold mb-6">Legal Center</h1>
       <p className="mb-6 text-lg">
-        Welcome to the CRM Cove Legal Center. Below you’ll find all our current
+        Welcome to the Cove CRM Legal Center. Below you’ll find all our current
         policies, terms, and compliance information. We’re committed to
         transparency, user rights, and platform protection.
       </p>

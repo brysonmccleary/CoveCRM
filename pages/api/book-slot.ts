@@ -49,7 +49,7 @@ export default async function handler(
       calendarId: user.calendarId,
       requestBody: {
         summary: `Meeting with ${name}`,
-        description: `Booked via CRM Cove`,
+        description: `Booked via Cove CRM`,
         start: {
           dateTime: start.toISOString(),
           timeZone: tz,

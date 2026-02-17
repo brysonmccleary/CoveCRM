@@ -10,7 +10,7 @@ export default function Document() {
         <meta name="theme-color" content="#0f172a" />
         <meta
           name="description"
-          content="CRM Cove – The Ultimate Life Insurance Sales CRM"
+          content="Cove CRM – The Ultimate Life Insurance Sales CRM"
         />{" "}
         {/* ✅ Updated brand name */}
         <meta name="viewport" content="width=device-width, initial-scale=1" />

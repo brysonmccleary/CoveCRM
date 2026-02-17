@@ -7,10 +7,10 @@ export default function Home() {
   return (
     <>
       <Head>
-        <title>CRM Cove – Your Sales Command Center</title>
+        <title>Cove CRM – Your Sales Command Center</title>
         <meta
           name="description"
-          content="Close more deals with CRM Cove. Built for life insurance telesales agents. Includes AI automation, calling, texting, and Google Calendar booking."
+          content="Close more deals with Cove CRM. Built for life insurance telesales agents. Includes AI automation, calling, texting, and Google Calendar booking."
         />
       </Head>
 
@@ -18,8 +18,8 @@ export default function Home() {
         {/* Nav */}
         <nav className="flex justify-between items-center py-6 px-6 shadow-sm">
           <div className="flex items-center space-x-2">
-            <Image src="/logo.png" alt="CRM Cove Logo" width={32} height={32} />
-            <h1 className="text-2xl font-bold text-blue-600">CRM Cove</h1>
+            <Image src="/logo.png" alt="Cove CRM Logo" width={32} height={32} />
+            <h1 className="text-2xl font-bold text-blue-600">Cove CRM</h1>
           </div>
           <div className="space-x-4">
             <Link href="/login">
@@ -235,7 +235,7 @@ export default function Home() {
             Simple, transparent pricing
           </h2>
           <div className="max-w-3xl mx-auto bg-white rounded-2xl shadow-lg p-10">
-            <h3 className="text-2xl font-bold mb-2">CRM Cove</h3>
+            <h3 className="text-2xl font-bold mb-2">Cove CRM</h3>
             <p className="text-4xl font-bold mb-2">$199.99/mo</p>
             <p className="text-sm text-gray-500 mb-4">
               + tax &amp; call/SMS usage
@@ -264,7 +264,7 @@ export default function Home() {
             Ready to get started?
           </h2>
           <p className="text-lg mb-8">
-            Join hundreds of top agents using CRM Cove to dominate telesales.
+            Join hundreds of top agents using Cove CRM to dominate telesales.
           </p>
           <Link href="/signup">
             <button className="bg-white text-black px-8 py-3 rounded-lg font-semibold hover:bg-gray-100 cursor-pointer">
@@ -290,7 +290,7 @@ export default function Home() {
               Terms of Service
             </Link>
           </div>
-          <p>© {new Date().getFullYear()} CRM Cove. All rights reserved.</p>
+          <p>© {new Date().getFullYear()} Cove CRM. All rights reserved.</p>
         </footer>
       </main>
     </>
