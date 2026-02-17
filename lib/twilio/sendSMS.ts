@@ -25,7 +25,7 @@ const DEFAULT_MPS = Math.max(
   1,
   parseInt(process.env.TWILIO_DEFAULT_MPS || "1", 10) || 1,
 );
-const SMS_COST = 0.0075;
+const SMS_COST = 0.02; // $ billed per SMS segment (platform price)
 
 const QUIET_START_HOUR = 21;
 const QUIET_END_HOUR = 8;
@@ -387,7 +387,8 @@ async function sendCore(
     if (usingPersonal || (user as any).billingMode === "self") {
       await trackUsage({ user, amount: 0, source: "twilio-self" as any });
     } else {
-      await trackUsage({ user, amount: SMS_COST, source: "twilio" });
+      const seg = Math.max(1, Number((tw as any)?.numSegments || 1) || 1);
+      await trackUsage({ user, amount: SMS_COST * seg, source: "twilio" });
     }
     const newStatus = (tw.status as string) || "accepted";
     await Message.findByIdAndUpdate(preRow._id, {
