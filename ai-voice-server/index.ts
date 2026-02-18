@@ -3853,7 +3853,7 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
         voice: state.context!.voiceProfile.openAiVoiceId || "alloy",
         temperature: 0.6,
         input_audio_format: "g711_ulaw",
-        output_audio_format: "pcm16",
+        output_audio_format: "g711_ulaw",
         input_audio_transcription: {
           model: "gpt-4o-mini-transcribe",
           language: "en",
@@ -3995,15 +3995,6 @@ async function handleOpenAiEvent(
     return;
   }
 
-  if (
-    t === "response.audio.done" ||
-    t === "response.done" ||
-    t === "response.output_item.done"
-  ) {
-    state.lastAiDoneAtMs = Date.now();
-    state.outboundOpenAiDone = true;
-    // do NOT return — allow existing cleanup logic
-  }
 
 
   try {
@@ -5163,15 +5154,14 @@ async function handleOpenAiEvent(
     }
 
     if (payloadBase64) {
-      const mulawBase64 = pcm16ToMulawBase64(payloadBase64);
-      const mulawBytes = Buffer.from(mulawBase64, "base64");
+      // ✅ OpenAI is configured to return g711_ulaw now (Twilio-ready). Do NOT convert.
+      const mulawBytes = Buffer.from(payloadBase64, "base64");
 
       if (!state.debugLoggedFirstOutputAudio) {
         console.log("[AI-VOICE] First OpenAI audio delta received", {
           streamSid,
-          pcmLength: payloadBase64.length,
-          mulawBase64Len: mulawBase64.length,
-          mulawBytesLen: mulawBytes.length,
+          ulawB64Len: payloadBase64.length,
+          ulawBytesLen: mulawBytes.length,
         });
         state.debugLoggedFirstOutputAudio = true;
       }
@@ -5185,22 +5175,18 @@ async function handleOpenAiEvent(
     }
   }
 
-  const isResponseDone =
-    t === "response.completed" ||
-    t === "response.done" ||
-    t === "response.output_audio.done" ||
-    t === "response.audio.done" ||
-    t === "response.cancelled" ||
-    t === "response.interrupted";
+  // ✅ IMPORTANT: Only finalize the response when AUDIO is done (or we cancelled/interrupted).
+  // response.done/response.completed/output_item.done can arrive before the final audio deltas.
+  // If we flip outboundOpenAiDone early, the guard above will drop remaining audio and cut off mid-sentence.
+  const isAudioDone = t === "response.audio.done" || t === "response.output_audio.done";
+  const isTerminalNoMoreAudio = t === "response.cancelled" || t === "response.interrupted";
+  const shouldFinalize = isAudioDone || isTerminalNoMoreAudio;
 
-  const isAudioItemDone =
-    t === "response.output_item.done" &&
-    (event?.item?.type === "output_audio" ||
-      event?.output_item?.type === "output_audio" ||
-      event?.item?.content_type === "audio" ||
-      event?.output_item?.content_type === "audio");
+  if (shouldFinalize) {
+    if (isAudioDone) {
+      state.lastAiDoneAtMs = Date.now();
+    }
 
-  if (isResponseDone || isAudioItemDone) {
     setWaitingForResponse(state, false, `OpenAI ${t}`);
     setResponseInFlight(state, false, `OpenAI ${t}`);
     state.outboundOpenAiDone = true;
