@@ -3616,8 +3616,9 @@ function isLikelySilenceMulawBase64(payloadB64: string): boolean {
     // Tuned to be conservative: classify comfort-noise as silence, but keep real speech as non-silence.
     return avgAbs < 900 && quietRatio >= 0.85;
   } catch {
-    // If decoding fails, do NOT treat it as silence (safer for barge-in behavior)
-    return false;
+    // COST SAFETY: if silence detection fails on a frame, treat it as silence.
+    // Otherwise we can end up streaming continuous "non-silence" to OpenAI and costs explode.
+    return true;
   }
 }
 
@@ -3791,18 +3792,35 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
       return;
     }
 
-const isSilenceToSend = isLikelySilenceMulawBase64(payload);
+    const isSilenceToSend = isLikelySilenceMulawBase64(payload);
     if (isSilenceToSend) {
       // ✅ COST CUT: Do NOT stream continuous idle silence.
       // Only allow sparse silence for ~1.2s after user speech so server_vad can finalize.
       // If user is actively speaking, do NOT throttle silence.
-      if (!state.userSpeechInProgress) {
-        const nowMs = Date.now();
-        const stopAt = Number((state as any).lastUserSpeechStoppedAtMs || 0);
-        const startedAt = Number((state as any).lastUserSpeechStartedAtMs || 0);
+
+      const nowMs = Date.now();
+      const startedAt = Number((state as any).lastUserSpeechStartedAtMs || 0);
+      const stopAt = Number((state as any).lastUserSpeechStoppedAtMs || 0);
+
+      // "Actually speaking" means: we saw speech start very recently AND we have NOT seen a stop after it.
+      // This avoids getting stuck in userSpeechInProgress=true forever due to comfort-noise / missing stop events.
+      const speechIsActuallyActive =
+        startedAt > 0 &&
+        (nowMs - startedAt) <= 2500 &&
+        (stopAt <= 0 || stopAt < startedAt);
+
+      // Safety reset: if OpenAI never sends speech_stopped, do NOT let userSpeechInProgress stay true forever.
+      try {
+        if (state.userSpeechInProgress && !speechIsActuallyActive && startedAt > 0 && (nowMs - startedAt) > 2500) {
+          state.userSpeechInProgress = false;
+        }
+      } catch {}
+
+      if (!speechIsActuallyActive) {
         const recentlySpoke =
           (stopAt > 0 && (nowMs - stopAt) <= 1200) ||
           (startedAt > 0 && (nowMs - startedAt) <= 1200);
+
         if (!recentlySpoke) {
           return;
         }
