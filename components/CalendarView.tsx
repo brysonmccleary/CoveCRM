@@ -94,6 +94,34 @@ function extractPhoneFromEvent(e: { title?: string; description?: string; locati
   return onlyDigits10(match?.[1]);
 }
 
+
+function sanitizeEventText(input?: string) {
+  if (!input) return "";
+  const raw = String(input);
+
+  // Block dialer/call logs and any internal debug dumps from ever showing in the calendar modal.
+  const looksLikeLogs =
+    /callsid=|durations?ec=|ai dialer fallback|twilio status=|outcome=disconnected|twilio status=completed|\[ai dialer/i.test(raw);
+
+  if (looksLikeLogs) return "";
+
+  // Normalize + cap
+  const cleaned = raw.replace(/\r?\n/g, "\n").trim();
+
+  // Keep it readable but never "dump": limit lines + line length
+  const lines = cleaned.split("\n").map((l) => l.trim()).filter(Boolean);
+
+  const MAX_LINES = 6;
+  const MAX_LINE_LEN = 140;
+  const MAX_TOTAL = 420;
+
+  const sliced = lines.slice(0, MAX_LINES).map((l) => (l.length > MAX_LINE_LEN ? l.slice(0, MAX_LINE_LEN) + "…" : l));
+  let out = sliced.join("\n");
+  if (out.length > MAX_TOTAL) out = out.slice(0, MAX_TOTAL) + "…";
+  return out;
+}
+
+
 export default function CalendarView() {
   const router = useRouter();
   const { data: session } = useSession();
@@ -368,7 +396,12 @@ export default function CalendarView() {
             <h2 className="text-xl font-bold">{selectedEvent.title}</h2>
             <p><strong>Start:</strong> {selectedEvent.start.toLocaleString()}</p>
             <p><strong>End:</strong> {selectedEvent.end.toLocaleString()}</p>
-            {selectedEvent.description && <p><strong>Description:</strong> {selectedEvent.description}</p>}
+            {(() => {
+              const d = sanitizeEventText(selectedEvent.description);
+              return d ? (
+                <p className="whitespace-pre-wrap"><strong>Description:</strong> {d}</p>
+              ) : null;
+            })()}
             {selectedEvent.location && <p><strong>Location:</strong> {selectedEvent.location}</p>}
             {lead ? (
               <>
@@ -376,7 +409,17 @@ export default function CalendarView() {
                 <p><strong>Lead:</strong> {lead["First Name"]} {lead["Last Name"]}</p>
                 <p><strong>Email:</strong> {lead.Email}</p>
                 <p><strong>Phone:</strong> {lead.Phone}</p>
-                <p><strong>Notes:</strong> {lead.Notes || "—"}</p>
+                {(() => {
+                  const n = sanitizeEventText(lead.Notes);
+                  return <p><strong>Notes:</strong> {n || "—"}</p>;
+                })()}
+                <button
+                  onClick={() => lead?._id && router.push(`/dashboard?tab=leads&leadId=${lead._id}`)}
+                  className="mt-3 px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded text-white w-full"
+                >
+                  👤 Open Lead Profile
+                </button>
+
                 <button onClick={handleCallNow} className="mt-4 px-4 py-2 bg-green-600 hover:bg-green-700 rounded text-white w-full">
                   📞 Call Now
                 </button>

@@ -560,11 +560,32 @@ export default function CalendarBookings() {
                 <strong>Location:</strong> {selectedEvent.location}
               </p>
             )}
-            {selectedEvent.description && (
-              <p className="whitespace-pre-wrap">
-                <strong>Description:</strong> {selectedEvent.description}
-              </p>
-            )}
+            {(() => {
+              const raw = String(selectedEvent.description || "");
+              const looksLikeLogs =
+                /callsid=|durations?ec=|ai dialer fallback|twilio status=|outcome=disconnected|twilio status=completed|\[ai dialer/i.test(raw);
+
+              if (looksLikeLogs) return null;
+
+              const cleaned = raw.replace(/\r?\n/g, "\n").trim();
+const lines = cleaned.split("\n").map((l) => l.trim()).filter(Boolean);
+const MAX_LINES = 6;
+              const MAX_LINE_LEN = 140;
+              const MAX_TOTAL = 420;
+
+              const sliced = lines
+                .slice(0, MAX_LINES)
+                .map((l) => (l.length > MAX_LINE_LEN ? l.slice(0, MAX_LINE_LEN) + "…" : l));
+
+              let out = sliced.join("\n");
+if (out.length > MAX_TOTAL) out = out.slice(0, MAX_TOTAL) + "…";
+
+              return out ? (
+                <p className="whitespace-pre-wrap">
+                  <strong>Description:</strong> {out}
+                </p>
+              ) : null;
+            })()}
             {selectedEvent.attendeesEmails &&
               selectedEvent.attendeesEmails.length > 0 && (
                 <p>
@@ -584,9 +605,45 @@ export default function CalendarBookings() {
                 <p>
                   <strong>Phone:</strong> {lead.Phone}
                 </p>
-                <p>
-                  <strong>Notes:</strong> {lead.Notes || "—"}
-                </p>
+                {(() => {
+                    const raw = String(lead?.Notes || "");
+                    const looksLikeLogs =
+                      /callsid=|durations?ec=|ai dialer fallback|twilio status=|outcome=disconnected|twilio status=completed|\[ai dialer/i.test(raw);
+
+                    if (looksLikeLogs) {
+                      return (
+                        <p>
+                          <strong>Notes:</strong> —
+                        </p>
+                      );
+                    }
+
+                    const cleaned = raw.replace(/\r?\n/g, "\n").trim();
+const lines = cleaned.split("\n").map((l) => l.trim()).filter(Boolean);
+const MAX_LINES = 6;
+                    const MAX_LINE_LEN = 140;
+                    const MAX_TOTAL = 420;
+
+                    const sliced = lines
+                      .slice(0, MAX_LINES)
+                      .map((l) => (l.length > MAX_LINE_LEN ? l.slice(0, MAX_LINE_LEN) + "…" : l));
+
+                    let out = sliced.join("\n");
+if (out.length > MAX_TOTAL) out = out.slice(0, MAX_TOTAL) + "…";
+
+                    return (
+                      <p>
+                        <strong>Notes:</strong> {out || "—"}
+                      </p>
+                    );
+                  })()}
+                <button
+                  onClick={() => lead?._id && router.push(`/dashboard?tab=leads&leadId=${lead._id}`)}
+                  className="mt-3 px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded text-white w-full"
+                >
+                  👤 Open Lead Profile
+                </button>
+
                 <button
                   onClick={callNow}
                   className="mt-4 px-4 py-2 bg-green-600 hover:bg-green-700 rounded text-white w-full"
