@@ -14,6 +14,12 @@ const formatTime = (dt: LuxonDateTime) => dt.toLocaleString(DateTime.TIME_SIMPLE
 const formatDate = (dt: LuxonDateTime) =>
   dt.toLocaleString({ month: "long", day: "numeric", year: "numeric" });
 
+function withStopFooter(msg: string) {
+  return /reply stop to opt out/i.test(msg)
+    ? msg
+    : `${msg} Reply STOP to opt out.`;
+}
+
 function safeTz(input: any) {
   const tz = (typeof input === "string" && input.trim()) ? input.trim() : "";
   // Luxon will treat invalid zones as "invalid"; we can guard by checking isValid.
@@ -101,7 +107,7 @@ export async function checkAndSendReminders() {
           console.log(`📨 Sending confirmation to ${leadPhone}`);
           await sendSMS(
             leadPhone,
-            `We’re all set! Quick details:\n\n📅 ${dateStr}\n⏰ ${timeStr}\n📞 Call from ${agentPhone || "your agent"}`,
+            withStopFooter(`We’re all set! Quick details:\n\n📅 ${dateStr}\n⏰ ${timeStr}\n📞 Call from ${agentPhone || "your agent"}`),
             agentEmail
           );
         } catch (err) {
@@ -126,7 +132,7 @@ export async function checkAndSendReminders() {
           console.log(`🌅 Sending morning-of reminder to ${leadPhone}`);
           await sendSMS(
             leadPhone,
-            `Good morning! Just a quick reminder of your appointment with ${agentEmail} today at ${timeStr}.`,
+            withStopFooter(`Good morning! Just a quick reminder of your appointment with ${agentEmail} today at ${timeStr}.`),
             agentEmail
           );
         } catch (err) {
@@ -147,7 +153,7 @@ export async function checkAndSendReminders() {
           console.log(`⏰ Sending 1-hour reminder to ${leadPhone}`);
           await sendSMS(
             leadPhone,
-            `Heads up! ${agentEmail} will be calling in about an hour.`,
+            withStopFooter(`Heads up! ${agentEmail} will be calling in about an hour.`),
             agentEmail
           );
         } catch (err) {
@@ -167,7 +173,7 @@ export async function checkAndSendReminders() {
           console.log(`⚠️ Sending 15-min reminder to ${leadPhone}`);
           await sendSMS(
             leadPhone,
-            `Just another heads up — your appointment is in 15 minutes. Talk soon!`,
+            withStopFooter(`Just another heads up — your appointment is in 15 minutes. Talk soon!`),
             agentEmail
           );
         } catch (err) {

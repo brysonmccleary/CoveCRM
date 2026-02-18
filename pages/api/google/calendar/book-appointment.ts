@@ -309,6 +309,16 @@ export default async function handler(
     return;
   }
 
+  // Track what we actually send/schedule so cron fallback doesn't double-send
+  let bookingId: any = null;
+  let didConfirm = false;
+  let didMorning = false;
+  let didHour = false;
+  let didFifteen = false;
+
+  // Track reminder flags + booking id across BOTH stub + real booking paths
+  // (declared here so the stub block can reference them without TS TDZ errors)
+
   // ===================== DEV STUB (no Google required) =====================
   if (BOOKING_STUB && bearer && INTERNAL_API_TOKEN && bearer === INTERNAL_API_TOKEN) {
     try {
@@ -379,13 +389,34 @@ export default async function handler(
         delayMinutes: humanDelayMinutes(),
       });
 
+      didConfirm = true;
+
       // Fake a successful calendar response
       const agentZone =
         (user as any)?.bookingSettings?.timezone || "America/Los_Angeles";
       const agentLocalStart = clientStart.setZone(agentZone);
       const agentLocalEnd = clientEnd.setZone(agentZone);
 
-      res.status(200).json({
+      // Persist reminder flags so cron fallback won't double-send
+    try {
+      if (bookingId) {
+        await Booking.updateOne(
+          { _id: bookingId },
+          {
+            $set: {
+              'reminderSent.confirm': didConfirm,
+              ...(didMorning ? { 'reminderSent.morning': true } : {}),
+              ...(didHour ? { 'reminderSent.hour': true } : {}),
+              ...(didFifteen ? { 'reminderSent.fifteen': true } : {}),
+            },
+          },
+        );
+      }
+    } catch (e: any) {
+      console.warn('[BOOK-APPOINTMENT] Failed to update reminderSent flags (non-blocking):', e?.message || e);
+    }
+
+    res.status(200).json({
         success: true,
         eventId: "dev-stub-event",
         htmlLink: "https://calendar.google.com/calendar/u/0/r",
@@ -470,7 +501,7 @@ export default async function handler(
 
   const appointmentJS = clientStart.toJSDate();
   let leadId = existingLead?._id;
-
+    bookingId = null;
   if (existingLead) {
     await Lead.updateOne(
       { _id: existingLead._id },
@@ -558,7 +589,7 @@ export default async function handler(
       typeof email === "string" && email.trim()
         ? email.trim()
         : `noemail+${to.slice(-10)}@covecrm.local`;
-    await Booking.create({
+    const bookingDoc = await Booking.create({
       leadEmail: leadEmailSafe,
       leadPhone: to,
       agentEmail: user.email,
@@ -573,6 +604,7 @@ export default async function handler(
       },
       eventId: created.data.id,
     });
+    bookingId = bookingDoc?._id || null;
 
     // 🔔 UI update
     const io = (res.socket as any)?.server?.io;
@@ -602,6 +634,7 @@ export default async function handler(
 
     const nowClient = DateTime.now().setZone(clientZone);
 
+
     // 1) Confirmation NOW from the SAME THREAD NUMBER (sticky "from")
     if (leadId) {
       const isAI = !!(bearer && INTERNAL_API_TOKEN && bearer === INTERNAL_API_TOKEN);
@@ -614,6 +647,7 @@ export default async function handler(
         // manual bookings still go out immediately.
         delayMinutes: isAI ? humanDelayMinutes() : undefined,
       });
+      didConfirm = true;
     } else {
       const paramsBase = await getSendParams(String((user as any)._id), to);
       await twilioClient.messages.create({ ...paramsBase, body: confirmBody });
@@ -670,6 +704,7 @@ export default async function handler(
       });
       if (morning > nowClient.plus({ minutes: MIN_SCHEDULE_LEAD_MINUTES })) {
         await sendOrSchedule(morningBody, morning);
+        didMorning = true;
       }
     }
 
@@ -679,6 +714,7 @@ export default async function handler(
       oneHourBefore > nowClient.plus({ minutes: MIN_SCHEDULE_LEAD_MINUTES })
     ) {
       await sendOrSchedule(hourBody, oneHourBefore);
+      didHour = true;
     }
 
     // 4) 15-min-before (only if still in future)
@@ -687,6 +723,7 @@ export default async function handler(
       fifteenBefore > nowClient.plus({ minutes: MIN_SCHEDULE_LEAD_MINUTES })
     ) {
       await sendOrSchedule(fifteenBody, fifteenBefore);
+      didFifteen = true;
     }
 
     // ✅ Email the agent a booking notice (time derived from same clientStart)

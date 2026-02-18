@@ -9,6 +9,9 @@ const BookingSchema = new Schema(
     agentEmail: { type: String, required: true }, // Who they're meeting with
     agentPhone: { type: String }, // Optional, for reminder content
 
+    // Optional: link back to Google Calendar event
+    eventId: { type: String, required: false, default: "" },
+
     date: { type: Date, required: true }, // Appointment date/time
     timezone: { type: String, default: "America/New_York" }, // ✅ NEW — lead's timezone
 
