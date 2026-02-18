@@ -3713,7 +3713,15 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
     // Normal path: forward inbound audio to OpenAI
     // ✅ COST CUT: throttle silence frames so we don't burn tokens 24/7, but keep VAD working.
     // We still send *some* silence (~1 frame / 200ms) so server_vad can detect end-of-speech and commit turns.
-        const isSilenceToSend = isLikelySilenceMulawBase64(payload);
+            // ✅ LISTENING-ONLY: reduce OpenAI audio input cost.
+    // We only forward inbound audio to OpenAI when we are actually listening for the user.
+    // (Barge-in detection is local; we don't need to stream inbound audio while the AI is talking.)
+    const isListening = !state.aiSpeaking && !state.waitingForResponse && !(state as any).responseInFlight;
+    if (!isListening) {
+      return;
+    }
+
+const isSilenceToSend = isLikelySilenceMulawBase64(payload);
     if (isSilenceToSend) {
       // ✅ COST CUT: Do NOT stream continuous idle silence.
       // Only allow sparse silence for ~1.2s after user speech so server_vad can finalize.
@@ -3981,34 +3989,6 @@ async function handleOpenAiEvent(
         state.userSpeechCommitWatchdog = null;
       }
 
-      // ✅ HARD CAP: If VAD/transcription gets stuck and never commits, force a commit so the AI responds.
-      // This prevents the “I have to say hello again” dead-air behavior.
-      state.userSpeechCommitWatchdog = setTimeout(() => {
-        try {
-          if (!state.userSpeechInProgress) return;
-          if (!state.openAiWs || !state.openAiReady) return;
-          if (state.voicemailSkipArmed) return;
-
-          // Don't force-commit during outbound or in-flight responses
-          if (state.aiSpeaking || state.waitingForResponse || (state as any).responseInFlight) return;
-
-          console.log("[AI-VOICE][VAD] watchdog forcing input_audio_buffer.commit", {
-            callSid: state.callSid,
-            streamSid: state.streamSid,
-          });
-
-          state.openAiWs.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
-        } catch {}
-      }, 1200);
-    } catch {}
-
-    // ✅ Clear pending filler commit (user continued speaking)
-    try {
-      if ((state as any).pendingFillerTimer) {
-        clearTimeout((state as any).pendingFillerTimer);
-        (state as any).pendingFillerTimer = null;
-      }
-      (state as any).pendingFillerCommit = null;
     } catch {}
 
     state.lastUserSpeechStartedAtMs = Date.now();
@@ -4029,7 +4009,30 @@ async function handleOpenAiEvent(
       }
     } catch {}
 
-    state.lastUserSpeechStoppedAtMs = Date.now();
+        // ✅ WATCHDOG (post-stop): If OpenAI doesn't emit committed quickly after speech_stopped,
+    // force a commit *after* the user finished talking. This prevents cutoffs / incoherent turns.
+    try {
+      if (state.userSpeechCommitWatchdog) {
+        clearTimeout(state.userSpeechCommitWatchdog);
+        state.userSpeechCommitWatchdog = null;
+      }
+      state.userSpeechCommitWatchdog = setTimeout(() => {
+        try {
+          if (state.userSpeechInProgress) return; // user started talking again
+          if (!state.openAiWs || !state.openAiReady) return;
+          if (state.voicemailSkipArmed) return;
+          // Don't force-commit during outbound or in-flight responses
+          if (state.aiSpeaking || state.waitingForResponse || (state as any).responseInFlight) return;
+          console.log("[AI-VOICE][VAD] post-stop forcing input_audio_buffer.commit", {
+            callSid: state.callSid,
+            streamSid: state.streamSid,
+          });
+          state.openAiWs.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
+        } catch {}
+      }, 450);
+    } catch {}
+
+state.lastUserSpeechStoppedAtMs = Date.now();
     return;
   }
 
@@ -4280,6 +4283,13 @@ async function handleOpenAiEvent(
   }
 
   if (t === "input_audio_buffer.committed") {
+    try {
+      if (state.userSpeechCommitWatchdog) {
+        clearTimeout(state.userSpeechCommitWatchdog);
+        state.userSpeechCommitWatchdog = null;
+      }
+    } catch {}
+
 
     // ✅ Guard: ignore committed user turns until the greeting has actually been sent.
     // Pre-greeting noise/buffer flush can produce committed events and trigger REPLAY, knocking the stepper off-script.
