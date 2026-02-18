@@ -2072,10 +2072,10 @@ function getTimeOfferLine(
     const h2 = Math.min(12, h + 1);
     const ladder = [
       `Okay — it looks like I have availability about ${h} hour${h === 1 ? "" : "s"} from now or about ${h2} hours from now. Which would work better for you?`,
-      `Okay — it looks like I have availability about ${h} hour${h === 1 ? "" : "s"} from now or about ${h2} hours from now. Which would work better for you?`,
-      `If you’re flexible, I can grab the next open slot around ${h}–${h2} hours from now — does that work for you?`,
       `To keep it easy, should I put you down for about ${h} hours from now, or about ${h2} hours from now?`,
+      `If you’re flexible, I can grab the next open slot around ${h}–${h2} hours from now — does that work for you?`,
       `Got it — my job is just to get you scheduled with ${agent}. About ${h} hours from now or about ${h2} hours from now better?`,
+      `If it helps, I can just lock in the next available time in about ${h}–${h2} hours — does that work for you?`,
     ];
     return ladder[Math.min(n, ladder.length - 1)];
   }
@@ -2154,6 +2154,85 @@ function getTimeOfferLine(
 
     const list = getSlotsForWindow(String(w), isToday);
 
+  // ✅ TODAY SAFETY: never offer past times for "today".
+  // Filter "today" slots to future-only based on a reliable timezone:
+  // lead tz hint > agent tz > America/Phoenix.
+  let listToUse = list;
+  let dayLabel = day;
+
+  function getNowMinutesInTz(tz: string): number | null {
+    try {
+      const parts = new Intl.DateTimeFormat("en-US", {
+        timeZone: tz,
+        hour12: false,
+        hour: "2-digit",
+        minute: "2-digit",
+      }).formatToParts(new Date());
+      const hh = Number(parts.find((p: any) => p.type === "hour")?.value || "");
+      const mm = Number(parts.find((p: any) => p.type === "minute")?.value || "");
+      if (!Number.isFinite(hh) || !Number.isFinite(mm)) return null;
+      return Math.max(0, Math.min(24 * 60 - 1, hh * 60 + mm));
+    } catch {
+      return null;
+    }
+  }
+
+  // Parse labels like "1:30pm" into minutes since midnight.
+  function labelToMinutes(lbl: string): number | null {
+    const t = String(lbl || "").trim().toLowerCase();
+    const m = t.match(/^(\d{1,2}):(\d{2})(am|pm)$/);
+    if (!m) return null;
+    let hh = Number(m[1] || 0);
+    const mm = Number(m[2] || 0);
+    const ap = String(m[3] || "");
+    if (!Number.isFinite(hh) || !Number.isFinite(mm)) return null;
+    if (hh < 1 || hh > 12) return null;
+    if (mm < 0 || mm > 59) return null;
+
+    // convert to 24h
+    if (ap === "am") {
+      if (hh === 12) hh = 0;
+    } else if (ap === "pm") {
+      if (hh !== 12) hh = hh + 12;
+    } else {
+      return null;
+    }
+    return hh * 60 + mm;
+  }
+
+  // Choose timezone: lead tz hint > agent tz > Phoenix
+  let tz = "";
+  try { tz = String(getLeadTimeZoneHintFromContext(ctx as any) || "").trim(); } catch {}
+  const ctxAgentTz = String((ctx as any)?.agentTimeZone || "").trim();
+  if (!tz || !isValidIanaTimeZone(tz)) {
+    if (isValidIanaTimeZone(ctxAgentTz)) tz = ctxAgentTz;
+    else tz = "America/Phoenix";
+  }
+
+  if (isToday) {
+    const nowM = getNowMinutesInTz(tz);
+    if (nowM != null) {
+      const cutoff = nowM + 30; // require at least +30 minutes
+      const cutoffRounded = Math.min(24 * 60 - 1, Math.ceil(cutoff / 30) * 30); // round to 30-min boundary
+      try {
+        listToUse = (list || []).filter((x: any) => {
+          const xm = labelToMinutes(String(x || ""));
+          return xm != null && xm >= cutoffRounded;
+        });
+      } catch {}
+    }
+
+    // If no valid "today" slots remain, fall back to tomorrow.
+    if (!Array.isArray(listToUse) || listToUse.length < 2) {
+      dayLabel = "tomorrow";
+      const isToday2 = false;
+      const defaultWindow2: any = "afternoon";
+      const w2: any = windowHint || defaultWindow2;
+      listToUse = getSlotsForWindow(String(w2), isToday2);
+    }
+  }
+
+
   // Seed: best-effort stable identifiers + day/window + rung
   const seed = [
     String((ctx as any)?.leadId || ""),
@@ -2174,7 +2253,7 @@ function getTimeOfferLine(
   let a = "1:30pm";
   let b = "3:00pm";
   try {
-    if (Array.isArray(list) && list.length >= 2) {
+    if (Array.isArray(listToUse) && listToUse.length >= 2) {
       const ut = String(rawUserText || "").toLowerCase();
       const wantsEarlier =
         ut.includes("earlier") || ut.includes("sooner") || ut.includes("before");
@@ -2183,10 +2262,10 @@ function getTimeOfferLine(
 
       const i =
         wantsEarlier ? 0 :
-        wantsLater ? Math.max(0, (list.length - 2)) :
-        ((list.length > 2) ? (hv % (list.length - 1)) : 0);
-      a = list[i] || a;
-      b = list[i + 1] || b;
+        wantsLater ? Math.max(0, (listToUse.length - 2)) :
+        ((listToUse.length > 2) ? (hv % (listToUse.length - 1)) : 0);
+      a = (listToUse as any)[i] || a;
+      b = (listToUse as any)[i + 1] || b;
     }
   } catch {}
 
@@ -2195,10 +2274,10 @@ function getTimeOfferLine(
   const lock = wantsLaterLock ? b : a;
   const ladder = [
     `Okay — it looks like they have availability at ${a} or ${b}. Which would work better for you?`,
-    `Okay — it looks like they have availability at ${a} or ${b}. Which would work better for you?`,
-    `If you’re flexible, I can lock in ${day} at ${lock} — does that work?`,
-    `To keep it easy, should I put you down for ${day} at ${a}, or ${day} at ${b}?`,
-    `Got it — my job is just to get you scheduled with ${agent}. ${day} at ${a} or ${b} usually better?`,
+    `Which is easier for you — ${dayLabel} at ${a}, or ${dayLabel} at ${b}?`,
+    `If you’re flexible, I can lock in ${dayLabel} at ${lock} — does that work?`,
+    `To keep it easy, should I put you down for ${dayLabel} at ${a}, or ${dayLabel} at ${b}?`,
+    `Got it — my job is just to get you scheduled with ${agent}. ${dayLabel} at ${a} or ${b} usually better?`,
   ];
 
   return ladder[Math.min(n, ladder.length - 1)];
