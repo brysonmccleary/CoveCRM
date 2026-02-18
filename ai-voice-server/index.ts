@@ -498,6 +498,12 @@ function tryCancelOpenAiResponse(state: CallState, reason: string) {
     state.lastCancelAtMs = now;
 
     // Cancel the current response
+        // IMPORTANT: once we cancel, immediately drop turn blockers so inbound audio can flow.
+    // OpenAI may still stream late deltas; we guard against that elsewhere.
+    state.lastCancelAtMs = Date.now();
+    state.waitingForResponse = false;
+    state.responseInFlight = false;
+    state.aiSpeaking = false;
     ws.send(JSON.stringify({ type: "response.cancel" }));
 
     // Clear any partially buffered input in OpenAI so next turn starts clean
@@ -3559,6 +3565,8 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
     (state.outboundMuLawBuffer?.length || 0) > 0 ||
     (!!state.outboundOpenAiDone === false && !!state.outboundPacerTimer);
 
+  const recentlyCancelled = (Date.now() - Number(state.lastCancelAtMs || 0)) < 1500;
+
   /**
    * ✅ CRITICAL FIX:
    * DO NOT DROP inbound frames during AI speech/wait/outbound drain.
@@ -3567,8 +3575,8 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
    * - keep a tiny frame buffer so we don't lose the start of their reply
    * - after cancel, forward audio normally
    */
-  const blockedByAiTurn =
-    state.aiSpeaking === true ||
+    const blockedByAiTurn =
+    ((state.aiSpeaking === true) && !recentlyCancelled) ||
     state.waitingForResponse === true ||
     outboundInProgress;
 
@@ -3620,8 +3628,9 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
     const userHasSpokenRecently = Number(state.userAudioMsBuffered || 0) >= 40; // ~2 frames
     if (isSilence && !userHasSpokenRecently) return;
 
-    // While AI is actively speaking, never forward live user audio to OpenAI (we buffer for barge-in instead).
-    if (state.aiSpeaking === true) return;
+        // While AI is actively speaking, never forward live user audio to OpenAI (we buffer for barge-in instead).
+    // EXCEPT: right after a barge-in cancel, we must allow inbound audio through immediately so VAD/transcription can lock.
+    if (state.aiSpeaking === true && !recentlyCancelled) return;
   }
 
 
@@ -3688,14 +3697,18 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
     // Normal path: forward inbound audio to OpenAI
     // ✅ COST CUT: throttle silence frames so we don't burn tokens 24/7, but keep VAD working.
     // We still send *some* silence (~1 frame / 200ms) so server_vad can detect end-of-speech and commit turns.
-    const isSilenceToSend = isLikelySilenceMulawBase64(payload);
+        const isSilenceToSend = isLikelySilenceMulawBase64(payload);
     if (isSilenceToSend) {
-      const nowMs = Date.now();
-      const lastMs = Number(state.lastSilenceSentAtMs || 0);
-      if (nowMs - lastMs < 200) {
-        return;
+      // If the user is in an active speech segment, do NOT throttle silence.
+      // VAD needs continuous frames to confidently detect end-of-speech and commit.
+      if (!state.userSpeechInProgress) {
+        const nowMs = Date.now();
+        const lastMs = Number(state.lastSilenceSentAtMs || 0);
+        if (nowMs - lastMs < 120) {
+          return;
+        }
+        state.lastSilenceSentAtMs = nowMs;
       }
-      state.lastSilenceSentAtMs = nowMs;
     }
     state.openAiWs.send(
       JSON.stringify({
