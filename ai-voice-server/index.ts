@@ -504,6 +504,22 @@ function tryCancelOpenAiResponse(state: CallState, reason: string) {
     state.waitingForResponse = false;
     state.responseInFlight = false;
     state.aiSpeaking = false;
+    // ✅ HARD-STOP (local): even if OpenAI cancel races ("response_cancel_not_active"),
+    // stop audio playback immediately so caller can finish speaking.
+    try {
+      if (state.outboundPacerTimer) {
+        clearInterval(state.outboundPacerTimer as any);
+        state.outboundPacerTimer = null as any;
+        console.log("[AI-VOICE][PACE] stopped | barge-in hard-stop");
+      }
+    } catch {}
+    try {
+      // Clear any queued outbound audio so nothing else plays after barge-in
+      (state as any).outboundMuLawBuffer = Buffer.alloc(0);
+      (state as any).outboundPadZerosRemaining = 0;
+      (state as any).outboundPacerPadZerosRemaining = 0;
+    } catch {}
+
     ws.send(JSON.stringify({ type: "response.cancel" }));
 
     // Clear any partially buffered input in OpenAI so next turn starts clean
@@ -3699,15 +3715,24 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
     // We still send *some* silence (~1 frame / 200ms) so server_vad can detect end-of-speech and commit turns.
         const isSilenceToSend = isLikelySilenceMulawBase64(payload);
     if (isSilenceToSend) {
-      // If the user is in an active speech segment, do NOT throttle silence.
-      // VAD needs continuous frames to confidently detect end-of-speech and commit.
+      // ✅ COST CUT: Do NOT stream continuous idle silence.
+      // Only allow sparse silence for ~1.2s after user speech so server_vad can finalize.
+      // If user is actively speaking, do NOT throttle silence.
       if (!state.userSpeechInProgress) {
         const nowMs = Date.now();
-        const lastMs = Number(state.lastSilenceSentAtMs || 0);
-        if (nowMs - lastMs < 120) {
+        const stopAt = Number((state as any).lastUserSpeechStoppedAtMs || 0);
+        const startedAt = Number((state as any).lastUserSpeechStartedAtMs || 0);
+        const recentlySpoke =
+          (stopAt > 0 && (nowMs - stopAt) <= 1200) ||
+          (startedAt > 0 && (nowMs - startedAt) <= 1200);
+        if (!recentlySpoke) {
           return;
         }
-        state.lastSilenceSentAtMs = nowMs;
+        const lastMs = Number((state as any).lastSilenceSentAtMs || 0);
+        if (nowMs - lastMs < 400) {
+          return;
+        }
+        (state as any).lastSilenceSentAtMs = nowMs;
       }
     }
     state.openAiWs.send(
