@@ -1719,8 +1719,9 @@ function extractSoonHours(textRaw: string): number | null {
 function isDayReferenceMentioned(textRaw: string): boolean {
   const t = String(textRaw || "").trim().toLowerCase();
   if (!t) return false;
-  return /(today|tomorrow|tonight|later today|later)/i.test(t);
+  return /(today|tomorrow|tonight|later today|later|monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tue|tues|wed|thu|thur|thurs|fri|sat|sun|weekend|next\s+(?:week|mon|monday|tue|tues|tuesday|wed|wednesday|thu|thur|thurs|thursday|fri|friday|sat|saturday|sun|sunday))/i.test(t);
 }
+
 
 function isTimeWindowMentioned(textRaw: string): boolean {
   const t = String(textRaw || "").trim().toLowerCase();
@@ -1753,6 +1754,36 @@ function isExactClockTimeMentioned(textRaw: string): boolean {
 
   // 3 o'clock / 3 oclock
   if (/\b\d{1,2}\s?o'?clock\b/i.test(t)) return true;
+
+  // 230 / 0230 / 1430 (military-ish compact forms)
+  // Accept only when minutes are valid (00-59).
+  try {
+    const m = t.match(/\b(\d{3,4})\b/);
+    if (m) {
+      const raw = String(m[1] || "");
+      const num = Number(raw);
+      if (Number.isFinite(num)) {
+        const hh = Math.floor(num / 100);
+        const mm = num % 100;
+        if (hh >= 0 && hh <= 23 && mm >= 0 && mm <= 59) return true;
+      }
+    }
+  } catch {}
+
+  // 2 30 / 14 30 (space-separated)
+  if (/\b\d{1,2}\s+\d{2}\b/.test(t)) {
+    try {
+      const m2 = t.match(/\b(\d{1,2})\s+(\d{2})\b/);
+      if (m2) {
+        const hh = Number(m2[1] || 0);
+        const mm = Number(m2[2] || 0);
+        if (hh >= 0 && hh <= 23 && mm >= 0 && mm <= 59) return true;
+      }
+    } catch {}
+  }
+
+  // 230pm / 1430 pm
+  if (/\b\d{3,4}\s?(am|pm)\b/i.test(t)) return true;
 
   return false;
 }
@@ -2065,24 +2096,63 @@ function getTimeOfferLine(
     return (h >>> 0);
   }
 
-  const slotsByWindow: Record<string, string[]> = {
-    morning: ["9:00am", "9:30am", "10:00am", "10:30am", "11:00am"],
-    late_morning: ["10:00am", "10:30am", "11:00am", "11:30am"],
-    afternoon: ["12:30pm", "1:00pm", "1:30pm", "2:00pm", "2:30pm", "3:00pm"],
-    mid_afternoon: ["1:30pm", "2:00pm", "2:30pm", "3:00pm", "3:30pm"],
-    late_afternoon: ["3:30pm", "4:00pm", "4:30pm", "5:00pm", "5:30pm"],
-    evening: ["5:30pm", "6:00pm", "6:30pm", "7:00pm", "7:30pm", "8:00pm"],
-    late_evening: ["7:30pm", "8:00pm", "8:30pm", "9:00pm"],
+  
+  // ✅ Dynamic slots (no hardcoded time lists)
+  // We generate clock-time options from broad windows using ranges + interval.
+  // This avoids offering the same exact times to everyone while still sounding natural.
+  function pad2(n: number): string { return String(n).padStart(2, "0"); }
+
+  function minutesToLabel(totalMins: number): string {
+    const m = Math.max(0, Math.min(24*60-1, Math.floor(totalMins)));
+    let hh = Math.floor(m / 60);
+    const mm = m % 60;
+    const isPm = hh >= 12;
+    let h12 = hh % 12;
+    if (h12 === 0) h12 = 12;
+    return `${h12}:${pad2(mm)}${isPm ? "pm" : "am"}`;
+  }
+
+  function buildSlots(startMins: number, endMinsInclusive: number, stepMins: number): string[] {
+    const out: string[] = [];
+    const step = Math.max(5, Math.min(60, Math.floor(stepMins || 30)));
+    let t = Math.max(0, Math.floor(startMins));
+    const end = Math.min(24*60-1, Math.floor(endMinsInclusive));
+    while (t <= end) {
+      out.push(minutesToLabel(t));
+      t += step;
+    }
+    return out;
+  }
+
+  type WindowRange = { start: number; end: number; step: number };
+
+  // Window ranges (minutes since midnight). Keep these broad and human.
+  const ranges: Record<string, WindowRange> = {
+    morning:        { start: 8*60,     end: 11*60+30, step: 30 },
+    late_morning:   { start: 10*60,    end: 12*60,    step: 30 },
+    afternoon:      { start: 12*60,    end: 16*60+30, step: 30 },
+    mid_afternoon:  { start: 13*60+30, end: 16*60,    step: 30 },
+    late_afternoon: { start: 15*60+30, end: 18*60,    step: 30 },
+    evening:        { start: 17*60,    end: 20*60+30, step: 30 },
+    late_evening:   { start: 19*60,    end: 21*60+30, step: 30 },
   };
 
-  // Default window if none provided: today→evening, tomorrow→afternoon
+  function getSlotsForWindow(win: string, isToday: boolean): string[] {
+    const key = String(win || "").trim();
+    const r = (ranges as any)[key] as WindowRange | undefined;
+    if (r) return buildSlots(r.start, r.end, r.step);
+    // fallback by day
+    const fallback = isToday ? ranges["evening"] : ranges["afternoon"];
+    return buildSlots(fallback.start, fallback.end, fallback.step);
+  }
+
+
+// Default window if none provided: today→evening, tomorrow→afternoon
   const isToday = dayHint === "today";
   const defaultWindow: TimeWindowHint = isToday ? "evening" : "afternoon";
   const w: TimeWindowHint = windowHint || defaultWindow;
 
-  const list =
-    slotsByWindow[String(w)] ||
-    (isToday ? slotsByWindow["evening"] : slotsByWindow["afternoon"]);
+    const list = getSlotsForWindow(String(w), isToday);
 
   // Seed: best-effort stable identifiers + day/window + rung
   const seed = [
