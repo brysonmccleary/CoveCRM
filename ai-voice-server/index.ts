@@ -4219,7 +4219,7 @@ async function handleOpenAiEvent(
           });
           state.openAiWs.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
         } catch {}
-      }, 450);
+      }, 220);
     } catch {}
 
 state.lastUserSpeechStoppedAtMs = Date.now();

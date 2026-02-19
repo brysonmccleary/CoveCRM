@@ -8,7 +8,7 @@ import User from "@/models/User";
 import { google } from "googleapis";
 import { Types } from "mongoose";
 import { DateTime } from "luxon";
-import * as BookingEnforcer from "@/lib/booking/enforceBookingSettings";
+import { enforceBookingSettings as BookingEnforcer } from "@/lib/booking/enforceBookingSettings";
 
 const AI_DIALER_CRON_KEY = process.env.AI_DIALER_CRON_KEY;
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID!;
