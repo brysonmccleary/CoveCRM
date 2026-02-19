@@ -2041,6 +2041,23 @@ function isTimeIndecisionOrAvailability(textRaw: string): boolean {
     t.includes("im flexible")
   ) return true;
 
+  // "Later" / "after" style answers (these ARE real answers to time questions)
+  // Examples: "something later", "a little later", "later on", "after that"
+  if (
+    t == "later" ||
+    t.startsWith("later ") ||
+    t.endsWith(" later") ||
+    t.includes("something later") ||
+    t.includes("a little later") ||
+    t.includes("little later") ||
+    t.includes("later on") ||
+    t.includes("later today") ||
+    t.includes("later this") ||
+    t.includes("after that") ||
+    t.includes("afterwards") ||
+    t.includes("after work")
+  ) return true;
+
   // Generic "not sure" answers to time questions
   if (
     t == "not sure" ||
