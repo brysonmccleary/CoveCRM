@@ -904,6 +904,12 @@ async function replayPendingCommittedTurn(
         }
       } catch {}
 
+
+      // ✅ After an objection rebuttal, re-arm the stepper so the next user reply
+      // is treated as answering the last asked step (keeps script flow natural).
+      state.awaitingUserAnswer = true;
+      state.awaitingAnswerForStepIndex = Math.max(0, (state.scriptStepIndex ?? 0) - 1);
+
       state.phase = "in_call";
       return;
     }
@@ -4984,6 +4990,12 @@ state.lastUserSpeechStoppedAtMs = Date.now();
           response: { modalities: ["audio", "text"], temperature: 0.6, instructions: perTurnInstr },
         })
       );
+
+
+      // ✅ After an objection rebuttal, re-arm the stepper so the next user reply
+      // is treated as answering the last asked step (keeps script flow natural).
+      state.awaitingUserAnswer = true;
+      state.awaitingAnswerForStepIndex = Math.max(0, (state.scriptStepIndex ?? 0) - 1);
 
       state.phase = "in_call";
       return;
