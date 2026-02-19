@@ -4711,7 +4711,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
 
             void replayPendingCommittedTurn(twilioWs, state, "filler grace expired");
           } catch {}
-        }, 950);
+        }, 750);
       } catch {}
 
       // IMPORTANT: do NOT process this commit yet.
