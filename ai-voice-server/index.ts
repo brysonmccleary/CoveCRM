@@ -195,6 +195,8 @@ type CallState = {
   // ✅ User-turn watchdog (prevents "stuck VAD" -> dead silence)
   userSpeechInProgress?: boolean;
   userSpeechCommitWatchdog?: NodeJS.Timeout | null;
+  // ✅ If OpenAI never emits speech_stopped (comfort-noise / VAD edge), force a commit so we don't go silent forever.
+  userSpeechStuckWatchdog?: NodeJS.Timeout | null;
   // ✅ If user commits while outbound pacer is still draining (aiSpeaking true), we must NOT drop the turn.
   // We queue it here and replay immediately when pacer drains and aiSpeaking flips to false.
   pendingCommittedTurn?: { bestTranscript: string; audioMs: number; atMs: number } | null;
@@ -4179,9 +4181,53 @@ async function handleOpenAiEvent(
         state.userSpeechCommitWatchdog = null;
       }
 
+      // ✅ Clear stuck-speech watchdog
+      if (state.userSpeechStuckWatchdog) {
+        clearTimeout(state.userSpeechStuckWatchdog);
+        state.userSpeechStuckWatchdog = null;
+      }
     } catch {}
 
     state.lastUserSpeechStartedAtMs = Date.now();
+
+    // ✅ STUCK-SPEECH FAILSAFE:
+    // If OpenAI never emits speech_stopped, force a commit so the call doesn't go dead silent forever.
+    try {
+      state.userSpeechStuckWatchdog = setTimeout(() => {
+        try {
+          if (!state.userSpeechInProgress) return;
+          if (!state.openAiWs || !state.openAiReady) return;
+          if (state.voicemailSkipArmed) return;
+
+          // Don't force-commit during outbound or in-flight responses
+          if (state.aiSpeaking || state.waitingForResponse || (state as any).responseInFlight) return;
+
+          const nowMs = Date.now();
+          const startedAt = Number((state as any).lastUserSpeechStartedAtMs || 0);
+          const stopAt = Number((state as any).lastUserSpeechStoppedAtMs || 0);
+
+          if (startedAt <= 0) return;
+          // Still no stop after this start
+          if (stopAt > 0 && stopAt >= startedAt) return;
+
+          // Only fire if we've been "speaking" too long (VAD stuck). Keep conservative.
+          if ((nowMs - startedAt) < 3200) return;
+
+          console.log("[AI-VOICE][VAD] stuck-speech forcing input_audio_buffer.commit", {
+            callSid: state.callSid,
+            streamSid: state.streamSid,
+            msSinceStart: nowMs - startedAt,
+          });
+
+          // Mark as stopped locally so downstream gating can proceed
+          state.userSpeechInProgress = false;
+          (state as any).lastUserSpeechStoppedAtMs = Date.now();
+
+          state.openAiWs.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
+        } catch {}
+      }, 3400);
+    } catch {}
+
     // ✅ Prevent stale transcript from previous turn contaminating this new utterance
     state.lastUserTranscript = "";
     try {
@@ -4196,6 +4242,10 @@ async function handleOpenAiEvent(
       if (state.userSpeechCommitWatchdog) {
         clearTimeout(state.userSpeechCommitWatchdog);
         state.userSpeechCommitWatchdog = null;
+      }
+      if (state.userSpeechStuckWatchdog) {
+        clearTimeout(state.userSpeechStuckWatchdog);
+        state.userSpeechStuckWatchdog = null;
       }
     } catch {}
 
@@ -4477,6 +4527,10 @@ state.lastUserSpeechStoppedAtMs = Date.now();
       if (state.userSpeechCommitWatchdog) {
         clearTimeout(state.userSpeechCommitWatchdog);
         state.userSpeechCommitWatchdog = null;
+      }
+      if (state.userSpeechStuckWatchdog) {
+        clearTimeout(state.userSpeechStuckWatchdog);
+        state.userSpeechStuckWatchdog = null;
       }
     } catch {}
 
