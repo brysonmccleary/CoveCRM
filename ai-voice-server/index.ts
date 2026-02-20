@@ -3895,7 +3895,7 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
 
         // While AI is actively speaking, never forward live user audio to OpenAI (we buffer for barge-in instead).
     // EXCEPT: right after a barge-in cancel, we must allow inbound audio through immediately so VAD/transcription can lock.
-    if (state.aiSpeaking === true && !recentlyCancelled) return;
+    if (state.aiSpeaking === true && (state as any).responseInFlight === true && !recentlyCancelled) return;
   }
 
 
@@ -3965,7 +3965,10 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
             // ✅ LISTENING-ONLY: reduce OpenAI audio input cost.
     // We only forward inbound audio to OpenAI when we are actually listening for the user.
     // (Barge-in detection is local; we don't need to stream inbound audio while the AI is talking.)
-    const isListening = !state.aiSpeaking && !state.waitingForResponse && !(state as any).responseInFlight;
+    const isListening =
+      !state.waitingForResponse &&
+      !(state as any).responseInFlight &&
+      (!state.aiSpeaking || state.outboundOpenAiDone === true);
     if (!isListening) {
       return;
     }
