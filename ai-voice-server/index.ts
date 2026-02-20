@@ -5717,7 +5717,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
         state.greetingAdvanceNextIndex = undefined;
         state.greetingAdvanceNextPhase = undefined;
         // Stay aligned to greeting (Step 0) so we don't skip straight to Step 1.
-        state.phase = "awaiting_greeting_reply";
+
         state.scriptStepIndex = 0;
       }
 
