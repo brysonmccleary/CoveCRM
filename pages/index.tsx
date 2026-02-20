@@ -14,21 +14,21 @@ export default function Home() {
         />
       </Head>
 
-      <main className="min-h-screen bg-white text-gray-900">
+      <main className="min-h-screen text-slate-100 bg-gradient-to-b from-[#020617] via-[#0b1225] to-[#020617]">
         {/* Nav */}
-        <nav className="flex justify-between items-center py-6 px-6 shadow-sm">
+        <nav className="flex justify-between items-center py-5 px-6 border-b border-white/10 bg-[#020617]/60 backdrop-blur supports-[backdrop-filter]:bg-[#020617]/40">
           <div className="flex items-center space-x-2">
             <Image src="/logo.png" alt="Cove CRM Logo" width={32} height={32} />
-            <h1 className="text-2xl font-bold text-blue-600">Cove CRM</h1>
+            <h1 className="text-2xl font-bold text-blue-400">Cove CRM</h1>
           </div>
           <div className="space-x-4">
             <Link href="/login">
-              <button className="text-sm text-gray-600 hover:text-blue-600 font-medium cursor-pointer">
+              <button className="text-sm text-slate-300 hover:text-white font-medium cursor-pointer transition">
                 Login
               </button>
             </Link>
             <Link href="/signup">
-              <button className="bg-blue-600 text-white px-5 py-2 rounded font-semibold hover:bg-blue-700 text-sm cursor-pointer">
+              <button className="bg-blue-600 text-white px-5 py-2 rounded-lg font-semibold hover:bg-blue-500 text-sm cursor-pointer transition shadow-sm shadow-blue-600/20">
                 Start Free Trial
               </button>
             </Link>
@@ -36,20 +36,30 @@ export default function Home() {
         </nav>
 
         {/* Hero Section */}
-        <section className="bg-[#020617] text-white py-24 px-6 text-center">
-          <h1 className="text-4xl md:text-5xl font-bold mb-6">
-            The #1 CRM for Life Insurance Sales
-          </h1>
-          <p className="text-lg md:text-xl max-w-2xl mx-auto mb-8">
-            Built for agents. Powered by AI. Close more, faster.
-          </p>
-          <Link href="/signup">
-            <button className="bg-white text-black px-8 py-3 rounded-lg font-medium hover:bg-gray-100 transition cursor-pointer">
-              Start Free Trial
-            </button>
-          </Link>
-          <p className="text-sm mt-4 opacity-70">3-day free trial</p>
+        <section className="relative text-white py-24 px-6 text-center overflow-hidden bg-[#020617]">
+          <div className="pointer-events-none absolute inset-0">
+            <div className="absolute -top-24 left-1/2 h-72 w-[44rem] -translate-x-1/2 rounded-full bg-blue-600/15 blur-3xl" />
+            <div className="absolute top-32 right-[-10rem] h-72 w-[36rem] rounded-full bg-purple-500/10 blur-3xl" />
+          </div>
+
+          <div className="relative">
+            <h1 className="text-4xl md:text-5xl font-bold mb-6">
+              The #1 CRM for Life Insurance Sales
+            </h1>
+            <p className="text-lg md:text-xl max-w-2xl mx-auto mb-8">
+              Built for agents. Powered by AI. Close more, faster.
+            </p>
+            <Link href="/signup">
+              <button className="bg-white text-black px-8 py-3 rounded-lg font-medium hover:bg-gray-100 transition cursor-pointer">
+                Start Free Trial
+              </button>
+            </Link>
+            <p className="text-sm mt-4 opacity-70">3-day free trial</p>
+          </div>
         </section>
+
+
+
 
         {/* Features + Flagship AI Section */}
         <section className="py-20 px-6 max-w-6xl mx-auto space-y-10">
@@ -57,7 +67,7 @@ export default function Home() {
             <h2 className="text-3xl font-bold mb-2">
               Everything you need to sell more policies
             </h2>
-            <p className="text-sm md:text-base text-gray-600 max-w-2xl mx-auto">
+            <p className="text-sm md:text-base text-slate-300 max-w-2xl mx-auto">
               A modern command center for high-performing agents — combining a
               full CRM with intelligent calling and texting that works for you
               around the clock.
@@ -218,29 +228,70 @@ export default function Home() {
             ].map(([title, description], i) => (
               <div
                 key={i}
-                className="border rounded-xl p-6 shadow-sm hover:shadow-md transition cursor-pointer bg-white"
+                className="rounded-2xl p-6 border border-white/10 bg-white/5 hover:bg-white/10 transition cursor-pointer shadow-[0_0_0_1px_rgba(255,255,255,0.03)]"
               >
                 <h3 className="font-bold text-lg mb-2">{title}</h3>
-                <p className="text-gray-600 text-sm leading-relaxed">
+                <p className="text-slate-300 text-sm leading-relaxed">
                   {description}
                 </p>
               </div>
             ))}
           </div>
+
         </section>
 
-        {/* Pricing Section */}
-        <section className="bg-gray-100 py-20 px-6 text-center">
+        {/* Product Screenshots */}
+        <section className="py-14 px-6">
+          <div className="max-w-6xl mx-auto">
+            <div className="grid gap-6 md:grid-cols-2">
+              <div className="rounded-3xl border border-white/10 bg-white/5 p-4 shadow-[0_0_0_1px_rgba(255,255,255,0.03)]">
+                <div className="text-xs tracking-[0.22em] uppercase text-slate-400 px-2 pt-2 pb-3">
+                  Dashboard
+                </div>
+                <div className="overflow-hidden rounded-2xl border border-white/10 bg-[#020617]">
+                  <Image
+                    src="/landing/dashboard.png"
+                    alt="Cove CRM dashboard screenshot"
+                    width={1400}
+                    height={900}
+                    className="w-full h-auto"
+                    priority
+                  />
+                </div>
+              </div>
+
+              <div className="rounded-3xl border border-white/10 bg-white/5 p-4 shadow-[0_0_0_1px_rgba(255,255,255,0.03)]">
+                <div className="text-xs tracking-[0.22em] uppercase text-slate-400 px-2 pt-2 pb-3">
+                  Affiliate Program
+                </div>
+                <div className="overflow-hidden rounded-2xl border border-white/10 bg-[#020617]">
+                  <Image
+                    src="/landing/affiliate-25refs.png"
+                    alt="Cove CRM affiliate program screenshot"
+                    width={1400}
+                    height={900}
+                    className="w-full h-auto"
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+
+
+{/* Pricing Section */}
+        <section className="py-20 px-6 text-center bg-[#020617]">
           <h2 className="text-3xl font-bold mb-6">
             Simple, transparent pricing
           </h2>
-          <div className="max-w-3xl mx-auto bg-white rounded-2xl shadow-lg p-10">
+          <div className="max-w-3xl mx-auto rounded-3xl border border-white/10 bg-white/5 shadow-[0_0_0_1px_rgba(255,255,255,0.03)] p-10">
             <h3 className="text-2xl font-bold mb-2">Cove CRM</h3>
             <p className="text-4xl font-bold mb-2">$199.99/mo</p>
-            <p className="text-sm text-gray-500 mb-4">
+            <p className="text-sm text-slate-400 mb-4">
               + tax &amp; call/SMS usage
             </p>
-            <ul className="text-left text-gray-700 mb-6">
+            <ul className="text-left text-slate-200 mb-6">
               <li className="mb-2">✔ Unlimited users per account</li>
               <li className="mb-2">
                 ✔ Includes dialer, texting, and lead management
@@ -251,7 +302,7 @@ export default function Home() {
               AI Upgrade (optional): +$50/month
             </p>
             <Link href="/signup">
-              <button className="bg-black text-white px-6 py-3 rounded-md hover:bg-gray-800 cursor-pointer">
+              <button className="bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-500 cursor-pointer transition shadow-sm shadow-blue-600/20">
                 Start My Free Trial
               </button>
             </Link>
@@ -259,7 +310,7 @@ export default function Home() {
         </section>
 
         {/* CTA Section */}
-        <section className="py-24 text-center px-6 bg-[#0f172a] text-white">
+        <section className="py-24 text-center px-6 bg-[#0b1225] text-white">
           <h2 className="text-3xl md:text-4xl font-bold mb-6">
             Ready to get started?
           </h2>
@@ -267,25 +318,25 @@ export default function Home() {
             Join hundreds of top agents using Cove CRM to dominate telesales.
           </p>
           <Link href="/signup">
-            <button className="bg-white text-black px-8 py-3 rounded-lg font-semibold hover:bg-gray-100 cursor-pointer">
+            <button className="bg-white text-black px-8 py-3 rounded-lg font-semibold hover:bg-slate-100 cursor-pointer transition">
               Start Free Trial Now
             </button>
           </Link>
         </section>
 
         {/* Footer */}
-        <footer className="py-10 text-center text-sm text-gray-400 space-y-2">
+        <footer className="py-10 text-center text-sm text-slate-400 space-y-2 bg-[#020617] border-t border-white/10">
           <div>
             <Link
               href="https://www.covecrm.com/legal/privacy"
-              className="text-gray-500 hover:text-gray-700 underline mx-2"
+              className="text-slate-400 hover:text-white underline mx-2 transition"
             >
               Privacy Policy
             </Link>
-            <span className="text-gray-500">•</span>
+            <span className="text-slate-500">•</span>
             <Link
               href="https://www.covecrm.com/legal/terms"
-              className="text-gray-500 hover:text-gray-700 underline mx-2"
+              className="text-slate-400 hover:text-white underline mx-2 transition"
             >
               Terms of Service
             </Link>
