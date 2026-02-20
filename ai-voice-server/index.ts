@@ -701,12 +701,31 @@ async function replayPendingCommittedTurn(
       return;
     }
 
-    // Clear pending first (prevents double replay)
-    state.pendingCommittedTurn = null;
-
     // Restore the exact accepted input for the turn
     const restoredTranscript = String(pending.bestTranscript || "").trim();
     const restoredAudioMs = Number(pending.audioMs || 0);
+    const pendingAgeMs = Date.now() - Number((pending as any).atMs || 0);
+
+    // ✅ CRITICAL:
+    // Do NOT clear pendingCommittedTurn until we actually have transcript text.
+    // Otherwise we replay with stale lastUserTranscript and the stepper can skip / mis-handle turns.
+    //
+    // Exception: greeting reply can be audio-only (no transcript yet) if the user clearly spoke.
+    // isGreetingReply computed above (do not redeclare)
+    if (!restoredTranscript) {
+      const strongAudio = restoredAudioMs >= 900; // ~0.9s indicates real speech (not comfort noise)
+      const allowGreetingAudioOnly = state.phase === "awaiting_greeting_reply" && strongAudio;
+      if (!allowGreetingAudioOnly) {
+        // Wait for transcription delta/completed to populate pending.bestTranscript and replay again.
+        // If it never arrives, drop the pending safely after ~1.8s (do NOT advance steps).
+        if (pendingAgeMs < 1800) return;
+        state.pendingCommittedTurn = null;
+        return;
+      }
+    }
+
+    // Clear pending now (prevents double replay) — ONLY after we have transcript or allowed greeting audio-only.
+    state.pendingCommittedTurn = null;
 
     if (restoredTranscript) state.lastUserTranscript = restoredTranscript;
     if (restoredAudioMs > 0) state.userAudioMsBuffered = restoredAudioMs;
