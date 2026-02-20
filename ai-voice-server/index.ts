@@ -724,6 +724,8 @@ async function replayPendingCommittedTurn(
 
     const lastUserText = String(state.lastUserTranscript || "").trim();
     const objectionKind = lastUserText ? detectObjection(lastUserText) : null;
+    const questionKind = !objectionKind && lastUserText ? detectQuestionKindForTurn(lastUserText) : null;
+    const objectionOrQuestionKind = objectionKind || questionKind;
 
     // Ensure script steps loaded
     if (!state.scriptSteps || state.scriptSteps.length === 0) {
@@ -858,10 +860,10 @@ async function replayPendingCommittedTurn(
       return;
     }
 
-    if (objectionKind) {
-      const lineToSay = enforceBookingOnlyLine(state.context!, getRebuttalLine(state.context!, objectionKind));
+    if (objectionOrQuestionKind) {
+      const lineToSay = enforceBookingOnlyLine(state.context!, getRebuttalLine(state.context!, objectionOrQuestionKind));
       const perTurnInstr = buildConversationalRebuttalInstruction(state.context!, lineToSay, {
-        objectionKind,
+        objectionKind: objectionOrQuestionKind,
         userText: lastUserText,
         lastOutboundLine: state.lastPromptLine,
         lastOutboundAtMs: state.lastPromptSentAtMs,
@@ -910,7 +912,7 @@ async function replayPendingCommittedTurn(
       // ✅ After an objection rebuttal, re-arm the stepper so the next user reply
       // is treated as answering the last asked step (keeps script flow natural).
       state.awaitingUserAnswer = true;
-      state.awaitingAnswerForStepIndex = Math.max(0, (state.scriptStepIndex ?? 0) - 1);
+      state.awaitingAnswerForStepIndex = expectedAnswerIdx;
 
       state.phase = "in_call";
       return;
@@ -1586,6 +1588,73 @@ function applyDiscoveryCap(state: CallState, lineRaw: string): string {
  * We do NOT change audio; we only decide whether to respond + whether to advance.
  */
 type StepType = "time_question" | "yesno_question" | "open_question" | "statement";
+
+function looksLikeUserQuestion(textRaw: string): boolean {
+  const t = String(textRaw || "").trim().toLowerCase();
+  if (!t) return false;
+
+  // Explicit question mark is strongest signal
+  if (t.includes("?")) return true;
+
+  // Common spoken-question openers
+  if (
+    t.startsWith("how ") ||
+    t.startsWith("what ") ||
+    t.startsWith("why ") ||
+    t.startsWith("when ") ||
+    t.startsWith("who ") ||
+    t.startsWith("where ") ||
+    t.startsWith("can you") ||
+    t.startsWith("could you") ||
+    t.startsWith("do you") ||
+    t.startsWith("are you") ||
+    t.startsWith("is this") ||
+    t.startsWith("is it")
+  ) return true;
+
+  // Common question stems even without punctuation
+  if (
+    t.startsWith("how long") ||
+    t.startsWith("how much") ||
+    t.startsWith("what happens") ||
+    t.startsWith("what do i") ||
+    t.startsWith("what do you")
+  ) return true;
+
+  return false;
+}
+
+function detectQuestionKindForTurn(textRaw: string): string | null {
+  const t = String(textRaw || "").trim().toLowerCase();
+  if (!t) return null;
+
+  // If it's clearly a scheduling/availability question, let the existing time ladder handle it.
+  try {
+    if (isTimeIndecisionOrAvailability(t) || isTimeMentioned(t) || looksLikeTimeAnswer(t)) return null;
+  } catch {}
+
+  if (!looksLikeUserQuestion(t)) return null;
+
+  // "How long / what happens" variants not covered by detectObjection
+  if (
+    t.includes("how long") ||
+    t.includes("how much time") ||
+    t.includes("how long is") ||
+    t.includes("how long will this be") ||
+    t.includes("how long will it be") ||
+    t.includes("how long does the call") ||
+    t.includes("how long is the call") ||
+    t.includes("how long will the call") ||
+    t.includes("what happens") ||
+    t.includes("what do i need to do") ||
+    t.includes("what do you need") ||
+    t.includes("what do you want") ||
+    t.includes("what is this for")
+  ) return "what_entails";
+
+  return "generic_question";
+}
+
 
 function classifyStepType(lineRaw: string): StepType {
   const line = String(lineRaw || "").toLowerCase();
@@ -2589,6 +2658,11 @@ function getRebuttalLine(ctx: AICallContext, kind: string): string {
     // Be specific + satisfying, then go right back to booking.
     // Keep it booking-only: no rates, no underwriting, no age/health questions.
     return `Totally — it’s quick, usually about 5 to 10 minutes. ${agent} just goes over what you requested for ${scope} and answers your questions. Would later today or tomorrow be better?`;
+  }
+
+  // ✅ NEW: Generic question fallback (brief answer, then back to booking)
+  if (kind === "generic_question") {
+    return `Good question — ${agent} can cover that on the quick call in a couple minutes. Would later today or tomorrow be better?`;
   }
 
   // Existing objections
@@ -4873,6 +4947,10 @@ state.lastUserSpeechStoppedAtMs = Date.now();
 
     const lastUserText = String(state.lastUserTranscript || "").trim();
     const objectionKind = lastUserText ? detectObjection(lastUserText) : null;
+
+    const questionKind = !objectionKind && lastUserText ? detectQuestionKindForTurn(lastUserText) : null;
+    const objectionOrQuestionKind = objectionKind || questionKind;
+
     const currentStepLine = steps[idx] || getBookingFallbackLine(state.context!);
 
     // ✅ FIX: The user is answering the LAST asked step, not the NEXT step-to-say.
@@ -5010,10 +5088,10 @@ state.lastUserSpeechStoppedAtMs = Date.now();
       return;
     }
 
-    if (objectionKind) {
-      const lineToSay = enforceBookingOnlyLine(state.context!, getRebuttalLine(state.context!, objectionKind));
+    if (objectionOrQuestionKind) {
+      const lineToSay = enforceBookingOnlyLine(state.context!, getRebuttalLine(state.context!, objectionOrQuestionKind));
       const perTurnInstr = buildConversationalRebuttalInstruction(state.context!, lineToSay, {
-        objectionKind,
+        objectionKind: objectionOrQuestionKind,
         userText: lastUserText,
         lastOutboundLine: state.lastPromptLine,
         lastOutboundAtMs: state.lastPromptSentAtMs,
@@ -5049,7 +5127,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
       // ✅ After an objection rebuttal, re-arm the stepper so the next user reply
       // is treated as answering the last asked step (keeps script flow natural).
       state.awaitingUserAnswer = true;
-      state.awaitingAnswerForStepIndex = Math.max(0, (state.scriptStepIndex ?? 0) - 1);
+      state.awaitingAnswerForStepIndex = expectedAnswerIdx;
 
       state.phase = "in_call";
       return;
