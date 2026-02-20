@@ -3922,10 +3922,18 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
       }
     }
 
-    // ✅ COST CUT: while AI is in-control (speaking / waiting / draining), do NOT stream silence to OpenAI.
-    // BUT: if the user has actually started talking, we must allow some silence through so server_vad can detect speech end.
-    const userHasSpokenRecently = Number(state.userAudioMsBuffered || 0) >= 40; // ~2 frames
-    if (isSilence && !userHasSpokenRecently) return;
+    // ✅ COST CUT (SAFE): do NOT stream continuous idle silence to OpenAI.
+    // IMPORTANT: we MUST allow trailing silence after *any* user speech so server_vad can detect end-of-speech && commit.
+    // Using userAudioMsBuffered alone can fail for very short replies (1 frame). Use VAD timestamps as the primary signal.
+    const nowMs_gate = Date.now();
+    const startedAt_gate = Number((state as any).lastUserSpeechStartedAtMs || 0);
+    const stopAt_gate = Number((state as any).lastUserSpeechStoppedAtMs || 0);
+    const userSpokeRecently_gate = (
+      (startedAt_gate > 0 && (nowMs_gate - startedAt_gate) <= 1200) ||
+      (stopAt_gate > 0 && (nowMs_gate - stopAt_gate) <= 1200) ||
+      Number(state.userAudioMsBuffered || 0) >= 20  // 1 frame minimum
+    );
+    if (isSilence && !userSpokeRecently_gate) return;
 
         // While AI is actively speaking, never forward live user audio to OpenAI (we buffer for barge-in instead).
     // EXCEPT: right after a barge-in cancel, we must allow inbound audio through immediately so VAD/transcription can lock.
@@ -4015,16 +4023,37 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
 
       const nowMs = Date.now();
       const listenEnabledAt = Number((state as any).lastListenEnabledAtMs || 0);
+      const warmupUntil = Number((state as any).listenWarmupUntilMs || 0);
+
+      // ✅ Critical: during warmup, DO NOT throttle inbound frames.
+      // We need full-rate audio briefly so OpenAI server_vad can detect the user's first words.
+      // Otherwise we create a catch-22 (we don't know it's speech until VAD, but VAD needs frames).
+      const inWarmup = warmupUntil > 0 && nowMs <= warmupUntil;
+
       const allowInitialSilence = listenEnabledAt > 0 && (nowMs - listenEnabledAt) <= 1200;
 
-      if (allowInitialSilence) {
-        // ✅ Allow a tiny post-greeting "re-entry" window so server_vad can stabilize.
-        // But DO NOT stream full-rate silence (cost spike).
-        // Throttle to ~1 frame / 250ms during this bounded window.
-        const lastMs = Number((state as any).lastSilenceSentAtMs || 0);
-        if (nowMs - lastMs < 250) {
-          return;
-        }
+      // ✅ HARD COST LOCK:
+      // Only stream inbound audio to OpenAI when we EXPECT the user to speak.
+      // This prevents "listening 24/7" which causes the $12/hr spike.
+      const expectingUserSpeech =
+        state.phase === "awaiting_greeting_reply" ||
+        !!state.awaitingUserAnswer ||
+        inWarmup;
+
+      if (!expectingUserSpeech) {
+        return;
+      }
+
+      // ✅ If we're in the brief re-entry window AND not warming up, throttle SILENCE frames only.
+      // This is bounded and prevents cost spikes, while warmup preserves VAD reliability.
+      const lastMs = Number((state as any).lastSilenceSentAtMs || 0);
+      const shouldDropSilenceFrame = !inWarmup && allowInitialSilence && (nowMs - lastMs) < 250;
+
+      if (shouldDropSilenceFrame) {
+        return;
+      }
+
+      if (!inWarmup && allowInitialSilence) {
         (state as any).lastSilenceSentAtMs = nowMs;
       } else {
 
@@ -4062,6 +4091,33 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
 
       }
     }
+    // 🔎 DEBUG METER (low-noise): count inbound frames forwarded to OpenAI + how many are silence.
+    try {
+      (state as any)._dbgFwdFrames = Number((state as any)._dbgFwdFrames || 0) + 1;
+      const _isSil = isLikelySilenceMulawBase64(payload);
+      if (_isSil) (state as any)._dbgFwdSilence = Number((state as any)._dbgFwdSilence || 0) + 1;
+      const _now = Date.now();
+      const _last = Number((state as any)._dbgFwdLogAtMs || 0);
+      if (_last <= 0) (state as any)._dbgFwdLogAtMs = _now;
+      if (_now - Number((state as any)._dbgFwdLogAtMs || 0) >= 2000) {
+        const f = Number((state as any)._dbgFwdFrames || 0);
+        const sil = Number((state as any)._dbgFwdSilence || 0);
+        console.log("[AI-VOICE][FWD-METER]", {
+          callSid: state.callSid,
+          phase: state.phase,
+          awaitingUserAnswer: !!state.awaitingUserAnswer,
+          inFlight: !!(state as any).responseInFlight,
+          waiting: !!state.waitingForResponse,
+          aiSpeaking: !!state.aiSpeaking,
+          frames2s: f,
+          silence2s: sil,
+        });
+        (state as any)._dbgFwdFrames = 0;
+        (state as any)._dbgFwdSilence = 0;
+        (state as any)._dbgFwdLogAtMs = _now;
+      }
+    } catch {}
+
     state.openAiWs.send(
       JSON.stringify({
         type: "input_audio_buffer.append",
@@ -4316,6 +4372,7 @@ async function handleOpenAiEvent(
     } catch {}
 
     state.lastUserSpeechStartedAtMs = Date.now();
+    (state as any).listenWarmupUntilMs = 0;
 
     // ✅ STUCK-SPEECH FAILSAFE:
     // If OpenAI never emits speech_stopped, force a commit so the call doesn't go dead silent forever.
@@ -5652,6 +5709,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
       stopOutboundPacer(twilioWs, state, "OpenAI done + <1 frame buffered");
       setAiSpeaking(state, false, `OpenAI ${t} (buffer < 1 frame)`);
       (state as any).lastListenEnabledAtMs = Date.now();
+      (state as any).listenWarmupUntilMs = Date.now() + 700;
 
       // ✅ If we never produced audible greeting audio, do NOT advance steps/phases.
       if (state.greetingAdvancePending) {
