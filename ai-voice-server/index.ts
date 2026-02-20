@@ -608,6 +608,7 @@ function ensureOutboundPacer(twilioWs: WebSocket, state: CallState) {
         if (remaining <= 0) {
           stopOutboundPacer(twilioWs, live, "OpenAI done + buffer empty");
           setAiSpeaking(live, false, "pacer drained");
+          (live as any).lastListenEnabledAtMs = Date.now();
           void replayPendingCommittedTurn(twilioWs, live, "pacer drained");
           return;
         }
@@ -630,6 +631,7 @@ function ensureOutboundPacer(twilioWs: WebSocket, state: CallState) {
 
         stopOutboundPacer(twilioWs, live, "buffer drained after OpenAI done");
         setAiSpeaking(live, false, "pacer drained");
+        (live as any).lastListenEnabledAtMs = Date.now();
         void replayPendingCommittedTurn(twilioWs, live, "pacer drained");
         return;
       }
@@ -3987,7 +3989,7 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
     const isListening =
       !state.waitingForResponse &&
       !(state as any).responseInFlight &&
-      (!state.aiSpeaking || state.outboundOpenAiDone === true);
+      !state.aiSpeaking;
     if (!isListening) {
       return;
     }
@@ -3999,6 +4001,15 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
       // If user is actively speaking, do NOT throttle silence.
 
       const nowMs = Date.now();
+      const listenEnabledAt = Number((state as any).lastListenEnabledAtMs || 0);
+      const allowInitialSilence = listenEnabledAt > 0 && (nowMs - listenEnabledAt) <= 1200;
+
+      if (allowInitialSilence) {
+        // ✅ Allow a tiny post-greeting "re-entry" window so server_vad can stabilize.
+        // Bounded (<=1200ms) and only right after listening is re-enabled.
+        // NOT continuous silence streaming.
+      } else {
+
       const startedAt = Number((state as any).lastUserSpeechStartedAtMs || 0);
       const stopAt = Number((state as any).lastUserSpeechStoppedAtMs || 0);
 
@@ -4029,6 +4040,8 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
           return;
         }
         (state as any).lastSilenceSentAtMs = nowMs;
+      }
+
       }
     }
     state.openAiWs.send(
@@ -5604,6 +5617,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
       state.outboundMuLawBuffer = Buffer.alloc(0);
       stopOutboundPacer(twilioWs, state, "OpenAI done + <1 frame buffered");
       setAiSpeaking(state, false, `OpenAI ${t} (buffer < 1 frame)`);
+      (state as any).lastListenEnabledAtMs = Date.now();
 
       // ✅ If we never produced audible greeting audio, do NOT advance steps/phases.
       if (state.greetingAdvancePending) {
