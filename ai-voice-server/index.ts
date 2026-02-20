@@ -4595,15 +4595,38 @@ state.lastUserSpeechStoppedAtMs = Date.now();
     } catch {}
 
     if (state.pendingAudioFrames.length > 0) {
-      console.log(
-        "[AI-VOICE] Dropping buffered inbound frames before greeting:",
-        state.pendingAudioFrames.length
-      );
+
+      // ✅ FIX: keep a small tail of early caller audio so we don't drop their initial "hello".
+
+      // This is bounded (~500ms) and does NOT increase ongoing cost.
+
+      const keepN = 25; // 25 * 20ms = 500ms
+
+      const kept = state.pendingAudioFrames.slice(-keepN);
+
+      const dropped = Math.max(0, state.pendingAudioFrames.length - kept.length);
+
+      (state as any).preGreetingFrames = kept;
+
       state.pendingAudioFrames = [];
+
+      console.log("[AI-VOICE] Keeping buffered inbound frames before greeting", { kept: kept.length, dropped });
+
     }
 
     try {
       state.openAiWs?.send(JSON.stringify({ type: "input_audio_buffer.clear" }));
+    // ✅ FIX: re-play a small slice of early caller audio (if any) so server_vad/transcription can lock.
+    // Bounded (<=500ms) and only happens once per call. Does NOT stream idle silence.
+    try {
+      const pre = (state as any).preGreetingFrames;
+      if (state.openAiWs && Array.isArray(pre) && pre.length > 0) {
+        for (const f of pre) {
+          state.openAiWs.send(JSON.stringify({ type: "input_audio_buffer.append", audio: f }));
+        }
+      }
+      (state as any).preGreetingFrames = [];
+    } catch {}
     } catch {}
 
     if (
@@ -4651,6 +4674,19 @@ state.lastUserSpeechStoppedAtMs = Date.now();
         ) {
           return;
         }
+
+        // ✅ FIX: If the caller is already speaking (very common right at connect),
+        // do NOT fire the greeting yet. Wait briefly for speech to stop so we don't talk over them.
+        try {
+          for (let i = 0; i < 10; i++) {
+            const startedAt = Number((liveState as any).lastUserSpeechStartedAtMs || 0);
+            const stopAt = Number((liveState as any).lastUserSpeechStoppedAtMs || 0);
+            const now = Date.now();
+            const userSpeaking = startedAt > 0 && (stopAt <= 0 || stopAt < startedAt) && (now - startedAt) <= 5000;
+            if (!userSpeaking) break;
+            await sleep(200);
+          }
+        } catch {}
 
         liveState.userAudioMsBuffered = 0;
         liveState.lastUserTranscript = "";
