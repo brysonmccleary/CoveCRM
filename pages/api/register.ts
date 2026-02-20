@@ -65,6 +65,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const cleanEmail = String(email || "").trim().toLowerCase();
     const cleanName = String(name || "").trim();
+    // Derive first/last name for Settings → Profile (so AI always has agent name)
+    // Example: "First Last" => firstName="First", lastName="Last"
+    const _nameParts = cleanName.split(/\s+/).filter(Boolean);
+    const firstName = String(_nameParts[0] || "").slice(0, 40);
+    const lastName = String(_nameParts.slice(1).join(" ") || "").slice(0, 60);
+
     const pw = String(password || "");
     const confirmPw = confirmPassword !== undefined ? String(confirmPassword) : undefined;
 
@@ -117,6 +123,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           email: cleanEmail,
           name: cleanName,
           metadata: {
+            agentFirstName: firstName,
+            agentLastName: lastName,
             usedCode: codeInputRaw || "",
             isHouseCode: String(isHouse),
             referredByUserId: referredByUserId ? String(referredByUserId) : "",
@@ -133,6 +141,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const newUser = await User.create({
       name: cleanName,
+      firstName,
+      lastName,
       email: cleanEmail,
       password: hashed,
       role: admin ? "admin" : "user",

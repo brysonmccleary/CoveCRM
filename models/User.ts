@@ -258,6 +258,8 @@ const UserSchema = new Schema<IUser>({
   email: { type: String, required: true },
   password: { type: String },
   name: { type: String },
+  firstName: { type: String, default: "" },
+  lastName: { type: String, default: "" },
   role: { type: String, enum: ["user", "admin"], default: "user" },
   createdAt: { type: Date, default: Date.now },
   username: { type: String },
