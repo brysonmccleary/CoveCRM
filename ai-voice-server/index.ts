@@ -882,7 +882,20 @@ async function replayPendingCommittedTurn(
     }
 
     if (objectionOrQuestionKind) {
-      const lineToSay = enforceBookingOnlyLine(state.context!, getRebuttalLine(state.context!, objectionOrQuestionKind));
+      // ✅ HARD-LOCK: "How long does it take?" must ALWAYS get the same rebuttal (prevents inconsistent answers).
+      // This does NOT change model, audio format, or session settings. Only the chosen line.
+      let overrideRebuttalLine: string | null = null;
+      try {
+        const t = String(lastUserText || "").toLowerCase();
+        const looksHowLong =
+          (t.includes("how long") && (t.includes("take") || t.includes("takes") || t.includes("call") || t.includes("does it"))) ||
+          t.trim() === "how long";
+        if (looksHowLong) {
+          overrideRebuttalLine =
+            "I understand — it’s usually about 5 to 10 minutes. Would later today or tomorrow be better?";
+        }
+      } catch {}
+      const lineToSay = enforceBookingOnlyLine(state.context!, overrideRebuttalLine || getRebuttalLine(state.context!, objectionOrQuestionKind));
       const perTurnInstr = buildConversationalRebuttalInstruction(state.context!, lineToSay, {
         objectionKind: objectionOrQuestionKind,
         userText: lastUserText,
@@ -4006,8 +4019,13 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
 
       if (allowInitialSilence) {
         // ✅ Allow a tiny post-greeting "re-entry" window so server_vad can stabilize.
-        // Bounded (<=1200ms) and only right after listening is re-enabled.
-        // NOT continuous silence streaming.
+        // But DO NOT stream full-rate silence (cost spike).
+        // Throttle to ~1 frame / 250ms during this bounded window.
+        const lastMs = Number((state as any).lastSilenceSentAtMs || 0);
+        if (nowMs - lastMs < 250) {
+          return;
+        }
+        (state as any).lastSilenceSentAtMs = nowMs;
       } else {
 
       const startedAt = Number((state as any).lastUserSpeechStartedAtMs || 0);
@@ -5124,7 +5142,23 @@ state.lastUserSpeechStoppedAtMs = Date.now();
     }
 
     if (objectionOrQuestionKind) {
-      const lineToSay = enforceBookingOnlyLine(state.context!, getRebuttalLine(state.context!, objectionOrQuestionKind));
+      // ✅ HARD-LOCK: "How long does it take?" must ALWAYS get the same rebuttal (prevents inconsistent answers).
+      // This does NOT change model, audio format, or session settings. Only the chosen line.
+      let overrideRebuttalLine: string | null = null;
+      try {
+        const t = String(lastUserText || "").toLowerCase();
+        const looksHowLong =
+          (t.includes("how long") && (t.includes("take") || t.includes("takes") || t.includes("call") || t.includes("does it"))) ||
+          t.trim() === "how long";
+        if (looksHowLong) {
+          overrideRebuttalLine =
+            "I understand — it’s usually about 5 to 10 minutes. Would later today or tomorrow be better?";
+        }
+      } catch {}
+      const lineToSay = enforceBookingOnlyLine(
+        state.context!,
+        overrideRebuttalLine || getRebuttalLine(state.context!, objectionOrQuestionKind)
+      );
       const perTurnInstr = buildConversationalRebuttalInstruction(state.context!, lineToSay, {
         objectionKind: objectionOrQuestionKind,
         userText: lastUserText,
