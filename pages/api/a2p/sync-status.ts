@@ -34,6 +34,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         .json({ ok: false, error: "CRON_SECRET/CRON_KEY not configured" });
     }
 
+    // 🔒 Require token or header key for cron shim
+    const token = typeof req.query.token === "string" ? req.query.token : "";
+    const headerKey = String(req.headers["x-cron-key"] || "");
+    if (token !== CRON_KEY && headerKey !== CRON_KEY) {
+      return res.status(401).json({ ok: false, error: "Unauthorized" });
+    }
+
     const base = makeBaseUrl(req);
     const target = `${base}/api/a2p/sync`;
 
