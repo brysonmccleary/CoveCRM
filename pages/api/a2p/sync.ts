@@ -462,42 +462,62 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       accountSidUsed = resolved.accountSid;
 
 
-      // ✅ Twilio = truth: if DB is missing/wrong SIDs, reattach to canonical Twilio campaign.
-      // This covers manual resubmits or support-created campaigns.
+      // ✅ Twilio = truth (bulletproof):
+      // Always consider canonical campaign from Twilio (approved > pending > newest),
+      // even if our stored campaign fetch succeeds, because resubmits can create new SIDs.
       try {
-        // If we *think* we have SIDs, validate them quickly. If fetch fails, treat as missing.
+        // Fetch current (if present) to get a status baseline
+        let currentStatus: string | undefined;
         const fetched = await tryFetchCampaignTenant({ client, messagingServiceSid, campaignSid });
-        if (!fetched) {
-          // scan Twilio for best available campaign (approved > pending > newest)
-          const canonical = await scanTwilioForCanonicalCampaignTenant({
-            client,
-            preferBrandSid: brandSid || null,
-          });
+        if (fetched) {
+          currentStatus = (fetched as any)?.status || (fetched as any)?.state;
+          campStatus = currentStatus || campStatus;
+        }
 
-          if (canonical?.messagingServiceSid && canonical?.campaignSid) {
-            messagingServiceSid = canonical.messagingServiceSid;
-            campaignSid = canonical.campaignSid;
-            if (canonical.brandSid) brandSid = canonical.brandSid;
+        const canonical = await scanTwilioForCanonicalCampaignTenant({
+          client,
+          preferBrandSid: brandSid || null,
+        });
 
-            // Persist the canonical SIDs so future syncs are fast and accurate
-            await A2PProfile.updateOne(
-              { _id: doc._id },
-              {
-                $set: {
-                  messagingServiceSid,
-                  campaignSid,
-                  usa2pSid: campaignSid,
-                  ...(brandSid ? { brandSid } : {}),
-                  lastSyncedAt: new Date(),
-                },
-                $unset: { lastError: 1 },
-              }
-            );
+        const scoreCurrent = scoreCampaignStatus(currentStatus || campStatus || "");
+        const scoreCanonical = scoreCampaignStatus(canonical?.campaignStatus || "");
+        const currentApproved = Boolean(
+          String(currentStatus || campStatus || "").toLowerCase() &&
+            CAMPAIGN_APPROVED.has(String(currentStatus || campStatus || "").toLowerCase())
+        );
 
-            // Keep a best-effort campaign status hint for downstream logic (we still fetch below)
-            if (canonical.campaignStatus) {
-              campStatus = canonical.campaignStatus;
+        const shouldSwitch =
+          (!campaignSid || !messagingServiceSid) ||
+          (canonical?.campaignSid && canonical?.messagingServiceSid && scoreCanonical > scoreCurrent) ||
+          (canonical?.campaignSid &&
+            canonical?.messagingServiceSid &&
+            canonical.campaignSid !== campaignSid &&
+            !currentApproved);
+
+        if (shouldSwitch && canonical?.messagingServiceSid && canonical?.campaignSid) {
+          messagingServiceSid = canonical.messagingServiceSid;
+          campaignSid = canonical.campaignSid;
+          if (canonical.brandSid && String(canonical.brandSid).startsWith("BN")) {
+            brandSid = String(canonical.brandSid);
+          }
+
+          // Persist canonical SIDs so future syncs are accurate
+          await A2PProfile.updateOne(
+            { _id: doc._id },
+            {
+              $set: {
+                messagingServiceSid,
+                campaignSid,
+                usa2pSid: campaignSid,
+                ...(brandSid ? { brandSid } : {}),
+                lastSyncedAt: new Date(),
+              },
+              $unset: { lastError: 1 },
             }
+          );
+
+          if (canonical.campaignStatus) {
+            campStatus = canonical.campaignStatus;
           }
         }
       } catch {
