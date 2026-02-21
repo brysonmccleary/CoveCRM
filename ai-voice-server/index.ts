@@ -852,6 +852,10 @@ async function replayPendingCommittedTurn(
         })
       );
 
+
+      // ✅ After asking the first real question, start listening for the user reply.
+      armExpectingUserSpeech(state, 0, "post-greeting step asked");
+
       // ✅ Do NOT advance out of greeting yet.
       // We only advance after we confirm OpenAI actually produced outbound audio (first audio.delta).
       let nextIdx = steps.length > 1 ? 1 : 0;
@@ -4336,6 +4340,32 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
   });
 }
 
+
+// ✅ Re-arm "expecting user speech" after we speak a line that needs an answer.
+// This prevents the cost-cut gate from dropping inbound audio forever after a question is asked.
+function armExpectingUserSpeech(state: any, stepIndex: number | undefined, reason: string) {
+  try {
+    state.awaitingUserAnswer = true;
+    state.awaitingAnswerForStepIndex = stepIndex;
+    (state as any).lastListenEnabledAtMs = Date.now();
+
+    // Warmup window: do not throttle inbound frames briefly so server_vad can lock on first words.
+    (state as any).listenWarmupUntilMs = Date.now() + 900;
+
+    // Reset silence throttle meter so we don't starve VAD right after re-arming.
+    (state as any).lastSilenceSentAtMs = 0;
+
+    try {
+      console.log("[AI-VOICE][LISTEN-ARM]", {
+        callSid: state.callSid,
+        streamSid: state.streamSid,
+        stepIndex,
+        phase: state.phase,
+        reason,
+      });
+    } catch {}
+  } catch {}
+}
 /**
  * OpenAI events → Twilio + control metadata
  */
@@ -5425,6 +5455,10 @@ state.lastUserSpeechStoppedAtMs = Date.now();
             response: { modalities: ["audio", "text"], instructions: instr },
 
           }));
+
+
+          // ✅ Reprompt is a question; re-arm listening so we capture the next user turn.
+          armExpectingUserSpeech(state, Number(state.awaitingAnswerForStepIndex ?? state.scriptStepIndex ?? 0), "reprompt asked");
 
         } catch (e) {
 
