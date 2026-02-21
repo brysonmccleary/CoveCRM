@@ -149,7 +149,9 @@ export default async function handler(
   try {
     // Optional secret check to prevent abuse
     if (CRON_SECRET) {
-      const token = (req.query.token || req.headers["x-cron-token"] || req.headers["x-cron-key"]) as
+      const authHeader = String(req.headers["authorization"] || "");
+      const bearer = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
+      const token = (req.query.token || req.headers["x-cron-token"] || req.headers["x-cron-key"] || bearer) as
         | string
         | undefined;
       if (token !== CRON_SECRET)

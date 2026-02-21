@@ -31,7 +31,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // ✅ Accept either ?token=... (Vercel cron style) OR x-cron-key header
     const token = typeof req.query.token === "string" ? String(req.query.token) : "";
     const headerKey = String(req.headers["x-cron-key"] || "");
-    if (CRON_KEY && token !== CRON_KEY && headerKey !== CRON_KEY) {
+    const authHeader = String(req.headers["authorization"] || "");
+    const bearer = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
+    if (CRON_KEY && token !== CRON_KEY && headerKey !== CRON_KEY && bearer !== CRON_KEY) {
       return res.status(401).json({ ok: false, error: "Unauthorized" });
     }
 
