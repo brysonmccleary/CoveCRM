@@ -496,7 +496,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       // ✅ Bill one-time A2P approval fee ONLY on first transition to messagingReady (idempotent)
       const wasReady =
-        (user as any)?.registrationStatus === "ready" || (user as any)?.messagingReady === true;
+        (user as any)?.a2p?.registrationStatus === "ready" || (user as any)?.a2p?.messagingReady === true;
 
       try {
         if (messagingReady && !wasReady) {

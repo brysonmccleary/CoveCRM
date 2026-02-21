@@ -162,6 +162,124 @@ async function recoverBrandSidByBundlePairTenant(args: {
   }
 }
 
+
+type TwilioA2PCandidate = {
+  messagingServiceSid: string;
+  campaignSid: string;
+  campaignStatus?: string;
+  brandRegistrationSid?: string | null;
+  dateCreated?: any;
+};
+
+function scoreCampaignStatus(statusRaw: string | undefined | null) {
+  const st = String(statusRaw || "").toLowerCase();
+  if (st && CAMPAIGN_APPROVED.has(st)) return 300;
+  if (st && CAMPAIGN_PENDING.has(st)) return 200;
+  if (st && CAMPAIGN_FAILED.has(st)) return 100;
+  if (st) return 50;
+  return 0;
+}
+
+function pickBestCandidate(cands: TwilioA2PCandidate[], preferBrandSid?: string | null) {
+  if (!cands.length) return null;
+
+  const prefer = (preferBrandSid || "").trim();
+  const preferred = prefer
+    ? cands.filter((c) => String(c.brandRegistrationSid || "").trim() === prefer)
+    : [];
+
+  const pool = preferred.length ? preferred : cands;
+
+  const sorted = [...pool].sort((a, b) => {
+    const sa = scoreCampaignStatus(a.campaignStatus);
+    const sb = scoreCampaignStatus(b.campaignStatus);
+    if (sb !== sa) return sb - sa;
+
+    // tie-breaker: newest dateCreated wins (if available)
+    const da = (a as any).dateCreated ? new Date((a as any).dateCreated).getTime() : 0;
+    const db = (b as any).dateCreated ? new Date((b as any).dateCreated).getTime() : 0;
+    return db - da;
+  });
+
+  return sorted[0] || null;
+}
+
+/**
+ * Twilio = truth:
+ * If our DB is missing or wrong SIDs, scan Twilio to find the canonical campaign
+ * (approved > pending > newest) and return { messagingServiceSid, campaignSid, brandSid }.
+ */
+async function scanTwilioForCanonicalCampaignTenant(args: {
+  client: any;
+  preferBrandSid?: string | null;
+}): Promise<{ messagingServiceSid: string; campaignSid: string; campaignStatus?: string; brandSid?: string | null } | null> {
+  const { client, preferBrandSid } = args;
+  if (!client) return null;
+
+  let services: any[] = [];
+  try {
+    services = (await client.messaging.v1.services.list({ limit: 50 })) || [];
+  } catch {
+    return null;
+  }
+
+  const all: TwilioA2PCandidate[] = [];
+
+  for (const svc of services) {
+    const svcSid = String((svc as any)?.sid || "").trim();
+    if (!svcSid) continue;
+
+    try {
+      const list = (await client.messaging.v1.services(svcSid).usAppToPerson.list({ limit: 50 })) || [];
+      for (const c of list) {
+        const campaignSid =
+          String((c as any)?.sid || (c as any)?.campaignSid || (c as any)?.campaign_id || (c as any)?.campaignId || "").trim();
+        if (!campaignSid) continue;
+
+        const campaignStatus = (c as any)?.status || (c as any)?.state;
+        const brandRegistrationSid = (c as any)?.brandRegistrationSid || (c as any)?.brandSid || null;
+
+        all.push({
+          messagingServiceSid: svcSid,
+          campaignSid,
+          campaignStatus,
+          brandRegistrationSid,
+          dateCreated: (c as any)?.dateCreated || null,
+        });
+      }
+    } catch {
+      // ignore per service
+    }
+  }
+
+  const best = pickBestCandidate(all, preferBrandSid || null);
+  if (!best) return null;
+
+  const brandSid =
+    best.brandRegistrationSid && String(best.brandRegistrationSid).startsWith("BN")
+      ? String(best.brandRegistrationSid)
+      : null;
+
+  return {
+    messagingServiceSid: best.messagingServiceSid,
+    campaignSid: best.campaignSid,
+    campaignStatus: best.campaignStatus,
+    brandSid,
+  };
+}
+
+async function tryFetchCampaignTenant(args: { client: any; messagingServiceSid: string | null; campaignSid: string | null }) {
+  const { client, messagingServiceSid, campaignSid } = args;
+  if (!client || !messagingServiceSid || !campaignSid) return null;
+  try {
+    const usA2p = await client.messaging.v1.services(messagingServiceSid).usAppToPerson(campaignSid).fetch();
+    return usA2p || null;
+  } catch {
+    return null;
+  }
+}
+
+
 async function ensureCampaignForApprovedBrandTenant(args: {
   client: any;
   doc: AnyDoc;
@@ -295,6 +413,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     let campaignSid = doc.campaignSid || doc.usa2pSid || null;
     let messagingServiceSid = doc.messagingServiceSid || null;
 
+    // campaign status hint used throughout the loop (including Twilio-truth reattach)
+    let campStatus: string | undefined;
+
     const baseClass = classifyFromDoc(doc);
 
     if (!hasA2PSubmissionData(doc)) {
@@ -339,6 +460,50 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const resolved = await getClientForUser(userEmail);
       client = resolved.client as any;
       accountSidUsed = resolved.accountSid;
+
+
+      // ✅ Twilio = truth: if DB is missing/wrong SIDs, reattach to canonical Twilio campaign.
+      // This covers manual resubmits or support-created campaigns.
+      try {
+        // If we *think* we have SIDs, validate them quickly. If fetch fails, treat as missing.
+        const fetched = await tryFetchCampaignTenant({ client, messagingServiceSid, campaignSid });
+        if (!fetched) {
+          // scan Twilio for best available campaign (approved > pending > newest)
+          const canonical = await scanTwilioForCanonicalCampaignTenant({
+            client,
+            preferBrandSid: brandSid || null,
+          });
+
+          if (canonical?.messagingServiceSid && canonical?.campaignSid) {
+            messagingServiceSid = canonical.messagingServiceSid;
+            campaignSid = canonical.campaignSid;
+            if (canonical.brandSid) brandSid = canonical.brandSid;
+
+            // Persist the canonical SIDs so future syncs are fast and accurate
+            await A2PProfile.updateOne(
+              { _id: doc._id },
+              {
+                $set: {
+                  messagingServiceSid,
+                  campaignSid,
+                  usa2pSid: campaignSid,
+                  ...(brandSid ? { brandSid } : {}),
+                  lastSyncedAt: new Date(),
+                },
+                $unset: { lastError: 1 },
+              }
+            );
+
+            // Keep a best-effort campaign status hint for downstream logic (we still fetch below)
+            if (canonical.campaignStatus) {
+              campStatus = canonical.campaignStatus;
+            }
+          }
+        }
+      } catch {
+        // non-fatal; we'll fall back to existing behavior
+      }
+
     } catch (e: any) {
       // ✅ Do not kill the batch. Record error and continue.
       results.push({
@@ -448,7 +613,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     let brandStatus: string | undefined;
-    let campStatus: string | undefined;
 
     try {
       if (brandSid) {
