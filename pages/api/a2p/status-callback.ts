@@ -6,6 +6,7 @@ import PhoneNumber from "@/models/PhoneNumber";
 import User from "@/models/User";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
 import { sendA2PApprovedEmail, sendA2PDeclinedEmail } from "@/lib/a2p/notifications";
+import { chargeA2PApprovalIfNeeded } from "@/lib/billing/trackUsage";
 
 const BASE_URL = (
   process.env.NEXT_PUBLIC_BASE_URL ||
@@ -492,6 +493,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       // ✅ READY only when both are approved
       const messagingReady = brandIsApproved && campaignIsApproved;
+
+      // ✅ Bill one-time A2P approval fee ONLY on first transition to messagingReady (idempotent)
+      const wasReady =
+        (user as any)?.registrationStatus === "ready" || (user as any)?.messagingReady === true;
+
+      try {
+        if (messagingReady && !wasReady) {
+          await chargeA2PApprovalIfNeeded({ user });
+        }
+      } catch (e: any) {
+        console.warn("[A2P] approval fee charge failed (non-fatal):", e?.message || e);
+      }
+
 
       // ✅ RegistrationStatus should reflect reality, not “SID exists”
       const registrationStatus = messagingReady

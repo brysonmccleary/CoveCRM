@@ -5,6 +5,7 @@ import A2PProfile from "@/models/A2PProfile";
 import User from "@/models/User";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
 import { sendA2PApprovedEmail, sendA2PDeclinedEmail } from "@/lib/a2p/notifications";
+import { chargeA2PApprovalIfNeeded } from "@/lib/billing/trackUsage";
 
 const BASE_URL = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "").replace(/\/$/, "");
 const CRON_SECRET = process.env.CRON_SECRET || "";
@@ -377,6 +378,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         );
 
         if (!doc.approvalNotifiedAt) {
+          // ✅ Bill one-time A2P approval fee ONLY once on first approval notification (idempotent)
+          try {
+            await chargeA2PApprovalIfNeeded({ user });
+          } catch (e: any) {
+            console.warn("[A2P] approval fee charge failed (non-fatal):", e?.message || e);
+          }
+
           try {
             await sendA2PApprovedEmail({
               to: userEmail,
@@ -515,6 +523,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         );
 
         if (!doc.approvalNotifiedAt) {
+          // ✅ Bill one-time A2P approval fee ONLY once on first approval notification (idempotent)
+          try {
+            await chargeA2PApprovalIfNeeded({ user });
+          } catch (e: any) {
+            console.warn("[A2P] approval fee charge failed (non-fatal):", e?.message || e);
+          }
+
           try {
             await sendA2PApprovedEmail({
               to: userEmail,
