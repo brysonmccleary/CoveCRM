@@ -149,7 +149,7 @@ export default async function handler(
   try {
     // Optional secret check to prevent abuse
     if (CRON_SECRET) {
-      const token = (req.query.token || req.headers["x-cron-token"]) as
+      const token = (req.query.token || req.headers["x-cron-token"] || req.headers["x-cron-key"]) as
         | string
         | undefined;
       if (token !== CRON_SECRET)
@@ -180,7 +180,7 @@ export default async function handler(
       const { changed, details } = await checkOne(profile as IA2PProfile);
 
       if (changed) {
-        await profile.save();
+        await profile.save({ validateBeforeSave: false });
         updated++;
       }
 
