@@ -252,7 +252,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           .usAppToPerson(campaignSid)
           .fetch();
 
-        campaignStatus = String((camp as any).status || (camp as any).state || campaignStatus);
+        campaignStatus = String((camp as any).campaignStatus || (camp as any).campaign_status || (camp as any).status || (camp as any).state || campaignStatus);
         campaignStatusFetched = true;
 
         const lower = safeLower(campaignStatus);

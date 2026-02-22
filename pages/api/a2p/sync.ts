@@ -236,7 +236,7 @@ async function scanTwilioForCanonicalCampaignTenant(args: {
           String((c as any)?.sid || (c as any)?.campaignSid || (c as any)?.campaign_id || (c as any)?.campaignId || "").trim();
         if (!campaignSid) continue;
 
-        const campaignStatus = (c as any)?.status || (c as any)?.state;
+        const campaignStatus = (c as any)?.campaignStatus || (c as any)?.campaign_status || (c as any)?.status || (c as any)?.state;
         const brandRegistrationSid = (c as any)?.brandRegistrationSid || (c as any)?.brandSid || null;
 
         all.push({
@@ -672,7 +672,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     try {
       if (campaignSid && messagingServiceSid) {
         const usA2p = await client.messaging.v1.services(messagingServiceSid).usAppToPerson(campaignSid).fetch();
-        campStatus = (usA2p as any)?.status || (usA2p as any)?.state;
+        campStatus = (usA2p as any)?.campaignStatus || (usA2p as any)?.campaign_status || (usA2p as any)?.status || (usA2p as any)?.state;
       }
     } catch {
       // ignore
