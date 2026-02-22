@@ -104,6 +104,7 @@ export default function AIDialSessionPage() {
 
   const [folders, setFolders] = useState<Folder[]>([]);
   const [numbers, setNumbers] = useState<NumberEntry[]>([]);
+
   const [loadingFolders, setLoadingFolders] = useState(true);
   const [loadingNumbers, setLoadingNumbers] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -112,6 +113,18 @@ export default function AIDialSessionPage() {
   const [selectedScriptKey, setSelectedScriptKey] = useState<string>("");
   const [selectedVoiceKey, setSelectedVoiceKey] = useState<string>("");
   const [selectedFromNumber, setSelectedFromNumber] = useState<string>("");
+
+  // If switching accounts, clear any saved dial number that isn't owned by this account.
+  useEffect(() => {
+    if (!selectedFromNumber) return;
+    if (!Array.isArray(numbers) || numbers.length === 0) return;
+    const ok = numbers.some((n) => n.phoneNumber === selectedFromNumber);
+    if (ok) return;
+    setSelectedFromNumber("");
+    try {
+      localStorage.removeItem("selectedDialNumber");
+    } catch {}
+  }, [numbers, selectedFromNumber]);
 
   const [sessionLoading, setSessionLoading] = useState(false);
   const [sessionError, setSessionError] = useState<string | null>(null);
@@ -768,32 +781,6 @@ export default function AIDialSessionPage() {
           </div>
         </div>
 
-        <div className="text-xs text-gray-400">
-          <p className="mb-1 font-semibold">
-            Architecture notes (for later wiring):
-          </p>
-          <ul className="list-disc list-inside space-y-1">
-            <li>
-              Each AI Dial Session is stored in <code>AICallSession</code> with
-              folder, script, voice, fromNumber, status and basic stats.
-            </li>
-            <li>
-              Individual AI calls (with recordings) will be stored in{" "}
-              <code>AICallRecording</code> and attach back to leads +
-              interaction history.
-            </li>
-            <li>
-              Scripts and voices can later be managed in{" "}
-              <code>AIAgentScript</code> and{" "}
-              <code>AIAgentVoiceProfile</code> instead of the hardcoded lists
-              here.
-            </li>
-            <li>
-              AI Dialer billing is separate from your manual dialer usage and
-              uses a prepaid minute balance.
-            </li>
-          </ul>
-        </div>
       </div>
     </div>
   );
