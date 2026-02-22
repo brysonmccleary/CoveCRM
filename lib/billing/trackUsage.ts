@@ -1,6 +1,7 @@
 // /lib/billing/trackUsage.ts
 import mongoose from "mongoose";
 import User from "@/models/User";
+import A2PProfile from "@/models/A2PProfile";
 import { stripe } from "@/lib/stripe";
 
 
@@ -197,11 +198,29 @@ export async function chargeA2PApprovalIfNeeded({
   //  - a2p.applicationStatus === 'approved'
   //  - a2p.registrationStatus === 'ready'
   //  - legacy: twilio.a2pStatus === 'approved'
-  const approved =
+  let approved =
     a2p.messagingReady === true ||
     a2p.applicationStatus === "approved" ||
     a2p.registrationStatus === "ready" ||
     userDoc?.twilio?.a2pStatus === "approved";
+
+  // ✅ Also accept A2PProfile as truth (our A2P system now writes here)
+  if (!approved) {
+    try {
+      const prof: any = await A2PProfile.findOne({ userId: String(userDoc._id) });
+      if (prof) {
+        const reg = String(prof.registrationStatus || "").toLowerCase();
+        const app = String(prof.applicationStatus || "").toLowerCase();
+        approved =
+          prof.messagingReady === true ||
+          app === "approved" ||
+          reg === "campaign_approved" ||
+          reg === "ready";
+      }
+    } catch {
+      // non-fatal; fall through
+    }
+  }
 
   if (!approved) {
     return { charged: false, reason: "not-approved" };
