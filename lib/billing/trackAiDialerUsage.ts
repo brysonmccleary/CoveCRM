@@ -105,93 +105,90 @@ export async function trackAiDialerUsage({
 
   const billableAmountUsd = minutes * AI_DIALER_RATE_PER_MIN_USD;
 
+  // Note: billedAmount is kept as ACTUAL charged total (updated when invoices are created).
+  const billedTotalUsd = Number((userDoc as any).aiDialerBilledTotalCents || 0) / 100;
   userDoc.aiDialerUsage = {
     vendorCost: prevUsage.vendorCost + vendorCostUsd,
     billedMinutes: prevUsage.billedMinutes + minutes,
-    billedAmount: prevUsage.billedAmount + billableAmountUsd,
-    lastChargedAt: new Date(),
+    billedAmount: billedTotalUsd,
+    lastChargedAt: prevUsage.lastChargedAt || null,
   };
 
-  /**
-   * ✅ IMPORTANT: Arm auto-reload ONLY after real AI Dialer usage occurs.
-   * This function should only be called for real connected minutes, but we still
-   * keep the arming rule here as a second layer of safety and idempotency.
-   */
-  if (minutes > 0 && (userDoc as any).aiDialerAutoReloadArmed !== true) {
-    (userDoc as any).aiDialerAutoReloadArmed = true;
-  }
 
-  // Admins never actually billed for AI dialer, but we keep stats
+  /**
+   * ✅ POSTPAID AI DIALER BILLING (LOCKED):
+   * - Do NOT use "aiDialerBalance" top-ups.
+   * - Accrue billed usage in cents.
+   * - Charge Stripe in $20 increments when accrued reaches threshold.
+   * - Admin allow-list is unchanged (admins never billed).
+   */
+
+  // Admins never billed for AI dialer, but we keep stats
   if (isAdminEmail(userDoc.email)) {
-    // Admins should always be armed (harmless, keeps logic consistent)
-    if ((userDoc as any).aiDialerAutoReloadArmed !== true) {
-      (userDoc as any).aiDialerAutoReloadArmed = true;
-    }
     await userDoc.save();
     return;
   }
 
-  // Initialize balance if null/undefined
-  if (typeof userDoc.aiDialerBalance !== "number") {
-    userDoc.aiDialerBalance = 0;
+  // ✅ Must have AI upgrade to accrue/charge AI dialer usage
+  // (We still track vendorCost + minutes analytics above)
+  if (!userDoc.hasAI) {
+    await userDoc.save();
+    return;
   }
 
-  // Subtract this call's billed amount from AI dialer balance
-  userDoc.aiDialerBalance = (userDoc.aiDialerBalance || 0) - billableAmountUsd;
+  // Initialize accrual fields if missing
+  if (typeof (userDoc as any).aiDialerAccruedCents !== "number") {
+    (userDoc as any).aiDialerAccruedCents = 0;
+  }
+  if (typeof (userDoc as any).aiDialerBilledTotalCents !== "number") {
+    (userDoc as any).aiDialerBilledTotalCents = 0;
+  }
+
+  const billableCents = Math.max(0, Math.round(billableAmountUsd * 100));
+  if (billableCents > 0) {
+    (userDoc as any).aiDialerAccruedCents = Number((userDoc as any).aiDialerAccruedCents || 0) + billableCents;
+  }
 
   const canBill = !!userDoc.stripeCustomerId && !DEV_SKIP_BILLING;
 
-  // If no Stripe customer, we just track usage but do not auto-topup here
-  if (!userDoc.stripeCustomerId) {
-    if (isProd) {
-      console.warn(
-        "[AI Dialer billing] User missing Stripe customer; balance may go negative.",
-        { email: userDoc.email }
-      );
-    } else {
-      console.warn(
-        "[AI Dialer billing][DEV] No Stripe customer; skipping auto-topup.",
-        { email: userDoc.email }
-      );
-    }
-  }
-
-  // ✅ Gate auto-topup: only after AI Dialer has actually been used at least once
-  const autoReloadArmed = (userDoc as any).aiDialerAutoReloadArmed === true;
-
-  // Auto-topup when AI dialer balance drops below $1
-  if (userDoc.aiDialerBalance < 1 && canBill && autoReloadArmed) {
+  // Charge in $20 increments when accrued reaches threshold
+  if (canBill && Number((userDoc as any).aiDialerAccruedCents || 0) >= AI_DIALER_TOPUP_CENTS) {
     try {
-      await createAndChargeInvoice({
-        customerId: userDoc.stripeCustomerId!,
-        amountCents: AI_DIALER_TOPUP_CENTS,
-        description: `CoveCRM AI Dialer credit ($${AI_DIALER_TOPUP_USD})`,
-      });
+      const accrued = Number((userDoc as any).aiDialerAccruedCents || 0);
+      const increments = Math.floor(accrued / AI_DIALER_TOPUP_CENTS);
+      const billCents = increments * AI_DIALER_TOPUP_CENTS;
 
-      userDoc.aiDialerBalance += AI_DIALER_TOPUP_USD;
-      console.log(
-        `💰 AI Dialer auto-topup: $${AI_DIALER_TOPUP_USD} charged to ${userDoc.email}`
-      );
+      if (billCents > 0) {
+        await createAndChargeInvoice({
+          customerId: userDoc.stripeCustomerId!,
+          amountCents: billCents,
+          description: `CoveCRM AI Dialer usage charge ($${(billCents / 100).toFixed(2)})`,
+        });
+
+        (userDoc as any).aiDialerAccruedCents = accrued - billCents;
+        (userDoc as any).aiDialerBilledTotalCents =
+          Number((userDoc as any).aiDialerBilledTotalCents || 0) + billCents;
+        (userDoc as any).aiDialerLastInvoicedAt = new Date();
+
+        // Keep aiDialerUsage.billedAmount aligned with ACTUAL billed total
+        const billedTotalUsd = Number((userDoc as any).aiDialerBilledTotalCents || 0) / 100;
+        userDoc.aiDialerUsage = {
+          vendorCost: prevUsage.vendorCost + vendorCostUsd,
+          billedMinutes: prevUsage.billedMinutes + minutes,
+          billedAmount: billedTotalUsd,
+          lastChargedAt: new Date(),
+        };
+
+        console.log(
+          `💳 AI Dialer invoice: $${(billCents / 100).toFixed(2)} charged to ${userDoc.email}`
+        );
+      }
     } catch (err) {
-      console.error(
-        "❌ AI Dialer Stripe auto top-up failed:",
-        (err as any)?.message || err
-      );
+      console.error("❌ Stripe AI Dialer threshold charge failed:", err);
+      // Do not throw; keep accrued so we can retry next usage
     }
-  } else if (userDoc.aiDialerBalance < 1 && canBill && !autoReloadArmed) {
-    // This is the "no charge until they use dialer" guarantee.
-    // We intentionally do NOT charge.
-    if (!isProd) {
-      console.warn(
-        "[AI Dialer billing][DEV] Balance < $1 but auto-reload not armed yet; not charging.",
-        { email: userDoc.email }
-      );
-    }
-  } else if (userDoc.aiDialerBalance < 1 && !canBill && !isProd) {
-    console.warn(
-      "[AI Dialer billing][DEV] Balance < $1 but billing disabled/unavailable; continuing for testing.",
-      { email: userDoc.email }
-    );
+  } else if (!canBill && !isProd && Number((userDoc as any).aiDialerAccruedCents || 0) >= AI_DIALER_TOPUP_CENTS) {
+    console.warn("[DEV AI Dialer billing] Threshold reached but billing disabled/unavailable; accrued will remain until enabled.");
   }
 
   await userDoc.save();

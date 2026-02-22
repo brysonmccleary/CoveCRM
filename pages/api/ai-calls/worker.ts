@@ -150,73 +150,11 @@ const MAX_ATTEMPTS_PER_LEAD = Number(
   process.env.AI_DIALER_MAX_ATTEMPTS_PER_LEAD || "2"
 );
 
-async function autoTopupIfNeeded(userDoc: any): Promise<{
-  balanceUSD: number;
-  toppedUp: boolean;
-}> {
-  let currentBalance = Number(userDoc.aiDialerBalance || 0);
 
-  if (currentBalance >= AI_RATE_PER_MINUTE) {
-    return { balanceUSD: currentBalance, toppedUp: false };
-  }
-
-  if (!AI_DIALER_AUTO_TOPUP_AMOUNT_USD || AI_DIALER_AUTO_TOPUP_AMOUNT_USD <= 0) {
-    console.warn(
-      "[AI Dialer] Auto-topup skipped: AI_DIALER_AUTO_TOPUP_AMOUNT_USD not configured"
-    );
-    return { balanceUSD: currentBalance, toppedUp: false };
-  }
-
-  const customerId = userDoc.stripeCustomerId as string | undefined;
-  if (!customerId) {
-    console.warn("[AI Dialer] Auto-topup skipped: user has no stripeCustomerId", {
-      email: userDoc.email,
-    });
-    return { balanceUSD: currentBalance, toppedUp: false };
-  }
-
-  const amountCents = Math.round(AI_DIALER_AUTO_TOPUP_AMOUNT_USD * 100);
-
-  try {
-    const paymentIntent = await stripe.paymentIntents.create({
-      amount: amountCents,
-      currency: "usd",
-      customer: customerId,
-      confirm: true,
-      off_session: true,
-      automatic_payment_methods: { enabled: true },
-      metadata: {
-        purpose: "ai_dialer_topup_auto",
-        email: userDoc.email || "",
-      },
-    });
-
-    if (paymentIntent.status === "succeeded") {
-      currentBalance += AI_DIALER_AUTO_TOPUP_AMOUNT_USD;
-      userDoc.aiDialerBalance = currentBalance;
-      userDoc.aiDialerLastTopUpAt = new Date();
-
-      // ✅ IMPORTANT: userDoc must be a real mongoose document (NOT .lean()) for this to work
-      await userDoc.save();
-
-      console.info("[AI Dialer] Auto-topup succeeded", {
-        email: userDoc.email,
-        addedUSD: AI_DIALER_AUTO_TOPUP_AMOUNT_USD,
-        newBalanceUSD: currentBalance,
-      });
-
-      return { balanceUSD: currentBalance, toppedUp: true };
-    }
-
-    console.warn("[AI Dialer] Auto-topup PaymentIntent not succeeded", {
-      email: userDoc.email,
-      status: paymentIntent.status,
-    });
-  } catch (err: any) {
-    console.error("[AI Dialer] Auto-topup failed", err?.message || err);
-  }
-
-  currentBalance = Number(userDoc.aiDialerBalance || currentBalance || 0);
+async function autoTopupIfNeeded(userDoc: any): Promise<{ balanceUSD: number; toppedUp: boolean }> {
+  // ✅ POSTPAID MODEL: worker does NOT charge or create PaymentIntents.
+  // Billing happens strictly inside trackAiDialerUsage() via $20 usage thresholds.
+  const currentBalance = Number(userDoc.aiDialerBalance || 0);
   return { balanceUSD: currentBalance, toppedUp: false };
 }
 

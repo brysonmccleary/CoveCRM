@@ -163,6 +163,15 @@ export interface IUser {
    */
   aiDialerAutoReloadArmed?: boolean;
 
+  /**
+   * ✅ AI Dialer postpaid usage billing (threshold-based):
+   * - aiDialerAccruedCents: unbilled running total (cents)
+   * - aiDialerBilledTotalCents: lifetime billed total (cents)
+   */
+  aiDialerAccruedCents?: number;
+  aiDialerBilledTotalCents?: number;
+  aiDialerLastInvoicedAt?: Date;
+
   usageBalance?: number;
 
   /**
@@ -385,6 +394,11 @@ const UserSchema = new Schema<IUser>({
 
   // ✅ NEW: only allow auto-reload after first real AI dialer usage
   aiDialerAutoReloadArmed: { type: Boolean, default: false },
+
+  // ✅ AI Dialer postpaid usage billing (threshold-based)
+  aiDialerAccruedCents: { type: Number, default: 0 },
+  aiDialerBilledTotalCents: { type: Number, default: 0 },
+  aiDialerLastInvoicedAt: { type: Date, default: null },
 
   usageBalance: { type: Number, default: 0 },
 
