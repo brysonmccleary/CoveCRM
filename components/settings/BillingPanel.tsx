@@ -123,29 +123,12 @@ export default function BillingPanel() {
             </p>
 
             <ul className="text-sm text-gray-400 mt-1 list-disc ml-5">
-              <li>$50 monthly access</li>
-              <li>SMS usage billed separately (Twilio usage)</li>
-              <li>AI Dialer billed at usage (per connected minute)</li>
+              <li>AI SMS Agent</li>
               <li>
-                Auto-reload: charges $20 only after you actually start using AI Dialer
-                and your dialer balance reaches 0
+                AI Calls <span className="opacity-70">(Coming Soon)</span>
               </li>
+              <li>AI Call Overview</li>
             </ul>
-
-            <div className="text-xs text-gray-400 mt-2">
-              {aiDialerLoading ? (
-                <>Checking AI Dialer status…</>
-              ) : aiDialerError ? (
-                <>AI Dialer status: {aiDialerError}</>
-              ) : (
-                <>
-                  AI Dialer minutes remaining:{" "}
-                  <span className="font-semibold">
-                    {Math.max(0, Math.floor(aiMinutesRemaining || 0))}
-                  </span>
-                </>
-              )}
-            </div>
           </div>
 
           {hasAIUpgrade ? (
