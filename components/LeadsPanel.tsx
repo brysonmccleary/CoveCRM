@@ -4,6 +4,7 @@ import LeadImportPanel from "./LeadImportPanel";
 import LeadPreviewPanel from "./LeadPreviewPanel";
 import { useRouter } from "next/router";
 
+import { useSession } from "next-auth/react";
 interface NumberEntry {
   id: string;
   phoneNumber: string;
@@ -65,7 +66,6 @@ function LeadSearchInline() {
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(-1);
   const router = useRouter();
-
   useEffect(() => {
     const handler = setTimeout(async () => {
       const term = q.trim();
@@ -601,7 +601,10 @@ export default function LeadsPanel() {
     }
   };
 
-  const goToAIDialSession = () => {
+    const { data: session } = useSession();
+  const isBryson = (session as any)?.user?.email?.toLowerCase?.() === "bryson.mccleary1@gmail.com";
+
+const goToAIDialSession = () => {
     router.push("/ai-dial-session").catch(() => {});
   };
 
@@ -738,13 +741,15 @@ export default function LeadsPanel() {
           Connect Google Sheet
         </button>
 
-        <button
-          onClick={goToAIDialSession}
-          className="bg-blue-600 text-white px-4 py-2 rounded hover:opacity-90 cursor-pointer"
-        >
-          AI Dial Session
-        </button>
-      </div>
+        {isBryson ? (
+          <button
+            onClick={goToAIDialSession}
+            className="bg-blue-600 text-white px-4 py-2 rounded hover:opacity-90 cursor-pointer"
+          >
+            AI Dial Session
+          </button>
+        ) : null}
+</div>
 
       {/* Global lead search */}
       <LeadSearchInline />

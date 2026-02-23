@@ -104,6 +104,7 @@ function LeadSearchInline() {
           className="border p-2 rounded w-full pr-10 text-black"
         />
         {q && (
+
           <button
             onClick={() => {
               setQ("");
@@ -543,7 +544,7 @@ export default function LeadsPage() {
             <button onClick={() => router.push("/ai-dial-session").catch(() => {})} className="bg-indigo-600 text-white px-4 py-2 rounded hover:opacity-90 cursor-pointer">
             AI Dial Session
           </button>
-          ) : null}
+) : null}
         </div>
 
         {/* Global search */}

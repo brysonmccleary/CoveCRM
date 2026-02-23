@@ -1,3 +1,6 @@
+import { authOptions } from "./api/auth/[...nextauth]";
+import { getServerSession } from "next-auth";
+import type { GetServerSideProps } from "next";
 // pages/ai-dial-session.tsx
 import React, { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/router";
@@ -98,6 +101,21 @@ const VOICE_OPTIONS = [
     providerVoiceId: "marin",
   },
 ];
+
+
+export const getServerSideProps: GetServerSideProps = async (ctx) => {
+  const session = await getServerSession(ctx.req as any, ctx.res as any, authOptions as any);
+  const email = (session as any)?.user?.email?.toLowerCase?.() || "";
+  if (email !== "bryson.mccleary1@gmail.com") {
+    return {
+      redirect: {
+        destination: "/dashboard?tab=leads",
+        permanent: false,
+      },
+    };
+  }
+  return { props: {} };
+};
 
 export default function AIDialSessionPage() {
   const router = useRouter();
