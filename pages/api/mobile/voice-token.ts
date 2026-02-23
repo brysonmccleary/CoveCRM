@@ -58,11 +58,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         ? user.twilioApiKeySecret
         : envApiKeySecret;
 
-    // Optional TwiML App SID for client -> PSTN
-    const outgoingAppSid: string | undefined =
-      usingPersonal && user?.twimlAppSid
-        ? user.twimlAppSid
-        : process.env.TWILIO_TWIML_APP_SID || undefined;
+    // Optional TwiML App SID for client -> PSTN (must be in SAME account as accountSid)
+// ✅ Use both top-level and nested storage; older code only checked user.twimlAppSid.
+const outgoingAppSid: string | undefined =
+  (user?.twimlAppSid as string) ||
+  (user?.twilio?.twimlAppSid as string) ||
+  process.env.TWILIO_TWIML_APP_SID ||
+  undefined;
 
     if (!accountSid || !apiKeySid || !apiKeySecret) {
       return res.status(500).json({
