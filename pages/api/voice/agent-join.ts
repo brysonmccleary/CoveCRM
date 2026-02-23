@@ -84,7 +84,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
   }
 
-  const vr = new TwilioTwiml.VoiceResponse();
+  if (!conferenceName || conferenceName === "default") {
+  res.setHeader("Content-Type", "text/xml");
+  return res.status(200).send(`<Response><Say>Missing conference.</Say><Hangup/></Response>`);
+}
+
+const vr = new TwilioTwiml.VoiceResponse();
   const dial = vr.dial();
   dial.conference(
     {
