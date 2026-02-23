@@ -108,7 +108,10 @@ function _rowImportedKey(rowNumber) {
  * This avoids byte-array normalization differences in UrlFetchApp.
  */
 function _hmacHexFromString(bodyString, secret) {
-  const rawSig = Utilities.computeHmacSha256Signature(String(bodyString || ""), String(secret || ""));
+  // Compute HMAC over the EXACT BYTES that will be sent, not JS string normalization.
+  // This matches server-side verification that uses raw request bytes.
+  const bytes = Utilities.newBlob(String(bodyString || ""), "application/json").getBytes();
+  const rawSig = Utilities.computeHmacSha256Signature(bytes, String(secret || ""));
   return rawSig
     .map(b => (b < 0 ? b + 256 : b).toString(16).padStart(2, "0"))
     .join("");
