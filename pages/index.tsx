@@ -281,6 +281,191 @@ export default function Home() {
           </div>
         </section>
 
+        {/* Comparison Section */}
+        <section className="py-14 px-6">
+          <div className="max-w-6xl mx-auto">
+            <div className="text-center mb-8">
+              <h2 className="text-3xl font-bold">See How CoveCRM Compares</h2>
+              <p className="text-slate-300 mt-3 max-w-3xl mx-auto">
+                Built specifically for high-volume outbound life insurance sales — not adapted from marketing-first systems.
+              </p>
+            </div>
+
+            <div className="rounded-3xl border border-white/10 bg-white/5 shadow-[0_0_0_1px_rgba(255,255,255,0.03)] p-6 md:p-8">
+              {/* Legend */}
+              <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
+                <div className="text-xs tracking-[0.22em] uppercase text-slate-400">
+                  Comparison (Insurance Use Case)
+                </div>
+                <div className="flex items-center gap-4 text-xs text-slate-400">
+                  <span className="inline-flex items-center gap-2">
+                    <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-gradient-to-r from-blue-500 to-indigo-500 shadow-sm">
+                      <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="white" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M20 6L9 17l-5-5" />
+                      </svg>
+                    </span>
+                    Native / Included
+                  </span>
+                  <span className="inline-flex items-center gap-2">
+                    <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-white/10 border border-white/10">
+                      <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="rgb(148 163 184)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M6 6l12 12" />
+                        <path d="M18 6l-12 12" />
+                      </svg>
+                    </span>
+                    Not available
+                  </span>
+                  <span className="inline-flex items-center gap-2">
+                    <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-white/10 border border-white/10 text-slate-200 font-semibold">
+                      ~
+                    </span>
+                    Add-on / Integrations
+                  </span>
+                </div>
+              </div>
+
+              {/* Header Row */}
+              <div className="grid grid-cols-6 gap-3 px-3 py-3 rounded-2xl bg-[#020617]/60 border border-white/10 text-slate-200 text-sm font-semibold">
+                <div className="col-span-2">Feature</div>
+                <div className="text-center">CoveCRM</div>
+                <div className="text-center">Ringy</div>
+                <div className="text-center">Close</div>
+                <div className="text-center">GHL</div>
+              </div>
+
+              {/* Rows */}
+              <div className="mt-3 space-y-2 text-sm">
+                {[
+                  {
+                    feature: "Full CRM platform",
+                    cove: "yes",
+                    ringy: "yes",
+                    close: "yes",
+                    ghl: "yes",
+                  },
+                  {
+                    feature: "Native power dialer",
+                    cove: "yes",
+                    ringy: "maybe",
+                    close: "yes",
+                    ghl: "maybe",
+                  },
+                  {
+                    feature: "Native AI voice dialer",
+                    cove: "yes",
+                    ringy: "no",
+                    close: "no",
+                    ghl: "no",
+                  },
+                  {
+                    feature: "AI SMS (built-in)",
+                    cove: "yes",
+                    ringy: "no",
+                    close: "no",
+                    ghl: "maybe",
+                  },
+                  {
+                    feature: "Insurance-focused templates",
+                    cove: "yes",
+                    ringy: "maybe",
+                    close: "no",
+                    ghl: "no",
+                  },
+                  {
+                    feature: "Twilio A2P automation (handled for you)",
+                    cove: "yes",
+                    ringy: "no",
+                    close: "no",
+                    ghl: "no",
+                  },
+                  {
+                    feature: "Per-user subaccount compliance architecture",
+                    cove: "yes",
+                    ringy: "no",
+                    close: "no",
+                    ghl: "maybe",
+                  },
+                ].map((row, idx) => (
+                  <div
+                    key={idx}
+                    className="grid grid-cols-6 gap-3 px-3 py-3 rounded-2xl border border-white/10 bg-white/5 hover:bg-white/10 transition shadow-[0_0_0_1px_rgba(255,255,255,0.02)]"
+                  >
+                    <div className="col-span-2 text-slate-200 font-medium">
+                      {row.feature}
+                    </div>
+
+                    {["cove", "ringy", "close", "ghl"].map((k) => {
+                      const v = (row as any)[k];
+                      if (v === "yes") {
+                        return (
+                          <div key={k} className="flex justify-center">
+                            <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-r from-blue-500 to-indigo-500 shadow-sm">
+                              <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="white" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M20 6L9 17l-5-5" />
+                              </svg>
+                            </span>
+                          </div>
+                        );
+                      }
+                      if (v === "maybe") {
+                        return (
+                          <div key={k} className="flex justify-center">
+                            <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-white/10 border border-white/10 text-slate-200 font-bold">
+                              ~
+                            </span>
+                          </div>
+                        );
+                      }
+                      return (
+                        <div key={k} className="flex justify-center">
+                          <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-white/10 border border-white/10">
+                            <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="rgb(148 163 184)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M6 6l12 12" />
+                              <path d="M18 6l-12 12" />
+                            </svg>
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ))}
+              </div>
+
+              {/* Why Block */}
+              <div className="mt-8 rounded-2xl border border-white/10 bg-[#020617]/60 p-6">
+                <h3 className="text-xl font-bold">Why Teams Choose CoveCRM</h3>
+                <p className="text-slate-300 mt-2 max-w-3xl">
+                  CoveCRM was designed around outbound insurance workflows from day one — so you don’t have to stitch together third-party tools.
+                </p>
+
+                <div className="grid gap-3 mt-5 md:grid-cols-2 text-slate-200">
+                  {[
+                    "Dialer-first workflow built for agent speed",
+                    "Native AI voice assistance",
+                    "Automated Twilio A2P handling",
+                    "Insurance-ready campaigns and templates",
+                  ].map((t, i) => (
+                    <div key={i} className="flex items-start gap-3">
+                      <span className="mt-1 inline-flex h-5 w-5 items-center justify-center rounded-full bg-gradient-to-r from-blue-500 to-indigo-500 shadow-sm">
+                        <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="white" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M20 6L9 17l-5-5" />
+                        </svg>
+                      </span>
+                      <span className="text-sm leading-relaxed">{t}</span>
+                    </div>
+                  ))}
+                </div>
+
+                <p className="text-[12px] text-slate-400 mt-6 leading-relaxed">
+                  Product names and trademarks are property of their respective owners. Comparison is based on publicly available information and may vary by plan.
+                </p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+
+
 
 
 {/* Pricing Section */}
