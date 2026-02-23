@@ -246,10 +246,6 @@ async function ensureSubaccountApiKeyForUser(args: {
 
   
 
-
-  return created;
-}
-
 /**
  * Ensure the user's PLATFORM subaccount has an Outgoing TwiML App SID.
  * This is REQUIRED for Twilio Voice JS (browser) calling to bridge correctly.
@@ -257,43 +253,60 @@ async function ensureSubaccountApiKeyForUser(args: {
  * We create the TwiML App INSIDE the subaccount (AP SIDs are account-scoped).
  * Store it on the user so /api/twilio/voice/token can always grant outgoingApplicationSid.
  */
-
 async function ensureSubaccountTwimlAppForUser(args: {
   email: string;
   baseUrl: string;
-  subSid: string;
-  apiKeySid: string;
-  apiKeySecret: string;
 }): Promise<{ twimlAppSid: string }> {
   const normalizedEmail = (args.email || "").toLowerCase().trim();
   if (!normalizedEmail) throw new Error("ensureSubaccountTwimlAppForUser: missing email");
 
-  const subSid = sanitizeId(args.subSid || "");
-  const apiKeySid = sanitizeId(args.apiKeySid || "");
-  const apiKeySecret = String(args.apiKeySecret || "").trim();
-
-  if (!subSid.startsWith("AC")) throw new Error("ensureSubaccountTwimlAppForUser: invalid subaccount SID");
-  if (!apiKeySid.startsWith("SK") || !apiKeySecret) throw new Error("ensureSubaccountTwimlAppForUser: invalid subaccount API key");
-
-  // Load writable user doc (we need to persist twimlAppSid)
+  // Load a writable doc
   const fresh = await User.findOne({ email: normalizedEmail });
   if (!fresh) throw new Error(`ensureSubaccountTwimlAppForUser: user not found: ${normalizedEmail}`);
 
+  // If already stored, do nothing
   const existing =
     (fresh as any)?.twimlAppSid ||
     (fresh as any)?.twilio?.twimlAppSid ||
-    "";
+    (fresh as any)?.twilio?.twimlAppSid;
 
   if (existing && String(existing).startsWith("AP")) {
     return { twimlAppSid: String(existing) };
   }
 
+  // Only auto-create for PLATFORM subaccounts (not personal/self-billed).
+  const FORCE_PLATFORM = (process.env.TWILIO_FORCE_PLATFORM || "") === "1";
+  const isPersonalEligible =
+    !FORCE_PLATFORM && hasPersonalCreds((fresh as any).toObject?.() || (fresh as any));
+
+  if (isPersonalEligible) {
+    throw new Error("ensureSubaccountTwimlAppForUser: personal tenant must provide twimlAppSid");
+  }
+
+  // Ensure subaccount API key exists and is stored (also ensures twilio.accountSid exists)
+  const createdKey = await ensureSubaccountApiKeyForUser(normalizedEmail);
+
+  const subSid =
+    sanitizeId((fresh as any)?.twilio?.accountSid || "") ||
+    sanitizeId((fresh as any)?.twilioAccountSid || "") ||
+    "";
+
+  if (!subSid.startsWith("AC")) {
+    throw new Error("ensureSubaccountTwimlAppForUser: invalid or missing subaccount SID");
+  }
+
+  const apiKeySid = sanitizeId(createdKey.apiKeySid || "");
+  const apiKeySecret = String(createdKey.apiKeySecret || "").trim();
+  if (!apiKeySid.startsWith("SK") || !apiKeySecret) {
+    throw new Error("ensureSubaccountTwimlAppForUser: invalid subaccount API key");
+  }
+
   const client = buildTwilioClient({ accountSid: subSid, apiKeySid, apiKeySecret });
 
-  const baseUrl = String(args.baseUrl || "").replace(/\/$/, "");
+  // TwiML App voice URL: default to your existing prod endpoint
   const voiceUrl =
     (process.env.TWILIO_VOICE_APP_URL || "").trim() ||
-    `${baseUrl}/api/voice/agent-join`;
+    `${args.baseUrl.replace(/\/$/, "")}/api/voice/agent-join`;
 
   const friendlyName = `CoveCRM Browser - ${normalizedEmail}`;
 
@@ -308,22 +321,27 @@ async function ensureSubaccountTwimlAppForUser(args: {
     throw new Error("ensureSubaccountTwimlAppForUser: TwiML app create did not return AP sid");
   }
 
-  // Store in both places to cover any legacy reads
+  // Store in both places (covers legacy + new codepaths)
   (fresh as any).twimlAppSid = sid;
   (fresh as any).twilio = (fresh as any).twilio || {};
   (fresh as any).twilio.twimlAppSid = sid;
 
   await fresh.save();
 
-  console.log(JSON.stringify({
-    msg: "ensureSubaccountTwimlAppForUser: created TwiML App in subaccount",
-    email: normalizedEmail,
-    subSidMasked: maskSid(subSid),
-    twimlAppSidMasked: maskSid(sid),
-    voiceUrl,
-  }));
+  console.log(
+    JSON.stringify({
+      msg: "ensureSubaccountTwimlAppForUser: created TwiML App in subaccount",
+      email: normalizedEmail,
+      subSidMasked: maskSid(subSid),
+      twimlAppSidMasked: maskSid(sid),
+      voiceUrl,
+    }),
+  );
 
   return { twimlAppSid: sid };
+}
+
+return created;
 }
 
 export async function getClientForUser(
@@ -355,13 +373,6 @@ export async function getClientForUser(
   const platformApiKeySecret = String(
     process.env.TWILIO_API_KEY_SECRET || "",
   ).trim();
-
-  const baseUrl =
-    (process.env.NEXT_PUBLIC_BASE_URL ||
-      process.env.BASE_URL ||
-      process.env.NEXTAUTH_URL ||
-      "https://www.covecrm.com").replace(/\/$/, "");
-
 
   // ---------- PERSONAL (self-billed) ----------
   const personalEligible = !FORCE_PLATFORM && hasPersonalCreds(user);
@@ -497,15 +508,6 @@ export async function getClientForUser(
     );
 
     // NOTE: usingPersonal=false here (still platform-billed, just isolated)
-    // ✅ Ensure TwiML App exists in this user's subaccount for browser calling
-    await ensureSubaccountTwimlAppForUser({
-      email: normalizedEmail,
-      baseUrl,
-      subSid,
-      apiKeySid,
-      apiKeySecret,
-    });
-
     return { client, accountSid: subSid, usingPersonal: false, user, auth };
   }
 
@@ -546,15 +548,6 @@ export async function getClientForUser(
         billingMode: user?.billingMode || "platform",
       }),
     );
-
-    // ✅ Ensure TwiML App exists in this user's subaccount for browser calling
-    await ensureSubaccountTwimlAppForUser({
-      email: normalizedEmail,
-      baseUrl,
-      subSid,
-      apiKeySid,
-      apiKeySecret,
-    });
 
     return { client, accountSid: subSid, usingPersonal: false, user, auth };
   }

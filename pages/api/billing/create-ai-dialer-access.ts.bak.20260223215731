@@ -71,7 +71,7 @@ export default async function handler(
       customer: customerId,
       line_items: [{ price: AI_SUITE_PRICE_ID, quantity: 1 }],
       payment_method_types: ["card"],
-      allow_promotion_codes: false,
+      allow_promotion_codes: true,
       metadata: {
         purpose: "ai_suite",
         userId: String(user._id),

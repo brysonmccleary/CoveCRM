@@ -246,10 +246,6 @@ async function ensureSubaccountApiKeyForUser(args: {
 
   
 
-
-  return created;
-}
-
 /**
  * Ensure the user's PLATFORM subaccount has an Outgoing TwiML App SID.
  * This is REQUIRED for Twilio Voice JS (browser) calling to bridge correctly.

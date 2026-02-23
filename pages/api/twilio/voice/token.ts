@@ -89,9 +89,7 @@ export default async function handler(
 
     // Optional TwiML App SID for client -> PSTN
     const outgoingAppSid: string | undefined =
-      usingPersonal && user?.twimlAppSid
-        ? user.twimlAppSid
-        : process.env.TWILIO_TWIML_APP_SID || undefined;
+      user?.twimlAppSid || process.env.TWILIO_TWIML_APP_SID || undefined;
 
     if (!accountSid || !apiKeySid || !apiKeySecret) {
       return res.status(500).json({
