@@ -289,6 +289,9 @@ export default function Home() {
               <p className="text-slate-300 mt-3 max-w-3xl mx-auto">
                 Built specifically for high-volume outbound life insurance sales — not adapted from marketing-first systems.
               </p>
+              <p className="text-xs text-slate-400 mt-3 max-w-4xl mx-auto leading-relaxed">
+                Note: Many CRMs now offer AI-assisted features (for example: AI writing/coaching tools, workflow helpers, or call assistance). CoveCRM’s AI is purpose-built for life insurance outbound — built directly into the calling + texting workflow (call overviews + automated follow-up), not just a generic add-on.
+              </p>
             </div>
 
             <div className="rounded-3xl border border-white/10 bg-white/5 shadow-[0_0_0_1px_rgba(255,255,255,0.03)] p-6 md:p-8">
@@ -441,7 +444,7 @@ export default function Home() {
                 <div className="grid gap-3 mt-5 md:grid-cols-2 text-slate-200">
                   {[
                     "Dialer-first workflow built for agent speed",
-                    "Native AI voice assistance",
+                    "AI built into calling + call summaries",
                     "Automated Twilio A2P handling",
                     "Insurance-ready campaigns and templates",
                   ].map((t, i) => (
