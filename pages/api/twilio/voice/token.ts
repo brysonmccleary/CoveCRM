@@ -58,11 +58,11 @@ export default async function handler(
     if (!identity) {
       const session = await getServerSession(req, res, authOptions as any);
       const s = session as any;
-      identity = (s?.user?.email || s?.user?.name || "").toString().trim();
+      identity = (s?.user?.email || "").toString().trim();
     }
 
     if (!identity) {
-      return res.status(401).json({ message: "Unauthorized" });
+      return res.status(401).json({ message: "Unauthorized (missing user email for Twilio identity)" });
     }
 
     identity = identity.toLowerCase();

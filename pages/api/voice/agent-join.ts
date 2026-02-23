@@ -2,6 +2,8 @@
 // TwiML for the BROWSER leg to join the same conference (absolute silence while waiting)
 import type { NextApiRequest, NextApiResponse } from "next";
 import { twiml as TwilioTwiml } from "twilio";
+import dbConnect from "@/lib/mongooseConnect";
+import Call from "@/models/Call";
 
 export const config = { api: { bodyParser: false } };
 
@@ -17,6 +19,14 @@ async function readRawBody(req: NextApiRequest): Promise<string> {
   });
 }
 
+
+
+function identityFromTwilioFrom(fromRaw: string): string {
+  const raw = String(fromRaw || "").trim();
+  // Twilio Client uses From like: client:identity
+  if (raw.startsWith("client:")) return raw.slice("client:".length).trim().toLowerCase();
+  return raw.toLowerCase();
+}
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   let conferenceName = "default";
   try {
@@ -26,12 +36,53 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const params = new URLSearchParams(raw);
         const fromBody = params.get("conferenceName");
         if (fromBody) conferenceName = fromBody;
+        const fromBodyTwilio = params.get("From") || "";
+        (req as any).__twilioFrom = fromBodyTwilio;
       }
     }
   } catch {}
 
   const fromQuery = (req.query.conferenceName as string) || "";
-  if (!conferenceName && fromQuery) conferenceName = fromQuery;
+  if ((conferenceName === "default" || !conferenceName) && fromQuery) conferenceName = fromQuery;
+
+  // ✅ SAFETY FALLBACK:
+  // If Twilio didn't provide conferenceName, infer it from the most recent active outbound call for this agent.
+  // This prevents the agent joining "default" and leaving the lead stuck waiting forever.
+  if (!conferenceName || conferenceName === "default") {
+    try {
+      const twilioFrom =
+        (req as any).__twilioFrom ||
+        (typeof (req.query as any)?.From === "string" ? (req.query as any).From : "");
+
+      const identity = identityFromTwilioFrom(String(twilioFrom || ""));
+      if (identity) {
+        await dbConnect();
+
+        const recent = await (Call as any)
+          .findOne({
+            userEmail: identity,
+            conferenceName: { $exists: true, $ne: "" },
+            lastStatus: { $nin: ["completed"] },
+            createdAt: { $gte: new Date(Date.now() - 10 * 60 * 1000) }, // last 10 minutes
+          })
+          .sort({ createdAt: -1 })
+          .lean();
+
+        if (recent?.conferenceName) {
+          conferenceName = String(recent.conferenceName);
+          try {
+            console.log("[agent-join] inferred conference", { identity, conferenceName });
+          } catch {}
+        } else {
+          try {
+            console.warn("[agent-join] no recent conference found; staying default", { identity });
+          } catch {}
+        }
+      }
+    } catch (e: any) {
+      console.error("[agent-join] infer conference error:", e?.message || e);
+    }
+  }
 
   const vr = new TwilioTwiml.VoiceResponse();
   const dial = vr.dial();

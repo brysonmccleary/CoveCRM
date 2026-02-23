@@ -138,7 +138,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           startedAt: now, // treat placement as "started" for metrics,
           dialKey: (typeof dialKey === "string" && dialKey.trim()) ? dialKey.trim() : undefined
         },
-        $set: { lastStatus: "initiated" },
+        $set: { lastStatus: "initiated", conferenceName },
       },
       { upsert: true, new: true }
     );
