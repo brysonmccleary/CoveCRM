@@ -663,27 +663,47 @@ export default function DialSession() {
 
         // ✅ PINNED AI OVERVIEW (latest, structured) — only if available
         try {
-          const firstWithOverview: any = (j?.events || []).find((ev: any) => ev?.type === "call" && ev?.aiOverviewReady && ev?.aiOverview);
-          const o = firstWithOverview?.aiOverview;
+          const events = Array.isArray(j?.events) ? j.events : [];
+          const callsWithOverview = events.filter(
+            (ev: any) => ev?.type === "call" && ev?.aiOverviewReady && ev?.aiOverview
+          );
+          const firstWithOverview = callsWithOverview.sort(
+            (a: any, b: any) => +new Date(b?.date || 0) - +new Date(a?.date || 0)
+          )[0];
+          const o = (firstWithOverview as any)?.aiOverview as any;
+
           if (o && typeof o === "object") {
-            const when2 = new Date(firstWithOverview.date).toLocaleString();
+            const when2 = new Date((firstWithOverview as any).date).toLocaleString();
+
+            // Close-style card: tight bullets only (no section headings)
+            const bullets: string[] = [];
+
+            const ob = Array.isArray(o.overviewBullets) ? o.overviewBullets : [];
+            for (const b of ob) {
+              const t = String(b || "").trim();
+              if (t) bullets.push(t);
+              if (bullets.length >= 5) break;
+            }
+
+            // If overviewBullets were empty, fall back to keyDetails
+            if (!bullets.length) {
+              const kd = Array.isArray(o.keyDetails) ? o.keyDetails : [];
+              for (const b of kd) {
+                const t = String(b || "").trim();
+                if (t) bullets.push(t);
+                if (bullets.length >= 5) break;
+              }
+            }
+
+            const header = `🤖 AI Call Overview (Pinned) • ${when2}`;
+            const metaBits: string[] = [];
+            if (o.outcome) metaBits.push(`Outcome: ${String(o.outcome)}`);
+            if (o.sentiment) metaBits.push(`Sentiment: ${String(o.sentiment)}`);
+
             const lines: string[] = [];
-            lines.push(`🤖 AI Call Overview (Pinned) • ${when2}`);
-            if ((o as any).outcome) lines.push(`Outcome: ${(o as any).outcome}`);
-            if ((o as any).sentiment) lines.push(`Sentiment: ${(o as any).sentiment}`);
-
-            const addSection = (label: string, arr: any, cap: number) => {
-              const a = Array.isArray(arr) ? arr : [];
-              if (!a.length) return;
-              lines.push(`${label}:`);
-              for (const x of a.slice(0, cap)) lines.push(`• ${String(x || "").trim()}`);
-            };
-
-            addSection("Overview", (o as any).overviewBullets, 6);
-            addSection("Key Details", (o as any).keyDetails, 6);
-            addSection("Objections", (o as any).objections, 3);
-            addSection("Questions", (o as any).questions, 3);
-            addSection("Next Steps", (o as any).nextSteps, 3);
+            lines.push(header);
+            if (metaBits.length) lines.push(metaBits.join(" • "));
+            for (const b of bullets.slice(0, 5)) lines.push(`• ${b}`);
 
             rows.push({ kind: "text", text: lines.join("\n") });
           }

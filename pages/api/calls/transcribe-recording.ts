@@ -344,30 +344,24 @@ Rules:
 - DO NOT include explanations.
 - DO NOT include paragraphs.
 - Bullet points only.
-- Pick ONLY the most important points (no filler).
-- Keep it tight (Close-style):
-  - overviewBullets: max 6
-  - keyDetails: max 6
-  - objections: max 3
-  - questions: max 3
-  - nextSteps: max 3
-- No more than 12 total bullets across all sections.
-- Bullets must be factual, not salesy.
-- Prioritize HARD FACTS over summaries. If present in the transcript, extract exact values and place them in keyDetails first:
-  - Coverage amount(s) (e.g., $250k, $500,000)
-  - Price/premium/budget (e.g., $65/mo, budget under $100/month)
-  - Timing + availability windows + specific times (e.g., "tomorrow 6–8pm", "Tue at 6:30pm")
-  - Household info (spouse/children), ages/DOB, smoker status, major health notes (if mentioned)
-  - State/location and any carrier/plan mentions (if mentioned)
-- Use compact labels in keyDetails (examples):
-  - "Coverage: $250k"
-  - "Budget: $80/mo"
-  - "Time: Tomorrow 6–8pm"
-  - "Smoker: No"
-- If an appointment time is explicitly agreed/confirmed, set appointmentTime and set outcome="Booked".
-- If the lead gives a callback window/time but not a confirmed booking, set outcome="Callback" and put the time window in keyDetails.
-- (Optional) If a direct quote is especially useful, include at most 1–2 short bullets prefixed with "QUOTE:" (keep under ~12 words each).
-- If something did not occur, return an empty array for that field.
+
+Style (match Close AI Lead Summary):
+- overviewBullets must be the PRIMARY "card" summary.
+- overviewBullets: 3–5 bullets max.
+- Each bullet should be a short, factual sentence (no labels like "Coverage:", no section headers).
+- Prioritize the MOST IMPORTANT call facts:
+  - booking/callback timing and any specific time windows
+  - coverage amount / budget / premium if mentioned
+  - household facts that matter (spouse, smoker, age, health notes) if mentioned
+  - clear objections or constraints
+- If outcome is "Callback", include the callback window as one bullet.
+- If outcome is "Booked", include the agreed time as one bullet.
+- Avoid filler, salesy language, or generic summaries.
+
+Other fields:
+- keyDetails: compact factual bullets (can keep compact labels like Coverage/Budget/Time if you want)
+- objections/questions/nextSteps: only if actually present
+- No more than 12 total bullets across all sections combined.
 - If voicemail is detected, set outcome="Voicemail".
 
 Schema:
