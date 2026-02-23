@@ -20,6 +20,8 @@ const CALL_AI_SUMMARY_ENABLED =
   (process.env.CALL_AI_SUMMARY_ENABLED || "").toLowerCase() === "1" ||
   (process.env.CALL_AI_SUMMARY_ENABLED || "").toLowerCase() === "true";
 
+const AI_DIALER_CRON_KEY = (process.env.AI_DIALER_CRON_KEY || "").trim();
+
 function candidateUrls(path: string): string[] {
   if (!BASE_URL) return [];
   const u = new URL(BASE_URL);
@@ -80,6 +82,27 @@ async function probeRecordingSize(url: string, accountSid?: string, authToken?: 
     return Number.isFinite(num) ? num : undefined;
   } catch {
     return undefined;
+  }
+}
+
+// Best-effort: trigger transcript + structured AI overview generation after recording completes.
+// This calls /api/calls/transcribe-recording using the cron key (no session required).
+async function triggerOverviewGeneration(args: { callSid: string; baseUrl: string }) {
+  try {
+    if (!args.callSid) return;
+    if (!args.baseUrl) return;
+    if (!AI_DIALER_CRON_KEY) return;
+
+    await fetch(`${args.baseUrl}/api/calls/transcribe-recording`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-cron-key": AI_DIALER_CRON_KEY,
+      },
+      body: JSON.stringify({ callSid: args.callSid }),
+    }).catch(() => {});
+  } catch {
+    // best-effort only
   }
 }
 
@@ -277,7 +300,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             { callSid: CallSid },
             { $set: { aiProcessing: "pending", aiEnabledAtCallTime: true } },
           );
-          // Optionally trigger your background summarizer here.
+          // Trigger overview generation (idempotent best-effort).
+          try {
+            // If call already has overview, skip.
+            const fresh = await Call.findOne({ callSid: CallSid }).lean<any>().exec();
+            const already =
+              fresh?.aiOverviewReady === true &&
+              fresh?.aiOverview &&
+              typeof fresh.aiOverview === "object" &&
+              String(fresh.transcript || "").trim().length > 0;
+
+            if (!already && BASE_URL) {
+              await triggerOverviewGeneration({ callSid: CallSid, baseUrl: BASE_URL });
+            }
+          } catch {
+            // ignore
+          }
         }
       } catch (e) {
         console.warn("ℹ️ Skipped AI queue:", (e as any)?.message || e);

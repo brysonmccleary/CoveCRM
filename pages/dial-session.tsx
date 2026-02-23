@@ -661,6 +661,36 @@ export default function DialSession() {
           rows.push({ kind: "text", text: `📌 Saved Notes (Pinned) — ${savedNotes.trim()}` });
         }
 
+        // ✅ PINNED AI OVERVIEW (latest, structured) — only if available
+        try {
+          const firstWithOverview: any = (j?.events || []).find((ev: any) => ev?.type === "call" && ev?.aiOverviewReady && ev?.aiOverview);
+          const o = firstWithOverview?.aiOverview;
+          if (o && typeof o === "object") {
+            const when2 = new Date(firstWithOverview.date).toLocaleString();
+            const lines: string[] = [];
+            lines.push(`🤖 AI Call Overview (Pinned) • ${when2}`);
+            if ((o as any).outcome) lines.push(`Outcome: ${(o as any).outcome}`);
+            if ((o as any).sentiment) lines.push(`Sentiment: ${(o as any).sentiment}`);
+
+            const addSection = (label: string, arr: any, cap: number) => {
+              const a = Array.isArray(arr) ? arr : [];
+              if (!a.length) return;
+              lines.push(`${label}:`);
+              for (const x of a.slice(0, cap)) lines.push(`• ${String(x || "").trim()}`);
+            };
+
+            addSection("Overview", (o as any).overviewBullets, 6);
+            addSection("Key Details", (o as any).keyDetails, 6);
+            addSection("Objections", (o as any).objections, 3);
+            addSection("Questions", (o as any).questions, 3);
+            addSection("Next Steps", (o as any).nextSteps, 3);
+
+            rows.push({ kind: "text", text: lines.join("\n") });
+          }
+        } catch {
+          // ignore
+        }
+
         for (const ev of (j?.events || [])) {
           const when = new Date((ev as any).date).toLocaleString();
           if ((ev as any).type === "note") {
@@ -682,9 +712,7 @@ export default function DialSession() {
             if (c.status) pieces.push(c.status);
             if (typeof c.durationSec === "number") pieces.push(`${c.durationSec}s`);
             rows.push({ kind: "text", text: pieces.join(" — ") });
-            if (c.recordingUrl) {
-              rows.push({ kind: "link", text: "▶️ Recording", href: c.recordingUrl, download: false });
-            }
+            // ✅ Dial Session: do NOT show recording rows here
           }
         }
         setHistory(rows);

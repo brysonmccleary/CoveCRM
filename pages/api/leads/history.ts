@@ -11,7 +11,7 @@ import { Types } from "mongoose";
 
 type ApiEvent =
   | { type: "sms"; id: string; dir: "inbound" | "outbound" | "ai"; text: string; date: string; sid?: string; status?: string }
-  | { type: "call"; id: string; date: string; durationSec?: number; status?: string; recordingUrl?: string; summary?: string; sentiment?: string }
+  | { type: "call"; id: string; date: string; durationSec?: number; status?: string; recordingUrl?: string; summary?: string; sentiment?: string; aiOverviewReady?: boolean; aiOverview?: any }
   | { type: "note"; id: string; date: string; text: string }
   | { type: "status"; id: string; date: string; to?: string };
 
@@ -114,6 +114,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           recordingUrl,
           summary: c.aiSummary,
           sentiment: c.aiSentiment,
+          aiOverviewReady: c.aiOverviewReady === true,
+          aiOverview: (c.aiOverviewReady === true && c.aiOverview && typeof c.aiOverview === "object") ? c.aiOverview : undefined,
         });
       }
     } catch (e) {
