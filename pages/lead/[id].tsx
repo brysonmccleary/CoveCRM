@@ -612,6 +612,7 @@ export default function LeadProfileDial() {
       "phonelast10",
       "normalizedphone",
       "rawrow",
+      "leadtype",
       "reminderssent",
       "isaiengaged",
       "v",

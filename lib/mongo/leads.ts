@@ -65,6 +65,10 @@ const LeadSchema = new Schema(
       default: {},
     },
 
+    // Original import row (preserve custom CSV/Sheet columns)
+    rawRow: { type: Schema.Types.Mixed },
+
+
     // Lead type used by AI
     leadType: {
       type: String,

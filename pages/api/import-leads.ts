@@ -448,6 +448,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           ["Folder Name"]: String(safeFolderName),
           updatedAt: new Date(),
         };
+        if ((m as any).rawRow !== undefined) base.rawRow = (m as any).rawRow;
+
 
         applyIdentityFields(base, phoneKey, emailKey, (m as any).Phone);
         if (m["First Name"] !== undefined) base["First Name"] = m["First Name"];
@@ -606,6 +608,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           const emailKey = lcEmail(lead["Email"] || lead["email"]);
           return {
             ...lead,
+            rawRow: lead,
             userEmail,
             folderId: safeFolderId,
             folder_name: String(safeFolderName),
@@ -661,6 +664,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         ...mapRow(r, mapping),
         userEmail,
         folderId: safeFolderId,
+        rawRow: r,
       }));
 
       const phoneKeys = Array.from(

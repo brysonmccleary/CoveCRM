@@ -1485,6 +1485,19 @@ export default function DialSession() {
                 const label = r.label;
                 const value = r.value;
 
+                // ✅ Avoid duplicate name display (name is already rendered in the top-name block)
+                const nk = String(key || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+                if (nk === "firstname" || nk === "lastname") return null;
+
+                // ✅ Remove Lead Type everywhere in regular dial session UI
+                if (nk === "leadtype" || String(label || "").toLowerCase().trim() === "lead type") return null;
+
+                // ✅ If this value comes from rawRow, display the label exactly as the original CSV header
+                const rawRowAny = (lead as any)?.rawRow;
+                const displayLabel =
+                  rawRowAny && Object.prototype.hasOwnProperty.call(rawRowAny, key) ? String(key) : label;
+
+
                 let display: string = "";
 
                 if (typeof value === "string") {
@@ -1500,7 +1513,7 @@ export default function DialSession() {
                 return (
                   <div key={key}>
                     <p>
-                      <strong>{label}:</strong> {display}
+                      <strong>{displayLabel}:</strong> {display}
                     </p>
                     <hr className="border-gray-700 my-1" />
                   </div>
