@@ -1,6 +1,7 @@
 // pages/leads.tsx
 import React, { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/router";
+import { useSession } from "next-auth/react";
 import Sidebar from "@/components/Sidebar";
 import LeadImportPanel from "@/components/LeadImportPanel";
 import LeadPreviewPanel from "@/components/LeadPreviewPanel";
@@ -42,7 +43,6 @@ function LeadSearchInline() {
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(-1);
   const router = useRouter();
-
   useEffect(() => {
     const handler = setTimeout(async () => {
       const term = q.trim();
@@ -160,6 +160,8 @@ function LeadSearchInline() {
 /** ───────────────────────────── Page ───────────────────────────── **/
 export default function LeadsPage() {
   const router = useRouter();
+  const { data: session } = useSession();
+  const isBryson = (session as any)?.user?.email?.toLowerCase?.() === "bryson.mccleary1@gmail.com";
 
   /**
    * ✅ SAFETY REDIRECT:
@@ -537,9 +539,11 @@ export default function LeadsPage() {
           >
             Connect Google Sheet
           </button>
-          <button onClick={() => router.push("/ai-dial-session").catch(() => {})} className="bg-indigo-600 text-white px-4 py-2 rounded hover:opacity-90 cursor-pointer">
+          {isBryson ? (
+            <button onClick={() => router.push("/ai-dial-session").catch(() => {})} className="bg-indigo-600 text-white px-4 py-2 rounded hover:opacity-90 cursor-pointer">
             AI Dial Session
           </button>
+          ) : null}
         </div>
 
         {/* Global search */}
