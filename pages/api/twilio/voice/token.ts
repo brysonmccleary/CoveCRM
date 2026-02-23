@@ -73,23 +73,35 @@ export default async function handler(
     const user = resolved?.user || {};
     const accountSid: string =
       (resolved?.accountSid as string) || process.env.TWILIO_ACCOUNT_SID || "";
-
     // Prefer user keys when present, otherwise fall back to platform envs.
+    // ✅ IMPORTANT: for platform subaccounts, we MUST use the subaccount-scoped API key
+    // and subaccount TwiML App SID (AP...) or the browser leg will be created under the wrong account.
     const envApiKeySid = process.env.TWILIO_API_KEY_SID || "";
     const envApiKeySecret = process.env.TWILIO_API_KEY_SECRET || "";
 
-    const apiKeySid: string =
-      usingPersonal && user?.twilioApiKeySid
-        ? user.twilioApiKeySid
-        : envApiKeySid;
-    const apiKeySecret: string =
-      usingPersonal && user?.twilioApiKeySecret
-        ? user.twilioApiKeySecret
-        : envApiKeySecret;
+    // getClientForUser exposes the exact auth used to create the SDK client
+    const resolvedAuth = (resolved?.auth || {}) as any;
 
-    // Optional TwiML App SID for client -> PSTN
+    const apiKeySid: string =
+      resolvedAuth?.mode === "apiKey" && resolvedAuth?.username
+        ? String(resolvedAuth.username)
+        : usingPersonal && (user?.twilio?.apiKeySid || user?.twilioApiKeySid)
+          ? String(user?.twilio?.apiKeySid || user?.twilioApiKeySid)
+          : envApiKeySid;
+
+    const apiKeySecret: string =
+      resolvedAuth?.mode === "apiKey" && resolvedAuth?.password
+        ? String(resolvedAuth.password)
+        : usingPersonal && (user?.twilio?.apiKeySecret || user?.twilioApiKeySecret)
+          ? String(user?.twilio?.apiKeySecret || user?.twilioApiKeySecret)
+          : envApiKeySecret;
+
+    // Optional TwiML App SID for client -> PSTN (must be in SAME account as accountSid)
     const outgoingAppSid: string | undefined =
-      user?.twimlAppSid || process.env.TWILIO_TWIML_APP_SID || undefined;
+      (user?.twimlAppSid as string) ||
+      (user?.twilio?.twimlAppSid as string) ||
+      process.env.TWILIO_TWIML_APP_SID ||
+      undefined;
 
     if (!accountSid || !apiKeySid || !apiKeySecret) {
       return res.status(500).json({

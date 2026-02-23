@@ -202,7 +202,7 @@ export interface IUser {
     lastSyncedAt?: Date;
   };
 
-  twilio?: { accountSid?: string; apiKeySid?: string; apiKeySecret?: string };
+  twilio?: { accountSid?: string; apiKeySid?: string; apiKeySecret?: string; twimlAppSid?: string };
   billingMode?: "platform" | "self";
 
   numbersLastSyncedAt?: Date;
@@ -426,7 +426,10 @@ const UserSchema = new Schema<IUser>({
     lastSyncedAt: Date,
   },
 
-  twilio: { accountSid: String, apiKeySid: String, apiKeySecret: String },
+  twilio: { accountSid: String, apiKeySid: String, apiKeySecret: String, twimlAppSid: String },
+
+  // ✅ TwiML App SID (account-scoped) used for Twilio Voice JS
+  twimlAppSid: String,
   billingMode: {
     type: String,
     enum: ["platform", "self"],
