@@ -2,6 +2,9 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import Twilio from "twilio";
 
+const BASE_URL = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "https://www.covecrm.com").replace(/\/$/, "");
+const SILENCE_URL = `${BASE_URL}/api/twiml/silence`;
+
 export const config = {
   api: { bodyParser: false },
 };
@@ -23,9 +26,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     dial.conference(
       {
-        endConferenceOnExit: true, // end the room when this leg exits
-        beep: "false",             // <- string, not boolean
-      },
+        startConferenceOnEnter: true,
+        endConferenceOnExit: true,
+        beep: false,
+        waitUrl: SILENCE_URL,
+        waitMethod: "POST",
+      } as any,
       String(conference)
     );
 

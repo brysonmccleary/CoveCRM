@@ -61,6 +61,25 @@ async function fetchLeadPreviewByNumber(num: string) {
   }
 }
 
+// Places the PSTN leg via our server and returns the conferenceName that Twilio should join.
+async function placeOutboundConferenceCall(toE164: string, fromTwilio: string): Promise<{ conferenceName: string; callSid?: string }> {
+  const r = await fetch("/api/twilio/voice/call", {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ to: toE164, fromNumber: fromTwilio }),
+  });
+  if (!r.ok) {
+    let detail = "";
+    try { detail = await r.text(); } catch {}
+    throw new Error(`Outbound call failed (${r.status}): ${detail || r.statusText}`);
+  }
+  const j = await r.json();
+  if (!j?.conferenceName) throw new Error("Outbound call missing conferenceName");
+  return { conferenceName: String(j.conferenceName), callSid: j.callSid ? String(j.callSid) : undefined };
+}
+
+
 export function useSoftphone() {
   const v = useContext(Ctx);
   if (!v) throw new Error("useSoftphone must be used within <SoftphoneProvider/>");
@@ -195,9 +214,27 @@ export default function SoftphoneProvider({ children }: Props) {
     const dev = deviceRef.current;
     if (!dev) throw new Error("Voice device not ready");
     if (!toE164 || !fromTwilio) throw new Error("Missing To/From");
+
     const To = normalizeE164(toE164);
     const From = normalizeE164(fromTwilio);
-    const conn = await (dev as any).connect?.({ params: { To, From } }); // TwiML answer.ts handles bridge
+
+    // ✅ PRIMARY: Conference-based browser -> PSTN bridging
+    // 1) Create PSTN leg on server (returns conferenceName)
+    // 2) Join browser leg into SAME conference via TwiML App (/api/voice/agent-join)
+    try {
+      const { conferenceName } = await placeOutboundConferenceCall(To, From);
+
+      // Join the conference from the browser leg.
+      // Twilio will call the TwiML App Voice URL (agent-join) and POST our params.
+      const conn = await (dev as any).connect?.({ params: { conferenceName } });
+      setActiveCall(conn);
+      return;
+    } catch (e) {
+      console.warn("[softphone] conference bridge failed; falling back to legacy connect", e);
+    }
+
+    // 🧯 FALLBACK: legacy direct connect (kept for safety)
+    const conn = await (dev as any).connect?.({ params: { To, From } });
     setActiveCall(conn);
   }, []);
 

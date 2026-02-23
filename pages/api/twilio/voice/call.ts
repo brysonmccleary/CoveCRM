@@ -56,15 +56,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const email = String(session?.user?.email ?? "").toLowerCase();
   if (!email) return res.status(401).json({ message: "Unauthorized" });
 
-  const { leadId, fromNumber, from, dialKey } = (req.body || {}) as {
+  const { leadId, to: toRaw, fromNumber, from, dialKey } = (req.body || {}) as {
     leadId?: string;
+    to?: string;
     // allow either key so UI can send either
     fromNumber?: string;
     from?: string;
     dialKey?: string;
   };
 
-  if (!leadId) return res.status(400).json({ message: "Missing leadId" });
+  if (!leadId && !toRaw) return res.status(400).json({ message: "Missing leadId or to" });
 
   try {
     await dbConnect();

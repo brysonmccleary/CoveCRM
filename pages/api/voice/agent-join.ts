@@ -7,7 +7,7 @@ import Call from "@/models/Call";
 
 export const config = { api: { bodyParser: false } };
 
-const BASE_URL = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "").replace(/\/$/, "");
+const BASE_URL = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "https://www.covecrm.com").replace(/\/$/, "");
 const SILENCE_URL = `${BASE_URL}/api/twiml/silence`;
 
 async function readRawBody(req: NextApiRequest): Promise<string> {
