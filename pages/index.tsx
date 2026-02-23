@@ -81,7 +81,10 @@ export default function Home() {
                 Flagship Feature
               </p>
               <h3 className="text-2xl md:text-3xl font-bold mb-4">
-                AI Dialer – Your 24/7 Appointment Setter
+                AI Dialer – Your 24/7 Appointment Setter 
+                <span className="ml-3 inline-flex items-center rounded-full bg-gradient-to-r from-blue-500 to-cyan-400 px-3 py-1 text-xs font-bold text-white shadow-lg animate-pulse">
+                  Join AI Dialer Waitlist
+                </span>
               </h3>
               <p className="text-sm md:text-base text-gray-200 mb-5 leading-relaxed">
                 A fully autonomous calling agent that dials your leads, is
