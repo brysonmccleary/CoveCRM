@@ -27,7 +27,7 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
     const identity = `user_${Math.floor(Math.random() * 1000000)}`;
 
     const voiceGrant = new VoiceGrant({
-      outgoingApplicationSid: (user?.twimlAppSid || user?.twilio?.twimlAppSid || process.env.TWILIO_TWIML_APP_SID),
+      outgoingApplicationSid: TWILIO_APP_SID,
       incomingAllow: true,
     });
 
