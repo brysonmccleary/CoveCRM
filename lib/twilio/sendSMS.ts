@@ -9,6 +9,7 @@ import Message from "@/models/Message";
 import { DateTime } from "luxon";
 import { getTimezoneFromState } from "@/utils/timezone";
 import { getClientForUser } from "./getClientForUser";
+import { syncA2PForUser } from "@/lib/twilio/syncA2P";
 import type { MessageListInstanceCreateOptions } from "twilio/lib/rest/api/v2010/account/message";
 
 const BASE_URL = (
@@ -195,13 +196,25 @@ async function sendCore(
   }).lean();
 
   // --- Strict A2P gating for US SMS ---
-  const isMessagingReady = userA2P.messagingReady === true;
-  if (isUSDest && !isMessagingReady && !DEV_ALLOW_UNAPPROVED) {
+// ✅ Auto-heal: if we're not marked ready, run a live sync from Twilio and re-check.
+// This does NOT bypass A2P compliance — it only updates stale local state.
+let isMessagingReady = userA2P.messagingReady === true;
+
+if (isUSDest && !isMessagingReady && !DEV_ALLOW_UNAPPROVED) {
+  try {
+    const refreshed = await syncA2PForUser(user as any);
+    const refreshedA2P = (refreshed as any)?.a2p || {};
+    isMessagingReady = refreshedA2P.messagingReady === true;
+  } catch {
+    // ignore — we'll throw the standard message below if still not ready
+  }
+
+  if (!isMessagingReady) {
     throw new Error(
       "Texting is not enabled yet. Your A2P 10DLC registration is pending or not linked.",
     );
   }
-
+}
   // Only platform/master account is allowed to default to the shared Messaging Service SID.
   let messagingServiceSid =
     paramsIn.overrideMsid ||

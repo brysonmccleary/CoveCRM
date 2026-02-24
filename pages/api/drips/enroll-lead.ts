@@ -143,8 +143,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     await dbConnect();
 
     // ✅ Do not project fixed fields — lead imports vary (Sheets/CSV)
-    const lead = await Lead.findOne({ _id: leadId, userEmail: email }).lean();
-    if (!lead) return res.status(404).json({ error: "Lead not found" });
+    // ✅ Support legacy leads that were stored under ownerEmail.
+// We prefer userEmail going forward, but we must be able to enroll old leads.
+const lead = await Lead.findOne({
+  _id: leadId,
+  $or: [{ userEmail: email }, { ownerEmail: email }],
+}).lean();
+
+// If the lead exists but is legacy-only (missing userEmail), backfill it.
+// This makes all future operations consistent and fixes the user permanently.
+if (lead && !(lead as any).userEmail) {
+  try {
+    await Lead.updateOne({ _id: (lead as any)._id }, { $set: { userEmail: email } });
+  } catch {}
+}
+if (!lead) return res.status(404).json({ error: "Lead not found" });
 
     const campaign = (await DripCampaign.findOne({ _id: campaignId })
       .select("_id name key isActive type steps")
