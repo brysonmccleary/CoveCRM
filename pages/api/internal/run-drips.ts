@@ -602,14 +602,13 @@ if (
         let sendScheduled = false;
         let sendSuppressed = false;
 
+        let lockMiss = false;
         try {
           const lockKey = `${String(user.email)}:${String((lead as any)._id)}:${String(
             (campaign as any)._id
           )}:${String(idx)}`;
 
           const ok = await acquireLock("enroll", lockKey, 60);
-
-          let lockMiss = false;
 
           if (ok) {
             try {
