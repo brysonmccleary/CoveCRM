@@ -53,3 +53,8 @@ vercel.*.json
 .env*
 cookies.txt
 *.zip
+
+# local patch backups
+*.bak
+*.bak_*
+*.bak*
