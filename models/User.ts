@@ -205,6 +205,9 @@ export interface IUser {
   twilio?: { accountSid?: string; apiKeySid?: string; apiKeySecret?: string; twimlAppSid?: string };
   billingMode?: "platform" | "self";
 
+
+  // ✅ TwiML App SID (account-scoped) used for Twilio Voice JS
+  twimlAppSid?: string;
   numbersLastSyncedAt?: Date;
 
   /** ⬇️ per-user dial progress */
