@@ -78,13 +78,44 @@ async function handleGet(req: NextApiRequest, res: NextApiResponse) {
       .sort({ name: 1 })
       .lean();
 
+    // Merge: prefer user-scoped over global when they share the same key.
+    const byKey = new Map<string, any>();
+    const noKey: any[] = [];
+
+    for (const c of campaigns as any[]) {
+      const rawKey = String((c as any).key || "").trim();
+      const nameKey = String((c as any).name || "").trim().toLowerCase();
+      const k = rawKey || (nameKey ? `name:${nameKey}` : "");
+if (!k) {
+        noKey.push(c);
+        continue;
+      }
+
+      const existing = byKey.get(k);
+      if (!existing) {
+        byKey.set(k, c);
+        continue;
+      }
+
+      const existingIsUser = !!((existing as any).userEmail || (existing as any).user) && !(existing as any).isGlobal;
+      const newIsUser = !!((c as any).userEmail || (c as any).user) && !(c as any).isGlobal;
+
+      // If existing is global and new is user-scoped, override it.
+      if (!existingIsUser && newIsUser) {
+        byKey.set(k, c);
+      }
+    }
+
+    const merged = [...byKey.values(), ...noKey].sort((a: any, b: any) =>
+      String(a.name).localeCompare(String(b.name))
+    );
+
     return res.status(200).json({
-      campaigns: campaigns.map((c: any) => ({
+      campaigns: merged.map((c: any) => ({
         _id: String(c._id),
         name: c.name,
         key: c.key,
         isActive: Boolean(c.isActive),
-        // extra fields (safe for new UI consumers)
         steps: Array.isArray(c.steps) ? c.steps : [],
         isGlobal: Boolean(c.isGlobal),
         createdBy: c.createdBy || null,
@@ -92,7 +123,7 @@ async function handleGet(req: NextApiRequest, res: NextApiResponse) {
         userEmail: c.userEmail || null,
       })),
     });
-  } catch (err: any) {
+} catch (err: any) {
     console.error("[drips/campaigns GET] error", err);
     return res
       .status(500)

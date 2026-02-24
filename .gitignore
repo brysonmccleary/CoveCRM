@@ -58,3 +58,8 @@ cookies.txt
 *.bak
 *.bak_*
 *.bak*
+
+# local patch artifacts
+.patch_backups_*/
+__pycache__/
+patch_*.py

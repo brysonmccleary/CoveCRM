@@ -32,8 +32,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // 1. Ensure this lead belongs to the user (tenant safety)
     const lead = await Lead.findOne({
       _id: leadId,
-      userEmail: email,
+      $or: [{ userEmail: email }, { ownerEmail: email }],
     });
+
+    // If the lead exists but is legacy-only (missing userEmail), backfill it.
+    if (lead && !(lead as any).userEmail) {
+      try {
+        await Lead.updateOne({ _id: (lead as any)._id }, { $set: { userEmail: email } });
+      } catch {}
+    }
 
     if (!lead) {
       return res.status(404).json({ error: "Lead not found" });

@@ -1,4 +1,4 @@
-import dbConnect from "@/lib/dbConnect";
+import dbConnect from "@/lib/mongooseConnect";
 import DripCampaign from "@/models/DripCampaign";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
@@ -14,12 +14,12 @@ export default async function handler(
   }
 
   await dbConnect();
-  const userEmail = session.user.email;
+  const userEmail = String(session.user.email).toLowerCase();
 
   if (req.method === "GET") {
     try {
       const drips = await DripCampaign.find({
-        $or: [{ user: userEmail }, { isGlobal: true }],
+        $or: [{ userEmail }, { user: userEmail }, { isGlobal: true }],
       });
       return res.status(200).json(drips);
     } catch (error) {
@@ -44,6 +44,7 @@ export default async function handler(
         ...req.body,
         steps,
         user: userEmail,
+        userEmail: userEmail,
       });
 
       await drip.save();

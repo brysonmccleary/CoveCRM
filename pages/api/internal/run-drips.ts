@@ -408,23 +408,37 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         claimedId = claim._id;
 
+        const tenantEmail = String(claim.userEmail || "").toLowerCase();
+
         const [lead, user, campaign] = await Promise.all([
-          Lead.findById(claim.leadId).lean(),
-          User.findOne({ email: claim.userEmail })
+          // ✅ tenant-safe lead fetch (supports legacy ownerEmail)
+          Lead.findOne({
+            _id: claim.leadId,
+            $or: [{ userEmail: tenantEmail }, { ownerEmail: tenantEmail }],
+          }).lean(),
+
+          User.findOne({ email: tenantEmail })
             .select({ _id: 1, email: 1, name: 1 })
             .lean(),
-          (DripCampaign.findById(claim.campaignId)
+
+          // ✅ tenant-safe campaign fetch (global OR owned by tenant)
+          DripCampaign.findOne({
+            _id: claim.campaignId,
+            $or: [{ isGlobal: true }, { userEmail: tenantEmail }, { user: tenantEmail }],
+          })
             .select({
               _id: 1,
               name: 1,
               type: 1,
               isActive: 1,
               steps: 1,
+              isGlobal: 1,
+              userEmail: 1,
+              user: 1,
             })
-            .lean() as any),
+            .lean(),
         ]);
-
-        if (
+if (
           !lead ||
           !user?._id ||
           !campaign ||

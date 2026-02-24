@@ -24,7 +24,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     await dbConnect();
 
     // ✅ Tenant safety: confirm lead belongs to the user
-    const lead = await Lead.findOne({ _id: leadId, userEmail: email }).select("_id").lean();
+    const lead = await Lead.findOne({ _id: leadId, $or: [{ userEmail: email }, { ownerEmail: email }] })
+      .select("_id userEmail")
+      .lean();
+
+    // If the lead exists but is legacy-only (missing userEmail), backfill it.
+    if (lead && !(lead as any).userEmail) {
+      try { await Lead.updateOne({ _id: (lead as any)._id }, { $set: { userEmail: email } }); } catch {}
+    }
     if (!lead) return res.status(404).json({ error: "Lead not found" });
 
     const enrollments = await DripEnrollment.find({

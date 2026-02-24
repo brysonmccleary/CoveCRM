@@ -55,6 +55,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // Transform each drip from prebuilt format -> DB format
     const formattedDrips = prebuiltDrips.map((drip: any) => ({
       name: drip.name,
+      key: drip.id, // stable key for merge/override
       type: drip.type, // e.g., "sms"
       isActive: true,
       isGlobal: true,
