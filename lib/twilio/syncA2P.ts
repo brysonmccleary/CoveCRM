@@ -21,9 +21,11 @@ function computeRegistrationStatus(opts: {
   const b = String(opts.brandStatus || "").toLowerCase();
   const c = String(opts.campaignStatus || "").toLowerCase();
 
-  const brandApproved = b === "approved" || b === "active";
+  const brandApproved = b === "approved" || b === "active" || b === "verified";
   const brandRejected = b === "rejected" || b === "failed";
-  const campaignApproved = c === "approved" || c === "active";
+  // Twilio A2P campaign commonly reports VERIFIED, not APPROVED.
+  const campaignApproved =
+    c === "verified" || c === "approved" || c === "active";
   const campaignRejected = c === "rejected" || c === "failed";
 
   if (brandRejected || campaignRejected) return "rejected";
@@ -101,6 +103,16 @@ export async function syncA2PForUser(passedUser: IUser) {
   // --- Fetch brand status (by SID when present) ---
   let brandStatus: string | undefined;
   try {
+    // Prefer TrustHub customer profile status when available (A2P brand is usually TrustHub)
+    const trusthubV1 = (client as any)?.trusthub?.v1;
+    if (brandSid && trusthubV1?.customerProfiles) {
+      const br = await trusthubV1.customerProfiles(brandSid).fetch();
+      brandStatus = br?.status;
+    }
+  } catch {
+    // ignore; fall through to messaging best-effort
+  }
+  try {
     const messagingV1 = (client.messaging.v1 as any) || {};
     if (brandSid && messagingV1.brandRegistrations) {
       const br = await messagingV1.brandRegistrations(brandSid).fetch();
@@ -124,33 +136,39 @@ export async function syncA2PForUser(passedUser: IUser) {
     // ignore; keep undefined
   }
 
+
   // --- Fetch campaign status (by SID when present) ---
   let campaignStatus: string | undefined;
   try {
+    // Prefer A2P campaign API (usAppToPerson). This is where VERIFIED appears.
+    const a2pCampaigns = (client as any)?.messaging?.v1?.usAppToPerson?.campaigns;
+    if (campaignSid && a2pCampaigns) {
+      const c = await a2pCampaigns(campaignSid).fetch();
+      campaignStatus = c?.status || c?.state || c?.approvalStatus || campaignStatus;
+    }
+  } catch {
+    // ignore; fall back below
+  }
+  try {
     const campaignsApi = (client.messaging.v1 as any)?.campaigns;
     if (campaignSid && campaignsApi?.call) {
-      // Some SDK versions expose .campaigns(cSid).fetch()
       const c = await campaignsApi(campaignSid).fetch();
-      campaignStatus = c?.status;
+      campaignStatus = c?.status || c?.state || c?.approvalStatus || campaignStatus;
     } else if (campaignSid && campaignsApi?.get) {
-      // Other versions: campaigns.get(cSid).fetch()
       const c = await campaignsApi.get(campaignSid).fetch();
-      campaignStatus = c?.status;
+      campaignStatus = c?.status || c?.state || c?.approvalStatus || campaignStatus;
     } else if (campaignsApi?.list) {
       const list = await campaignsApi.list({ limit: 100 });
       if (list?.length) {
-        const approved =
-          list.find((c: any) =>
-            ["approved", "active"].includes(
-              String(c?.status).toLowerCase(),
-            ),
-          ) || list[0];
+        const approved = list.find((c: any) =>
+          ["verified", "approved", "active"].includes(String(c?.status || c?.state || c?.approvalStatus).toLowerCase())
+        ) || list[0];
         campaignSid = approved?.sid || campaignSid;
-        campaignStatus = approved?.status;
+        campaignStatus = approved?.status || approved?.state || approved?.approvalStatus || campaignStatus;
       }
     }
   } catch {
-    // ignore; keep undefined
+    // ignore; keep whatever we got
   }
 
   // --- Pick a Messaging Service (platform account only) ---
@@ -218,8 +236,9 @@ export async function syncA2PForUser(passedUser: IUser) {
     carrier: num.addressRequirements,
     capabilities: {
       voice: Boolean(num.capabilities?.voice),
-      sms: Boolean(num.capabilities?.SMS),
-      mms: Boolean(num.capabilities?.MMS),
+      // Twilio can return sms/mms lowercase OR SMS/MMS uppercase depending on SDK shape
+      sms: Boolean(num.capabilities?.sms ?? num.capabilities?.SMS),
+      mms: Boolean(num.capabilities?.mms ?? num.capabilities?.MMS),
     },
     purchasedAt: num.dateCreated,
     messagingServiceSid:

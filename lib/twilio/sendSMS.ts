@@ -209,7 +209,19 @@ if (isUSDest && !isMessagingReady && !DEV_ALLOW_UNAPPROVED) {
     // ignore — we'll throw the standard message below if still not ready
   }
 
+
   if (!isMessagingReady) {
+    console.log(
+      JSON.stringify({
+        msg: "[sendSMS] BLOCKED: A2P not ready after sync",
+        userEmail: user.email,
+        brandStatus: (user as any)?.a2p?.brandStatus,
+        campaignStatus: (user as any)?.a2p?.campaignStatus,
+        brandSid: (user as any)?.a2p?.brandSid,
+        campaignSid: (user as any)?.a2p?.campaignSid,
+        messagingServiceSid: (user as any)?.a2p?.messagingServiceSid,
+      }),
+    );
     throw new Error(
       "Texting is not enabled yet. Your A2P 10DLC registration is pending or not linked.",
     );
@@ -241,7 +253,7 @@ if (isUSDest && !isMessagingReady && !DEV_ALLOW_UNAPPROVED) {
 
   // For delayed AI replies we *must* use a Messaging Service so Twilio can schedule.
   // So we only auto-force the from-number when we are NOT doing a delayed send.
-  if (!forcedFrom && lead?._id && !wantsDelayedSend) {
+  if (!forcedFrom && lead?._id && !wantsDelayedSend && !messagingServiceSid) {
     const lastMsg = await Message.findOne({ leadId: lead._id })
       .sort({ createdAt: -1 })
       .lean()
@@ -249,7 +261,6 @@ if (isUSDest && !isMessagingReady && !DEV_ALLOW_UNAPPROVED) {
     if (lastMsg?.direction === "inbound" && lastMsg.to)
       forcedFrom = String(lastMsg.to);
     else if (lastMsg?.from) forcedFrom = String(lastMsg.from);
-    if (forcedFrom) messagingServiceSid = null;
   }
 
   // If someone passed a from AND also requested a delay, prefer the Messaging Service
