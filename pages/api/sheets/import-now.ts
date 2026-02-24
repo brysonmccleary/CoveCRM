@@ -203,7 +203,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       const { folder, safeName } = await selectImportFolder(userEmail, { folderName: providedName });
 
-      const mapped = rows.map((r) => ({ ...mapRow(r, mapping), userEmail, folderId: folder._id }));
+      const mapped = rows.map((r) => ({ ...mapRow(r, mapping), userEmail, folderId: folder._id, rawRow: r }));
 
       const phoneKeys = Array.from(new Set(mapped.map((m) => m.phoneLast10).filter(Boolean) as string[]));
       const emailKeys = Array.from(new Set(mapped.map((m) => m.Email).filter(Boolean) as string[]));
@@ -252,6 +252,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           updatedAt: new Date(),
         };
 
+        if ((m as any).rawRow !== undefined) base.rawRow = (m as any).rawRow;
+
         applyIdentityFields(base, phoneKey, emailKey, m.Phone);
         if (m["First Name"] !== undefined) base["First Name"] = m["First Name"];
         if (m["Last Name"] !== undefined) base["Last Name"] = m["Last Name"];
@@ -269,6 +271,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             status: m.status || "New",
             createdAt: new Date(),
           };
+
+          if ((m as any).rawRow !== undefined) setOnInsert.rawRow = (m as any).rawRow;
           if ("status" in base) delete base.status;
 
           ops.push({ updateOne: { filter, update: { $set: base, $setOnInsert: setOnInsert }, upsert: true } });
@@ -394,7 +398,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       // Mapping path
       const mapping = JSON.parse(mappingStr) as Record<string, string>;
-      const rowsMapped = rawRows.map((r) => ({ ...mapRow(r, mapping), userEmail, folderId: folder._id }));
+      const rowsMapped = rawRows.map((r) => ({ ...mapRow(r, mapping), userEmail, folderId: folder._id, rawRow: r }));
 
       const phoneKeys = Array.from(new Set(rowsMapped.map((m) => m.phoneLast10).filter(Boolean) as string[]));
       const emailKeys = Array.from(new Set(rowsMapped.map((m) => m.Email).filter(Boolean) as string[]));
@@ -443,6 +447,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           updatedAt: new Date(),
         };
 
+        if ((m as any).rawRow !== undefined) base.rawRow = (m as any).rawRow;
+
         applyIdentityFields(base, phoneKey, emailKey, m.Phone);
         if (m["First Name"] !== undefined) base["First Name"] = m["First Name"];
         if (m["Last Name"] !== undefined) base["Last Name"] = m["Last Name"];
@@ -460,6 +466,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             status: m.status || "New",
             createdAt: new Date(),
           };
+
+          if ((m as any).rawRow !== undefined) setOnInsert.rawRow = (m as any).rawRow;
           if ("status" in base) delete base.status;
 
           ops.push({ updateOne: { filter, update: { $set: base, $setOnInsert: setOnInsert }, upsert: true } });

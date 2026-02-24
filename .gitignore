@@ -13,8 +13,6 @@ pnpm-debug.log*
 *.log
 
 # Local environment variables
-.env
-.env.local
 .env.*.local
 *.env
 
@@ -40,21 +38,18 @@ pnpm-lock.yaml
 
 # TS build info
 tsconfig.tsbuildinfo
-<<<<<<< HEAD
-.env
-.env.*
-vercel.*.json
-=======
+
+# env files
 
 # env files
 .env
 .env.*
 .env.local
+.env*.local
+vercel.*.json
 .env.vercel
 
 # never upload local env/zips
 .env*
 cookies.txt
 *.zip
-
->>>>>>> feat/dynamic-caller-id

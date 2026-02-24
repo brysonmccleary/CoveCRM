@@ -751,6 +751,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             status: (m as any).status || "New",
             createdAt: new Date(),
           };
+          if ((m as any).rawRow !== undefined) setOnInsert.rawRow = (m as any).rawRow;
+
           if ("status" in base) delete base.status;
           ops.push({
             updateOne: {
