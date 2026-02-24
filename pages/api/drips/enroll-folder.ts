@@ -254,7 +254,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     ).lean();
 
     // ✅ IMPORTANT: do NOT project only Phone/First/Last
-    const leads = await Lead.find({ userEmail: email, folderId })
+    const leads = await Lead.find({
+      folderId,
+      $or: [{ userEmail: email }, { ownerEmail: email }],
+    })
       .limit(Math.max(0, Number(limit) || 10_000))
       .lean();
 

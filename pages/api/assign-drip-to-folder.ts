@@ -141,7 +141,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const seedNextSendAt = isQuietHoursPT(nowPT) ? nextWindowPT(nowPT) : new Date();
 
     // IMPORTANT: don't narrow projections; imports vary. Use full docs only if needed.
-    const leads = await Lead.find({ userEmail, folderId: new ObjectId(folderId) })
+    const leads = await Lead.find({
+      folderId: new ObjectId(folderId),
+      $or: [{ userEmail }, { ownerEmail: userEmail }],
+    })
       .select({ _id: 1, unsubscribed: 1 })
       .lean();
 
