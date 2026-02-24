@@ -4,36 +4,6 @@ import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import { Buffer } from "buffer";
 
-// ✅ Guard: only create subaccount TwiML Apps for real/paid/admin users.
-// This prevents generating Twilio resources for throwaway "Free" test accounts.
-const VOICE_ALLOWLIST_EMAILS = new Set(
-  [
-    "brysonmccleary@",
-    "support@covecrm.com",
-    "lukeclement",
-    "kevinlaut",
-    "alicia",
-    "dan",
-  ]
-    .map((s) => s.toLowerCase())
-);
-
-function isVoiceEligibleUser(user: any, normalizedEmail: string): boolean {
-  const email = (normalizedEmail || "").toLowerCase();
-  const plan = String(user?.plan || "").toLowerCase(); // "Free", "Pro", etc.
-  const role = String(user?.role || "").toLowerCase();
-
-  // Allowlist by substring match (covers aliases / plus addressing)
-  for (const token of VOICE_ALLOWLIST_EMAILS) {
-    if (token && email.includes(token)) return true;
-  }
-
-  // Paid plans (anything not Free) or admins
-  if (role === "admin") return true;
-  if (plan && plan !== "free") return true;
-
-  return false;
-}
 
 export type TwilioResolvedAuth = {
   // "authToken" = SID + Auth Token
@@ -529,8 +499,6 @@ export async function getClientForUser(
 
     // NOTE: usingPersonal=false here (still platform-billed, just isolated)
     // ✅ Ensure TwiML App exists in this user's subaccount for browser calling
-    // ✅ Guard: avoid creating Twilio resources for throwaway Free/test accounts
-    if (isVoiceEligibleUser(user, normalizedEmail)) {
     await ensureSubaccountTwimlAppForUser({
       email: normalizedEmail,
       baseUrl,
@@ -539,9 +507,6 @@ export async function getClientForUser(
       apiKeySecret,
     });
 
-    } else {
-      console.log(JSON.stringify({ msg: 'getClientForUser: skip ensureSubaccountTwimlAppForUser (not eligible)', email: normalizedEmail, plan: user?.plan ?? null, role: user?.role ?? null }));
-    }
     return { client, accountSid: subSid, usingPersonal: false, user, auth };
   }
 
