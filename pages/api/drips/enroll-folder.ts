@@ -12,6 +12,20 @@ import { DateTime } from "luxon";
 import { acquireLock } from "@/lib/locks";
 import { sendSms } from "@/lib/twilio/sendSMS";
 import { renderTemplate, ensureOptOut, splitName } from "@/utils/renderTemplate";
+import mongoose from "mongoose";
+
+const asObjectId = (v: any) => {
+  try {
+    if (!v) return null;
+    if (v instanceof mongoose.Types.ObjectId) return v;
+    if (typeof v === "string" && mongoose.Types.ObjectId.isValid(v)) {
+      return new mongoose.Types.ObjectId(v);
+    }
+    return v;
+  } catch {
+    return v;
+  }
+};
 
 const PT_ZONE = "America/Los_Angeles";
 const SEND_HOUR_PT = 9;
@@ -170,6 +184,7 @@ function pickLeadPhoneRaw(lead: Record<string, any>): string | null {
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  const campaignId = asObjectId(req.body?.campaignId);
   if (req.method !== "POST")
     return res.status(405).json({ error: "Method Not Allowed" });
 

@@ -1,5 +1,6 @@
 // pages/api/drips/drips-folder-watch.ts
 import type { NextApiRequest, NextApiResponse } from "next";
+import mongoose from "mongoose";
 import dbConnect from "@/lib/mongooseConnect";
 import { DateTime } from "luxon";
 import Lead from "@/models/Lead";
@@ -9,6 +10,19 @@ import DripCampaign from "@/models/DripCampaign";
 import { acquireLock } from "@/lib/locks";
 
 export const config = { maxDuration: 60 };
+
+const asObjectId = (v: any) => {
+  try {
+    if (!v) return null;
+    if (v instanceof mongoose.Types.ObjectId) return v;
+    if (typeof v === "string" && mongoose.Types.ObjectId.isValid(v)) {
+      return new mongoose.Types.ObjectId(v);
+    }
+    return v; // keep non-ObjectId strings (e.g. prebuilt slug ids)
+  } catch {
+    return v;
+  }
+};
 
 const PT_ZONE = "America/Los_Angeles";
 const SEND_HOUR_PT = 9;
@@ -61,13 +75,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     let deactivated = 0;
 
     for (const w of watchers) {
+      const campaignId = asObjectId(w.campaignId);
       scanned++;
 
       const wLock = await acquireLock("watch", `folder:${w._id}`, 45);
       if (!wLock) continue;
 
       // Deactivate watcher if campaign is no longer active SMS
-      const campaign = (await DripCampaign.findById(w.campaignId)
+      const campaign = (await DripCampaign.findById(campaignId)
         .select({ _id: 1, isActive: 1, type: 1 })
         .lean()) as null | { _id: any; isActive?: boolean; type?: string };
 
@@ -92,7 +107,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                   $expr: {
                     $and: [
                       { $eq: ["$leadId", "$$leadId"] },
-                      { $eq: ["$campaignId", w.campaignId] },
+                      { $eq: ["$campaignId", campaignId] },
                       { $in: ["$status", ["active", "paused"]] },
                     ],
                   },
@@ -115,7 +130,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const before = await DripEnrollment.findOne({
           userEmail: w.userEmail,
           leadId: lead._id,
-          campaignId: w.campaignId,
+          campaignId,
           status: { $in: ["active", "paused"] },
         })
           .select({ _id: 1 })
@@ -130,14 +145,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           {
             userEmail: w.userEmail,
             leadId: lead._id,
-            campaignId: w.campaignId,
+            campaignId,
             status: { $in: ["active", "paused"] },
           },
           {
             $setOnInsert: {
               userEmail: w.userEmail,
               leadId: lead._id,
-              campaignId: w.campaignId,
+              campaignId,
               status: "active",
               cursorStep: 0,
               nextSendAt,

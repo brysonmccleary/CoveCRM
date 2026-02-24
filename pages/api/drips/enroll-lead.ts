@@ -11,6 +11,20 @@ import { sendSms } from "@/lib/twilio/sendSMS";
 import { acquireLock } from "@/lib/locks";
 import { renderTemplate, ensureOptOut, splitName } from "@/utils/renderTemplate";
 import { DateTime } from "luxon";
+import mongoose from "mongoose";
+
+const asObjectId = (v: any) => {
+  try {
+    if (!v) return null;
+    if (v instanceof mongoose.Types.ObjectId) return v;
+    if (typeof v === "string" && mongoose.Types.ObjectId.isValid(v)) {
+      return new mongoose.Types.ObjectId(v);
+    }
+    return v;
+  } catch {
+    return v;
+  }
+};
 
 type Body = {
   leadId?: string;
@@ -125,6 +139,7 @@ function pickLeadPhoneRaw(lead: Record<string, any>): string | null {
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  const campaignId = asObjectId(req.body?.campaignId);
   if (req.method !== "POST")
     return res.status(405).json({ error: "Method Not Allowed" });
 
