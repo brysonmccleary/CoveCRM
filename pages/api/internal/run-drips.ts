@@ -9,7 +9,7 @@ import { sendSms } from "@/lib/twilio/sendSMS";
 import { renderTemplate, ensureOptOut, splitName } from "@/utils/renderTemplate";
 import { prebuiltDrips } from "@/utils/prebuiltDrips";
 import { DateTime } from "luxon";
-import { acquireLock } from "@/lib/locks";
+import { acquireLock, releaseLock } from "@/lib/locks";
 
 export const config = { maxDuration: 60 };
 
@@ -607,10 +607,13 @@ if (
             (campaign as any)._id
           )}:${String(idx)}`;
 
-          const ok = await acquireLock("enroll", lockKey, 600);
+          const ok = await acquireLock("enroll", lockKey, 60);
+
+          let lockMiss = false;
 
           if (ok) {
-            const result = await sendSms({
+            try {
+              const result = await sendSms({
               to,
               body: finalBody,
               userEmail: user.email,
@@ -634,9 +637,15 @@ if (
               sendSuppressed = true;
               enrollSuppressed++;
             }
+            } finally {
+              try {
+                await releaseLock("enroll", lockKey);
+              } catch {}
+            }
           } else {
             // couldn't acquire lock — treat as suppressed for this tick, but DO NOT advance.
             enrollSuppressed++;
+            lockMiss = true;
           }
         } catch (err: any) {
           // ✅ FAILURE: do NOT advance cursorStep / sentAtByIndex.
@@ -664,13 +673,23 @@ if (
         }
 
         // ✅ If lock miss, we purposely did not send; do NOT advance.
+        
         if (!sendSucceeded) {
+          // If we missed the lock, push nextSendAt out a bit so we don't thrash.
+          const bump = lockMiss
+            ? DateTime.now().setZone(PT_ZONE).plus({ minutes: 2 }).toJSDate()
+            : undefined;
+
           await DripEnrollment.updateOne(
             { _id: claim._id },
-            { $set: { processing: false }, $unset: { processingAt: 1 } }
+            bump
+              ? { $set: { processing: false, nextSendAt: bump }, $unset: { processingAt: 1 } }
+              : { $set: { processing: false }, $unset: { processingAt: 1 } }
           );
+
           return;
         }
+
 
         // ✅ SUCCESS PATH ONLY: advance cursor + schedule next
         const nextIndex = idx + 1;
