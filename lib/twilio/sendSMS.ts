@@ -319,6 +319,18 @@ if (isUSDest && !isMessagingReady && !DEV_ALLOW_UNAPPROVED) {
     reason = "scheduled_delay";
   }
 
+  
+  // --- AUTO-GENERATE IDEMPOTENCY KEY FOR AUTOMATION ---
+  if (!paramsIn.idempotencyKey) {
+    if (paramsIn.enrollmentId && paramsIn.stepIndex !== null && paramsIn.stepIndex !== undefined) {
+      paramsIn.idempotencyKey = `drip:${paramsIn.enrollmentId}:${paramsIn.stepIndex}`;
+    } else if (paramsIn.campaignId && paramsIn.leadId && paramsIn.stepIndex !== null && paramsIn.stepIndex !== undefined) {
+      paramsIn.idempotencyKey = `drip:${paramsIn.campaignId}:${paramsIn.leadId}:${paramsIn.stepIndex}`;
+    } else if (paramsIn.campaignId && paramsIn.leadId) {
+      paramsIn.idempotencyKey = `campaign:${paramsIn.campaignId}:${paramsIn.leadId}`;
+    }
+  }
+
   // PRE-INSERT queued row with IDEMPOTENCY KEY (this is the duplicate gate)
   let preRow: any;
   try {
