@@ -160,8 +160,19 @@ export default function DripCampaignsPanel() {
   };
 
   const insertMergeField = (field: string) => {
-    // Keep legacy <token> style so it stays compatible with existing rendering logic
-    setCurrentText((prev) => `${prev} <${field}>`);
+    const map: Record<string, string> = {
+      client_first_name: "{{ contact.first_name }}",
+      agent_name: "{{ agent.name }}",
+      // agent_phone + folder_name intentionally not supported
+    };
+
+    const token = map[field] || "";
+    if (!token) return;
+
+    setCurrentText((prev) => {
+      const sep = prev && !prev.endsWith(" ") ? " " : "";
+      return `${prev}${sep}${token}`;
+    });
   };
 
   // ---- Save new custom campaign to backend ----
@@ -607,18 +618,6 @@ setBackendCampaigns((prev) =>
             className="text-xs bg-gray-700 text-white px-2 py-1 rounded hover:bg-gray-600"
           >
             Insert Agent Name
-          </button>
-          <button
-            onClick={() => insertMergeField("agent_phone")}
-            className="text-xs bg-gray-700 text-white px-2 py-1 rounded hover:bg-gray-600"
-          >
-            Insert Agent Phone
-          </button>
-          <button
-            onClick={() => insertMergeField("folder_name")}
-            className="text-xs bg-gray-700 text-white px-2 py-1 rounded hover:bg-gray-600"
-          >
-            Insert Folder Name
           </button>
         </div>
 
