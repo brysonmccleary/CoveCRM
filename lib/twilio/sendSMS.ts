@@ -205,6 +205,20 @@ if (isUSDest && !isMessagingReady && !DEV_ALLOW_UNAPPROVED) {
     const refreshed = await syncA2PForUser(user as any);
     const refreshedA2P = (refreshed as any)?.a2p || {};
     isMessagingReady = refreshedA2P.messagingReady === true;
+
+    // LIVE_READY_OVERRIDE_FROM_STATUS
+    // ✅ If Twilio shows the campaign is verified/approved and we have a Messaging Service,
+    // proceed even if the cached messagingReady boolean is stale.
+    if (!isMessagingReady) {
+      const b = String(refreshedA2P.brandStatus || userA2P.brandStatus || "").toLowerCase();
+      const c = String(refreshedA2P.campaignStatus || userA2P.campaignStatus || "").toLowerCase();
+      const msid = String(refreshedA2P.messagingServiceSid || userA2P.messagingServiceSid || "").trim();
+      const brandOk = b === "approved" || b === "active" || b === "verified";
+      const campaignOk = c === "verified" || c === "approved" || c === "active";
+      if (brandOk && campaignOk && msid) {
+        isMessagingReady = true;
+      }
+    }
   } catch {
     // ignore — we'll throw the standard message below if still not ready
   }
