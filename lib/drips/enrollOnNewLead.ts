@@ -74,7 +74,7 @@ export async function enrollOnNewLeadIfWatched(params: {
 
   await Promise.all(
     watchers.map(async (w: any) => {
-      const campaignId = String(w.campaignId);
+      const campaignId = toObjectId(String(w.campaignId));
 
       // Watcher has enum ["immediate", "nextWindow"]
       const watcherModeRaw = String(w?.startMode || "").trim();
@@ -90,9 +90,25 @@ export async function enrollOnNewLeadIfWatched(params: {
       const effectiveWhen =
         effectiveMode === "nextWindow" ? computeNextWindowPT() : now;
 
+      // ✅ DURABLE BLOCK:
+      // If this lead/campaign has EVER been explicitly stopped/canceled/completed,
+      // watchers must never auto-re-enroll (prevents step0 spam loops).
+      const blocked = await DripEnrollment.findOne({
+        userEmail,
+        leadId: toObjectId(leadId),
+        campaignId,
+        $or: [
+          { stopAll: true },
+          { status: { $in: ["canceled", "cancelled", "completed"] } },
+        ],
+      }).select({ _id: 1 }).lean();
+
+      if (blocked?._id) return;
+
       await DripEnrollment.findOneAndUpdate(
         {
-          leadId,
+          userEmail,
+          leadId: toObjectId(leadId),
           campaignId,
           status: { $in: ["active", "paused"] },
         },

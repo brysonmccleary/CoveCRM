@@ -612,7 +612,7 @@ if (
 
           if (ok) {
             try {
-              const result = await sendSms({
+const result = await sendSms({
               to,
               body: finalBody,
               userEmail: user.email,

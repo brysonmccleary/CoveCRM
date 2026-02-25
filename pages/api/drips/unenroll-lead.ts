@@ -52,7 +52,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         userEmail: email,
         leadId,
         campaignId,
-        status: { $in: ["active", "paused"] },
+        status: { $in: ["active", "paused", "canceled", "cancelled"] },
       },
       {
         $set: {
@@ -61,6 +61,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           isActive: false,
           isPaused: true,
           stopAll: true,
+          active: false,
+          enabled: false,
         },
         $unset: {
           processing: 1,

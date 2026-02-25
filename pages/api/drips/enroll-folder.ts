@@ -295,7 +295,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           userEmail: email,
           leadId: lead._id,
           campaignId,
-          status: { $in: ["active", "paused"] },
+          $or: [ { status: { $in: ["active", "paused", "completed", "canceled", "cancelled"] } }, { stopAll: true } ],
         },
         { _id: 1 }
       ).lean();

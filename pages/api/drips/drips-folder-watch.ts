@@ -108,7 +108,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                     $and: [
                       { $eq: ["$leadId", "$$leadId"] },
                       { $eq: ["$campaignId", campaignId] },
-                      { $in: ["$status", ["active", "paused"]] },
+                      { $or: [ { $in: ["$status", ["active", "paused", "completed", "canceled", "cancelled"]] }, { $eq: ["$stopAll", true] } ] },
                     ],
                   },
                 },
@@ -131,7 +131,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           userEmail: w.userEmail,
           leadId: lead._id,
           campaignId,
-          status: { $in: ["active", "paused"] },
+          $or: [ { status: { $in: ["active", "paused", "completed", "canceled", "cancelled"] } }, { stopAll: true } ],
         })
           .select({ _id: 1 })
           .lean();
@@ -146,7 +146,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             userEmail: w.userEmail,
             leadId: lead._id,
             campaignId,
-            status: { $in: ["active", "paused"] },
+            $or: [ { status: { $in: ["active", "paused", "completed", "canceled", "cancelled"] } }, { stopAll: true } ],
           },
           {
             $setOnInsert: {

@@ -9,7 +9,7 @@ const DripEnrollmentSchema = new Schema(
 
     status: {
       type: String,
-      enum: ["active", "paused", "completed", "error", "canceled"],
+      enum: ["active", "paused", "completed", "error", "canceled", "cancelled"],
       default: "active",
       index: true,
     },
