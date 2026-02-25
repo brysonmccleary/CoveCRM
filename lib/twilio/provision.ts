@@ -112,6 +112,38 @@ async function findOrBuyNumber(
   return { phoneSid: (bought as any).sid, phoneNumber: (bought as any).phoneNumber };
 }
 
+
+// AUTO_ATTACH_TO_MESSAGING_SERVICE
+// ✅ Attach a purchased/existing IncomingPhoneNumber to the user's Messaging Service sender pool (subaccount-safe).
+// This prevents Twilio 21704 (Messaging Service contains no phone numbers) and makes texting work immediately after purchase.
+async function attachNumberToMessagingService(
+  subScoped: Twilio,
+  phoneSid: string,
+  messagingServiceSid: string,
+) {
+  const msid = String(messagingServiceSid || "").trim();
+  const pnSid = String(phoneSid || "").trim();
+  if (!msid || !pnSid) return;
+
+  // 1) Attach PN → Messaging Service sender pool (best-effort)
+  try {
+    await (subScoped as any).messaging.v1
+      .services(msid)
+      .phoneNumbers
+      .create({ phoneNumberSid: pnSid });
+  } catch {
+    // ignore (already attached / not allowed)
+  }
+
+  // 2) Also set Messaging Service on the IncomingPhoneNumber (best-effort)
+  try {
+    await (subScoped as any).incomingPhoneNumbers(pnSid).update({
+      messagingServiceSid: msid,
+    });
+  } catch {
+    // ignore
+  }
+}
 async function applyWebhooks(subScoped: Twilio, phoneSid: string, email: string) {
   await subScoped.incomingPhoneNumbers(phoneSid).update({
     smsUrl: `${BASE_URL}/api/twilio/inbound-sms`,
@@ -192,6 +224,18 @@ export async function provisionUserTwilio(email: string): Promise<ProvisionResul
 
     // 4) Webhooks
     await applyWebhooks(subScoped, phoneSid, user.email);
+
+    
+    // AUTO_ATTACH_TO_MESSAGING_SERVICE_CALL
+    // ✅ If user already has a Messaging Service SID (A2P flow), attach the number immediately so texting works right away.
+    try {
+      const msid = (user as any)?.a2p?.messagingServiceSid;
+      if (msid && phoneSid) {
+        await attachNumberToMessagingService(subScoped, phoneSid, msid);
+      }
+    } catch {
+      // ignore
+    }
 
     return {
       ok: true,

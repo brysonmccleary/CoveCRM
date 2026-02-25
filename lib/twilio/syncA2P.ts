@@ -107,6 +107,94 @@ export async function syncA2PForUser(passedUser: IUser) {
   campaignSid = campaignSid || userShadowA2P.campaignSid || userShadowA2P.usa2pSid;
   messagingServiceSid = messagingServiceSid || userShadowA2P.messagingServiceSid;
 
+  // GLOBAL_ENSURE_SENDER_POOL
+  // ✅ Helper must be in outer scope (NOT inside a try block), so later code can call it.
+  // Ensures the Messaging Service sender pool contains at least one SMS-capable IncomingPhoneNumber.
+  async function ensureSenderPoolHasNumbers(opts: {
+    messagingServiceSid?: string;
+    mappedNumbers: Array<any>;
+  }) {
+    const msid = String(opts.messagingServiceSid || "").trim();
+    if (!msid) return { ok: false, serviceHasNumber: false };
+
+    const servicesApi = (client as any)?.messaging?.v1?.services;
+    if (!servicesApi) return { ok: false, serviceHasNumber: false };
+
+    // 1) If service already has numbers, we're good
+    try {
+      const existing = await (client as any).messaging.v1
+        .services(msid)
+        .phoneNumbers
+        .list({ limit: 1 });
+      if (Array.isArray(existing) && existing.length > 0) {
+        return { ok: true, serviceHasNumber: true };
+      }
+    } catch {
+      // ignore and continue
+    }
+
+    // 2) Attach SMS-capable IncomingPhoneNumbers to the service sender pool
+    const smsCapable = (opts.mappedNumbers || []).filter((n: any) => {
+      return Boolean(n?.capabilities?.sms) && Boolean(n?.sid);
+    });
+
+    if (!smsCapable.length) {
+      return { ok: true, serviceHasNumber: false };
+    }
+
+    let attachedAny = false;
+
+    for (const n of smsCapable) {
+      const pnSid = String(n.sid || "").trim();
+      if (!pnSid) continue;
+
+      // Add to Messaging Service sender pool (best-effort)
+      try {
+        await (client as any).messaging.v1
+          .services(msid)
+          .phoneNumbers
+          .create({ phoneNumberSid: pnSid });
+        attachedAny = true;
+      } catch {
+        // ignore (already attached / not allowed / etc)
+      }
+
+      // Also set Messaging Service on the number (best-effort)
+      try {
+        await (client as any).incomingPhoneNumbers(pnSid).update({
+          messagingServiceSid: msid,
+        });
+      } catch {
+        // ignore
+      }
+    }
+
+    // 3) Re-check pool
+    try {
+      const recheck = await (client as any).messaging.v1
+        .services(msid)
+        .phoneNumbers
+        .list({ limit: 1 });
+      const ok = Array.isArray(recheck) && recheck.length > 0;
+
+      if (process.env.DEBUG_A2P === "1") {
+        console.log(
+          JSON.stringify({
+            msg: "[syncA2P] sender pool recheck (global helper)",
+            messagingServiceSid: msid,
+            ok,
+            attachedAny,
+            smsCapableCount: smsCapable.length,
+          }),
+        );
+      }
+
+      return { ok: true, serviceHasNumber: ok, attachedAny };
+    } catch {
+      return { ok: true, serviceHasNumber: attachedAny, attachedAny };
+    }
+  }
+
   // --- Fetch brand status (by SID when present) ---
   let brandStatus: string | undefined;
   try {
@@ -294,22 +382,52 @@ export async function syncA2PForUser(passedUser: IUser) {
   // - Brand approved
   // - Campaign approved
   // - At least one number in this account
-  // HAS_NUMBERS_FROM_SERVICE_POOL
-  // ✅ Determine send-ready by either:
-  //  - at least one IncomingPhoneNumber in this account, OR
-  //  - at least one PhoneNumber attached to the Messaging Service sender pool
+  
+  // AUTO_ATTACH_SENDER_POOL_CALL
+  // AUTO_ATTACH_SENDER_POOL_HARDENED
+  // ✅ If brand+campaign are approved/verified, ensure the Messaging Service sender pool is populated.
+  // This prevents Twilio 21704 and ensures numbers start working the moment approval happens.
+  const bOk = ["approved","active","verified"].includes(String(brandStatus || "").toLowerCase());
+  const cOk = ["verified","approved","active"].includes(String(campaignStatus || "").toLowerCase());
+
+  if (messagingServiceSid && bOk && cOk) {
+    try {
+      // Only attach if the pool is currently empty (avoid extra API calls)
+      let poolEmpty = true;
+      try {
+        const existing = await (client as any).messaging.v1
+          .services(messagingServiceSid)
+          .phoneNumbers
+          .list({ limit: 1 });
+        poolEmpty = !(Array.isArray(existing) && existing.length > 0);
+      } catch {
+        // if we can't check, still attempt attach best-effort
+        poolEmpty = true;
+      }
+
+      if (poolEmpty) {
+        await ensureSenderPoolHasNumbers({ messagingServiceSid, mappedNumbers });
+      }
+    } catch {
+      // ignore; send path should also guard
+    }
+  }
+  // SERVICE_HAS_NUMBER_REINTRODUCED
+  // ✅ Re-check sender pool count so hasNumbers is accurate even when IncomingPhoneNumbers list is empty.
   let serviceHasNumber = false;
   try {
     if (messagingServiceSid && (client as any)?.messaging?.v1?.services) {
-      const nums = await (client as any).messaging.v1
+      const existing = await (client as any).messaging.v1
         .services(messagingServiceSid)
         .phoneNumbers
         .list({ limit: 1 });
-      serviceHasNumber = Array.isArray(nums) && nums.length > 0;
+      serviceHasNumber = Array.isArray(existing) && existing.length > 0;
     }
   } catch {
-    // ignore; fall back to mappedNumbers
+    // ignore
   }
+
+
   const hasNumbers = mappedNumbers.length > 0 || serviceHasNumber;
 
   // --- Compute readiness + new registrationStatus
