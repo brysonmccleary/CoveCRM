@@ -139,6 +139,22 @@ export async function syncA2PForUser(passedUser: IUser) {
 
   // --- Fetch campaign status (by SID when present) ---
   let campaignStatus: string | undefined;
+  // ✅ FIX: service-scoped fetch for QE... campaign SIDs (Messaging Service → US A2P)
+  // Some tenants store campaignSid like "QE..." which must be fetched via:
+  // client.messaging.v1.services(msid).usAppToPerson(csid).fetch()
+  try {
+    if (messagingServiceSid && campaignSid && (client as any)?.messaging?.v1?.services) {
+      const usA2p = await (client as any).messaging.v1
+        .services(messagingServiceSid)
+        .usAppToPerson(campaignSid)
+        .fetch();
+      campaignStatus =
+        usA2p?.status || usA2p?.state || usA2p?.approvalStatus || campaignStatus;
+    }
+  } catch {
+    // ignore; fall back below
+  }
+
   try {
     // Prefer A2P campaign API (usAppToPerson). This is where VERIFIED appears.
     const a2pCampaigns = (client as any)?.messaging?.v1?.usAppToPerson?.campaigns;
