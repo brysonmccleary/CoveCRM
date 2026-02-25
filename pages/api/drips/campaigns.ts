@@ -44,6 +44,10 @@ async function handleGet(req: NextApiRequest, res: NextApiResponse) {
 
     await dbConnect();
 
+    res.setHeader("Cache-Control", "no-store, max-age=0");
+    res.setHeader("Pragma", "no-cache");
+    res.setHeader("Expires", "0");
+
     const activeOnly = ["1", "true", "yes"].includes(
       String(req.query.active || "").toLowerCase()
     );
@@ -78,40 +82,35 @@ async function handleGet(req: NextApiRequest, res: NextApiResponse) {
       .sort({ name: 1 })
       .lean();
 
-    // Merge: prefer user-scoped over global when they share the same key.
-    const byKey = new Map<string, any>();
-    const noKey: any[] = [];
+    
+    // ✅ Dedupe campaigns so prebuilts don't appear twice (global + user override).
+    // Preference: user-owned override > global.
+    const normalizeName = (s: any) => String(s || "").trim().toLowerCase();
 
-    for (const c of campaigns as any[]) {
-      const rawKey = String((c as any).key || "").trim();
-      const nameKey = String((c as any).name || "").trim().toLowerCase();
-      const k = rawKey || (nameKey ? `name:${nameKey}` : "");
-if (!k) {
-        noKey.push(c);
+    const isOwnedByUser = (c: any) => {
+      const u = String(c?.user || c?.userEmail || "").toLowerCase();
+      return u === email && !c?.isGlobal;
+    };
+
+    const byGroup: Record<string, any> = {};
+    for (const c of campaigns) {
+      const key = c?.key ? `key:${String(c.key)}` : `name:${normalizeName(c?.name)}`;
+      const prev = byGroup[key];
+      if (!prev) {
+        byGroup[key] = c;
         continue;
       }
-
-      const existing = byKey.get(k);
-      if (!existing) {
-        byKey.set(k, c);
-        continue;
-      }
-
-      const existingIsUser = !!((existing as any).userEmail || (existing as any).user) && !(existing as any).isGlobal;
-      const newIsUser = !!((c as any).userEmail || (c as any).user) && !(c as any).isGlobal;
-
-      // If existing is global and new is user-scoped, override it.
-      if (!existingIsUser && newIsUser) {
-        byKey.set(k, c);
+      // Prefer user-owned override over global.
+      if (isOwnedByUser(c) && !isOwnedByUser(prev)) {
+        byGroup[key] = c;
       }
     }
 
-    const merged = [...byKey.values(), ...noKey].sort((a: any, b: any) =>
-      String(a.name).localeCompare(String(b.name))
-    );
+    const deduped = Object.values(byGroup)
+      .sort((a: any, b: any) => String(a?.name || "").localeCompare(String(b?.name || "")));
 
     return res.status(200).json({
-      campaigns: merged.map((c: any) => ({
+      campaigns: deduped.map((c: any) => ({
         _id: String(c._id),
         name: c.name,
         key: c.key,

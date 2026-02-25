@@ -36,7 +36,29 @@ export default function DripCampaignDetail() {
 
   const saveChanges = async () => {
     try {
-      await axios.put(`/api/drips/${id}`, { steps });
+      // Enforce opt-out on every message
+      const optOut = " Reply STOP to opt out.";
+      const normalized = (steps || []).map((s) => {
+        const day = String(s?.day || "immediately");
+        const textRaw = String(s?.text || "").trim();
+        const text = textRaw.endsWith(optOut) ? textRaw : `${textRaw}${optOut}`;
+        return { ...s, day, text };
+      });
+
+      const res = await axios.put(`/api/drips/${id}`, { steps: normalized });
+
+      // If we edited a GLOBAL drip, API clones it and returns a NEW _id
+      const updated = res.data || {};
+      const newId = String(updated._id || id);
+
+      setDrip(updated);
+      setSteps(updated.steps || normalized);
+
+      if (newId !== String(id)) {
+        // Move user to their cloned copy
+        router.replace(`/drip-campaigns/${newId}`);
+      }
+
       alert("Changes saved successfully!");
     } catch (err) {
       alert("Error saving changes");

@@ -54,7 +54,18 @@ export default async function handler(
         $or: [{ user: userEmail }, { userEmail: userEmail }, { isGlobal: true }],
       });
 
-      if (!drip) {
+      
+      // If this is a global drip, but the user has an override with the same key,
+      // return the override so the UI (still referencing the global _id) sees saved edits.
+      if (drip?.isGlobal && drip?.key) {
+        const override = await DripCampaign.findOne({
+          key: drip.key,
+          isGlobal: { $ne: true },
+          $or: [{ user: userEmail }, { userEmail: userEmail }],
+        });
+        if (override) return res.status(200).json(override);
+      }
+if (!drip) {
         return res.status(404).json({ error: "Drip not found or access denied" });
       }
 
@@ -88,12 +99,33 @@ export default async function handler(
       } = req.body || {};
 
       // If global: create a user-owned copy and return it (prevents cross-user leakage)
-      if (existingAny.isGlobal) {
+            if (existingAny.isGlobal) {
         const normalized = normalizeSteps(steps) ?? existingAny.steps;
+
+        // If user already has an override for this global drip key, update it instead of creating new.
+        const existingOverride = existingAny.key
+          ? await DripCampaign.findOne({
+              key: existingAny.key,
+              isGlobal: { $ne: true },
+              $or: [{ user: userEmail }, { userEmail: userEmail }],
+            })
+          : null;
+
+        if (existingOverride) {
+          existingOverride.name = name ?? existingOverride.name;
+          existingOverride.type = type ?? existingOverride.type;
+          existingOverride.steps = normalized;
+          existingOverride.assignedFolders = assignedFolders ?? existingOverride.assignedFolders;
+          existingOverride.isActive = isActive ?? existingOverride.isActive;
+          existingOverride.analytics = analytics ?? existingOverride.analytics;
+          existingOverride.comments = comments ?? existingOverride.comments;
+          await existingOverride.save();
+          return res.status(200).json(existingOverride);
+        }
 
         const cloned = await DripCampaign.create({
           name: (name ?? existingAny.name),
-          key: existingAny.key,           // keep same key so GET /campaigns can prefer the user version
+          key: existingAny.key, // stable key so list endpoints can prefer user version
           type: (type ?? existingAny.type),
           isActive: (isActive ?? existingAny.isActive),
           assignedFolders: (assignedFolders ?? []),
@@ -139,8 +171,16 @@ export default async function handler(
 
     // DELETE: never allow deleting global, and only allow owner delete
     if (req.method === "DELETE") {
-      if (existingAny.isGlobal) {
-        return res.status(403).json({ error: "Cannot delete global drip" });
+            if (existingAny.isGlobal) {
+        // If UI tries to delete a global drip, delete the user's override (if it exists) instead.
+        if (existingAny.key) {
+          await DripCampaign.deleteOne({
+            key: existingAny.key,
+            isGlobal: { $ne: true },
+            $or: [{ user: userEmail }, { userEmail: userEmail }],
+          });
+        }
+        return res.status(200).json({ message: "User override removed (global preserved)" });
       }
 
       const owner = String(existingAny.userEmail || existingAny.user || "").toLowerCase();
