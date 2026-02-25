@@ -294,7 +294,23 @@ export async function syncA2PForUser(passedUser: IUser) {
   // - Brand approved
   // - Campaign approved
   // - At least one number in this account
-  const hasNumbers = mappedNumbers.length > 0;
+  // HAS_NUMBERS_FROM_SERVICE_POOL
+  // ✅ Determine send-ready by either:
+  //  - at least one IncomingPhoneNumber in this account, OR
+  //  - at least one PhoneNumber attached to the Messaging Service sender pool
+  let serviceHasNumber = false;
+  try {
+    if (messagingServiceSid && (client as any)?.messaging?.v1?.services) {
+      const nums = await (client as any).messaging.v1
+        .services(messagingServiceSid)
+        .phoneNumbers
+        .list({ limit: 1 });
+      serviceHasNumber = Array.isArray(nums) && nums.length > 0;
+    }
+  } catch {
+    // ignore; fall back to mappedNumbers
+  }
+  const hasNumbers = mappedNumbers.length > 0 || serviceHasNumber;
 
   // --- Compute readiness + new registrationStatus
   const registrationStatus = computeRegistrationStatus({
