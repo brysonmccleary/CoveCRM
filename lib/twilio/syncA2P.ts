@@ -100,6 +100,13 @@ export async function syncA2PForUser(passedUser: IUser) {
   let campaignSid = profile.campaignSid;
   let messagingServiceSid = profile.messagingServiceSid;
 
+  // SEED_FROM_USER_A2P_SHADOW
+  // ✅ If A2PProfile is missing SIDs, seed from User.a2p shadow fields (common for tenant/platform users).
+  const userShadowA2P = (user as any)?.a2p || {};
+  brandSid = brandSid || userShadowA2P.brandSid;
+  campaignSid = campaignSid || userShadowA2P.campaignSid || userShadowA2P.usa2pSid;
+  messagingServiceSid = messagingServiceSid || userShadowA2P.messagingServiceSid;
+
   // --- Fetch brand status (by SID when present) ---
   let brandStatus: string | undefined;
   try {
@@ -240,6 +247,20 @@ export async function syncA2PForUser(passedUser: IUser) {
     }
   } else if (messagingService) {
     messagingServiceSid = messagingService.sid;
+  }
+
+  // RETRY_SERVICE_SCOPED_CAMPAIGN_FETCH
+  // ✅ Now that messagingServiceSid may be resolved, retry service-scoped campaign fetch if needed.
+  if (!campaignStatus && messagingServiceSid && campaignSid && (client as any)?.messaging?.v1?.services) {
+    try {
+      const usA2p = await (client as any).messaging.v1
+        .services(messagingServiceSid)
+        .usAppToPerson(campaignSid)
+        .fetch();
+      campaignStatus = usA2p?.status || usA2p?.state || usA2p?.approvalStatus || campaignStatus;
+    } catch {
+      // ignore; final readiness will reflect what we could verify
+    }
   }
 
   // --- Pull purchased numbers from THIS Twilio account ---
