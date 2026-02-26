@@ -1153,7 +1153,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // Global webhook token (recommended for subaccount-per-user SaaS)
   const expectedWebhookToken = process.env.TWILIO_WEBHOOK_SECRET || "";
   const reqUrl = new URL(req.url || "/api/twilio/inbound-sms", "https://local.invalid");
-  const providedWebhookToken = reqUrl.searchParams.get("token") || "";
+  const headerToken = (req.headers["x-covecrm-webhook-token"] || req.headers["x-webhook-token"] || "") as string;
+    const providedWebhookToken = (headerToken || reqUrl.searchParams.get("token") || "").trim();
   const hasValidWebhookToken =
       !!expectedWebhookToken && providedWebhookToken === expectedWebhookToken;
 

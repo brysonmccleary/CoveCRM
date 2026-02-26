@@ -57,8 +57,10 @@ const cursor = usersCol.find(
   }
 
   let scanned = 0;
-  let updatedServices = 0;
-  let updatedNumbers = 0;
+    let attemptedSubaccounts = 0;
+    let updatedSubaccounts = 0;
+    let updatedServices = 0;
+    let updatedNumbers = 0;
   const failures: Array<{ email?: string; subSid?: string; reason: string }> = [];
 
   while (await cursor.hasNext()) {
@@ -70,7 +72,11 @@ const cursor = usersCol.find(
 
     if (!subSid) continue;
 
+      attemptedSubaccounts++;
+
     const client = twilio(masterSid, masterToken, { accountSid: subSid });
+
+      let didUpdateThisSub = false;
 
     // 1) Update ALL Messaging Services in this subaccount
     try {
@@ -80,6 +86,7 @@ const cursor = usersCol.find(
         if (svc.inboundRequestUrl !== inboundUrl) {
           await client.messaging.v1.services(svc.sid).update({ inboundRequestUrl: inboundUrl });
           updatedServices++;
+            didUpdateThisSub = true;
         }
       }
     } catch (e: any) {
@@ -95,13 +102,17 @@ const cursor = usersCol.find(
         if (n.smsUrl !== inboundUrl || method !== "POST") {
           await client.incomingPhoneNumbers(n.sid).update({ smsUrl: inboundUrl, smsMethod: "POST" });
           updatedNumbers++;
+            didUpdateThisSub = true;
         }
       }
     } catch (e: any) {
       failures.push({ email, subSid, reason: `IncomingPhoneNumbers list/update failed: ${e?.message || String(e)}` });
       continue;
     }
-  }
+
+      if (didUpdateThisSub) updatedSubaccounts++;
+    }
+
 
   return res.status(200).json({
       ok: true,
