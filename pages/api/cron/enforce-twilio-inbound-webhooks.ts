@@ -121,6 +121,8 @@ const cursor = usersCol.find(
       buildCommit: (process.env.VERCEL_GIT_COMMIT_SHA || process.env.VERCEL_GITHUB_COMMIT_SHA || process.env.GITHUB_SHA || "").slice(0, 12),
       inboundUrl: inboundUrl.replace(/token=([^&]+)/, "token=***"),
       scannedUsers: scanned,
+      attemptedSubaccounts,
+      updatedSubaccounts,
       updatedServices,
       updatedNumbers,
       failuresCount: failures.length,
