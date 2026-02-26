@@ -116,6 +116,9 @@ const cursor = usersCol.find(
 
   return res.status(200).json({
       ok: true,
+      buildTag: "enforce-twilio-inbound-webhooks@v3",
+      buildTime: "2026-02-26T00:59:44Z",
+      buildCommit: (process.env.VERCEL_GIT_COMMIT_SHA || process.env.VERCEL_GITHUB_COMMIT_SHA || process.env.GITHUB_SHA || "").slice(0, 12),
       inboundUrl: inboundUrl.replace(/token=([^&]+)/, "token=***"),
       scannedUsers: scanned,
       updatedServices,
