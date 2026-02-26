@@ -44,12 +44,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!db) return res.status(500).json({ ok: false, error: "Mongo db handle unavailable" });
   const usersCol = db.collection("users");
 const cursor = usersCol.find(
-    {
-      "twilio.accountSid": { $exists: true, $ne: "" },
-      "a2p.messagingServiceSid": { $exists: true, $ne: "" },
-    },
-    { projection: { email: 1, twilio: 1, a2p: 1 } }
-  );
+      {
+        "twilio.accountSid": { $exists: true, $ne: "" },
+      },
+      { projection: { email: 1, twilio: 1, a2p: 1 } }
+    );
 
   const masterSid = process.env.TWILIO_ACCOUNT_SID || "";
   const masterToken = process.env.TWILIO_AUTH_TOKEN || "";
