@@ -67,46 +67,50 @@ const cursor = usersCol.find(
     scanned++;
 
     const subSid = u?.twilio?.accountSid;
-    const msSid = u?.a2p?.messagingServiceSid;
     const email = u?.email;
 
-    if (!subSid || !msSid) continue;
+    if (!subSid) continue;
 
     const client = twilio(masterSid, masterToken, { accountSid: subSid });
 
+    // 1) Update ALL Messaging Services in this subaccount
     try {
-      const ms = await client.messaging.v1.services(msSid).fetch();
-      if (ms.inboundRequestUrl !== inboundUrl) {
-        await client.messaging.v1.services(msSid).update({ inboundRequestUrl: inboundUrl });
-        updatedServices++;
+      const services = await client.messaging.v1.services.list({ limit: 200 });
+      for (const svc of services) {
+        // If inboundRequestUrl is null/empty or different, set it.
+        if (svc.inboundRequestUrl !== inboundUrl) {
+          await client.messaging.v1.services(svc.sid).update({ inboundRequestUrl: inboundUrl });
+          updatedServices++;
+        }
       }
     } catch (e: any) {
-      failures.push({ email, subSid, reason: `MessagingService update failed: ${e?.message || String(e)}` });
-      continue;
+      failures.push({ email, subSid, reason: `MessagingServices list/update failed: ${e?.message || String(e)}` });
+      // Don't stop—still try to update number-level webhooks
     }
 
+    // 2) Update ALL Incoming Phone Numbers in this subaccount (even if not attached to a Messaging Service)
     try {
       const nums = await client.incomingPhoneNumbers.list({ limit: 200 });
-      const attached = nums.filter((n: any) => n.messagingServiceSid === msSid);
-      for (const n of attached) {
-        if (n.smsUrl !== inboundUrl || (n.smsMethod || "").toUpperCase() !== "POST") {
+      for (const n of nums) {
+        const method = (n.smsMethod || "").toUpperCase();
+        if (n.smsUrl !== inboundUrl || method !== "POST") {
           await client.incomingPhoneNumbers(n.sid).update({ smsUrl: inboundUrl, smsMethod: "POST" });
           updatedNumbers++;
         }
       }
     } catch (e: any) {
-      failures.push({ email, subSid, reason: `IncomingPhoneNumbers update failed: ${e?.message || String(e)}` });
+      failures.push({ email, subSid, reason: `IncomingPhoneNumbers list/update failed: ${e?.message || String(e)}` });
       continue;
     }
   }
 
   return res.status(200).json({
-    ok: true,
-    inboundUrl,
-    scannedUsers: scanned,
-    updatedServices,
-    updatedNumbers,
-    failuresCount: failures.length,
-    failures: failures.slice(0, 20),
-  });
-}
+      ok: true,
+      inboundUrl: inboundUrl.replace(/token=([^&]+)/, "token=***"),
+      scannedUsers: scanned,
+      updatedServices,
+      updatedNumbers,
+      failuresCount: failures.length,
+      failures: failures.slice(0, 20),
+    });
+  }
