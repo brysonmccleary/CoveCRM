@@ -2,7 +2,7 @@ import { Html, Head, Main, NextScript } from "next/document";
 
 export default function Document() {
   return (
-    <Html lang="en">
+    <Html lang="en" className="dark">
       <Head>
         {/* ✅ Favicon from /public/logo.png */}
         <link rel="icon" href="/logo.png" type="image/png" />

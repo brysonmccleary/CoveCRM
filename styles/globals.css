@@ -20,9 +20,9 @@
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
+/* Dark tokens controlled by Tailwind-style .dark class */
+html.dark {
+  --background: #0a0a0a;
     --foreground: #ededed;
 
     /* Keep brand colors consistent in dark mode */
@@ -30,7 +30,6 @@
     --cove-bg:       #1e293b;
     --cove-card:     #111D35;
     --cove-accent:   #3B82F6;
-  }
 }
 
 /* ── Global base styles ────────────────────────────────────── */
