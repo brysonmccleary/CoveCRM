@@ -1131,40 +1131,50 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const raw = (await buffer(req)).toString();
   const params = new URLSearchParams(raw);
 
-  // Compute exact URL Twilio used (handles www vs apex & proxies)
+  // Compute exact URL Twilio used (include query string)
   const host = (req.headers["x-forwarded-host"] as string) || (req.headers.host as string) || "";
   const proto = (req.headers["x-forwarded-proto"] as string) || "https";
-  const pathOnly = (req.url || "").split("?")[0] || "/api/twilio/inbound-sms";
-  const ABS_BASE_URL = host ? `${proto}://${host}` : RAW_BASE_URL || "";
+  const fullPath = req.url || "/api/twilio/inbound-sms";
   const absoluteUrl = host
-    ? `${proto}://${host}${pathOnly}`
-    : RAW_BASE_URL
-    ? `${RAW_BASE_URL}${pathOnly}`
-    : "";
-
-  // Verify Twilio signature (unless dev bypass)
+      ? `${proto}://${host}${fullPath}`
+      : RAW_BASE_URL
+      ? `${RAW_BASE_URL}${fullPath}`
+      : "";
+  const ABS_BASE_URL = host ? `${proto}://${host}` : RAW_BASE_URL || "";
+  // Verify Twilio signature OR accept global webhook token (SaaS-safe for subaccounts)
   const signature = (req.headers["x-twilio-signature"] || "") as string;
 
   // ✅ Prod-safe test bypass via Authorization: Bearer INTERNAL_API_TOKEN
   const hasAuthBypass =
-    !!INTERNAL_API_TOKEN &&
-    typeof req.headers.authorization === "string" &&
-    req.headers.authorization === `Bearer ${INTERNAL_API_TOKEN}`;
+      !!INTERNAL_API_TOKEN &&
+      typeof req.headers.authorization === "string" &&
+      req.headers.authorization === `Bearer ${INTERNAL_API_TOKEN}`;
 
-  const valid = absoluteUrl
-    ? twilio.validateRequest(AUTH_TOKEN, signature, absoluteUrl, Object.fromEntries(params as any))
-    : false;
+  // Global webhook token (recommended for subaccount-per-user SaaS)
+  const expectedWebhookToken = process.env.TWILIO_WEBHOOK_SECRET || "";
+  const reqUrl = new URL(req.url || "/api/twilio/inbound-sms", "https://local.invalid");
+  const providedWebhookToken = reqUrl.searchParams.get("token") || "";
+  const hasValidWebhookToken =
+      !!expectedWebhookToken && providedWebhookToken === expectedWebhookToken;
 
-  if (!valid) {
-    if (ALLOW_DEV_TWILIO_TEST || hasAuthBypass) {
-      console.warn("⚠️ Signature bypass enabled for inbound-sms (dev/test).");
-    } else {
-      console.warn("❌ Invalid Twilio signature on inbound-sms", { absoluteUrl });
-      return res.status(403).send("Invalid signature");
+  // Keep signature validation (works for some setups), but do NOT require it for subaccounts
+  const validSig = absoluteUrl
+      ? twilio.validateRequest(AUTH_TOKEN, signature, absoluteUrl, Object.fromEntries(params as any))
+      : false;
+
+    if (!(validSig || hasValidWebhookToken)) {
+      if (ALLOW_DEV_TWILIO_TEST || hasAuthBypass) {
+        console.warn("⚠️ Signature bypass enabled for inbound-sms (dev/test).");
+      } else {
+        console.warn("❌ inbound-sms blocked (no valid signature and no valid webhook token)", {
+          absoluteUrl,
+          hasToken: !!providedWebhookToken,
+        });
+        return res.status(403).send("Forbidden");
+      }
     }
-  }
 
-  try {
+    try {
     await mongooseConnect();
 
     const messageSid = params.get("MessageSid") || params.get("SmsSid") || "";

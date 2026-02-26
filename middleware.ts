@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
 const openCronPaths = new Set([
+    "/api/cron/enforce-twilio-inbound-webhooks",
   "/api/cron/run-drips",
   "/api/cron/google-sheets-poll",
   "/api/admin/audit-sheets-cron",
