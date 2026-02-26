@@ -7,6 +7,7 @@ import mongoose from "mongoose";
 import { google } from "googleapis";
 import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
 import { checkCronAuth } from "@/lib/cronAuth";
+import { enrollOnNewLeadIfWatched } from "@/lib/drips/enrollOnNewLead";
 
 const FINGERPRINT = "selfheal-v5h"; // revert to always-computed folder; TS safety intact
 
@@ -363,13 +364,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               .lean<{ _id: mongoose.Types.ObjectId } | null>();
 
             if (!existing) {
-              if (!dryRun)
-                await Lead.create({
+              if (!dryRun) {
+                const created = await Lead.create({
                   ...doc,
                   folderId: targetFolderId,
                   folder_name: targetFolderName,
                   ["Folder Name"]: targetFolderName,
                 });
+
+                try {
+                  await enrollOnNewLeadIfWatched({
+                    userEmail,
+                    folderId: String(targetFolderId),
+                    leadId: String(created?._id),
+                    source: "sheet-bulk",
+                  });
+                } catch (e) {
+                  console.error("[Google Sheets Poll] drip enroll failed", e);
+                }
+              }
               imported++;
             } else {
               if (!dryRun)

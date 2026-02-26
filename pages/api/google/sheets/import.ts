@@ -8,6 +8,7 @@ import Lead from "@/models/Lead";
 import mongoose from "mongoose";
 import { google } from "googleapis";
 import { ensureNonSystemFolderId } from "@/lib/folders/ensureNonSystemFolderId";
+import { enrollOnNewLeadIfWatched } from "@/lib/drips/enrollOnNewLead";
 
 type ImportBody = {
   spreadsheetId: string;
@@ -230,6 +231,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const upc = (result?.upsertedCount || (result?.upsertedId ? 1 : 0) || 0) as number;
       const mod = (result?.modifiedCount || 0) as number;
       const match = (result?.matchedCount || 0) as number;
+
+
+      // ✅ If this upsert inserted a NEW lead, enroll it into any active drip watchers for this folder.
+      // Must not break import, must not run on updates.
+      if (upc > 0) {
+        const upserted = (result as any)?.upsertedId;
+        const newLeadId = (upserted as any)?._id ?? upserted;
+
+        if (newLeadId) {
+          try {
+            await enrollOnNewLeadIfWatched({
+              userEmail,
+              folderId: String(targetFolderId),
+              leadId: String(newLeadId),
+              source: "sheet-bulk",
+            });
+          } catch (e) {
+            console.error("[Google Sheets Import] drip enroll failed", e);
+          }
+        }
+      }
 
       if (upc > 0) inserted += upc;
       else if (mod > 0 || match > 0) updated += 1;
