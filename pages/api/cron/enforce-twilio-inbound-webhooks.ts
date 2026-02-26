@@ -1,6 +1,51 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import twilio from "twilio";
 import mongoose from "mongoose";
+import { sendEmail } from "@/lib/email";
+
+// --------------------------------------------------------------------------------------
+// OPS ALERTS (hands-off)
+// Sends an email when failures occur, rate-limited to avoid spam.
+// Env:
+//   OPS_ALERT_EMAIL (optional) default: Bryson.mccleary1@gmail.com
+//   OPS_ALERT_COOLDOWN_MINUTES (optional) default: 30
+// --------------------------------------------------------------------------------------
+const OPS_ALERT_DEFAULT_TO = "Bryson.mccleary1@gmail.com";
+const OPS_ALERT_COOLDOWN_MINUTES = parseInt(process.env.OPS_ALERT_COOLDOWN_MINUTES || "30", 10);
+
+// best-effort global rate limit across warm lambdas
+function shouldSendOpsAlert(): boolean {
+  const g: any = globalThis as any;
+  const now = Date.now();
+  const last = typeof g.__covecrm_last_ops_alert_ts === "number" ? g.__covecrm_last_ops_alert_ts : 0;
+  const cooldownMs = Math.max(1, OPS_ALERT_COOLDOWN_MINUTES) * 60 * 1000;
+  if (now - last < cooldownMs) return false;
+  g.__covecrm_last_ops_alert_ts = now;
+  return true;
+}
+
+function escapeHtml(s: string) {
+  return String(s || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+async function sendOpsAlertEmail(opts: {
+  to?: string;
+  subject: string;
+  html: string;
+}) {
+  try {
+    const to = (process.env.OPS_ALERT_EMAIL || opts.to || OPS_ALERT_DEFAULT_TO).trim();
+    if (!to) return;
+    await sendEmail(to, opts.subject, opts.html);
+  } catch (e: any) {
+    console.error("[OPS ALERT] sendEmail failed:", e?.message || e);
+  }
+}
 
 /**
  * Enforces inbound webhook URLs across ALL user subaccounts:
@@ -114,7 +159,49 @@ const cursor = usersCol.find(
     }
 
 
-  return res.status(200).json({
+  
+    // ----------------------------------------------------------------------------------
+    // OPS ALERT: email if any failures occurred (rate-limited)
+    // ----------------------------------------------------------------------------------
+    if (failures.length > 0 && shouldSendOpsAlert()) {
+      const commit = (process.env.VERCEL_GIT_COMMIT_SHA || process.env.VERCEL_GITHUB_COMMIT_SHA || process.env.GITHUB_SHA || "").slice(0, 12);
+      const subj = `CoveCRM OPS: Twilio webhook enforcement failures (${failures.length})`;
+      const rows = failures.slice(0, 50).map((f) => {
+        const email = escapeHtml(String(f.email || ""));
+        const subSid = escapeHtml(String(f.subSid || ""));
+        const reason = escapeHtml(String(f.reason || ""));
+        return `<tr>
+          <td style="padding:6px 8px;border-bottom:1px solid #eee;font-family:Arial, sans-serif;font-size:12px;">${email}</td>
+          <td style="padding:6px 8px;border-bottom:1px solid #eee;font-family:Arial, sans-serif;font-size:12px;">${subSid}</td>
+          <td style="padding:6px 8px;border-bottom:1px solid #eee;font-family:Arial, sans-serif;font-size:12px;">${reason}</td>
+        </tr>`;
+      }).join("");
+
+      const html = `
+        <div style="font-family:Arial, sans-serif;">
+          <h2 style="margin:0 0 8px 0;">Twilio Inbound Webhook Enforcement Failures</h2>
+          <p style="margin:0 0 6px 0;"><b>Count:</b> ${failures.length}</p>
+          <p style="margin:0 0 6px 0;"><b>Build:</b> ${escapeHtml(commit || "unknown")}</p>
+          <p style="margin:0 0 12px 0;"><b>Endpoint:</b> /api/cron/enforce-twilio-inbound-webhooks</p>
+          <table cellspacing="0" cellpadding="0" style="border-collapse:collapse;width:100%;max-width:900px;">
+            <thead>
+              <tr>
+                <th align="left" style="padding:6px 8px;border-bottom:2px solid #ddd;font-size:12px;">User Email</th>
+                <th align="left" style="padding:6px 8px;border-bottom:2px solid #ddd;font-size:12px;">Subaccount SID</th>
+                <th align="left" style="padding:6px 8px;border-bottom:2px solid #ddd;font-size:12px;">Reason</th>
+              </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+          <p style="margin-top:12px;font-size:12px;color:#666;">
+            This is rate-limited (default: 30 minutes). Set OPS_ALERT_COOLDOWN_MINUTES to change.
+          </p>
+        </div>
+      `;
+      await sendOpsAlertEmail({ subject: subj, html });
+    }
+
+return res.status(200).json({
       ok: true,
       buildTag: "enforce-twilio-inbound-webhooks@v3",
       buildTime: "2026-02-26T00:59:44Z",
