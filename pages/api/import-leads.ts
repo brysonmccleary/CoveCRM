@@ -13,6 +13,35 @@ import { authOptions } from "./auth/[...nextauth]";
 import { sanitizeLeadType, createLeadsFromCSV } from "@/lib/mongo/leads";
 import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
 import { ensureNonSystemFolderId } from "@/lib/folders/ensureNonSystemFolderId";
+import { enrollOnNewLeadIfWatched } from "@/lib/drips/enrollOnNewLead";
+
+// ✅ Extract inserted IDs from bulkWrite result (supports multiple driver shapes)
+function getUpsertedIdsFromBulkWrite(result: any): string[] {
+  try {
+    const raw = result?.getUpsertedIds?.() ?? result?.upsertedIds;
+    const ids: any[] = [];
+
+    // raw could be: [{ index, _id }, ...]
+    if (Array.isArray(raw)) {
+      for (const it of raw) {
+        const id = it?._id ?? it;
+        if (id) ids.push(id);
+      }
+    }
+    // raw could be: { "0": ObjectId("..."), "5": ObjectId("...") }
+    else if (raw && typeof raw === "object") {
+      for (const k of Object.keys(raw)) {
+        const id = (raw as any)[k]?._id ?? (raw as any)[k];
+        if (id) ids.push(id);
+      }
+    }
+
+    return ids.map((x) => String(x)).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
 
 export const config = { api: { bodyParser: false } };
 
@@ -484,6 +513,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       let updated = 0;
       if (ops.length) {
         const result = await (Lead as any).bulkWrite(ops, { ordered: false });
+
+        // ✅ Enroll ONLY brand-new inserted leads into any active drip watchers for this folder.
+        // Safety: uses bulkWrite upserted IDs; does NOT run for existing leads/updates.
+        try {
+          const newIds = getUpsertedIdsFromBulkWrite(result);
+          if (newIds.length) {
+            await Promise.allSettled(
+              newIds.map((leadId) =>
+                enrollOnNewLeadIfWatched({
+                  userEmail,
+                  folderId: String(safeFolderId),
+                  leadId: String(leadId),
+                  source: "folder-bulk",
+                  startMode: "now",
+                })
+              )
+            );
+          }
+        } catch (e) {
+          console.error("[CSV Import] drip enroll failed", e);
+        }
+
         inserted = (result as any).upsertedCount || 0;
         const existedOps = processedFilters.length - inserted;
         updated = existedOps < 0 ? 0 : existedOps;
@@ -769,6 +820,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       let updated = 0;
       if (ops.length) {
         const result = await (Lead as any).bulkWrite(ops, { ordered: false });
+
+        // ✅ Enroll ONLY brand-new inserted leads into any active drip watchers for this folder.
+        // Safety: uses bulkWrite upserted IDs; does NOT run for existing leads/updates.
+        try {
+          const newIds = getUpsertedIdsFromBulkWrite(result);
+          if (newIds.length) {
+            await Promise.allSettled(
+              newIds.map((leadId) =>
+                enrollOnNewLeadIfWatched({
+                  userEmail,
+                  folderId: String(safeFolderId),
+                  leadId: String(leadId),
+                  source: "folder-bulk",
+                  startMode: "now",
+                })
+              )
+            );
+          }
+        } catch (e) {
+          console.error("[CSV Import] drip enroll failed", e);
+        }
+
         inserted = (result as any).upsertedCount || 0;
         const existedOps = processedFilters.length - inserted;
         updated = existedOps < 0 ? 0 : existedOps;
