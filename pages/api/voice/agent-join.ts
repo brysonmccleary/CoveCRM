@@ -46,51 +46,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if ((conferenceName === "default" || !conferenceName) && fromQuery) conferenceName = fromQuery;
 
   // ✅ SAFETY FALLBACK:
-  // If Twilio didn't provide conferenceName, infer it from the most recent active outbound call for this agent.
-  // This prevents the agent joining "default" and leaving the lead stuck waiting forever.
-  if (!conferenceName || conferenceName === "default") {
-    try {
-      const twilioFrom =
-        (req as any).__twilioFrom ||
-        (typeof (req.query as any)?.From === "string" ? (req.query as any).From : "");
-
-      const identity = identityFromTwilioFrom(String(twilioFrom || ""));
-      if (identity) {
-        await dbConnect();
-
-        const recent = await (Call as any)
-          .findOne({
-            userEmail: identity,
-            conferenceName: { $exists: true, $ne: "" },
-            lastStatus: { $nin: ["completed"] },
-            createdAt: { $gte: new Date(Date.now() - 10 * 60 * 1000) }, // last 10 minutes
-          })
-          .sort({ createdAt: -1 })
-          .lean();
-
-        if (recent?.conferenceName) {
-          conferenceName = String(recent.conferenceName);
-          try {
-            console.log("[agent-join] inferred conference", { identity, conferenceName });
-          } catch {}
-        } else {
-          try {
-            console.warn("[agent-join] no recent conference found; staying default", { identity });
-          } catch {}
-        }
-      }
-    } catch (e: any) {
-      console.error("[agent-join] infer conference error:", e?.message || e);
-    }
+      if (!conferenceName || conferenceName === "default") {
+    res.setHeader("Content-Type", "text/xml");
+    res.status(200).send("<Response><Say>Missing conference.</Say><Hangup/></Response>");
+    return;
   }
 
-  if (!conferenceName || conferenceName === "default") {
-  res.setHeader("Content-Type", "text/xml");
-  return res.status(200).send(`<Response><Say>Missing conference.</Say><Hangup/></Response>`);
-}
 
-const vr = new TwilioTwiml.VoiceResponse();
+  const vr = new TwilioTwiml.VoiceResponse();
   const dial = vr.dial();
+  try { console.log("[agent-join] final conferenceName =", conferenceName); } catch {}
+
   dial.conference(
     {
       startConferenceOnEnter: true,

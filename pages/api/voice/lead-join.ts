@@ -9,7 +9,15 @@ const BASE_URL = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || ""
 const SILENCE_URL = `${BASE_URL}/api/twiml/silence`;
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  const conferenceName = (req.query.conferenceName as string) || "default";
+  const conferenceName = (req.query.conferenceName as string) || "";
+  
+  if (!conferenceName) {
+    res.setHeader("Content-Type", "text/xml");
+    res.status(200).send("<Response><Say>Missing conference.</Say><Hangup/></Response>");
+    return;
+  }
+  try { console.log("[lead-join] conferenceName =", conferenceName); } catch {}
+
   const vr = new TwilioTwiml.VoiceResponse();
   const dial = vr.dial();
   dial.conference(
