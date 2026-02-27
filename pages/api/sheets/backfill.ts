@@ -223,12 +223,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       };
 
       // Vercel log capture (this is what you’ll use to prove exactly what’s wrong)
-      console.warn("[sheets/backfill] Invalid signature debug", debug);
+      if (process.env.SHEETS_SIG_DEBUG === "1") {
+        console.warn("[sheets/backfill] Invalid signature debug", debug);
+      }
 
-      return res.status(403).json({
-        error: "Invalid signature",
-        debug,
-      });
+      // Return 200 to prevent retry storms from old/invalid Apps Script installs.
+      return res.status(200).json({ ok: false, error: "Invalid signature" });
     }
 
     let payload: any = {};

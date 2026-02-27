@@ -235,8 +235,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const rawBodyText = rawBytes.toString("utf8");
 
     if (!verifySignatureFlexibleBytes(rawBytes, rawBodyText, token, sig)) {
-      console.warn("[sheets/webhook] invalid signature", { requestId, rawLen: rawBytes.length });
-      return res.status(403).json({ error: "Invalid signature" });
+      if (process.env.SHEETS_SIG_DEBUG === "1") {
+        console.warn("[sheets/webhook] invalid signature", { requestId, rawLen: rawBytes.length });
+      }
+      // Return 200 to prevent retry storms from old/invalid Apps Script installs.
+      return res.status(200).json({ ok: false, error: "Invalid signature" });
     }
 
     let payload: any = {};
