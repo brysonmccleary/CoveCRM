@@ -19,7 +19,11 @@ export default function LeadPreviewPanel({
   useEffect(() => {
     const id = lead?._id || lead?.id;
     if (id) {
-      window.location.href = `/lead/${encodeURIComponent(id)}`;
+      const folderId = lead?.folderId;
+      const hasFolder = typeof folderId === "string" && folderId.trim().length > 0;
+      window.location.href = hasFolder
+        ? `/lead/${encodeURIComponent(id)}?folderId=${encodeURIComponent(folderId)}`
+        : `/lead/${encodeURIComponent(id)}`;
     } else {
       onClose?.();
     }

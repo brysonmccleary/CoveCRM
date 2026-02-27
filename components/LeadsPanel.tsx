@@ -868,7 +868,7 @@ const goToAIDialSession = () => {
                         {showColFirstName && (
                           <td>
                             <button
-                              onClick={() => setPreviewLead(lead)}
+                              onClick={() => setPreviewLead(typeof expandedFolder === "string" && expandedFolder ? { ...lead, folderId: expandedFolder } : lead)}
                               className="text-blue-500 underline cursor-pointer"
                             >
                               {getLeadValue(lead, "firstName") || "-"}

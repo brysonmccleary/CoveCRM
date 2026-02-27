@@ -5,6 +5,9 @@ import Sidebar from "@/components/Sidebar";
 import toast from "react-hot-toast";
 import dynamic from "next/dynamic";
 
+
+import { useInlineLeadCall } from "@/lib/dial/useInlineLeadCall";
+
 const CallPanelClose = dynamic<{
   leadId: string;
   userHasAI: boolean;
@@ -117,7 +120,10 @@ type UICampaign = {
   active?: boolean;
 };
 
+type NumberEntry = { id: string; phoneNumber: string; sid: string; capabilities?: any };
+
 const LEADS_URL = "/dashboard?tab=leads";
+
 
 /* ---------------- helpers ---------------- */
 function safeBullets(v: any, max = 12): string[] {
@@ -263,6 +269,49 @@ function labelFromKey(k: string) {
 
 export default function LeadProfileDial() {
   const router = useRouter();
+  // ---------- Folder context for Prev/Next ----------
+  const folderId = useMemo(() => {
+    const v = (router.query as any)?.folderId;
+    return typeof v === "string" && v.trim() ? v.trim() : "";
+  }, [router.query]);
+
+  const [folderLeadIds, setFolderLeadIds] = useState<string[]>([]);
+  const [folderLeadIdsLoading, setFolderLeadIdsLoading] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (!folderId) {
+      setFolderLeadIds([]);
+      return;
+    }
+    (async () => {
+      try {
+        setFolderLeadIdsLoading(true);
+        const r = await fetch(`/api/get-leads-by-folder?folderId=${encodeURIComponent(folderId)}`, { cache: "no-store" });
+        const j = await r.json().catch(() => ({} as any));
+        const leads = Array.isArray(j?.leads) ? j.leads : [];
+        const ids = leads
+          .map((x: any) => String(x?._id || x?.id || "").trim())
+          .filter(Boolean);
+        setFolderLeadIds(ids);
+      } catch {
+        setFolderLeadIds([]);
+      } finally {
+        setFolderLeadIdsLoading(false);
+      }
+    })();
+  }, [folderId]);
+
+  const { prevLeadId, nextLeadId } = useMemo(() => {
+    const current = String((router.query as any)?.id || "").trim();
+    if (!folderId || !current || !folderLeadIds.length) return { prevLeadId: "", nextLeadId: "" };
+    const idx = folderLeadIds.findIndex((x) => x === current);
+    if (idx < 0) return { prevLeadId: "", nextLeadId: "" };
+    return {
+      prevLeadId: idx > 0 ? folderLeadIds[idx - 1] : "",
+      nextLeadId: idx + 1 < folderLeadIds.length ? folderLeadIds[idx + 1] : "",
+    };
+  }, [folderId, folderLeadIds, router.query]);
+
   const { id } = router.query;
 
   const [lead, setLead] = useState<Lead | null>(null);
@@ -522,9 +571,37 @@ export default function LeadProfileDial() {
     }
   };
 
-  const startCall = () => {
+  // ---------- Inline calling (NO /dial-session) ----------
+  const [numbers, setNumbers] = useState<NumberEntry[]>([]);
+  const [selectedFromNumber, setSelectedFromNumber] = useState<string>("");
+
+  const { status: callStatus, callActive, muted, startCall: startInlineCall, hangup, toggleMute } = useInlineLeadCall();
+
+  useEffect(() => {
+    const loadNumbers = async () => {
+      try {
+        const r = await fetch("/api/getNumbers");
+        const j = await r.json().catch(() => ({} as any));
+        const list: NumberEntry[] = Array.isArray(j?.numbers) ? j.numbers : [];
+        setNumbers(list);
+        // default selection: previously selected dial number OR first number
+        try {
+          const saved = typeof window !== "undefined" ? window.localStorage.getItem("selectedDialNumber") : "";
+          const candidate = saved && list.some((n) => String(n.phoneNumber) === String(saved)) ? saved : (list[0]?.phoneNumber || "");
+          if (candidate) setSelectedFromNumber(String(candidate));
+        } catch {
+          if (list[0]?.phoneNumber) setSelectedFromNumber(String(list[0].phoneNumber));
+        }
+      } catch {
+        setNumbers([]);
+      }
+    };
+    loadNumbers();
+  }, []);
+
+  const startCall = async () => {
     if (!lead?.id) return toast.error("Lead not loaded");
-    router.push({ pathname: "/dial-session", query: { leadId: lead.id } });
+    await startInlineCall({ leadId: lead.id, fromNumber: selectedFromNumber });
   };
 
   const leadInfoRows = useMemo(() => {
@@ -975,7 +1052,31 @@ export default function LeadProfileDial() {
       {/* CENTER */}
       <div className="flex-1 p-6 bg-[#0f172a] border-r border-gray-800 flex flex-col min-h-0">
         <div className="max-w-3xl flex flex-col min-h-0 flex-1">
-          <h3 className="text-lg font-bold mb-2">Add a Note</h3>
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="text-lg font-bold">Add a Note</h3>
+            {folderId ? (
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => prevLeadId && router.push(`/lead/${prevLeadId}?folderId=${encodeURIComponent(folderId)}`)}
+                  disabled={!prevLeadId}
+                  className="text-xs px-2 py-1 rounded bg-white/10 hover:bg-white/20 disabled:opacity-40"
+                  title={folderLeadIdsLoading ? "Loading…" : "Previous lead"}
+                >
+                  Prev
+                </button>
+                <button
+                  type="button"
+                  onClick={() => nextLeadId && router.push(`/lead/${nextLeadId}?folderId=${encodeURIComponent(folderId)}`)}
+                  disabled={!nextLeadId}
+                  className="text-xs px-2 py-1 rounded bg-white/10 hover:bg-white/20 disabled:opacity-40"
+                  title={folderLeadIdsLoading ? "Loading…" : "Next lead"}
+                >
+                  Next
+                </button>
+              </div>
+            ) : null}
+          </div>
 
           <div className="rounded-lg mb-2 bg-[#0f172a] border border-white/10">
             <textarea
@@ -987,19 +1088,56 @@ export default function LeadProfileDial() {
             />
           </div>
 
-          <div className="flex items-center gap-2 mb-4">
+          {/* Call row (NO /dial-session) */}
+          <div className="flex items-center gap-2 mb-2 flex-wrap">
+            <select
+              value={selectedFromNumber}
+              onChange={(e) => setSelectedFromNumber(e.target.value)}
+              className="text-sm bg-[#1e293b] text-white border border-white/10 rounded px-2 py-1.5 min-w-[220px]"
+              disabled={!numbers.length}
+              title="Select number to call from"
+            >
+              {numbers.length ? null : <option value="">No numbers</option>}
+              {numbers.map((n) => (
+                <option key={n.sid || n.id || n.phoneNumber} value={n.phoneNumber}>
+                  {n.phoneNumber}
+                </option>
+              ))}
+            </select>
+
+            <button
+              type="button"
+              onClick={callActive ? () => hangup("agent-hangup") : startCall}
+              disabled={!lead?.id || (!selectedFromNumber && !callActive)}
+              className={`text-sm text-white px-3 py-1.5 rounded-md ${
+                callActive ? "bg-red-600 hover:bg-red-700" : "bg-green-600 hover:bg-green-700"
+              } disabled:opacity-50`}
+            >
+              {callActive ? "Hang Up" : "Call"}
+            </button>
+
+            <button
+              type="button"
+              onClick={toggleMute}
+              disabled={!callActive}
+              className="text-sm bg-white/10 hover:bg-white/20 text-white px-3 py-1.5 rounded-md disabled:opacity-40"
+              title="Mute/unmute"
+            >
+              {muted ? "Unmute" : "Mute"}
+            </button>
+
+            <span className="text-xs text-gray-400">
+              {callStatus && callStatus !== "Idle" ? `Status: ${callStatus}` : null}
+            </span>
+          </div>
+
+          {/* Actions row (moved down one row) */}
+          <div className="flex items-center gap-2 mb-4 flex-wrap">
             <button
               onClick={handleSaveNote}
               className="text-sm bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-md"
             >
               Save Note
-            </button>
-            <button
-              type="button"
-              onClick={startCall}
-              className="text-sm bg-green-600 hover:bg-green-700 text-white px-3 py-1.5 rounded-md"
-            >
-              Call
             </button>
 
             <button
@@ -1130,7 +1268,7 @@ export default function LeadProfileDial() {
             {histLoading ? <span className="text-xs text-gray-400">Loading…</span> : null}
           </div>
 
-          <div className="bg-[#0b1220] border border-white/10 rounded p-3 flex-1 min-h-0 overflow-y-auto">
+          <div className="bg-[#0b1220] border border-white/10 rounded p-3 h-[260px] overflow-y-auto">
             {historyLines.length === 0 ? (
               <p className="text-gray-400">No interactions yet.</p>
             ) : (
