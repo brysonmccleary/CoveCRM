@@ -897,6 +897,47 @@ export default function LeadProfileDial() {
     );
   };
 
+
+  // ---------- Disposition (move lead to folder) ----------
+  const [disposition, setDisposition] = useState<string>("");
+  const [savingDisposition, setSavingDisposition] = useState<boolean>(false);
+
+  const handleDispositionChange = async (value: string) => {
+    setDisposition(value);
+    const v = String(value || "").trim();
+    if (!v) return;
+
+    // Match existing behavior elsewhere: disposition endpoint ignores No Answer for folder moves.
+
+    const leadId = String(lead?._id || lead?.id || router.query.id || "").trim();
+    if (!leadId) {
+      toast.error("Lead not loaded");
+      return;
+    }
+
+    try {
+      setSavingDisposition(true);
+
+      const res = await fetch("/api/disposition-lead", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ leadId, newFolderName: v }),
+      });
+
+      const data = await res.json().catch(() => ({} as any));
+      if (!res.ok || !data?.success) {
+        throw new Error(data?.message || "Failed to move lead");
+      }
+
+      toast.success(`Moved to ${data?.folderName || v}`);
+    } catch (e: any) {
+      toast.error(e?.message || "Failed to move lead");
+    } finally {
+      setSavingDisposition(false);
+    }
+  };
+
+
   // ---------- Render ----------
   return (
     <div className="flex bg-[#0f172a] text-white min-h-screen">
@@ -978,6 +1019,24 @@ export default function LeadProfileDial() {
             >
               Remove from Drip
             </button>
+          </div>
+
+
+          {/* Disposition */}
+          <div className="mb-4">
+            <label className="block text-xs text-gray-300 mb-1">Disposition</label>
+            <select
+              value={disposition}
+              disabled={savingDisposition || !lead?.id}
+              onChange={(e) => handleDispositionChange(e.target.value)}
+              className="w-full bg-[#1e293b] text-white border border-white/10 rounded p-2 disabled:opacity-60"
+            >
+              <option value="">-- Select Disposition --</option>
+              <option value="Sold">Sold</option>
+              <option value="Booked Appointment">Booked Appointment</option>
+              <option value="Not Interested">Not Interested</option>
+              
+            </select>
           </div>
 
           {/* AI Call Overview */}
