@@ -105,3 +105,56 @@ input[type="password"],
 textarea {
   cursor: text;
 }
+
+
+/* ===== Cove Dark Mode Safety Overrides =====
+   Goal: force a consistent dark UI even if some components still use light Tailwind classes.
+   This is a quick, global stopgap. Later we should replace hardcoded bg-white/text-black in components.
+*/
+html.dark .bg-white { background-color: var(--cove-card) !important; }
+html.dark .bg-gray-50,
+html.dark .bg-gray-100,
+html.dark .bg-gray-200,
+html.dark .bg-slate-50,
+html.dark .bg-slate-100,
+html.dark .bg-zinc-50,
+html.dark .bg-neutral-50 {
+  background-color: var(--cove-bg) !important;
+}
+
+html.dark .text-black { color: #ffffff !important; }
+
+/* Borders that often look “light mode” */
+html.dark .border-gray-200,
+html.dark .border-gray-300,
+html.dark .border-slate-200,
+html.dark .border-slate-300,
+html.dark .border-zinc-200,
+html.dark .border-neutral-200 {
+  border-color: rgba(255,255,255,0.12) !important;
+}
+
+/* Form fields that default to white */
+html.dark input:not([type="checkbox"]):not([type="radio"]),
+html.dark textarea,
+html.dark select {
+  background-color: rgba(255,255,255,0.04) !important;
+  color: #ffffff !important;
+  border-color: rgba(255,255,255,0.18) !important;
+}
+
+html.dark input::placeholder,
+html.dark textarea::placeholder {
+  color: rgba(255,255,255,0.55) !important;
+}
+
+/* Tables often render “white” if not explicitly styled */
+html.dark table,
+html.dark thead,
+html.dark tbody,
+html.dark tr,
+html.dark td,
+html.dark th {
+  background-color: transparent;
+  color: inherit;
+}
