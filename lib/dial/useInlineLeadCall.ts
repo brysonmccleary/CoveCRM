@@ -52,28 +52,22 @@ export function useInlineLeadCall() {
   };
 
   useEffect(() => {
-    let raf: number | null = null;
-    let t0: ReturnType<typeof setTimeout> | null = null;
-    let t1: ReturnType<typeof setTimeout> | null = null;
+    let did = false;
 
     const attemptUnlock = async () => {
+      if (did) return;
+      did = true;
       try { await primeAudioContext(); } catch {}
       try { await ensureUnlocked(); } catch {}
     };
 
-    attemptUnlock();
-    t0 = setTimeout(() => { attemptUnlock(); }, 0);
-    t1 = setTimeout(() => { attemptUnlock(); }, 250);
-    raf = window.requestAnimationFrame(() => { attemptUnlock(); });
-
+    // Only unlock on FIRST user gesture (no autoplay attempts on mount)
     const onFirstGesture = () => { attemptUnlock(); };
+
     window.addEventListener("pointerdown", onFirstGesture, { once: true, passive: true } as any);
     window.addEventListener("keydown", onFirstGesture, { once: true } as any);
 
     return () => {
-      try { if (t0) clearTimeout(t0); } catch {}
-      try { if (t1) clearTimeout(t1); } catch {}
-      try { if (raf !== null) cancelAnimationFrame(raf); } catch {}
       try { window.removeEventListener("pointerdown", onFirstGesture as any); } catch {}
       try { window.removeEventListener("keydown", onFirstGesture as any); } catch {}
     };

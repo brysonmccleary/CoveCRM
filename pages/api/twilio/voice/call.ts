@@ -22,12 +22,74 @@ const voiceStatusUrl = (email: string) =>
 
 function normalizeE164(p?: string) {
   const raw = String(p || "").trim();
+  if (!raw) return "";
+
+  // If already +E164-ish, validate it has enough digits
+  if (raw.startsWith("+")) {
+    const d = raw.replace(/\D/g, "");
+    if (d.length >= 10 && d.length <= 15) return `+${d}`;
+    return "";
+  }
+
   const d = raw.replace(/\D/g, "");
-  if (!d) return "";
   if (d.length === 11 && d.startsWith("1")) return `+${d}`;
   if (d.length === 10) return `+1${d}`;
-  return raw.startsWith("+") ? raw : `+${d}`;
+  return "";
 }
+
+function pickLeadPhoneE164(leadDoc: any): string {
+  const directCandidates: any[] = [
+    leadDoc.phone,
+    leadDoc.Phone,
+    leadDoc.phoneNumber,
+    leadDoc["Phone Number"],
+    leadDoc.mobile,
+    leadDoc.Mobile,
+    leadDoc.cell,
+    leadDoc.Cell,
+    leadDoc.primaryPhone,
+    leadDoc["Primary Phone"],
+    leadDoc.otherPhone1,
+    leadDoc["Other Phone 1"],
+    leadDoc.otherPhone,
+    leadDoc["Other Phone"],
+  ].filter(Boolean);
+
+  for (const c of directCandidates) {
+    const e = normalizeE164(String(c));
+    if (e) return e;
+  }
+
+  // If Lead stores imported columns inside a nested object, try common containers
+  const containers = [
+    leadDoc.data,
+    leadDoc.fields,
+    leadDoc.meta,
+    leadDoc.raw,
+    leadDoc.contact,
+  ].filter(Boolean);
+
+  for (const obj of containers) {
+    if (!obj || typeof obj !== "object") continue;
+    for (const k of Object.keys(obj)) {
+      const key = String(k || "").toLowerCase();
+      if (!key.includes("phone")) continue;
+      const e = normalizeE164(String((obj as any)[k] ?? ""));
+      if (e) return e;
+    }
+  }
+
+  // Last resort: scan top-level keys that include "phone"
+  for (const k of Object.keys(leadDoc || {})) {
+    const key = String(k || "").toLowerCase();
+    if (!key.includes("phone")) continue;
+    const e = normalizeE164(String((leadDoc as any)[k] ?? ""));
+    if (e) return e;
+  }
+
+  return "";
+}
+
 
 function makeConferenceName(email: string) {
   const slug = email.replace(/[^a-z0-9]+/gi, "_").toLowerCase().slice(0, 24);
@@ -81,21 +143,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    const candidates = [
-      leadDoc.phone,
-      leadDoc.Phone,
-      leadDoc.mobile,
-      leadDoc.Mobile,
-      leadDoc.primaryPhone,
-      leadDoc["Primary Phone"],
-    ].filter(Boolean);
-
-    const to = normalizeE164(candidates[0]);
+    const to = toRaw ? normalizeE164(toRaw) : pickLeadPhoneE164(leadDoc);
     if (!to) return res.status(400).json({ message: "Lead has no valid phone number" });
 
     const { client } = await getClientForUser(email);
-
-    // ✅ If UI sent a from number, prefer it IF it exists on this user's subaccount.
+// ✅ If UI sent a from number, prefer it IF it exists on this user's subaccount.
     const requestedFrom = normalizeE164(fromNumber || from || "");
     let chosenFrom: string | null = null;
 
