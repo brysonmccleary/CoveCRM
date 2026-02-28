@@ -331,6 +331,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       hasRowNumber: !!rowNumber,
     });
 
+    const externalId =
+      connectionId && rowNumber
+        ? `gs:${connectionId}:r${rowNumber}`
+        : connectionId && payload?.ts
+          ? `gs:${connectionId}:ts:${payload.ts}`
+          : undefined;
 
     // ✅ Hard-dedupe by externalId across the whole account (prevents duplicates even if lead moved folders)
     if (externalId) {
@@ -416,14 +422,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return res.status(200).json({ ok: true, skipped: "duplicate_email" });
       }
     }
-
-    const externalId =
-      connectionId && rowNumber
-        ? `gs:${connectionId}:r${rowNumber}`
-        : connectionId && payload?.ts
-          ? `gs:${connectionId}:ts:${payload.ts}`
-          : undefined;
-
     // ✅ Import EVERYTHING: spread full row first, then overlay canonical fields
     const leadDoc: any = {
       ...row,
