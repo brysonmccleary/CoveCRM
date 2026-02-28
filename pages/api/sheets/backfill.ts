@@ -311,6 +311,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       } else if (emailLower) {
         emails.push(emailLower);
       }
+      const externalId =
+        connectionId && rowNumber
+          ? `gs:${connectionId}:r${rowNumber}`
+          : connectionId && payload?.ts
+            ? `gs:${connectionId}:ts:${payload.ts}`
+            : undefined;
 
       const leadDoc: any = {
         State: String(state || "").trim() || undefined,
@@ -329,6 +335,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         leadType: sanitizeLeadType(String(leadTypeIn || "")),
 
         source: "google-sheets",
+        externalId: externalId,
         sheetMeta: {
           sheetId,
           gid: payload.gid || "",

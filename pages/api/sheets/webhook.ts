@@ -331,6 +331,33 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       hasRowNumber: !!rowNumber,
     });
 
+
+    // ✅ Hard-dedupe by externalId across the whole account (prevents duplicates even if lead moved folders)
+    if (externalId) {
+      const existsByExternal = await (Lead as any)
+        .findOne({ userEmail, externalId })
+        .select({ _id: 1 })
+        .lean();
+      if (existsByExternal) {
+        console.log("[sheets/webhook] skip dedupe", {
+          requestId,
+          reason: "duplicate_externalId",
+          existingLeadId: String(existsByExternal._id),
+        });
+
+        await touchFolderUpdatedAt(folder._id as any, userEmail);
+
+        match.lastSyncedAt = new Date();
+        match.lastEventAt = new Date();
+        match.updatedAt = new Date();
+        gs.syncedSheetsSimple = synced;
+        (user as any).googleSheets = gs;
+        await user.save();
+
+        return res.status(200).json({ ok: true, skipped: "duplicate_externalId" });
+      }
+    }
+
     // ✅ Dedupe (log WHY)
     if (normalizedPhone) {
       const exists = await (Lead as any)
@@ -390,6 +417,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
+    const externalId =
+      connectionId && rowNumber
+        ? `gs:${connectionId}:r${rowNumber}`
+        : connectionId && payload?.ts
+          ? `gs:${connectionId}:ts:${payload.ts}`
+          : undefined;
+
     // ✅ Import EVERYTHING: spread full row first, then overlay canonical fields
     const leadDoc: any = {
       ...row,
@@ -411,6 +445,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       leadType: sanitizeLeadType(String(leadTypeIn || "")),
 
       source: "google-sheets",
+      externalId: externalId,
       sheetMeta: {
         sheetId,
         gid: payload.gid || "",
