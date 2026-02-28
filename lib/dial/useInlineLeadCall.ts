@@ -1,7 +1,7 @@
 // lib/dial/useInlineLeadCall.ts
 import { useCallback, useEffect, useRef, useState } from "react";
 import toast from "react-hot-toast";
-import { playRingback, stopRingback, primeAudioContext, ensureUnlocked } from "@/utils/ringAudio";
+import { playRingback, stopRingback, primeAudioContext, ensureUnlocked, armRingbackFromUserGesture, disarmRingbackUserGesture, isRingbackArmed } from "@/utils/ringAudio";
 import { joinConference, leaveConference, setMuted as sdkSetMuted, getMuted as sdkGetMuted } from "@/utils/voiceClient";
 
 type StartResult = { callSid: string; conferenceName: string };
@@ -37,6 +37,8 @@ export function useInlineLeadCall() {
         try {
           await ensureUnlocked();
         } catch {}
+        // Do NOT allow polling/focus/mount to start ringback unless the user explicitly initiated a call.
+        if (!isRingbackArmed()) return;
         try {
           playRingback();
         } catch {}
@@ -73,11 +75,20 @@ export function useInlineLeadCall() {
     };
   }, []);
 
+  // Safety: if component using this hook unmounts (navigation), kill ringback immediately.
+  useEffect(() => {
+    return () => {
+      try { stopRingback(); } catch {}
+      try { disarmRingbackUserGesture(); } catch {}
+    };
+  }, []);
+
   const hangup = useCallback(async (why?: string) => {
     const sid = activeCallSidRef.current;
     activeCallSidRef.current = null;
 
     await applyRingbackDesired(false);
+    try { disarmRingbackUserGesture(); } catch {}
     clearStatusPoll();
 
     try {
@@ -164,12 +175,14 @@ export function useInlineLeadCall() {
 
         if (s === "in-progress") {
           await applyRingbackDesired(false);
+          try { disarmRingbackUserGesture(); } catch {}
           setStatus("Connected");
           return;
         }
 
         if (isTerminalStatus(s)) {
           await applyRingbackDesired(false);
+          try { disarmRingbackUserGesture(); } catch {}
           const label =
             s === "completed" ? "Completed" :
             s === "busy"      ? "Busy" :
@@ -188,6 +201,8 @@ export function useInlineLeadCall() {
   const startCall = useCallback(async (opts: { leadId: string; fromNumber: string }) => {
     const leadId = String(opts.leadId || "").trim();
     const fromNumber = String(opts.fromNumber || "").trim();
+    // Arm ringback ONLY as part of an explicit user-initiated startCall flow.
+    try { armRingbackFromUserGesture(); } catch {}
     if (!leadId) return toast.error("Lead not loaded");
     if (!fromNumber) return toast.error("Select a number to call from");
 
@@ -236,6 +251,7 @@ export function useInlineLeadCall() {
       await beginStatusPolling(callSid);
     } catch (e: any) {
       await applyRingbackDesired(false);
+      try { disarmRingbackUserGesture(); } catch {}
       try { await leaveConference(); } catch {}
       setCallActive(false);
       setStatus("Failed");

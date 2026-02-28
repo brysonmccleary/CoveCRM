@@ -1,4 +1,5 @@
 // pages/lead/[id].tsx
+import { stopRingback } from "@/utils/ringAudio";
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { useRouter } from "next/router";
 import Sidebar from "@/components/Sidebar";
@@ -268,6 +269,11 @@ function labelFromKey(k: string) {
 /* ---------------------------------------- */
 
 export default function LeadProfileDial() {
+  // Safety: opening a lead should never carry over outbound ringback audio.
+  useEffect(() => {
+    try { stopRingback(); } catch {}
+  }, []);
+
   const router = useRouter();
   // ---------- Folder context for Prev/Next ----------
   const folderId = useMemo(() => {
