@@ -6,6 +6,7 @@ import Lead from "@/models/Lead";
 import Message from "@/models/Message";
 import User from "@/models/User";
 import { sendSMS } from "@/lib/twilio/sendSMS";
+import { initSocket, emitToUser } from "@/lib/socket";
 
 type LeanLead = {
   _id: any;
@@ -100,14 +101,23 @@ export default async function handler(
   // Emit socket event (best-effort, same event name as web)
   try {
     // @ts-ignore
-    res.socket?.server?.io?.emit("newMessage", {
+    initSocket(res as any);
+    emitToUser(email || "", "newMessage", {
       _id: message._id,
       leadId,
       text: message.text,
       direction: message.direction,
       date: message.createdAt,
     });
-  } catch (e) {
+  
+    emitToUser(email || "", "message:new", {
+      _id: message._id,
+      leadId,
+      text: message.text,
+      direction: message.direction,
+      date: message.createdAt,
+    });
+} catch (e) {
     console.warn("Socket emit (mobile) failed:", e);
   }
 

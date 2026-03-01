@@ -104,9 +104,12 @@ export default function InboxSidebar({
     socket.on("newMessage", refresh);
     socket.on("message:new", refresh);
 
+
+    socket.on("message:read", refresh);
     return () => {
       socket.off("newMessage", refresh);
       socket.off("message:new", refresh);
+      socket.off("message:read", refresh);
     };
   }, [socket]);
 

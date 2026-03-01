@@ -1,37 +1,38 @@
-import { useEffect, useRef } from "react";
-import { io, Socket } from "socket.io-client";
+import { useEffect } from "react";
+import { connectAndJoin, getSocket } from "@/lib/socketClient";
 
-let socket: Socket;
+type Handler = (data: any) => void;
 
-export function useSocket(userEmail: string, onMessage: (data: any) => void) {
-  const initialized = useRef(false);
-
+/**
+ * useSocket
+ * - Uses the singleton Socket.IO client from lib/socketClient.ts
+ * - Joins the user's email room
+ * - Listens for server event: "newMessage"
+ *
+ * IMPORTANT: do NOT create a second io() client here (prevents double connections + dup listeners).
+ */
+export function useSocket(userEmail: string, onMessage: Handler) {
   useEffect(() => {
-    if (!userEmail || initialized.current) return;
+    const email = (userEmail || "").trim().toLowerCase();
+    if (!email) return;
 
-    socket = io(undefined, {
-      path: "/api/socket/",
-    });
+    // Connect + join room (idempotent)
+    const s = connectAndJoin(email);
+    if (!s) return;
 
-    socket.on("connect", () => {
-      console.log("✅ Socket connected:", socket.id);
-      socket.emit("join", userEmail);
-    });
+    const handler = (data: any) => {
+      onMessage?.(data);
+    };
 
-    socket.on("disconnect", () => {
-      console.log("❌ Socket disconnected");
-    });
-
-    socket.on("message:new", (data) => {
-      console.log("📩 New socket message", data);
-      onMessage(data);
-    });
-
-    initialized.current = true;
+    // Align event name with API emit: emitToUser(email, "newMessage", payload)
+    s.on("newMessage", handler);
 
     return () => {
-      socket.disconnect();
-      initialized.current = false;
+      try {
+        s.off("newMessage", handler);
+        // Do NOT disconnect the singleton here; other pages may be using it.
+        // Use disconnectSocket() only on sign-out.
+      } catch {}
     };
   }, [userEmail, onMessage]);
 }

@@ -77,7 +77,7 @@ export default function ConversationsPage() {
 
   const fetchConversations = async () => {
     try {
-      const res = await axios.get("/api/messages/conversations");
+      const res = await axios.get("/api/message/conversations");
       setConversations(res.data);
     } catch (err) {
       console.error("Failed to fetch conversations:", err);

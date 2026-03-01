@@ -18,12 +18,12 @@ function isBrowser() {
 function resolveEndpoint() {
   // ---- 1) Env overrides (preferred) ----
   const envBase = (process.env.NEXT_PUBLIC_SOCKET_URL || "").trim().replace(/\/$/, "");
-  // IMPORTANT: server path is '/socket/' (with trailing slash)
+  // IMPORTANT: server path is '/api/socket'
   const envPathRaw = (process.env.NEXT_PUBLIC_SOCKET_PATH || "").trim();
   const envPath = envPathRaw ? (envPathRaw.endsWith("/") ? envPathRaw : envPathRaw + "/") : "";
 
   if (envBase) {
-    return { base: envBase, path: envPath || "/socket/" };
+    return { base: envBase, path: envPath || "/api/socket" };
   }
 
   // ---- 2) Safe default in PRODUCTION: same-origin (Vercel Next.js) ----

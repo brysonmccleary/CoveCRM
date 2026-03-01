@@ -37,8 +37,9 @@ function createIo(res: NextApiResponseWithSocket): SocketIOServer {
     try {
       // Rooms: clients call socket.emit("join", email)
       socket.on("join", (room: string) => {
-        if (!room) return;
-        socket.join(room);
+        const normalized = String(room || "").trim().toLowerCase();
+        if (!normalized) return;
+        socket.join(normalized);
       });
 
       // Optional RPC pong (client may send .emit("ping"))
@@ -86,5 +87,7 @@ export function getIO(): SocketIOServer | null {
 export function emitToUser(userEmail: string, event: string, payload?: any) {
   if (!_io) return;
   if (!userEmail || !event) return;
-  _io.to(userEmail).emit(event, payload);
+  const room = String(userEmail || "").trim().toLowerCase();
+  if (!room) return;
+  _io.to(room).emit(event, payload);
 }

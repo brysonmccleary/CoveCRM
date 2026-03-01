@@ -4,7 +4,7 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
 import dbConnect from "@/lib/dbConnect";
 import Message from "@/models/Message";
-import { emitToUser } from "@/lib/socket";
+import { initSocket, emitToUser } from "@/lib/socket";
 
 /**
  * Marks all UNREAD inbound messages in a thread as read for the current user.
@@ -30,6 +30,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // Fire a real-time event so badges/sidebars update instantly.
     // Safe no-op if socket server isn't initialized.
+    // @ts-ignore
+    try { initSocket(res as any); } catch {}
+
     emitToUser(userEmail, "message:read", { leadId, modified: result.modifiedCount });
 
     return res.status(200).json({ ok: true, modified: result.modifiedCount });

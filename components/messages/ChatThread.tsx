@@ -4,6 +4,7 @@ import axios from "axios";
 import { Socket } from "socket.io-client";
 
 interface Message {
+  _id?: string;
   text: string;
   direction: "inbound" | "outbound" | "ai";
   leadId?: string;
@@ -59,6 +60,12 @@ function getMsgIso(m: Message): string | undefined {
   return m.date || m.sentAt || m.createdAt || m.queuedAt;
 }
 
+function hasMsgId(list: Message[], msg: Message) {
+  const id = (msg as any)?._id;
+  if (!id) return false;
+  return list.some((m: any) => m?._id && String(m._id) === String(id));
+}
+
 export default function ChatThread({ leadId, socket }: ChatThreadProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
@@ -93,7 +100,7 @@ export default function ChatThread({ leadId, socket }: ChatThreadProps) {
 
     const handleNewMessage = (message: Message) => {
       if (message.leadId === leadId) {
-        setMessages((prev) => [...prev, message]);
+        setMessages((prev) => (hasMsgId(prev, message) ? prev : [...prev, message]));
         scrollToBottom();
 
         if (message.direction === "inbound") {
@@ -102,18 +109,31 @@ export default function ChatThread({ leadId, socket }: ChatThreadProps) {
       }
     };
 
-    const handleServerMessageNew = (payload: Partial<Message> & { leadId?: string }) => {
+
+    const handleRead = (payload: { leadId?: string }) => {
+      // If this thread was marked read elsewhere (another tab), you can optionally refresh.
+      // Keeping this as a no-op avoids extra network calls.
       if (payload?.leadId === leadId) {
-        fetchMessages();
+        // no-op
       }
     };
 
     socket.on("newMessage", handleNewMessage);
-    socket.on("message:new", handleServerMessageNew);
 
+    const handleLegacyMessageNew = (payload: any) => {
+      if (payload?.leadId === leadId) {
+        // Legacy event: safest is to refetch from API
+        fetchMessages();
+      }
+    };
+
+    socket.on("message:new", handleLegacyMessageNew);
+
+    socket.on("message:read", handleRead);
     return () => {
       socket.off("newMessage", handleNewMessage);
-      socket.off("message:new", handleServerMessageNew);
+      socket.off("message:new", handleLegacyMessageNew);
+      socket.off("message:read", handleRead);
     };
   }, [socket, leadId]);
 
@@ -127,9 +147,8 @@ export default function ChatThread({ leadId, socket }: ChatThreadProps) {
     });
 
     const message = res.data.message;
-    setMessages((prev) => [...prev, message]);
+    setMessages((prev) => (hasMsgId(prev, message) ? prev : [...prev, message]));
     setInput("");
-    socket?.emit("newMessage", { ...message, leadId });
     scrollToBottom();
   };
 
