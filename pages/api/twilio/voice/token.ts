@@ -9,6 +9,7 @@ import { getClientForUser } from "@/lib/twilio/getClientForUser";
 const MOBILE_JWT_SECRET =
   process.env.MOBILE_JWT_SECRET ||
   process.env.NEXTAUTH_SECRET ||
+  process.env.JWT_SECRET ||
   "dev-mobile-secret";
 
 /**
