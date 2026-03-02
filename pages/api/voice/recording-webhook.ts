@@ -5,6 +5,7 @@ import twilio from "twilio";
 import dbConnect from "@/lib/mongooseConnect";
 import Call from "@/models/Call";
 import User from "@/models/User";
+import { requireAI } from "@/lib/billing/requireAI";
 import { getUserByPhoneNumber } from "@/lib/getUserByPhoneNumber";
 
 export const config = { api: { bodyParser: false } };
@@ -293,7 +294,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       try {
         const user =
           (userEmail && (await User.findOne({ email: userEmail }))) || null;
-        const aiAllowed = !!(user?.hasAI && CALL_AI_SUMMARY_ENABLED);
+        const gate = userEmail ? await requireAI(String(userEmail).toLowerCase(), { allowOwnerBypass: true }) : { ok: false, status: 404, error: "User not found" };
+        const aiAllowed = CALL_AI_SUMMARY_ENABLED && gate.ok;
+
 
         if (aiAllowed) {
           await Call.updateOne(

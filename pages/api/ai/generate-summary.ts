@@ -2,6 +2,7 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth";
 import { authOptions } from "../auth/[...nextauth]";
+import { requireAI } from "@/lib/billing/requireAI";
 import dbConnect from "@/lib/mongooseConnect";
 import mongoose from "mongoose";
 import Lead from "@/models/Lead";
@@ -71,6 +72,11 @@ Use 5–8 bullets max. Be specific. Use clean, professional language like Close.
     },
   ];
 
+  // 🔒 Strict AI upgrade gate: call summaries require user.hasAI === true
+  const __email = String((lead as any)?.userEmail || "").toLowerCase();
+  const __gate = await requireAI(__email, { allowOwnerBypass: true });
+  if (!__gate.ok) return;
+
   const completion = await openai.chat.completions.create({
     model: "gpt-4o",
     messages,
@@ -138,6 +144,13 @@ export default async function handler(
       }
 
       // Fire-and-forget trigger to the same worker used by the recording webhook
+      // 🔒 Strict AI upgrade gate: worker trigger requires user.hasAI === true
+      const __email = String((call as any)?.userEmail || "").toLowerCase();
+      const __gate = await requireAI(__email, { allowOwnerBypass: true });
+      if (!__gate.ok) {
+        return res.status(200).json({ message: "AI upgrade not active. Skipping." });
+      }
+
       fetch(`${BASE_URL}/api/ai/call-worker`, {
         method: "POST",
         headers: {

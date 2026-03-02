@@ -1,5 +1,6 @@
 // /pages/api/ai/call-worker.ts
 import type { NextApiRequest, NextApiResponse } from "next";
+import { requireAI } from "@/lib/billing/requireAI";
 import dbConnect from "@/lib/mongooseConnect";
 import Call from "@/models/Call";
 import { getUserByEmail } from "@/models/User";
@@ -187,6 +188,13 @@ export default async function handler(
       await summarizeTranscript(transcript);
 
     call.transcript = force || !call.transcript ? transcript : call.transcript;
+    // 🔒 Strict AI upgrade gate: call summaries require user.hasAI === true
+    const __email = String((call as any)?.userEmail || "").toLowerCase();
+    const __gate = await requireAI(__email, { allowOwnerBypass: true });
+    if (!__gate.ok) {
+      return res.status(200).json({ message: "AI upgrade not active. Skipping summary." });
+    }
+
     call.aiSummary = force || !call.aiSummary ? summary : call.aiSummary;
     call.aiActionItems =
       force || !(call.aiActionItems && call.aiActionItems.length)

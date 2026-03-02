@@ -11,6 +11,7 @@ import DripCampaign from "@/models/DripCampaign";
 import { AiQueuedReply } from "@/models/AiQueuedReply";
 import twilio, { Twilio } from "twilio";
 import { OpenAI } from "openai";
+import { requireAI } from "@/lib/billing/requireAI";
 import { getTimezoneFromState } from "@/utils/timezone";
 import { DateTime } from "luxon";
 import { buffer } from "micro";
@@ -627,6 +628,12 @@ datetime_text: string|null (eg "tomorrow 3pm")
 yesno: "yes"|"no"|"unknown"`;
   const user = `Now: ${input.nowISO} TZ:${input.tz}\nText: "${input.text}"`;
 
+  // 🔒 Strict AI upgrade gate: AI SMS takeover requires user.hasAI === true
+  const __aiEmail = String(_lastInboundUserEmailForBilling || "").toLowerCase();
+  if (!__aiEmail) return { intent: "unknown", datetime_text: null };
+  const __gate = await requireAI(__aiEmail, { allowOwnerBypass: true });
+  if (!__gate.ok) return { intent: "unknown", datetime_text: null };
+
   const resp = await openai.chat.completions.create({
     model: "gpt-4o-mini",
     temperature: 0,
@@ -929,6 +936,13 @@ ${recentAssistant.length ? recentAssistant.join(" | ") : "(none yet)"}
   ];
 
   // --- First Responses API call ---
+  // 🔒 Strict AI upgrade gate: AI SMS takeover requires user.hasAI === true
+  const __aiEmail = String((lead as any)?.userEmail || (user as any)?.email || "").toLowerCase();
+  _lastInboundUserEmailForBilling = __aiEmail;
+  if (!__aiEmail) throw new Error("AI skipped: no user email");
+  const __gate = await requireAI(__aiEmail, { allowOwnerBypass: true });
+  if (!__gate.ok) throw new Error("AI upgrade required");
+
   const response = await openai.responses.create({
     model: "o3-mini",
     input: inputMessages,
@@ -984,6 +998,13 @@ ${recentAssistant.length ? recentAssistant.join(" | ") : "(none yet)"}
 
   // If tools were called, send tool outputs back into Responses API for a final natural-language reply
   if (toolOutputs.length > 0) {
+  // 🔒 Strict AI upgrade gate: AI SMS takeover requires user.hasAI === true
+  const __aiEmail = String((lead as any)?.userEmail || (user as any)?.email || "").toLowerCase();
+  _lastInboundUserEmailForBilling = __aiEmail;
+  if (!__aiEmail) throw new Error("AI skipped: no user email");
+  const __gate = await requireAI(__aiEmail, { allowOwnerBypass: true });
+  if (!__gate.ok) throw new Error("AI upgrade required");
+
     const followup = await openai.responses.create({
       model: "o3-mini",
       previous_response_id: (response as any).id,
