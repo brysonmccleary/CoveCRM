@@ -72,9 +72,37 @@ export default async function handler(
     const resolved = (await getClientForUser(identity)) as any;
     const usingPersonal = !!resolved?.usingPersonal;
     const user = resolved?.user || {};
+
+    // ✅ HARD GUARD: never allow non-admin users to generate Voice tokens from a personal/main Twilio account.
+    // This prevents calls being created under the wrong account and "burning clients".
+    const role = String(user?.role || "").toLowerCase();
+    const platformAccountSid = String(process.env.TWILIO_ACCOUNT_SID || "").trim();
+
+    if (role && role !== "admin") {
+      if (usingPersonal) {
+        return res.status(403).json({
+          message:
+            "Twilio Voice is not enabled for personal accounts. Please contact support to enable your CoveCRM subaccount calling.",
+          detail: { identity, usingPersonal: true },
+        });
+      }
+    }
+
     const accountSid: string =
       (resolved?.accountSid as string) || process.env.TWILIO_ACCOUNT_SID || "";
-    // Prefer user keys when present, otherwise fall back to platform envs.
+    
+
+    // ✅ HARD GUARD (continued): block non-admin fallback to platform/main account
+    if (role && role !== "admin") {
+      if (platformAccountSid && accountSid && platformAccountSid === accountSid) {
+        return res.status(403).json({
+          message:
+            "Twilio Voice token blocked (platform account fallback). This user must be assigned a Twilio subaccount.",
+          detail: { identity, usingPersonal: false, accountSidMasked: mask(accountSid) },
+        });
+      }
+    }
+// Prefer user keys when present, otherwise fall back to platform envs.
     // ✅ IMPORTANT: for platform subaccounts, we MUST use the subaccount-scoped API key
     // and subaccount TwiML App SID (AP...) or the browser leg will be created under the wrong account.
     const envApiKeySid = process.env.TWILIO_API_KEY_SID || "";
