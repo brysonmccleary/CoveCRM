@@ -38,12 +38,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (fromBody) conferenceName = fromBody;
         const fromBodyTwilio = params.get("From") || "";
         (req as any).__twilioFrom = fromBodyTwilio;
+        const toBody = params.get("To");
+        if (toBody) (req as any).__twilioTo = toBody;
       }
     }
   } catch {}
 
   const fromQuery = (req.query.conferenceName as string) || "";
   if ((conferenceName === "default" || !conferenceName) && fromQuery) conferenceName = fromQuery;
+  // ✅ MOBILE OUTBOUND MODE (additive, does not affect browser/conference calls)
+  // If Twilio posts a `To` number (from VoiceGrant + connect params), dial PSTN directly.
+  const postedTo = String((req as any).__twilioTo || "").trim();
+  if (postedTo) {
+    const vr = new TwilioTwiml.VoiceResponse();
+    const dial = vr.dial();
+    dial.number(postedTo);
+    res.setHeader("Content-Type", "text/xml");
+    res.status(200).send(vr.toString());
+    return;
+  }
+
 
   // ✅ SAFETY FALLBACK:
       if (!conferenceName || conferenceName === "default") {
