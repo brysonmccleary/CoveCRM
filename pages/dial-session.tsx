@@ -973,7 +973,7 @@ export default function DialSession() {
       setCallActive(true);
 
       // Ensure audio is gesture-unlocked; then start ringback.
-      ensureUnlocked();
+      try { await ensureUnlocked(); } catch {}
       try { armRingbackFromUserGesture(); } catch {}
       await applyRingbackDesired(true);
 
