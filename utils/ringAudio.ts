@@ -25,6 +25,16 @@ export function disarmRingbackUserGesture(): void {
   ringbackArmedAt = 0;
 }
 
+function isDialSessionRoute(): boolean {
+  try {
+    if (typeof window === "undefined") return false;
+    const p = String(window.location?.pathname || "");
+    return p.startsWith("/dial-session") || p.startsWith("/ai-dial-session");
+  } catch {
+    return false;
+  }
+}
+
 /** True only shortly after the user gesture. */
 export function isRingbackArmed(maxAgeMs: number = 6000): boolean {
   if (!ringbackArmed) return false;
@@ -112,8 +122,9 @@ export function ensureUnlocked(): Promise<void> {
 }
 
 export async function playRingback(): Promise<void> {
-  // HARD BLOCK: never start ringback unless armed by a recent user gesture.
-  if (!isRingbackArmed()) {
+  // HARD BLOCK everywhere EXCEPT dial-session routes.
+  // Dial-session may start ringback from polling/timers after the initial click; it must still ring.
+  if (!isRingbackArmed() && !isDialSessionRoute()) {
     throw new Error("Ringback blocked: not armed by user gesture");
   }
   const el = ensureEl();
