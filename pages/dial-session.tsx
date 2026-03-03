@@ -4,7 +4,7 @@ import { useRouter } from "next/router";
 import Sidebar from "@/components/Sidebar";
 import BookAppointmentModal from "@/components/BookAppointmentModal";
 import { isCallAllowedForLead, localTimeString } from "@/utils/checkCallTime";
-import { playRingback, stopRingback, primeAudioContext, ensureUnlocked } from "@/utils/ringAudio";
+import { playRingback, stopRingback, primeAudioContext, ensureUnlocked, armRingbackFromUserGesture } from "@/utils/ringAudio";
 import toast from "react-hot-toast";
 import { joinConference, leaveConference, setMuted as sdkSetMuted, getMuted as sdkGetMuted } from "@/utils/voiceClient";
 
@@ -974,6 +974,7 @@ export default function DialSession() {
 
       // Ensure audio is gesture-unlocked; then start ringback.
       ensureUnlocked();
+      try { armRingbackFromUserGesture(); } catch {}
       await applyRingbackDesired(true);
 
       callStartAtRef.current = Date.now();
