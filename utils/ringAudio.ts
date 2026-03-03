@@ -78,45 +78,72 @@ export function ensureUnlocked(): Promise<void> {
   if (unlocked) return Promise.resolve();
   if (unlockPromise) return unlockPromise;
 
-  unlockPromise = new Promise<void>((resolve) => {
-    const handler = async () => {
+  // Attempt to unlock immediately (works when called inside the same user gesture).
+  // If it fails (e.g., NotAllowedError), fall back to waiting for the next gesture.
+  unlockPromise = (async () => {
+    try {
+      await primeAudioContext();
+      const el = ensureEl();
+
+      // SILENT unlock attempt (never audible)
+      const prevMuted = (el as any).muted;
+      const prevVol = (el as any).volume;
+      try { (el as any).muted = true; (el as any).volume = 0; } catch {}
+
       try {
-        await primeAudioContext();
-        const el = ensureEl();
+        const p = el.play();
+        if (p && typeof (p as any).then === "function") {
+          await (p as Promise<void>).catch(() => {});
+        }
+      } catch {}
 
-        // Attempt a short play to satisfy gesture gating; immediately pause/reset.
-        // IMPORTANT: this must be SILENT or it will "ring" when the user clicks anything (like opening a lead).
-        const prevMuted = (el as any).muted;
-        const prevVol = (el as any).volume;
-        try { (el as any).muted = true; (el as any).volume = 0; } catch {}
+      try { el.pause(); el.currentTime = 0; } catch {}
+      try { (el as any).muted = prevMuted; (el as any).volume = prevVol; } catch {}
 
+      unlocked = true;
+      return;
+    } catch {
+      // fall through to gesture listeners
+    }
+
+    return await new Promise<void>((resolve) => {
+      const handler = async () => {
         try {
-          const p = el.play();
-          if (p && typeof (p as any).then === "function") {
-            await (p as Promise<void>).catch(() => {});
-          }
-        } catch {}
-        try { el.pause(); el.currentTime = 0; } catch {}
+          await primeAudioContext();
+          const el = ensureEl();
 
-        try { (el as any).muted = prevMuted; (el as any).volume = prevVol; } catch {}
+          // Attempt a short play to satisfy gesture gating; immediately pause/reset.
+          // IMPORTANT: this must be SILENT or it will "ring" when the user clicks anything (like opening a lead).
+          const prevMuted = (el as any).muted;
+          const prevVol = (el as any).volume;
+          try { (el as any).muted = true; (el as any).volume = 0; } catch {}
 
-        unlocked = true;
-      } finally {
-        // Clean up all one-time listeners
-        window.removeEventListener("pointerdown", handler as any);
-        window.removeEventListener("touchend", handler as any);
-        window.removeEventListener("click", handler as any);
-        window.removeEventListener("keydown", handler as any);
-        resolve();
-      }
-    };
+          try {
+            const p = el.play();
+            if (p && typeof (p as any).then === "function") {
+              await (p as Promise<void>).catch(() => {});
+            }
+          } catch {}
+          try { el.pause(); el.currentTime = 0; } catch {}
 
-    // Use broad set of gestures for reliability across Safari/iOS/desktop
-    window.addEventListener("pointerdown", handler as any, { once: true, passive: true });
-    window.addEventListener("touchend", handler as any, { once: true, passive: true });
-    window.addEventListener("click", handler as any, { once: true, passive: true });
-    window.addEventListener("keydown", handler as any, { once: true });
-  });
+          try { (el as any).muted = prevMuted; (el as any).volume = prevVol; } catch {}
+
+          unlocked = true;
+        } finally {
+          window.removeEventListener("pointerdown", handler as any);
+          window.removeEventListener("touchend", handler as any);
+          window.removeEventListener("click", handler as any);
+          window.removeEventListener("keydown", handler as any);
+          resolve();
+        }
+      };
+
+      window.addEventListener("pointerdown", handler as any, { once: true, passive: true });
+      window.addEventListener("touchend", handler as any, { once: true, passive: true });
+      window.addEventListener("click", handler as any, { once: true, passive: true });
+      window.addEventListener("keydown", handler as any, { once: true });
+    });
+  })();
 
   return unlockPromise;
 }
