@@ -104,7 +104,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         .lean();
 
       if (!affiliateOwner && !isHouse) {
-        return res.status(400).json({ message: "Invalid referral code" });
+        // Allow unknown codes so Stripe promo codes or future affiliate codes don't block signup
+        // If it isn't an approved affiliate, we simply don't attach referral tracking
       }
 
       referredByCode = codeInput;
