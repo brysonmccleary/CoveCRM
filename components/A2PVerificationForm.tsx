@@ -142,7 +142,12 @@ export default function A2PVerificationForm() {
         brand === "failed" ||
         camp === "failed";
 
+      const brandApproved = brand === "approved";
+      const campApproved = camp === "approved";
+
       const approved =
+        brandApproved &&
+        campApproved &&
         (app === "approved" || reg === "campaign_approved") &&
         (resp.messagingReady || resp.canSendSms);
 
@@ -667,7 +672,12 @@ The opt-in page displays SMS Opt-In Terms and SMS Opt-In Privacy links on the sa
                   brand === "failed" ||
                   camp === "failed";
 
+                const brandApproved = brand === "approved";
+                const campApproved = camp === "approved";
+
                 const approved =
+                  brandApproved &&
+                  campApproved &&
                   (app === "approved" || reg === "campaign_approved") &&
                   (resp.messagingReady || resp.canSendSms);
 
@@ -741,7 +751,7 @@ The opt-in page displays SMS Opt-In Terms and SMS Opt-In Privacy links on the sa
           <div className="border border-gray-600 bg-gray-800 text-gray-100 text-sm px-3 py-2 rounded">
             Checking your A2P status…
           </div>
-        ) : statusView ? (
+        ) : statusView && statusView.state === "approved" ? (
           <div className={`${statusClasses} text-sm px-3 py-2 rounded`}>
             <div className="font-semibold">{statusView.title}</div>
             {statusView.description && (
