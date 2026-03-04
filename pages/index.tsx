@@ -471,6 +471,30 @@ export default function Home() {
 
 
 
+
+
+        {/* --- Demo Video (YouTube) --- */}
+        <section className="py-14 px-6" data-cove-home-video="1">
+          <div className="max-w-6xl mx-auto">
+            <div className="rounded-3xl border border-white/10 bg-white/5 shadow-[0_0_0_1px_rgba(255,255,255,0.03)] p-6 md:p-8">
+              <div className="text-center mb-6">
+                <h2 className="text-2xl sm:text-3xl font-semibold text-white">Watch the demo</h2>
+                <p className="text-white/70 mt-2">See CoveCRM in action.</p>
+              </div>
+
+              <div className="relative w-full overflow-hidden rounded-2xl border border-white/10 bg-[#020617]" style={{ paddingTop: "56.25%" }}>
+                <iframe
+                  className="absolute inset-0 h-full w-full"
+                  src="https://www.youtube.com/embed/yLgH-4AEn0Q?rel=0&modestbranding=1"
+                  title="CoveCRM Demo"
+                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                  allowFullScreen
+                />
+              </div>
+            </div>
+          </div>
+        </section>
+
 {/* Pricing Section */}
         <section className="py-20 px-6 text-center bg-[#020617]">
           <h2 className="text-3xl font-bold mb-6">
