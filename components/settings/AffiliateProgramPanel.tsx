@@ -150,11 +150,42 @@ export default function AffiliateProgramPanel() {
     }
   };
 
-  const copyCode = () => {
+  async function copyToClipboard(value: string) {
+    try {
+      // Safari can block clipboard on non-HTTPS; prefer modern API when available
+      if (navigator?.clipboard?.writeText && window.isSecureContext) {
+        await navigator.clipboard.writeText(value);
+        return true;
+      }
+    } catch {}
+
+    // Fallback: hidden textarea (works on Safari/localhost)
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = value;
+      ta.setAttribute("readonly", "");
+      ta.style.position = "fixed";
+      ta.style.left = "-9999px";
+      ta.style.top = "-9999px";
+      document.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+      const ok = document.execCommand("copy");
+      document.body.removeChild(ta);
+      return ok;
+    } catch {
+      return false;
+    }
+  }
+
+  const copyCode = async () => {
     if (!stats?.code) return;
-    navigator.clipboard.writeText(stats.code);
+    const referralLink = `https://covecrm.com/signup?ref=${encodeURIComponent(
+      String(stats.code),
+    )}`;
+    const ok = await copyToClipboard(referralLink);
     setCopySuccess(true);
-    toast.success("Code copied");
+    ok ? toast.success("Link copied") : toast.error("Copy failed");
     setTimeout(() => setCopySuccess(false), 1500);
   };
 
@@ -285,7 +316,7 @@ export default function AffiliateProgramPanel() {
                 onClick={copyCode}
                 className="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded text-sm"
               >
-                {copySuccess ? "Copied!" : "Copy Code"}
+                {copySuccess ? "Copied!" : "Copy Link"}
               </button>
             </div>
 
@@ -336,6 +367,25 @@ export default function AffiliateProgramPanel() {
                 >
                   {stats.approved ? "Approved" : "Pending"}
                 </p>
+                  {stats?.code && (
+                    <div className="mt-2">
+                      <p className="text-xs text-gray-300">Affiliate Link</p>
+                      <div className="mt-1 flex items-center gap-2">
+                        <div className="flex-1 bg-[#1E2533] border border-white/10 rounded px-3 py-2 text-xs text-gray-200 truncate">
+                          {`https://covecrm.com/signup?ref=${stats.code}`}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            copyToClipboard(`https://covecrm.com/signup?ref=${stats.code}`)
+                          }
+                          className="bg-blue-600 hover:bg-blue-700 px-3 py-2 rounded text-xs"
+                        >
+                          Copy Link
+                        </button>
+                      </div>
+                    </div>
+                  )}
               </div>
             </div>
 

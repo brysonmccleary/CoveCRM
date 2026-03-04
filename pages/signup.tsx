@@ -24,10 +24,29 @@ export default function SignUp() {
   const aiAddOnPrice = 50;
 
   useEffect(() => {
-    if (router.query.code && typeof router.query.code === "string") {
-      setPromoCode(router.query.code);
-    }
-  }, [router.query.code]);
+    // AUTO_REF_APPLY_EFFECT
+    // ✅ Accept affiliate links in either format:
+    //   /signup?ref=CODE   (new affiliate link)
+    //   /signup?code=CODE  (legacy)
+    const qpRef = router.query.ref;
+    const qpCode = router.query.code;
+
+    const fromRef = typeof qpRef === "string" ? qpRef : Array.isArray(qpRef) ? qpRef[0] : "";
+    const fromCode = typeof qpCode === "string" ? qpCode : Array.isArray(qpCode) ? qpCode[0] : "";
+
+    const incoming = (fromRef || fromCode || "").trim();
+    if (!incoming) return;
+
+    setPromoCode(incoming);
+
+    // Persist so it survives redirects / refreshes
+    try {
+      if (typeof window !== "undefined") {
+        localStorage.setItem("affiliate_code", incoming);
+        document.cookie = `affiliate_code=${encodeURIComponent(incoming)}; path=/; max-age=2592000`; // 30d
+      }
+    } catch {}
+  }, [router.query.ref, router.query.code]);
 
   const pwMismatch = useMemo(
     () => confirmPassword.length > 0 && password !== confirmPassword,
@@ -37,6 +56,55 @@ export default function SignUp() {
   const canSubmit = useMemo(() => {
     return !!name && !!email && !!password && !!confirmPassword && !pwMismatch && !isSubmitting;
   }, [name, email, password, confirmPassword, pwMismatch, isSubmitting]);
+
+  useEffect(() => {
+    // AUTO_REF_APPLY_RUN
+    // If we arrived with a code already present, auto-apply it once (no blur needed).
+    const code = (promoCode || "").trim();
+    if (!code) return;
+    if (discountApplied) return;
+    if (checkingCode) return;
+
+    const qpRef = router.query.ref;
+    const qpCode = router.query.code;
+
+    const fromQuery =
+      (typeof qpRef === "string" && qpRef.trim() === code) ||
+      (typeof qpCode === "string" && qpCode.trim() === code);
+
+    let fromPersist = false;
+    try {
+      const stored =
+        typeof window !== "undefined" ? localStorage.getItem("affiliate_code") || "" : "";
+      const cookie =
+        typeof document !== "undefined"
+          ? document.cookie.match(/(?:^|; )affiliate_code=([^;]+)/)?.[1] || ""
+          : "";
+      fromPersist =
+        decodeURIComponent(stored || "").trim() === code ||
+        decodeURIComponent(cookie || "").trim() === code;
+    } catch {}
+
+    if (!fromQuery && !fromPersist) return;
+
+    // Fire the same logic as blur would, but silently (no extra toast spam).
+    (async () => {
+      setCheckingCode(true);
+      try {
+        const res = await axios.post("/api/apply-code", { code });
+        const { price, ownerEmail } = res.data || {};
+        if (typeof price === "number") setFinalPrice(price);
+        setAffiliateEmail(ownerEmail || "");
+        setDiscountApplied(true);
+      } catch {
+        setDiscountApplied(false);
+        setFinalPrice(basePrice);
+        setAffiliateEmail("");
+      } finally {
+        setCheckingCode(false);
+      }
+    })();
+  }, [promoCode, router.query.ref, router.query.code]);
 
   const handleCodeBlur = async () => {
     if (!promoCode.trim()) {
