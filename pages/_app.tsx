@@ -49,6 +49,25 @@ function InnerApp({
   const authed = status === "authenticated" && !!session?.user?.email;
 
   const router = useRouter();
+
+  // ✅ Capture ?ref=CODE from affiliate share links (persist ~30 days)
+  useEffect(() => {
+    try {
+      if (typeof window === "undefined") return;
+
+      const params = new URLSearchParams(window.location.search);
+      const ref = (params.get("ref") || "").trim();
+      if (!ref) return;
+
+      // localStorage for client reads; cookie for server/API reads
+      localStorage.setItem("affiliate_code", ref);
+      document.cookie = `affiliate_code=${encodeURIComponent(
+        ref,
+      )}; path=/; max-age=2592000; SameSite=Lax`;
+    } catch {
+      // non-fatal
+    }
+  }, []);
   const isPublic = useMemo(
     () => PUBLIC_ROUTES.has(router.pathname),
     [router.pathname],

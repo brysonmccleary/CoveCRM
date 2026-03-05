@@ -3,11 +3,13 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import { buffer } from "micro";
 import twilio from "twilio";
 import mongooseConnect from "@/lib/mongooseConnect";
+import mongoose from "mongoose";
 import { getUserByPhoneNumber } from "@/lib/getUserByPhoneNumber";
 import { trackUsage } from "@/lib/billing/trackUsage";
 import User from "@/models/User";
 import Message from "@/models/Message";
 import Call from "@/models/Call";
+import { sendEmail } from "@/lib/email";
 
 export const config = { api: { bodyParser: false } };
 
@@ -306,6 +308,59 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       // Usage/Billing unchanged...
       try {
         if (TERMINAL_VOICE_STATES.has(CallStatus) && ownerNumber) {
+        // ✅ Missed inbound call email (temporary until mobile app)
+        // Only send for explicit "missed" terminal states; never for completed/answered.
+        try {
+          const missedStates = new Set(["busy", "failed", "no-answer", "canceled"]);
+          if (missedStates.has(CallStatus)) {
+            await mongooseConnect();
+
+            // We dedupe + pull lead info from the short-lived InboundCall doc
+            // created in /api/twilio/voice/inbound.ts (callSid, ownerEmail, leadId, phone, leadName).
+            const coll = mongoose.connection.collection("inboundcalls");
+
+            // Atomic: only the first terminal callback sends the email
+            const r = await coll.findOneAndUpdate(
+              { callSid: CallSid, missedEmailSentAt: { $exists: false } },
+              { $set: { missedEmailSentAt: new Date() } },
+              { returnDocument: "before" as any }
+            );
+
+            const inb: any = (r as any)?.value || null;
+            const toEmail =
+              (typeof inb?.ownerEmail === "string" && inb.ownerEmail) ? String(inb.ownerEmail).toLowerCase() : null;
+
+            if (toEmail) {
+              const leadName = (typeof inb?.leadName === "string" && inb.leadName.trim()) ? inb.leadName.trim() : "Unknown lead";
+              const phone = (typeof inb?.from === "string" && inb.from.trim()) ? inb.from.trim() : (typeof inb?.phone === "string" ? inb.phone : "");
+              const leadId = (typeof inb?.leadId === "string" && inb.leadId) ? inb.leadId : null;
+
+              const base =
+                (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "https://www.covecrm.com").replace(/\/$/, "");
+              const leadUrl = leadId ? `${base}/leads?open=${encodeURIComponent(leadId)}` : `${base}/leads`;
+
+              const subject = `Missed call from ${leadName}`;
+              const html = `
+                <div style="font-family: Arial, sans-serif; line-height: 1.4;">
+                  <h3 style="margin:0 0 8px 0;">Missed call</h3>
+                  <p style="margin:0 0 8px 0;"><b>Lead:</b> ${leadName}</p>
+                  ${phone ? `<p style="margin:0 0 8px 0;"><b>Phone:</b> ${phone}</p>` : ""}
+                  <p style="margin:0 0 8px 0;"><b>Status:</b> ${CallStatus}</p>
+                  <p style="margin:0 0 8px 0;"><a href="${leadUrl}">Open lead</a></p>
+                </div>
+              `;
+
+              await sendEmail(toEmail, subject, html);
+              try { console.log("[missed-call-email] sent", { toEmail, CallSid, CallStatus, leadId }); } catch {}
+            } else {
+              // No inboundcall doc or missing ownerEmail => skip silently
+              try { console.log("[missed-call-email] skip (no ownerEmail)", { CallSid, CallStatus }); } catch {}
+            }
+          }
+        } catch (e: any) {
+          console.warn("[missed-call-email] failed (non-fatal):", e?.message || e);
+        }
+
           const user = await getUserByPhoneNumber(ownerNumber);
           if (user) {
             const userDoc = await User.findById(user._id);
