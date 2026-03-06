@@ -5700,6 +5700,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
         state.greetingAdvancePending = false;
         state.greetingAdvanceNextIndex = undefined;
         state.greetingAdvanceNextPhase = undefined;
+        armExpectingUserSpeech(state, state.scriptStepIndex, "greeting audio started");
       }
     }
 
