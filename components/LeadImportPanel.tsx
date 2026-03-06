@@ -10,6 +10,14 @@ const LOCAL_KEY_MAPPING = "leadImport:mapping:v1";
 const LOCAL_KEY_FOLDER = "leadImport:lastFolderId";
 const LOCAL_KEY_SKIP = "leadImport:skipExisting";
 
+type SavedImportTemplate = {
+  _id?: string;
+  name: string;
+  mapping: Record<string, string>;
+  skipHeader: Record<string, boolean>;
+  customFieldNames: Record<string, string>;
+};
+
 const CANONICAL_FIELDS = [
   "First Name",
   "Last Name",
@@ -68,6 +76,8 @@ export default function LeadImportPanel({ onImportSuccess }: { onImportSuccess?:
   const [mapping, setMapping] = useState<Record<string, string>>({});
   const [skipHeader, setSkipHeader] = useState<Record<string, boolean>>({});
   const [customFieldNames, setCustomFieldNames] = useState<Record<string, string>>({});
+  const [templateName, setTemplateName] = useState("");
+  const [templates, setTemplates] = useState<SavedImportTemplate[]>([]);
 
   // Folders
   const [folders, setFolders] = useState<Folder[]>([]);
@@ -111,6 +121,28 @@ export default function LeadImportPanel({ onImportSuccess }: { onImportSuccess?:
 
         const savedSkip = localStorage.getItem(LOCAL_KEY_SKIP);
         if (savedSkip != null) setSkipExisting(savedSkip === "true");
+      } catch {
+        /* ignore */
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await fetch("/api/mappings");
+        if (!r.ok) return;
+        const data = await r.json();
+        const next = Array.isArray(data)
+          ? data.map((item: any) => ({
+              _id: item?._id ? String(item._id) : undefined,
+              name: String(item?.name || ""),
+              mapping: { ...(item?.fields?.mapping || {}) },
+              skipHeader: { ...(item?.fields?.skipHeader || {}) },
+              customFieldNames: { ...(item?.fields?.customFieldNames || {}) },
+            })).filter((item: SavedImportTemplate) => item.name)
+          : [];
+        setTemplates(next);
       } catch {
         /* ignore */
       }
@@ -192,6 +224,73 @@ export default function LeadImportPanel({ onImportSuccess }: { onImportSuccess?:
     return result;
   };
 
+  const saveTemplate = async () => {
+    const name = templateName.trim();
+    if (!name) {
+      toast.error("❌ Enter a template name");
+      return;
+    }
+
+    const payload = {
+      name,
+      fields: {
+        mapping: { ...(mapping || {}) },
+        skipHeader: { ...(skipHeader || {}) },
+        customFieldNames: { ...(customFieldNames || {}) },
+      },
+    };
+
+    try {
+      const r = await fetch("/api/mappings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        throw new Error(data?.message || "Failed to save template");
+      }
+
+      const saved: SavedImportTemplate = {
+        _id: data?._id ? String(data._id) : undefined,
+        name: String(data?.name || name),
+        mapping: { ...(data?.fields?.mapping || payload.fields.mapping) },
+        skipHeader: { ...(data?.fields?.skipHeader || payload.fields.skipHeader) },
+        customFieldNames: {
+          ...(data?.fields?.customFieldNames || payload.fields.customFieldNames),
+        },
+      };
+
+      setTemplates((prev) => {
+        const next = prev.filter(
+          (t) => t.name.trim().toLowerCase() !== saved.name.trim().toLowerCase()
+        );
+        next.push(saved);
+        next.sort((a, b) => a.name.localeCompare(b.name));
+        return next;
+      });
+
+      toast.success(`✅ Saved template: ${saved.name}`);
+      setTemplateName("");
+    } catch (e: any) {
+      toast.error(`❌ ${e?.message || "Failed to save template"}`);
+    }
+  };
+
+  const applyTemplateByName = (name: string) => {
+    if (!name) return;
+    const tpl = templates.find((t) => t?.name === name);
+    if (!tpl) {
+      toast.error("❌ Template not found");
+      return;
+    }
+    setMapping({ ...(tpl.mapping || {}) });
+    setSkipHeader({ ...(tpl.skipHeader || {}) });
+    setCustomFieldNames({ ...(tpl.customFieldNames || {}) });
+    toast.success(`✅ Loaded template: ${name}`);
+  };
+
   const handleImport = async () => {
     try {
       if (!uploadedFile) {
@@ -244,6 +343,12 @@ export default function LeadImportPanel({ onImportSuccess }: { onImportSuccess?:
       const form = new FormData();
       form.append("file", uploadedFile);
       form.append("mapping", JSON.stringify(mappingForApi));
+      form.append(
+        "skipHeaders",
+        JSON.stringify(
+          Object.keys(skipHeader).filter((header) => !!skipHeader[header])
+        )
+      );
       form.append("skipExisting", String(skipExisting));
       form.append("_ts", String(Date.now()));
 
@@ -397,6 +502,42 @@ export default function LeadImportPanel({ onImportSuccess }: { onImportSuccess?:
         <div className="space-y-2">
           <div className="text-sm text-gray-600">
             Map your CSV columns to fields. We’ll remember your choices.
+          </div>
+
+          <div className="flex flex-col md:flex-row gap-2 md:items-center">
+            <input
+              type="text"
+              value={templateName}
+              onChange={(e) => setTemplateName(e.target.value)}
+              placeholder="Template name"
+              className="border p-2 rounded md:w-64"
+            />
+
+            <button
+              type="button"
+              onClick={saveTemplate}
+              className="bg-black text-white dark:bg-white dark:text-black px-4 py-2 rounded hover:opacity-90"
+              disabled={isUploading}
+            >
+              Save Template
+            </button>
+
+            <select
+              defaultValue=""
+              onChange={(e) => {
+                applyTemplateByName(e.target.value);
+                e.currentTarget.value = "";
+              }}
+              className="border p-2 rounded md:w-72"
+              disabled={isUploading}
+            >
+              <option value="">Load Saved Template</option>
+              {templates.map((tpl) => (
+                <option key={tpl._id || tpl.name} value={tpl.name}>
+                  {tpl.name}
+                </option>
+              ))}
+            </select>
           </div>
 
           {csvHeaders.map((header) => (

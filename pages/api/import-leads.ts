@@ -269,6 +269,7 @@ type JsonPayload = {
   mapping?: Record<string, string>;
   rows?: Record<string, any>[];
   skipExisting?: boolean;
+  skipHeaders?: string[];
 };
 async function readJsonBody(req: NextApiRequest): Promise<JsonPayload | null> {
   if (!req.headers["content-type"]?.includes("application/json")) return null;
@@ -287,12 +288,45 @@ async function readJsonBody(req: NextApiRequest): Promise<JsonPayload | null> {
 }
 
 /* ---- CSV mapping ---- */
-function mapRow(row: Record<string, any>, mapping: Record<string, string>) {
+function normalizeHeaderKey(input?: string | null) {
+  return String(input || "").trim().toLowerCase();
+}
+
+function buildSkippedHeaderSet(skipHeaders?: string[]) {
+  return new Set(
+    Array.isArray(skipHeaders)
+      ? skipHeaders.map((h) => normalizeHeaderKey(h)).filter(Boolean)
+      : []
+  );
+}
+
+function mapRow(
+  row: Record<string, any>,
+  mapping: Record<string, string>,
+  skippedHeaders?: Set<string>
+) {
+  const isSkipped = (header?: string | null) =>
+    !!header && !!skippedHeaders?.has(normalizeHeaderKey(header));
+
   const pick = (k: string) => {
     const col = mapping[k];
-    if (!col) return undefined;
+    if (!col || isSkipped(col)) return undefined;
     const v = row[col];
     return typeof v === "string" ? v.trim() : v;
+  };
+
+  const pickRaw = (...headers: string[]) => {
+    for (const header of headers) {
+      if (isSkipped(header)) continue;
+      const v = row[header];
+      if (typeof v === "string") {
+        const trimmed = v.trim();
+        if (trimmed) return trimmed;
+      } else if (v !== undefined && v !== null && v !== "") {
+        return v;
+      }
+    }
+    return undefined;
   };
 
   const first = pick("firstName");
@@ -302,7 +336,7 @@ function mapRow(row: Record<string, any>, mapping: Record<string, string>) {
   const stateRaw = pick("state");
   const notes = pick("notes");
   const source = pick("source");
-  const leadTypeRaw = row["Lead Type"] || row["leadType"] || row["LeadType"];
+  const leadTypeRaw = pickRaw("Lead Type", "leadType", "LeadType");
   const statusRaw = pick("status") ?? pick("disposition");
 
   const mergedNotes =
@@ -331,7 +365,6 @@ function mapRow(row: Record<string, any>, mapping: Record<string, string>) {
     status,
   };
 }
-
 /* ---- dedupe helpers ---- */
 function buildFilter(userEmail: string, phoneKey?: string, emailKey?: string) {
   if (phoneKey) {
@@ -373,7 +406,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const json = await readJsonBody(req);
   if (json) {
     try {
-      const { targetFolderId, mapping, rows, skipExisting = false } = json;
+      const { targetFolderId, mapping, rows, skipExisting = false, skipHeaders = [] } = json;
+      const skippedHeaderSet = buildSkippedHeaderSet(skipHeaders);
 
       const preferredName = (json.newFolderName || json.newFolder || json.name || "")
         .toString()
@@ -404,7 +438,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         );
 
       const mapped = rows.map((r) => ({
-        ...mapRow(r, mapping!),
+        ...mapRow(r, mapping!, skippedHeaderSet),
         userEmail,
         folderId: safeFolderId,
       }));
@@ -605,6 +639,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const mappingStr = (
         Array.isArray(fields.mapping) ? fields.mapping[0] : fields.mapping
       )?.toString();
+      const skipHeadersStr = (
+        Array.isArray((fields as any).skipHeaders)
+          ? (fields as any).skipHeaders[0]
+          : (fields as any).skipHeaders
+      )?.toString();
+      const skipHeaders = skipHeadersStr ? JSON.parse(skipHeadersStr) : [];
+      const skippedHeaderSet = buildSkippedHeaderSet(skipHeaders);
       const skipExisting =
         (
           Array.isArray(fields.skipExisting)
@@ -712,7 +753,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
 
       const rowsMapped = rawRows.map((r) => ({
-        ...mapRow(r, mapping),
+        ...mapRow(r, mapping, skippedHeaderSet),
         userEmail,
         folderId: safeFolderId,
         rawRow: r,

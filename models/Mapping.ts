@@ -2,7 +2,8 @@ import mongoose from "mongoose";
 
 const MappingSchema = new mongoose.Schema(
   {
-    userId: { type: String, required: false }, // Add actual user ID if auth connected
+    userId: { type: String, required: false }, // legacy / unused
+    userEmail: { type: String, required: true, index: true },
     name: { type: String, required: true },
     fields: { type: Object, required: true },
     createdAt: { type: Date, default: Date.now },
