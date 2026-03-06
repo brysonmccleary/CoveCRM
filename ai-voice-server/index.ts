@@ -852,10 +852,6 @@ async function replayPendingCommittedTurn(
         })
       );
 
-
-      // ✅ After asking the first real question, start listening for the user reply.
-      armExpectingUserSpeech(state, 0, "post-greeting step asked");
-
       // ✅ Do NOT advance out of greeting yet.
       // We only advance after we confirm OpenAI actually produced outbound audio (first audio.delta).
       let nextIdx = steps.length > 1 ? 1 : 0;
@@ -4019,77 +4015,81 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
       return;
     }
 
-    // ✅ HARD COST LOCK (MOVED UP):
-    // Do not forward ANY inbound audio to OpenAI unless we truly expect the user to speak.
-    // Previously this gate only applied to frames classified as "silence"; if comfort-noise
-    // was misclassified as non-silence, we forwarded full-rate audio and cost spiked.
-    const nowMs = Date.now();
-    const listenEnabledAt = Number((state as any).lastListenEnabledAtMs || 0);
-    const warmupUntil = Number((state as any).listenWarmupUntilMs || 0);
-    const inWarmup = warmupUntil > 0 && nowMs <= warmupUntil;
-
-    const expectingUserSpeech =
-      state.phase === "awaiting_greeting_reply" ||
-      !!state.awaitingUserAnswer ||
-      inWarmup;
-
-    if (!expectingUserSpeech) {
-      return;
-    }
-
-    // ✅ Silence/noise throttling:
-    // - During warmup: do NOT throttle (VAD needs full-rate frames to catch first words).
-    // - After warmup (before speech starts): throttle aggressively even if misclassified as non-silence
-    //   to avoid comfort-noise burning input cost 24/7.
-    // - After speech: allow bounded trailing silence so server_vad can detect end-of-speech.
     const isSilenceToSend = isLikelySilenceMulawBase64(payload);
+    if (isSilenceToSend) {
+      // ✅ COST CUT: Do NOT stream continuous idle silence.
+      // Only allow sparse silence for ~1.2s after user speech so server_vad can finalize.
+      // If user is actively speaking, do NOT throttle silence.
 
-    // If not in warmup and we have NOT detected speech-in-progress yet, treat frames as "idle"
-    // and apply a hard throttle to protect cost. Once speech_started fires, normal forwarding resumes.
-    const startedAt = Number((state as any).lastUserSpeechStartedAtMs || 0);
-    const stopAt = Number((state as any).lastUserSpeechStoppedAtMs || 0);
+      const nowMs = Date.now();
+      const listenEnabledAt = Number((state as any).lastListenEnabledAtMs || 0);
+      const warmupUntil = Number((state as any).listenWarmupUntilMs || 0);
 
-    const speechIsActuallyActive =
-      startedAt > 0 &&
-      (nowMs - startedAt) <= 2500 &&
-      (stopAt <= 0 || stopAt < startedAt);
+      // ✅ Critical: during warmup, DO NOT throttle inbound frames.
+      // We need full-rate audio briefly so OpenAI server_vad can detect the user's first words.
+      // Otherwise we create a catch-22 (we don't know it's speech until VAD, but VAD needs frames).
+      const inWarmup = warmupUntil > 0 && nowMs <= warmupUntil;
 
-    // Safety reset: if OpenAI never sends speech_stopped, do NOT let userSpeechInProgress stay true forever.
-    try {
-      if (state.userSpeechInProgress && !speechIsActuallyActive && startedAt > 0 && (nowMs - startedAt) > 2500) {
-        state.userSpeechInProgress = false;
+      const allowInitialSilence = listenEnabledAt > 0 && (nowMs - listenEnabledAt) <= 1200;
+
+      // ✅ HARD COST LOCK:
+      // Only stream inbound audio to OpenAI when we EXPECT the user to speak.
+      // This prevents "listening 24/7" which causes the $12/hr spike.
+      const expectingUserSpeech =
+        state.phase === "awaiting_greeting_reply" ||
+        !!state.awaitingUserAnswer ||
+        inWarmup;
+
+      if (!expectingUserSpeech) {
+        return;
       }
-    } catch {}
 
-    const allowInitialSilence = listenEnabledAt > 0 && (nowMs - listenEnabledAt) <= 1200;
-    const recentlySpoke =
-      (stopAt > 0 && (nowMs - stopAt) <= 1200) ||
-      (startedAt > 0 && (nowMs - startedAt) <= 1200);
-
-    // ✅ Pre-speech probe window:
-    // Right after we "arm listening", forward full-rate briefly so server_vad can detect
-    // the very first short words. This prevents the "needs two sentences" symptom.
-    // BOUNDED: max 900ms, then we revert to hard-throttle if no speech is detected.
-    const preSpeechProbe = listenEnabledAt > 0 && (nowMs - listenEnabledAt) <= 900;
-
-    // 1) Warmup: forward everything (VAD lock-on window)
-    if (inWarmup) {
-      // no throttling
-    } else if (!speechIsActuallyActive && !recentlySpoke && !preSpeechProbe) {
-      // 2) Idle (no speech yet): hard-throttle ALL frames (silence OR noise)
+      // ✅ If we're in the brief re-entry window AND not warming up, throttle SILENCE frames only.
+      // This is bounded and prevents cost spikes, while warmup preserves VAD reliability.
       const lastMs = Number((state as any).lastSilenceSentAtMs || 0);
-      if (nowMs - lastMs < 400) return;
-      (state as any).lastSilenceSentAtMs = nowMs;
-    } else if (isSilenceToSend) {
-      // 3) Trailing silence after speech: allow sparse silence so server_vad can commit
-      const lastMs = Number((state as any).lastSilenceSentAtMs || 0);
+      const shouldDropSilenceFrame = !inWarmup && allowInitialSilence && (nowMs - lastMs) < 250;
 
-      // During the brief re-entry window after listen is enabled, send at most 1 silence / 250ms
-      if (allowInitialSilence && (nowMs - lastMs) < 250) return;
+      if (shouldDropSilenceFrame) {
+        return;
+      }
 
-      // Otherwise keep it sparse
-      if ((nowMs - lastMs) < 400) return;
-      (state as any).lastSilenceSentAtMs = nowMs;
+      if (!inWarmup && allowInitialSilence) {
+        (state as any).lastSilenceSentAtMs = nowMs;
+      } else {
+
+      const startedAt = Number((state as any).lastUserSpeechStartedAtMs || 0);
+      const stopAt = Number((state as any).lastUserSpeechStoppedAtMs || 0);
+
+      // "Actually speaking" means: we saw speech start very recently AND we have NOT seen a stop after it.
+      // This avoids getting stuck in userSpeechInProgress=true forever due to comfort-noise / missing stop events.
+      const speechIsActuallyActive =
+        startedAt > 0 &&
+        (nowMs - startedAt) <= 2500 &&
+        (stopAt <= 0 || stopAt < startedAt);
+
+      // Safety reset: if OpenAI never sends speech_stopped, do NOT let userSpeechInProgress stay true forever.
+      try {
+        if (state.userSpeechInProgress && !speechIsActuallyActive && startedAt > 0 && (nowMs - startedAt) > 2500) {
+          state.userSpeechInProgress = false;
+        }
+      } catch {}
+
+      if (!speechIsActuallyActive) {
+        const recentlySpoke =
+          (stopAt > 0 && (nowMs - stopAt) <= 1200) ||
+          (startedAt > 0 && (nowMs - startedAt) <= 1200);
+
+        if (!recentlySpoke) {
+          return;
+        }
+        const lastMs = Number((state as any).lastSilenceSentAtMs || 0);
+        if (nowMs - lastMs < 400) {
+          return;
+        }
+        (state as any).lastSilenceSentAtMs = nowMs;
+      }
+
+      }
     }
     // 🔎 DEBUG METER (low-noise): count inbound frames forwarded to OpenAI + how many are silence.
     try {
@@ -4336,32 +4336,6 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
   });
 }
 
-
-// ✅ Re-arm "expecting user speech" after we speak a line that needs an answer.
-// This prevents the cost-cut gate from dropping inbound audio forever after a question is asked.
-function armExpectingUserSpeech(state: any, stepIndex: number | undefined, reason: string) {
-  try {
-    state.awaitingUserAnswer = true;
-    state.awaitingAnswerForStepIndex = stepIndex;
-    (state as any).lastListenEnabledAtMs = Date.now();
-
-    // Warmup window: do not throttle inbound frames briefly so server_vad can lock on first words.
-    (state as any).listenWarmupUntilMs = Date.now() + 900;
-
-    // Reset silence throttle meter so we don't starve VAD right after re-arming.
-    (state as any).lastSilenceSentAtMs = 0;
-
-    try {
-      console.log("[AI-VOICE][LISTEN-ARM]", {
-        callSid: state.callSid,
-        streamSid: state.streamSid,
-        stepIndex,
-        phase: state.phase,
-        reason,
-      });
-    } catch {}
-  } catch {}
-}
 /**
  * OpenAI events → Twilio + control metadata
  */
@@ -5451,10 +5425,6 @@ state.lastUserSpeechStoppedAtMs = Date.now();
             response: { modalities: ["audio", "text"], instructions: instr },
 
           }));
-
-
-          // ✅ Reprompt is a question; re-arm listening so we capture the next user turn.
-          armExpectingUserSpeech(state, Number(state.awaitingAnswerForStepIndex ?? state.scriptStepIndex ?? 0), "reprompt asked");
 
         } catch (e) {
 
