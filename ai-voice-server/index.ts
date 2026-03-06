@@ -3911,15 +3911,15 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
       const aiAudioStartedAt = Number(state.aiAudioStartedAtMs || 0);
 
       // Barge-in cooldown: ignore the first ~650ms after AI audio actually starts
-      const cooldownOk = aiAudioStartedAt > 0 && (now - aiAudioStartedAt) >= 650;
+      const cooldownOk = aiAudioStartedAt > 0 && (now - aiAudioStartedAt) >= 400;
 
       // Require sustained speech: at least 200ms of non-silence while AI is speaking
-      const sustainedOk = Number(state.bargeInAudioMsBuffered || 0) >= 700;
+      const sustainedOk = Number(state.bargeInAudioMsBuffered || 0) >= 350;
 
       if (cooldownOk && sustainedOk) {
         // ✅ Patch 5: ignore micro-interjections ("um", quick noises). Require truly sustained speech.
         const ms = Number(state.bargeInAudioMsBuffered || 0);
-        if (ms >= 700) {
+        if (ms >= 350) {
           // Cancel only for validated barge-in while AI is speaking
           tryCancelOpenAiResponse(state, "ai-speaking");
         }
@@ -4061,7 +4061,7 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
       }
     } catch {}
 
-    const allowInitialSilence = listenEnabledAt > 0 && (nowMs - listenEnabledAt) <= 1200;
+    const allowInitialSilence = listenEnabledAt > 0 && (nowMs - listenEnabledAt) <= 800;
     const recentlySpoke =
       (stopAt > 0 && (nowMs - stopAt) <= 1200) ||
       (startedAt > 0 && (nowMs - startedAt) <= 1200);
@@ -4070,7 +4070,7 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
     // Right after we "arm listening", forward full-rate briefly so server_vad can detect
     // the very first short words. This prevents the "needs two sentences" symptom.
     // BOUNDED: max 900ms, then we revert to hard-throttle if no speech is detected.
-    const preSpeechProbe = listenEnabledAt > 0 && (nowMs - listenEnabledAt) <= 900;
+    const preSpeechProbe = listenEnabledAt > 0 && (nowMs - listenEnabledAt) <= 600;
 
     // 1) Warmup: forward everything (VAD lock-on window)
     if (inWarmup) {
@@ -4078,7 +4078,7 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
     } else if (!speechIsActuallyActive && !recentlySpoke && !preSpeechProbe) {
       // 2) Idle (no speech yet): hard-throttle ALL frames (silence OR noise)
       const lastMs = Number((state as any).lastSilenceSentAtMs || 0);
-      if (nowMs - lastMs < 400) return;
+      if (nowMs - lastMs < 800) return;
       (state as any).lastSilenceSentAtMs = nowMs;
     } else if (isSilenceToSend) {
       // 3) Trailing silence after speech: allow sparse silence so server_vad can commit
@@ -4088,7 +4088,7 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
       if (allowInitialSilence && (nowMs - lastMs) < 250) return;
 
       // Otherwise keep it sparse
-      if ((nowMs - lastMs) < 400) return;
+      if ((nowMs - lastMs) < 800) return;
       (state as any).lastSilenceSentAtMs = nowMs;
     }
     // 🔎 DEBUG METER (low-noise): count inbound frames forwarded to OpenAI + how many are silence.
@@ -4421,7 +4421,7 @@ async function handleOpenAiEvent(
           if (stopAt > 0 && stopAt >= startedAt) return;
 
           // Only fire if we've been "speaking" too long (VAD stuck). Keep conservative.
-          if ((nowMs - startedAt) < 3200) return;
+          if ((nowMs - startedAt) < 4800) return;
 
           console.log("[AI-VOICE][VAD] stuck-speech forcing input_audio_buffer.commit", {
             callSid: state.callSid,
@@ -4435,7 +4435,7 @@ async function handleOpenAiEvent(
 
           state.openAiWs.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
         } catch {}
-      }, 3400);
+      }, 5000);
     } catch {}
 
     // ✅ Prevent stale transcript from previous turn contaminating this new utterance
@@ -4459,27 +4459,6 @@ async function handleOpenAiEvent(
       }
     } catch {}
 
-        // ✅ WATCHDOG (post-stop): If OpenAI doesn't emit committed quickly after speech_stopped,
-    // force a commit *after* the user finished talking. This prevents cutoffs / incoherent turns.
-    try {
-      if (state.userSpeechCommitWatchdog) {
-        clearTimeout(state.userSpeechCommitWatchdog);
-        state.userSpeechCommitWatchdog = null;
-      }
-      state.userSpeechCommitWatchdog = setTimeout(() => {
-        try {
-          if (state.userSpeechInProgress) return; // user started talking again
-          if (!state.openAiWs || !state.openAiReady) return;
-          if (state.voicemailSkipArmed) return;
-          // Don't force-commit during outbound or in-flight responses
-          if (state.aiSpeaking || state.waitingForResponse || (state as any).responseInFlight) return;
-          console.log("[AI-VOICE][VAD] post-stop forcing input_audio_buffer.commit", {
-            callSid: state.callSid,
-            streamSid: state.streamSid,
-          });
-          state.openAiWs.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
-        } catch {}
-      }, 220);
     } catch {}
 
 state.lastUserSpeechStoppedAtMs = Date.now();
