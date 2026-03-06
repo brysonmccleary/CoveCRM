@@ -4459,7 +4459,6 @@ async function handleOpenAiEvent(
       }
     } catch {}
 
-    } catch {}
 
 state.lastUserSpeechStoppedAtMs = Date.now();
     return;
