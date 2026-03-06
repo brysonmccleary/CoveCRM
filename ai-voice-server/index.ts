@@ -4459,6 +4459,19 @@ async function handleOpenAiEvent(
       }
     } catch {}
 
+    // Safety net: if server_vad never emits committed, force it after 800ms.
+    try {
+      state.userSpeechCommitWatchdog = setTimeout(() => {
+        try {
+          if (state.userSpeechInProgress) return;
+          if (!state.openAiWs || !state.openAiReady) return;
+          if (state.voicemailSkipArmed) return;
+          if (state.aiSpeaking || state.waitingForResponse || (state as any).responseInFlight) return;
+          console.log("[AI-VOICE][VAD] post-stop safety commit", { callSid: state.callSid });
+          state.openAiWs.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
+        } catch {}
+      }, 800);
+    } catch {}
 
 state.lastUserSpeechStoppedAtMs = Date.now();
     return;
