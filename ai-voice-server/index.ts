@@ -4075,7 +4075,7 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
     // 1) Warmup: forward everything (VAD lock-on window)
     if (inWarmup) {
       // no throttling
-    } else if (!speechIsActuallyActive && !recentlySpoke && !preSpeechProbe) {
+    } else if (!speechIsActuallyActive && !recentlySpoke && !preSpeechProbe && state.phase !== "awaiting_greeting_reply") {
       // 2) Idle (no speech yet): hard-throttle ALL frames (silence OR noise)
       const lastMs = Number((state as any).lastSilenceSentAtMs || 0);
       if (nowMs - lastMs < 800) return;
