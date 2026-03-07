@@ -883,6 +883,19 @@ async function replayPendingCommittedTurn(
       return;
     }
 
+    try {
+      console.log("[AI-VOICE][REBUTTAL-GATE]", {
+        callSid: state.callSid,
+        phase: state.phase,
+        isGreetingReply,
+        objectionKind,
+        questionKind,
+        objectionOrQuestionKind,
+        lastUserText,
+        awaitingUserAnswer: state.awaitingUserAnswer,
+      });
+    } catch {}
+
     if (objectionOrQuestionKind) {
       // ✅ HARD-LOCK: "How long does it take?" must ALWAYS get the same rebuttal (prevents inconsistent answers).
       // This does NOT change model, audio format, or session settings. Only the chosen line.
@@ -5240,6 +5253,19 @@ state.lastUserSpeechStoppedAtMs = Date.now();
       state.phase = "awaiting_greeting_reply";
       return;
     }
+
+    try {
+      console.log("[AI-VOICE][REBUTTAL-GATE]", {
+        callSid: state.callSid,
+        phase: state.phase,
+        isGreetingReply,
+        objectionKind,
+        questionKind,
+        objectionOrQuestionKind,
+        lastUserText,
+        awaitingUserAnswer: state.awaitingUserAnswer,
+      });
+    } catch {}
 
     if (objectionOrQuestionKind) {
       // ✅ HARD-LOCK: "How long does it take?" must ALWAYS get the same rebuttal (prevents inconsistent answers).
