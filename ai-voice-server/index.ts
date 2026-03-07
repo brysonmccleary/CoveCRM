@@ -5653,6 +5653,11 @@ state.lastUserSpeechStoppedAtMs = Date.now();
       state.scriptStepIndex = idx;
     }
     state.phase = "in_call";
+    // ✅ Re-arm awaitingUserAnswer so next user turn hits the stepper, not the rebuttal path.
+    state.awaitingUserAnswer = true;
+    state.awaitingAnswerForStepIndex = canAdvance
+      ? Math.min(idx + 1, Math.max(0, steps.length - 1))
+      : idx;
     return;
   }
 
