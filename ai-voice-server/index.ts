@@ -5099,9 +5099,9 @@ state.lastUserSpeechStoppedAtMs = Date.now();
     const steps = state.scriptSteps || [];
 
     const lastUserText = String(state.lastUserTranscript || "").trim();
-    const objectionKind = lastUserText ? detectObjection(lastUserText) : null;
+    const objectionKind = !isGreetingReply && lastUserText ? detectObjection(lastUserText) : null;
 
-    const questionKind = !objectionKind && lastUserText ? detectQuestionKindForTurn(lastUserText) : null;
+    const questionKind = !isGreetingReply && !objectionKind && lastUserText ? detectQuestionKindForTurn(lastUserText) : null;
     const objectionOrQuestionKind = objectionKind || questionKind;
 
     const currentStepLine = steps[idx] || getBookingFallbackLine(state.context!);
