@@ -5685,7 +5685,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
         state.greetingAdvanceNextIndex = undefined;
         state.greetingAdvanceNextPhase = undefined;
         state.awaitingUserAnswer = true;
-        state.awaitingAnswerForStepIndex = state.scriptStepIndex - 1;
+        state.awaitingAnswerForStepIndex = (state.scriptStepIndex ?? 1) - 1;
       }
     }
 
