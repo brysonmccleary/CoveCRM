@@ -737,7 +737,9 @@ async function replayPendingCommittedTurn(
       streamSid: state.streamSid,
       reason,
       restoredLen: restoredTranscript ? restoredTranscript.length : 0,
+      restoredText: restoredTranscript || "",
       restoredAudioMs,
+      phase: state.phase,
     });
 
     // ✅ Re-run the same commit logic path by directly invoking the same response.create decision logic
