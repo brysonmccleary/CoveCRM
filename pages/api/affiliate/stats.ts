@@ -129,10 +129,10 @@ export default async function handler(
   }
 
   // Counts / totals (source of truth = Affiliate doc)
-  const signups =
-    typeof affiliate.totalReferrals === "number"
-      ? affiliate.totalReferrals
-      : referrals.length;
+  const signups = Math.max(
+    Number(affiliate.totalReferrals || 0),
+    referrals.length
+  );
 
   const payoutDue = Number(affiliate.payoutDue || 0);
   const totalPayoutsSent = Number(affiliate.totalPayoutsSent || 0);

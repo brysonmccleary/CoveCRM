@@ -1,3 +1,4 @@
+// pages/api/stripe/create-checkout-session.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import type Stripe from "stripe";
 import type { Session } from "next-auth";
@@ -113,6 +114,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         email: user.email,
         upgradeIncluded: wantsUpgrade ? "true" : "false",
         referralCodeUsed: enteredCode || "none",
+      },
+      subscription_data: {
+        metadata: {
+          userId: (user as any)?._id?.toString?.() || "",
+          email: user.email,
+          upgradeIncluded: wantsUpgrade ? "true" : "false",
+          referralCodeUsed: enteredCode || "none",
+          appliedPromoCode: enteredCode || "none",
+        },
       },
       success_url: `${BASE_URL}/success?paid=true`,
       cancel_url: `${BASE_URL}/upgrade`,
