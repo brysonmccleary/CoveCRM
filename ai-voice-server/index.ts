@@ -1684,6 +1684,17 @@ function detectQuestionKindForTurn(textRaw: string): string | null {
 
   if (!looksLikeUserQuestion(t)) return null;
 
+  // ✅ Social filler phrases that look like questions but are not real questions
+  const fillerPhrases = [
+    "what's up", "whats up", "what up", "wassup",
+    "yeah what's up", "yeah whats up",
+    "what's going on", "whats going on",
+    "what's this about", "whats this about",
+    "who is this", "who's this", "who's calling",
+    "what is this", "what is this about",
+  ];
+  if (fillerPhrases.some(p => t.includes(p))) return null;
+
   // "How long / what happens" variants not covered by detectObjection
   if (
     t.includes("how long") ||
