@@ -4995,6 +4995,17 @@ state.lastUserSpeechStoppedAtMs = Date.now();
     const filler = isFillerTranscript(bestTranscript || String(state.lastUserTranscript || ""));
     const fillerAudioMs = Number(audioMsCommitGate || 0);
 
+    // ✅ If a real (non-filler) commit arrives while a filler timer is pending, cancel it and proceed.
+    if (!filler && (state as any).pendingFillerTimer) {
+      clearTimeout((state as any).pendingFillerTimer);
+      (state as any).pendingFillerTimer = null;
+      (state as any).pendingFillerCommit = null;
+      console.log("[AI-VOICE][FILLER] cancelled pending filler timer — real transcript arrived", {
+        callSid: state.callSid,
+        transcript: bestTranscript,
+      });
+    }
+
     // Only apply grace when it's not a real answer (filler) and not strong audio.
     if (filler && fillerAudioMs < 1700) {
       try {
