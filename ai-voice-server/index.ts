@@ -4415,7 +4415,32 @@ async function handleOpenAiEvent(
           if (state.voicemailSkipArmed) return;
 
           // Don't force-commit during outbound or in-flight responses
-          if (state.aiSpeaking || state.waitingForResponse || (state as any).responseInFlight) return;
+          if (state.aiSpeaking || state.waitingForResponse || (state as any).responseInFlight) {
+            console.log("[AI-VOICE][VAD] stuck-speech watchdog BLOCKED", {
+              callSid: state.callSid,
+              aiSpeaking: state.aiSpeaking,
+              waitingForResponse: state.waitingForResponse,
+              responseInFlight: !!(state as any).responseInFlight,
+              msSinceStart: Date.now() - Number((state as any).lastUserSpeechStartedAtMs || 0),
+            });
+            // Re-arm and try again shortly
+            state.userSpeechStuckWatchdog = setTimeout(() => {
+              try {
+                if (!state.userSpeechInProgress) return;
+                if (!state.openAiWs || !state.openAiReady) return;
+                if (state.aiSpeaking || state.waitingForResponse || (state as any).responseInFlight) return;
+                const nowMs2 = Date.now();
+                const startedAt2 = Number((state as any).lastUserSpeechStartedAtMs || 0);
+                const stopAt2 = Number((state as any).lastUserSpeechStoppedAtMs || 0);
+                if (stopAt2 > 0 && stopAt2 >= startedAt2) return;
+                console.log("[AI-VOICE][VAD] stuck-speech retry-commit", { callSid: state.callSid, msSinceStart: nowMs2 - startedAt2 });
+                state.userSpeechInProgress = false;
+                (state as any).lastUserSpeechStoppedAtMs = Date.now();
+                state.openAiWs.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
+              } catch {}
+            }, 2000);
+            return;
+          }
 
           const nowMs = Date.now();
           const startedAt = Number((state as any).lastUserSpeechStartedAtMs || 0);
@@ -4439,6 +4464,18 @@ async function handleOpenAiEvent(
           (state as any).lastUserSpeechStoppedAtMs = Date.now();
 
           state.openAiWs.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
+
+          // ✅ Re-arm watchdog in case VAD still doesn't fire speech_stopped
+          state.userSpeechStuckWatchdog = setTimeout(() => {
+            try {
+              if (!state.userSpeechInProgress) return;
+              if (!state.openAiWs || !state.openAiReady) return;
+              if (state.aiSpeaking || state.waitingForResponse || (state as any).responseInFlight) return;
+              state.userSpeechInProgress = false;
+              (state as any).lastUserSpeechStoppedAtMs = Date.now();
+              state.openAiWs.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
+            } catch {}
+          }, 3400);
         } catch {}
       }, 3400);
     } catch {}
