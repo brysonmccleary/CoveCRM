@@ -2649,7 +2649,36 @@ if (
     } catch {}
     return "busy";
   }
-  if (t.includes("text me") || t.includes("send it") || t.includes("email me")) {
+  // "Already talked to someone / already spoke with agent"
+  if (
+    t.includes("already talked") ||
+    t.includes("already spoke") ||
+    t.includes("already spoken") ||
+    t.includes("already called") ||
+    t.includes("someone already called") ||
+    t.includes("talked to someone") ||
+    t.includes("spoke with someone") ||
+    t.includes("spoke with") && t.includes("agent") ||
+    t.includes("talked to") && t.includes("agent") ||
+    t.includes("already set up") ||
+    t.includes("already scheduled") ||
+    t.includes("already booked")
+  ) return "already_talked";
+
+  // "How did you get my number / information"
+  if (
+    t.includes("how did you get my") ||
+    t.includes("where did you get my") ||
+    t.includes("how do you have my") ||
+    t.includes("where did you find my") ||
+    t.includes("who gave you my") ||
+    t.includes("how'd you get my")
+  ) return "how_did_you_get";
+
+  // "Can you mail it / send it in the mail / text it over"
+  if (t.includes("text me") || t.includes("send it") || t.includes("email me") ||
+      t.includes("mail it") || t.includes("send me") || t.includes("text it") ||
+      t.includes("send that over") || t.includes("send over") || t.includes("mail me")) {
     // If they are still actively scheduling ("text me the times you have tomorrow"),
     // keep booking flow and offer options instead of rebuttal.
     try {
@@ -2746,7 +2775,16 @@ function getRebuttalLine(ctx: AICallContext, kind: string): string {
     return `I understand. This is just a scheduling call tied to your life insurance request. ${agent} will explain everything clearly on the phone. Would later today or tomorrow be better?`;
   }
   if (kind === "not_interested") {
-    return `No worries at all. Would you like me to close this out, or would a quick call later today or tomorrow be better?`;
+    return `No worries — I hear you. Before I close this out, ${agent} just wanted to make sure you saw everything you requested. Would even a 5-minute call later today or tomorrow be okay?`;
+  }
+
+  if (kind === "already_talked") {
+    return `Got it — no worries. Just to make sure nothing slips through, do you remember roughly when that call was? Either way, ${agent} can do a quick follow-up to make sure you're all set. Would later today or tomorrow be better?`;
+  }
+
+  if (kind === "how_did_you_get") {
+    const scope = getScopeLabelForScriptKey(ctx.scriptKey);
+    return `Totally fair question — it came through a request for information on ${scope}. I can note that if you'd like, but ${agent} can explain everything on a quick call. Would later today or tomorrow be better?`;
   }
 
   // ✅ IMPORTANT: redirect stays booking-only, never follows disallowed topics
