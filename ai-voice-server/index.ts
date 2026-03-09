@@ -5038,7 +5038,10 @@ state.lastUserSpeechStoppedAtMs = Date.now();
                 (cleaned.length <= 20 && phrases.has(cleaned));
 
               if (isFillerStill) {
+                // ✅ Don't silently drop — replay so stepper can reprompt rather than going silent.
+                state.pendingCommittedTurn = (state as any).pendingFillerCommit;
                 (state as any).pendingFillerCommit = null;
+                void replayPendingCommittedTurn(twilioWs, state, "filler grace expired - still filler, reprompt");
                 return;
               }
             } catch {}
