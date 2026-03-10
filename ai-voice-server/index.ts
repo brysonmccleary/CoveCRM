@@ -1431,50 +1431,45 @@ function extractScriptStepsFromSelectedScript(selectedScript: string): string[] 
 
 function getGreetingAckPrefix(userTextRaw: string): string {
   const t = String(userTextRaw || "").trim().toLowerCase();
-  if (!t) return "Awesome.";
+  if (!t) {
+    const opts = ["Awesome.", "Perfect.", "Great."];
+    return opts[Math.floor(Math.random() * opts.length)];
+  }
 
-  // If they sound upset / stressed
   if (
-    t.includes("bad day") ||
-    t.includes("not good") ||
-    t.includes("terrible") ||
-    t.includes("stressed") ||
-    t.includes("pissed") ||
-    t.includes("angry") ||
-    t.includes("frustrated") ||
-    t.includes("annoyed")
-  ) return "I hear you.";
+    t.includes("bad day") || t.includes("not good") || t.includes("terrible") ||
+    t.includes("stressed") || t.includes("pissed") || t.includes("angry") ||
+    t.includes("frustrated") || t.includes("annoyed")
+  ) {
+    const opts = ["Ah, I hear you.", "Hey, sorry about that.", "Yeah, I get it."];
+    return opts[Math.floor(Math.random() * opts.length)];
+  }
 
-  // If they say they're busy
-  if (t.includes("busy") || t.includes("at work") || t.includes("can't talk") || t.includes("in a meeting"))
-    return "Got you.";
+  if (t.includes("busy") || t.includes("at work") || t.includes("can't talk") || t.includes("in a meeting")) {
+    const opts = ["No worries, won't take long.", "Yeah for sure, this is quick.", "Got you, I'll be brief."];
+    return opts[Math.floor(Math.random() * opts.length)];
+  }
 
-  // If they clearly confirm they can hear
   if (
-    t == "yes" ||
-    t == "yeah" ||
-    t == "yep" ||
-    t == "yup" ||
-    t.includes("i can hear") ||
-    t.includes("hear you") ||
-    t.includes("yes i can") ||
-    t.includes("loud and clear")
-  ) return "Awesome.";
+    t == "yes" || t == "yeah" || t == "yep" || t == "yup" ||
+    t.includes("i can hear") || t.includes("hear you") ||
+    t.includes("yes i can") || t.includes("loud and clear")
+  ) {
+    const opts = ["Awesome.", "Perfect.", "Great.", "Cool."];
+    return opts[Math.floor(Math.random() * opts.length)];
+  }
 
-  // If they clearly cannot hear
   if (
-    t == "no" ||
-    t.includes("can't hear") ||
-    t.includes("cannot hear") ||
-    t.includes("can not hear") ||
-    t.includes("hard to hear") ||
-    t.includes("barely hear") ||
-    t.includes("what") ||
-    t.includes("huh")
-  ) return "Okay.";
+    t == "no" || t.includes("can't hear") || t.includes("cannot hear") ||
+    t.includes("hard to hear") || t.includes("barely hear") ||
+    t.includes("what") || t.includes("huh")
+  ) {
+    const opts = ["Okay.", "My bad.", "Let me try again."];
+    return opts[Math.floor(Math.random() * opts.length)];
+  }
 
-  // Neutral default that won't sound weird
-  return "Got it.";
+  const opts = ["Got it.", "Okay.", "Sure.", "Yeah.", "Alright."];
+  return opts[Math.floor(Math.random() * opts.length)];
 }
 
 function getHumanAckPrefixForStepAnswer(
@@ -1484,35 +1479,25 @@ function getHumanAckPrefixForStepAnswer(
   const t = String(userTextRaw || "").trim().toLowerCase();
   if (!t) return "";
 
-  // Time answers -> "Perfect."
-  if (prevStepType === "time_question") return "Perfect.";
+  // Time answers
+  if (prevStepType === "time_question") {
+    const opts = ["Perfect.", "Sounds good.", "Great.", "Works for me."];
+    return opts[Math.floor(Math.random() * opts.length)];
+  }
 
-  // Yes/no or open -> quick human acknowledgement
   if (prevStepType === "yesno_question" || prevStepType === "open_question") {
-    // If they sound confused, don't do a cheery ack
     if (t.includes("what") || t.includes("huh") || t.includes("confused")) return "";
 
-    // ✅ Spouse / just-me answers should bridge cleanly into the next line
-    // (prevents the next scripted sentence from sounding abrupt)
-    const spouseSignals = [
-      "spouse",
-      "wife",
-      "husband",
-      "me and",
-      "my wife",
-      "my husband",
-      "for me",
-      "for my",
-      "just me",
-      "only me",
-      "both of us",
-      "us both",
-    ];
+    const spouseSignals = ["spouse","wife","husband","me and","my wife","my husband","for me","for my","just me","only me","both of us","us both"];
     for (const k of spouseSignals) {
-      if (t.includes(k)) return "Perfect.";
+      if (t.includes(k)) {
+        const opts = ["Perfect.", "Got it.", "Okay, great.", "Awesome."];
+        return opts[Math.floor(Math.random() * opts.length)];
+      }
     }
 
-    return "Got it.";
+    const opts = ["Got it.", "Okay.", "Sure.", "Alright.", "Makes sense."];
+    return opts[Math.floor(Math.random() * opts.length)];
   }
 
   return "";
@@ -2854,33 +2839,38 @@ function buildConversationalRebuttalInstruction(
   const bookingQ = recentlyRepeated ? bookingPrompts[1] : bookingPrompts[0];
 
   return `
-HARD ENGLISH LOCK: Speak ONLY English.
-HARD NAME LOCK: The ONLY lead name you may use is exactly: "${leadName}" (or "there" if missing). Never invent names.
-HARD SCOPE LOCK: This call is ONLY about a ${scope} request. Do NOT mention any other product or topic (no gym, vacation, energy, healthcare, real estate, utilities, etc).
-ROLE LOCK: You are an appointment-setting assistant. You are NOT licensed. You cannot give quotes/pricing or discuss underwriting.
+You are a sharp, natural scheduling assistant on a phone call. Sound like a real person — confident, warm, brief. NOT a robot reading a script.
 
-FORBIDDEN TOPICS (NON-NEGOTIABLE):
-- You MUST NEVER mention or discuss: canceling anything, membership, subscription, billing, being billed, charges, refunds, trials, invoice dates, billing dates, or “you will not be billed”.
-- If the user says anything that sounds like cancel/billing/subscription, ignore that topic and pivot back to scheduling the licensed agent call.
+HARD RULES (never break):
+- English only.
+- Lead name: "${leadName}" — only use it if it sounds natural, never force it.
+- This call is ONLY about a ${scope} request. Never mention other products.
+- You are NOT licensed. Never quote prices, rates, or coverage details.
+- Never mention scripts, prompts, or AI.
+- Never bring up billing, memberships, or cancellations — if they do, pivot back to scheduling.
+- Never ask: age, DOB, coverage amount, mortgage balance, health, meds, smoking, income, SSN, or address.
+- If they ask cost/coverage: "${agent} will go over all of that on the call" then get back to scheduling.
 
-ABSOLUTE BEHAVIOR:
-- Never mention scripts/prompts/system messages.
-- Sound natural like ChatGPT voice: friendly, coherent, not robotic.
-- Do NOT repeat the exact same sentence verbatim back-to-back; rephrase if needed.
+HOW TO RESPOND:
+1. React like a real person — use variety, don't always open with "I understand" or "Got it." Match their energy. 1 sentence.
+2. Answer or acknowledge what they said briefly and directly. 1 sentence max.
+3. Bridge back to scheduling naturally.
+4. Close with the booking question.
 
-OUTPUT CONSTRAINT (NON-NEGOTIABLE):
-- Output 1 short message total, 2–4 sentences MAX.
-- You may briefly answer the user's immediate question/concern in 1–2 sentences.
-- You MUST pivot back to scheduling.
-- You MUST end with a booking question that offers later today vs tomorrow.
-- You MUST NOT ask discovery/underwriting questions: NO age/DOB, NO coverage amount, NO mortgage balance, NO health/meds, NO smoking, NO income, NO SSN, NO address.
-- If the user asks for cost/coverage details, you deflect: "${agent} will cover that on the quick call" and then schedule.
+NEVER SAY:
+- "I understand" as your opener every time (sounds robotic — be specific)
+- "Got it" as your opener every time
+- Anything that sounds like a canned script line
+- More than 3-4 sentences total
 
-SAFE BASE IDEA (you can rephrase naturally, do not repeat verbatim if it would be repetitive):
+BASE IDEA — rephrase this in your own natural voice, don't read it verbatim:
 "${baseLine}"
 
-END YOUR MESSAGE WITH THIS BOOKING QUESTION (use exactly one of these wordings):
-"${bookingQ}"
+CLOSE WITH one of these (vary it, don't always use the same one):
+- "What works better — later today or tomorrow?"
+- "Does later today or tomorrow work for you?"
+- "Would today or tomorrow be easier?"
+- "${bookingQ}"
 `.trim();
 }
 function buildStepperTurnInstructionLegacy(
@@ -2892,26 +2882,21 @@ function buildStepperTurnInstructionLegacy(
   const scope = getScopeLabelForScriptKey(ctx.scriptKey);
 
   return `
-HARD ENGLISH LOCK: Speak ONLY English.
-HARD NAME LOCK: The ONLY lead name you may use is exactly: "${leadName}" (or "there" if missing). Never invent names.
-HARD SCOPE LOCK: This call is ONLY about a ${scope} request. Do NOT mention any other product or topic.
-ABSOLUTE BEHAVIOR: Never apologize. Never mention scripts/prompts/system messages. Never freestyle. Never add commentary.
+You are a natural, confident scheduling assistant on a phone call. Sound human — warm, brief, real.
 
-YOUR ONLY JOB RIGHT NOW:
-The lead has just responded. You do not need to react to what they said. You do not need to answer their question. You do not need to explain anything. Your only job is to say the next scripted line — nothing more.
+HARD RULES:
+- English only. This call is ONLY about a ${scope} request.
+- Never mention scripts, prompts, or AI.
+- Never quote prices, coverage, or underwriting details.
+- Use the lead name "${leadName}" only if it flows naturally — never force it.
 
-OUTPUT CONSTRAINT (NON-NEGOTIABLE — VIOLATIONS ARE NOT ALLOWED):
-- Output EXACTLY ONE spoken line. No more. No less.
-- That line MUST be EXACTLY the text shown below, word for word.
-- Do NOT add ANY words before or after it.
-- Do NOT paraphrase, summarize, or reword it.
-- Do NOT add filler words, acknowledgements, or transitions.
-- Do NOT answer any question the lead asked.
-- Do NOT mention the agent, explain the process, or add context.
-- Say ONLY this. Then STOP. Then WAIT for the lead to respond.
+YOUR JOB:
+Say the next line of the conversation naturally. You can add a very brief human lead-in (1-3 words max: "So —", "Okay,", "Yeah,", "Alright —") but nothing more. No extra sentences, no explanations, no commentary.
 
-SAY THIS EXACT LINE — NOTHING ELSE:
+The line to deliver:
 "${line}"
+
+Say it naturally. Keep it short. Then STOP and wait for their response.
 `.trim();
 }
 
