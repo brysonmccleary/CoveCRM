@@ -2761,9 +2761,11 @@ function getRebuttalLine(ctx: AICallContext, kind: string): string {
     return `I hear you — I won’t keep you. This is just regarding the ${scope} request, and ${agent}’s call is only about 5 minutes at a time that works for you. What time works better, later today or tomorrow?`;
   }
   if (kind === "send_it") {
+    const scope = getScopeLabelForScriptKey(ctx.scriptKey);
     return `Totally understand — the thing is, the ${scope} information is specific to your situation, so ${agent} can go over it way faster on a quick call. What time works better for you, later today or tomorrow?`;
   }
   if (kind === "already_have") {
+    const scope = getScopeLabelForScriptKey(ctx.scriptKey);
     return `I hear you — a lot of people ${agent} speaks with already have something in place. The call is just to go over the ${scope} request and make sure what you have still lines up. It’s only 5 minutes. What time works better, later today or tomorrow?`;
   }
   if (kind === "how_much") {
