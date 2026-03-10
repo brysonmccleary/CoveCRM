@@ -2731,14 +2731,15 @@ function getRebuttalLine(ctx: AICallContext, kind: string): string {
   // "Are you AI / robot?" -> quick human answer + redirect to booking
   if (kind === "are_you_ai") {
     const aiName = (ctx.voiceProfile?.aiName || "Alex").trim() || "Alex";
-    return `(laugh) haha I get that a lot. I\'m ${aiName} - just an assistant trained to set up appointments for the licensed agent. Would later today or tomorrow be better?`;
+    const scope = getScopeLabelForScriptKey(ctx.scriptKey);
+    return `Haha — totally fair. I\'m ${aiName}, a scheduling assistant working with ${agent}. This is just regarding the ${scope} request that came through — ${agent} covers everything on a quick 5-minute call. What time works better for you, later today or tomorrow?`;
   }
 
   // ✅ NEW: "Who are you / I'm confused" handling (human + on-scope)
   if (kind === "confused_identity") {
     const aiName = (ctx.voiceProfile?.aiName || "Alex").trim() || "Alex";
     const scope = getScopeLabelForScriptKey(ctx.scriptKey);
-    return `Hey — my name is ${aiName}. I’m calling about the ${scope} request. Would later today or tomorrow be better?`;
+    return `Good question — my name is ${aiName}, a scheduling assistant calling on behalf of ${agent}. This is regarding the ${scope} request that came through — ${agent} just wants a quick 5-minute call to go over everything. What time works better for you, later today or tomorrow?`;
   }
 
   // ✅ NEW: "What does this call entail / how long?" handling
@@ -2746,45 +2747,50 @@ function getRebuttalLine(ctx: AICallContext, kind: string): string {
     const scope = getScopeLabelForScriptKey(ctx.scriptKey);
     // Be specific + satisfying, then go right back to booking.
     // Keep it booking-only: no rates, no underwriting, no age/health questions.
-    return `Totally — it’s quick, usually about 5 to 10 minutes. ${agent} just goes over what you requested for ${scope} and answers your questions. Would later today or tomorrow be better?`;
+    return `Totally — it’s a quick 5 to 10 minutes. ${agent} just goes over the ${scope} request, answers your questions, and makes sure everything lines up for you. What time works better, later today or tomorrow?`;
   }
 
-  // ✅ NEW: Generic question fallback (brief answer, then back to booking)
   if (kind === "generic_question") {
-    return `Good question — ${agent} can cover that on the quick call in a couple minutes. Would later today or tomorrow be better?`;
+    const scope = getScopeLabelForScriptKey(ctx.scriptKey);
+    return `Good question — ${agent} can cover that on the call. It's regarding the ${scope} request and only takes about 5 minutes. What time works better for you, later today or tomorrow?`;
   }
 
   // Existing objections
   if (kind === "busy") {
-    return `Totally understand. That’s why I’m just scheduling — it’ll be a short call with ${agent}. Would later today or tomorrow be better?`;
+    const scope = getScopeLabelForScriptKey(ctx.scriptKey);
+    return `I hear you — I won’t keep you. This is just regarding the ${scope} request, and ${agent}’s call is only about 5 minutes at a time that works for you. What time works better, later today or tomorrow?`;
   }
   if (kind === "send_it") {
-    return `I can, but it’s usually easier to schedule a quick call so you don’t have to go back and forth. Would later today or tomorrow be better?`;
+    return `Totally understand — the thing is, the ${scope} information is specific to your situation, so ${agent} can go over it way faster on a quick call. What time works better for you, later today or tomorrow?`;
   }
   if (kind === "already_have") {
-    return `I hear you — a lot of people we talk to already have something in place and find out they’re overpaying. Let’s set up a quick 3–5 minute call with ${agent} to see if we can save you at least $20 a month — is that fair? Would later today or tomorrow be better?`;
+    return `I hear you — a lot of people ${agent} speaks with already have something in place. The call is just to go over the ${scope} request and make sure what you have still lines up. It’s only 5 minutes. What time works better, later today or tomorrow?`;
   }
   if (kind === "how_much") {
-    return `Good question — ${agent} covers that on the quick call because it depends on what you want it to do. Would later today or tomorrow be better?`;
+    const scope = getScopeLabelForScriptKey(ctx.scriptKey);
+    return `Good question — it depends on what you're looking for with the ${scope}, so ${agent} covers that on the call. It's only about 5 minutes. What time works better for you, later today or tomorrow?`;
   }
   if (kind === "dont_remember") {
-    // Stay inside life-insurance context
-    return `No worries — it was just a request for information on life insurance. Was that for just you, or a spouse as well?`;
+    const scope = getScopeLabelForScriptKey(ctx.scriptKey);
+    return `No worries — it looks like it may have been a little while since the request came through for ${scope}. ${agent} just wants a quick 5-minute call to make sure you're taken care of. What time works better, later today or tomorrow?`;
   }
   if (kind === "scam") {
-    return `I understand. This is just a scheduling call tied to your life insurance request. ${agent} will explain everything clearly on the phone. Would later today or tomorrow be better?`;
+    const scope = getScopeLabelForScriptKey(ctx.scriptKey);
+    return `Totally understand the concern — this is just a scheduling call tied to the ${scope} request that came through. ${agent} is a licensed agent and will go over everything on the call. What time works better for you, later today or tomorrow?`;
   }
   if (kind === "not_interested") {
-    return `No worries — I hear you. Before I close this out, ${agent} just wanted to make sure you saw everything you requested. Would even a 5-minute call later today or tomorrow be okay?`;
+    const scope = getScopeLabelForScriptKey(ctx.scriptKey);
+    return `I hear you — I just want to make sure you got what you were looking for with the ${scope} request. ${agent}'s call is only 5 minutes and you're under no obligation. What time works better, later today or tomorrow?`;
   }
 
   if (kind === "already_talked") {
-    return `Got it — no worries. Just to make sure nothing slips through, do you remember roughly when that call was? Either way, ${agent} can do a quick follow-up to make sure you're all set. Would later today or tomorrow be better?`;
+    const scope = getScopeLabelForScriptKey(ctx.scriptKey);
+    return `Got it — totally understand. It looks like the ${scope} request may have come through again, so ${agent} just wants a quick follow-up to make sure nothing slipped through. What time works better for you, later today or tomorrow?`;
   }
 
   if (kind === "how_did_you_get") {
     const scope = getScopeLabelForScriptKey(ctx.scriptKey);
-    return `Totally fair question — it came through a request for information on ${scope}. I can note that if you'd like, but ${agent} can explain everything on a quick call. Would later today or tomorrow be better?`;
+    return `I hear you — the information came through a form that was filled out online regarding ${scope}. It may have been a bit since it came through, but ${agent} can cover everything on a quick 5-minute call. What time works better for you, later today or tomorrow?`;
   }
 
   // ✅ IMPORTANT: redirect stays booking-only, never follows disallowed topics
