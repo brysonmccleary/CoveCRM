@@ -200,29 +200,25 @@ export default async function handler(
 
     // ✅ Enforce booking rules in AGENT TZ (bookingSettings belong to agent)
     try {
-      const enforceFn =
-        (BookingEnforcer as any).enforceBookingSettings ||
-        (BookingEnforcer as any).default;
-      if (typeof enforceFn === "function") {
+      {
         const dur = Math.max(15, Math.min(240, Number(durationMinutes || 30)));
         const startAgent = DateTime.fromJSDate(startUtcDate, { zone: "utc" })
           .setZone(agentTz)
           .set({ second: 0, millisecond: 0 });
 
-        const out = await enforceFn(
+        const out = await BookingEnforcer({
           calendar,
           calendarId,
-          (user as any)?.bookingSettings || {},
-          startAgent,
-          dur,
-          leadTimeZone,
-          5,
-        );
+          bookingSettings: (user as any)?.bookingSettings || {},
+          requestedStart: startAgent,
+          durationMinutes: dur,
+          outputZone: leadTimeZone,
+          suggestionLimit: 5,
+        });
         if (out && out.ok === false) {
           return res.status(200).json({
             ok: false,
             error: out.reason || "invalid",
-            // Keep shape predictable for the caller (voice) — suggestions are lead-facing
             ...(Array.isArray(out.suggestions) ? { suggestions: out.suggestions } : {}),
           } as any);
         }
