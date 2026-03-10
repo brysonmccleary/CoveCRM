@@ -2737,7 +2737,12 @@ function getRebuttalLine(ctx: AICallContext, kind: string): string {
 
   if (kind === "generic_question") {
     const scope = getScopeLabelForScriptKey(ctx.scriptKey);
-    return `Good question — ${agent} can cover that on the call. It's regarding the ${scope} request and only takes about 5 minutes. What time works better for you, later today or tomorrow?`;
+    const lines = [
+      `So ${agent} can actually answer that way better than I can on the call — it's only 5 minutes and it's all about the ${scope} request. What time works better, later today or tomorrow?`,
+      `That's a great one for ${agent} to cover — they'll go over all of that on the call. It's quick, about 5 minutes. Does later today or tomorrow work?`,
+      `Yeah, ${agent} handles all of that on the call — way more helpful than me trying to explain it. It's only 5 minutes. What works better, today or tomorrow?`,
+    ];
+    return lines[Math.floor(Math.random() * lines.length)];
   }
 
   // Existing objections
@@ -2767,12 +2772,22 @@ function getRebuttalLine(ctx: AICallContext, kind: string): string {
   }
   if (kind === "not_interested") {
     const scope = getScopeLabelForScriptKey(ctx.scriptKey);
-    return `I hear you — I just want to make sure you got what you were looking for with the ${scope} request. ${agent}'s call is only 5 minutes and you're under no obligation. What time works better, later today or tomorrow?`;
+    const lines = [
+      `Yeah, no pressure at all — ${agent}'s call is literally just 5 minutes to make sure the ${scope} request got handled. You're under no obligation. Does later today or tomorrow work?`,
+      `Totally fair — I just want to make sure the ${scope} request didn't fall through the cracks. ${agent} only needs 5 minutes. What time works better for you?`,
+      `No worries — this is just to make sure you got taken care of on the ${scope}. ${agent}'s call is only 5 minutes, no pressure. Later today or tomorrow?`,
+    ];
+    return lines[Math.floor(Math.random() * lines.length)];
   }
 
   if (kind === "already_talked") {
     const scope = getScopeLabelForScriptKey(ctx.scriptKey);
-    return `Got it — totally understand. It looks like the ${scope} request may have come through again, so ${agent} just wants a quick follow-up to make sure nothing slipped through. What time works better for you, later today or tomorrow?`;
+    const lines = [
+      `Yeah, and that's totally fine — this is just the follow-up call to make sure everything got taken care of on the ${scope} side. ${agent} just needs 5 minutes. What time works better, later today or tomorrow?`,
+      `Oh for sure — this is just the follow-up. Sometimes the first call doesn't get everything wrapped up, so ${agent} wants to make sure you're all set. Does later today or tomorrow work?`,
+      `Yeah, that makes sense — this would just be the follow-up with ${agent} to make sure everything got finalized on your end. It's only 5 minutes. What works better, today or tomorrow?`,
+    ];
+    return lines[Math.floor(Math.random() * lines.length)];
   }
 
   if (kind === "how_did_you_get") {
