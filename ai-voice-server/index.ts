@@ -834,7 +834,14 @@ async function replayPendingCommittedTurn(
       }
 
       const lineToSay2 = `${ack} ${lineToSay}`;
-      const perTurnInstr = buildStepperTurnInstruction(state.context!, lineToSay2);
+      const perTurnInstr = buildStepperTurnInstruction(state.context!, lineToSay2, {
+        userText: lastUserText,
+        recentExchanges: state.recentExchanges,
+      });
+
+      // Push greeting exchange to memory
+      if (lastUserText) pushExchange(state, "user", lastUserText, 0);
+      pushExchange(state, "ai", lineToSay2, 0);
 
       state.awaitingUserAnswer = false;
       state.awaitingAnswerForStepIndex = undefined;
@@ -2478,12 +2485,15 @@ function shouldTreatCommitAsRealAnswer(
 
   // If we have transcription:
   if (text) {
-    // Time questions: allow 1-word answers like "afternoon", "tomorrow", etc.
+    // Time questions: allow explicit time answers + affirmatives ("yeah" = today)
     if (stepType === "time_question") {
       return looksLikeTimeAnswer(text) || isTimeIndecisionOrAvailability(text);
     }
 
-    // Non-time questions: be strict about filler.
+    // open_question / yesno_question: advance on any non-filler.
+    // If the answer didn't actually address the question, the free-response branch
+    // will handle it naturally — GPT re-asks conversationally rather than looping
+    // on a canned reprompt line.
     if (isFillerOnly(text)) return false;
     return true;
   }
@@ -2532,13 +2542,11 @@ function getRepromptLineForStepType(
   }
 
   if (stepType === "open_question") {
-    // ✅ Patch: booking-only reprompts (no discovery)
-    const ladder = [
-      `Real quick — was this for just you, or a spouse as well?`,
-      `Perfect — my job is just to set up a quick call with ${agent}. Would later today or tomorrow be better?`,
-      `No worries — just to get you scheduled, is later today or tomorrow better?`,
-    ];
-    return ladder[Math.min(n, ladder.length - 1)];
+    // open_question reprompts always use the free-response GPT path.
+    // Return the booking fallback as a backstop — the useFreeResponse check
+    // in the committed handler will override this with a GPT-generated response
+    // that re-asks the question naturally based on context.
+    return getBookingFallbackLine(ctx);
   }
 
   return getBookingFallbackLine(ctx);
@@ -2881,6 +2889,7 @@ function buildFreeResponseInstruction(
     userText: string;
     recentExchanges?: Array<{ role: "ai" | "user"; text: string; stepIndex?: number }>;
     currentStepLine?: string;
+    stepType?: string;  // helps GPT know what kind of answer to steer toward
   }
 ): string {
   const leadName = (ctx.clientFirstName || "").trim() || "there";
@@ -2904,10 +2913,25 @@ ${lines.join("\n")}
 `;
   }
 
+  const stepTypeHint = (() => {
+    const st = String(opts.stepType || "").toLowerCase();
+    if (st === "open_question") return `
+This is an open question. You need a specific answer before moving forward. Do not skip it.`;
+    if (st === "yesno_question") return `
+This is a yes-or-no question. Steer toward a clear yes or no.`;
+    if (st === "time_question") return `
+You need a day or time. Offer today or tomorrow as the options.`;
+    return "";
+  })();
+
   const stepHint = currentStep
     ? `
-WHERE YOU ARE IN THE SCRIPT: You still need to ask: "${currentStep}"
-After handling what the lead said, work your way back to this.
+WHERE YOU ARE IN THE SCRIPT:
+You still need to get an answer to this question: "${currentStep}"${stepTypeHint}
+
+IMPORTANT: After responding to what they said, you MUST re-ask this question naturally.
+Do not skip it. Do not jump ahead. Re-ask it in your own words, conversationally.
+Example: if the question is about spouse coverage, work it back in naturally.
 `
     : "";
 
@@ -5792,16 +5816,23 @@ state.lastUserSpeechStoppedAtMs = Date.now();
         try {
           if (!hasTranscript) return false;
           if (!lastUserText || lastUserText.trim().length < 4) return false;
-          // Time/availability is handled by the time ladder above — don't free-respond to that
-          if (isTimeIndecisionOrAvailability(lastUserText)) return false;
-          if (isTimeMentioned(lastUserText)) return false;
-          // If we're just re-asking the same step type and the reprompt is already tailored, use it
+
+          // Time/availability is handled by the time ladder — don't free-respond to that
           if (stepType === "time_question") return false;
-          // Use free-response when the line is the generic booking fallback (not tailored)
+          if (isTimeIndecisionOrAvailability(lastUserText)) return false;
+
+          // open_question: ALWAYS use free-response for non-answers.
+          // GPT will acknowledge what they said and re-ask the question naturally.
+          // This is the "handles anything" path — no canned reprompts for open questions.
+          if (stepType === "open_question") return true;
+
+          // yesno_question: use free-response when they said something real but ambiguous
+          if (stepType === "yesno_question" && repromptN >= 1) return true;
+
+          // Generic fallback: use free-response when reprompt line is just the booking default
           const fallback = getBookingFallbackLine(state.context!).toLowerCase();
           if (repromptLine.toLowerCase().includes(fallback.slice(0, 40))) return true;
-          // Also free-respond when on reprompt 1+ for open/yesno and user said something real
-          if ((stepType === "open_question" || stepType === "yesno_question") && repromptN >= 1) return true;
+
           return false;
         } catch { return false; }
       })();
@@ -5834,6 +5865,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
               userText: lastUserText,
               recentExchanges: state.recentExchanges,
               currentStepLine: steps[idx] || "",
+              stepType: stepType,
             });
             lineForMemory = `[free-response to: "${lastUserText.slice(0, 60)}"]`;
           } else {
