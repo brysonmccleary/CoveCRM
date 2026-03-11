@@ -796,6 +796,69 @@ async function replayPendingCommittedTurn(
       // Require real words OR strong audio (fallback) before advancing past greeting.
       const greetAudioMs = Number(state.userAudioMsBuffered || 0);
       if (!lastUserText && greetAudioMs < 1400) return;
+
+      // ✅ Objection check: if the lead objects on their very first response
+      // (e.g. "already got it taken care of", "not interested", "remove me"),
+      // route to the rebuttal handler instead of advancing the script.
+      // This catches objections that fire before awaitingUserAnswer is set.
+      const greetingObjKind = lastUserText ? detectObjection(lastUserText) : null;
+      const greetingQKind = lastUserText ? detectQuestionKindForTurn(lastUserText) : null;
+      const greetingObjOrQ = greetingObjKind || greetingQKind;
+      if (greetingObjOrQ) {
+        // Treat exactly like the REBUTTAL-GATE path — just set phase and fall through.
+        // We do this by setting awaitingUserAnswer = true temporarily so the rebuttal
+        // gate fires on the NEXT committed event... but we need to handle it NOW.
+        // Instead: build the rebuttal inline and send it.
+        try {
+          const overrideLine = enforceBookingOnlyLine(
+            state.context!,
+            getRebuttalLine(state.context!, greetingObjOrQ)
+          );
+          if (lastUserText) pushExchange(state, "user", lastUserText, 0);
+          const rebuttalInstr = buildConversationalRebuttalInstruction(state.context!, overrideLine, {
+            objectionKind: greetingObjOrQ,
+            userText: lastUserText,
+            lastOutboundLine: state.lastPromptLine,
+            lastOutboundAtMs: state.lastPromptSentAtMs,
+            recentExchanges: state.recentExchanges,
+          });
+          pushExchange(state, "ai", overrideLine, 0);
+
+          state.awaitingUserAnswer = false;
+          state.awaitingAnswerForStepIndex = undefined;
+          state.userAudioMsBuffered = 0;
+          state.lastUserTranscript = "";
+          state.lowSignalCommitCount = 0;
+
+          await humanPause();
+
+          setWaitingForResponse(state, true, "response.create (greeting objection)");
+          setAiSpeaking(state, true, "response.create (greeting objection)");
+          setResponseInFlight(state, true, "response.create (greeting objection)");
+          state.outboundOpenAiDone = false;
+
+          state.lastPromptSentAtMs = Date.now();
+          state.lastPromptLine = overrideLine;
+          state.lastResponseCreateAtMs = Date.now();
+          state.lastObjectionKind = greetingObjOrQ;
+          state.objectionRepeatCount = 0;
+
+          state.openAiWs.send(JSON.stringify({
+            type: "response.create",
+            response: { modalities: ["audio", "text"], temperature: 0.6, instructions: rebuttalInstr },
+          }));
+
+          // Re-arm stepper so next reply answers Step 1
+          state.awaitingUserAnswer = true;
+          state.awaitingAnswerForStepIndex = 0;
+          state.phase = "in_call";
+          return;
+        } catch (e) {
+          try { console.log("[AI-VOICE] greeting objection handler error:", String(e)); } catch {}
+          // fall through to normal greeting reply if something goes wrong
+        }
+      }
+
       const ack = getGreetingAckPrefix(lastUserText);
 
       if (isGreetingNegativeHearing(lastUserText)) {
@@ -5853,7 +5916,9 @@ state.lastUserSpeechStoppedAtMs = Date.now();
 
       (async () => {
         try {
-          await humanPause();
+          // Free-response turns skip the artificial pause — respond immediately.
+          // Script reprompt turns keep it to sound natural.
+          if (!useFreeResponse) await humanPause();
         } catch {}
 
         try {
