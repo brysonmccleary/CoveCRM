@@ -1556,6 +1556,17 @@ function isGreetingNegativeHearing(userTextRaw: string): boolean {
   return false;
 }
 
+function isTestOrPlaceholderName(name: string): boolean {
+  const t = String(name || "").trim().toLowerCase();
+  if (!t) return true;
+  const placeholders = new Set([
+    "test", "testing", "tester", "demo", "sample", "lead", "user",
+    "firstname", "first_name", "name", "unknown", "n/a", "na", "none",
+    "undefined", "null", "placeholder",
+  ]);
+  return placeholders.has(t) || t.startsWith("test ") || t.endsWith(" test");
+}
+
 function getBookingFallbackLine(ctx: AICallContext): string {
   const agentRaw = (ctx.agentName || "your agent").trim() || "your agent";
   const agent = (agentRaw.split(" ")[0] || agentRaw).trim();
@@ -1965,6 +1976,17 @@ function looksLikeTimeAnswer(textRaw: string): boolean {
   if (isTimeWindowMentioned(t)) return true;
   if (isExactClockTimeMentioned(t)) return true;
 
+  // ✅ Affirmatives to "later today or tomorrow" = picking today / agreeing to schedule.
+  // Treat as a valid time answer so we move forward instead of reprompting.
+  const affirmatives = new Set([
+    "yes", "yeah", "yep", "yup", "sure", "ok", "okay", "alright",
+    "sounds good", "that works", "works for me", "that's fine", "thats fine",
+    "fine", "go ahead", "either", "either one", "both work", "whatever",
+    "you pick", "your call", "doesn't matter", "doesnt matter",
+  ]);
+  const stripped = t.replace(/[?.!,]+$/, "").trim();
+  if (affirmatives.has(stripped) || affirmatives.has(t)) return true;
+
   return false;
 }
 
@@ -2100,6 +2122,9 @@ function isFillerOnly(textRaw: string): boolean {
   const t = String(textRaw || "").trim().toLowerCase();
   if (!t) return true;
 
+  // Strip trailing punctuation for matching ("hello." -> "hello")
+  const stripped = t.replace(/[?.!,]+$/, "").trim();
+
   // common tiny acknowledgements / noise
   const fillers = new Set([
     "yeah",
@@ -2116,17 +2141,32 @@ function isFillerOnly(textRaw: string): boolean {
     "uh-huh",
     "okay",
     "ok",
+    // greeting words — these are NOT answers to script questions
     "hello",
+    "hi",
     "hey",
+    "hey there",
+    "hi there",
+    "good morning",
+    "good afternoon",
+    "good evening",
     "can you hear me",
     "yeah i can hear you",
     "i can hear you",
+    "yes i can hear you",
+    "yes i can",
+    "loud and clear",
   ]);
 
-  if (fillers.has(t)) return true;
+  if (fillers.has(t) || fillers.has(stripped)) return true;
 
   // Regex catch for stretched fillers: "uhhh", "ummm", "hmmmm", etc.
-  if (/^(uh+|um+|mm+|mhm+|hmm+|er+|ah+|eh+)$/.test(t)) return true;
+  if (/^(uh+|um+|mm+|mhm+|hmm+|er+|ah+|eh+)$/.test(stripped)) return true;
+
+  // greeting-only sentences (1–3 words, all greeting tokens)
+  const greetingTokens = new Set(["hello","hi","hey","there","good","morning","afternoon","evening","howdy","yo"]);
+  const words = stripped.split(/\s+/);
+  if (words.length <= 3 && words.every(w => greetingTokens.has(w))) return true;
 
   // IMPORTANT:
   // Do NOT treat every 1-word reply as filler.
@@ -3407,21 +3447,24 @@ TURN DISCIPLINE (NON-NEGOTIABLE)
  */
 function buildGreetingInstructions(ctx: AICallContext): string {
   const aiName = (ctx.voiceProfile.aiName || "Alex").trim() || "Alex";
-  const clientName = (ctx.clientFirstName || "").trim() || "there";
+  const clientNameRaw = (ctx.clientFirstName || "").trim();
+  const clientName = (!clientNameRaw || isTestOrPlaceholderName(clientNameRaw)) ? "there" : clientNameRaw;
   const scope = getScopeLabelForScriptKey(ctx.scriptKey);
 
-  return [
-    'HARD ENGLISH LOCK: Speak ONLY English.',
-    `HARD SCOPE LOCK: This call is ONLY about a ${scope} request. Do NOT mention any other product.`,
-    'HARD NAME LOCK: You may ONLY use the lead name exactly as provided. If missing, say "there". Never invent names.',
-    "",
-    "SYSTEM GREETING (NON-NEGOTIABLE):",
-    `- Your first words MUST start with: "Hey ${clientName}."`,
-    "- Keep it SHORT: 1 sentence greeting + 1 simple question.",
-    `- Say exactly: "Hey ${clientName}. This is ${aiName}. Can you hear me alright?"`,
-    "- After the question, STOP talking and WAIT for the lead to respond.",
-    "- Do NOT begin the booking script on this greeting turn.",
-  ].join("\n");
+  return `
+You are ${aiName}, a scheduling assistant. You are making a phone call.
+
+YOUR ONLY JOB RIGHT NOW:
+Say this greeting EXACTLY, naturally, as a real person would:
+"Hey ${clientName}. This is ${aiName}. Can you hear me alright?"
+
+RULES:
+- Say ONLY those words. Nothing more.
+- After you say it, STOP COMPLETELY and wait for them to respond.
+- Do NOT introduce yourself further. Do NOT mention the reason for the call yet.
+- Do NOT start the booking script. That comes after they respond.
+- English only.
+`.trim();
 }
 
 /**
@@ -5008,9 +5051,11 @@ state.lastUserSpeechStoppedAtMs = Date.now();
         liveState.outboundOpenAiDone = false;
 
         const aiName = (liveState.context!.voiceProfile.aiName || "Alex").trim() || "Alex";
-        const clientName = (liveState.context!.clientFirstName || "").trim() || "there";
+        const clientNameRaw = (liveState.context!.clientFirstName || "").trim();
+        const clientName = (!clientNameRaw || isTestOrPlaceholderName(clientNameRaw)) ? "there" : clientNameRaw;
         const greetingLine = `Hey ${clientName}. This is ${aiName}. Can you hear me alright?`;
-        const greetingInstr = buildStepperTurnInstruction(liveState.context!, greetingLine);
+        // Greeting instruction: dead simple — say the line, stop, wait. No history/goals scaffolding.
+        const greetingInstr = buildGreetingInstructions(liveState.context!);
 
         try {
           if (!liveState.debugLoggedResponseCreateGreeting) {
@@ -5442,10 +5487,18 @@ state.lastUserSpeechStoppedAtMs = Date.now();
       // ✅ Human-sounding deterministic acknowledgment after "Can you hear me?"
       // We ONLY do this on the very first step after the greeting.
       const ack = getGreetingAckPrefix(lastUserText);
-      if (isGreetingNegativeHearing(lastUserText)) {
-        // If they couldn't hear, re-ask hearing check instead of advancing steps.
+      // Also treat a bare greeting response ("hello", "hi") the same as negative hearing —
+      // they didn't acknowledge us, just said hello back. Re-ask the hearing check.
+      const isGreetingEcho = isFillerOnly(lastUserText) &&
+        (["hello","hi","hey","hello?","hi?","hey?"].includes(
+          String(lastUserText || "").trim().toLowerCase().replace(/[?.!]+$/, "")
+        ));
+
+      if (isGreetingNegativeHearing(lastUserText) || (isGreetingEcho && !lastUserText.toLowerCase().includes("hear"))) {
+        // If they couldn't hear or just echoed hello back, re-ask hearing check instead of advancing steps.
         const aiName2 = (state.context!.voiceProfile.aiName || "Alex").trim() || "Alex";
-        const clientName2 = (state.context!.clientFirstName || "").trim() || "there";
+        const clientNameRaw2 = (state.context!.clientFirstName || "").trim();
+        const clientName2 = (!clientNameRaw2 || isTestOrPlaceholderName(clientNameRaw2)) ? "there" : clientNameRaw2;
         const retryLine = `Okay — can you hear me now, ${clientName2}? This is ${aiName2}.`;
         const retryInstr = buildStepperTurnInstruction(state.context!, retryLine);
 
