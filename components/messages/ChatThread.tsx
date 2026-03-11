@@ -70,6 +70,15 @@ export default function ChatThread({ leadId, socket }: ChatThreadProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [resumingDrip, setResumingDrip] = useState(false);
+  const [dripUi, setDripUi] = useState<{
+    loading: boolean;
+    hasActive: boolean;
+    hasResumable: boolean;
+  }>({
+    loading: true,
+    hasActive: false,
+    hasResumable: false,
+  });
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
   const timeZone = useMemo(() => getAgentTimeZone(), []);
@@ -94,6 +103,38 @@ export default function ChatThread({ leadId, socket }: ChatThreadProps) {
   useEffect(() => {
     fetchMessages();
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [leadId]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const fetchDripUi = async () => {
+      if (!leadId) return;
+      try {
+        setDripUi((prev) => ({ ...prev, loading: true }));
+        const res = await axios.get(`/api/drips/resume-status?leadId=${encodeURIComponent(leadId)}`);
+        if (!cancelled) {
+          setDripUi({
+            loading: false,
+            hasActive: !!res.data?.hasActive,
+            hasResumable: !!res.data?.hasResumable,
+          });
+        }
+      } catch {
+        if (!cancelled) {
+          setDripUi({
+            loading: false,
+            hasActive: false,
+            hasResumable: false,
+          });
+        }
+      }
+    };
+
+    fetchDripUi();
+    return () => {
+      cancelled = true;
+    };
   }, [leadId]);
 
   useEffect(() => {
@@ -154,12 +195,17 @@ export default function ChatThread({ leadId, socket }: ChatThreadProps) {
   };
 
   const handleContinueDrip = async () => {
-    if (!leadId || resumingDrip) return;
+    if (!leadId || resumingDrip || dripUi.hasActive) return;
 
     try {
       setResumingDrip(true);
       const res = await axios.post("/api/drips/resume-lead", { leadId });
       const campaignName = res?.data?.campaignName || "drip campaign";
+      setDripUi({
+        loading: false,
+        hasActive: true,
+        hasResumable: false,
+      });
       alert(`✅ Continued ${campaignName}`);
     } catch (err: any) {
       console.error("Continue drip failed", err);
@@ -175,14 +221,20 @@ export default function ChatThread({ leadId, socket }: ChatThreadProps) {
 
   return (
     <div className="flex flex-col h-full bg-[#0f172a]">
-      <div className="flex items-center justify-end px-4 py-3 border-b border-gray-800 bg-[#0f172a]">
-        <button
-          onClick={handleContinueDrip}
-          disabled={resumingDrip}
-          className="bg-blue-600 text-white px-4 py-2 rounded-full hover:bg-blue-700 transition disabled:opacity-60"
-        >
-          {resumingDrip ? "Continuing..." : "Continue Drip"}
-        </button>
+      <div className="flex items-center justify-end px-4 py-3 border-b border-gray-800 bg-[#0f172a] min-h-[72px]">
+        {dripUi.hasActive ? (
+          <span className="bg-green-700 text-white px-4 py-2 rounded-full text-sm">
+            Drip Active
+          </span>
+        ) : dripUi.hasResumable ? (
+          <button
+            onClick={handleContinueDrip}
+            disabled={resumingDrip}
+            className="bg-blue-600 text-white px-4 py-2 rounded-full hover:bg-blue-700 transition disabled:opacity-60"
+          >
+            {resumingDrip ? "Continuing..." : "Continue Drip"}
+          </button>
+        ) : null}
       </div>
 
       <div className="flex-1 overflow-y-auto p-4 space-y-3 flex flex-col">
