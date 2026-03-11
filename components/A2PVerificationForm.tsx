@@ -632,6 +632,7 @@ The opt-in page displays SMS Opt-In Terms and SMS Opt-In Privacy links on the sa
         landingOptInUrl: landingOptInUrl || undefined,
         landingTosUrl: landingTosUrl || undefined,
         landingPrivacyUrl: landingPrivacyUrl || undefined,
+        useHostedCompliancePages,
       };
 
       const res = await fetch("/api/registerA2P", {

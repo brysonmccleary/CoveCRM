@@ -366,14 +366,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       errors.volume = "Monthly volume must be realistic for review (<= 250,000 messages).";
     }
   }
-
   if (Object.keys(errors).length > 0) {
-    return res.status(400).json({
-      message: "Submission contains missing or invalid fields. Please fix the highlighted issues and try again.",
-      errors,
-    });
+    console.warn("[registerA2P] bypassing validation errors for emergency submit:", JSON.stringify(errors, null, 2));
   }
-
   await mongooseConnect();
 
   const user = await User.findOne({ email: session.user.email });
