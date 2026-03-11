@@ -91,6 +91,7 @@ export default function ConversationsPanel() {
   const [reply, setReply] = useState("");
   const [bookingTime, setBookingTime] = useState("");
   const [bookingForMessageIndex, setBookingForMessageIndex] = useState<number | null>(null);
+  const [resumingDrip, setResumingDrip] = useState(false);
   const chatRef = useRef<HTMLDivElement>(null);
 
   // 🔔 unread store
@@ -150,6 +151,30 @@ export default function ConversationsPanel() {
     }
   };
 
+  const handleContinueDrip = async () => {
+    if (!selectedLead?._id || resumingDrip) return;
+
+    try {
+      setResumingDrip(true);
+      const res = await axios.post("/api/drips/resume-lead", {
+        leadId: selectedLead._id,
+      });
+
+      const campaignName = res?.data?.campaignName || "drip campaign";
+      alert(`✅ Continued ${campaignName}`);
+      await loadLeads();
+    } catch (err: any) {
+      console.error("❌ Continue drip failed", err);
+      const msg =
+        err?.response?.data?.error ||
+        err?.response?.data?.detail ||
+        "❌ Could not continue drip";
+      alert(msg);
+    } finally {
+      setResumingDrip(false);
+    }
+  };
+
   // auto-scroll to bottom when thread changes
   useEffect(() => {
     if (chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight;
@@ -204,9 +229,19 @@ export default function ConversationsPanel() {
       <div className="w-full md:w-2/3 border rounded p-3 flex flex-col h-[80vh]">
         {selectedLead ? (
           <>
-            <h3 className="font-semibold text-lg mb-2">
-              {selectedLead["First Name"]} ({selectedLead.Phone})
-            </h3>
+            <div className="mb-2 flex items-center justify-between gap-3">
+              <h3 className="font-semibold text-lg">
+                {selectedLead["First Name"]} ({selectedLead.Phone})
+              </h3>
+
+              <button
+                onClick={handleContinueDrip}
+                disabled={resumingDrip}
+                className="bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white px-3 py-1 rounded text-sm"
+              >
+                {resumingDrip ? "Continuing..." : "Continue Drip"}
+              </button>
+            </div>
 
             <div
               ref={chatRef}
