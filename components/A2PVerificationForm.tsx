@@ -551,9 +551,12 @@ The opt-in page displays SMS Opt-In Terms and SMS Opt-In Privacy links on the sa
       if (od.length < 300) {
         newErrors.optInDetails =
           "Opt-in description must be detailed (at least a few full sentences describing the form, disclosure, and consent).";
-      } else if (!/consent/i.test(od) || !/(by clicking|by entering)/i.test(od)) {
+      } else if (
+        !/consent/i.test(od) ||
+        !/(by clicking|by entering|by submitting|by checking the box|by providing)/i.test(od)
+      ) {
         newErrors.optInDetails =
-          'Opt-in description must clearly state that the user gives consent by clicking/entering their information (e.g., "By entering your information and clicking this button, you consent to receive calls/texts...").';
+          'Opt-in description must clearly state how the user gives consent (for example: by clicking, entering their information, submitting the form, checking the box, or providing their phone number).';
       }
     }
 
