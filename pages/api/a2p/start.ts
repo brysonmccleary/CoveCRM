@@ -120,7 +120,10 @@ function applyComplianceTokens(messageFlow: string, urls: { optInUrl: string; to
 
 // ---------------- helpers ----------------
 function required<T>(v: T, name: string): T {
-  if (!v) throw new Error(`Missing required field: ${name}`);
+  if (!v) {
+    console.error("[A2P start] Missing required field:", name);
+    throw new Error(`Missing required field: ${name}`);
+  }
   return v;
 }
 

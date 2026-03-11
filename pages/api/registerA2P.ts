@@ -171,6 +171,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(401).json({ message: "Unauthorized" });
 
   const body = (req.body || {}) as BodyIn;
+  console.log("[registerA2P] incoming body keys:", Object.keys(body || {}));
+  console.log("[registerA2P] incoming body:", JSON.stringify(body, null, 2));
   const errors: ValidationErrors = {};
 
   const {
