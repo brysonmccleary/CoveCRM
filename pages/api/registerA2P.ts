@@ -481,6 +481,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
 
     const startData = await startRes.json().catch(() => ({}));
+    console.log("[registerA2P] /api/a2p/start status:", startRes.status);
+    console.log("[registerA2P] /api/a2p/start response:", JSON.stringify(startData, null, 2));
     if (!startRes.ok) {
       return res.status(startRes.status).json({
         message: startData?.message || "A2P start failed",
