@@ -254,6 +254,15 @@ export default function DripCampaignsPanel() {
     setEditableDrips({ ...editableDrips, [dripId]: updated });
   };
 
+  const handleRemoveNewStep = (index: number) => {
+    setMessageSteps((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const handleRemoveEditableStep = (dripId: string, index: number) => {
+    const updated = [...(editableDrips[dripId] || [])].filter((_, i) => i !== index);
+    setEditableDrips({ ...editableDrips, [dripId]: updated });
+  };
+
   const handleAssignDrip = (dripId: string, dripName?: string) => {
     const resolved = resolveDbCampaignId(dripId, dripName);
     setSelectedDripId(resolved);
@@ -652,6 +661,14 @@ setBackendCampaigns((prev) =>
                 <p>
                   <strong>Message:</strong> {step.text}
                 </p>
+                <div className="flex justify-end mt-2">
+                  <button
+                    onClick={() => handleRemoveNewStep(idx)}
+                    className="bg-red-600 hover:bg-red-700 text-white px-2 py-1 rounded text-xs cursor-pointer"
+                  >
+                    Delete
+                  </button>
+                </div>
               </div>
             ))}
           </div>
@@ -709,6 +726,14 @@ setBackendCampaigns((prev) =>
                       }
                       className="border border-black dark:border-white p-2 rounded w-full text-sm"
                     />
+                    <div className="flex justify-end">
+                      <button
+                        onClick={() => handleRemoveEditableStep(String(campaignId), idx)}
+                        className="bg-red-600 hover:bg-red-700 text-white px-2 py-1 rounded text-xs cursor-pointer"
+                      >
+                        Delete
+                      </button>
+                    </div>
                   </div>
                 ))}
 
@@ -778,6 +803,14 @@ setBackendCampaigns((prev) =>
                     }
                     className="border border-black dark:border-white p-2 rounded w-full text-sm"
                   />
+                  <div className="flex justify-end">
+                    <button
+                      onClick={() => handleRemoveEditableStep(camp._id, idx)}
+                      className="bg-red-600 hover:bg-red-700 text-white px-2 py-1 rounded text-xs cursor-pointer"
+                    >
+                      Delete
+                    </button>
+                  </div>
                 </div>
               ))}
 
