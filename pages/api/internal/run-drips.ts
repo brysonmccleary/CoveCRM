@@ -562,7 +562,7 @@ if (
           folderName: null,
         });
 
-        const finalBody = ensureOptOut(rendered);
+        const finalBody = idx === 0 ? ensureOptOut(rendered) : String(rendered || "").trim();
 
         // ✅ idempotencyKey should be stable per enrollment+step.
         // Using nextSendAt in the key can create false “new sends” after reschedules.

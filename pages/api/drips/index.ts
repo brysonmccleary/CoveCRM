@@ -30,14 +30,11 @@ export default async function handler(
 
   if (req.method === "POST") {
     try {
-      const optOut = " Reply STOP to opt out.";
       const steps = (req.body.steps || []).map(
-        (step: { text: string; day: string }) => {
-          const enforcedText = step.text.trim().endsWith(optOut)
-            ? step.text.trim()
-            : `${step.text.trim()}${optOut}`;
-          return { ...step, text: enforcedText };
-        },
+        (step: { text: string; day: string }) => ({
+          ...step,
+          text: String(step?.text || "").trim(),
+        }),
       );
 
       const drip = new DripCampaign({

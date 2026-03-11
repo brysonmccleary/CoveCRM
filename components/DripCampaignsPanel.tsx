@@ -269,12 +269,10 @@ export default function DripCampaignsPanel() {
       return;
     }
 
-    // Enforce opt-out on every message (same rule as builder)
-    const optOut = " Reply STOP to opt out.";
+    // Preserve edited text as written. First-touch opt-out is enforced at send time.
     const normalized = steps.map((s) => {
       const day = String(s.day || "immediately");
-      const textRaw = String(s.text || "").trim();
-      const text = textRaw.endsWith(optOut) ? textRaw : `${textRaw}${optOut}`;
+      const text = String(s.text || "").trim();
       return { day, text };
     });
 
@@ -379,12 +377,10 @@ export default function DripCampaignsPanel() {
       return;
     }
 
-    // Enforce opt-out on every message (same rule as builder)
-    const optOut = " Reply STOP to opt out.";
+    // Preserve edited text as written. First-touch opt-out is enforced at send time.
     const normalized = steps.map((s) => {
       const day = String(s.day || "immediately");
-      const textRaw = String(s.text || "").trim();
-      const text = textRaw.endsWith(optOut) ? textRaw : `${textRaw}${optOut}`;
+      const text = String(s.text || "").trim();
       return { day, text };
     });
 
@@ -540,12 +536,10 @@ setBackendCampaigns((prev) =>
       return;
     }
 
-    // Enforce opt-out on every message
-    const optOut = " Reply STOP to opt out.";
+    // Preserve edited text as written. First-touch opt-out is enforced at send time.
     const normalized = steps.map((s: any) => {
       const day = String(s.day || "immediately");
-      const textRaw = String(s.text || "").trim();
-      const text = textRaw.endsWith(optOut) ? textRaw : `${textRaw}${optOut}`;
+      const text = String(s.text || "").trim();
       return { day, text };
     });
 
