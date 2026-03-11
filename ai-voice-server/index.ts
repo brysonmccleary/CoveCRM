@@ -6054,6 +6054,65 @@ state.lastUserSpeechStoppedAtMs = Date.now();
       state.timeOfferCountForStepIndex = idx;
       state.timeOfferCount = n + 1;
     }
+    // ✅ open_question relevance gate: if the user's reply doesn't address
+    // the current question at all, fire free-response (GPT re-asks naturally)
+    // instead of advancing the stepper blindly.
+    // Examples that should NOT advance:
+    //   "Yeah, what's up?" to "Was this for yourself or a spouse?"
+    //   "What do you mean?" to any open_question
+    //   "Okay" / "Sure" — filler, not a real answer
+    // Examples that SHOULD advance:
+    //   "Just me", "Both of us", "Me and my wife", "Myself"
+    if (stepType === "open_question" && hasTranscript && lastUserText) {
+      const openQText = lastUserText.trim().toLowerCase();
+      // Signals that indicate the user is NOT answering but reacting
+      const isOffTopic =
+        // question-back / confusion
+        /what('s| is)? (this|that|up|going on)/.test(openQText) ||
+        /what do you (mean|want|need)/.test(openQText) ||
+        /why (are you|is this)/.test(openQText) ||
+        /who (is this|are you|am i)/.test(openQText) ||
+        /how did you/.test(openQText) ||
+        // pure filler / acknowledgement with no info
+        (isFillerOnly(openQText) && openQText.length < 15) ||
+        // "yeah what's up" / "yep what's up" — answering + questioning back
+        /^(yeah|yep|yes|yup|sure|okay|ok|hi|hello)[,.]?\s*(what'?s? up|what do you (want|need)|what is (this|it)|huh)\??$/.test(openQText);
+
+      if (isOffTopic) {
+        // Don't advance — fire free-response so GPT re-asks conversationally
+        const repromptLine = getRepromptLineForStepType(state.context!, stepType, 0);
+        if (lastUserText) pushExchange(state, "user", lastUserText, expectedAnswerIdx);
+
+        const freeInstr = buildFreeResponseInstruction(state.context!, {
+          userText: lastUserText,
+          currentStepLine: repromptLine,
+          stepType,
+          recentExchanges: state.recentExchanges,
+        });
+
+        (async () => {
+          try {
+            setWaitingForResponse(state, true, "response.create (open_question off-topic)");
+            setAiSpeaking(state, true, "response.create (open_question off-topic)");
+            setResponseInFlight(state, true, "response.create (open_question off-topic)");
+            state.outboundOpenAiDone = false;
+
+            state.lastPromptSentAtMs = Date.now();
+            state.lastPromptLine = repromptLine;
+            state.lastResponseCreateAtMs = Date.now();
+
+            state.openAiWs!.send(JSON.stringify({
+              type: "response.create",
+              response: { modalities: ["audio", "text"], temperature: 0.75, instructions: freeInstr },
+            }));
+          } catch (e) {
+            try { console.log("[AI-VOICE] open_question off-topic free-response error:", String(e)); } catch {}
+          }
+        })();
+        return;
+      }
+    }
+
     const prevIdx = expectedAnswerIdx;
 
 
