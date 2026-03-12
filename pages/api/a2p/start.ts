@@ -1975,6 +1975,55 @@ usecaseCode: normalizedUseCase,
     // Evaluate + submit Secondary
     await evaluateAndSubmitCustomerProfile(secondaryProfileSid!);
 
+    const secondaryProfileStatus = String(
+      await getCustomerProfileStatus(secondaryProfileSid!),
+    ).toUpperCase();
+
+    log("secondary customerProfile post-submit status", {
+      secondaryProfileSid,
+      secondaryProfileStatus,
+      twilioAccountSidUsed,
+    });
+
+    const SECONDARY_PROFILE_APPROVED = new Set([
+      "APPROVED",
+      "TWILIO_APPROVED",
+    ]);
+
+    if (!SECONDARY_PROFILE_APPROVED.has(secondaryProfileStatus)) {
+      await A2PProfile.updateOne(
+        { _id: a2pId },
+        {
+          $set: {
+            applicationStatus: "pending",
+            messagingReady: false,
+            lastError: undefined,
+            lastSyncedAt: new Date(),
+            twilioAccountSidLastUsed: twilioAccountSidUsed,
+          } as any,
+          $push: {
+            approvalHistory: {
+              stage: "profile_submitted",
+              at: new Date(),
+              note: `Secondary Customer Profile submitted; waiting for approval (${secondaryProfileStatus}) before brand creation`,
+            },
+          },
+        },
+      );
+
+      return res.status(200).json({
+        message:
+          "Secondary customer profile submitted and awaiting Twilio review before brand creation.",
+        data: {
+          profileSid: secondaryProfileSid,
+          profileStatus: secondaryProfileStatus,
+          canCreateBrand: false,
+          canCreateCampaign: false,
+          twilioAccountSidUsed,
+        },
+      });
+    }
+
     // ---------------- 2) TrustProduct (A2P) ----------------
     live = await A2PProfile.findOne({ userId }).lean<any>();
     let trustProductSid: string | undefined = live?.trustProductSid;
@@ -2060,6 +2109,56 @@ usecaseCode: normalizedUseCase,
     // Evaluate + submit TrustProduct
     await evaluateAndSubmitTrustProduct(trustProductSid!);
 
+    const trustProductStatus = String(
+      await getTrustProductStatus(trustProductSid!),
+    ).toUpperCase();
+
+    log("trustProduct post-submit status", {
+      trustProductSid,
+      trustProductStatus,
+      twilioAccountSidUsed,
+    });
+
+    const TRUST_PRODUCT_APPROVED = new Set([
+      "APPROVED",
+      "TWILIO_APPROVED",
+    ]);
+
+    if (!TRUST_PRODUCT_APPROVED.has(trustProductStatus)) {
+      await A2PProfile.updateOne(
+        { _id: a2pId },
+        {
+          $set: {
+            applicationStatus: "pending",
+            messagingReady: false,
+            lastError: undefined,
+            lastSyncedAt: new Date(),
+            twilioAccountSidLastUsed: twilioAccountSidUsed,
+          } as any,
+          $push: {
+            approvalHistory: {
+              stage: "trust_product_submitted",
+              at: new Date(),
+              note: `A2P Trust Product submitted; waiting for approval (${trustProductStatus}) before brand creation`,
+            },
+          },
+        },
+      );
+
+      return res.status(200).json({
+        message:
+          "A2P Trust Product submitted and awaiting Twilio review before brand creation.",
+        data: {
+          profileSid: secondaryProfileSid,
+          trustProductSid,
+          trustProductStatus,
+          canCreateBrand: false,
+          canCreateCampaign: false,
+          twilioAccountSidUsed,
+        },
+      });
+    }
+
     // ---------------- 3) BrandRegistration (BN...) with resubmit logic -------
     live = await A2PProfile.findOne({ userId }).lean<any>();
 
@@ -2143,7 +2242,7 @@ usecaseCode: normalizedUseCase,
       const payload: any = {
         customerProfileBundleSid: secondaryProfileSid!,
         a2PProfileBundleSid: trustProductSid!,
-        brandType: "STANDARD",
+        brandType: "LOW_VOLUME_STANDARD",
       };
 
       log("step: brandRegistrations.create", {

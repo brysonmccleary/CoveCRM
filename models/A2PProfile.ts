@@ -3,6 +3,8 @@ import mongoose, { Schema, Document } from "mongoose";
 
 export type A2PRegistrationStatus =
   | "not_started"
+  | "profile_submitted"
+  | "trust_product_submitted"
   | "brand_submitted"
   | "brand_approved"
   | "campaign_submitted"
@@ -182,6 +184,8 @@ const A2PProfileSchema = new Schema<IA2PProfile>({
     type: String,
     enum: [
       "not_started",
+      "profile_submitted",
+      "trust_product_submitted",
       "brand_submitted",
       "brand_approved",
       "campaign_submitted",

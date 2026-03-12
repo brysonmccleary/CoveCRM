@@ -448,7 +448,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             volume: volDigits,
 
             applicationStatus: "pending",
-            registrationStatus: "brand_submitted",
+            registrationStatus: "profile_submitted",
             messagingReady: false,
             declinedReason: null,
             lastError: null,
@@ -514,6 +514,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       startInner.brandFailureReason ||
       startInner.brandFailureReasons ||
       undefined;
+
+    if (startInner?.canCreateBrand === false) {
+      const waitMessage =
+        startInner?.profileStatus
+          ? `Your business profile was submitted and is waiting on Twilio review (${startInner.profileStatus}). We’ll continue automatically after approval.`
+          : startInner?.trustProductStatus
+            ? `Your A2P trust product was submitted and is waiting on Twilio review (${startInner.trustProductStatus}). We’ll continue automatically after approval.`
+            : "Your A2P onboarding is in progress and waiting on Twilio review before brand creation.";
+
+      return res.status(200).json({
+        ok: true,
+        message: waitMessage,
+        brandStatus,
+        brandFailureReason,
+        start: startInner,
+      });
+    }
 
     if (canCreateCampaign === false) {
       const msg =
