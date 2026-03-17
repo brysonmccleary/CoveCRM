@@ -4682,7 +4682,11 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
 
           // ✅ HOTFIX: Reduce end-of-turn silence so we don't get 3–5s dead air after the user talks.
           // Default can be too slow; this makes "speech_stopped/committed" fire faster.
-          silence_duration_ms: 550,
+          // 400ms: short enough to not hang on mid-sentence pauses, long enough to not cut off natural speech.
+          silence_duration_ms: 400,
+
+          // ✅ Slightly higher threshold so background noise doesn't keep the turn open.
+          threshold: 0.55,
 
           // ✅ Helps keep the start of user speech from being clipped.
           prefix_padding_ms: 300,
