@@ -199,7 +199,25 @@ async function ensureCampaignForProfile(args: {
   const { client, a2p, messagingServiceSid, brandSid } = args;
 
   if (!brandSid) return;
-  if (a2p.usa2pSid) return;
+
+  // Do NOT trust a stored usa2pSid blindly.
+  // Resubmits/recreated brands can leave a stale campaign SID in Mongo.
+  // Only skip creation if the stored campaign is still fetchable on the current Messaging Service.
+  if (a2p.usa2pSid) {
+    try {
+      const existing = await client.messaging.v1
+        .services(messagingServiceSid)
+        .usAppToPerson(a2p.usa2pSid)
+        .fetch();
+
+      if (existing) return;
+    } catch {
+      await A2PProfile.updateOne(
+        { _id: a2p._id },
+        { $unset: { usa2pSid: 1, campaignSid: 1 } }
+      );
+    }
+  }
 
   const useCaseCode = getUseCaseFromProfile(a2p);
   const messageFlowText = getMessageFlowFromProfile(a2p);

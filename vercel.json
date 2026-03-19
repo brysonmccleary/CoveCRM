@@ -33,10 +33,6 @@
       "schedule": "*/5 * * * *"
     },
     {
-      "path": "/api/cron/check-a2p-status?token=@CRON_SECRET",
-      "schedule": "*/30 * * * *"
-    },
-    {
       "path": "/api/a2p/sync-status?token=@CRON_SECRET",
       "schedule": "*/15 * * * *"
     },
