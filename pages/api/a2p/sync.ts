@@ -807,6 +807,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             applicationStatus: "pending",
             registrationStatus: nextRegistration || "pending",
             lastSyncedAt: new Date(),
+            ...(brandSid ? { brandSid } : {}),
+            ...(campaignSid ? { campaignSid, usa2pSid: campaignSid } : {}),
+            ...(messagingServiceSid ? { messagingServiceSid } : {}),
+            ...(brandStatus ? { brandStatus } : {}),
+            ...(campStatus ? { campaignStatus: campStatus } : {}),
+          },
+          $unset: {
+            lastError: 1,
+            declinedReason: 1,
+            brandErrors: 1,
+            brandErrorsText: 1,
+            brandFailureReason: 1,
           },
         }
       );
