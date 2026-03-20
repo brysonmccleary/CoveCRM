@@ -114,13 +114,12 @@ export default function OptInPage(props: Props) {
                   checked={consent}
                   onChange={(e) => setConsent(e.target.checked)}
                   className="mt-1 h-4 w-4"
-                  required
                 />
                 <span className="text-sm text-slate-200 leading-5">
-                  By checking this box and submitting, you consent to receive SMS messages from{" "}
-                  <span className="font-semibold">{agentName}</span> — your licensed agent — using CoveCRM regarding your
-                  current policy, policy updates/changes, and future policy options. Message frequency varies. Msg &amp;
-                  data rates may apply. Reply STOP to cancel. Reply HELP for help. Consent is not a condition of purchase.
+                  By checking this box, you agree to receive conversational and account-related SMS messages from{" "}
+                  <span className="font-semibold">{agentName}</span> using CoveCRM, including responses to your request,
+                  policy-related updates, and service communications. Message frequency varies. Msg &amp; data rates may
+                  apply. Reply STOP to cancel. Reply HELP for help. Consent is not a condition of purchase.
                 </span>
               </label>
 
