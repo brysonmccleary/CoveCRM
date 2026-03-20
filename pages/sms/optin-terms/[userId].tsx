@@ -20,7 +20,7 @@ export default function OptInTerms(props: Props) {
       <div className="max-w-3xl mx-auto">
         <h1 className="text-3xl font-bold mb-2">SMS Opt-In Terms</h1>
         <p className="text-slate-300 mb-6">
-          These terms apply to SMS messages you opt in to receive from your licensed agent using CoveCRM.
+          These terms apply if you choose to opt in to receive SMS messages related to your existing policy, account servicing, and policy updates.
         </p>
 
         <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-5 mb-6 text-sm text-slate-200">
@@ -30,8 +30,8 @@ export default function OptInTerms(props: Props) {
 
         <h2 className="text-xl font-semibold mt-6 mb-2">1. What You’re Opting Into</h2>
         <p className="text-slate-200 mb-4">
-          By opting in, you agree to receive SMS messages from <span className="font-semibold">{agentName}</span> — your licensed agent —
-          using CoveCRM regarding your current policy, policy updates/changes, and future policy options.
+          If you opt in, you agree to receive SMS messages from <span className="font-semibold">{businessName}</span> regarding your existing policy,
+          policy updates, account servicing, and retention-related communications.
         </p>
 
         <h2 className="text-xl font-semibold mt-6 mb-2">2. Message Frequency</h2>
@@ -42,13 +42,13 @@ export default function OptInTerms(props: Props) {
 
         <h2 className="text-xl font-semibold mt-6 mb-2">4. Opt-Out &amp; Help</h2>
         <ul className="list-disc list-inside space-y-2 text-slate-200 mb-4">
-          <li>Reply <span className="font-semibold">STOP</span> to cancel messages at any time.</li>
+          <li>Reply <span className="font-semibold">STOP</span> to opt out at any time.</li>
           <li>Reply <span className="font-semibold">HELP</span> for help.</li>
         </ul>
 
         <h2 className="text-xl font-semibold mt-6 mb-2">5. Consent</h2>
         <p className="text-slate-200 mb-4">
-          Consent is not a condition of purchase. By submitting the opt-in form, you provide click-wrap consent to receive SMS messages.
+          Consent is optional and is not a condition of purchase. You may choose whether to opt in to receive SMS messages.
         </p>
 
         <h2 className="text-xl font-semibold mt-6 mb-2">6. Privacy</h2>
