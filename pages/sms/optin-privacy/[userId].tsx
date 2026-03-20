@@ -20,7 +20,7 @@ export default function OptInPrivacy(props: Props) {
       <div className="max-w-3xl mx-auto">
         <h1 className="text-3xl font-bold mb-2">SMS Opt-In Privacy</h1>
         <p className="text-slate-300 mb-6">
-          This privacy notice explains how information is handled when you opt in to receive SMS messages from your licensed agent using CoveCRM.
+          This privacy notice explains how information is handled when you submit this form and, if you choose, opt in to receive SMS messages related to your existing policy, account servicing, and policy updates.
         </p>
 
         <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-5 mb-6 text-sm text-slate-200">
@@ -41,8 +41,13 @@ export default function OptInPrivacy(props: Props) {
 
         <h2 className="text-xl font-semibold mt-6 mb-2">3. Sharing</h2>
         <p className="text-slate-200 mb-4">
-          CoveCRM does not sell your personal information. Data may be processed by service providers used to deliver SMS services (e.g., Twilio)
-          and to host CoveCRM. Providers receive only what is necessary to perform their services and are required to protect the data.
+          We do not sell or share mobile or personal data with third parties, affiliates, or partners for marketing or promotional purposes.
+          We only share data with third parties when it is strictly necessary to deliver our service and only under binding agreements that
+          ensure confidentiality. Under no circumstances will mobile data be shared or sold for advertising or promotional use.
+        </p>
+        <p className="text-slate-200 mb-4">
+          Data may be processed by service providers used to deliver SMS services and to host CoveCRM. These providers receive only the
+          information necessary to perform their services and are required to protect the data.
         </p>
 
         <h2 className="text-xl font-semibold mt-6 mb-2">4. Retention</h2>

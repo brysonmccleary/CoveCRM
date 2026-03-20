@@ -9,17 +9,17 @@ type Props = {
   agentName: string;
   email: string;
   phone: string;
+  userId: string;
 };
 
 export default function OptInPage(props: Props) {
-  const { businessName, agentName, email, phone } = props;
+  const { businessName, agentName, email, phone, userId } = props;
 
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [mobile, setMobile] = useState("");
   const [leadEmail, setLeadEmail] = useState("");
   const [consent, setConsent] = useState(false);
-  const [marketingConsent, setMarketingConsent] = useState(false);
   const [submitted, setSubmitted] = useState(false);
 
   const contactLine = useMemo(() => {
@@ -32,29 +32,35 @@ export default function OptInPage(props: Props) {
 
   const onSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!consent) return;
-    setSubmitted(true)
+    setSubmitted(true);
   };
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-50 px-4 py-10">
       <div className="max-w-3xl mx-auto">
         <div className="mb-6">
-          <h1 className="text-3xl font-bold">SMS Opt-In</h1>
+          <h1 className="text-3xl font-bold">SMS Communication Preferences</h1>
           <p className="text-slate-300 mt-2">
-            Use this page to confirm consent to receive text messages from your licensed agent using CoveCRM.
+            This page is used by existing customers to confirm their communication preferences for text messages related to their current policy, account servicing, and policy updates.
           </p>
         </div>
 
         <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-5 mb-6">
           <div className="text-sm text-slate-300">
             <div className="mb-1">
-              <span className="font-semibold text-slate-200">Sender:</span>{" "}
+              <span className="font-semibold text-slate-200">Business:</span>{" "}
               <span className="text-slate-100">{businessName}</span>
+            </div>
+            <div>
+              <span className="font-semibold text-slate-200">Representative:</span>{" "}
+              <span className="text-slate-100">{agentName}</span>
             </div>
             <div>
               <span className="font-semibold text-slate-200">Contact:</span>{" "}
               <span className="text-slate-100">{contactLine}</span>
+            </div>
+            <div className="text-xs text-slate-400">
+              SMS consent is optional. You may submit this form without agreeing to receive SMS messages.
             </div>
           </div>
         </div>
@@ -108,6 +114,9 @@ export default function OptInPage(props: Props) {
             </div>
 
             <div className="rounded-lg border border-slate-800 bg-slate-950/40 p-4">
+              <div className="text-xs text-slate-400 mb-3">
+                Checking the box below is optional and only applies if you want to receive SMS messages from this business.
+              </div>
               <label className="flex gap-3 items-start">
                 <input
                   type="checkbox"
@@ -117,17 +126,16 @@ export default function OptInPage(props: Props) {
                 />
                 <span className="text-sm text-slate-200 leading-5">
                   By checking this box, you agree to receive SMS messages from{" "}
-                  <span className="font-semibold">{agentName}</span> using CoveCRM related to your existing policy,
-                  policy updates, account servicing, and retention-related communications. Message frequency varies.
-                  Msg &amp; data rates may apply. Reply STOP to cancel. Reply HELP for help. Consent is not a condition
-                  of purchase.
+                  <span className="font-semibold">{businessName}</span> regarding your existing policy, policy updates,
+                  account servicing, and retention-related communications. Message frequency varies. Msg &amp; data rates
+                  may apply. Reply STOP to opt out. Reply HELP for help. Consent is not a condition of purchase.
                 </span>
               </label>
 
               <div className="text-xs text-slate-400 mt-3">
-                <a className="underline text-slate-300 hover:text-white" href={`/sms/optin-terms/${encodeURIComponent(String((props as any).userId || ""))}`}>Opt-in Terms</a>
+                <a className="underline text-slate-300 hover:text-white" href={`/sms/optin-terms/${encodeURIComponent(userId)}`}>Opt-in Terms</a>
                 {" • "}
-                <a className="underline text-slate-300 hover:text-white" href={`/sms/optin-privacy/${encodeURIComponent(String((props as any).userId || ""))}`}>Opt-in Privacy</a>
+                <a className="underline text-slate-300 hover:text-white" href={`/sms/optin-privacy/${encodeURIComponent(userId)}`}>Opt-in Privacy</a>
               </div>
             </div>
 
@@ -135,7 +143,7 @@ export default function OptInPage(props: Props) {
               type="submit"
               className="w-full rounded-lg bg-white text-slate-900 font-semibold py-2 hover:bg-slate-200 transition"
             >
-              Submit Opt-In
+              Submit Information
             </button>
 
             <p className="text-xs text-slate-400">
@@ -170,7 +178,7 @@ export default function OptInPage(props: Props) {
         )}
 
         <div className="mt-8 text-xs text-slate-500">
-          This page is provided by CoveCRM to support compliant SMS opt-in documentation for A2P 10DLC review.
+          This page is provided by CoveCRM to support SMS communication preference documentation for existing customer communications.
         </div>
       </div>
     </div>
