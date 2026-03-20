@@ -298,13 +298,13 @@ export default function A2PVerificationForm() {
 
   // ---------- Opt-in Details ----------
   const [optInDetails, setOptInDetails] = useState(
-    `This campaign sends conversational and account-related SMS messages for existing customers and users who explicitly opt in. Messages are used to respond to inquiries, provide service-related updates, confirm or update customer information, and support policy-related communications. Marketing consent, if collected, is separate and optional.
+    `This campaign sends service-related SMS messages to existing insurance customers who explicitly opt in after becoming customers. Messages are used for policy updates, account servicing, retention-related communications, customer support, and other non-promotional messages related to the customer’s existing policy relationship.
 
-End users opt in through a dedicated SMS opt-in page provided by CoveCRM for the sender. The form collects name and mobile phone number (and optionally email) and presents a separate, unchecked SMS consent checkbox above the Submit button. A separate marketing checkbox is displayed independently and is optional.
+End users opt in through a dedicated SMS opt-in page provided by CoveCRM for the sender. The form collects name and mobile phone number (and optionally email) and presents a separate, unchecked SMS consent checkbox directly above the Submit button. No marketing consent is required to submit the form.
 
 Before submission, users see a disclosure similar to:
 
-“By checking this box, you agree to receive conversational and account-related SMS messages using CoveCRM, including responses to your request, service communications, and policy-related updates. Message frequency varies. Msg & data rates may apply. Reply STOP to cancel. Reply HELP for help. Consent is not a condition of purchase.”
+“By checking this box, you agree to receive SMS messages using CoveCRM related to your existing policy, policy updates, account servicing, and retention-related communications. Message frequency varies. Msg & data rates may apply. Reply STOP to cancel. Reply HELP for help. Consent is not a condition of purchase.”
 
 The opt-in page displays SMS Opt-In Terms and SMS Opt-In Privacy links on the same page as the form submission. Consent records may be retained as needed for compliance and audit purposes.`,
   );

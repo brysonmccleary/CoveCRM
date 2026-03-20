@@ -116,29 +116,13 @@ export default function OptInPage(props: Props) {
                   className="mt-1 h-4 w-4"
                 />
                 <span className="text-sm text-slate-200 leading-5">
-                  By checking this box, you agree to receive conversational and account-related SMS messages from{" "}
-                  <span className="font-semibold">{agentName}</span> using CoveCRM, including responses to your request,
-                  policy-related updates, and service communications. Message frequency varies. Msg &amp; data rates may
-                  apply. Reply STOP to cancel. Reply HELP for help. Consent is not a condition of purchase.
+                  By checking this box, you agree to receive SMS messages from{" "}
+                  <span className="font-semibold">{agentName}</span> using CoveCRM related to your existing policy,
+                  policy updates, account servicing, and retention-related communications. Message frequency varies.
+                  Msg &amp; data rates may apply. Reply STOP to cancel. Reply HELP for help. Consent is not a condition
+                  of purchase.
                 </span>
               </label>
-
-              <div className="mt-4 border-t border-slate-800 pt-4">
-                <label className="flex gap-3 items-start">
-                  <input
-                    type="checkbox"
-                    checked={marketingConsent}
-                    onChange={(e) => setMarketingConsent(e.target.checked)}
-                    className="mt-1 h-4 w-4"
-                  />
-                  <span className="text-sm text-slate-200 leading-5">
-                    <span className="font-semibold">Optional marketing consent:</span> By checking this box, you also agree to receive
-                    promotional/marketing SMS from <span className="font-semibold">{agentName}</span> about optional coverage,
-                    new products, or special offers. Message frequency varies. Msg &amp; data rates may apply. Reply STOP to cancel.
-                    Reply HELP for help. This box is optional and not required to submit the form.
-                  </span>
-                </label>
-              </div>
 
               <div className="text-xs text-slate-400 mt-3">
                 <a className="underline text-slate-300 hover:text-white" href={`/sms/optin-terms/${encodeURIComponent(String((props as any).userId || ""))}`}>Opt-in Terms</a>
