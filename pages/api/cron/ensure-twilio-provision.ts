@@ -16,8 +16,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // Find users missing any of: subaccount, api key, phone number
     const cursor = User.find({
       $or: [
+        { billingMode: { $in: [null, ""] } },
         { "twilio.accountSid": { $in: [null, ""] } },
         { "twilio.apiKeySid": { $in: [null, ""] } },
+        { "twilio.apiKeySecret": { $in: [null, ""] } },
         { numbers: { $exists: false } },
         { numbers: { $size: 0 } },
       ],

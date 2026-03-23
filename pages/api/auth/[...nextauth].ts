@@ -8,6 +8,7 @@ import User from "@/models/User";
 import A2PProfile from "@/models/A2PProfile";
 import { syncA2PForUser } from "@/lib/twilio/syncA2P";
 import { sendWelcomeEmail } from "@/lib/email";
+import { ensureUserTwilioIdentity } from "@/lib/twilio/provision";
 import { getPlatformTwilioClient } from "@/lib/twilio/getPlatformClient";
 
 const isDev =
@@ -170,11 +171,7 @@ export const authOptions: NextAuthOptions = {
 
         if (!isValid) return null;
 
-        if (isNewUser) {
-          Promise.resolve(
-            ensureMessagingService(String((user as any)._id), user.email)
-          ).catch(() => {});
-        }
+        Promise.resolve(ensureUserTwilioIdentity(user.email)).catch(() => {});
         Promise.resolve(safeSyncA2PByEmail(user.email, false)).catch(() => {});
 
         return {
@@ -230,11 +227,7 @@ export const authOptions: NextAuthOptions = {
           user.email = email;
         }
 
-        if (isNewUser) {
-          Promise.resolve(
-            ensureMessagingService(String((user as any)._id), user.email)
-          ).catch(() => {});
-        }
+        Promise.resolve(ensureUserTwilioIdentity(user.email)).catch(() => {});
         Promise.resolve(safeSyncA2PByEmail(user.email, false)).catch(() => {});
 
         return {

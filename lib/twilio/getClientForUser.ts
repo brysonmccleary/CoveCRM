@@ -2,6 +2,7 @@
 import twilio, { Twilio } from "twilio";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
+import { ensureUserTwilioIdentity } from "@/lib/twilio/provision";
 import { Buffer } from "buffer";
 
 
@@ -337,7 +338,7 @@ export async function getClientForUser(
     throw new Error("getClientForUser: missing email");
   }
 
-  const user = await User.findOne({ email: normalizedEmail }).lean<any>();
+  let user = await User.findOne({ email: normalizedEmail }).lean<any>();
 
   // ✅ CRITICAL: never silently fall back to platform when we can't resolve a tenant user.
   // If this triggers, your session/email mapping is broken and MUST be fixed.
@@ -363,6 +364,36 @@ export async function getClientForUser(
       process.env.NEXTAUTH_URL ||
       "https://www.covecrm.com").replace(/\/$/, "");
 
+  // ✅ Auto-heal missing platform-billed tenant identity before client resolution.
+  if (
+    !FORCE_PLATFORM &&
+    user?.billingMode !== "self" &&
+    (!user?.twilio?.accountSid || !user?.twilio?.apiKeySid || !user?.twilio?.apiKeySecret)
+  ) {
+    try {
+      const repaired = await ensureUserTwilioIdentity(normalizedEmail);
+      if (repaired.ok) {
+        user = await User.findOne({ email: normalizedEmail }).lean<any>();
+      } else {
+        console.warn(
+          JSON.stringify({
+            msg: "getClientForUser: auto-heal failed",
+            email: normalizedEmail,
+            reason: repaired.message,
+            error: repaired.error || null,
+          }),
+        );
+      }
+    } catch (e: any) {
+      console.warn(
+        JSON.stringify({
+          msg: "getClientForUser: auto-heal threw",
+          email: normalizedEmail,
+          error: e?.message || String(e),
+        }),
+      );
+    }
+  }
 
   // ---------- PERSONAL (self-billed) ----------
   const personalEligible = !FORCE_PLATFORM && hasPersonalCreds(user);

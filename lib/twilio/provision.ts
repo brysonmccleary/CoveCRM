@@ -155,6 +155,59 @@ async function applyWebhooks(subScoped: Twilio, phoneSid: string, email: string)
   });
 }
 
+export async function ensureUserTwilioIdentity(email: string): Promise<
+  | { ok: true; message: string; data: { subaccountSid: string; apiKeySid: string } }
+  | { ok: false; message: string; error?: string }
+> {
+  try {
+    await dbConnect();
+    const user = await User.findOne({ email: String(email || "").toLowerCase().trim() });
+    if (!user) return { ok: false, message: "User not found." };
+
+    // Platform-billed is the default multi-tenant mode.
+    if ((user as any).billingMode !== "self") {
+      (user as any).billingMode = "platform";
+    }
+
+    const master = getMasterClient();
+
+    // 1) Subaccount
+    let subSid = user?.twilio?.accountSid || "";
+    if (!subSid) {
+      const sub = await ensureSubaccount(master, user.email);
+      subSid = (sub as any).sid;
+      user.twilio = user.twilio || {};
+      user.twilio.accountSid = subSid;
+    }
+
+    // 2) API Key
+    let keySid = user?.twilio?.apiKeySid || "";
+    let keySecret = user?.twilio?.apiKeySecret || "";
+    if (!keySid || !keySecret) {
+      const key = await ensureApiKeyForSub(master, subSid);
+      keySid = key.sid;
+      keySecret = key.secret;
+      user.twilio = user.twilio || {};
+      user.twilio.apiKeySid = keySid;
+      user.twilio.apiKeySecret = keySecret;
+    }
+
+    await user.save();
+
+    return {
+      ok: true,
+      message: "Twilio identity ensured",
+      data: { subaccountSid: subSid, apiKeySid: keySid },
+    };
+  } catch (err: any) {
+    return {
+      ok: false,
+      message: "Twilio identity ensure failed",
+      error: err?.message || String(err),
+    };
+  }
+}
+
 export async function provisionUserTwilio(email: string): Promise<ProvisionResult> {
   try {
     await dbConnect();
