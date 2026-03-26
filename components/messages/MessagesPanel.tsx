@@ -1,7 +1,7 @@
 // /components/messages/MessagesPanel.tsx
 import { useEffect, useState } from "react";
 import { useSession } from "next-auth/react";
-import InboxSidebar from "./InboxSidebar";
+import InboxSidebar, { InboxMode } from "./InboxSidebar";
 import ChatThread from "./ChatThread";
 import { connectAndJoin, disconnectSocket, getSocket } from "@/lib/socketClient";
 
@@ -9,6 +9,7 @@ export default function MessagesPanel() {
   const { data: session } = useSession();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [socketConnected, setSocketConnected] = useState(false);
+  const [mode, setMode] = useState<InboxMode>("sms");
 
   useEffect(() => {
     const email = (session?.user?.email || "").toLowerCase();
@@ -39,16 +40,18 @@ export default function MessagesPanel() {
       {/* LEFT: Conversation List */}
       <div className="w-[350px] bg-[#1e293b] border-r border-gray-700">
         <InboxSidebar
-          onSelect={setSelectedId}
+          onSelect={(id) => { setSelectedId(id); }}
           selectedId={selectedId}
           socket={getSocket()}
+          mode={mode}
+          onModeChange={(m) => { setMode(m); setSelectedId(null); }}
         />
       </div>
 
       {/* RIGHT: Chat Window */}
       <div className="flex-1 bg-[#0f172a]">
         {selectedId ? (
-          <ChatThread leadId={selectedId} socket={getSocket()} />
+          <ChatThread leadId={selectedId} socket={getSocket()} mode={mode} />
         ) : (
           <div className="flex items-center justify-center h-full text-gray-400">
             Select a conversation

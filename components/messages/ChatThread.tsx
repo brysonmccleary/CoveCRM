@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import axios from "axios";
 import { Socket } from "socket.io-client";
+import { InboxMode } from "./InboxSidebar";
 
 interface Message {
   _id?: string;
@@ -18,10 +19,32 @@ interface Message {
   queuedAt?: string;
 }
 
+interface EmailMsg {
+  _id: string;
+  subject: string;
+  to: string;
+  from: string;
+  direction: "outbound" | "inbound";
+  status: "queued" | "sent" | "delivered" | "opened" | "bounced" | "replied" | "failed";
+  sentAt?: string;
+  createdAt?: string;
+}
+
 interface ChatThreadProps {
   leadId: string;
   socket: Socket | null;
+  mode?: InboxMode;
 }
+
+const STATUS_BADGE: Record<string, string> = {
+  queued: "bg-gray-600 text-gray-200",
+  sent: "bg-blue-700 text-blue-100",
+  delivered: "bg-green-700 text-green-100",
+  opened: "bg-teal-700 text-teal-100",
+  bounced: "bg-red-700 text-red-100",
+  replied: "bg-purple-700 text-purple-100",
+  failed: "bg-red-700 text-red-100",
+};
 
 function getAgentTimeZone(): string {
   // Matches iMessage on the agent's device because it uses device timezone.
@@ -66,8 +89,9 @@ function hasMsgId(list: Message[], msg: Message) {
   return list.some((m: any) => m?._id && String(m._id) === String(id));
 }
 
-export default function ChatThread({ leadId, socket }: ChatThreadProps) {
+export default function ChatThread({ leadId, socket, mode = "sms" }: ChatThreadProps) {
   const [messages, setMessages] = useState<Message[]>([]);
+  const [emailMessages, setEmailMessages] = useState<EmailMsg[]>([]);
   const [input, setInput] = useState("");
   const [resumingDrip, setResumingDrip] = useState(false);
   const [dripUi, setDripUi] = useState<{
@@ -100,10 +124,25 @@ export default function ChatThread({ leadId, socket }: ChatThreadProps) {
     }
   };
 
+  const fetchEmailMessages = async () => {
+    if (!leadId) return;
+    try {
+      const res = await axios.get(`/api/email/threads/${leadId}`);
+      setEmailMessages(res.data);
+      scrollToBottom();
+    } catch (err) {
+      console.error("Failed to load email thread", err);
+    }
+  };
+
   useEffect(() => {
-    fetchMessages();
+    if (mode === "email") {
+      fetchEmailMessages();
+    } else {
+      fetchMessages();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [leadId]);
+  }, [leadId, mode]);
 
   useEffect(() => {
     let cancelled = false;
@@ -219,6 +258,77 @@ export default function ChatThread({ leadId, socket }: ChatThreadProps) {
     }
   };
 
+  // ── Email mode render ──────────────────────────────────────────────────────
+  if (mode === "email") {
+    return (
+      <div className="flex flex-col h-full bg-[#0f172a]">
+        <div className="px-4 py-3 border-b border-gray-800 bg-[#0f172a] min-h-[56px] flex items-center">
+          <span className="text-gray-400 text-sm">Email thread</span>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-4 space-y-3">
+          {emailMessages.length === 0 && (
+            <div className="text-gray-500 text-sm text-center mt-10">
+              No emails sent to this contact yet.
+            </div>
+          )}
+          {emailMessages.map((msg) => {
+            const dateStr = msg.sentAt || msg.createdAt;
+            const date = dateStr ? new Date(dateStr) : null;
+            const formattedDate = date && !isNaN(date.getTime())
+              ? new Intl.DateTimeFormat(undefined, {
+                  month: "short",
+                  day: "numeric",
+                  year: "numeric",
+                  hour: "numeric",
+                  minute: "2-digit",
+                  hour12: true,
+                  timeZone,
+                }).format(date)
+              : "";
+
+            const badgeCls =
+              STATUS_BADGE[msg.status] || "bg-gray-600 text-gray-200";
+            const isInbound = msg.direction === "inbound";
+
+            return (
+              <div
+                key={msg._id}
+                className={`rounded-xl border p-3 ${
+                  isInbound
+                    ? "border-gray-600 bg-[#1e293b]"
+                    : "border-gray-700 bg-[#162032]"
+                }`}
+              >
+                <div className="flex items-start justify-between gap-2 mb-1">
+                  <div className="font-medium text-white text-sm truncate">
+                    {msg.subject}
+                  </div>
+                  <span
+                    className={`text-xs px-2 py-0.5 rounded-full whitespace-nowrap ${badgeCls}`}
+                  >
+                    {msg.status}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2 text-xs text-gray-400">
+                  <span>{isInbound ? `From: ${msg.from}` : `To: ${msg.to}`}</span>
+                  {formattedDate && (
+                    <>
+                      <span>·</span>
+                      <span>{formattedDate}</span>
+                    </>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+          <div ref={bottomRef} />
+        </div>
+      </div>
+    );
+  }
+
+  // ── SMS mode render ─────────────────────────────────────────────────────────
   return (
     <div className="flex flex-col h-full bg-[#0f172a]">
       <div className="flex items-center justify-end px-4 py-3 border-b border-gray-800 bg-[#0f172a] min-h-[72px]">
