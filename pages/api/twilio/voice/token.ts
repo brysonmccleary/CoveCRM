@@ -132,6 +132,15 @@ export default async function handler(
       process.env.TWILIO_TWIML_APP_SID ||
       undefined;
 
+    // Optional Push Credential SID (required for iOS/Android incoming calls via VoIP push)
+    // Source priority: user.twilio.pushCredentialSid -> user.pushCredentialSid -> env
+    const pushCredentialSid: string | undefined =
+      (user?.twilio?.pushCredentialSid as string) ||
+      (user?.pushCredentialSid as string) ||
+      process.env.TWILIO_VOICE_PUSH_CREDENTIAL_SID ||
+      undefined;
+
+
     if (!accountSid || !apiKeySid || !apiKeySecret) {
       return res.status(500).json({
         message: "Twilio Voice is not fully configured",
@@ -187,6 +196,7 @@ export default async function handler(
     const grant = new VoiceGrant({
       incomingAllow: true,
       outgoingApplicationSid: outgoingAppSid,
+      pushCredentialSid: pushCredentialSid,
     });
     token.addGrant(grant);
 

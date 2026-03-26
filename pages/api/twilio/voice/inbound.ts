@@ -2,6 +2,8 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { buffer as microBuffer } from "micro";
 import twilio from "twilio";
+import { getClientForUser } from "@/lib/twilio/getClientForUser";
+import { pickFromNumberForUser } from "@/lib/twilio/pickFromNumber";
 
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
@@ -41,6 +43,13 @@ function resolveFullUrl(req: NextApiRequest): string {
   const path = req.url || "/api/twilio/voice/inbound";
   return `${proto}://${host}${path}`;
 }
+
+function makeInboundConferenceName(ownerEmail: string, callSid: string) {
+  const slug = String(ownerEmail || "user").replace(/[^a-z0-9]+/gi, "_").toLowerCase().slice(0, 20);
+  const sid = String(callSid || "").replace(/[^a-z0-9]+/gi, "").toLowerCase().slice(0, 10);
+  return `inb_${slug}_${sid || Date.now().toString(36)}`;
+}
+
 function baseUrl(): string {
   const raw = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "https://www.covecrm.com").replace(/\/$/, "");
   return raw || "https://www.covecrm.com";
@@ -237,6 +246,64 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
   } catch (e) {
     console.error("Render emit error:", e);
+  }
+
+  // ✅ MOBILE INBOUND MODE (flagged):
+  // If enabled, put caller into a conference with MP3 ringback as waitUrl,
+  // and simultaneously ring the agent's mobile app via Twilio Client (VoIP push).
+  //
+  // NOTE: This is additive and gated by env to avoid changing existing web inbound behavior.
+  if (process.env.MOBILE_INBOUND_ENABLED === "1" && ownerEmail) {
+    const conferenceName = makeInboundConferenceName(ownerEmail, callSid);
+
+    // Best-effort: place the agent/mobile leg to Twilio Client identity
+    try {
+      const { client } = await getClientForUser(ownerEmail);
+      const agentJoinUrl = `${baseUrl()}/api/voice/agent-join?conferenceName=${encodeURIComponent(conferenceName)}`;
+
+      const fromForAgent = await pickFromNumberForUser(ownerEmail);
+      if (!fromForAgent) {
+        console.warn("[inbound] mobile inbound: no from-number for agent leg", { ownerEmail, to });
+      } else {
+        await client.calls.create({
+          to: `client:${ownerEmail}`,
+          from: fromForAgent,
+          url: agentJoinUrl,
+        });
+      }
+
+      // Best-effort state update
+      try {
+        if (callSid) {
+          await InboundCall.findOneAndUpdate(
+            { callSid },
+            { $set: { state: "bridging", conferenceName } },
+            { upsert: true }
+          );
+        }
+      } catch {}
+    } catch (e: any) {
+      console.error("[inbound] mobile agent call create failed:", e?.message || e);
+    }
+
+    // Caller into conference, with MP3 ringback as waitUrl so NO Twilio default tones leak.
+    const vr = new twilio.twiml.VoiceResponse();
+    const dial = vr.dial();
+
+    const waitUrl = `${baseUrl()}/api/twiml/ringback`;
+    dial.conference(
+      {
+        startConferenceOnEnter: true,
+        endConferenceOnExit: true,
+        beep: false,
+        waitUrl,
+        waitMethod: "POST",
+      } as any,
+      String(conferenceName),
+    );
+
+    res.setHeader("Content-Type", "text/xml");
+    return res.status(200).send(vr.toString());
   }
 
   // keep the call IN-PROGRESS with YOUR ringback until agent clicks Answer.
