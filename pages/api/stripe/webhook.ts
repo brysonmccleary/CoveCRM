@@ -9,8 +9,14 @@ import Affiliate from "@/models/Affiliate";
 import type { IAffiliate } from "@/models/Affiliate";
 import AffiliatePayout from "@/models/AffiliatePayout";
 import User from "@/models/User";
+import Folder from "@/models/Folder";
+import EmailCampaign from "@/models/EmailCampaign";
+import ProspectingPlan from "@/models/ProspectingPlan";
+import FBLeadSubscription from "@/models/FBLeadSubscription";
+import { assignLeadsToUser } from "@/lib/prospecting/assignLeads";
 import twilioClient from "@/lib/twilioClient";
 import { sendAffiliateApprovedEmail } from "@/lib/email";
+import { Resend } from "resend";
 
 export const config = { api: { bodyParser: false } };
 
@@ -484,6 +490,223 @@ export default async function handler(
           break;
         }
 
+        /* ───────────── FB Lead Manager Purchase ───────────── */
+        if (purpose === "fb_lead_manager" || purpose === "fb_lead_manager_pro") {
+          if (!email) {
+            audit("fb_lead_manager: missing email", { sessionId: s.id });
+            break;
+          }
+
+          const planTier = purpose === "fb_lead_manager_pro" ? "manager_pro" : "manager";
+          const userIdMeta = s.metadata?.userId;
+          let fbUser: any = null;
+          if (userIdMeta) fbUser = await User.findById(userIdMeta);
+          if (!fbUser) fbUser = await User.findOne({ email });
+          if (!fbUser) {
+            audit("fb_lead_manager: user not found", { email, sessionId: s.id });
+            break;
+          }
+
+          const periodEnd = new Date();
+          periodEnd.setDate(periodEnd.getDate() + 30);
+          const subscriptionId = (s.subscription as string) || "";
+
+          await FBLeadSubscription.findOneAndUpdate(
+            { userEmail: email },
+            {
+              $set: {
+                userId: fbUser._id,
+                userEmail: email,
+                plan: planTier,
+                status: "active",
+                stripeSubscriptionId: subscriptionId || undefined,
+                currentPeriodEnd: periodEnd,
+              },
+            },
+            { upsert: true, new: true }
+          );
+
+          try {
+            const resendClient = new Resend(process.env.RESEND_API_KEY);
+            await resendClient.emails.send({
+              from: process.env.EMAIL_FROM || "noreply@covecrm.com",
+              to: email,
+              subject: "Your Facebook Lead Manager is now active",
+              html: `<p>Hi ${fbUser.name || "there"},</p><p>Your CoveCRM Facebook Lead Manager subscription is active. Your leads will now flow directly into CoveCRM automatically.</p><p><a href="${process.env.NEXT_PUBLIC_BASE_URL || "https://covecrm.com"}/facebook-leads">Log in to complete your campaign setup →</a></p><p>— The CoveCRM Team</p>`,
+            });
+          } catch (mailErr) {
+            audit("fb_lead_manager: confirmation email failed", {
+              email,
+              error: (mailErr as any)?.message,
+            });
+          }
+
+          audit("fb_lead_manager: provisioned", {
+            email,
+            plan: planTier,
+            sessionId: s.id,
+          });
+
+          break;
+        }
+
+        /* ───────────── Prospecting Plan Purchase ───────────── */
+        if (purpose === "prospecting_plan") {
+          if (!email) {
+            audit("prospecting_plan: missing email", { sessionId: s.id });
+            break;
+          }
+
+          const userIdMeta = s.metadata?.userId;
+          let prospUser: any = null;
+          if (userIdMeta) prospUser = await User.findById(userIdMeta);
+          if (!prospUser) prospUser = await User.findOne({ email });
+          if (!prospUser) {
+            audit("prospecting_plan: user not found", { email, sessionId: s.id });
+            break;
+          }
+
+          const tierRaw = parseInt(s.metadata?.planTier || "250", 10);
+          const planTier = [250, 500, 1000, 2500].includes(tierRaw)
+            ? (tierRaw as 250 | 500 | 1000 | 2500)
+            : 250;
+          const subscriptionId = (s.subscription as string) || "";
+          const stripeProductId = s.metadata?.stripeProductId || "";
+
+          // Idempotency — skip if plan already created for this subscription
+          const existingPlan = subscriptionId
+            ? await ProspectingPlan.findOne({ stripeSubscriptionId: subscriptionId }).lean()
+            : null;
+
+          if (existingPlan) {
+            audit("prospecting_plan: already provisioned", {
+              sessionId: s.id,
+              subscriptionId,
+            });
+            break;
+          }
+
+          const periodStart = new Date();
+          const periodEnd = new Date();
+          periodEnd.setMonth(periodEnd.getMonth() + 1);
+
+          const plan = await ProspectingPlan.create({
+            userId: prospUser._id,
+            userEmail: email,
+            planTier,
+            leadsIncluded: planTier,
+            leadsAssigned: 0,
+            leadsRemaining: planTier,
+            periodStart,
+            periodEnd,
+            status: "active",
+            stripeSubscriptionId: subscriptionId || undefined,
+            stripeProductId: stripeProductId || undefined,
+            autoRenew: !!subscriptionId,
+          });
+
+          // Create default Prospecting Folder
+          const monthYear = periodStart.toLocaleDateString("en-US", {
+            month: "long",
+            year: "numeric",
+          });
+          const folderName = `Prospecting Leads — ${monthYear}`;
+
+          const folder = await Folder.findOneAndUpdate(
+            { userEmail: email, name: folderName },
+            { $setOnInsert: { userEmail: email, name: folderName, assignedDrips: [] } },
+            { upsert: true, new: true }
+          );
+
+          // Find or create a default email campaign for this user
+          let campaign = await EmailCampaign.findOne({
+            userEmail: email,
+            isActive: true,
+          }).lean();
+
+          if (!campaign) {
+            const baseUrl =
+              process.env.NEXT_PUBLIC_BASE_URL || "https://covecrm.com";
+
+            campaign = await EmailCampaign.create({
+              userId: prospUser._id,
+              userEmail: email,
+              name: "Prospecting Outreach",
+              isActive: true,
+              fromName: prospUser.name || "",
+              fromEmail: email,
+              dailyLimit: 100,
+              steps: [
+                {
+                  day: 0,
+                  subject: "A quick note from {{agentName}}",
+                  html: `<p>Hi {{firstName}},</p><p>My name is ${prospUser.name || "a fellow agent"} and I wanted to reach out. I specialize in helping insurance professionals like yourself get better results for their clients.</p><p>Would you be open to a quick conversation?</p><p>— ${prospUser.name || "Your Name"}</p>`,
+                  text: "",
+                },
+                {
+                  day: 3,
+                  subject: "Following up",
+                  html: `<p>Hi {{firstName}},</p><p>Just wanted to follow up on my previous note. I'd love to connect when you have a moment.</p><p>— ${prospUser.name || "Your Name"}</p>`,
+                  text: "",
+                },
+                {
+                  day: 7,
+                  subject: "Last note",
+                  html: `<p>Hi {{firstName}},</p><p>I'll keep this brief — if there's ever a time you'd like to connect, I'm here.</p><p>— ${prospUser.name || "Your Name"}</p>`,
+                  text: "",
+                },
+              ],
+            });
+          }
+
+          // Assign leads
+          const assignResult = await assignLeadsToUser(
+            prospUser._id,
+            email,
+            planTier,
+            plan._id,
+            folder._id as any,
+            (campaign as any)._id
+          ).catch((e: any) => {
+            audit("prospecting_plan: assignLeads error", { error: e?.message });
+            return { assigned: 0, leads: [], errors: [e?.message] };
+          });
+
+          audit("prospecting_plan: provisioned", {
+            userId: String(prospUser._id),
+            planTier,
+            assigned: assignResult.assigned,
+            sessionId: s.id,
+          });
+
+          // Send confirmation email via Resend
+          try {
+            const resendClient = new Resend(process.env.RESEND_API_KEY);
+            const baseUrl =
+              process.env.NEXT_PUBLIC_BASE_URL || "https://covecrm.com";
+            await resendClient.emails.send({
+              from:
+                process.env.EMAIL_FROM || "noreply@covecrm.com",
+              to: email,
+              subject: `Your ${planTier} prospecting leads are ready!`,
+              html: `
+                <p>Hi ${prospUser.name || "there"},</p>
+                <p>Your CoveCRM Prospecting Plan (${planTier} leads) has been activated.</p>
+                <p><strong>${assignResult.assigned} leads</strong> have been added to your CRM folder <em>${folderName}</em> and enrolled in your email campaign.</p>
+                <p><a href="${baseUrl}/dashboard">Log in to view your leads →</a></p>
+                <p>— The CoveCRM Team</p>
+              `,
+            });
+          } catch (mailErr) {
+            audit("prospecting_plan: confirmation email failed", {
+              email,
+              error: (mailErr as any)?.message,
+            });
+          }
+
+          break;
+        }
+
         /* ───────────── Normal CRM subscription checkout ───────────── */
         const userId = s.metadata?.userId;
         const referralCodeUsed = U(s.metadata?.referralCodeUsed || "");
@@ -770,6 +993,21 @@ export default async function handler(
 
           await user.save();
         }
+
+        // Cancel FB Lead Manager subscription if matched
+        if (sub.id) {
+          const cancelled = await FBLeadSubscription.findOneAndUpdate(
+            { stripeSubscriptionId: sub.id },
+            { $set: { status: "cancelled" } }
+          );
+          if (cancelled) {
+            audit("fb_lead_manager: subscription cancelled", {
+              stripeSubscriptionId: sub.id,
+              userEmail: (cancelled as any).userEmail,
+            });
+          }
+        }
+
         break;
       }
 
@@ -803,6 +1041,31 @@ export default async function handler(
           }
         } catch (e) {
           console.error("invoice.payment_failed cleanup error:", e);
+        }
+        break;
+      }
+
+      case "customer.subscription.created": {
+        // Idempotency guard: if checkout.session.completed already handled a
+        // prospecting_plan for this subscription, skip. This fires after checkout.
+        const newSub = event.data.object as Stripe.Subscription;
+        const newSubMeta = newSub.metadata || {};
+        const newSubPurpose = newSubMeta.purpose || "";
+
+        if (newSubPurpose === "prospecting_plan") {
+          const alreadyProvisioned = await ProspectingPlan.findOne({
+            stripeSubscriptionId: newSub.id,
+          }).lean();
+          if (!alreadyProvisioned) {
+            // checkout.session.completed didn't fire yet — let it handle it
+            audit("customer.subscription.created: prospecting_plan pending checkout", {
+              subscriptionId: newSub.id,
+            });
+          } else {
+            audit("customer.subscription.created: prospecting_plan already provisioned", {
+              subscriptionId: newSub.id,
+            });
+          }
         }
         break;
       }

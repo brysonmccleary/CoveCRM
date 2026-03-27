@@ -2,7 +2,7 @@ const sidebarItems = [
   { category: "Account", links: ["Profile", "Appearance", "Memberships"] },
   { category: "Organization", links: ["General", "Team Management", "Roles & Permissions"] },
   { category: "Customization", links: ["Custom Activities", "Custom Fields", "Shared Fields"] },
-  { category: "Communication", links: ["Phone & Voicemail", "Dialer", "Email", "Booking"] },
+  { category: "Communication", links: ["Phone & Voicemail", "Dialer", "Email", "Email Account", "Booking"] },
   { category: "Connect", links: ["Integrations", "Developer"] },
   { category: "Billing", links: ["Plan", "Payment", "Usage"] },
 ];

@@ -3,6 +3,7 @@ import SettingsSidebar from "./SettingsSidebar";
 import ProfilePanel from "@/components/settings/ProfilePanel"; // ✅ Real UI
 import BillingPanel from "./BillingPanel";
 import ReferralPanel from "./ReferralPanel";
+import EmailAccountPanel from "./EmailAccountPanel";
 
 export default function SettingsLayout() {
   const [selected, setSelected] = useState("Profile");
@@ -23,6 +24,8 @@ export default function SettingsLayout() {
         return <BillingPanel />;
       case "Memberships":
         return <ReferralPanel />;
+      case "Email Account":
+        return <EmailAccountPanel />;
       default:
         return <div className="p-6 text-gray-400">Coming Soon</div>;
     }

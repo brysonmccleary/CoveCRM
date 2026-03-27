@@ -89,10 +89,20 @@ function hasMsgId(list: Message[], msg: Message) {
   return list.some((m: any) => m?._id && String(m._id) === String(id));
 }
 
+interface SuggestedReply {
+  tone: string;
+  content: string;
+}
+
 export default function ChatThread({ leadId, socket, mode = "sms" }: ChatThreadProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [emailMessages, setEmailMessages] = useState<EmailMsg[]>([]);
   const [input, setInput] = useState("");
+  const [emailSubject, setEmailSubject] = useState("");
+  const [emailBody, setEmailBody] = useState("");
+  const [sendingEmail, setSendingEmail] = useState(false);
+  const [suggestedReplies, setSuggestedReplies] = useState<SuggestedReply[]>([]);
+  const [loadingSuggestions, setLoadingSuggestions] = useState(false);
   const [resumingDrip, setResumingDrip] = useState(false);
   const [dripUi, setDripUi] = useState<{
     loading: boolean;
@@ -130,8 +140,55 @@ export default function ChatThread({ leadId, socket, mode = "sms" }: ChatThreadP
       const res = await axios.get(`/api/email/threads/${leadId}`);
       setEmailMessages(res.data);
       scrollToBottom();
+      // Pre-fill Re: subject from last outbound
+      const last = [...res.data].reverse().find((m: EmailMsg) => m.subject);
+      if (last?.subject) {
+        setEmailSubject(last.subject.startsWith("Re:") ? last.subject : `Re: ${last.subject}`);
+      }
     } catch (err) {
       console.error("Failed to load email thread", err);
+    }
+  };
+
+  const fetchSuggestions = async () => {
+    if (!leadId || emailMessages.length === 0) return;
+    setLoadingSuggestions(true);
+    setSuggestedReplies([]);
+    try {
+      const thread = emailMessages.slice(-6).map((m) => ({
+        role: m.direction === "outbound" ? "agent" : "lead",
+        content: m.subject || "(no subject)",
+      }));
+      const res = await axios.post("/api/ai/suggest-reply", {
+        thread,
+        channel: "email",
+      });
+      setSuggestedReplies(Array.isArray(res.data?.replies) ? res.data.replies : []);
+    } catch {
+      // silently fail
+    } finally {
+      setLoadingSuggestions(false);
+    }
+  };
+
+  const sendEmailReply = async () => {
+    if (!emailBody.trim() || !emailSubject.trim()) return;
+    setSendingEmail(true);
+    try {
+      await axios.post("/api/email/send-one", {
+        leadId,
+        subject: emailSubject.trim(),
+        html: `<p>${emailBody.trim().replace(/\n/g, "</p><p>")}</p>`,
+        text: emailBody.trim(),
+      });
+      setEmailBody("");
+      setEmailSubject("");
+      setSuggestedReplies([]);
+      await fetchEmailMessages();
+    } catch (err: any) {
+      alert(err?.response?.data?.error || "Failed to send email");
+    } finally {
+      setSendingEmail(false);
     }
   };
 
@@ -262,10 +319,47 @@ export default function ChatThread({ leadId, socket, mode = "sms" }: ChatThreadP
   if (mode === "email") {
     return (
       <div className="flex flex-col h-full bg-[#0f172a]">
-        <div className="px-4 py-3 border-b border-gray-800 bg-[#0f172a] min-h-[56px] flex items-center">
+        {/* Header */}
+        <div className="px-4 py-3 border-b border-gray-800 bg-[#0f172a] min-h-[56px] flex items-center justify-between">
           <span className="text-gray-400 text-sm">Email thread</span>
+          {emailMessages.length > 0 && (
+            <button
+              onClick={fetchSuggestions}
+              disabled={loadingSuggestions}
+              className="text-xs bg-[#1e293b] border border-gray-600 text-blue-400 hover:text-blue-300 px-3 py-1 rounded-full disabled:opacity-60"
+            >
+              {loadingSuggestions ? "Thinking…" : "Suggest Replies"}
+            </button>
+          )}
         </div>
 
+        {/* AI Reply Suggestions */}
+        {suggestedReplies.length > 0 && (
+          <div className="px-4 py-3 border-b border-gray-800 bg-[#0f172a] space-y-2">
+            <p className="text-xs text-gray-500 mb-1">AI Reply Suggestions</p>
+            {suggestedReplies.map((r, i) => (
+              <div
+                key={i}
+                className="border border-gray-700 rounded-lg p-2.5 bg-[#1e293b] flex items-start justify-between gap-2"
+              >
+                <div>
+                  <span className="text-xs text-blue-400 font-medium capitalize mr-1">
+                    {r.tone}:
+                  </span>
+                  <span className="text-xs text-gray-300">{r.content}</span>
+                </div>
+                <button
+                  onClick={() => setEmailBody(r.content)}
+                  className="text-xs text-green-400 hover:text-green-300 whitespace-nowrap ml-2"
+                >
+                  Use
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Email messages list */}
         <div className="flex-1 overflow-y-auto p-4 space-y-3">
           {emailMessages.length === 0 && (
             <div className="text-gray-500 text-sm text-center mt-10">
@@ -275,20 +369,20 @@ export default function ChatThread({ leadId, socket, mode = "sms" }: ChatThreadP
           {emailMessages.map((msg) => {
             const dateStr = msg.sentAt || msg.createdAt;
             const date = dateStr ? new Date(dateStr) : null;
-            const formattedDate = date && !isNaN(date.getTime())
-              ? new Intl.DateTimeFormat(undefined, {
-                  month: "short",
-                  day: "numeric",
-                  year: "numeric",
-                  hour: "numeric",
-                  minute: "2-digit",
-                  hour12: true,
-                  timeZone,
-                }).format(date)
-              : "";
+            const formattedDate =
+              date && !isNaN(date.getTime())
+                ? new Intl.DateTimeFormat(undefined, {
+                    month: "short",
+                    day: "numeric",
+                    year: "numeric",
+                    hour: "numeric",
+                    minute: "2-digit",
+                    hour12: true,
+                    timeZone,
+                  }).format(date)
+                : "";
 
-            const badgeCls =
-              STATUS_BADGE[msg.status] || "bg-gray-600 text-gray-200";
+            const badgeCls = STATUS_BADGE[msg.status] || "bg-gray-600 text-gray-200";
             const isInbound = msg.direction === "inbound";
 
             return (
@@ -301,12 +395,8 @@ export default function ChatThread({ leadId, socket, mode = "sms" }: ChatThreadP
                 }`}
               >
                 <div className="flex items-start justify-between gap-2 mb-1">
-                  <div className="font-medium text-white text-sm truncate">
-                    {msg.subject}
-                  </div>
-                  <span
-                    className={`text-xs px-2 py-0.5 rounded-full whitespace-nowrap ${badgeCls}`}
-                  >
+                  <div className="font-medium text-white text-sm truncate">{msg.subject}</div>
+                  <span className={`text-xs px-2 py-0.5 rounded-full whitespace-nowrap ${badgeCls}`}>
                     {msg.status}
                   </span>
                 </div>
@@ -323,6 +413,32 @@ export default function ChatThread({ leadId, socket, mode = "sms" }: ChatThreadP
             );
           })}
           <div ref={bottomRef} />
+        </div>
+
+        {/* Compose area */}
+        <div className="border-t border-gray-800 p-4 space-y-2 bg-[#0f172a]">
+          <input
+            value={emailSubject}
+            onChange={(e) => setEmailSubject(e.target.value)}
+            placeholder="Subject"
+            className="w-full bg-[#1e293b] border border-gray-700 rounded-lg px-3 py-1.5 text-white text-sm placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-blue-600"
+          />
+          <div className="flex gap-2">
+            <textarea
+              rows={3}
+              value={emailBody}
+              onChange={(e) => setEmailBody(e.target.value)}
+              placeholder="Write your email…"
+              className="flex-1 bg-[#1e293b] border border-gray-700 rounded-lg px-3 py-2 text-white text-sm placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-blue-600 resize-none"
+            />
+            <button
+              onClick={sendEmailReply}
+              disabled={sendingEmail || !emailBody.trim() || !emailSubject.trim()}
+              className="bg-blue-600 hover:bg-blue-700 text-white px-4 rounded-lg text-sm font-medium disabled:opacity-60 self-end"
+            >
+              {sendingEmail ? "Sending…" : "Send"}
+            </button>
+          </div>
         </div>
       </div>
     );

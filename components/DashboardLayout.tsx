@@ -6,10 +6,14 @@ import { useSession } from "next-auth/react";
 import { connectAndJoin } from "@/lib/socketClient";
 import IncomingCallBanner from "@/components/IncomingCallBanner"; // ← NEW
 
+const ADMIN_EMAIL = "bryson.mccleary1@gmail.com";
+
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const { data: session } = useSession();
   const [unreadCount, setUnreadCount] = useState(0);
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
+
+  const isAdmin = session?.user?.email?.toLowerCase() === ADMIN_EMAIL;
 
   const links = [
     { name: "Home", path: "/dashboard?tab=home" },
@@ -18,7 +22,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     { name: "Conversations", path: "/dashboard?tab=conversations" },
     { name: "Calendar", path: "/dashboard?tab=calendar" },
     { name: "Numbers", path: "/dashboard?tab=numbers" },
+    { name: "FB Leads", path: "/facebook-leads" },
     { name: "Settings", path: "/dashboard?tab=settings" },
+    ...(isAdmin ? [{ name: "Admin: Prospecting", path: "/admin/prospecting" }] : []),
   ];
 
   const fetchUnread = async () => {

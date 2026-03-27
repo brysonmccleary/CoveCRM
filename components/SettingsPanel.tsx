@@ -5,6 +5,7 @@ import AffiliateProgramPanel from "@/components/settings/AffiliateProgramPanel";
 import BillingPanel from "@/components/settings/BillingPanel";
 import toast from "react-hot-toast";
 import InvoicesPanel from "@/components/settings/InvoicesPanel";
+import EmailAccountPanel from "@/components/settings/EmailAccountPanel";
 
 type DayKey = "Monday" | "Tuesday" | "Wednesday" | "Thursday" | "Friday";
 type WorkingHours = {
@@ -219,6 +220,7 @@ export default function SettingsPanel() {
     { id: "billing", label: "Billing & Usage" },
     { id: "invoices", label: "Invoices" },
     { id: "affiliate", label: "Affiliate Program" },
+    { id: "email-account", label: "Email Account" },
     { id: "legal", label: "Legal" },
   ];
 
@@ -489,6 +491,12 @@ export default function SettingsPanel() {
         )}
 
         {activeTab === "affiliate" && <AffiliateProgramPanel />}
+
+        {activeTab === "email-account" && (
+          <div>
+            <EmailAccountPanel />
+          </div>
+        )}
 
         {activeTab === "legal" && (
           <div className="space-y-6 max-w-xl">

@@ -4,6 +4,9 @@ import axios from "axios";
 import toast from "react-hot-toast";
 import AssignDripModal from "@/components/AssignDripModal";
 import { prebuiltDrips } from "@/utils/prebuiltDrips";
+import EmailCampaignsPanel from "@/components/EmailCampaignsPanel";
+
+type DripTabMode = "sms" | "email";
 
 interface MessageStep {
   text: string;
@@ -29,6 +32,7 @@ interface ApiCampaign {
 }
 
 export default function DripCampaignsPanel() {
+  const [dripTab, setDripTab] = useState<DripTabMode>("sms");
   const [campaignName, setCampaignName] = useState("");
   const [messageSteps, setMessageSteps] = useState<MessageStep[]>([]);
   const [currentText, setCurrentText] = useState("");
@@ -599,6 +603,36 @@ setBackendCampaigns((prev) =>
 
   return (
     <div className="p-4 space-y-6">
+      {/* SMS / Email tab toggle */}
+      <div className="flex gap-2">
+        <button
+          onClick={() => setDripTab("sms")}
+          className={`px-5 py-2 rounded-full text-sm font-medium transition ${
+            dripTab === "sms"
+              ? "bg-green-600 text-white"
+              : "bg-[#1e293b] text-gray-400 border border-gray-600 hover:text-white"
+          }`}
+        >
+          SMS
+        </button>
+        <button
+          onClick={() => setDripTab("email")}
+          className={`px-5 py-2 rounded-full text-sm font-medium transition ${
+            dripTab === "email"
+              ? "bg-blue-600 text-white"
+              : "bg-[#1e293b] text-gray-400 border border-gray-600 hover:text-white"
+          }`}
+        >
+          Email
+        </button>
+      </div>
+
+      {/* Email tab */}
+      {dripTab === "email" && <EmailCampaignsPanel />}
+
+      {/* SMS tab */}
+      {dripTab === "sms" && <>
+
       {/* Creator */}
       <div className="border border-black dark:border-white p-4 rounded">
         <h2 className="text-xl font-bold mb-2">Create Custom Drip Campaign</h2>
@@ -845,6 +879,7 @@ setBackendCampaigns((prev) =>
           onAssign={handleAssignConfirm}
         />
       )}
+      </>}
     </div>
   );
 }

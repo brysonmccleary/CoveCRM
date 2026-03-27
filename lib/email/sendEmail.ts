@@ -1,9 +1,15 @@
 // lib/email/sendEmail.ts
 // Resend wrapper with suppression check, EmailMessage record creation, and status tracking.
+// If the sending user has an active verified AgentEmailAccount, uses their SMTP instead of Resend.
+// Use CommonJS require for nodemailer (matches lib/email.ts pattern)
+const nodemailer = require("nodemailer") as any;
+
 import { Resend } from "resend";
 import mongooseConnect from "@/lib/mongooseConnect";
 import EmailMessage from "@/models/EmailMessage";
+import AgentEmailAccount from "@/models/AgentEmailAccount";
 import { checkSuppression } from "./checkSuppression";
+import { decrypt } from "@/lib/prospecting/encrypt";
 import mongoose from "mongoose";
 
 const resend = new Resend(process.env.RESEND_API_KEY);
@@ -32,6 +38,8 @@ export interface SendEmailResult {
   messageId?: string;
   emailMessageId?: string;
   error?: string;
+  /** true when sent via agent's own SMTP account */
+  usedSmtp?: boolean;
 }
 
 export async function sendEmailWithTracking(
@@ -64,9 +72,26 @@ export async function sendEmailWithTracking(
     return { ok: false, suppressed: true };
   }
 
-  // Build from string
-  const rawFrom = from || process.env.EMAIL_FROM || "noreply@covecrm.com";
-  const fromAddress = fromName ? `${fromName} <${rawFrom}>` : rawFrom;
+  // Check if this user has a verified AgentEmailAccount to use instead of Resend
+  let agentSmtp: any = null;
+  try {
+    agentSmtp = await AgentEmailAccount.findOne({
+      userId,
+      active: true,
+      isVerified: true,
+    }).lean();
+  } catch {
+    // If model lookup fails, fall back to Resend
+    agentSmtp = null;
+  }
+
+  // Build from address: prefer agent SMTP's fromName/fromEmail when using SMTP
+  const resolvedFromName = fromName || (agentSmtp?.fromName) || "";
+  const resolvedFromRaw =
+    from || (agentSmtp?.fromEmail) || process.env.EMAIL_FROM || "noreply@covecrm.com";
+  const fromAddress = resolvedFromName
+    ? `${resolvedFromName} <${resolvedFromRaw}>`
+    : resolvedFromRaw;
 
   // Create EmailMessage in queued state before attempting send
   const emailMessage = await EmailMessage.create({
@@ -86,6 +111,55 @@ export async function sendEmailWithTracking(
     ...(stepIndex !== undefined ? { stepIndex } : {}),
   });
 
+  // ── Path A: Agent SMTP ────────────────────────────────────────────────────
+  if (agentSmtp) {
+    try {
+      const decryptedPass = decrypt(agentSmtp.smtpPass);
+
+      const transporter = nodemailer.createTransport({
+        host: agentSmtp.smtpHost,
+        port: agentSmtp.smtpPort || 587,
+        secure: agentSmtp.smtpSecure === true,
+        auth: { user: agentSmtp.smtpUser, pass: decryptedPass },
+      });
+
+      const info = await transporter.sendMail({
+        from: fromAddress,
+        to: normalizedTo,
+        subject,
+        html,
+        ...(text ? { text } : {}),
+        ...(replyTo ? { replyTo } : {}),
+      });
+
+      // Update EmailMessage + last used timestamp
+      await Promise.all([
+        EmailMessage.updateOne(
+          { _id: emailMessage._id },
+          { $set: { status: "sent", sentAt: new Date() } }
+        ),
+        AgentEmailAccount.updateOne(
+          { _id: agentSmtp._id },
+          { $set: { lastUsedAt: new Date() } }
+        ),
+      ]);
+
+      return {
+        ok: true,
+        messageId: info.messageId || "",
+        emailMessageId: String(emailMessage._id),
+        usedSmtp: true,
+      };
+    } catch (err: any) {
+      // SMTP failed — fall through to Resend as backup
+      console.warn(
+        "[sendEmail] Agent SMTP failed, falling back to Resend:",
+        err?.message
+      );
+    }
+  }
+
+  // ── Path B: Resend platform sending ──────────────────────────────────────
   try {
     const sendParams: Parameters<typeof resend.emails.send>[0] = {
       from: fromAddress,
@@ -110,6 +184,7 @@ export async function sendEmailWithTracking(
       ok: true,
       messageId: resendId,
       emailMessageId: String(emailMessage._id),
+      usedSmtp: false,
     };
   } catch (err: any) {
     await EmailMessage.updateOne(

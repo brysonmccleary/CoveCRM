@@ -3,6 +3,9 @@ import { useEffect, useState } from "react";
 import Sidebar from "@/components/Sidebar";
 import Link from "next/link";
 import AssignDripModal from "@/components/AssignDripModal";
+import EmailCampaignsPanel from "@/components/EmailCampaignsPanel";
+
+type TabMode = "sms" | "email";
 
 interface Step {
   text: string;
@@ -17,6 +20,7 @@ interface Drip {
 }
 
 export default function DripCampaignsPanel() {
+  const [tab, setTab] = useState<TabMode>("sms");
   const [drips, setDrips] = useState<Drip[]>([]);
   const [name, setName] = useState("");
   const [steps, setSteps] = useState<Step[]>([]);
@@ -92,7 +96,37 @@ export default function DripCampaignsPanel() {
     <div className="flex min-h-screen bg-[#0f172a] text-white">
       <Sidebar />
       <div className="flex-1 p-6">
-        <h1 className="text-2xl font-bold mb-6">Drip Campaigns</h1>
+        <h1 className="text-2xl font-bold mb-4">Drip Campaigns</h1>
+
+        {/* Tab toggle */}
+        <div className="flex gap-2 mb-6">
+          <button
+            onClick={() => setTab("sms")}
+            className={`px-5 py-2 rounded-full text-sm font-medium transition ${
+              tab === "sms"
+                ? "bg-green-600 text-white"
+                : "bg-[#1e293b] text-gray-400 border border-gray-600 hover:text-white"
+            }`}
+          >
+            SMS
+          </button>
+          <button
+            onClick={() => setTab("email")}
+            className={`px-5 py-2 rounded-full text-sm font-medium transition ${
+              tab === "email"
+                ? "bg-blue-600 text-white"
+                : "bg-[#1e293b] text-gray-400 border border-gray-600 hover:text-white"
+            }`}
+          >
+            Email
+          </button>
+        </div>
+
+        {/* Email tab */}
+        {tab === "email" && <EmailCampaignsPanel />}
+
+        {/* SMS tab */}
+        {tab === "sms" && <>
 
         {/* Create custom drip */}
         <div className="border border-gray-600 p-4 rounded mb-8">
@@ -191,6 +225,7 @@ export default function DripCampaignsPanel() {
             onAssign={handleAssignConfirm}
           />
         )}
+        </>}
       </div>
     </div>
   );
