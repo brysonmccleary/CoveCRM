@@ -2,6 +2,7 @@
 // Email campaign manager: list, create, AI-generate steps, prebuilt templates.
 import { useEffect, useState } from "react";
 import axios from "axios";
+import toast from "react-hot-toast";
 
 interface CampaignStep {
   day: number;
@@ -118,11 +119,15 @@ export default function EmailCampaignsPanel() {
   const [aiStepCount, setAIStepCount] = useState(5);
   const [aiBuilding, setAIBuilding] = useState(false);
   const [aiDescription, setAIDescription] = useState("");
+  // AI Preview state (edit-before-save)
+  const [aiPreview, setAIPreview] = useState<{ name: string; description: string; steps: CampaignStep[] } | null>(null);
+  const [aiPreviewSaving, setAIPreviewSaving] = useState(false);
 
   const buildWithAI = async () => {
     if (!aiScenario.trim()) return;
     setAIBuilding(true);
     setAIDescription("");
+    setAIPreview(null);
     try {
       const res = await axios.post("/api/ai/explain-drip", {
         scenario: aiScenario,
@@ -130,22 +135,47 @@ export default function EmailCampaignsPanel() {
         stepCount: aiStepCount,
       });
       const { campaignName: genName, description, steps } = res.data;
-      if (!Array.isArray(steps) || steps.length === 0) return;
-      if (genName) setBuilderName(genName);
-      setAIDescription(description || "");
+      if (!Array.isArray(steps) || steps.length === 0) { toast.error("AI returned no steps. Try again."); return; }
       const filled: CampaignStep[] = steps.map((s: any, i: number) => ({
         day: Number(s.day) || i,
         subject: s.subject || "",
         html: `<p>${String(s.text || "").replace(/\n/g, "</p><p>")}</p>`,
         text: String(s.text || ""),
       }));
-      setBuilderSteps(filled);
-      toast.success("Email campaign built! Review and save below.");
+      setAIPreview({ name: genName || "", description: description || "", steps: filled });
+      toast.success("Email campaign generated! Review and save below.");
       setShowAIBuilder(false);
     } catch {
       toast.error("AI build failed. Try again.");
     } finally {
       setAIBuilding(false);
+    }
+  };
+
+  const saveAIPreview = async () => {
+    if (!aiPreview) return;
+    if (!aiPreview.name.trim()) { toast.error("Campaign name is required."); return; }
+    if (aiPreview.steps.length === 0) { toast.error("Add at least one step."); return; }
+    for (let i = 0; i < aiPreview.steps.length; i++) {
+      if (!aiPreview.steps[i].subject.trim() || !aiPreview.steps[i].html.trim()) {
+        toast.error(`Step ${i + 1} needs a subject and body.`);
+        return;
+      }
+    }
+    setAIPreviewSaving(true);
+    try {
+      const res = await axios.post("/api/email/campaigns", {
+        name: aiPreview.name.trim(),
+        steps: aiPreview.steps,
+        dailyLimit: 50,
+      });
+      setCampaigns((prev) => [...prev, res.data]);
+      setAIPreview(null);
+      toast.success("✅ AI email campaign saved!");
+    } catch (err: any) {
+      toast.error(err?.response?.data?.error || "Failed to save campaign");
+    } finally {
+      setAIPreviewSaving(false);
     }
   };
 
@@ -490,6 +520,104 @@ export default function EmailCampaignsPanel() {
           </div>
         )}
       </section>
+
+      {/* ── A2: AI Preview (edit before save) ── */}
+      {aiPreview && (
+        <section className="border border-indigo-500/40 bg-[#0f172a] rounded-xl p-5 space-y-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-semibold text-white">🤖 AI Generated Campaign — Review &amp; Edit</h2>
+            <button
+              onClick={() => setAIPreview(null)}
+              className="text-xs text-red-400 hover:text-red-300 border border-red-800/40 px-3 py-1 rounded"
+            >
+              Discard
+            </button>
+          </div>
+
+          {aiPreview.description && (
+            <div className="bg-blue-950/40 border border-blue-600/30 rounded-lg p-3 text-xs text-blue-200">
+              🤖 {aiPreview.description}
+            </div>
+          )}
+
+          <div>
+            <label className="text-xs text-gray-400 mb-1 block">Campaign Name</label>
+            <input
+              value={aiPreview.name}
+              onChange={(e) => setAIPreview((p) => p ? { ...p, name: e.target.value } : p)}
+              className="bg-[#1e293b] border border-gray-600 rounded px-3 py-1.5 text-white text-sm w-full"
+              placeholder="Campaign name"
+            />
+          </div>
+
+          {aiPreview.steps.map((step, idx) => (
+            <div key={idx} className="border border-gray-700 rounded-xl p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-medium text-white">Step {idx + 1}</span>
+                <button
+                  onClick={() => setAIPreview((p) => p ? { ...p, steps: p.steps.filter((_, i) => i !== idx) } : p)}
+                  className="text-xs text-red-400 hover:text-red-300"
+                >
+                  Remove
+                </button>
+              </div>
+              <div className="flex items-center gap-2">
+                <label className="text-xs text-gray-400 whitespace-nowrap">Send on day</label>
+                <input
+                  type="number"
+                  min={0}
+                  value={step.day}
+                  onChange={(e) => setAIPreview((p) => p ? {
+                    ...p,
+                    steps: p.steps.map((s, i) => i === idx ? { ...s, day: Number(e.target.value) } : s)
+                  } : p)}
+                  className="bg-[#0f172a] border border-gray-600 rounded px-2 py-1 text-white text-sm w-20"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-gray-400 mb-1 block">Subject</label>
+                <input
+                  value={step.subject}
+                  onChange={(e) => setAIPreview((p) => p ? {
+                    ...p,
+                    steps: p.steps.map((s, i) => i === idx ? { ...s, subject: e.target.value } : s)
+                  } : p)}
+                  placeholder="Email subject line"
+                  className="bg-[#0f172a] border border-gray-600 rounded px-3 py-1.5 text-white text-sm w-full"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-gray-400 mb-1 block">HTML Body</label>
+                <textarea
+                  rows={4}
+                  value={step.html}
+                  onChange={(e) => setAIPreview((p) => p ? {
+                    ...p,
+                    steps: p.steps.map((s, i) => i === idx ? { ...s, html: e.target.value } : s)
+                  } : p)}
+                  className="bg-[#0f172a] border border-gray-600 rounded px-3 py-1.5 text-white text-sm w-full resize-y font-mono"
+                />
+              </div>
+            </div>
+          ))}
+
+          <div className="flex gap-3">
+            <button
+              onClick={saveAIPreview}
+              disabled={aiPreviewSaving}
+              className="flex-1 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white font-medium py-2 rounded-lg text-sm"
+            >
+              {aiPreviewSaving ? "Saving…" : "Save Campaign"}
+            </button>
+            <button
+              onClick={() => setAIPreview(null)}
+              className="px-4 py-2 rounded-lg text-sm text-gray-400 hover:text-white border border-gray-600"
+            >
+              Discard
+            </button>
+          </div>
+        </section>
+      )}
 
       {/* ── B: Campaign Builder ── */}
       <section className="border border-gray-600 bg-[#1e293b] rounded-xl p-5 space-y-4">

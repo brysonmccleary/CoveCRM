@@ -42,11 +42,17 @@ export default function DripCampaignsPanel() {
   const [aiStepCount, setAIStepCount] = useState(5);
   const [aiBuilding, setAIBuilding] = useState(false);
   const [aiDescription, setAIDescription] = useState("");
+  // AI Preview state (edit-before-save)
+  const [aiPreviewName, setAIPreviewName] = useState("");
+  const [aiPreviewSteps, setAIPreviewSteps] = useState<MessageStep[]>([]);
+  const [aiPreviewSaving, setAIPreviewSaving] = useState(false);
 
   const buildWithAI = async () => {
     if (!aiScenario.trim()) { toast.error("Describe the lead scenario first"); return; }
     setAIBuilding(true);
     setAIDescription("");
+    setAIPreviewName("");
+    setAIPreviewSteps([]);
     try {
       const res = await axios.post("/api/ai/explain-drip", {
         scenario: aiScenario,
@@ -55,26 +61,50 @@ export default function DripCampaignsPanel() {
       });
       const { campaignName: generatedName, description, steps } = res.data;
       if (!Array.isArray(steps) || steps.length === 0) { toast.error("AI returned no steps. Try again."); return; }
-      // Auto-fill campaign builder
-      if (generatedName) setCampaignName(generatedName);
-      setAIDescription(description || "");
       const filled: MessageStep[] = steps.map((s: any) => ({
         day: s.day === 0 ? "immediately" : `Day ${s.day}`,
         text: String(s.text || ""),
       }));
-      setMessageSteps(filled);
-      if (filled.length > 0) {
-        const lastDay = steps[steps.length - 1]?.day || 0;
-        setMaxDayUsed(Number(lastDay) || 0);
-        setCurrentDay(`Day ${Number(lastDay) + 1}`);
-      }
-      toast.success("Campaign built! Review and edit below, then save.");
+      setAIPreviewName(generatedName || "");
+      setAIPreviewSteps(filled);
+      setAIDescription(description || "");
+      toast.success("Campaign generated! Review and edit below, then save.");
       setShowAIBuilder(false);
     } catch {
       toast.error("AI build failed. Try again.");
     } finally {
       setAIBuilding(false);
     }
+  };
+
+  const saveAIPreview = async () => {
+    if (!aiPreviewName.trim() || aiPreviewSteps.length === 0) {
+      toast.error("❌ Campaign name and at least one step are required.");
+      return;
+    }
+    setAIPreviewSaving(true);
+    try {
+      const res = await axios.post("/api/drips/campaigns", {
+        name: aiPreviewName.trim(),
+        steps: aiPreviewSteps,
+      });
+      const created: ApiCampaign | undefined = res.data?.campaign;
+      if (created?._id) setBackendCampaigns((prev) => [...prev, created]);
+      setAIPreviewName("");
+      setAIPreviewSteps([]);
+      setAIDescription("");
+      toast.success("✅ AI campaign saved!");
+    } catch {
+      toast.error("❌ Error saving campaign");
+    } finally {
+      setAIPreviewSaving(false);
+    }
+  };
+
+  const discardAIPreview = () => {
+    setAIPreviewName("");
+    setAIPreviewSteps([]);
+    setAIDescription("");
   };
 
   const [messageSteps, setMessageSteps] = useState<MessageStep[]>([]);
@@ -733,9 +763,82 @@ setBackendCampaigns((prev) =>
         </div>
       )}
 
-      {aiDescription && (
-        <div className="bg-blue-950/40 border border-blue-600/30 rounded-xl p-4 mb-4 text-sm text-blue-200">
-          🤖 {aiDescription}
+      {/* AI Generated Campaign Preview */}
+      {aiPreviewSteps.length > 0 && (
+        <div className="bg-[#0f172a] border border-indigo-500/40 rounded-xl p-5 space-y-4 mb-4">
+          <div className="flex items-center justify-between">
+            <h3 className="text-white font-semibold text-sm">🤖 AI Generated Campaign — Review &amp; Edit</h3>
+            <button
+              onClick={discardAIPreview}
+              className="text-xs text-red-400 hover:text-red-300"
+            >
+              Discard
+            </button>
+          </div>
+
+          {aiDescription && (
+            <div className="bg-blue-950/40 border border-blue-600/30 rounded-lg p-3 text-xs text-blue-200">
+              {aiDescription}
+            </div>
+          )}
+
+          <div>
+            <label className="block text-xs text-gray-400 mb-1">Campaign Name</label>
+            <input
+              value={aiPreviewName}
+              onChange={(e) => setAIPreviewName(e.target.value)}
+              className="w-full bg-[#1e293b] border border-white/10 text-white rounded-lg px-3 py-2 text-sm"
+              placeholder="Campaign name"
+            />
+          </div>
+
+          <div className="space-y-3">
+            {aiPreviewSteps.map((step, idx) => (
+              <div key={idx} className="bg-[#1e293b] border border-white/10 rounded-lg p-3 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-gray-400 font-medium">Step {idx + 1}</span>
+                  <button
+                    onClick={() => setAIPreviewSteps((prev) => prev.filter((_, i) => i !== idx))}
+                    className="text-xs text-red-400 hover:text-red-300"
+                  >
+                    Remove
+                  </button>
+                </div>
+                <textarea
+                  value={step.text}
+                  onChange={(e) => setAIPreviewSteps((prev) => prev.map((s, i) => i === idx ? { ...s, text: e.target.value } : s))}
+                  rows={3}
+                  className="w-full bg-[#0b1220] border border-white/10 text-white rounded-lg px-3 py-2 text-sm resize-none"
+                />
+                <select
+                  value={step.day}
+                  onChange={(e) => setAIPreviewSteps((prev) => prev.map((s, i) => i === idx ? { ...s, day: e.target.value } : s))}
+                  className="bg-[#0b1220] border border-white/10 text-white rounded px-2 py-1 text-xs"
+                >
+                  <option value="immediately">immediately</option>
+                  {Array.from({ length: 60 }, (_, i) => i + 1).map((d) => (
+                    <option key={d} value={`Day ${d}`}>Day {d}</option>
+                  ))}
+                </select>
+              </div>
+            ))}
+          </div>
+
+          <div className="flex gap-3">
+            <button
+              onClick={saveAIPreview}
+              disabled={aiPreviewSaving}
+              className="flex-1 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 py-2 rounded-lg text-sm font-semibold text-white"
+            >
+              {aiPreviewSaving ? "Saving..." : "Save Campaign"}
+            </button>
+            <button
+              onClick={discardAIPreview}
+              className="px-4 py-2 rounded-lg text-sm text-gray-400 hover:text-white border border-white/10"
+            >
+              Discard
+            </button>
+          </div>
         </div>
       )}
 

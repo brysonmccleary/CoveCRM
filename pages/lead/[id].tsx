@@ -9,6 +9,8 @@ import dynamic from "next/dynamic";
 
 import { useInlineLeadCall } from "@/lib/dial/useInlineLeadCall";
 
+const CallCoachReport = dynamic(() => import("@/components/CallCoachReport"), { ssr: false });
+
 const CallPanelClose = dynamic<{
   leadId: string;
   userHasAI: boolean;
@@ -584,11 +586,6 @@ export default function LeadProfileDial() {
   const [vmDropStatus, setVmDropStatus] = useState<string>("");
   const [vmDropOpen, setVmDropOpen] = useState(false);
 
-  // Coach report state
-  const [coachReport, setCoachReport] = useState<any>(null);
-  const [coachLoaded, setCoachLoaded] = useState(false);
-  const [coachGenerating, setCoachGenerating] = useState(false);
-  const [coachExpanded, setCoachExpanded] = useState<Record<number, boolean>>({});
 
   const [numbers, setNumbers] = useState<NumberEntry[]>([]);
   const [selectedFromNumber, setSelectedFromNumber] = useState<string>("");
@@ -669,42 +666,6 @@ export default function LeadProfileDial() {
     }
   };
 
-  // Load coach report when latestOverviewCall changes
-  useEffect(() => {
-    if (!latestOverviewCall?.id || coachLoaded) return;
-    setCoachLoaded(true);
-    fetch(`/api/calls/coach-report?callId=${encodeURIComponent(String((latestOverviewCall as any).id))}`, { cache: "no-store" })
-      .then((r) => r.json())
-      .then((j) => { if (j.report) setCoachReport(j.report); })
-      .catch(() => {});
-  }, [latestOverviewCall, coachLoaded]);
-
-  const generateCoachReport = async () => {
-    if (!latestOverviewCall) return;
-    setCoachGenerating(true);
-    try {
-      const res = await fetch("/api/calls/coach-report", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ callId: String((latestOverviewCall as any).id), leadName }),
-      });
-      const j = await res.json();
-      if (j.report) { setCoachReport(j.report); toast.success("Coach report generated"); }
-      else toast.error(j.error || "Failed to generate");
-    } catch { toast.error("Network error"); }
-    finally { setCoachGenerating(false); }
-  };
-
-  function coachScoreColor(n: number) {
-    if (n >= 8) return "text-green-400";
-    if (n >= 5) return "text-yellow-400";
-    return "text-red-400";
-  }
-  function coachScoreBg(n: number) {
-    if (n >= 8) return "bg-green-500";
-    if (n >= 5) return "bg-yellow-500";
-    return "bg-red-500";
-  }
 
   const leadInfoRows = useMemo(() => {
     const l = lead || ({} as any);
@@ -1403,133 +1364,14 @@ export default function LeadProfileDial() {
           </div>
 
           {/* AI Call Coach Report */}
-          <div className="mb-4 bg-[#0b1220] border border-white/10 rounded p-3">
-            <div className="flex items-center justify-between mb-2">
-              <h3 className="text-lg font-bold">AI Call Coach</h3>
-              {latestOverviewCall && !coachReport && !coachGenerating && (
-                <button
-                  type="button"
-                  onClick={generateCoachReport}
-                  className="text-xs px-2 py-1 rounded bg-amber-600/20 hover:bg-amber-600/30 border border-amber-500/20 text-amber-200"
-                >
-                  Generate Coach Report
-                </button>
-              )}
-              {coachGenerating && (
-                <span className="text-xs text-gray-400">Generating…</span>
-              )}
-            </div>
-
-            {!coachLoaded ? (
-              <p className="text-gray-500 text-sm">Loading…</p>
-            ) : !coachReport ? (
-              <p className="text-gray-400 text-sm">
-                {latestOverviewCall
-                  ? "No coach report yet. Click \"Generate Coach Report\" to analyze this call."
-                  : "No calls with transcripts found for this lead."}
-              </p>
-            ) : (
-              <div className="space-y-4">
-                {/* Overall score */}
-                <div className="flex items-center gap-3">
-                  <span className={`text-3xl font-bold ${coachScoreColor(coachReport.overallScore)}`}>
-                    {coachReport.overallScore}/10
-                  </span>
-                  <div className="flex-1 bg-white/10 rounded-full h-2">
-                    <div
-                      className={`h-2 rounded-full ${coachScoreBg(coachReport.overallScore)}`}
-                      style={{ width: `${(coachReport.overallScore / 10) * 100}%` }}
-                    />
-                  </div>
-                </div>
-
-                {/* Category breakdown */}
-                {coachReport.categories && (
-                  <div className="space-y-2">
-                    {(coachReport.categories as { name: string; score: number }[]).map((cat, i) => (
-                      <div key={i} className="flex items-center gap-2">
-                        <span className="text-xs text-gray-400 w-32 shrink-0">{cat.name}</span>
-                        <div className="flex-1 bg-white/10 rounded-full h-1.5">
-                          <div
-                            className={`h-1.5 rounded-full ${coachScoreBg(cat.score)}`}
-                            style={{ width: `${(cat.score / 10) * 100}%` }}
-                          />
-                        </div>
-                        <span className={`text-xs w-8 text-right ${coachScoreColor(cat.score)}`}>{cat.score}/10</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {/* What Went Well */}
-                {coachReport.wentWell?.length > 0 && (
-                  <div className="bg-green-900/20 border border-green-500/20 rounded-lg p-3">
-                    <p className="text-xs font-semibold text-green-400 mb-1">What Went Well</p>
-                    <ul className="space-y-1">
-                      {(coachReport.wentWell as string[]).map((item, i) => (
-                        <li key={i} className="text-sm text-green-200 flex gap-2">
-                          <span className="text-green-500 mt-0.5">✓</span>
-                          <span>{item}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-
-                {/* What To Improve */}
-                {coachReport.toImprove?.length > 0 && (
-                  <div className="bg-amber-900/20 border border-amber-500/20 rounded-lg p-3">
-                    <p className="text-xs font-semibold text-amber-400 mb-1">What To Improve</p>
-                    <ul className="space-y-1">
-                      {(coachReport.toImprove as string[]).map((item, i) => (
-                        <li key={i} className="text-sm text-amber-200 flex gap-2">
-                          <span className="text-amber-500 mt-0.5">→</span>
-                          <span>{item}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-
-                {/* Objections */}
-                {coachReport.objections?.length > 0 && (
-                  <div>
-                    <p className="text-xs font-semibold text-gray-400 mb-1">Objections Handled</p>
-                    <div className="space-y-2">
-                      {(coachReport.objections as { objection: string; betterResponse?: string }[]).map((obj, i) => (
-                        <div key={i} className="bg-white/5 border border-white/10 rounded-lg p-2">
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="text-sm text-gray-200">{obj.objection}</span>
-                            {obj.betterResponse && (
-                              <button
-                                onClick={() => setCoachExpanded(prev => ({ ...prev, [i]: !prev[i] }))}
-                                className="text-xs text-blue-400 hover:text-blue-300 shrink-0"
-                              >
-                                {coachExpanded[i] ? "Hide" : "Better Response"}
-                              </button>
-                            )}
-                          </div>
-                          {coachExpanded[i] && obj.betterResponse && (
-                            <p className="text-xs text-blue-200 mt-2 border-t border-white/10 pt-2">
-                              {obj.betterResponse}
-                            </p>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {/* Next Step */}
-                {coachReport.nextStep && (
-                  <div className="bg-blue-900/20 border border-blue-500/20 rounded-lg p-3">
-                    <p className="text-xs font-semibold text-blue-400 mb-1">Recommended Next Step</p>
-                    <p className="text-sm text-blue-200">{coachReport.nextStep}</p>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
+          {latestOverviewCall?.id && (
+            <CallCoachReport
+              callId={String(latestOverviewCall.id)}
+              leadName={leadName}
+              userHasAI={userHasAI}
+              key={String(latestOverviewCall.id)}
+            />
+          )}
 
           <div className="flex items-center justify-between">
             <h3 className="text-lg font-bold mb-2">Interaction History</h3>
@@ -1567,7 +1409,12 @@ export default function LeadProfileDial() {
 
       {/* RIGHT */}
       <div className="w-[400px] p-4 bg-[#0b1220] flex flex-col min-h-0">
-        <div className="flex-1 min-h-0 overflow-y-auto">
+        {calls.length > 0 && (
+          <p className="text-xs text-gray-500 mb-2 shrink-0">
+            {calls.length} recording{calls.length !== 1 ? "s" : ""} on file
+          </p>
+        )}
+        <div className="max-h-[500px] overflow-y-auto">
           {lead?.id ? (
             <CallPanelClose
               leadId={lead.id}

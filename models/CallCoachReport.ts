@@ -7,6 +7,13 @@ export interface IObjectionEncountered {
   howHandled: string;
   betterResponse: string;
   wasOvercome: boolean;
+  conceptConfusion?: string | null;
+}
+
+export interface ISandwichFeedback {
+  topBread: string[];
+  filling: string[];
+  bottomBread: string[];
 }
 
 export interface IScoreBreakdown {
@@ -29,6 +36,8 @@ export interface ICallCoachReport extends Document {
   scoreBreakdown: IScoreBreakdown;
   whatWentWell: string[];
   whatToImprove: string[];
+  sandwichFeedback?: ISandwichFeedback;
+  managerSuggestion?: string | null;
   objectionsEncountered: IObjectionEncountered[];
   nextStepRecommendation: string;
   callSummary: string;
@@ -61,6 +70,18 @@ const CallCoachReportSchema = new Schema<ICallCoachReport>(
     },
     whatWentWell: { type: [String], default: [] },
     whatToImprove: { type: [String], default: [] },
+    sandwichFeedback: {
+      type: new Schema(
+        {
+          topBread: { type: [String], default: [] },
+          filling: { type: [String], default: [] },
+          bottomBread: { type: [String], default: [] },
+        },
+        { _id: false }
+      ),
+      default: undefined,
+    },
+    managerSuggestion: { type: String, default: null },
     objectionsEncountered: {
       type: [
         new Schema(
@@ -69,6 +90,7 @@ const CallCoachReportSchema = new Schema<ICallCoachReport>(
             howHandled: { type: String },
             betterResponse: { type: String },
             wasOvercome: { type: Boolean },
+            conceptConfusion: { type: String, default: null },
           },
           { _id: false }
         ),

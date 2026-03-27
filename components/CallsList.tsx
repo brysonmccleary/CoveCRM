@@ -181,14 +181,8 @@ export default function CallsList({
                   </div>
                   <div className="flex-none text-xs text-gray-300 flex items-center gap-2">
                     {r.hasRecording ? <span title="Recording available">🎙</span> : null}
-                    {r.hasAI ? <span title="AI summary ready">✨</span> : null}
                   </div>
                 </div>
-                {r.hasAI && r.aiSummary ? (
-                  <div className="mt-1 text-xs text-gray-400 line-clamp-2">
-                    {r.aiSummary}
-                  </div>
-                ) : null}
               </button>
             );
           })

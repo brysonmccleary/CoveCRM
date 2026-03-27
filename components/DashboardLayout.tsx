@@ -27,12 +27,13 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
   const links = [
     { name: "Home", path: "/dashboard?tab=home" },
-    { name: "Leads", path: "/dashboard?tab=leads" },
+    { name: "Folders", path: "/dashboard?tab=leads" },
     { name: "Drip Campaigns", path: "/dashboard?tab=drip-campaigns" },
     { name: "Conversations", path: "/dashboard?tab=conversations" },
     { name: "Calendar", path: "/dashboard?tab=calendar" },
     { name: "Numbers", path: "/dashboard?tab=numbers" },
     { name: "FB Leads", path: "/facebook-leads" },
+    { name: "Recruiting", path: "/recruiting" },
     { name: "Team", path: "/team" },
     { name: "Settings", path: "/dashboard?tab=settings" },
     ...(isAdmin ? [{ name: "Admin: Prospecting", path: "/admin/prospecting" }] : []),

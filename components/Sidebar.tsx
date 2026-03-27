@@ -77,7 +77,7 @@ export default function Sidebar() {
             Home
           </Link>
           <Link href="/dashboard?tab=leads" className="block hover:underline">
-            Leads
+            Folders
           </Link>
           <Link
             href="/dashboard?tab=drip-campaigns"
@@ -101,6 +101,9 @@ export default function Sidebar() {
           </Link>
           <Link href="/facebook-leads" className="block hover:underline">
             FB Leads
+          </Link>
+          <Link href="/recruiting" className="block hover:underline">
+            Recruiting
           </Link>
           <Link href="/dashboard?tab=settings" className="block hover:underline">
             Settings

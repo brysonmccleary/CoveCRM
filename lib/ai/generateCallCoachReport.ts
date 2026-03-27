@@ -7,42 +7,7 @@ import CallCoachReport from "@/models/CallCoachReport";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-const SYSTEM_PROMPT = `You are an expert insurance sales coach with 20+ years of experience training top-producing life insurance telesales agents. You analyze call transcripts and provide structured, actionable coaching feedback.
-
-You score calls across 6 dimensions (each 1-10):
-- Opening: quality of introduction, permission to continue, building instant rapport
-- Rapport: tone, empathy, personalization, connecting with the prospect
-- Discovery: asking good questions to uncover needs, budget, health situation, urgency
-- Presentation: tailoring the product pitch to what was discovered, benefit-focused
-- Objection Handling: rebuttal quality, staying calm, using feel/felt/found and other proven techniques
-- Closing: asking for the appointment/business, overcoming hesitation, creating urgency
-
-Return a single JSON object with NO markdown or code fences. Fields:
-{
-  "callScore": number (1-10, weighted average of breakdown),
-  "scoreBreakdown": {
-    "opening": number,
-    "rapport": number,
-    "discovery": number,
-    "presentation": number,
-    "objectionHandling": number,
-    "closing": number
-  },
-  "whatWentWell": [string, string, ...],  (3-5 specific positive observations)
-  "whatToImprove": [string, string, ...],  (3-5 specific, actionable improvements)
-  "objectionsEncountered": [
-    {
-      "objection": string,      (exact objection or paraphrase)
-      "howHandled": string,     (what the agent actually said/did)
-      "betterResponse": string, (ideal rebuttal using insurance sales best practices)
-      "wasOvercome": boolean
-    }
-  ],
-  "nextStepRecommendation": string,  (1-2 sentences on the single most important thing to do next)
-  "callSummary": string               (2-3 sentence plain-English summary of the call outcome)
-}
-
-Be specific and direct. Reference actual moments from the transcript when possible. If there is no transcript or it is too short, score conservatively (5s) and note limited data in your feedback.`;
+const SYSTEM_PROMPT = `You are an experienced insurance sales manager and coach with 20+ years training top producers. You use the sandwich coaching method: start with genuine strengths, address specific improvements, end with encouragement. You are specific, direct, and reference exact moments from the transcript. You understand insurance-specific concepts like equity protection, critical period, cash value, IUL, final expense, mortgage protection, and term life. You know common objections and how to handle them. You never give generic advice — every piece of feedback references something that actually happened on the call. Always respond with valid JSON only.`;
 
 export async function generateCallCoachReport(
   callId: string,
@@ -62,14 +27,45 @@ export async function generateCallCoachReport(
   const durationSeconds =
     (call as any).duration || (call as any).durationSec || 0;
 
-  const userContent = `
-Call Duration: ${durationSeconds} seconds
-Lead Name: ${leadName || "Unknown"}
-Call Outcome (from AI Overview): ${(call as any).aiOverview?.outcome || "Unknown"}
+  const userContent = `Analyze this insurance sales call and provide a detailed coaching report using the sandwich method.
 
+Agent name: ${userEmail}
+Lead name: ${leadName || "Unknown"}
+Call duration: ${durationSeconds} seconds
 Transcript:
 ${transcript || "(No transcript available — score conservatively)"}
-`.trim();
+
+IMPORTANT: Be specific. Reference exact quotes or moments from the transcript. If the call was short or unclear, acknowledge that honestly.
+
+Return this exact JSON structure:
+{
+  "callScore": <number 1-10>,
+  "scoreBreakdown": {
+    "opening": <number>,
+    "rapport": <number>,
+    "discovery": <number>,
+    "presentation": <number>,
+    "objectionHandling": <number>,
+    "closing": <number>
+  },
+  "sandwichFeedback": {
+    "topBread": [<2-3 specific things they did WELL — reference exact moments>],
+    "filling": [<2-4 specific improvements — be direct and reference exact moments with better alternatives>],
+    "bottomBread": [<1-2 encouraging closing points — specific to this call>]
+  },
+  "objectionsEncountered": [
+    {
+      "objection": <exact objection they raised>,
+      "howHandled": <what the agent actually said or did>,
+      "betterResponse": <ideal response — be specific, give exact words to use>,
+      "wasOvercome": <boolean>,
+      "conceptConfusion": <if agent used jargon the lead may not have understood, explain it — or null>
+    }
+  ],
+  "nextStepRecommendation": <exact words to say on the next call — specific and actionable>,
+  "managerSuggestion": <if there is a specific skill gap, suggest a role-play exercise or null>,
+  "callSummary": <2-3 sentences of what happened on this call>
+}`;
 
   let parsed: any;
   try {
@@ -108,6 +104,20 @@ ${transcript || "(No transcript available — score conservatively)"}
   };
   const callScore = clamp(parsed.callScore);
 
+  // Build sandwich feedback — may come in sandwichFeedback or fall back to whatWentWell/whatToImprove
+  const sf = parsed.sandwichFeedback;
+  const sandwichFeedback = sf
+    ? {
+        topBread: Array.isArray(sf.topBread) ? sf.topBread.map(String) : [],
+        filling: Array.isArray(sf.filling) ? sf.filling.map(String) : [],
+        bottomBread: Array.isArray(sf.bottomBread) ? sf.bottomBread.map(String) : [],
+      }
+    : undefined;
+
+  // Backward-compat: also store whatWentWell/whatToImprove
+  const whatWentWell = sandwichFeedback?.topBread || (Array.isArray(parsed.whatWentWell) ? parsed.whatWentWell : []);
+  const whatToImprove = sandwichFeedback?.filling || (Array.isArray(parsed.whatToImprove) ? parsed.whatToImprove : []);
+
   try {
     const report = await CallCoachReport.create({
       callId,
@@ -118,14 +128,17 @@ ${transcript || "(No transcript available — score conservatively)"}
       leadName: leadName || "",
       callScore,
       scoreBreakdown,
-      whatWentWell: Array.isArray(parsed.whatWentWell) ? parsed.whatWentWell : [],
-      whatToImprove: Array.isArray(parsed.whatToImprove) ? parsed.whatToImprove : [],
+      whatWentWell,
+      whatToImprove,
+      sandwichFeedback,
+      managerSuggestion: parsed.managerSuggestion || null,
       objectionsEncountered: Array.isArray(parsed.objectionsEncountered)
         ? parsed.objectionsEncountered.map((o: any) => ({
             objection: String(o.objection || ""),
             howHandled: String(o.howHandled || ""),
             betterResponse: String(o.betterResponse || ""),
             wasOvercome: Boolean(o.wasOvercome),
+            conceptConfusion: o.conceptConfusion ? String(o.conceptConfusion) : null,
           }))
         : [],
       nextStepRecommendation: String(parsed.nextStepRecommendation || ""),
