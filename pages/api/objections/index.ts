@@ -17,11 +17,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   if (req.method === "GET") {
     await seedGlobalObjections();
-    const objections = await ObjectionEntry.find({
+    const all = await ObjectionEntry.find({
       $or: [{ isGlobal: true }, { userEmail }],
     })
       .sort({ category: 1, createdAt: -1 })
       .lean();
+
+    // Deduplicate: prefer user-specific over global for same objection text
+    const seen = new Map<string, any>();
+    for (const o of all) {
+      const key = String((o as any).objection || "").toLowerCase().trim();
+      if (!key) continue;
+      const existing = seen.get(key);
+      if (!existing) { seen.set(key, o); continue; }
+      // Prefer user-owned over global
+      if ((o as any).isGlobal === false && (existing as any).isGlobal === true) {
+        seen.set(key, o);
+      }
+    }
+    const objections = Array.from(seen.values());
     return res.status(200).json({ objections });
   }
 

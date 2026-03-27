@@ -1,5 +1,5 @@
 // pages/api/ai/explain-drip.ts
-// POST — use GPT-4o-mini to explain what a drip sequence does in plain English
+// POST — given a lead scenario, build a complete drip sequence using GPT-4o-mini
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/pages/api/auth/[...nextauth]";
@@ -9,6 +9,8 @@ export const config = { maxDuration: 30 };
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
+const SYSTEM_PROMPT = `You are an expert insurance sales coach and copywriter. You build high-converting SMS and email drip sequences for insurance agents. You understand insurance buyer psychology, common objections, and what motivates people to take action. Always respond with valid JSON only.`;
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
@@ -16,36 +18,68 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!session?.user?.email) return res.status(401).json({ error: "Unauthorized" });
 
   if (!process.env.OPENAI_API_KEY) {
-    return res.status(200).json({ explanation: "AI explanation requires OPENAI_API_KEY." });
+    return res.status(200).json({ error: "AI requires OPENAI_API_KEY." });
   }
 
-  const { steps, campaignName, channel } = req.body as {
-    steps?: { day: number; text: string }[];
+  const { scenario, type = "sms", campaignName, stepCount = 5 } = req.body as {
+    scenario?: string;
+    type?: "sms" | "email";
     campaignName?: string;
-    channel?: "sms" | "email";
+    stepCount?: number;
   };
 
-  if (!steps || steps.length === 0) {
-    return res.status(400).json({ error: "steps array is required" });
+  if (!scenario || !scenario.trim()) {
+    return res.status(400).json({ error: "scenario is required" });
   }
 
-  const stepsText = steps
-    .map((s) => `Day ${s.day}: "${s.text}"`)
-    .join("\n");
+  const count = Math.min(Math.max(Number(stepCount) || 5, 3), 10);
 
-  const prompt = `You are a helpful insurance sales coach. A CRM user has a ${channel || "SMS"} drip sequence called "${campaignName || "Untitled"}". Here are the steps:\n\n${stepsText}\n\nExplain this sequence in 2-3 plain English sentences. Focus on the timing strategy, tone, and what outcome it's designed for. Be concise and friendly.`;
+  const userPrompt = `Build a ${type} drip campaign for this lead scenario:
+${scenario.trim()}
+
+Return a JSON object:
+{
+  "campaignName": string,
+  "description": string,
+  "steps": [
+    {
+      "day": number,
+      "subject": string,
+      "text": string,
+      "reasoning": string
+    }
+  ]
+}
+
+Build ${count} steps. Space them appropriately (day 0, 2, 5, 10, 14 for example).
+${type === "sms"
+  ? "For SMS: keep each message under 160 characters. Conversational, not salesy. No subject line needed (use empty string). Use {{first_name}} and {{agent_name}} merge fields."
+  : "For email: include meaningful subject lines. Professional but warm. Use {{first_name}} and {{agent_name}} merge fields."}
+Always include an opt-out line in the last step.
+${campaignName ? `Campaign name suggestion from user: "${campaignName}" (use this or improve it).` : ""}`;
 
   try {
     const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
-      messages: [{ role: "user", content: prompt }],
-      max_tokens: 200,
+      response_format: { type: "json_object" },
+      messages: [
+        { role: "system", content: SYSTEM_PROMPT },
+        { role: "user", content: userPrompt },
+      ],
+      max_tokens: 1200,
+      temperature: 0.4,
     });
 
-    const explanation = completion.choices[0]?.message?.content?.trim() || "No explanation generated.";
-    return res.status(200).json({ explanation });
+    const raw = completion.choices[0]?.message?.content || "{}";
+    const parsed = JSON.parse(raw);
+
+    return res.status(200).json({
+      campaignName: parsed.campaignName || "AI Drip Campaign",
+      description: parsed.description || "",
+      steps: Array.isArray(parsed.steps) ? parsed.steps : [],
+    });
   } catch (err: any) {
     console.error("[explain-drip] OpenAI error:", err?.message);
-    return res.status(500).json({ error: "Failed to generate explanation" });
+    return res.status(500).json({ error: "Failed to generate campaign" });
   }
 }

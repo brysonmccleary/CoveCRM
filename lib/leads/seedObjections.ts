@@ -49,7 +49,7 @@ const GLOBAL_OBJECTIONS = [
 
 export async function seedGlobalObjections(): Promise<void> {
   const count = await ObjectionEntry.countDocuments({ isGlobal: true });
-  if (count > 0) return; // already seeded
+  if (count >= 7) return; // hard guard — prevents re-seeding on every restart
 
   await ObjectionEntry.insertMany(
     GLOBAL_OBJECTIONS.map((o) => ({ ...o, isGlobal: true, userEmail: "" }))

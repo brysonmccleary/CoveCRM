@@ -578,6 +578,18 @@ export default function LeadProfileDial() {
   };
 
   // ---------- Inline calling (NO /dial-session) ----------
+  // Voicemail drop state
+  const [vmDrops, setVmDrops] = useState<{ _id: string; name: string; audioUrl?: string }[]>([]);
+  const [vmDropping, setVmDropping] = useState(false);
+  const [vmDropStatus, setVmDropStatus] = useState<string>("");
+  const [vmDropOpen, setVmDropOpen] = useState(false);
+
+  // Coach report state
+  const [coachReport, setCoachReport] = useState<any>(null);
+  const [coachLoaded, setCoachLoaded] = useState(false);
+  const [coachGenerating, setCoachGenerating] = useState(false);
+  const [coachExpanded, setCoachExpanded] = useState<Record<number, boolean>>({});
+
   const [numbers, setNumbers] = useState<NumberEntry[]>([]);
   const [selectedFromNumber, setSelectedFromNumber] = useState<string>("");
 
@@ -609,6 +621,90 @@ export default function LeadProfileDial() {
     if (!lead?.id) return toast.error("Lead not loaded");
     await startInlineCall({ leadId: lead.id, fromNumber: selectedFromNumber });
   };
+
+  // Load voicemail drops when needed
+  const loadVmDrops = async () => {
+    try {
+      const r = await fetch("/api/voicemail");
+      const j = await r.json();
+      setVmDrops(j.drops || []);
+    } catch {}
+  };
+
+  const doVmDrop = async (dropId?: string) => {
+    if (!lead) return;
+    const phone = lead.Phone || lead.phone || (lead as any)["Phone Number"];
+    if (!phone) { toast.error("No phone number on this lead"); return; }
+    setVmDropping(true);
+    setVmDropStatus("");
+    try {
+      const res = await fetch("/api/voicemail/drop", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ toPhone: phone, dropId, leadId: lead.id }),
+      });
+      const j = await res.json();
+      if (!res.ok) { toast.error(j.error || "Failed to drop voicemail"); return; }
+      setVmDropStatus("✓ Voicemail dropped");
+      setTimeout(() => setVmDropStatus(""), 3000);
+      setVmDropOpen(false);
+      toast.success("Voicemail drop initiated");
+    } catch {
+      toast.error("Network error");
+    } finally {
+      setVmDropping(false);
+    }
+  };
+
+  const handleVmDropClick = async () => {
+    await loadVmDrops();
+    if (vmDrops.length === 0) {
+      toast.error("No voicemail drops set up. Go to Settings → Voicemail Drops to add one.");
+      return;
+    }
+    if (vmDrops.length === 1) {
+      await doVmDrop(vmDrops[0]._id);
+    } else {
+      setVmDropOpen(true);
+    }
+  };
+
+  // Load coach report when latestOverviewCall changes
+  useEffect(() => {
+    if (!latestOverviewCall?.id || coachLoaded) return;
+    setCoachLoaded(true);
+    fetch(`/api/calls/coach-report?callId=${encodeURIComponent(String((latestOverviewCall as any).id))}`, { cache: "no-store" })
+      .then((r) => r.json())
+      .then((j) => { if (j.report) setCoachReport(j.report); })
+      .catch(() => {});
+  }, [latestOverviewCall, coachLoaded]);
+
+  const generateCoachReport = async () => {
+    if (!latestOverviewCall) return;
+    setCoachGenerating(true);
+    try {
+      const res = await fetch("/api/calls/coach-report", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ callId: String((latestOverviewCall as any).id), leadName }),
+      });
+      const j = await res.json();
+      if (j.report) { setCoachReport(j.report); toast.success("Coach report generated"); }
+      else toast.error(j.error || "Failed to generate");
+    } catch { toast.error("Network error"); }
+    finally { setCoachGenerating(false); }
+  };
+
+  function coachScoreColor(n: number) {
+    if (n >= 8) return "text-green-400";
+    if (n >= 5) return "text-yellow-400";
+    return "text-red-400";
+  }
+  function coachScoreBg(n: number) {
+    if (n >= 8) return "bg-green-500";
+    if (n >= 5) return "bg-yellow-500";
+    return "bg-red-500";
+  }
 
   const leadInfoRows = useMemo(() => {
     const l = lead || ({} as any);
@@ -1132,6 +1228,43 @@ export default function LeadProfileDial() {
               {muted ? "Unmute" : "Mute"}
             </button>
 
+            <div className="relative">
+              <button
+                type="button"
+                onClick={handleVmDropClick}
+                disabled={vmDropping || !lead?.id}
+                className="text-sm bg-purple-700 hover:bg-purple-800 text-white px-3 py-1.5 rounded-md disabled:opacity-50"
+              >
+                {vmDropping ? "Dropping..." : "📱 Drop VM"}
+              </button>
+
+              {/* VM drop selector popup */}
+              {vmDropOpen && vmDrops.length > 1 && (
+                <div className="absolute left-0 top-full z-50 mt-1 bg-[#1e293b] border border-white/10 rounded-xl shadow-xl p-3 space-y-2 min-w-[200px]">
+                  <p className="text-xs text-gray-400 mb-1">Select a voicemail drop:</p>
+                  {vmDrops.map((d) => (
+                    <button
+                      key={d._id}
+                      onClick={() => { setVmDropOpen(false); doVmDrop(d._id); }}
+                      className="w-full text-left text-sm text-white hover:bg-white/10 px-3 py-2 rounded-lg"
+                    >
+                      {d.name}
+                    </button>
+                  ))}
+                  <button
+                    onClick={() => setVmDropOpen(false)}
+                    className="w-full text-center text-xs text-gray-500 hover:text-gray-300 pt-1"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {vmDropStatus && (
+              <span className="text-xs text-green-400">{vmDropStatus}</span>
+            )}
+
             <span className="text-xs text-gray-400">
               {callStatus && callStatus !== "Idle" ? `Status: ${callStatus}` : null}
             </span>
@@ -1265,6 +1398,135 @@ export default function LeadProfileDial() {
                   {fmtDateTime((latestOverviewCall as any)?.startedAt || (latestOverviewCall as any)?.completedAt)}
                   {closeOverview.generatedAt ? <> • Overview generated {fmtDateTime(closeOverview.generatedAt)}</> : null}
                 </div>
+              </div>
+            )}
+          </div>
+
+          {/* AI Call Coach Report */}
+          <div className="mb-4 bg-[#0b1220] border border-white/10 rounded p-3">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-lg font-bold">AI Call Coach</h3>
+              {latestOverviewCall && !coachReport && !coachGenerating && (
+                <button
+                  type="button"
+                  onClick={generateCoachReport}
+                  className="text-xs px-2 py-1 rounded bg-amber-600/20 hover:bg-amber-600/30 border border-amber-500/20 text-amber-200"
+                >
+                  Generate Coach Report
+                </button>
+              )}
+              {coachGenerating && (
+                <span className="text-xs text-gray-400">Generating…</span>
+              )}
+            </div>
+
+            {!coachLoaded ? (
+              <p className="text-gray-500 text-sm">Loading…</p>
+            ) : !coachReport ? (
+              <p className="text-gray-400 text-sm">
+                {latestOverviewCall
+                  ? "No coach report yet. Click \"Generate Coach Report\" to analyze this call."
+                  : "No calls with transcripts found for this lead."}
+              </p>
+            ) : (
+              <div className="space-y-4">
+                {/* Overall score */}
+                <div className="flex items-center gap-3">
+                  <span className={`text-3xl font-bold ${coachScoreColor(coachReport.overallScore)}`}>
+                    {coachReport.overallScore}/10
+                  </span>
+                  <div className="flex-1 bg-white/10 rounded-full h-2">
+                    <div
+                      className={`h-2 rounded-full ${coachScoreBg(coachReport.overallScore)}`}
+                      style={{ width: `${(coachReport.overallScore / 10) * 100}%` }}
+                    />
+                  </div>
+                </div>
+
+                {/* Category breakdown */}
+                {coachReport.categories && (
+                  <div className="space-y-2">
+                    {(coachReport.categories as { name: string; score: number }[]).map((cat, i) => (
+                      <div key={i} className="flex items-center gap-2">
+                        <span className="text-xs text-gray-400 w-32 shrink-0">{cat.name}</span>
+                        <div className="flex-1 bg-white/10 rounded-full h-1.5">
+                          <div
+                            className={`h-1.5 rounded-full ${coachScoreBg(cat.score)}`}
+                            style={{ width: `${(cat.score / 10) * 100}%` }}
+                          />
+                        </div>
+                        <span className={`text-xs w-8 text-right ${coachScoreColor(cat.score)}`}>{cat.score}/10</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* What Went Well */}
+                {coachReport.wentWell?.length > 0 && (
+                  <div className="bg-green-900/20 border border-green-500/20 rounded-lg p-3">
+                    <p className="text-xs font-semibold text-green-400 mb-1">What Went Well</p>
+                    <ul className="space-y-1">
+                      {(coachReport.wentWell as string[]).map((item, i) => (
+                        <li key={i} className="text-sm text-green-200 flex gap-2">
+                          <span className="text-green-500 mt-0.5">✓</span>
+                          <span>{item}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {/* What To Improve */}
+                {coachReport.toImprove?.length > 0 && (
+                  <div className="bg-amber-900/20 border border-amber-500/20 rounded-lg p-3">
+                    <p className="text-xs font-semibold text-amber-400 mb-1">What To Improve</p>
+                    <ul className="space-y-1">
+                      {(coachReport.toImprove as string[]).map((item, i) => (
+                        <li key={i} className="text-sm text-amber-200 flex gap-2">
+                          <span className="text-amber-500 mt-0.5">→</span>
+                          <span>{item}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {/* Objections */}
+                {coachReport.objections?.length > 0 && (
+                  <div>
+                    <p className="text-xs font-semibold text-gray-400 mb-1">Objections Handled</p>
+                    <div className="space-y-2">
+                      {(coachReport.objections as { objection: string; betterResponse?: string }[]).map((obj, i) => (
+                        <div key={i} className="bg-white/5 border border-white/10 rounded-lg p-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-sm text-gray-200">{obj.objection}</span>
+                            {obj.betterResponse && (
+                              <button
+                                onClick={() => setCoachExpanded(prev => ({ ...prev, [i]: !prev[i] }))}
+                                className="text-xs text-blue-400 hover:text-blue-300 shrink-0"
+                              >
+                                {coachExpanded[i] ? "Hide" : "Better Response"}
+                              </button>
+                            )}
+                          </div>
+                          {coachExpanded[i] && obj.betterResponse && (
+                            <p className="text-xs text-blue-200 mt-2 border-t border-white/10 pt-2">
+                              {obj.betterResponse}
+                            </p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Next Step */}
+                {coachReport.nextStep && (
+                  <div className="bg-blue-900/20 border border-blue-500/20 rounded-lg p-3">
+                    <p className="text-xs font-semibold text-blue-400 mb-1">Recommended Next Step</p>
+                    <p className="text-sm text-blue-200">{coachReport.nextStep}</p>
+                  </div>
+                )}
               </div>
             )}
           </div>

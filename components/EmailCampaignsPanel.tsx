@@ -112,27 +112,40 @@ type Tone = "professional" | "casual" | "urgent";
 export default function EmailCampaignsPanel() {
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [loading, setLoading] = useState(true);
-  const [explanations, setExplanations] = useState<Record<string, string>>({});
-  const [explaining, setExplaining] = useState<string | null>(null);
+  // AI Builder state
+  const [showAIBuilder, setShowAIBuilder] = useState(false);
+  const [aiScenario, setAIScenario] = useState("");
+  const [aiStepCount, setAIStepCount] = useState(5);
+  const [aiBuilding, setAIBuilding] = useState(false);
+  const [aiDescription, setAIDescription] = useState("");
 
-  const explainCampaign = async (c: Campaign) => {
-    if (explanations[c._id]) {
-      // Toggle off
-      setExplanations((prev) => { const n = { ...prev }; delete n[c._id]; return n; });
-      return;
-    }
-    setExplaining(c._id);
+  const buildWithAI = async () => {
+    if (!aiScenario.trim()) return;
+    setAIBuilding(true);
+    setAIDescription("");
     try {
       const res = await axios.post("/api/ai/explain-drip", {
-        steps: c.steps.map((s) => ({ day: s.day, text: s.text || s.subject })),
-        campaignName: c.name,
-        channel: "email",
+        scenario: aiScenario,
+        type: "email",
+        stepCount: aiStepCount,
       });
-      setExplanations((prev) => ({ ...prev, [c._id]: res.data.explanation || "No explanation." }));
+      const { campaignName: genName, description, steps } = res.data;
+      if (!Array.isArray(steps) || steps.length === 0) return;
+      if (genName) setBuilderName(genName);
+      setAIDescription(description || "");
+      const filled: CampaignStep[] = steps.map((s: any, i: number) => ({
+        day: Number(s.day) || i,
+        subject: s.subject || "",
+        html: `<p>${String(s.text || "").replace(/\n/g, "</p><p>")}</p>`,
+        text: String(s.text || ""),
+      }));
+      setBuilderSteps(filled);
+      toast.success("Email campaign built! Review and save below.");
+      setShowAIBuilder(false);
     } catch {
-      setExplanations((prev) => ({ ...prev, [c._id]: "Could not generate explanation." }));
+      toast.error("AI build failed. Try again.");
     } finally {
-      setExplaining(null);
+      setAIBuilding(false);
     }
   };
 
@@ -465,18 +478,12 @@ export default function EmailCampaignsPanel() {
                       Delete
                     </button>
                     <button
-                      onClick={() => explainCampaign(c)}
-                      disabled={explaining === c._id}
+                      onClick={() => setShowAIBuilder(true)}
                       className="text-xs text-indigo-400 hover:text-indigo-300 border border-gray-600 px-3 py-1 rounded"
                     >
-                      {explaining === c._id ? "..." : explanations[c._id] ? "Hide AI Summary" : "AI Summary"}
+                      🤖 Build with AI
                     </button>
                   </div>
-                  {explanations[c._id] && (
-                    <p className="mt-2 text-xs text-indigo-200 bg-indigo-950/40 border border-indigo-800 rounded p-2">
-                      🤖 {explanations[c._id]}
-                    </p>
-                  )}
                 </div>
               )
             )}
@@ -486,7 +493,50 @@ export default function EmailCampaignsPanel() {
 
       {/* ── B: Campaign Builder ── */}
       <section className="border border-gray-600 bg-[#1e293b] rounded-xl p-5 space-y-4">
-        <h2 className="text-lg font-semibold text-white">Build New Campaign</h2>
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-semibold text-white">Build New Campaign</h2>
+          <button
+            onClick={() => setShowAIBuilder((v) => !v)}
+            className="flex items-center gap-1 bg-indigo-700 hover:bg-indigo-600 text-white px-3 py-1.5 rounded-lg text-xs font-semibold"
+          >
+            🤖 Build with AI
+          </button>
+        </div>
+
+        {showAIBuilder && (
+          <div className="bg-[#0b1220] border border-indigo-600/30 rounded-xl p-4 space-y-3">
+            <label className="block text-xs text-gray-400">Describe your lead / use case</label>
+            <textarea
+              value={aiScenario}
+              onChange={(e) => setAIScenario(e.target.value)}
+              rows={3}
+              placeholder="e.g. 'Agent recruits who filled out interest form but haven't replied in 3 days'"
+              className="w-full bg-[#1e293b] border border-white/10 text-white rounded-lg px-3 py-2 text-sm resize-none"
+            />
+            <div className="flex items-center gap-3 flex-wrap">
+              <div>
+                <label className="text-xs text-gray-400 mr-2">Steps:</label>
+                {[3, 5, 7, 10].map((n) => (
+                  <button key={n} onClick={() => setAIStepCount(n)}
+                    className={`mr-1 px-2 py-0.5 rounded text-xs font-semibold ${aiStepCount === n ? "bg-indigo-600 text-white" : "bg-[#1e293b] text-gray-400 border border-white/10"}`}>
+                    {n}
+                  </button>
+                ))}
+              </div>
+              <button onClick={buildWithAI} disabled={aiBuilding || !aiScenario.trim()}
+                className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 px-3 py-1.5 rounded-lg text-xs font-semibold text-white">
+                {aiBuilding ? "Building..." : "Build Campaign"}
+              </button>
+              <button onClick={() => setShowAIBuilder(false)} className="text-gray-400 hover:text-white text-xs">Cancel</button>
+            </div>
+          </div>
+        )}
+
+        {aiDescription && (
+          <div className="bg-blue-950/40 border border-blue-600/30 rounded-xl p-3 text-xs text-blue-200">
+            🤖 {aiDescription}
+          </div>
+        )}
 
         <div className="flex gap-3 flex-wrap">
           <div className="flex-1 min-w-[180px]">

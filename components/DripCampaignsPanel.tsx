@@ -34,28 +34,49 @@ interface ApiCampaign {
 export default function DripCampaignsPanel() {
   const [dripTab, setDripTab] = useState<DripTabMode>("sms");
   const [campaignName, setCampaignName] = useState("");
-  const [dripExplanations, setDripExplanations] = useState<Record<string, string>>({});
-  const [dripExplaining, setDripExplaining] = useState<string | null>(null);
 
-  const explainDrip = async (id: string, name: string, steps: { day: string | number; text: string }[]) => {
-    if (dripExplanations[id]) {
-      setDripExplanations((prev) => { const n = { ...prev }; delete n[id]; return n; });
-      return;
-    }
-    setDripExplaining(id);
+  // AI Builder state
+  const [showAIBuilder, setShowAIBuilder] = useState(false);
+  const [aiScenario, setAIScenario] = useState("");
+  const [aiType, setAIType] = useState<"sms" | "email">("sms");
+  const [aiStepCount, setAIStepCount] = useState(5);
+  const [aiBuilding, setAIBuilding] = useState(false);
+  const [aiDescription, setAIDescription] = useState("");
+
+  const buildWithAI = async () => {
+    if (!aiScenario.trim()) { toast.error("Describe the lead scenario first"); return; }
+    setAIBuilding(true);
+    setAIDescription("");
     try {
       const res = await axios.post("/api/ai/explain-drip", {
-        steps: steps.map((s) => ({ day: Number(s.day) || 0, text: s.text })),
-        campaignName: name,
-        channel: "sms",
+        scenario: aiScenario,
+        type: aiType,
+        stepCount: aiStepCount,
       });
-      setDripExplanations((prev) => ({ ...prev, [id]: res.data.explanation || "No explanation." }));
+      const { campaignName: generatedName, description, steps } = res.data;
+      if (!Array.isArray(steps) || steps.length === 0) { toast.error("AI returned no steps. Try again."); return; }
+      // Auto-fill campaign builder
+      if (generatedName) setCampaignName(generatedName);
+      setAIDescription(description || "");
+      const filled: MessageStep[] = steps.map((s: any) => ({
+        day: s.day === 0 ? "immediately" : `Day ${s.day}`,
+        text: String(s.text || ""),
+      }));
+      setMessageSteps(filled);
+      if (filled.length > 0) {
+        const lastDay = steps[steps.length - 1]?.day || 0;
+        setMaxDayUsed(Number(lastDay) || 0);
+        setCurrentDay(`Day ${Number(lastDay) + 1}`);
+      }
+      toast.success("Campaign built! Review and edit below, then save.");
+      setShowAIBuilder(false);
     } catch {
-      setDripExplanations((prev) => ({ ...prev, [id]: "Could not generate explanation." }));
+      toast.error("AI build failed. Try again.");
     } finally {
-      setDripExplaining(null);
+      setAIBuilding(false);
     }
   };
+
   const [messageSteps, setMessageSteps] = useState<MessageStep[]>([]);
   const [currentText, setCurrentText] = useState("");
   const [currentDay, setCurrentDay] = useState("immediately");
@@ -655,6 +676,69 @@ setBackendCampaigns((prev) =>
       {/* SMS tab */}
       {dripTab === "sms" && <>
 
+      {/* AI Builder toggle */}
+      <div className="mb-4">
+        <button
+          onClick={() => setShowAIBuilder((v) => !v)}
+          className="flex items-center gap-2 bg-indigo-700 hover:bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-semibold transition"
+        >
+          🤖 Build with AI
+        </button>
+      </div>
+
+      {showAIBuilder && (
+        <div className="bg-[#0f172a] border border-indigo-600/30 rounded-xl p-5 space-y-4 mb-4">
+          <h3 className="font-semibold text-white text-sm">AI Drip Builder</h3>
+          <div>
+            <label className="block text-xs text-gray-400 mb-1">Describe your lead</label>
+            <textarea
+              value={aiScenario}
+              onChange={(e) => setAIScenario(e.target.value)}
+              rows={3}
+              placeholder="e.g. 'Filled out a final expense form but didn't finish — likely price sensitive, 65+ year old, no current coverage'"
+              className="w-full bg-[#1e293b] border border-white/10 text-white rounded-lg px-3 py-2 text-sm resize-none"
+            />
+          </div>
+          <div className="flex gap-4 flex-wrap">
+            <div>
+              <label className="block text-xs text-gray-400 mb-1">Type</label>
+              <div className="flex gap-2">
+                {(["sms", "email"] as const).map((t) => (
+                  <button key={t} onClick={() => setAIType(t)}
+                    className={`px-3 py-1 rounded text-xs font-semibold ${aiType === t ? "bg-indigo-600 text-white" : "bg-[#1e293b] text-gray-400 border border-white/10"}`}>
+                    {t.toUpperCase()}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <label className="block text-xs text-gray-400 mb-1">Steps</label>
+              <div className="flex gap-1">
+                {[3, 5, 7, 10].map((n) => (
+                  <button key={n} onClick={() => setAIStepCount(n)}
+                    className={`px-3 py-1 rounded text-xs font-semibold ${aiStepCount === n ? "bg-indigo-600 text-white" : "bg-[#1e293b] text-gray-400 border border-white/10"}`}>
+                    {n}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+          <div className="flex gap-3">
+            <button onClick={buildWithAI} disabled={aiBuilding || !aiScenario.trim()}
+              className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 px-4 py-2 rounded-lg text-sm font-semibold text-white">
+              {aiBuilding ? "Building your campaign..." : "Build Campaign"}
+            </button>
+            <button onClick={() => setShowAIBuilder(false)} className="text-gray-400 hover:text-white text-sm">Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {aiDescription && (
+        <div className="bg-blue-950/40 border border-blue-600/30 rounded-xl p-4 mb-4 text-sm text-blue-200">
+          🤖 {aiDescription}
+        </div>
+      )}
+
       {/* Creator */}
       <div className="border border-black dark:border-white p-4 rounded">
         <h2 className="text-xl font-bold mb-2">Create Custom Drip Campaign</h2>
@@ -835,11 +919,10 @@ setBackendCampaigns((prev) =>
             </button>
             <div className="flex gap-2">
               <button
-                onClick={() => explainDrip(camp._id, camp.name, camp.steps || [])}
-                disabled={dripExplaining === camp._id}
+                onClick={() => { setShowAIBuilder(true); setAIType("sms"); }}
                 className="text-xs text-indigo-400 hover:text-indigo-300 border border-indigo-800 px-3 py-1 rounded"
               >
-                {dripExplaining === camp._id ? "..." : dripExplanations[camp._id] ? "Hide AI" : "AI Summary"}
+                🤖 Build with AI
               </button>
               <button
                 onClick={() => handleAssignDrip(camp._id)}
@@ -849,11 +932,6 @@ setBackendCampaigns((prev) =>
               </button>
             </div>
           </div>
-          {dripExplanations[camp._id] && (
-            <p className="mt-2 text-xs text-indigo-200 bg-indigo-950/40 border border-indigo-800 rounded p-2">
-              🤖 {dripExplanations[camp._id]}
-            </p>
-          )}
 
           {expandedDrips[camp._id] && (
             <div className="mt-4 space-y-3">

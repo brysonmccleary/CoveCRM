@@ -19,5 +19,7 @@ const ObjectionEntrySchema = new Schema(
 
 ObjectionEntrySchema.index({ userEmail: 1, category: 1 });
 ObjectionEntrySchema.index({ isGlobal: 1 });
+// Prevent exact duplicate objections per user ("global" uses sentinel "" for userEmail)
+ObjectionEntrySchema.index({ objection: 1, userEmail: 1 }, { unique: true, sparse: true });
 
 export default models.ObjectionEntry || model("ObjectionEntry", ObjectionEntrySchema);

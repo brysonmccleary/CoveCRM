@@ -28,7 +28,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const links = [
     { name: "Home", path: "/dashboard?tab=home" },
     { name: "Leads", path: "/dashboard?tab=leads" },
-    { name: "Pipeline", path: "/pipeline" },
     { name: "Drip Campaigns", path: "/dashboard?tab=drip-campaigns" },
     { name: "Conversations", path: "/dashboard?tab=conversations" },
     { name: "Calendar", path: "/dashboard?tab=calendar" },

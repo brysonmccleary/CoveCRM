@@ -617,7 +617,7 @@ export default function Home() {
           <h2 className="text-3xl font-bold mb-3">Simple, transparent pricing</h2>
           <p className="text-slate-400 mb-10 max-w-xl mx-auto text-sm">No per-seat fees, no surprise add-ons. One flat monthly rate covers your whole operation.</p>
 
-          <div className="max-w-5xl mx-auto grid gap-6 md:grid-cols-3">
+          <div className="max-w-3xl mx-auto grid gap-6 md:grid-cols-2">
             {/* Core Plan */}
             <div className="rounded-3xl border border-white/10 bg-white/5 shadow-[0_0_0_1px_rgba(255,255,255,0.03)] p-8 text-left">
               <h3 className="text-xl font-bold mb-1">Cove CRM</h3>
@@ -657,24 +657,6 @@ export default function Home() {
               </Link>
             </div>
 
-            {/* Agency / Team */}
-            <div className="rounded-3xl border border-white/10 bg-white/5 p-8 text-left">
-              <h3 className="text-xl font-bold mb-1">Agency &amp; Teams</h3>
-              <p className="text-2xl font-bold mb-1 text-slate-300">Contact Us</p>
-              <p className="text-xs text-slate-400 mb-5">Custom pricing for agencies</p>
-              <ul className="text-sm text-slate-200 space-y-2 mb-6">
-                <li className="flex gap-2 items-start"><span className="text-blue-400 mt-0.5">✔</span> Everything in Cove CRM + AI</li>
-                <li className="flex gap-2 items-start"><span className="text-blue-400 mt-0.5">✔</span> Agent recruiting + team leaderboard</li>
-                <li className="flex gap-2 items-start"><span className="text-blue-400 mt-0.5">✔</span> Facebook Lead Manager for multiple campaigns</li>
-                <li className="flex gap-2 items-start"><span className="text-blue-400 mt-0.5">✔</span> AI Dialer waitlist priority access</li>
-                <li className="flex gap-2 items-start"><span className="text-blue-400 mt-0.5">✔</span> Dedicated onboarding support</li>
-              </ul>
-              <a href="mailto:support@covecrm.com">
-                <button className="w-full border border-white/20 text-white px-6 py-3 rounded-lg hover:bg-white/10 cursor-pointer transition font-semibold">
-                  Contact Sales
-                </button>
-              </a>
-            </div>
           </div>
         </section>
 

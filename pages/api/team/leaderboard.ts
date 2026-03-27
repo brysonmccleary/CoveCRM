@@ -1,12 +1,34 @@
 // pages/api/team/leaderboard.ts
-// GET — return leaderboard stats for all team members
+// GET — leaderboard stats per team member with date range support
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/pages/api/auth/[...nextauth]";
 import mongooseConnect from "@/lib/mongooseConnect";
 import TeamMember from "@/models/TeamMember";
+import Call from "@/models/Call";
+import Message from "@/models/Message";
+import Booking from "@/models/Booking";
 import Lead from "@/lib/mongo/leads";
-import CallLog from "@/models/CallLog";
+
+function getRangeStart(range: string): Date {
+  const now = new Date();
+  if (range === "today") {
+    const start = new Date(now);
+    start.setHours(0, 0, 0, 0);
+    return start;
+  }
+  if (range === "7days") {
+    const start = new Date(now);
+    start.setDate(start.getDate() - 7);
+    start.setHours(0, 0, 0, 0);
+    return start;
+  }
+  // 30days default
+  const start = new Date(now);
+  start.setDate(start.getDate() - 30);
+  start.setHours(0, 0, 0, 0);
+  return start;
+}
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "GET") return res.status(405).json({ error: "Method not allowed" });
@@ -17,35 +39,67 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   await mongooseConnect();
   const ownerEmail = session.user.email.toLowerCase();
 
-  const members = await TeamMember.find({ ownerEmail, status: "active" }).lean();
-  const emails = [ownerEmail, ...members.map((m: any) => m.memberEmail)];
+  const range = String(req.query.range || "30days");
+  const since = getRangeStart(range);
 
-  const thisMonth = new Date();
-  thisMonth.setDate(1);
-  thisMonth.setHours(0, 0, 0, 0);
+  const members = await TeamMember.find({ ownerEmail, status: "active" }).lean();
+  const memberEmails = members.map((m: any) => m.memberEmail);
+  const emails = [ownerEmail, ...memberEmails];
 
   const board = await Promise.all(
     emails.map(async (email) => {
-      const [newLeads, bookedLeads, calls] = await Promise.all([
-        Lead.countDocuments({ userEmail: email, createdAt: { $gte: thisMonth } }),
-        Lead.countDocuments({ userEmail: email, status: "Booked Appointment", updatedAt: { $gte: thisMonth } }),
-        (CallLog as any).countDocuments?.({ userEmail: email, createdAt: { $gte: thisMonth } }) ?? 0,
+      const [
+        allCalls,
+        connectCalls,
+        smsCount,
+        leadsAdded,
+        appointmentsBooked,
+        talkTimeAgg,
+      ] = await Promise.all([
+        // Total dials in range
+        (Call as any).countDocuments({ userEmail: email, startedAt: { $gte: since } }),
+        // Connects = calls with duration > 30 seconds
+        (Call as any).countDocuments({ userEmail: email, startedAt: { $gte: since }, duration: { $gt: 30 } }),
+        // Outbound SMS sent
+        (Message as any).countDocuments({ userEmail: email, direction: "outbound", createdAt: { $gte: since } }).catch(() => 0),
+        // Leads added
+        (Lead as any).countDocuments({ userEmail: email, createdAt: { $gte: since } }),
+        // Bookings (appointments booked)
+        (Booking as any).countDocuments({ agentEmail: email, createdAt: { $gte: since } }).catch(() => 0),
+        // Total talk time (sum of duration)
+        (Call as any).aggregate([
+          { $match: { userEmail: email, startedAt: { $gte: since }, duration: { $gt: 0 } } },
+          { $group: { _id: null, total: { $sum: "$duration" } } },
+        ]).catch(() => []),
       ]);
 
+      const totalTalkSec = talkTimeAgg?.[0]?.total || 0;
+      const talkTimeMinutes = Math.round(totalTalkSec / 60);
+      const connectRate = allCalls > 0 ? Math.round((connectCalls / allCalls) * 100) : 0;
+
       const member = members.find((m: any) => m.memberEmail === email);
+      const name = (member as any)?.memberName || (email === ownerEmail ? "You" : email);
+
       return {
         email,
-        name: (member as any)?.memberName || (email === ownerEmail ? "You" : email),
-        newLeads,
-        bookedLeads,
-        calls,
+        name,
         isOwner: email === ownerEmail,
+        calls: allCalls,
+        connects: connectCalls,
+        connectRate,
+        talkTimeMinutes,
+        smsCount,
+        leadsAdded,
+        appointmentsBooked,
       };
     })
   );
 
-  // Sort by booked desc, then new leads
-  board.sort((a, b) => b.bookedLeads - a.bookedLeads || b.newLeads - a.newLeads);
+  // Sort by calls desc
+  board.sort((a, b) => b.calls - a.calls || b.appointmentsBooked - a.appointmentsBooked);
 
-  return res.status(200).json({ board, month: thisMonth.toISOString().slice(0, 7) });
+  // Add rank
+  const ranked = board.map((entry, i) => ({ ...entry, rank: i + 1 }));
+
+  return res.status(200).json({ board: ranked, range, since: since.toISOString() });
 }

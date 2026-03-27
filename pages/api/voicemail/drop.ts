@@ -6,6 +6,7 @@ import { authOptions } from "@/pages/api/auth/[...nextauth]";
 import mongooseConnect from "@/lib/mongooseConnect";
 import VoicemailDrop from "@/models/VoicemailDrop";
 import User from "@/models/User";
+import Lead from "@/models/Lead";
 import twilio from "twilio";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -17,7 +18,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   await mongooseConnect();
   const userEmail = session.user.email.toLowerCase();
 
-  const { toPhone, dropId } = req.body as { toPhone?: string; dropId?: string };
+  const { toPhone, dropId, leadId } = req.body as { toPhone?: string; dropId?: string; leadId?: string };
   if (!toPhone) return res.status(400).json({ error: "toPhone required" });
 
   // Get voicemail drop (or default)
@@ -57,6 +58,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // Track drop count
     await VoicemailDrop.updateOne({ _id: drop._id }, { $inc: { dropCount: 1 } });
+
+    // Log to lead history if leadId provided
+    if (leadId) {
+      try {
+        const lead = await Lead.findById(leadId);
+        if (lead && String(lead.userEmail || "").toLowerCase() === userEmail) {
+          const droppedAt = new Date().toLocaleString("en-US", { timeZone: "America/New_York" });
+          lead.history = lead.history || [];
+          lead.history.push({
+            type: "voicemail",
+            message: `📱 Voicemail dropped at ${droppedAt} ET using "${drop.name}"`,
+            userEmail,
+            timestamp: new Date(),
+            meta: { dropId: String(drop._id), callSid: call.sid },
+          });
+          await lead.save();
+        }
+      } catch (histErr: any) {
+        console.warn("[voicemail-drop] Failed to log history:", histErr?.message);
+      }
+    }
 
     return res.status(200).json({ ok: true, callSid: call.sid });
   } catch (err: any) {
