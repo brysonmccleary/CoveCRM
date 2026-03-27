@@ -49,8 +49,8 @@ Rules:
 - Include a clear, specific call to action
 - Write in a ${toneDesc} tone
 - Emails should be concise (150-250 words for the body)
-- Always include a brief unsubscribe mention at the end of the html (e.g. "To unsubscribe, reply STOP.")
 - Return valid HTML for the body (use <p>, <strong>, <br> tags — no inline styles)
+- Every email you generate MUST end with the placeholder text [FOOTER] on its own line at the very end of the html. This will be automatically replaced with the required CAN-SPAM footer including unsubscribe link and physical address. Never omit this placeholder.
 
 Respond with JSON only in this exact shape:
 {

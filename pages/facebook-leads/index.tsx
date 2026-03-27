@@ -145,80 +145,89 @@ function ActionBadge({ action }: { action: string }) {
 
 function HeroSection({ onGetStarted }: { onGetStarted: (plan: "manager" | "manager_pro") => void }) {
   return (
-    <div className="space-y-10">
-      <div className="text-center space-y-4 pt-8">
-        <h1 className="text-4xl font-extrabold text-white">
-          Generate Your Own Exclusive Insurance Leads on Facebook
-        </h1>
-        <p className="text-xl text-gray-300 max-w-2xl mx-auto">
-          Stop paying $25–50 per lead to vendors. Generate exclusive leads you own for a fraction of the cost — never resold, never shared, 100% yours.
-        </p>
-        <div className="flex flex-wrap items-center justify-center gap-4 pt-1">
-          {["✓ 100% Exclusive to You", "✓ Never Resold or Shared", "✓ You Own the Ads & Leads"].map((badge) => (
-            <span key={badge} className="text-green-400 text-sm font-medium">
-              {badge}
-            </span>
-          ))}
-        </div>
+    <div className="space-y-6 text-center pt-8 max-w-2xl mx-auto">
+      <h1 className="text-4xl font-extrabold text-white">
+        Generate Your Own Exclusive Insurance Leads on Facebook
+      </h1>
+      <p className="text-xl text-gray-300">
+        Stop paying $25–50 per lead to vendors. Generate exclusive leads you own for a fraction of the cost — never resold, never shared, 100% yours.
+      </p>
+      <div className="flex flex-wrap items-center justify-center gap-4">
+        {["✓ 100% Exclusive to You", "✓ Never Resold or Shared", "✓ You Own the Ads & Leads"].map((badge) => (
+          <span key={badge} className="text-green-400 text-sm font-medium">
+            {badge}
+          </span>
+        ))}
       </div>
+      <div className="pt-2 space-y-2">
+        <a
+          href="/upgrade"
+          className="inline-block bg-blue-600 hover:bg-blue-500 text-white font-semibold px-8 py-3 rounded-lg transition text-base"
+        >
+          View Plans &amp; Upgrade →
+        </a>
+        <p className="text-xs text-gray-500">
+          Questions? Email{" "}
+          <a href="mailto:support@covecrm.com" className="text-gray-400 hover:text-white underline">
+            support@covecrm.com
+          </a>
+        </p>
+      </div>
+    </div>
+  );
+}
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-3xl mx-auto">
-        {/* Lead Manager */}
-        <div className="bg-[#1e293b] border border-gray-700 rounded-2xl p-6 space-y-4">
-          <div>
-            <h2 className="text-xl font-bold text-white">Lead Manager</h2>
-            <p className="text-3xl font-extrabold text-blue-400 mt-1">$149<span className="text-sm text-gray-400 font-normal">/mo</span></p>
-          </div>
-          <ul className="space-y-2 text-sm text-gray-300">
-            {[
-              "Step-by-step Facebook Ads setup guide",
-              "AI-generated ad copy for your lead type",
-              "Winning ad intelligence from Facebook Ad Library",
-              "Campaign performance dashboard",
-              "Automatic lead intake to your CRM",
-            ].map((f) => (
-              <li key={f} className="flex items-start gap-2">
-                <span className="text-green-400 mt-0.5">✓</span> {f}
-              </li>
-            ))}
-          </ul>
-          <button
-            onClick={() => onGetStarted("manager")}
-            className="w-full bg-blue-600 hover:bg-blue-500 text-white font-semibold py-3 rounded-lg transition"
-          >
-            Get Started — $149/mo
-          </button>
-        </div>
+// ── What's Included ───────────────────────────────────────────────────────────
 
-        {/* Lead Manager Pro */}
-        <div className="bg-[#1e293b] border border-blue-500 rounded-2xl p-6 space-y-4 relative">
-          <div className="absolute -top-3 left-1/2 -translate-x-1/2">
-            <span className="bg-blue-600 text-white text-xs font-bold px-3 py-1 rounded-full">MOST POPULAR</span>
-          </div>
-          <div>
-            <h2 className="text-xl font-bold text-white">Lead Manager Pro</h2>
-            <p className="text-3xl font-extrabold text-blue-400 mt-1">$249<span className="text-sm text-gray-400 font-normal">/mo</span></p>
-          </div>
-          <ul className="space-y-2 text-sm text-gray-300">
-            {[
-              "Everything in Lead Manager",
-              "AI-powered campaign monitoring",
-              "Weekly AI optimization alerts",
-              "A/B testing recommendations",
-              "Priority support",
-            ].map((f) => (
-              <li key={f} className="flex items-start gap-2">
-                <span className="text-blue-400 mt-0.5">✓</span> {f}
-              </li>
-            ))}
-          </ul>
-          <button
-            onClick={() => onGetStarted("manager_pro")}
-            className="w-full bg-blue-500 hover:bg-blue-400 text-white font-semibold py-3 rounded-lg transition"
-          >
-            Get Started — $249/mo
-          </button>
+function WhatsIncluded() {
+  const managerFeatures = [
+    "Step-by-step Facebook Ads setup guide for your lead type",
+    "AI-generated ad copy — 3 headlines + 3 body text variations",
+    "Curated ad images — 5 photos for your lead type",
+    "Winning ad intelligence — browse top-performing ads in your niche",
+    "Campaign performance dashboard — track CPL, spend, leads",
+    "Real-time lead delivery — leads flow directly into your CRM via Zapier",
+    "AI optimization recommendations — scale, pause, or test",
+    "Expectations walkthrough — 90-day roadmap to consistent leads",
+    "Google Sheets backup — every lead saved to a sheet you own",
+  ];
+  const proFeatures = [
+    "Weekly AI performance analysis — detailed report every Monday",
+    "Auto Mode — AI automatically flags ads to pause or scale",
+    "A/B test recommendations — what to test next",
+    "Daily action report — wake up knowing exactly what to do",
+    "Market intelligence — weekly trends from competitor ad scanning",
+    "Complete ad package generator — hook, copy, images, lead form questions, SMS follow-up script, call script all in one",
+    "Priority support",
+  ];
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-4xl mx-auto">
+      <div className="bg-[#1e293b] border border-gray-700 rounded-xl p-6 space-y-3">
+        <div>
+          <h3 className="text-white font-bold text-base">Lead Manager</h3>
+          <p className="text-blue-400 font-extrabold text-xl mt-0.5">$149<span className="text-sm text-gray-400 font-normal">/mo</span></p>
         </div>
+        <ul className="space-y-1.5">
+          {managerFeatures.map((f) => (
+            <li key={f} className="flex items-start gap-2 text-xs text-gray-300">
+              <span className="text-green-400 mt-0.5 shrink-0">✓</span> {f}
+            </li>
+          ))}
+        </ul>
+      </div>
+      <div className="bg-[#1e293b] border border-blue-500/50 rounded-xl p-6 space-y-3">
+        <div>
+          <h3 className="text-white font-bold text-base">Lead Manager Pro</h3>
+          <p className="text-blue-400 font-extrabold text-xl mt-0.5">$249<span className="text-sm text-gray-400 font-normal">/mo</span></p>
+          <p className="text-xs text-blue-400 mt-0.5">Everything above, plus:</p>
+        </div>
+        <ul className="space-y-1.5">
+          {proFeatures.map((f) => (
+            <li key={f} className="flex items-start gap-2 text-xs text-gray-300">
+              <span className="text-blue-400 mt-0.5 shrink-0">✓</span> {f}
+            </li>
+          ))}
+        </ul>
       </div>
     </div>
   );
@@ -281,6 +290,7 @@ function SetupWizard({
   const [step, setStep] = useState(0);
   const [adData, setAdData] = useState<GeneratedAd | null>(null);
   const [adCards, setAdCards] = useState<AdCard[]>([]);
+  const [adLibraryUrl, setAdLibraryUrl] = useState<string>("");
   const [generatingAds, setGeneratingAds] = useState(false);
   const [loadingIntel, setLoadingIntel] = useState(false);
   const [copiedIdx, setCopiedIdx] = useState<string | null>(null);
@@ -332,19 +342,15 @@ function SetupWizard({
   const loadAdIntelligence = async () => {
     setLoadingIntel(true);
     try {
-      const res = await fetch(`/api/facebook/ad-intelligence?leadType=${leadType}`);
+      const res = await fetch("/api/facebook/scan-ads", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ leadType }),
+      });
       const data = await res.json();
-      if (res.ok && data.ads?.length === 0) {
-        await fetch("/api/facebook/scan-ads", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ leadType }),
-        });
-        const res2 = await fetch(`/api/facebook/ad-intelligence?leadType=${leadType}`);
-        const data2 = await res2.json();
-        setAdCards(data2.ads ?? []);
-      } else {
-        setAdCards(data.ads ?? []);
+      if (res.ok) {
+        setAdCards(data.winningPatterns ?? data.ads ?? []);
+        setAdLibraryUrl(data.adLibraryUrl ?? "");
       }
     } finally {
       setLoadingIntel(false);
@@ -758,24 +764,31 @@ function SetupWizard({
                   )}
 
                   {imageData && (
-                    <div className="space-y-5">
-                      {/* AI Generated Images */}
-                      {imageData.aiImages.length > 0 && (
+                    <div className="space-y-4">
+                      {/* Curated Stock Photos */}
+                      {imageData.stockPhotos.length > 0 && (
                         <div className="space-y-2">
-                          <p className="text-xs text-gray-400 uppercase tracking-wide font-medium">AI Generated — Unique to You</p>
+                          <p className="text-xs text-gray-400 uppercase tracking-wide font-medium">Curated Photos for Your Lead Type</p>
                           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                            {imageData.aiImages.map((img, i) => (
+                            {imageData.stockPhotos.map((photo: any, i: number) => (
                               <div key={i} className="bg-[#0f172a] border border-gray-700 rounded-lg overflow-hidden">
                                 <img
-                                  src={img.url}
-                                  alt={`AI generated ad image ${i + 1}`}
+                                  src={photo.url}
+                                  alt={`Photo ${i + 1}`}
                                   className="w-full object-cover"
                                   style={{ aspectRatio: "16/9" }}
                                 />
                                 <div className="p-2 flex items-center justify-between">
-                                  <span className="text-xs text-gray-500">1792×1024px</span>
                                   <a
-                                    href={img.url}
+                                    href={photo.unsplashLink}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="text-xs text-gray-500 hover:text-gray-300"
+                                  >
+                                    Photo by {photo.photographer}
+                                  </a>
+                                  <a
+                                    href={photo.downloadUrl}
                                     target="_blank"
                                     rel="noopener noreferrer"
                                     className="text-xs text-blue-400 hover:text-blue-300"
@@ -789,74 +802,16 @@ function SetupWizard({
                         </div>
                       )}
 
-                      {/* Stock Photos */}
-                      {imageData.stockPhotos.length > 0 && (
-                        <div className="space-y-2">
-                          <p className="text-xs text-gray-400 uppercase tracking-wide font-medium">Stock Photos — Curated for Your Lead Type</p>
-                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                            {imageData.stockPhotos.map((photo, i) => (
-                              <div key={i} className="bg-[#0f172a] border border-gray-700 rounded-lg overflow-hidden">
-                                <img
-                                  src={photo.url}
-                                  alt={`Stock photo ${i + 1}`}
-                                  className="w-full object-cover"
-                                  style={{ aspectRatio: "16/9" }}
-                                />
-                                <div className="p-2 space-y-1">
-                                  <div className="flex items-center justify-between">
-                                    <a
-                                      href={photo.unsplashLink}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      className="text-xs text-gray-500 hover:text-gray-300"
-                                    >
-                                      Photo by {photo.photographer}
-                                    </a>
-                                    <a
-                                      href={photo.downloadUrl}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      className="text-xs text-blue-400 hover:text-blue-300"
-                                    >
-                                      Download ↗
-                                    </a>
-                                  </div>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-
-                      <div className="bg-[#0f172a] border border-gray-700 rounded-lg p-3 space-y-1">
-                        <p className="text-xs text-gray-400">📐 {imageData.recommendedSize}</p>
-                        <p className="text-xs text-gray-500">Each agent gets different images — your ads won&apos;t look like everyone else&apos;s. Download your favorites and upload them directly to Facebook Ads Manager.</p>
+                      <div className="bg-[#0f172a] border border-gray-700 rounded-lg p-3 space-y-1.5">
+                        <p className="text-xs text-gray-300">These are real lifestyle photos that perform well for insurance ads. Download 3–5 different ones and let Facebook find the winner automatically.</p>
+                        <p className="text-xs text-blue-300">💡 Pro tip: Photos of real people you know (clients, yourself, your family) outperform stock photos. Ask clients if you can use their photo with a testimonial quote.</p>
+                        <p className="text-xs text-gray-500">📐 {imageData.recommendedSize}</p>
                       </div>
-
-                      <div className="space-y-1">
-                        {[
-                          "Use 3–5 different images and let Facebook find the winner automatically",
-                          "Square (1080×1080px) works better on mobile — most insurance leads come from mobile",
-                          "Never put more than 20% text on your image or Facebook will limit its reach",
-                        ].map((tip) => (
-                          <p key={tip} className="text-xs text-gray-400 flex items-start gap-2">
-                            <span className="text-blue-400 shrink-0">•</span> {tip}
-                          </p>
-                        ))}
-                      </div>
-
-                      <button
-                        onClick={generateImages}
-                        disabled={generatingImages}
-                        className="text-xs text-gray-500 hover:text-white underline"
-                      >
-                        Regenerate images
-                      </button>
                     </div>
                   )}
 
                   {!imageData && !generatingImages && (
-                    <p className="text-xs text-gray-500">Click &quot;Generate Images&quot; to get AI-created images unique to your campaign, plus curated stock photos for your lead type.</p>
+                    <p className="text-xs text-gray-500">Click &quot;Generate Images&quot; to get 5 curated lifestyle photos for your lead type.</p>
                   )}
                 </div>
               </div>
@@ -871,8 +826,29 @@ function SetupWizard({
         {/* ── Step 5: Winning Ad Examples ── */}
         {step === 5 && (
           <div className="space-y-4">
-            <h3 className="text-xl font-bold text-white">Winning Ad Examples</h3>
-            <p className="text-sm text-gray-400">Top-performing ads in your niche from the Facebook Ad Library.</p>
+            <div className="flex items-start justify-between flex-wrap gap-3">
+              <div>
+                <h3 className="text-xl font-bold text-white">Winning Ad Examples</h3>
+                <p className="text-sm text-gray-400 mt-0.5">Proven patterns in your niche — use these as inspiration, not to copy.</p>
+              </div>
+              {adLibraryUrl && (
+                <a
+                  href={adLibraryUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="shrink-0 bg-blue-700 hover:bg-blue-600 text-white text-xs px-4 py-2 rounded-lg font-medium"
+                >
+                  Browse Live Winning Ads →
+                </a>
+              )}
+            </div>
+
+            <div className="bg-[#0f172a] border border-blue-800/40 rounded-lg p-3 text-xs text-blue-300 space-y-1">
+              <p>🔍 <strong>How to use the Ad Library:</strong> Click "Browse Live Winning Ads" to see real ads running right now in your niche. Filter by ads running 30+ days — those are proven winners.</p>
+              <p>💡 Use these patterns as inspiration, then create your own unique angle. Don't copy ads exactly.</p>
+              <p>✅ <strong>No landing page needed.</strong> Facebook Lead Ads keep everything inside Facebook — the lead form IS your landing page. Removing friction = more leads.</p>
+            </div>
+
             {loadingIntel ? (
               <div className="flex items-center gap-3 text-gray-400 py-8 justify-center">
                 <div className="animate-spin w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full" />
@@ -895,8 +871,17 @@ function SetupWizard({
                     {ad.ctaButton && (
                       <p className="text-xs text-gray-500">CTA: {ad.ctaButton}</p>
                     )}
+                    {(ad as any).notes && (
+                      <p className="text-xs text-gray-600 italic">{(ad as any).notes}</p>
+                    )}
                   </div>
                 ))}
+              </div>
+            )}
+
+            {adLibraryUrl && (
+              <div className="bg-white/5 rounded-lg p-3 text-xs text-gray-400">
+                <p>Can&apos;t see enough ads? <a href={adLibraryUrl} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300 underline">Open Facebook Ad Library →</a> and search for your niche. Look for ads that started 30+ days ago and are still running — those are your benchmarks.</p>
               </div>
             )}
           </div>
@@ -959,20 +944,20 @@ function SetupWizard({
         {step === 7 && (
           <div className="space-y-5">
             <h3 className="text-xl font-bold text-white">Connect Your Leads to CoveCRM</h3>
-            <p className="text-sm text-gray-400">Choose how you want to receive leads from Facebook. You can use all three options simultaneously.</p>
+            <p className="text-sm text-gray-400">Choose how you want to receive leads from Facebook.</p>
 
-            {/* Option A: Webhook */}
+            {/* Option A: Zapier (Recommended) */}
             <div className="bg-[#0f172a] border border-green-800 rounded-xl p-5 space-y-3">
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <span className="bg-green-700 text-white text-xs font-bold px-2 py-0.5 rounded">Option A</span>
-                <h4 className="font-semibold text-white">Instant Lead Delivery</h4>
+                <h4 className="font-semibold text-white">Connect via Zapier (Recommended, Free)</h4>
                 <span className="text-xs text-green-400 bg-green-900/40 px-2 py-0.5 rounded">Recommended</span>
               </div>
               <p className="text-sm text-gray-300">
-                When someone fills out your Facebook Lead Ad form, their info appears in CoveCRM within seconds — no manual work needed.
+                Facebook does not allow pasting a webhook URL directly. The easiest way to connect your leads to CoveCRM is through Zapier — it&apos;s free for this use case and takes about 5 minutes.
               </p>
               <div>
-                <p className="text-xs text-gray-400 mb-1">Your unique CoveCRM webhook URL:</p>
+                <p className="text-xs text-gray-400 mb-1">Your CoveCRM webhook URL:</p>
                 <div className="flex items-center gap-2">
                   <div className="flex-1 bg-gray-900 border border-gray-600 rounded px-3 py-2 font-mono text-xs text-blue-300 break-all">
                     {webhookUrl}
@@ -985,132 +970,63 @@ function SetupWizard({
                   </button>
                 </div>
               </div>
-              <ol className="text-sm text-gray-300 space-y-1 list-decimal list-inside ml-2">
-                <li>In Facebook Ads Manager, open your Lead Ad campaign</li>
-                <li>Click your Lead Form → Settings → CRM Integration</li>
-                <li>Select &quot;Other&quot; or &quot;Webhook&quot;</li>
-                <li>Paste your unique CoveCRM webhook URL above</li>
-                <li>Click &quot;Send Test Lead&quot; to verify</li>
-                <li>Leads now appear in CoveCRM automatically</li>
+              <ol className="text-sm text-gray-300 space-y-2 list-decimal list-inside ml-2">
+                <li>Go to <a href="https://zapier.com" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">zapier.com</a> and create a free account if you don&apos;t have one</li>
+                <li>Click <strong>&quot;Create Zap&quot;</strong></li>
+                <li>For the Trigger, search and select <strong>&quot;Facebook Lead Ads&quot;</strong></li>
+                <li>Click <strong>&quot;Connect&quot;</strong> and log in with your Facebook account</li>
+                <li>Select your Facebook Page and Lead Form from the dropdowns</li>
+                <li>For the Action, search and select <strong>&quot;Webhooks by Zapier&quot;</strong></li>
+                <li>Select action event: <strong>&quot;POST&quot;</strong></li>
+                <li>In the URL field, paste your CoveCRM webhook URL above</li>
+                <li>Set Payload Type to <strong>&quot;JSON&quot;</strong></li>
+                <li>Map these fields: <code className="bg-gray-800 px-1 rounded">first_name</code>, <code className="bg-gray-800 px-1 rounded">last_name</code>, <code className="bg-gray-800 px-1 rounded">email</code>, <code className="bg-gray-800 px-1 rounded">phone_number</code></li>
+                <li>Click <strong>&quot;Test&quot;</strong> to send a test lead</li>
+                <li>Turn on your Zap — leads will now flow into CoveCRM automatically</li>
               </ol>
+              <div className="bg-green-900/20 border border-green-800/40 rounded-lg p-3 text-xs text-green-300 space-y-1">
+                <p>Your Zapier free plan allows 100 leads/month. Upgrade to Zapier Starter ($19.99/month) for unlimited leads.</p>
+                <a href="https://zapier.com" target="_blank" rel="noopener noreferrer" className="text-green-400 hover:text-green-300 underline">Open Zapier →</a>
+              </div>
             </div>
 
-            {/* Option B: Google Sheet Sync */}
+            {/* Option B: CSV Download */}
             <div className="bg-[#0f172a] border border-gray-700 rounded-xl p-5 space-y-3">
               <div className="flex items-center gap-2">
                 <span className="bg-blue-700 text-white text-xs font-bold px-2 py-0.5 rounded">Option B</span>
-                <h4 className="font-semibold text-white">Auto-Sync to Google Sheets</h4>
+                <h4 className="font-semibold text-white">Download CSV from Facebook (Manual)</h4>
               </div>
               <p className="text-sm text-gray-300">
-                Connect a Google Sheet to Facebook Lead Ads. CoveCRM imports new leads from your sheet every 5 minutes. You keep a permanent copy of every lead in a sheet you own.
+                Facebook stores your leads for 90 days. You can download them as a CSV and import to CoveCRM anytime.
               </p>
               <ol className="text-sm text-gray-300 space-y-1 list-decimal list-inside ml-2">
-                <li>In Facebook Ads Manager, go to Leads Center</li>
-                <li>Click &quot;Connect CRM&quot; → select &quot;Google Sheets&quot;</li>
-                <li>Follow Facebook&apos;s steps to connect your Google account and select a sheet</li>
-                <li>Copy your Google Sheet URL and paste it below</li>
+                <li>Go to <a href="https://business.facebook.com" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">business.facebook.com</a></li>
+                <li>Click on your Facebook Page</li>
+                <li>Go to <strong>&quot;Leads Center&quot;</strong> from the left menu (or go to Ads Manager → your Lead Ad → Download leads)</li>
+                <li>Select the date range and form</li>
+                <li>Click <strong>&quot;Download&quot;</strong> — choose CSV format</li>
+                <li>Come back to CoveCRM and use the <strong>&quot;Import Leads CSV&quot;</strong> button on your campaign</li>
               </ol>
-              <div className="flex gap-2 items-end">
-                <div className="flex-1">
-                  <label className="text-xs text-gray-400 mb-1 block">Google Sheet URL</label>
-                  <input
-                    value={googleSheetUrl}
-                    onChange={(e) => setGoogleSheetUrl(e.target.value)}
-                    placeholder="https://docs.google.com/spreadsheets/d/..."
-                    className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-white text-xs"
-                  />
-                </div>
-                <button
-                  onClick={() => createdCampaignId && connectSheet(createdCampaignId)}
-                  disabled={connectingSheet || !googleSheetUrl}
-                  className="bg-blue-700 hover:bg-blue-600 text-white text-xs px-4 py-2 rounded disabled:opacity-60 shrink-0"
-                >
-                  {connectingSheet ? "Connecting…" : "Connect Sheet"}
-                </button>
-              </div>
-              {sheetMsg && (
-                <p className={`text-xs ${sheetMsg.includes("!") ? "text-green-400" : "text-red-400"}`}>
-                  {sheetMsg}
-                </p>
-              )}
-              <p className="text-xs text-gray-500">Leads sync every 5 minutes. Use the webhook above for instant delivery.</p>
-              <p className="text-xs text-gray-500">Your Google Sheet will also receive a copy of every lead that comes in through the webhook automatically.</p>
             </div>
 
-            {/* Option C: Apps Script */}
+            {/* Option C: Developer / Direct Webhook */}
             <div className="bg-[#0f172a] border border-gray-700 rounded-xl p-5 space-y-3">
               <div className="flex items-center gap-2">
                 <span className="bg-gray-600 text-white text-xs font-bold px-2 py-0.5 rounded">Option C</span>
-                <h4 className="font-semibold text-white">Set Up Your Own Google Sheet with Apps Script</h4>
+                <h4 className="font-semibold text-white">Direct Webhook (Advanced — Requires Developer)</h4>
                 <span className="text-xs text-yellow-400 bg-yellow-900/40 px-2 py-0.5 rounded">Advanced</span>
               </div>
               <p className="text-sm text-gray-300">
-                Use Google Apps Script to create a custom sheet that receives leads instantly. You get full control over your data.
+                If you or your developer want to connect directly without Zapier, you can register CoveCRM as a Facebook App and subscribe to webhook events. This requires creating a Facebook Developer App and is recommended only for developers.
               </p>
-              {appsScriptTemplate && (
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <p className="text-xs text-gray-400">Apps Script Template</p>
-                    <button
-                      onClick={() => {
-                        navigator.clipboard.writeText(appsScriptTemplate).catch(() => {});
-                        setCopiedScript(true);
-                        setTimeout(() => setCopiedScript(false), 1500);
-                      }}
-                      className="text-xs text-blue-400 hover:text-blue-300"
-                    >
-                      {copiedScript ? "Copied!" : "Copy Script"}
-                    </button>
-                  </div>
-                  <div className="bg-gray-900 border border-gray-700 rounded p-3 font-mono text-xs text-gray-400 max-h-32 overflow-y-auto whitespace-pre-wrap">
-                    {appsScriptTemplate.slice(0, 400)}…
-                  </div>
-                </div>
-              )}
-              {appsScriptSteps.length > 0 ? (
-                <ol className="text-sm text-gray-300 space-y-1 list-decimal list-inside ml-2">
-                  {appsScriptSteps.map((s, i) => (
-                    <li key={i}>
-                      {i === 0 ? (
-                        <>Go to <a href="https://script.google.com" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">script.google.com</a> and click &apos;+ New project&apos;</>
-                      ) : s}
-                    </li>
-                  ))}
-                </ol>
-              ) : (
-                <ol className="text-sm text-gray-300 space-y-1 list-decimal list-inside ml-2">
-                  <li>Go to <a href="https://script.google.com" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">script.google.com</a> and click &apos;+ New project&apos;</li>
-                  <li>Delete any existing code in the editor</li>
-                  <li>Paste the Apps Script template above and click &apos;Copy Script&apos;</li>
-                  <li>Click Deploy → New Deployment → Web App</li>
-                  <li>Set &quot;Execute as&quot;: Me, &quot;Who has access&quot;: Anyone</li>
-                  <li>Copy the Web App URL and paste it below</li>
-                </ol>
-              )}
-              <div className="flex gap-2 items-end">
-                <div className="flex-1">
-                  <label className="text-xs text-gray-400 mb-1 block">Apps Script Web App URL</label>
-                  <input
-                    value={appsScriptUrl}
-                    onChange={(e) => setAppsScriptUrl(e.target.value)}
-                    placeholder="https://script.google.com/macros/s/..."
-                    className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-white text-xs"
-                  />
-                </div>
-                <button
-                  onClick={() => createdCampaignId && connectAppsScript(createdCampaignId)}
-                  disabled={connectingScript || !appsScriptUrl}
-                  className="bg-gray-700 hover:bg-gray-600 text-white text-xs px-4 py-2 rounded disabled:opacity-60 shrink-0"
-                >
-                  {connectingScript ? "Connecting…" : "Connect"}
-                </button>
-              </div>
-              {scriptMsg && (
-                <p className={`text-xs ${scriptMsg.includes("!") ? "text-green-400" : "text-red-400"}`}>
-                  {scriptMsg}
-                </p>
-              )}
-              <p className="text-xs text-gray-500">This gives you a Google Sheet that updates in real time when leads come in, plus your leads still appear in CoveCRM automatically.</p>
+              <a
+                href="https://developers.facebook.com/docs/marketing-api/guides/lead-ads/"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-block text-xs text-blue-400 hover:text-blue-300 underline"
+              >
+                View Facebook Developer Documentation →
+              </a>
             </div>
           </div>
         )}
@@ -1708,12 +1624,18 @@ export default function FacebookLeadsPage() {
         </div>
 
         {viewMode === "hero" && (
-          <HeroSection
-            onGetStarted={(plan) => {
-              setSelectedPlan(plan);
-              setViewMode("lead-type");
-            }}
-          />
+          <div className="space-y-12">
+            <HeroSection
+              onGetStarted={(plan) => {
+                setSelectedPlan(plan);
+                setViewMode("lead-type");
+              }}
+            />
+            <div>
+              <h2 className="text-center text-lg font-semibold text-white mb-6">What&apos;s Included in Your Plan</h2>
+              <WhatsIncluded />
+            </div>
+          </div>
         )}
 
         {viewMode === "lead-type" && (

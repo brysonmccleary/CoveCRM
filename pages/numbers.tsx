@@ -26,6 +26,7 @@ function NumbersPage() {
   const [checkingSpam, setCheckingSpam] = useState<string | null>(null);
   const [defaultId, setDefaultId] = useState<string | null>(null);
   const [savingDefault, setSavingDefault] = useState(false);
+  const [confirmedId, setConfirmedId] = useState<string | null>(null);
   const [releaseConfirm, setReleaseConfirm] = useState<string | null>(null);
   const [releasing, setReleasing] = useState(false);
 
@@ -48,7 +49,22 @@ function NumbersPage() {
 
       if (defRes.ok) {
         const defData = await defRes.json();
-        setDefaultId(defData.defaultSmsNumberId || null);
+        const existingDefault = defData.defaultSmsNumberId || null;
+        setDefaultId(existingDefault);
+
+        // Auto-select if only one number and no default set
+        if (!existingDefault) {
+          const nums = numData?.numbers ?? [];
+          if (nums.length === 1) {
+            const autoId = nums[0]._id || nums[0].sid || nums[0].id;
+            // Fire and forget — don't await
+            fetch("/api/settings/default-number", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ numberId: autoId }),
+            }).then(() => setDefaultId(autoId)).catch(() => {});
+          }
+        }
       }
     } catch (error) {
       console.error("Error fetching numbers:", error);
@@ -89,9 +105,10 @@ function NumbersPage() {
       });
       if (res.ok) {
         setDefaultId(numberId);
-        toast.success("Default SMS number updated");
+        setConfirmedId(numberId);
+        setTimeout(() => setConfirmedId(null), 2000);
       } else {
-        toast.error("Failed to save default");
+        toast.error("Failed to save primary number");
       }
     } catch {
       toast.error("Failed to save default");
@@ -131,18 +148,18 @@ function NumbersPage() {
       <div className="p-4 space-y-6">
         <h1 className="text-2xl font-bold">Manage Numbers</h1>
 
-        {/* Default SMS Number */}
+        {/* Primary SMS Number */}
         {!loading && numbers.length > 0 && (
           <div className="bg-[#0f172a] border border-white/10 rounded-xl p-5">
-            <h2 className="text-base font-semibold text-white mb-1">Default SMS Number</h2>
+            <h2 className="text-base font-semibold text-white mb-1">Primary SMS Number</h2>
             <p className="text-xs text-gray-400 mb-4">
-              Choose which number sends outbound SMS by default. If no default is set, the first available number is used.
+              Choose which number sends outbound SMS by default. If no primary is set, the first available number is used.
             </p>
             <div className="space-y-2">
               <label className="flex items-center gap-3 bg-[#1e293b] rounded-lg px-4 py-2.5 cursor-pointer border border-white/10 hover:border-indigo-500 transition">
                 <input
                   type="radio"
-                  name="defaultNumber"
+                  name="primaryNumber"
                   checked={!defaultId}
                   onChange={() => setDefault(null)}
                   className="accent-indigo-500"
@@ -152,28 +169,34 @@ function NumbersPage() {
               </label>
               {numbers.map((num) => {
                 const id = num._id || num.sid || num.id;
-                const isDefault = defaultId === id;
+                const isPrimary = defaultId === id;
+                const justConfirmed = confirmedId === id;
                 return (
                   <label
                     key={id}
                     className={`flex items-center gap-3 rounded-lg px-4 py-2.5 cursor-pointer border transition ${
-                      isDefault
+                      isPrimary
                         ? "bg-indigo-900/20 border-indigo-500"
                         : "bg-[#1e293b] border-white/10 hover:border-indigo-500"
                     }`}
                   >
                     <input
                       type="radio"
-                      name="defaultNumber"
-                      checked={isDefault}
+                      name="primaryNumber"
+                      checked={isPrimary}
                       onChange={() => setDefault(id)}
                       className="accent-indigo-500"
                       disabled={savingDefault}
                     />
                     <span className="text-white text-sm font-medium flex-1">{num.phoneNumber}</span>
-                    {isDefault && (
+                    {justConfirmed && (
+                      <span className="text-xs bg-blue-800 text-blue-300 px-2 py-0.5 rounded-full font-semibold animate-pulse">
+                        ✓ Updated
+                      </span>
+                    )}
+                    {isPrimary && !justConfirmed && (
                       <span className="text-xs bg-green-800 text-green-300 px-2 py-0.5 rounded-full font-semibold">
-                        ✓ Default
+                        ✓ Primary
                       </span>
                     )}
                   </label>
@@ -208,7 +231,7 @@ function NumbersPage() {
                         <p className="text-white font-semibold">{number.phoneNumber}</p>
                         {isDefault && (
                           <span className="text-xs bg-green-800 text-green-300 px-2 py-0.5 rounded-full">
-                            ✓ Default SMS
+                            ✓ Primary SMS
                           </span>
                         )}
                       </div>

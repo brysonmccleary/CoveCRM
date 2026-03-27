@@ -61,7 +61,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .slice(0, 3);
 
     if (sorted.length === 0) {
-      return res.status(200).json({ objections: [], range, since });
+      return res.status(200).json({
+        objections: [],
+        range,
+        since,
+        message: "Generate call overviews to start tracking objections",
+      });
     }
 
     // Try to match each objection to an ObjectionEntry for a suggested response

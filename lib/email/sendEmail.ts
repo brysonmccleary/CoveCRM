@@ -30,6 +30,8 @@ export interface SendEmailPayload {
   campaignId?: string | mongoose.Types.ObjectId;
   enrollmentId?: string | mongoose.Types.ObjectId;
   stepIndex?: number;
+  /** Physical mailing address for CAN-SPAM footer (recruiting emails) */
+  agentAddress?: string;
 }
 
 export interface SendEmailResult {
@@ -56,15 +58,19 @@ export async function sendEmailWithTracking(
     fromName,
     replyTo,
     subject,
-    html,
+    html: rawHtml,
     text,
     campaignId,
     enrollmentId,
     stepIndex,
+    agentAddress,
   } = payload;
 
   const normalizedTo = to.toLowerCase().trim();
   const normalizedUserEmail = userEmail.toLowerCase().trim();
+
+  // Inline variable — will be resolved after EmailMessage is created (needs message ID for unsubscribe URL)
+  let html = rawHtml;
 
   // Always check suppression before sending
   const suppressed = await checkSuppression(normalizedUserEmail, normalizedTo);
@@ -93,6 +99,30 @@ export async function sendEmailWithTracking(
     ? `${resolvedFromName} <${resolvedFromRaw}>`
     : resolvedFromRaw;
 
+  // ── CAN-SPAM footer injection ─────────────────────────────────────────────
+  // Only inject when the email contains [FOOTER] placeholder (set by AI on recruiting emails)
+  if (rawHtml.includes("[FOOTER]")) {
+    const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || "https://covecrm.com";
+    // Note: emailMessage._id not available yet — we use a placeholder resolved below
+    const agentName = fromName || resolvedFromRaw;
+    const agentEmail = resolvedFromRaw;
+    const physicalAddress =
+      agentAddress || "CoveCRM, 123 Business Ave, Suite 100, Phoenix, AZ 85001";
+
+    // We need the emailMessage ID for the unsubscribe link, so we'll do a two-pass:
+    // 1. Create with placeholder unsubscribe link
+    // 2. Replace placeholder after creation
+    html = rawHtml.replace(
+      "[FOOTER]",
+      `<div style="margin-top:32px;padding-top:16px;border-top:1px solid #374151;font-family:Arial,sans-serif;font-size:11px;color:#9ca3af;line-height:1.7;">
+<p style="margin:0 0 5px 0;">This email was sent by ${agentName} (${agentEmail}) regarding a professional opportunity in the insurance industry.</p>
+<p style="margin:0 0 5px 0;">You are receiving this email because your insurance license information is publicly available through your state's Department of Insurance.</p>
+<p style="margin:0 0 5px 0;">To unsubscribe from future emails, <a href="{{UNSUBSCRIBE_URL}}" style="color:#9ca3af;text-decoration:underline;">click here</a>.</p>
+<p style="margin:0;">Physical address: ${physicalAddress}</p>
+</div>`
+    );
+  }
+
   // Create EmailMessage in queued state before attempting send
   const emailMessage = await EmailMessage.create({
     userId,
@@ -111,6 +141,13 @@ export async function sendEmailWithTracking(
     ...(stepIndex !== undefined ? { stepIndex } : {}),
   });
 
+  // Resolve unsubscribe URL now that we have the emailMessage ID
+  if (html.includes("{{UNSUBSCRIBE_URL}}")) {
+    const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || "https://covecrm.com";
+    const unsubUrl = `${baseUrl}/api/email/unsubscribe?mid=${emailMessage._id}`;
+    html = html.replaceAll("{{UNSUBSCRIBE_URL}}", unsubUrl);
+  }
+
   // ── Path A: Agent SMTP ────────────────────────────────────────────────────
   if (agentSmtp) {
     try {
@@ -127,7 +164,7 @@ export async function sendEmailWithTracking(
         from: fromAddress,
         to: normalizedTo,
         subject,
-        html,
+        html, // footer-injected
         ...(text ? { text } : {}),
         ...(replyTo ? { replyTo } : {}),
       });
@@ -165,7 +202,7 @@ export async function sendEmailWithTracking(
       from: fromAddress,
       to: normalizedTo,
       subject,
-      html,
+      html, // footer-injected
       ...(text ? { text } : {}),
       ...(replyTo ? { reply_to: replyTo } : {}),
     };
