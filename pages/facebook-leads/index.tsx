@@ -1620,11 +1620,21 @@ function LeadFeed() {
 
 type ViewMode = "loading" | "hero" | "lead-type" | "setup" | "dashboard";
 
+const FILTER_OPTIONS = [
+  { id: "", label: "All" },
+  { id: "final_expense", label: "Final Expense" },
+  { id: "mortgage_protection", label: "Mortgage Protection" },
+  { id: "veteran", label: "Veteran" },
+  { id: "iul", label: "IUL" },
+  { id: "trucker", label: "Trucker" },
+];
+
 export default function FacebookLeadsPage() {
   const { data: session, status } = useSession();
   const router = useRouter();
   const [viewMode, setViewMode] = useState<ViewMode>("loading");
   const [campaigns, setCampaigns] = useState<FBCampaign[]>([]);
+  const [campaignFilter, setCampaignFilter] = useState<string>("");
   const [selectedPlan, setSelectedPlan] = useState<"manager" | "manager_pro">("manager");
   const [selectedLeadType, setSelectedLeadType] = useState<string>("");
 
@@ -1676,9 +1686,12 @@ export default function FacebookLeadsPage() {
             <h1 className="text-2xl font-bold text-white">Facebook Lead Manager</h1>
             <p className="text-gray-400 text-sm mt-0.5">Generate exclusive insurance leads from Facebook Ads</p>
           </div>
-          {viewMode === "dashboard" && (
+          {viewMode !== "loading" && (
             <button
-              onClick={() => setViewMode("lead-type")}
+              onClick={() => {
+                setSelectedPlan("manager");
+                setViewMode("lead-type");
+              }}
               className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg text-sm font-medium"
             >
               + New Campaign
@@ -1735,20 +1748,45 @@ export default function FacebookLeadsPage() {
         {viewMode === "dashboard" && (
           <div className="space-y-8">
             <div className="space-y-4">
-              <h2 className="text-lg font-bold text-white">Your Campaigns</h2>
-              {campaigns.length === 0 ? (
-                <p className="text-gray-500 text-sm">No campaigns yet.</p>
-              ) : (
-                campaigns.map((c) => (
-                  <CampaignCard
-                    key={c._id}
-                    campaign={c}
-                    onUpdate={() => loadCampaigns()}
-                    onDelete={() => loadCampaigns()}
-                    onSetupGuide={handleSetupGuide}
-                  />
-                ))
-              )}
+              <div className="flex items-center justify-between flex-wrap gap-3">
+                <h2 className="text-lg font-bold text-white">Your Campaigns</h2>
+                {/* Lead type filter */}
+                <div className="flex items-center gap-1 flex-wrap">
+                  {FILTER_OPTIONS.map((f) => (
+                    <button
+                      key={f.id}
+                      onClick={() => setCampaignFilter(f.id)}
+                      className={`text-xs px-3 py-1 rounded-full transition ${
+                        campaignFilter === f.id
+                          ? "bg-blue-600 text-white"
+                          : "bg-gray-800 text-gray-400 hover:text-white hover:bg-gray-700"
+                      }`}
+                    >
+                      {f.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {(() => {
+                const filtered = campaignFilter
+                  ? campaigns.filter((c) => c.leadType === campaignFilter)
+                  : campaigns;
+                return filtered.length === 0 ? (
+                  <p className="text-gray-500 text-sm">
+                    {campaignFilter ? "No campaigns match this filter." : "No campaigns yet."}
+                  </p>
+                ) : (
+                  filtered.map((c) => (
+                    <CampaignCard
+                      key={c._id}
+                      campaign={c}
+                      onUpdate={() => loadCampaigns()}
+                      onDelete={() => loadCampaigns()}
+                      onSetupGuide={handleSetupGuide}
+                    />
+                  ))
+                );
+              })()}
             </div>
 
             <div className="border-t border-gray-700 pt-6">
