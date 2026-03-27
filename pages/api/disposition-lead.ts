@@ -10,6 +10,7 @@ import { initSocket } from "@/lib/socket";
 import { folderNameForDisposition } from "@/lib/dispositionToFolder";
 import { isSystemFolderName } from "@/lib/systemFolders";
 import jwt from "jsonwebtoken";
+import { trackOutcomeFromDisposition } from "@/lib/facebook/trackCRMOutcome";
 
 function escapeRegex(s: string) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -227,6 +228,9 @@ export default async function handler(
           : previousStatus || null,
       });
     } catch {}
+
+    // FB outcome tracking (best-effort, non-blocking)
+    trackOutcomeFromDisposition(leadId, rawName).catch(() => {});
 
     // Socket notify (best-effort)
     try {

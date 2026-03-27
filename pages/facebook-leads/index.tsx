@@ -1686,17 +1686,25 @@ export default function FacebookLeadsPage() {
             <h1 className="text-2xl font-bold text-white">Facebook Lead Manager</h1>
             <p className="text-gray-400 text-sm mt-0.5">Generate exclusive insurance leads from Facebook Ads</p>
           </div>
-          {viewMode !== "loading" && (
+          <div className="flex items-center gap-2">
             <button
-              onClick={() => {
-                setSelectedPlan("manager");
-                setViewMode("lead-type");
-              }}
-              className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg text-sm font-medium"
+              onClick={() => router.push("/facebook-ads")}
+              className="bg-indigo-600/80 hover:bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium border border-indigo-500/30"
             >
-              + New Campaign
+              Ads Manager →
             </button>
-          )}
+            {viewMode !== "loading" && (
+              <button
+                onClick={() => {
+                  setSelectedPlan("manager");
+                  setViewMode("lead-type");
+                }}
+                className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg text-sm font-medium"
+              >
+                + New Campaign
+              </button>
+            )}
+          </div>
         </div>
 
         {viewMode === "hero" && (

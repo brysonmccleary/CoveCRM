@@ -38,6 +38,27 @@ const FBLeadCampaignSchema = new Schema(
     },
     notes: { type: String, default: "" },
     isDefault: { type: Boolean, default: false }, // receives unmatched webhook leads for this user
+
+    // Performance scoring fields
+    metaCampaignId: { type: String, default: "" },
+    metaAdsetId: { type: String, default: "" },
+    objective: { type: String, default: "" }, // e.g. "LEAD_GENERATION"
+    autoModeOn: { type: Boolean, default: false },
+    targetCpl: { type: Number, default: 0 },
+    targetCostPerBooked: { type: Number, default: 0 },
+    targetCostPerSale: { type: Number, default: 0 },
+    performanceScore: { type: Number, default: null },
+    performanceClass: {
+      type: String,
+      enum: ["SCALE", "DUPLICATE_TEST", "MONITOR", "FIX", "PAUSE", null],
+      default: null,
+    },
+    lastScoredAt: { type: Date },
+    lastActionReport: { type: String, default: "" },
+    lastActionReportAt: { type: Date },
+    frequency: { type: Number, default: 0 },
+    optOutRate: { type: Number, default: 0 },
+    badNumberRate: { type: Number, default: 0 },
   },
   { timestamps: true }
 );

@@ -4,7 +4,8 @@ import mongoose, { Schema, models, model } from "mongoose";
 const FollowUpNudgeSchema = new Schema(
   {
     userEmail: { type: String, required: true, index: true },
-    leadId: { type: Schema.Types.ObjectId, ref: "Lead", required: true },
+    leadId: { type: Schema.Types.ObjectId, ref: "Lead", required: false },
+    campaignId: { type: Schema.Types.ObjectId, ref: "FBLeadCampaign" },
     leadName: { type: String, default: "" },
     message: { type: String, required: true },
     priority: { type: String, enum: ["high", "medium", "low"], default: "medium" },
