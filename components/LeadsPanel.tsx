@@ -196,6 +196,7 @@ export default function LeadsPanel() {
   const [selectAll, setSelectAll] = useState(false);
   const [showResumeOptions, setShowResumeOptions] = useState(false);
   const [previewLead, setPreviewLead] = useState<any | null>(null);
+  const [agingFilter, setAgingFilter] = useState<"all" | "fresh" | "warm" | "stale" | "cold">("all");
   const [numbers, setNumbers] = useState<NumberEntry[]>([]);
   const [selectedNumber, setSelectedNumber] = useState<string>("");
   const [resumeInfo, setResumeInfo] = useState<ResumeInfo | null>(null);
@@ -839,6 +840,22 @@ const goToAIDialSession = () => {
                   </div>
                 </div>
 
+                {/* Aging filter */}
+                <div className="flex items-center gap-2 mb-3">
+                  <label className="text-sm text-gray-400">Filter by age:</label>
+                  <select
+                    value={agingFilter}
+                    onChange={(e) => setAgingFilter(e.target.value as any)}
+                    className="border border-gray-600 bg-gray-700 text-white text-sm rounded px-2 py-1"
+                  >
+                    <option value="all">All</option>
+                    <option value="fresh">Fresh (&lt; 1 day)</option>
+                    <option value="warm">Warm (1–3 days)</option>
+                    <option value="stale">Stale (3–7 days)</option>
+                    <option value="cold">Cold (&gt; 7 days)</option>
+                  </select>
+                </div>
+
                 <table className="min-w-full text-base">
                   <thead>
                     <tr>
@@ -850,39 +867,84 @@ const goToAIDialSession = () => {
                       {showColEmail && <th>Email</th>}
                       {showColState && <th>State</th>}
                       {showColAge && <th>Age</th>}
+                      <th title="Lead score">Score</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {leads.map((lead, index) => (
-                      <tr key={lead._id} className="border-t">
-                        <td>
-                          <input
-                            type="checkbox"
-                            checked={selectedLeads.includes(lead._id)}
-                            onChange={() => toggleLeadSelection(lead._id)}
-                            className="cursor-pointer"
-                          />
-                        </td>
-                        <td>{index + 1}</td>
+                    {leads
+                      .filter((lead) => {
+                        if (agingFilter === "all") return true;
+                        const ageMs = Date.now() - new Date(lead.createdAt ?? 0).getTime();
+                        const ageDays = ageMs / (1000 * 60 * 60 * 24);
+                        if (agingFilter === "fresh") return ageDays < 1;
+                        if (agingFilter === "warm") return ageDays >= 1 && ageDays < 3;
+                        if (agingFilter === "stale") return ageDays >= 3 && ageDays < 7;
+                        if (agingFilter === "cold") return ageDays >= 7;
+                        return true;
+                      })
+                      .map((lead, index) => {
+                        const ageMs = Date.now() - new Date(lead.createdAt ?? 0).getTime();
+                        const ageDays = ageMs / (1000 * 60 * 60 * 24);
+                        const agingClass =
+                          ageDays < 1 ? "" :
+                          ageDays < 3 ? "bg-yellow-950/30" :
+                          ageDays < 7 ? "bg-orange-950/40" :
+                          "bg-red-950/30";
+                        const agingDot =
+                          ageDays < 1 ? null :
+                          ageDays < 3 ? "🟡" :
+                          ageDays < 7 ? "🟠" :
+                          "🔴";
 
-                        {showColFirstName && (
+                        return (
+                        <tr key={lead._id} className={`border-t ${agingClass}`}>
                           <td>
-                            <button
-                              onClick={() => setPreviewLead(typeof expandedFolder === "string" && expandedFolder ? { ...lead, folderId: expandedFolder } : lead)}
-                              className="text-blue-500 underline cursor-pointer"
-                            >
-                              {getLeadValue(lead, "firstName") || "-"}
-                            </button>
+                            <input
+                              type="checkbox"
+                              checked={selectedLeads.includes(lead._id)}
+                              onChange={() => toggleLeadSelection(lead._id)}
+                              className="cursor-pointer"
+                            />
                           </td>
-                        )}
+                          <td>{index + 1}</td>
 
-                        {showColLastName && <td>{getLeadValue(lead, "lastName") || "-"}</td>}
-                        {showColPhone && <td>{getLeadValue(lead, "phone") || "-"}</td>}
-                        {showColEmail && <td>{getLeadValue(lead, "email") || "-"}</td>}
-                        {showColState && <td>{getLeadValue(lead, "state") || "-"}</td>}
-                        {showColAge && <td>{getLeadValue(lead, "age") ?? "-"}</td>}
-                      </tr>
-                    ))}
+                          {showColFirstName && (
+                            <td>
+                              <button
+                                onClick={() => setPreviewLead(typeof expandedFolder === "string" && expandedFolder ? { ...lead, folderId: expandedFolder } : lead)}
+                                className="text-blue-500 underline cursor-pointer"
+                              >
+                                {agingDot && <span className="mr-1 text-xs">{agingDot}</span>}
+                                {getLeadValue(lead, "firstName") || "-"}
+                              </button>
+                            </td>
+                          )}
+
+                          {showColLastName && <td>{getLeadValue(lead, "lastName") || "-"}</td>}
+                          {showColPhone && <td>{getLeadValue(lead, "phone") || "-"}</td>}
+                          {showColEmail && <td>{getLeadValue(lead, "email") || "-"}</td>}
+                          {showColState && <td>{getLeadValue(lead, "state") || "-"}</td>}
+                          {showColAge && <td>{getLeadValue(lead, "age") ?? "-"}</td>}
+                          <td>
+                            {typeof (lead as any).score === "number" ? (
+                              <span
+                                className={`text-xs font-bold px-1.5 py-0.5 rounded ${
+                                  (lead as any).score >= 70
+                                    ? "bg-green-900 text-green-300"
+                                    : (lead as any).score >= 40
+                                    ? "bg-yellow-900 text-yellow-300"
+                                    : "bg-red-900 text-red-300"
+                                }`}
+                              >
+                                {(lead as any).score}
+                              </span>
+                            ) : (
+                              <span className="text-gray-600 text-xs">—</span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

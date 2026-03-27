@@ -12,6 +12,9 @@ import Lead from "@/models/Lead";
 import Folder from "@/models/Folder";
 import User from "@/models/User";
 import { enrollOnNewLeadIfWatched } from "@/lib/drips/enrollOnNewLead";
+import { scoreLeadOnArrival } from "@/lib/leads/scoreLead";
+import { trackLeadSourceStat } from "@/lib/leads/trackLeadSourceStat";
+import { checkDuplicate } from "@/lib/leads/checkDuplicate";
 
 const FB_LEAD_TYPE_TO_CRM: Record<string, string> = {
   final_expense: "Final Expense",
@@ -206,6 +209,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           const normalizedPhone = phone.replace(/\D+/g, "");
           const crmLeadType = FB_LEAD_TYPE_TO_CRM[(campaign as any).leadType] ?? "Final Expense";
 
+          // Duplicate check before creating CRM lead
+          const dupCheck = await checkDuplicate(
+            (campaign as any).userEmail,
+            normalizedPhone,
+            email
+          );
+          if (dupCheck.isDuplicate) {
+            console.info(`[fb-webhook] Duplicate lead detected: ${dupCheck.existingLeadId} (${dupCheck.matchType})`);
+            // Still create the FBLeadEntry for tracking, but don't create CRM lead
+          }
+
           const entry = await FBLeadEntry.create({
             userId: (user as any)._id,
             userEmail: (campaign as any).userEmail,
@@ -222,6 +236,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             importedAt: new Date(),
           });
 
+          if (dupCheck.isDuplicate) {
+            console.info(`[fb-webhook] Skipping CRM lead creation for duplicate`);
+            continue;
+          }
+
           const crmLead = await Lead.create({
             "First Name": firstName,
             "Last Name": lastName,
@@ -237,6 +256,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           });
 
           await FBLeadEntry.updateOne({ _id: entry._id }, { $set: { crmLeadId: crmLead._id } });
+
+          // Score lead and track source
+          try {
+            await scoreLeadOnArrival(String(crmLead._id), "facebook_realtime");
+            await trackLeadSourceStat((campaign as any).userEmail, "facebook_realtime");
+          } catch (scoreErr: any) {
+            console.warn("[fb-webhook] Scoring error:", scoreErr?.message);
+          }
 
           await enrollOnNewLeadIfWatched({
             userEmail: (campaign as any).userEmail,

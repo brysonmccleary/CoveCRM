@@ -19,6 +19,7 @@ import CalendarBookings from "@/components/CalendarBookings";
 import BookingForm from "@/components/BookingForm";
 import SettingsPanel from "@/components/SettingsPanel";
 import MessagesPanel from "@/components/messages/MessagesPanel";
+import CallCoachTrends from "@/components/CallCoachTrends";
 
 import {
   LineChart,
@@ -94,6 +95,63 @@ function secsToHMS(s: number) {
   if (h > 0) return `${h}h ${m}m ${r}s`;
   if (m > 0) return `${m}m ${r}s`;
   return `${r}s`;
+}
+
+const SOURCE_LABELS: Record<string, string> = {
+  facebook_realtime: "Facebook (Live)",
+  doi_prospecting: "DOI Prospecting",
+  google_sheet: "Google Sheet",
+  csv_import: "CSV Import",
+  manual: "Manual Entry",
+};
+
+function LeadSourceROIWidget() {
+  const [bySource, setBySource] = useState<Record<string, any>>({});
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetch("/api/leads/source-stats")
+      .then((r) => r.json())
+      .then((d) => setBySource(d.bySource || {}))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
+
+  const sources = Object.keys(bySource);
+  if (loading) return null;
+  if (sources.length === 0) return null;
+
+  return (
+    <div className="bg-[#0f172a] rounded-xl p-5 mt-4">
+      <h3 className="text-white font-semibold mb-3">Lead Sources (Last 3 Months)</h3>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-gray-400 text-left border-b border-white/10">
+              <th className="pb-2">Source</th>
+              <th className="pb-2 text-right">Leads</th>
+              <th className="pb-2 text-right">Contacted</th>
+              <th className="pb-2 text-right">Booked</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sources.map((src) => {
+              const s = bySource[src];
+              const contactRate = s.leadCount > 0 ? Math.round((s.contactedCount / s.leadCount) * 100) : 0;
+              return (
+                <tr key={src} className="border-b border-white/5">
+                  <td className="py-2 text-white">{SOURCE_LABELS[src] || src}</td>
+                  <td className="py-2 text-right text-gray-300">{s.leadCount}</td>
+                  <td className="py-2 text-right text-yellow-300">{s.contactedCount} ({contactRate}%)</td>
+                  <td className="py-2 text-right text-green-300">{s.bookedCount}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
 }
 
 function DashboardOverview() {
@@ -232,6 +290,9 @@ function DashboardOverview() {
           )}
         </div>
       </div>
+
+      <LeadSourceROIWidget />
+      <CallCoachTrends />
     </div>
   );
 }

@@ -34,6 +34,28 @@ interface ApiCampaign {
 export default function DripCampaignsPanel() {
   const [dripTab, setDripTab] = useState<DripTabMode>("sms");
   const [campaignName, setCampaignName] = useState("");
+  const [dripExplanations, setDripExplanations] = useState<Record<string, string>>({});
+  const [dripExplaining, setDripExplaining] = useState<string | null>(null);
+
+  const explainDrip = async (id: string, name: string, steps: { day: string | number; text: string }[]) => {
+    if (dripExplanations[id]) {
+      setDripExplanations((prev) => { const n = { ...prev }; delete n[id]; return n; });
+      return;
+    }
+    setDripExplaining(id);
+    try {
+      const res = await axios.post("/api/ai/explain-drip", {
+        steps: steps.map((s) => ({ day: Number(s.day) || 0, text: s.text })),
+        campaignName: name,
+        channel: "sms",
+      });
+      setDripExplanations((prev) => ({ ...prev, [id]: res.data.explanation || "No explanation." }));
+    } catch {
+      setDripExplanations((prev) => ({ ...prev, [id]: "Could not generate explanation." }));
+    } finally {
+      setDripExplaining(null);
+    }
+  };
   const [messageSteps, setMessageSteps] = useState<MessageStep[]>([]);
   const [currentText, setCurrentText] = useState("");
   const [currentDay, setCurrentDay] = useState("immediately");
@@ -811,13 +833,27 @@ setBackendCampaigns((prev) =>
             >
               {camp.name} — {(camp.steps || []).length} messages
             </button>
-            <button
-              onClick={() => handleAssignDrip(camp._id)}
-              className="bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded text-sm cursor-pointer"
-            >
-              Assign to Folder/Leads
-            </button>
+            <div className="flex gap-2">
+              <button
+                onClick={() => explainDrip(camp._id, camp.name, camp.steps || [])}
+                disabled={dripExplaining === camp._id}
+                className="text-xs text-indigo-400 hover:text-indigo-300 border border-indigo-800 px-3 py-1 rounded"
+              >
+                {dripExplaining === camp._id ? "..." : dripExplanations[camp._id] ? "Hide AI" : "AI Summary"}
+              </button>
+              <button
+                onClick={() => handleAssignDrip(camp._id)}
+                className="bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded text-sm cursor-pointer"
+              >
+                Assign to Folder/Leads
+              </button>
+            </div>
           </div>
+          {dripExplanations[camp._id] && (
+            <p className="mt-2 text-xs text-indigo-200 bg-indigo-950/40 border border-indigo-800 rounded p-2">
+              🤖 {dripExplanations[camp._id]}
+            </p>
+          )}
 
           {expandedDrips[camp._id] && (
             <div className="mt-4 space-y-3">

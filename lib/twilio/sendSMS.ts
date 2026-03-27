@@ -241,9 +241,22 @@ if (isUSDest && !isMessagingReady && !DEV_ALLOW_UNAPPROVED) {
     );
   }
 }
+  // If user has a defaultSmsNumberId set, try to use that number's messagingServiceSid
+  let defaultNumberMsid: string | null = null;
+  const defaultSmsNumberId = (user as any)?.defaultSmsNumberId;
+  if (defaultSmsNumberId && !paramsIn.overrideMsid) {
+    const defaultNum = ((user as any)?.numbers || []).find(
+      (n: any) => String(n._id) === defaultSmsNumberId || n.sid === defaultSmsNumberId
+    );
+    if (defaultNum?.messagingServiceSid) {
+      defaultNumberMsid = defaultNum.messagingServiceSid;
+    }
+  }
+
   // Only platform/master account is allowed to default to the shared Messaging Service SID.
   let messagingServiceSid =
     paramsIn.overrideMsid ||
+    defaultNumberMsid ||
     userA2P.messagingServiceSid ||
     (isPlatformAccount ? SHARED_MESSAGING_SERVICE_SID : null) ||
     legacyA2P?.messagingServiceSid ||

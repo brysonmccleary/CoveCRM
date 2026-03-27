@@ -9,6 +9,9 @@ import Lead from "@/models/Lead";
 import Folder from "@/models/Folder";
 import User from "@/models/User";
 import { enrollOnNewLeadIfWatched } from "@/lib/drips/enrollOnNewLead";
+import { scoreLeadOnArrival } from "@/lib/leads/scoreLead";
+import { trackLeadSourceStat } from "@/lib/leads/trackLeadSourceStat";
+import { checkDuplicate } from "@/lib/leads/checkDuplicate";
 import axios from "axios";
 
 export const config = { maxDuration: 60 };
@@ -112,6 +115,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           });
 
           await FBLeadEntry.updateOne({ _id: entry._id }, { $set: { crmLeadId: crmLead._id } });
+
+          // Score and track source
+          try {
+            await scoreLeadOnArrival(String(crmLead._id), "google_sheet");
+            await trackLeadSourceStat(c.userEmail, "google_sheet");
+          } catch (_) {}
 
           await enrollOnNewLeadIfWatched({
             userEmail: c.userEmail,

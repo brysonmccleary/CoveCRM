@@ -188,7 +188,10 @@ export interface IUser {
     dripAlerts?: boolean;
     bookingConfirmations?: boolean;
     emailOnInboundSMS?: boolean;
+    dailyDigest?: boolean;
   };
+
+  defaultSmsNumberId?: string | null;
 
   country?: string;
 
@@ -415,7 +418,11 @@ const UserSchema = new Schema<IUser>({
     dripAlerts: { type: Boolean, default: true },
     bookingConfirmations: { type: Boolean, default: true },
     emailOnInboundSMS: { type: Boolean, default: true },
+    dailyDigest: { type: Boolean, default: false },
   },
+
+  // Default SMS number (sub-doc _id from numbers array)
+  defaultSmsNumberId: { type: String, default: null },
 
   country: { type: String },
 

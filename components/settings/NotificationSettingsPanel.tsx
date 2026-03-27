@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 export default function NotificationSettingsPanel() {
   const [dripAlerts, setDripAlerts] = useState(true);
   const [bookingConfirmations, setBookingConfirmations] = useState(true);
+  const [dailyDigest, setDailyDigest] = useState(false);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -18,6 +19,7 @@ export default function NotificationSettingsPanel() {
         const data = await res.json();
         setDripAlerts(data?.dripAlerts ?? true);
         setBookingConfirmations(data?.bookingConfirmations ?? true);
+        setDailyDigest(data?.dailyDigest ?? false);
       } catch (err) {
         console.warn("Notification load failed — silently ignored");
         setDripAlerts(true);
@@ -35,7 +37,7 @@ export default function NotificationSettingsPanel() {
       await fetch("/api/settings/update-notifications", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ dripAlerts, bookingConfirmations }),
+        body: JSON.stringify({ dripAlerts, bookingConfirmations, dailyDigest }),
       });
     } catch (err) {
       console.warn("Notification save failed — silently ignored");
@@ -65,6 +67,19 @@ export default function NotificationSettingsPanel() {
           className="w-5 h-5"
           checked={bookingConfirmations}
           onChange={(e) => setBookingConfirmations(e.target.checked)}
+        />
+      </div>
+
+      <div className="flex items-center justify-between">
+        <div>
+          <label className="text-sm font-medium">Daily performance digest</label>
+          <p className="text-xs text-gray-400">Receive a daily summary of new leads, calls, and bookings by email</p>
+        </div>
+        <input
+          type="checkbox"
+          className="w-5 h-5"
+          checked={dailyDigest}
+          onChange={(e) => setDailyDigest(e.target.checked)}
         />
       </div>
 

@@ -27,7 +27,7 @@ export default async function handler(
       return res.status(404).json({ error: "User not found" });
     }
 
-    const { dripAlerts, bookingConfirmations } = req.body;
+    const { dripAlerts, bookingConfirmations, dailyDigest } = req.body;
 
     // Fallback logic to preserve existing values if undefined
     const updatedNotifications = {
@@ -39,6 +39,10 @@ export default async function handler(
         typeof bookingConfirmations === "boolean"
           ? bookingConfirmations
           : (user.notifications?.bookingConfirmations ?? true),
+      dailyDigest:
+        typeof dailyDigest === "boolean"
+          ? dailyDigest
+          : ((user.notifications as any)?.dailyDigest ?? false),
     };
 
     user.notifications = {

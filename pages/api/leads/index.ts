@@ -4,6 +4,9 @@ import { authOptions } from "../auth/[...nextauth]";
 import mongooseConnect from "@/lib/mongooseConnect";
 import Lead from "@/models/Lead";
 import { Types } from "mongoose";
+import { checkDuplicate } from "@/lib/leads/checkDuplicate";
+import { scoreLeadOnArrival } from "@/lib/leads/scoreLead";
+import { trackLeadSourceStat } from "@/lib/leads/trackLeadSourceStat";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const session = await getServerSession(req, res, authOptions);
@@ -71,6 +74,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       const now = new Date();
 
+      // Duplicate detection
+      const dupCheck = await checkDuplicate(email, Phone, Email);
+      if (dupCheck.isDuplicate) {
+        return res.status(409).json({
+          duplicate: true,
+          matchType: dupCheck.matchType,
+          existingLeadId: dupCheck.existingLeadId,
+          existingName: dupCheck.existingName,
+          message: `A lead with this ${dupCheck.matchType} already exists: ${dupCheck.existingName}`,
+        });
+      }
+
       const newLead = await Lead.create({
         State,
         "First Name": FirstName,
@@ -88,6 +103,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         createdAt: now,
         updatedAt: now,
       });
+
+      // Score and track
+      try {
+        await scoreLeadOnArrival(String(newLead._id), "manual");
+        await trackLeadSourceStat(email, "manual");
+      } catch (_) {}
 
       return res.status(201).json(newLead);
     } catch (error) {

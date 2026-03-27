@@ -102,6 +102,9 @@ export default function CalendarBookings() {
   const [selectedEvent, setSelectedEvent] = useState<EventType | null>(null);
   const [lead, setLead] = useState<LeadType | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
+  const [noShowBookingId, setNoShowBookingId] = useState<string | null>(null);
+  const [markingNoShow, setMarkingNoShow] = useState(false);
+  const [noShowMarked, setNoShowMarked] = useState(false);
 
   // Connection + UI state
   const [calendarConnected, setCalendarConnected] = useState(false);
@@ -365,15 +368,44 @@ export default function CalendarBookings() {
   const onEventClick = async (event: EventType) => {
     setSelectedEvent(event);
     setLead(null);
+    setNoShowBookingId(null);
+    setNoShowMarked(false);
     setModalOpen(true);
 
     const l = await findLeadForEvent(event);
     if (l) setLead(l);
+
+    // Try to find associated CRM booking by eventId
+    if (event.id) {
+      try {
+        const res = await axios.get(`/api/bookings/by-event?eventId=${encodeURIComponent(event.id)}`);
+        if (res.data?.booking?._id) {
+          setNoShowBookingId(res.data.booking._id);
+          setNoShowMarked(!!res.data.booking.noShow);
+        }
+      } catch {
+        // No booking found — fine
+      }
+    }
+  };
+
+  const handleMarkNoShow = async () => {
+    if (!noShowBookingId) return;
+    setMarkingNoShow(true);
+    try {
+      await axios.post("/api/bookings/no-show", { bookingId: noShowBookingId });
+      setNoShowMarked(true);
+    } catch {
+      // Silently fail
+    } finally {
+      setMarkingNoShow(false);
+    }
   };
 
   const closeModal = () => {
     setSelectedEvent(null);
     setLead(null);
+    setNoShowBookingId(null);
     setModalOpen(false);
   };
 
@@ -650,6 +682,20 @@ if (out.length > MAX_TOTAL) out = out.slice(0, MAX_TOTAL) + "…";
                 >
                   📞 Call Now
                 </button>
+
+                {noShowBookingId && (
+                  <button
+                    onClick={handleMarkNoShow}
+                    disabled={markingNoShow || noShowMarked}
+                    className={`mt-2 px-4 py-2 rounded text-white w-full ${
+                      noShowMarked
+                        ? "bg-gray-600 cursor-not-allowed"
+                        : "bg-red-700 hover:bg-red-800"
+                    }`}
+                  >
+                    {noShowMarked ? "✓ Marked as No-Show" : markingNoShow ? "Marking..." : "Mark as No-Show"}
+                  </button>
+                )}
               </>
             ) : (
               <p className="mt-3 italic text-sm text-gray-300">

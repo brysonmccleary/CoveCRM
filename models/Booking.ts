@@ -21,6 +21,11 @@ const BookingSchema = new Schema(
       hour: { type: Boolean, default: false },
       fifteen: { type: Boolean, default: false },
     },
+
+    // No-show tracking
+    noShow: { type: Boolean, default: false },
+    noShowMarkedAt: { type: Date },
+    reengagementDripId: { type: String },
   },
   { timestamps: true },
 );

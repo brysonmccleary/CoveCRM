@@ -112,6 +112,29 @@ type Tone = "professional" | "casual" | "urgent";
 export default function EmailCampaignsPanel() {
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [loading, setLoading] = useState(true);
+  const [explanations, setExplanations] = useState<Record<string, string>>({});
+  const [explaining, setExplaining] = useState<string | null>(null);
+
+  const explainCampaign = async (c: Campaign) => {
+    if (explanations[c._id]) {
+      // Toggle off
+      setExplanations((prev) => { const n = { ...prev }; delete n[c._id]; return n; });
+      return;
+    }
+    setExplaining(c._id);
+    try {
+      const res = await axios.post("/api/ai/explain-drip", {
+        steps: c.steps.map((s) => ({ day: s.day, text: s.text || s.subject })),
+        campaignName: c.name,
+        channel: "email",
+      });
+      setExplanations((prev) => ({ ...prev, [c._id]: res.data.explanation || "No explanation." }));
+    } catch {
+      setExplanations((prev) => ({ ...prev, [c._id]: "Could not generate explanation." }));
+    } finally {
+      setExplaining(null);
+    }
+  };
 
   // Builder state
   const [builderName, setBuilderName] = useState("");
@@ -422,7 +445,7 @@ export default function EmailCampaignsPanel() {
                       {c.isActive ? "Active" : "Paused"}
                     </span>
                   </div>
-                  <div className="flex gap-2 mt-2">
+                  <div className="flex gap-2 mt-2 flex-wrap">
                     <button
                       onClick={() => openEdit(c)}
                       className="text-xs text-blue-400 hover:text-blue-300 border border-gray-600 px-3 py-1 rounded"
@@ -441,7 +464,19 @@ export default function EmailCampaignsPanel() {
                     >
                       Delete
                     </button>
+                    <button
+                      onClick={() => explainCampaign(c)}
+                      disabled={explaining === c._id}
+                      className="text-xs text-indigo-400 hover:text-indigo-300 border border-gray-600 px-3 py-1 rounded"
+                    >
+                      {explaining === c._id ? "..." : explanations[c._id] ? "Hide AI Summary" : "AI Summary"}
+                    </button>
                   </div>
+                  {explanations[c._id] && (
+                    <p className="mt-2 text-xs text-indigo-200 bg-indigo-950/40 border border-indigo-800 rounded p-2">
+                      🤖 {explanations[c._id]}
+                    </p>
+                  )}
                 </div>
               )
             )}

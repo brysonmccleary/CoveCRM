@@ -1,5 +1,6 @@
 // /components/CallSummary.tsx
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 
 type CallShape = {
   _id?: string;
@@ -89,19 +90,29 @@ export default function CallSummary({
             </div>
           ) : null}
 
-          <div className="text-xs text-gray-400">
-            Sentiment:{" "}
-            <span
-              className={
-                sentiment === "positive"
-                  ? "text-green-400"
-                  : sentiment === "negative"
-                  ? "text-red-400"
-                  : "text-gray-300"
-              }
-            >
-              {sentiment}
-            </span>
+          <div className="flex items-center justify-between mt-2">
+            <div className="text-xs text-gray-400">
+              Sentiment:{" "}
+              <span
+                className={
+                  sentiment === "positive"
+                    ? "text-green-400"
+                    : sentiment === "negative"
+                    ? "text-red-400"
+                    : "text-gray-300"
+                }
+              >
+                {sentiment}
+              </span>
+            </div>
+            {callId && (
+              <Link
+                href={`/calls/${callId}`}
+                className="text-xs text-blue-400 hover:text-blue-300 transition"
+              >
+                View Coach Report →
+              </Link>
+            )}
           </div>
         </div>
       ) : (

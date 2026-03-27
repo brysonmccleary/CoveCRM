@@ -5,6 +5,7 @@ import DashboardLayout from "@/components/DashboardLayout";
 import CallsList from "@/components/CallsList";
 
 const CallDetailCard = dynamic(() => import("@/components/CallDetailCard"), { ssr: false });
+const CallCoachReport = dynamic(() => import("@/components/CallCoachReport"), { ssr: false });
 
 export default function CallsIdPage() {
   const router = useRouter();
@@ -53,7 +54,10 @@ export default function CallsIdPage() {
 
           <div className="md:col-span-2">
             {selectedId ? (
-              <CallDetailCard callId={selectedId} userHasAI={userHasAI} />
+              <div className="flex flex-col gap-4">
+                <CallDetailCard callId={selectedId} userHasAI={userHasAI} />
+                <CallCoachReport callId={selectedId} userHasAI={userHasAI} />
+              </div>
             ) : (
               <div className="bg-[#0b1220] border border-white/10 rounded-xl p-6 text-white">
                 <div className="text-sm text-gray-300">
