@@ -61,5 +61,9 @@ cookies.txt
 
 # local patch artifacts
 .patch_backups_*/
+.patch-backups/
+*.backup
 __pycache__/
 patch_*.py
+COVECRM_REVIEW/
+COVECRM_REVIEW/
