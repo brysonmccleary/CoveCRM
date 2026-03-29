@@ -211,7 +211,7 @@ export default function DashboardOverview() {
                   <XAxis dataKey="date" stroke="#9CA3AF" />
                   <YAxis stroke="#9CA3AF" domain={[0, "auto"]} />
                   <Tooltip
-                    formatter={(value: number) => `${value} calls`}
+                    formatter={(value) => `${Number(value ?? 0)} calls`}
                     labelStyle={{ color: "#fff" }}
                     contentStyle={{ backgroundColor: "#111827", borderColor: "#4B5563" }}
                   />
