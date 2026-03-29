@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/router";
 import DashboardLayout from "@/components/DashboardLayout";
+import MetaConnectPanel from "@/components/MetaConnectPanel";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -74,7 +75,15 @@ interface GeneratedImages {
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const LEAD_TYPES = [
+type LeadTypeOption = {
+  id: string;
+  label: string;
+  icon: string;
+  desc: string;
+  disabled?: boolean;
+};
+
+const LEAD_TYPES: readonly LeadTypeOption[] = [
   { id: "final_expense", label: "Final Expense", icon: "🕊️", desc: "Seniors age 50–80" },
   { id: "iul", label: "IUL", icon: "📈", desc: "Indexed Universal Life" },
   { id: "mortgage_protection", label: "Mortgage Protection", icon: "🏠", desc: "New homeowners" },
@@ -141,39 +150,266 @@ function ActionBadge({ action }: { action: string }) {
   );
 }
 
+// ── Upgrade Modal ──────────────────────────────────────────────────────────────
+
+const UPGRADE_EXPECTATIONS = [
+  "Facebook's algorithm needs 3–7 days to exit its Learning Phase — don't change anything during this time.",
+  "Expect your first leads in days 3–14 once the algorithm stabilizes.",
+  "Typical CPL (cost per lead) for insurance is $8–$25. Start with $20/day budget.",
+  "Results compound over time. Most agents see consistent leads by day 30–45.",
+  "You'll get AI-optimized ad copy, targeting guidance, and performance recommendations.",
+  "Leads are delivered directly to your CRM in real time via Zapier or webhook.",
+];
+
+function UpgradeModal({
+  open,
+  onClose,
+}: {
+  open: boolean;
+  onClose: () => void;
+}) {
+  const [step, setStep] = useState<0 | 1 | 2 | 3>(0);
+  const [selectedPlan, setSelectedPlan] = useState<"manager" | "manager_pro">("manager");
+  const [agreed, setAgreed] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (!open) {
+      setStep(0);
+      setAgreed(false);
+      setError("");
+    }
+  }, [open]);
+
+  if (!open) return null;
+
+  const handleSubscribe = async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const res = await fetch("/api/facebook/subscribe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ plan: selectedPlan }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed");
+      if (data.url) window.location.href = data.url;
+    } catch (err: any) {
+      setError(err.message || "Something went wrong");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/70" onClick={onClose} />
+      <div className="relative bg-[#0f172a] border border-white/10 rounded-2xl w-full max-w-lg shadow-2xl overflow-y-auto max-h-[90vh]">
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-white/10">
+          <div className="flex items-center gap-3">
+            {(["Plan", "Expectations", "Payment", "Done"] as const).map((label, i) => (
+              <div key={label} className="flex items-center gap-2">
+                <div
+                  className={`w-6 h-6 rounded-full text-xs flex items-center justify-center font-bold transition ${
+                    i <= step
+                      ? "bg-indigo-600 text-white"
+                      : "bg-white/10 text-gray-500"
+                  }`}
+                >
+                  {i + 1}
+                </div>
+                <span className={`text-xs hidden sm:block ${i <= step ? "text-white" : "text-gray-500"}`}>
+                  {label}
+                </span>
+                {i < 3 && <span className="text-gray-700 text-xs">›</span>}
+              </div>
+            ))}
+          </div>
+          <button onClick={onClose} className="text-gray-500 hover:text-white text-lg leading-none">✕</button>
+        </div>
+
+        {/* Step 0: Plan Selection */}
+        {step === 0 && (
+          <div className="p-6 space-y-4">
+            <h2 className="text-xl font-bold text-white">Choose Your Plan</h2>
+            <div className="space-y-3">
+              {[
+                {
+                  id: "manager" as const,
+                  name: "Lead Manager",
+                  price: "$149/mo",
+                  features: ["Setup guide for your lead type", "AI ad copy + curated images", "Winning ad intelligence", "Real-time lead delivery via Zapier", "Campaign performance dashboard", "AI optimization recommendations"],
+                  highlight: false,
+                },
+                {
+                  id: "manager_pro" as const,
+                  name: "Lead Manager Pro",
+                  price: "$249/mo",
+                  features: ["Everything in Lead Manager", "Weekly AI performance analysis", "Auto Mode — AI flags pause/scale", "Daily action reports", "Market intelligence from competitor ads", "Priority support"],
+                  highlight: true,
+                },
+              ].map((plan) => (
+                <button
+                  key={plan.id}
+                  onClick={() => setSelectedPlan(plan.id)}
+                  className={`w-full text-left rounded-xl border p-4 transition ${
+                    selectedPlan === plan.id
+                      ? "border-indigo-500 bg-indigo-900/20"
+                      : "border-white/10 bg-[#1e293b] hover:border-white/20"
+                  }`}
+                >
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <p className="text-white font-semibold">{plan.name}</p>
+                        {plan.highlight && (
+                          <span className="text-xs bg-indigo-700 text-indigo-200 px-2 py-0.5 rounded-full">Popular</span>
+                        )}
+                      </div>
+                      <p className="text-indigo-400 font-bold text-sm mt-0.5">{plan.price}</p>
+                    </div>
+                    <div className={`w-5 h-5 rounded-full border-2 mt-0.5 transition ${
+                      selectedPlan === plan.id ? "border-indigo-500 bg-indigo-500" : "border-gray-600"
+                    }`} />
+                  </div>
+                  <ul className="mt-2 space-y-0.5">
+                    {plan.features.map((f) => (
+                      <li key={f} className="text-xs text-gray-400 flex items-start gap-1.5">
+                        <span className="text-green-500 shrink-0">✓</span> {f}
+                      </li>
+                    ))}
+                  </ul>
+                </button>
+              ))}
+            </div>
+            <button
+              onClick={() => setStep(1)}
+              className="w-full py-3 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold rounded-xl transition"
+            >
+              Continue →
+            </button>
+          </div>
+        )}
+
+        {/* Step 1: Expectations */}
+        {step === 1 && (
+          <div className="p-6 space-y-4">
+            <h2 className="text-xl font-bold text-white">Read This Before You Start</h2>
+            <p className="text-gray-400 text-sm">Facebook Ads is a platform that rewards patience. Here&apos;s what to expect in your first 90 days:</p>
+            <ul className="space-y-2">
+              {UPGRADE_EXPECTATIONS.map((e, i) => (
+                <li key={i} className="flex items-start gap-2 bg-[#1e293b] rounded-lg p-3">
+                  <span className="text-indigo-400 font-bold text-sm shrink-0">{i + 1}</span>
+                  <p className="text-sm text-gray-300">{e}</p>
+                </li>
+              ))}
+            </ul>
+            <label className="flex items-center gap-3 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={agreed}
+                onChange={(e) => setAgreed(e.target.checked)}
+                className="accent-indigo-500 w-4 h-4"
+              />
+              <span className="text-sm text-gray-300">I understand and I&apos;m ready to commit at least 90 days to this.</span>
+            </label>
+            <div className="flex gap-3">
+              <button onClick={() => setStep(0)} className="flex-1 py-2.5 bg-white/10 hover:bg-white/20 text-white rounded-xl text-sm transition">
+                ← Back
+              </button>
+              <button
+                onClick={() => setStep(2)}
+                disabled={!agreed}
+                className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold rounded-xl transition disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                Continue →
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Step 2: Payment */}
+        {step === 2 && (
+          <div className="p-6 space-y-5">
+            <h2 className="text-xl font-bold text-white">Subscribe to {selectedPlan === "manager" ? "Lead Manager" : "Lead Manager Pro"}</h2>
+            <div className="bg-[#1e293b] rounded-xl p-4 space-y-1">
+              <div className="flex justify-between text-sm">
+                <span className="text-gray-400">{selectedPlan === "manager" ? "Lead Manager" : "Lead Manager Pro"}</span>
+                <span className="text-white font-bold">{selectedPlan === "manager" ? "$149" : "$249"}/mo</span>
+              </div>
+              <p className="text-xs text-gray-500">Billed monthly. Cancel anytime.</p>
+            </div>
+            {error && (
+              <div className="bg-red-900/20 border border-red-600/40 rounded-lg p-3 text-red-300 text-sm">
+                {error}
+              </div>
+            )}
+            <div className="flex gap-3">
+              <button onClick={() => setStep(1)} className="flex-1 py-2.5 bg-white/10 hover:bg-white/20 text-white rounded-xl text-sm transition">
+                ← Back
+              </button>
+              <button
+                onClick={handleSubscribe}
+                disabled={loading}
+                className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold rounded-xl transition disabled:opacity-50"
+              >
+                {loading ? "Redirecting…" : "Subscribe & Pay →"}
+              </button>
+            </div>
+            <p className="text-xs text-gray-500 text-center">
+              Secure checkout powered by Stripe. Questions?{" "}
+              <a href="mailto:support@covecrm.com" className="text-gray-400 hover:text-white underline">
+                support@covecrm.com
+              </a>
+            </p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── Section A: Hero / Pricing ──────────────────────────────────────────────────
 
 function HeroSection({ onGetStarted }: { onGetStarted: (plan: "manager" | "manager_pro") => void }) {
+  const [upgradeOpen, setUpgradeOpen] = useState(false);
+
   return (
-    <div className="space-y-6 text-center pt-8 max-w-2xl mx-auto">
-      <h1 className="text-4xl font-extrabold text-white">
-        Generate Your Own Exclusive Insurance Leads on Facebook
-      </h1>
-      <p className="text-xl text-gray-300">
-        Stop paying $25–50 per lead to vendors. Generate exclusive leads you own for a fraction of the cost — never resold, never shared, 100% yours.
-      </p>
-      <div className="flex flex-wrap items-center justify-center gap-4">
-        {["✓ 100% Exclusive to You", "✓ Never Resold or Shared", "✓ You Own the Ads & Leads"].map((badge) => (
-          <span key={badge} className="text-green-400 text-sm font-medium">
-            {badge}
-          </span>
-        ))}
-      </div>
-      <div className="pt-2 space-y-2">
-        <a
-          href="/upgrade"
-          className="inline-block bg-blue-600 hover:bg-blue-500 text-white font-semibold px-8 py-3 rounded-lg transition text-base"
-        >
-          View Plans &amp; Upgrade →
-        </a>
-        <p className="text-xs text-gray-500">
-          Questions? Email{" "}
-          <a href="mailto:support@covecrm.com" className="text-gray-400 hover:text-white underline">
-            support@covecrm.com
-          </a>
+    <>
+      <UpgradeModal open={upgradeOpen} onClose={() => setUpgradeOpen(false)} />
+      <div className="space-y-6 text-center pt-8 max-w-2xl mx-auto">
+        <h1 className="text-4xl font-extrabold text-white">
+          Generate Your Own Exclusive Insurance Leads on Facebook
+        </h1>
+        <p className="text-xl text-gray-300">
+          Stop paying $25–50 per lead to vendors. Generate exclusive leads you own for a fraction of the cost — never resold, never shared, 100% yours.
         </p>
+        <div className="flex flex-wrap items-center justify-center gap-4">
+          {["✓ 100% Exclusive to You", "✓ Never Resold or Shared", "✓ You Own the Ads & Leads"].map((badge) => (
+            <span key={badge} className="text-green-400 text-sm font-medium">
+              {badge}
+            </span>
+          ))}
+        </div>
+        <div className="pt-2 space-y-2">
+          <button
+            onClick={() => setUpgradeOpen(true)}
+            className="inline-block bg-blue-600 hover:bg-blue-500 text-white font-semibold px-8 py-3 rounded-lg transition text-base"
+          >
+            View Plans &amp; Upgrade →
+          </button>
+          <p className="text-xs text-gray-500">
+            Questions? Email{" "}
+            <a href="mailto:support@covecrm.com" className="text-gray-400 hover:text-white underline">
+              support@covecrm.com
+            </a>
+          </p>
+        </div>
       </div>
-    </div>
+    </>
   );
 }
 
@@ -254,10 +490,10 @@ function LeadTypeSelector({
         {LEAD_TYPES.map((lt) => (
           <button
             key={lt.id}
-            onClick={() => !lt.disabled && onSelect(lt.id)}
-            disabled={lt.disabled}
+            onClick={() => !(lt as any).disabled && onSelect(lt.id)}
+            disabled={!!(lt as any).disabled}
             className={`p-5 rounded-xl border text-left transition ${
-              lt.disabled
+              (lt as any).disabled
                 ? "border-gray-700 bg-gray-800/50 opacity-50 cursor-not-allowed"
                 : "border-gray-600 bg-[#1e293b] hover:border-blue-500 hover:bg-[#1e3a5f] cursor-pointer"
             }`}
@@ -265,7 +501,7 @@ function LeadTypeSelector({
             <div className="text-3xl mb-2">{lt.icon}</div>
             <div className="text-white font-semibold">{lt.label}</div>
             <div className="text-xs text-gray-400 mt-0.5">{lt.desc}</div>
-            {lt.disabled && (
+            {(lt as any).disabled && (
               <div className="text-xs text-gray-500 mt-1">Coming Soon</div>
             )}
           </button>
@@ -1548,6 +1784,7 @@ const FILTER_OPTIONS = [
 export default function FacebookLeadsPage() {
   const { data: session, status } = useSession();
   const router = useRouter();
+  const [fbTab, setFbTab] = useState<"campaigns" | "generate">("campaigns");
   const [viewMode, setViewMode] = useState<ViewMode>("loading");
   const [campaigns, setCampaigns] = useState<FBCampaign[]>([]);
   const [campaignFilter, setCampaignFilter] = useState<string>("");
@@ -1609,7 +1846,7 @@ export default function FacebookLeadsPage() {
             >
               Ads Manager →
             </button>
-            {viewMode !== "loading" && (
+            {(
               <button
                 onClick={() => {
                   setSelectedPlan("manager");
@@ -1623,7 +1860,68 @@ export default function FacebookLeadsPage() {
           </div>
         </div>
 
-        {viewMode === "hero" && (
+        {/* Tab bar */}
+        <div style={{ display: "flex", gap: "4px", borderBottom: "1px solid rgba(255,255,255,0.08)", paddingBottom: "0" }}>
+          {(["campaigns", "generate"] as const).map((t) => (
+            <button
+              key={t}
+              onClick={() => setFbTab(t)}
+              style={{
+                padding: "8px 20px",
+                fontSize: "14px",
+                fontWeight: 500,
+                color: fbTab === t ? "#fff" : "#9ca3af",
+                background: "none",
+                border: "none",
+                borderBottom: fbTab === t ? "2px solid #6366f1" : "2px solid transparent",
+                cursor: "pointer",
+                transition: "color 0.15s",
+              }}
+            >
+              {t === "campaigns" ? "My Campaigns" : "Generate Ad"}
+            </button>
+          ))}
+        </div>
+
+        {fbTab === "generate" && (
+          <div style={{ padding: "40px 0" }}>
+            <div style={{
+              background: "linear-gradient(135deg, #1e1b4b 0%, #1e293b 100%)",
+              border: "1px solid rgba(99,102,241,0.3)",
+              borderRadius: "16px",
+              padding: "40px",
+              maxWidth: "520px",
+              margin: "0 auto",
+              textAlign: "center",
+            }}>
+              <div style={{ fontSize: "48px", marginBottom: "16px" }}>🤖</div>
+              <h2 style={{ color: "#fff", fontSize: "22px", fontWeight: 700, marginBottom: "10px" }}>
+                AI Ad Generator
+              </h2>
+              <p style={{ color: "#94a3b8", fontSize: "15px", lineHeight: "1.6", marginBottom: "28px" }}>
+                Generate a complete Facebook lead ad in seconds — AI-written copy, targeting, and budget pre-filled. Review before publishing. Always starts paused.
+              </p>
+              <button
+                onClick={() => router.push("/facebook-ads/copilot?tab=generate")}
+                style={{
+                  background: "#6366f1",
+                  color: "#fff",
+                  border: "none",
+                  borderRadius: "10px",
+                  padding: "14px 32px",
+                  fontSize: "15px",
+                  fontWeight: 600,
+                  cursor: "pointer",
+                  width: "100%",
+                }}
+              >
+                Generate My Ad →
+              </button>
+            </div>
+          </div>
+        )}
+
+        {fbTab === "campaigns" && viewMode === "hero" && (
           <div className="space-y-12">
             <HeroSection
               onGetStarted={(plan) => {
@@ -1638,7 +1936,7 @@ export default function FacebookLeadsPage() {
           </div>
         )}
 
-        {viewMode === "lead-type" && (
+        {fbTab === "campaigns" && viewMode === "lead-type" && (
           <div className="space-y-4">
             <button
               onClick={() => setViewMode(campaigns.length > 0 ? "dashboard" : "hero")}
@@ -1656,7 +1954,7 @@ export default function FacebookLeadsPage() {
           </div>
         )}
 
-        {viewMode === "setup" && (
+        {fbTab === "campaigns" && viewMode === "setup" && (
           <div className="space-y-4">
             <button
               onClick={() => setViewMode(campaigns.length > 0 ? "dashboard" : "lead-type")}
@@ -1675,8 +1973,11 @@ export default function FacebookLeadsPage() {
           </div>
         )}
 
-        {viewMode === "dashboard" && (
+        {fbTab === "campaigns" && viewMode === "dashboard" && (
           <div className="space-y-8">
+            {/* Meta Connection Card */}
+            <MetaConnectPanel />
+
             <div className="space-y-4">
               <div className="flex items-center justify-between flex-wrap gap-3">
                 <h2 className="text-lg font-bold text-white">Your Campaigns</h2>
