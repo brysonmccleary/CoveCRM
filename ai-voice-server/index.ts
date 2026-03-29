@@ -47,6 +47,10 @@ const COVECRM_BASE_URL =
 
 const AI_DIALER_CRON_KEY = process.env.AI_DIALER_CRON_KEY || "";
 const AI_DIALER_AGENT_KEY = process.env.AI_DIALER_AGENT_KEY || "";
+const COVECRM_API_SECRET = process.env.COVECRM_API_SECRET || "";
+const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID || "";
+const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN || "";
+const TWILIO_PHONE_NUMBER = process.env.TWILIO_PHONE_NUMBER || "";
 
 // Your internal vendor-cost estimate (Twilio + OpenAI)
 const AI_DIALER_VENDOR_COST_PER_MIN_USD = Number(
@@ -60,6 +64,23 @@ const OPENAI_REALTIME_MODEL =
 
 console.log("[AI-VOICE] Realtime model resolved:", OPENAI_REALTIME_MODEL, "(env:", process.env.OPENAI_REALTIME_MODEL ? "set" : "default", ")");
 
+const REQUIRED_VARS = [
+  "OPENAI_API_KEY",
+  "TWILIO_ACCOUNT_SID",
+  "TWILIO_AUTH_TOKEN",
+  "TWILIO_PHONE_NUMBER",
+  "AI_DIALER_CRON_KEY",
+  "AI_DIALER_AGENT_KEY",
+  "COVECRM_BASE_URL",
+];
+for (const v of REQUIRED_VARS) {
+  if (!process.env[v]) {
+    console.error(`[AI-VOICE] ⚠️ Missing env var: ${v} — some features may not work`);
+  }
+}
+console.log("[AI-VOICE] Model:", OPENAI_REALTIME_MODEL);
+console.log("[AI-VOICE] CoveCRM base:", COVECRM_BASE_URL);
+
 // Endpoints
 const BOOK_APPOINTMENT_URL = new URL(
   "/api/ai-calls/book-appointment",
@@ -70,6 +91,7 @@ const OUTCOME_URL = new URL(
   COVECRM_BASE_URL
 ).toString();
 const USAGE_URL = new URL("/api/ai-calls/usage", COVECRM_BASE_URL).toString();
+const TRANSFER_TWIML_URL = new URL("/api/ai-calls/transfer-twiml", COVECRM_BASE_URL).toString();
 
 /**
  * Twilio <Stream> message types
@@ -135,6 +157,10 @@ type AICallContext = {
 
   // ✅ Optional AMD hint from CoveCRM (AnswerBy=human/machine/unknown etc)
   answeredBy?: string;
+
+  // ✅ Live transfer settings (from AISettings via context API)
+  liveTransferEnabled?: boolean;
+  liveTransferPhone?: string;
 
   raw: {
     session: any;
@@ -2831,89 +2857,79 @@ function getRebuttalLine(ctx: AICallContext, kind: string): string {
   const agentRaw = (ctx.agentName || "your agent").trim() || "your agent";
   const agent = (agentRaw.split(" ")[0] || agentRaw).trim();
 
-  // "Are you AI / robot?" -> quick human answer + redirect to booking
-  if (kind === "are_you_ai") {
-    const aiName = (ctx.voiceProfile?.aiName || "Alex").trim() || "Alex";
+  if (kind === "not_interested") {
     const scope = getScopeLabelForScriptKey(ctx.scriptKey);
-    return `Haha — totally fair. I\'m ${aiName}, a scheduling assistant working with ${agent}. This is just regarding the ${scope} request that came through — ${agent} covers everything on a quick 5-minute call. What time works better for you, later today or tomorrow?`;
+    const lines = [
+      `I completely understand — and I'm not here to pressure you at all. A lot of people feel that way before they see what's actually available for their situation. ${agent}'s call is literally just 5 minutes, no obligation. Does later today or tomorrow work better?`,
+      `Yeah, totally fair. I hear you. The thing is, ${agent} just wants to make sure the ${scope} request didn't fall through the cracks — it's a free 5-minute call, nothing more. Does later today or tomorrow work better?`,
+      `That makes total sense, and I respect that. I'll just say — most people who felt that way ended up really glad they took the 5 minutes. ${agent} keeps it quick and simple. Does later today or tomorrow work better?`,
+    ];
+    return lines[Math.floor(Math.random() * lines.length)];
   }
 
-  // ✅ NEW: "Who are you / I'm confused" handling (human + on-scope)
+  if (kind === "already_have") {
+    const scope = getScopeLabelForScriptKey(ctx.scriptKey);
+    return `I completely understand — and that's actually great that you have something in place. A lot of people ${agent} works with have coverage but end up overpaying or have gaps they didn't know about. The call is literally just to make sure what you have still makes sense. Does later today or tomorrow work better?`;
+  }
+
+  if (kind === "busy") {
+    return `I completely understand — and I won't keep you long. ${agent}'s call is only about 5 minutes at whatever time works for you. Does later today or tomorrow work better?`;
+  }
+
+  if (kind === "how_much") {
+    return `Yeah totally — and that's actually the main thing ${agent} covers on the call, because it really depends on your specific situation. The call is free and only takes about 5 minutes. Does later today or tomorrow work better?`;
+  }
+
+  if (kind === "send_it") {
+    const scope = getScopeLabelForScriptKey(ctx.scriptKey);
+    return `I completely understand — and honestly the ${scope} stuff is a lot easier to explain on a quick call than over text. ${agent} keeps it to 5 minutes and makes it real simple. Does later today or tomorrow work better?`;
+  }
+
+  if (kind === "scam") {
+    const scope = getScopeLabelForScriptKey(ctx.scriptKey);
+    return `I completely understand the concern — and that's a fair reaction. This is just a scheduling call for the ${scope} request that came through. ${agent} is a licensed agent and everything is explained on the call. Does later today or tomorrow work better?`;
+  }
+
+  if (kind === "dont_remember") {
+    const scope = getScopeLabelForScriptKey(ctx.scriptKey);
+    return `Yeah, totally — it may have been a little while since the request came through. This is just regarding ${scope} — ${agent} just wants to make sure you got taken care of. Does later today or tomorrow work better?`;
+  }
+
+  if (kind === "already_talked") {
+    return `Got it — and that's totally fine. This is just the follow-up to make sure everything got wrapped up on your end. ${agent} keeps it quick. Does later today or tomorrow work better?`;
+  }
+
+  if (kind === "how_did_you_get") {
+    const scope = getScopeLabelForScriptKey(ctx.scriptKey);
+    return `Yeah, fair question — the information came through a form that was submitted online for ${scope}. ${agent} just wants to make sure you're taken care of. Does later today or tomorrow work better?`;
+  }
+
+  if (kind === "are_you_ai") {
+    const aiName = (ctx.voiceProfile?.aiName || "Alex").trim() || "Alex";
+    return `Ha — totally fair question. I'm ${aiName}, a scheduling assistant working with ${agent}. I'm just here to get you connected — ${agent} is the licensed agent who handles everything on the actual call. Does later today or tomorrow work better?`;
+  }
+
   if (kind === "confused_identity") {
     const aiName = (ctx.voiceProfile?.aiName || "Alex").trim() || "Alex";
     const scope = getScopeLabelForScriptKey(ctx.scriptKey);
-    return `Good question — my name is ${aiName}, a scheduling assistant calling on behalf of ${agent}. This is regarding the ${scope} request that came through — ${agent} just wants a quick 5-minute call to go over everything. What time works better for you, later today or tomorrow?`;
+    return `Good question — my name is ${aiName}, I'm a scheduling assistant calling on behalf of ${agent}. This is regarding the ${scope} request that came through — ${agent} just wants a quick 5-minute call to go over everything. Does later today or tomorrow work better?`;
   }
 
-  // ✅ NEW: "What does this call entail / how long?" handling
   if (kind === "what_entails") {
     const scope = getScopeLabelForScriptKey(ctx.scriptKey);
-    // Be specific + satisfying, then go right back to booking.
-    // Keep it booking-only: no rates, no underwriting, no age/health questions.
-    return `Totally — it’s a quick 5 to 10 minutes. ${agent} just goes over the ${scope} request, answers your questions, and makes sure everything lines up for you. What time works better, later today or tomorrow?`;
+    return `Yeah, totally — it's a quick 5 to 10 minutes. ${agent} goes over the ${scope} request, answers your questions, and makes sure everything lines up for you. No pressure, no obligation. Does later today or tomorrow work better?`;
   }
 
   if (kind === "generic_question") {
     const scope = getScopeLabelForScriptKey(ctx.scriptKey);
     const lines = [
-      `So ${agent} can actually answer that way better than I can on the call — it's only 5 minutes and it's all about the ${scope} request. What time works better, later today or tomorrow?`,
-      `That's a great one for ${agent} to cover — they'll go over all of that on the call. It's quick, about 5 minutes. Does later today or tomorrow work?`,
-      `Yeah, ${agent} handles all of that on the call — way more helpful than me trying to explain it. It's only 5 minutes. What works better, today or tomorrow?`,
+      `I completely understand. That's a fair question. ${agent} can answer that much better on the quick call and make it specific to your ${scope} request. Does later today or tomorrow work better?`,
+      `Yeah, totally. I hear what you're asking. ${agent} covers that on the call so you get a clear answer for your situation, and it only takes about 5 minutes. Does later today or tomorrow work better?`,
+      `That makes sense. I get why you'd ask. ${agent} is the one who goes over that part on the quick call and keeps it simple. Does later today or tomorrow work better?`,
     ];
     return lines[Math.floor(Math.random() * lines.length)];
   }
 
-  // Existing objections
-  if (kind === "busy") {
-    const scope = getScopeLabelForScriptKey(ctx.scriptKey);
-    return `I hear you — I won’t keep you. This is just regarding the ${scope} request, and ${agent}’s call is only about 5 minutes at a time that works for you. What time works better, later today or tomorrow?`;
-  }
-  if (kind === "send_it") {
-    const scope = getScopeLabelForScriptKey(ctx.scriptKey);
-    return `Totally understand — the thing is, the ${scope} information is specific to your situation, so ${agent} can go over it way faster on a quick call. What time works better for you, later today or tomorrow?`;
-  }
-  if (kind === "already_have") {
-    const scope = getScopeLabelForScriptKey(ctx.scriptKey);
-    return `I hear you — a lot of people ${agent} speaks with already have something in place. The call is just to go over the ${scope} request and make sure what you have still lines up. It’s only 5 minutes. What time works better, later today or tomorrow?`;
-  }
-  if (kind === "how_much") {
-    const scope = getScopeLabelForScriptKey(ctx.scriptKey);
-    return `Good question — it depends on what you're looking for with the ${scope}, so ${agent} covers that on the call. It's only about 5 minutes. What time works better for you, later today or tomorrow?`;
-  }
-  if (kind === "dont_remember") {
-    const scope = getScopeLabelForScriptKey(ctx.scriptKey);
-    return `No worries — it looks like it may have been a little while since the request came through for ${scope}. ${agent} just wants a quick 5-minute call to make sure you're taken care of. What time works better, later today or tomorrow?`;
-  }
-  if (kind === "scam") {
-    const scope = getScopeLabelForScriptKey(ctx.scriptKey);
-    return `Totally understand the concern — this is just a scheduling call tied to the ${scope} request that came through. ${agent} is a licensed agent and will go over everything on the call. What time works better for you, later today or tomorrow?`;
-  }
-  if (kind === "not_interested") {
-    const scope = getScopeLabelForScriptKey(ctx.scriptKey);
-    const lines = [
-      `Yeah, no pressure at all — ${agent}'s call is literally just 5 minutes to make sure the ${scope} request got handled. You're under no obligation. Does later today or tomorrow work?`,
-      `Totally fair — I just want to make sure the ${scope} request didn't fall through the cracks. ${agent} only needs 5 minutes. What time works better for you?`,
-      `No worries — this is just to make sure you got taken care of on the ${scope}. ${agent}'s call is only 5 minutes, no pressure. Later today or tomorrow?`,
-    ];
-    return lines[Math.floor(Math.random() * lines.length)];
-  }
-
-  if (kind === "already_talked") {
-    const scope = getScopeLabelForScriptKey(ctx.scriptKey);
-    const lines = [
-      `Yeah, and that's totally fine — this is just the follow-up call to make sure everything got taken care of on the ${scope} side. ${agent} just needs 5 minutes. What time works better, later today or tomorrow?`,
-      `Oh for sure — this is just the follow-up. Sometimes the first call doesn't get everything wrapped up, so ${agent} wants to make sure you're all set. Does later today or tomorrow work?`,
-      `Yeah, that makes sense — this would just be the follow-up with ${agent} to make sure everything got finalized on your end. It's only 5 minutes. What works better, today or tomorrow?`,
-    ];
-    return lines[Math.floor(Math.random() * lines.length)];
-  }
-
-  if (kind === "how_did_you_get") {
-    const scope = getScopeLabelForScriptKey(ctx.scriptKey);
-    return `I hear you — the information came through a form that was filled out online regarding ${scope}. It may have been a bit since it came through, but ${agent} can cover everything on a quick 5-minute call. What time works better for you, later today or tomorrow?`;
-  }
-
-  // ✅ IMPORTANT: redirect stays booking-only, never follows disallowed topics
   if (kind === "redirect") {
     return getBookingFallbackLine(ctx);
   }
@@ -3476,12 +3492,21 @@ function getScriptBlock(ctx: AICallContext): string {
   const scope = getScopeLabelForScriptKey(scriptKey);
 
   const HARD_LOCKS = `
+TONE & DELIVERY (CRITICAL — READ FIRST)
+- Sound like a real, warm professional — not a bot, not a recording.
+- Brief natural acknowledgments make you sound human: “Sure”, “Of course”, “Got it”, “Yeah absolutely”, “No worries”.
+- Mirror the lead: friendly → friendly, brief → brief, hesitant → slow down and stay warm.
+- Never ramble. One acknowledgment, then the next script line.
+- If confused: “No worries — real quick...” + one clear sentence. If annoyed/rushed: “I totally get that — this’ll be quick.”
+- If silence: “Hello — can you hear me okay?” then wait.
+- Keep every turn to 1–2 sentences. Tighter sounds more confident.
+
 HARD ENGLISH LOCK (NON-NEGOTIABLE)
 - Speak ONLY English.
 
 HARD NAME LOCK (NON-NEGOTIABLE)
-- The ONLY name you may use for the lead is exactly: "${client}"
-- If the lead name is missing, use exactly: "there"
+- The ONLY name you may use for the lead is exactly: “${client}”
+- If the lead name is missing, use exactly: “there”
 - NEVER invent or guess a name. NEVER use any other name.
 
 HARD SCOPE LOCK (NON-NEGOTIABLE)
@@ -3536,20 +3561,20 @@ function buildGreetingInstructions(ctx: AICallContext): string {
   const aiName = (ctx.voiceProfile.aiName || "Alex").trim() || "Alex";
   const clientNameRaw = (ctx.clientFirstName || "").trim();
   const clientName = (!clientNameRaw || isTestOrPlaceholderName(clientNameRaw)) ? "there" : clientNameRaw;
-  const scope = getScopeLabelForScriptKey(ctx.scriptKey);
 
   return `
-You are ${aiName}, a scheduling assistant. You are making a phone call.
+You are ${aiName}, a real person making a phone call. Sound warm, natural, and unhurried — the way a friendly professional speaks, not a robot or a recording.
 
 YOUR ONLY JOB RIGHT NOW:
-Say this greeting EXACTLY, naturally, as a real person would:
+Say this greeting EXACTLY:
 "Hey ${clientName}. This is ${aiName}. Can you hear me alright?"
 
-RULES:
-- Say ONLY those words. Nothing more.
-- After you say it, STOP COMPLETELY and wait for them to respond.
+DELIVERY RULES:
+- Say ONLY those words. Nothing more, nothing less.
+- Speak in a warm, relaxed tone — like you're calling a neighbor, not reading a script.
+- Add a tiny natural pause after "Hey ${clientName}." — a real person would.
+- STOP completely after asking "Can you hear me alright?" and WAIT. Do not fill the silence.
 - Do NOT introduce yourself further. Do NOT mention the reason for the call yet.
-- Do NOT start the booking script. That comes after they respond.
 - English only.
 `.trim();
 }
@@ -3566,8 +3591,19 @@ function buildSystemPrompt(ctx: AICallContext): string {
   const scope = getScopeLabelForScriptKey(scriptKey);
 
   const base = `
-You are ${aiName}, a phone appointment-setting assistant calling on behalf of licensed life insurance agent ${agent}.
-You are calm, confident, and human-sounding.
+You are ${aiName}, a real person making an outbound phone call on behalf of licensed agent ${agent}.
+You are warm, calm, and naturally confident — the way an experienced professional sounds, not a robot.
+
+TONE & DELIVERY (READ THIS FIRST)
+- Sound like a real human: use brief acknowledgments like "Sure", "Of course", "Absolutely", "Got it", "Yeah no worries" — naturally woven in, never forced.
+- Mirror the lead’s energy. If they’re friendly, be friendly. If they’re brief, be brief. If they’re hesitant, slow down and stay warm.
+- Never sound scripted. Deliver each line as if you’re speaking it for the first time.
+- When the lead gives ANY response, acknowledge it genuinely before moving on. One natural word or phrase is enough.
+- If a lead sounds confused: "No worries, let me explain quickly..." — then one clear sentence.
+- If a lead sounds annoyed or rushed: "I totally get that — this’ll be really quick."
+- If a lead is silent for more than a moment: "Hello — can you hear me okay?" — then wait again.
+- Never fill silence with rambling. One acknowledgment, then the next step.
+- Keep every turn to 1–2 sentences. Tighter is warmer.
 
 HARD ENGLISH LOCK (NON-NEGOTIABLE)
 - Speak ONLY English.
@@ -3584,7 +3620,7 @@ HARD SCOPE LOCK (NON-NEGOTIABLE)
 
 ABSOLUTE BEHAVIOR LOCK (NON-NEGOTIABLE)
 - NEVER apologize.
-- NEVER mention scripts/prompts/system messages.
+- NEVER mention scripts, prompts, or system messages.
 - NEVER introduce any other reason for calling.
 - If you are about to say anything outside allowed scope, DO NOT SAY IT. Continue with the booking script.
 
@@ -3598,12 +3634,12 @@ BOOKING-ONLY (NON-NEGOTIABLE)
 - Your ONLY goal is to follow the booking script and schedule the appointment.
 
 MANDATORY REDIRECT RULE (NON-NEGOTIABLE)
-- If the lead volunteers ANY of the above information, acknowledge briefly (e.g. "Got it"),
+- If the lead volunteers ANY of the above information, acknowledge briefly ("Got it", "Sure"),
   then IMMEDIATELY return to booking without asking follow-up questions.
 
 TURN DISCIPLINE (NON-NEGOTIABLE)
 - After you ask ANY question, STOP and WAIT.
-- Do NOT fill silence.
+- Do NOT fill silence with additional explanation.
 
 CONTROL SCHEMA RULES (VERY IMPORTANT — KEEP SHORT)
 - Emit control.kind="book_appointment" ONLY when the lead gives a clear time AND confirms it works.
@@ -3874,6 +3910,103 @@ const server = http.createServer(
         return;
       }
 
+      if (req.method === "POST" && url.pathname === "/trigger-call") {
+        // Validate API secret
+        const authHeader = req.headers["x-api-secret"] || req.headers["authorization"] || "";
+        const token = Array.isArray(authHeader) ? authHeader[0] : String(authHeader);
+        const bare = token.replace(/^Bearer\s+/i, "");
+        if (!COVECRM_API_SECRET || bare !== COVECRM_API_SECRET) {
+          res.statusCode = 401;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ ok: false, error: "Unauthorized" }));
+          return;
+        }
+
+        let body = "";
+        req.on("data", (chunk) => { body += chunk; });
+        req.on("end", async () => {
+          try {
+            const payload = body ? JSON.parse(body) : {};
+            const { userEmail, leadId, leadPhone, scriptKey } = payload;
+
+            if (!userEmail || !leadPhone) {
+              res.statusCode = 400;
+              res.setHeader("Content-Type", "application/json");
+              res.end(JSON.stringify({ ok: false, error: "userEmail and leadPhone are required" }));
+              return;
+            }
+
+            if (!TWILIO_ACCOUNT_SID || !TWILIO_AUTH_TOKEN || !TWILIO_PHONE_NUMBER) {
+              console.warn("[AI-VOICE] /trigger-call: Twilio credentials not configured");
+              res.statusCode = 503;
+              res.setHeader("Content-Type", "application/json");
+              res.end(JSON.stringify({ ok: false, error: "Twilio credentials not configured" }));
+              return;
+            }
+
+            const twimlUrl = new URL("/api/ai-calls/voice-twiml", COVECRM_BASE_URL);
+            if (leadId) twimlUrl.searchParams.set("leadId", leadId);
+            twimlUrl.searchParams.set("userEmail", userEmail);
+            if (scriptKey) twimlUrl.searchParams.set("scriptKey", scriptKey);
+
+            const statusUrl = new URL("/api/ai-calls/status", COVECRM_BASE_URL);
+            statusUrl.searchParams.set("userEmail", userEmail);
+
+            // Normalize phone
+            const digits = leadPhone.replace(/\D/g, "");
+            const toE164 = digits.length === 10 ? `+1${digits}` : digits.startsWith("1") && digits.length === 11 ? `+${digits}` : leadPhone;
+
+            // Twilio REST API call via fetch
+            const twilioUrl = `https://api.twilio.com/2010-04-01/Accounts/${TWILIO_ACCOUNT_SID}/Calls.json`;
+            const credentials = Buffer.from(`${TWILIO_ACCOUNT_SID}:${TWILIO_AUTH_TOKEN}`).toString("base64");
+            const formBody = new URLSearchParams({
+              To: toE164,
+              From: TWILIO_PHONE_NUMBER,
+              Url: twimlUrl.toString(),
+              StatusCallback: statusUrl.toString(),
+              StatusCallbackEvent: "initiated ringing answered completed",
+              Record: "true",
+            });
+
+            const twilioRes = await fetch(twilioUrl, {
+              method: "POST",
+              headers: {
+                "Authorization": `Basic ${credentials}`,
+                "Content-Type": "application/x-www-form-urlencoded",
+              },
+              body: formBody.toString(),
+            });
+
+            const twilioData: any = await twilioRes.json().catch(() => ({}));
+
+            if (!twilioRes.ok) {
+              console.error("[AI-VOICE] /trigger-call Twilio error:", twilioData);
+              res.statusCode = 502;
+              res.setHeader("Content-Type", "application/json");
+              res.end(JSON.stringify({ ok: false, error: twilioData?.message || "Twilio call failed" }));
+              return;
+            }
+
+            console.log("[AI-VOICE] /trigger-call initiated:", {
+              callSid: twilioData?.sid,
+              to: toE164,
+              userEmail,
+              leadId,
+            });
+
+            res.statusCode = 200;
+            res.setHeader("Content-Type", "application/json");
+            res.end(JSON.stringify({ ok: true, callSid: twilioData?.sid }));
+          } catch (err: any) {
+            console.error("[AI-VOICE] /trigger-call error:", err?.message || err);
+            res.statusCode = 500;
+            res.setHeader("Content-Type", "application/json");
+            res.end(JSON.stringify({ ok: false, error: err?.message || "Internal error" }));
+          }
+        });
+        return;
+      }
+
       res.statusCode = 404;
       res.setHeader("Content-Type", "application/json");
       res.end(JSON.stringify({ ok: false, error: "Not found" }));
@@ -3972,6 +4105,18 @@ wss.on("connection", (ws: WebSocket) => {
           err?.message || err
         );
       });
+
+      if (!st.finalOutcomeSent && st.context) {
+        const answeredBy = String(st.context.answeredBy || "").toLowerCase();
+        const outcome = isVoicemailAnsweredBy(answeredBy) ? "no_answer" : "unknown";
+        handleFinalOutcomeIntent(st, {
+          kind: "final_outcome",
+          outcome,
+          summary: "Call ended via WebSocket close.",
+          notesAppend: `answeredBy: ${answeredBy || "unknown"}. Lead left in original folder per policy.`,
+        }).catch(() => {});
+        st.finalOutcomeSent = true;
+      }
     }
 
     if (st?.openAiWs) {
@@ -4052,6 +4197,95 @@ startServer().catch((err: any) => {
 /**
  * START
  */
+/**
+ * ✅ LIVE TRANSFER — redirect call to agent phone via Twilio REST API.
+ * Called after lead confirms interest (script step 1 → 2 advance).
+ * If agent doesn't answer, Twilio calls transfer-fallback.ts which plays a graceful message.
+ */
+async function performLiveTransfer(ws: WebSocket, state: CallState): Promise<void> {
+  const ctx = state.context;
+  if (!ctx) return;
+  if (!ctx.liveTransferEnabled || !ctx.liveTransferPhone) return;
+  if (state.phase === "ended") return;
+
+  const agentFirst = (ctx.agentName || "my agent").split(" ")[0] || "my agent";
+  const leadName = ctx.clientFirstName || "them";
+  const scope = getScopeLabelForScriptKey(ctx.scriptKey);
+
+  console.log("[AI-VOICE][LIVE-TRANSFER] Initiating transfer", {
+    callSid: state.callSid,
+    agentPhone: ctx.liveTransferPhone,
+    leadName,
+  });
+
+  // 1. Say transfer line
+  const transferLine = `That's great to hear. I actually have a licensed agent available right now who can go over everything with you in detail. Let me connect you — just one moment.`;
+
+  try {
+    if (state.openAiWs && state.openAiWs.readyState === WebSocket.OPEN) {
+      setWaitingForResponse(state, true, "live-transfer speak");
+      setAiSpeaking(state, true, "live-transfer speak");
+      setResponseInFlight(state, true, "live-transfer speak");
+      state.outboundOpenAiDone = false;
+      state.openAiWs.send(JSON.stringify({
+        type: "response.create",
+        response: {
+          modalities: ["audio", "text"],
+          instructions: `Say EXACTLY this sentence and nothing else: "${transferLine}" Then stop completely.`,
+        },
+      }));
+    }
+  } catch (err: any) {
+    console.warn("[AI-VOICE][LIVE-TRANSFER] Failed to send transfer line:", err?.message);
+  }
+
+  // 2. Wait for AI to finish speaking (~4 seconds for one sentence)
+  await new Promise((r) => setTimeout(r, 4500));
+
+  if (state.phase === "ended") return;
+
+  // 3. Redirect the call via Twilio REST API
+  try {
+    const transferUrl = new URL(TRANSFER_TWIML_URL);
+    transferUrl.searchParams.set("agentPhone", ctx.liveTransferPhone);
+    transferUrl.searchParams.set("leadName", leadName);
+    transferUrl.searchParams.set("agentName", agentFirst);
+    transferUrl.searchParams.set("scope", scope);
+    transferUrl.searchParams.set("key", AI_DIALER_CRON_KEY);
+
+    const twilioCallUrl = `https://api.twilio.com/2010-04-01/Accounts/${TWILIO_ACCOUNT_SID}/Calls/${state.callSid}.json`;
+    const credentials = Buffer.from(`${TWILIO_ACCOUNT_SID}:${TWILIO_AUTH_TOKEN}`).toString("base64");
+
+    const redirectRes = await fetch(twilioCallUrl, {
+      method: "POST",
+      headers: {
+        "Authorization": `Basic ${credentials}`,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams({ Url: transferUrl.toString() }).toString(),
+    });
+
+    if (redirectRes.ok) {
+      console.log("[AI-VOICE][LIVE-TRANSFER] Call redirected to agent", {
+        callSid: state.callSid,
+        agentPhone: ctx.liveTransferPhone,
+      });
+    } else {
+      const errBody = await redirectRes.text().catch(() => "");
+      console.error("[AI-VOICE][LIVE-TRANSFER] Twilio redirect failed", {
+        status: redirectRes.status,
+        body: errBody.slice(0, 200),
+      });
+    }
+  } catch (err: any) {
+    console.error("[AI-VOICE][LIVE-TRANSFER] Error redirecting call:", err?.message);
+  }
+
+  // 4. Mark call ended on our side — Twilio now owns the call
+  state.phase = "ended";
+  safelyCloseOpenAi(state, "live transfer redirect");
+}
+
 async function handleStart(ws: WebSocket, msg: TwilioStartEvent) {
   const state = calls.get(ws);
   if (!state) return;
@@ -4060,6 +4294,20 @@ async function handleStart(ws: WebSocket, msg: TwilioStartEvent) {
   state.callSid = msg.start.callSid;
   state.callStartedAtMs = Date.now();
   state.billedUsageSent = false;
+
+  // Safety: auto-close call after 20 minutes to prevent runaway costs
+  setTimeout(() => {
+    try {
+      const live = calls.get(ws);
+      if (!live || live.phase === "ended") return;
+      console.log("[AI-VOICE][TIMEOUT] 20-minute call timeout — closing", {
+        callSid: live.callSid,
+      });
+      live.phase = "ended";
+      stopOutboundPacer(ws, live, "20min timeout");
+      safelyCloseOpenAi(live, "20min timeout");
+    } catch {}
+  }, 20 * 60 * 1000);
 
   setWaitingForResponse(state, false, "start/reset");
   setAiSpeaking(state, false, "start/reset");
@@ -4412,6 +4660,18 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
       return;
     }
 
+    // HARD COST GATE: never stream audio to OpenAI unless we are actively in a call
+    // with a live context AND the call is in a phase where user speech is expected.
+    // This is the primary defense against dead-air cost spikes.
+    const isActiveCall = !!state.context && !!state.openAiWs && !!state.openAiReady;
+    const isInSpeakingPhase =
+      state.phase === "awaiting_greeting_reply" ||
+      state.phase === "in_call";
+
+    if (!isActiveCall || !isInSpeakingPhase) {
+      return;
+    }
+
     const isSilenceToSend = isLikelySilenceMulawBase64(payload);
     if (isSilenceToSend) {
       // ✅ COST CUT: Do NOT stream continuous idle silence.
@@ -4432,9 +4692,12 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
       // ✅ HARD COST LOCK:
       // Only stream inbound audio to OpenAI when we EXPECT the user to speak.
       // This prevents "listening 24/7" which causes the $12/hr spike.
+      // Only stream silence to OpenAI when ACTIVELY expecting user reply
+      // awaitingUserAnswer must be true OR we are in greeting phase OR in warmup
+      // This prevents continuous silence streaming during script transitions
       const expectingUserSpeech =
-        state.phase === "awaiting_greeting_reply" ||
-        !!state.awaitingUserAnswer ||
+        (state.phase === "awaiting_greeting_reply" && !!state.debugLoggedResponseCreateGreeting) ||
+        (state.phase === "in_call" && !!state.awaitingUserAnswer) ||
         inWarmup;
 
       if (!expectingUserSpeech) {
@@ -4521,6 +4784,25 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
         audio: payload,
       })
     );
+
+    try {
+      (state as any)._totalAudioMsSentToOpenAi =
+        ((state as any)._totalAudioMsSentToOpenAi || 0) + 20;
+      const total = Number((state as any)._totalAudioMsSentToOpenAi || 0);
+      const lastLogAt = Number((state as any)._audioMeterLogAt || 0);
+      if (total - lastLogAt >= 30000) {
+        (state as any)._audioMeterLogAt = total;
+        const inputMinutes = total / 60000;
+        const estimatedInputCost = inputMinutes * 0.10;
+        console.log("[AI-VOICE][COST-METER] Audio streamed to OpenAI:", {
+          callSid: state.callSid,
+          inputMinutes: inputMinutes.toFixed(2),
+          estimatedInputCostUsd: estimatedInputCost.toFixed(4),
+          phase: state.phase,
+          awaitingUserAnswer: !!state.awaitingUserAnswer,
+        });
+      }
+    } catch {}
   } catch (err: any) {
     console.error(
       "[AI-VOICE] Error forwarding audio to OpenAI:",
@@ -4556,6 +4838,23 @@ async function handleStop(ws: WebSocket, msg: TwilioStopEvent) {
       "[AI-VOICE] Error billing AI Dialer usage:",
       err?.message || err
     );
+  }
+
+  if (!state.finalOutcomeSent && state.context) {
+    const answeredBy = String(state.context.answeredBy || "").toLowerCase();
+    const outcome = isVoicemailAnsweredBy(answeredBy) ? "no_answer" : "unknown";
+    console.log("[AI-VOICE][OUTCOME][FALLBACK]", {
+      callSid: state.callSid,
+      outcome,
+      reason: "call ended without explicit outcome signal",
+    });
+    void handleFinalOutcomeIntent(state, {
+      kind: "final_outcome",
+      outcome,
+      summary: "Call ended — outcome not explicitly confirmed during call.",
+      notesAppend: `answeredBy: ${answeredBy || "unknown"}. Lead left in original folder per policy.`,
+    }).catch(() => {});
+    state.finalOutcomeSent = true;
   }
 
   calls.delete(ws);
@@ -4680,15 +4979,13 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
           type: "server_vad",
           create_response: false,
 
-          // ✅ HOTFIX: Reduce end-of-turn silence so we don't get 3–5s dead air after the user talks.
-          // Default can be too slow; this makes "speech_stopped/committed" fire faster.
-          // 400ms: short enough to not hang on mid-sentence pauses, long enough to not cut off natural speech.
-          silence_duration_ms: 400,
+          // Allow natural end-of-sentence pauses without cutting off
+          silence_duration_ms: 600,
 
-          // ✅ Slightly higher threshold so background noise doesn't keep the turn open.
-          threshold: 0.55,
+          // Balanced threshold — reduces false triggers on background noise
+          threshold: 0.5,
 
-          // ✅ Helps keep the start of user speech from being clipped.
+          // Capture speech from the very start of each user turn
           prefix_padding_ms: 300,
         },
       },
@@ -6246,6 +6543,53 @@ state.lastUserSpeechStoppedAtMs = Date.now();
       // hold position; next turn will reprompt / ask again
       state.scriptStepIndex = idx;
     }
+
+    // ✅ LIVE TRANSFER: when lead answers STEP 1 (interest confirmed, idx=1),
+    // and live transfer is enabled, hand off to agent immediately.
+    // Booking path (CHANGE D) is skipped here — performLiveTransfer handles the fallback
+    // via Twilio's <Dial action="fallback"> which plays a graceful message if agent is unavailable.
+    if (canAdvance && idx === 1 && state.context?.liveTransferEnabled && state.context?.liveTransferPhone && state.phase !== "ended") {
+      console.log("[AI-VOICE][LIVE-TRANSFER] Interest confirmed at step 1 — triggering live transfer", {
+        callSid: state.callSid,
+        agentPhone: state.context.liveTransferPhone,
+      });
+      const wsConn = state.openAiWs;
+      if (wsConn) {
+        void performLiveTransfer(wsConn, state);
+      }
+      return;
+    }
+
+    // SERVER-SIDE BOOKING TRIGGER
+    // When the stepper reaches the confirm step (Step 4) and we have a real exact time,
+    // trigger the booking without waiting for the model to emit a control signal.
+    try {
+      const newStepIdx = state.scriptStepIndex;
+      const totalSteps = (state.scriptSteps || []).length;
+      const onConfirmStep = newStepIdx >= 3 && totalSteps >= 4;
+      const lastExactTime = String((state as any).lastExactTimeText || "").trim();
+      const lastExactAt = Number((state as any).lastExactTimeAtMs || 0);
+      const hasRecentExactTime =
+        !!lastExactTime &&
+        isExactClockTimeMentioned(lastExactTime) &&
+        lastExactAt > 0 &&
+        (Date.now() - lastExactAt) < 5 * 60 * 1000;
+
+      if (onConfirmStep && hasRecentExactTime && !state.finalOutcomeSent) {
+        console.log("[AI-VOICE][BOOKING][SERVER-TRIGGER]", {
+          callSid: state.callSid,
+          stepIndex: newStepIdx,
+          lastExactTimeText: lastExactTime,
+        });
+        void handleFinalOutcomeIntent(state, {
+          kind: "final_outcome",
+          outcome: "booked",
+          summary: `AI scheduled appointment. Lead confirmed call around ${lastExactTime}.`,
+          notesAppend: `Approximate time confirmed by lead: ${lastExactTime}. Agent should confirm exact slot.`,
+        });
+        state.finalOutcomeSent = true;
+      }
+    } catch {}
     state.phase = "in_call";
     // ✅ Re-arm awaitingUserAnswer so next user turn hits the stepper, not the rebuttal path.
     state.awaitingUserAnswer = true;
@@ -6552,6 +6896,32 @@ async function handleBookAppointmentIntent(state: CallState, control: any) {
     console.log(
       `[AI-VOICE] Appointment booked for lead ${ctx.clientFirstName} ${ctx.clientLastName} – eventId=${json.eventId}`
     );
+
+    if (json.ok && ctx.clientPhone && COVECRM_API_SECRET) {
+      try {
+        const smsUrl = new URL("/api/ai-calls/booking-confirmation-sms", COVECRM_BASE_URL);
+        smsUrl.searchParams.set("key", AI_DIALER_CRON_KEY);
+        await fetch(smsUrl.toString(), {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-ai-dialer-key": AI_DIALER_CRON_KEY,
+          },
+          body: JSON.stringify({
+            leadId: ctx.leadId,
+            leadPhone: ctx.clientPhone,
+            agentName: ctx.agentName,
+            appointmentTime: body.startTimeUtc,
+            leadTimeZone: leadTimeZone,
+            agentTimeZone: agentTimeZone,
+            userEmail: ctx.userEmail,
+          }),
+        });
+        console.log("[AI-VOICE][SMS-CONFIRM] Confirmation SMS triggered for lead:", ctx.leadId);
+      } catch (err: any) {
+        console.warn("[AI-VOICE][SMS-CONFIRM] Non-blocking SMS trigger failed:", err?.message);
+      }
+    }
   } catch (err: any) {
     console.error(
       "[AI-VOICE] Error calling book-appointment endpoint:",
@@ -6602,6 +6972,10 @@ async function handleFinalOutcomeIntent(state: CallState, control: any) {
       outcome: outcomeRaw,
       summary,
       notesAppend,
+      dispositionRule: outcomeRaw === "booked" ? "move_to_booked" :
+        outcomeRaw === "not_interested" ? "move_to_not_interested" :
+        outcomeRaw === "do_not_call" ? "move_to_do_not_call" :
+        "leave_in_place",
     };
 
     const resp = await fetch(OUTCOME_URL, {
