@@ -4242,7 +4242,8 @@ async function performLiveTransfer(ws: WebSocket, state: CallState): Promise<voi
   // 2. Wait for AI to finish speaking (~4 seconds for one sentence)
   await new Promise((r) => setTimeout(r, 4500));
 
-  if (state.phase === "ended") return;
+  const phaseAfterSpeak = (state as { phase?: CallPhase }).phase;
+  if (phaseAfterSpeak === "ended") return;
 
   // 3. Redirect the call via Twilio REST API
   try {
