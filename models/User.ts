@@ -220,6 +220,16 @@ export interface IUser {
     total?: number;
     updatedAt: Date;
   }[];
+
+  metaPageId?: string;
+  metaPageName?: string;
+  metaInstagramId?: string;
+  metaAdAccountId?: string;
+  metaSystemUserToken?: string;
+  metaAccessToken?: string;
+  metaTokenExpiresAt?: Date;
+  metaLastWebhookAt?: Date;
+  metaLastInsightSyncAt?: Date;
 }
 
 const SyncedSheetSchema = new Schema(
@@ -449,6 +459,16 @@ const UserSchema = new Schema<IUser>({
   numbersLastSyncedAt: Date,
 
   dialProgress: { type: [DialProgressSchema], default: [] },
+
+  metaPageId: { type: String, default: "" },
+  metaPageName: { type: String, default: "" },
+  metaInstagramId: { type: String, default: "" },
+  metaAdAccountId: { type: String, default: "" },
+  metaSystemUserToken: { type: String, default: "" },
+  metaAccessToken: { type: String, default: "" },
+  metaTokenExpiresAt: { type: Date, default: null },
+  metaLastWebhookAt: { type: Date, default: null },
+  metaLastInsightSyncAt: { type: Date, default: null },
 });
 
 UserSchema.index({ email: 1 }, { name: "user_email_idx" });
@@ -477,6 +497,8 @@ UserSchema.index(
   { "googleSheets.syncedSheetsSimple.connectionId": 1 },
   { name: "user_sheets_simple_connectionid_idx", sparse: true },
 );
+
+UserSchema.index({ metaPageId: 1 }, { name: "user_meta_page_id_idx", sparse: true });
 
 const User =
   (mongoose.models.User as mongoose.Model<IUser>) ||

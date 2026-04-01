@@ -1,5 +1,7 @@
 // /pages/api/folders/assignDrip.ts
 import type { NextApiRequest, NextApiResponse } from "next";
+import { getServerSession } from "next-auth/next";
+import { authOptions } from "@/pages/api/auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import Folder from "@/models/Folder";
 
@@ -7,6 +9,10 @@ export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse,
 ) {
+  const session = await getServerSession(req, res, authOptions);
+  const email = typeof session?.user?.email === "string" ? session.user.email.toLowerCase() : "";
+  if (!email) return res.status(401).json({ message: "Unauthorized" });
+
   await dbConnect();
 
   if (req.method !== "POST") {
@@ -23,7 +29,8 @@ export default async function handler(
   }
 
   try {
-    const folder: any = await Folder.findById(folderId);
+    // Only allow modifying folders owned by the requesting user
+    const folder: any = await Folder.findOne({ _id: folderId, userEmail: email });
     if (!folder) {
       return res.status(404).json({ message: "Folder not found" });
     }

@@ -8,6 +8,12 @@ interface Folder {
   _id: string;
   name: string;
   leadCount?: number;
+  assignedDrips?: any[];
+  aiFirstCallEnabled?: boolean;
+  aiFirstCallDelayMinutes?: number;
+  aiRealTimeOnly?: boolean;
+  aiScriptKey?: string;
+  aiEnabledAt?: string | Date | null;
 }
 
 interface Lead {
@@ -17,6 +23,16 @@ interface Lead {
 
 type NumberEntry = { id: string; phoneNumber: string; sid: string };
 type ResumeInfo = { lastIndex: number | null; total: number | null; updatedAt?: string | null };
+
+const AI_SCRIPT_OPTIONS = [
+  { value: "default", label: "Default" },
+  { value: "final_expense", label: "Final Expense" },
+  { value: "mortgage_protection", label: "Mortgage Protection" },
+  { value: "iul_cash_value", label: "IUL / Cash Value" },
+  { value: "veteran_leads", label: "Veteran Leads" },
+  { value: "trucker_leads", label: "Trucker Leads" },
+  { value: "generic_life", label: "Generic Life" },
+];
 
 /** ───────────────────────── Page ───────────────────────── */
 export default function LeadsPage() {
@@ -38,6 +54,9 @@ export default function LeadsPage() {
   // Dial controls
   const [numbers, setNumbers] = useState<NumberEntry[]>([]);
   const [selectedNumber, setSelectedNumber] = useState<string>("");
+  const [aiFirstCallEnabled, setAiFirstCallEnabled] = useState(false);
+  const [aiScriptKey, setAiScriptKey] = useState("default");
+  const [aiFirstCallDelayMinutes, setAiFirstCallDelayMinutes] = useState(1);
 
   // Resume (server-backed)
   const [resumeInfo, setResumeInfo] = useState<ResumeInfo | null>(null);
@@ -143,6 +162,17 @@ export default function LeadsPage() {
     setFilteredLeads(filtered);
   }, [searchQuery, leads]);
 
+  /** Sync inline folder AI controls from the active folder */
+  useEffect(() => {
+    setAiFirstCallEnabled(!!activeFolder?.aiFirstCallEnabled);
+    setAiScriptKey(activeFolder?.aiScriptKey || "default");
+    setAiFirstCallDelayMinutes(
+      typeof activeFolder?.aiFirstCallDelayMinutes === "number"
+        ? activeFolder.aiFirstCallDelayMinutes
+        : 1
+    );
+  }, [activeFolder]);
+
   /** Helpers */
   const toggleLeadSelection = (id: string) => {
     setSelectedLeads((prev) => (prev.includes(id) ? prev.filter((leadId) => leadId !== id) : [...prev, id]));
@@ -166,6 +196,58 @@ export default function LeadsPage() {
   const buildServerProgressKey = () => {
     const folder = activeFolder?._id ?? "no-folder";
     return `folder:${folder}`;
+  };
+
+  const saveAIFolderSettings = async (overrides: Partial<Pick<Folder, "aiFirstCallEnabled" | "aiScriptKey" | "aiFirstCallDelayMinutes" | "aiEnabledAt">>) => {
+    if (!activeFolder?._id) return;
+
+    const nextEnabled =
+      typeof overrides.aiFirstCallEnabled === "boolean"
+        ? overrides.aiFirstCallEnabled
+        : aiFirstCallEnabled;
+    const nextScriptKey = overrides.aiScriptKey ?? aiScriptKey;
+    const nextDelayRaw =
+      typeof overrides.aiFirstCallDelayMinutes === "number"
+        ? overrides.aiFirstCallDelayMinutes
+        : aiFirstCallDelayMinutes;
+    const nextDelay = Math.max(0, Math.min(60, Math.round(nextDelayRaw || 0)));
+    const nextEnabledAt =
+      overrides.aiEnabledAt !== undefined
+        ? overrides.aiEnabledAt
+        : nextEnabled
+        ? activeFolder.aiEnabledAt || new Date().toISOString()
+        : null;
+
+    const res = await fetch("/api/folders/ai-settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        folderId: activeFolder._id,
+        aiFirstCallEnabled: nextEnabled,
+        aiScriptKey: nextScriptKey,
+        aiFirstCallDelayMinutes: nextDelay,
+        aiEnabledAt: nextEnabled ? nextEnabledAt || new Date().toISOString() : null,
+      }),
+    });
+
+    if (!res.ok) {
+      throw new Error("Failed to save AI settings");
+    }
+
+    const updatedFolder: Folder = {
+      ...activeFolder,
+      aiFirstCallEnabled: nextEnabled,
+      aiScriptKey: nextScriptKey,
+      aiFirstCallDelayMinutes: nextDelay,
+      aiEnabledAt: nextEnabled ? nextEnabledAt || new Date().toISOString() : null,
+    };
+
+    setActiveFolder(updatedFolder);
+    setFolders((prev) =>
+      prev.map((folder) =>
+        folder._id === updatedFolder._id ? { ...folder, ...updatedFolder } : folder
+      )
+    );
   };
 
   /** Start Dial Session (keeps existing local resume prompt behavior) */
@@ -273,6 +355,10 @@ export default function LeadsPage() {
     !!resumeInfo && resumeInfo.lastIndex != null && resumeInfo.lastIndex >= 0 && filteredLeads.length > 0;
   const canStart = selectedLeads.length > 0;
   const canResume = hasResume && !!selectedNumber && filteredLeads.length > 0;
+  const showFacebookDripWarning =
+    !!activeFolder &&
+    activeFolder.name.startsWith("FB: ") &&
+    (!Array.isArray(activeFolder.assignedDrips) || activeFolder.assignedDrips.length === 0);
 
   /** Render */
   return (
@@ -315,21 +401,106 @@ export default function LeadsPage() {
               className="border p-2 rounded w-full text-black mb-4"
             />
 
-            {/* Number selector */}
-            <div className="mb-3">
-              <label className="font-semibold block mb-1">Select Number to Call From:</label>
-              <select
-                value={selectedNumber}
-                onChange={(e) => setSelectedNumber(e.target.value)}
-                className="border p-2 rounded w-full text-black"
-              >
-                <option value="">-- Choose a number --</option>
-                {numbers.map((n) => (
-                  <option key={n.id} value={n.phoneNumber}>
-                    {n.phoneNumber}
-                  </option>
-                ))}
-              </select>
+            {showFacebookDripWarning && (
+              <div className="mb-4 rounded border border-yellow-600 bg-yellow-900/20 px-4 py-3 text-sm text-yellow-200">
+                No drip assigned. Leads will not receive text follow-up unless you assign a drip.
+              </div>
+            )}
+
+            <div className="mb-4 rounded border border-white/20 p-3">
+              <div className="flex flex-wrap items-end gap-3">
+                <div className="min-w-[220px] flex-1">
+                  <label className="font-semibold block mb-1 text-sm">Select Number</label>
+                  <select
+                    value={selectedNumber}
+                    onChange={(e) => setSelectedNumber(e.target.value)}
+                    className="border p-2 rounded w-full text-black"
+                  >
+                    <option value="">-- Choose a number --</option>
+                    {numbers.map((n) => (
+                      <option key={n.id} value={n.phoneNumber}>
+                        {n.phoneNumber}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="font-semibold block mb-1 text-sm">AI First Call</label>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      const nextEnabled = !aiFirstCallEnabled;
+                      setAiFirstCallEnabled(nextEnabled);
+                      try {
+                        await saveAIFolderSettings({
+                          aiFirstCallEnabled: nextEnabled,
+                          aiEnabledAt: nextEnabled ? new Date().toISOString() : null,
+                        });
+                      } catch {
+                        setAiFirstCallEnabled(!nextEnabled);
+                        alert("Failed to save AI settings.");
+                      }
+                    }}
+                    className={`rounded px-3 py-2 text-sm font-semibold ${
+                      aiFirstCallEnabled
+                        ? "bg-blue-600 hover:bg-blue-700 text-white"
+                        : "bg-gray-600 hover:bg-gray-700 text-white"
+                    }`}
+                  >
+                    {aiFirstCallEnabled ? "ON" : "OFF"}
+                  </button>
+                </div>
+
+                <div className="min-w-[200px]">
+                  <label className="font-semibold block mb-1 text-sm">AI Script</label>
+                  <select
+                    value={aiScriptKey}
+                    onChange={async (e) => {
+                      const nextScriptKey = e.target.value;
+                      setAiScriptKey(nextScriptKey);
+                      try {
+                        await saveAIFolderSettings({ aiScriptKey: nextScriptKey });
+                      } catch {
+                        setAiScriptKey(activeFolder?.aiScriptKey || "default");
+                        alert("Failed to save AI settings.");
+                      }
+                    }}
+                    className="border p-2 rounded w-full text-black"
+                  >
+                    {AI_SCRIPT_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="w-[120px]">
+                  <label className="font-semibold block mb-1 text-sm">Delay Minutes</label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={60}
+                    value={aiFirstCallDelayMinutes}
+                    onChange={(e) => {
+                      const nextValue = Number(e.target.value);
+                      setAiFirstCallDelayMinutes(Number.isFinite(nextValue) ? nextValue : 0);
+                    }}
+                    onBlur={async (e) => {
+                      const nextDelay = Math.max(0, Math.min(60, Math.round(Number(e.target.value) || 0)));
+                      setAiFirstCallDelayMinutes(nextDelay);
+                      try {
+                        await saveAIFolderSettings({ aiFirstCallDelayMinutes: nextDelay });
+                      } catch {
+                        setAiFirstCallDelayMinutes(activeFolder?.aiFirstCallDelayMinutes ?? 1);
+                        alert("Failed to save AI settings.");
+                      }
+                    }}
+                    className="border p-2 rounded w-full text-black"
+                  />
+                </div>
+              </div>
             </div>
 
             <div className="border border-white p-4 rounded overflow-auto">

@@ -75,6 +75,35 @@ const LeadSchema = new Schema(
       enum: ["Final Expense", "Veteran", "Mortgage Protection", "IUL"],
       default: "Final Expense",
     },
+
+    // Meta (Facebook native webhook) fields
+    metaLeadgenId: { type: String, index: true, sparse: true },
+    metaFormId: { type: String, default: "" },
+    metaAdId: { type: String, default: "" },
+    metaAdsetId: { type: String, default: "" },
+    metaCampaignId: { type: String, default: "" },
+    metaPageId: { type: String, default: "" },
+    metaCreatedTime: { type: Date },
+    metaRawPayload: { type: String, default: "" },
+    leadSource: { type: String, default: "" },
+
+    // AI First-Call tracking
+    sourceType: {
+      type: String,
+      enum: ["csv_import", "facebook_lead", "form_submission", "api_live", "manual_live", "google_sheets_live", "doi_prospecting", "manual_import"],
+      default: "manual_live",
+    },
+    realTimeEligible: { type: Boolean, default: false },
+    aiFirstCallAttemptedAt: { type: Date, default: null },
+    aiFirstCallDueAt: { type: Date, default: null },
+    aiFirstCallTriggeredAt: { type: Date, default: null }, // set when voice server confirms the call was placed
+    aiFirstCallStatus: {
+      type: String,
+      enum: ["pending", "scheduled", "triggered", "failed", "stale_cleared", "aborted_dnc", "aborted_booked"],
+      default: null,
+    },
+    aiContactAttemptedAt: { type: Date, default: null },
+    aiConversationActive: { type: Boolean, default: false },
   },
   { timestamps: true, strict: false }
 );
@@ -113,6 +142,13 @@ LeadSchema.index({ ownerEmail: 1, Phone: 1 }, { name: "lead_owner_phone_idx" });
 LeadSchema.index({ userEmail: 1, folderId: 1 }, { name: "lead_user_folder_idx" });
 LeadSchema.index({ State: 1 }, { name: "lead_state_idx" });
 LeadSchema.index({ userEmail: 1, isAIEngaged: 1, updatedAt: -1 }, { name: "lead_ai_engaged_idx" });
+LeadSchema.index({ aiFirstCallStatus: 1, aiFirstCallDueAt: 1 }, { name: "lead_ai_first_call_due_idx", sparse: true });
+
+// Meta lead dedup — sparse unique so null/empty doesn't conflict
+LeadSchema.index(
+  { metaLeadgenId: 1 },
+  { name: "lead_meta_leadgen_id_unique", unique: true, sparse: true }
+);
 
 // -------- Utilities --------
 export const sanitizeLeadType = (input: string): string => {

@@ -180,7 +180,7 @@ export default function CallCoachReport({
     }
   }
 
-  if (!userHasAI) return null;
+  // AI Coaching is available to all users — userHasAI gate removed
 
   const BREAKDOWN_LABELS: [keyof ScoreBreakdown, string][] = [
     ["opening", "Opening"],

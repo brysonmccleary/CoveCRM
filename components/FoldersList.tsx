@@ -6,6 +6,7 @@ interface Folder {
   _id: string;
   name: string;
   leadCount: number;
+  aiFirstCallEnabled?: boolean;
 }
 
 interface FoldersListProps {
@@ -14,7 +15,7 @@ interface FoldersListProps {
   onFolderSelect?: (folderId: string) => void;
 }
 
-const SYSTEM_FOLDERS = ["Not Interested", "Booked Appointment", "Sold"];
+const SYSTEM_FOLDERS = ["Not Interested", "Booked Appointment", "Sold", "Bad Number"];
 
 export default function FoldersList({ onRefetchReady, onFolderSelect }: FoldersListProps) {
   const router = useRouter();
@@ -48,6 +49,19 @@ export default function FoldersList({ onRefetchReady, onFolderSelect }: FoldersL
     // ✅ Navigate to the actual folder-scoped page
     const path = `/leads/folder/${folderId}`;
     router.push(path).catch((e) => console.error("FoldersList: router.push failed", e));
+  };
+
+  const toggleAIFirstCall = async (folderId: string, currentValue: boolean) => {
+    const res = await fetch("/api/folders/ai-settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        folderId,
+        aiFirstCallEnabled: !currentValue,
+        aiEnabledAt: !currentValue ? new Date().toISOString() : null,
+      }),
+    });
+    if (res.ok) fetchFolders();
   };
 
   // Expose the refresh function to parent
@@ -112,40 +126,84 @@ export default function FoldersList({ onRefetchReady, onFolderSelect }: FoldersL
     };
   }, [fetchFolders]);
 
-  if (loading) return <p>Loading folders...</p>;
+  if (loading) return <p className="text-slate-400">Loading folders...</p>;
 
   return (
     <div>
-      <h2 className="text-xl font-bold mb-4">Your Folders</h2>
+      <h2 className="text-xl font-bold mb-4 text-slate-100">Your Folders</h2>
       {folders.length === 0 ? (
-        <p className="text-gray-400">No folders yet.</p>
+        <p className="text-slate-500">No folders yet.</p>
       ) : (
         <ul>
-          {folders.map((folder) => (
-            <li
-              key={folder._id}
-              className="mb-2 border border-gray-600 p-2 rounded flex justify-between items-center hover:bg-gray-700"
-            >
-              <button
-                type="button"
-                className="cursor-pointer w-full text-left"
-                onClick={() => goToFolder(folder._id)}
-                title={`Open ${folder.name}`}
+          {folders.map((folder) => {
+            const isSystem = SYSTEM_FOLDERS.includes(folder.name);
+            return (
+              <li
+                key={folder._id}
+                className={`mb-2 border border-white/10 p-2 rounded flex flex-wrap justify-between items-center gap-2 hover:bg-[#0f172a] transition-colors${isSystem ? " border-l-2 border-l-blue-500/40" : ""}`}
               >
-                {folder.name} — {folder.leadCount} Lead{folder.leadCount !== 1 ? "s" : ""}
-              </button>
-
-              {!SYSTEM_FOLDERS.includes(folder.name) && (
                 <button
-                  onClick={() => handleDeleteFolder(folder._id, setFolders)}
-                  title="Delete Folder"
-                  className="ml-4 text-red-500 hover:text-red-700 cursor-pointer"
+                  type="button"
+                  className="cursor-pointer text-left text-slate-100 flex-1 min-w-0"
+                  onClick={() => goToFolder(folder._id)}
+                  title={`Open ${folder.name}`}
                 >
-                  🗑️
+                  {folder.name}{" "}
+                  <span className="text-slate-400">
+                    — {folder.leadCount} Lead{folder.leadCount !== 1 ? "s" : ""}
+                  </span>
                 </button>
-              )}
-            </li>
-          ))}
+
+                <div className="flex items-center gap-2 shrink-0">
+                  {!isSystem && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        toggleAIFirstCall(folder._id, !!folder.aiFirstCallEnabled);
+                      }}
+                      title={folder.aiFirstCallEnabled ? "Disable AI First-Call" : "Enable AI First-Call"}
+                      style={
+                        folder.aiFirstCallEnabled
+                          ? {
+                              backgroundColor: "rgba(59,130,246,0.15)",
+                              border: "1px solid rgba(59,130,246,0.4)",
+                              color: "#60a5fa",
+                              borderRadius: "999px",
+                              fontSize: "11px",
+                              padding: "2px 10px",
+                              whiteSpace: "nowrap",
+                              cursor: "pointer",
+                            }
+                          : {
+                              backgroundColor: "rgba(255,255,255,0.05)",
+                              border: "1px solid rgba(255,255,255,0.1)",
+                              color: "#94a3b8",
+                              borderRadius: "999px",
+                              fontSize: "11px",
+                              padding: "2px 10px",
+                              whiteSpace: "nowrap",
+                              cursor: "pointer",
+                            }
+                      }
+                    >
+                      {folder.aiFirstCallEnabled ? "🤖 AI: ON" : "🤖 AI: OFF"}
+                    </button>
+                  )}
+
+                  {!isSystem && (
+                    <button
+                      onClick={() => handleDeleteFolder(folder._id, setFolders)}
+                      title="Delete Folder"
+                      className="text-red-400 hover:text-red-300 cursor-pointer"
+                    >
+                      🗑️
+                    </button>
+                  )}
+                </div>
+              </li>
+            );
+          })}
         </ul>
       )}
     </div>

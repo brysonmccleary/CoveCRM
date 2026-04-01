@@ -9,6 +9,18 @@ type CallShape = {
   aiSummary?: string;
   aiActionItems?: string[];
   aiSentiment?: "positive" | "neutral" | "negative";
+  aiBullets?: string[];
+  aiOverview?: {
+    overviewBullets?: string[];
+    keyDetails?: string[];
+    objections?: string[];
+    questions?: string[];
+    nextSteps?: string[];
+    outcome?: string;
+    appointmentTime?: string;
+    sentiment?: string;
+    generatedAt?: string;
+  };
 };
 
 export default function CallSummary({
@@ -26,8 +38,18 @@ export default function CallSummary({
   const [currentCall, setCurrentCall] = useState<CallShape | null>(call || null);
 
   const aiAvailable = useMemo(() => {
-    const c = currentCall || {};
-    return Boolean(userHasAI && (c.aiSummary || (lead && lead.aiSummary)));
+    const c: any = currentCall || {};
+    const overviewBullets = Array.isArray(c?.aiOverview?.overviewBullets) ? c.aiOverview.overviewBullets : [];
+    const legacyBullets = Array.isArray(c?.aiBullets) ? c.aiBullets : [];
+    return Boolean(
+      userHasAI &&
+      (
+        overviewBullets.length > 0 ||
+        legacyBullets.length > 0 ||
+        c.aiSummary ||
+        (lead && lead.aiSummary)
+      )
+    );
   }, [currentCall, userHasAI, lead]);
 
   useEffect(() => {
@@ -48,6 +70,20 @@ export default function CallSummary({
 
   const sentiment = currentCall?.aiSentiment || "neutral";
   const actionItems = currentCall?.aiActionItems || [];
+  const overviewBullets = useMemo(() => {
+    const c: any = currentCall || {};
+    const primary = Array.isArray(c?.aiOverview?.overviewBullets)
+      ? c.aiOverview.overviewBullets.map((x: any) => String(x || "").trim()).filter(Boolean)
+      : [];
+    if (primary.length) return primary.slice(0, 5);
+
+    const fallbackBullets = Array.isArray(c?.aiBullets)
+      ? c.aiBullets.map((x: any) => String(x || "").trim()).filter(Boolean)
+      : [];
+    if (fallbackBullets.length) return fallbackBullets.slice(0, 5);
+
+    return [];
+  }, [currentCall]);
 
   return (
     <div className="bg-[#0f172a] p-4 border rounded text-white">
@@ -75,9 +111,19 @@ export default function CallSummary({
             ) : null}
           </div>
 
-          <div className="text-sm text-gray-200 whitespace-pre-line mb-3">
-            {currentCall?.aiSummary || lead?.aiSummary}
-          </div>
+          {overviewBullets.length > 0 ? (
+            <div className="mb-3">
+              <ul className="list-disc ml-5 space-y-1 text-sm text-gray-200">
+                {overviewBullets.map((b: string, i: number) => (
+                  <li key={i}>{b}</li>
+                ))}
+              </ul>
+            </div>
+          ) : (
+            <div className="text-sm text-gray-200 whitespace-pre-line mb-3">
+              {currentCall?.aiSummary || lead?.aiSummary}
+            </div>
+          )}
 
           {actionItems.length > 0 ? (
             <div className="mb-3">

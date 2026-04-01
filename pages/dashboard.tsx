@@ -19,7 +19,6 @@ import CalendarBookings from "@/components/CalendarBookings";
 import BookingForm from "@/components/BookingForm";
 import SettingsPanel from "@/components/SettingsPanel";
 import MessagesPanel from "@/components/messages/MessagesPanel";
-import CallCoachTrends from "@/components/CallCoachTrends";
 
 import {
   LineChart,
@@ -292,7 +291,6 @@ function DashboardOverview() {
       </div>
 
       <LeadSourceROIWidget />
-      <CallCoachTrends />
     </div>
   );
 }

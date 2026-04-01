@@ -1,5 +1,5 @@
 // pages/api/cron/sync-facebook-sheets.ts
-// Cron — runs every 5 minutes, syncs new leads from connected Google Sheets via Apps Script
+// Cron — runs every minute, syncs new leads from connected Google Sheets via Apps Script
 import type { NextApiRequest, NextApiResponse } from "next";
 import { checkCronAuth } from "@/lib/cronAuth";
 import mongooseConnect from "@/lib/mongooseConnect";
@@ -12,6 +12,7 @@ import { enrollOnNewLeadIfWatched } from "@/lib/drips/enrollOnNewLead";
 import { scoreLeadOnArrival } from "@/lib/leads/scoreLead";
 import { trackLeadSourceStat } from "@/lib/leads/trackLeadSourceStat";
 import { checkDuplicate } from "@/lib/leads/checkDuplicate";
+import { triggerAIFirstCall } from "@/lib/ai/triggerAIFirstCall";
 import axios from "axios";
 
 export const config = { maxDuration: 60 };
@@ -21,7 +22,7 @@ const FB_LEAD_TYPE_TO_CRM: Record<string, string> = {
   iul: "IUL",
   mortgage_protection: "Mortgage Protection",
   veteran: "Veteran",
-  trucker: "Final Expense",
+  trucker: "Trucker",
 };
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -44,6 +45,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   for (const campaign of campaigns) {
     const c = campaign as any;
     try {
+      // isFirstSync: lastSyncedRow not yet set means this is the initial bulk import.
+      // On first sync ALL sheet rows are imported — we must NOT trigger AI first call
+      // for those older rows. Users who want AI to call them should use AI Dial Session.
+      // After the first sync, lastSyncedRow > 0, and new rows are truly real-time.
+      const isFirstSync = !c.lastSyncedRow || c.lastSyncedRow <= 0;
       const sinceRow = c.lastSyncedRow ?? 1;
       const url = `${c.appsScriptUrl}?action=getLeads&sinceRow=${sinceRow}`;
 
@@ -55,16 +61,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const user = await User.findOne({ email: c.userEmail }).select("_id").lean();
       if (!user) continue;
 
-      const folderName = `FB: ${c.campaignName}`;
-      let folder = await Folder.findOne({ userEmail: c.userEmail, name: folderName });
-      if (!folder) {
-        folder = await Folder.create({
-          name: folderName,
-          userEmail: c.userEmail,
-          assignedDrips: [],
-        });
-      }
-
       let maxRow = sinceRow;
 
       for (const row of leads) {
@@ -75,6 +71,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           const phone = String(row.phone ?? "");
           const normalizedPhone = phone.replace(/\D+/g, "");
           const crmLeadType = FB_LEAD_TYPE_TO_CRM[c.leadType] ?? "Final Expense";
+          const folderName = `FB: ${String(c.campaignName || "").trim()}`;
+          let folder = c.folderId ? await Folder.findById(c.folderId) : null;
+          if (!folder) {
+            folder = await Folder.findOne({ userEmail: c.userEmail, name: folderName });
+          }
+          if (!folder) {
+            folder = await Folder.create({
+              name: folderName,
+              userEmail: c.userEmail,
+              assignedDrips: [],
+            });
+          }
 
           // Skip if email already imported for this campaign
           if (email) {
@@ -112,6 +120,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             folderId: folder._id,
             leadType: crmLeadType,
             status: "New",
+            sourceType: "google_sheets_live",
+            realTimeEligible: true,
           });
 
           await FBLeadEntry.updateOne({ _id: entry._id }, { $set: { crmLeadId: crmLead._id } });
@@ -129,6 +139,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             startMode: "now",
             source: "manual-lead",
           });
+
+          // Trigger AI first call only for truly new rows (not initial bulk sync).
+          // On first sync, skip AI — agent must use AI Dial Session for older rows.
+          if (!isFirstSync) {
+            try {
+              triggerAIFirstCall(
+                String(crmLead._id),
+                String(folder._id),
+                c.userEmail
+              ).catch(() => {});
+            } catch (_) {}
+          }
 
           if (row.rowNumber > maxRow) maxRow = row.rowNumber;
           totalImported++;

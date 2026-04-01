@@ -11,7 +11,7 @@ interface NumberEntry {
   sid: string;
 }
 
-const SYSTEM_FOLDERS = ["Not Interested", "Booked Appointment", "Sold"];
+const SYSTEM_FOLDERS = ["Not Interested", "Booked Appointment", "Sold", "Bad Number"];
 
 /* =========================
    Google Sheets Wizard Utils
@@ -890,12 +890,6 @@ const goToAIDialSession = () => {
                           ageDays < 3 ? "bg-yellow-950/30" :
                           ageDays < 7 ? "bg-orange-950/40" :
                           "bg-red-950/30";
-                        const agingDot =
-                          ageDays < 1 ? null :
-                          ageDays < 3 ? "🟡" :
-                          ageDays < 7 ? "🟠" :
-                          "🔴";
-
                         return (
                         <tr key={lead._id} className={`border-t ${agingClass}`}>
                           <td>
@@ -914,7 +908,6 @@ const goToAIDialSession = () => {
                                 onClick={() => setPreviewLead(typeof expandedFolder === "string" && expandedFolder ? { ...lead, folderId: expandedFolder } : lead)}
                                 className="text-blue-500 underline cursor-pointer"
                               >
-                                {agingDot && <span className="mr-1 text-xs">{agingDot}</span>}
                                 {getLeadValue(lead, "firstName") || "-"}
                               </button>
                             </td>

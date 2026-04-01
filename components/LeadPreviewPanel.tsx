@@ -136,6 +136,7 @@ export function LegacyLeadPreviewPanel({
               <option value="Booked Appointment">Booked Appointment</option>
               <option value="Not Interested">Not Interested</option>
               <option value="No Answer">No Answer</option>
+              <option value="Bad Number">Bad Number</option>
             </select>
           </div>
         </div>

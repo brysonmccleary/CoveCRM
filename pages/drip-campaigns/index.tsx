@@ -1,9 +1,12 @@
 // /pages/drip-campaigns/index.tsx
 import { useEffect, useState } from "react";
+import { useSession } from "next-auth/react";
 import Sidebar from "@/components/Sidebar";
 import Link from "next/link";
 import AssignDripModal from "@/components/AssignDripModal";
 import EmailCampaignsPanel from "@/components/EmailCampaignsPanel";
+
+const EXPERIMENTAL_ADMIN = "bryson.mccleary1@gmail.com";
 
 type TabMode = "sms" | "email";
 
@@ -20,6 +23,8 @@ interface Drip {
 }
 
 export default function DripCampaignsPanel() {
+  const { data: session } = useSession();
+  const isAdmin = (session?.user?.email ?? "").toLowerCase() === EXPERIMENTAL_ADMIN;
   const [tab, setTab] = useState<TabMode>("sms");
   const [drips, setDrips] = useState<Drip[]>([]);
   const [name, setName] = useState("");
@@ -110,20 +115,22 @@ export default function DripCampaignsPanel() {
           >
             SMS
           </button>
-          <button
-            onClick={() => setTab("email")}
-            className={`px-5 py-2 rounded-full text-sm font-medium transition ${
-              tab === "email"
-                ? "bg-blue-600 text-white"
-                : "bg-[#1e293b] text-gray-400 border border-gray-600 hover:text-white"
-            }`}
-          >
-            Email
-          </button>
+          {isAdmin && (
+            <button
+              onClick={() => setTab("email")}
+              className={`px-5 py-2 rounded-full text-sm font-medium transition ${
+                tab === "email"
+                  ? "bg-blue-600 text-white"
+                  : "bg-[#1e293b] text-gray-400 border border-gray-600 hover:text-white"
+              }`}
+            >
+              Email
+            </button>
+          )}
         </div>
 
-        {/* Email tab */}
-        {tab === "email" && <EmailCampaignsPanel />}
+        {/* Email tab — admin-only */}
+        {tab === "email" && isAdmin && <EmailCampaignsPanel />}
 
         {/* SMS tab */}
         {tab === "sms" && <>

@@ -49,6 +49,11 @@ export async function sendPlatformPromo(
 
   const toEmail = (lead.email as string).toLowerCase().trim();
 
+  // Block synthetic placeholder emails — no real recipient
+  if (toEmail.endsWith("@noemail.doilead.local")) {
+    return { ok: false, skipped: true };
+  }
+
   // Also check EmailSuppression collection (platform's own suppression list)
   const suppressed = await EmailSuppression.findOne({
     userEmail: PLATFORM_USER_EMAIL,

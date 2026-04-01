@@ -4,9 +4,12 @@ import { signOut, useSession } from "next-auth/react";
 import Image from "next/image";
 import { connectAndJoin } from "@/lib/socketClient";
 
+const EXPERIMENTAL_ADMIN = "bryson.mccleary1@gmail.com";
+
 export default function Sidebar() {
   const { data: session } = useSession();
   const [unreadCount, setUnreadCount] = useState(0);
+  const isAdmin = (session?.user?.email ?? "").toLowerCase() === EXPERIMENTAL_ADMIN;
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
 
   const fetchUnread = async () => {
@@ -99,12 +102,16 @@ export default function Sidebar() {
           <Link href="/dashboard?tab=numbers" className="block hover:underline">
             Numbers
           </Link>
-          <Link href="/facebook-leads" className="block hover:underline">
-            FB Leads
-          </Link>
-          <Link href="/recruiting" className="block hover:underline">
-            Recruiting
-          </Link>
+          {isAdmin && (
+            <Link href="/facebook-leads" className="block hover:underline">
+              FB Leads
+            </Link>
+          )}
+          {isAdmin && (
+            <Link href="/recruiting" className="block hover:underline">
+              Recruiting
+            </Link>
+          )}
           <Link href="/dashboard?tab=settings" className="block hover:underline">
             Settings
           </Link>

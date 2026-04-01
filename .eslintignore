@@ -1,0 +1,6 @@
+node_modules/
+.next/
+twilio-voice.js/
+ai-voice-server/
+scripts/
+**/*.d.ts

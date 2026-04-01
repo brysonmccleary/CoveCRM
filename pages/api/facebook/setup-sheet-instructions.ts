@@ -4,35 +4,95 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/pages/api/auth/[...nextauth]";
 
-const APPS_SCRIPT_TEMPLATE = `// CoveCRM Facebook Lead Ads — Google Apps Script
-// Paste this into script.google.com, deploy as a Web App with access "Anyone"
+const BASE_HEADERS = [
+  "date",
+  "campaign_name",
+  "lead_type",
+  "first_name",
+  "last_name",
+  "phone",
+  "email",
+  "city",
+  "state",
+  "zip",
+  "source",
+  "status",
+  "assigned_to",
+  "notes",
+];
+
+const LEAD_TYPE_HEADERS: Record<string, string[]> = {
+  mortgage_protection: ["birthdate", "homeowner", "mortgage_balance", "smoker"],
+  final_expense: ["birthdate", "age_range", "coverage_amount"],
+  iul: ["birthdate", "household_income", "current_coverage_amount"],
+  veteran: ["birthdate", "veteran_status"],
+  trucker: ["birthdate", "cdl_status"],
+};
+
+function buildAppsScriptTemplate(headers: string[]) {
+  return `// CoveCRM Facebook Lead Ads — Google Apps Script
+// Paste this into script.google.com, attach it to the Google Sheet you own,
+// then deploy as a Web App with access "Anyone"
+
+var HEADERS = ${JSON.stringify(headers)};
+
+function ensureHeaders(sheet) {
+  if (sheet.getLastRow() === 0) {
+    sheet.appendRow(HEADERS);
+    return;
+  }
+
+  var firstRow = sheet.getRange(1, 1, 1, HEADERS.length).getValues()[0];
+  var hasHeaders = firstRow.some(function(cell) {
+    return String(cell || "").trim() !== "";
+  });
+
+  if (!hasHeaders) {
+    sheet.getRange(1, 1, 1, HEADERS.length).setValues([HEADERS]);
+  }
+}
+
+function normalizePayload(data) {
+  return {
+    date: data.date || new Date().toISOString(),
+    campaign_name: data.campaign_name || data.campaignName || "",
+    lead_type: data.lead_type || data.leadType || "",
+    first_name: data.first_name || data.firstName || "",
+    last_name: data.last_name || data.lastName || "",
+    phone: data.phone || "",
+    email: data.email || "",
+    city: data.city || "",
+    state: data.state || "",
+    zip: data.zip || data.postal_code || "",
+    birthdate: data.birthdate || data.date_of_birth || "",
+    homeowner: data.homeowner || "",
+    coverage_amount: data.coverage_amount || data.coverageAmount || "",
+    mortgage_balance: data.mortgage_balance || data.mortgageBalance || "",
+    smoker: data.smoker || "",
+    age_range: data.age_range || data.ageRange || "",
+    household_income: data.household_income || data.householdIncome || "",
+    current_coverage_amount: data.current_coverage_amount || data.currentCoverageAmount || "",
+    veteran_status: data.veteran_status || data.veteranStatus || "",
+    cdl_status: data.cdl_status || data.cdlStatus || "",
+    source: data.source || "facebook_lead",
+    status: data.status || "New",
+    assigned_to: data.assigned_to || data.assignedTo || "",
+    notes: data.notes || ""
+  };
+}
 
 function doPost(e) {
   try {
     var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
-
-    // Add headers if first row is empty
-    if (sheet.getLastRow() === 0) {
-      sheet.appendRow([
-        "Timestamp", "First Name", "Last Name", "Email",
-        "Phone", "Lead Type", "Source", "Campaign", "Row"
-      ]);
-    }
-
+    ensureHeaders(sheet);
     var data = JSON.parse(e.postData.contents);
-    var rowNum = sheet.getLastRow() + 1;
+    var normalized = normalizePayload(data);
+    var row = HEADERS.map(function(header) {
+      return normalized[header] || "";
+    });
 
-    sheet.appendRow([
-      data.date || new Date().toISOString(),
-      data.firstName || "",
-      data.lastName || "",
-      data.email || "",
-      data.phone || "",
-      data.leadType || "",
-      data.source || "Facebook",
-      data.campaignName || "",
-      rowNum
-    ]);
+    sheet.appendRow(row);
+    var rowNum = sheet.getLastRow();
 
     return ContentService
       .createTextOutput(JSON.stringify({ ok: true, row: rowNum }))
@@ -47,6 +107,7 @@ function doPost(e) {
 function doGet(e) {
   try {
     var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+    ensureHeaders(sheet);
     var action = e.parameter.action;
 
     if (action === "getLeads") {
@@ -62,20 +123,41 @@ function doGet(e) {
           .setMimeType(ContentService.MimeType.JSON);
       }
 
+      var headerValues = sheet.getRange(1, 1, 1, Math.max(sheet.getLastColumn(), HEADERS.length)).getValues()[0];
+      var headerMap = {};
+      for (var h = 0; h < headerValues.length; h++) {
+        headerMap[String(headerValues[h] || "").trim().toLowerCase()] = h;
+      }
+
+      function getCell(row, key) {
+        var idx = headerMap[key];
+        if (idx === undefined) return "";
+        return row[idx] || "";
+      }
+
       var numRows = lastRow - startRow + 1;
-      var data = sheet.getRange(startRow, 1, numRows, 9).getValues();
+      var data = sheet.getRange(startRow, 1, numRows, Math.max(sheet.getLastColumn(), HEADERS.length)).getValues();
 
       for (var i = 0; i < data.length; i++) {
         var row = data[i];
         leads.push({
-          date: row[0],
-          firstName: row[1],
-          lastName: row[2],
-          email: row[3],
-          phone: row[4],
-          leadType: row[5],
-          source: row[6],
-          campaignName: row[7],
+          date: getCell(row, "date") || getCell(row, "timestamp"),
+          firstName: getCell(row, "first_name") || getCell(row, "first name"),
+          lastName: getCell(row, "last_name") || getCell(row, "last name"),
+          email: getCell(row, "email"),
+          phone: getCell(row, "phone"),
+          leadType: getCell(row, "lead_type") || getCell(row, "lead type"),
+          source: getCell(row, "source"),
+          campaignName: getCell(row, "campaign_name") || getCell(row, "campaign"),
+          city: getCell(row, "city"),
+          state: getCell(row, "state"),
+          zip: getCell(row, "zip"),
+          birthdate: getCell(row, "birthdate"),
+          homeowner: getCell(row, "homeowner"),
+          coverageAmount: getCell(row, "coverage_amount"),
+          status: getCell(row, "status"),
+          assignedTo: getCell(row, "assigned_to"),
+          notes: getCell(row, "notes"),
           rowNumber: startRow + i
         });
       }
@@ -94,8 +176,10 @@ function doGet(e) {
       .setMimeType(ContentService.MimeType.JSON);
   }
 }`;
+}
 
 const SETUP_STEPS = [
+  "Create one Google Sheet you own for Facebook leads",
   "Go to script.google.com and click '+ New project'",
   "Delete any existing code in the editor",
   "Paste the Apps Script template below",
@@ -113,8 +197,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const session = await getServerSession(req, res, authOptions);
   if (!session?.user?.email) return res.status(401).json({ error: "Unauthorized" });
 
+  const leadType = String(req.query.leadType || "").trim().toLowerCase();
+  const specificHeaders = LEAD_TYPE_HEADERS[leadType] || [];
+  const headers = [...BASE_HEADERS, ...specificHeaders];
+  const headerRowText = headers.join(",");
+
   return res.status(200).json({
     steps: SETUP_STEPS,
-    appsScriptTemplate: APPS_SCRIPT_TEMPLATE,
+    appsScriptTemplate: buildAppsScriptTemplate(headers),
+    headers,
+    headerRowText,
   });
 }

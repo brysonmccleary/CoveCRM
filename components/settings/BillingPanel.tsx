@@ -3,10 +3,8 @@ import { useEffect, useState } from "react";
 
 export default function BillingPanel() {
   const [isLoading, setIsLoading] = useState(false);
-  const [buyingAI, setBuyingAI] = useState(false);
 
   const [billingAmount, setBillingAmount] = useState<string | null>(null);
-  const [hasAIUpgrade, setHasAIUpgrade] = useState(false);
 
   // (Optional) keep showing dialer minutes + status for transparency
   const [aiDialerLoading, setAiDialerLoading] = useState(true);
@@ -19,7 +17,6 @@ export default function BillingPanel() {
         const res = await fetch("/api/stripe/get-subscription", { cache: "no-store" });
         const data = await res.json();
         if (data.amount != null) setBillingAmount(`$${data.amount}/month`);
-        if (typeof data.hasAIUpgrade === "boolean") setHasAIUpgrade(data.hasAIUpgrade);
       } catch (err) {
         console.error("Error fetching billing:", err);
       }
@@ -85,20 +82,6 @@ export default function BillingPanel() {
     }
   };
 
-  const buyAI = async () => {
-    setBuyingAI(true);
-    try {
-      const r = await fetch("/api/billing/create-ai-checkout", { method: "POST" });
-      const j = await r.json();
-      if (!r.ok || !j?.url) throw new Error(j?.error || "Failed to start checkout");
-      window.location.href = j.url;
-    } catch (err: any) {
-      alert(err?.message || "Unable to start checkout");
-    } finally {
-      setBuyingAI(false);
-    }
-  };
-
   return (
     <div className="bg-white dark:bg-gray-800 p-6 rounded shadow space-y-6">
       <h2 className="text-xl font-bold">Billing & Subscription</h2>
@@ -110,41 +93,30 @@ export default function BillingPanel() {
         <p className="text-sm text-gray-500">Includes full CRM access.</p>
       </div>
 
-      {/* Add-ons */}
-      <div className="border rounded p-4 space-y-6">
-        <h3 className="font-semibold text-lg">Add-ons</h3>
-
-        {/* AI Suite */}
-        <div className="flex justify-between">
-          <div>
-            <p className="font-medium">AI Suite (SMS + Calls)</p>
-            <p className="text-sm text-gray-500">
-              Unlocks the AI SMS Assistant and the AI Dialer.
-            </p>
-
-            <ul className="text-sm text-gray-400 mt-1 list-disc ml-5">
-              <li>AI SMS Agent</li>
-              <li>
-                AI Calls <span className="opacity-70">(Coming Soon)</span>
-              </li>
-              <li>AI Call Overview</li>
-            </ul>
-          </div>
-
-          {hasAIUpgrade ? (
-            <span className="px-3 py-1.5 rounded bg-emerald-600/20 text-emerald-200 text-sm">
-              Enabled
-            </span>
-          ) : (
-            <button
-              onClick={buyAI}
-              disabled={buyingAI}
-              className="px-3 py-1.5 rounded bg-blue-600 text-white text-sm"
-            >
-              {buyingAI ? "Loading…" : "Enable"}
-            </button>
-          )}
-        </div>
+      {/* AI Features */}
+      <div className="border rounded p-4 space-y-3">
+        <h3 className="font-semibold text-lg">AI Features</h3>
+        <p className="text-sm text-gray-400">
+          All AI features are included with your CoveCRM subscription.
+        </p>
+        <ul className="text-sm text-gray-300 space-y-1.5">
+          {[
+            "AI Call Coach",
+            "AI Call Overview",
+            "AI SMS Assistant",
+            "AI Lead Scoring",
+            "AI New Lead Call (enable in AI Settings)",
+            "AI Dial Session (enable in AI Settings)",
+          ].map((f) => (
+            <li key={f} className="flex items-center gap-2">
+              <span className="text-emerald-400">✓</span>
+              {f}
+            </li>
+          ))}
+        </ul>
+        <p className="text-xs text-gray-500 pt-1">
+          Usage note: Standard Twilio charges apply for outbound calls and SMS messages. These appear as usage charges on your monthly statement.
+        </p>
       </div>
 
       {/* Billing Portal */}

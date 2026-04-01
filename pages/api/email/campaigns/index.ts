@@ -2,6 +2,7 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth";
 import { authOptions } from "../../auth/[...nextauth]";
+import { isExperimentalAdminEmail } from "@/lib/isExperimentalAdmin";
 import mongooseConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import EmailCampaign from "@/models/EmailCampaign";
@@ -11,6 +12,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!session?.user?.email) return res.status(401).json({ error: "Unauthorized" });
 
   const userEmail = String(session.user.email).toLowerCase();
+  // Email campaigns are admin-only for now
+  if (!isExperimentalAdminEmail(userEmail)) return res.status(403).json({ error: "Not available" });
 
   await mongooseConnect();
 

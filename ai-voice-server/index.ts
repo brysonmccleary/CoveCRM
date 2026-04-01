@@ -310,6 +310,9 @@ type CallState = {
   // Repeat-objection tracking
   lastObjectionKind?: string;
   objectionRepeatCount?: number;
+
+  // silence watchdog: arms after greeting or each AI turn; cancelled on speech_started
+  silenceWatchdog?: NodeJS.Timeout | null;
 };
 
 const calls = new Map<WebSocket, CallState>();
@@ -591,6 +594,12 @@ function tryCancelOpenAiResponse(state: CallState, reason: string) {
 const TWILIO_FRAME_BYTES = 160;
 const TWILIO_FRAME_MS = 20;
 
+// Silence watchdogs (cost control)
+// - after greeting / after any AI turn, we expect real human speech soon
+// - if not, end the AI session so we do not burn cost on dead air
+const POST_GREETING_SILENCE_MS = 10000;
+const MID_CALL_SILENCE_MS = 15000;
+
 function ensureOutboundPacer(twilioWs: WebSocket, state: CallState) {
   if (state.outboundPacerTimer) return;
 
@@ -714,6 +723,52 @@ function stopOutboundPacer(
     state.outboundPacerTimer = null;
     console.log("[AI-VOICE][PACE] stopped |", reason);
   }
+}
+
+function clearSilenceWatchdog(state: CallState, reason: string) {
+  try {
+    if (state.silenceWatchdog) {
+      clearTimeout(state.silenceWatchdog);
+      state.silenceWatchdog = null;
+      console.log("[AI-VOICE][SILENCE] cleared |", reason);
+    }
+  } catch {}
+}
+
+function armSilenceWatchdog(
+  ws: WebSocket,
+  state: CallState,
+  ms: number,
+  reason: string
+) {
+  clearSilenceWatchdog(state, `re-arm before ${reason}`);
+
+  if (state.phase === "ended") return;
+  if (!state.callSid) return;
+
+  state.silenceWatchdog = setTimeout(() => {
+    try {
+      const live = calls.get(ws);
+      if (!live) return;
+      if (live.phase === "ended") return;
+
+      console.log("[AI-VOICE][SILENCE] timeout fired — closing call", {
+        callSid: live.callSid,
+        phase: live.phase,
+        reason,
+        ms,
+      });
+
+      live.phase = "ended";
+      live.finalOutcomeSent = live.finalOutcomeSent || false;
+      stopOutboundPacer(ws, live, `silence timeout (${reason})`);
+      safelyCloseOpenAi(live, `silence timeout (${reason})`);
+    } catch (err: any) {
+      console.warn("[AI-VOICE][SILENCE] timeout close failed:", err?.message || err);
+    }
+  }, ms);
+
+  console.log("[AI-VOICE][SILENCE] armed |", { callSid: state.callSid, reason, ms });
 }
 
 
@@ -1406,6 +1461,7 @@ async function refreshAnsweredByFromCoveCRM(
 
 function safelyCloseOpenAi(state: CallState, why: string) {
   try {
+    clearSilenceWatchdog(state, `close openai (${why})`);
     state.outboundOpenAiDone = true;
     state.outboundMuLawBuffer = Buffer.alloc(0);
     state.openAiReady = false;
@@ -4305,6 +4361,7 @@ async function handleStart(ws: WebSocket, msg: TwilioStartEvent) {
         callSid: live.callSid,
       });
       live.phase = "ended";
+      clearSilenceWatchdog(live, "20min timeout");
       stopOutboundPacer(ws, live, "20min timeout");
       safelyCloseOpenAi(live, "20min timeout");
     } catch {}
@@ -4314,9 +4371,11 @@ async function handleStart(ws: WebSocket, msg: TwilioStartEvent) {
   setAiSpeaking(state, false, "start/reset");
   setResponseInFlight(state, false, "start/reset");
 
+  clearSilenceWatchdog(state, "start/reset");
   state.userAudioMsBuffered = 0;
   state.initialGreetingQueued = false;
   state.phase = "init";
+  state.silenceWatchdog = null;
 
   state.openAiReady = false;
   state.openAiConfigured = false;
@@ -5054,6 +5113,7 @@ async function handleOpenAiEvent(
 
   if (t === "input_audio_buffer.speech_started") {
     try {
+      clearSilenceWatchdog(state, "user started speaking");
       // Mark speech in progress
       state.userSpeechInProgress = true;
 

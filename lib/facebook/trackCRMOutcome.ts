@@ -4,6 +4,7 @@ import mongooseConnect from "@/lib/mongooseConnect";
 import FBLeadEntry from "@/models/FBLeadEntry";
 import FBLeadCampaign from "@/models/FBLeadCampaign";
 import CRMOutcome from "@/models/CRMOutcome";
+import AdMetricsDaily from "@/models/AdMetricsDaily";
 import { scoreAdPerformance } from "./scoreAdPerformance";
 
 // Revenue estimates by lead type
@@ -92,6 +93,21 @@ export async function trackOutcomeFromDisposition(
           userEmail,
           date: today,
           leadId,
+        },
+      },
+      { upsert: true, new: true }
+    );
+
+    // Also upsert AdMetricsDaily so it becomes the full-funnel daily source of truth
+    await AdMetricsDaily.findOneAndUpdate(
+      { campaignId, date: today },
+      {
+        $inc: incFields,
+        $setOnInsert: {
+          campaignId,
+          userId,
+          userEmail,
+          date: today,
         },
       },
       { upsert: true, new: true }

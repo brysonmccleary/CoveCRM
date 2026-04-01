@@ -24,7 +24,7 @@ type ResumeInfo = {
   updatedAt?: string | null;
 };
 
-const SYSTEM_FOLDERS = ["Not Interested", "Booked Appointment", "Sold"];
+const SYSTEM_FOLDERS = ["Not Interested", "Booked Appointment", "Sold", "Bad Number"];
 
 /** ───────────────────────── Global lead search ───────────────────────── **/
 function LeadSearchInline() {

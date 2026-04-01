@@ -10,11 +10,11 @@ import axios from "axios";
 export const config = { maxDuration: 30 };
 
 const UNSPLASH_QUERIES: Record<string, string> = {
-  final_expense: "senior couple smiling home living room",
-  veteran: "american veteran family outdoor",
-  mortgage_protection: "young couple house keys smiling outdoor",
-  iul: "family financial planning professional",
-  trucker: "truck driver smiling highway road",
+  final_expense: "senior couple at home warm lighting",
+  veteran: "american flag family home lifestyle patriotic",
+  mortgage_protection: "family standing in front of suburban house",
+  iul: "professional couple modern home office financial planning",
+  trucker: "semi truck on highway at sunset america",
 };
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {

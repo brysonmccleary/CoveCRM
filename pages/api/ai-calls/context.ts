@@ -6,6 +6,7 @@ import AICallSession from "@/models/AICallSession";
 import AICallRecording from "@/models/AICallRecording";
 import Lead from "@/models/Lead";
 import User from "@/models/User";
+import AISettings from "@/models/AISettings";
 
 const AI_DIALER_CRON_KEY = process.env.AI_DIALER_CRON_KEY || "";
 
@@ -79,6 +80,19 @@ export default async function handler(
 
     const userEmail = ((aiSession as any).userEmail as string) || "";
     const user = await User.findOne({ email: userEmail }).lean();
+
+    // -------- Live transfer settings --------
+    let liveTransferEnabled = false;
+    let liveTransferPhone = "";
+    try {
+      const aiSettings = await AISettings.findOne({ userEmail }).lean() as any;
+      if (aiSettings?.liveTransferEnabled) {
+        liveTransferEnabled = true;
+        liveTransferPhone = aiSettings.liveTransferPhone || "";
+      }
+    } catch {
+      // non-blocking
+    }
 
     // -------- Voice profile mapping --------
     // New default persona: Jacob (Cedar)
@@ -247,6 +261,10 @@ export default async function handler(
       voiceKey,
       fromNumber: (aiSession as any).fromNumber,
       voiceProfile,
+
+      // ✅ Live transfer settings from AISettings
+      liveTransferEnabled,
+      liveTransferPhone,
 
       // ✅ NEW (non-breaking): exposes AMD AnsweredBy when known
       answeredBy,

@@ -6,7 +6,7 @@
     "dev": "next dev --webpack",
     "build": "NODE_OPTIONS='--max-old-space-size=4096' next build --webpack",
     "start": "next start",
-    "lint": "next lint",
+    "lint": "ESLINT_USE_FLAT_CONFIG=false eslint . --ext .ts,.tsx,.js,.jsx --max-warnings 400",
     "jest": "jest",
     "create-indexes": "tsx scripts/create-indexes.ts",
     "socket": "node server/socket-server.ts"

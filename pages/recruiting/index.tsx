@@ -4,6 +4,10 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/router";
 import Link from "next/link";
 import DashboardLayout from "@/components/DashboardLayout";
+import { GetServerSideProps } from "next";
+import { getServerSession } from "next-auth/next";
+import { authOptions } from "@/pages/api/auth/[...nextauth]";
+import { isExperimentalAdminEmail } from "@/lib/isExperimentalAdmin";
 
 interface EmailCampaign {
   _id: string;
@@ -19,7 +23,7 @@ const PLANS = [
     id: "starter",
     name: "Starter",
     leads: 250,
-    price: "$49",
+    price: "$79",
     color: "border-white/10",
     badge: null,
   },
@@ -27,7 +31,7 @@ const PLANS = [
     id: "growth",
     name: "Growth",
     leads: 500,
-    price: "$89",
+    price: "$139",
     color: "border-indigo-500/50",
     badge: null,
   },
@@ -35,7 +39,7 @@ const PLANS = [
     id: "pro",
     name: "Pro",
     leads: 1000,
-    price: "$149",
+    price: "$229",
     color: "border-indigo-500",
     badge: "Most Popular",
   },
@@ -43,7 +47,7 @@ const PLANS = [
     id: "elite",
     name: "Elite",
     leads: 2500,
-    price: "$299",
+    price: "$449",
     color: "border-purple-500/50",
     badge: null,
   },
@@ -86,6 +90,15 @@ export default function RecruitingPage() {
   const router = useRouter();
   const [campaigns, setCampaigns] = useState<EmailCampaign[]>([]);
   const [loadingCampaigns, setLoadingCampaigns] = useState(false);
+  const [folders, setFolders] = useState<{ _id: string; name: string; leadCount: number }[]>([]);
+  const [selectedCampaignId, setSelectedCampaignId] = useState("");
+  const [selectedFolderId, setSelectedFolderId] = useState("");
+  const [enrolling, setEnrolling] = useState(false);
+  const [enrollResult, setEnrollResult] = useState<{ enrolled: number; skipped: number; message: string } | null>(null);
+  const [recruitingFromName, setRecruitingFromName] = useState("");
+  const [recruitingFromEmail, setRecruitingFromEmail] = useState("");
+  const [savingSender, setSavingSender] = useState(false);
+  const [senderSaved, setSenderSaved] = useState(false);
 
   useEffect(() => {
     setLoadingCampaigns(true);
@@ -95,6 +108,67 @@ export default function RecruitingPage() {
       .catch(() => {})
       .finally(() => setLoadingCampaigns(false));
   }, []);
+
+  useEffect(() => {
+    fetch("/api/get-folders")
+      .then((r) => r.json())
+      .then((j) => {
+        const all = Array.isArray(j?.folders) ? j.folders : [];
+        // Only show recruiting folders
+        setFolders(all.filter((f: any) => f.name?.toLowerCase().includes("recruit")));
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    fetch("/api/settings/recruiting-sender")
+      .then((r) => r.json())
+      .then((j) => {
+        if (j.fromName) setRecruitingFromName(j.fromName);
+        if (j.fromEmail) setRecruitingFromEmail(j.fromEmail);
+      })
+      .catch(() => {});
+  }, []);
+
+  const saveRecruitingSender = async () => {
+    setSavingSender(true);
+    setSenderSaved(false);
+    try {
+      const res = await fetch("/api/settings/recruiting-sender", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fromName: recruitingFromName, fromEmail: recruitingFromEmail }),
+      });
+      if (res.ok) setSenderSaved(true);
+    } catch {}
+    finally { setSavingSender(false); }
+  };
+
+  const enrollInCampaign = async () => {
+    if (!selectedCampaignId || !selectedFolderId) {
+      alert("Please select both a folder and a campaign.");
+      return;
+    }
+    setEnrolling(true);
+    setEnrollResult(null);
+    try {
+      const res = await fetch("/api/recruiting/enroll-campaign", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ campaignId: selectedCampaignId, folderId: selectedFolderId }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setEnrollResult(data);
+      } else {
+        alert(data.error || "Enrollment failed");
+      }
+    } catch {
+      alert("Network error");
+    } finally {
+      setEnrolling(false);
+    }
+  };
 
   return (
     <DashboardLayout>
@@ -148,6 +222,157 @@ export default function RecruitingPage() {
             ))}
           </div>
         </div>
+
+        {/* G. Enroll Recruiting Leads in Email Campaign */}
+        <section style={{ maxWidth: "900px", margin: "0 auto 0px", padding: "0 0px" }}>
+          <div style={{ borderBottom: "1px solid rgba(255,255,255,0.1)", marginBottom: "24px", paddingBottom: "12px" }}>
+            <h2 style={{ fontSize: "20px", fontWeight: 700, color: "#f1f5f9", margin: 0 }}>
+              Enroll Recruiting Leads in Email Campaign
+            </h2>
+            <p style={{ fontSize: "14px", color: "#94a3b8", marginTop: "6px" }}>
+              Select a recruiting folder and an email campaign to auto-enroll all leads. Emails send at 9am daily. Already-enrolled leads are skipped automatically.
+            </p>
+          </div>
+
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "16px", marginBottom: "16px" }}>
+            <div style={{ flex: "1", minWidth: "220px" }}>
+              <label style={{ fontSize: "12px", color: "#94a3b8", display: "block", marginBottom: "6px", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                Recruiting Folder
+              </label>
+              <select
+                value={selectedFolderId}
+                onChange={(e) => setSelectedFolderId(e.target.value)}
+                style={{ width: "100%", backgroundColor: "#0f172a", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "8px", color: "#f1f5f9", padding: "10px 12px", fontSize: "14px" }}
+              >
+                <option value="">— Select folder —</option>
+                {folders.map((f) => (
+                  <option key={f._id} value={f._id}>
+                    {f.name} ({f.leadCount} leads)
+                  </option>
+                ))}
+              </select>
+              {folders.length === 0 && (
+                <p style={{ fontSize: "12px", color: "#64748b", marginTop: "6px" }}>
+                  No recruiting folders found. Purchase a plan below to get started.
+                </p>
+              )}
+            </div>
+
+            <div style={{ flex: "1", minWidth: "220px" }}>
+              <label style={{ fontSize: "12px", color: "#94a3b8", display: "block", marginBottom: "6px", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                Email Campaign
+              </label>
+              <select
+                value={selectedCampaignId}
+                onChange={(e) => setSelectedCampaignId(e.target.value)}
+                style={{ width: "100%", backgroundColor: "#0f172a", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "8px", color: "#f1f5f9", padding: "10px 12px", fontSize: "14px" }}
+              >
+                <option value="">— Select campaign —</option>
+                {campaigns.filter((c) => c.isActive).map((c) => (
+                  <option key={c._id} value={c._id}>
+                    {c.name} ({c.steps?.length || 0} steps)
+                  </option>
+                ))}
+              </select>
+              {campaigns.length === 0 && !loadingCampaigns && (
+                <p style={{ fontSize: "12px", color: "#64748b", marginTop: "6px" }}>
+                  No email campaigns yet.{" "}
+                  <a href="/drip-campaigns" style={{ color: "#60a5fa" }}>Create one in Drip Campaigns →</a>
+                </p>
+              )}
+            </div>
+          </div>
+
+          <button
+            onClick={enrollInCampaign}
+            disabled={enrolling || !selectedCampaignId || !selectedFolderId}
+            style={{
+              backgroundColor: enrolling ? "#1e3a5f" : "#2563eb",
+              color: "#ffffff",
+              border: "none",
+              borderRadius: "8px",
+              padding: "12px 28px",
+              fontSize: "14px",
+              fontWeight: 600,
+              cursor: enrolling ? "not-allowed" : "pointer",
+              opacity: (!selectedCampaignId || !selectedFolderId) ? 0.5 : 1,
+            }}
+          >
+            {enrolling ? "Enrolling..." : "Enroll Leads in Campaign"}
+          </button>
+
+          {enrollResult && (
+            <div style={{ marginTop: "16px", backgroundColor: "rgba(34,197,94,0.1)", border: "1px solid rgba(34,197,94,0.3)", borderRadius: "8px", padding: "14px 16px" }}>
+              <p style={{ color: "#4ade80", fontWeight: 600, margin: "0 0 4px" }}>
+                ✓ {enrollResult.enrolled} leads enrolled successfully
+              </p>
+              <p style={{ color: "#94a3b8", fontSize: "13px", margin: 0 }}>
+                {enrollResult.skipped} skipped (already enrolled or no email address)
+              </p>
+            </div>
+          )}
+        </section>
+
+        {/* H. Recruiting Email Sender */}
+        <section style={{ maxWidth: "900px", margin: "0 auto 0px" }}>
+          <div style={{ borderBottom: "1px solid rgba(255,255,255,0.1)", marginBottom: "24px", paddingBottom: "12px" }}>
+            <h2 style={{ fontSize: "20px", fontWeight: 700, color: "#f1f5f9", margin: 0 }}>
+              Recruiting Email Sender
+            </h2>
+            <p style={{ fontSize: "14px", color: "#94a3b8", marginTop: "6px" }}>
+              Set the name and email address that recruiting emails are sent from. Uses your SMTP credentials.
+            </p>
+          </div>
+
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "16px", marginBottom: "16px" }}>
+            <div style={{ flex: "1", minWidth: "200px" }}>
+              <label style={{ fontSize: "12px", color: "#94a3b8", display: "block", marginBottom: "6px", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                From Name
+              </label>
+              <input
+                type="text"
+                value={recruitingFromName}
+                onChange={(e) => setRecruitingFromName(e.target.value)}
+                placeholder="e.g. John Smith"
+                style={{ width: "100%", backgroundColor: "#0f172a", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "8px", color: "#f1f5f9", padding: "10px 12px", fontSize: "14px", boxSizing: "border-box" }}
+              />
+            </div>
+            <div style={{ flex: "1", minWidth: "200px" }}>
+              <label style={{ fontSize: "12px", color: "#94a3b8", display: "block", marginBottom: "6px", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                From Email
+              </label>
+              <input
+                type="email"
+                value={recruitingFromEmail}
+                onChange={(e) => setRecruitingFromEmail(e.target.value)}
+                placeholder="e.g. john@youragency.com"
+                style={{ width: "100%", backgroundColor: "#0f172a", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "8px", color: "#f1f5f9", padding: "10px 12px", fontSize: "14px", boxSizing: "border-box" }}
+              />
+            </div>
+          </div>
+
+          <button
+            onClick={saveRecruitingSender}
+            disabled={savingSender || !recruitingFromName || !recruitingFromEmail}
+            style={{
+              backgroundColor: savingSender ? "#1e3a5f" : "#2563eb",
+              color: "#ffffff",
+              border: "none",
+              borderRadius: "8px",
+              padding: "12px 28px",
+              fontSize: "14px",
+              fontWeight: 600,
+              cursor: savingSender ? "not-allowed" : "pointer",
+              opacity: (!recruitingFromName || !recruitingFromEmail) ? 0.5 : 1,
+            }}
+          >
+            {savingSender ? "Saving..." : "Save Sender"}
+          </button>
+
+          {senderSaved && (
+            <p style={{ marginTop: "12px", color: "#4ade80", fontSize: "14px" }}>✓ Sender saved</p>
+          )}
+        </section>
 
         {/* C. Plan Comparison */}
         <div>
@@ -278,3 +503,10 @@ export default function RecruitingPage() {
     </DashboardLayout>
   );
 }
+
+// Admin-only: gate this page to experimental admin access
+export const getServerSideProps: GetServerSideProps = async (ctx) => {
+  const session = await getServerSession(ctx.req, ctx.res, authOptions);
+  if (!isExperimentalAdminEmail(session?.user?.email)) return { notFound: true };
+  return { props: {} };
+};

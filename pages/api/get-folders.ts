@@ -6,7 +6,7 @@ import mongooseConnect from "@/lib/mongooseConnect";
 import Folder from "@/models/Folder";
 import Lead from "@/models/Lead";
 
-const SYSTEM_FOLDERS = ["Sold", "Not Interested", "Booked Appointment"] as const;
+const SYSTEM_FOLDERS = ["Sold", "Not Interested", "Booked Appointment", "Bad Number"] as const;
 
 type LeanFolder = {
   _id: string;
@@ -15,6 +15,11 @@ type LeanFolder = {
   assignedDrips?: any[];
   createdAt?: Date;
   updatedAt?: Date;
+  aiFirstCallEnabled?: boolean;
+  aiFirstCallDelayMinutes?: number;
+  aiRealTimeOnly?: boolean;
+  aiScriptKey?: string;
+  aiEnabledAt?: Date | null;
 };
 
 type DBFolder = {
@@ -24,6 +29,11 @@ type DBFolder = {
   assignedDrips?: any[];
   createdAt?: any;
   updatedAt?: any;
+  aiFirstCallEnabled?: boolean;
+  aiFirstCallDelayMinutes?: number;
+  aiRealTimeOnly?: boolean;
+  aiScriptKey?: string;
+  aiEnabledAt?: any;
 };
 
 function escapeRegex(s: string) {
@@ -43,6 +53,11 @@ function toLeanFolder(doc: DBFolder, email: string): LeanFolder {
     assignedDrips: doc.assignedDrips ?? [],
     createdAt: doc.createdAt ? new Date(doc.createdAt) : undefined,
     updatedAt: doc.updatedAt ? new Date(doc.updatedAt) : undefined,
+    aiFirstCallEnabled: doc.aiFirstCallEnabled ?? false,
+    aiFirstCallDelayMinutes: doc.aiFirstCallDelayMinutes ?? 1,
+    aiRealTimeOnly: doc.aiRealTimeOnly ?? true,
+    aiScriptKey: doc.aiScriptKey ?? "default",
+    aiEnabledAt: doc.aiEnabledAt ? new Date(doc.aiEnabledAt) : null,
   };
 }
 

@@ -6,9 +6,7 @@ import BillingPanel from "@/components/settings/BillingPanel";
 import toast from "react-hot-toast";
 import InvoicesPanel from "@/components/settings/InvoicesPanel";
 import EmailAccountPanel from "@/components/settings/EmailAccountPanel";
-import CommunicationPanel from "@/components/settings/CommunicationPanel";
-import VoicemailDropPanel from "@/components/settings/VoicemailDropPanel";
-import ObjectionLibraryPanel from "@/components/settings/ObjectionLibraryPanel";
+
 
 type DayKey = "Monday" | "Tuesday" | "Wednesday" | "Thursday" | "Friday";
 type WorkingHours = {
@@ -219,9 +217,6 @@ export default function SettingsPanel() {
     { id: "profile", label: "Profile" },
     { id: "account", label: "Booking Settings" },
     { id: "notifications", label: "Notifications" },
-    { id: "communication", label: "Default Number" },
-    { id: "voicemail", label: "Voicemail Drops" },
-    { id: "objections", label: "Objection Library" },
     { id: "a2p", label: "A2P Verification" },
     { id: "billing", label: "Billing & Usage" },
     { id: "invoices", label: "Invoices" },
@@ -497,20 +492,6 @@ export default function SettingsPanel() {
         )}
 
         {activeTab === "affiliate" && <AffiliateProgramPanel />}
-
-        {activeTab === "communication" && <CommunicationPanel />}
-
-        {activeTab === "voicemail" && (
-          <div className="max-w-2xl">
-            <VoicemailDropPanel />
-          </div>
-        )}
-
-        {activeTab === "objections" && (
-          <div className="max-w-2xl">
-            <ObjectionLibraryPanel />
-          </div>
-        )}
 
         {activeTab === "email-account" && (
           <div>

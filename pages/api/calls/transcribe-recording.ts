@@ -348,15 +348,29 @@ Rules:
 Style (match Close AI Lead Summary):
 - overviewBullets must be the PRIMARY "card" summary.
 - overviewBullets: 3–5 bullets max.
-- Each bullet should be a short, factual sentence (no labels like "Coverage:", no section headers).
-- Prioritize the MOST IMPORTANT call facts:
-  - booking/callback timing and any specific time windows
-  - coverage amount / budget / premium if mentioned
-  - household facts that matter (spouse, smoker, age, health notes) if mentioned
-  - clear objections or constraints
+- Each bullet should be a short, factual sentence.
+- Do NOT use section headers.
+- Do NOT write generic bullets like "They discussed insurance options" unless nothing more specific exists.
+- The bullets should let an agent understand the call fast without reading a paragraph.
+
+For overviewBullets, prioritize in this order:
+1. Final result or disposition of the call
+2. Callback / booked appointment timing and exact windows if mentioned
+3. What was actually discussed
+4. Money / coverage / premium / benefit numbers mentioned
+5. Household or decision-maker facts that matter
+6. Clear objections / constraints
+7. The next step
+
+Important extraction rules:
+- If the caller identity is clear, include who handled the call in one bullet when useful.
+- If any dollar amounts, coverage amounts, ages, dates, times, days, or time windows are mentioned, include the most important ones.
 - If outcome is "Callback", include the callback window as one bullet.
 - If outcome is "Booked", include the agreed time as one bullet.
-- Avoid filler, salesy language, or generic summaries.
+- If outcome is "Not Interested", make that clear in the bullets.
+- If outcome is "Voicemail", keep bullets minimal and factual.
+- If there was no meaningful conversation, say that clearly instead of inventing detail.
+- Avoid filler, salesy language, vague wording, or repeated facts.
 
 Other fields:
 - keyDetails: compact factual bullets (can keep compact labels like Coverage/Budget/Time if you want)

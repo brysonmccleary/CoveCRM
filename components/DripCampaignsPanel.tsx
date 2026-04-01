@@ -2,9 +2,12 @@
 import { useEffect, useState } from "react";
 import axios from "axios";
 import toast from "react-hot-toast";
+import { useSession } from "next-auth/react";
 import AssignDripModal from "@/components/AssignDripModal";
 import { prebuiltDrips } from "@/utils/prebuiltDrips";
 import EmailCampaignsPanel from "@/components/EmailCampaignsPanel";
+
+const EXPERIMENTAL_ADMIN = "bryson.mccleary1@gmail.com";
 
 type DripTabMode = "sms" | "email";
 
@@ -32,6 +35,8 @@ interface ApiCampaign {
 }
 
 export default function DripCampaignsPanel() {
+  const { data: session } = useSession();
+  const isAdmin = (session?.user?.email ?? "").toLowerCase() === EXPERIMENTAL_ADMIN;
   const [dripTab, setDripTab] = useState<DripTabMode>("sms");
   const [campaignName, setCampaignName] = useState("");
 
@@ -688,20 +693,22 @@ setBackendCampaigns((prev) =>
         >
           SMS
         </button>
-        <button
-          onClick={() => setDripTab("email")}
-          className={`px-5 py-2 rounded-full text-sm font-medium transition ${
-            dripTab === "email"
-              ? "bg-blue-600 text-white"
-              : "bg-[#1e293b] text-gray-400 border border-gray-600 hover:text-white"
-          }`}
-        >
-          Email
-        </button>
+        {isAdmin && (
+          <button
+            onClick={() => setDripTab("email")}
+            className={`px-5 py-2 rounded-full text-sm font-medium transition ${
+              dripTab === "email"
+                ? "bg-blue-600 text-white"
+                : "bg-[#1e293b] text-gray-400 border border-gray-600 hover:text-white"
+            }`}
+          >
+            Email
+          </button>
+        )}
       </div>
 
-      {/* Email tab */}
-      {dripTab === "email" && <EmailCampaignsPanel />}
+      {/* Email tab — admin-only */}
+      {dripTab === "email" && isAdmin && <EmailCampaignsPanel />}
 
       {/* SMS tab */}
       {dripTab === "sms" && <>

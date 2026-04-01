@@ -39,13 +39,6 @@ export interface ScrapeAllResult {
 const BATCH_SIZE = 100;
 const LOG_EVERY = 1000;
 
-/** Generate a synthetic email for records that have no email address.
- *  Format is clearly non-real so it won't match suppressions or bounce lists. */
-function syntheticEmail(state: string, licenseNumber: string): string {
-  const safe = (licenseNumber || "unknown").replace(/[^a-z0-9]/gi, "").toLowerCase();
-  return `_doi_${state.toLowerCase()}_${safe}@noemail.doilead.local`;
-}
-
 /** True if the license type string is a life or health line. */
 function isLifeHealth(licenseType: string): boolean {
   const lt = (licenseType || "").toUpperCase();
@@ -62,7 +55,8 @@ function isLifeHealth(licenseType: string): boolean {
   );
 }
 
-/** Upsert a single record into DOILead by email (primary) or licenseNumber (fallback).
+/** Upsert a single record into DOILead by real email.
+ *  Records without a valid real email are skipped — no synthetic/placeholder emails allowed.
  *  Returns "imported" | "updated" | "skipped". */
 async function upsertDOILead(fields: {
   firstName: string;
@@ -75,7 +69,9 @@ async function upsertDOILead(fields: {
   licenseStatus: string;
   source: string;
 }): Promise<"imported" | "updated" | "skipped"> {
-  const emailKey = fields.email || syntheticEmail(fields.state, fields.licenseNumber);
+  // Require a real email — skip records with missing or clearly invalid email
+  const emailKey = fields.email.toLowerCase().trim();
+  if (!emailKey || !emailKey.includes("@")) return "skipped";
 
   try {
     const result = await DOILead.findOneAndUpdate(
@@ -102,6 +98,7 @@ async function upsertDOILead(fields: {
     );
 
     return result === null ? "imported" : "updated";
+
   } catch (err: any) {
     // Duplicate key on concurrent writes — treat as skipped
     if (err?.code === 11000) return "skipped";
@@ -206,8 +203,8 @@ export async function importFloridaLeads(): Promise<StateImportResult> {
 
         const email = rawEmail.toLowerCase().includes("@") ? rawEmail.toLowerCase().trim() : "";
 
-        // Skip if no licenseNumber AND no email — nothing to key on
-        if (!licenseNumber && !email) continue;
+        // Skip records with no real email — we only import leads with valid contact info
+        if (!email) continue;
 
         batch.push({
           firstName,
@@ -351,7 +348,8 @@ export async function importTexasLeads(): Promise<StateImportResult> {
 
         const email = rawEmail.toLowerCase().includes("@") ? rawEmail.toLowerCase() : "";
 
-        if (!licenseNumber && !email) continue;
+        // Skip records with no real email
+        if (!email) continue;
 
         batch.push({
           firstName,

@@ -6,7 +6,7 @@ import Folder from "@/models/Folder";
 import Lead from "@/models/Lead";
 import User from "@/models/User";
 
-const SYSTEM_FOLDERS = ["Sold", "Not Interested", "Booked Appointment"] as const;
+const SYSTEM_FOLDERS = ["Sold", "Not Interested", "Booked Appointment", "Bad Number"] as const;
 
 type LeanFolder = {
   _id: string;

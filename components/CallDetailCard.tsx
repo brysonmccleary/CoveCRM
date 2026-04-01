@@ -21,6 +21,17 @@ type Call = {
   aiBullets?: string[];
   aiScore?: number;
   aiSentiment?: "positive" | "neutral" | "negative";
+  aiOverview?: {
+    overviewBullets?: string[];
+    keyDetails?: string[];
+    objections?: string[];
+    questions?: string[];
+    nextSteps?: string[];
+    outcome?: string;
+    appointmentTime?: string;
+    sentiment?: string;
+    generatedAt?: string;
+  };
   lead?: { id: string; name?: string; phone?: string; email?: string; };
 };
 
@@ -59,7 +70,12 @@ export default function CallDetailCard({
   const [error, setError] = useState<string | null>(null);
   const idOrSid = callId ? `id=${encodeURIComponent(callId)}` : `callSid=${encodeURIComponent(callSid || "")}`;
 
-  const canShowAI = userHasAI && (call?.aiSummary || (call?.aiBullets?.length || 0) > 0 || (call?.aiActionItems?.length || 0) > 0);
+  const canShowAI = userHasAI && (
+    call?.aiSummary ||
+    (call?.aiBullets?.length || 0) > 0 ||
+    (call?.aiActionItems?.length || 0) > 0 ||
+    ((call as any)?.aiOverview?.overviewBullets?.length || 0) > 0
+  );
   const leadName = call?.lead?.name || "Unknown Lead";
   const leadPhone = call?.lead?.phone || "";
 
@@ -119,7 +135,17 @@ export default function CallDetailCard({
   }
 
   const sentimentLabel = useMemo(() => call?.aiSentiment || "neutral", [call?.aiSentiment]);
-  const bullets = useMemo(() => Array.isArray(call?.aiBullets) ? call!.aiBullets! : [], [call?.aiBullets]);
+  const bullets = useMemo(() => {
+    const primary = Array.isArray((call as any)?.aiOverview?.overviewBullets)
+      ? (call as any).aiOverview.overviewBullets.map((x: any) => String(x || "").trim()).filter(Boolean)
+      : [];
+    if (primary.length) return primary.slice(0, 5);
+
+    return Array.isArray(call?.aiBullets)
+      ? call!.aiBullets!.map((x: any) => String(x || "").trim()).filter(Boolean).slice(0, 5)
+      : [];
+  }, [(call as any)?.aiOverview?.overviewBullets, call?.aiBullets]);
+
   const actionItems = useMemo(() => Array.isArray(call?.aiActionItems) ? call!.aiActionItems! : [], [call?.aiActionItems]);
 
   return (
@@ -192,14 +218,12 @@ export default function CallDetailCard({
           <>
             {bullets.length > 0 ? (
               <div className="mt-2">
-                <div className="text-sm text-gray-300 font-medium mb-1">Key Points</div>
+                <div className="text-sm text-gray-300 font-medium mb-1">Summary</div>
                 <ul className="list-disc ml-5 text-sm space-y-1">
-                  {bullets.map((b, i) => (<li key={i}>{b}</li>))}
+                  {bullets.map((b: string, i: number) => (<li key={i}>{b}</li>))}
                 </ul>
               </div>
-            ) : null}
-
-            {call?.aiSummary ? (
+            ) : call?.aiSummary ? (
               <div className="mt-3 text-sm text-gray-200 whitespace-pre-line">
                 {call.aiSummary}
               </div>

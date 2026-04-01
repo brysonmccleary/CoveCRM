@@ -3,6 +3,7 @@
 // GET  — verify token challenge (Facebook calls this on setup)
 // POST — receive leadgen events, fetch lead from Graph API, store in CRM
 import type { NextApiRequest, NextApiResponse } from "next";
+import { createHmac, timingSafeEqual } from "crypto";
 import axios from "axios";
 import mongooseConnect from "@/lib/mongooseConnect";
 import FBLeadEntry from "@/models/FBLeadEntry";
@@ -15,13 +16,36 @@ import { enrollOnNewLeadIfWatched } from "@/lib/drips/enrollOnNewLead";
 import { scoreLeadOnArrival } from "@/lib/leads/scoreLead";
 import { trackLeadSourceStat } from "@/lib/leads/trackLeadSourceStat";
 import { checkDuplicate } from "@/lib/leads/checkDuplicate";
+import { triggerAIFirstCall } from "@/lib/ai/triggerAIFirstCall";
+
+const FB_APP_SECRET = process.env.FB_APP_SECRET || "";
+
+function validateFBSignature(rawBody: string, signatureHeader: string): boolean {
+  if (!FB_APP_SECRET) return true; // dev/local: skip when not configured
+  if (!signatureHeader) return false;
+  const sig = signatureHeader.replace(/^sha256=/, "");
+  const expected = createHmac("sha256", FB_APP_SECRET).update(rawBody).digest("hex");
+  try {
+    return timingSafeEqual(Buffer.from(sig, "hex"), Buffer.from(expected, "hex"));
+  } catch {
+    return false;
+  }
+}
 
 const FB_LEAD_TYPE_TO_CRM: Record<string, string> = {
   final_expense: "Final Expense",
   iul: "IUL",
   mortgage_protection: "Mortgage Protection",
   veteran: "Veteran",
-  trucker: "Final Expense",
+  trucker: "Trucker",
+};
+
+const FB_LEAD_TYPE_TO_AI_SCRIPT_KEY: Record<string, string> = {
+  final_expense: "final_expense",
+  mortgage_protection: "mortgage_protection",
+  iul: "iul_cash_value",
+  veteran: "veteran_leads",
+  trucker: "trucker_leads",
 };
 
 async function fetchLeadFromGraph(leadgenId: string): Promise<Record<string, string>> {
@@ -78,6 +102,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // ── POST: Receive lead events ────────────────────────────────────────────
   if (req.method === "POST") {
     const body = req.body;
+
+    // HMAC-SHA256 signature validation (FB_APP_SECRET must be set in production)
+    const signatureHeader = String(req.headers["x-hub-signature-256"] || "");
+    const rawBodyStr = JSON.stringify(body);
+    if (!validateFBSignature(rawBodyStr, signatureHeader)) {
+      if (FB_APP_SECRET) {
+        // Production: reject invalid signatures silently — return 200 so FB doesn't retry
+        console.warn("[fb-webhook] Invalid X-Hub-Signature-256 — rejecting");
+        return res.status(200).json({ ok: false, error: "invalid_signature" });
+      }
+      console.warn("[fb-webhook] Signature check skipped — FB_APP_SECRET not configured");
+    }
+
     console.info("[fb-webhook] Received payload:", JSON.stringify(body).slice(0, 500));
 
     // Always return 200 quickly to Facebook
@@ -120,17 +157,41 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             `${fieldMap["first_name"] ?? ""} ${fieldMap["last_name"] ?? ""}`.trim();
           const email = (fieldMap["email"] ?? "").toLowerCase().trim();
           const phone = fieldMap["phone_number"] ?? fieldMap["phone"] ?? "";
+          const city = fieldMap["city"] ?? "";
+          const state = fieldMap["state"] ?? "";
+          const zip = fieldMap["zip"] ?? fieldMap["postal_code"] ?? "";
+          const birthdate = fieldMap["birthdate"] ?? fieldMap["date_of_birth"] ?? "";
+          const homeowner = fieldMap["homeowner"] ?? "";
+          const coverageAmount =
+            fieldMap["coverage_amount"] ??
+            fieldMap["coverage amount wanted ($5,000 – $25,000 / $25,000+)"] ??
+            fieldMap["mortgage balance (approximate)"] ??
+            fieldMap["current coverage amount (if any)"] ??
+            "";
 
           // Find campaign: pageId → leadType match → isDefault → most recent active
           const userEmailFromQuery =
             typeof req.query.userEmail === "string" ? req.query.userEmail.toLowerCase() : "";
 
-          let campaign = pageId
-            ? await FBLeadCampaign.findOne({
-                facebookPageId: pageId,
-                status: { $in: ["active", "setup"] },
-              }).lean()
-            : null;
+          let campaign =
+            (formId
+              ? await FBLeadCampaign.findOne({
+                  metaFormId: formId,
+                  status: { $in: ["active", "setup"] },
+                }).lean()
+              : null) ||
+            (adId
+              ? await FBLeadCampaign.findOne({
+                  metaAdId: adId,
+                  status: { $in: ["active", "setup"] },
+                }).lean()
+              : null) ||
+            (pageId
+              ? await FBLeadCampaign.findOne({
+                  facebookPageId: pageId,
+                  status: { $in: ["active", "setup"] },
+                }).lean()
+              : null);
 
           if (!campaign && userEmailFromQuery) {
             // Try matching by lead_type from form data
@@ -191,16 +252,31 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
 
           const folderName = `FB: ${(campaign as any).campaignName}`;
-          let folder = await Folder.findOne({
-            userEmail: (campaign as any).userEmail,
-            name: folderName,
-          });
+          let folder: any = null;
+
+          // First: try stored folderId for direct routing (faster, more reliable)
+          if ((campaign as any).folderId) {
+            folder = await Folder.findById((campaign as any).folderId).lean();
+          }
+
+          // Fallback: find or create by name convention
           if (!folder) {
-            folder = await Folder.create({
-              name: folderName,
+            folder = await Folder.findOne({
               userEmail: (campaign as any).userEmail,
-              assignedDrips: [],
-            });
+              name: folderName,
+            }).lean();
+            if (!folder) {
+              folder = await Folder.create({
+                name: folderName,
+                userEmail: (campaign as any).userEmail,
+                assignedDrips: [],
+                aiFirstCallEnabled: true,
+                aiContactEnabled: true,
+                aiEnabledAt: new Date(),
+                aiScriptKey:
+                  FB_LEAD_TYPE_TO_AI_SCRIPT_KEY[(campaign as any).leadType] || "default",
+              });
+            }
           }
 
           const nameParts = fullName.split(/\s+/);
@@ -253,6 +329,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             folderId: folder._id,
             leadType: crmLeadType,
             status: "New",
+            sourceType: "facebook_lead",
+            realTimeEligible: true,
           });
 
           await FBLeadEntry.updateOne({ _id: entry._id }, { $set: { crmLeadId: crmLead._id } });
@@ -273,6 +351,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             source: "manual-lead",
           });
 
+          // ✅ AI First-Call: fire-and-forget (non-blocking)
+          try {
+            triggerAIFirstCall(
+              String(crmLead._id),
+              String(folder._id),
+              (campaign as any).userEmail
+            ).catch(() => {});
+          } catch {}
+
           await FBLeadCampaign.updateOne(
             { _id: (campaign as any)._id },
             { $inc: { totalLeads: 1 } }
@@ -282,14 +369,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           const appsScriptUrl = (campaign as any).appsScriptUrl;
           if (appsScriptUrl) {
             await writeToAppsScript(appsScriptUrl, {
+              date: new Date().toISOString(),
+              campaign_name: (campaign as any).campaignName,
+              lead_type: (campaign as any).leadType,
               firstName,
               lastName,
               email,
               phone,
-              leadType: (campaign as any).leadType,
-              source: "Facebook",
-              date: new Date().toISOString(),
-              campaignName: (campaign as any).campaignName,
+              city,
+              state,
+              zip,
+              birthdate,
+              homeowner,
+              coverage_amount: String(coverageAmount || ""),
+              source: "facebook_lead",
+              status: "New",
+              assigned_to: "",
+              notes: "",
             });
           }
 

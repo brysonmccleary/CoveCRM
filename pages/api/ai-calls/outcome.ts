@@ -21,7 +21,8 @@ type AllowedOutcome =
   | "no_answer"
   | "callback"
   | "do_not_call"
-  | "disconnected";
+  | "disconnected"
+  | "transferred"; // live transfer succeeded — do NOT move folder, agent resolves disposition
 
 interface OutcomeBody {
   callSid?: string;
@@ -480,6 +481,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       "callback",
       "do_not_call",
       "disconnected",
+      "transferred",
     ];
 
     const prevOutcome: AllowedOutcome = (rec.outcome as any) || "unknown";
@@ -632,16 +634,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     // ───────────────────────── Move lead to resolution folder ─────────────────────────
+    // "transferred" outcome: leave lead in current folder — agent resolves disposition later
     let moved = false;
     let targetFolderId: Types.ObjectId | null = null;
 
-    if (userEmail && leadId && nextOutcome) {
+    if (userEmail && leadId && nextOutcome && nextOutcome !== "transferred") {
       let systemFolderName: string | null = null;
 
       if (nextOutcome === "booked") {
         systemFolderName = "Booked Appointment";
       } else if (nextOutcome === "not_interested") {
         systemFolderName = "Not Interested";
+      } else if (nextOutcome === "do_not_call") {
+        systemFolderName = "Do Not Contact";
       }
 
       if (systemFolderName) {
@@ -657,6 +662,42 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         targetFolderId = folderDoc?._id as any;
 
+        // Build lead update — vary by outcome
+        const leadFieldUpdate: Record<string, any> = {
+          folderId: targetFolderId,
+          updatedAt: new Date(),
+        };
+
+        if (nextOutcome === "booked") {
+          // Set appointmentTime only if not already set (prevent duplicate booking)
+          const existingLead = await Lead.findOne({
+            _id: leadId,
+            $or: [{ userEmail }, { ownerEmail: userEmail }, { user: userEmail }],
+          }).select("appointmentTime status").lean().exec() as any;
+
+          if (existingLead?.appointmentTime) {
+            // Already booked — only move folder, don't overwrite appointment
+            console.info(`[ai-calls/outcome] Lead ${leadId} already has appointmentTime — skipping duplicate appointmentTime write`);
+          } else {
+            // Build ISO appointment time from confirmed fields if available
+            const apptStr = [confirmedDate, confirmedTime].filter(Boolean).join(" ").trim();
+            if (apptStr) {
+              const apptDate = new Date(apptStr);
+              if (!isNaN(apptDate.getTime())) {
+                leadFieldUpdate.appointmentTime = apptDate;
+              }
+            }
+            leadFieldUpdate.status = "Booked Appointment";
+          }
+        } else if (nextOutcome === "not_interested") {
+          leadFieldUpdate.status = "Not Interested";
+        } else if (nextOutcome === "do_not_call") {
+          // Durable DNC flag — blocks all future AI calling
+          leadFieldUpdate.doNotCall = true;
+          leadFieldUpdate.doNotCallAt = new Date();
+          leadFieldUpdate.status = "Do Not Contact";
+        }
+
         const updateResult = await Lead.updateOne(
           {
             _id: leadId,
@@ -666,7 +707,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               { user: userEmail },
             ],
           },
-          { $set: { folderId: targetFolderId, updatedAt: new Date() } }
+          { $set: leadFieldUpdate }
         ).exec();
 
         moved = !!updateResult.modifiedCount;

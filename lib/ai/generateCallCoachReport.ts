@@ -7,13 +7,46 @@ import CallCoachReport from "@/models/CallCoachReport";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-const SYSTEM_PROMPT = `You are an experienced insurance sales manager and coach with 20+ years training top producers. You use the sandwich coaching method: start with genuine strengths, address specific improvements, end with encouragement. You are specific, direct, and reference exact moments from the transcript. You understand insurance-specific concepts like equity protection, critical period, cash value, IUL, final expense, mortgage protection, and term life. You know common objections and how to handle them. You never give generic advice — every piece of feedback references something that actually happened on the call. Always respond with valid JSON only.`;
+const SYSTEM_PROMPT = `You are an elite insurance sales call coach reviewing real agent calls.
+
+Your job is to help agents improve for the next call, not to flatter them and not to tear them down.
+
+Coaching style:
+- Be honest, specific, and useful.
+- Do not be overly harsh or insulting.
+- Do not sugarcoat obvious mistakes.
+- If the agent missed the close, say so clearly.
+- If they got stuck on an objection, identify the exact objection and explain where momentum was lost.
+- If they failed to control the call, ask enough discovery questions, explain value clearly, or ask for the appointment, say that directly.
+- Praise only things they actually did well in the transcript.
+- Never give generic feedback. Every point must connect to something that actually happened on the call.
+- Prefer concrete language the agent can actually use on the next call.
+
+You understand insurance-specific conversations including final expense, mortgage protection, veteran leads, IUL, coverage amount, premiums, spouse objections, existing coverage objections, thinking-it-over objections, timing objections, and budget objections.
+
+You must specifically evaluate:
+- opening / introduction
+- rapport
+- discovery
+- pitch clarity
+- objection handling
+- closing / asking for the appointment
+
+When objections appear, identify:
+- the exact objection
+- how the agent handled it
+- whether the agent actually overcame it
+- what the better response should have been
+
+If the agent lost the call because they were vague, passive, too wordy, failed to redirect, failed to isolate the objection, or failed to ask for the appointment, say that plainly.
+
+Always respond with valid JSON only.`;
 
 export async function generateCallCoachReport(
   callId: string,
   userEmail: string,
   leadName?: string
-): Promise<{ ok: boolean; report?: any; error?: string }> {
+): Promise<{ ok: boolean; report?: any; error?: string; skipped?: boolean; reason?: string }> {
   await mongooseConnect();
 
   // Don't regenerate if already exists
@@ -23,19 +56,57 @@ export async function generateCallCoachReport(
   const call = await (Call as any).findOne({ _id: callId, userEmail }).lean();
   if (!call) return { ok: false, error: "Call not found" };
 
-  const transcript = (call as any).transcript || "";
+  const transcript = String((call as any).transcript || "").trim();
   const durationSeconds =
-    (call as any).duration || (call as any).durationSec || 0;
+    Number((call as any).duration || (call as any).durationSec || 0) || 0;
 
-  const userContent = `Analyze this insurance sales call and provide a detailed coaching report using the sandwich method.
+  const sourceBits = [
+    (call as any)?.source,
+    (call as any)?.callSource,
+    (call as any)?.origin,
+    (call as any)?.mode,
+    (call as any)?.dialerType,
+  ]
+    .map((v: any) => String(v || "").toLowerCase().trim())
+    .filter(Boolean);
+
+  const likelyAIDialer =
+    (call as any)?.isAIDialer === true ||
+    Boolean((call as any)?.aiDialerSessionId) ||
+    Boolean((call as any)?.aiCallSessionId) ||
+    sourceBits.some((v: string) => ["ai_dialer", "ai-dialer", "ai dialer"].includes(v));
+
+  if (likelyAIDialer) {
+    return { ok: true, skipped: true, reason: "ai_dialer_call" };
+  }
+
+  if (durationSeconds < 60) {
+    return { ok: true, skipped: true, reason: "duration_under_60_seconds" };
+  }
+
+  if (!transcript || transcript.length < 40) {
+    return { ok: true, skipped: true, reason: "missing_or_short_transcript" };
+  }
+
+  const userContent = `Analyze this insurance sales call and provide a detailed coaching report.
 
 Agent name: ${userEmail}
 Lead name: ${leadName || "Unknown"}
 Call duration: ${durationSeconds} seconds
 Transcript:
-${transcript || "(No transcript available — score conservatively)"}
+${transcript}
 
-IMPORTANT: Be specific. Reference exact quotes or moments from the transcript. If the call was short or unclear, acknowledge that honestly.
+Important coaching instructions:
+- Be honest and specific.
+- Do not be fake-positive.
+- Do not be overly harsh.
+- Identify exactly where the call slowed down or lost momentum.
+- Identify the real objection(s), not generic categories.
+- Be very clear about whether the agent actually asked for the appointment.
+- If the agent never clearly closed, say that directly.
+- If they talked too much, were vague, failed to isolate the objection, or failed to control the call, say that directly.
+- Quote or closely reference actual moments from the transcript.
+- Give corrections the agent can actually use on the next call.
 
 Return this exact JSON structure:
 {
@@ -49,22 +120,22 @@ Return this exact JSON structure:
     "closing": <number>
   },
   "sandwichFeedback": {
-    "topBread": [<2-3 specific things they did WELL — reference exact moments>],
-    "filling": [<2-4 specific improvements — be direct and reference exact moments with better alternatives>],
-    "bottomBread": [<1-2 encouraging closing points — specific to this call>]
+    "topBread": [<1-3 specific things they actually did well>],
+    "filling": [<2-5 specific improvements, including where they got held up and what they should have done instead>],
+    "bottomBread": [<1-2 encouraging but honest closing points>]
   },
   "objectionsEncountered": [
     {
-      "objection": <exact objection they raised>,
+      "objection": <exact objection or hesitation from the lead>,
       "howHandled": <what the agent actually said or did>,
-      "betterResponse": <ideal response — be specific, give exact words to use>,
+      "betterResponse": <better response with specific wording the agent could use next time>,
       "wasOvercome": <boolean>,
-      "conceptConfusion": <if agent used jargon the lead may not have understood, explain it — or null>
+      "conceptConfusion": <any confusing wording / jargon used by the agent, or null>
     }
   ],
-  "nextStepRecommendation": <exact words to say on the next call — specific and actionable>,
-  "managerSuggestion": <if there is a specific skill gap, suggest a role-play exercise or null>,
-  "callSummary": <2-3 sentences of what happened on this call>
+  "nextStepRecommendation": <the most important thing the agent should do differently on the next similar call>,
+  "managerSuggestion": <short role-play or drill suggestion if needed, otherwise null>,
+  "callSummary": <2-3 honest sentences summarizing what happened and where the call was won or lost>
 }`;
 
   let parsed: any;

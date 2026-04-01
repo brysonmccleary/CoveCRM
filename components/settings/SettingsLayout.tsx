@@ -4,6 +4,7 @@ import ProfilePanel from "@/components/settings/ProfilePanel"; // ✅ Real UI
 import BillingPanel from "./BillingPanel";
 import ReferralPanel from "./ReferralPanel";
 import EmailAccountPanel from "./EmailAccountPanel";
+import AISettingsPanel from "./AISettingsPanel";
 
 export default function SettingsLayout() {
   const [selected, setSelected] = useState("Profile");
@@ -26,6 +27,8 @@ export default function SettingsLayout() {
         return <ReferralPanel />;
       case "Email Account":
         return <EmailAccountPanel />;
+      case "AI Settings":
+        return <AISettingsPanel />;
       default:
         return <div className="p-6 text-gray-400">Coming Soon</div>;
     }

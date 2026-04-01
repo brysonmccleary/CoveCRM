@@ -11,6 +11,7 @@ export function folderNameForDisposition(status: string): string | null {
   if (s === "sold") return "Sold";
   if (s === "not interested" || s === "notinterested") return "Not Interested";
   if (s === "booked appointment" || s === "booked") return "Booked Appointment";
+  if (s === "bad number" || s === "wrong number" || s === "disconnected") return "Bad Number";
   if (s === "resolved") return "Resolved"; // not a system folder, but we keep pretty case for status/history
 
   return null; // unknown → no forced folder move

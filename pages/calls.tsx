@@ -8,7 +8,8 @@ const CallDetailCard = dynamic(() => import("@/components/CallDetailCard"), { ss
 
 export default function CallsPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [userHasAI, setUserHasAI] = useState<boolean>(false);
+  // AI Coaching available to all users
+  const userHasAI = true;
 
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -16,18 +17,6 @@ export default function CallsPage() {
       const id = u.searchParams.get("id");
       if (id) setSelectedId(id);
     }
-  }, []);
-
-  useEffect(() => {
-    (async () => {
-      try {
-        const r = await fetch("/api/account/features", { cache: "no-store" });
-        const j = await r.json();
-        if (r.ok) setUserHasAI(Boolean(j?.aiCalls));
-      } catch {
-        setUserHasAI(false);
-      }
-    })();
   }, []);
 
   return (

@@ -7,12 +7,12 @@ const nextConfig = {
   },
 
   images: {
-    domains: ["lh3.googleusercontent.com"],
-  },
-
-  // Make lint non-blocking during builds
-  eslint: {
-    ignoreDuringBuilds: true,
+    remotePatterns: [
+      {
+        protocol: "https",
+        hostname: "lh3.googleusercontent.com",
+      },
+    ],
   },
 
   // Force apex -> www so OAuth redirect_uri is consistent

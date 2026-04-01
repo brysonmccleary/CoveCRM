@@ -6,6 +6,7 @@ import { sendInitialDrip } from "@/utils/sendInitialDrip";
 import type { ILead } from "@/models/Lead";
 import type { Types } from "mongoose";
 import { isSystemFolderName as systemUtilIsSystem } from "@/lib/systemFolders";
+import { getLeadTypeFolderName, normalizeLeadType } from "@/lib/leadTypeConfig";
 
 // Local guard (belt & suspenders)
 const BLOCKED = new Set(["sold", "not interested", "booked", "booked appointment"]);
@@ -19,24 +20,35 @@ export async function syncSheetRow(row: {
   email: string;
   phone: string;
   notes?: string;
-  folderName: string;
+  folderName?: string;
   userEmail: string;
+  leadType?: string;
   additionalFields?: Record<string, unknown>;
 }) {
   await dbConnect();
 
+  const normalizedLeadType = normalizeLeadType(
+    row.leadType || (row.additionalFields?.["leadType"] as string) || (row.additionalFields?.["Lead Type"] as string) || ""
+  );
+  const resolvedFolderName =
+    String(row.folderName || "").trim() || (normalizedLeadType ? getLeadTypeFolderName(normalizedLeadType) : "");
+
+  if (!resolvedFolderName) {
+    throw new Error("folderName or leadType is required for syncSheetRow.");
+  }
+
   // Guard against system folders
-  if (isSystemFolderName(row.folderName)) {
-    throw new Error(`Cannot sync into system folder '${row.folderName}'.`);
+  if (isSystemFolderName(resolvedFolderName)) {
+    throw new Error(`Cannot sync into system folder '${resolvedFolderName}'.`);
   }
 
   // Create/find the destination folder for the user
   let folder = await Folder.findOne({
-    name: row.folderName,
+    name: resolvedFolderName,
     userEmail: row.userEmail,
   });
   if (!folder) {
-    folder = await Folder.create({ name: row.folderName, userEmail: row.userEmail });
+    folder = await Folder.create({ name: resolvedFolderName, userEmail: row.userEmail });
   }
 
   const leadData: ILead = {
@@ -67,7 +79,7 @@ export async function syncSheetRow(row: {
     ...leadObj,
     name: row.name,
     phone: row.phone,
-    folderName: String((folder as any).name || row.folderName),
+    folderName: String((folder as any).name || resolvedFolderName),
     agentName: (folder as any).agentName ?? undefined,
     agentPhone: (folder as any).agentPhone ?? undefined,
   };

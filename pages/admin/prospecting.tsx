@@ -6,9 +6,8 @@ import { useSession } from "next-auth/react";
 import { useRouter } from "next/router";
 
 const ADMIN_EMAIL = "bryson.mccleary1@gmail.com";
-const CRON_SECRET = process.env.NEXT_PUBLIC_CRON_SECRET || "";
 
-type Tab = "senders" | "leads" | "assignments" | "plans" | "fb_subscriptions";
+type Tab = "senders" | "leads" | "assignments" | "plans" | "fb_subscriptions" | "meta_diagnostics";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -296,9 +295,7 @@ function LeadsTab() {
     setScraping(true);
     setScrapeMsg("");
     try {
-      const res = await fetch("/api/cron/run-doi-scraper", {
-        headers: { "x-cron-secret": process.env.NEXT_PUBLIC_CRON_SECRET || "admin-trigger" },
-      });
+      const res = await fetch("/api/admin/run-doi-scraper", { method: "POST" });
       const data = await res.json();
       if (res.ok) {
         setScrapeMsg(`Done. Scraped=${data.totalScraped} Inserted=${data.totalInserted} Updated=${data.totalUpdated} Errors=${data.totalErrors}`);
@@ -754,6 +751,215 @@ function FBSubscriptionsTab() {
   );
 }
 
+// ── Tab 6: Meta Diagnostics ───────────────────────────────────────────────────
+
+interface MetaDiagData {
+  totalUsersWithMeta: number;
+  totalActiveFBSubs: number;
+  totalMetaLeads: number;
+  expiredTokens: number;
+  recentWebhookUsers: number;
+  users: {
+    email: string;
+    pageId: string;
+    adAccountId: string;
+    tokenExpiresAt?: string;
+    lastWebhookAt?: string;
+    lastInsightSyncAt?: string;
+    hasActiveSub: boolean;
+    metaLeadCount: number;
+  }[];
+}
+
+function MetaDiagnosticsTab() {
+  const [data, setData] = useState<MetaDiagData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [testEmail, setTestEmail] = useState("");
+  const [testLeadgenId, setTestLeadgenId] = useState("");
+  const [testPageId, setTestPageId] = useState("");
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<string>("");
+  const [syncing, setSyncing] = useState(false);
+  const [syncResult, setSyncResult] = useState<string>("");
+
+  const fetchDiag = async () => {
+    setLoading(true);
+    try {
+      const res = await fetch("/api/admin/meta-diagnostics");
+      const d = await res.json();
+      setData(d);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { fetchDiag(); }, []);
+
+  const testWebhook = async () => {
+    setTesting(true);
+    setTestResult("");
+    try {
+      const res = await fetch("/api/admin/test-meta-webhook", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userEmail: testEmail, leadgenId: testLeadgenId, pageId: testPageId }),
+      });
+      const d = await res.json();
+      setTestResult(res.ok ? `OK: ${JSON.stringify(d)}` : `Error: ${d.error || "unknown"}`);
+    } catch (e: any) {
+      setTestResult(`Network error: ${e.message}`);
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  const syncAll = async () => {
+    setSyncing(true);
+    setSyncResult("");
+    try {
+      const res = await fetch("/api/admin/sync-meta-insights", { method: "POST" });
+      const d = await res.json();
+      setSyncResult(res.ok ? `Synced ${d.synced ?? 0} users.` : `Error: ${d.error || "unknown"}`);
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  const isExpiringSoon = (exp?: string) => {
+    if (!exp) return false;
+    return new Date(exp).getTime() - Date.now() < 7 * 24 * 60 * 60 * 1000;
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Summary cards */}
+      {loading ? (
+        <p className="text-gray-400 text-sm">Loading…</p>
+      ) : !data ? (
+        <p className="text-red-400 text-sm">Failed to load diagnostics.</p>
+      ) : (
+        <>
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+            {[
+              { label: "Users w/ Meta", value: data.totalUsersWithMeta },
+              { label: "Active FB Subs", value: data.totalActiveFBSubs },
+              { label: "Total Meta Leads", value: data.totalMetaLeads },
+              { label: "Expired Tokens", value: data.expiredTokens, warn: data.expiredTokens > 0 },
+              { label: "Recent Webhook", value: data.recentWebhookUsers },
+            ].map(({ label, value, warn }) => (
+              <div key={label} className="bg-[#1e293b] border border-gray-700 rounded-lg p-3 text-center">
+                <p className="text-xs text-gray-400 mb-1">{label}</p>
+                <p className={`text-xl font-bold ${warn ? "text-yellow-400" : "text-white"}`}>{value}</p>
+              </div>
+            ))}
+          </div>
+
+          {/* User table */}
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs text-left">
+              <thead>
+                <tr className="text-gray-400 border-b border-gray-700">
+                  <th className="py-2 pr-3">Email</th>
+                  <th className="py-2 pr-3">Page ID</th>
+                  <th className="py-2 pr-3">Ad Account</th>
+                  <th className="py-2 pr-3">Token</th>
+                  <th className="py-2 pr-3">Last Webhook</th>
+                  <th className="py-2 pr-3">Last Sync</th>
+                  <th className="py-2 pr-3">Sub</th>
+                  <th className="py-2">Leads</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.users.map((u) => (
+                  <tr key={u.email} className="border-b border-gray-800 hover:bg-[#1e293b]">
+                    <td className="py-2 pr-3 text-white">{u.email}</td>
+                    <td className="py-2 pr-3 text-gray-400 font-mono">{u.pageId || "—"}</td>
+                    <td className="py-2 pr-3 text-gray-400 font-mono">{u.adAccountId || "—"}</td>
+                    <td className="py-2 pr-3">
+                      {!u.tokenExpiresAt ? (
+                        <span className="text-emerald-400">Long-lived</span>
+                      ) : isExpiringSoon(u.tokenExpiresAt) ? (
+                        <span className="text-yellow-400">Expiring soon</span>
+                      ) : (
+                        <span className="text-emerald-400">Valid</span>
+                      )}
+                    </td>
+                    <td className="py-2 pr-3 text-gray-500">{u.lastWebhookAt ? new Date(u.lastWebhookAt).toLocaleDateString() : "Never"}</td>
+                    <td className="py-2 pr-3 text-gray-500">{u.lastInsightSyncAt ? new Date(u.lastInsightSyncAt).toLocaleDateString() : "Never"}</td>
+                    <td className="py-2 pr-3">
+                      <span className={`px-1.5 py-0.5 rounded text-[10px] ${u.hasActiveSub ? "bg-green-800 text-green-300" : "bg-gray-700 text-gray-400"}`}>
+                        {u.hasActiveSub ? "Active" : "None"}
+                      </span>
+                    </td>
+                    <td className="py-2 text-gray-300">{u.metaLeadCount}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {data.users.length === 0 && (
+              <p className="text-gray-500 text-sm py-4">No users with Meta connected yet.</p>
+            )}
+          </div>
+        </>
+      )}
+
+      {/* Sync All */}
+      <div className="bg-[#1e293b] border border-gray-700 rounded-xl p-5 space-y-3">
+        <h3 className="text-sm font-semibold text-white">Sync All Ad Insights</h3>
+        <p className="text-xs text-gray-400">Trigger the meta insights cron for all connected users with active FB subscriptions.</p>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={syncAll}
+            disabled={syncing}
+            className="bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded text-sm disabled:opacity-60"
+          >
+            {syncing ? "Syncing…" : "Sync All Now"}
+          </button>
+          {syncResult && <p className="text-xs text-emerald-400">{syncResult}</p>}
+        </div>
+      </div>
+
+      {/* Test webhook */}
+      <div className="bg-[#1e293b] border border-gray-700 rounded-xl p-5 space-y-4">
+        <h3 className="text-sm font-semibold text-white">Test Meta Webhook</h3>
+        <p className="text-xs text-gray-400">Manually trigger lead processing for a specific user and leadgen ID.</p>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          {[
+            { label: "User Email", val: testEmail, set: setTestEmail, ph: "agent@example.com" },
+            { label: "Leadgen ID", val: testLeadgenId, set: setTestLeadgenId, ph: "123456789" },
+            { label: "Page ID", val: testPageId, set: setTestPageId, ph: "Page ID (optional)" },
+          ].map(({ label, val, set, ph }) => (
+            <div key={label}>
+              <label className="text-xs text-gray-400 mb-1 block">{label}</label>
+              <input
+                type="text"
+                value={val}
+                onChange={(e) => set(e.target.value)}
+                placeholder={ph}
+                className="w-full bg-[#0f172a] border border-gray-600 rounded px-3 py-1.5 text-white text-sm"
+              />
+            </div>
+          ))}
+        </div>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={testWebhook}
+            disabled={testing || !testEmail || !testLeadgenId}
+            className="bg-blue-600 hover:bg-blue-700 text-white px-5 py-2 rounded text-sm disabled:opacity-60"
+          >
+            {testing ? "Testing…" : "Run Test"}
+          </button>
+          {testResult && (
+            <p className={`text-xs font-mono ${testResult.startsWith("OK") ? "text-emerald-400" : "text-rose-400"}`}>
+              {testResult}
+            </p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
 export default function AdminProspectingPage() {
@@ -807,6 +1013,7 @@ export default function AdminProspectingPage() {
           <TabBtn active={tab === "assignments"} onClick={() => setTab("assignments")} label="Assignments" />
           <TabBtn active={tab === "plans"} onClick={() => setTab("plans")} label="Plans" />
           <TabBtn active={tab === "fb_subscriptions"} onClick={() => setTab("fb_subscriptions")} label="FB Subscriptions" />
+          <TabBtn active={tab === "meta_diagnostics"} onClick={() => setTab("meta_diagnostics")} label="Meta Diagnostics" />
         </div>
 
         <div>
@@ -815,6 +1022,7 @@ export default function AdminProspectingPage() {
           {tab === "assignments" && <AssignmentsTab />}
           {tab === "plans" && <PlansTab />}
           {tab === "fb_subscriptions" && <FBSubscriptionsTab />}
+          {tab === "meta_diagnostics" && <MetaDiagnosticsTab />}
         </div>
       </div>
     </DashboardLayout>

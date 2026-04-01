@@ -27,6 +27,16 @@ const FolderSchema = new Schema<any>(
       type: [Schema.Types.Mixed],
       default: [],
     },
+
+    // AI First-Call settings (per-folder)
+    aiContactEnabled: { type: Boolean, default: false },
+    aiFirstCallEnabled: { type: Boolean, default: false },
+    aiFirstCallDelayMinutes: { type: Number, default: 1, min: 0, max: 60 },
+    aiAutoTextEnabled: { type: Boolean, default: false },
+    aiRealTimeOnly: { type: Boolean, default: true },
+    aiNewLeadsOnly: { type: Boolean, default: true },
+    aiEnabledAt: { type: Date, default: null },
+    aiScriptKey: { type: String, default: "default" },
   },
   {
     timestamps: true,

@@ -19,6 +19,28 @@ type HistoryRow =
   | { kind: "text"; text: string }
   | { kind: "link"; text: string; href: string; download?: boolean };
 
+type DialAICallOverview = {
+  call?: {
+    id?: string;
+    callSid?: string;
+    startedAt?: string | null;
+    completedAt?: string | null;
+    duration?: number | null;
+    aiOverviewReady?: boolean;
+    aiOverview?: {
+      overviewBullets?: string[];
+      keyDetails?: string[];
+      objections?: string[];
+      questions?: string[];
+      nextSteps?: string[];
+      outcome?: string;
+      appointmentTime?: string;
+      sentiment?: string;
+      generatedAt?: string;
+    } | null;
+  } | null;
+};
+
 /** ---------- UI helpers (display-only; no flow changes) ---------- **/
 const toTitle = (s: string) =>
   s
@@ -181,6 +203,7 @@ export default function DialSession() {
   const [showBookModal, setShowBookModal] = useState(false);
   const [notes, setNotes] = useState("");
   const [history, setHistory] = useState<HistoryRow[]>([]);
+  const [latestAiOverview, setLatestAiOverview] = useState<DialAICallOverview["call"] | null>(null);
 
   // Numbers (display only; server resolves authoritative values)
   const [fromNumber, setFromNumber] = useState<string>("");
@@ -572,7 +595,7 @@ export default function DialSession() {
     };
     loadNumbers();
     return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-comments, react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fromNumberParam]);
 
   // Load leads list + support startIndex/progressKey + SERVER resume
@@ -741,6 +764,24 @@ export default function DialSession() {
       }
     };
     loadHistory();
+  }, [lead?.id]);
+
+  useEffect(() => {
+    const loadLatestAiOverview = async () => {
+      if (!lead?.id) {
+        setLatestAiOverview(null);
+        return;
+      }
+      try {
+        const r = await fetch(`/api/calls/ai-overview?leadId=${encodeURIComponent(lead.id)}`, { cache: "no-store" });
+        const j = await r.json().catch(() => ({} as DialAICallOverview));
+        if (r.ok && j?.call) setLatestAiOverview(j.call);
+        else setLatestAiOverview(null);
+      } catch {
+        setLatestAiOverview(null);
+      }
+    };
+    loadLatestAiOverview();
   }, [lead?.id]);
 
   // Auto-advance driver
@@ -1111,7 +1152,7 @@ export default function DialSession() {
     }
   };
 
-  const handleDisposition = async (label: "Sold" | "No Answer" | "Booked Appointment" | "Not Interested") => {
+  const handleDisposition = async (label: "Sold" | "No Answer" | "Booked Appointment" | "Not Interested" | "Bad Number") => {
     if (!lead?.id) {
       toast.error("No active lead to disposition");
       return;
@@ -1414,6 +1455,11 @@ export default function DialSession() {
       "assigneddrips","dripprogress","history","interactionhistory",
       "normalizedphone","phonelast10",
       "rawrow",
+      // Internal scoring/AI flags — not useful to agents
+      "scorebreakdown","aiconversationactive","scoreversion","scoreupdatedat",
+      "sheetmeta","sourcetype","realtimeeligible",
+      "aifirstcallattempteat","aifirstcallattemptdat","aifirstcalldueat","aifirstcallstatus",
+      "donotcall","donotcallat","leadtype","reminderssent","isaiengaged",
     ]);
 
     const bannedTopNorm = new Set<string>();
@@ -1467,6 +1513,13 @@ export default function DialSession() {
     (lead as any)?.lastname ??
     (lead as any)?.lastName ??
     "";
+
+  const latestAiBullets = Array.isArray((latestAiOverview as any)?.aiOverview?.overviewBullets)
+    ? (latestAiOverview as any).aiOverview.overviewBullets
+        .map((x: any) => String(x || "").trim())
+        .filter(Boolean)
+        .slice(0, 5)
+    : [];
 
   return (
     // ✅ UI ONLY: make the area to the right of Sidebar a constrained flex container (Safari-safe scroll)
@@ -1600,6 +1653,24 @@ export default function DialSession() {
         <div className="flex-1 p-6 bg-[#1e293b] flex flex-col h-full min-h-0">
           {/* Top content (scrollable container so it never pushes bottom controls off-screen) */}
           <div className="flex-1 min-h-0 overflow-y-auto">
+            {latestAiBullets.length > 0 ? (
+              <div className="mb-4 border border-gray-600 rounded p-3 bg-gray-800">
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="text-lg font-bold">Latest AI Call Overview</h3>
+                  <div className="text-xs text-gray-400">
+                    {((latestAiOverview as any)?.aiOverview?.outcome || "") ? `Outcome: ${(latestAiOverview as any).aiOverview.outcome}` : ""}
+                    {((latestAiOverview as any)?.aiOverview?.outcome || "") && ((latestAiOverview as any)?.aiOverview?.sentiment || "") ? " • " : ""}
+                    {((latestAiOverview as any)?.aiOverview?.sentiment || "") ? `Sentiment: ${(latestAiOverview as any).aiOverview.sentiment}` : ""}
+                  </div>
+                </div>
+                <ul className="list-disc ml-5 space-y-1 text-sm text-gray-200">
+                  {latestAiBullets.map((b: string, i: number) => (
+                    <li key={i}>{b}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+
             <h3 className="text-lg font-bold mb-2">Notes</h3>
             <div className="border border-gray-500 rounded p-2 mb-2">
               <textarea
@@ -1644,6 +1715,7 @@ export default function DialSession() {
               <button onClick={() => handleDisposition("No Answer")} className="bg-gray-600 hover:bg-gray-700 px-3 py-2 rounded">No Answer</button>
               <button onClick={() => handleDisposition("Booked Appointment")} className="bg-gray-600 hover:bg-gray-700 px-3 py-2 rounded">Booked Appointment</button>
               <button onClick={() => handleDisposition("Not Interested")} className="bg-gray-600 hover:bg-gray-700 px-3 py-2 rounded">Not Interested</button>
+              <button onClick={() => handleDisposition("Bad Number")} className="bg-gray-600 hover:bg-gray-700 px-3 py-2 rounded">Bad Number</button>
             </div>
 
             <div className="flex gap-2 mt-2">

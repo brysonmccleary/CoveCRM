@@ -38,6 +38,7 @@ const FBLeadCampaignSchema = new Schema(
     },
     notes: { type: String, default: "" },
     isDefault: { type: Boolean, default: false }, // receives unmatched webhook leads for this user
+    folderId: { type: Schema.Types.ObjectId, ref: "Folder", default: null }, // linked CRM folder
 
     // Performance scoring fields
     metaCampaignId: { type: String, default: "" },
@@ -53,6 +54,8 @@ const FBLeadCampaignSchema = new Schema(
       enum: ["SCALE", "DUPLICATE_TEST", "MONITOR", "FIX", "PAUSE", null],
       default: null,
     },
+    automationEnabled: { type: Boolean, default: false },
+    lastAutomationActionAt: { type: Date, default: null },
     lastScoredAt: { type: Date },
     lastActionReport: { type: String, default: "" },
     lastActionReportAt: { type: Date },

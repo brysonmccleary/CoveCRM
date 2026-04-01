@@ -7,6 +7,8 @@ import { Types } from "mongoose";
 import { checkDuplicate } from "@/lib/leads/checkDuplicate";
 import { scoreLeadOnArrival } from "@/lib/leads/scoreLead";
 import { trackLeadSourceStat } from "@/lib/leads/trackLeadSourceStat";
+import AISettings from "@/models/AISettings";
+import { triggerAIFirstCall } from "@/lib/ai/triggerAIFirstCall";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const session = await getServerSession(req, res, authOptions);
@@ -102,12 +104,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         folderId: folderObjId,
         createdAt: now,
         updatedAt: now,
+        sourceType: "manual_live",
+        realTimeEligible: true,
       });
 
       // Score and track
       try {
         await scoreLeadOnArrival(String(newLead._id), "manual");
         await trackLeadSourceStat(email, "manual");
+      } catch (_) {}
+
+      // Fire-and-forget: AI first call (folder-level safety gates inside helper)
+      try {
+        if (Phone && folderObjId) {
+          triggerAIFirstCall(
+            String(newLead._id),
+            String(folderObjId),
+            email
+          ).catch(() => {});
+        }
       } catch (_) {}
 
       return res.status(201).json(newLead);

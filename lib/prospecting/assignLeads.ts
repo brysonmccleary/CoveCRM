@@ -39,6 +39,7 @@ export async function assignLeadsToUser(
 
   const baseMatch: Record<string, any> = {
     globallyUnsubscribed: false,
+    email: { $not: /^_doi_.*@noemail\.doilead\.local$/ },
     $or: [
       { cooldownUntil: null },
       { cooldownUntil: { $exists: false } },

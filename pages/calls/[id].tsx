@@ -9,7 +9,8 @@ const CallDetailCard = dynamic(() => import("@/components/CallDetailCard"), { ss
 export default function CallsIdPage() {
   const router = useRouter();
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [userHasAI, setUserHasAI] = useState<boolean>(false);
+  // AI Coaching available to all users
+  const userHasAI = true;
 
   // Pick up the dynamic route param (/calls/[id])
   useEffect(() => {
@@ -17,19 +18,6 @@ export default function CallsIdPage() {
     const rid = (router.query.id as string) || null;
     setSelectedId(rid);
   }, [router.isReady, router.query.id]);
-
-  // Feature flag: does this user have AI?
-  useEffect(() => {
-    (async () => {
-      try {
-        const r = await fetch("/api/account/features", { cache: "no-store" });
-        const j = await r.json();
-        if (r.ok) setUserHasAI(Boolean(j?.aiCalls));
-      } catch {
-        setUserHasAI(false);
-      }
-    })();
-  }, []);
 
   return (
     <DashboardLayout>

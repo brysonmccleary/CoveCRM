@@ -30,11 +30,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!campaign) return res.status(404).json({ error: "Campaign not found" });
 
   const updates: Record<string, any> = {};
-  if (googleSheetUrl !== undefined) updates.googleSheetUrl = googleSheetUrl;
-  if (appsScriptUrl !== undefined) updates.appsScriptUrl = appsScriptUrl;
+  if (googleSheetUrl !== undefined) {
+    const trimmedSheetUrl = String(googleSheetUrl || "").trim();
+    if (trimmedSheetUrl && !/^https:\/\/docs\.google\.com\/spreadsheets\//i.test(trimmedSheetUrl)) {
+      return res.status(400).json({ error: "Enter a valid Google Sheet URL." });
+    }
+    updates.googleSheetUrl = trimmedSheetUrl;
+  }
+  if (appsScriptUrl !== undefined) {
+    const trimmedScriptUrl = String(appsScriptUrl || "").trim();
+    if (trimmedScriptUrl && !/^https:\/\/script\.google\.com\//i.test(trimmedScriptUrl)) {
+      return res.status(400).json({ error: "Enter a valid Google Apps Script Web App URL." });
+    }
+    updates.appsScriptUrl = trimmedScriptUrl;
+  }
 
   Object.assign(campaign, updates);
   await campaign.save();
 
-  return res.status(200).json({ ok: true, campaign });
+  return res.status(200).json({
+    ok: true,
+    campaign,
+    connected: {
+      googleSheet: !!campaign.googleSheetUrl,
+      appsScript: !!campaign.appsScriptUrl,
+    },
+  });
 }

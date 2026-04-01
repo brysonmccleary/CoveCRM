@@ -10,6 +10,7 @@ import { google } from "googleapis";
 import mongoose from "mongoose";
 import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
 import { ensureSafeFolder } from "@/lib/ensureSafeFolder";
+import { getLeadTypeFolderName, normalizeLeadType } from "@/lib/leadTypeConfig";
 
 function normalizePhone(input: any): string {
   return String(input || "").replace(/\D+/g, "");
@@ -70,14 +71,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         skip = {},
         lastRowImported = headerRow,
         folderId,
+        leadType,
+        type,
         // folderName is ignored for naming now; we recalc from Drive
       } = sheetCfg || {};
 
       if (!spreadsheetId || !title) continue;
 
-      // --- Build canonical folder name: spreadsheet name ONLY ---
+      // --- Build canonical folder name: lead-type-aware first, spreadsheet name fallback ---
       const meta = await drive.files.get({ fileId: spreadsheetId, fields: "name" });
-      const defaultName = (meta.data.name || "Imported Leads").trim();
+      const normalizedLeadType = normalizeLeadType(leadType || type || "");
+      const defaultName = normalizedLeadType
+        ? getLeadTypeFolderName(normalizedLeadType)
+        : (meta.data.name || "Imported Leads").trim();
 
       // --- Resolve/Correct destination folder (CENTRALIZED via ensureSafeFolder) ---
       const folderDoc = await ensureSafeFolder({
