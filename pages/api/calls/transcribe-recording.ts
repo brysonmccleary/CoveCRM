@@ -2,6 +2,7 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import dbConnect from "@/lib/mongooseConnect";
 import Call from "@/models/Call";
+import { queueLeadMemoryHook } from "@/lib/ai/memory/queueLeadMemoryHook";
 import UserModel from "@/models/User";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
@@ -353,6 +354,19 @@ Style (match Close AI Lead Summary):
 - Do NOT write generic bullets like "They discussed insurance options" unless nothing more specific exists.
 - The bullets should let an agent understand the call fast without reading a paragraph.
 
+Speaker Attribution Rules:
+- The sales agent is the caller.
+- The other person on the call is the client/lead.
+- Clearly distinguish who said what.
+- Do NOT attribute agent statements to the client.
+- Do NOT attribute client statements to the agent.
+- overviewBullets should read like CRM notes, for example:
+  - Agent called regarding mortgage protection.
+  - Client said the coverage was for him and his wife.
+  - Client asked about price.
+  - Outcome: Follow-up needed.
+- Keep bullets short, factual, and speaker-aware.
+
 For overviewBullets, prioritize in this order:
 1. Final result or disposition of the call
 2. Callback / booked appointment timing and exact windows if mentioned
@@ -595,6 +609,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     }
 
     await call.save();
+    if (call.userEmail && call.leadId && transcriptText.trim()) {
+      queueLeadMemoryHook({
+        userEmail: String(call.userEmail),
+        leadId: String(call.leadId),
+        type: "call",
+        body: transcriptText.trim(),
+        sourceId: String(call._id),
+      });
+    }
 
     return res.status(200).json({
       ok: true,

@@ -39,7 +39,7 @@ export default function TeamAcceptPage() {
         const data = await res.json();
         if (res.ok) {
           setResult("success");
-          setMessage("You've joined the team!");
+          setMessage("You joined the team successfully.");
         } else {
           setResult("error");
           setMessage(data.error || "Failed to accept invite.");
@@ -66,12 +66,12 @@ export default function TeamAcceptPage() {
           <>
             <div className="text-5xl">🎉</div>
             <p className="text-green-400 text-lg font-semibold">{message}</p>
-            <p className="text-gray-400 text-sm">You are now part of {ownerEmail}'s team.</p>
+            <p className="text-gray-400 text-sm">You joined {ownerEmail}'s team successfully. You can continue in your dashboard now.</p>
             <button
-              onClick={() => router.push("/team")}
+              onClick={() => router.push("/dashboard")}
               className="mt-4 bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-2 rounded-lg"
             >
-              View Team
+              Go to Dashboard
             </button>
           </>
         )}

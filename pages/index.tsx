@@ -143,10 +143,7 @@ export default function Home() {
               <span className="w-1.5 h-1.5 rounded-full bg-blue-400" />
               1.2M leads managed
             </div>
-            <div className="absolute bottom-20 left-[10%] flex items-center gap-2 bg-white/5 border border-white/10 backdrop-blur-sm rounded-full px-4 py-2 text-xs text-slate-400">
-              <span className="w-1.5 h-1.5 rounded-full bg-purple-400" />
-              $0 per seat
-            </div>
+            
           </div>
 
           <div className="relative max-w-4xl mx-auto">
@@ -165,11 +162,14 @@ export default function Home() {
             {/* Glow line */}
             <div className="w-24 h-0.5 bg-gradient-to-r from-transparent via-blue-500 to-transparent mx-auto mb-6" />
 
-            <p className="text-lg md:text-xl max-w-2xl mx-auto mb-8 text-slate-300 leading-relaxed">
-              The complete sales platform for high-volume insurance agents — AI dialer, AI call coach, SMS automation, Facebook lead manager, and team recruiting, all in one place.
+            <p className="text-lg md:text-xl max-w-2xl mx-auto mb-6 text-slate-300 leading-relaxed">
+              CoveCRM is an AI-powered sales system that calls leads, texts leads, follows up, books appointments, and coaches you — automatically.
+            </p>
+            <p className="text-sm text-slate-500 mb-8">
+              Built specifically for high-volume life insurance agents.
             </p>
 
-            <p className="text-sm text-slate-500 mb-8">Trusted by insurance agents across 47 states</p>
+            
 
             <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
               <Link href="/signup">
@@ -517,57 +517,56 @@ export default function Home() {
                 ))}
               </div>
 
-              <div className="mt-8 rounded-2xl border border-white/10 bg-[#020617]/60 p-6">
-                <h3 className="text-xl font-bold">Why Agents Choose CoveCRM</h3>
-                <p className="text-slate-300 mt-2 max-w-3xl">
-                  CoveCRM was designed around outbound insurance workflows from day one — with AI coaching, lead automation, and team tools built in, not bolted on.
-                </p>
-                <div className="grid gap-3 mt-5 md:grid-cols-2 text-slate-200">
-                  {[
-                    "AI Call Coach scores every call and shows you exactly how to improve",
-                    "Dialer-first workflow built for agent speed",
-                    "Facebook leads automatically imported, scored, and enrolled in drips",
-                    "Build and manage your downline inside the same platform you use to sell",
-                  ].map((t, i) => (
-                    <div key={i} className="flex items-start gap-3">
-                      <span className="mt-1 inline-flex h-5 w-5 items-center justify-center rounded-full bg-gradient-to-r from-blue-500 to-indigo-500 shadow-sm shrink-0">
-                        <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="white" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>
-                      </span>
-                      <span className="text-sm leading-relaxed">{t}</span>
-                    </div>
-                  ))}
-                </div>
-                <p className="text-[12px] text-slate-400 mt-6 leading-relaxed">
-                  Product names and trademarks are property of their respective owners. Comparison is based on publicly available information and may vary by plan.
-                </p>
-              </div>
             </div>
           </div>
         </section>
 
-        {/* Testimonials */}
+        {/* AI Engine */}
         <section className="py-20 px-6 bg-[#030d1f]">
           <div className="max-w-6xl mx-auto">
             <div className="text-center mb-12">
-              <h2 className="text-3xl md:text-4xl font-bold">What Agents Are Saying</h2>
-              <p className="text-slate-400 mt-3">Real results from real life insurance agents.</p>
+              <h2 className="text-3xl md:text-4xl font-bold">The AI Engine Running Your Sales Pipeline</h2>
+              <p className="text-slate-400 mt-3 max-w-3xl mx-auto">
+                CoveCRM doesn’t just store leads — it remembers, decides, and takes action automatically so no opportunity slips through the cracks.
+              </p>
             </div>
-            <div className="grid gap-6 md:grid-cols-3">
-              {TESTIMONIALS.map((t, i) => (
-                <div key={i} className="rounded-2xl border border-white/10 bg-white/4 p-7 hover:border-blue-500/20 transition">
-                  <div className="flex gap-1 mb-4">
-                    {[...Array(5)].map((_, s) => (
-                      <svg key={s} className="h-4 w-4 text-yellow-400" viewBox="0 0 20 20" fill="currentColor">
-                        <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
-                      </svg>
-                    ))}
+
+            <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+              {[
+                [
+                  "AI Lead Memory",
+                  "Remembers conversations, objections, notes, and behavior so the system always knows the full story behind every lead.",
+                ],
+                [
+                  "AI Decision Engine",
+                  "Determines the next best action for every lead — call, text, follow up, reschedule, or reactivate.",
+                ],
+                [
+                  "AI Automated Follow-Up",
+                  "Sends the right message at the right time so leads don’t go cold while you’re busy closing deals.",
+                ],
+                [
+                  "AI Lead Reactivation",
+                  "Finds old leads that are likely to respond and brings them back to life automatically.",
+                ],
+                [
+                  "AI Priority Score",
+                  "Shows you exactly who to call first so your best opportunities get attention before anyone else.",
+                ],
+                [
+                  "AI Call Coach",
+                  "Analyzes every call and tells you exactly how to improve your pitch, handle objections, and close more business.",
+                ],
+              ].map(([title, description], i) => (
+                <div
+                  key={i}
+                  className="rounded-2xl border border-white/10 bg-white/4 p-7 hover:border-blue-500/20 hover:bg-white/6 transition"
+                >
+                  <div className="mb-4 inline-flex rounded-full border border-blue-500/20 bg-blue-500/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-blue-300">
+                    AI Layer
                   </div>
-                  <p className="text-slate-200 text-sm leading-relaxed mb-5">"{t.quote}"</p>
-                  <div>
-                    <div className="font-semibold text-white text-sm">{t.name}</div>
-                    <div className="text-xs text-slate-400 mt-0.5">{t.role}</div>
-                    <div className="text-xs text-blue-400 mt-1.5">{t.stat}</div>
-                  </div>
+                  <h3 className="text-white font-bold text-xl mb-3">{title}</h3>
+                  <p className="text-slate-300 text-sm leading-relaxed">{description}</p>
                 </div>
               ))}
             </div>

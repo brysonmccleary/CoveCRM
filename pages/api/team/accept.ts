@@ -36,11 +36,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(410).json({ error: "Invite has expired" });
   }
 
+  if (String(invite.inviteeEmail || "").toLowerCase() !== acceptorEmail.toLowerCase()) {
+    return res.status(403).json({ error: "This invite was sent to a different email address." });
+  }
+
   // Create team member
   await TeamMember.findOneAndUpdate(
     { ownerEmail: ownerEmail.toLowerCase(), memberEmail: acceptorEmail.toLowerCase() },
     {
       $set: {
+        memberEmail: acceptorEmail.toLowerCase(),
+        ownerEmail: ownerEmail.toLowerCase(),
         memberName: acceptorName || acceptorEmail,
         status: "active",
         joinedAt: new Date(),
