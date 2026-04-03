@@ -16,6 +16,7 @@ interface FoldersListProps {
 }
 
 const SYSTEM_FOLDERS = ["Not Interested", "Booked Appointment", "Sold", "Bad Number"];
+const SYSTEM_FOLDER_ORDER = ["Sold", "Not Interested", "Booked Appointment", "Bad Number"];
 
 export default function FoldersList({ onRefetchReady, onFolderSelect }: FoldersListProps) {
   const router = useRouter();
@@ -116,7 +117,22 @@ export default function FoldersList({ onRefetchReady, onFolderSelect }: FoldersL
       }
     })();
 
-    return () => {
+  
+  const sortedFolders = [...folders].sort((a, b) => {
+    const aSys = SYSTEM_FOLDER_ORDER.includes(a.name);
+    const bSys = SYSTEM_FOLDER_ORDER.includes(b.name);
+
+    if (aSys && bSys) {
+      return SYSTEM_FOLDER_ORDER.indexOf(a.name) - SYSTEM_FOLDER_ORDER.indexOf(b.name);
+    }
+    if (aSys) return 1;
+    if (bSys) return -1;
+
+    return a.name.localeCompare(b.name);
+  });
+
+  return (
+) => {
       mounted = false;
       try {
         socketRef.current?.off?.("lead:updated");
@@ -128,6 +144,18 @@ export default function FoldersList({ onRefetchReady, onFolderSelect }: FoldersL
 
   if (loading) return <p className="text-slate-400">Loading folders...</p>;
 
+  const sortedFolders = [...folders].sort((a, b) => {
+    const aSys = SYSTEM_FOLDER_ORDER.includes(a.name);
+    const bSys = SYSTEM_FOLDER_ORDER.includes(b.name);
+
+    if (aSys && bSys) {
+      return SYSTEM_FOLDER_ORDER.indexOf(a.name) - SYSTEM_FOLDER_ORDER.indexOf(b.name);
+    }
+    if (aSys) return 1;
+    if (bSys) return -1;
+    return a.name.localeCompare(b.name);
+  });
+
   return (
     <div>
       <h2 className="text-xl font-bold mb-4 text-slate-100">Your Folders</h2>
@@ -135,7 +163,7 @@ export default function FoldersList({ onRefetchReady, onFolderSelect }: FoldersL
         <p className="text-slate-500">No folders yet.</p>
       ) : (
         <ul>
-          {folders.map((folder) => {
+          {sortedFolders.map((folder) => {
             const isSystem = SYSTEM_FOLDERS.includes(folder.name);
             return (
               <li

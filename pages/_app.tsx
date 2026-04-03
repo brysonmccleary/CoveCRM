@@ -3,7 +3,6 @@ import "../styles/globals.css";
 import type { AppProps } from "next/app";
 import { SessionProvider, useSession } from "next-auth/react";
 import { Toaster } from "react-hot-toast";
-import ChatAssistantWidget from "@/components/ChatAssistantWidget";
 import InternalSync from "@/pages/internal-sync";
 import ReminderBanner from "@/components/ReminderBanner";
 import CallbackBanner from "@/components/CallbackBanner";
@@ -162,12 +161,6 @@ function InnerApp({
         </>
       )}
 
-      {/* Assistant ONLY when signed-in and on internal pages */}
-      {authed && !hideAssistant && (
-        <div className="cursor-pointer">
-          <ChatAssistantWidget />
-        </div>
-      )}
 
       {/* 🔌 Socket bridge mounts only when authed & internal */}
       {authed && !isPublic && (
