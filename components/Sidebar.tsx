@@ -9,6 +9,10 @@ const EXPERIMENTAL_ADMIN = "bryson.mccleary1@gmail.com";
 export default function Sidebar() {
   const { data: session } = useSession();
   const [unreadCount, setUnreadCount] = useState(0);
+  const [assistantOpen, setAssistantOpen] = useState(false);
+  const [assistantMessages, setAssistantMessages] = useState<any[]>([]);
+  const [assistantInput, setAssistantInput] = useState("");
+  const [assistantLoading, setAssistantLoading] = useState(false);
   const isAdmin = (session?.user?.email ?? "").toLowerCase() === EXPERIMENTAL_ADMIN;
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -118,7 +122,13 @@ export default function Sidebar() {
         </nav>
       </div>
 
-      <div className="mt-8">
+      <div className="mt-8 space-y-3">
+        <button
+          onClick={() => setAssistantOpen(true)}
+          className="w-full rounded-lg bg-gradient-to-r from-purple-600 to-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:opacity-90"
+        >
+          ✨ Ask Assistant
+        </button>
         <button
           onClick={() => signOut({ callbackUrl: "/auth/signin" })}
           className="block text-red-500 hover:underline"
@@ -127,6 +137,62 @@ export default function Sidebar() {
           Log Out
         </button>
       </div>
+
+      {assistantOpen && (
+        <div className="fixed inset-0 z-50 flex items-end justify-end bg-black/40">
+          <div className="w-[380px] h-[520px] bg-[#0b1220] border border-white/10 rounded-xl m-6 flex flex-col">
+            <div className="p-3 border-b border-white/10 flex justify-between items-center">
+              <div className="text-sm font-semibold">Cove AI Assistant</div>
+              <button onClick={() => setAssistantOpen(false)}>✕</button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-3 space-y-2">
+              {assistantMessages.map((m, i) => (
+                <div key={i} className={m.role === "user" ? "text-right" : "text-left"}>
+                  <div className={m.role === "user"
+                    ? "inline-block bg-indigo-600 px-3 py-2 rounded-lg text-sm"
+                    : "inline-block bg-white/10 px-3 py-2 rounded-lg text-sm"}>
+                    {m.content}
+                  </div>
+                </div>
+              ))}
+              {assistantLoading && <div className="text-xs text-white/50">Thinking...</div>}
+            </div>
+
+            <div className="p-3 border-t border-white/10 flex gap-2">
+              <input
+                value={assistantInput}
+                onChange={(e) => setAssistantInput(e.target.value)}
+                placeholder="Ask anything..."
+                className="flex-1 bg-white/10 rounded-lg px-3 py-2 text-sm outline-none"
+              />
+              <button
+                onClick={async () => {
+                  if (!assistantInput.trim()) return;
+                  const msg = assistantInput;
+                  setAssistantInput("");
+                  setAssistantMessages(m => [...m, { role: "user", content: msg }]);
+                  setAssistantLoading(true);
+
+                  const res = await fetch("/api/ai/assistant", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ message: msg }),
+                  });
+
+                  const data = await res.json();
+                  setAssistantMessages(m => [...m, { role: "assistant", content: data.reply }]);
+                  setAssistantLoading(false);
+                }}
+                className="bg-indigo-600 px-3 py-2 rounded-lg text-sm"
+              >
+                Send
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }
