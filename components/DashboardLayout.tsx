@@ -6,6 +6,8 @@ import { useSession } from "next-auth/react";
 import { connectAndJoin } from "@/lib/socketClient";
 import IncomingCallBanner from "@/components/IncomingCallBanner"; // ← NEW
 import Link from "next/link";
+import { useRouter } from "next/router";
+import SupportChatModal from "@/components/SupportChatModal";
 
 const ADMIN_EMAIL = "bryson.mccleary1@gmail.com";
 
@@ -19,8 +21,10 @@ interface Nudge {
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const { data: session } = useSession();
+  const router = useRouter();
   const [unreadCount, setUnreadCount] = useState(0);
   const [nudges, setNudges] = useState<Nudge[]>([]);
+  const [helpOpen, setHelpOpen] = useState(false);
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
 
   const isAdmin = session?.user?.email?.toLowerCase() === ADMIN_EMAIL;
@@ -106,6 +110,17 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       </span>
     );
 
+  const pageContext = (() => {
+    const tab = String((router.query as any)?.tab || "").trim().toLowerCase();
+    if (tab === "leads") return "leads_page";
+    if (tab === "conversations") return "inbox";
+    if (tab === "numbers") return "numbers";
+    if (tab === "settings") return "settings";
+    if (tab === "calendar") return "calendar";
+    if (router.pathname.includes("facebook")) return "facebook_ads";
+    return "dashboard";
+  })();
+
   return (
     <div className="flex min-h-screen text-white">
       {/* Incoming Call Banner overlay (fixed; safe anywhere) */}
@@ -136,13 +151,31 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             ))}
           </nav>
         </div>
-        <div className="mt-8">
+        <div className="mt-6 space-y-3">
           <button
-            onClick={() => signOut({ callbackUrl: "/auth/signin" })}
-            className="block text-red-400 hover:underline"
+            type="button"
+            onClick={() => setHelpOpen(true)}
+            className="w-full rounded-xl border border-white/10 bg-gradient-to-r from-[#7c3aed] to-[#6366f1] px-4 py-3 text-left text-sm font-semibold text-white shadow-lg transition hover:opacity-95"
           >
-            Log Out
+            <div className="flex items-start gap-3">
+              <span className="text-base leading-none">✨</span>
+              <div className="min-w-0">
+                <div>Ask Assistant</div>
+                <div className="mt-0.5 text-xs font-medium text-white/75">
+                  AI help, support, and answers
+                </div>
+              </div>
+            </div>
           </button>
+
+          <div className="pt-4 border-t border-white/5">
+            <button
+              onClick={() => signOut({ callbackUrl: "/auth/signin" })}
+              className="block px-1 text-left text-sm text-red-400 transition hover:text-red-300"
+            >
+              Log Out
+            </button>
+          </div>
         </div>
       </div>
 
@@ -192,6 +225,12 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           {children}
         </div>
       </main>
+
+      <SupportChatModal
+        isOpen={helpOpen}
+        onClose={() => setHelpOpen(false)}
+        pageContext={pageContext}
+      />
     </div>
   );
 }
