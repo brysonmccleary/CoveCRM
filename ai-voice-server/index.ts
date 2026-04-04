@@ -5142,32 +5142,32 @@ async function handleOpenAiEvent(
           if (!state.openAiWs || !state.openAiReady) return;
           if (state.voicemailSkipArmed) return;
 
-          // Don't force-commit during outbound or in-flight responses (unless hard-stuck >8s)
+          // Hard-stuck override: after 8s of "speaking" with no commit, force it regardless of flags.
           const nowForGuard = Date.now();
           const startForGuard = Number((state as any).lastUserSpeechStartedAtMs || 0);
           const hardStuckForGuard = startForGuard > 0 && (nowForGuard - startForGuard) >= 8000;
+
           if (!hardStuckForGuard && (state.aiSpeaking || state.waitingForResponse || (state as any).responseInFlight)) {
-            console.log("[AI-VOICE][VAD] stuck-speech watchdog BLOCKED", {
+            console.log("[AI-VOICE][VAD] stuck-speech watchdog BLOCKED — re-arming", {
               callSid: state.callSid,
-              aiSpeaking: state.aiSpeaking,
-              waitingForResponse: state.waitingForResponse,
-              responseInFlight: !!(state as any).responseInFlight,
-              msSinceStart: Date.now() - Number((state as any).lastUserSpeechStartedAtMs || 0),
+              msSinceStart: nowForGuard - startForGuard,
             });
-            // Re-arm and try again shortly
+            // Re-arm with shorter interval — will become hardStuck on next fire
             state.userSpeechStuckWatchdog = setTimeout(() => {
               try {
                 if (!state.userSpeechInProgress) return;
                 if (!state.openAiWs || !state.openAiReady) return;
-                if (state.aiSpeaking || state.waitingForResponse || (state as any).responseInFlight) return;
-                const nowMs2 = Date.now();
-                const startedAt2 = Number((state as any).lastUserSpeechStartedAtMs || 0);
-                const stopAt2 = Number((state as any).lastUserSpeechStoppedAtMs || 0);
-                if (stopAt2 > 0 && stopAt2 >= startedAt2) return;
-                console.log("[AI-VOICE][VAD] stuck-speech retry-commit", { callSid: state.callSid, msSinceStart: nowMs2 - startedAt2 });
+                const now2 = Date.now();
+                const start2 = Number((state as any).lastUserSpeechStartedAtMs || 0);
+                const stop2 = Number((state as any).lastUserSpeechStoppedAtMs || 0);
+                if (stop2 > 0 && stop2 >= start2) return;
+                // After 8s total, force commit regardless of flags
+                const isHardStuck2 = start2 > 0 && (now2 - start2) >= 8000;
+                if (!isHardStuck2 && (state.aiSpeaking || state.waitingForResponse || (state as any).responseInFlight)) return;
+                console.log("[AI-VOICE][VAD] stuck-speech FORCE-COMMIT (retry)", { callSid: state.callSid, msSinceStart: now2 - start2 });
                 state.userSpeechInProgress = false;
                 (state as any).lastUserSpeechStoppedAtMs = Date.now();
-                state.openAiWs.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
+                state.openAiWs!.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
               } catch {}
             }, 2000);
             return;
@@ -5984,6 +5984,9 @@ state.lastUserSpeechStoppedAtMs = Date.now();
           })
         );
 
+        // ✅ Arm awaitingUserAnswer so next commit doesn't loop back into greeting retry
+        state.awaitingUserAnswer = true;
+        state.awaitingAnswerForStepIndex = 0;
         // Stay in greeting phase; do NOT advance steps.
         state.phase = "awaiting_greeting_reply";
         return;
@@ -6054,6 +6057,11 @@ state.lastUserSpeechStoppedAtMs = Date.now();
       state.greetingAdvancePending = true;
       state.greetingAdvanceNextIndex = steps.length > 1 ? 1 : 0;
       state.greetingAdvanceNextPhase = "in_call";
+
+      // ✅ Pre-arm awaitingUserAnswer so inbound audio is forwarded to OpenAI during Step 1.
+      // greetingAdvancePending will finalize phase/stepIndex on first audio delta.
+      state.awaitingUserAnswer = true;
+      state.awaitingAnswerForStepIndex = 0;
 
       // Stay in greeting phase until we see outbound audio actually start.
       state.phase = "awaiting_greeting_reply";
