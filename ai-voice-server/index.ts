@@ -5043,7 +5043,7 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
           silence_duration_ms: 400,
 
           // Balanced threshold — reduces false triggers on background noise
-          threshold: 0.5,
+          threshold: 0.9,
 
           // Capture speech from the very start of each user turn
           prefix_padding_ms: 300,
