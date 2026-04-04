@@ -1282,9 +1282,6 @@ async function replayPendingCommittedTurn(
     // ✅ hard cap discovery questions (max 2) before sending
     lineToSay = applyDiscoveryCap(state, lineToSay);
 
-    // ✅ hard cap discovery questions (max 2) before sending
-    lineToSay = applyDiscoveryCap(state, lineToSay);
-
         // Exact-time enforcement (mirror normal path)
     let forcedExactTimeOffer = false;
     if (stepType === "time_question") {
@@ -5178,7 +5175,7 @@ async function handleOpenAiEvent(
                 console.log("[AI-VOICE][VAD] stuck-speech FORCE-COMMIT (retry)", { callSid: state.callSid, msSinceStart: now2 - start2 });
                 state.userSpeechInProgress = false;
                 (state as any).lastUserSpeechStoppedAtMs = Date.now();
-                state.openAiWs!.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
+                if (state.openAiWs?.readyState === 1) state.openAiWs.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
               } catch {}
             }, 2000);
             return;
@@ -6339,7 +6336,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
           state.lastPromptLine = useFreeResponse ? repromptLine : repromptLine;
           state.lastResponseCreateAtMs = Date.now();
 
-          state.openAiWs!.send(JSON.stringify({
+          if (state.openAiWs?.readyState === 1) state.openAiWs.send(JSON.stringify({
             type: "response.create",
             response: { modalities: ["audio", "text"], temperature: 0.75, instructions: instr },
           }));
@@ -6488,7 +6485,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
             state.lastPromptLine = repromptLine;
             state.lastResponseCreateAtMs = Date.now();
 
-            state.openAiWs!.send(JSON.stringify({
+            if (state.openAiWs?.readyState === 1) state.openAiWs.send(JSON.stringify({
               type: "response.create",
               response: { modalities: ["audio", "text"], temperature: 0.75, instructions: freeInstr },
             }));
