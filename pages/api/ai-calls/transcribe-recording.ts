@@ -2,6 +2,7 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import mongooseConnect from "@/lib/mongooseConnect";
 import AICallRecording from "@/models/AICallRecording";
+import { queueLeadMemoryHook } from "@/lib/ai/memory/queueLeadMemoryHook";
 
 const AI_DIALER_CRON_KEY = (process.env.AI_DIALER_CRON_KEY || "").trim();
 
@@ -336,6 +337,19 @@ export default async function handler(
 
     (rec as any).updatedAt = new Date();
     await rec.save();
+    const memoryBody =
+      typeof rec.summary === "string" && rec.summary.trim()
+        ? rec.summary.trim()
+        : transcriptText.trim();
+    if (rec.userEmail && rec.leadId && memoryBody) {
+      queueLeadMemoryHook({
+        userEmail: String(rec.userEmail),
+        leadId: String(rec.leadId),
+        type: "call",
+        body: memoryBody,
+        sourceId: String(rec._id),
+      });
+    }
 
     return res.status(200).json({
       ok: true,

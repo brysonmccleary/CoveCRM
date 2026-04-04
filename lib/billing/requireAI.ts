@@ -1,3 +1,4 @@
+// lib/billing/requireAI.ts
 import type { HydratedDocument } from "mongoose";
 import User from "@/models/User";
 import connectToDatabase from "@/lib/mongodb";
@@ -29,8 +30,6 @@ export async function requireAI(email: string, opts: RequireAIOptions = {}) : Pr
   if (opts.allowOwnerBypass && isOwnerAccount(user)) {
     return { ok: true, user: opts.includeUser ? user : undefined };
   }
-
-  if (!user.hasAI) return { ok: false, status: 403, error: "AI upgrade required" };
 
   return { ok: true, user: opts.includeUser ? user : undefined };
 }

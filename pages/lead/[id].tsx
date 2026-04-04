@@ -5,6 +5,7 @@ import { useRouter } from "next/router";
 import Sidebar from "@/components/Sidebar";
 import toast from "react-hot-toast";
 import dynamic from "next/dynamic";
+import AIInsightsPanel from "@/components/lead/AIInsightsPanel";
 
 
 import { useInlineLeadCall } from "@/lib/dial/useInlineLeadCall";
@@ -124,6 +125,15 @@ type UICampaign = {
 };
 
 type NumberEntry = { id: string; phoneNumber: string; sid: string; capabilities?: any };
+
+type LeadMemoryProfileView = {
+  shortSummary?: string;
+  nextBestAction?: string;
+  objections?: string[];
+  preferences?: Record<string, any>;
+  lastUpdatedAt?: string;
+  keyFacts?: { key: string; value: string; confidence?: number }[];
+};
 
 const LEADS_URL = "/dashboard?tab=leads";
 
@@ -326,6 +336,7 @@ export default function LeadProfileDial() {
   const [resolvedId, setResolvedId] = useState<string | null>(null);
   const [notes, setNotes] = useState("");
   const [historyLines, setHistoryLines] = useState<string[]>([]);
+  const [memoryProfile, setMemoryProfile] = useState<LeadMemoryProfileView | null>(null);
   const [calls, setCalls] = useState<CallRow[]>([]);
   const [histLoading, setHistLoading] = useState(false);
   const [callsLoading, setCallsLoading] = useState(false);
@@ -443,6 +454,32 @@ export default function LeadProfileDial() {
   useEffect(() => {
     loadHistory();
   }, [loadHistory]);
+
+  useEffect(() => {
+    if (!resolvedId) {
+      setMemoryProfile(null);
+      return;
+    }
+
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const r = await fetch(`/api/ai/memory/profile?leadId=${encodeURIComponent(resolvedId)}`, {
+          cache: "no-store",
+        });
+        const j = await r.json().catch(() => ({} as any));
+        if (!r.ok || cancelled) return;
+        setMemoryProfile(j?.profile || null);
+      } catch {
+        if (!cancelled) setMemoryProfile(null);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [resolvedId]);
 
   const loadCalls = useCallback(async () => {
     if (!resolvedId) return;
@@ -1284,6 +1321,77 @@ export default function LeadProfileDial() {
           </div>
 
           {/* AI Call Overview */}
+          {memoryProfile ? (
+            <div className="mb-4 bg-[#0b1220] border border-white/10 rounded p-3">
+              <h3 className="text-lg font-bold mb-2">AI Lead Memory</h3>
+
+              {memoryProfile.shortSummary ? (
+                <div className="mb-3">
+                  <div className="text-xs text-gray-400 mb-1">Short summary</div>
+                  <p className="text-sm text-gray-200">{memoryProfile.shortSummary}</p>
+                </div>
+              ) : null}
+
+              {Array.isArray(memoryProfile.keyFacts) && memoryProfile.keyFacts.length > 0 ? (
+                <div className="mb-3">
+                  <div className="text-xs text-gray-400 mb-1">Key facts</div>
+                  <ul className="space-y-1">
+                    {memoryProfile.keyFacts.slice(0, 8).map((fact, idx) => (
+                      <li key={`${fact.key}-${idx}`} className="text-sm text-gray-200 flex gap-2">
+                        <span className="text-gray-400">•</span>
+                        <span>{fact.key}: {fact.value}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+
+              {Array.isArray(memoryProfile.objections) && memoryProfile.objections.length > 0 ? (
+                <div className="mb-3">
+                  <div className="text-xs text-gray-400 mb-1">Objections</div>
+                  <ul className="space-y-1">
+                    {memoryProfile.objections.slice(0, 6).map((item, idx) => (
+                      <li key={`${item}-${idx}`} className="text-sm text-gray-200 flex gap-2">
+                        <span className="text-gray-400">•</span>
+                        <span>{item}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+
+              {memoryProfile.preferences && Object.keys(memoryProfile.preferences).length > 0 ? (
+                <div className="mb-3">
+                  <div className="text-xs text-gray-400 mb-1">Preferences</div>
+                  <ul className="space-y-1">
+                    {Object.entries(memoryProfile.preferences)
+                      .slice(0, 8)
+                      .map(([key, value]) => (
+                        <li key={key} className="text-sm text-gray-200 flex gap-2">
+                          <span className="text-gray-400">•</span>
+                          <span>{key}: {String(value ?? "")}</span>
+                        </li>
+                      ))}
+                  </ul>
+                </div>
+              ) : null}
+
+              {memoryProfile.nextBestAction ? (
+                <div className="mb-2">
+                  <div className="text-xs text-gray-400 mb-1">Next best action</div>
+                  <p className="text-sm text-gray-200">{memoryProfile.nextBestAction}</p>
+                </div>
+              ) : null}
+
+              {memoryProfile.lastUpdatedAt ? (
+                <div className="text-xs text-gray-500">
+                  Last updated {fmtDateTime(memoryProfile.lastUpdatedAt)}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+
+          {/* AI Call Overview */}
           <div className="mb-4 bg-[#0b1220] border border-white/10 rounded p-3">
             <div className="flex items-center justify-between mb-1">
               <h3 className="text-lg font-bold">AI Call Overview</h3>
@@ -1415,6 +1523,10 @@ export default function LeadProfileDial() {
 
       {/* RIGHT */}
       <div className="w-[400px] p-4 bg-[#0b1220] flex flex-col min-h-0">
+        <div className="mb-4 shrink-0">
+          <AIInsightsPanel lead={lead} />
+        </div>
+
         {calls.length > 0 && (
           <p className="text-xs text-gray-500 mb-2 shrink-0">
             {calls.length} recording{calls.length !== 1 ? "s" : ""} on file

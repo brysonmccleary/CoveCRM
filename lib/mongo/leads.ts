@@ -104,6 +104,13 @@ const LeadSchema = new Schema(
     },
     aiContactAttemptedAt: { type: Date, default: null },
     aiConversationActive: { type: Boolean, default: false },
+    aiPriorityScore: { type: Number, default: 0 },
+    aiPriorityCategory: {
+      type: String,
+      enum: ["hot", "warm", "cold"],
+      default: "cold",
+    },
+    aiPriorityUpdatedAt: { type: Date },
   },
   { timestamps: true, strict: false }
 );

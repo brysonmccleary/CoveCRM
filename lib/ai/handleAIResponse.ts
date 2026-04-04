@@ -7,6 +7,7 @@ import { OpenAI } from "openai";
 import delay from "../utils/delay";
 import mongoose from "mongoose";
 import { trackUsage } from "@/lib/billing/trackUsage";
+import { assertBillingAllowed } from "@/lib/billing/assertBillingAllowed";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
@@ -103,9 +104,10 @@ export async function handleAIResponse(
   const user: any = await User.findOne({ email: lead.userEmail });
   if (!user) return;
 
-  // ⛔ Freeze if usage balance too low
-  if ((user.usageBalance || 0) < -20) {
-    console.warn(`⛔ AI frozen due to low balance for ${user.email}`);
+  try {
+    assertBillingAllowed(user);
+  } catch (err: any) {
+    console.warn(`⛔ AI frozen due to low balance for ${user.email}: ${err?.message || err}`);
     return;
   }
 

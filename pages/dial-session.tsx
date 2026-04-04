@@ -158,6 +158,27 @@ const isJunkHistoryText = (t: string) => {
   return false;
 };
 
+const toTimeValue = (value: any, fallback = 0) => {
+  if (!value) return fallback;
+  const time = new Date(value).getTime();
+  return Number.isFinite(time) ? time : fallback;
+};
+
+const toPriorityNumber = (value: any) => {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : 0;
+};
+
+const compareDialPriority = (a: Lead, b: Lead) => {
+  const scoreDelta = toPriorityNumber(b.aiPriorityScore) - toPriorityNumber(a.aiPriorityScore);
+  if (scoreDelta !== 0) return scoreDelta;
+
+  const createdDelta = toTimeValue(b.createdAt) - toTimeValue(a.createdAt);
+  if (createdDelta !== 0) return createdDelta;
+
+  return toTimeValue(a.lastContactedAt) - toTimeValue(b.lastContactedAt);
+};
+
 /** --------------------------------------------------------------- **/
 
 export default function DialSession() {
@@ -626,7 +647,7 @@ export default function DialSession() {
             return j?.lead?._id ? ({ id: j.lead._id, ...j.lead } as Lead) : null;
           } catch { return null; }
         }));
-        const valid = (fetched.filter(Boolean) as Lead[]);
+        const valid = (fetched.filter(Boolean) as Lead[]).sort(compareDialPriority);
 
         // starting index (local startIndex > server pointer fallback)
         let start = 0;

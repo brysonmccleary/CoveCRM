@@ -5,6 +5,7 @@ import type { Session } from "next-auth";
 import { authOptions } from "../auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import Lead from "@/models/Lead";
+import { queueLeadMemoryHook } from "@/lib/ai/memory/queueLeadMemoryHook";
 
 /**
  * POST /api/leads/add-note
@@ -84,6 +85,13 @@ export default async function handler(
     });
 
     await lead.save();
+    queueLeadMemoryHook({
+      userEmail,
+      leadId: String(lead._id),
+      type: "note",
+      body: clean,
+      sourceId: `note:${String(lead._id)}:${now.toISOString()}`,
+    });
 
     res.status(200).json({
       success: true,

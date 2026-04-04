@@ -5,8 +5,10 @@ import mongooseConnect from "@/lib/mongooseConnect";
 import Lead from "@/models/Lead";
 import Message from "@/models/Message";
 import User from "@/models/User";
-import { sendSMS } from "@/lib/twilio/sendSMS";
+import { sendSms } from "@/lib/twilio/sendSMS";
 import { initSocket, emitToUser } from "@/lib/socket";
+import { queueLeadMemoryHook } from "@/lib/ai/memory/queueLeadMemoryHook";
+import crypto from "crypto";
 
 type LeanLead = {
   _id: any;
@@ -74,13 +76,29 @@ export default async function handler(
 
   const to = String(toRaw).trim();
 
+  const cleanText = text.trim();
+  const manualIdempotencyKey =
+    direction === "outbound"
+      ? `manual:${email}:${String(leadId)}:${crypto
+          .createHash("sha1")
+          .update(cleanText)
+          .digest("hex")
+          .slice(0, 16)}`
+      : null;
+
   // Send SMS for outbound messages
   if (direction === "outbound") {
     const user = await User.findOne({ email }).lean().exec();
     if (!user) return res.status(404).json({ error: "User not found" });
 
     try {
-      await sendSMS(to, text.trim(), user._id);
+      await sendSms({
+        to,
+        body: cleanText,
+        userEmail: email,
+        leadId: String(leadId),
+        idempotencyKey: manualIdempotencyKey || undefined,
+      });
     } catch (err: any) {
       console.error("Twilio send error (mobile):", err);
       return res
@@ -90,13 +108,31 @@ export default async function handler(
   }
 
   // Persist message
+  if (manualIdempotencyKey) {
+    const existing = await Message.findOne({ idempotencyKey: manualIdempotencyKey }).lean().exec();
+    if (existing) {
+      return res.status(200).json({ success: true, message: existing });
+    }
+  }
+
   const message = await Message.create({
     userEmail: email,
     leadId,
-    text: text.trim(),
+    text: cleanText,
     direction,
     read: direction === "inbound" ? false : true,
+    idempotencyKey: manualIdempotencyKey || undefined,
   });
+  if (direction === "inbound") {
+    queueLeadMemoryHook({
+      userEmail: email,
+      leadId: String(leadId),
+      type: "sms",
+      direction: "inbound",
+      body: cleanText,
+      sourceId: String(message._id),
+    });
+  }
 
   // Emit socket event (best-effort, same event name as web)
   try {

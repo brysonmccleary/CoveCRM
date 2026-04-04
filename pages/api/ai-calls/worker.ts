@@ -9,6 +9,7 @@ import { getClientForUser } from "@/lib/twilio/getClientForUser";
 import { isCallAllowedForLead } from "@/utils/checkCallTime";
 import { Types } from "mongoose";
 import { stripe } from "@/lib/stripe";
+import { assertBillingAllowed } from "@/lib/billing/assertBillingAllowed";
 
 const BASE = (
   process.env.NEXT_PUBLIC_BASE_URL ||
@@ -363,6 +364,35 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const adminFree = isAdminFreeEmail(userEmail);
     const bypassAmd = isBypassAmdEmail(userEmail);
+
+    if (!adminFree) {
+      try {
+        assertBillingAllowed(userDoc);
+      } catch (err: any) {
+        await AICallSession.updateOne(
+          { _id: sessionId },
+          {
+            $set: {
+              status: "stopped",
+              errorMessage: err?.message || "Account paused due to unpaid usage balance.",
+              completedAt: new Date(),
+            },
+          }
+        );
+
+        console.log("[AI WORKER] stopped due to unpaid usage balance", {
+          sessionId,
+          userEmail,
+        });
+
+        await releaseLock(sessionId);
+        return res.status(200).json({
+          ok: true,
+          message: "stopped_unpaid_usage_balance",
+          sessionId,
+        });
+      }
+    }
 
     if (bypassAmd) {
       console.log("[AI WORKER] AMD bypass enabled for this user (debug)", {

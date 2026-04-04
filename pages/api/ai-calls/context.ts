@@ -7,6 +7,7 @@ import AICallRecording from "@/models/AICallRecording";
 import Lead from "@/models/Lead";
 import User from "@/models/User";
 import AISettings from "@/models/AISettings";
+import { buildLeadContext } from "@/lib/ai/memory/buildLeadContext";
 
 const AI_DIALER_CRON_KEY = process.env.AI_DIALER_CRON_KEY || "";
 
@@ -221,6 +222,33 @@ export default async function handler(
     // Optional notes from lead fields
     const notesFromLead =
       leadAny.notes || leadAny.notesInternal || leadAny.leadNotes || "";
+    const leadMemory = await buildLeadContext(userEmail, String(leadObjectId)).catch(() => ({
+      leadSummary: "",
+      keyFacts: [],
+      keyFactsText: "(none)",
+      objections: [],
+      objectionsText: "(none)",
+      nextBestAction: "",
+    }));
+    const memoryPrompt = `This is what we know about the lead:
+${leadMemory.leadSummary || "(none)"}
+
+Key facts:
+${leadMemory.keyFactsText || "(none)"}
+
+Objections:
+${leadMemory.objectionsText || "(none)"}
+
+Goal:
+${leadMemory.nextBestAction || "(none)"}
+
+Conversation strategy:
+- Reference previous conversation
+- Handle known objections
+- Try to book appointment`;
+    const combinedNotes = [String(notesFromLead || "").trim(), memoryPrompt]
+      .filter(Boolean)
+      .join("\n\n");
 
     // ✅ Optional: expose AMD AnsweredBy when known (typing-safe access)
     let answeredBy: string | undefined = undefined;
@@ -256,7 +284,12 @@ export default async function handler(
       clientState,
       clientPhone: leadAny.phone || leadAny.phoneNumber || leadAny.Phone,
       clientEmail: leadAny.email || leadAny.Email,
-      clientNotes: notesFromLead,
+      clientNotes: combinedNotes,
+      leadSummary: leadMemory.leadSummary || "",
+      keyFacts: Array.isArray(leadMemory.keyFacts) ? leadMemory.keyFacts : [],
+      objections: Array.isArray(leadMemory.objections) ? leadMemory.objections : [],
+      nextBestAction: leadMemory.nextBestAction || "",
+      memoryPrompt,
       scriptKey,
       voiceKey,
       fromNumber: (aiSession as any).fromNumber,

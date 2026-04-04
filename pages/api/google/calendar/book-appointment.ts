@@ -8,6 +8,7 @@ import Lead from "@/models/Lead";
 import Booking from "@/models/Booking";
 import A2PProfile from "@/models/A2PProfile";
 import Message from "@/models/Message";
+import { queueLeadMemoryHook } from "@/lib/ai/memory/queueLeadMemoryHook";
 import twilio, { Twilio } from "twilio";
 import twilioClient from "@/lib/twilioClient";
 import { google } from "googleapis";
@@ -678,7 +679,7 @@ export default async function handler(
 
       const tw = await twilioClient.messages.create(params);
 
-      await Message.create({
+      const message = await Message.create({
         leadId,
         userEmail: user.email,
         direction: "outbound",
@@ -690,6 +691,14 @@ export default async function handler(
         sid: (tw as any)?.sid,
         status: (tw as any)?.status,
         sentAt,
+      });
+      queueLeadMemoryHook({
+        userEmail: user.email,
+        leadId: String(leadId),
+        type: "sms",
+        direction: "outbound",
+        body,
+        sourceId: String(message._id),
       });
     };
 

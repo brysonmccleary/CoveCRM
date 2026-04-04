@@ -5,15 +5,12 @@ import twilio from "twilio";
 import mongooseConnect from "@/lib/mongooseConnect";
 import mongoose from "mongoose";
 import { getUserByPhoneNumber } from "@/lib/getUserByPhoneNumber";
-import { trackUsage } from "@/lib/billing/trackUsage";
 import User from "@/models/User";
 import Message from "@/models/Message";
 import Call from "@/models/Call";
 import { sendEmail } from "@/lib/email";
 
 export const config = { api: { bodyParser: false } };
-
-const CALL_COST_PER_SECOND = 0.000333;
 
 const PLATFORM_AUTH_TOKEN = (process.env.TWILIO_AUTH_TOKEN || "").trim();
 const RAW_BASE = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "").replace(/\/$/, "");
@@ -305,7 +302,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         console.warn("⚠️ Call doc upsert failed (continuing):", (e as any)?.message || e);
       }
 
-      // Usage/Billing unchanged...
+      // Regular call billing is centralized in voice-status.ts.
       try {
         if (TERMINAL_VOICE_STATES.has(CallStatus) && ownerNumber) {
         // ✅ Missed inbound call email (temporary until mobile app)
@@ -366,31 +363,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             const userDoc = await User.findById(user._id);
             const numberEntry = (userDoc as any)?.numbers?.find((n: any) => n.phoneNumber === ownerNumber);
             if (numberEntry) {
-              const sec = durationSec || 0;
-              const usageCost = parseFloat((sec * CALL_COST_PER_SECOND).toFixed(6));
-
-              // ✅ Idempotency: Twilio may retry callbacks. Bill each CallSid only once.
-              // Acquire a one-time billing lock on the Call doc (billedAt).
-              const billLock = await Call.updateOne(
-                { callSid: CallSid, $or: [{ billedAt: { $exists: false } }, { billedAt: null }] },
-                { $set: { billedAt: now } }
-              ).exec();
-              const locked = ((billLock as any)?.modifiedCount ?? 0) > 0;
-
-              if (!locked) {
-                console.log(`💡 Suppressed duplicate Twilio billing for CallSid=${CallSid}`);
-              } else {
-                // Only mutate + persist usage if we own the billing lock
-                numberEntry.usage = numberEntry.usage || { callsMade: 0, callsReceived: 0, textsSent: 0, textsReceived: 0, cost: 0 };
-                if (direction === "inbound") numberEntry.usage.callsReceived += 1;
-                if (direction === "outbound") numberEntry.usage.callsMade += 1;
-
-                numberEntry.usage.cost += usageCost;
-                await (userDoc as any).save();
-
-                await trackUsage({ user: userDoc, amount: usageCost, source: "twilio" });
-                console.log(`📞 Tracked ${sec}s ${direction} call on ${ownerNumber} (cost $${usageCost}) [CallSid=${CallSid}, status=${CallStatus}]`);
-              }
+              numberEntry.usage = numberEntry.usage || { callsMade: 0, callsReceived: 0, textsSent: 0, textsReceived: 0, cost: 0 };
+              if (direction === "inbound") numberEntry.usage.callsReceived += 1;
+              if (direction === "outbound") numberEntry.usage.callsMade += 1;
+              await (userDoc as any).save();
             }
           }
         }

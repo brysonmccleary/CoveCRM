@@ -27,6 +27,8 @@ import { sendSms } from "@/lib/twilio/sendSMS";
 import { sendIncomingSmsPush } from "@/lib/mobile/push";
 import { trackUsage } from "@/lib/billing/trackUsage";
 import { priceOpenAIUsage } from "@/lib/billing/openaiPricing";
+import { queueLeadMemoryHook } from "@/lib/ai/memory/queueLeadMemoryHook";
+import { buildLeadContext } from "@/lib/ai/memory/buildLeadContext";
 
 export const config = { api: { bodyParser: false } };
 
@@ -628,7 +630,6 @@ datetime_text: string|null (eg "tomorrow 3pm")
 yesno: "yes"|"no"|"unknown"`;
   const user = `Now: ${input.nowISO} TZ:${input.tz}\nText: "${input.text}"`;
 
-  // 🔒 Strict AI upgrade gate: AI SMS takeover requires user.hasAI === true
   const __aiEmail = String(_lastInboundUserEmailForBilling || "").toLowerCase();
   if (!__aiEmail) return { intent: "unknown", datetime_text: null };
   const __gate = await requireAI(__aiEmail, { allowOwnerBypass: true });
@@ -807,7 +808,7 @@ async function runO3MiniSmsAssistant(opts: {
   inboundText: string;
   history: any[];
 }): Promise<string> {
-  const { lead, user, context, tz, inboundText, history } = opts;
+  const { lead, user, userEmail, context, tz, inboundText, history } = opts;
 
   const recentAssistant = (history || [])
     .filter((m: any) => m?.type === "ai")
@@ -815,8 +816,37 @@ async function runO3MiniSmsAssistant(opts: {
     .filter(Boolean)
     .slice(-5);
 
+  const leadMemory = await buildLeadContext(userEmail, String(lead._id)).catch(() => ({
+    leadSummary: "",
+    keyFactsText: "(none)",
+    lastMessagesText: "(none)",
+    nextBestAction: "",
+  }));
+
   // --- SYSTEM PROMPT (Jeremy-style, appointment only, no quotes/details) ---
   const systemPrompt = `
+You are texting a lead about insurance.
+
+Here is what you know about this lead:
+${leadMemory.leadSummary || "(none)"}
+
+Key facts:
+${leadMemory.keyFactsText || "(none)"}
+
+Recent conversation:
+${leadMemory.lastMessagesText || "(none)"}
+
+Next best action:
+${leadMemory.nextBestAction || "(none)"}
+
+Rules:
+- Be natural
+- Be short
+- Move toward booking appointment
+- Respect lead preferences
+- If lead asked to call later, acknowledge it
+- If lead objected before, handle objection
+
 You are an SMS appointment-setting assistant for a licensed insurance agent.
 You are NOT a licensed agent yourself. You NEVER give quotes, product details, carrier advice, or policy recommendations.
 
@@ -1423,6 +1453,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       accountSid: accountSid || undefined,
       fromServiceSid: fromServiceSid || undefined,
       numMedia: isNaN(numMedia) ? undefined : numMedia,
+    });
+    queueLeadMemoryHook({
+      userEmail: user.email,
+      leadId: String(lead._id),
+      type: "sms",
+      direction: "inbound",
+      body,
+      sourceId: String(savedMessage._id),
     });
 
     // Update lead interaction history

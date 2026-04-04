@@ -13,6 +13,7 @@ import FollowUpNudge from "@/models/FollowUpNudge";
 import Lead from "@/models/Lead";
 import Folder from "@/models/Folder";
 import { Types } from "mongoose";
+import { queueLeadMemoryHook } from "@/lib/ai/memory/queueLeadMemoryHook";
 
 const COVECRM_API_SECRET = process.env.COVECRM_API_SECRET || "";
 
@@ -48,7 +49,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   // 1. Write CallLog
   try {
-    await CallLog.create({
+    const callLog = await CallLog.create({
       userEmail: userEmail.toLowerCase(),
       leadId: leadId && Types.ObjectId.isValid(leadId) ? new Types.ObjectId(leadId) : undefined,
       phoneNumber: phoneNumber || "",
@@ -58,6 +59,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       durationSeconds: durationSeconds || 0,
       timestamp: now,
     });
+    if (leadId && Types.ObjectId.isValid(leadId) && typeof summary === "string" && summary.trim()) {
+      queueLeadMemoryHook({
+        userEmail: userEmail.toLowerCase(),
+        leadId: String(leadId),
+        type: "call",
+        body: summary.trim(),
+        sourceId: String(callLog._id),
+      });
+    }
   } catch (err: any) {
     console.error("[ai-result] CallLog create error:", err?.message);
   }

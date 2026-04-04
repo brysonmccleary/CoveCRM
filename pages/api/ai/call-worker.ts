@@ -131,14 +131,13 @@ export default async function handler(
     const call = await Call.findOne({ callSid });
     if (!call) return errJson(res, "Call not found", 404);
 
-    // ✅ Entitlement check: single source of truth
     const user = await getUserByEmail(call.userEmail);
-    const aiEnabled = !!(user && (user as any).hasAI === true);
+    const aiEnabled = !!user;
     call.aiEnabledAtCallTime = aiEnabled;
 
     if (!aiEnabled) {
       await call.save();
-      return okJson(res, { skipped: "no-entitlement" });
+      return okJson(res, { skipped: "user-not-found" });
     }
 
     if (
@@ -192,7 +191,7 @@ export default async function handler(
     const __email = String((call as any)?.userEmail || "").toLowerCase();
     const __gate = await requireAI(__email, { allowOwnerBypass: true });
     if (!__gate.ok) {
-      return res.status(200).json({ message: "AI upgrade not active. Skipping summary." });
+      return res.status(__gate.status).json({ message: __gate.error });
     }
 
     call.aiSummary = force || !call.aiSummary ? summary : call.aiSummary;

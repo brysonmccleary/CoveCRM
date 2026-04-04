@@ -3,6 +3,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import axios from "axios";
 import { Socket } from "socket.io-client";
 import { InboxMode } from "./InboxSidebar";
+import { useLeadMemoryProfile } from "@/lib/ai/memory/useLeadMemoryProfile";
+import { getSuggestedTaskLabel } from "@/lib/ai/memory/nextBestAction";
 
 interface Message {
   _id?: string;
@@ -95,9 +97,11 @@ interface SuggestedReply {
 }
 
 export default function ChatThread({ leadId, socket, mode = "sms" }: ChatThreadProps) {
+  const memoryProfile = useLeadMemoryProfile(leadId);
   const [messages, setMessages] = useState<Message[]>([]);
   const [emailMessages, setEmailMessages] = useState<EmailMsg[]>([]);
   const [input, setInput] = useState("");
+  const [sendingSms, setSendingSms] = useState(false);
   const [emailSubject, setEmailSubject] = useState("");
   const [emailBody, setEmailBody] = useState("");
   const [sendingEmail, setSendingEmail] = useState(false);
@@ -276,18 +280,25 @@ export default function ChatThread({ leadId, socket, mode = "sms" }: ChatThreadP
   }, [socket, leadId]);
 
   const sendMessage = async () => {
-    if (!input.trim()) return;
+    const clean = input.trim();
+    if (!clean || sendingSms) return;
 
-    const res = await axios.post("/api/message", {
-      leadId,
-      text: input.trim(),
-      direction: "outbound",
-    });
+    try {
+      setSendingSms(true);
 
-    const message = res.data.message;
-    setMessages((prev) => (hasMsgId(prev, message) ? prev : [...prev, message]));
-    setInput("");
-    scrollToBottom();
+      const res = await axios.post("/api/message", {
+        leadId,
+        text: clean,
+        direction: "outbound",
+      });
+
+      const message = res.data.message;
+      setMessages((prev) => (hasMsgId(prev, message) ? prev : [...prev, message]));
+      setInput("");
+      scrollToBottom();
+    } finally {
+      setSendingSms(false);
+    }
   };
 
   const handleContinueDrip = async () => {
@@ -445,8 +456,25 @@ export default function ChatThread({ leadId, socket, mode = "sms" }: ChatThreadP
   }
 
   // ── SMS mode render ─────────────────────────────────────────────────────────
+  const nextBestAction = String(memoryProfile?.nextBestAction || "").trim();
+  const suggestedTask = getSuggestedTaskLabel(nextBestAction);
+
   return (
     <div className="flex flex-col h-full bg-[#0f172a]">
+      {nextBestAction ? (
+        <div className="px-4 pt-4">
+          <div className="rounded-xl border border-blue-500/20 bg-blue-950/30 p-3">
+            <div className="text-xs font-medium uppercase tracking-wide text-blue-300">
+              AI Suggested Next Step
+            </div>
+            <p className="mt-1 text-sm text-blue-50">{nextBestAction}</p>
+            {suggestedTask ? (
+              <p className="mt-2 text-xs text-blue-200/80">{suggestedTask}</p>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+
       <div className="flex items-center justify-end px-4 py-3 border-b border-gray-800 bg-[#0f172a] min-h-[72px]">
         {dripUi.hasActive ? (
           <span className="bg-green-700 text-white px-4 py-2 rounded-full text-sm">
@@ -510,15 +538,21 @@ export default function ChatThread({ leadId, socket, mode = "sms" }: ChatThreadP
           className="flex-1 bg-[#1e293b] text-white border border-gray-700 rounded-full px-4 py-2 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-green-600"
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && sendMessage()}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              if (!sendingSms) sendMessage();
+            }
+          }}
           placeholder="Type your message..."
         />
         <button
           onClick={sendMessage}
-          className="bg-green-600 text-white px-5 rounded-full hover:bg-green-700 transition"
+          disabled={sendingSms || !input.trim()}
+          className="bg-green-600 text-white px-5 rounded-full hover:bg-green-700 transition disabled:opacity-60 disabled:cursor-not-allowed"
           aria-label="Send message"
         >
-          Send
+          {sendingSms ? "Sending…" : "Send"}
         </button>
       </div>
     </div>

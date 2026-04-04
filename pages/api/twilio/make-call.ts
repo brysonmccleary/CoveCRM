@@ -5,6 +5,7 @@ import dbConnect from "@/lib/mongooseConnect";
 import { getUserByEmail } from "@/models/User";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
+import { assertBillingAllowed } from "@/lib/billing/assertBillingAllowed";
 export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse,
@@ -30,12 +31,12 @@ export default async function handler(
       return res.status(404).json({ message: "User not found" });
     }
 
-    // ❌ Block if user is frozen for unpaid usage
-    const usageBalance = Number((user as any).usageBalance ?? 0);
-    if (usageBalance < -20) {
+    try {
+      assertBillingAllowed(user);
+    } catch (err: any) {
       return res
         .status(403)
-        .json({ message: "Usage balance too low. Please update payment." });
+        .json({ message: err?.message || "Account paused due to unpaid usage balance." });
     }
 
     const call = await twilioClient.calls.create({

@@ -2,6 +2,7 @@
 import mongoose from "mongoose";
 import dbConnect from "@/lib/mongooseConnect";
 import { trackUsage } from "@/lib/billing/trackUsage";
+import { assertBillingAllowed } from "@/lib/billing/assertBillingAllowed";
 import User from "@/models/User";
 import A2PProfile from "@/models/A2PProfile";
 import Lead from "@/models/Lead";
@@ -10,6 +11,7 @@ import { DateTime } from "luxon";
 import { getTimezoneFromState } from "@/utils/timezone";
 import { getClientForUser } from "./getClientForUser";
 import { syncA2PForUser } from "@/lib/twilio/syncA2P";
+import { queueLeadMemoryHook } from "@/lib/ai/memory/queueLeadMemoryHook";
 import type { MessageListInstanceCreateOptions } from "twilio/lib/rest/api/v2010/account/message";
 
 const BASE_URL = (
@@ -176,6 +178,7 @@ async function sendCore(
   await dbConnect();
   const user = paramsIn.user;
   if (!user) throw new Error("User not found");
+  assertBillingAllowed(user);
 
   const toNorm = normalize(paramsIn.to);
   if (!toNorm) throw new Error("Invalid destination phone number.");
@@ -319,6 +322,16 @@ if (isUSDest && !isMessagingReady && !DEV_ALLOW_UNAPPROVED) {
       campaignId: paramsIn.campaignId || undefined,
       stepIndex: paramsIn.stepIndex ?? undefined,
     } as any);
+    if (lead?._id) {
+      queueLeadMemoryHook({
+        userEmail: user.email,
+        leadId: String(lead._id),
+        type: "sms",
+        direction: "outbound",
+        body: paramsIn.body,
+        sourceId: String(suppressed._id),
+      });
+    }
     return {
       serviceSid: messagingServiceSid || "",
       messageId: String(suppressed._id),
@@ -395,6 +408,16 @@ if (isUSDest && !isMessagingReady && !DEV_ALLOW_UNAPPROVED) {
   }
 
   const messageId = String(preRow._id);
+  if (lead?._id) {
+    queueLeadMemoryHook({
+      userEmail: user.email,
+      leadId: String(lead._id),
+      type: "sms",
+      direction: "outbound",
+      body: paramsIn.body,
+      sourceId: messageId,
+    });
+  }
 
   // Build Twilio params
   const twParams: MessageListInstanceCreateOptions = {
@@ -575,4 +598,3 @@ export async function sendSms(args: {
       typeof args.delayMinutes === "number" ? args.delayMinutes : null,
   });
 }
-

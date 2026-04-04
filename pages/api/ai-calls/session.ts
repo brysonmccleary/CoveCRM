@@ -309,7 +309,7 @@ export default async function handler(
         folderId: fid,
         $or: [{ userEmail: email }, { ownerEmail: email }, { user: email }],
       })
-        .sort({ createdAt: 1 })
+        .sort({ aiPriorityScore: -1, createdAt: -1, lastContactedAt: 1 })
         .select("_id")
         .lean()
         .exec();

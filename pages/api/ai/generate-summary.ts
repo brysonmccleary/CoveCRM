@@ -30,15 +30,7 @@ async function generateLeadSummary(leadId: string): Promise<void> {
   if (!lead || lead.aiSummary || !lead.callTranscripts?.length) return;
 
   const user = await getUserByEmail(String(lead.userEmail || "").toLowerCase());
-  const aiEntitled =
-    !!user &&
-    (user as any) &&
-    ((user as any).aiEnabled === true ||
-      (user as any).hasAI === true ||
-      (user as any)?.plan?.ai === true ||
-      (user as any)?.plan === "Pro");
-
-  if (!aiEntitled) return;
+  if (!user) return;
 
   const agentName = (user as any)?.name || "The agent";
   const clientName = (lead as any)?.name || "The client";
@@ -126,21 +118,11 @@ export default async function handler(
 
       if (!call) return res.status(404).json({ message: "Call not found" });
 
-      // Entitlement check mirrors the worker’s gate
       const user = await getUserByEmail(
         String(call.userEmail || "").toLowerCase(),
       );
-      const aiEntitled =
-        !!user &&
-        ((user as any).aiEnabled === true ||
-          (user as any).hasAI === true ||
-          (user as any)?.plan?.ai === true ||
-          (user as any)?.plan === "Pro");
-
-      if (!aiEntitled) {
-        return res
-          .status(200)
-          .json({ message: "AI not enabled for this user. Skipping." });
+      if (!user) {
+        return res.status(404).json({ message: "User not found for call." });
       }
 
       // Fire-and-forget trigger to the same worker used by the recording webhook
@@ -148,7 +130,7 @@ export default async function handler(
       const __email = String((call as any)?.userEmail || "").toLowerCase();
       const __gate = await requireAI(__email, { allowOwnerBypass: true });
       if (!__gate.ok) {
-        return res.status(200).json({ message: "AI upgrade not active. Skipping." });
+        return res.status(__gate.status).json({ message: __gate.error });
       }
 
       fetch(`${BASE_URL}/api/ai/call-worker`, {
