@@ -6667,13 +6667,91 @@ state.lastUserSpeechStoppedAtMs = Date.now();
           stepIndex: newStepIdx,
           lastExactTimeText: lastExactTime,
         });
-        void handleFinalOutcomeIntent(state, {
+void handleFinalOutcomeIntent(state, {
           kind: "final_outcome",
           outcome: "booked",
           summary: `AI scheduled appointment. Lead confirmed call around ${lastExactTime}.`,
           notesAppend: `Approximate time confirmed by lead: ${lastExactTime}. Agent should confirm exact slot.`,
         });
         state.finalOutcomeSent = true;
+
+        // ✅ Also trigger Google Calendar booking
+        // Parse the exact time string into a UTC ISO string using agent timezone.
+        // We use a best-effort parse: today's date + the spoken time.
+        try {
+          const agentTz = String(state.context?.agentTimeZone || "America/Phoenix").trim();
+          const leadTz = String(getLeadTimeZoneHintFromContext(state.context!) || agentTz).trim();
+
+          // Build a date string: "today at <lastExactTime>" in agent timezone
+          const nowInAgentTz = new Date().toLocaleString("en-US", { timeZone: agentTz });
+          const todayStr = new Date(nowInAgentTz).toLocaleDateString("en-US", {
+            year: "numeric", month: "2-digit", day: "2-digit"
+          }); // MM/DD/YYYY
+
+          // Parse spoken time like "3pm", "3:30pm", "3:30" into a Date
+          const parseSpokenTime = (raw: string, dateStr: string, tz: string): Date | null => {
+            try {
+              const t = raw.trim().toLowerCase();
+              // Normalize: "3pm" → "3:00 PM", "3:30pm" → "3:30 PM"
+              const match = t.match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/i);
+              if (!match) return null;
+              let hh = Number(match[1]);
+              const mm = Number(match[2] || "0");
+              const meridiem = (match[3] || "").toLowerCase();
+              if (meridiem === "pm" && hh !== 12) hh += 12;
+              if (meridiem === "am" && hh === 12) hh = 0;
+              // dateStr is MM/DD/YYYY
+              const [mo, da, yr] = dateStr.split("/").map(Number);
+              // Create date in agent timezone by building ISO string
+              const isoLocal = `${yr}-${String(mo).padStart(2,"0")}-${String(da).padStart(2,"0")}T${String(hh).padStart(2,"0")}:${String(mm).padStart(2,"0")}:00`;
+              // Convert local time in agentTz to UTC
+              const localDate = new Date(isoLocal);
+              if (isNaN(localDate.getTime())) return null;
+              // Adjust for timezone offset
+              const offsetMs = localDate.getTime() - new Date(localDate.toLocaleString("en-US", { timeZone: tz })).getTime();
+              return new Date(localDate.getTime() + offsetMs);
+            } catch { return null; }
+          };
+
+          const startDate = parseSpokenTime(lastExactTime, todayStr, agentTz);
+
+          if (startDate && !isNaN(startDate.getTime())) {
+            // Sanity check: must be in the future (within 48 hours)
+            const diffMs = startDate.getTime() - Date.now();
+            const validFuture = diffMs > -60000 && diffMs < 48 * 60 * 60 * 1000;
+
+            if (validFuture) {
+              console.log("[AI-VOICE][BOOKING][AUTO-TRIGGER]", {
+                callSid: state.callSid,
+                lastExactTime,
+                startTimeUtc: startDate.toISOString(),
+                agentTz,
+                leadTz,
+              });
+
+              void handleBookAppointmentIntent(state, {
+                startTimeUtc: startDate.toISOString(),
+                durationMinutes: 30,
+                leadTimeZone: isValidIanaTimeZone(leadTz) ? leadTz : agentTz,
+                agentTimeZone: isValidIanaTimeZone(agentTz) ? agentTz : "America/Phoenix",
+                notes: `Booked via AI Dialer. Lead said: "${lastExactTime}". Agent should confirm exact slot.`,
+              });
+            } else {
+              console.log("[AI-VOICE][BOOKING][AUTO-TRIGGER] time outside valid window — skipping calendar", {
+                callSid: state.callSid,
+                lastExactTime,
+                diffMs,
+              });
+            }
+          } else {
+            console.log("[AI-VOICE][BOOKING][AUTO-TRIGGER] could not parse time — skipping calendar", {
+              callSid: state.callSid,
+              lastExactTime,
+            });
+          }
+        } catch (bookErr: any) {
+          console.warn("[AI-VOICE][BOOKING][AUTO-TRIGGER] calendar booking error (non-blocking):", bookErr?.message);
+        }
       }
     } catch {}
     state.phase = "in_call";
@@ -6701,6 +6779,38 @@ state.lastUserSpeechStoppedAtMs = Date.now();
       state.bargeInDetected = false;
       state.bargeInAudioMsBuffered = 0;
       state.bargeInFrames = [];
+
+      // ✅ Voicemail mid-call check: 3s after first audio delta, re-check AMD.
+      // Twilio AMD can be slow to resolve. If it comes back "machine" after greeting starts,
+      // we stop immediately rather than leaving a full voicemail.
+      if (!state.voicemailSkipArmed && !(state as any).voicemailMidCallCheckDone) {
+        (state as any).voicemailMidCallCheckDone = true;
+        setTimeout(async () => {
+          try {
+            const live = calls.get(twilioWs);
+            if (!live || live.phase === "ended" || live.voicemailSkipArmed) return;
+            const answeredBy = await refreshAnsweredByFromCoveCRM(live, "mid-call AMD check");
+            if (isVoicemailAnsweredBy(answeredBy)) {
+              console.log("[AI-VOICE][VOICEMAIL] mid-call AMD detected — hanging up", {
+                callSid: live.callSid,
+                answeredBy,
+              });
+              live.voicemailSkipArmed = true;
+              // Send final_outcome as no_answer before closing
+              if (!live.finalOutcomeSent && live.context) {
+                live.finalOutcomeSent = true;
+                void handleFinalOutcomeIntent(live, {
+                  kind: "final_outcome",
+                  outcome: "no_answer",
+                  summary: "Voicemail detected mid-call via AMD.",
+                  notesAppend: `answeredBy: ${answeredBy}. Call ended automatically.`,
+                }).catch(() => {});
+              }
+              safelyCloseOpenAi(live, "voicemail detected mid-call");
+            }
+          } catch {}
+        }, 3000);
+      }
 
       // ✅ If we were waiting to advance out of greeting, do it ONLY after we confirm audio started.
       if (state.greetingAdvancePending) {
