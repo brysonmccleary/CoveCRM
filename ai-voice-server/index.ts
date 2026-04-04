@@ -674,6 +674,12 @@ function ensureOutboundPacer(twilioWs: WebSocket, state: CallState) {
         stopOutboundPacer(twilioWs, live, "buffer drained after OpenAI done");
         setAiSpeaking(live, false, "pacer drained");
         (live as any).lastListenEnabledAtMs = Date.now();
+        (live as any).listenWarmupUntilMs = Date.now() + 700;
+        if (live.phase === "in_call") {
+          armSilenceWatchdog(twilioWs, live, MID_CALL_SILENCE_MS, "pacer drained in_call");
+        } else if (live.phase === "awaiting_greeting_reply") {
+          armSilenceWatchdog(twilioWs, live, POST_GREETING_SILENCE_MS, "pacer drained greeting");
+        }
         void replayPendingCommittedTurn(twilioWs, live, "pacer drained");
         return;
       }
@@ -2973,7 +2979,12 @@ function getRebuttalLine(ctx: AICallContext, kind: string): string {
 
   if (kind === "what_entails") {
     const scope = getScopeLabelForScriptKey(ctx.scriptKey);
-    return `Yeah, totally — it's a quick 5 to 10 minutes. ${agent} goes over the ${scope} request, answers your questions, and makes sure everything lines up for you. No pressure, no obligation. Does later today or tomorrow work better?`;
+    const lines = [
+      `So it's really quick — usually 5 to 10 minutes. ${agent} just goes over the ${scope} request, answers any questions you have, and makes sure everything makes sense for your situation. No pressure at all. Does later today or tomorrow work better?`,
+      `Yeah it's short — ${agent} keeps it to about 5 minutes. Just goes over the ${scope} request and answers your questions. That's really it. Does later today or tomorrow work better?`,
+      `Honestly it's pretty painless — ${agent} just covers the ${scope} request, answers whatever you want to know, and that's it. Usually 5 to 10 minutes max. Does later today or tomorrow work better?`,
+    ];
+    return lines[Math.floor(Math.random() * lines.length)];
   }
 
   if (kind === "generic_question") {
