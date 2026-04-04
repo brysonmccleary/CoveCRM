@@ -5039,8 +5039,8 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
           type: "server_vad",
           create_response: false,
 
-          // Allow natural end-of-sentence pauses without cutting off
-          silence_duration_ms: 600,
+          // Short enough to not hang on pauses, long enough to not cut off natural speech
+          silence_duration_ms: 400,
 
           // Balanced threshold — reduces false triggers on background noise
           threshold: 0.5,
@@ -5142,8 +5142,11 @@ async function handleOpenAiEvent(
           if (!state.openAiWs || !state.openAiReady) return;
           if (state.voicemailSkipArmed) return;
 
-          // Don't force-commit during outbound or in-flight responses
-          if (state.aiSpeaking || state.waitingForResponse || (state as any).responseInFlight) {
+          // Don't force-commit during outbound or in-flight responses (unless hard-stuck >8s)
+          const nowForGuard = Date.now();
+          const startForGuard = Number((state as any).lastUserSpeechStartedAtMs || 0);
+          const hardStuckForGuard = startForGuard > 0 && (nowForGuard - startForGuard) >= 8000;
+          if (!hardStuckForGuard && (state.aiSpeaking || state.waitingForResponse || (state as any).responseInFlight)) {
             console.log("[AI-VOICE][VAD] stuck-speech watchdog BLOCKED", {
               callSid: state.callSid,
               aiSpeaking: state.aiSpeaking,
@@ -5178,8 +5181,11 @@ async function handleOpenAiEvent(
           // Still no stop after this start
           if (stopAt > 0 && stopAt >= startedAt) return;
 
-          // Only fire if we've been "speaking" too long (VAD stuck). Keep conservative.
-          if ((nowMs - startedAt) < 3200) return;
+          // Only fire if we've been "speaking" too long (VAD stuck).
+          // After 8s, force-commit regardless of flags — something is definitely stuck.
+          const hardStuck = (nowMs - startedAt) >= 8000;
+          if (!hardStuck && (nowMs - startedAt) < 3200) return;
+          if (!hardStuck && (state.aiSpeaking || state.waitingForResponse || (state as any).responseInFlight)) return;
 
           console.log("[AI-VOICE][VAD] stuck-speech forcing input_audio_buffer.commit", {
             callSid: state.callSid,
