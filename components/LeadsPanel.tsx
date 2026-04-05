@@ -3,7 +3,6 @@ import React, { useState, useEffect, useRef, useMemo } from "react";
 import LeadImportPanel from "./LeadImportPanel";
 import LeadPreviewPanel from "./LeadPreviewPanel";
 import { useRouter } from "next/router";
-import { useLeadMemoryProfile } from "@/lib/ai/memory/useLeadMemoryProfile";
 
 import { useSession } from "next-auth/react";
 interface NumberEntry {
@@ -185,18 +184,6 @@ function LeadSearchInline() {
 type LeadRow = { _id: string; createdAt?: string | number | Date };
 type ResumeInfo = { lastIndex: number | null; total: number | null };
 
-function LeadSuggestionBadge({ leadId }: { leadId: string }) {
-  const profile = useLeadMemoryProfile(leadId);
-  const nextBestAction = String(profile?.nextBestAction || "").trim();
-
-  if (!nextBestAction) return null;
-
-  return (
-    <div className="mt-1 inline-flex max-w-full rounded-full border border-blue-300/40 bg-blue-50 px-2 py-0.5 text-[11px] text-blue-800 dark:border-blue-500/30 dark:bg-blue-950/40 dark:text-blue-200">
-      <span className="truncate">AI Suggests: {nextBestAction}</span>
-    </div>
-  );
-}
 
 /* =========================
    Main
@@ -924,7 +911,6 @@ const goToAIDialSession = () => {
                               >
                                 {getLeadValue(lead, "firstName") || "-"}
                               </button>
-                              <LeadSuggestionBadge leadId={String(lead._id)} />
                             </td>
                           )}
 
