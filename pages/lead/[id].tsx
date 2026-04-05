@@ -5,7 +5,6 @@ import { useRouter } from "next/router";
 import Sidebar from "@/components/Sidebar";
 import toast from "react-hot-toast";
 import dynamic from "next/dynamic";
-import AIInsightsPanel from "@/components/lead/AIInsightsPanel";
 
 
 import { useInlineLeadCall } from "@/lib/dial/useInlineLeadCall";
@@ -1523,10 +1522,6 @@ export default function LeadProfileDial() {
 
       {/* RIGHT */}
       <div className="w-[400px] p-4 bg-[#0b1220] flex flex-col min-h-0">
-        <div className="mb-4 shrink-0">
-          <AIInsightsPanel lead={lead} />
-        </div>
-
         {calls.length > 0 && (
           <p className="text-xs text-gray-500 mb-2 shrink-0">
             {calls.length} recording{calls.length !== 1 ? "s" : ""} on file
