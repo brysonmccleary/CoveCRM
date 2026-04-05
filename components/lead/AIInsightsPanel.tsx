@@ -145,10 +145,6 @@ export default function AIInsightsPanel({ lead }: { lead: LeadLike | null }) {
     return latestReactivation?.date || null;
   }, [smsEvents]);
 
-  const recommendedMessage =
-    lastSuggestedMessage ||
-    `Hey ${firstNameFromLead(lead)}, just wanted to follow up about the coverage you were looking into. Do you have a few minutes later today?`;
-
   const summary =
     String(memoryProfile?.shortSummary || memoryProfile?.longSummary || "").trim() ||
     "No AI summary yet";
@@ -190,11 +186,6 @@ export default function AIInsightsPanel({ lead }: { lead: LeadLike | null }) {
       <div className="px-4 py-4 border-b border-white/10">
         <div className="text-xs uppercase tracking-[0.18em] text-gray-400 mb-2">Next Best Action</div>
         <p className="text-sm text-gray-200 leading-6">{nextBestAction}</p>
-      </div>
-
-      <div className="px-4 py-4 border-b border-white/10">
-        <div className="text-xs uppercase tracking-[0.18em] text-gray-400 mb-2">Recommended Message</div>
-        <p className="text-sm text-gray-200 leading-6">{recommendedMessage}</p>
       </div>
 
       <div className="px-4 py-4 border-b border-white/10">
