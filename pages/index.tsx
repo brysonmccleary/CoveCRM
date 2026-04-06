@@ -8,9 +8,8 @@ const WHATS_NEW = [
   "AI Dial Sessions",
   "Lead Scoring",
   "Pipeline Board",
-  "Facebook Lead Manager",
-  "Meta Native Webhook",
-  "Team Leaderboard",
+  "2-Way SMS Inbox",
+  "Google Calendar Sync",
   "Daily Performance Digest",
 ];
 
@@ -18,26 +17,27 @@ const FEATURES = [
   {
     icon: (
       <svg className="h-6 w-6 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
-        <path strokeLinecap="round" strokeLinejoin="round" d="M15 15l-2 5L9 9l11 4-5 2zm0 0l5 5" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M3 5h18M6 12h12M9 19h6" />
       </svg>
     ),
     color: "from-blue-600/20 to-blue-800/10",
     border: "border-blue-500/20",
-    title: "Generate Leads",
-    description: "Connect your Facebook lead forms or import from CSV and Google Sheets. Leads flow directly into organized folders, ready to work.",
-    points: ["Facebook Lead Manager", "Google Sheets sync", "CSV import", "Smart folder organization"],
+    title: "Stay Organized",
+    description: "Manage leads, conversations, appointments, and follow-up from one clean system built for high-volume insurance sales.",
+    points: ["Smart lead management", "2-way SMS inbox", "Calendar sync", "Organized pipeline view"],
   },
   {
     icon: (
       <svg className="h-6 w-6 text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
-        <path strokeLinecap="round" strokeLinejoin="round" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.347.347a3.5 3.5 0 01-4.95 0l-.347-.347z" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6l4 2" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
       </svg>
     ),
     color: "from-purple-600/20 to-purple-800/10",
     border: "border-purple-500/20",
-    title: "Work Leads Smarter",
-    description: "AI lead scoring, follow-up nudges, and automated SMS drips keep you focused on your best opportunities at exactly the right time.",
-    points: ["AI lead scoring (0–100)", "Smart follow-up nudges", "Prebuilt drip campaigns", "Lead aging alerts"],
+    title: "Follow Up Faster",
+    description: "Automated SMS drips, AI nudges, and appointment reminders keep leads moving without letting opportunities slip away.",
+    points: ["Prebuilt drip campaigns", "Lead aging alerts", "Smart follow-up nudges", "No-show rescheduling"],
   },
   {
     icon: (
@@ -48,8 +48,8 @@ const FEATURES = [
     color: "from-emerald-600/20 to-emerald-800/10",
     border: "border-emerald-500/20",
     title: "Close More Deals",
-    description: "The AI Call Coach scores every call and gives you specific feedback to improve. Combined with the AI dialer, you close more with less effort.",
-    points: ["AI Call Coach scoring", "Objection library", "Power dialer + AI dialer", "Visual pipeline board"],
+    description: "AI Call Coach and the AI Dialer help you improve conversations, book more appointments, and sell more policies with less wasted effort.",
+    points: ["AI Call Coach", "AI Dial Sessions", "Power dialer", "Lead scoring"],
   },
 ];
 
@@ -347,8 +347,8 @@ export default function Home() {
           {/* Facebook Lead Manager */}
           <div className="bg-[#020617] text-white rounded-3xl border border-white/8 px-8 py-10 md:px-12 md:py-12 shadow-xl flex flex-col md:flex-row items-start md:items-center justify-between gap-8">
             <div className="max-w-xl">
-              <p className="text-xs tracking-[0.2em] uppercase text-gray-400 mb-3">New Feature</p>
-              <h3 className="text-2xl md:text-3xl font-bold mb-4">Facebook Lead Manager – Leads on Autopilot</h3>
+              <p className="text-xs tracking-[0.2em] uppercase text-gray-400 mb-3">Coming Soon</p>
+              <h3 className="text-2xl md:text-3xl font-bold mb-4">Facebook Lead Manager – Leads on Autopilot <span className="ml-2 inline-flex items-center rounded-full bg-yellow-500 px-2 py-0.5 text-xs font-bold text-black">Coming Soon</span></h3>
               <p className="text-sm md:text-base text-gray-200 mb-5 leading-relaxed">
                 Connect your Facebook lead forms directly to Cove. New leads are automatically imported, scored, organized into folders, and enrolled in drip campaigns — the moment they fill out your ad.
               </p>
@@ -370,8 +370,8 @@ export default function Home() {
           {/* Agent Recruiting */}
           <div className="bg-[#020617] text-white rounded-3xl border border-white/8 px-8 py-10 md:px-12 md:py-12 shadow-xl flex flex-col md:flex-row items-start md:items-center justify-between gap-8">
             <div className="max-w-xl">
-              <p className="text-xs tracking-[0.2em] uppercase text-gray-400 mb-3">New Feature</p>
-              <h3 className="text-2xl md:text-3xl font-bold mb-4">Agent Recruiting – Build Your Team Inside Cove</h3>
+              <p className="text-xs tracking-[0.2em] uppercase text-gray-400 mb-3">Coming Soon</p>
+              <h3 className="text-2xl md:text-3xl font-bold mb-4">Agent Recruiting – Build Your Team Inside Cove <span className="ml-2 inline-flex items-center rounded-full bg-yellow-500 px-2 py-0.5 text-xs font-bold text-black">Coming Soon</span></h3>
               <p className="text-sm md:text-base text-gray-200 mb-5 leading-relaxed">
                 Invite agents, track team performance with leaderboards, and manage your downline — all from your Cove dashboard. No separate platform needed.
               </p>
@@ -484,8 +484,6 @@ export default function Home() {
                   { feature: "Native AI voice dialer", cove: "yes", ringy: "no", close: "no", ghl: "no" },
                   { feature: "AI Call Coach", cove: "yes", ringy: "no", close: "no", ghl: "no" },
                   { feature: "AI SMS (built-in)", cove: "yes", ringy: "no", close: "no", ghl: "maybe" },
-                  { feature: "Facebook Lead Manager", cove: "yes", ringy: "no", close: "maybe", ghl: "maybe" },
-                  { feature: "Agent Recruiting Tools", cove: "yes", ringy: "no", close: "no", ghl: "maybe" },
                   { feature: "Insurance-focused templates", cove: "yes", ringy: "maybe", close: "no", ghl: "no" },
                   { feature: "Twilio A2P automation (handled for you)", cove: "yes", ringy: "no", close: "no", ghl: "no" },
                 ].map((row, idx) => (
