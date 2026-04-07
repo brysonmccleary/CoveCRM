@@ -4399,6 +4399,7 @@ async function handleStart(ws: WebSocket, msg: TwilioStartEvent) {
 
   state.voicemailSkipArmed = false;
   (state as any).greetingAudioStarted = false;
+  (state as any).greetingAudioDone = false;
   (state as any).voicemailMidCallCheckDone = false;
 
   // script adherence reset
@@ -5428,17 +5429,10 @@ state.lastUserSpeechStoppedAtMs = Date.now();
 
     try {
       state.openAiWs?.send(JSON.stringify({ type: "input_audio_buffer.clear" }));
-    // ✅ FIX: re-play a small slice of early caller audio (if any) so server_vad/transcription can lock.
-    // Bounded (<=500ms) and only happens once per call. Does NOT stream idle silence.
-    try {
-      const pre = (state as any).preGreetingFrames;
-      if (state.openAiWs && Array.isArray(pre) && pre.length > 0) {
-        for (const f of pre) {
-          state.openAiWs.send(JSON.stringify({ type: "input_audio_buffer.append", audio: f }));
-        }
-      }
+      // ✅ Do NOT replay pre-greeting frames. They cause spurious speech_started/committed
+      // sequences that trigger the greeting retry loop. Real speech after greeting plays
+      // will be captured by live VAD naturally.
       (state as any).preGreetingFrames = [];
-    } catch {}
     } catch {}
 
     if (
@@ -5569,15 +5563,15 @@ state.lastUserSpeechStoppedAtMs = Date.now();
     } catch {}
 
 
-    // ✅ Guard: ignore committed user turns until the greeting audio has actually started playing.
-    // Pre-greeting noise/buffer flush fires commits before or during the greeting IIFE.
-    // debugLoggedResponseCreateGreeting is set when response.create fires, but that's still
-    // too early — the user's buffered audio can commit in the same tick.
-    // greetingAudioStarted is set on the FIRST audio delta, which is the safest gate.
-    if (state.phase === "awaiting_greeting_reply" && !(state as any).greetingAudioStarted) {
-      console.log("[AI-VOICE][TURN-GATE] ignoring pre-greeting commit (greeting audio not started yet)", {
+    // ✅ Guard: ignore ALL commits until greeting audio has FINISHED playing.
+    // greetingAudioDone is set on response.audio.done for the greeting response.
+    // This is the only safe gate — greetingAudioStarted (first delta) fires too early
+    // because pre-greeting buffered frames can commit in the same tick as the first delta.
+    if (state.phase === "awaiting_greeting_reply" && !(state as any).greetingAudioDone) {
+      console.log("[AI-VOICE][TURN-GATE] ignoring pre-greeting commit (greeting audio not done yet)", {
         callSid: state.callSid,
-        debugLoggedResponseCreateGreeting: !!state.debugLoggedResponseCreateGreeting,
+        greetingAudioStarted: !!(state as any).greetingAudioStarted,
+        greetingAudioDone: !!(state as any).greetingAudioDone,
       });
       return;
     }
@@ -6005,8 +5999,9 @@ state.lastUserSpeechStoppedAtMs = Date.now();
         // Without this, the silence gate blocks inbound frames and VAD never fires.
         state.awaitingUserAnswer = true;
         state.awaitingAnswerForStepIndex = 0;
-        // Reset greetingAudioStarted so the next commit is also gated on audio starting.
+        // Reset both flags so the retry commit is gated on retry audio finishing.
         (state as any).greetingAudioStarted = false;
+        (state as any).greetingAudioDone = false;
         // Stay in greeting phase; do NOT advance steps.
         state.phase = "awaiting_greeting_reply";
         return;
@@ -6880,6 +6875,16 @@ void handleFinalOutcomeIntent(state, {
   if (shouldFinalize) {
     if (isAudioDone) {
       state.lastAiDoneAtMs = Date.now();
+
+      // ✅ Mark greeting audio as done so commits can be processed.
+      // We set this on ANY audio.done while in awaiting_greeting_reply phase.
+      // This covers both the initial greeting and any retry greeting.
+      if (state.phase === "awaiting_greeting_reply") {
+        (state as any).greetingAudioDone = true;
+        console.log("[AI-VOICE] greetingAudioDone = true | commits now unblocked", {
+          callSid: state.callSid,
+        });
+      }
     }
 
     setWaitingForResponse(state, false, `OpenAI ${t}`);
