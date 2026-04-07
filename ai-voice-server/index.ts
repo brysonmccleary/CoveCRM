@@ -4398,6 +4398,8 @@ async function handleStart(ws: WebSocket, msg: TwilioStartEvent) {
   stopOutboundPacer(ws, state, "start/reset");
 
   state.voicemailSkipArmed = false;
+  (state as any).greetingAudioStarted = false;
+  (state as any).voicemailMidCallCheckDone = false;
 
   // script adherence reset
   state.scriptSteps = [];
@@ -5567,9 +5569,16 @@ state.lastUserSpeechStoppedAtMs = Date.now();
     } catch {}
 
 
-    // ✅ Guard: ignore committed user turns until the greeting has actually been sent.
-    // Pre-greeting noise/buffer flush can produce committed events and trigger REPLAY, knocking the stepper off-script.
-    if (state.phase === "awaiting_greeting_reply" && !state.debugLoggedResponseCreateGreeting) {
+    // ✅ Guard: ignore committed user turns until the greeting audio has actually started playing.
+    // Pre-greeting noise/buffer flush fires commits before or during the greeting IIFE.
+    // debugLoggedResponseCreateGreeting is set when response.create fires, but that's still
+    // too early — the user's buffered audio can commit in the same tick.
+    // greetingAudioStarted is set on the FIRST audio delta, which is the safest gate.
+    if (state.phase === "awaiting_greeting_reply" && !(state as any).greetingAudioStarted) {
+      console.log("[AI-VOICE][TURN-GATE] ignoring pre-greeting commit (greeting audio not started yet)", {
+        callSid: state.callSid,
+        debugLoggedResponseCreateGreeting: !!state.debugLoggedResponseCreateGreeting,
+      });
       return;
     }
 
@@ -5992,9 +6001,12 @@ state.lastUserSpeechStoppedAtMs = Date.now();
           })
         );
 
-        // ✅ Arm awaitingUserAnswer so next commit doesn't loop back into greeting retry
+        // ✅ Arm awaitingUserAnswer so audio keeps flowing to OpenAI after retry plays.
+        // Without this, the silence gate blocks inbound frames and VAD never fires.
         state.awaitingUserAnswer = true;
         state.awaitingAnswerForStepIndex = 0;
+        // Reset greetingAudioStarted so the next commit is also gated on audio starting.
+        (state as any).greetingAudioStarted = false;
         // Stay in greeting phase; do NOT advance steps.
         state.phase = "awaiting_greeting_reply";
         return;
