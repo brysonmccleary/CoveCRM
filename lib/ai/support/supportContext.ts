@@ -2,7 +2,6 @@ import mongooseConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import Folder from "@/models/Folder";
 import Number from "@/models/Number";
-import Lead from "@/models/Lead";
 import {
   getA2PStatus,
   getAIFeatureStatus,
@@ -66,16 +65,7 @@ export async function buildSupportContext(userEmail: string) {
       importErrors: recentImportErrors,
     },
     aiFeatures,
-    topLeads: (arguments[0] as any)[8]?.map((lead: any) => ({
-      id: String(lead._id),
-      name: lead.name || ((lead.firstName || "") + " " + (lead.lastName || "")).trim(),
-      phone: lead.phone || "",
-      folder: lead.folderName || "",
-      aiPriorityScore: lead.aiPriorityScore || 0,
-      aiPriorityCategory: lead.aiPriorityCategory || "",
-      lastContactedAt: lead.lastContactedAt || null,
-      lastReplyAt: lead.lastReplyAt || null,
-      createdAt: lead.createdAt,
-    })) || [],
+    leadAssistant,
+    topLeads: Array.isArray(leadAssistant?.topLeads) ? leadAssistant.topLeads : [],
   };
 }

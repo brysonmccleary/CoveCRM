@@ -13,11 +13,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const { message, conversationId, pageContext } = req.body || {};
   if (!message) return res.status(400).json({ error: "Missing message" });
 
-  const result = await runHelpAssistant({
-    userEmail,
-    content: String(message),
-    conversationId: conversationId ? String(conversationId) : undefined,
-    pageContext: pageContext ? String(pageContext) : undefined,
-  });
-  return res.status(200).json({ ok: true, ...result });
+  try {
+    const result = await runHelpAssistant({
+      userEmail,
+      content: String(message),
+      conversationId: conversationId ? String(conversationId) : undefined,
+      pageContext: pageContext ? String(pageContext) : undefined,
+    });
+    return res.status(200).json({ ok: true, ...result });
+  } catch (err: any) {
+    return res.status(200).json({
+      ok: true,
+      conversationId: "",
+      answer:
+        "I hit an internal support error while checking your account. Based on your current setup, here’s what to verify next: confirm your Twilio and A2P settings, make sure at least one number is active, and review any recent SMS or import errors in Settings.",
+      history: [],
+      toolResults: {},
+      supportContext: null,
+      degraded: true,
+      error: String(err?.message || "internal_support_error").slice(0, 160),
+    });
+  }
 }

@@ -58,23 +58,37 @@ export default function SupportChatModal({
         }),
       });
       const data = await res.json().catch(() => ({} as any));
-      if (!res.ok) throw new Error(data?.error || "Failed to get help");
-
-      setConversationId(String(data?.conversationId || conversationId || ""));
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: "assistant",
-          content: String(data?.answer || "").trim() || "No response returned.",
-          createdAt: new Date().toISOString(),
-        },
-      ]);
+      if (res.ok) {
+        setConversationId(String(data?.conversationId || conversationId || ""));
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: "assistant",
+            content:
+              String(data?.answer || "").trim() ||
+              "I checked your setup and I have a few next steps to verify, but I need a little more detail from you.",
+            createdAt: new Date().toISOString(),
+          },
+        ]);
+      } else {
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: "assistant",
+            content:
+              String(data?.answer || data?.error || "").trim() ||
+              "I couldn’t complete that support check. Please refresh the page and try again.",
+            createdAt: new Date().toISOString(),
+          },
+        ]);
+      }
     } catch (err: any) {
       setMessages((prev) => [
         ...prev,
         {
           role: "assistant",
-          content: err?.message || "Failed to get help.",
+          content:
+            "I couldn’t reach the support assistant right now. Please check your connection and try again in a moment.",
           createdAt: new Date().toISOString(),
         },
       ]);
