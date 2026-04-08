@@ -979,6 +979,10 @@ async function replayPendingCommittedTurn(
           })
         );
 
+        state.awaitingUserAnswer = true;
+        state.awaitingAnswerForStepIndex = 0;
+        (state as any).greetingAudioStarted = false;
+        (state as any).greetingAudioDone = false;
         state.phase = "awaiting_greeting_reply";
         return;
       }
