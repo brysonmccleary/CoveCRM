@@ -21,6 +21,7 @@ const ALLOW_STATUS_SET = new Set([
   "sold",
   "not interested",
   "booked appointment",
+  "bad number",
 ]);
 
 const MOBILE_JWT_SECRET =
@@ -139,7 +140,7 @@ export default async function handler(
 
       if (isSystemFolderName(desiredFolderName)) {
         // 🔒 Deterministic pick: fetch all system folders for the user, then match in code.
-        const SYSTEM_NAMES = ["Sold", "Not Interested", "Booked Appointment"];
+        const SYSTEM_NAMES = ["Sold", "Not Interested", "Booked Appointment", "Bad Number"];
         const systemRows = await Folder.find({
           userEmail,
           name: { $in: SYSTEM_NAMES },

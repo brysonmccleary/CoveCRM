@@ -250,6 +250,8 @@ export default function DialSession() {
 
   const dispositionBusyRef = useRef<boolean>(false);
 
+  const dialAttemptsRef = useRef<number>(0);
+
   const callStartAtRef = useRef<number>(0);
   const hasConnectedRef = useRef<boolean>(false);
 
@@ -450,8 +452,25 @@ export default function DialSession() {
     }, 27000);
   };
   const scheduleAdvance = () => {
+    if (advanceScheduledRef.current) return;
+    advanceScheduledRef.current = true;
+
     if (advanceTimeoutRef.current) clearTimeout(advanceTimeoutRef.current);
-    advanceTimeoutRef.current = setTimeout(() => { if (!sessionEndedRef.current) disconnectAndNext(); }, DIAL_DELAY_MS);
+
+    advanceTimeoutRef.current = setTimeout(() => {
+      advanceScheduledRef.current = false;
+
+      if (sessionEndedRef.current) return;
+
+      if (dialAttemptsRef.current === 0) {
+        dialAttemptsRef.current = 1;
+        setReadyToCall(true);
+        return;
+      }
+
+      dialAttemptsRef.current = 0;
+      disconnectAndNext();
+    }, DIAL_DELAY_MS);
   };
   const scheduleNextLead = () => {
     if (nextLeadTimeoutRef.current) clearTimeout(nextLeadTimeoutRef.current);
@@ -1203,7 +1222,13 @@ export default function DialSession() {
 
       // ✅ IMPORTANT: disposition button must NOT open calendar (prevents double booking)
 
-      if (!sessionEndedRef.current) scheduleNextLead(); // advance to next lead
+      if (!sessionEndedRef.current) {
+        if (label === "No Answer") {
+          scheduleAdvance(); // double-dial: redial same lead once before advancing
+        } else {
+          scheduleNextLead(); // advance to next lead
+        }
+      }
     } catch (e: any) {
       console.error(e);
       toast.error(e?.message || "Failed to save note");
@@ -1215,6 +1240,7 @@ export default function DialSession() {
 
   /** flow controls **/
   const nextLead = () => {
+    dialAttemptsRef.current = 0;
     if (sessionEndedRef.current) return;
     if (leadQueue.length <= 1) return showSessionSummary();
     const nextIndex = currentLeadIndex + 1;
