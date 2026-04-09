@@ -6,6 +6,7 @@ import { getUserByEmail } from "@/models/User";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
 import { assertBillingAllowed } from "@/lib/billing/assertBillingAllowed";
+import { checkCallingAllowed } from "@/lib/billing/checkCallingAllowed";
 export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse,
@@ -37,6 +38,11 @@ export default async function handler(
       return res
         .status(403)
         .json({ message: err?.message || "Account paused due to unpaid usage balance." });
+    }
+
+    const billingCheck = await checkCallingAllowed(session.user.email.toLowerCase());
+    if (!billingCheck.allowed) {
+      return res.status(402).json({ message: billingCheck.reason });
     }
 
     const call = await twilioClient.calls.create({

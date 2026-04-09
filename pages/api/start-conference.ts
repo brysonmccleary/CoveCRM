@@ -4,6 +4,7 @@ import Twilio from "twilio";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "./auth/[...nextauth]"; // relative to /pages/api
 import { resolveFromNumber } from "@/lib/voice";
+import { checkCallingAllowed } from "@/lib/billing/checkCallingAllowed";
 
 const {
   TWILIO_ACCOUNT_SID,
@@ -52,6 +53,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return sendJSON(res, 401, { message: "Unauthorized" });
     }
     const clientIdentity = identityFromEmail(userEmail);
+
+    const billingCheck = await checkCallingAllowed(userEmail);
+    if (!billingCheck.allowed) {
+      return sendJSON(res, 402, { message: billingCheck.reason });
+    }
 
     if (!client) {
       return sendJSON(res, 500, { message: "Server Twilio client not configured" });

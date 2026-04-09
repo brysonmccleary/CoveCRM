@@ -11,6 +11,7 @@ import Call from "@/models/Call";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
 import { pickFromNumberForUser } from "@/lib/twilio/pickFromNumber";
 import { isCallAllowedForLead } from "@/utils/checkCallTime";
+import { checkCallingAllowed } from "@/lib/billing/checkCallingAllowed";
 
 const MOBILE_JWT_SECRET =
   process.env.MOBILE_JWT_SECRET ||
@@ -87,6 +88,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     await dbConnect();
+
+    const billingCheck = await checkCallingAllowed(email);
+    if (!billingCheck.allowed) {
+      return res.status(402).json({ message: billingCheck.reason });
+    }
 
     // If leadId provided, we can enforce quiet-hours based on lead; otherwise skip that check.
     let leadDoc: any = null;

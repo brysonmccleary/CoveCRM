@@ -10,6 +10,7 @@ import AICallSession from "@/models/AICallSession";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
 import { pickFromNumberForUser } from "@/lib/twilio/pickFromNumber";
 import { isCallAllowedForLead } from "@/utils/checkCallTime";
+import { checkCallingAllowed } from "@/lib/billing/checkCallingAllowed";
 
 type StartAiSessionBody = {
   // New AI dial session fields
@@ -313,6 +314,11 @@ export default async function handler(
     return res.status(401).json({ error: "Unauthorized", ok: false });
 
   const body = (req.body || {}) as StartAiSessionBody;
+
+  const billingCheck = await checkCallingAllowed(userEmail);
+  if (!billingCheck.allowed) {
+    return res.status(402).json({ error: billingCheck.reason, ok: false });
+  }
 
   // If folderId is provided, we treat this as a full AI dial SESSION start.
   if (body.folderId) {

@@ -26,6 +26,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   if (req.method === "POST") {
     const { numberId } = req.body as { numberId?: string };
+
+    // Validate ownership: the requested numberId must match a number the authenticated user owns
+    if (numberId) {
+      const user = await User.findOne({ email: userEmail }).select("numbers").lean();
+      const owned: string[] = ((user as any)?.numbers || []).flatMap((n: any) =>
+        [n._id ? String(n._id) : null, n.sid || null].filter(Boolean)
+      );
+      if (!owned.includes(numberId)) {
+        return res.status(403).json({ error: "Number does not belong to this user" });
+      }
+    }
+
     await User.updateOne(
       { email: userEmail },
       { $set: { defaultSmsNumberId: numberId ?? null } }

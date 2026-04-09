@@ -277,6 +277,17 @@ export default async function handler(
       });
       if (!subscription?.id) throw new Error("Stripe subscription failed");
       createdSubscriptionId = subscription.id;
+
+      // Guard: if the initial payment failed the subscription will be "incomplete".
+      // Do NOT proceed to Twilio purchase if payment was not confirmed.
+      if (subscription.status !== "active" && subscription.status !== "trialing") {
+        try { await stripe.subscriptions.cancel(subscription.id); } catch {}
+        createdSubscriptionId = undefined;
+        return res.status(402).json({
+          code: "payment_failed",
+          message: "Payment failed. Please check your payment method and try again.",
+        });
+      }
     }
 
     // ---------- Buy number from the resolved Twilio account
@@ -423,7 +434,7 @@ export default async function handler(
       );
     }
 
-    // ---------- Save on user doc
+    // ---------- Save on user doc (with Twilio rollback on failure)
     user.numbers = user.numbers || [];
     user.numbers.push({
       sid: purchased.sid,
@@ -443,7 +454,29 @@ export default async function handler(
     } as any);
     user.a2p = user.a2p || ({} as any);
     if (targetMS) (user.a2p as any).messagingServiceSid = targetMS;
-    await user.save();
+    try {
+      await user.save();
+    } catch (dbErr: any) {
+      // DB save failed after Twilio number was purchased — attempt rollback.
+      console.error("buy-number: DB save failed, attempting Twilio rollback", {
+        email,
+        purchasedSid,
+        error: dbErr?.message,
+      });
+      try {
+        await client.incomingPhoneNumbers(purchased.sid).remove();
+        console.info("buy-number: Twilio rollback succeeded", { purchasedSid });
+      } catch (rollbackErr: any) {
+        console.error("buy-number: Twilio rollback FAILED — manual cleanup required", {
+          purchasedSid,
+          error: rollbackErr?.message,
+        });
+      }
+      if (createdSubscriptionId) {
+        try { await stripe.subscriptions.cancel(createdSubscriptionId); } catch {}
+      }
+      return res.status(500).json({ message: "Failed to save number to account. The purchased number has been released." });
+    }
 
     return res.status(200).json({
       ok: true,

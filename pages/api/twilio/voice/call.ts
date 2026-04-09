@@ -9,6 +9,7 @@ import Call from "@/models/Call";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
 import { pickFromNumberForUser } from "@/lib/twilio/pickFromNumber";
 import { isCallAllowedForLead } from "@/utils/checkCallTime";
+import { checkCallingAllowed } from "@/lib/billing/checkCallingAllowed";
 
 const BASE = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "http://localhost:3000").replace(/\/$/, "");
 
@@ -131,6 +132,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     await dbConnect();
+
+    const billingCheck = await checkCallingAllowed(email);
+    if (!billingCheck.allowed) {
+      return res.status(402).json({ message: billingCheck.reason });
+    }
 
     const leadDoc: any = await Lead.findOne({ _id: leadId, userEmail: email }).lean();
     if (!leadDoc) return res.status(404).json({ message: "Lead not found or access denied" });

@@ -39,6 +39,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
 
         return {
+          _id: String(num._id),
           sid: num.sid,
           phoneNumber: num.phoneNumber,
           subscriptionStatus: status,

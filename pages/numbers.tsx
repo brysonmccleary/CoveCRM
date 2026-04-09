@@ -52,10 +52,10 @@ function NumbersPage() {
         const existingDefault = defData.defaultSmsNumberId || null;
         setDefaultId(existingDefault);
 
-        // Auto-select if only one number and no default set
+        // Auto-select first number as primary if none is set
         if (!existingDefault) {
           const nums = numData?.numbers ?? [];
-          if (nums.length === 1) {
+          if (nums.length >= 1) {
             const autoId = nums[0]._id || nums[0].sid || nums[0].id;
             // Fire and forget — don't await
             fetch("/api/settings/default-number", {
@@ -257,6 +257,15 @@ function NumbersPage() {
                       )}
                     </div>
                     <div className="flex gap-2">
+                      {!isDefault && (
+                        <button
+                          onClick={() => setDefault(numId)}
+                          disabled={savingDefault}
+                          className="text-xs bg-indigo-900/30 hover:bg-indigo-900/60 border border-indigo-700 text-indigo-300 px-3 py-1.5 rounded-lg disabled:opacity-50"
+                        >
+                          Set as Primary
+                        </button>
+                      )}
                       <button
                         onClick={() => checkSpam(number.phoneNumber)}
                         disabled={checkingSpam === number.phoneNumber}

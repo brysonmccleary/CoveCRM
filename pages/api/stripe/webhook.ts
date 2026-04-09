@@ -603,6 +603,7 @@ export default async function handler(
             stripeSubscriptionId: subscriptionId || undefined,
             stripeProductId: stripeProductId || undefined,
             autoRenew: !!subscriptionId,
+            autoFulfill: true,
           });
 
           // Create default Prospecting Folder
@@ -659,6 +660,12 @@ export default async function handler(
             });
           }
 
+          // Persist folder/campaign references for automation
+          await ProspectingPlan.updateOne(
+            { _id: plan._id },
+            { $set: { folderId: folder._id, campaignId: (campaign as any)._id } }
+          );
+
           // Assign leads
           const assignResult = await assignLeadsToUser(
             prospUser._id,
@@ -671,6 +678,27 @@ export default async function handler(
             audit("prospecting_plan: assignLeads error", { error: e?.message });
             return { assigned: 0, leads: [], errors: [e?.message] };
           });
+
+          const intervalDays =
+            Number(process.env.PROSPECTING_PLAN_FULFILLMENT_DAYS || "30") || 30;
+          const retryHours =
+            Number(process.env.PROSPECTING_PLAN_RETRY_HOURS || "6") || 6;
+          const nextFulfillmentAt = new Date();
+          if (assignResult.assigned) {
+            nextFulfillmentAt.setDate(nextFulfillmentAt.getDate() + intervalDays);
+            nextFulfillmentAt.setHours(9, 0, 0, 0);
+          } else {
+            nextFulfillmentAt.setHours(nextFulfillmentAt.getHours() + retryHours);
+          }
+          await ProspectingPlan.updateOne(
+            { _id: plan._id },
+            {
+              $set: {
+                lastFulfilledAt: new Date(),
+                nextFulfillmentAt,
+              },
+            }
+          );
 
           audit("prospecting_plan: provisioned", {
             userId: String(prospUser._id),
@@ -798,6 +826,9 @@ export default async function handler(
           const user = await User.findOne({ stripeCustomerId: customerId });
           if (user) {
             user.subscriptionStatus = "active";
+            (user as any).hasEverPaid = true;
+            (user as any).pastDueSince = null;
+            (user as any).callingBlocked = false;
             await user.save();
             userEmail = user.email;
             if (!codeText) codeText = U((user as any).referredBy);
@@ -1014,6 +1045,7 @@ export default async function handler(
       case "invoice.payment_failed": {
         const inv = event.data.object as Stripe.Invoice;
         const subscriptionId = inv.subscription as string;
+        const customerId = inv.customer as string | undefined;
 
         try {
           const users = await User.find({
@@ -1042,6 +1074,27 @@ export default async function handler(
         } catch (e) {
           console.error("invoice.payment_failed cleanup error:", e);
         }
+
+        // Enforce calling block on the CRM platform subscription payment failure.
+        // Self-billed users are excluded (they manage their own Twilio).
+        if (customerId) {
+          try {
+            const failedUser = await User.findOne({ stripeCustomerId: customerId });
+            if (failedUser && (failedUser as any).billingMode !== "self") {
+              if (!(failedUser as any).hasEverPaid) {
+                // Never paid — block calling immediately
+                (failedUser as any).callingBlocked = true;
+              } else if (!(failedUser as any).pastDueSince) {
+                // Paid before — start grace period clock; do not block yet
+                (failedUser as any).pastDueSince = new Date();
+              }
+              await failedUser.save();
+            }
+          } catch (e) {
+            console.error("invoice.payment_failed calling-block error:", e);
+          }
+        }
+
         break;
       }
 

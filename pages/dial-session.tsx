@@ -591,27 +591,42 @@ export default function DialSession() {
       setNumbersLoaded(false);
 
       if (typeof fromNumberParam === "string" && fromNumberParam) {
-        if (!cancelled) {
-          setFromNumber(fromNumberParam);
-          localStorage.setItem("selectedDialNumber", fromNumberParam);
-        }
+        // URL param is highest priority — use it directly, do NOT persist to localStorage
+        if (!cancelled) setFromNumber(fromNumberParam);
       } else {
-        const saved = localStorage.getItem("selectedDialNumber");
-        if (saved) {
-          if (!cancelled) setFromNumber(saved);
-        } else {
-          try {
-            const list = await fetchJson<Json>("/api/twilio/list-numbers").catch(async () => {
-              return await fetchJson<Json>("/api/getNumbers");
-            });
-            if (!cancelled) {
-              const first = pickFirstVoiceNumber(list);
-              if (first) {
-                setFromNumber(first);
-                localStorage.setItem("selectedDialNumber", first);
-              }
-            }
-          } catch {}
+        // Fetch DB primary, valid numbers list, and session email in parallel
+        try {
+          const [fromRes, numsRes, sessRes] = await Promise.all([
+            fetchJson<{ from: string | null }>("/api/twilio/current-from"),
+            fetchJson<{ numbers: Array<{ phoneNumber?: string }> }>("/api/settings/default-number"),
+            fetchJson<{ user?: { email?: string } }>("/api/auth/session").catch(() => null as any),
+          ]);
+
+          const userEmail = sessRes?.user?.email ? String(sessRes.user.email).toLowerCase() : "";
+          const lsKey = userEmail ? `selectedDialNumber:${userEmail}` : "selectedDialNumber";
+
+          const dbPrimary = fromRes?.from || null;
+          const validPhones = new Set(
+            (numsRes?.numbers || []).map((n: any) => n.phoneNumber).filter(Boolean)
+          );
+
+          // localStorage is only honoured if the number is still in this user’s account
+          const saved = localStorage.getItem(lsKey);
+          let chosen = dbPrimary;
+
+          if (saved && validPhones.has(saved)) {
+            chosen = saved; // explicit prior user selection, still valid
+          } else if (saved) {
+            // Stale or cross-user value — clear it
+            localStorage.removeItem(lsKey);
+            console.info(`[dial-session] Cleared stale selectedDialNumber for user ${userEmail}`);
+          }
+
+          if (!cancelled && chosen) setFromNumber(chosen);
+        } catch {
+          // on fetch failure fall back to unscoped key without validation
+          const saved = localStorage.getItem("selectedDialNumber");
+          if (!cancelled && saved) setFromNumber(saved);
         }
       }
 
@@ -622,16 +637,6 @@ export default function DialSession() {
       } catch {}
 
       if (!cancelled) setNumbersLoaded(true);
-
-      // ✅ ADDITIVE: override display with Twilio’s authoritative "from" number for this user
-      try {
-        const j = await fetchJson<{ from: string | null }>("/api/twilio/current-from");
-        if (!cancelled && j?.from) {
-          setFromNumber(j.from);
-          localStorage.setItem("selectedDialNumber", j.from);
-        }
-      } catch {}
-
     };
     loadNumbers();
     return () => { cancelled = true; };

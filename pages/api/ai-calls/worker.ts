@@ -10,6 +10,7 @@ import { isCallAllowedForLead } from "@/utils/checkCallTime";
 import { Types } from "mongoose";
 import { stripe } from "@/lib/stripe";
 import { assertBillingAllowed } from "@/lib/billing/assertBillingAllowed";
+import { checkCallingAllowed } from "@/lib/billing/checkCallingAllowed";
 
 const BASE = (
   process.env.NEXT_PUBLIC_BASE_URL ||
@@ -389,6 +390,34 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return res.status(200).json({
           ok: true,
           message: "stopped_unpaid_usage_balance",
+          sessionId,
+        });
+      }
+    }
+
+    // Block calling if subscription payment failed and grace period has expired.
+    if (!adminFree) {
+      const billingCheck = await checkCallingAllowed(userEmail);
+      if (!billingCheck.allowed) {
+        await AICallSession.updateOne(
+          { _id: sessionId },
+          {
+            $set: {
+              status: "stopped",
+              errorMessage: billingCheck.reason || "Calling blocked due to payment issue.",
+              completedAt: new Date(),
+            },
+          }
+        );
+        console.log("[AI WORKER] stopped due to calling blocked (billing)", {
+          sessionId,
+          userEmail,
+          reason: billingCheck.reason,
+        });
+        await releaseLock(sessionId);
+        return res.status(200).json({
+          ok: true,
+          message: "stopped_calling_blocked",
           sessionId,
         });
       }

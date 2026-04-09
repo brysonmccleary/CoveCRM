@@ -4,6 +4,7 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/pages/api/auth/[...nextauth]";
 import mongooseConnect from "@/lib/mongooseConnect";
+import { checkCallingAllowed } from "@/lib/billing/checkCallingAllowed";
 import VoicemailDrop from "@/models/VoicemailDrop";
 import User from "@/models/User";
 import Lead from "@/models/Lead";
@@ -17,6 +18,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   await mongooseConnect();
   const userEmail = session.user.email.toLowerCase();
+
+  const billingCheck = await checkCallingAllowed(userEmail);
+  if (!billingCheck.allowed) return res.status(402).json({ error: billingCheck.reason });
 
   const { toPhone, dropId, leadId } = req.body as { toPhone?: string; dropId?: string; leadId?: string };
   if (!toPhone) return res.status(400).json({ error: "toPhone required" });

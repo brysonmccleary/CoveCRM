@@ -208,6 +208,10 @@ export interface IUser {
   twilio?: { accountSid?: string; apiKeySid?: string; apiKeySecret?: string; twimlAppSid?: string };
   billingMode?: "platform" | "self";
 
+  /** Billing enforcement fields */
+  hasEverPaid?: boolean;
+  pastDueSince?: Date | null;
+  callingBlocked?: boolean;
 
   // ✅ TwiML App SID (account-scoped) used for Twilio Voice JS
   twimlAppSid?: string;
@@ -455,6 +459,10 @@ const UserSchema = new Schema<IUser>({
     enum: ["platform", "self"],
     default: "platform",
   },
+
+  hasEverPaid: { type: Boolean, default: false },
+  pastDueSince: { type: Date, default: null },
+  callingBlocked: { type: Boolean, default: false },
 
   numbersLastSyncedAt: Date,
 

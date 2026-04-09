@@ -9,6 +9,7 @@ import Call from "@/models/Call";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
 import { pickFromNumberForUser } from "@/lib/twilio/pickFromNumber";
 import { isCallAllowedForLead } from "@/utils/checkCallTime";
+import { checkCallingAllowed } from "@/lib/billing/checkCallingAllowed";
 
 /** Build callback base from the actual request so Twilio always hits the right host */
 function runtimeBase(req: NextApiRequest) {
@@ -43,6 +44,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const body = (req.body || {}) as { leadId?: string; to?: string };
 
   try { await dbConnect(); } catch {}
+
+  const billingCheck = await checkCallingAllowed(userEmail);
+  if (!billingCheck.allowed) {
+    return res.status(402).json({ error: billingCheck.reason });
+  }
 
   // --- Resolve lead + enforce quiet hours (8am–9pm local) ---
   let toNumber = "";
