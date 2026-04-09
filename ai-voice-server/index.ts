@@ -6460,6 +6460,8 @@ state.lastUserSpeechStoppedAtMs = Date.now();
     //   "Just me", "Both of us", "Me and my wife", "Myself"
     if (stepType === "open_question" && hasTranscript && lastUserText) {
       const openQText = lastUserText.trim().toLowerCase();
+      // ✅ Time-availability questions should get time offers, not off-topic handling.
+      if (!isTimeIndecisionOrAvailability(openQText) && !isTimeMentioned(openQText)) {
       // Signals that indicate the user is NOT answering but reacting
       const isOffTopic =
         // question-back / confusion
@@ -6506,6 +6508,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
         })();
         return;
       }
+      } // end time-availability bypass
     }
 
     const prevIdx = expectedAnswerIdx;
