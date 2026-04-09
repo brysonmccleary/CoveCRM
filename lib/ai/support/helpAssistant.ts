@@ -4,6 +4,7 @@ import SupportConversation from "@/models/SupportConversation";
 import SupportKnowledgeDoc from "@/models/SupportKnowledgeDoc";
 import { buildSupportContext } from "./supportContext";
 import { ensureSupportKnowledgeSeeded } from "./seedSupportKnowledge";
+import { priceOpenAIUsage } from "@/lib/billing/openaiPricing";
 import {
   getA2PStatus,
   getAIFeatureStatus,
@@ -239,6 +240,28 @@ async function saveConversationSilently(conversation: any) {
   }
 }
 
+function logSupportUsage(details: {
+  source: string;
+  userEmail?: string | null;
+  leadId?: string | null;
+  model: string;
+  durationMs: number;
+  promptTokens?: number;
+  completionTokens?: number;
+  costUsd?: number;
+}) {
+  console.info("[openai-usage]", {
+    source: details.source,
+    userEmail: details.userEmail || null,
+    leadId: details.leadId || null,
+    model: details.model,
+    durationMs: details.durationMs,
+    promptTokens: details.promptTokens ?? null,
+    completionTokens: details.completionTokens ?? null,
+    costUsd: details.costUsd ?? null,
+  });
+}
+
 export async function runHelpAssistant({
   userEmail,
   content,
@@ -267,7 +290,7 @@ export async function runHelpAssistant({
 
     const [loadedSupportContext, knowledgeDocs] = await Promise.all([
       buildSupportContext(userEmail).catch(() => null),
-      SupportKnowledgeDoc.find({}).sort({ updatedAt: -1 }).limit(8).lean().catch(() => []),
+      SupportKnowledgeDoc.find({}).sort({ updatedAt: -1 }).limit(5).lean().catch(() => []),
     ]);
 
     supportContext = loadedSupportContext || {
@@ -295,6 +318,19 @@ export async function runHelpAssistant({
       topLeads: [],
     };
 
+    const promptSupportContext = {
+      ...supportContext,
+      leadAssistant: supportContext?.leadAssistant
+        ? {
+            ...supportContext.leadAssistant,
+            topLeads: Array.isArray(supportContext?.leadAssistant?.topLeads)
+              ? supportContext.leadAssistant.topLeads.slice(0, 10)
+              : [],
+          }
+        : null,
+      topLeads: Array.isArray(supportContext?.topLeads) ? supportContext.topLeads.slice(0, 10) : [],
+    };
+
     const apiKey = process.env.OPENAI_API_KEY;
     let answer = "";
 
@@ -303,6 +339,7 @@ export async function runHelpAssistant({
       let response: any = null;
 
       try {
+        const startedAt = Date.now();
         response = await client.responses.create({
           model: "gpt-5-mini",
           input: [
@@ -328,14 +365,14 @@ export async function runHelpAssistant({
               content: JSON.stringify({
                 message: content,
                 pageContext: pageContext || "",
-                supportContext,
+                supportContext: promptSupportContext,
                 knowledgeDocs: (Array.isArray(knowledgeDocs) ? knowledgeDocs : []).map((doc: any) => ({
                   title: doc.title,
                   category: doc.category,
                   content: doc.content,
                   tags: doc.tags,
                 })),
-                history: Array.isArray(conversation?.messages) ? conversation.messages.slice(-10) : [],
+                history: Array.isArray(conversation?.messages) ? conversation.messages.slice(-6) : [],
               }),
             },
           ],
@@ -350,6 +387,20 @@ export async function runHelpAssistant({
               additionalProperties: false,
             },
           })),
+        });
+        const usage = response?.usage || {};
+        logSupportUsage({
+          source: "lib/ai/support/helpAssistant:first",
+          userEmail,
+          model: "gpt-5-mini",
+          durationMs: Date.now() - startedAt,
+          promptTokens: usage?.input_tokens,
+          completionTokens: usage?.output_tokens,
+          costUsd: priceOpenAIUsage({
+            model: "gpt-5-mini",
+            promptTokens: usage?.input_tokens,
+            completionTokens: usage?.output_tokens,
+          }),
         });
       } catch {
         response = null;
@@ -384,10 +435,25 @@ export async function runHelpAssistant({
       let finalResponse: any = response;
       if (toolOutputs.length > 0 && response?.id) {
         try {
+          const startedAt = Date.now();
           finalResponse = await client.responses.create({
             model: "gpt-5-mini",
             previous_response_id: response.id,
             input: toolOutputs,
+          });
+          const usage = finalResponse?.usage || {};
+          logSupportUsage({
+            source: "lib/ai/support/helpAssistant:followup",
+            userEmail,
+            model: "gpt-5-mini",
+            durationMs: Date.now() - startedAt,
+            promptTokens: usage?.input_tokens,
+            completionTokens: usage?.output_tokens,
+            costUsd: priceOpenAIUsage({
+              model: "gpt-5-mini",
+              promptTokens: usage?.input_tokens,
+              completionTokens: usage?.output_tokens,
+            }),
           });
         } catch {
           finalResponse = response;

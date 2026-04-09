@@ -621,6 +621,28 @@ function pushAsked(memory: LeadMemory, key: string) {
 // ===== NEW: billing context for OpenAI =====
 let _lastInboundUserEmailForBilling: string | null = null;
 
+function logOpenAIUsage(details: {
+  source: string;
+  userEmail?: string | null;
+  leadId?: string | null;
+  model: string;
+  durationMs: number;
+  promptTokens?: number;
+  completionTokens?: number;
+  costUsd?: number;
+}) {
+  console.info("[openai-usage]", {
+    source: details.source,
+    userEmail: details.userEmail || null,
+    leadId: details.leadId || null,
+    model: details.model,
+    durationMs: details.durationMs,
+    promptTokens: details.promptTokens ?? null,
+    completionTokens: details.completionTokens ?? null,
+    costUsd: details.costUsd ?? null,
+  });
+}
+
 // --- LLM helpers (INTENT extractor still using gpt-4o-mini; left as-is)
 async function extractIntentAndTimeLLM(input: { text: string; nowISO: string; tz: string }) {
   const sys = `Extract intent for a brief SMS thread about booking a call.
@@ -635,6 +657,7 @@ yesno: "yes"|"no"|"unknown"`;
   const __gate = await requireAI(__aiEmail, { allowOwnerBypass: true });
   if (!__gate.ok) return { intent: "unknown", datetime_text: null };
 
+  const startedAt = Date.now();
   const resp = await openai.chat.completions.create({
     model: "gpt-4o-mini",
     temperature: 0,
@@ -651,6 +674,15 @@ yesno: "yes"|"no"|"unknown"`;
       model: "gpt-4o-mini",
       promptTokens: usage?.prompt_tokens,
       completionTokens: usage?.completion_tokens,
+    });
+    logOpenAIUsage({
+      source: "pages/api/twilio/inbound-sms:extractIntentAndTimeLLM",
+      userEmail: _lastInboundUserEmailForBilling,
+      model: "gpt-4o-mini",
+      durationMs: Date.now() - startedAt,
+      promptTokens: usage?.prompt_tokens,
+      completionTokens: usage?.completion_tokens,
+      costUsd: raw,
     });
     if (raw > 0 && _lastInboundUserEmailForBilling) {
       await trackUsage({
@@ -809,6 +841,7 @@ async function runO3MiniSmsAssistant(opts: {
   history: any[];
 }): Promise<string> {
   const { lead, user, userEmail, context, tz, inboundText, history } = opts;
+  const totalStartedAt = Date.now();
 
   const recentAssistant = (history || [])
     .filter((m: any) => m?.type === "ai")
@@ -973,6 +1006,7 @@ ${recentAssistant.length ? recentAssistant.join(" | ") : "(none yet)"}
   const __gate = await requireAI(__aiEmail, { allowOwnerBypass: true });
   if (!__gate.ok) throw new Error("AI upgrade required");
 
+  const firstCallStartedAt = Date.now();
   const response = await openai.responses.create({
     model: "o3-mini",
     input: inputMessages,
@@ -980,8 +1014,23 @@ ${recentAssistant.length ? recentAssistant.join(" | ") : "(none yet)"}
     reasoning: { effort: "medium" },
   });
 
-  let totalPromptTokens = (response as any)?.usage?.input_tokens || 0;
-  let totalCompletionTokens = (response as any)?.usage?.output_tokens || 0;
+  const firstUsage = (response as any)?.usage || {};
+  let totalPromptTokens = firstUsage?.input_tokens || 0;
+  let totalCompletionTokens = firstUsage?.output_tokens || 0;
+  logOpenAIUsage({
+    source: "pages/api/twilio/inbound-sms:runO3MiniSmsAssistant:first",
+    userEmail,
+    leadId: String(lead?._id || ""),
+    model: "o3-mini",
+    durationMs: Date.now() - firstCallStartedAt,
+    promptTokens: firstUsage?.input_tokens,
+    completionTokens: firstUsage?.output_tokens,
+    costUsd: priceOpenAIUsage({
+      model: "o3-mini",
+      promptTokens: firstUsage?.input_tokens,
+      completionTokens: firstUsage?.output_tokens,
+    }),
+  });
 
   const env: SmsToolEnv = { lead, user, tz };
   const toolOutputs: SmsToolCallOutput[] = [];
@@ -1035,14 +1084,30 @@ ${recentAssistant.length ? recentAssistant.join(" | ") : "(none yet)"}
   const __gate = await requireAI(__aiEmail, { allowOwnerBypass: true });
   if (!__gate.ok) throw new Error("AI upgrade required");
 
+    const followupStartedAt = Date.now();
     const followup = await openai.responses.create({
       model: "o3-mini",
       previous_response_id: (response as any).id,
       input: toolOutputs,
     });
+    const followupUsage = (followup as any)?.usage || {};
     finalResponse = followup;
-    totalPromptTokens += (followup as any)?.usage?.input_tokens || 0;
-    totalCompletionTokens += (followup as any)?.usage?.output_tokens || 0;
+    totalPromptTokens += followupUsage?.input_tokens || 0;
+    totalCompletionTokens += followupUsage?.output_tokens || 0;
+    logOpenAIUsage({
+      source: "pages/api/twilio/inbound-sms:runO3MiniSmsAssistant:followup",
+      userEmail,
+      leadId: String(lead?._id || ""),
+      model: "o3-mini",
+      durationMs: Date.now() - followupStartedAt,
+      promptTokens: followupUsage?.input_tokens,
+      completionTokens: followupUsage?.output_tokens,
+      costUsd: priceOpenAIUsage({
+        model: "o3-mini",
+        promptTokens: followupUsage?.input_tokens,
+        completionTokens: followupUsage?.output_tokens,
+      }),
+    });
   }
 
   // --- Billing for o3-mini usage ---
@@ -1059,6 +1124,16 @@ ${recentAssistant.length ? recentAssistant.join(" | ") : "(none yet)"}
         source: "openai",
       });
     }
+    logOpenAIUsage({
+      source: "pages/api/twilio/inbound-sms:runO3MiniSmsAssistant:total",
+      userEmail,
+      leadId: String(lead?._id || ""),
+      model: "o3-mini",
+      durationMs: Date.now() - totalStartedAt,
+      promptTokens: totalPromptTokens,
+      completionTokens: totalCompletionTokens,
+      costUsd: cost,
+    });
   } catch (e) {
     console.warn("[inbound-sms] Failed to track o3-mini usage:", e);
   }
