@@ -1705,8 +1705,9 @@ function isGreetingNegativeHearing(userTextRaw: string): boolean {
   }
 
   // Short confusion responses to "can you hear me?"
-  if (new Set(["what","huh","pardon","sorry","hello"]).has(t)) return true;
-  if (new Set(["what?","huh?","pardon?","sorry?","hello?"]).has(t)) return true;
+  // NOTE: "hello" removed — saying hello back is NOT a hearing problem
+  if (new Set(["what","huh","pardon","sorry"]).has(t)) return true;
+  if (new Set(["what?","huh?","pardon?","sorry?"]).has(t)) return true;
 
   // Fallback phrase patterns (no regex escapes in TS needed here)
   if (t.includes("can not hear") || t.includes("cannot hear")) return true;
@@ -5960,7 +5961,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
       // Also treat a bare greeting response ("hello", "hi") the same as negative hearing —
       // they didn't acknowledge us, just said hello back. Re-ask the hearing check.
       const isGreetingEcho = isFillerOnly(lastUserText) &&
-        (["hello","hi","hey","hello?","hi?","hey?"].includes(
+        (["hi","hey","hi?","hey?"].includes(
           String(lastUserText || "").trim().toLowerCase().replace(/[?.!]+$/, "")
         ));
 
@@ -6886,14 +6887,18 @@ void handleFinalOutcomeIntent(state, {
       // ✅ Mark greeting audio as done so commits can be processed.
       // We set this on ANY audio.done while in awaiting_greeting_reply phase.
       // This covers both the initial greeting and any retry greeting.
-      if (state.phase === "awaiting_greeting_reply") {
+      // ✅ Mark greeting done if we are in greeting phase OR greeting advance is pending
+      // (greetingAdvancePending means we fired the greeting but phase may shift on first delta)
+      const inGreetingPhase = state.phase === "awaiting_greeting_reply" ||
+        !!(state as any).greetingAdvancePending ||
+        !!state.debugLoggedResponseCreateGreeting && !state.debugLoggedResponseCreateUserTurn;
+      if (inGreetingPhase && !(state as any).greetingAudioDone) {
         (state as any).greetingAudioDone = true;
-        // ✅ Also arm awaitingUserAnswer so audio is forwarded to OpenAI
-        // immediately after greeting finishes (not just during warmup window).
         state.awaitingUserAnswer = true;
         state.awaitingAnswerForStepIndex = 0;
         console.log("[AI-VOICE] greetingAudioDone = true | awaitingUserAnswer armed | commits now unblocked", {
           callSid: state.callSid,
+          phase: state.phase,
         });
       }
     }
