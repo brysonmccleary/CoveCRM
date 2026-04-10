@@ -674,7 +674,7 @@ function ensureOutboundPacer(twilioWs: WebSocket, state: CallState) {
         stopOutboundPacer(twilioWs, live, "buffer drained after OpenAI done");
         setAiSpeaking(live, false, "pacer drained");
         (live as any).lastListenEnabledAtMs = Date.now();
-        (live as any).listenWarmupUntilMs = Date.now() + 700;
+        (live as any).listenWarmupUntilMs = Date.now() + 2000;
         if (live.phase === "in_call") {
           armSilenceWatchdog(twilioWs, live, MID_CALL_SILENCE_MS, "pacer drained in_call");
         } else if (live.phase === "awaiting_greeting_reply") {
@@ -5057,8 +5057,8 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
           // Short enough to not hang on pauses, long enough to not cut off natural speech
           silence_duration_ms: 400,
 
-          // Balanced threshold — reduces false triggers on background noise
-          threshold: 0.9,
+          // Balanced threshold — rejects comfort noise but catches real speech
+          threshold: 0.85,
 
           // Capture speech from the very start of each user turn
           prefix_padding_ms: 300,
@@ -6888,7 +6888,11 @@ void handleFinalOutcomeIntent(state, {
       // This covers both the initial greeting and any retry greeting.
       if (state.phase === "awaiting_greeting_reply") {
         (state as any).greetingAudioDone = true;
-        console.log("[AI-VOICE] greetingAudioDone = true | commits now unblocked", {
+        // ✅ Also arm awaitingUserAnswer so audio is forwarded to OpenAI
+        // immediately after greeting finishes (not just during warmup window).
+        state.awaitingUserAnswer = true;
+        state.awaitingAnswerForStepIndex = 0;
+        console.log("[AI-VOICE] greetingAudioDone = true | awaitingUserAnswer armed | commits now unblocked", {
           callSid: state.callSid,
         });
       }
@@ -6914,7 +6918,7 @@ void handleFinalOutcomeIntent(state, {
       stopOutboundPacer(twilioWs, state, "OpenAI done + <1 frame buffered");
       setAiSpeaking(state, false, `OpenAI ${t} (buffer < 1 frame)`);
       (state as any).lastListenEnabledAtMs = Date.now();
-      (state as any).listenWarmupUntilMs = Date.now() + 700;
+      (state as any).listenWarmupUntilMs = Date.now() + 2000;
 
       // ✅ If we never produced audible greeting audio, do NOT advance steps/phases.
       if (state.greetingAdvancePending) {
