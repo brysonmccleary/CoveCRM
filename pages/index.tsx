@@ -75,13 +75,47 @@ const TESTIMONIALS = [
 ];
 
 export default function Home() {
+  const homepageTitle = "Cove CRM – CRM for Insurance Agents, AI Dialer, SMS & Facebook Leads";
+  const homepageDescription =
+    "CoveCRM is a CRM for insurance agents with AI dialer tools, SMS automation, Facebook lead workflows, power dialing, and appointment booking built for high-volume insurance sales.";
+
   return (
     <>
       <Head>
-        <title>Cove CRM – The #1 CRM for Life Insurance Sales</title>
+        <title>{homepageTitle}</title>
         <meta
           name="description"
-          content="Close more deals with Cove CRM. Built for life insurance telesales agents. AI Call Coach, AI Dialer, SMS automation, Facebook Lead Manager, and agent recruiting — all in one platform."
+          content={homepageDescription}
+        />
+        <link rel="canonical" href="https://www.covecrm.com/" />
+        <meta property="og:title" content={homepageTitle} />
+        <meta property="og:description" content={homepageDescription} />
+        <meta property="og:type" content="website" />
+        <meta property="og:url" content="https://www.covecrm.com/" />
+        <meta property="og:image" content="https://www.covecrm.com/logo.png" />
+        <meta name="twitter:card" content="summary_large_image" />
+        <meta name="twitter:title" content={homepageTitle} />
+        <meta name="twitter:description" content={homepageDescription} />
+        <meta name="twitter:image" content="https://www.covecrm.com/logo.png" />
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{
+            __html: JSON.stringify({
+              "@context": "https://schema.org",
+              "@type": "SoftwareApplication",
+              name: "CoveCRM",
+              applicationCategory: "BusinessApplication",
+              operatingSystem: "Web",
+              url: "https://www.covecrm.com/",
+              description: homepageDescription,
+              brand: "CoveCRM",
+              offers: {
+                "@type": "Offer",
+                price: "199.99",
+                priceCurrency: "USD",
+              },
+            }),
+          }}
         />
       </Head>
 
@@ -636,17 +670,50 @@ export default function Home() {
 
         {/* Footer */}
         <footer className="py-10 px-6 bg-[#020617] border-t border-white/10">
-          <div className="max-w-6xl mx-auto flex flex-col md:flex-row items-center justify-between gap-4 text-sm text-slate-400">
-            <div className="flex items-center gap-2">
-              <Image src="/logo.png" alt="Cove CRM" width={24} height={24} />
-              <span className="font-semibold text-slate-300">Cove CRM</span>
+          <div className="max-w-6xl mx-auto grid gap-8 md:grid-cols-[1.2fr_2.8fr] text-sm text-slate-400">
+            <div className="space-y-3">
+              <div className="flex items-center gap-2">
+                <Image src="/logo.png" alt="Cove CRM" width={24} height={24} />
+                <span className="font-semibold text-slate-300">Cove CRM</span>
+              </div>
+              <p>© 2026 CoveCRM. Built for insurance agents.</p>
             </div>
-            <div className="flex items-center gap-5">
-              <Link href="/legal/privacy" className="hover:text-white transition">Privacy</Link>
-              <Link href="/legal/terms" className="hover:text-white transition">Terms</Link>
-              <a href="mailto:support@covecrm.com" className="hover:text-white transition">Support</a>
+            <div className="grid gap-8 sm:grid-cols-2 lg:grid-cols-4">
+              <div>
+                <h3 className="mb-3 text-xs font-bold uppercase tracking-wider text-slate-300">Company</h3>
+                <div className="flex flex-col gap-2">
+                  <Link href="/legal/privacy" className="hover:text-white transition">Privacy</Link>
+                  <Link href="/legal/terms" className="hover:text-white transition">Terms</Link>
+                  <a href="mailto:support@covecrm.com" className="hover:text-white transition">Support</a>
+                </div>
+              </div>
+              <div>
+                <h3 className="mb-3 text-xs font-bold uppercase tracking-wider text-slate-300">Core</h3>
+                <div className="flex flex-col gap-2">
+                  <a href="/best-crm-for-insurance-agents" className="hover:text-white transition">Best CRM for Insurance Agents</a>
+                  <a href="/life-insurance-crm" className="hover:text-white transition">Life Insurance CRM</a>
+                  <a href="/covecrm-features" className="hover:text-white transition">CoveCRM Features</a>
+                  <a href="/insurance-crm-faq" className="hover:text-white transition">Insurance CRM FAQ</a>
+                </div>
+              </div>
+              <div>
+                <h3 className="mb-3 text-xs font-bold uppercase tracking-wider text-slate-300">Compare</h3>
+                <div className="flex flex-col gap-2">
+                  <a href="/go-high-level-vs-covecrm" className="hover:text-white transition">GoHighLevel vs CoveCRM</a>
+                  <a href="/close-vs-covecrm" className="hover:text-white transition">Close vs CoveCRM</a>
+                  <a href="/ringy-vs-covecrm" className="hover:text-white transition">Ringy vs CoveCRM</a>
+                </div>
+              </div>
+              <div>
+                <h3 className="mb-3 text-xs font-bold uppercase tracking-wider text-slate-300">Solutions</h3>
+                <div className="flex flex-col gap-2">
+                  <a href="/ai-dialer-for-insurance-agents" className="hover:text-white transition">AI Dialer for Insurance Agents</a>
+                  <a href="/crm-that-texts-leads-automatically" className="hover:text-white transition">CRM That Texts Leads Automatically</a>
+                  <a href="/facebook-leads-for-insurance-agents" className="hover:text-white transition">Facebook Leads for Insurance Agents</a>
+                  <a href="/insurance-agent-follow-up-system" className="hover:text-white transition">Insurance Agent Follow-Up System</a>
+                </div>
+              </div>
             </div>
-            <p>© 2026 CoveCRM. Built for insurance agents.</p>
           </div>
         </footer>
 
