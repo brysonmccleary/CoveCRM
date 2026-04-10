@@ -1456,7 +1456,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       activeEnrollments = await DripEnrollment.find({
         leadId: lead._id,
         userEmail: user.email,
-        status: "active",
+        status: { $in: ["active", "paused"] },
       })
         .select({ _id: 1, campaignId: 1 })
         .lean();
@@ -1473,13 +1473,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
 
       const result = await DripEnrollment.updateMany(
-        { leadId: lead._id, userEmail: user.email, status: "active" },
+        { leadId: lead._id, userEmail: user.email, status: { $in: ["active", "paused"] } },
         {
           $set: {
             status: "paused",
             paused: true,
             isPaused: true,
             isActive: false,
+            active: false,
+            enabled: false,
             stopAll: true,
             nextSendAt: null,
           },

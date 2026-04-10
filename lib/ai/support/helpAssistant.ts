@@ -15,6 +15,17 @@ import {
   getTwilioStatus,
 } from "./supportTools";
 
+const SUPPORT_MODEL = process.env.OPENAI_SUPPORT_MODEL || "gpt-4.1-mini";
+const MAX_HISTORY_MESSAGES = 6;
+const MAX_HISTORY_ITEM_CHARS = 240;
+const MAX_KNOWLEDGE_DOCS = 3;
+const MAX_KNOWLEDGE_DOC_CHARS = 900;
+const MAX_TOOL_RESULT_CHARS = 900;
+const MAX_TOTAL_PROMPT_CHARS = 14000;
+const MAX_SUPPORT_CONTEXT_CHARS = 7000;
+const MAX_PAGE_CONTEXT_CHARS = 160;
+const MAX_USER_MESSAGE_CHARS = 1200;
+
 const SUPPORT_TOOL_DEFS = [
   { name: "getTwilioStatus", description: "Inspect Twilio and phone-number setup for the tenant." },
   { name: "getA2PStatus", description: "Inspect A2P registration and messaging readiness." },
@@ -45,6 +56,281 @@ type HelpAssistantArgs = {
 function safeErrorMessage(err: any) {
   const message = String(err?.message || err || "internal_error").trim();
   return message.slice(0, 160) || "internal_error";
+}
+
+function truncateText(value: any, maxChars: number) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, Math.max(0, maxChars - 1)).trim()}…`;
+}
+
+function jsonChars(value: any) {
+  try {
+    return JSON.stringify(value).length;
+  } catch {
+    return 0;
+  }
+}
+
+function summarizeRecentFailures(items: any[], limit: number) {
+  return (Array.isArray(items) ? items : []).slice(0, limit).map((item: any) => ({
+    status: String(item?.status || "").trim(),
+    errorCode: String(item?.errorCode || "").trim(),
+    errorMessage: truncateText(item?.errorMessage, 120),
+    createdAt: item?.createdAt || null,
+  }));
+}
+
+function compactSupportContextForPrompt(supportContext: any) {
+  const compact = {
+    integrations: {
+      twilioConfigured: Boolean(supportContext?.integrations?.twilioConfigured),
+      googleSheetsConnected: Boolean(supportContext?.integrations?.googleSheetsConnected),
+      googleCalendarConnected: Boolean(supportContext?.integrations?.googleCalendarConnected),
+      metaConnected: Boolean(supportContext?.integrations?.metaConnected),
+    },
+    messagingStatus: {
+      numberCount: Number(supportContext?.messagingStatus?.numberCount || 0),
+      a2p: supportContext?.messagingStatus?.a2p?.profile
+        ? {
+            registrationStatus: supportContext.messagingStatus.a2p.profile.registrationStatus || "",
+            applicationStatus: supportContext.messagingStatus.a2p.profile.applicationStatus || "",
+            messagingReady: Boolean(supportContext.messagingStatus.a2p.profile.messagingReady),
+            brandStatus: supportContext.messagingStatus.a2p.profile.brandStatus || "",
+            lastError: truncateText(supportContext.messagingStatus.a2p.profile.lastError, 120),
+          }
+        : null,
+      recentSmsFailures: summarizeRecentFailures(supportContext?.messagingStatus?.recentSmsFailures, 3),
+    },
+    campaigns: {
+      assignedDripsTotal: Number(supportContext?.campaigns?.assignedDripsTotal || 0),
+    },
+    folders: (Array.isArray(supportContext?.folders) ? supportContext.folders : []).slice(0, 5).map((folder: any) => ({
+      id: String(folder?.id || ""),
+      name: truncateText(folder?.name, 48),
+      aiContactEnabled: Boolean(folder?.aiContactEnabled),
+      aiFirstCallEnabled: Boolean(folder?.aiFirstCallEnabled),
+    })),
+    recentErrors: {
+      smsFailures: summarizeRecentFailures(supportContext?.recentErrors?.smsFailures, 3),
+      importErrors: (Array.isArray(supportContext?.recentErrors?.importErrors) ? supportContext.recentErrors.importErrors : [])
+        .slice(0, 3)
+        .map((item: any) => ({
+          id: String(item?.id || ""),
+          sourceType: String(item?.sourceType || ""),
+          createdAt: item?.createdAt || null,
+        })),
+    },
+    aiFeatures: {
+      hasAI: Boolean(supportContext?.aiFeatures?.hasAI),
+      aiAssistantName: truncateText(supportContext?.aiFeatures?.aiAssistantName, 40),
+      aiDialerBalance: Number(supportContext?.aiFeatures?.aiDialerBalance || 0),
+      usageBalance: Number(supportContext?.aiFeatures?.usageBalance || 0),
+    },
+    leadAssistant: supportContext?.leadAssistant
+      ? {
+          totals: {
+            totalLeads: Number(supportContext.leadAssistant?.totals?.totalLeads || 0),
+            hotLeads: Number(supportContext.leadAssistant?.totals?.hotLeads || 0),
+            warmLeads: Number(supportContext.leadAssistant?.totals?.warmLeads || 0),
+          },
+          topLeads: (Array.isArray(supportContext?.leadAssistant?.topLeads) ? supportContext.leadAssistant.topLeads : [])
+            .slice(0, 5)
+            .map((lead: any) => ({
+              id: String(lead?.id || ""),
+              name: truncateText(lead?.name, 48),
+              folder: truncateText(lead?.folder, 32),
+              aiPriorityScore: typeof lead?.aiPriorityScore === "number" ? lead.aiPriorityScore : 0,
+              aiPriorityCategory: String(lead?.aiPriorityCategory || ""),
+              status: truncateText(lead?.status, 24),
+              updatedAt: lead?.updatedAt || null,
+            })),
+        }
+      : null,
+    topLeads: (Array.isArray(supportContext?.topLeads) ? supportContext.topLeads : []).slice(0, 5).map((lead: any) => ({
+      id: String(lead?.id || ""),
+      name: truncateText(lead?.name, 48),
+      folder: truncateText(lead?.folder, 32),
+      aiPriorityScore: typeof lead?.aiPriorityScore === "number" ? lead.aiPriorityScore : 0,
+      aiPriorityCategory: String(lead?.aiPriorityCategory || ""),
+      status: truncateText(lead?.status, 24),
+      updatedAt: lead?.updatedAt || null,
+    })),
+  };
+
+  const compactChars = jsonChars(compact);
+  return {
+    compact:
+      compactChars <= MAX_SUPPORT_CONTEXT_CHARS
+        ? compact
+        : {
+            integrations: compact.integrations,
+            messagingStatus: {
+              numberCount: compact.messagingStatus.numberCount,
+              a2p: compact.messagingStatus.a2p,
+            },
+            campaigns: compact.campaigns,
+            folders: compact.folders.slice(0, 3),
+            aiFeatures: compact.aiFeatures,
+            leadAssistant: compact.leadAssistant
+              ? {
+                  totals: compact.leadAssistant.totals,
+                  topLeads: compact.leadAssistant.topLeads.slice(0, 3),
+                }
+              : null,
+            topLeads: compact.topLeads.slice(0, 3),
+          },
+    truncated: compactChars > MAX_SUPPORT_CONTEXT_CHARS,
+    originalChars: compactChars,
+  };
+}
+
+function compactKnowledgeDocsForPrompt(knowledgeDocs: any[]) {
+  const docs = (Array.isArray(knowledgeDocs) ? knowledgeDocs : []).slice(0, MAX_KNOWLEDGE_DOCS).map((doc: any) => ({
+    title: truncateText(doc?.title, 100),
+    category: truncateText(doc?.category, 40),
+    tags: Array.isArray(doc?.tags) ? doc.tags.slice(0, 6).map((tag: any) => truncateText(tag, 24)) : [],
+    content: truncateText(doc?.content, MAX_KNOWLEDGE_DOC_CHARS),
+  }));
+  return {
+    docs,
+    truncated: (Array.isArray(knowledgeDocs) ? knowledgeDocs.length : 0) > docs.length,
+  };
+}
+
+function compactHistoryForPrompt(messages: any[]) {
+  const history = (Array.isArray(messages) ? messages : [])
+    .slice(-MAX_HISTORY_MESSAGES)
+    .map((message: any) => ({
+      role: String(message?.role || "user"),
+      content: truncateText(message?.content, MAX_HISTORY_ITEM_CHARS),
+      createdAt: message?.createdAt || null,
+    }));
+  return {
+    history,
+    truncated: (Array.isArray(messages) ? messages.length : 0) > history.length,
+  };
+}
+
+function trimToolResult(value: any): any {
+  if (Array.isArray(value)) {
+    return value.slice(0, 4).map((item) => trimToolResult(item));
+  }
+  if (value && typeof value === "object") {
+    const out: Record<string, any> = {};
+    for (const [key, raw] of Object.entries(value)) {
+      if (Array.isArray(raw)) out[key] = raw.slice(0, 4).map((item) => trimToolResult(item));
+      else if (raw && typeof raw === "object") out[key] = trimToolResult(raw);
+      else if (typeof raw === "string") out[key] = truncateText(raw, 160);
+      else out[key] = raw;
+    }
+    return out;
+  }
+  if (typeof value === "string") return truncateText(value, 160);
+  return value;
+}
+
+function buildPromptPayload(args: {
+  message: string;
+  pageContext?: string;
+  supportContext: any;
+  knowledgeDocs: any[];
+  history: any[];
+}) {
+  const safeMessage = truncateText(args.message, MAX_USER_MESSAGE_CHARS);
+  const safePageContext = truncateText(args.pageContext, MAX_PAGE_CONTEXT_CHARS);
+  let supportContextInfo = compactSupportContextForPrompt(args.supportContext);
+  let knowledgeInfo = compactKnowledgeDocsForPrompt(args.knowledgeDocs);
+  let historyInfo = compactHistoryForPrompt(args.history);
+
+  let payload = {
+    message: safeMessage,
+    pageContext: safePageContext,
+    supportContext: supportContextInfo.compact,
+    knowledgeDocs: knowledgeInfo.docs,
+    history: historyInfo.history,
+  };
+
+  let totalPromptChars = jsonChars(payload);
+  let totalPromptTruncated = false;
+
+  if (totalPromptChars > MAX_TOTAL_PROMPT_CHARS) {
+    totalPromptTruncated = true;
+    knowledgeInfo = {
+      docs: knowledgeInfo.docs.map((doc) => ({
+        ...doc,
+        content: truncateText(doc.content, 500),
+      })),
+      truncated: true,
+    };
+    historyInfo = {
+      history: historyInfo.history.slice(-4).map((item) => ({
+        ...item,
+        content: truncateText(item.content, 160),
+      })),
+      truncated: true,
+    };
+    payload = {
+      message: safeMessage,
+      pageContext: safePageContext,
+      supportContext: supportContextInfo.compact,
+      knowledgeDocs: knowledgeInfo.docs,
+      history: historyInfo.history,
+    };
+    totalPromptChars = jsonChars(payload);
+  }
+
+  if (totalPromptChars > MAX_TOTAL_PROMPT_CHARS) {
+    totalPromptTruncated = true;
+    supportContextInfo = {
+      compact: compactSupportContextForPrompt({
+        ...args.supportContext,
+        folders: Array.isArray(args.supportContext?.folders) ? args.supportContext.folders.slice(0, 3) : [],
+        topLeads: Array.isArray(args.supportContext?.topLeads) ? args.supportContext.topLeads.slice(0, 3) : [],
+        leadAssistant: args.supportContext?.leadAssistant
+          ? {
+              ...args.supportContext.leadAssistant,
+              topLeads: Array.isArray(args.supportContext.leadAssistant?.topLeads)
+                ? args.supportContext.leadAssistant.topLeads.slice(0, 3)
+                : [],
+            }
+          : null,
+      }).compact,
+      truncated: true,
+      originalChars: supportContextInfo.originalChars,
+    };
+    payload = {
+      message: safeMessage,
+      pageContext: safePageContext,
+      supportContext: supportContextInfo.compact,
+      knowledgeDocs: knowledgeInfo.docs,
+      history: historyInfo.history,
+    };
+    totalPromptChars = jsonChars(payload);
+  }
+
+  return {
+    payload,
+    metrics: {
+      userMessageChars: safeMessage.length,
+      pageContextChars: safePageContext.length,
+      supportContextChars: jsonChars(supportContextInfo.compact),
+      knowledgeDocsChars: jsonChars(knowledgeInfo.docs),
+      historyChars: jsonChars(historyInfo.history),
+      totalPromptChars,
+      supportContextTruncated: supportContextInfo.truncated,
+      knowledgeDocsTruncated: knowledgeInfo.truncated,
+      historyTruncated: historyInfo.truncated,
+      totalPromptTruncated,
+      knowledgeDocCount: knowledgeInfo.docs.length,
+      historyCount: historyInfo.history.length,
+    },
+  };
+}
+
+function logSupportPrompt(details: Record<string, unknown>) {
+  console.info("[support-assistant]", details);
 }
 
 async function runSupportToolsSafely(userEmail: string) {
@@ -290,7 +576,7 @@ export async function runHelpAssistant({
 
     const [loadedSupportContext, knowledgeDocs] = await Promise.all([
       buildSupportContext(userEmail).catch(() => null),
-      SupportKnowledgeDoc.find({}).sort({ updatedAt: -1 }).limit(5).lean().catch(() => []),
+      SupportKnowledgeDoc.find({}).sort({ updatedAt: -1 }).limit(MAX_KNOWLEDGE_DOCS).lean().catch(() => []),
     ]);
 
     supportContext = loadedSupportContext || {
@@ -318,30 +604,32 @@ export async function runHelpAssistant({
       topLeads: [],
     };
 
-    const promptSupportContext = {
-      ...supportContext,
-      leadAssistant: supportContext?.leadAssistant
-        ? {
-            ...supportContext.leadAssistant,
-            topLeads: Array.isArray(supportContext?.leadAssistant?.topLeads)
-              ? supportContext.leadAssistant.topLeads.slice(0, 10)
-              : [],
-          }
-        : null,
-      topLeads: Array.isArray(supportContext?.topLeads) ? supportContext.topLeads.slice(0, 10) : [],
-    };
-
     const apiKey = process.env.OPENAI_API_KEY;
     let answer = "";
 
     if (apiKey) {
       const client = new OpenAI({ apiKey });
       let response: any = null;
+      const promptPayload = buildPromptPayload({
+        message: content,
+        pageContext,
+        supportContext,
+        knowledgeDocs,
+        history: Array.isArray(conversation?.messages) ? conversation.messages : [],
+      });
 
       try {
         const startedAt = Date.now();
+        logSupportPrompt({
+          event: "request:start",
+          userEmail,
+          model: SUPPORT_MODEL,
+          totalMessages: 2,
+          ...promptPayload.metrics,
+          totalPromptCharsCapped: promptPayload.metrics.totalPromptChars > MAX_TOTAL_PROMPT_CHARS,
+        });
         response = await client.responses.create({
-          model: "gpt-5-mini",
+          model: SUPPORT_MODEL,
           input: [
             {
               role: "system",
@@ -362,18 +650,7 @@ export async function runHelpAssistant({
             },
             {
               role: "user",
-              content: JSON.stringify({
-                message: content,
-                pageContext: pageContext || "",
-                supportContext: promptSupportContext,
-                knowledgeDocs: (Array.isArray(knowledgeDocs) ? knowledgeDocs : []).map((doc: any) => ({
-                  title: doc.title,
-                  category: doc.category,
-                  content: doc.content,
-                  tags: doc.tags,
-                })),
-                history: Array.isArray(conversation?.messages) ? conversation.messages.slice(-6) : [],
-              }),
+              content: JSON.stringify(promptPayload.payload),
             },
           ],
           tools: SUPPORT_TOOL_DEFS.map((tool) => ({
@@ -392,12 +669,12 @@ export async function runHelpAssistant({
         logSupportUsage({
           source: "lib/ai/support/helpAssistant:first",
           userEmail,
-          model: "gpt-5-mini",
+          model: SUPPORT_MODEL,
           durationMs: Date.now() - startedAt,
           promptTokens: usage?.input_tokens,
           completionTokens: usage?.output_tokens,
           costUsd: priceOpenAIUsage({
-            model: "gpt-5-mini",
+            model: SUPPORT_MODEL,
             promptTokens: usage?.input_tokens,
             completionTokens: usage?.output_tokens,
           }),
@@ -435,22 +712,36 @@ export async function runHelpAssistant({
       let finalResponse: any = response;
       if (toolOutputs.length > 0 && response?.id) {
         try {
+          const trimmedToolOutputs = toolOutputs.map((item) => ({
+            ...item,
+            output: truncateText(item.output, MAX_TOOL_RESULT_CHARS),
+          }));
+          const toolContextChars = jsonChars(trimmedToolOutputs);
           const startedAt = Date.now();
+          logSupportPrompt({
+            event: "request:followup",
+            userEmail,
+            model: SUPPORT_MODEL,
+            totalMessages: trimmedToolOutputs.length,
+            toolContextChars,
+            toolResultCount: trimmedToolOutputs.length,
+            toolContextTruncated: trimmedToolOutputs.some((item, index) => item.output.length !== toolOutputs[index].output.length),
+          });
           finalResponse = await client.responses.create({
-            model: "gpt-5-mini",
+            model: SUPPORT_MODEL,
             previous_response_id: response.id,
-            input: toolOutputs,
+            input: trimmedToolOutputs,
           });
           const usage = finalResponse?.usage || {};
           logSupportUsage({
             source: "lib/ai/support/helpAssistant:followup",
             userEmail,
-            model: "gpt-5-mini",
+            model: SUPPORT_MODEL,
             durationMs: Date.now() - startedAt,
             promptTokens: usage?.input_tokens,
             completionTokens: usage?.output_tokens,
             costUsd: priceOpenAIUsage({
-              model: "gpt-5-mini",
+              model: SUPPORT_MODEL,
               promptTokens: usage?.input_tokens,
               completionTokens: usage?.output_tokens,
             }),

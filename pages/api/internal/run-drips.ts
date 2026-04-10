@@ -2,6 +2,7 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import dbConnect from "@/lib/mongooseConnect";
 import Lead from "@/models/Lead";
+import Message from "@/models/Message";
 import User from "@/models/User";
 import DripCampaign from "@/models/DripCampaign";
 import DripEnrollment from "@/models/DripEnrollment";
@@ -133,6 +134,35 @@ function normalizeToE164Maybe(phone?: string): string | null {
   const just = digits.replace(/\D/g, "");
   if (just.length === 10) return `+1${just}`;
   if (just.length === 11 && just.startsWith("1")) return `+${just}`;
+  return null;
+}
+
+const DRIP_SUPPRESSED_STATUS_MATCHERS = [
+  "engaged",
+  "replied",
+  "booked",
+  "sold",
+  "not interested",
+  "bad number",
+  "wrong number",
+  "do not call",
+  "dnc",
+];
+
+function getDripSuppressionReason(lead: any, hasInboundReply: boolean): string | null {
+  if (!lead) return "missing-lead";
+  if (hasInboundReply || lead?.lastInboundAt) return "lead-replied";
+  if (lead?.isAIEngaged === true) return "ai-engaged";
+  if (lead?.unsubscribed === true || lead?.optOut === true) return "opted-out";
+
+  const status = String(lead?.status || "")
+    .trim()
+    .toLowerCase();
+
+  if (status && DRIP_SUPPRESSED_STATUS_MATCHERS.some((token) => status.includes(token))) {
+    return `status:${status}`;
+  }
+
   return null;
 }
 
@@ -568,10 +598,32 @@ if (
         // Using nextSendAt in the key can create false “new sends” after reschedules.
         const idKey = `${String(claim._id)}:${idx}`;
 
-        // Still active right before send
-        const fresh = await DripEnrollment.findById(claim._id)
-          .select({ status: 1, stopAll: 1, paused: 1, isPaused: 1 })
-          .lean();
+        // Still active right before send, and still drip-eligible based on current DB truth.
+        const [fresh, latestLead, inboundReply] = await Promise.all([
+          DripEnrollment.findById(claim._id)
+            .select({ status: 1, stopAll: 1, paused: 1, isPaused: 1 })
+            .lean(),
+          Lead.findOne({
+            _id: claim.leadId,
+            $or: [{ userEmail: tenantEmail }, { ownerEmail: tenantEmail }],
+          })
+            .select({
+              _id: 1,
+              status: 1,
+              lastInboundAt: 1,
+              isAIEngaged: 1,
+              unsubscribed: 1,
+              optOut: 1,
+            })
+            .lean(),
+          Message.findOne({
+            leadId: claim.leadId,
+            userEmail: tenantEmail,
+            direction: "inbound",
+          })
+            .select({ _id: 1 })
+            .lean(),
+        ]);
 
         if (
           !fresh ||
@@ -583,6 +635,46 @@ if (
           await DripEnrollment.updateOne(
             { _id: claim._id },
             { $set: { processing: false }, $unset: { processingAt: 1 } }
+          );
+          return;
+        }
+
+        const suppressionReason = getDripSuppressionReason(
+          latestLead,
+          Boolean(inboundReply?._id)
+        );
+
+        if (suppressionReason) {
+          console.log(
+            "[run-drips] suppressing drip send",
+            JSON.stringify({
+              enrollmentId: String(claim._id),
+              leadId: String(claim.leadId),
+              campaignId: String(claim.campaignId),
+              userEmail: tenantEmail,
+              reason: suppressionReason,
+            })
+          );
+
+          enrollSuppressed++;
+
+          await DripEnrollment.updateOne(
+            { _id: claim._id },
+            {
+              $set: {
+                status: "canceled",
+                nextSendAt: null,
+                processing: false,
+                lastError: `suppressed:${suppressionReason}`,
+                stopAll: true,
+                active: false,
+                enabled: false,
+                isActive: false,
+                paused: true,
+                isPaused: true,
+              },
+              $unset: { processingAt: 1 },
+            }
           );
           return;
         }

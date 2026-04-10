@@ -26,8 +26,8 @@ export async function buildSupportContext(userEmail: string) {
     leadAssistant,
   ] = await Promise.all([
     (User as any).findOne({ email: userEmail }).lean(),
-    Folder.find({ userEmail }).sort({ updatedAt: -1 }).limit(20).lean(),
-    Number.find({ userEmail }).sort({ createdAt: -1 }).limit(20).lean(),
+    Folder.find({ userEmail }).sort({ updatedAt: -1 }).limit(8).lean(),
+    Number.find({ userEmail }).sort({ createdAt: -1 }).limit(8).lean(),
     getA2PStatus(userEmail),
     getMetaStatus(userEmail),
     getRecentSmsFailures(userEmail),
@@ -59,7 +59,7 @@ export async function buildSupportContext(userEmail: string) {
       name: folder.name,
       aiContactEnabled: Boolean(folder.aiContactEnabled),
       aiFirstCallEnabled: Boolean(folder.aiFirstCallEnabled),
-    })),
+    })).slice(0, 8),
     recentErrors: {
       smsFailures: recentSmsFailures,
       importErrors: recentImportErrors,

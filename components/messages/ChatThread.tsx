@@ -3,8 +3,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import axios from "axios";
 import { Socket } from "socket.io-client";
 import { InboxMode } from "./InboxSidebar";
-import { useLeadMemoryProfile } from "@/lib/ai/memory/useLeadMemoryProfile";
-import { getSuggestedTaskLabel } from "@/lib/ai/memory/nextBestAction";
 
 interface Message {
   _id?: string;
@@ -97,7 +95,6 @@ interface SuggestedReply {
 }
 
 export default function ChatThread({ leadId, socket, mode = "sms" }: ChatThreadProps) {
-  const memoryProfile = useLeadMemoryProfile(leadId);
   const [messages, setMessages] = useState<Message[]>([]);
   const [emailMessages, setEmailMessages] = useState<EmailMsg[]>([]);
   const [input, setInput] = useState("");
@@ -456,25 +453,8 @@ export default function ChatThread({ leadId, socket, mode = "sms" }: ChatThreadP
   }
 
   // ── SMS mode render ─────────────────────────────────────────────────────────
-  const nextBestAction = String(memoryProfile?.nextBestAction || "").trim();
-  const suggestedTask = getSuggestedTaskLabel(nextBestAction);
-
   return (
     <div className="flex flex-col h-full bg-[#0f172a]">
-      {nextBestAction ? (
-        <div className="px-4 pt-4">
-          <div className="rounded-xl border border-blue-500/20 bg-blue-950/30 p-3">
-            <div className="text-xs font-medium uppercase tracking-wide text-blue-300">
-              AI Suggested Next Step
-            </div>
-            <p className="mt-1 text-sm text-blue-50">{nextBestAction}</p>
-            {suggestedTask ? (
-              <p className="mt-2 text-xs text-blue-200/80">{suggestedTask}</p>
-            ) : null}
-          </div>
-        </div>
-      ) : null}
-
       <div className="flex items-center justify-end px-4 py-3 border-b border-gray-800 bg-[#0f172a] min-h-[72px]">
         {dripUi.hasActive ? (
           <span className="bg-green-700 text-white px-4 py-2 rounded-full text-sm">

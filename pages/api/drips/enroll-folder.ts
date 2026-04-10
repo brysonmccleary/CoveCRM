@@ -4,6 +4,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "../auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import Lead from "@/models/Lead";
+import Message from "@/models/Message";
 import DripCampaign from "@/models/DripCampaign";
 import DripEnrollment from "@/models/DripEnrollment";
 import DripFolderEnrollment from "@/models/DripFolderEnrollment";
@@ -75,6 +76,35 @@ function normalizeToE164Maybe(phone?: string): string | null {
   const just = digits.replace(/\D/g, "");
   if (just.length === 10) return `+1${just}`;
   if (just.length === 11 && just.startsWith("1")) return `+${just}`;
+  return null;
+}
+
+const DRIP_SUPPRESSED_STATUS_MATCHERS = [
+  "engaged",
+  "replied",
+  "booked",
+  "sold",
+  "not interested",
+  "bad number",
+  "wrong number",
+  "do not call",
+  "dnc",
+];
+
+function getDripSuppressionReason(lead: any, hasInboundReply: boolean): string | null {
+  if (!lead) return "missing-lead";
+  if (hasInboundReply || lead?.lastInboundAt) return "lead-replied";
+  if (lead?.isAIEngaged === true) return "ai-engaged";
+  if (lead?.unsubscribed === true || lead?.optOut === true) return "opted-out";
+
+  const status = String(lead?.status || "")
+    .trim()
+    .toLowerCase();
+
+  if (status && DRIP_SUPPRESSED_STATUS_MATCHERS.some((token) => status.includes(token))) {
+    return `status:${status}`;
+  }
+
   return null;
 }
 
@@ -264,6 +294,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     let created = 0,
       deduped = 0,
       immediateSent = 0,
+      immediateSuppressed = 0,
       immediateSkippedNoPhone = 0,
       immediateLockMiss = 0,
       immediateFailed = 0;
@@ -381,6 +412,66 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
 
         try {
+          const [latestLead, inboundReply] = await Promise.all([
+            Lead.findOne({
+              _id: lead._id,
+              $or: [{ userEmail: user.email }, { ownerEmail: user.email }],
+            })
+              .select({
+                _id: 1,
+                status: 1,
+                lastInboundAt: 1,
+                isAIEngaged: 1,
+                unsubscribed: 1,
+                optOut: 1,
+              })
+              .lean(),
+            Message.findOne({
+              leadId: lead._id,
+              userEmail: user.email,
+              direction: "inbound",
+            })
+              .select({ _id: 1 })
+              .lean(),
+          ]);
+
+          const suppressionReason = getDripSuppressionReason(
+            latestLead,
+            Boolean(inboundReply?._id)
+          );
+
+          if (suppressionReason) {
+            immediateSuppressed++;
+            console.log(
+              "[drips/enroll-folder] suppressing immediate send",
+              JSON.stringify({
+                enrollmentId: String(ins._id),
+                leadId: String(lead._id),
+                campaignId: String(campaign._id),
+                userEmail: user.email,
+                reason: suppressionReason,
+              })
+            );
+
+            await DripEnrollment.updateOne(
+              { _id: ins._id },
+              {
+                $set: {
+                  status: "canceled",
+                  nextSendAt: null,
+                  stopAll: true,
+                  active: false,
+                  enabled: false,
+                  isActive: false,
+                  paused: true,
+                  isPaused: true,
+                  lastError: `suppressed:${suppressionReason}`,
+                },
+              }
+            );
+            continue;
+          }
+
           const result = await sendSms({
             to,
             body: finalBody,
@@ -459,6 +550,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         created,
         deduped,
         immediateSent,
+        immediateSuppressed,
         immediateSkippedNoPhone,
         immediateLockMiss,
         immediateFailed,
@@ -474,6 +566,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         created,
         deduped,
         immediateSent,
+        immediateSuppressed,
         immediateSkippedNoPhone,
         immediateLockMiss,
         immediateFailed,

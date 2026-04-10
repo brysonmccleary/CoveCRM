@@ -6,11 +6,18 @@ import A2PProfile from "@/models/A2PProfile";
 import Message from "@/models/Message";
 import Lead from "@/models/Lead";
 
+function truncateText(value: any, maxChars: number) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, Math.max(0, maxChars - 1)).trim()}…`;
+}
+
 export async function getTwilioStatus(userEmail: string) {
   await mongooseConnect();
   const [user, numbers] = await Promise.all([
     (User as any).findOne({ email: userEmail }).lean(),
-    Number.find({ userEmail }).sort({ createdAt: -1 }).limit(10).lean(),
+    Number.find({ userEmail }).sort({ createdAt: -1 }).limit(5).lean(),
   ]);
   return {
     hasTwilioConfig: Boolean(user?.twilio?.accountSid),
@@ -50,7 +57,7 @@ export async function getMetaStatus(userEmail: string) {
   const recentMetaLeads = await (Lead as any)
     .find({ userEmail, metaLeadgenId: { $exists: true, $ne: "" } })
     .sort({ createdAt: -1 })
-    .limit(5)
+    .limit(3)
     .lean();
 
   return {
@@ -72,7 +79,7 @@ export async function getRecentImportErrors(userEmail: string) {
       sourceType: { $in: ["csv_import", "google_sheets_live", "manual_import"] },
     })
     .sort({ createdAt: -1 })
-    .limit(20)
+    .limit(8)
     .lean();
 
   return {
@@ -92,7 +99,7 @@ export async function getRecentSmsFailures(userEmail: string) {
     $or: [{ status: "failed" }, { errorCode: { $exists: true, $ne: "" } }],
   })
     .sort({ createdAt: -1 })
-    .limit(20)
+    .limit(5)
     .lean();
 
   return failures.map((message) => ({
@@ -102,14 +109,14 @@ export async function getRecentSmsFailures(userEmail: string) {
     from: message.from || "",
     status: message.status || "",
     errorCode: message.errorCode || "",
-    errorMessage: message.errorMessage || "",
+    errorMessage: truncateText(message.errorMessage || "", 120),
     createdAt: message.createdAt,
   }));
 }
 
 export async function getFolderMappings(userEmail: string) {
   await mongooseConnect();
-  const folders = await Folder.find({ userEmail }).sort({ updatedAt: -1 }).lean();
+  const folders = await Folder.find({ userEmail }).sort({ updatedAt: -1 }).limit(8).lean();
   return folders.map((folder: any) => ({
     id: String(folder._id),
     name: folder.name,
@@ -145,7 +152,7 @@ export async function getLeadAssistantSnapshot(userEmail: string) {
     (Lead as any)
       .find({ userEmail })
       .sort({ aiPriorityScore: -1, updatedAt: -1, createdAt: -1 })
-      .limit(25)
+      .limit(10)
       .lean(),
   ]);
 

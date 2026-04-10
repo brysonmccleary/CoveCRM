@@ -6,6 +6,7 @@ import dbConnect from "@/lib/mongooseConnect";
 import DripCampaign from "@/models/DripCampaign";
 import DripEnrollment from "@/models/DripEnrollment";
 import Lead from "@/models/Lead";
+import Message from "@/models/Message";
 import User from "@/models/User";
 import { sendSms } from "@/lib/twilio/sendSMS";
 import { acquireLock } from "@/lib/locks";
@@ -59,6 +60,35 @@ function normalizeToE164Maybe(phone?: string): string | null {
   const just = digits.replace(/\D/g, "");
   if (just.length === 10) return `+1${just}`;
   if (just.length === 11 && just.startsWith("1")) return `+${just}`;
+  return null;
+}
+
+const DRIP_SUPPRESSED_STATUS_MATCHERS = [
+  "engaged",
+  "replied",
+  "booked",
+  "sold",
+  "not interested",
+  "bad number",
+  "wrong number",
+  "do not call",
+  "dnc",
+];
+
+function getDripSuppressionReason(lead: any, hasInboundReply: boolean): string | null {
+  if (!lead) return "missing-lead";
+  if (hasInboundReply || lead?.lastInboundAt) return "lead-replied";
+  if (lead?.isAIEngaged === true) return "ai-engaged";
+  if (lead?.unsubscribed === true || lead?.optOut === true) return "opted-out";
+
+  const status = String(lead?.status || "")
+    .trim()
+    .toLowerCase();
+
+  if (status && DRIP_SUPPRESSED_STATUS_MATCHERS.some((token) => status.includes(token))) {
+    return `status:${status}`;
+  }
+
   return null;
 }
 
@@ -273,6 +303,73 @@ if (!lead) return res.status(404).json({ error: "Lead not found" });
 
           if (locked) {
             try {
+              const [latestLead, inboundReply] = await Promise.all([
+                Lead.findOne({
+                  _id: leadIdStr,
+                  $or: [{ userEmail: user.email }, { ownerEmail: user.email }],
+                })
+                  .select({
+                    _id: 1,
+                    status: 1,
+                    lastInboundAt: 1,
+                    isAIEngaged: 1,
+                    unsubscribed: 1,
+                    optOut: 1,
+                  })
+                  .lean(),
+                Message.findOne({
+                  leadId: enrollment.leadId,
+                  userEmail: user.email,
+                  direction: "inbound",
+                })
+                  .select({ _id: 1 })
+                  .lean(),
+              ]);
+
+              const suppressionReason = getDripSuppressionReason(
+                latestLead,
+                Boolean(inboundReply?._id)
+              );
+
+              if (suppressionReason) {
+                console.log(
+                  "[drips/enroll-lead] suppressing immediate send",
+                  JSON.stringify({
+                    enrollmentId: String(enrollment._id),
+                    leadId: leadIdStr,
+                    campaignId: campaignIdStr,
+                    userEmail: user.email,
+                    reason: suppressionReason,
+                  })
+                );
+
+                await DripEnrollment.updateOne(
+                  { _id: enrollment._id },
+                  {
+                    $set: {
+                      status: "canceled",
+                      nextSendAt: null,
+                      stopAll: true,
+                      active: false,
+                      enabled: false,
+                      isActive: false,
+                      paused: true,
+                      isPaused: true,
+                      lastError: `suppressed:${suppressionReason}`,
+                    },
+                  }
+                );
+
+                return res.status(200).json({
+                  success: true,
+                  enrollmentId: String(enrollment?._id),
+                  campaign: { id: campaignIdStr, name: campaign.name, key: campaign.key },
+                  nextSendAt: null,
+                  wasUpserted,
+                  historyEntry,
+                });
+              }
+
               await sendSms({
                 to,
                 body: finalBody,
