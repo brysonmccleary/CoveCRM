@@ -162,7 +162,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(401).json({ ok: false, error: "Invalid credentials" });
     }
 
-    if (!user.trialGranted) {
+    if (!(user as any).trialGranted) {
       return res.status(403).json({ error: "Account not activated" });
     }
 
