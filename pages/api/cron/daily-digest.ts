@@ -14,7 +14,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // Only send to users with dailyDigest enabled
   const users = await User.find({
     "notifications.dailyDigest": true,
-    subscriptionStatus: "active",
+    trialGranted: true,
   })
     .select("email")
     .lean();

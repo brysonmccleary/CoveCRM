@@ -159,12 +159,9 @@ export default function SignUp() {
       // compute display total only for the querystring (server enforces real pricing)
       const uiTotal = (discountApplied ? finalPrice : basePrice) + (aiUpgrade ? aiAddOnPrice : 0);
 
-      toast.success("Account created! Redirecting to billing…");
-      router.push(
-        `/billing?email=${encodeURIComponent(email)}&price=${uiTotal}&ai=${aiUpgrade ? 1 : 0}&trial=1&code=${encodeURIComponent(
-          promoCode.trim() || ""
-        )}`
-      );
+      toast.success("Account created! Check your email for the verification code.");
+      void uiTotal;
+      router.push(`/verify-email?email=${encodeURIComponent(email)}`);
     } catch (err: any) {
       const msg = err?.response?.data?.message || "Signup failed. Try again.";
       toast.error(msg);

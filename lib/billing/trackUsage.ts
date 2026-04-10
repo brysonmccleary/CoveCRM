@@ -96,6 +96,11 @@ export async function trackUsage({
     return;
   }
 
+  if (!userDoc?.trialGranted && userDoc?.role !== "admin") {
+    console.warn(`[BLOCKED USAGE] ${userDoc?.email} has no trialGranted`);
+    return null;
+  }
+
   // ---- Analytics (store RAW costs) ----
   const addToTwilio =
     source === "twilio" || source === "twilio-voice" || source === "twilio-self";

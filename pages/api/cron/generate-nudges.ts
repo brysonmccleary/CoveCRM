@@ -11,7 +11,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   await mongooseConnect();
 
-  const users = await User.find({ subscriptionStatus: "active" }).select("email").lean();
+  const users = await User.find({ trialGranted: true }).select("email").lean();
   let total = 0;
 
   for (const user of users) {

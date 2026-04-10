@@ -112,9 +112,9 @@ export default async function handler(
   if (affiliateReferralEmails.length > 0) {
     const activeUsers = await User.find({
       email: { $in: affiliateReferralEmails },
-      subscriptionStatus: "active",
+      trialGranted: true,
     })
-      .select("name email createdAt subscriptionStatus")
+      .select("name email createdAt trialGranted")
       .lean();
 
     activeUsersByEmail = new Map(

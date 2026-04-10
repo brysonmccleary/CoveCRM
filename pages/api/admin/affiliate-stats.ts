@@ -25,7 +25,7 @@ export default async function handler(
 
   try {
     const users = await User.find({
-      subscriptionStatus: "active",
+      trialGranted: true,
       referredBy: { $ne: null },
     }).lean();
 

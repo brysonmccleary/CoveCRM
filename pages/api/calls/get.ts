@@ -19,7 +19,7 @@ function serialize<T extends Record<string, any>>(doc: T | null) {
 
 function entitled(user: any): boolean {
   if (!ENV_AI || !user) return false;
-  const active = (user.subscriptionStatus || "active") === "active";
+  const active = user.trialGranted === true;
   return Boolean(user.hasAI && active);
 }
 
