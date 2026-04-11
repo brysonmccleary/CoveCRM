@@ -3917,19 +3917,22 @@ const server = http.createServer(
                   COVECRM_BASE_URL
                 );
                 workerUrl.searchParams.set("key", AI_DIALER_CRON_KEY);
-
-                await fetch(workerUrl.toString(), {
+                console.log("[AI-VOICE] Kicking worker:", workerUrl.toString());
+                const workerResp = await fetch(workerUrl.toString(), {
                   method: "POST",
                   headers: {
                     "x-cron-key": AI_DIALER_CRON_KEY,
                   },
                 });
+                console.log("[AI-VOICE] Worker kick response:", workerResp.status);
               } catch (err: any) {
                 console.error(
                   "[AI-VOICE] Error kicking AI worker from /start-session:",
                   err?.message || err
                 );
               }
+            } else {
+              console.warn("[AI-VOICE] AI_DIALER_CRON_KEY not set — worker not kicked");
             }
 
             res.statusCode = 200;
