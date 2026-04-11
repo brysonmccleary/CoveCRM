@@ -4,6 +4,7 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from "./api/auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
+import { isAccountActivated } from "@/lib/billing/requireActivatedAccount";
 
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/router";
@@ -256,7 +257,7 @@ function DashboardOverview() {
                 <XAxis dataKey="label" stroke="#D1D5DB" />
                 <YAxis stroke="#D1D5DB" allowDecimals={false} />
                 <Tooltip
-                  formatter={(value: number) => `${value} calls`}
+                  formatter={(value: number | string) => `${value} calls`}
                   labelStyle={{ color: "#E5E7EB" }}
                   contentStyle={{
                     backgroundColor: "#1A2B45",
@@ -335,6 +336,16 @@ export const getServerSideProps: GetServerSideProps = async (context) => {
 
   await dbConnect();
   const user = await User.findOne({ email: session.user.email as string });
+
+  if (!isAccountActivated(user)) {
+    const destination =
+      (user as any)?.emailVerified === true
+        ? `/billing?email=${encodeURIComponent(String(session.user.email))}&trial=1`
+        : `/verify-email?email=${encodeURIComponent(String(session.user.email))}`;
+    return {
+      redirect: { destination, permanent: false },
+    };
+  }
 
   // ✅ Use the actual calendar fields, NOT googleSheets
   const hasCalendarConnected = Boolean(
