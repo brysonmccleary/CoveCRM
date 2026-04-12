@@ -651,6 +651,17 @@ function ensureOutboundPacer(twilioWs: WebSocket, state: CallState) {
           stopOutboundPacer(twilioWs, live, "OpenAI done + buffer empty");
           setAiSpeaking(live, false, "pacer drained");
           (live as any).lastListenEnabledAtMs = Date.now();
+          (live as any).listenWarmupUntilMs = Date.now() + 2000;
+          if (live.phase === "awaiting_greeting_reply") {
+            (live as any).greetingAudioDone = true;
+            live.awaitingUserAnswer = true;
+            live.awaitingAnswerForStepIndex = 0;
+            console.log("[AI-VOICE] greetingAudioDone=true on empty-buffer drain | awaitingUserAnswer armed", { callSid: live.callSid });
+            armSilenceWatchdog(twilioWs, live, POST_GREETING_SILENCE_MS, "pacer drained greeting empty");
+          } else if (live.phase === "in_call") {
+            (live as any).listenWarmupUntilMs = Date.now() + 2000;
+            armSilenceWatchdog(twilioWs, live, MID_CALL_SILENCE_MS, "pacer drained in_call empty");
+          }
           void replayPendingCommittedTurn(twilioWs, live, "pacer drained");
           return;
         }
