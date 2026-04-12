@@ -5460,8 +5460,12 @@ state.lastUserSpeechStoppedAtMs = Date.now();
           const existing = String(state.context?.answeredBy || "").trim();
           if (!existing) {
             await refreshAnsweredByFromCoveCRM(state, "pre-greeting #1");
-            await sleep(150);
+            await sleep(500);
             await refreshAnsweredByFromCoveCRM(state, "pre-greeting #2");
+            await sleep(500);
+            await refreshAnsweredByFromCoveCRM(state, "pre-greeting #3");
+            await sleep(500);
+            await refreshAnsweredByFromCoveCRM(state, "pre-greeting #4");
           }
         } catch {}
 
@@ -5479,7 +5483,36 @@ state.lastUserSpeechStoppedAtMs = Date.now();
           return;
         }
 
-        const isHuman = answeredByNow === "human";
+        // ✅ If AMD hasn't resolved yet (empty/unknown), wait up to 3 more seconds
+        // Twilio AMD can take 3-5s to resolve — we cannot greet into a voicemail
+        if (!answeredByNow || answeredByNow === "unknown") {
+          console.log("[AI-VOICE] AMD not resolved yet — waiting up to 3s before greeting", {
+            callSid: state.callSid,
+            answeredByNow,
+          });
+          for (let i = 0; i < 6; i++) {
+            await sleep(500);
+            await refreshAnsweredByFromCoveCRM(state, `amd-wait-${i}`);
+            const latest = String(state.context?.answeredBy || "").toLowerCase();
+            if (isVoicemailAnsweredBy(latest)) {
+              console.log("[AI-VOICE] Voicemail detected during AMD wait — suppressing", {
+                callSid: state.callSid,
+                answeredBy: latest,
+              });
+              state.voicemailSkipArmed = true;
+              safelyCloseOpenAi(state, "voicemail detected AMD wait");
+              return;
+            }
+            if (latest === "human") {
+              console.log("[AI-VOICE] Human confirmed during AMD wait — proceeding", {
+                callSid: state.callSid,
+              });
+              break;
+            }
+          }
+        }
+
+        const isHuman = String(state.context?.answeredBy || "").toLowerCase() === "human";
         try {
           if (isHuman) await sleep(250);
         } catch {}
