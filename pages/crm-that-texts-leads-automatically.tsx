@@ -59,9 +59,9 @@ export default function CRMThatTextsLeadsAutomaticallyPage() {
             <h1 className="mt-4 text-4xl md:text-5xl font-bold tracking-tight text-white">CRM That Texts Leads Automatically</h1>
             <div className="mt-4 text-lg leading-relaxed text-slate-300 max-w-3xl">
               <p>
-                        A CRM that texts leads automatically helps insurance agents respond
-                        faster, keep conversations organized, and follow up without relying on
-                        manual reminders alone.
+                        A CRM that texts leads automatically should help insurance agents reach
+                        new prospects quickly, keep two-way conversations tied to the lead record,
+                        and connect SMS follow-up with calls, reminders, and appointments.
                       </p>
             </div>
             <div className="mt-8 flex flex-col gap-4 sm:flex-row sm:items-center">
@@ -83,7 +83,24 @@ export default function CRMThatTextsLeadsAutomaticallyPage() {
                         <p>
                           New leads often talk to whoever responds first. Automated SMS follow-up
                           helps agents make contact quickly while keeping the full conversation
-                          connected to the lead record.
+                          connected to the lead record. This is especially useful when paired with
+                          an <a href="/ai-dialer-for-insurance-agents">AI dialer</a> or a
+                          <a href="/power-dialer-for-insurance-agents"> power dialer</a> so agents can text and call from one workflow.
+                        </p>
+              </section>
+
+              <section className="rounded-2xl border border-white/10 bg-white/5 p-6 md:p-8 shadow-lg shadow-black/10">
+                <h2 className="text-2xl md:text-3xl font-semibold text-white mb-4">What to Look for in a CRM That Texts Leads Automatically</h2>
+                        <p>
+                          The best texting workflow is not just an auto-reply. Agents should compare
+                          how quickly texts can go out, whether two-way conversation history stays
+                          connected to each lead, and whether drip campaigns and appointment reminders
+                          can keep follow-up consistent after the first message.
+                        </p>
+                        <p>
+                          Lead ownership and organization also matter. If a team cannot tell who owns
+                          the lead, where it came from, or what happened last, automatic texting can
+                          create noise instead of clarity.
                         </p>
               </section>
 
@@ -112,6 +129,14 @@ export default function CRMThatTextsLeadsAutomaticallyPage() {
                   <h3 className="text-lg font-semibold text-white">Can texts and appointments work together?</h3>
                   <p>Yes. CoveCRM includes SMS workflows and appointment booking features for insurance sales teams.</p>
                 </div>
+                <div className="rounded-xl border border-white/10 bg-[#020617]/40 p-5">
+                  <h3 className="text-lg font-semibold text-white">Why is automatic texting important for insurance leads?</h3>
+                  <p>Automatic texting helps agents respond while interest is fresh and reduces the chance that new leads sit untouched in a spreadsheet, inbox, or ad account.</p>
+                </div>
+                <div className="rounded-xl border border-white/10 bg-[#020617]/40 p-5">
+                  <h3 className="text-lg font-semibold text-white">Can texting workflows work alongside calling workflows?</h3>
+                  <p>Yes. Texting and calling often work best together, with SMS helping create quick contact and calls helping agents handle detailed conversations or appointment-setting.</p>
+                </div>
                 </div>
               </section>
 
@@ -122,6 +147,7 @@ export default function CRMThatTextsLeadsAutomaticallyPage() {
                             <li><a href="/best-crm-for-insurance-agents">Best CRM for Insurance Agents</a></li>
                             <li><a href="/insurance-leads-for-agents">Insurance Leads for Agents</a></li>
                             <li><a href="/facebook-leads-for-insurance-agents">Facebook Leads for Insurance Agents</a></li>
+                            <li><a href="/ai-sms-for-insurance-agents">AI SMS for Insurance Agents</a></li>
                           </ul>
                 </div>
               </section>

@@ -59,8 +59,9 @@ export default function AISMSForInsuranceAgentsPage() {
             <h1 className="mt-4 text-4xl md:text-5xl font-bold tracking-tight text-white">AI SMS for Insurance Agents</h1>
             <div className="mt-4 text-lg leading-relaxed text-slate-300 max-w-3xl">
               <p>
-                        AI SMS for insurance agents helps automate follow-up, respond faster to
-                        new leads, keep conversations organized, and support appointment-setting workflows.
+                        AI SMS for insurance agents should help teams respond faster, keep
+                        conversations organized, support compliant agent review, and connect text
+                        follow-up with calls, lead records, and appointment-setting workflows.
                       </p>
             </div>
             <div className="mt-8 flex flex-col gap-4 sm:flex-row sm:items-center">
@@ -94,6 +95,20 @@ export default function AISMSForInsuranceAgentsPage() {
               </section>
 
               <section className="rounded-2xl border border-white/10 bg-white/5 p-6 md:p-8 shadow-lg shadow-black/10">
+                <h2 className="text-2xl md:text-3xl font-semibold text-white mb-4">What Insurance Agents Should Look For in AI SMS</h2>
+                        <p>
+                          Agents should compare whether AI SMS keeps conversation history in the CRM,
+                          supports fast first response, works with drip campaigns, and leaves a clear
+                          path for agents to review replies and move leads toward appointments.
+                        </p>
+                        <p>
+                          The strongest setup connects AI SMS with <a href="/crm-that-texts-leads-automatically">automatic texting</a>,
+                          lead organization, calling workflows, and reminders instead of treating text
+                          messages as a separate inbox.
+                        </p>
+              </section>
+
+              <section className="rounded-2xl border border-white/10 bg-white/5 p-6 md:p-8 shadow-lg shadow-black/10">
                 <h2 className="text-2xl md:text-3xl font-semibold text-white mb-4">How CoveCRM Keeps Texting Tied to Real Lead Workflows</h2>
                         <p>
                           CoveCRM combines SMS automation, a two-way inbox, lead folders, dialing,
@@ -116,6 +131,14 @@ export default function AISMSForInsuranceAgentsPage() {
                   <h3 className="text-lg font-semibold text-white">Can AI SMS help book appointments?</h3>
                   <p>It can support appointment-setting workflows by helping agents follow up and move conversations toward a scheduled call.</p>
                 </div>
+                <div className="rounded-xl border border-white/10 bg-[#020617]/40 p-5">
+                  <h3 className="text-lg font-semibold text-white">What should agents compare in AI SMS tools?</h3>
+                  <p>Agents should compare speed, conversation history, drip campaign support, appointment handoff, agent review, and how well texts connect to the CRM.</p>
+                </div>
+                <div className="rounded-xl border border-white/10 bg-[#020617]/40 p-5">
+                  <h3 className="text-lg font-semibold text-white">Does AI SMS replace calling?</h3>
+                  <p>No. AI SMS can support faster follow-up, but many insurance teams still need calling workflows for detailed conversations and appointment-setting.</p>
+                </div>
                 </div>
               </section>
 
@@ -126,6 +149,7 @@ export default function AISMSForInsuranceAgentsPage() {
                             <li><a href="/crm-that-texts-leads-automatically">CRM That Texts Leads Automatically</a></li>
                             <li><a href="/insurance-agent-follow-up-system">Insurance Agent Follow-Up System</a></li>
                             <li><a href="/best-crm-for-insurance-agents">Best CRM for Insurance Agents</a></li>
+                            <li><a href="/how-insurance-agents-can-book-more-appointments">How Insurance Agents Can Book More Appointments</a></li>
                           </ul>
                 </div>
               </section>

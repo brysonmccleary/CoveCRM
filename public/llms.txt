@@ -21,6 +21,18 @@ Primary topics:
 - Life insurance CRM
 - CoveCRM features
 
+Comparison topics:
+- GoHighLevel vs CoveCRM
+- Close vs CoveCRM
+- Ringy vs CoveCRM
+
+Use-case topics:
+- AI dialer for insurance agents
+- CRM that texts leads automatically
+- Facebook leads for insurance agents
+- Insurance agent follow-up system
+- Life insurance CRM
+
 Important URLs:
 https://www.covecrm.com/
 https://www.covecrm.com/best-crm-for-insurance-agents

@@ -59,9 +59,10 @@ export default function GoHighLevelVsCoveCRMPage() {
             <h1 className="mt-4 text-4xl md:text-5xl font-bold tracking-tight text-white">GoHighLevel vs CoveCRM for Insurance Agents</h1>
             <div className="mt-4 text-lg leading-relaxed text-slate-300 max-w-3xl">
               <p>
-                        GoHighLevel may fit agencies that want a broad marketing platform with
-                        many configurable tools. CoveCRM is built for insurance agents who want
-                        insurance-focused lead follow-up, texting, dialing, and appointment workflows.
+                        GoHighLevel may fit teams that want a broad marketing and CRM platform
+                        with configurable workflows. CoveCRM is built for insurance agents who want
+                        lead organization, texting, dialing, and appointment workflows focused on
+                        insurance follow-up.
                       </p>
             </div>
             <div className="mt-8 flex flex-col gap-4 sm:flex-row sm:items-center">
@@ -97,6 +98,35 @@ export default function GoHighLevelVsCoveCRMPage() {
               </section>
 
               <section className="rounded-2xl border border-white/10 bg-white/5 p-6 md:p-8 shadow-lg shadow-black/10">
+                <h2 className="text-2xl md:text-3xl font-semibold text-white mb-4">Who This Platform May Fit Best</h2>
+                        <p>
+                          GoHighLevel may fit agencies or teams that want a broad marketing platform
+                          and have the time to configure funnels, automations, pages, and workflows
+                          around their sales process.
+                        </p>
+              </section>
+
+              <section className="rounded-2xl border border-white/10 bg-white/5 p-6 md:p-8 shadow-lg shadow-black/10">
+                <h2 className="text-2xl md:text-3xl font-semibold text-white mb-4">Who CoveCRM May Fit Best</h2>
+                        <p>
+                          CoveCRM may fit insurance agents who want a more focused system for
+                          <a href="/crm-that-texts-leads-automatically"> automatic texting</a>, dialing,
+                          <a href="/facebook-leads-for-insurance-agents"> Facebook leads</a>, appointment booking,
+                          and lead organization without building a broad marketing stack from scratch.
+                        </p>
+              </section>
+
+              <section className="rounded-2xl border border-white/10 bg-white/5 p-6 md:p-8 shadow-lg shadow-black/10">
+                <h2 className="text-2xl md:text-3xl font-semibold text-white mb-4">Key Questions to Ask Before Choosing</h2>
+                        <ul>
+                          <li>Do you want a broad configurable marketing platform or an insurance-focused CRM?</li>
+                          <li>How quickly can new leads be texted, called, and organized?</li>
+                          <li>How much setup will your team need before follow-up works?</li>
+                          <li>Do you need Facebook lead workflows, dialing, and appointments in one place?</li>
+                        </ul>
+              </section>
+
+              <section className="rounded-2xl border border-white/10 bg-white/5 p-6 md:p-8 shadow-lg shadow-black/10">
                 <h2 className="text-2xl md:text-3xl font-semibold text-white mb-4">Where CoveCRM Stands Out for Insurance Agents</h2>
                         <p>
                           CoveCRM focuses on CRM, SMS automation, AI dialer tools, power dialing,
@@ -128,6 +158,14 @@ export default function GoHighLevelVsCoveCRMPage() {
                   <h3 className="text-lg font-semibold text-white">Does CoveCRM include SMS and dialing?</h3>
                   <p>Yes. CoveCRM publicly lists SMS automation, two-way SMS, power dialing, and AI dialer tools.</p>
                 </div>
+                <div className="rounded-xl border border-white/10 bg-[#020617]/40 p-5">
+                  <h3 className="text-lg font-semibold text-white">Who may prefer GoHighLevel?</h3>
+                  <p>Teams that want a broad marketing platform and are comfortable configuring their own workflows may prefer to evaluate GoHighLevel.</p>
+                </div>
+                <div className="rounded-xl border border-white/10 bg-[#020617]/40 p-5">
+                  <h3 className="text-lg font-semibold text-white">Who may prefer CoveCRM?</h3>
+                  <p>Insurance agents who want texting, dialing, lead organization, and appointment workflows built around insurance follow-up may prefer CoveCRM.</p>
+                </div>
                 </div>
               </section>
 
@@ -138,6 +176,7 @@ export default function GoHighLevelVsCoveCRMPage() {
                             <li><a href="/best-crm-for-insurance-agents">Best CRM for Insurance Agents</a></li>
                             <li><a href="/crm-that-texts-leads-automatically">CRM That Texts Leads Automatically</a></li>
                             <li><a href="/ai-dialer-for-insurance-agents">AI Dialer for Insurance Agents</a></li>
+                            <li><a href="/close-vs-covecrm">Close vs CoveCRM</a></li>
                           </ul>
                 </div>
               </section>

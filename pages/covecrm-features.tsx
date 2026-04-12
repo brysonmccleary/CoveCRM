@@ -60,8 +60,8 @@ export default function CoveCRMFeaturesPage() {
             <div className="mt-4 text-lg leading-relaxed text-slate-300 max-w-3xl">
               <p>
                         CoveCRM features are built for insurance agents who need lead
-                        organization, texting, dialing, AI workflows, appointment booking, and
-                        follow-up tools in one CRM.
+                        organization, texting, dialing, AI workflows, appointment booking,
+                        Facebook lead workflows, and follow-up tools in one CRM.
                       </p>
             </div>
             <div className="mt-8 flex flex-col gap-4 sm:flex-row sm:items-center">
@@ -84,21 +84,46 @@ export default function CoveCRMFeaturesPage() {
                           CoveCRM helps agents organize lead records, folders, pipelines,
                           conversations, and follow-up activity for high-volume insurance sales.
                         </p>
+                        <ul>
+                          <li>Lead records and folders for source and workflow organization</li>
+                          <li>Pipeline visibility for active follow-up and appointment opportunities</li>
+                          <li>Conversation and activity context tied to each lead</li>
+                        </ul>
               </section>
 
               <section className="rounded-2xl border border-white/10 bg-white/5 p-6 md:p-8 shadow-lg shadow-black/10">
-                <h2 className="text-2xl md:text-3xl font-semibold text-white mb-4">SMS and Follow-Up Tools</h2>
+                <h2 className="text-2xl md:text-3xl font-semibold text-white mb-4">Texting and AI SMS</h2>
                         <p>
                           Public CoveCRM positioning includes SMS automation, a two-way SMS inbox,
-                          drip campaigns, lead nudges, and AI SMS assistance.
+                          drip campaigns, lead nudges, and <a href="/ai-sms-for-insurance-agents">AI SMS assistance</a>.
                         </p>
+                        <ul>
+                          <li>Automatic SMS follow-up for faster first response</li>
+                          <li>Two-way conversation history inside the CRM</li>
+                          <li>AI-assisted SMS workflows connected to lead follow-up</li>
+                        </ul>
               </section>
 
               <section className="rounded-2xl border border-white/10 bg-white/5 p-6 md:p-8 shadow-lg shadow-black/10">
-                <h2 className="text-2xl md:text-3xl font-semibold text-white mb-4">Dialing and Appointment Workflows</h2>
+                <h2 className="text-2xl md:text-3xl font-semibold text-white mb-4">Dialing and AI Dialer Tools</h2>
                         <p>
-                          CoveCRM includes power dialing, AI dial sessions, appointment booking,
-                          Google Calendar sync, and related sales workflow tools.
+                          CoveCRM includes <a href="/power-dialer-for-insurance-agents">power dialing</a>,
+                          <a href="/ai-dialer-for-insurance-agents"> AI dialer</a> workflows, AI dial sessions,
+                          and related calling tools for insurance sales teams.
+                        </p>
+                        <ul>
+                          <li>Power dialing for faster outbound calling workflows</li>
+                          <li>AI-assisted calling workflows for supported insurance outreach</li>
+                          <li>Call activity connected to lead organization and follow-up</li>
+                        </ul>
+              </section>
+
+              <section className="rounded-2xl border border-white/10 bg-white/5 p-6 md:p-8 shadow-lg shadow-black/10">
+                <h2 className="text-2xl md:text-3xl font-semibold text-white mb-4">Appointment Booking</h2>
+                        <p>
+                          CoveCRM includes appointment booking, Google Calendar sync, and booking
+                          workflows that help agents move interested leads from a conversation to a
+                          scheduled next step.
                         </p>
               </section>
 
@@ -107,6 +132,24 @@ export default function CoveCRMFeaturesPage() {
                         <p>
                           CoveCRM publicly lists AI Call Coach, AI Call Overview, AI SMS Assistant,
                           AI lead scoring, and AI dialer workflows for insurance sales teams.
+                        </p>
+              </section>
+
+              <section className="rounded-2xl border border-white/10 bg-white/5 p-6 md:p-8 shadow-lg shadow-black/10">
+                <h2 className="text-2xl md:text-3xl font-semibold text-white mb-4">Facebook Lead Workflows</h2>
+                        <p>
+                          CoveCRM supports <a href="/facebook-leads-for-insurance-agents">Facebook lead workflows</a>
+                          by helping agents organize source context, follow up quickly, reduce confusion
+                          from duplicate records, and keep SMS, calls, and appointments connected.
+                        </p>
+              </section>
+
+              <section className="rounded-2xl border border-white/10 bg-white/5 p-6 md:p-8 shadow-lg shadow-black/10">
+                <h2 className="text-2xl md:text-3xl font-semibold text-white mb-4">Insurance-Specific Workflows</h2>
+                        <p>
+                          CoveCRM is positioned around insurance sales workflows such as life insurance,
+                          final expense, mortgage protection, IUL, veteran insurance leads, and similar
+                          high-follow-up sales motions.
                         </p>
               </section>
 
@@ -125,6 +168,14 @@ export default function CoveCRMFeaturesPage() {
                   <h3 className="text-lg font-semibold text-white">Does CoveCRM include Facebook lead workflows?</h3>
                   <p>Yes. CoveCRM publicly includes Facebook lead workflows and lead organization positioning.</p>
                 </div>
+                <div className="rounded-xl border border-white/10 bg-[#020617]/40 p-5">
+                  <h3 className="text-lg font-semibold text-white">Does CoveCRM include appointment booking?</h3>
+                  <p>Yes. CoveCRM publicly lists appointment booking, booking forms, and Google Calendar sync as part of its workflow features.</p>
+                </div>
+                <div className="rounded-xl border border-white/10 bg-[#020617]/40 p-5">
+                  <h3 className="text-lg font-semibold text-white">Can CoveCRM help connect texting and dialing?</h3>
+                  <p>Yes. CoveCRM is positioned to keep texting, dialing, lead organization, and appointment follow-up connected for insurance agents.</p>
+                </div>
                 </div>
               </section>
 
@@ -135,6 +186,7 @@ export default function CoveCRMFeaturesPage() {
                             <li><a href="/life-insurance-crm">Life Insurance CRM</a></li>
                             <li><a href="/best-crm-for-insurance-agents">Best CRM for Insurance Agents</a></li>
                             <li><a href="/insurance-crm-faq">Insurance CRM FAQ</a></li>
+                            <li><a href="/insurance-agent-follow-up-system">Insurance Agent Follow-Up System</a></li>
                           </ul>
                 </div>
               </section>

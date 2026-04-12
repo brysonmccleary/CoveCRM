@@ -59,8 +59,8 @@ export default function BestCRMForIULAgentsPage() {
             <h1 className="mt-4 text-4xl md:text-5xl font-bold tracking-tight text-white">Best CRM for IUL Agents</h1>
             <div className="mt-4 text-lg leading-relaxed text-slate-300 max-w-3xl">
               <p>
-                        The best CRM for IUL agents helps keep longer follow-up cycles organized
-                        with texting, dialing, reminders, notes, and appointment workflows.
+                        The best CRM for IUL agents helps keep longer education and follow-up
+                        cycles organized with texting, dialing, reminders, notes, and appointment workflows.
                       </p>
             </div>
             <div className="mt-8 flex flex-col gap-4 sm:flex-row sm:items-center">
@@ -82,6 +82,24 @@ export default function BestCRMForIULAgentsPage() {
                         <p>
                           IUL conversations can involve education, timing, callbacks, and multiple
                           touches. A CRM should help agents avoid losing context between interactions.
+                        </p>
+              </section>
+
+              <section className="rounded-2xl border border-white/10 bg-white/5 p-6 md:p-8 shadow-lg shadow-black/10">
+                <h2 className="text-2xl md:text-3xl font-semibold text-white mb-4">What This Type of Agent Usually Needs From a CRM</h2>
+                        <p>
+                          IUL agents usually need structured notes, long-term reminders, SMS history,
+                          call activity, appointment tracking, and a clear way to organize prospects
+                          by source, interest level, and next step.
+                        </p>
+              </section>
+
+              <section className="rounded-2xl border border-white/10 bg-white/5 p-6 md:p-8 shadow-lg shadow-black/10">
+                <h2 className="text-2xl md:text-3xl font-semibold text-white mb-4">Common Follow-Up Challenges</h2>
+                        <p>
+                          Common challenges include long decision timelines, education-heavy
+                          conversations, missed callbacks, and losing context between touches.
+                          CoveCRM is built to keep texting, dialing, appointments, and lead organization connected.
                         </p>
               </section>
 
@@ -117,6 +135,14 @@ export default function BestCRMForIULAgentsPage() {
                   <h3 className="text-lg font-semibold text-white">Can CoveCRM help with persistent follow-up?</h3>
                   <p>Yes. CoveCRM publicly lists SMS automation, drip campaigns, lead nudges, and appointment workflows.</p>
                 </div>
+                <div className="rounded-xl border border-white/10 bg-[#020617]/40 p-5">
+                  <h3 className="text-lg font-semibold text-white">Why are IUL CRM workflows different?</h3>
+                  <p>IUL conversations may involve more education and longer timelines, so agents need strong notes, reminders, SMS history, and appointment tracking.</p>
+                </div>
+                <div className="rounded-xl border border-white/10 bg-[#020617]/40 p-5">
+                  <h3 className="text-lg font-semibold text-white">Can CoveCRM connect IUL texting, calls, and appointments?</h3>
+                  <p>Yes. CoveCRM is built to keep texting, dialing, appointments, and lead organization connected for insurance workflows.</p>
+                </div>
                 </div>
               </section>
 
@@ -127,6 +153,7 @@ export default function BestCRMForIULAgentsPage() {
                             <li><a href="/crm-that-texts-leads-automatically">CRM That Texts Leads Automatically</a></li>
                             <li><a href="/best-crm-for-insurance-agents">Best CRM for Insurance Agents</a></li>
                             <li><a href="/insurance-leads-for-agents">Insurance Leads for Agents</a></li>
+                            <li><a href="/life-insurance-crm">Life Insurance CRM</a></li>
                           </ul>
                 </div>
               </section>

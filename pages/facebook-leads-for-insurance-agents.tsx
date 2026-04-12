@@ -59,9 +59,9 @@ export default function FacebookLeadsForInsuranceAgentsPage() {
             <h1 className="mt-4 text-4xl md:text-5xl font-bold tracking-tight text-white">Facebook Leads for Insurance Agents</h1>
             <div className="mt-4 text-lg leading-relaxed text-slate-300 max-w-3xl">
               <p>
-                        Facebook leads for insurance agents need fast follow-up and clear
-                        organization. CoveCRM helps agents keep leads moving from capture to
-                        SMS, calls, folders, drip campaigns, and appointments.
+                        Facebook leads for insurance agents are easier to work when capture,
+                        speed to lead, duplicate handling, campaign context, SMS, calls, and
+                        appointments all stay connected in the CRM.
                       </p>
             </div>
             <div className="mt-8 flex flex-col gap-4 sm:flex-row sm:items-center">
@@ -85,6 +85,31 @@ export default function FacebookLeadsForInsuranceAgentsPage() {
                           public positioning includes Facebook lead workflows that help agents
                           respond quickly and manage each lead in the CRM.
                         </p>
+              </section>
+
+              <section className="rounded-2xl border border-white/10 bg-white/5 p-6 md:p-8 shadow-lg shadow-black/10">
+                <h2 className="text-2xl md:text-3xl font-semibold text-white mb-4">What Makes Facebook Leads Hard to Manage</h2>
+                        <p>
+                          Facebook leads can become difficult when response speed is slow, duplicate
+                          submissions clutter the CRM, campaign attribution is unclear, or agents lose
+                          track of the context that created the inquiry.
+                        </p>
+                        <p>
+                          Follow-up consistency is another common issue. A lead may need a text, a call,
+                          a reminder, and an appointment prompt, which is why Facebook lead workflows
+                          should connect to a broader <a href="/insurance-agent-follow-up-system">insurance follow-up system</a>.
+                        </p>
+              </section>
+
+              <section className="rounded-2xl border border-white/10 bg-white/5 p-6 md:p-8 shadow-lg shadow-black/10">
+                <h2 className="text-2xl md:text-3xl font-semibold text-white mb-4">What Insurance Agents Should Look For in a Facebook Lead Workflow</h2>
+                        <ul>
+                          <li>Fast routing into the CRM after a lead submits a form</li>
+                          <li>Automatic SMS follow-up and clear two-way conversation history</li>
+                          <li>Campaign and source context for better lead organization</li>
+                          <li>Duplicate prevention and lead ownership clarity</li>
+                          <li>Calling and appointment workflows connected to the same record</li>
+                        </ul>
               </section>
 
               <section className="rounded-2xl border border-white/10 bg-white/5 p-6 md:p-8 shadow-lg shadow-black/10">
@@ -112,6 +137,14 @@ export default function FacebookLeadsForInsuranceAgentsPage() {
                   <h3 className="text-lg font-semibold text-white">Does CoveCRM support drip campaigns?</h3>
                   <p>Yes. CoveCRM publicly lists prebuilt drip campaigns and automated follow-up as part of the product.</p>
                 </div>
+                <div className="rounded-xl border border-white/10 bg-[#020617]/40 p-5">
+                  <h3 className="text-lg font-semibold text-white">What should agents compare in a Facebook lead CRM?</h3>
+                  <p>Agents should compare speed to lead, duplicate handling, campaign organization, SMS automation, dialing, and appointment workflow support.</p>
+                </div>
+                <div className="rounded-xl border border-white/10 bg-[#020617]/40 p-5">
+                  <h3 className="text-lg font-semibold text-white">Can Facebook leads work with automatic texting?</h3>
+                  <p>Yes. Facebook leads are often strongest when they move quickly into a CRM that can start SMS follow-up and keep the conversation organized.</p>
+                </div>
                 </div>
               </section>
 
@@ -122,6 +155,7 @@ export default function FacebookLeadsForInsuranceAgentsPage() {
                             <li><a href="/best-crm-for-insurance-agents">Best CRM for Insurance Agents</a></li>
                             <li><a href="/insurance-leads-for-agents">Insurance Leads for Agents</a></li>
                             <li><a href="/crm-that-texts-leads-automatically">CRM That Texts Leads Automatically</a></li>
+                            <li><a href="/insurance-agent-follow-up-system">Insurance Agent Follow-Up System</a></li>
                           </ul>
                 </div>
               </section>

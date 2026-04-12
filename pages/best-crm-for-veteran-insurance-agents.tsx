@@ -60,8 +60,8 @@ export default function BestCRMForVeteranInsuranceAgentsPage() {
             <div className="mt-4 text-lg leading-relaxed text-slate-300 max-w-3xl">
               <p>
                         The best CRM for veteran insurance agents helps teams respond quickly,
-                        organize lead pipelines, text prospects, dial efficiently, and book
-                        appointments from one workflow.
+                        organize lead pipelines, preserve conversation context, text prospects,
+                        dial efficiently, and book appointments from one workflow.
                       </p>
             </div>
             <div className="mt-8 flex flex-col gap-4 sm:flex-row sm:items-center">
@@ -83,6 +83,24 @@ export default function BestCRMForVeteranInsuranceAgentsPage() {
                         <p>
                           Veteran insurance workflows can require clear communication, structured
                           follow-up, organized records, and timely appointment setting.
+                        </p>
+              </section>
+
+              <section className="rounded-2xl border border-white/10 bg-white/5 p-6 md:p-8 shadow-lg shadow-black/10">
+                <h2 className="text-2xl md:text-3xl font-semibold text-white mb-4">What This Type of Agent Usually Needs From a CRM</h2>
+                        <p>
+                          Veteran insurance agents usually need clear lead source tracking, respectful
+                          follow-up history, SMS and call records, appointment reminders, and a simple
+                          way to organize next steps across active and older leads.
+                        </p>
+              </section>
+
+              <section className="rounded-2xl border border-white/10 bg-white/5 p-6 md:p-8 shadow-lg shadow-black/10">
+                <h2 className="text-2xl md:text-3xl font-semibold text-white mb-4">Common Follow-Up Challenges</h2>
+                        <p>
+                          Common challenges include losing context, missing callbacks, duplicating
+                          outreach, and not knowing whether a lead needs a text, call, or appointment
+                          reminder. CoveCRM is built to keep texting, dialing, appointments, and lead organization connected.
                         </p>
               </section>
 
@@ -118,6 +136,14 @@ export default function BestCRMForVeteranInsuranceAgentsPage() {
                   <h3 className="text-lg font-semibold text-white">Can CoveCRM work with Facebook lead sources?</h3>
                   <p>Yes. CoveCRM publicly includes Facebook lead workflows and lead organization features.</p>
                 </div>
+                <div className="rounded-xl border border-white/10 bg-[#020617]/40 p-5">
+                  <h3 className="text-lg font-semibold text-white">Why does context matter for veteran insurance leads?</h3>
+                  <p>Context helps agents follow up respectfully, avoid duplicate outreach, and see what was said before the next text, call, or appointment reminder.</p>
+                </div>
+                <div className="rounded-xl border border-white/10 bg-[#020617]/40 p-5">
+                  <h3 className="text-lg font-semibold text-white">Can CoveCRM keep veteran lead workflows connected?</h3>
+                  <p>Yes. CoveCRM is built to keep texting, dialing, appointments, and lead organization connected for insurance workflows.</p>
+                </div>
                 </div>
               </section>
 
@@ -128,6 +154,7 @@ export default function BestCRMForVeteranInsuranceAgentsPage() {
                             <li><a href="/facebook-leads-for-insurance-agents">Facebook Leads for Insurance Agents</a></li>
                             <li><a href="/best-crm-for-insurance-agents">Best CRM for Insurance Agents</a></li>
                             <li><a href="/power-dialer-for-insurance-agents">Power Dialer for Insurance Agents</a></li>
+                            <li><a href="/insurance-agent-follow-up-system">Insurance Agent Follow-Up System</a></li>
                           </ul>
                 </div>
               </section>

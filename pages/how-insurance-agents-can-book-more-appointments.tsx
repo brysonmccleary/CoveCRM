@@ -59,9 +59,9 @@ export default function BookMoreAppointmentsPage() {
             <h1 className="mt-4 text-4xl md:text-5xl font-bold tracking-tight text-white">How Insurance Agents Can Book More Appointments</h1>
             <div className="mt-4 text-lg leading-relaxed text-slate-300 max-w-3xl">
               <p>
-                        Insurance agents can book more appointments by responding quickly,
-                        organizing leads clearly, using text and call workflows, and following up
-                        consistently after each lead interaction.
+                        Insurance agents can book more appointments when they respond quickly,
+                        keep lead context organized, use text and call workflows together, and
+                        make the next scheduling step clear after each interaction.
                       </p>
             </div>
             <div className="mt-8 flex flex-col gap-4 sm:flex-row sm:items-center">
@@ -91,6 +91,25 @@ export default function BookMoreAppointmentsPage() {
                         <p>
                           Appointment-setting often requires more than one touch. A follow-up system
                           helps agents keep reminders, notes, and next steps organized.
+                        </p>
+              </section>
+
+              <section className="rounded-2xl border border-white/10 bg-white/5 p-6 md:p-8 shadow-lg shadow-black/10">
+                <h2 className="text-2xl md:text-3xl font-semibold text-white mb-4">Common Reasons Insurance Agents Lose Appointments</h2>
+                        <p>
+                          Agents often lose appointment opportunities when response time is slow,
+                          SMS and call notes are separated, reminders are missed, or leads are not
+                          prioritized after the first conversation.
+                        </p>
+              </section>
+
+              <section className="rounded-2xl border border-white/10 bg-white/5 p-6 md:p-8 shadow-lg shadow-black/10">
+                <h2 className="text-2xl md:text-3xl font-semibold text-white mb-4">How Better Systems Improve Booking Rates</h2>
+                        <p>
+                          A better system makes it easier to see who needs a reply, what was said,
+                          which lead source created the opportunity, and what next step should happen.
+                          Texting, dialing, reminders, and booking tools work best when they are tied
+                          to the same <a href="/insurance-agent-follow-up-system">follow-up workflow</a>.
                         </p>
               </section>
 
@@ -125,6 +144,14 @@ export default function BookMoreAppointmentsPage() {
                   <h3 className="text-lg font-semibold text-white">Can texting help with appointment-setting?</h3>
                   <p>Yes. SMS can help agents respond quickly and move interested leads toward a scheduled conversation.</p>
                 </div>
+                <div className="rounded-xl border border-white/10 bg-[#020617]/40 p-5">
+                  <h3 className="text-lg font-semibold text-white">Why do agents lose appointment opportunities?</h3>
+                  <p>Common reasons include slow response, missed reminders, scattered notes, unclear next steps, and disconnected texting or calling workflows.</p>
+                </div>
+                <div className="rounded-xl border border-white/10 bg-[#020617]/40 p-5">
+                  <h3 className="text-lg font-semibold text-white">Can a CRM improve appointment follow-up?</h3>
+                  <p>Yes. A CRM can keep lead context, text history, call activity, reminders, and booking workflows together so fewer next steps are missed.</p>
+                </div>
                 </div>
               </section>
 
@@ -135,6 +162,7 @@ export default function BookMoreAppointmentsPage() {
                             <li><a href="/ai-dialer-for-insurance-agents">AI Dialer for Insurance Agents</a></li>
                             <li><a href="/crm-that-texts-leads-automatically">CRM That Texts Leads Automatically</a></li>
                             <li><a href="/insurance-agent-follow-up-system">Insurance Agent Follow-Up System</a></li>
+                            <li><a href="/best-crm-for-insurance-agents">Best CRM for Insurance Agents</a></li>
                           </ul>
                 </div>
               </section>

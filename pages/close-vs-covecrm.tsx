@@ -87,6 +87,34 @@ export default function CloseVsCoveCRMPage() {
               </section>
 
               <section className="rounded-2xl border border-white/10 bg-white/5 p-6 md:p-8 shadow-lg shadow-black/10">
+                <h2 className="text-2xl md:text-3xl font-semibold text-white mb-4">Who This Platform May Fit Best</h2>
+                        <p>
+                          Close may fit outbound sales teams that want a general sales CRM and are
+                          comparing calling, sales pipeline, and communication workflows across a
+                          range of industries.
+                        </p>
+              </section>
+
+              <section className="rounded-2xl border border-white/10 bg-white/5 p-6 md:p-8 shadow-lg shadow-black/10">
+                <h2 className="text-2xl md:text-3xl font-semibold text-white mb-4">Who CoveCRM May Fit Best</h2>
+                        <p>
+                          CoveCRM may fit insurance agents who want <a href="/power-dialer-for-insurance-agents">dialing</a>,
+                          <a href="/ai-sms-for-insurance-agents"> AI SMS</a>, lead folders, appointment booking,
+                          and insurance lead follow-up connected in one system.
+                        </p>
+              </section>
+
+              <section className="rounded-2xl border border-white/10 bg-white/5 p-6 md:p-8 shadow-lg shadow-black/10">
+                <h2 className="text-2xl md:text-3xl font-semibold text-white mb-4">Key Questions to Ask Before Choosing</h2>
+                        <ul>
+                          <li>Do you need a broad outbound sales CRM or an insurance-specific CRM?</li>
+                          <li>How will SMS, dialing, and appointments stay connected to each lead?</li>
+                          <li>How much setup is required for insurance follow-up workflows?</li>
+                          <li>Can your team organize leads by source, campaign, and insurance type?</li>
+                        </ul>
+              </section>
+
+              <section className="rounded-2xl border border-white/10 bg-white/5 p-6 md:p-8 shadow-lg shadow-black/10">
                 <h2 className="text-2xl md:text-3xl font-semibold text-white mb-4">Where CoveCRM Fits Insurance Agents Better</h2>
                         <p>
                           CoveCRM focuses on insurance lead workflows, including SMS automation,
@@ -128,6 +156,14 @@ export default function CloseVsCoveCRMPage() {
                   <h3 className="text-lg font-semibold text-white">Which is better for insurance follow-up?</h3>
                   <p>CoveCRM is designed around insurance lead follow-up, SMS, dialing, and appointment workflows.</p>
                 </div>
+                <div className="rounded-xl border border-white/10 bg-[#020617]/40 p-5">
+                  <h3 className="text-lg font-semibold text-white">Who may prefer Close?</h3>
+                  <p>Teams that want a broader outbound sales CRM for multiple industries may want to compare Close closely.</p>
+                </div>
+                <div className="rounded-xl border border-white/10 bg-[#020617]/40 p-5">
+                  <h3 className="text-lg font-semibold text-white">Who may prefer CoveCRM?</h3>
+                  <p>Insurance agents who want insurance lead workflows, texting, dialing, and appointments connected may prefer CoveCRM.</p>
+                </div>
                 </div>
               </section>
 
@@ -138,6 +174,7 @@ export default function CloseVsCoveCRMPage() {
                             <li><a href="/power-dialer-for-insurance-agents">Power Dialer for Insurance Agents</a></li>
                             <li><a href="/best-crm-for-insurance-agents">Best CRM for Insurance Agents</a></li>
                             <li><a href="/insurance-leads-for-agents">Insurance Leads for Agents</a></li>
+                            <li><a href="/go-high-level-vs-covecrm">GoHighLevel vs CoveCRM</a></li>
                           </ul>
                 </div>
               </section>

@@ -60,7 +60,8 @@ export default function InsuranceAgentFollowUpSystemPage() {
             <div className="mt-4 text-lg leading-relaxed text-slate-300 max-w-3xl">
               <p>
                         A strong insurance agent follow-up system helps agents respond quickly,
-                        stay organized, text leads, make calls, set reminders, and book appointments.
+                        stay organized, text leads, make calls, set reminders, track context, and
+                        book appointments from one connected workflow.
                       </p>
             </div>
             <div className="mt-8 flex flex-col gap-4 sm:flex-row sm:items-center">
@@ -83,6 +84,17 @@ export default function InsuranceAgentFollowUpSystemPage() {
                           A useful follow-up system should include lead organization, SMS history,
                           dialing, reminders, appointment workflows, and a clear next step for each lead.
                         </p>
+              </section>
+
+              <section className="rounded-2xl border border-white/10 bg-white/5 p-6 md:p-8 shadow-lg shadow-black/10">
+                <h2 className="text-2xl md:text-3xl font-semibold text-white mb-4">What a Complete Insurance Follow-Up System Includes</h2>
+                        <ul>
+                          <li>Fast first response through SMS or calling workflows</li>
+                          <li>Two-way conversation history tied to each lead</li>
+                          <li>Lead folders, source tracking, and owner clarity</li>
+                          <li>Drip campaigns, reminders, and lead nudges</li>
+                          <li>Appointment booking connected to the same lead record</li>
+                        </ul>
               </section>
 
               <section className="rounded-2xl border border-white/10 bg-white/5 p-6 md:p-8 shadow-lg shadow-black/10">
@@ -116,6 +128,14 @@ export default function InsuranceAgentFollowUpSystemPage() {
                   <h3 className="text-lg font-semibold text-white">Can CoveCRM help with follow-up?</h3>
                   <p>Yes. CoveCRM publicly lists SMS automation, drip campaigns, lead nudges, dialing, and appointment workflows.</p>
                 </div>
+                <div className="rounded-xl border border-white/10 bg-[#020617]/40 p-5">
+                  <h3 className="text-lg font-semibold text-white">What should a follow-up system include?</h3>
+                  <p>It should include lead organization, SMS, calling, reminders, drip campaigns, appointment booking, and a clear record of what happened last.</p>
+                </div>
+                <div className="rounded-xl border border-white/10 bg-[#020617]/40 p-5">
+                  <h3 className="text-lg font-semibold text-white">Can follow-up systems help with older leads?</h3>
+                  <p>Yes. Organized reminders, notes, SMS history, and call activity can help agents revisit older leads without losing context.</p>
+                </div>
                 </div>
               </section>
 
@@ -126,6 +146,7 @@ export default function InsuranceAgentFollowUpSystemPage() {
                             <li><a href="/insurance-leads-for-agents">Insurance Leads for Agents</a></li>
                             <li><a href="/ai-sms-for-insurance-agents">AI SMS for Insurance Agents</a></li>
                             <li><a href="/how-insurance-agents-can-book-more-appointments">How Insurance Agents Can Book More Appointments</a></li>
+                            <li><a href="/crm-that-texts-leads-automatically">CRM That Texts Leads Automatically</a></li>
                           </ul>
                 </div>
               </section>

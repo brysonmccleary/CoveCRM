@@ -27,12 +27,12 @@ const faqs = [
       "Yes. CoveCRM includes Facebook lead workflow positioning, lead organization, and follow-up tools for insurance agents.",
   },
   {
-    question: "Why does speed to lead matter in insurance sales?",
+    question: "Why does speed to lead matter?",
     answer:
       "Speed to lead matters because prospects are often most responsive shortly after they submit a form or request information.",
   },
   {
-    question: "Can I organize leads by type or campaign?",
+    question: "Can leads be organized by type or campaign?",
     answer:
       "Yes. CoveCRM publicly positions lead folders, pipelines, and campaign-focused organization as part of the CRM workflow.",
   },
@@ -40,6 +40,36 @@ const faqs = [
     question: "What makes CoveCRM different from a generic CRM?",
     answer:
       "CoveCRM is positioned for insurance agents, with texting, dialing, AI workflows, Facebook lead follow-up, and appointment booking in one place.",
+  },
+  {
+    question: "What is the difference between a power dialer and AI dialer?",
+    answer:
+      "A power dialer helps agents move through outbound calls faster with fewer manual steps, while an AI dialer adds more automation or AI-assisted calling workflows.",
+  },
+  {
+    question: "Can CoveCRM help agencies and teams?",
+    answer:
+      "Yes. CoveCRM is positioned for insurance agents and teams that need organized lead follow-up, texting, dialing, and appointment workflows.",
+  },
+  {
+    question: "Does CoveCRM support appointment booking?",
+    answer:
+      "Yes. CoveCRM publicly lists appointment booking, booking forms, reminders, and Google Calendar sync as part of its workflow features.",
+  },
+  {
+    question: "How long does insurance CRM setup usually take?",
+    answer:
+      "Setup time varies by team, lead sources, data imports, and workflow complexity. Insurance-focused CRMs can reduce setup when common texting, dialing, and appointment workflows are already built in.",
+  },
+  {
+    question: "Can an insurance CRM help with follow-up automation?",
+    answer:
+      "Yes. Insurance CRM follow-up automation can help with SMS, drip campaigns, reminders, lead nudges, and consistent next steps after a lead arrives.",
+  },
+  {
+    question: "Should agents compare CoveCRM with generic CRMs?",
+    answer:
+      "Yes. Agents should compare speed to lead, texting, dialing, appointment booking, lead organization, insurance-specific workflows, and the amount of setup required.",
   },
 ];
 
@@ -105,7 +135,8 @@ export default function InsuranceCRMFAQPage() {
             <h1 className="mt-4 text-4xl md:text-5xl font-bold tracking-tight text-white">Insurance CRM FAQ</h1>
             <p className="mt-4 text-lg leading-relaxed text-slate-300 max-w-3xl">
               Below are answers to common questions about insurance CRMs, texting,
-              dialing, follow-up automation, appointment booking, and CoveCRM.
+              dialing, follow-up automation, appointment booking, lead organization,
+              setup, and how CoveCRM fits insurance sales workflows.
             </p>
             <div className="mt-8 flex flex-col gap-4 sm:flex-row sm:items-center">
               <a
@@ -138,6 +169,9 @@ export default function InsuranceCRMFAQPage() {
               <li><a href="/best-crm-for-insurance-agents" className="text-blue-300 transition hover:text-white">Best CRM for Insurance Agents</a></li>
               <li><a href="/crm-that-texts-leads-automatically" className="text-blue-300 transition hover:text-white">CRM That Texts Leads Automatically</a></li>
               <li><a href="/ai-dialer-for-insurance-agents" className="text-blue-300 transition hover:text-white">AI Dialer for Insurance Agents</a></li>
+              <li><a href="/power-dialer-for-insurance-agents" className="text-blue-300 transition hover:text-white">Power Dialer for Insurance Agents</a></li>
+              <li><a href="/insurance-agent-follow-up-system" className="text-blue-300 transition hover:text-white">Insurance Agent Follow-Up System</a></li>
+              <li><a href="/life-insurance-crm" className="text-blue-300 transition hover:text-white">Life Insurance CRM</a></li>
             </ul>
           </section>
 

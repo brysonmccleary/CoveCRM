@@ -61,7 +61,7 @@ export default function RingyVsCoveCRMPage() {
               <p>
                         Ringy and CoveCRM both appear in conversations about sales follow-up for
                         agents. CoveCRM focuses its public positioning on insurance CRM workflows,
-                        AI tools, SMS automation, dialing, and lead follow-up.
+                        AI tools, SMS automation, dialing, appointments, and lead follow-up.
                       </p>
             </div>
             <div className="mt-8 flex flex-col gap-4 sm:flex-row sm:items-center">
@@ -84,6 +84,34 @@ export default function RingyVsCoveCRMPage() {
                           Both platforms may be considered by agents who care about lead outreach,
                           calling, texting, and managing sales conversations more efficiently.
                         </p>
+              </section>
+
+              <section className="rounded-2xl border border-white/10 bg-white/5 p-6 md:p-8 shadow-lg shadow-black/10">
+                <h2 className="text-2xl md:text-3xl font-semibold text-white mb-4">Who This Platform May Fit Best</h2>
+                        <p>
+                          Ringy may fit agents or sales teams that are comparing sales outreach tools
+                          and want to evaluate calling, texting, and follow-up workflows against their
+                          current process.
+                        </p>
+              </section>
+
+              <section className="rounded-2xl border border-white/10 bg-white/5 p-6 md:p-8 shadow-lg shadow-black/10">
+                <h2 className="text-2xl md:text-3xl font-semibold text-white mb-4">Who CoveCRM May Fit Best</h2>
+                        <p>
+                          CoveCRM may fit insurance agents who want <a href="/insurance-leads-for-agents">insurance lead management</a>,
+                          SMS automation, dialing, Facebook lead workflows, appointments, and AI
+                          follow-up tools in one insurance-focused CRM.
+                        </p>
+              </section>
+
+              <section className="rounded-2xl border border-white/10 bg-white/5 p-6 md:p-8 shadow-lg shadow-black/10">
+                <h2 className="text-2xl md:text-3xl font-semibold text-white mb-4">Key Questions to Ask Before Choosing</h2>
+                        <ul>
+                          <li>Does the platform match your insurance lead sources and follow-up style?</li>
+                          <li>Can texting, dialing, and appointment booking work from the same lead record?</li>
+                          <li>How clearly can agents track source, owner, and next step?</li>
+                          <li>How much training or configuration will be needed before launch?</li>
+                        </ul>
               </section>
 
               <section className="rounded-2xl border border-white/10 bg-white/5 p-6 md:p-8 shadow-lg shadow-black/10">
@@ -127,6 +155,14 @@ export default function RingyVsCoveCRMPage() {
                   <h3 className="text-lg font-semibold text-white">Does CoveCRM support Facebook leads?</h3>
                   <p>Yes. CoveCRM includes Facebook lead workflows and lead organization positioning.</p>
                 </div>
+                <div className="rounded-xl border border-white/10 bg-[#020617]/40 p-5">
+                  <h3 className="text-lg font-semibold text-white">Who may prefer Ringy?</h3>
+                  <p>Agents comparing sales outreach tools may want to evaluate Ringy if it matches their existing calling and texting process.</p>
+                </div>
+                <div className="rounded-xl border border-white/10 bg-[#020617]/40 p-5">
+                  <h3 className="text-lg font-semibold text-white">Who may prefer CoveCRM?</h3>
+                  <p>Insurance agents who want lead organization, texting, dialing, AI tools, and appointment workflows in one insurance-focused CRM may prefer CoveCRM.</p>
+                </div>
                 </div>
               </section>
 
@@ -137,6 +173,7 @@ export default function RingyVsCoveCRMPage() {
                             <li><a href="/best-crm-for-insurance-agents">Best CRM for Insurance Agents</a></li>
                             <li><a href="/facebook-leads-for-insurance-agents">Facebook Leads for Insurance Agents</a></li>
                             <li><a href="/crm-that-texts-leads-automatically">CRM That Texts Leads Automatically</a></li>
+                            <li><a href="/close-vs-covecrm">Close vs CoveCRM</a></li>
                           </ul>
                 </div>
               </section>

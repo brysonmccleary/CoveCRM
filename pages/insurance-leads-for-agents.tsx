@@ -59,9 +59,9 @@ export default function InsuranceLeadsForAgentsPage() {
             <h1 className="mt-4 text-4xl md:text-5xl font-bold tracking-tight text-white">Insurance Leads for Agents</h1>
             <div className="mt-4 text-lg leading-relaxed text-slate-300 max-w-3xl">
               <p>
-                        Getting insurance leads is only part of the equation. The bigger
-                        challenge is responding quickly, organizing each opportunity, following
-                        up consistently, and booking appointments before interest cools off.
+                        Insurance leads are only valuable when agents can respond quickly, keep
+                        the source and context organized, follow up consistently, and move qualified
+                        prospects toward appointments before interest cools off.
                       </p>
             </div>
             <div className="mt-8 flex flex-col gap-4 sm:flex-row sm:items-center">
@@ -84,6 +84,26 @@ export default function InsuranceLeadsForAgentsPage() {
                           A list of names does not create sales by itself. Insurance agents need
                           a system for speed to lead, SMS follow-up, dialing, notes, folders, and
                           appointment booking so every lead has a clear next step.
+                        </p>
+              </section>
+
+              <section className="rounded-2xl border border-white/10 bg-white/5 p-6 md:p-8 shadow-lg shadow-black/10">
+                <h2 className="text-2xl md:text-3xl font-semibold text-white mb-4">Where Insurance Leads Usually Come From</h2>
+                        <p>
+                          Insurance agents may receive leads from <a href="/facebook-leads-for-insurance-agents">Facebook lead campaigns</a>,
+                          purchased lead vendors, referrals, imported CSVs or spreadsheets, and older
+                          aged lead lists. Each source needs a clear workflow so the agent knows what
+                          to do next and how the lead arrived.
+                        </p>
+              </section>
+
+              <section className="rounded-2xl border border-white/10 bg-white/5 p-6 md:p-8 shadow-lg shadow-black/10">
+                <h2 className="text-2xl md:text-3xl font-semibold text-white mb-4">Why Lead Management Matters as Much as Lead Volume</h2>
+                        <p>
+                          More leads do not help if agents cannot contact, prioritize, and follow up
+                          with them. Strong lead management keeps source, owner, conversation history,
+                          call activity, and appointments connected so every opportunity has a visible
+                          next step.
                         </p>
               </section>
 
@@ -111,6 +131,14 @@ export default function InsuranceLeadsForAgentsPage() {
                   <h3 className="text-lg font-semibold text-white">Does CoveCRM replace buying leads?</h3>
                   <p>No. CoveCRM helps agents manage and follow up with leads from sources such as Facebook, imports, and other lead channels.</p>
                 </div>
+                <div className="rounded-xl border border-white/10 bg-[#020617]/40 p-5">
+                  <h3 className="text-lg font-semibold text-white">Where do insurance agents usually get leads?</h3>
+                  <p>Common sources include Facebook lead forms, purchased lead vendors, referrals, CSV imports, spreadsheets, and older aged lead lists.</p>
+                </div>
+                <div className="rounded-xl border border-white/10 bg-[#020617]/40 p-5">
+                  <h3 className="text-lg font-semibold text-white">Why is lead organization important?</h3>
+                  <p>Lead organization helps agents see source, ownership, conversation history, call activity, reminders, and appointment next steps without relying on memory.</p>
+                </div>
                 </div>
               </section>
 
@@ -121,6 +149,7 @@ export default function InsuranceLeadsForAgentsPage() {
                             <li><a href="/best-crm-for-insurance-agents">Best CRM for Insurance Agents</a></li>
                             <li><a href="/facebook-leads-for-insurance-agents">Facebook Leads for Insurance Agents</a></li>
                             <li><a href="/crm-that-texts-leads-automatically">CRM That Texts Leads Automatically</a></li>
+                            <li><a href="/insurance-agent-follow-up-system">Insurance Agent Follow-Up System</a></li>
                           </ul>
                 </div>
               </section>
