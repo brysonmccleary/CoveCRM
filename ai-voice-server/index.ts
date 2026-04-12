@@ -678,6 +678,11 @@ function ensureOutboundPacer(twilioWs: WebSocket, state: CallState) {
         if (live.phase === "in_call") {
           armSilenceWatchdog(twilioWs, live, MID_CALL_SILENCE_MS, "pacer drained in_call");
         } else if (live.phase === "awaiting_greeting_reply") {
+          // ✅ Unconditionally arm listening when greeting audio finishes playing
+          (live as any).greetingAudioDone = true;
+          live.awaitingUserAnswer = true;
+          live.awaitingAnswerForStepIndex = 0;
+          console.log("[AI-VOICE] greetingAudioDone=true on pacer drain | awaitingUserAnswer armed", { callSid: live.callSid });
           armSilenceWatchdog(twilioWs, live, POST_GREETING_SILENCE_MS, "pacer drained greeting");
         }
         void replayPendingCommittedTurn(twilioWs, live, "pacer drained");
