@@ -676,6 +676,8 @@ function ensureOutboundPacer(twilioWs: WebSocket, state: CallState) {
         (live as any).lastListenEnabledAtMs = Date.now();
         (live as any).listenWarmupUntilMs = Date.now() + 2000;
         if (live.phase === "in_call") {
+          // ✅ Re-arm warmup window after every AI turn so VAD gets clean audio
+          (live as any).listenWarmupUntilMs = Date.now() + 2000;
           armSilenceWatchdog(twilioWs, live, MID_CALL_SILENCE_MS, "pacer drained in_call");
         } else if (live.phase === "awaiting_greeting_reply") {
           // ✅ Unconditionally arm listening when greeting audio finishes playing
