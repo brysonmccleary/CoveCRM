@@ -6892,9 +6892,13 @@ void handleFinalOutcomeIntent(state, {
       // This covers both the initial greeting and any retry greeting.
       // ✅ Mark greeting done if we are in greeting phase OR greeting advance is pending
       // (greetingAdvancePending means we fired the greeting but phase may shift on first delta)
-      const inGreetingPhase = state.phase === "awaiting_greeting_reply" ||
-        !!(state as any).greetingAdvancePending ||
-        !!state.debugLoggedResponseCreateGreeting && !state.debugLoggedResponseCreateUserTurn;
+      // ✅ Set greetingAudioDone on the first response.audio.done after the greeting fired.
+      // We check debugLoggedResponseCreateGreeting (set when greeting response.create fires)
+      // and NOT debugLoggedResponseCreateUserTurn (only set when a user-turn response.create fires).
+      // This works regardless of phase, since greetingAdvancePending may already be cleared.
+      const greetingFired = !!state.debugLoggedResponseCreateGreeting;
+      const userTurnFired = !!state.debugLoggedResponseCreateUserTurn;
+      const inGreetingPhase = greetingFired && !userTurnFired;
       if (inGreetingPhase && !(state as any).greetingAudioDone) {
         (state as any).greetingAudioDone = true;
         state.awaitingUserAnswer = true;
@@ -6902,6 +6906,8 @@ void handleFinalOutcomeIntent(state, {
         console.log("[AI-VOICE] greetingAudioDone = true | awaitingUserAnswer armed | commits now unblocked", {
           callSid: state.callSid,
           phase: state.phase,
+          greetingFired,
+          userTurnFired,
         });
       }
     }
