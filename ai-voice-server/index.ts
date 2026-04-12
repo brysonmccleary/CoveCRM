@@ -597,8 +597,8 @@ const TWILIO_FRAME_MS = 20;
 // Silence watchdogs (cost control)
 // - after greeting / after any AI turn, we expect real human speech soon
 // - if not, end the AI session so we do not burn cost on dead air
-const POST_GREETING_SILENCE_MS = 10000;
-const MID_CALL_SILENCE_MS = 15000;
+const POST_GREETING_SILENCE_MS = 15000;
+const MID_CALL_SILENCE_MS = 25000;
 
 function ensureOutboundPacer(twilioWs: WebSocket, state: CallState) {
   if (state.outboundPacerTimer) return;
@@ -5968,12 +5968,8 @@ state.lastUserSpeechStoppedAtMs = Date.now();
       const ack = getGreetingAckPrefix(lastUserText);
       // Also treat a bare greeting response ("hello", "hi") the same as negative hearing —
       // they didn't acknowledge us, just said hello back. Re-ask the hearing check.
-      const isGreetingEcho = isFillerOnly(lastUserText) &&
-        (["hi","hey","hi?","hey?"].includes(
-          String(lastUserText || "").trim().toLowerCase().replace(/[?.!]+$/, "")
-        ));
-
-      if (isGreetingNegativeHearing(lastUserText) || (isGreetingEcho && !lastUserText.toLowerCase().includes("hear"))) {
+      // ✅ Only retry on actual hearing failure signals — NOT on "hi"/"hey" greetings
+      if (isGreetingNegativeHearing(lastUserText)) {
         // If they couldn't hear or just echoed hello back, re-ask hearing check instead of advancing steps.
         const aiName2 = (state.context!.voiceProfile.aiName || "Alex").trim() || "Alex";
         const clientNameRaw2 = (state.context!.clientFirstName || "").trim();
@@ -6938,6 +6934,14 @@ void handleFinalOutcomeIntent(state, {
       setAiSpeaking(state, false, `OpenAI ${t} (buffer < 1 frame)`);
       (state as any).lastListenEnabledAtMs = Date.now();
       (state as any).listenWarmupUntilMs = Date.now() + 2000;
+
+      // ✅ Force greetingAudioDone on <1 frame path too
+      if (state.phase === "awaiting_greeting_reply" && !(state as any).greetingAudioDone) {
+        (state as any).greetingAudioDone = true;
+        state.awaitingUserAnswer = true;
+        state.awaitingAnswerForStepIndex = 0;
+        console.log("[AI-VOICE] greetingAudioDone=true on <1frame path | awaitingUserAnswer armed", { callSid: state.callSid });
+      }
 
       // ✅ If we never produced audible greeting audio, do NOT advance steps/phases.
       if (state.greetingAdvancePending) {
