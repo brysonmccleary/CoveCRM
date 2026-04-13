@@ -653,7 +653,7 @@ function ensureOutboundPacer(twilioWs: WebSocket, state: CallState) {
           (live as any).lastListenEnabledAtMs = Date.now();
           (live as any).listenWarmupUntilMs = Date.now() + 2000;
           // ✅ Phase-agnostic greeting done check (phase may already be in_call)
-          if (!(live as any).greetingAudioDone && !!live.debugLoggedResponseCreateGreeting && !live.awaitingUserAnswer) {
+          if (!(live as any).greetingAudioDone && !!live.debugLoggedResponseCreateGreeting) {
             (live as any).greetingAudioDone = true;
             live.awaitingUserAnswer = true;
             live.awaitingAnswerForStepIndex = 0;
@@ -690,7 +690,7 @@ function ensureOutboundPacer(twilioWs: WebSocket, state: CallState) {
         // ✅ If greeting audio hasn't been marked done yet, do it now regardless of phase.
         // greetingAdvancePending shifts phase to in_call on first audio delta, so we
         // cannot rely on phase === awaiting_greeting_reply here.
-        if (!(live as any).greetingAudioDone && !!live.debugLoggedResponseCreateGreeting && !live.awaitingUserAnswer) {
+        if (!(live as any).greetingAudioDone && !!live.debugLoggedResponseCreateGreeting) {
           (live as any).greetingAudioDone = true;
           live.awaitingUserAnswer = true;
           live.awaitingAnswerForStepIndex = 0;
@@ -6983,11 +6983,11 @@ void handleFinalOutcomeIntent(state, {
       (state as any).listenWarmupUntilMs = Date.now() + 2000;
 
       // ✅ Force greetingAudioDone on <1 frame path too
-      if (state.phase === "awaiting_greeting_reply" && !(state as any).greetingAudioDone) {
+      if (!(state as any).greetingAudioDone && !!state.debugLoggedResponseCreateGreeting) {
         (state as any).greetingAudioDone = true;
         state.awaitingUserAnswer = true;
         state.awaitingAnswerForStepIndex = 0;
-        console.log("[AI-VOICE] greetingAudioDone=true on <1frame path | awaitingUserAnswer armed", { callSid: state.callSid });
+        console.log("[AI-VOICE] greetingAudioDone=true on <1frame path (phase-agnostic) | awaitingUserAnswer armed", { callSid: state.callSid, phase: state.phase });
       }
 
       // ✅ If we never produced audible greeting audio, do NOT advance steps/phases.
