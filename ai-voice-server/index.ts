@@ -652,11 +652,12 @@ function ensureOutboundPacer(twilioWs: WebSocket, state: CallState) {
           setAiSpeaking(live, false, "pacer drained");
           (live as any).lastListenEnabledAtMs = Date.now();
           (live as any).listenWarmupUntilMs = Date.now() + 2000;
-          if (live.phase === "awaiting_greeting_reply") {
+          // ✅ Phase-agnostic greeting done check (phase may already be in_call)
+          if (!(live as any).greetingAudioDone && !!live.debugLoggedResponseCreateGreeting && !live.awaitingUserAnswer) {
             (live as any).greetingAudioDone = true;
             live.awaitingUserAnswer = true;
             live.awaitingAnswerForStepIndex = 0;
-            console.log("[AI-VOICE] greetingAudioDone=true on empty-buffer drain | awaitingUserAnswer armed", { callSid: live.callSid });
+            console.log("[AI-VOICE] greetingAudioDone=true on empty-buffer drain (phase-agnostic) | awaitingUserAnswer armed", { callSid: live.callSid, phase: live.phase });
             armSilenceWatchdog(twilioWs, live, POST_GREETING_SILENCE_MS, "pacer drained greeting empty");
           } else if (live.phase === "in_call") {
             (live as any).listenWarmupUntilMs = Date.now() + 2000;
@@ -686,17 +687,17 @@ function ensureOutboundPacer(twilioWs: WebSocket, state: CallState) {
         setAiSpeaking(live, false, "pacer drained");
         (live as any).lastListenEnabledAtMs = Date.now();
         (live as any).listenWarmupUntilMs = Date.now() + 2000;
-        if (live.phase === "in_call") {
-          // ✅ Re-arm warmup window after every AI turn so VAD gets clean audio
-          (live as any).listenWarmupUntilMs = Date.now() + 2000;
-          armSilenceWatchdog(twilioWs, live, MID_CALL_SILENCE_MS, "pacer drained in_call");
-        } else if (live.phase === "awaiting_greeting_reply") {
-          // ✅ Unconditionally arm listening when greeting audio finishes playing
+        // ✅ If greeting audio hasn't been marked done yet, do it now regardless of phase.
+        // greetingAdvancePending shifts phase to in_call on first audio delta, so we
+        // cannot rely on phase === awaiting_greeting_reply here.
+        if (!(live as any).greetingAudioDone && !!live.debugLoggedResponseCreateGreeting && !live.awaitingUserAnswer) {
           (live as any).greetingAudioDone = true;
           live.awaitingUserAnswer = true;
           live.awaitingAnswerForStepIndex = 0;
-          console.log("[AI-VOICE] greetingAudioDone=true on pacer drain | awaitingUserAnswer armed", { callSid: live.callSid });
+          console.log("[AI-VOICE] greetingAudioDone=true on pacer drain (phase-agnostic) | awaitingUserAnswer armed", { callSid: live.callSid, phase: live.phase });
           armSilenceWatchdog(twilioWs, live, POST_GREETING_SILENCE_MS, "pacer drained greeting");
+        } else if (live.phase === "in_call") {
+          armSilenceWatchdog(twilioWs, live, MID_CALL_SILENCE_MS, "pacer drained in_call");
         }
         void replayPendingCommittedTurn(twilioWs, live, "pacer drained");
         return;
