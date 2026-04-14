@@ -13,7 +13,7 @@ const STRIPE_MODE: "live" | "test" | undefined = stripeKey
   ? (stripeKey.startsWith("sk_live_") ? "live" : "test")
   : undefined;
 
-import { sendEmailVerificationCode, sendWelcomeEmail } from "@/lib/email/sendEmail"; // ✅ NEW
+import { sendEmailVerificationCode, sendWelcomeEmail } from "@/lib/email"; // ✅ NEW
 
 /** Admin allow-list (comma-separated emails in Vercel env) */
 function isAdminEmail(email?: string | null) {

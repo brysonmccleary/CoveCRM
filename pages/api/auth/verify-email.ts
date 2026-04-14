@@ -2,7 +2,7 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import crypto from "crypto";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
-import { sendEmailVerificationCode } from "@/lib/email/sendEmail";
+import { sendEmailVerificationCode } from "@/lib/email";
 
 function makeVerificationCode() {
   return String(crypto.randomInt(0, 1_000_000)).padStart(6, "0");
