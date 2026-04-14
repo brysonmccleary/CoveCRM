@@ -202,7 +202,6 @@ type CallState = {
 
   // greeting guard
   initialGreetingQueued?: boolean;
-  cancelGreeting?: boolean;
 
   // ✅ Delay advancing out of greeting until we confirm OpenAI actually produced audio (prevents Step 0 skip)
   greetingAdvancePending?: boolean;
@@ -601,111 +600,6 @@ const TWILIO_FRAME_MS = 20;
 const POST_GREETING_SILENCE_MS = 15000;
 const MID_CALL_SILENCE_MS = 25000;
 
-function clearStalePostAudioTurnBlockers(state: CallState, reason: string) {
-  if (state.aiSpeaking) return;
-  if (!state.waitingForResponse && !state.responseInFlight) return;
-
-  const doneAt = Number(state.lastAiDoneAtMs || 0);
-  const createAt = Number(state.lastResponseCreateAtMs || 0);
-  const audioIsDone =
-    state.outboundOpenAiDone === true ||
-    (doneAt > 0 && (createAt <= 0 || doneAt >= createAt));
-
-  if (!audioIsDone) return;
-
-  console.log("[AI-VOICE][TURN-GATE] clearing stale post-audio blockers", {
-    callSid: state.callSid,
-    reason,
-    waitingForResponse: !!state.waitingForResponse,
-    responseInFlight: !!state.responseInFlight,
-    outboundOpenAiDone: !!state.outboundOpenAiDone,
-  });
-
-  setWaitingForResponse(state, false, `stale post-audio blocker (${reason})`);
-  setResponseInFlight(state, false, `stale post-audio blocker (${reason})`);
-}
-
-function rearmListeningAfterAiTurn(
-  twilioWs: WebSocket,
-  state: CallState,
-  reason: string
-) {
-  if (state.phase === "ended") return false;
-  if (state.voicemailSkipArmed) return false;
-  if ((state as any).liveTransferPending) return false;
-  if (!state.context || !state.openAiWs || !state.openAiReady) return false;
-  clearStalePostAudioTurnBlockers(state, reason);
-  if (state.aiSpeaking || state.waitingForResponse || state.responseInFlight) return false;
-
-  let expectedStepIndex: number | undefined;
-  let watchdogMs = MID_CALL_SILENCE_MS;
-
-  if (state.phase === "awaiting_greeting_reply") {
-    if (!!state.debugLoggedResponseCreateGreeting && !(state as any).greetingAudioDone) {
-      (state as any).greetingAudioDone = true;
-    }
-    expectedStepIndex = 0;
-    watchdogMs = POST_GREETING_SILENCE_MS;
-  } else if (state.phase === "in_call") {
-    expectedStepIndex =
-      typeof state.awaitingAnswerForStepIndex === "number"
-        ? state.awaitingAnswerForStepIndex
-        : typeof state.scriptStepIndex === "number"
-          ? state.scriptStepIndex
-          : undefined;
-  } else {
-    return false;
-  }
-
-  state.awaitingUserAnswer = true;
-  state.awaitingAnswerForStepIndex = expectedStepIndex;
-  (state as any).lastListenEnabledAtMs = Date.now();
-  (state as any).listenWarmupUntilMs = Date.now() + 500;
-
-  console.log("[AI-VOICE][LISTEN-REARM]", {
-    callSid: state.callSid,
-    phase: state.phase,
-    reason,
-    awaitingAnswerForStepIndex: state.awaitingAnswerForStepIndex,
-  });
-
-  armSilenceWatchdog(twilioWs, state, watchdogMs, reason);
-  return true;
-}
-
-function isCallStillLive(
-  twilioWs: WebSocket,
-  state: CallState | undefined | null
-): state is CallState {
-  if (!state) return false;
-  if (state.phase === "ended") return false;
-  if (state.cancelGreeting) return false;
-  if (calls.get(twilioWs) !== state) return false;
-  try {
-    if (twilioWs.readyState !== WebSocket.OPEN) return false;
-  } catch {}
-  if (!state.openAiWs || !state.openAiReady) return false;
-  return true;
-}
-
-function abortGreetingIfNotLive(
-  twilioWs: WebSocket,
-  state: CallState | undefined | null,
-  reason: string
-): boolean {
-  if (isCallStillLive(twilioWs, state)) return false;
-  try {
-    const s: any = state;
-    console.log("[AI-VOICE][GREETING-ABORT]", {
-      callSid: s?.callSid,
-      streamSid: s?.streamSid,
-      phase: s?.phase,
-      reason,
-    });
-  } catch {}
-  return true;
-}
-
 function ensureOutboundPacer(twilioWs: WebSocket, state: CallState) {
   if (state.outboundPacerTimer) return;
 
@@ -756,7 +650,18 @@ function ensureOutboundPacer(twilioWs: WebSocket, state: CallState) {
         if (remaining <= 0) {
           stopOutboundPacer(twilioWs, live, "OpenAI done + buffer empty");
           setAiSpeaking(live, false, "pacer drained");
-          rearmListeningAfterAiTurn(twilioWs, live, "pacer drained empty");
+          (live as any).lastListenEnabledAtMs = Date.now();
+          (live as any).listenWarmupUntilMs = Date.now() + 2000;
+          if (live.phase === "awaiting_greeting_reply") {
+            (live as any).greetingAudioDone = true;
+            live.awaitingUserAnswer = true;
+            live.awaitingAnswerForStepIndex = 0;
+            console.log("[AI-VOICE] greetingAudioDone=true on empty-buffer drain | awaitingUserAnswer armed", { callSid: live.callSid });
+            armSilenceWatchdog(twilioWs, live, POST_GREETING_SILENCE_MS, "pacer drained greeting empty");
+          } else if (live.phase === "in_call") {
+            (live as any).listenWarmupUntilMs = Date.now() + 2000;
+            armSilenceWatchdog(twilioWs, live, MID_CALL_SILENCE_MS, "pacer drained in_call empty");
+          }
           void replayPendingCommittedTurn(twilioWs, live, "pacer drained");
           return;
         }
@@ -779,7 +684,20 @@ function ensureOutboundPacer(twilioWs: WebSocket, state: CallState) {
 
         stopOutboundPacer(twilioWs, live, "buffer drained after OpenAI done");
         setAiSpeaking(live, false, "pacer drained");
-        rearmListeningAfterAiTurn(twilioWs, live, "pacer drained");
+        (live as any).lastListenEnabledAtMs = Date.now();
+        (live as any).listenWarmupUntilMs = Date.now() + 2000;
+        if (live.phase === "in_call") {
+          // ✅ Re-arm warmup window after every AI turn so VAD gets clean audio
+          (live as any).listenWarmupUntilMs = Date.now() + 2000;
+          armSilenceWatchdog(twilioWs, live, MID_CALL_SILENCE_MS, "pacer drained in_call");
+        } else if (live.phase === "awaiting_greeting_reply") {
+          // ✅ Unconditionally arm listening when greeting audio finishes playing
+          (live as any).greetingAudioDone = true;
+          live.awaitingUserAnswer = true;
+          live.awaitingAnswerForStepIndex = 0;
+          console.log("[AI-VOICE] greetingAudioDone=true on pacer drain | awaitingUserAnswer armed", { callSid: live.callSid });
+          armSilenceWatchdog(twilioWs, live, POST_GREETING_SILENCE_MS, "pacer drained greeting");
+        }
         void replayPendingCommittedTurn(twilioWs, live, "pacer drained");
         return;
       }
@@ -888,8 +806,6 @@ async function replayPendingCommittedTurn(
     const pending = state.pendingCommittedTurn;
     if (!pending) return;
 
-    clearStalePostAudioTurnBlockers(state, `replay pending (${reason})`);
-
     // Only replay when the AI is truly done speaking/draining and we are able to create a response
     if (state.aiSpeaking) return;
     if (state.waitingForResponse || state.responseInFlight) return;
@@ -968,7 +884,7 @@ async function replayPendingCommittedTurn(
 
     const humanPause = async () => {
       try {
-        await sleep(randInt(200, 350));
+        await sleep(randInt(120, 220));
       } catch {}
     };
 
@@ -1089,7 +1005,7 @@ async function replayPendingCommittedTurn(
         return;
       }
 
-      const lineToSay2 = addLightHumanReaction(`${ack} ${lineToSay}`, lastUserText);
+      const lineToSay2 = `${ack} ${lineToSay}`;
       const perTurnInstr = buildStepperTurnInstruction(state.context!, lineToSay2, {
         userText: lastUserText,
         recentExchanges: state.recentExchanges,
@@ -1147,10 +1063,6 @@ async function replayPendingCommittedTurn(
       state.greetingAdvancePending = true;
       state.greetingAdvanceNextIndex = nextIdx;
       state.greetingAdvanceNextPhase = "in_call";
-      // ✅ Pre-arm awaitingUserAnswer so silence frames reach OpenAI VAD immediately after
-      // greeting audio drains, without waiting for the first Step 1 audio delta.
-      state.awaitingUserAnswer = true;
-      state.awaitingAnswerForStepIndex = 0;
 
       // Stay in greeting phase until we see outbound audio actually start.
       state.phase = "awaiting_greeting_reply";
@@ -1184,8 +1096,7 @@ async function replayPendingCommittedTurn(
             "I understand — it’s usually about 5 to 10 minutes. Would later today or tomorrow be better?";
         }
       } catch {}
-      let lineToSay = enforceBookingOnlyLine(state.context!, overrideRebuttalLine || getRebuttalLine(state.context!, objectionOrQuestionKind));
-      lineToSay = addLightHumanReaction(lineToSay, lastUserText);
+      const lineToSay = enforceBookingOnlyLine(state.context!, overrideRebuttalLine || getRebuttalLine(state.context!, objectionOrQuestionKind));
       const perTurnInstr = buildConversationalRebuttalInstruction(state.context!, lineToSay, {
         objectionKind: objectionOrQuestionKind,
         userText: lastUserText,
@@ -1458,7 +1369,6 @@ async function replayPendingCommittedTurn(
       }
     } catch {}
 
-    lineToSay = addLightHumanReaction(lineToSay, lastUserText);
     const perTurnInstr = buildStepperTurnInstruction(state.context!, lineToSay);
     try { console.log("[AI-VOICE][STEPPER][REPLAY-SEND]", { callSid: state.callSid, stepIndex: idx, expectedAnswerIdx, stepType, lineToSay }); } catch {}
 
@@ -1582,7 +1492,6 @@ function safelyCloseOpenAi(state: CallState, why: string) {
     state.openAiReady = false;
     state.openAiConfigured = false;
     state.phase = "ended";
-    state.cancelGreeting = true;
     setWaitingForResponse(state, false, `close openai (${why})`);
     setAiSpeaking(state, false, `close openai (${why})`);
     setResponseInFlight(state, false, `close openai (${why})`);
@@ -1756,7 +1665,7 @@ function getHumanAckPrefixForStepAnswer(
 
   // Time answers
   if (prevStepType === "time_question") {
-    const opts = ["Perfect.", "Sounds good.", "Great.", "For sure.", "Okay."];
+    const opts = ["Perfect.", "Sounds good.", "Great.", "Works for me."];
     return opts[Math.floor(Math.random() * opts.length)];
   }
 
@@ -1766,41 +1675,16 @@ function getHumanAckPrefixForStepAnswer(
     const spouseSignals = ["spouse","wife","husband","me and","my wife","my husband","for me","for my","just me","only me","both of us","us both"];
     for (const k of spouseSignals) {
       if (t.includes(k)) {
-        const opts = ["Perfect.", "Got it.", "Okay.", "For sure.", "Makes sense."];
+        const opts = ["Perfect.", "Got it.", "Okay, great.", "Awesome."];
         return opts[Math.floor(Math.random() * opts.length)];
       }
     }
 
-    const opts = ["Got it.", "Okay.", "Yeah.", "Got you.", "For sure.", "Makes sense."];
+    const opts = ["Got it.", "Okay.", "Sure.", "Alright.", "Makes sense."];
     return opts[Math.floor(Math.random() * opts.length)];
   }
 
   return "";
-}
-
-function getLightHumorReactionPrefix(userTextRaw: string): string {
-  const t = String(userTextRaw || "").trim().toLowerCase();
-  if (!t) return "";
-  const hasHumor =
-    t.includes("haha") ||
-    t.includes(" lol") ||
-    t.startsWith("lol") ||
-    t.includes("that's funny") ||
-    t.includes("thats funny") ||
-    t.includes("joking") ||
-    t.includes("kidding");
-  if (!hasHumor) return "";
-  const opts = ["Haha, ", "Yeah, that's funny. "];
-  return opts[Math.floor(Math.random() * opts.length)];
-}
-
-function addLightHumanReaction(lineRaw: string, userTextRaw: string): string {
-  const line = String(lineRaw || "").trim();
-  if (!line) return line;
-  const prefix = getLightHumorReactionPrefix(userTextRaw);
-  if (!prefix) return line;
-  if (/^(haha|yeah, that's funny)/i.test(line)) return line;
-  return `${prefix}${line}`;
 }
 
 
@@ -3330,20 +3214,11 @@ HOW TO RESPOND:
 3. Bridge back to scheduling naturally.
 4. Close with the booking question (unless in de-escalation mode — then keep it soft).
 
-HUMAN DELIVERY RULES:
-- Speak like a real person on a phone call.
-- Use short natural reactions like "yeah", "got it", "okay", "for sure".
-- If they are casual or slightly funny, one light reaction is okay, like "haha yeah I get that".
-- Never tell jokes. Never overdo humor. Never go off script.
-- Keep it short and conversational. Slightly vary tone naturally.
-- Do not sound like a robot or assistant.
-- 1-2 sentences max.
-
 NEVER SAY:
 - "I understand" as your opener every single time
 - "Got it" as your opener every single time
 - Anything that sounds like a canned script line
-- More than 1-2 sentences total
+- More than 3-4 sentences total
 - The exact same thing you said in a prior turn (check RECENT CONVERSATION above)
 
 BASE IDEA — rephrase this in your own natural voice, don't read it verbatim:
@@ -3426,19 +3301,10 @@ SUGGESTED LINE (your backbone — deliver the substance of this naturally, don't
 "${line}"
 
 HOW TO DELIVER IT:
-1. If the lead said something — acknowledge it briefly first (1–4 words: "Yeah.", "Got you.", "Okay.", "For sure.", "Makes sense."). Match their energy.
+1. If the lead said something — acknowledge it briefly first (1–4 words: "Got it.", "Yeah for sure.", "Makes sense.", "Okay —"). Match their energy.
 2. Respond to anything they raised that needs a quick word (1 sentence max). If nothing needs addressing, skip this.
 3. Deliver the substance of the suggested line naturally. You may rephrase slightly to sound human, but preserve the core ask.
 4. STOP. Do not add explanations, summaries, or extra commentary.
-
-HUMAN DELIVERY RULES:
-- Speak like a real person on a phone call.
-- Use short natural reactions like "yeah", "got it", "okay", "for sure".
-- If they are casual or slightly funny, one light reaction is okay, like "haha yeah I get that".
-- Never tell jokes. Never overdo humor. Never go off script.
-- Keep it short and conversational. Slightly vary tone naturally.
-- Do not sound like a robot or assistant.
-- 1-2 sentences max.
 
 VARIETY RULE: Do not open with "I understand" or "Got it" every single turn. Mix it up. Sound like a real person, not a script.
 `.trim();
@@ -4256,7 +4122,6 @@ wss.on("connection", (ws: WebSocket) => {
     aiSpeaking: false,
     userAudioMsBuffered: 0,
     initialGreetingQueued: false,
-    cancelGreeting: false,
     openAiReady: false,
     openAiConfigured: false,
     debugLoggedMissingTrack: false,
@@ -4321,7 +4186,6 @@ wss.on("connection", (ws: WebSocket) => {
 
     if (st) {
       st.phase = "ended";
-      st.cancelGreeting = true;
       stopOutboundPacer(ws, st, "twilio ws close");
 
       // ✅ best-effort billing on close (Twilio may not always deliver a clean `stop`)
@@ -4443,7 +4307,6 @@ async function performLiveTransfer(ws: WebSocket, state: CallState): Promise<voi
     agentPhone: ctx.liveTransferPhone,
     leadName,
   });
-  (state as any).liveTransferPending = true;
 
   // 1. Say transfer line
   const transferLine = `That's great to hear. I actually have a licensed agent available right now who can go over everything with you in detail. Let me connect you — just one moment.`;
@@ -4744,7 +4607,6 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
     (!!state.outboundOpenAiDone === false && !!state.outboundPacerTimer);
 
   const recentlyCancelled = (Date.now() - Number(state.lastCancelAtMs || 0)) < 1500;
-  clearStalePostAudioTurnBlockers(state, "media input gate");
 
   /**
    * ✅ CRITICAL FIX:
@@ -4923,12 +4785,6 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
       const inWarmup = warmupUntil > 0 && nowMs <= warmupUntil;
 
       const allowInitialSilence = listenEnabledAt > 0 && (nowMs - listenEnabledAt) <= 1200;
-      const recentUserAudioForVad =
-        Number(state.userAudioMsBuffered || 0) >= 20 ||
-        (Number((state as any).lastUserSpeechStartedAtMs || 0) > 0 &&
-          (nowMs - Number((state as any).lastUserSpeechStartedAtMs || 0)) <= 1200) ||
-        (Number((state as any).lastUserSpeechStoppedAtMs || 0) > 0 &&
-          (nowMs - Number((state as any).lastUserSpeechStoppedAtMs || 0)) <= 1200);
 
       // ✅ HARD COST LOCK:
       // Only stream inbound audio to OpenAI when we EXPECT the user to speak.
@@ -4939,8 +4795,7 @@ async function handleMedia(ws: WebSocket, msg: TwilioMediaEvent) {
       const expectingUserSpeech =
         (state.phase === "awaiting_greeting_reply" && !!state.debugLoggedResponseCreateGreeting) ||
         (state.phase === "in_call" && !!state.awaitingUserAnswer) ||
-        inWarmup ||
-        recentUserAudioForVad;
+        inWarmup;
 
       if (!expectingUserSpeech) {
         return;
@@ -5065,7 +4920,6 @@ async function handleStop(ws: WebSocket, msg: TwilioStopEvent) {
   );
 
   state.phase = "ended";
-  state.cancelGreeting = true;
   stopOutboundPacer(ws, state, "twilio stop");
 
   if (state.openAiWs) {
@@ -5223,10 +5077,10 @@ async function initOpenAiRealtime(ws: WebSocket, state: CallState) {
           create_response: false,
 
           // Short enough to not hang on pauses, long enough to not cut off natural speech
-          silence_duration_ms: 500,
+          silence_duration_ms: 400,
 
           // Balanced threshold — rejects comfort noise but catches real speech
-          threshold: 0.6,
+          threshold: 0.85,
 
           // Capture speech from the very start of each user turn
           prefix_padding_ms: 300,
@@ -5616,15 +5470,18 @@ state.lastUserSpeechStoppedAtMs = Date.now();
 
       (async () => {
         try {
-          if (abortGreetingIfNotLive(twilioWs, state, "async start not live")) return;
           const existing = String(state.context?.answeredBy || "").trim();
           if (!existing) {
             await refreshAnsweredByFromCoveCRM(state, "pre-greeting #1");
-            if (abortGreetingIfNotLive(twilioWs, state, "after pre-greeting refresh")) return;
+            await sleep(500);
+            await refreshAnsweredByFromCoveCRM(state, "pre-greeting #2");
+            await sleep(500);
+            await refreshAnsweredByFromCoveCRM(state, "pre-greeting #3");
+            await sleep(500);
+            await refreshAnsweredByFromCoveCRM(state, "pre-greeting #4");
           }
         } catch {}
 
-        if (abortGreetingIfNotLive(twilioWs, state, "before AMD check")) return;
         const answeredByNow = String(
           state.context?.answeredBy || ""
         ).toLowerCase();
@@ -5639,18 +5496,16 @@ state.lastUserSpeechStoppedAtMs = Date.now();
           return;
         }
 
-        // ✅ If AMD hasn't resolved yet (empty/unknown), wait briefly before greeting.
-        // Twilio AMD can take 3-5s to resolve; don't block a live greeting that long.
+        // ✅ If AMD hasn't resolved yet (empty/unknown), wait up to 3 more seconds
+        // Twilio AMD can take 3-5s to resolve — we cannot greet into a voicemail
         if (!answeredByNow || answeredByNow === "unknown") {
-          console.log("[AI-VOICE] AMD not resolved yet — brief wait before greeting", {
+          console.log("[AI-VOICE] AMD not resolved yet — waiting up to 3s before greeting", {
             callSid: state.callSid,
             answeredByNow,
           });
-          for (let i = 0; i < 3; i++) {
-            await sleep(250);
-            if (abortGreetingIfNotLive(twilioWs, state, `after AMD sleep ${i}`)) return;
+          for (let i = 0; i < 6; i++) {
+            await sleep(500);
             await refreshAnsweredByFromCoveCRM(state, `amd-wait-${i}`);
-            if (abortGreetingIfNotLive(twilioWs, state, `after AMD refresh ${i}`)) return;
             const latest = String(state.context?.answeredBy || "").toLowerCase();
             if (isVoicemailAnsweredBy(latest)) {
               console.log("[AI-VOICE] Voicemail detected during AMD wait — suppressing", {
@@ -5670,10 +5525,20 @@ state.lastUserSpeechStoppedAtMs = Date.now();
           }
         }
 
-        let liveState = calls.get(twilioWs);
-        if (abortGreetingIfNotLive(twilioWs, liveState, "before greeting speech guard")) return;
-        if (!liveState) return;
-        if (liveState.waitingForResponse) return;
+        const isHuman = String(state.context?.answeredBy || "").toLowerCase() === "human";
+        try {
+          if (isHuman) await sleep(250);
+        } catch {}
+
+        const liveState = calls.get(twilioWs);
+        if (
+          !liveState ||
+          !liveState.openAiWs ||
+          liveState.waitingForResponse ||
+          !liveState.openAiReady
+        ) {
+          return;
+        }
 
         // ✅ FIX: If the caller is already speaking (very common right at connect),
         // do NOT fire the greeting yet. Wait briefly for speech to stop so we don't talk over them.
@@ -5685,14 +5550,8 @@ state.lastUserSpeechStoppedAtMs = Date.now();
             const userSpeaking = startedAt > 0 && (stopAt <= 0 || stopAt < startedAt) && (now - startedAt) <= 5000;
             if (!userSpeaking) break;
             await sleep(200);
-            if (abortGreetingIfNotLive(twilioWs, liveState, `after user-speaking wait ${i}`)) return;
           }
         } catch {}
-
-        liveState = calls.get(twilioWs);
-        if (abortGreetingIfNotLive(twilioWs, liveState, "before greeting response.create")) return;
-        if (!liveState) return;
-        if (liveState.waitingForResponse) return;
 
         liveState.userAudioMsBuffered = 0;
         liveState.lastUserTranscript = "";
@@ -5733,7 +5592,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
         liveState.lastPromptLine = "GREETING";
         liveState.lastResponseCreateAtMs = Date.now();
 
-        liveState.openAiWs!.send(
+        liveState.openAiWs.send(
           JSON.stringify({
             type: "response.create",
             response: {
@@ -6138,7 +5997,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
     // ✅ small human pause like ChatGPT voice (only when we are about to speak)
     const humanPause = async () => {
       try {
-        await sleep(randInt(200, 350));
+        await sleep(randInt(120, 220));
       } catch {}
     };
 
@@ -6204,8 +6063,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
       }
 
       // prefix the first script step with a safe ack
-      const lineToSay2 = addLightHumanReaction(`${ack} ${lineToSay}`, lastUserText);
-      const perTurnInstr = buildStepperTurnInstruction(
+      const lineToSay2 = `${ack} ${lineToSay}`;      const perTurnInstr = buildStepperTurnInstruction(
         state.context!,
         lineToSay2
       );
@@ -6307,11 +6165,10 @@ state.lastUserSpeechStoppedAtMs = Date.now();
             "I understand — it’s usually about 5 to 10 minutes. Would later today or tomorrow be better?";
         }
       } catch {}
-      let lineToSay = enforceBookingOnlyLine(
+      const lineToSay = enforceBookingOnlyLine(
         state.context!,
         overrideRebuttalLine || getRebuttalLine(state.context!, objectionOrQuestionKind)
       );
-      lineToSay = addLightHumanReaction(lineToSay, lastUserText);
 
       // ── Repeat-objection tracking ──
       const isRepeatObjection =
@@ -6749,7 +6606,6 @@ state.lastUserSpeechStoppedAtMs = Date.now();
     // Push user answer to exchange memory before building instruction
     if (lastUserText) pushExchange(state, "user", lastUserText, expectedAnswerIdx);
 
-    lineToSay = addLightHumanReaction(lineToSay, lastUserText);
     const perTurnInstr = buildStepperTurnInstruction(state.context!, lineToSay, {
       userText: lastUserText,
       recentExchanges: state.recentExchanges,
@@ -7100,7 +6956,6 @@ void handleFinalOutcomeIntent(state, {
           greetingFired,
           userTurnFired,
         });
-        armSilenceWatchdog(twilioWs, state, POST_GREETING_SILENCE_MS, "greeting response.audio.done");
       }
     }
 
@@ -7124,14 +6979,14 @@ void handleFinalOutcomeIntent(state, {
       stopOutboundPacer(twilioWs, state, "OpenAI done + <1 frame buffered");
       setAiSpeaking(state, false, `OpenAI ${t} (buffer < 1 frame)`);
       (state as any).lastListenEnabledAtMs = Date.now();
-      (state as any).listenWarmupUntilMs = Date.now() + 500;
+      (state as any).listenWarmupUntilMs = Date.now() + 2000;
 
       // ✅ Force greetingAudioDone on <1 frame path too
-      if (!(state as any).greetingAudioDone && !!state.debugLoggedResponseCreateGreeting) {
+      if (state.phase === "awaiting_greeting_reply" && !(state as any).greetingAudioDone) {
         (state as any).greetingAudioDone = true;
         state.awaitingUserAnswer = true;
         state.awaitingAnswerForStepIndex = 0;
-        console.log("[AI-VOICE] greetingAudioDone=true on <1frame path (phase-agnostic) | awaitingUserAnswer armed", { callSid: state.callSid, phase: state.phase });
+        console.log("[AI-VOICE] greetingAudioDone=true on <1frame path | awaitingUserAnswer armed", { callSid: state.callSid });
       }
 
       // ✅ If we never produced audible greeting audio, do NOT advance steps/phases.
@@ -7144,7 +6999,6 @@ void handleFinalOutcomeIntent(state, {
         state.scriptStepIndex = 0;
       }
 
-      rearmListeningAfterAiTurn(twilioWs, state, `OpenAI ${t} (buffer < 1 frame)`);
       void replayPendingCommittedTurn(twilioWs, state, `OpenAI ${t} (buffer < 1 frame)`);
     }
   }
