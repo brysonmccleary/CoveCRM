@@ -202,6 +202,7 @@ type CallState = {
 
   // greeting guard
   initialGreetingQueued?: boolean;
+  cancelGreeting?: boolean;
 
   // ✅ Delay advancing out of greeting until we confirm OpenAI actually produced audio (prevents Step 0 skip)
   greetingAdvancePending?: boolean;
@@ -634,7 +635,7 @@ function rearmListeningAfterAiTurn(
   if ((state as any).liveTransferPending) return false;
   if (!state.context || !state.openAiWs || !state.openAiReady) return false;
   clearStalePostAudioTurnBlockers(state, reason);
-  if (state.aiSpeaking) return false;
+  if (state.aiSpeaking || state.waitingForResponse || state.responseInFlight) return false;
 
   let expectedStepIndex: number | undefined;
   let watchdogMs = MID_CALL_SILENCE_MS;
@@ -669,6 +670,39 @@ function rearmListeningAfterAiTurn(
   });
 
   armSilenceWatchdog(twilioWs, state, watchdogMs, reason);
+  return true;
+}
+
+function isCallStillLive(
+  twilioWs: WebSocket,
+  state: CallState | undefined | null
+): state is CallState {
+  if (!state) return false;
+  if (state.phase === "ended") return false;
+  if (state.cancelGreeting) return false;
+  if (calls.get(twilioWs) !== state) return false;
+  try {
+    if (twilioWs.readyState !== WebSocket.OPEN) return false;
+  } catch {}
+  if (!state.openAiWs || !state.openAiReady) return false;
+  return true;
+}
+
+function abortGreetingIfNotLive(
+  twilioWs: WebSocket,
+  state: CallState | undefined | null,
+  reason: string
+): boolean {
+  if (isCallStillLive(twilioWs, state)) return false;
+  try {
+    const s: any = state;
+    console.log("[AI-VOICE][GREETING-ABORT]", {
+      callSid: s?.callSid,
+      streamSid: s?.streamSid,
+      phase: s?.phase,
+      reason,
+    });
+  } catch {}
   return true;
 }
 
@@ -1548,6 +1582,7 @@ function safelyCloseOpenAi(state: CallState, why: string) {
     state.openAiReady = false;
     state.openAiConfigured = false;
     state.phase = "ended";
+    state.cancelGreeting = true;
     setWaitingForResponse(state, false, `close openai (${why})`);
     setAiSpeaking(state, false, `close openai (${why})`);
     setResponseInFlight(state, false, `close openai (${why})`);
@@ -4221,6 +4256,7 @@ wss.on("connection", (ws: WebSocket) => {
     aiSpeaking: false,
     userAudioMsBuffered: 0,
     initialGreetingQueued: false,
+    cancelGreeting: false,
     openAiReady: false,
     openAiConfigured: false,
     debugLoggedMissingTrack: false,
@@ -4285,6 +4321,7 @@ wss.on("connection", (ws: WebSocket) => {
 
     if (st) {
       st.phase = "ended";
+      st.cancelGreeting = true;
       stopOutboundPacer(ws, st, "twilio ws close");
 
       // ✅ best-effort billing on close (Twilio may not always deliver a clean `stop`)
@@ -5028,6 +5065,7 @@ async function handleStop(ws: WebSocket, msg: TwilioStopEvent) {
   );
 
   state.phase = "ended";
+  state.cancelGreeting = true;
   stopOutboundPacer(ws, state, "twilio stop");
 
   if (state.openAiWs) {
@@ -5578,12 +5616,15 @@ state.lastUserSpeechStoppedAtMs = Date.now();
 
       (async () => {
         try {
+          if (abortGreetingIfNotLive(twilioWs, state, "async start not live")) return;
           const existing = String(state.context?.answeredBy || "").trim();
           if (!existing) {
             await refreshAnsweredByFromCoveCRM(state, "pre-greeting #1");
+            if (abortGreetingIfNotLive(twilioWs, state, "after pre-greeting refresh")) return;
           }
         } catch {}
 
+        if (abortGreetingIfNotLive(twilioWs, state, "before AMD check")) return;
         const answeredByNow = String(
           state.context?.answeredBy || ""
         ).toLowerCase();
@@ -5607,7 +5648,9 @@ state.lastUserSpeechStoppedAtMs = Date.now();
           });
           for (let i = 0; i < 3; i++) {
             await sleep(250);
+            if (abortGreetingIfNotLive(twilioWs, state, `after AMD sleep ${i}`)) return;
             await refreshAnsweredByFromCoveCRM(state, `amd-wait-${i}`);
+            if (abortGreetingIfNotLive(twilioWs, state, `after AMD refresh ${i}`)) return;
             const latest = String(state.context?.answeredBy || "").toLowerCase();
             if (isVoicemailAnsweredBy(latest)) {
               console.log("[AI-VOICE] Voicemail detected during AMD wait — suppressing", {
@@ -5627,15 +5670,10 @@ state.lastUserSpeechStoppedAtMs = Date.now();
           }
         }
 
-        const liveState = calls.get(twilioWs);
-        if (
-          !liveState ||
-          !liveState.openAiWs ||
-          liveState.waitingForResponse ||
-          !liveState.openAiReady
-        ) {
-          return;
-        }
+        let liveState = calls.get(twilioWs);
+        if (abortGreetingIfNotLive(twilioWs, liveState, "before greeting speech guard")) return;
+        if (!liveState) return;
+        if (liveState.waitingForResponse) return;
 
         // ✅ FIX: If the caller is already speaking (very common right at connect),
         // do NOT fire the greeting yet. Wait briefly for speech to stop so we don't talk over them.
@@ -5647,8 +5685,14 @@ state.lastUserSpeechStoppedAtMs = Date.now();
             const userSpeaking = startedAt > 0 && (stopAt <= 0 || stopAt < startedAt) && (now - startedAt) <= 5000;
             if (!userSpeaking) break;
             await sleep(200);
+            if (abortGreetingIfNotLive(twilioWs, liveState, `after user-speaking wait ${i}`)) return;
           }
         } catch {}
+
+        liveState = calls.get(twilioWs);
+        if (abortGreetingIfNotLive(twilioWs, liveState, "before greeting response.create")) return;
+        if (!liveState) return;
+        if (liveState.waitingForResponse) return;
 
         liveState.userAudioMsBuffered = 0;
         liveState.lastUserTranscript = "";
@@ -5689,7 +5733,7 @@ state.lastUserSpeechStoppedAtMs = Date.now();
         liveState.lastPromptLine = "GREETING";
         liveState.lastResponseCreateAtMs = Date.now();
 
-        liveState.openAiWs.send(
+        liveState.openAiWs!.send(
           JSON.stringify({
             type: "response.create",
             response: {
