@@ -652,10 +652,16 @@ function ensureOutboundPacer(twilioWs: WebSocket, state: CallState) {
           setAiSpeaking(live, false, "pacer drained");
           (live as any).lastListenEnabledAtMs = Date.now();
           (live as any).listenWarmupUntilMs = Date.now() + 2000;
-          if (live.phase === "awaiting_greeting_reply") {
+          if (
+            live.phase === "awaiting_greeting_reply" &&
+            !live.voicemailSkipArmed &&
+            calls.get(twilioWs) === live &&
+            twilioWs.readyState === WebSocket.OPEN
+          ) {
             (live as any).greetingAudioDone = true;
             live.awaitingUserAnswer = true;
             live.awaitingAnswerForStepIndex = 0;
+            console.log("[AI-VOICE][FIX] greeting listen re-armed", { callSid: live.callSid, reason: "pacer drained greeting empty" });
             console.log("[AI-VOICE] greetingAudioDone=true on empty-buffer drain | awaitingUserAnswer armed", { callSid: live.callSid });
             armSilenceWatchdog(twilioWs, live, POST_GREETING_SILENCE_MS, "pacer drained greeting empty");
           } else if (live.phase === "in_call") {
@@ -692,11 +698,18 @@ function ensureOutboundPacer(twilioWs: WebSocket, state: CallState) {
           armSilenceWatchdog(twilioWs, live, MID_CALL_SILENCE_MS, "pacer drained in_call");
         } else if (live.phase === "awaiting_greeting_reply") {
           // ✅ Unconditionally arm listening when greeting audio finishes playing
-          (live as any).greetingAudioDone = true;
-          live.awaitingUserAnswer = true;
-          live.awaitingAnswerForStepIndex = 0;
-          console.log("[AI-VOICE] greetingAudioDone=true on pacer drain | awaitingUserAnswer armed", { callSid: live.callSid });
-          armSilenceWatchdog(twilioWs, live, POST_GREETING_SILENCE_MS, "pacer drained greeting");
+          if (
+            !live.voicemailSkipArmed &&
+            calls.get(twilioWs) === live &&
+            twilioWs.readyState === WebSocket.OPEN
+          ) {
+            (live as any).greetingAudioDone = true;
+            live.awaitingUserAnswer = true;
+            live.awaitingAnswerForStepIndex = 0;
+            console.log("[AI-VOICE][FIX] greeting listen re-armed", { callSid: live.callSid, reason: "pacer drained greeting" });
+            console.log("[AI-VOICE] greetingAudioDone=true on pacer drain | awaitingUserAnswer armed", { callSid: live.callSid });
+            armSilenceWatchdog(twilioWs, live, POST_GREETING_SILENCE_MS, "pacer drained greeting");
+          }
         }
         void replayPendingCommittedTurn(twilioWs, live, "pacer drained");
         return;
