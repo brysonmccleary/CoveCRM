@@ -32,6 +32,8 @@ export interface SendEmailPayload {
   stepIndex?: number;
   /** Physical mailing address for CAN-SPAM footer (recruiting emails) */
   agentAddress?: string;
+  doiAgentId?: string | mongoose.Types.ObjectId;
+  doiLeadId?: string | mongoose.Types.ObjectId;
 }
 
 export interface SendEmailResult {
@@ -64,6 +66,8 @@ export async function sendEmailWithTracking(
     enrollmentId,
     stepIndex,
     agentAddress,
+    doiAgentId,
+    doiLeadId,
   } = payload;
 
   const normalizedTo = to.toLowerCase().trim();
@@ -139,6 +143,8 @@ export async function sendEmailWithTracking(
     ...(campaignId ? { campaignId } : {}),
     ...(enrollmentId ? { enrollmentId } : {}),
     ...(stepIndex !== undefined ? { stepIndex } : {}),
+    ...(doiAgentId ? { doiAgentId } : {}),
+    ...(doiLeadId ? { doiLeadId } : {}),
   });
 
   // Resolve unsubscribe URL now that we have the emailMessage ID

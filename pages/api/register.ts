@@ -3,6 +3,7 @@ import mongoose from "mongoose";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import bcrypt from "bcryptjs";
+import crypto from "crypto";
 
 /** Stripe */
 import Stripe from "stripe";
@@ -12,7 +13,7 @@ const STRIPE_MODE: "live" | "test" | undefined = stripeKey
   ? (stripeKey.startsWith("sk_live_") ? "live" : "test")
   : undefined;
 
-import { sendWelcomeEmail } from "@/lib/email"; // ✅ NEW
+import { sendEmailVerificationCode, sendWelcomeEmail } from "@/lib/email"; // ✅ NEW
 
 /** Admin allow-list (comma-separated emails in Vercel env) */
 function isAdminEmail(email?: string | null) {
@@ -34,6 +35,18 @@ const HOUSE_CODES = new Set(
     .map((s) => s.trim().toLowerCase())
     .filter(Boolean)
 );
+
+function makeVerificationCode() {
+  return String(crypto.randomInt(0, 1_000_000)).padStart(6, "0");
+}
+
+function hashVerificationCode(email: string, code: string) {
+  const secret = process.env.EMAIL_VERIFICATION_SECRET || process.env.NEXTAUTH_SECRET || "covecrm";
+  return crypto
+    .createHmac("sha256", secret)
+    .update(`${email.toLowerCase()}:${code}`)
+    .digest("hex");
+}
 
 async function generateUniqueReferralCode(): Promise<string> {
   const ALPHANUM = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
@@ -115,6 +128,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const hashed = await bcrypt.hash(pw, 10);
     const admin = isAdminEmail(cleanEmail);
     const myReferralCode = await generateUniqueReferralCode();
+    const verificationCode = makeVerificationCode();
+    const verificationCodeHash = hashVerificationCode(cleanEmail, verificationCode);
+    const verificationExpiresAt = new Date(Date.now() + 10 * 60 * 1000);
 
     // Create Stripe customer (metadata only). Discount is applied later at checkout/subscription.
     let stripeCustomerId: string | undefined;
@@ -149,6 +165,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       role: admin ? "admin" : "user",
       plan: admin ? "Pro" : "Free",
       subscriptionStatus: "active",
+      emailVerified: admin,
+      emailVerificationCodeHash: admin ? null : verificationCodeHash,
+      emailVerificationExpiresAt: admin ? null : verificationExpiresAt,
+      trialGranted: admin,
+      trialActivatedAt: admin ? new Date() : null,
+      trialEmailUsed: admin,
+      trialBlockedReason: null,
       referralCode: myReferralCode,
       referredByCode,
       referredByUserId,
@@ -157,11 +180,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       isHouseCode: isHouse,
     });
 
-    // ✅ Send welcome email for /signup flow (non-blocking)
     try {
+      if (!admin) {
+        const sent = await sendEmailVerificationCode({
+          to: newUser.email,
+          name: newUser.name,
+          code: verificationCode,
+        });
+        if (!sent.ok) throw new Error(sent.error || "Verification email failed");
+      }
       await sendWelcomeEmail({ to: newUser.email, name: newUser.name });
-    } catch (e) {
-      console.warn("welcome email (register) failed:", e);
+    } catch (e: any) {
+      console.error("verification/welcome email (register) failed:", e?.message || e);
+      return res.status(500).json({
+        message: "Account created, but verification email could not be sent. Please request a new code.",
+      });
     }
 
     return res.status(200).json({

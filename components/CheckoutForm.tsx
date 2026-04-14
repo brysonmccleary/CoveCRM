@@ -78,7 +78,7 @@ export default function CheckoutForm({
           }
 
           try {
-            await fetch("/api/stripe/set-default-payment-method", {
+            const activationRes = await fetch("/api/stripe/set-default-payment-method", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
@@ -87,8 +87,14 @@ export default function CheckoutForm({
                 paymentMethodId: pm,
               }),
             });
+            const activationData = await activationRes.json().catch(() => ({}));
+            if (!activationRes.ok || activationData?.ok === false) {
+              toast.error("Account activation failed. Please contact support.");
+              return;
+            }
           } catch {
-            // non-blocking
+            toast.error("Account activation failed. Please contact support.");
+            return;
           }
 
           toast.success("✅ Trial started! Card saved for usage billing.");

@@ -11,6 +11,16 @@ export interface IUser {
 
   agentPhone?: string;
   stripeCustomerId?: string;
+  stripeCardFingerprint?: string | null;
+
+  emailVerified?: boolean;
+  emailVerificationCodeHash?: string | null;
+  emailVerificationExpiresAt?: Date | null;
+
+  trialGranted?: boolean;
+  trialActivatedAt?: Date | null;
+  trialEmailUsed?: boolean;
+  trialBlockedReason?: string | null;
 
   numbers?: {
     sid: string;
@@ -294,6 +304,16 @@ const UserSchema = new Schema<IUser>({
   username: { type: String },
   agentPhone: { type: String },
   stripeCustomerId: { type: String },
+  stripeCardFingerprint: { type: String, default: null, index: true, sparse: true },
+
+  emailVerified: { type: Boolean, default: false },
+  emailVerificationCodeHash: { type: String, default: null },
+  emailVerificationExpiresAt: { type: Date, default: null },
+
+  trialGranted: { type: Boolean, default: false, index: true },
+  trialActivatedAt: { type: Date, default: null },
+  trialEmailUsed: { type: Boolean, default: false },
+  trialBlockedReason: { type: String, default: null },
 
   numbers: [
     {

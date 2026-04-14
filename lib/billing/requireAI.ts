@@ -2,6 +2,7 @@
 import type { HydratedDocument } from "mongoose";
 import User from "@/models/User";
 import connectToDatabase from "@/lib/mongodb";
+import { ACCOUNT_NOT_ACTIVATED_MESSAGE, isAccountActivated } from "@/lib/billing/requireActivatedAccount";
 
 type GateOk = { ok: true; user?: HydratedDocument<any> };
 type GateFail = { ok: false; status: 404 | 403; error: string };
@@ -29,6 +30,10 @@ export async function requireAI(email: string, opts: RequireAIOptions = {}) : Pr
 
   if (opts.allowOwnerBypass && isOwnerAccount(user)) {
     return { ok: true, user: opts.includeUser ? user : undefined };
+  }
+
+  if (!isAccountActivated(user)) {
+    return { ok: false, status: 403, error: ACCOUNT_NOT_ACTIVATED_MESSAGE };
   }
 
   return { ok: true, user: opts.includeUser ? user : undefined };

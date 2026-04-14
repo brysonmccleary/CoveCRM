@@ -22,6 +22,7 @@ const PUBLIC_ROUTES = new Set<string>([
   "/",
   "/login",
   "/signup",
+  "/verify-email",
   "/billing",
   "/auth/signin",
   "/auth/signup",
@@ -79,6 +80,21 @@ function InnerApp({
 
   const hideAssistant =
     isPublic || router.pathname === "/" || router.pathname === "/billing";
+
+  useEffect(() => {
+    if (!authed || isPublic) return;
+    const user = session?.user as any;
+    if (user?.role === "admin" || user?.accountActivated === true) return;
+
+    if (user?.emailVerified !== true) {
+      router.replace(`/verify-email?email=${encodeURIComponent(String(user?.email || ""))}`);
+      return;
+    }
+
+    if (user?.trialGranted !== true) {
+      router.replace(`/billing?email=${encodeURIComponent(String(user?.email || ""))}&trial=1`);
+    }
+  }, [authed, isPublic, router, session?.user]);
 
   /** Load leads for reminders (only when logged in on internal pages) */
   useEffect(() => {

@@ -2,6 +2,7 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import { stripe } from "@/lib/stripe";
 import dbConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
+import { grantTrialIfEligible } from "@/lib/billing/grantTrialIfEligible";
 
 /**
  * Trial support helper:
@@ -32,6 +33,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!customerId) {
       return res.status(404).json({ error: "User missing stripeCustomerId." });
     }
+    if (!user) {
+      return res.status(404).json({ error: "User not found." });
+    }
 
     await stripe.customers.update(String(customerId), {
       invoice_settings: { default_payment_method: paymentMethodId },
@@ -47,7 +51,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
-    return res.status(200).json({ ok: true });
+    const paymentMethod = await stripe.paymentMethods.retrieve(paymentMethodId);
+    const fingerprint = paymentMethod.card?.fingerprint || null;
+    if (fingerprint) {
+      (user as any).stripeCardFingerprint = fingerprint;
+      await user.save();
+    }
+
+    const trial = await grantTrialIfEligible(user, stripe);
+    if (!trial.ok || !trial.granted) {
+      return res.status(403).json({
+        ok: false,
+        error: "Account not activated",
+        reason: trial.reason || "trial_not_granted",
+      });
+    }
+
+    return res.status(200).json({ ok: true, trialGranted: true });
   } catch (err: any) {
     console.error("set-default-payment-method error:", err);
     return res
