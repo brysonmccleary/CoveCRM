@@ -460,6 +460,31 @@ export async function sendWelcomeEmail(opts: {
   });
 }
 
+export async function sendEmailVerificationCode(opts: {
+  to: string;
+  name?: string;
+  code: string;
+}): Promise<SendEmailResult> {
+  const subject = "Verify your Cove CRM email";
+  const html = `
+    <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;line-height:1.5;color:#0f172a">
+      <h2>Verify your email</h2>
+      <p>Hi ${escapeHtml(opts.name || "there")},</p>
+      <p>Enter this code to activate your Cove CRM account:</p>
+      <p style="font-size:28px;font-weight:700;letter-spacing:6px;margin:24px 0">${escapeHtml(opts.code)}</p>
+      <p>This code expires in 10 minutes.</p>
+      <p>If you did not create a Cove CRM account, you can ignore this email.</p>
+      <p style="margin:16px 0 0 0">— The Cove CRM Team</p>
+    </div>
+  `;
+  return sendViaResend({
+    to: opts.to,
+    subject,
+    html,
+    replyTo: DEFAULT_SUPPORT_EMAIL,
+  });
+}
+
 /* ---------- Affiliate: Admin notification on application ---------- */
 
 function renderAffiliateApplicationAdminEmail(opts: {
