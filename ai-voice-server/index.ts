@@ -652,12 +652,13 @@ function ensureOutboundPacer(twilioWs: WebSocket, state: CallState) {
           setAiSpeaking(live, false, "pacer drained");
           (live as any).lastListenEnabledAtMs = Date.now();
           (live as any).listenWarmupUntilMs = Date.now() + 2000;
-          // ✅ Phase-agnostic greeting done check (phase may already be in_call)
-          if (!(live as any).greetingAudioDone && !!live.debugLoggedResponseCreateGreeting) {
-            (live as any).greetingAudioDone = true;
+          // ✅ Arm POST_GREETING watchdog whenever greeting has fired and we're still in greeting phase.
+          // Always set awaitingUserAnswer=true so silence frames reach OpenAI VAD after drain.
+          if (!!live.debugLoggedResponseCreateGreeting && live.phase === "awaiting_greeting_reply") {
+            if (!(live as any).greetingAudioDone) (live as any).greetingAudioDone = true;
             live.awaitingUserAnswer = true;
             live.awaitingAnswerForStepIndex = 0;
-            console.log("[AI-VOICE] greetingAudioDone=true on empty-buffer drain (phase-agnostic) | awaitingUserAnswer armed", { callSid: live.callSid, phase: live.phase });
+            console.log("[AI-VOICE] greetingAudioDone=true on empty-buffer drain | awaitingUserAnswer armed", { callSid: live.callSid, phase: live.phase });
             armSilenceWatchdog(twilioWs, live, POST_GREETING_SILENCE_MS, "pacer drained greeting empty");
           } else if (live.phase === "in_call") {
             (live as any).listenWarmupUntilMs = Date.now() + 2000;
@@ -687,14 +688,13 @@ function ensureOutboundPacer(twilioWs: WebSocket, state: CallState) {
         setAiSpeaking(live, false, "pacer drained");
         (live as any).lastListenEnabledAtMs = Date.now();
         (live as any).listenWarmupUntilMs = Date.now() + 2000;
-        // ✅ If greeting audio hasn't been marked done yet, do it now regardless of phase.
-        // greetingAdvancePending shifts phase to in_call on first audio delta, so we
-        // cannot rely on phase === awaiting_greeting_reply here.
-        if (!(live as any).greetingAudioDone && !!live.debugLoggedResponseCreateGreeting) {
-          (live as any).greetingAudioDone = true;
+        // ✅ Arm POST_GREETING watchdog whenever greeting has fired and we're still in greeting phase.
+        // Always set awaitingUserAnswer=true so silence frames reach OpenAI VAD after drain.
+        if (!!live.debugLoggedResponseCreateGreeting && live.phase === "awaiting_greeting_reply") {
+          if (!(live as any).greetingAudioDone) (live as any).greetingAudioDone = true;
           live.awaitingUserAnswer = true;
           live.awaitingAnswerForStepIndex = 0;
-          console.log("[AI-VOICE] greetingAudioDone=true on pacer drain (phase-agnostic) | awaitingUserAnswer armed", { callSid: live.callSid, phase: live.phase });
+          console.log("[AI-VOICE] greetingAudioDone=true on pacer drain | awaitingUserAnswer armed", { callSid: live.callSid, phase: live.phase });
           armSilenceWatchdog(twilioWs, live, POST_GREETING_SILENCE_MS, "pacer drained greeting");
         } else if (live.phase === "in_call") {
           armSilenceWatchdog(twilioWs, live, MID_CALL_SILENCE_MS, "pacer drained in_call");
@@ -1064,6 +1064,10 @@ async function replayPendingCommittedTurn(
       state.greetingAdvancePending = true;
       state.greetingAdvanceNextIndex = nextIdx;
       state.greetingAdvanceNextPhase = "in_call";
+      // ✅ Pre-arm awaitingUserAnswer so silence frames reach OpenAI VAD immediately after
+      // greeting audio drains, without waiting for the first Step 1 audio delta.
+      state.awaitingUserAnswer = true;
+      state.awaitingAnswerForStepIndex = 0;
 
       // Stay in greeting phase until we see outbound audio actually start.
       state.phase = "awaiting_greeting_reply";
@@ -5474,12 +5478,8 @@ state.lastUserSpeechStoppedAtMs = Date.now();
           const existing = String(state.context?.answeredBy || "").trim();
           if (!existing) {
             await refreshAnsweredByFromCoveCRM(state, "pre-greeting #1");
-            await sleep(500);
+            await sleep(200);
             await refreshAnsweredByFromCoveCRM(state, "pre-greeting #2");
-            await sleep(500);
-            await refreshAnsweredByFromCoveCRM(state, "pre-greeting #3");
-            await sleep(500);
-            await refreshAnsweredByFromCoveCRM(state, "pre-greeting #4");
           }
         } catch {}
 
@@ -5497,15 +5497,15 @@ state.lastUserSpeechStoppedAtMs = Date.now();
           return;
         }
 
-        // ✅ If AMD hasn't resolved yet (empty/unknown), wait up to 3 more seconds
+        // ✅ If AMD hasn't resolved yet (empty/unknown), wait up to ~1.4s more before greeting
         // Twilio AMD can take 3-5s to resolve — we cannot greet into a voicemail
         if (!answeredByNow || answeredByNow === "unknown") {
-          console.log("[AI-VOICE] AMD not resolved yet — waiting up to 3s before greeting", {
+          console.log("[AI-VOICE] AMD not resolved yet — waiting up to 1.4s before greeting", {
             callSid: state.callSid,
             answeredByNow,
           });
-          for (let i = 0; i < 6; i++) {
-            await sleep(500);
+          for (let i = 0; i < 4; i++) {
+            await sleep(350);
             await refreshAnsweredByFromCoveCRM(state, `amd-wait-${i}`);
             const latest = String(state.context?.answeredBy || "").toLowerCase();
             if (isVoicemailAnsweredBy(latest)) {
@@ -6957,6 +6957,7 @@ void handleFinalOutcomeIntent(state, {
           greetingFired,
           userTurnFired,
         });
+        armSilenceWatchdog(twilioWs, state, POST_GREETING_SILENCE_MS, "greeting response.audio.done");
       }
     }
 
