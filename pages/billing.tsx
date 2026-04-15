@@ -88,7 +88,7 @@ export default function BillingPage() {
             aiUpgrade,
             affiliateEmail: affiliateEmailStr || undefined,
             promoCode: promoCodeStr || undefined, // server treats empty as "no code"
-            trialDays: isTrial ? 3 : 0,
+            trialDays: isTrial ? 7 : 0,
           }),
         });
 

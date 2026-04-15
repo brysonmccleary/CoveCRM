@@ -218,7 +218,7 @@ export default function Home() {
                 </button>
               </Link>
             </div>
-            <p className="text-sm mt-4 text-slate-500">3-day free trial · No credit card required</p>
+            <p className="text-sm mt-4 text-slate-500">7-day free trial · Card required for usage billing</p>
           </div>
         </section>
 
@@ -631,7 +631,7 @@ export default function Home() {
                   "AI Call Overview — auto-summarized after every call",
                   "AI SMS Assistant — automated lead follow-up",
                   "AI lead scoring + smart nudges",
-                  "3-day free trial included",
+                  "7-day free trial included",
                 ].map((f) => (
                   <li key={f} className="flex gap-3 items-start">
                     <span className="text-blue-400 mt-0.5 shrink-0">✔</span>
@@ -665,7 +665,7 @@ export default function Home() {
               Start Free Trial Now
             </button>
           </Link>
-          <p className="text-sm mt-4 text-slate-500">3-day free trial · No credit card required</p>
+          <p className="text-sm mt-4 text-slate-500">7-day free trial · Card required for usage billing</p>
         </section>
 
         {/* Footer */}
