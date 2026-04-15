@@ -71,13 +71,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const now = new Date();
+    const nextSendAt = new Date(Date.now() + 5 * 60 * 1000);
 
     await DripEnrollment.updateOne(
       { _id: enrollment._id, userEmail: email },
       {
         $set: {
           status: "active",
-          nextSendAt: now,
+          nextSendAt,
           isActive: true,
           isPaused: false,
           stopAll: false,
@@ -135,7 +136,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         typeof enrollment.cursorStep === "number" && Number.isFinite(enrollment.cursorStep)
           ? enrollment.cursorStep
           : 0,
-      nextSendAt: now.toISOString(),
+      nextSendAt: nextSendAt.toISOString(),
       message: "Drip resumed",
     });
   } catch (err: any) {
