@@ -685,6 +685,7 @@ export default function Home() {
                   <Link href="/legal/privacy" className="hover:text-white transition">Privacy</Link>
                   <Link href="/legal/terms" className="hover:text-white transition">Terms</Link>
                   <a href="mailto:support@covecrm.com" className="hover:text-white transition">Support</a>
+                  <Link href="/security" className="hover:text-white transition">Security</Link>
                 </div>
               </div>
               <div>
@@ -714,6 +715,51 @@ export default function Home() {
                 </div>
               </div>
             </div>
+          </div>
+
+          <div className="mt-10 pt-8 border-t border-white/10 grid grid-cols-1 md:grid-cols-4 gap-8 text-sm text-slate-400">
+
+            <div>
+              <h4 className="text-white font-semibold mb-3">Security</h4>
+              <ul className="space-y-2">
+                <li>Secure cloud infrastructure</li>
+                <li>Encrypted data transmission (HTTPS)</li>
+                <li>Protected application access</li>
+                <li>Account-level data separation</li>
+              </ul>
+            </div>
+
+            <div>
+              <h4 className="text-white font-semibold mb-3">Compliance</h4>
+              <ul className="space-y-2">
+                <li>A2P 10DLC compliant messaging</li>
+                <li>Built-in opt-out handling</li>
+                <li>Insurance-focused workflows</li>
+              </ul>
+            </div>
+
+            <div>
+              <h4 className="text-white font-semibold mb-3">Company</h4>
+              <ul className="space-y-2">
+                <li>Vault Commerce Group LLC</li>
+                <li>Built by a professional development team</li>
+                <li>
+                  <a href="mailto:support@covecrm.com" className="hover:text-white transition">
+                    support@covecrm.com
+                  </a>
+                </li>
+              </ul>
+            </div>
+
+            <div>
+              <h4 className="text-white font-semibold mb-3">Built With</h4>
+              <ul className="space-y-2">
+                <li>Twilio infrastructure</li>
+                <li>Secure cloud hosting</li>
+                <li>Modern AI systems</li>
+              </ul>
+            </div>
+
           </div>
         </footer>
 
