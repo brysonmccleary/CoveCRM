@@ -40,7 +40,7 @@ export default function VerifyEmailPage() {
       const data = await res.json().catch(() => ({}));
       if (!res.ok || data?.ok === false) throw new Error(data?.error || "Verification failed");
       toast.success("Email verified. Continue to billing.");
-      router.push(nextBillingUrl);
+      window.location.assign(`/billing?email=${encodeURIComponent(email)}&trial=1`);
     } catch (err: any) {
       toast.error(err?.message || "Verification failed");
     } finally {
