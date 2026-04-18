@@ -283,14 +283,33 @@ export default async function handler(
         });
       }
 
-      const subscription = await stripe.subscriptions.create({
-        customer: user.stripeCustomerId,
-        items: [{ price: PHONE_PRICE_ID }],
-        metadata: {
-          phoneNumber: requestedNumber || `areaCode:${areaCode ?? ""}`,
-          userEmail: user.email,
-        },
+      const customerId = user.stripeCustomerId;
+      const existingSubs = await stripe.subscriptions.list({
+        customer: customerId,
+        status: "all",
+        limit: 5,
       });
+
+      const reusable = existingSubs.data.find(sub =>
+        ["active", "trialing", "past_due"].includes(sub.status)
+      );
+
+      let subscription;
+
+      if (!reusable) {
+        subscription = await stripe.subscriptions.create({
+          customer: user.stripeCustomerId,
+          items: [{ price: PHONE_PRICE_ID }],
+          metadata: {
+            phoneNumber: requestedNumber || `areaCode:${areaCode ?? ""}`,
+            userEmail: user.email,
+          },
+        });
+      } else {
+        console.log("[STRIPE] Using existing subscription:", reusable.id);
+        subscription = reusable;
+      }
+
       if (!subscription?.id) throw new Error("Stripe subscription failed");
       createdSubscriptionId = subscription.id;
     }

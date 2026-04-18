@@ -48,6 +48,30 @@ function hashVerificationCode(email: string, code: string) {
     .digest("hex");
 }
 
+function base64UrlEncode(value: string) {
+  return Buffer.from(value)
+    .toString("base64")
+    .replace(/=/g, "")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_");
+}
+
+function makeEmailVerificationToken(email: string, expiresAt: Date) {
+  const secret = process.env.EMAIL_VERIFICATION_SECRET || process.env.NEXTAUTH_SECRET || "covecrm";
+  const payload = base64UrlEncode(JSON.stringify({
+    email: email.toLowerCase(),
+    expiresAt: expiresAt.toISOString(),
+  }));
+  const signature = crypto
+    .createHmac("sha256", secret)
+    .update(payload)
+    .digest("base64")
+    .replace(/=/g, "")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_");
+  return `${payload}.${signature}`;
+}
+
 async function generateUniqueReferralCode(): Promise<string> {
   const ALPHANUM = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
   const make = () =>
@@ -131,6 +155,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const verificationCode = makeVerificationCode();
     const verificationCodeHash = hashVerificationCode(cleanEmail, verificationCode);
     const verificationExpiresAt = new Date(Date.now() + 10 * 60 * 1000);
+    const verificationToken = makeEmailVerificationToken(cleanEmail, verificationExpiresAt);
+    const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || "https://www.covecrm.com";
+    const verifyUrl = `${baseUrl}/api/auth/verify-email?email=${encodeURIComponent(
+      cleanEmail,
+    )}&token=${encodeURIComponent(verificationToken)}`;
 
     // Create Stripe customer (metadata only). Discount is applied later at checkout/subscription.
     let stripeCustomerId: string | undefined;
@@ -186,6 +215,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           to: newUser.email,
           name: newUser.name,
           code: verificationCode,
+          verifyUrl,
         });
         if (!sent.ok) throw new Error(sent.error || "Verification email failed");
       }

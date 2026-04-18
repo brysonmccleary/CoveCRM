@@ -267,20 +267,39 @@ export default async function handler(
         });
       }
 
-      const subscription = await stripe.subscriptions.create({
-        customer: user.stripeCustomerId,
-        items: [{ price: PHONE_PRICE_ID }],
-        metadata: {
-          phoneNumber: requestedNumber || `areaCode:${areaCode ?? ""}`,
-          userEmail: user.email,
-        },
+      const customerId = user.stripeCustomerId;
+      const existingSubs = await stripe.subscriptions.list({
+        customer: customerId,
+        status: "all",
+        limit: 5,
       });
+
+      const reusable = existingSubs.data.find(sub =>
+        ["active", "trialing", "past_due"].includes(sub.status)
+      );
+
+      let subscription;
+
+      if (!reusable) {
+        subscription = await stripe.subscriptions.create({
+          customer: user.stripeCustomerId,
+          items: [{ price: PHONE_PRICE_ID }],
+          metadata: {
+            phoneNumber: requestedNumber || `areaCode:${areaCode ?? ""}`,
+            userEmail: user.email,
+          },
+        });
+      } else {
+        console.log("[STRIPE] Using existing subscription:", reusable.id);
+        subscription = reusable;
+      }
+
       if (!subscription?.id) throw new Error("Stripe subscription failed");
       createdSubscriptionId = subscription.id;
 
       // Guard: if the initial payment failed the subscription will be "incomplete".
       // Do NOT proceed to Twilio purchase if payment was not confirmed.
-      if (subscription.status !== "active" && subscription.status !== "trialing") {
+      if (!reusable && subscription.status !== "active" && subscription.status !== "trialing") {
         try { await stripe.subscriptions.cancel(subscription.id); } catch {}
         createdSubscriptionId = undefined;
         return res.status(402).json({

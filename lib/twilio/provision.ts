@@ -35,13 +35,21 @@ function getSubScopedClient(subAccountSid: string): Twilio {
   return twilio(auth.apiKeySid, auth.apiKeySecret, { accountSid: subAccountSid });
 }
 
-async function ensureSubaccount(master: Twilio, email: string) {
-  const friendlyName = `CoveCRM - ${email}`;
-  try {
-    const subs = await master.api.accounts.list({ friendlyName, limit: 1 });
-    if (subs?.[0]?.sid) return subs[0];
-  } catch {}
-  return await master.api.accounts.create({ friendlyName });
+async function ensureSubaccount(master: Twilio, user: any) {
+  if (user?.twilio?.accountSid) {
+    console.log("[TWILIO] Using existing subaccount:", user.twilio.accountSid);
+    return { sid: user.twilio.accountSid };
+  }
+
+  const sub = await master.api.accounts.create({
+    friendlyName: `CoveCRM - ${user.email}`,
+  });
+
+  user.twilio = user.twilio || {};
+  user.twilio.accountSid = sub.sid;
+  await user.save();
+
+  return sub;
 }
 
 // TS-safe subaccount API Key creation (types don’t expose it directly)
@@ -172,13 +180,8 @@ export async function ensureUserTwilioIdentity(email: string): Promise<
     const master = getMasterClient();
 
     // 1) Subaccount
-    let subSid = user?.twilio?.accountSid || "";
-    if (!subSid) {
-      const sub = await ensureSubaccount(master, user.email);
-      subSid = (sub as any).sid;
-      user.twilio = user.twilio || {};
-      user.twilio.accountSid = subSid;
-    }
+    const sub = await ensureSubaccount(master, user);
+    let subSid = (sub as any).sid;
 
     // 2) API Key
     let keySid = user?.twilio?.apiKeySid || "";
@@ -217,14 +220,8 @@ export async function provisionUserTwilio(email: string): Promise<ProvisionResul
     const master = getMasterClient();
 
     // 1) Subaccount
-    let subSid = user?.twilio?.accountSid || "";
-    if (!subSid) {
-      const sub = await ensureSubaccount(master, user.email);
-      subSid = (sub as any).sid;
-      user.twilio = user.twilio || {};
-      user.twilio.accountSid = subSid;
-      await user.save();
-    }
+    const sub = await ensureSubaccount(master, user);
+    let subSid = (sub as any).sid;
 
     // Scoped client to subaccount using platform creds
     const subScoped = getSubScopedClient(subSid);

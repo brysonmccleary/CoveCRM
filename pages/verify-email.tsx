@@ -76,7 +76,8 @@ export default function VerifyEmailPage() {
       <div className="max-w-md w-full p-6 rounded-2xl shadow-xl bg-[var(--cove-card)] text-white border border-[#1e293b]">
         <h1 className="text-3xl font-bold mb-3 text-center">Verify Your Email</h1>
         <p className="text-sm text-gray-300 text-center mb-6">
-          Enter the 6-digit code we sent to {email || "your email"}.
+          Confirm instantly from the email link we sent to {email || "your email"}, or enter the
+          6-digit fallback code below.
         </p>
 
         <form onSubmit={verify} className="space-y-4">

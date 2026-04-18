@@ -35,6 +35,8 @@ export default function CheckoutForm({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
+    if (loading) return;
+
     if (!stripe || !elements) {
       toast.error("Stripe is not ready.");
       return;

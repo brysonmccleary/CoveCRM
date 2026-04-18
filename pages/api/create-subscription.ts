@@ -13,6 +13,14 @@ const AI_ADDON_PRICE = 50;
 // Use env price IDs so they’re always correct for your current Stripe account
 const BASE_PRICE_ID = process.env.STRIPE_PRICE_ID_MONTHLY as string; // required
 const AI_ADDON_PRICE_ID = process.env.STRIPE_PRICE_ID_AI_ADDON || ""; // optional
+const ACTIVATION_ENFORCEMENT_STARTED_AT = new Date(
+  process.env.ACCOUNT_ACTIVATION_ENFORCEMENT_STARTED_AT || "2026-04-10T00:00:00.000Z"
+).getTime();
+
+function isLegacyBillingAccount(user: any) {
+  const createdAt = user?.createdAt ? new Date(user.createdAt).getTime() : 0;
+  return Boolean(createdAt && createdAt < ACTIVATION_ENFORCEMENT_STARTED_AT);
+}
 
 async function ensureStripeCustomer(userDoc: any, email: string): Promise<string> {
   let cid: string | null = userDoc?.stripeCustomerId || userDoc?.stripeCustomerID || null;
@@ -84,6 +92,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!effectiveEmail) return res.status(400).json({ error: "Missing email." });
 
     const userDoc = await User.findOne({ email: effectiveEmail });
+    if (!userDoc) return res.status(404).json({ error: "User not found." });
+    if (
+      (userDoc as any).role !== "admin" &&
+      (userDoc as any).emailVerified !== true &&
+      !isLegacyBillingAccount(userDoc)
+    ) {
+      return res.status(403).json({ error: "Account not activated" });
+    }
 
     const customerId = await ensureStripeCustomer(userDoc, effectiveEmail);
 
@@ -169,7 +185,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       params.discounts = [{ coupon: couponId }];
     }
 
-    const subscription = await stripe.subscriptions.create(params);
+    const existingSubs = await stripe.subscriptions.list({
+      customer: customerId,
+      status: "all",
+      limit: 5,
+    });
+
+    const reusable = existingSubs.data.find(sub =>
+      ["incomplete", "trialing", "active", "past_due"].includes(sub.status)
+    );
+
+    if (reusable) {
+      console.log("[STRIPE] Reusing existing subscription:", reusable.id);
+      const latest = reusable.latest_invoice as any;
+      return res.status(200).json({
+        clientSecret: latest?.payment_intent?.client_secret || null,
+        setupClientSecret: latest?.setup_intent?.client_secret || null,
+        subscriptionId: reusable.id,
+        reused: true
+      });
+    }
+
+    const subscription = await stripe.subscriptions.create(params, {
+      idempotencyKey: `sub_${customerId}`
+    });
 
     const latest = subscription.latest_invoice as Stripe.Invoice | null;
     const clientSecret =

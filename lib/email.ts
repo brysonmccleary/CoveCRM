@@ -464,15 +464,28 @@ export async function sendEmailVerificationCode(opts: {
   to: string;
   name?: string;
   code: string;
+  verifyUrl?: string;
 }): Promise<SendEmailResult> {
   const subject = "Verify your Cove CRM email";
+  const safeVerifyUrl = opts.verifyUrl ? escapeHtml(opts.verifyUrl) : "";
   const html = `
     <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;line-height:1.5;color:#0f172a">
-      <h2>Verify your email</h2>
+      <h2>Confirm your Cove CRM email</h2>
       <p>Hi ${escapeHtml(opts.name || "there")},</p>
-      <p>Enter this code to activate your Cove CRM account:</p>
-      <p style="font-size:28px;font-weight:700;letter-spacing:6px;margin:24px 0">${escapeHtml(opts.code)}</p>
-      <p>This code expires in 10 minutes.</p>
+      <p>Confirm your email to activate your Cove CRM account and continue setup.</p>
+      ${
+        safeVerifyUrl
+          ? `<p style="margin:24px 0">
+              <a href="${safeVerifyUrl}" style="display:inline-block;background:#111827;color:#ffffff;padding:12px 18px;border-radius:8px;text-decoration:none;font-weight:700">
+                Confirm Email
+              </a>
+            </p>
+            <p style="font-size:13px;color:#475569;margin:0 0 18px 0">If the button does not work, copy and paste this link into your browser:<br/><a href="${safeVerifyUrl}">${safeVerifyUrl}</a></p>`
+          : ""
+      }
+      <p style="margin:18px 0 8px 0">You can also enter this fallback code:</p>
+      <p style="font-size:28px;font-weight:700;letter-spacing:6px;margin:0 0 18px 0">${escapeHtml(opts.code)}</p>
+      <p>This link and code expire in 10 minutes.</p>
       <p>If you did not create a Cove CRM account, you can ignore this email.</p>
       <p style="margin:16px 0 0 0">— The Cove CRM Team</p>
     </div>
