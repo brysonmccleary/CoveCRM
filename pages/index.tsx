@@ -141,7 +141,7 @@ export default function Home() {
           </div>
         </nav>
 
-        {/* What's New Strip */}
+        {/* What\'s New Strip */}
         <div className="border-b border-white/10 bg-[#020617]/80 py-2.5 px-6 overflow-x-auto">
           <div className="flex items-center gap-3 max-w-6xl mx-auto">
             <span className="text-xs font-bold text-blue-400 uppercase tracking-wider shrink-0">New:</span>
@@ -157,6 +157,67 @@ export default function Home() {
             </div>
           </div>
         </div>
+
+        {/* Hero Section */}
+        <section className="relative text-white py-28 px-6 text-center overflow-hidden bg-[#020617]">
+          {/* Background glows */}
+          <div className="pointer-events-none absolute inset-0">
+            <div className="absolute -top-24 left-1/2 h-96 w-[56rem] -translate-x-1/2 rounded-full bg-blue-600/12 blur-3xl" />
+            <div className="absolute top-32 right-[-10rem] h-72 w-[36rem] rounded-full bg-purple-500/8 blur-3xl" />
+            <div className="absolute bottom-0 left-[-8rem] h-64 w-[32rem] rounded-full bg-cyan-500/6 blur-3xl" />
+          </div>
+
+          {/* Floating stat badges */}
+          <div className="pointer-events-none absolute inset-0 hidden md:block">
+            <div className="absolute top-16 left-[8%] flex items-center gap-2 bg-white/5 border border-white/10 backdrop-blur-sm rounded-full px-4 py-2 text-xs text-slate-400">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+              2,400+ agents
+            </div>
+            <div className="absolute top-28 right-[7%] flex items-center gap-2 bg-white/5 border border-white/10 backdrop-blur-sm rounded-full px-4 py-2 text-xs text-slate-400">
+              <span className="w-1.5 h-1.5 rounded-full bg-blue-400" />
+              1.2M leads managed
+            </div>
+          </div>
+
+          <div className="relative max-w-4xl mx-auto">
+            <div className="inline-flex items-center gap-2 rounded-full bg-blue-600/15 border border-blue-500/25 px-4 py-1.5 text-xs font-medium text-blue-300 mb-6">
+              <span className="h-1.5 w-1.5 rounded-full bg-blue-400 animate-pulse" />
+              Built exclusively for life insurance telesales
+            </div>
+
+            <h1 className="text-5xl md:text-7xl font-bold mb-6 leading-[1.08] tracking-tight">
+              Sell More Policies.<br />
+              <span className="bg-gradient-to-r from-blue-400 via-cyan-400 to-blue-300 bg-clip-text text-transparent">
+                Work Smarter.
+              </span>
+            </h1>
+
+            {/* Glow line */}
+            <div className="w-24 h-0.5 bg-gradient-to-r from-transparent via-blue-500 to-transparent mx-auto mb-6" />
+
+            <p className="text-lg md:text-xl max-w-2xl mx-auto mb-6 text-slate-300 leading-relaxed">
+              CoveCRM is an AI-powered sales system that calls leads, texts leads, follows up, books appointments, and coaches you — automatically.
+            </p>
+            <p className="text-sm text-slate-500 mb-8">
+              Built specifically for high-volume life insurance agents.
+            </p>
+
+            <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
+              <Link href="/signup">
+                <button className="relative bg-blue-600 text-white px-10 py-4 rounded-xl font-bold hover:bg-blue-500 transition cursor-pointer text-base shadow-[0_0_24px_rgba(59,130,246,0.35)] border border-blue-500/50 hover:shadow-[0_0_36px_rgba(59,130,246,0.5)]">
+                  Start Free Trial
+                  <span className="absolute inset-0 rounded-xl animate-pulse border border-blue-400/30 pointer-events-none" />
+                </button>
+              </Link>
+              <Link href="/login">
+                <button className="text-slate-300 hover:text-white font-medium text-base transition cursor-pointer">
+                  Already have an account →
+                </button>
+              </Link>
+            </div>
+            <p className="text-sm mt-4 text-slate-500">7-day free trial · Card required for usage billing</p>
+          </div>
+        </section>
 
         {/* AI Decision Block */}
         <div className="bg-[#020617] border-b border-white/5 py-8 px-6">
@@ -183,70 +244,6 @@ export default function Home() {
             </div>
           </div>
         </div>
-
-        {/* Hero Section */}
-        <section className="relative text-white py-28 px-6 text-center overflow-hidden bg-[#020617]">
-          {/* Background glows */}
-          <div className="pointer-events-none absolute inset-0">
-            <div className="absolute -top-24 left-1/2 h-96 w-[56rem] -translate-x-1/2 rounded-full bg-blue-600/12 blur-3xl" />
-            <div className="absolute top-32 right-[-10rem] h-72 w-[36rem] rounded-full bg-purple-500/8 blur-3xl" />
-            <div className="absolute bottom-0 left-[-8rem] h-64 w-[32rem] rounded-full bg-cyan-500/6 blur-3xl" />
-          </div>
-
-          {/* Floating stat badges */}
-          <div className="pointer-events-none absolute inset-0 hidden md:block">
-            <div className="absolute top-16 left-[8%] flex items-center gap-2 bg-white/5 border border-white/10 backdrop-blur-sm rounded-full px-4 py-2 text-xs text-slate-400">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-              2,400+ agents
-            </div>
-            <div className="absolute top-28 right-[7%] flex items-center gap-2 bg-white/5 border border-white/10 backdrop-blur-sm rounded-full px-4 py-2 text-xs text-slate-400">
-              <span className="w-1.5 h-1.5 rounded-full bg-blue-400" />
-              1.2M leads managed
-            </div>
-            
-          </div>
-
-          <div className="relative max-w-4xl mx-auto">
-            <div className="inline-flex items-center gap-2 rounded-full bg-blue-600/15 border border-blue-500/25 px-4 py-1.5 text-xs font-medium text-blue-300 mb-6">
-              <span className="h-1.5 w-1.5 rounded-full bg-blue-400 animate-pulse" />
-              Built exclusively for life insurance telesales
-            </div>
-
-            <h1 className="text-5xl md:text-7xl font-bold mb-6 leading-[1.08] tracking-tight">
-              Sell More Policies.<br />
-              <span className="bg-gradient-to-r from-blue-400 via-cyan-400 to-blue-300 bg-clip-text text-transparent">
-                Work Smarter.
-              </span>
-            </h1>
-
-            {/* Glow line */}
-            <div className="w-24 h-0.5 bg-gradient-to-r from-transparent via-blue-500 to-transparent mx-auto mb-6" />
-
-            <p className="text-lg md:text-xl max-w-2xl mx-auto mb-6 text-slate-300 leading-relaxed">
-              CoveCRM is an AI-powered sales system that calls leads, texts leads, follows up, books appointments, and coaches you — automatically.
-            </p>
-            <p className="text-sm text-slate-500 mb-8">
-              Built specifically for high-volume life insurance agents.
-            </p>
-
-            
-
-            <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
-              <Link href="/signup">
-                <button className="relative bg-blue-600 text-white px-10 py-4 rounded-xl font-bold hover:bg-blue-500 transition cursor-pointer text-base shadow-[0_0_24px_rgba(59,130,246,0.35)] border border-blue-500/50 hover:shadow-[0_0_36px_rgba(59,130,246,0.5)]">
-                  Start Free Trial
-                  <span className="absolute inset-0 rounded-xl animate-pulse border border-blue-400/30 pointer-events-none" />
-                </button>
-              </Link>
-              <Link href="/login">
-                <button className="text-slate-300 hover:text-white font-medium text-base transition cursor-pointer">
-                  Already have an account →
-                </button>
-              </Link>
-            </div>
-            <p className="text-sm mt-4 text-slate-500">7-day free trial · Card required for usage billing</p>
-          </div>
-        </section>
 
         {/* 3-Column Features Strip */}
         <section className="py-20 px-6 bg-[#020617]">
@@ -445,7 +442,7 @@ export default function Home() {
             <div className="border border-gray-700/70 rounded-2xl px-6 py-5 text-xs md:text-sm text-gray-200 w-full md:max-w-xs flex flex-col justify-center bg-white/3">
               <p className="text-[10px] tracking-[0.25em] uppercase text-gray-400 mb-2 text-center">Team Performance</p>
               <p className="text-center leading-relaxed text-gray-300">
-                See who's dialing, who's booking, and where each agent is falling behind — all in one leaderboard.
+                See who\'s dialing, who\'s booking, and where each agent is falling behind — all in one leaderboard.
               </p>
             </div>
           </div>
@@ -589,7 +586,7 @@ export default function Home() {
             <div className="text-center mb-12">
               <h2 className="text-3xl md:text-4xl font-bold">The AI Engine Running Your Sales Pipeline</h2>
               <p className="text-slate-400 mt-3 max-w-3xl mx-auto">
-                CoveCRM doesn’t just store leads — it remembers, decides, and takes action automatically so no opportunity slips through the cracks.
+                CoveCRM doesn&apos;t just store leads — it remembers, decides, and takes action automatically so no opportunity slips through the cracks.
               </p>
             </div>
 
@@ -605,7 +602,7 @@ export default function Home() {
                 ],
                 [
                   "AI Automated Follow-Up",
-                  "Sends the right message at the right time so leads don’t go cold while you’re busy closing deals.",
+                  "Sends the right message at the right time so leads don\'t go cold while you\'re busy closing deals.",
                 ],
                 [
                   "AI Lead Reactivation",
@@ -651,7 +648,7 @@ export default function Home() {
                     "eCommerce or SaaS businesses",
                     "General sales teams without insurance focus",
                     "Pipeline-only CRMs with no dialer needs",
-                    "Teams that don't work Facebook or online leads",
+                    "Teams that don\'t work Facebook or online leads",
                   ].map((item) => (
                     <li key={item} className="flex gap-3 items-start">
                       <span className="text-rose-400 mt-0.5 shrink-0">—</span>
