@@ -20,11 +20,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const secret = process.env.CRON_SECRET || "";
   const authz = req.headers.authorization || "";
   const token = (req.query.token as string) || "";
+  const isVercelCron = !!req.headers["x-vercel-cron"];
 
   // Accept Authorization header OR ?token= for Vercel Cron
   const ok =
     (!!secret && authz === `Bearer ${secret}`) ||
-    (!!secret && token === secret);
+    (!!secret && token === secret) ||
+    isVercelCron;
 
   if (!ok) return res.status(401).json({ error: "Unauthorized" });
 
@@ -44,8 +46,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const amountUSD = Math.floor(Number(affiliate.payoutDue || 0) * 100) / 100;
       const idempotencyKey = `sweep:${affiliate._id}:${Math.round(amountUSD * 100)}`;
 
-      const exists = await AffiliatePayout.findOne({ idempotencyKey }).lean();
-      if (exists) {
+      const exists = await AffiliatePayout.findOne({ idempotencyKey });
+      if (exists?.status === "sent") {
         results.push({ promoCode: affiliate.promoCode, skipped: "already processed" });
         continue;
       }
@@ -56,14 +58,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         (affiliate.connectedAccountStatus === "verified" || affiliate.onboardingCompleted === true);
 
       if (!canAutopay) {
-        await AffiliatePayout.create({
-          affiliateId: String(affiliate._id),
-          affiliateEmail: affiliate.email,
-          amount: amountUSD,
-          currency: "usd",
-          status: "queued",
-          idempotencyKey,
-        });
+        if (!exists) {
+          await AffiliatePayout.create({
+            affiliateId: String(affiliate._id),
+            affiliateEmail: affiliate.email,
+            amount: amountUSD,
+            currency: "usd",
+            status: "queued",
+            idempotencyKey,
+          });
+        }
         results.push({ promoCode: affiliate.promoCode, queued: amountUSD });
         continue;
       }
@@ -76,15 +80,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           description: `Affiliate payout sweep (${affiliate.promoCode})`,
         });
 
-        await AffiliatePayout.create({
-          affiliateId: String(affiliate._id),
-          affiliateEmail: affiliate.email,
-          amount: amountUSD,
-          currency: "usd",
-          stripeTransferId: transfer.id,
-          status: "sent",
-          idempotencyKey,
-        });
+        if (exists) {
+          exists.stripeTransferId = transfer.id;
+          exists.status = "sent";
+          exists.amount = amountUSD;
+          exists.currency = "usd";
+          exists.affiliateEmail = affiliate.email;
+          await exists.save();
+        } else {
+          await AffiliatePayout.create({
+            affiliateId: String(affiliate._id),
+            affiliateEmail: affiliate.email,
+            amount: amountUSD,
+            currency: "usd",
+            stripeTransferId: transfer.id,
+            status: "sent",
+            idempotencyKey,
+          });
+        }
 
         affiliate.payoutDue = Math.max(0, Number(affiliate.payoutDue || 0) - amountUSD);
         affiliate.totalPayoutsSent = Number(affiliate.totalPayoutsSent || 0) + amountUSD;
@@ -93,14 +106,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         results.push({ promoCode: affiliate.promoCode, sent: amountUSD, transferId: transfer.id });
       } catch (e: any) {
-        await AffiliatePayout.create({
-          affiliateId: String(affiliate._id),
-          affiliateEmail: affiliate.email,
-          amount: amountUSD,
-          currency: "usd",
-          status: "failed",
-          idempotencyKey,
-        });
+        if (exists) {
+          exists.status = "failed";
+          exists.amount = amountUSD;
+          exists.currency = "usd";
+          exists.affiliateEmail = affiliate.email;
+          await exists.save();
+        } else {
+          await AffiliatePayout.create({
+            affiliateId: String(affiliate._id),
+            affiliateEmail: affiliate.email,
+            amount: amountUSD,
+            currency: "usd",
+            status: "failed",
+            idempotencyKey,
+          });
+        }
         results.push({ promoCode: affiliate.promoCode, failed: e?.message || "transfer failed" });
       }
     }

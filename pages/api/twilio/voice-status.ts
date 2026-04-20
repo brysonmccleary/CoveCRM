@@ -6,6 +6,8 @@ import { trackUsage } from "@/lib/billing/trackUsage";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
 import Call from "@/models/Call";
 import InboundCall from "@/models/InboundCall";
+import Lead from "@/models/Lead";
+import { sendEmail } from "@/lib/email";
 
 const VOICE_COST_PER_MIN = Number(process.env.CRM_VOICE_COST_PER_MIN || 0.015);
 
@@ -46,6 +48,81 @@ function normStatus(s?: string) {
 function ceilMinutesFromSeconds(seconds: number) {
   if (!Number.isFinite(seconds) || seconds <= 0) return 0;
   return Math.ceil(seconds / 60);
+}
+
+function escapeHtml(s: string) {
+  return String(s || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+function pickFirst(obj: any, keys: string[]): string | undefined {
+  for (const k of keys) {
+    const v = obj?.[k];
+    if (typeof v === "string" && v.trim()) return v.trim();
+  }
+  return undefined;
+}
+
+function buildLeadName(lead: any): string | undefined {
+  const first = pickFirst(lead, ["firstName", "First Name", "FirstName", "first_name", "name", "Name"]);
+  const last = pickFirst(lead, ["lastName", "Last Name", "LastName", "last_name", "surname"]);
+  if (first && last) return `${first} ${last}`.trim();
+  if (first) return first;
+  if (typeof lead?.email === "string" && lead.email) return lead.email.split("@")[0];
+  return undefined;
+}
+
+async function sendMissedInboundCallEmailOnce(opts: {
+  callSid: string;
+  status: string;
+  ownerEmail?: string;
+  from?: string;
+  leadId?: string;
+}) {
+  const missedStates = new Set(["busy", "failed", "no-answer", "canceled"]);
+  if (!missedStates.has(opts.status) || !opts.callSid) return;
+
+  const inbound = await (InboundCall as any).findOneAndUpdate(
+    { callSid: opts.callSid, missedEmailSentAt: { $exists: false } },
+    { $set: { missedEmailSentAt: new Date(), state: "expired" } },
+    { new: false },
+  ).lean();
+  if (!inbound) return;
+
+  const ownerEmail = String(inbound?.ownerEmail || opts.ownerEmail || "").toLowerCase();
+  if (!ownerEmail) return;
+
+  const leadId = inbound?.leadId ? String(inbound.leadId) : opts.leadId || "";
+  let leadName = typeof inbound?.leadName === "string" ? inbound.leadName.trim() : "";
+  if (!leadName && leadId) {
+    try {
+      const lead = await (Lead as any).findById(leadId).lean();
+      leadName = buildLeadName(lead) || "";
+    } catch {}
+  }
+
+  const phone = String(inbound?.from || opts.from || "").trim();
+  const base = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "https://www.covecrm.com").replace(/\/$/, "");
+  const leadUrl = leadId ? `${base}/leads?open=${encodeURIComponent(leadId)}` : `${base}/leads`;
+  const displayName = leadName || "Unknown caller";
+
+  await sendEmail(
+    ownerEmail,
+    `Missed call from ${displayName}`,
+    `
+      <div style="font-family: Arial, sans-serif; line-height: 1.4;">
+        <h3 style="margin:0 0 8px 0;">Missed call</h3>
+        <p style="margin:0 0 8px 0;"><b>Client:</b> ${escapeHtml(displayName)}</p>
+        ${phone ? `<p style="margin:0 0 8px 0;"><b>Phone:</b> ${escapeHtml(phone)}</p>` : ""}
+        <p style="margin:0 0 8px 0;"><b>Status:</b> ${escapeHtml(opts.status)}</p>
+        <p style="margin:0 0 8px 0;"><a href="${leadUrl}">Open lead</a></p>
+      </div>
+    `,
+  );
 }
 
 
@@ -94,7 +171,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const callSid = String(firstDefined(b.callSid, b.CallSid, q.callSid, q.CallSid) || "").trim();
   if (!callSid) return res.status(200).json({ ok: false, error: "missing_callSid" });
 
-  const status = normStatus(firstDefined(b.status, b.CallStatus, q.status, q.CallStatus));
+  const status = normStatus(firstDefined(b.status, b.CallStatus, b.DialCallStatus, q.status, q.CallStatus, q.DialCallStatus));
   const rawDirection = String(firstDefined(b.direction, b.Direction, q.direction, q.Direction) || "").toLowerCase();
   const direction: "outbound" | "inbound" = rawDirection === "inbound" ? "inbound" : "outbound";
 
@@ -256,6 +333,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     await (Call as any).updateOne({ callSid }, { $set: set, $setOnInsert: setOnInsert }, { upsert: true });
+
+    if (effDirection === "inbound" && terminalForBilling) {
+      try {
+        await sendMissedInboundCallEmailOnce({
+          callSid,
+          status,
+          ownerEmail: userEmail,
+          from,
+          leadId,
+        });
+      } catch (e: any) {
+        console.warn("[voice-status] missed-call email failed", e?.message || e);
+      }
+    }
 
     // ✅ Finalize billing once, when terminal status arrives
     // Idempotent: only bill if billedAt is not set

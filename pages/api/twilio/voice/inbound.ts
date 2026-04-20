@@ -176,6 +176,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // save short-lived InboundCall doc
   try {
     if (callSid) {
+      const leadNameFull = leadDoc ? buildLeadFullName(leadDoc) : undefined;
       await InboundCall.findOneAndUpdate(
         { callSid },
         {
@@ -184,6 +185,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           to,
           ownerEmail: ownerEmail || null,
           leadId: leadDoc?._id?.toString() || null,
+          leadName: leadNameFull || null,
           state: "ringing",
           expiresAt: new Date(Date.now() + 2 * 60 * 1000),
         },
@@ -307,11 +309,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   // keep the call IN-PROGRESS with YOUR ringback until agent clicks Answer.
-  // Use ABSOLUTE URL for Twilio <Play>.
   const vr = new twilio.twiml.VoiceResponse();
-  const ringUrl = `${baseUrl()}/ringback.mp3`;
-  // loop="0" = infinite on Twilio
-  vr.play({ loop: 0 }, ringUrl);
+  if (ownerEmail) {
+    const actionUrl = `${baseUrl()}/api/twilio/voice-status?userEmail=${encodeURIComponent(
+      ownerEmail,
+    )}&direction=inbound`;
+    const dial = vr.dial({
+      answerOnBridge: true,
+      timeout: 25,
+      action: actionUrl,
+      method: "POST",
+    });
+    dial.client(
+      {
+        statusCallback: actionUrl,
+        statusCallbackMethod: "POST",
+        statusCallbackEvent: ["initiated", "ringing", "answered", "completed"] as any,
+      } as any,
+      ownerEmail,
+    );
+  } else {
+    const ringUrl = `${baseUrl()}/ringback.mp3`;
+    // loop="0" = infinite on Twilio
+    vr.play({ loop: 0 }, ringUrl);
+  }
 
   res.setHeader("Content-Type", "text/xml");
   return res.status(200).send(vr.toString());

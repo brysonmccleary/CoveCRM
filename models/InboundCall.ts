@@ -6,7 +6,10 @@ export interface IInboundCall extends Document {
   to: string;
   ownerEmail?: string | null;
   leadId?: mongoose.Types.ObjectId | null;
-  state: "ringing" | "answered" | "declined" | "completed" | "expired";
+  leadName?: string | null;
+  conferenceName?: string | null;
+  missedEmailSentAt?: Date | null;
+  state: "ringing" | "answered" | "bridging" | "declined" | "completed" | "expired" | "ended";
   createdAt: Date;
   updatedAt: Date;
   expiresAt?: Date; // used for auto-cleanup of stale banners
@@ -19,9 +22,12 @@ const InboundCallSchema = new Schema<IInboundCall>(
     to: { type: String, required: true, index: true },
     ownerEmail: { type: String, index: true },
     leadId: { type: Schema.Types.ObjectId, ref: "Lead" },
+    leadName: { type: String },
+    conferenceName: { type: String },
+    missedEmailSentAt: { type: Date },
     state: {
       type: String,
-      enum: ["ringing", "answered", "declined", "completed", "expired"],
+      enum: ["ringing", "answered", "bridging", "declined", "completed", "expired", "ended"],
       default: "ringing",
       index: true,
     },

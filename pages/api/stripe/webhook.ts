@@ -142,14 +142,6 @@ async function creditAffiliateOnce(opts: CreditOnceOpts) {
     note,
   } = opts;
 
-  if (isFirstInvoice) {
-    audit("skip credit (first invoice)", {
-      affiliateId: String((affiliate as any)._id || ""),
-      invoiceId,
-    });
-    return false;
-  }
-
   (affiliate as any).payoutHistory = (affiliate as any).payoutHistory || [];
 
   if (
@@ -784,6 +776,7 @@ export default async function handler(
       case "invoice.payment_succeeded": {
         const inv = event.data.object as Stripe.Invoice;
         const customerId = inv.customer as string | undefined;
+        const paidCents = Number(inv.amount_paid || 0);
 
         const isFirst =
           inv.billing_reason === "subscription_create" ||
@@ -838,28 +831,26 @@ export default async function handler(
         if (codeText) {
           const affForRevenue = await findAffiliateByPromoCode(codeText);
           if (affForRevenue) {
-            const cents = Number(inv.amount_paid || 0);
             const newRevenue =
               Number((affForRevenue as any).totalRevenueGenerated || 0) +
-              cents / 100;
+              paidCents / 100;
 
             const updates: Partial<IAffiliate> & { [k: string]: any } = {
               totalRevenueGenerated: newRevenue,
             };
 
-            if (isFirst && userEmail) {
+            if (userEmail) {
               const referrals = (
                 (affForRevenue as any).referrals || []
               ).slice();
-              if (
-                !referrals.some(
-                  (r: any) => r?.email?.toLowerCase() === L(userEmail!),
-                )
-              ) {
+              const alreadyReferral = referrals.some(
+                (r: any) => r?.email?.toLowerCase() === L(userEmail!),
+              );
+              if (!alreadyReferral) {
                 referrals.push({ email: userEmail, joinedAt: new Date() });
+                updates.totalReferrals =
+                  Number((affForRevenue as any).totalReferrals || 0) + 1;
               }
-              updates.totalReferrals =
-                Number((affForRevenue as any).totalReferrals || 0) + 1;
               (updates as any).referrals = referrals;
             }
 
@@ -870,13 +861,13 @@ export default async function handler(
           }
         }
 
-        if (!codeText || isHouseCode(codeText) || isFirst) {
+        if (!codeText || isHouseCode(codeText) || paidCents <= 0) {
           audit("skip payout", {
             reason: !codeText
               ? "no code"
               : isHouseCode(codeText)
               ? "house code"
-              : "first invoice",
+              : "zero paid amount",
             invoiceId: inv.id,
             code: codeText || null,
           });
