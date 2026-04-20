@@ -38,6 +38,10 @@ async function getUserByEmailCI(email: string) {
   return User.findOne({ email: { $regex: `^${esc}$`, $options: "i" } });
 }
 
+function getCanonicalPasswordHash(user: any) {
+  return String(user?.password || "");
+}
+
 /**
  * Create/attach a Twilio Messaging Service, but NEVER let errors break login.
  */
@@ -128,21 +132,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       user.email = email;
     }
 
-    const currentHash =
-      (user as any).password ||
-      (user as any).passwordHash ||
-      (user as any).hashedPassword ||
-      "";
+    const currentHash = getCanonicalPasswordHash(user);
     if (!currentHash) {
       return res.status(401).json({ ok: false, error: "Invalid credentials" });
     }
-
-    console.log("[AUTH DEBUG]", {
-      email: user.email,
-      hasPassword: !!(user as any).password,
-      hasPasswordHash: !!(user as any).passwordHash,
-      hasHashedPassword: !!(user as any).hashedPassword,
-    });
 
     const isValid = await bcrypt.compare(pwd, String(currentHash));
 
