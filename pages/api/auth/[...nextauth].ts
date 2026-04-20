@@ -10,6 +10,7 @@ import { syncA2PForUser } from "@/lib/twilio/syncA2P";
 import { sendWelcomeEmail } from "@/lib/email";
 import { ensureUserTwilioIdentity } from "@/lib/twilio/provision";
 import { getPlatformTwilioClient } from "@/lib/twilio/getPlatformClient";
+import { isAccountActivated } from "@/lib/billing/requireActivatedAccount";
 
 const isDev =
   process.env.NODE_ENV === "development" ||
@@ -123,51 +124,22 @@ export const authOptions: NextAuthOptions = {
         await mongooseConnect();
 
         let user = await getUserByEmailCI(emailRaw);
-        let isNewUser = false;
 
         if (!user) {
-          const hashedPassword = await bcrypt.hash(password, 10);
-          const cookieHeader =
-            (req as any)?.headers?.cookie as string | undefined;
-          const cookieAffiliate = getCookieValue(cookieHeader, "affiliate_code");
-          const affiliateCode = credentials.code || cookieAffiliate || null;
-
-          user = await User.create({
-            email,
-            password: hashedPassword,
-            name: email.split("@")[0],
-            role: "user",
-            affiliateCode,
-            subscriptionStatus: "active",
-          });
-
-          isNewUser = true;
-
-          try {
-            await sendWelcomeEmail({ to: user.email, name: user.name });
-          } catch (e) {
-            console.warn("welcome email (credentials) failed:", e);
-          }
+          return null;
         } else if (user.email !== email) {
           await User.updateOne({ _id: user._id }, { $set: { email } });
           user.email = email;
         }
 
         const currentHash = ((user as any).password ?? "") as string;
-        let isValid = false;
-
         if (!currentHash) {
-          if (DBG) console.log("AUTH DEBUG: no password set, setting one", email);
-          const hashed = await bcrypt.hash(password, 10);
-          await User.updateOne(
-            { _id: (user as any)._id },
-            { $set: { password: hashed } }
-          );
-          isValid = true;
-        } else {
-          isValid = await bcrypt.compare(password, String(currentHash));
-          if (DBG) console.log("AUTH DEBUG: compare result", { email, ok: isValid });
+          if (DBG) console.log("AUTH DEBUG: missing password hash", { email });
+          return null;
         }
+
+        const isValid = await bcrypt.compare(password, String(currentHash));
+        if (DBG) console.log("AUTH DEBUG: compare result", { email, ok: isValid });
 
         if (!isValid) return null;
 
@@ -292,6 +264,10 @@ export const authOptions: NextAuthOptions = {
       try {
         await mongooseConnect();
         const u = await User.findOne({ email: (session.user as any).email });
+        (session.user as any).emailVerified = (u as any)?.emailVerified === true;
+        (session.user as any).trialGranted = (u as any)?.trialGranted === true;
+        (session.user as any).trialBlockedReason = (u as any)?.trialBlockedReason || null;
+        (session.user as any).accountActivated = isAccountActivated(u);
         const last = u?.a2p?.lastSyncedAt
           ? new Date(u.a2p.lastSyncedAt).getTime()
           : 0;

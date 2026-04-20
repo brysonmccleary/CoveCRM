@@ -119,28 +119,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     await mongooseConnect();
 
     let user = await getUserByEmailCI(emailRaw);
-    let isNewUser = false;
 
-    // If user doesn't exist, mirror web behavior: create them + hash password
     if (!user) {
-      const hashedPassword = await bcrypt.hash(pwd, 10);
-
-      user = await User.create({
-        email,
-        password: hashedPassword,
-        name: email.split("@")[0],
-        role: "user",
-        affiliateCode: affiliateCode || null,
-        subscriptionStatus: "active",
-      });
-
-      isNewUser = true;
-
-      try {
-        await sendWelcomeEmail({ to: user.email, name: user.name });
-      } catch (e) {
-        console.warn("welcome email (mobile credentials) failed:", e);
-      }
+      return res.status(401).json({ ok: false, error: "Invalid credentials" });
     } else if (user.email !== email) {
       // normalize casing
       await User.updateOne({ _id: user._id }, { $set: { email } });
@@ -148,15 +129,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const currentHash = ((user as any).password ?? "") as string;
-    let isValid = false;
-
     if (!currentHash) {
-      const hashed = await bcrypt.hash(pwd, 10);
-      await User.updateOne({ _id: (user as any)._id }, { $set: { password: hashed } });
-      isValid = true;
-    } else {
-      isValid = await bcrypt.compare(pwd, String(currentHash));
+      return res.status(401).json({ ok: false, error: "Invalid credentials" });
     }
+
+    const isValid = await bcrypt.compare(pwd, String(currentHash));
 
     if (!isValid) {
       return res.status(401).json({ ok: false, error: "Invalid credentials" });
@@ -167,11 +144,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     // fire-and-forget side effects (don't block login)
-    if (isNewUser) {
-      Promise.resolve(
-        ensureMessagingService(String((user as any)._id), user.email)
-      ).catch(() => {});
-    }
     Promise.resolve(safeSyncA2PByEmail(user.email, false)).catch(() => {});
 
     const publicUser = {
