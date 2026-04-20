@@ -132,11 +132,22 @@ export const authOptions: NextAuthOptions = {
           user.email = email;
         }
 
-        const currentHash = ((user as any).password ?? "") as string;
+        const currentHash =
+          (user as any).password ||
+          (user as any).passwordHash ||
+          (user as any).hashedPassword ||
+          "";
         if (!currentHash) {
           if (DBG) console.log("AUTH DEBUG: missing password hash", { email });
           return null;
         }
+
+        console.log("[AUTH DEBUG]", {
+          email: user.email,
+          hasPassword: !!(user as any).password,
+          hasPasswordHash: !!(user as any).passwordHash,
+          hasHashedPassword: !!(user as any).hashedPassword,
+        });
 
         const isValid = await bcrypt.compare(password, String(currentHash));
         if (DBG) console.log("AUTH DEBUG: compare result", { email, ok: isValid });
