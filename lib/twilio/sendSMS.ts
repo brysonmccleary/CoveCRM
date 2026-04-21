@@ -60,6 +60,20 @@ function findOwnedNumberById(user: any, numberId: string) {
   );
 }
 
+function resolveStoredDefaultSmsNumber(user: any) {
+  const defaultSmsNumberId = String((user as any)?.defaultSmsNumberId || "");
+  const numbers = getUserNumberEntries(user);
+  const defaultNumber = findOwnedNumberById(user, defaultSmsNumberId);
+  const onlyNumber = numbers.length === 1 ? numbers[0] : null;
+
+  return {
+    defaultSmsNumberId,
+    defaultNumber,
+    onlyNumber,
+    numberCount: numbers.length,
+  };
+}
+
 async function verifyNumberInActiveAccount(client: any, phoneNumber: string) {
   const matches = await client.incomingPhoneNumbers.list({
     phoneNumber,
@@ -81,9 +95,59 @@ async function resolveStrictSmsSender(args: {
     throw new Error("Invalid outbound number.");
   }
 
-  const ownedNumber = requestedNorm
+  let ownedNumber = requestedNorm
     ? findOwnedNumberByPhone(args.user, requestedNorm)
-    : findOwnedNumberById(args.user, String((args.user as any)?.defaultSmsNumberId || ""));
+    : resolveStoredDefaultSmsNumber(args.user).defaultNumber;
+
+  if (!requestedNorm && !ownedNumber?.phoneNumber) {
+    const initialState = resolveStoredDefaultSmsNumber(args.user);
+    if (initialState.defaultSmsNumberId) {
+      console.warn(
+        JSON.stringify({
+          msg: "sendSMS: defaultSmsNumberId missing from user.numbers",
+          userEmail: args.user?.email || null,
+          userId: args.user?._id ? String(args.user._id) : null,
+          defaultSmsNumberId: initialState.defaultSmsNumberId,
+          userNumberCount: initialState.numberCount,
+        }),
+      );
+    }
+
+    const freshUser = await ensureUserDoc(args.user?._id || args.user?.email);
+    if (freshUser) {
+      (args.user as any).numbers = (freshUser as any).numbers;
+      (args.user as any).defaultSmsNumberId =
+        (freshUser as any).defaultSmsNumberId;
+
+      const refreshedState = resolveStoredDefaultSmsNumber(freshUser);
+      ownedNumber = refreshedState.defaultNumber;
+
+      if (!ownedNumber?.phoneNumber && refreshedState.onlyNumber?.phoneNumber) {
+        const onlyNumberId = String(
+          (refreshedState.onlyNumber as any)?._id ||
+            refreshedState.onlyNumber?.sid ||
+            "",
+        );
+        if (onlyNumberId) {
+          (freshUser as any).defaultSmsNumberId = onlyNumberId;
+          await freshUser.save();
+          (args.user as any).defaultSmsNumberId = onlyNumberId;
+          ownedNumber = refreshedState.onlyNumber;
+          console.info(
+            JSON.stringify({
+              msg: "sendSMS: healed missing defaultSmsNumberId using single owned number",
+              userEmail: args.user?.email || null,
+              userId: args.user?._id ? String(args.user._id) : null,
+              defaultSmsNumberId: onlyNumberId,
+              resolvedFrom: normalize(
+                String(refreshedState.onlyNumber?.phoneNumber || ""),
+              ),
+            }),
+          );
+        }
+      }
+    }
+  }
 
   if (!ownedNumber?.phoneNumber) {
     console.warn(

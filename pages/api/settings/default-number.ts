@@ -34,7 +34,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         [n._id ? String(n._id) : null, n.sid || null].filter(Boolean)
       );
       if (!owned.includes(numberId)) {
-        return res.status(403).json({ error: "Number does not belong to this user" });
+        return res.status(403).json({
+          error: "Selected primary SMS number is not present on this account.",
+        });
       }
     }
 
