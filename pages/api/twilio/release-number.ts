@@ -135,9 +135,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     }
 
     // 4) Local cleanup (always)
+    const defaultId = String((user as any).defaultSmsNumberId || "");
+    const removedNumberId = String((entry as any)?._id || "");
+    const removedNumberSid = String(entry?.sid || "");
+    const removedWasDefault = Boolean(
+      defaultId &&
+        (defaultId === removedNumberId || defaultId === removedNumberSid),
+    );
+
     user.numbers = numbers.filter(
       (n: any) => n?.phoneNumber !== normalized && n?.phoneNumber !== String(rawPhoneParam),
     );
+    if (removedWasDefault) {
+      const nextNumber = Array.isArray(user.numbers) ? user.numbers[0] : null;
+      user.defaultSmsNumberId = nextNumber
+        ? String((nextNumber as any)?._id || nextNumber.sid || "")
+        : null;
+    }
     await user.save();
 
     try {

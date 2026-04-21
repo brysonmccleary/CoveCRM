@@ -505,6 +505,10 @@ export default async function handler(
           (purchased as any).capabilities?.MMS ?? purchased.capabilities?.mms,
       },
     } as any);
+    const newNumberEntry = user.numbers[user.numbers.length - 1] as any;
+    if (!user.defaultSmsNumberId) {
+      user.defaultSmsNumberId = String(newNumberEntry?._id || purchased.sid);
+    }
     user.a2p = user.a2p || ({} as any);
     if (targetMS) (user.a2p as any).messagingServiceSid = targetMS;
     try {

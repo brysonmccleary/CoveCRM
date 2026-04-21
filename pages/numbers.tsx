@@ -49,22 +49,7 @@ function NumbersPage() {
 
       if (defRes.ok) {
         const defData = await defRes.json();
-        const existingDefault = defData.defaultSmsNumberId || null;
-        setDefaultId(existingDefault);
-
-        // Auto-select first number as primary if none is set
-        if (!existingDefault) {
-          const nums = numData?.numbers ?? [];
-          if (nums.length >= 1) {
-            const autoId = nums[0]._id || nums[0].sid || nums[0].id;
-            // Fire and forget — don't await
-            fetch("/api/settings/default-number", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ numberId: autoId }),
-            }).then(() => setDefaultId(autoId)).catch(() => {});
-          }
-        }
+        setDefaultId(defData.defaultSmsNumberId || null);
       }
     } catch (error) {
       console.error("Error fetching numbers:", error);
