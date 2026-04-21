@@ -14,7 +14,7 @@ export default function NumberPurchasePanel() {
     setLoading(true);
 
     try {
-      const res = await fetch("/api/purchase-number", {
+      const res = await fetch("/api/twilio/buy-number", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ areaCode }),

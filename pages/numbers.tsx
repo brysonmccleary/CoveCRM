@@ -102,15 +102,18 @@ function NumbersPage() {
     }
   };
 
-  const handleRelease = async (numberId: string, force = false) => {
+  const handleRelease = async (phoneNumber: string, force = false) => {
     setReleasing(true);
     try {
-      const url = `/api/numbers/${numberId}${force ? "?force=true" : ""}`;
-      const res = await fetch(url, { method: "DELETE" });
+      const res = await fetch("/api/twilio/release-number", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phoneNumber }),
+      });
       const data = await res.json();
 
       if (res.status === 409 && data.requiresConfirmation) {
-        setReleaseConfirm(numberId);
+        setReleaseConfirm(phoneNumber);
         return;
       }
 
@@ -259,7 +262,7 @@ function NumbersPage() {
                         {checkingSpam === number.phoneNumber ? "Checking..." : "Check Spam"}
                       </button>
                       <button
-                        onClick={() => handleRelease(number._id || number.sid, false)}
+                        onClick={() => handleRelease(number.phoneNumber, false)}
                         disabled={releasing}
                         className="text-xs bg-red-900/30 hover:bg-red-900/50 border border-red-800 text-red-300 px-3 py-1.5 rounded-lg disabled:opacity-50"
                       >

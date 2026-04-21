@@ -741,6 +741,11 @@ const result = await sendSms({
         } catch (err: any) {
           // ✅ FAILURE: do NOT advance cursorStep / sentAtByIndex.
           enrollFailed++;
+          console.error("DRIP SEND FAILED", {
+            userId: user?._id ? String(user._id) : null,
+            leadId: (lead as any)?._id ? String((lead as any)._id) : null,
+            error: err?.message || err,
+          });
 
           const retryAt = DateTime.now()
             .setZone(PT_ZONE)
