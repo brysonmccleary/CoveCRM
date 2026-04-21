@@ -4,7 +4,6 @@ import dbConnect from "@/lib/mongooseConnect";
 import { trackUsage } from "@/lib/billing/trackUsage";
 import { assertBillingAllowed } from "@/lib/billing/assertBillingAllowed";
 import User from "@/models/User";
-import A2PProfile from "@/models/A2PProfile";
 import Lead from "@/models/Lead";
 import Message from "@/models/Message";
 import { DateTime } from "luxon";
@@ -22,12 +21,7 @@ const BASE_URL = (
 const STATUS_CALLBACK =
   process.env.A2P_STATUS_CALLBACK_URL ||
   (BASE_URL ? `${BASE_URL}/api/twilio/status-callback` : undefined);
-const SHARED_MESSAGING_SERVICE_SID = process.env.TWILIO_MESSAGING_SERVICE_SID;
 const DEV_ALLOW_UNAPPROVED = process.env.DEV_ALLOW_UNAPPROVED === "1";
-const DEFAULT_MPS = Math.max(
-  1,
-  parseInt(process.env.TWILIO_DEFAULT_MPS || "1", 10) || 1,
-);
 const SMS_COST = 0.02; // $ billed per SMS segment (platform price)
 
 const QUIET_START_HOUR = 21;
@@ -41,25 +35,101 @@ function normalize(p: string) {
   if (digits.length === 10) return `+1${digits}`;
   return p.startsWith("+") ? p : `+${digits}`;
 }
+
+function getUserNumberEntries(user: any): any[] {
+  return Array.isArray((user as any)?.numbers) ? (user as any).numbers : [];
+}
+
+function findOwnedNumberByPhone(user: any, phoneNumber: string) {
+  const normalized = normalize(phoneNumber);
+  if (!normalized) return null;
+  return (
+    getUserNumberEntries(user).find(
+      (entry: any) => normalize(String(entry?.phoneNumber || "")) === normalized,
+    ) || null
+  );
+}
+
+function findOwnedNumberById(user: any, numberId: string) {
+  if (!numberId) return null;
+  return (
+    getUserNumberEntries(user).find((entry: any) => {
+      const entryId = entry?._id ? String(entry._id) : "";
+      return entryId === numberId || String(entry?.sid || "") === numberId;
+    }) || null
+  );
+}
+
+async function verifyNumberInActiveAccount(client: any, phoneNumber: string) {
+  const matches = await client.incomingPhoneNumbers.list({
+    phoneNumber,
+    limit: 1,
+  });
+  return Array.isArray(matches) && matches.length > 0;
+}
+
+async function resolveStrictSmsSender(args: {
+  user: any;
+  client: any;
+  accountSid: string;
+  requestedFrom?: string | null;
+}) {
+  const requestedFrom = String(args.requestedFrom || "").trim();
+  const requestedNorm = requestedFrom ? normalize(requestedFrom) : "";
+
+  if (requestedFrom && !requestedNorm) {
+    throw new Error("Invalid outbound number.");
+  }
+
+  const ownedNumber = requestedNorm
+    ? findOwnedNumberByPhone(args.user, requestedNorm)
+    : findOwnedNumberById(args.user, String((args.user as any)?.defaultSmsNumberId || ""));
+
+  if (!ownedNumber?.phoneNumber) {
+    console.warn(
+      JSON.stringify({
+        msg: "sendSMS: outbound number not assigned",
+        userEmail: args.user?.email || null,
+        userId: args.user?._id ? String(args.user._id) : null,
+        requestedFrom: requestedNorm || null,
+      }),
+    );
+    throw new Error(
+      requestedNorm
+        ? "Requested outbound number is not assigned to this account."
+        : "No assigned outbound number configured.",
+    );
+  }
+
+  const resolvedFrom = normalize(String(ownedNumber.phoneNumber || ""));
+  const existsInActiveAccount = await verifyNumberInActiveAccount(
+    args.client,
+    resolvedFrom,
+  );
+
+  if (!existsInActiveAccount) {
+    console.warn(
+      JSON.stringify({
+        msg: "sendSMS: outbound number/account mismatch",
+        userEmail: args.user?.email || null,
+        userId: args.user?._id ? String(args.user._id) : null,
+        accountSid: args.accountSid || null,
+        requestedFrom: requestedNorm || null,
+        resolvedFrom,
+      }),
+    );
+    throw new Error("Outbound number/account mismatch.");
+  }
+
+  return resolvedFrom;
+}
+
 function isUS(num: string) {
   return (num || "").startsWith("+1");
 }
 function pickLeadZone(lead: any): string {
   const fromState = getTimezoneFromState(lead?.State || "");
   return fromState || "America/New_York";
-}
-function sleep(ms: number) {
-  return new Promise((r) => setTimeout(r, ms));
-}
-
-const senderThrottle = new Map<string, number>();
-async function throttleForSender(msid: string, mps: number) {
-  const now = Date.now();
-  const step = Math.ceil(1000 / Math.max(1, mps));
-  const next = senderThrottle.get(msid) || 0;
-  const wait = Math.max(0, next - now);
-  if (wait > 0) await sleep(wait);
-  senderThrottle.set(msid, Date.now() + step);
 }
 
 async function ensureUserDoc(userOrId: string | any) {
@@ -77,43 +147,6 @@ async function ensureUserDoc(userOrId: string | any) {
   if (userOrId.email)
     return await User.findOne({ email: String(userOrId.email).toLowerCase() });
   return null;
-}
-
-async function ensureTenantMessagingService(
-  userId: string,
-  friendlyNameHint?: string,
-) {
-  const twilio = await import("twilio");
-  const platformClient = twilio.default(
-    process.env.TWILIO_API_KEY_SID || process.env.TWILIO_ACCOUNT_SID!,
-    process.env.TWILIO_API_KEY_SECRET || process.env.TWILIO_AUTH_TOKEN!,
-    { accountSid: process.env.TWILIO_ACCOUNT_SID! },
-  );
-  let a2p = await A2PProfile.findOne({ userId });
-  if (a2p?.messagingServiceSid) {
-    try {
-      await platformClient.messaging.v1
-        .services(a2p.messagingServiceSid)
-        .update({
-          friendlyName: `CoveCRM – ${friendlyNameHint || userId}`,
-          inboundRequestUrl: `${BASE_URL}/api/twilio/inbound-sms`,
-          statusCallback: STATUS_CALLBACK,
-        });
-    } catch {}
-    return a2p.messagingServiceSid;
-  }
-  const svc = await platformClient.messaging.v1.services.create({
-    friendlyName: `CoveCRM – ${friendlyNameHint || userId}`,
-    inboundRequestUrl: `${BASE_URL}/api/twilio/inbound-sms`,
-    statusCallback: STATUS_CALLBACK,
-  });
-  if (a2p) {
-    a2p.messagingServiceSid = svc.sid;
-    await a2p.save();
-  } else {
-    await A2PProfile.create({ userId, messagingServiceSid: svc.sid });
-  }
-  return svc.sid;
 }
 
 async function resolveLeadForSend(opts: {
@@ -188,15 +221,8 @@ async function sendCore(
   const { client, usingPersonal, accountSid } = await getClientForUser(
     user.email,
   );
-  const platformAccountSid = (process.env.TWILIO_ACCOUNT_SID || "").trim();
-  const isPlatformAccount =
-    platformAccountSid && accountSid === platformAccountSid;
-  const isSubaccount = !usingPersonal && !isPlatformAccount;
 
   const userA2P = (user as any).a2p || {};
-  const legacyA2P = await A2PProfile.findOne({
-    userId: String(user._id),
-  }).lean();
 
   // --- Strict A2P gating for US SMS ---
 // ✅ Auto-heal: if we're not marked ready, run a live sync from Twilio and re-check.
@@ -244,33 +270,7 @@ if (isUSDest && !isMessagingReady && !DEV_ALLOW_UNAPPROVED) {
     );
   }
 }
-  // If user has a defaultSmsNumberId set, try to use that number's messagingServiceSid
-  let defaultNumberMsid: string | null = null;
-  const defaultSmsNumberId = (user as any)?.defaultSmsNumberId;
-  if (defaultSmsNumberId && !paramsIn.overrideMsid) {
-    const defaultNum = ((user as any)?.numbers || []).find(
-      (n: any) => String(n._id) === defaultSmsNumberId || n.sid === defaultSmsNumberId
-    );
-    if (defaultNum?.messagingServiceSid) {
-      defaultNumberMsid = defaultNum.messagingServiceSid;
-    }
-  }
-
-  // Only platform/master account is allowed to default to the shared Messaging Service SID.
-  let messagingServiceSid =
-    paramsIn.overrideMsid ||
-    defaultNumberMsid ||
-    userA2P.messagingServiceSid ||
-    (isPlatformAccount ? SHARED_MESSAGING_SERVICE_SID : null) ||
-    legacyA2P?.messagingServiceSid ||
-    null;
-
-  // ---- NEW: know if this send explicitly wants a delay (AI human-like) ----
-  const wantsDelayedSend =
-    !!(paramsIn.delayMinutesForNonQuiet && paramsIn.delayMinutesForNonQuiet > 0);
-
-  // If caller explicitly passes a from-number, prefer that over Messaging Service
-  if (paramsIn.from) messagingServiceSid = null;
+  const serviceSid = "";
 
   const lead = await resolveLeadForSend({
     leadId: paramsIn.leadId,
@@ -278,29 +278,12 @@ if (isUSDest && !isMessagingReady && !DEV_ALLOW_UNAPPROVED) {
     toNorm,
   });
 
-  // pick from number from thread if not provided
-  let forcedFrom: string | null = paramsIn.from || null;
-
-  // For delayed AI replies we *must* use a Messaging Service so Twilio can schedule.
-  // So we only auto-force the from-number when we are NOT doing a delayed send.
-  if (!forcedFrom && lead?._id && !wantsDelayedSend && !messagingServiceSid) {
-    const lastMsg = await Message.findOne({ leadId: lead._id })
-      .sort({ createdAt: -1 })
-      .lean()
-      .exec();
-    if (lastMsg?.direction === "inbound" && lastMsg.to)
-      forcedFrom = String(lastMsg.to);
-    else if (lastMsg?.from) forcedFrom = String(lastMsg.from);
-  }
-
-  // If someone passed a from AND also requested a delay, prefer the Messaging Service
-  // so the scheduled send actually works.
-  if (forcedFrom && wantsDelayedSend) {
-    console.log(
-      "[sendSMS] Ignoring forcedFrom to allow scheduled send via Messaging Service",
-    );
-    forcedFrom = null;
-  }
+  const forcedFrom = await resolveStrictSmsSender({
+    user,
+    client,
+    accountSid,
+    requestedFrom: paramsIn.from || null,
+  });
 
   // Opt-out suppression
   if ((lead as any)?.optOut === true || (lead as any)?.unsubscribed === true) {
@@ -315,7 +298,6 @@ if (isUSDest && !isMessagingReady && !DEV_ALLOW_UNAPPROVED) {
       reason: "opt_out",
       to: toNorm,
       from: forcedFrom || undefined,
-      fromServiceSid: messagingServiceSid || undefined,
       queuedAt: new Date(),
       idempotencyKey: paramsIn.idempotencyKey || undefined,
       enrollmentId: paramsIn.enrollmentId || undefined,
@@ -333,7 +315,7 @@ if (isUSDest && !isMessagingReady && !DEV_ALLOW_UNAPPROVED) {
       });
     }
     return {
-      serviceSid: messagingServiceSid || "",
+      serviceSid,
       messageId: String(suppressed._id),
     };
   }
@@ -357,6 +339,21 @@ if (isUSDest && !isMessagingReady && !DEV_ALLOW_UNAPPROVED) {
     const dt = nowLocal.plus({ minutes: paramsIn.delayMinutesForNonQuiet });
     scheduledAt = dt.toUTC().toJSDate();
     reason = "scheduled_delay";
+  }
+
+  if (scheduledAt) {
+    console.warn(
+      JSON.stringify({
+        msg: "sendSMS: scheduled send blocked by strict sender enforcement",
+        userEmail: user.email,
+        userId: user?._id ? String(user._id) : null,
+        from: forcedFrom,
+        scheduledAt: scheduledAt.toISOString(),
+      }),
+    );
+    throw new Error(
+      "Scheduled send requires a messaging service and is unavailable with strict outbound number enforcement.",
+    );
   }
 
   
@@ -385,7 +382,6 @@ if (isUSDest && !isMessagingReady && !DEV_ALLOW_UNAPPROVED) {
       reason,
       to: toNorm,
       from: forcedFrom || undefined,
-      fromServiceSid: messagingServiceSid || undefined,
       queuedAt: new Date(),
       scheduledAt: scheduledAt ? scheduledAt : undefined,
       idempotencyKey: paramsIn.idempotencyKey || undefined,
@@ -400,7 +396,7 @@ if (isUSDest && !isMessagingReady && !DEV_ALLOW_UNAPPROVED) {
         idempotencyKey: paramsIn.idempotencyKey,
       }).lean();
       return {
-        serviceSid: existing?.fromServiceSid || messagingServiceSid || "",
+        serviceSid: existing?.fromServiceSid || serviceSid,
         messageId: String(existing?._id || ""),
       };
     }
@@ -427,46 +423,13 @@ if (isUSDest && !isMessagingReady && !DEV_ALLOW_UNAPPROVED) {
   };
   if (paramsIn.mediaUrls?.length) (twParams as any).mediaUrl = paramsIn.mediaUrls;
 
-  // Routing:
-  //  - If we have a Messaging Service SID, use it (platform account or per-tenant MS).
-  //  - Else if we have a from-number, use that.
-  //  - Else, only the platform/master account is allowed to auto-create a per-tenant MS.
-  //  - Subaccounts without an explicit from-number will error (no silent use of master MS).
-  if (messagingServiceSid) {
-    (twParams as any).messagingServiceSid = messagingServiceSid;
-    if (scheduledAt) {
-      (twParams as any).scheduleType = "fixed";
-      (twParams as any).sendAt = scheduledAt;
-    }
-  } else if (forcedFrom) {
+  if (forcedFrom) {
     (twParams as any).from = forcedFrom;
-    if (scheduledAt) {
-      console.warn(
-        "⚠️ Requested scheduled send but no Messaging Service SID; sending immediately.",
-      );
-    }
-  } else if (!usingPersonal && isPlatformAccount) {
-    const msid = await ensureTenantMessagingService(
-      String(user._id),
-      user.name || user.email,
-    );
-    (twParams as any).messagingServiceSid = msid;
-    messagingServiceSid = msid;
-    if (scheduledAt) {
-      (twParams as any).scheduleType = "fixed";
-      (twParams as any).sendAt = scheduledAt;
-    }
   } else {
     throw new Error(
-      "No routing set (neither messagingServiceSid nor from). Please choose a sending number.",
+      "No assigned outbound number configured.",
     );
   }
-
-  const mps =
-    typeof userA2P.mps === "number" && userA2P.mps > 0
-      ? userA2P.mps
-      : DEFAULT_MPS;
-  if (messagingServiceSid) await throttleForSender(messagingServiceSid, mps);
 
   try {
     const tw = await client.messages.create(twParams);
@@ -481,18 +444,10 @@ if (isUSDest && !isMessagingReady && !DEV_ALLOW_UNAPPROVED) {
       $set: {
         sid: tw.sid,
         status: newStatus,
-        sentAt:
-          scheduledAt && messagingServiceSid ? scheduledAt : new Date(),
+        sentAt: new Date(),
       },
     }).exec();
-    return scheduledAt && messagingServiceSid
-      ? {
-          sid: tw.sid,
-          serviceSid: messagingServiceSid || "",
-          messageId,
-          scheduledAt: (scheduledAt as Date).toISOString(),
-        }
-      : { sid: tw.sid, serviceSid: messagingServiceSid || "", messageId };
+    return { sid: tw.sid, serviceSid, messageId };
   } catch (err: any) {
     const code = err?.code;
     const msg = err?.message || "Failed to send SMS";

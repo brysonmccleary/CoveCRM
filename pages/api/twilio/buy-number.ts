@@ -20,6 +20,15 @@ const BASE_URL = (
 const INBOUND_SMS_WEBHOOK = `${BASE_URL}/api/twilio/inbound-sms`;
 const STATUS_CALLBACK = `${BASE_URL}/api/twilio/status-callback`;
 const VOICE_URL = `${BASE_URL}/api/twilio/voice/inbound`;
+const INTERNAL_NUMBER_PURCHASE_BYPASS_EMAILS = [
+  "support@covecrm.com",
+  "admin@covecrm.com",
+  "bryson.mccleary1@gmail.com",
+  ...(process.env.INTERNAL_TWILIO_NUMBER_PURCHASE_BYPASS_EMAILS || "")
+    .split(",")
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean),
+];
 
 // Master/platform account SID (sanitized)
 const PLATFORM_ACCOUNT_SID = (process.env.TWILIO_ACCOUNT_SID || "")
@@ -40,6 +49,15 @@ function maskSid(sid?: string): string | null {
   if (!sid) return null;
   if (sid.length <= 6) return sid;
   return `${sid.slice(0, 4)}…${sid.slice(-4)}`;
+}
+
+function canBypassNumberPurchaseBilling(user: any, email: string): boolean {
+  const normalizedEmail = String(email || "").toLowerCase();
+  return Boolean(
+    user?.isOwner === true ||
+      user?.role === "owner" ||
+      INTERNAL_NUMBER_PURCHASE_BYPASS_EMAILS.includes(normalizedEmail),
+  );
 }
 
 /**
@@ -225,8 +243,24 @@ export default async function handler(
     }
 
     const isSelfBilled = usingPersonal || (user as any).billingMode === "self";
+    const allowInternalBillingBypass = canBypassNumberPurchaseBilling(
+      user,
+      email,
+    );
 
-    if (!isSelfBilled) {
+    if (!isSelfBilled && allowInternalBillingBypass) {
+      console.info(
+        JSON.stringify({
+          msg: "buy-number: internal billing bypass used",
+          email,
+          userId: String(user._id),
+          requestedNumber: requestedNumber || null,
+          areaCode: areaCode ?? null,
+        }),
+      );
+    }
+
+    if (!isSelfBilled && !allowInternalBillingBypass) {
       if (!user.stripeCustomerId) {
         const customer = await stripe.customers.create({
           email: user.email,

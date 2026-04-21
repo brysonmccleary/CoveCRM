@@ -7,7 +7,6 @@ import dbConnect from "@/lib/mongooseConnect";
 import Lead from "@/models/Lead";
 import Call from "@/models/Call";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
-import { pickFromNumberForUser } from "@/lib/twilio/pickFromNumber";
 import { isCallAllowedForLead } from "@/utils/checkCallTime";
 import { checkCallingAllowed } from "@/lib/billing/checkCallingAllowed";
 
@@ -98,9 +97,38 @@ function makeConferenceName(email: string) {
   return `cove_${slug}_${Date.now().toString(36)}_${rand}`;
 }
 
-// ✅ Validate that a requested caller ID actually exists on THIS user's Twilio subaccount.
-// If Twilio API errors for any reason, we safely fall back to the normal picker.
-async function validateFromOnSubaccount(client: any, requestedFromE164: string): Promise<boolean> {
+function findOwnedUserNumber(user: any, phoneNumber: string) {
+  const normalized = normalizeE164(phoneNumber);
+  if (!normalized) return null;
+  return (
+    ((user as any)?.numbers || []).find(
+      (entry: any) => normalizeE164(String(entry?.phoneNumber || "")) === normalized,
+    ) || null
+  );
+}
+
+function resolveConfiguredCallerId(user: any): string {
+  const configuredPhone = normalizeE164(
+    String((user as any)?.defaultVoiceNumber || (user as any)?.defaultFromNumber || ""),
+  );
+  if (configuredPhone && findOwnedUserNumber(user, configuredPhone)?.phoneNumber) {
+    return configuredPhone;
+  }
+
+  const defaultSmsNumberId = String((user as any)?.defaultSmsNumberId || "");
+  if (defaultSmsNumberId) {
+    const owned = ((user as any)?.numbers || []).find((entry: any) => {
+      const entryId = entry?._id ? String(entry._id) : "";
+      return entryId === defaultSmsNumberId || String(entry?.sid || "") === defaultSmsNumberId;
+    });
+    const fallbackPhone = normalizeE164(String(owned?.phoneNumber || ""));
+    if (fallbackPhone) return fallbackPhone;
+  }
+
+  return "";
+}
+
+async function validateFromInActiveAccount(client: any, requestedFromE164: string): Promise<boolean> {
   try {
     const list = await client.incomingPhoneNumbers.list({
       phoneNumber: requestedFromE164,
@@ -152,22 +180,49 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const to = toRaw ? normalizeE164(toRaw) : pickLeadPhoneE164(leadDoc);
     if (!to) return res.status(400).json({ message: "Lead has no valid phone number" });
 
-    const { client } = await getClientForUser(email);
-// ✅ If UI sent a from number, prefer it IF it exists on this user's subaccount.
+    const { client, accountSid, user } = await getClientForUser(email);
     const requestedFrom = normalizeE164(fromNumber || from || "");
-    let chosenFrom: string | null = null;
+    const rawRequestedFrom = String(fromNumber || from || "").trim();
 
-    if (requestedFrom) {
-      const ok = await validateFromOnSubaccount(client, requestedFrom);
-      if (ok) chosenFrom = requestedFrom;
+    if (rawRequestedFrom && !requestedFrom) {
+      return res.status(400).json({ message: "Invalid outbound number." });
     }
 
-    if (!chosenFrom) {
-      chosenFrom = await pickFromNumberForUser(email);
-    }
+    const chosenFrom = requestedFrom || resolveConfiguredCallerId(user);
 
     if (!chosenFrom) {
-      return res.status(400).json({ message: "No outbound caller ID configured. Buy a number first." });
+      return res.status(400).json({ message: "No assigned outbound number configured." });
+    }
+
+    if (!findOwnedUserNumber(user, chosenFrom)) {
+      console.warn(
+        JSON.stringify({
+          msg: "voice/call: requested outbound number not assigned",
+          userEmail: email,
+          userId: (user as any)?._id ? String((user as any)._id) : null,
+          requestedFrom: requestedFrom || null,
+          resolvedFrom: chosenFrom,
+        }),
+      );
+      return res.status(403).json({ message: "Requested outbound number is not assigned to this account." });
+    }
+
+    const activeAccountHasNumber = await validateFromInActiveAccount(
+      client,
+      chosenFrom,
+    );
+    if (!activeAccountHasNumber) {
+      console.warn(
+        JSON.stringify({
+          msg: "voice/call: outbound number/account mismatch",
+          userEmail: email,
+          userId: (user as any)?._id ? String((user as any)._id) : null,
+          accountSid,
+          requestedFrom: requestedFrom || null,
+          resolvedFrom: chosenFrom,
+        }),
+      );
+      return res.status(409).json({ message: "Outbound number/account mismatch." });
     }
 
     const conferenceName = makeConferenceName(email);

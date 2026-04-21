@@ -1,22 +1,11 @@
 // pages/api/start-conference.ts
 import type { NextApiRequest, NextApiResponse } from "next";
-import Twilio from "twilio";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "./auth/[...nextauth]"; // relative to /pages/api
-import { resolveFromNumber } from "@/lib/voice";
 import { checkCallingAllowed } from "@/lib/billing/checkCallingAllowed";
+import { getClientForUser } from "@/lib/twilio/getClientForUser";
 
-const {
-  TWILIO_ACCOUNT_SID,
-  TWILIO_AUTH_TOKEN,
-  NEXT_PUBLIC_BASE_URL,
-  NEXTAUTH_URL,
-} = process.env;
-
-const client =
-  TWILIO_ACCOUNT_SID && TWILIO_AUTH_TOKEN
-    ? Twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
-    : null;
+const { NEXT_PUBLIC_BASE_URL, NEXTAUTH_URL } = process.env;
 
 function sendJSON(res: NextApiResponse, status: number, body: any) {
   res.status(status).setHeader("Content-Type", "application/json");
@@ -40,6 +29,49 @@ function identityFromEmail(email: string) {
     .slice(0, 120);
 }
 
+function findOwnedUserNumber(user: any, phoneNumber: string) {
+  const normalized = e164(phoneNumber);
+  if (!normalized) return null;
+  return (
+    ((user as any)?.numbers || []).find(
+      (entry: any) => e164(String(entry?.phoneNumber || "")) === normalized,
+    ) || null
+  );
+}
+
+function resolveConfiguredCallerId(user: any): string {
+  const configuredPhone = e164(
+    String((user as any)?.defaultVoiceNumber || (user as any)?.defaultFromNumber || ""),
+  );
+  if (configuredPhone && findOwnedUserNumber(user, configuredPhone)?.phoneNumber) {
+    return configuredPhone;
+  }
+
+  const defaultSmsNumberId = String((user as any)?.defaultSmsNumberId || "");
+  if (defaultSmsNumberId) {
+    const owned = ((user as any)?.numbers || []).find((entry: any) => {
+      const entryId = entry?._id ? String(entry._id) : "";
+      return entryId === defaultSmsNumberId || String(entry?.sid || "") === defaultSmsNumberId;
+    });
+    const fallbackPhone = e164(String(owned?.phoneNumber || ""));
+    if (fallbackPhone) return fallbackPhone;
+  }
+
+  return "";
+}
+
+async function validateFromInActiveAccount(client: any, phoneNumber: string) {
+  try {
+    const list = await client.incomingPhoneNumbers.list({
+      phoneNumber,
+      limit: 1,
+    });
+    return Array.isArray(list) && list.length > 0;
+  } catch {
+    return false;
+  }
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") {
     return sendJSON(res, 405, { message: "Method not allowed" });
@@ -57,10 +89,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const billingCheck = await checkCallingAllowed(userEmail);
     if (!billingCheck.allowed) {
       return sendJSON(res, 402, { message: billingCheck.reason });
-    }
-
-    if (!client) {
-      return sendJSON(res, 500, { message: "Server Twilio client not configured" });
     }
 
     const baseUrl = (NEXT_PUBLIC_BASE_URL || NEXTAUTH_URL || "").replace(/\/$/, "");
@@ -87,8 +115,45 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     // ✅ Dynamic, per-user caller ID (fully automated)
-    const requestedFrom = (fromNumberBody || fromBody || "").trim() || null;
-    const fromNumber = await resolveFromNumber({ requested: requestedFrom, userEmail });
+    const { client, accountSid, user } = await getClientForUser(userEmail);
+    const requestedFromRaw = String(fromNumberBody || fromBody || "").trim();
+    const requestedFrom = requestedFromRaw ? e164(requestedFromRaw) : "";
+
+    if (requestedFromRaw && !requestedFrom) {
+      return sendJSON(res, 400, { message: "Invalid outbound number." });
+    }
+
+    const fromNumber = requestedFrom || resolveConfiguredCallerId(user);
+    if (!fromNumber) {
+      return sendJSON(res, 400, { message: "No assigned outbound number configured." });
+    }
+
+    if (!findOwnedUserNumber(user, fromNumber)) {
+      console.warn("start-conference: requested outbound number not assigned", {
+        userEmail,
+        userId: (user as any)?._id ? String((user as any)._id) : null,
+        requestedFrom: requestedFrom || null,
+        resolvedFrom: fromNumber,
+      });
+      return sendJSON(res, 403, {
+        message: "Requested outbound number is not assigned to this account.",
+      });
+    }
+
+    const activeAccountHasNumber = await validateFromInActiveAccount(
+      client,
+      fromNumber,
+    );
+    if (!activeAccountHasNumber) {
+      console.warn("start-conference: outbound number/account mismatch", {
+        userEmail,
+        userId: (user as any)?._id ? String((user as any)._id) : null,
+        accountSid,
+        requestedFrom: requestedFrom || null,
+        resolvedFrom: fromNumber,
+      });
+      return sendJSON(res, 409, { message: "Outbound number/account mismatch." });
+    }
 
     const conferenceName = `conf_${Date.now()}`;
     const agentUrl = `${baseUrl}/api/voice/agent-join?conferenceName=${encodeURIComponent(conferenceName)}`;

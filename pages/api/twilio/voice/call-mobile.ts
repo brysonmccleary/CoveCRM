@@ -9,7 +9,6 @@ import dbConnect from "@/lib/mongooseConnect";
 import Lead from "@/models/Lead";
 import Call from "@/models/Call";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
-import { pickFromNumberForUser } from "@/lib/twilio/pickFromNumber";
 import { isCallAllowedForLead } from "@/utils/checkCallTime";
 import { checkCallingAllowed } from "@/lib/billing/checkCallingAllowed";
 
@@ -42,7 +41,38 @@ function normalizeE164(p?: string) {
   return "";
 }
 
-async function validateFromOnSubaccount(client: any, requestedFromE164: string): Promise<boolean> {
+function findOwnedUserNumber(user: any, phoneNumber: string) {
+  const normalized = normalizeE164(phoneNumber);
+  if (!normalized) return null;
+  return (
+    ((user as any)?.numbers || []).find(
+      (entry: any) => normalizeE164(String(entry?.phoneNumber || "")) === normalized,
+    ) || null
+  );
+}
+
+function resolveConfiguredCallerId(user: any): string {
+  const configuredPhone = normalizeE164(
+    String((user as any)?.defaultVoiceNumber || (user as any)?.defaultFromNumber || ""),
+  );
+  if (configuredPhone && findOwnedUserNumber(user, configuredPhone)?.phoneNumber) {
+    return configuredPhone;
+  }
+
+  const defaultSmsNumberId = String((user as any)?.defaultSmsNumberId || "");
+  if (defaultSmsNumberId) {
+    const owned = ((user as any)?.numbers || []).find((entry: any) => {
+      const entryId = entry?._id ? String(entry._id) : "";
+      return entryId === defaultSmsNumberId || String(entry?.sid || "") === defaultSmsNumberId;
+    });
+    const fallbackPhone = normalizeE164(String(owned?.phoneNumber || ""));
+    if (fallbackPhone) return fallbackPhone;
+  }
+
+  return "";
+}
+
+async function validateFromInActiveAccount(client: any, requestedFromE164: string): Promise<boolean> {
   try {
     const list = await client.incomingPhoneNumbers.list({
       phoneNumber: requestedFromE164,
@@ -133,21 +163,48 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
 
-    // Match web behavior: honor requested fromNumber if it exists on this subaccount, else pick one.
+    // Match web behavior: use the exact requested caller ID or the configured stored caller ID only.
     const requestedFrom = normalizeE164(String(requestedFromRaw || ""));
-    let chosenFrom: string | null = null;
 
-    if (requestedFrom) {
-      const ok = await validateFromOnSubaccount(client, requestedFrom);
-      if (ok) chosenFrom = requestedFrom;
+    if (requestedFromRaw && !requestedFrom) {
+      return res.status(400).json({ message: "Invalid outbound number." });
     }
 
-    if (!chosenFrom) {
-      chosenFrom = await pickFromNumberForUser(email);
-    }
+    const chosenFrom = requestedFrom || resolveConfiguredCallerId(user);
 
     if (!chosenFrom) {
-      return res.status(400).json({ message: "No outbound caller ID configured. Buy a number first." });
+      return res.status(400).json({ message: "No assigned outbound number configured." });
+    }
+
+    if (!findOwnedUserNumber(user, chosenFrom)) {
+      console.warn(
+        JSON.stringify({
+          msg: "call-mobile: requested outbound number not assigned",
+          userEmail: email,
+          userId: (user as any)?._id ? String((user as any)._id) : null,
+          requestedFrom: requestedFrom || null,
+          resolvedFrom: chosenFrom,
+        }),
+      );
+      return res.status(403).json({ message: "Requested outbound number is not assigned to this account." });
+    }
+
+    const activeAccountHasNumber = await validateFromInActiveAccount(
+      client,
+      chosenFrom,
+    );
+    if (!activeAccountHasNumber) {
+      console.warn(
+        JSON.stringify({
+          msg: "call-mobile: outbound number/account mismatch",
+          userEmail: email,
+          userId: (user as any)?._id ? String((user as any)._id) : null,
+          accountSid,
+          requestedFrom: requestedFrom || null,
+          resolvedFrom: chosenFrom,
+        }),
+      );
+      return res.status(409).json({ message: "Outbound number/account mismatch." });
     }
 
     const conferenceName = makeConferenceName(email);

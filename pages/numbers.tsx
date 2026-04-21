@@ -153,7 +153,7 @@ function NumbersPage() {
           <div className="bg-[#0f172a] border border-white/10 rounded-xl p-5">
             <h2 className="text-base font-semibold text-white mb-1">Primary SMS Number</h2>
             <p className="text-xs text-gray-400 mb-4">
-              Choose which number sends outbound SMS by default. If no primary is set, the first available number is used.
+              Choose which number sends outbound SMS by default. Outbound SMS uses only the specifically assigned primary number. If no primary is set, sends that rely on a default will fail instead of switching to another number.
             </p>
             <div className="space-y-2">
               <label className="flex items-center gap-3 bg-[#1e293b] rounded-lg px-4 py-2.5 cursor-pointer border border-white/10 hover:border-indigo-500 transition">
@@ -165,7 +165,7 @@ function NumbersPage() {
                   className="accent-indigo-500"
                   disabled={savingDefault}
                 />
-                <span className="text-gray-400 text-sm">Auto (use first available)</span>
+                <span className="text-gray-400 text-sm">No primary selected (sending will fail until one is assigned)</span>
               </label>
               {numbers.map((num) => {
                 const id = num._id || num.sid || num.id;
