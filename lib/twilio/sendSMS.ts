@@ -11,6 +11,7 @@ import { getTimezoneFromState } from "@/utils/timezone";
 import { getClientForUser } from "./getClientForUser";
 import { syncA2PForUser } from "@/lib/twilio/syncA2P";
 import { queueLeadMemoryHook } from "@/lib/ai/memory/queueLeadMemoryHook";
+import { reconcileUserNumbers } from "@/lib/twilio/reconcileUserNumbers";
 import type { MessageListInstanceCreateOptions } from "twilio/lib/rest/api/v2010/account/message";
 
 const BASE_URL = (
@@ -115,36 +116,34 @@ async function resolveStrictSmsSender(args: {
 
     const freshUser = await ensureUserDoc(args.user?._id || args.user?.email);
     if (freshUser) {
+      await reconcileUserNumbers(freshUser, freshUser.email);
+
       (args.user as any).numbers = (freshUser as any).numbers;
       (args.user as any).defaultSmsNumberId =
         (freshUser as any).defaultSmsNumberId;
 
       const refreshedState = resolveStoredDefaultSmsNumber(freshUser);
-      ownedNumber = refreshedState.defaultNumber;
 
-      if (!ownedNumber?.phoneNumber && refreshedState.onlyNumber?.phoneNumber) {
-        const onlyNumberId = String(
-          (refreshedState.onlyNumber as any)?._id ||
-            refreshedState.onlyNumber?.sid ||
-            "",
+      ownedNumber =
+        refreshedState.defaultNumber ||
+        (refreshedState.numberCount === 1
+          ? refreshedState.onlyNumber
+          : null);
+
+      if (
+        ownedNumber?.phoneNumber &&
+        refreshedState.numberCount === 1 &&
+        refreshedState.defaultSmsNumberId
+      ) {
+        console.info(
+          JSON.stringify({
+            msg: "sendSMS: healed defaultSmsNumberId using single owned number",
+            userEmail: args.user?.email || null,
+            userId: args.user?._id ? String(args.user._id) : null,
+            defaultSmsNumberId: refreshedState.defaultSmsNumberId,
+            resolvedFrom: normalize(String(ownedNumber.phoneNumber || "")),
+          }),
         );
-        if (onlyNumberId) {
-          (freshUser as any).defaultSmsNumberId = onlyNumberId;
-          await freshUser.save();
-          (args.user as any).defaultSmsNumberId = onlyNumberId;
-          ownedNumber = refreshedState.onlyNumber;
-          console.info(
-            JSON.stringify({
-              msg: "sendSMS: healed missing defaultSmsNumberId using single owned number",
-              userEmail: args.user?.email || null,
-              userId: args.user?._id ? String(args.user._id) : null,
-              defaultSmsNumberId: onlyNumberId,
-              resolvedFrom: normalize(
-                String(refreshedState.onlyNumber?.phoneNumber || ""),
-              ),
-            }),
-          );
-        }
       }
     }
   }
