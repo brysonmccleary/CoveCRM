@@ -11,7 +11,6 @@ import { getTimezoneFromState } from "@/utils/timezone";
 import { getClientForUser } from "./getClientForUser";
 import { syncA2PForUser } from "@/lib/twilio/syncA2P";
 import { queueLeadMemoryHook } from "@/lib/ai/memory/queueLeadMemoryHook";
-import { reconcileUserNumbers } from "@/lib/twilio/reconcileUserNumbers";
 import type { MessageListInstanceCreateOptions } from "twilio/lib/rest/api/v2010/account/message";
 
 const BASE_URL = (
@@ -114,9 +113,10 @@ async function resolveStrictSmsSender(args: {
       );
     }
 
-    const freshUser = await ensureUserDoc(args.user?._id || args.user?.email);
+    const freshUser = await ensureUserDoc(
+      args.user?._id ? String(args.user._id) : args.user?.email,
+    );
     if (freshUser) {
-      await reconcileUserNumbers(freshUser, freshUser.email);
 
       (args.user as any).numbers = (freshUser as any).numbers;
       (args.user as any).defaultSmsNumberId =
@@ -272,9 +272,17 @@ async function sendCore(
   scheduledAt?: string;
 }> {
   await dbConnect();
-  const user = paramsIn.user;
+  let user = paramsIn.user;
   if (!user) throw new Error("User not found");
   assertBillingAllowed(user);
+
+  const refreshedUser =
+    user?._id && mongoose.isValidObjectId(user._id)
+      ? await User.findById(user._id)
+      : await ensureUserDoc(user.email);
+  if (refreshedUser) {
+    user = refreshedUser;
+  }
 
   const toNorm = normalize(paramsIn.to);
   if (!toNorm) throw new Error("Invalid destination phone number.");
