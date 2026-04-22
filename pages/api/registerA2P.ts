@@ -128,22 +128,6 @@ function isValidZip(value: string | undefined): boolean {
   return /^[0-9]{5}(-[0-9]{4})?$/.test(value.trim());
 }
 
-function ensureHasStopLanguage(text: string): boolean {
-  return /reply\s+stop/i.test(text) || /text\s+stop/i.test(text);
-}
-
-function ensureHasHelpLanguage(text: string): boolean {
-  return /\bhelp\b/i.test(text);
-}
-
-function ensureHasFrequency(text: string): boolean {
-  return /frequency\s+varies/i.test(text);
-}
-
-function ensureHasMsgDataRates(text: string): boolean {
-  return /msg\s*&\s*data\s*rates\s*may\s*apply/i.test(text);
-}
-
 function getRequestBaseUrl(req: NextApiRequest) {
   // ✅ Always correct in Vercel/proxies; prevents “calls localhost” and “start never hits”
   const proto = String(req.headers["x-forwarded-proto"] || "https");
@@ -308,18 +292,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (trimmed.length < 20 || trimmed.length > 320) {
       errors[key] = "Sample messages must be between 20 and 320 characters.";
     }
-    if (!ensureHasStopLanguage(trimmed)) {
-      errors[key] = 'Sample messages must include opt-out language like "Reply STOP to cancel".';
-    }
-    if (!ensureHasHelpLanguage(trimmed)) {
-      errors[key] = 'Sample messages must include HELP language (e.g., "HELP for help").';
-    }
-    if (!ensureHasFrequency(trimmed)) {
-      errors[key] = 'Sample messages must include message frequency (e.g., "Message frequency varies").';
-    }
-    if (!ensureHasMsgDataRates(trimmed)) {
-      errors[key] = 'Sample messages must include "Msg & data rates may apply." ';
-    }
   });
 
   if (!samplesFromFieldsRaw[0] && finalSamples.length) {
@@ -327,32 +299,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if ((m.length < 20 || m.length > 320) && !errors.sampleMessage1) {
         errors.sampleMessage1 = "Sample messages must be between 20 and 320 characters.";
       }
-      if (!ensureHasStopLanguage(m) && !errors.sampleMessage1) {
-        errors.sampleMessage1 = 'Sample messages must include opt-out language like "Reply STOP to cancel".';
-      }
-      if (!ensureHasHelpLanguage(m) && !errors.sampleMessage1) {
-        errors.sampleMessage1 = 'Sample messages must include HELP language (e.g., "HELP for help").';
-      }
-      if (!ensureHasFrequency(m) && !errors.sampleMessage1) {
-        errors.sampleMessage1 = 'Sample messages must include message frequency (e.g., "Message frequency varies").';
-      }
-      if (!ensureHasMsgDataRates(m) && !errors.sampleMessage1) {
-        errors.sampleMessage1 = 'Sample messages must include "Msg & data rates may apply." ';
-      }
     });
   }
 
   const optIn = (optInDetails || "").trim();
   if (!optIn) {
     errors.optInDetails = "Opt-in details are required.";
-  } else {
-    if (optIn.length < 300) {
-      errors.optInDetails =
-        "Opt-in description must be detailed (at least a few full sentences describing the form, disclosure, and consent).";
-    } else if (!/consent/i.test(optIn) || !/(by clicking|by entering)/i.test(optIn)) {
-      errors.optInDetails =
-        'Opt-in description must clearly state consent by clicking/entering info (e.g., "By entering your information and clicking... you consent...").';
-    }
   }
 
   const volDigits = (volume || "").replace(/[^\d]/g, "");

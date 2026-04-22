@@ -350,8 +350,6 @@ The opt-in page displays SMS Opt-In Terms and SMS Opt-In Privacy links on the sa
 
   // ---------- Helpers ----------
   const allMessages = [msg1, msg2, msg3].filter(Boolean).join("\n\n");
-  const ensureHasStopLanguage = (text: string) =>
-    /reply\s+stop/i.test(text) || /text\s+stop/i.test(text);
 
   const isUsState = (value: string) =>
     US_STATE_CODES.includes(value.trim().toUpperCase());
@@ -539,25 +537,11 @@ The opt-in page displays SMS Opt-In Terms and SMS Opt-In Privacy links on the sa
       if (trimmed.length < 20 || trimmed.length > 320) {
         newErrors[key] = "Sample messages must be between 20 and 320 characters.";
       }
-      if (!ensureHasStopLanguage(trimmed)) {
-        newErrors[key] = 'Sample messages must include opt-out language like "Reply STOP to opt out".';
-      }
     });
 
     const od = optInDetails.trim();
     if (!od) {
       newErrors.optInDetails = "Opt-in details are required.";
-    } else {
-      if (od.length < 300) {
-        newErrors.optInDetails =
-          "Opt-in description must be detailed (at least a few full sentences describing the form, disclosure, and consent).";
-      } else if (
-        !/consent/i.test(od) ||
-        !/(by clicking|by entering|by submitting|by checking the box|by providing)/i.test(od)
-      ) {
-        newErrors.optInDetails =
-          'Opt-in description must clearly state how the user gives consent (for example: by clicking, entering their information, submitting the form, checking the box, or providing their phone number).';
-      }
     }
 
     const volDigits = volume.replace(/[^\d]/g, "");
