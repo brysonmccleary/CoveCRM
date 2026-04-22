@@ -16,6 +16,8 @@ function formatPhoneNumber(number: string) {
 interface TwilioNumber {
   sid: string;
   phoneNumber: string;
+  _id?: string;
+  id?: string;
   subscriptionStatus: string;
   nextBillingDate: string | null;
   usage: {
@@ -43,6 +45,7 @@ export default function BuyNumberPanel() {
   const [selectedNumber, setSelectedNumber] = useState<AvailableNumber | null>(null);
   const [deleteConfirming, setDeleteConfirming] = useState(false);
   const [numberToDelete, setNumberToDelete] = useState<TwilioNumber | null>(null);
+  const [defaultId, setDefaultId] = useState<string | null>(null);
 
   const fetchOwnedNumbers = async () => {
     try {
@@ -53,8 +56,18 @@ export default function BuyNumberPanel() {
     }
   };
 
+  const fetchDefaultNumber = async () => {
+    try {
+      const res = await axios.get("/api/settings/default-number");
+      setDefaultId(res.data?.defaultSmsNumberId || null);
+    } catch (err) {
+      console.error("Error fetching default number", err);
+    }
+  };
+
   useEffect(() => {
     fetchOwnedNumbers();
+    fetchDefaultNumber();
   }, []);
 
   const fetchAvailableNumbers = async () => {
@@ -94,6 +107,7 @@ export default function BuyNumberPanel() {
     try {
       await axios.post("/api/twilio/buy-number", { number: numberToBuy.phoneNumber });
       await fetchOwnedNumbers();
+      await fetchDefaultNumber();
       alert(`Successfully purchased ${numberToBuy.phoneNumber}`);
     } catch (err: any) {
       console.error("Error purchasing number", err);
@@ -111,12 +125,23 @@ export default function BuyNumberPanel() {
         data: { phoneNumber: numberToDelete.phoneNumber },
       });
       await fetchOwnedNumbers();
+      await fetchDefaultNumber();
       alert(`Deleted ${numberToDelete.phoneNumber}`);
       setDeleteConfirming(false);
       setNumberToDelete(null);
     } catch (err) {
       console.error("Error deleting number", err);
       alert("Failed to delete number");
+    }
+  };
+
+  const handleSetPrimary = async (numberId: string) => {
+    try {
+      await axios.post("/api/settings/default-number", { numberId });
+      setDefaultId(numberId);
+    } catch (err) {
+      console.error("Error setting default number", err);
+      alert("Failed to set primary number");
     }
   };
 
@@ -163,14 +188,33 @@ export default function BuyNumberPanel() {
       <ul className="space-y-2">
         {ownedNumbers.map((num) => (
           <li key={num.sid} className="border p-3 rounded">
+            {(() => {
+              const numId = String(num._id || num.sid || num.id || "");
+              const isPrimary = defaultId === numId;
+              return (
+                <>
             <div className="flex justify-between items-center">
               <span className="font-medium">{formatPhoneNumber(num.phoneNumber)}</span>
-              <button
-                onClick={() => handleSelectDelete(num)}
-                className="bg-red-600 hover:bg-red-700 text-white px-2 py-1 rounded cursor-pointer"
-              >
-                Delete
-              </button>
+              <div className="flex items-center gap-2">
+                {isPrimary ? (
+                  <span className="bg-green-900/30 border border-green-800 text-green-300 px-2 py-1 rounded cursor-default text-sm">
+                    Primary
+                  </span>
+                ) : (
+                  <button
+                    onClick={() => handleSetPrimary(numId)}
+                    className="bg-[#1e293b] hover:bg-[#2d3f55] border border-white/10 text-gray-300 px-2 py-1 rounded cursor-pointer text-sm"
+                  >
+                    Set Primary
+                  </button>
+                )}
+                <button
+                  onClick={() => handleSelectDelete(num)}
+                  className="bg-red-600 hover:bg-red-700 text-white px-2 py-1 rounded cursor-pointer"
+                >
+                  Delete
+                </button>
+              </div>
             </div>
             <div className="text-sm text-gray-600 mt-1">
               <p>
@@ -186,6 +230,9 @@ export default function BuyNumberPanel() {
                 Texts: {num.usage.textsSent} sent / {num.usage.textsReceived} received
               </p>
             </div>
+                </>
+              );
+            })()}
           </li>
         ))}
       </ul>
