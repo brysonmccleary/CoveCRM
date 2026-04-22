@@ -488,7 +488,7 @@ export default async function handler(
       );
     }
 
-    // ---------- Save on user doc (with Twilio rollback on failure)
+    // ---------- Save on user doc
     user.numbers = user.numbers || [];
     user.numbers.push({
       sid: purchased.sid,
@@ -512,25 +512,19 @@ export default async function handler(
     try {
       await user.save();
     } catch (dbErr: any) {
-      // DB save failed after Twilio number was purchased — attempt rollback.
-      console.error("buy-number: DB save failed, attempting Twilio rollback", {
+      console.error("buy-number: DB save failed after Twilio acquisition", {
         email,
         purchasedSid,
         error: dbErr?.message,
       });
-      try {
-        await client.incomingPhoneNumbers(purchased.sid).remove();
-        console.info("buy-number: Twilio rollback succeeded", { purchasedSid });
-      } catch (rollbackErr: any) {
-        console.error("buy-number: Twilio rollback FAILED — manual cleanup required", {
-          purchasedSid,
-          error: rollbackErr?.message,
-        });
-      }
+      console.error("CRITICAL: number purchase failed AFTER acquisition. Number NOT released.", {
+        phoneNumber: purchased?.phoneNumber || null,
+        sid: purchased?.sid || purchasedSid || null,
+      });
       if (createdSubscriptionId) {
         try { await stripe.subscriptions.cancel(createdSubscriptionId); } catch {}
       }
-      return res.status(500).json({ message: "Failed to save number to account. The purchased number has been released." });
+      return res.status(500).json({ message: "Failed to save number to account after purchase." });
     }
 
     return res.status(200).json({
@@ -546,12 +540,12 @@ export default async function handler(
   } catch (err: any) {
     console.error("Buy number error:", err);
 
-    try {
-      if (purchasedSid) {
-        const { client } = await getClientForUser(session!.user!.email!);
-        await client.incomingPhoneNumbers(purchasedSid).remove();
-      }
-    } catch {}
+    if (purchasedSid) {
+      console.error("CRITICAL: number purchase failed AFTER acquisition. Number NOT released.", {
+        phoneNumber: null,
+        sid: purchasedSid || null,
+      });
+    }
     try {
       if (createdSubscriptionId)
         await stripe.subscriptions.cancel(createdSubscriptionId);
