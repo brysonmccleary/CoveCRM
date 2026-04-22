@@ -194,7 +194,11 @@ function NumbersPage() {
                       >
                         {checkingSpam === number.phoneNumber ? "Checking..." : "Check Spam"}
                       </button>
-                      {!isDefault && (
+                      {isDefault ? (
+                        <span className="text-xs bg-green-900/30 border border-green-800 text-green-300 px-3 py-1.5 rounded-lg cursor-default">
+                          Primary
+                        </span>
+                      ) : (
                         <button
                           onClick={() => setDefault(numId)}
                           disabled={savingDefault}
