@@ -6,6 +6,7 @@ import User from "@/models/User";
 import PhoneNumber from "@/models/PhoneNumber";
 import { stripe } from "@/lib/stripe";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
+import { resolvePreferredSmsDefault } from "@/lib/twilio/resolvePreferredSmsDefault";
 
 type Json = Record<string, any>;
 
@@ -147,11 +148,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       (n: any) => n?.phoneNumber !== normalized && n?.phoneNumber !== String(rawPhoneParam),
     );
     if (removedWasDefault) {
-      const nextNumber = Array.isArray(user.numbers) ? user.numbers[0] : null;
-      user.defaultSmsNumberId = nextNumber
-        ? String((nextNumber as any)?._id || nextNumber.sid || "")
-        : null;
+      user.defaultSmsNumberId = null;
     }
+    await resolvePreferredSmsDefault(user, { save: false });
     await user.save();
 
     try {

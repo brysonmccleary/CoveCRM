@@ -11,6 +11,8 @@ import { getTimezoneFromState } from "@/utils/timezone";
 import { getClientForUser } from "./getClientForUser";
 import { syncA2PForUser } from "@/lib/twilio/syncA2P";
 import { queueLeadMemoryHook } from "@/lib/ai/memory/queueLeadMemoryHook";
+import { reconcileUserNumbers } from "@/lib/twilio/reconcileUserNumbers";
+import { resolvePreferredSmsDefault } from "@/lib/twilio/resolvePreferredSmsDefault";
 import type { MessageListInstanceCreateOptions } from "twilio/lib/rest/api/v2010/account/message";
 
 const BASE_URL = (
@@ -276,7 +278,19 @@ async function sendCore(
   if (!user) throw new Error("User not found");
   assertBillingAllowed(user);
 
-  const refreshedUser =
+  await reconcileUserNumbers(user, user.email);
+
+  let refreshedUser =
+    user?._id && mongoose.isValidObjectId(user._id)
+      ? await User.findById(user._id)
+      : await ensureUserDoc(user.email);
+  if (refreshedUser) {
+    user = refreshedUser;
+  }
+
+  await resolvePreferredSmsDefault(user);
+
+  refreshedUser =
     user?._id && mongoose.isValidObjectId(user._id)
       ? await User.findById(user._id)
       : await ensureUserDoc(user.email);

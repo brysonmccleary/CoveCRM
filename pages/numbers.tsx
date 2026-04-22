@@ -136,64 +136,6 @@ function NumbersPage() {
       <div className="p-4 space-y-6">
         <h1 className="text-2xl font-bold">Manage Numbers</h1>
 
-        {/* Primary SMS Number */}
-        {!loading && numbers.length > 0 && (
-          <div className="bg-[#0f172a] border border-white/10 rounded-xl p-5">
-            <h2 className="text-base font-semibold text-white mb-1">Primary SMS Number</h2>
-            <p className="text-xs text-gray-400 mb-4">
-              Choose which number sends outbound SMS by default. Outbound SMS uses only the specifically assigned primary number. If no primary is set, sends that rely on a default will fail instead of switching to another number.
-            </p>
-            <div className="space-y-2">
-              <label className="flex items-center gap-3 bg-[#1e293b] rounded-lg px-4 py-2.5 cursor-pointer border border-white/10 hover:border-indigo-500 transition">
-                <input
-                  type="radio"
-                  name="primaryNumber"
-                  checked={!defaultId}
-                  onChange={() => setDefault(null)}
-                  className="accent-indigo-500"
-                  disabled={savingDefault}
-                />
-                <span className="text-gray-400 text-sm">No primary selected (sending will fail until one is assigned)</span>
-              </label>
-              {numbers.map((num) => {
-                const id = num._id || num.sid || num.id;
-                const isPrimary = defaultId === id;
-                const justConfirmed = confirmedId === id;
-                return (
-                  <label
-                    key={id}
-                    className={`flex items-center gap-3 rounded-lg px-4 py-2.5 cursor-pointer border transition ${
-                      isPrimary
-                        ? "bg-indigo-900/20 border-indigo-500"
-                        : "bg-[#1e293b] border-white/10 hover:border-indigo-500"
-                    }`}
-                  >
-                    <input
-                      type="radio"
-                      name="primaryNumber"
-                      checked={isPrimary}
-                      onChange={() => setDefault(id)}
-                      className="accent-indigo-500"
-                      disabled={savingDefault}
-                    />
-                    <span className="text-white text-sm font-medium flex-1">{num.phoneNumber}</span>
-                    {justConfirmed && (
-                      <span className="text-xs bg-blue-800 text-blue-300 px-2 py-0.5 rounded-full font-semibold animate-pulse">
-                        ✓ Updated
-                      </span>
-                    )}
-                    {isPrimary && !justConfirmed && (
-                      <span className="text-xs bg-green-800 text-green-300 px-2 py-0.5 rounded-full font-semibold">
-                        ✓ Primary
-                      </span>
-                    )}
-                  </label>
-                );
-              })}
-            </div>
-          </div>
-        )}
-
         <NumberPurchasePanel />
 
         <div>
@@ -245,15 +187,6 @@ function NumbersPage() {
                       )}
                     </div>
                     <div className="flex gap-2">
-                      {!isDefault && (
-                        <button
-                          onClick={() => setDefault(numId)}
-                          disabled={savingDefault}
-                          className="text-xs bg-indigo-900/30 hover:bg-indigo-900/60 border border-indigo-700 text-indigo-300 px-3 py-1.5 rounded-lg disabled:opacity-50"
-                        >
-                          Set as Primary
-                        </button>
-                      )}
                       <button
                         onClick={() => checkSpam(number.phoneNumber)}
                         disabled={checkingSpam === number.phoneNumber}
@@ -261,12 +194,21 @@ function NumbersPage() {
                       >
                         {checkingSpam === number.phoneNumber ? "Checking..." : "Check Spam"}
                       </button>
+                      {!isDefault && (
+                        <button
+                          onClick={() => setDefault(numId)}
+                          disabled={savingDefault}
+                          className="text-xs bg-[#1e293b] hover:bg-[#2d3f55] border border-white/10 text-gray-300 px-3 py-1.5 rounded-lg disabled:opacity-50"
+                        >
+                          Set Primary
+                        </button>
+                      )}
                       <button
                         onClick={() => handleRelease(number.phoneNumber, false)}
                         disabled={releasing}
                         className="text-xs bg-red-900/30 hover:bg-red-900/50 border border-red-800 text-red-300 px-3 py-1.5 rounded-lg disabled:opacity-50"
                       >
-                        Release
+                        Delete
                       </button>
                     </div>
                   </li>
