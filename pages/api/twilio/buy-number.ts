@@ -14,6 +14,7 @@ import { resolvePreferredSmsDefault } from "@/lib/twilio/resolvePreferredSmsDefa
 // $/mo price for a phone number (platform-billed users)
 const PHONE_PRICE_ID =
   process.env.STRIPE_PHONE_PRICE_ID || "price_1RpvR9DF9aEsjVyJk9GiJkpe";
+const PHONE_SUBSCRIPTION_PURPOSE = "phone_number";
 
 const BASE_URL = (
   process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "http://localhost:3000"
@@ -59,6 +60,22 @@ function canBypassNumberPurchaseBilling(user: any, email: string): boolean {
       user?.role === "owner" ||
       INTERNAL_NUMBER_PURCHASE_BYPASS_EMAILS.includes(normalizedEmail),
   );
+}
+
+function buildPhoneSubscriptionMetadata(args: {
+  requestedNumber?: string;
+  areaCode?: string | number;
+  email: string;
+  userId: string;
+}) {
+  const { requestedNumber, areaCode, email, userId } = args;
+  return {
+    purpose: PHONE_SUBSCRIPTION_PURPOSE,
+    phoneBilling: "true",
+    phoneNumber: requestedNumber || `areaCode:${areaCode ?? ""}`,
+    userEmail: email,
+    userId,
+  };
 }
 
 /**
@@ -302,39 +319,34 @@ export default async function handler(
         });
       }
 
-      const customerId = user.stripeCustomerId;
-      const existingSubs = await stripe.subscriptions.list({
-        customer: customerId,
-        status: "all",
-        limit: 5,
+      const subscription = await stripe.subscriptions.create({
+        customer: user.stripeCustomerId,
+        items: [{ price: PHONE_PRICE_ID }],
+        metadata: buildPhoneSubscriptionMetadata({
+          requestedNumber,
+          areaCode,
+          email: user.email,
+          userId: String(user._id),
+        }),
       });
-
-      const reusable = existingSubs.data.find(sub =>
-        ["active", "trialing", "past_due"].includes(sub.status)
-      );
-
-      let subscription;
-
-      if (!reusable) {
-        subscription = await stripe.subscriptions.create({
-          customer: user.stripeCustomerId,
-          items: [{ price: PHONE_PRICE_ID }],
-          metadata: {
-            phoneNumber: requestedNumber || `areaCode:${areaCode ?? ""}`,
-            userEmail: user.email,
-          },
-        });
-      } else {
-        console.log("[STRIPE] Using existing subscription:", reusable.id);
-        subscription = reusable;
-      }
 
       if (!subscription?.id) throw new Error("Stripe subscription failed");
       createdSubscriptionId = subscription.id;
 
+      console.info(
+        JSON.stringify({
+          msg: "buy-number: attached dedicated phone subscription",
+          email,
+          userId: String(user._id),
+          subscriptionId: createdSubscriptionId,
+          phoneNumber: requestedNumber || null,
+          areaCode: areaCode ?? null,
+        }),
+      );
+
       // Guard: if the initial payment failed the subscription will be "incomplete".
       // Do NOT proceed to Twilio purchase if payment was not confirmed.
-      if (!reusable && subscription.status !== "active" && subscription.status !== "trialing") {
+      if (subscription.status !== "active" && subscription.status !== "trialing") {
         try { await stripe.subscriptions.cancel(subscription.id); } catch {}
         createdSubscriptionId = undefined;
         return res.status(402).json({
@@ -506,6 +518,17 @@ export default async function handler(
           (purchased as any).capabilities?.MMS ?? purchased.capabilities?.mms,
       },
     } as any);
+    if (createdSubscriptionId) {
+      console.info(
+        JSON.stringify({
+          msg: "buy-number: saved phone subscription linkage on number",
+          email,
+          userId: String(user._id),
+          subscriptionId: createdSubscriptionId,
+          phoneNumber: purchased.phoneNumber!,
+        }),
+      );
+    }
     await resolvePreferredSmsDefault(user, { save: false });
     user.a2p = user.a2p || ({} as any);
     if (targetMS) (user.a2p as any).messagingServiceSid = targetMS;
