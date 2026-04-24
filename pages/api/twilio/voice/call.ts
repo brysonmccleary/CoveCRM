@@ -20,9 +20,22 @@ const voiceContinueUrl = (conference: string) =>
 const voiceStatusUrl = (email: string) =>
   `${BASE}/api/twilio/voice-status?userEmail=${encodeURIComponent(email.toLowerCase())}`;
 
+function normalizeUSPhoneForCall(value: string): string {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  if (/^\+1\d{10}$/.test(raw)) return raw;
+  const digits = raw.replace(/\D/g, "");
+  if (digits.length === 10) return `+1${digits}`;
+  if (digits.length === 11 && digits.startsWith("1")) return `+${digits}`;
+  return "";
+}
+
 function normalizeE164(p?: string) {
   const raw = String(p || "").trim();
   if (!raw) return "";
+
+  const normalizedUs = normalizeUSPhoneForCall(raw);
+  if (normalizedUs) return normalizedUs;
 
   // If already +E164-ish, validate it has enough digits
   if (raw.startsWith("+")) {
