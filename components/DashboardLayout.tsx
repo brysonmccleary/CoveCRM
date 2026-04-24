@@ -42,6 +42,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       { name: "FB Leads", path: "/facebook-leads" },
       { name: "Recruiting", path: "/recruiting" },
       { name: "Admin: Prospecting", path: "/admin/prospecting" },
+      { name: "Admin: Site Intelligence", path: "/admin/site-intelligence" },
     ] : []),
   ];
 
