@@ -1,9 +1,9 @@
 import Head from "next/head";
 import Link from "next/link";
+import { useEffect, useMemo, useState } from "react";
 import { useSession } from "next-auth/react";
 import DashboardLayout from "@/components/DashboardLayout";
-
-const ADMIN_EMAIL = "bryson.mccleary1@gmail.com";
+import { isExperimentalAdminEmail } from "@/lib/isExperimentalAdmin";
 
 const reviewItems = [
   "CTA clicks",
@@ -45,11 +45,108 @@ const dailyChecklist = [
   "Check mobile errors",
 ];
 
+type ClarityInsightsResponse = {
+  waiting?: boolean;
+  error?: string;
+  summary?: {
+    visitors?: number;
+    uniqueVisitors?: number;
+    engagementTime?: number;
+    scrollDepth?: number;
+    rageClicks?: number;
+    deadClicks?: number;
+  } | null;
+  topUrls?: Array<{ url: string; traffic: number }>;
+  devices?: {
+    breakdown?: Array<{ device: string; traffic: number }>;
+    mobile?: number;
+    desktop?: number;
+  };
+  metricNames?: string[];
+  responseShape?: string;
+};
+
+function formatNumber(value?: number) {
+  const safe = Number(value || 0);
+  return new Intl.NumberFormat("en-US").format(safe);
+}
+
+function formatEngagementTime(value?: number) {
+  const totalSeconds = Math.max(0, Math.round(Number(value || 0)));
+  if (!totalSeconds) return "0s";
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return seconds ? `${minutes}m ${seconds}s` : `${minutes}m`;
+}
+
 export default function SiteIntelligencePage() {
   const { data: session, status } = useSession();
+  const [clarity, setClarity] = useState<ClarityInsightsResponse | null>(null);
+  const [loadingInsights, setLoadingInsights] = useState(false);
 
   const email = String(session?.user?.email || "").toLowerCase();
-  const isAdmin = email === ADMIN_EMAIL;
+  const isAdmin = isExperimentalAdminEmail(email);
+
+  useEffect(() => {
+    if (!isAdmin) return;
+
+    let active = true;
+    const loadInsights = async () => {
+      try {
+        setLoadingInsights(true);
+        const res = await fetch("/api/admin/clarity-insights");
+        const data = (await res.json()) as ClarityInsightsResponse;
+        if (!active) return;
+        setClarity(data);
+      } catch (error: any) {
+        if (!active) return;
+        setClarity({
+          waiting: true,
+          error: error?.message || "Failed to load Clarity insights.",
+        });
+      } finally {
+        if (active) setLoadingInsights(false);
+      }
+    };
+
+    loadInsights();
+    return () => {
+      active = false;
+    };
+  }, [isAdmin]);
+
+  const metricCards = useMemo(() => {
+    const summary = clarity?.summary || {};
+    const devices = clarity?.devices || {};
+    return [
+      {
+        label: "Visitors / Traffic",
+        value: formatNumber(summary.visitors),
+        subtext: `Unique visitors: ${formatNumber(summary.uniqueVisitors)}`,
+      },
+      {
+        label: "Engagement Time",
+        value: formatEngagementTime(summary.engagementTime),
+        subtext: "Last 1 day from Clarity export",
+      },
+      {
+        label: "Scroll Depth",
+        value: formatNumber(summary.scrollDepth),
+        subtext: "Clarity export aggregate",
+      },
+      {
+        label: "Frustration Clicks",
+        value: `${formatNumber(summary.rageClicks)} / ${formatNumber(summary.deadClicks)}`,
+        subtext: "Rage clicks / dead clicks",
+      },
+      {
+        label: "Mobile vs Desktop",
+        value: `${formatNumber(devices.mobile)} / ${formatNumber(devices.desktop)}`,
+        subtext: "Mobile traffic / desktop traffic",
+      },
+    ];
+  }, [clarity]);
 
   if (status === "loading") {
     return (
@@ -107,6 +204,130 @@ export default function SiteIntelligencePage() {
                 Open Microsoft Clarity
               </Link>
             </div>
+          </div>
+
+          <div className="rounded-[28px] border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-950">
+            <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.24em] text-emerald-600 dark:text-emerald-400">
+                  Live Clarity Metrics
+                </p>
+                <h2 className="mt-2 text-2xl font-semibold text-slate-900 dark:text-white">
+                  Last 1 Day Snapshot
+                </h2>
+                <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
+                  Pulled server-side from the Microsoft Clarity Data Export API using URL and device breakdowns.
+                </p>
+              </div>
+              {clarity?.responseShape ? (
+                <p className="max-w-md text-xs leading-5 text-slate-500 dark:text-slate-400">
+                  {clarity.responseShape}
+                </p>
+              ) : null}
+            </div>
+
+            {loadingInsights ? (
+              <div className="mt-6 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-600 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300">
+                Loading Clarity insights...
+              </div>
+            ) : clarity?.waiting ? (
+              <div className="mt-6 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-5 text-sm text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-200">
+                {clarity.error || "Waiting for Clarity data."}
+              </div>
+            ) : clarity?.error ? (
+              <div className="mt-6 rounded-2xl border border-red-200 bg-red-50 px-4 py-5 text-sm text-red-700 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-200">
+                {clarity.error}
+              </div>
+            ) : (
+              <div className="mt-6 space-y-6">
+                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+                  {metricCards.map((card) => (
+                    <div
+                      key={card.label}
+                      className="rounded-[22px] border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-900"
+                    >
+                      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+                        {card.label}
+                      </p>
+                      <p className="mt-3 text-2xl font-semibold text-slate-900 dark:text-white">
+                        {card.value}
+                      </p>
+                      <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
+                        {card.subtext}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="grid gap-5 lg:grid-cols-2">
+                  <section className="rounded-[24px] border border-slate-200 bg-slate-50 p-5 dark:border-slate-800 dark:bg-slate-900">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <h3 className="text-lg font-semibold text-slate-900 dark:text-white">
+                          Top URLs
+                        </h3>
+                        <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
+                          Highest traffic URLs in the last day.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="mt-5 space-y-3">
+                      {(clarity?.topUrls || []).length ? (
+                        (clarity?.topUrls || []).map((item) => (
+                          <div
+                            key={item.url}
+                            className="flex items-start justify-between gap-4 rounded-2xl border border-slate-200 bg-white px-4 py-3 dark:border-slate-800 dark:bg-slate-950"
+                          >
+                            <span className="min-w-0 break-all text-sm text-slate-700 dark:text-slate-200">
+                              {item.url}
+                            </span>
+                            <span className="whitespace-nowrap text-sm font-semibold text-slate-900 dark:text-white">
+                              {formatNumber(item.traffic)}
+                            </span>
+                          </div>
+                        ))
+                      ) : (
+                        <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-300">
+                          Waiting for Clarity data.
+                        </div>
+                      )}
+                    </div>
+                  </section>
+
+                  <section className="rounded-[24px] border border-slate-200 bg-slate-50 p-5 dark:border-slate-800 dark:bg-slate-900">
+                    <h3 className="text-lg font-semibold text-slate-900 dark:text-white">
+                      Device Breakdown
+                    </h3>
+                    <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
+                      Traffic by device value returned from Clarity.
+                    </p>
+
+                    <div className="mt-5 space-y-3">
+                      {(clarity?.devices?.breakdown || []).length ? (
+                        (clarity?.devices?.breakdown || []).map((item) => (
+                          <div
+                            key={item.device}
+                            className="flex items-center justify-between gap-4 rounded-2xl border border-slate-200 bg-white px-4 py-3 dark:border-slate-800 dark:bg-slate-950"
+                          >
+                            <span className="text-sm text-slate-700 dark:text-slate-200">
+                              {item.device}
+                            </span>
+                            <span className="text-sm font-semibold text-slate-900 dark:text-white">
+                              {formatNumber(item.traffic)}
+                            </span>
+                          </div>
+                        ))
+                      ) : (
+                        <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-300">
+                          Waiting for Clarity device data.
+                        </div>
+                      )}
+                    </div>
+                  </section>
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="grid gap-5 xl:grid-cols-3">
