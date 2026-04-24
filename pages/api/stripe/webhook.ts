@@ -116,6 +116,215 @@ const audit = (msg: string, extra?: Record<string, unknown>) => {
   } catch {}
 };
 
+async function releasePhoneNumbersForSubscription(args: {
+  subscriptionId?: string | null;
+  customerId?: string | null;
+  reason: "payment_failed" | "subscription_deleted";
+  cancelStripeSubscription?: boolean;
+}) {
+  const { subscriptionId, customerId, reason, cancelStripeSubscription = false } = args;
+
+  const phoneSubscriptionCheck = await isPhoneNumberSubscription(subscriptionId);
+  if (!phoneSubscriptionCheck.ok) {
+    audit(`${reason}: skip number cleanup`, {
+      subscriptionId: subscriptionId || null,
+      customerId: customerId || null,
+      reason: phoneSubscriptionCheck.reason,
+    });
+    return;
+  }
+
+  const phoneSub = phoneSubscriptionCheck.sub;
+  const phoneSubCustomerId =
+    typeof phoneSub?.customer === "string" ? phoneSub.customer : phoneSub?.customer?.id || "";
+
+  const userQuery: Record<string, unknown> = {
+    "numbers.subscriptionId": subscriptionId,
+  };
+  if (customerId) {
+    userQuery.stripeCustomerId = customerId;
+  }
+
+  const users = await User.find(userQuery);
+  for (const user of users) {
+    const number: any = (user as any).numbers?.find(
+      (n: any) => n.subscriptionId === subscriptionId,
+    );
+    if (!number) continue;
+
+    const normalizedEmail = L(user.email || "");
+    const normalizedPhoneNumber = String(number.phoneNumber || "");
+    const normalizedUserId = String((user as any)._id || "");
+
+    if (canBypassNumberPurchaseBilling(user, user.email)) {
+      audit(`${reason}: skip bypass user number release`, {
+        subscriptionId,
+        userId: normalizedUserId,
+        email: normalizedEmail,
+        phoneNumber: normalizedPhoneNumber || null,
+      });
+      continue;
+    }
+
+    if (customerId && String((user as any).stripeCustomerId || "") !== String(customerId)) {
+      audit("number release skipped due to ownership mismatch", {
+        eventReason: reason,
+        subscriptionId,
+        customerId,
+        userId: normalizedUserId,
+        email: normalizedEmail,
+        phoneNumber: normalizedPhoneNumber || null,
+        mismatch: "user_customer_mismatch",
+      });
+      continue;
+    }
+
+    if (phoneSubCustomerId && phoneSubCustomerId !== String((user as any).stripeCustomerId || "")) {
+      audit("number release skipped due to ownership mismatch", {
+        eventReason: reason,
+        subscriptionId,
+        customerId: customerId || null,
+        subscriptionCustomerId: phoneSubCustomerId,
+        userId: normalizedUserId,
+        email: normalizedEmail,
+        phoneNumber: normalizedPhoneNumber || null,
+        mismatch: "subscription_customer_mismatch",
+      });
+      continue;
+    }
+
+    const phoneDoc = await PhoneNumber.findOne({
+      phoneNumber: normalizedPhoneNumber,
+    })
+      .select("userId twilioSid phoneNumber")
+      .lean();
+
+    if (phoneDoc && String((phoneDoc as any).userId || "") !== normalizedUserId) {
+      audit("number release skipped due to ownership mismatch", {
+        eventReason: reason,
+        subscriptionId,
+        userId: normalizedUserId,
+        email: normalizedEmail,
+        phoneNumber: normalizedPhoneNumber || null,
+        mismatch: "phone_doc_owner_mismatch",
+      });
+      continue;
+    }
+
+    if (phoneSub?.metadata?.userId && String(phoneSub.metadata.userId) !== normalizedUserId) {
+      audit("number release skipped due to ownership mismatch", {
+        eventReason: reason,
+        subscriptionId,
+        userId: normalizedUserId,
+        email: normalizedEmail,
+        phoneNumber: normalizedPhoneNumber || null,
+        mismatch: "subscription_user_id_mismatch",
+      });
+      continue;
+    }
+
+    if (phoneSub?.metadata?.userEmail && L(phoneSub.metadata.userEmail) !== normalizedEmail) {
+      audit(`${reason}: skip number release due to subscription email mismatch`, {
+        subscriptionId,
+        userId: normalizedUserId,
+        email: normalizedEmail,
+        subscriptionEmail: L(phoneSub.metadata.userEmail),
+        phoneNumber: normalizedPhoneNumber || null,
+      });
+      continue;
+    }
+
+    if (
+      phoneSub?.metadata?.phoneNumber &&
+      String(phoneSub.metadata.phoneNumber) !== normalizedPhoneNumber
+    ) {
+      audit(`${reason}: skip number release due to subscription phone mismatch`, {
+        subscriptionId,
+        userId: normalizedUserId,
+        email: normalizedEmail,
+        phoneNumber: normalizedPhoneNumber || null,
+        subscriptionPhoneNumber: String(phoneSub.metadata.phoneNumber),
+      });
+      continue;
+    }
+
+    let resolvedClient: Awaited<ReturnType<typeof getClientForUser>> | null = null;
+    try {
+      resolvedClient = await getClientForUser(normalizedEmail);
+    } catch (e: any) {
+      audit(`${reason}: skip number release due to Twilio client resolution failure`, {
+        subscriptionId,
+        userId: normalizedUserId,
+        email: normalizedEmail,
+        phoneNumber: normalizedPhoneNumber || null,
+        reason: e?.message || String(e),
+      });
+      continue;
+    }
+
+    const candidateSid =
+      String((phoneDoc as any)?.twilioSid || number.sid || "").trim() || undefined;
+    if (!candidateSid && !normalizedPhoneNumber) {
+      audit(`${reason}: skip number release due to missing number identity`, {
+        subscriptionId,
+        userId: normalizedUserId,
+        email: normalizedEmail,
+      });
+      continue;
+    }
+
+    try {
+      if (candidateSid) {
+        await (resolvedClient.client as any).incomingPhoneNumbers(candidateSid).remove();
+      } else {
+        const matches = await resolvedClient.client.incomingPhoneNumbers.list({
+          phoneNumber: normalizedPhoneNumber,
+          limit: 1,
+        });
+        if (!matches.length) {
+          throw new Error("number_not_found_in_tenant_twilio");
+        }
+        await (resolvedClient.client as any)
+          .incomingPhoneNumbers(matches[0].sid)
+          .remove();
+      }
+    } catch (e: any) {
+      audit("number release failed in Twilio", {
+        eventReason: reason,
+        subscriptionId,
+        userId: normalizedUserId,
+        email: normalizedEmail,
+        phoneNumber: normalizedPhoneNumber || null,
+        reason: e?.message || String(e),
+      });
+      continue;
+    }
+
+    if (cancelStripeSubscription && subscriptionId) {
+      try {
+        await stripe.subscriptions.cancel(subscriptionId);
+      } catch {}
+    }
+
+    (user as any).numbers = (user as any).numbers.filter(
+      (n: any) => n.subscriptionId !== subscriptionId,
+    );
+    await user.save();
+
+    await PhoneNumber.deleteOne({
+      phoneNumber: normalizedPhoneNumber,
+      userId: (user as any)._id,
+    });
+
+    audit(`number released due to ${reason}`, {
+      subscriptionId,
+      userId: normalizedUserId,
+      email: normalizedEmail,
+      phoneNumber: normalizedPhoneNumber || null,
+    });
+  }
+}
+
 /* ──────────────────────────────────────────────────────────────────────────── */
 /* Affiliate helpers (existing behavior preserved; targeted adjustments only)   */
 /* ──────────────────────────────────────────────────────────────────────────── */
@@ -1088,6 +1297,17 @@ export default async function handler(
           }
         }
 
+        try {
+          await releasePhoneNumbersForSubscription({
+            subscriptionId: sub.id,
+            customerId,
+            reason: "subscription_deleted",
+            cancelStripeSubscription: false,
+          });
+        } catch (e) {
+          console.error("customer.subscription.deleted phone cleanup error:", e);
+        }
+
         break;
       }
 
@@ -1097,152 +1317,12 @@ export default async function handler(
         const customerId = inv.customer as string | undefined;
 
         try {
-          const phoneSubscriptionCheck = await isPhoneNumberSubscription(subscriptionId);
-          if (!phoneSubscriptionCheck.ok) {
-            audit("invoice.payment_failed: skip number cleanup", {
-              subscriptionId,
-              customerId: customerId || null,
-              reason: phoneSubscriptionCheck.reason,
-            });
-          } else {
-            const phoneSub = phoneSubscriptionCheck.sub;
-            const users = await User.find({
-              "numbers.subscriptionId": subscriptionId,
-            });
-            for (const user of users) {
-              const number: any = (user as any).numbers?.find(
-                (n: any) => n.subscriptionId === subscriptionId,
-              );
-              if (!number) continue;
-
-              if (canBypassNumberPurchaseBilling(user, user.email)) {
-                audit("invoice.payment_failed: skip bypass user number release", {
-                  subscriptionId,
-                  userId: String((user as any)._id || ""),
-                  email: L(user.email || ""),
-                  phoneNumber: number.phoneNumber || null,
-                });
-                continue;
-              }
-
-              const normalizedEmail = L(user.email || "");
-              const normalizedPhoneNumber = String(number.phoneNumber || "");
-              const phoneDoc = await PhoneNumber.findOne({
-                phoneNumber: normalizedPhoneNumber,
-              })
-                .select("userId twilioSid phoneNumber")
-                .lean();
-
-              if (phoneDoc && String((phoneDoc as any).userId || "") !== String((user as any)._id || "")) {
-                audit("invoice.payment_failed: skip number release due to ownership mismatch", {
-                  subscriptionId,
-                  userId: String((user as any)._id || ""),
-                  email: normalizedEmail,
-                  phoneNumber: normalizedPhoneNumber,
-                });
-                continue;
-              }
-
-              if (phoneSub?.metadata?.userEmail && L(phoneSub.metadata.userEmail) !== normalizedEmail) {
-                audit("invoice.payment_failed: skip number release due to subscription email mismatch", {
-                  subscriptionId,
-                  userId: String((user as any)._id || ""),
-                  email: normalizedEmail,
-                  subscriptionEmail: L(phoneSub.metadata.userEmail),
-                  phoneNumber: normalizedPhoneNumber,
-                });
-                continue;
-              }
-
-              if (
-                phoneSub?.metadata?.phoneNumber &&
-                String(phoneSub.metadata.phoneNumber) !== normalizedPhoneNumber
-              ) {
-                audit("invoice.payment_failed: skip number release due to subscription phone mismatch", {
-                  subscriptionId,
-                  userId: String((user as any)._id || ""),
-                  email: normalizedEmail,
-                  phoneNumber: normalizedPhoneNumber,
-                  subscriptionPhoneNumber: String(phoneSub.metadata.phoneNumber),
-                });
-                continue;
-              }
-
-              let resolvedClient: Awaited<ReturnType<typeof getClientForUser>> | null = null;
-              try {
-                resolvedClient = await getClientForUser(normalizedEmail);
-                audit("invoice.payment_failed: resolved tenant Twilio client", {
-                  subscriptionId,
-                  userId: String((user as any)._id || ""),
-                  email: normalizedEmail,
-                  phoneNumber: normalizedPhoneNumber,
-                  accountSid: resolvedClient.accountSid,
-                });
-              } catch (e: any) {
-                audit("invoice.payment_failed: skip number release due to Twilio client resolution failure", {
-                  subscriptionId,
-                  userId: String((user as any)._id || ""),
-                  email: normalizedEmail,
-                  phoneNumber: normalizedPhoneNumber,
-                  reason: e?.message || String(e),
-                });
-                continue;
-              }
-
-              const candidateSid =
-                String((phoneDoc as any)?.twilioSid || number.sid || "").trim() || undefined;
-              if (!candidateSid && !normalizedPhoneNumber) {
-                audit("invoice.payment_failed: skip number release due to missing number identity", {
-                  subscriptionId,
-                  userId: String((user as any)._id || ""),
-                  email: normalizedEmail,
-                });
-                continue;
-              }
-
-              try {
-                if (candidateSid) {
-                  await (resolvedClient.client as any).incomingPhoneNumbers(candidateSid).remove();
-                } else {
-                  const matches = await resolvedClient.client.incomingPhoneNumbers.list({
-                    phoneNumber: normalizedPhoneNumber,
-                    limit: 1,
-                  });
-                  if (!matches.length) {
-                    throw new Error("number_not_found_in_tenant_twilio");
-                  }
-                  await (resolvedClient.client as any)
-                    .incomingPhoneNumbers(matches[0].sid)
-                    .remove();
-                }
-              } catch (e: any) {
-                audit("invoice.payment_failed: Twilio release failed; skipping DB removal", {
-                  subscriptionId,
-                  userId: String((user as any)._id || ""),
-                  email: normalizedEmail,
-                  phoneNumber: normalizedPhoneNumber,
-                  reason: e?.message || String(e),
-                });
-                continue;
-              }
-
-              try {
-                await stripe.subscriptions.cancel(subscriptionId);
-              } catch {}
-
-              (user as any).numbers = (user as any).numbers.filter(
-                (n: any) => n.subscriptionId !== subscriptionId,
-              );
-              await user.save();
-
-              audit("invoice.payment_failed: released phone number after confirmed phone subscription failure", {
-                subscriptionId,
-                userId: String((user as any)._id || ""),
-                email: normalizedEmail,
-                phoneNumber: normalizedPhoneNumber,
-              });
-            }
-          }
+          await releasePhoneNumbersForSubscription({
+            subscriptionId,
+            customerId: customerId || null,
+            reason: "payment_failed",
+            cancelStripeSubscription: false,
+          });
         } catch (e) {
           console.error("invoice.payment_failed cleanup error:", e);
         }

@@ -11,6 +11,7 @@ import { getClientForUser } from "@/lib/twilio/getClientForUser";
 
 const PHONE_PRICE_ID =
   process.env.STRIPE_PHONE_PRICE_ID || "price_1RpvR9DF9aEsjVyJk9GiJkpe";
+const PHONE_SUBSCRIPTION_PURPOSE = "phone_number";
 
 const BASE_URL = (
   process.env.NEXT_PUBLIC_BASE_URL ||
@@ -30,6 +31,16 @@ const MOBILE_JWT_SECRET =
   process.env.NEXTAUTH_SECRET ||
   "dev-mobile-secret";
 
+const INTERNAL_NUMBER_PURCHASE_BYPASS_EMAILS = [
+  "support@covecrm.com",
+  "admin@covecrm.com",
+  "bryson.mccleary1@gmail.com",
+  ...(process.env.INTERNAL_TWILIO_NUMBER_PURCHASE_BYPASS_EMAILS || "")
+    .split(",")
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean),
+];
+
 /** Normalize to E.164 (+1XXXXXXXXXX) */
 function normalizeE164(p: string) {
   const digits = (p || "").replace(/\D/g, "");
@@ -44,6 +55,152 @@ function maskSid(sid?: string): string | null {
   if (!sid) return null;
   if (sid.length <= 6) return sid;
   return `${sid.slice(0, 4)}…${sid.slice(-4)}`;
+}
+
+function canBypassNumberPurchaseBilling(user: any, email: string): boolean {
+  const normalizedEmail = String(email || "").toLowerCase();
+  return Boolean(
+    user?.isOwner === true ||
+      user?.role === "owner" ||
+      INTERNAL_NUMBER_PURCHASE_BYPASS_EMAILS.includes(normalizedEmail),
+  );
+}
+
+function buildPhoneSubscriptionMetadata(args: {
+  requestedNumber?: string;
+  areaCode?: string | number;
+  email: string;
+  userId: string;
+}) {
+  const { requestedNumber, areaCode, email, userId } = args;
+  return {
+    purpose: PHONE_SUBSCRIPTION_PURPOSE,
+    phoneBilling: "true",
+    phoneNumber: requestedNumber || `areaCode:${areaCode ?? ""}`,
+    userEmail: email,
+    userId,
+  };
+}
+
+function isPhoneSubscriptionCandidate(sub: Stripe.Subscription | null | undefined) {
+  if (!sub) return false;
+  const metadata = sub.metadata || {};
+  const purpose = String(metadata.purpose || "").trim().toLowerCase();
+  const phoneBilling = String(metadata.phoneBilling || "").trim().toLowerCase();
+  const hasPhonePrice = (sub.items?.data || []).some(
+    (item: any) => item?.price?.id === PHONE_PRICE_ID,
+  );
+
+  return (
+    purpose === PHONE_SUBSCRIPTION_PURPOSE ||
+    phoneBilling === "true" ||
+    (hasPhonePrice && !!metadata.phoneNumber && !!metadata.userEmail)
+  );
+}
+
+async function validatePlatformNumberPurchaseBilling(args: {
+  user: any;
+  email: string;
+  requestedNumber?: string;
+  areaCode?: string | number;
+}) {
+  const { user, email, requestedNumber, areaCode } = args;
+
+  if (!user.stripeCustomerId) {
+    console.warn(
+      JSON.stringify({
+        msg: "buy-number (mobile): blocking purchase due to missing Stripe customer",
+        email,
+        userId: String(user._id),
+        requestedNumber: requestedNumber || null,
+        areaCode: areaCode ?? null,
+      }),
+    );
+    return {
+      ok: false as const,
+      status: 403,
+      body: {
+        code: "billing_incomplete",
+        message:
+          "Complete signup billing with an active or trialing subscription before purchasing a phone number.",
+      },
+    };
+  }
+
+  const customer =
+    (await stripe.customers.retrieve(
+      user.stripeCustomerId,
+    )) as Stripe.Customer | Stripe.DeletedCustomer;
+
+  const customerDeleted = "deleted" in customer;
+  const hasCustomerDefaultPM = customerDeleted
+    ? false
+    : Boolean(
+        customer.invoice_settings?.default_payment_method ||
+          (customer as Stripe.Customer).default_source,
+      );
+
+  const existingSubs = await stripe.subscriptions.list({
+    customer: user.stripeCustomerId,
+    status: "all",
+    expand: ["data.items.data.price"],
+    limit: 20,
+  });
+
+  const qualifyingSubscription =
+    existingSubs.data.find((sub) => {
+      const activeLike = sub.status === "active" || sub.status === "trialing";
+      return activeLike && !isPhoneSubscriptionCandidate(sub);
+    }) || null;
+
+  if (!qualifyingSubscription) {
+    console.warn(
+      JSON.stringify({
+        msg: "buy-number (mobile): blocking purchase due to missing active or trialing signup subscription",
+        email,
+        userId: String(user._id),
+        stripeCustomerId: user.stripeCustomerId,
+      }),
+    );
+    return {
+      ok: false as const,
+      status: 403,
+      body: {
+        code: "no_active_subscription",
+        message:
+          "An active or trialing CoveCRM subscription is required before purchasing a phone number.",
+      },
+    };
+  }
+
+  const hasSubscriptionPaymentMethod = Boolean(
+    (qualifyingSubscription as any).default_payment_method ||
+      (qualifyingSubscription as any).default_source,
+  );
+
+  if (!hasCustomerDefaultPM && !hasSubscriptionPaymentMethod) {
+    console.warn(
+      JSON.stringify({
+        msg: "buy-number (mobile): blocking purchase due to missing payment method",
+        email,
+        userId: String(user._id),
+        stripeCustomerId: user.stripeCustomerId,
+        qualifyingSubscriptionId: qualifyingSubscription.id,
+      }),
+    );
+    return {
+      ok: false as const,
+      status: 402,
+      body: {
+        code: "no_payment_method",
+        message:
+          "Please add a payment method to your account before purchasing a phone number.",
+        stripeCustomerId: user.stripeCustomerId,
+      },
+    };
+  }
+
+  return { ok: true as const };
 }
 
 function getEmailFromAuth(req: NextApiRequest): string | null {
@@ -241,77 +398,58 @@ export default async function handler(
 
     const isSelfBilled =
       usingPersonal || (user as any).billingMode === "self";
+    const allowInternalBillingBypass = canBypassNumberPurchaseBilling(
+      user,
+      email,
+    );
 
-    if (!isSelfBilled) {
-      if (!user.stripeCustomerId) {
-        const customer = await stripe.customers.create({
-          email: user.email,
-          name: user.name || undefined,
-        });
-        user.stripeCustomerId = customer.id;
-        await user.save();
-      }
-
-      const customer =
-        (await stripe.customers.retrieve(
-          user.stripeCustomerId,
-        )) as Stripe.Customer | Stripe.DeletedCustomer;
-
-      const hasDefaultPM =
-        "deleted" in customer
-          ? false
-          : Boolean(
-              customer.invoice_settings?.default_payment_method ||
-                (customer as Stripe.Customer).default_source,
-            );
-
-      if (!hasDefaultPM) {
-        console.warn(
-          JSON.stringify({
-            msg: "buy-number (mobile): blocking purchase due to missing payment method",
-            email,
-            usingPersonal,
-            userBillingMode: user?.billingMode ?? null,
-            stripeCustomerId: user.stripeCustomerId,
-          }),
-        );
-        return res.status(402).json({
-          code: "no_payment_method",
-          message:
-            "Please add a payment method to your account before purchasing a phone number.",
-          stripeCustomerId: user.stripeCustomerId,
-        });
-      }
-
-      const customerId = user.stripeCustomerId;
-      const existingSubs = await stripe.subscriptions.list({
-        customer: customerId,
-        status: "all",
-        limit: 5,
-      });
-
-      const reusable = existingSubs.data.find(sub =>
-        ["active", "trialing", "past_due"].includes(sub.status)
+    if (!isSelfBilled && allowInternalBillingBypass) {
+      console.info(
+        JSON.stringify({
+          msg: "buy-number (mobile): internal billing bypass used",
+          email,
+          userId: String(user._id),
+          requestedNumber: requestedNumber || null,
+          areaCode: areaCode ?? null,
+        }),
       );
+    }
 
-      let subscription;
-
-      if (!reusable) {
-        subscription = await stripe.subscriptions.create({
-          customer: user.stripeCustomerId,
-          items: [{ price: PHONE_PRICE_ID }],
-          metadata: {
-            phoneNumber: requestedNumber || `areaCode:${areaCode ?? ""}`,
-            userEmail: user.email,
-          },
-        });
-      } else {
-        console.log("[STRIPE] Using existing subscription:", reusable.id);
-        subscription = reusable;
+    if (!isSelfBilled && !allowInternalBillingBypass) {
+      const billingGate = await validatePlatformNumberPurchaseBilling({
+        user,
+        email,
+        requestedNumber,
+        areaCode,
+      });
+      if (!billingGate.ok) {
+        return res.status(billingGate.status).json(billingGate.body);
       }
+
+      const subscription = await stripe.subscriptions.create({
+        customer: String(user.stripeCustomerId),
+        items: [{ price: PHONE_PRICE_ID }],
+        metadata: buildPhoneSubscriptionMetadata({
+          requestedNumber,
+          areaCode,
+          email: user.email,
+          userId: String(user._id),
+        }),
+      });
 
       if (!subscription?.id) throw new Error("Stripe subscription failed");
       createdSubscriptionId = subscription.id;
+
+      if (subscription.status !== "active" && subscription.status !== "trialing") {
+        try {
+          await stripe.subscriptions.cancel(subscription.id);
+        } catch {}
+        createdSubscriptionId = undefined;
+        return res.status(402).json({
+          code: "payment_failed",
+          message: "Payment failed. Please check your payment method and try again.",
+        });
+      }
     }
 
     // ---------- Buy number from the resolved Twilio account
