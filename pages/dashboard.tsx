@@ -257,7 +257,7 @@ function DashboardOverview() {
                 <XAxis dataKey="label" stroke="#D1D5DB" />
                 <YAxis stroke="#D1D5DB" allowDecimals={false} />
                 <Tooltip
-                  formatter={(value: number | string) => `${value} calls`}
+                  formatter={(value: unknown) => `${value ?? 0} calls`}
                   labelStyle={{ color: "#E5E7EB" }}
                   contentStyle={{
                     backgroundColor: "#1A2B45",
