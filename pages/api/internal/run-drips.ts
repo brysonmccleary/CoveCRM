@@ -107,6 +107,10 @@ function getCanonicalDripId(dripDoc: any, fallbackId: string): string {
   return String(dripDoc?._id ? dripDoc._id : fallbackId);
 }
 
+function shouldAppendOptOutForCampaign(campaign: any): boolean {
+  return Boolean(campaign?.isGlobal === true || String(campaign?.key || "").trim());
+}
+
 function parseStepDayNumber(dayField?: string): number {
   if (!dayField) return NaN;
   const raw = String(dayField).trim().toLowerCase();
@@ -592,7 +596,11 @@ if (
           folderName: null,
         });
 
-        const finalBody = idx === 0 ? ensureOptOut(rendered) : String(rendered || "").trim();
+        const appendOptOut = shouldAppendOptOutForCampaign(campaign);
+        const finalBody =
+          idx === 0
+            ? ensureOptOut(rendered, { appendOptOut })
+            : String(rendered || "").trim();
 
         // ✅ idempotencyKey should be stable per enrollment+step.
         // Using nextSendAt in the key can create false “new sends” after reschedules.
@@ -704,6 +712,18 @@ if (
 
           if (ok) {
             try {
+            if (process.env.NODE_ENV !== "production" && !appendOptOut) {
+              console.log(
+                "[CUSTOM DRIP SEND]",
+                JSON.stringify({
+                  campaignId: String((campaign as any)._id || ""),
+                  stepId: String(idx),
+                  appendOptOut,
+                  finalBody,
+                }),
+              );
+            }
+
 const result = await sendSms({
               to,
               body: finalBody,

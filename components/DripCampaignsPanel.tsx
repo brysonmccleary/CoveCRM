@@ -222,12 +222,7 @@ export default function DripCampaignsPanel() {
         ? 0
         : parseInt(currentDay.replace("Day ", ""), 10);
 
-    const optOut = " Reply STOP to opt out.";
-    const enforcedText = currentText.trim().endsWith(optOut)
-      ? currentText.trim()
-      : `${currentText.trim()}${optOut}`;
-
-    setMessageSteps((prev) => [...prev, { text: enforcedText, day: currentDay }]);
+    setMessageSteps((prev) => [...prev, { text: currentText.trim(), day: currentDay }]);
     setCurrentText("");
     setCurrentDay(`Day ${numericDay + 1}`);
     setMaxDayUsed((prev) => Math.max(prev, numericDay));

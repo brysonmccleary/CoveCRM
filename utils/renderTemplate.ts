@@ -101,10 +101,14 @@ export function renderTemplate(template: string, ctx: TemplateContext): string {
   });
 }
 
-/** Ensures a compliant opt-out phrase is present exactly once. */
-export function ensureOptOut(message: string): string {
+/** Ensures a compliant opt-out phrase is present exactly once when enabled. */
+export function ensureOptOut(
+  message: string,
+  opts?: { appendOptOut?: boolean },
+): string {
   const optOut = " Reply STOP to opt out.";
   const body = String(message || "").trim();
+  if (opts?.appendOptOut === false) return body;
   if (!body) return optOut.trim();
   if (body.endsWith(optOut.trim())) return body;
   return `${body}${optOut}`;

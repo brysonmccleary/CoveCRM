@@ -36,12 +36,9 @@ export default function DripCampaignDetail() {
 
   const saveChanges = async () => {
     try {
-      // Enforce opt-out on every message
-      const optOut = " Reply STOP to opt out.";
       const normalized = (steps || []).map((s) => {
         const day = String(s?.day || "immediately");
-        const textRaw = String(s?.text || "").trim();
-        const text = textRaw.endsWith(optOut) ? textRaw : `${textRaw}${optOut}`;
+        const text = String(s?.text || "").trim();
         return { ...s, day, text };
       });
 
