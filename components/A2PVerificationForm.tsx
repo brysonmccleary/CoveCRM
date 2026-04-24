@@ -304,7 +304,7 @@ End users opt in through a dedicated SMS opt-in page provided by CoveCRM for the
 
 Before submission, users see a disclosure similar to:
 
-“By checking this box, you agree to receive SMS messages using CoveCRM related to your existing policy, policy updates, account servicing, and retention-related communications. Message frequency varies. Msg & data rates may apply. Reply STOP to cancel. Reply HELP for help. Consent is not a condition of purchase.”
+“By clicking this box, you agree to receive SMS messages using CoveCRM related to your existing policy, policy updates, account servicing, and retention-related communications. Message frequency varies. Msg & data rates may apply. Reply STOP to cancel. Reply HELP for help. Consent is not a condition of purchase.”
 
 The opt-in page displays SMS Opt-In Terms and SMS Opt-In Privacy links on the same page as the form submission. Consent records may be retained as needed for compliance and audit purposes.`,
   );

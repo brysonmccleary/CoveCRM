@@ -125,7 +125,7 @@ export default function OptInPage(props: Props) {
                   className="mt-1 h-4 w-4"
                 />
                 <span className="text-sm text-slate-200 leading-5">
-                  By checking this box, you agree to receive SMS messages from{" "}
+                  By clicking this box, you agree to receive SMS messages from{" "}
                   <span className="font-semibold">{businessName}</span> regarding your existing policy, policy updates,
                   account servicing, and retention-related communications. Message frequency varies. Msg &amp; data rates
                   may apply. Reply STOP to opt out. Reply HELP for help. Consent is not a condition of purchase.
