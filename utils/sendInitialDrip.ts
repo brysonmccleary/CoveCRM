@@ -3,6 +3,7 @@ import type { LeadType } from "@/models/Lead";
 import { sendSMS } from "@/lib/twilio/sendSMS"; // ✅ central Twilio sender that logs to Message
 import { renderTemplate, ensureOptOut, splitName } from "@/utils/renderTemplate";
 import { acquireLock } from "@/lib/locks"; // 🔒 add lock
+import DripEnrollment from "@/models/DripEnrollment";
 
 // 👇 Defaults
 const DEFAULT_AGENT_NAME = "your licensed agent";
@@ -27,6 +28,36 @@ export async function sendInitialDrip(lead: LeadType, rawMessage?: string) {
   try {
     const to = (lead as any)?.phone || (lead as any)?.Phone;
     if (!to) return;
+
+    const userEmail = String((lead as any)?.userEmail || (lead as any)?.ownerEmail || "").toLowerCase();
+    const leadId = String((lead as any)?._id || (lead as any)?.id || "");
+
+    // Legacy direct-send safety:
+    // if this lead has any modern drip enrollment history, do not allow legacy Day 1 sends.
+    if (userEmail && leadId) {
+      const hasModernEnrollment = await DripEnrollment.exists({
+        userEmail,
+        leadId,
+      });
+      if (hasModernEnrollment) {
+        console.log("Legacy drip suppressed: modern enrollment exists", { userEmail, leadId });
+        return;
+      }
+    }
+
+    // One-time migration safety for stale legacy Day 1 resets.
+    const legacyProgress = Array.isArray((lead as any)?.dripProgress)
+      ? (lead as any).dripProgress
+      : [];
+    const staleLegacyReset = legacyProgress.some((entry: any) => {
+      if (Number(entry?.lastSentIndex) !== -1) return false;
+      const startedAt = entry?.startedAt ? new Date(entry.startedAt) : null;
+      return !!startedAt && Number.isFinite(startedAt.getTime()) && Date.now() - startedAt.getTime() > 24 * 60 * 60 * 1000;
+    });
+    if (staleLegacyReset) {
+      console.log("Legacy drip suppressed: stale legacy progress reset", { userEmail, leadId });
+      return;
+    }
 
     // Contact names
     const firstName =
@@ -100,10 +131,13 @@ export async function sendInitialDrip(lead: LeadType, rawMessage?: string) {
     message = ensureOptOut(message);
 
     // 4) 🔒 Lock to prevent duplicate initial sends from parallel runners (10 min)
-    const userEmail = String((lead as any)?.userEmail || (lead as any)?.ownerEmail || "").toLowerCase();
-    const leadId = String((lead as any)?._id || (lead as any)?.id || "");
     const campaignId =
-      String(((lead as any)?.dripProgress?.dripId) || folderName || "initial");
+      String(
+        (Array.isArray((lead as any)?.dripProgress) ? (lead as any).dripProgress[0]?.dripId : (lead as any)?.dripProgress?.dripId) ||
+          (Array.isArray((lead as any)?.assignedDrips) ? (lead as any).assignedDrips[0] : null) ||
+          folderName ||
+          "initial"
+      );
     const stepId = "initial";
 
     const ok = await acquireLock("drip", `${userEmail}:${leadId}:${campaignId}:${stepId}`, 600);

@@ -108,7 +108,7 @@ function getCanonicalDripId(dripDoc: any, fallbackId: string): string {
 }
 
 function shouldAppendOptOutForCampaign(campaign: any): boolean {
-  return Boolean(campaign?.isGlobal === true || String(campaign?.key || "").trim());
+  return Boolean(campaign?.isGlobal === true);
 }
 
 function parseStepDayNumber(dayField?: string): number {
