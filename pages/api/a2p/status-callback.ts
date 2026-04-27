@@ -7,6 +7,7 @@ import User from "@/models/User";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
 import { sendA2PApprovedEmail, sendA2PDeclinedEmail } from "@/lib/a2p/notifications";
 import { chargeA2PApprovalIfNeeded } from "@/lib/billing/trackUsage";
+import { resumeA2PAutomationForUserEmail } from "@/lib/a2p/resumeAutomation";
 
 const BASE_URL = (
   process.env.NEXT_PUBLIC_BASE_URL ||
@@ -357,7 +358,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (!anySid) return res.status(200).json({ ok: true, ...(debugEnabled ? { debug } : {}) });
 
-    const a2p = await A2PProfile.findOne({
+    let a2p = await A2PProfile.findOne({
       $or: [
         { profileSid: anySid },
         { trustProductSid: anySid },
@@ -372,6 +373,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const user = a2p.userId ? await User.findById(a2p.userId).lean<any>() : null;
     if (!user?.email) return res.status(200).json({ ok: true, ...(debugEnabled ? { debug } : {}) });
+
+    try {
+      await resumeA2PAutomationForUserEmail(String(user.email));
+      const refreshedA2P = await A2PProfile.findById((a2p as any)._id).lean<any>();
+      if (refreshedA2P) {
+        a2p = refreshedA2P;
+      }
+    } catch (resumeErr: any) {
+      console.warn("[A2P RESUME]", {
+        source: "status-callback",
+        userEmail: user?.email,
+        message: resumeErr?.message || String(resumeErr),
+      });
+    }
+
+    if (!a2p) return res.status(200).json({ ok: true, ...(debugEnabled ? { debug } : {}) });
 
     let resolved: any = null;
     try {

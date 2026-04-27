@@ -70,6 +70,9 @@ export interface IA2PProfile extends Document {
   messagingServiceSid?: string;
 
   brandStatus?: string;
+  profileStatus?: string;
+  trustProductStatus?: string;
+  campaignStatus?: string;
   brandFailureReason?: string;
 
   brandErrors?: any[];
@@ -91,6 +94,8 @@ export interface IA2PProfile extends Document {
   lastSubmittedInputs?: any;
 
   twilioAccountSidLastUsed?: string;
+  lastCheckedAt?: Date;
+  lastAdvancedAt?: Date;
 
   compliance?: {
     help?: string;
@@ -175,6 +180,9 @@ const A2PProfileSchema = new Schema<IA2PProfile>({
   messagingServiceSid: { type: String },
 
   brandStatus: { type: String },
+  profileStatus: { type: String },
+  trustProductStatus: { type: String },
+  campaignStatus: { type: String },
   brandFailureReason: { type: String },
 
   brandErrors: { type: [Schema.Types.Mixed], default: undefined },
@@ -217,6 +225,8 @@ const A2PProfileSchema = new Schema<IA2PProfile>({
   lastSubmittedInputs: { type: Schema.Types.Mixed },
 
   twilioAccountSidLastUsed: { type: String },
+  lastCheckedAt: { type: Date },
+  lastAdvancedAt: { type: Date },
 
   compliance: {
     help: { type: String },

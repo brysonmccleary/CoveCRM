@@ -6,6 +6,7 @@ import mongooseConnect from "@/lib/mongooseConnect";
 import A2PProfile from "@/models/A2PProfile";
 import User from "@/models/User";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
+import { resumeA2PAutomationForUserEmail } from "@/lib/a2p/resumeAutomation";
 
 // Brand statuses that indicate brand approved (NOT texting-ready)
 const BRAND_APPROVED = new Set(["approved", "verified", "active", "in_use", "registered"]);
@@ -112,6 +113,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       client = resolved.client;
       twilioAccountSidUsed = resolved.accountSid;
       console.log("[A2P status] twilioAccountSidUsed", { twilioAccountSidUsed });
+
+      try {
+        await resumeA2PAutomationForUserEmail(session.user.email);
+        const refreshed = await A2PProfile.findById((a2p as any)._id);
+        if (refreshed) {
+          Object.assign(a2p, refreshed.toObject());
+        }
+      } catch (resumeErr: any) {
+        console.warn("[A2P RESUME]", {
+          source: "a2p-status",
+          userEmail: session.user.email,
+          message: resumeErr?.message || String(resumeErr),
+        });
+      }
 
       // ✅ Optional proof: list brands in this scoped context
       if ((process.env.A2P_DEBUG_BRANDS || "") === "1") {
@@ -409,6 +424,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       applicationStatus,
       a2pStatusLabel,
       declinedReason: (a2p as any).declinedReason || null,
+      stages: {
+        businessProfile: {
+          sid: (a2p as any).profileSid || null,
+          status: (a2p as any).profileStatus || "unknown",
+        },
+        trustProduct: {
+          sid: (a2p as any).trustProductSid || null,
+          status: (a2p as any).trustProductStatus || "unknown",
+        },
+        brand: {
+          sid: (a2p as any).brandSid || null,
+          status: brandStatus,
+        },
+        campaign: {
+          sid: campaignSid || null,
+          status: campaignStatus,
+        },
+        messagingReady: Boolean((a2p as any).messagingReady),
+      },
       brand: {
         sid: (a2p as any).brandSid || null,
         status: brandStatus,

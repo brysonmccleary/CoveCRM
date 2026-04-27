@@ -6,6 +6,7 @@ import User from "@/models/User";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
 import { sendA2PApprovedEmail, sendA2PDeclinedEmail } from "@/lib/a2p/notifications";
 import { chargeA2PApprovalIfNeeded } from "@/lib/billing/trackUsage";
+import { resumeA2PAutomationForUserEmail } from "@/lib/a2p/resumeAutomation";
 
 const BASE_URL = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "").replace(/\/$/, "");
 const CRON_SECRET = process.env.CRON_SECRET || "";
@@ -403,7 +404,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const candidates: AnyDoc[] = await A2PProfile.find(finalQuery).limit(limit).lean();
   const results: AnyDoc[] = [];
 
-  for (const doc of candidates) {
+  for (let doc of candidates) {
     const id = String(doc._id);
     const userId = doc.userId ? String(doc.userId) : null;
 
@@ -451,6 +452,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         missing: listMissingSids(doc),
       });
       continue;
+    }
+
+    try {
+      await resumeA2PAutomationForUserEmail(userEmail);
+      const refreshedDoc = await A2PProfile.findById(doc._id).lean<AnyDoc | null>();
+      if (refreshedDoc) {
+        doc = refreshedDoc as AnyDoc;
+        brandSid = doc.brandSid || null;
+        campaignSid = doc.campaignSid || doc.usa2pSid || null;
+        messagingServiceSid = doc.messagingServiceSid || null;
+      }
+    } catch (resumeErr: any) {
+      console.warn("[A2P RESUME]", {
+        source: "a2p-sync",
+        userEmail,
+        message: resumeErr?.message || String(resumeErr),
+      });
     }
 
     let client: any = null;

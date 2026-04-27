@@ -206,12 +206,21 @@ export interface IUser {
   country?: string;
 
   a2p?: {
+    profileSid?: string;
+    profileStatus?: string;
+    trustProductSid?: string;
+    trustProductStatus?: string;
     brandSid?: string;
     brandStatus?: string;
     campaignSid?: string;
     campaignStatus?: string;
     messagingServiceSid?: string;
     messagingReady?: boolean;
+    registrationStatus?: string;
+    applicationStatus?: string;
+    declinedReason?: string | null;
+    lastCheckedAt?: Date;
+    lastAdvancedAt?: Date;
     lastSyncedAt?: Date;
   };
 
@@ -461,12 +470,21 @@ const UserSchema = new Schema<IUser>({
   country: { type: String },
 
   a2p: {
+    profileSid: String,
+    profileStatus: String,
+    trustProductSid: String,
+    trustProductStatus: String,
     brandSid: String,
     brandStatus: String,
     campaignSid: String,
     campaignStatus: String,
     messagingServiceSid: String,
     messagingReady: { type: Boolean, default: false },
+    registrationStatus: String,
+    applicationStatus: String,
+    declinedReason: String,
+    lastCheckedAt: Date,
+    lastAdvancedAt: Date,
     lastSyncedAt: Date,
   },
 

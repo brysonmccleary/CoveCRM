@@ -6,6 +6,7 @@ import mongooseConnect from "@/lib/mongooseConnect";
 import A2PProfile from "@/models/A2PProfile";
 import type { IA2PProfile } from "@/models/A2PProfile";
 import User from "@/models/User";
+import { resumeA2PAutomationForUserEmail } from "@/lib/a2p/resumeAutomation";
 
 /**
  * This endpoint orchestrates the full A2P flow:
@@ -439,6 +440,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const startInner = (startData && startData.data) || startData || {};
 
     await persistLastSubmitted();
+
+    try {
+      await resumeA2PAutomationForUserEmail(session.user.email);
+    } catch (resumeErr: any) {
+      console.warn("[A2P RESUME]", {
+        source: "registerA2P",
+        userEmail: session.user.email,
+        message: resumeErr?.message || String(resumeErr),
+      });
+    }
 
     const rawBrandStatus =
       startData?.brandStatus ||
