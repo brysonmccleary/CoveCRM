@@ -291,9 +291,7 @@ if (!lead) return res.status(404).json({ error: "Lead not found" });
           });
           const finalBody = ensureOptOut(rendered);
 
-          const idKey = `${String(enrollment._id)}:0:${new Date(
-            enrollment.nextSendAt || Date.now()
-          ).toISOString()}`;
+          const idKey = `${String(enrollment._id)}:0`;
 
           const locked = await acquireLock(
             "enroll",
@@ -382,7 +380,14 @@ if (!lead) return res.status(404).json({ error: "Lead not found" });
               });
 
               const nextIndex = 1;
-              const update: any = { $set: { cursorStep: nextIndex, lastSentAt: new Date() } };
+              const sentAt = new Date();
+              const update: any = {
+                $set: {
+                  cursorStep: nextIndex,
+                  lastSentAt: sentAt,
+                  "sentAtByIndex.0": sentAt,
+                },
+              };
               if (steps.length > 1) {
                 const prevDay = parseStepDayNumber(firstStep.day);
                 const nextDay = parseStepDayNumber(steps[1].day);
