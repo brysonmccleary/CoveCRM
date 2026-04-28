@@ -94,21 +94,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         continue;
       }
 
-      // Find leads in folder missing an active/paused enrollment for this campaign
+      // Find leads in folder with no enrollment history for this campaign.
+      // Automatic folder-watch should never reseed once any enrollment exists.
       const leads = await Lead.aggregate([
         { $match: { userEmail: w.userEmail, folderId: w.folderId } },
         {
           $lookup: {
             from: "dripenrollments",
-            let: { leadId: "$_id" },
+            let: { leadId: "$_id", userEmail: "$userEmail" },
             pipeline: [
               {
                 $match: {
                   $expr: {
                     $and: [
+                      { $eq: ["$userEmail", "$$userEmail"] },
                       { $eq: ["$leadId", "$$leadId"] },
                       { $eq: ["$campaignId", campaignId] },
-                      { $or: [ { $in: ["$status", ["active", "paused", "completed", "canceled", "cancelled"]] }, { $eq: ["$stopAll", true] } ] },
                     ],
                   },
                 },
@@ -131,7 +132,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           userEmail: w.userEmail,
           leadId: lead._id,
           campaignId,
-          $or: [ { status: { $in: ["active", "paused", "completed", "canceled", "cancelled"] } }, { stopAll: true } ],
         })
           .select({ _id: 1 })
           .lean();
@@ -146,7 +146,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             userEmail: w.userEmail,
             leadId: lead._id,
             campaignId,
-            $or: [ { status: { $in: ["active", "paused", "completed", "canceled", "cancelled"] } }, { stopAll: true } ],
           },
           {
             $setOnInsert: {
