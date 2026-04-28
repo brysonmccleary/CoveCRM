@@ -704,6 +704,116 @@ yesno: "yes"|"no"|"unknown"`;
 }
 
 // --- chat history for LLM (user/assistant roles)
+function firstNonEmptyString(values: any[]): string | null {
+  for (const value of values) {
+    const text = String(value || "").trim();
+    if (text) return text;
+  }
+  return null;
+}
+
+function pickLeadFirstNameForSms(lead: any): string | null {
+  return firstNonEmptyString([
+    lead?.["First Name"],
+    lead?.firstName,
+    lead?.First,
+    lead?.first,
+    lead?.givenName,
+    lead?.given,
+    lead?.given_name,
+    lead?.contact_first_name,
+  ]);
+}
+
+function pickLeadFullNameForSms(lead: any): string | null {
+  const first = pickLeadFirstNameForSms(lead);
+  const last = firstNonEmptyString([
+    lead?.["Last Name"],
+    lead?.lastName,
+    lead?.Last,
+    lead?.last,
+    lead?.familyName,
+    lead?.family,
+    lead?.family_name,
+    lead?.contact_last_name,
+  ]);
+  const fromParts = [first, last].filter(Boolean).join(" ").trim();
+  return fromParts || firstNonEmptyString([lead?.["Full Name"], lead?.fullName, lead?.Name, lead?.name]);
+}
+
+const INVALID_LEAD_GREETING_NAMES = new Set([
+  "test",
+  "testing",
+  "lead",
+  "unknown",
+  "n/a",
+  "na",
+  "none",
+  "null",
+  "sample",
+  "demo",
+]);
+
+function safeLeadFirstNameForGreeting(firstName?: string | null): string | null {
+  const text = String(firstName || "").trim();
+  if (!text) return null;
+  if (INVALID_LEAD_GREETING_NAMES.has(text.toLowerCase())) return null;
+  return text;
+}
+
+function splitFirstName(name?: string | null): string | null {
+  const text = String(name || "").trim();
+  return text ? text.split(/\s+/)[0] : null;
+}
+
+function normalizeNameForCompare(name?: string | null): string {
+  return String(name || "").trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function sanitizeOwnerGreetingForLead(args: {
+  body: string;
+  leadId?: string | null;
+  leadFirst?: string | null;
+  leadFull?: string | null;
+  ownerFirst?: string | null;
+  ownerFull?: string | null;
+}): string {
+  const body = String(args.body || "");
+  const leadFirstNorm = normalizeNameForCompare(args.leadFirst);
+  const leadFullNorm = normalizeNameForCompare(args.leadFull);
+  const ownerNames = [args.ownerFull, args.ownerFirst]
+    .map((name) => String(name || "").trim())
+    .filter(Boolean)
+    .sort((a, b) => b.length - a.length);
+
+  for (const ownerName of ownerNames) {
+    const ownerNorm = normalizeNameForCompare(ownerName);
+    if (!ownerNorm || ownerNorm === leadFirstNorm || ownerNorm === leadFullNorm) continue;
+
+    const ownerPattern = escapeRegExp(ownerName).replace(/\s+/g, "\\s+");
+    const re = new RegExp(`^(\\s*(?:hey|hi|hello)\\s+)(${ownerPattern})(?=\\s|,|!|\\.|\\?|$)`, "i");
+    const match = body.match(re);
+    if (!match) continue;
+
+    const replacementName = safeLeadFirstNameForGreeting(args.leadFirst) || "there";
+    const sanitized = `${match[1]}${replacementName}${body.slice(match[0].length)}`;
+    console.warn("[inbound-sms] sanitized owner greeting in AI reply", {
+      leadId: args.leadId || null,
+      ownerFirst: args.ownerFirst || null,
+      leadFirst: args.leadFirst || null,
+      before: body.slice(0, 80),
+      after: sanitized.slice(0, 80),
+    });
+    return sanitized;
+  }
+
+  return body;
+}
+
 function historyToChatMessages(history: any[] = []) {
   const msgs: { role: "user" | "assistant"; content: string }[] = [];
   for (const m of history) {
@@ -855,10 +965,27 @@ async function runO3MiniSmsAssistant(opts: {
     lastMessagesText: "(none)",
     nextBestAction: "",
   }));
+  const leadFirstName = pickLeadFirstNameForSms(lead);
+  const leadFullName = pickLeadFullNameForSms(lead);
+  const ownerFullName = firstNonEmptyString([user?.name, user?.fullName, user?.username]);
+  const ownerFirstName = firstNonEmptyString([user?.firstName, splitFirstName(ownerFullName)]);
+  const safeLeadGreetingName = safeLeadFirstNameForGreeting(leadFirstName) || "there";
 
   // --- SYSTEM PROMPT (Jeremy-style, appointment only, no quotes/details) ---
   const systemPrompt = `
 You are texting a lead about insurance.
+
+IDENTITY:
+- The lead/contact is the person receiving this SMS.
+- Lead/contact first name from lead/contact fields: ${leadFirstName || "(missing or uncertain)"}.
+- Lead/contact full name from lead/contact fields: ${leadFullName || "(missing or uncertain)"}.
+- Safe greeting name for the lead: ${safeLeadGreetingName}.
+- Agent/account owner name: ${ownerFullName || "(unknown)"}.
+- Agent/account owner first name: ${ownerFirstName || "(unknown)"}.
+- Assistant/persona name may appear in prior messages as Kayla; Kayla is not the lead/contact.
+- Prior outbound messages may mention the agent/owner/persona name. Do not treat those names as the lead/contact name.
+- Only greet the lead using the safe greeting name. If the lead first name is missing or uncertain, say "Hey there" or skip the name.
+- Never say "Hey ${ownerFirstName || "the owner"}", "Hi ${ownerFirstName || "the owner"}", or "Hello ${ownerFirstName || "the owner"}" unless the lead/contact first name is actually ${ownerFirstName || "that same name"}.
 
 Here is what you know about this lead:
 ${leadMemory.leadSummary || "(none)"}
@@ -1912,7 +2039,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const lastAI = [...(lead.interactionHistory || [])].reverse().find(
         (m: any) => m.type === "ai",
       );
-      const draft = aiReply;
+      const draft = sanitizeOwnerGreetingForLead({
+        body: aiReply,
+        leadId: String(lead._id || ""),
+        leadFirst: pickLeadFirstNameForSms(lead),
+        leadFull: pickLeadFullNameForSms(lead),
+        ownerFirst: firstNonEmptyString([(user as any)?.firstName, splitFirstName((user as any)?.name)]),
+        ownerFull: firstNonEmptyString([(user as any)?.name, (user as any)?.fullName, (user as any)?.username]),
+      });
       if (lastAI && lastAI.text?.trim() === draft.trim()) {
         console.log("🔁 Same AI content as last time — not queueing.");
         return res.status(200).json({

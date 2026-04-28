@@ -5,6 +5,8 @@ import { checkCronAuth } from "@/lib/cronAuth";
 import { acquireLock } from "@/lib/locks";
 import { AiQueuedReply } from "@/models/AiQueuedReply";
 import { LeadAIState } from "@/models/LeadAIState";
+import Lead from "@/models/Lead";
+import User from "@/models/User";
 import { sendSms } from "@/lib/twilio/sendSMS";
 
 export const config = {
@@ -19,6 +21,116 @@ const DEFAULT_COOLDOWN_HOURS = 72;
 
 // Ensure reschedules never land "immediately" (avoid jitter / clock drift)
 const MIN_RESCHEDULE_MINUTES = 5;
+
+function firstNonEmptyString(values: any[]): string | null {
+  for (const value of values) {
+    const text = String(value || "").trim();
+    if (text) return text;
+  }
+  return null;
+}
+
+function pickLeadFirstNameForSms(lead: any): string | null {
+  return firstNonEmptyString([
+    lead?.["First Name"],
+    lead?.firstName,
+    lead?.First,
+    lead?.first,
+    lead?.givenName,
+    lead?.given,
+    lead?.given_name,
+    lead?.contact_first_name,
+  ]);
+}
+
+function pickLeadFullNameForSms(lead: any): string | null {
+  const first = pickLeadFirstNameForSms(lead);
+  const last = firstNonEmptyString([
+    lead?.["Last Name"],
+    lead?.lastName,
+    lead?.Last,
+    lead?.last,
+    lead?.familyName,
+    lead?.family,
+    lead?.family_name,
+    lead?.contact_last_name,
+  ]);
+  const fromParts = [first, last].filter(Boolean).join(" ").trim();
+  return fromParts || firstNonEmptyString([lead?.["Full Name"], lead?.fullName, lead?.Name, lead?.name]);
+}
+
+const INVALID_LEAD_GREETING_NAMES = new Set([
+  "test",
+  "testing",
+  "lead",
+  "unknown",
+  "n/a",
+  "na",
+  "none",
+  "null",
+  "sample",
+  "demo",
+]);
+
+function safeLeadFirstNameForGreeting(firstName?: string | null): string | null {
+  const text = String(firstName || "").trim();
+  if (!text) return null;
+  if (INVALID_LEAD_GREETING_NAMES.has(text.toLowerCase())) return null;
+  return text;
+}
+
+function splitFirstName(name?: string | null): string | null {
+  const text = String(name || "").trim();
+  return text ? text.split(/\s+/)[0] : null;
+}
+
+function normalizeNameForCompare(name?: string | null): string {
+  return String(name || "").trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function sanitizeOwnerGreetingForLead(args: {
+  body: string;
+  leadId?: string | null;
+  leadFirst?: string | null;
+  leadFull?: string | null;
+  ownerFirst?: string | null;
+  ownerFull?: string | null;
+}): string {
+  const body = String(args.body || "");
+  const leadFirstNorm = normalizeNameForCompare(args.leadFirst);
+  const leadFullNorm = normalizeNameForCompare(args.leadFull);
+  const ownerNames = [args.ownerFull, args.ownerFirst]
+    .map((name) => String(name || "").trim())
+    .filter(Boolean)
+    .sort((a, b) => b.length - a.length);
+
+  for (const ownerName of ownerNames) {
+    const ownerNorm = normalizeNameForCompare(ownerName);
+    if (!ownerNorm || ownerNorm === leadFirstNorm || ownerNorm === leadFullNorm) continue;
+
+    const ownerPattern = escapeRegExp(ownerName).replace(/\s+/g, "\\s+");
+    const re = new RegExp(`^(\\s*(?:hey|hi|hello)\\s+)(${ownerPattern})(?=\\s|,|!|\\.|\\?|$)`, "i");
+    const match = body.match(re);
+    if (!match) continue;
+
+    const replacementName = safeLeadFirstNameForGreeting(args.leadFirst) || "there";
+    const sanitized = `${match[1]}${replacementName}${body.slice(match[0].length)}`;
+    console.warn("[send-ai-queued] sanitized owner greeting in AI reply", {
+      leadId: args.leadId || null,
+      ownerFirst: args.ownerFirst || null,
+      leadFirst: args.leadFirst || null,
+      before: body.slice(0, 80),
+      after: sanitized.slice(0, 80),
+    });
+    return sanitized;
+  }
+
+  return body;
+}
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   // Vercel cron hits with GET
@@ -196,10 +308,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           `[send-ai-queued] Sending queuedId=${id} to=${updated.to} (attempt ${updated.attempts})`
         );
 
+        const [leadForGreeting, userForGreeting] = await Promise.all([
+          (Lead as any).findOne({ _id: updated.leadId, userEmail: updated.userEmail }).lean().catch(() => null),
+          (User as any).findOne({ email: updated.userEmail }).lean().catch(() => null),
+        ]);
+        const sanitizedBody = sanitizeOwnerGreetingForLead({
+          body: updated.body,
+          leadId: String(updated.leadId || ""),
+          leadFirst: pickLeadFirstNameForSms(leadForGreeting),
+          leadFull: pickLeadFullNameForSms(leadForGreeting),
+          ownerFirst: firstNonEmptyString([
+            userForGreeting?.firstName,
+            splitFirstName(userForGreeting?.name),
+          ]),
+          ownerFull: firstNonEmptyString([
+            userForGreeting?.name,
+            userForGreeting?.fullName,
+            userForGreeting?.username,
+          ]),
+        });
+
         // Actually send via Twilio (no extra delay here)
         await sendSms({
           to: updated.to,
-          body: updated.body,
+          body: sanitizedBody,
           userEmail: updated.userEmail,
           // no delayMinutes: we already respected human delay when enqueuing
         });
