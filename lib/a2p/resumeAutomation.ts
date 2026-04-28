@@ -21,6 +21,8 @@ const STATUS_CB =
 const NOTIFY_EMAIL =
   process.env.A2P_NOTIFICATIONS_EMAIL || "a2p@yourcompany.com";
 
+const A2P_COMPANY_TYPE = "private";
+
 const BRAND_OK_FOR_CAMPAIGN = new Set([
   "APPROVED",
   "VERIFIED",
@@ -95,6 +97,15 @@ function isTwilioDuplicateAssignment(err: any): boolean {
 
 function isSidLike(value: any, prefix: string) {
   return typeof value === "string" && value.startsWith(prefix);
+}
+
+function isCompanyTypeRejected(status: string, reason: any) {
+  const normalizedStatus = normalizeTrustHubStatus(status);
+  const text = String(reason || "").toLowerCase();
+  return (
+    (normalizedStatus === "TWILIO_REJECTED" || normalizedStatus === "REJECTED") &&
+    (text.includes("22218") || text.includes("company type is invalid"))
+  );
 }
 
 function basicAuthHeader(username: string, password: string) {
@@ -493,6 +504,38 @@ async function recoverExistingTrustProductForProfile(args: {
   return undefined;
 }
 
+async function upsertA2PTrustProductEndUser(args: {
+  client: any;
+  profile: any;
+  normalizedEmail: string;
+  existingSid?: string;
+}) {
+  const friendlyName = `${String(args.profile.businessName || "").trim() || "Business"} – A2P Messaging Profile`;
+  const attributes = {
+    company_type: A2P_COMPANY_TYPE,
+    brand_contact_email: String(args.profile.email || args.normalizedEmail || NOTIFY_EMAIL),
+  } as any;
+
+  if (args.existingSid) {
+    try {
+      const updated: any = await args.client.trusthub.v1.endUsers(args.existingSid).update({
+        friendlyName,
+        attributes,
+      } as any);
+      return String(updated?.sid || args.existingSid || "").trim();
+    } catch (err: any) {
+      if (!isTwilioNotFound(err)) throw err;
+    }
+  }
+
+  const created: any = await args.client.trusthub.v1.endUsers.create({
+    type: "us_a2p_messaging_profile_information",
+    friendlyName,
+    attributes,
+  });
+  return String(created?.sid || "").trim();
+}
+
 async function recoverExistingCampaignForBrand(args: {
   client: any;
   messagingServiceSid: string;
@@ -718,9 +761,27 @@ export async function resumeA2PAutomationForUserEmail(userEmail: string) {
 
     let trustProductSid = profile.trustProductSid ? String(profile.trustProductSid).trim() : "";
     let trustProductStatus = normalizeTrustHubStatus(profile.trustProductStatus);
+    let trustProductRejectionReason = "";
     if (trustProductSid) {
       try {
-        await client.trusthub.v1.trustProducts(trustProductSid).fetch();
+        const trustProduct: any = await client.trusthub.v1.trustProducts(trustProductSid).fetch();
+        trustProductStatus = normalizeTrustHubStatus(trustProduct?.status);
+        const rawFailure =
+          trustProduct?.failureReason ||
+          trustProduct?.failureReasons ||
+          trustProduct?.errors ||
+          trustProduct?.errorCodes ||
+          trustProduct?.rejectionReasons ||
+          undefined;
+        if (typeof rawFailure === "string") {
+          trustProductRejectionReason = rawFailure;
+        } else if (rawFailure) {
+          try {
+            trustProductRejectionReason = JSON.stringify(rawFailure);
+          } catch {
+            trustProductRejectionReason = String(rawFailure);
+          }
+        }
       } catch (err: any) {
         if (isTwilioNotFound(err)) {
           await A2PProfile.updateOne(
@@ -775,16 +836,18 @@ export async function resumeA2PAutomationForUserEmail(userEmail: string) {
 
     let a2pProfileEndUserSid = String(profile.a2pProfileEndUserSid || "").trim();
     if (trustProductSid && profile.profileSid && profileApproved) {
-      if (!a2pProfileEndUserSid) {
-        const createdEndUser: any = await client.trusthub.v1.endUsers.create({
-          type: "us_a2p_messaging_profile_information",
-          friendlyName: `${String(profile.businessName || "").trim() || "Business"} – A2P Messaging Profile`,
-          attributes: {
-            company_type: "PRIVATE_PROFIT",
-            brand_contact_email: String(profile.email || normalizedEmail || NOTIFY_EMAIL),
-          } as any,
+      const shouldRepairCompanyType = isCompanyTypeRejected(
+        trustProductStatus,
+        trustProductRejectionReason || profile.lastError || profile.declinedReason,
+      );
+
+      if (!a2pProfileEndUserSid || shouldRepairCompanyType) {
+        a2pProfileEndUserSid = await upsertA2PTrustProductEndUser({
+          client,
+          profile,
+          normalizedEmail,
+          existingSid: shouldRepairCompanyType ? a2pProfileEndUserSid || undefined : undefined,
         });
-        a2pProfileEndUserSid = String(createdEndUser?.sid || "").trim();
         if (a2pProfileEndUserSid) {
           update.a2pProfileEndUserSid = a2pProfileEndUserSid;
         }

@@ -2077,7 +2077,7 @@ usecaseCode: normalizedUseCase,
     live = await A2PProfile.findOne({ userId }).lean<any>();
     if (!live?.a2pProfileEndUserSid) {
       const a2pAttributes = {
-        company_type: "PRIVATE_PROFIT",
+        company_type: "private",
         brand_contact_email: String(email),
       };
 
