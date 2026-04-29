@@ -509,14 +509,17 @@ async function upsertA2PTrustProductEndUser(args: {
   profile: any;
   normalizedEmail: string;
   existingSid?: string;
+  forceCreateFresh?: boolean;
 }) {
   const friendlyName = `${String(args.profile.businessName || "").trim() || "Business"} – A2P Messaging Profile`;
-  const attributes = {
+  const attributes: Record<string, string> = {
     company_type: A2P_COMPANY_TYPE,
     brand_contact_email: String(args.profile.email || args.normalizedEmail || NOTIFY_EMAIL),
-  } as any;
+  };
+  delete (attributes as any).stock_exchange;
+  delete (attributes as any).stock_ticker;
 
-  if (args.existingSid) {
+  if (args.existingSid && !args.forceCreateFresh) {
     try {
       const updated: any = await args.client.trusthub.v1.endUsers(args.existingSid).update({
         friendlyName,
@@ -846,7 +849,8 @@ export async function resumeA2PAutomationForUserEmail(userEmail: string) {
           client,
           profile,
           normalizedEmail,
-          existingSid: shouldRepairCompanyType ? a2pProfileEndUserSid || undefined : undefined,
+          existingSid: a2pProfileEndUserSid || undefined,
+          forceCreateFresh: shouldRepairCompanyType,
         });
         if (a2pProfileEndUserSid) {
           update.a2pProfileEndUserSid = a2pProfileEndUserSid;

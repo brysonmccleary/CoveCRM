@@ -2076,10 +2076,12 @@ usecaseCode: normalizedUseCase,
     // ---------------- 2.2) EndUser: us_a2p_messaging_profile_information ----------------
     live = await A2PProfile.findOne({ userId }).lean<any>();
     if (!live?.a2pProfileEndUserSid) {
-      const a2pAttributes = {
+      const a2pAttributes: Record<string, string> = {
         company_type: "private",
         brand_contact_email: String(email),
       };
+      delete (a2pAttributes as any).stock_exchange;
+      delete (a2pAttributes as any).stock_ticker;
 
       log("step: endUsers.create (a2p_profile)", {
         type: "us_a2p_messaging_profile_information",
