@@ -17,6 +17,7 @@ import { scoreLeadOnArrival } from "@/lib/leads/scoreLead";
 import { trackLeadSourceStat } from "@/lib/leads/trackLeadSourceStat";
 import { checkDuplicate } from "@/lib/leads/checkDuplicate";
 import { triggerAIFirstCall } from "@/lib/ai/triggerAIFirstCall";
+import { buildLeadSheetPayload } from "@/lib/facebook/sheets/mapLeadToSheetRow";
 
 const FB_APP_SECRET = process.env.FB_APP_SECRET || "";
 
@@ -48,15 +49,17 @@ const FB_LEAD_TYPE_TO_AI_SCRIPT_KEY: Record<string, string> = {
   trucker: "trucker_leads",
 };
 
-async function fetchLeadFromGraph(leadgenId: string): Promise<Record<string, string>> {
-  const token = process.env.FB_PAGE_ACCESS_TOKEN;
-  if (!token) return {};
+async function fetchLeadFromGraph(
+  leadgenId: string,
+  accessToken: string
+): Promise<Record<string, string>> {
+  if (!accessToken) return {};
   try {
     const url = `https://graph.facebook.com/v18.0/${leadgenId}`;
     const res = await axios.get(url, {
       params: {
         fields: "field_data,created_time,ad_id,form_id",
-        access_token: token,
+        access_token: accessToken,
       },
       timeout: 8000,
     });
@@ -144,30 +147,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             continue;
           }
 
-          // Fetch full lead details from Graph API
-          const fieldMap = await fetchLeadFromGraph(fbLeadId);
+          const fieldMap: Record<string, string> = {};
 
           // Fall back to any field_data included directly in the payload
           for (const f of value?.field_data ?? []) {
             fieldMap[String(f.name).toLowerCase()] = String(f.values?.[0] ?? "");
           }
-
-          const fullName =
-            fieldMap["full_name"] ??
-            `${fieldMap["first_name"] ?? ""} ${fieldMap["last_name"] ?? ""}`.trim();
-          const email = (fieldMap["email"] ?? "").toLowerCase().trim();
-          const phone = fieldMap["phone_number"] ?? fieldMap["phone"] ?? "";
-          const city = fieldMap["city"] ?? "";
-          const state = fieldMap["state"] ?? "";
-          const zip = fieldMap["zip"] ?? fieldMap["postal_code"] ?? "";
-          const birthdate = fieldMap["birthdate"] ?? fieldMap["date_of_birth"] ?? "";
-          const homeowner = fieldMap["homeowner"] ?? "";
-          const coverageAmount =
-            fieldMap["coverage_amount"] ??
-            fieldMap["coverage amount wanted ($5,000 – $25,000 / $25,000+)"] ??
-            fieldMap["mortgage balance (approximate)"] ??
-            fieldMap["current coverage amount (if any)"] ??
-            "";
 
           // Find campaign: pageId → leadType match → isDefault → most recent active
           const userEmailFromQuery =
@@ -186,12 +171,29 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                   status: { $in: ["active", "setup"] },
                 }).lean()
               : null) ||
+            (value?.campaign_id
+              ? await FBLeadCampaign.findOne({
+                  metaCampaignId: String(value.campaign_id),
+                  status: { $in: ["active", "setup"] },
+                }).lean()
+              : null) ||
             (pageId
               ? await FBLeadCampaign.findOne({
                   facebookPageId: pageId,
                   status: { $in: ["active", "setup"] },
-                }).lean()
+                })
+                  .sort({ createdAt: -1 })
+                  .lean()
               : null);
+
+          if (!campaign) {
+            console.warn("[fb-webhook] No campaign match", {
+              formId,
+              adId,
+              metaCampaignId: value?.campaign_id,
+              pageId,
+            });
+          }
 
           if (!campaign && userEmailFromQuery) {
             // Try matching by lead_type from form data
@@ -233,10 +235,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             continue;
           }
 
-          const user = await User.findOne({ email: (campaign as any).userEmail })
-            .select("_id")
+          const user = await User.findOne({ _id: (campaign as any).userId })
+            .select("_id metaAccessToken")
             .lean();
           if (!user) continue;
+
+          const accessToken = String((user as any)?.metaAccessToken || "").trim();
+          if (accessToken) {
+            const graphFieldMap = await fetchLeadFromGraph(fbLeadId, accessToken);
+            Object.assign(fieldMap, graphFieldMap);
+            for (const f of value?.field_data ?? []) {
+              fieldMap[String(f.name).toLowerCase()] = String(f.values?.[0] ?? "");
+            }
+          } else {
+            console.warn("[fb-webhook] Missing access token, using payload only");
+          }
 
           // Check active FB Lead Manager subscription
           const sub = await FBLeadSubscription.findOne({ userId: (user as any)._id }).lean();
@@ -279,11 +292,44 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             }
           }
 
+          const fullName =
+            fieldMap["full_name"] ??
+            `${fieldMap["first_name"] ?? ""} ${fieldMap["last_name"] ?? ""}`.trim();
+          const email = (fieldMap["email"] ?? "").toLowerCase().trim();
+          const phone = fieldMap["phone_number"] ?? fieldMap["phone"] ?? "";
+          const city = fieldMap["city"] ?? "";
+          const state = fieldMap["state"] ?? "";
+          const zip = fieldMap["zip"] ?? fieldMap["postal_code"] ?? "";
+          const birthdate = fieldMap["birthdate"] ?? fieldMap["date_of_birth"] ?? "";
+          const homeowner = fieldMap["homeowner"] ?? "";
+          const coverageAmount =
+            fieldMap["coverage_amount"] ??
+            fieldMap["coverage amount wanted ($5,000 – $25,000 / $25,000+)"] ??
+            fieldMap["mortgage balance (approximate)"] ??
+            fieldMap["current coverage amount (if any)"] ??
+            "";
+
           const nameParts = fullName.split(/\s+/);
           const firstName = nameParts[0] ?? "";
           const lastName = nameParts.slice(1).join(" ");
           const normalizedPhone = phone.replace(/\D+/g, "");
           const crmLeadType = FB_LEAD_TYPE_TO_CRM[(campaign as any).leadType] ?? "Final Expense";
+          const sheetAnswers = {
+            ...fieldMap,
+            city,
+            state,
+            zip,
+            postalCode: zip,
+            birthdate,
+            dateOfBirth: birthdate,
+            homeowner,
+            coverage: coverageAmount,
+            coverageAmount,
+          };
+          const sheetNotes = Object.entries(fieldMap)
+            .filter(([, value]) => String(value || "").trim())
+            .map(([key, value]) => `${key}: ${value}`)
+            .join("\n");
 
           // Duplicate check before creating CRM lead
           const dupCheck = await checkDuplicate(
@@ -331,6 +377,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             status: "New",
             sourceType: "facebook_lead",
             realTimeEligible: true,
+            campaignId: (campaign as any)._id,
+            metaCampaignId: (campaign as any).metaCampaignId,
+            metaAdsetId: (campaign as any).metaAdsetId,
+            metaAdId: adId,
+            metaFormId: formId,
           });
 
           await FBLeadEntry.updateOne({ _id: entry._id }, { $set: { crmLeadId: crmLead._id } });
@@ -365,28 +416,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             { $inc: { totalLeads: 1 } }
           );
 
-          // Write to agent's Google Sheet via Apps Script if connected
-          const appsScriptUrl = (campaign as any).appsScriptUrl;
-          if (appsScriptUrl) {
-            await writeToAppsScript(appsScriptUrl, {
-              date: new Date().toISOString(),
-              campaign_name: (campaign as any).campaignName,
-              lead_type: (campaign as any).leadType,
+          // Mirror to the campaign's Google Sheet after CRM lead creation.
+          const appsScriptUrl = String((campaign as any).appsScriptUrl || "").trim();
+          if ((campaign as any).writeLeadsToSheet === true && appsScriptUrl) {
+            const payload = buildLeadSheetPayload({
+              leadType: (campaign as any).leadType,
+              campaignId: String((campaign as any)._id),
+              answers: sheetAnswers,
               firstName,
               lastName,
               email,
               phone,
-              city,
-              state,
-              zip,
-              birthdate,
-              homeowner,
-              coverage_amount: String(coverageAmount || ""),
-              source: "facebook_lead",
+              notes: sheetNotes,
               status: "New",
-              assigned_to: "",
-              notes: "",
             });
+            await writeToAppsScript(appsScriptUrl, payload);
           }
 
           console.info(`[fb-webhook] Imported lead ${fbLeadId} for ${(campaign as any).userEmail}`);

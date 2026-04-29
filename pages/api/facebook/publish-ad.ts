@@ -1,13 +1,21 @@
 // pages/api/facebook/publish-ad.ts
-// Creates internal FBLeadCampaign + CRM folder when agent clicks "Post Ad".
-// Meta API publishing is a future phase; this pass wires up the routing layer.
+// Creates internal FBLeadCampaign + CRM folder, attempts full Meta API publish,
+// generates auto-hosted funnel page data, and returns funnelUrl.
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/pages/api/auth/[...nextauth]";
+import OpenAI from "openai";
 import mongooseConnect from "@/lib/mongooseConnect";
 import FBLeadCampaign from "@/models/FBLeadCampaign";
 import Folder from "@/models/Folder";
 import User from "@/models/User";
+import { getCreativeRules } from "@/lib/facebook/creativeStyleRules";
+import type { LeadType as CreativeLeadType } from "@/lib/facebook/creativeStyleRules";
+import { isWinnerSupportedLeadType } from "@/lib/facebook/winningAdLibrary";
+import { getCanonicalHeaders, getLeadSheetType } from "@/lib/facebook/sheets/sheetHeaders";
+import { validateStates } from "@/lib/facebook/guardrails";
+import { validateLaunchInput } from "@/pages/api/facebook/validate-launch";
+import { injectAgentContact } from "@/lib/funnels/injectAgentContact";
 
 const VALID_LEAD_TYPES = [
   "final_expense",
@@ -16,6 +24,105 @@ const VALID_LEAD_TYPES = [
   "veteran",
   "trucker",
 ];
+
+const openai = process.env.OPENAI_API_KEY
+  ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+  : null;
+
+const IMAGE_PROMPT_FALLBACKS: Record<string, string> = {
+  final_expense:
+    "Vertical 1:1 Facebook ad image for final expense insurance, older couple at home, warm trustworthy realistic photography, no logos, no text overlay",
+  iul:
+    "Vertical 1:1 Facebook ad image for indexed universal life, confident middle-aged family in a bright home setting, premium realistic photography, no logos, no text overlay",
+  mortgage_protection:
+    "Vertical 1:1 Facebook ad image for mortgage protection, homeowner family in front of their house, realistic trustworthy lighting, no logos, no text overlay",
+  veteran:
+    "Vertical 1:1 Facebook ad image for veteran life insurance leads, mature family at home with subtle patriotic palette, realistic, no insignia, no logos, no text overlay",
+  trucker:
+    "Vertical 1:1 Facebook ad image for trucker insurance leads, professional truck driver with family-safe trustworthy tone, realistic photography, no logos, no text overlay",
+};
+
+function getImageAssetFromOpenAIResponse(image: any) {
+  const firstImage = image?.data?.[0] || {};
+  const url = String(firstImage.url || "").trim();
+  if (url) return url;
+
+  const b64Json = String(firstImage.b64_json || "").trim();
+  if (b64Json) return `data:image/png;base64,${b64Json}`;
+
+  return "";
+}
+
+function getBase64FromDataImageUrl(imageAsset: string) {
+  const match = String(imageAsset || "")
+    .trim()
+    .match(/^data:image\/(?:png|jpeg|jpg|webp);base64,([A-Za-z0-9+/=\s]+)$/);
+
+  return match?.[1]?.replace(/\s/g, "") || "";
+}
+
+async function generateImageUrlForPublish(leadType: string, imagePrompt?: string) {
+  if (!openai) return "";
+
+  const prompt =
+    String(imagePrompt || "").trim() ||
+    IMAGE_PROMPT_FALLBACKS[leadType] ||
+    IMAGE_PROMPT_FALLBACKS.mortgage_protection;
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const image = await openai.images.generate({
+        model: "gpt-image-1",
+        prompt,
+        size: "1024x1024",
+      });
+      const imageAsset = getImageAssetFromOpenAIResponse(image);
+      if (imageAsset) return imageAsset;
+    } catch (err: any) {
+      console.warn("[publish-ad] image generation attempt failed:", err?.message || err);
+    }
+  }
+
+  return "";
+}
+
+async function uploadMetaAdImageFromDataUrl(
+  adAccountId: string,
+  accessToken: string,
+  imageAsset: string,
+  imageName: string
+) {
+  const imageBase64 = getBase64FromDataImageUrl(imageAsset);
+  if (!imageBase64) {
+    throw new Error("No usable generated image asset was available for Meta creative upload");
+  }
+
+  const imageParams = new URLSearchParams();
+  imageParams.set("bytes", imageBase64);
+  imageParams.set("name", imageName);
+  imageParams.set("access_token", accessToken);
+
+  const imageResp = await fetch(`https://graph.facebook.com/v19.0/act_${adAccountId}/adimages`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: imageParams.toString(),
+  });
+  const imageJson = await imageResp.json();
+  const images =
+    imageJson?.images && typeof imageJson.images === "object"
+      ? (imageJson.images as Record<string, any>)
+      : {};
+  const firstImageHash = Object.values(images)
+    .map((image: any) => String(image?.hash || "").trim())
+    .find(Boolean);
+  const imageHash = String(images.bytes?.hash || firstImageHash || imageJson?.hash || "").trim();
+
+  if (!imageResp.ok || !imageHash) {
+    throw new Error(`Meta image upload failed: ${JSON.stringify(imageJson)}`);
+  }
+
+  return imageHash;
+}
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") {
@@ -40,6 +147,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     facebookPageId,
     adAccountId,
     creativeArchetype,
+    // Winner fields — sent by generate-ad when winner library was used
+    winningFamilyId,
+    variationType,
+    uniquenessFingerprint,
+    landingPageConfig: winnerLandingPageConfig,
+    benefitBullets: winnerBenefitBullets,
+    buttonLabels: winnerButtonLabels,
+    vendorStyleTag,
+    licensedStates,
+    borderStateBehavior,
+    stateRestrictionNoticeAccepted,
+    publicAgentProfile,
+    complianceProfile,
+    funnelType,
   } = req.body as {
     leadType?: string;
     campaignName?: string;
@@ -53,6 +174,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     facebookPageId?: string;
     adAccountId?: string;
     creativeArchetype?: string;
+    winningFamilyId?: string;
+    variationType?: string;
+    uniquenessFingerprint?: string;
+    landingPageConfig?: {
+      pageType?: string;
+      headline?: string;
+      subheadline?: string;
+      buttonLabels?: string[];
+      benefitBullets?: string[];
+      ctaStrip?: string;
+      theme?: { background?: string; accent?: string; styleTag?: string };
+    };
+    benefitBullets?: string[];
+    buttonLabels?: string[];
+    vendorStyleTag?: string;
+    licensedStates?: string[];
+    borderStateBehavior?: "allow_with_warning" | "block";
+    stateRestrictionNoticeAccepted?: boolean;
+    publicAgentProfile?: Record<string, string>;
+    complianceProfile?: Record<string, string>;
+    funnelType?: string;
   };
 
   // Validate required fields
@@ -72,19 +214,99 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (budgetCents < 500) {
     return res.status(400).json({ error: "dailyBudgetCents must be >= 500 ($5.00/day minimum)" });
   }
+  let normalizedLicensedStates: string[] = [];
+  try {
+    normalizedLicensedStates = validateStates(licensedStates);
+  } catch (err: any) {
+    return res.status(400).json({ error: err?.message || "Licensed states required" });
+  }
+  if (!stateRestrictionNoticeAccepted) {
+    return res.status(400).json({ error: "State restriction notice must be acknowledged before publishing." });
+  }
 
   try {
-    await mongooseConnect();
+    const launchValidation = await validateLaunchInput({
+      userEmail: session.user.email,
+      body: req.body,
+    });
+    normalizedLicensedStates = launchValidation.licensedStates;
+    const lockedStructure = launchValidation.structure;
 
     const userEmail = String(session.user.email).toLowerCase();
     const user = await User.findOne({ email: userEmail })
-      .select("_id metaAccessToken metaAdAccountId metaPageId metaInstagramId")
+      .select("_id email name firstName lastName agentPhone numbers metaAccessToken metaSystemUserToken metaAdAccountId metaPageId metaInstagramId")
       .lean();
     if (!user) {
       return res.status(404).json({ error: "User account not found" });
     }
+    const agentContact = injectAgentContact(user, {
+      name: publicAgentProfile?.displayName,
+      phone: publicAgentProfile?.phone,
+      email: (user as any).email,
+    });
 
     const safeName = String(campaignName).trim();
+    const funnelSlug = safeName
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, "")
+      .slice(0, 80);
+    let resolvedImageUrl = String(imageUrl || "").trim();
+
+    if (!resolvedImageUrl) {
+      resolvedImageUrl = await generateImageUrlForPublish(leadType, imagePrompt);
+    }
+
+    if (!resolvedImageUrl) {
+      return res.status(400).json({
+        ok: false,
+        error: "Image generation required before publish",
+      });
+    }
+
+    // Build auto-hosted funnel content.
+    // For winner-supported lead types: use the winner landing page config passed from generate-ad.
+    // For unsupported types (IUL, etc.): fall back to getCreativeRules() blueprint.
+    // Stored in the campaign record; served at /f/{campaignId}.
+    const creativeLeadType = (VALID_LEAD_TYPES.includes(String(leadType)) ? leadType : "mortgage_protection") as CreativeLeadType;
+    const allArchetypeRules = getCreativeRules(creativeLeadType);
+    const primaryRule = allArchetypeRules[0];
+
+    const useWinnerConfig = isWinnerSupportedLeadType(String(leadType)) && !!winnerLandingPageConfig;
+    const sheetType = getLeadSheetType(leadType);
+
+    const funnelData = {
+      leadType,
+      campaignName: safeName,
+      // Headline: prefer winner landing page config, then ad headline, then archetype rule
+      headline: (useWinnerConfig ? winnerLandingPageConfig!.headline : null)
+        ?? primaryRule.overlayData.headline,
+      subheadline: (useWinnerConfig ? winnerLandingPageConfig!.subheadline : null)
+        ?? primaryRule.overlayData.subheadline,
+      buttonLabels: (useWinnerConfig ? winnerLandingPageConfig!.buttonLabels : null)
+        ?? winnerButtonLabels
+        ?? primaryRule.overlayData.buttonLabels,
+      ctaStrip: (useWinnerConfig ? winnerLandingPageConfig!.ctaStrip : null)
+        ?? primaryRule.overlayData.ctaStrip,
+      benefitBullets: (useWinnerConfig ? winnerLandingPageConfig!.benefitBullets : null)
+        ?? winnerBenefitBullets
+        ?? primaryRule.overlayData.benefitBullets,
+      ctaStyle: primaryRule.ctaStyle,
+      buttonStyle: primaryRule.buttonStyle,
+      colorDirection: (useWinnerConfig ? winnerLandingPageConfig!.theme?.styleTag : null)
+        ?? primaryRule.colorDirection,
+      adHeadline: headline || "",
+      adPrimaryText: primaryText || "",
+      imageUrl: resolvedImageUrl,
+      creativeArchetype: creativeArchetype || winningFamilyId || primaryRule.archetype,
+      generatedAt: new Date().toISOString(),
+      // Winner metadata — used by the funnel renderer for family-matched styling
+      pageType: useWinnerConfig ? (winnerLandingPageConfig!.pageType || "") : "",
+      vendorStyleTag: vendorStyleTag || "",
+      winningFamilyId: winningFamilyId || "",
+      variationType: variationType || "",
+      uniquenessFingerprint: uniquenessFingerprint || "",
+    };
 
     // 1. Ensure CRM folder exists — convention: "FB: {campaignName}"
     //    This matches what the webhook uses for lead routing.
@@ -129,16 +351,48 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           dailyBudget: Math.round(budgetCents / 100),
           folderId,
           ...(facebookPageId ? { facebookPageId } : {}),
-          // Store ad copy metadata in notes for future troubleshooting
+          funnelStatus: "active",
+          funnelSlug,
+          funnelVersion: "2026-04-production-v1",
+          landingPageConfig: funnelData,
+          licensedStates: normalizedLicensedStates,
+          borderStateBehavior: borderStateBehavior === "allow_with_warning" ? "allow_with_warning" : "block",
+          stateRestrictionNoticeAccepted: true,
+          publicAgentProfile: {
+            displayName: agentContact.name,
+            businessName: String(publicAgentProfile?.businessName || "").trim(),
+            phone: agentContact.phone,
+            stateLabel: normalizedLicensedStates.join(", "),
+            logoUrl: String(publicAgentProfile?.logoUrl || "").trim(),
+            headshotUrl: String(publicAgentProfile?.headshotUrl || "").trim(),
+          },
+          complianceProfile: {
+            disclaimerText:
+              String(complianceProfile?.disclaimerText || "").trim() ||
+              "Availability varies by state and carrier. This is a no-obligation review with a licensed agent.",
+            consentText:
+              String(complianceProfile?.consentText || "").trim() ||
+              "By submitting, you agree to be contacted by phone, text, or email by a licensed insurance agent. Consent is not a condition of purchase.",
+            privacyUrl: String(complianceProfile?.privacyUrl || "").trim(),
+            termsUrl: String(complianceProfile?.termsUrl || "").trim(),
+          },
+          leadSheetType: sheetType,
+          expectedSheetHeaders: getCanonicalHeaders(sheetType),
+          writeLeadsToSheet: true,
+          // Store ad copy metadata + auto-generated funnel data.
+          // Funnel data is served at /f/{campaignId} as the hosted landing page.
           notes: JSON.stringify({
             headline: headline || "",
             primaryText: primaryText || "",
             imagePrompt: imagePrompt || "",
-            imageUrl: imageUrl || "",
+            imageUrl: resolvedImageUrl,
             cta: cta || "",
             creativeArchetype: creativeArchetype || "",
             adAccountId: adAccountId || "",
+            funnelType: funnelType || "",
+            campaignStructure: lockedStructure,
             savedAt: new Date().toISOString(),
+            funnelData,
           }),
         },
       },
@@ -153,23 +407,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     let metaError: string | null = null;
 
     try {
-      const fullUser = await User.findOne({ email: userEmail })
-        .select("metaAccessToken metaAdAccountId metaPageId metaInstagramId")
-        .lean() as any;
-
-      const accessToken = String(fullUser?.metaAccessToken || "").trim();
-      const adAccountIdFinal = String(adAccountId || fullUser?.metaAdAccountId || "").trim().replace(/^act_/, "");
-      const pageIdFinal = String(facebookPageId || fullUser?.metaPageId || "").trim();
+      const fullUser = user as any;
+      const accessToken = String(launchValidation.accessToken || "").trim();
+      const adAccountIdFinal = String(launchValidation.adAccountId || "").trim().replace(/^act_/, "");
+      const pageIdFinal = String(launchValidation.pageId || "").trim();
       const instagramId = String(fullUser?.metaInstagramId || "").trim();
 
-      if (!accessToken || !adAccountIdFinal || !pageIdFinal) {
-        metaPublishStatus = "skipped_missing_meta_connection";
-      } else {
         const campaignParams = new URLSearchParams();
-        campaignParams.set("name", safeName);
-        campaignParams.set("objective", "OUTCOME_LEADS");
-        campaignParams.set("status", "PAUSED");
-        campaignParams.set("special_ad_categories", '["CREDIT"]');
+        campaignParams.set("name", lockedStructure.campaign.name);
+        campaignParams.set("objective", lockedStructure.campaign.objective);
+        campaignParams.set("buying_type", lockedStructure.campaign.buying_type);
+        campaignParams.set("status", lockedStructure.campaign.status);
+        campaignParams.set("special_ad_categories", JSON.stringify(lockedStructure.campaign.special_ad_categories));
         campaignParams.set("access_token", accessToken);
 
         const metaCampaignResp = await fetch(`https://graph.facebook.com/v19.0/act_${adAccountIdFinal}/campaigns`, {
@@ -185,16 +434,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         metaCampaignId = String(metaCampaignJson.id);
 
         const adsetParams = new URLSearchParams();
-        adsetParams.set("name", `${safeName} Ad Set`);
+        adsetParams.set("name", lockedStructure.adSet.name);
         adsetParams.set("campaign_id", metaCampaignId);
-        adsetParams.set("daily_budget", String(budgetCents));
-        adsetParams.set("billing_event", "IMPRESSIONS");
-        adsetParams.set("optimization_goal", "LEAD_GENERATION");
-        adsetParams.set("bid_strategy", "LOWEST_COST_WITHOUT_CAP");
-        adsetParams.set("status", "PAUSED");
+        adsetParams.set("daily_budget", String(lockedStructure.adSet.daily_budget));
+        adsetParams.set("billing_event", lockedStructure.adSet.billing_event);
+        adsetParams.set("optimization_goal", lockedStructure.adSet.optimization_goal);
+        adsetParams.set("bid_strategy", lockedStructure.adSet.bid_strategy);
+        adsetParams.set("status", lockedStructure.adSet.status);
         adsetParams.set("promoted_object", JSON.stringify({ page_id: pageIdFinal }));
         adsetParams.set("targeting", JSON.stringify({
-          geo_locations: { countries: ["US"] },
+          ...lockedStructure.adSet.targeting,
           age_min: 30,
           age_max: 80,
         }));
@@ -239,11 +488,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           throw new Error(`Meta lead form create failed: ${JSON.stringify(metaFormJson)}`);
         }
         metaFormId = String(metaFormJson.id);
+        const appUrl = String(process.env.NEXT_PUBLIC_APP_URL || process.env.NEXTAUTH_URL || "https://www.covecrm.com").replace(/\/$/, "");
+        const funnelAbsoluteUrl = `${appUrl}/f/${String(campaign._id)}`;
+        const resolvedImageBase64 = getBase64FromDataImageUrl(resolvedImageUrl);
+        const resolvedMetaImageHash = resolvedImageBase64
+          ? await uploadMetaAdImageFromDataUrl(
+              adAccountIdFinal,
+              accessToken,
+              resolvedImageUrl,
+              `${safeName} Creative Image`
+            )
+          : "";
 
         const objectStorySpec: Record<string, any> = {
           page_id: pageIdFinal,
           link_data: {
-            link: "https://www.covecrm.com",
+            link: funnelAbsoluteUrl,
             message: String(primaryText || ""),
             name: String(headline || ""),
             description: String(description || ""),
@@ -251,14 +511,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               type: String(cta || "LEARN_MORE"),
               value: {
                 lead_gen_form_id: metaFormId,
-                link: "https://www.covecrm.com",
+                link: funnelAbsoluteUrl,
               },
             },
           },
         };
 
-        if (imageUrl && String(imageUrl).trim()) {
-          objectStorySpec.link_data.image_url = String(imageUrl).trim();
+        if (resolvedMetaImageHash) {
+          objectStorySpec.link_data.image_hash = resolvedMetaImageHash;
+        } else {
+          objectStorySpec.link_data.image_url = resolvedImageUrl;
         }
         if (instagramId) {
           objectStorySpec.instagram_actor_id = instagramId;
@@ -300,6 +562,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
         metaAdId = String(metaAdJson.id);
 
+        const now = new Date();
         await FBLeadCampaign.updateOne(
           { _id: campaign._id },
           {
@@ -309,32 +572,63 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               metaFormId,
               metaAdId,
               facebookCampaignId: metaCampaignId,
+              metaPublishStatus: "success",
+              metaPublishError: "",
+              metaLastPublishAttemptAt: now,
+              metaLastPublishSuccessAt: now,
+              metaObjectHealth: "paused_on_meta",
             },
           }
         );
 
         metaPublishStatus = "success";
-      }
     } catch (err: any) {
       metaPublishStatus = "failed";
       metaError = err?.message || "Meta publish failed";
       console.error("[publish-ad] meta publish error:", metaError);
     }
 
+    // Persist publish diagnostics for non-success outcomes
+    if (metaPublishStatus !== "success") {
+      await FBLeadCampaign.updateOne(
+        { _id: campaign._id },
+        {
+          $set: {
+            metaPublishStatus,
+            metaPublishError: metaError || "",
+            metaLastPublishAttemptAt: new Date(),
+            metaObjectHealth: "sync_failed",
+          },
+        }
+      ).catch((e: any) => console.warn("[publish-ad] diagnostics update failed:", e?.message));
+    }
+
+    const campaignId = String(campaign._id);
+    const funnelUrl = `/f/${campaignId}`;
+
+    if (metaPublishStatus === "failed") {
+      return res.status(500).json({
+        ok: false,
+        error: "Meta publish failed",
+        metaError,
+        metaCampaignId,
+        metaAdsetId,
+        metaFormId,
+        metaAdId,
+        campaignId,
+        funnelUrl,
+      });
+    }
+
     return res.status(200).json({
       ok: true,
-      status: "internal_campaign_created_meta_publish_attempted",
-      message:
-        metaPublishStatus === "success"
-          ? `Meta campaign, ad set, lead form, and ad were created in PAUSED status, and CRM routing folder ${folderName} is ready.`
-          : `CRM campaign and folder are ready, but Meta live publish did not complete.`,
-      campaignId: String(campaign._id),
+      message: `Campaign created, Meta assets created, hosted funnel live, and CRM routing ready. Meta campaign, ad set, lead form, and ad are in PAUSED status.`,
+      campaignId,
       folderId: String(folderId),
       folderName,
       campaignName: safeName,
       leadType,
-      metaPublishStatus,
-      metaError,
+      funnelUrl,
       metaCampaignId,
       metaAdsetId,
       metaFormId,

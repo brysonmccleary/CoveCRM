@@ -36,10 +36,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     { name: "Conversations", path: "/dashboard?tab=conversations" },
     { name: "Calendar", path: "/dashboard?tab=calendar" },
     { name: "Numbers", path: "/dashboard?tab=numbers" },
+    { name: "FB Leads", path: "/facebook-leads" },
     { name: "Team", path: "/team" },
     { name: "Settings", path: "/dashboard?tab=settings" },
     ...(isAdmin ? [
-      { name: "FB Leads", path: "/facebook-leads" },
       { name: "Recruiting", path: "/recruiting" },
       { name: "Admin: Prospecting", path: "/admin/prospecting" },
       { name: "Admin: Site Intelligence", path: "/admin/site-intelligence" },

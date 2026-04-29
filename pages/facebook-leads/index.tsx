@@ -5,10 +5,12 @@ import { useSession } from "next-auth/react";
 import { useRouter } from "next/router";
 import DashboardLayout from "@/components/DashboardLayout";
 import MetaConnectPanel from "@/components/MetaConnectPanel";
+import FBCampaignSheetsWizard from "@/components/FBCampaignSheetsWizard";
+import AdWizard from "@/components/FacebookAds/AdWizard";
 import { GetServerSideProps } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/pages/api/auth/[...nextauth]";
-import { isExperimentalAdminEmail } from "@/lib/isExperimentalAdmin";
+import { US_STATES } from "@/lib/facebook/geo/usStates";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -22,10 +24,18 @@ interface FBCampaign {
   totalLeads: number;
   totalClicks: number;
   cpl: number;
+  appointments?: number;
+  sales?: number;
   plan: string;
   createdAt: string;
   googleSheetUrl?: string;
   appsScriptUrl?: string;
+  writeLeadsToSheet?: boolean;
+  sheetHeaderValidationPassed?: boolean;
+  metaObjectHealth?: string | null;
+  metaSyncStatus?: string | null;
+  metaPublishStatus?: string | null;
+  metaLastSyncedAt?: string | null;
 }
 
 interface FBLeadEntryRow {
@@ -77,26 +87,6 @@ interface GeneratedImages {
   recommendedSize: string;
 }
 
-const DEFAULT_SHEET_HEADERS = [
-  "date",
-  "campaign_name",
-  "lead_type",
-  "first_name",
-  "last_name",
-  "phone",
-  "email",
-  "city",
-  "state",
-  "zip",
-  "birthdate",
-  "homeowner",
-  "coverage_amount",
-  "source",
-  "status",
-  "assigned_to",
-  "notes",
-];
-
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 type LeadTypeOption = {
@@ -109,7 +99,6 @@ type LeadTypeOption = {
 
 const LEAD_TYPES: readonly LeadTypeOption[] = [
   { id: "final_expense", label: "Final Expense", icon: "🕊️", desc: "Seniors age 50–80" },
-  { id: "iul", label: "IUL", icon: "📈", desc: "Indexed Universal Life" },
   { id: "mortgage_protection", label: "Mortgage Protection", icon: "🏠", desc: "New homeowners" },
   { id: "veteran", label: "Veteran Leads", icon: "🎖️", desc: "US military veterans" },
   { id: "trucker", label: "Trucker Leads", icon: "🚚", desc: "CDL commercial drivers" },
@@ -118,7 +107,6 @@ const LEAD_TYPES: readonly LeadTypeOption[] = [
 
 const LEAD_TYPE_LABEL: Record<string, string> = {
   final_expense: "Final Expense",
-  iul: "IUL",
   mortgage_protection: "Mortgage Protection",
   veteran: "Veteran",
   trucker: "Trucker",
@@ -138,7 +126,6 @@ const CREATIVE_TIPS: Record<string, string> = {
     "Use an American flag or a veteran in civilian clothes — avoid military uniforms, Facebook restricts military imagery. Warm, authentic family photos convert best.",
   mortgage_protection:
     "Use a happy couple in front of a home or a family with house keys. Always include people — houses without faces underperform.",
-  iul: "Use a professional or family photo. Financial ads perform significantly better with human faces in the creative.",
   trucker:
     "Use a semi truck on an open highway or a trucker with family. Authentic beats stock every time.",
 };
@@ -507,7 +494,12 @@ function SetupWizard({
   const [loadingIntel, setLoadingIntel] = useState(false);
   const [copiedIdx, setCopiedIdx] = useState<string | null>(null);
   const [campaignName, setCampaignName] = useState(`${LEAD_TYPE_LABEL[leadType] ?? leadType} Campaign`);
+  const [campaignNameEdited, setCampaignNameEdited] = useState(false);
   const [dailyBudget, setDailyBudget] = useState("20");
+  const [licensedStates, setLicensedStates] = useState<string[]>([]);
+  const [stateSearch, setStateSearch] = useState("");
+  const [borderStateBehavior, setBorderStateBehavior] = useState<"allow_with_warning" | "block">("block");
+  const [stateNoticeAccepted, setStateNoticeAccepted] = useState(false);
   const [creating, setCreating] = useState(false);
 
   // Sheet / Apps Script connection state
@@ -517,10 +509,14 @@ function SetupWizard({
   const [appsScriptUrl, setAppsScriptUrl] = useState("");
   const [connectingScript, setConnectingScript] = useState(false);
   const [scriptMsg, setScriptMsg] = useState("");
+  const [validatingSheet, setValidatingSheet] = useState(false);
+  const [sheetValidationMsg, setSheetValidationMsg] = useState("");
   const [appsScriptTemplate, setAppsScriptTemplate] = useState("");
   const [appsScriptSteps, setAppsScriptSteps] = useState<string[]>([]);
-  const [headerRowText, setHeaderRowText] = useState(DEFAULT_SHEET_HEADERS.join(","));
-  const [sheetHeaders, setSheetHeaders] = useState<string[]>(DEFAULT_SHEET_HEADERS);
+  const [headerRowText, setHeaderRowText] = useState("");
+  const [sheetHeaders, setSheetHeaders] = useState<string[]>([]);
+  const [sheetInstructionsError, setSheetInstructionsError] = useState(false);
+  const [loadingSheetInstructions, setLoadingSheetInstructions] = useState(false);
   const [copiedScript, setCopiedScript] = useState(false);
   const [createdCampaignId, setCreatedCampaignId] = useState<string | null>(null);
   const [expectationsChecked, setExpectationsChecked] = useState(false);
@@ -531,6 +527,33 @@ function SetupWizard({
 
   const userEmail = session?.user?.email ?? "";
   const webhookUrl = `https://covecrm.com/api/facebook/webhook?userEmail=${encodeURIComponent(userEmail)}`;
+  const filteredStates = US_STATES.filter((state) => {
+    const q = stateSearch.trim().toLowerCase();
+    if (!q) return true;
+    return state.name.toLowerCase().includes(q) || state.code.toLowerCase().includes(q);
+  });
+  const selectedStateLabels = licensedStates
+    .map((code) => US_STATES.find((state) => state.code === code)?.name || code)
+    .filter(Boolean);
+  const stateSummary =
+    selectedStateLabels.length <= 3
+      ? selectedStateLabels.join(", ")
+      : `${selectedStateLabels.slice(0, 3).join(", ")} +${selectedStateLabels.length - 3} more`;
+
+  const updateCampaignStates = (nextStates: string[]) => {
+    const uniqueStates = Array.from(new Set(nextStates));
+    setLicensedStates(uniqueStates);
+    if (!campaignNameEdited) {
+      const label = LEAD_TYPE_LABEL[leadType] ?? leadType;
+      const nextName =
+        uniqueStates.length === 1
+          ? `${label} - ${US_STATES.find((state) => state.code === uniqueStates[0])?.name || uniqueStates[0]} Campaign`
+          : uniqueStates.length > 1
+          ? `${label} - Multi State Campaign`
+          : `${label} Campaign`;
+      setCampaignName(nextName);
+    }
+  };
 
   const goNext = () => setStep((s) => Math.min(SETUP_STEPS.length - 1, s + 1));
   const goBack = () => setStep((s) => Math.max(0, s - 1));
@@ -592,14 +615,30 @@ function SetupWizard({
 
   const loadAppsScriptTemplate = async () => {
     if (appsScriptTemplate) return;
+    setSheetInstructionsError(false);
+    setLoadingSheetInstructions(true);
     try {
       const res = await fetch(`/api/facebook/setup-sheet-instructions?leadType=${encodeURIComponent(leadType)}`);
+      if (!res.ok) throw new Error("API error");
       const data = await res.json();
+      const headers: string[] = Array.isArray(data.headers) && data.headers.length > 0 ? data.headers : [];
+      if (headers.length === 0) throw new Error("No headers returned");
       setAppsScriptTemplate(data.appsScriptTemplate ?? "");
       setAppsScriptSteps(data.steps ?? []);
-      setSheetHeaders(data.headers ?? DEFAULT_SHEET_HEADERS);
-      setHeaderRowText(data.headerRowText ?? DEFAULT_SHEET_HEADERS.join(","));
-    } catch {}
+      setSheetHeaders(headers);
+      setHeaderRowText(data.headerRowText ?? headers.join("\t"));
+    } catch {
+      setSheetInstructionsError(true);
+      setSheetHeaders([]);
+      setHeaderRowText("");
+    } finally {
+      setLoadingSheetInstructions(false);
+    }
+  };
+
+  const retryLoadSheetInstructions = () => {
+    setAppsScriptTemplate("");
+    loadAppsScriptTemplate();
   };
 
   const generateImages = async () => {
@@ -632,6 +671,9 @@ function SetupWizard({
           campaignName,
           dailyBudget: Number(dailyBudget),
           plan,
+          licensedStates,
+          borderStateBehavior,
+          stateRestrictionNoticeAccepted: stateNoticeAccepted,
         }),
       });
       const data = await res.json();
@@ -643,6 +685,7 @@ function SetupWizard({
         }
         if (appsScriptUrl.trim()) {
           await connectAppsScript(campaignId);
+          await validateSheetSetup(campaignId);
         }
         onComplete(data.campaign);
       }
@@ -680,6 +723,26 @@ function SetupWizard({
       setScriptMsg(res.ok ? "Apps Script connected!" : data.error ?? "Failed.");
     } finally {
       setConnectingScript(false);
+    }
+  };
+
+  const validateSheetSetup = async (campaignId: string) => {
+    setValidatingSheet(true);
+    setSheetValidationMsg("");
+    try {
+      const res = await fetch("/api/facebook/validate-sheet-setup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ campaignId, appsScriptUrl }),
+      });
+      const data = await res.json();
+      if (res.ok && data.valid) {
+        setSheetValidationMsg("Sheet setup validated. Leads will write to your sheet.");
+      } else {
+        setSheetValidationMsg((data.errors || [data.error || "Validation failed"]).join(" "));
+      }
+    } finally {
+      setValidatingSheet(false);
     }
   };
 
@@ -839,12 +902,11 @@ function SetupWizard({
                   </thead>
                   <tbody className="text-gray-300 text-xs">
                     {[
-                      { type: "Final Expense", guidance: "Start with $20–30/day minimum. Give it 30 days before evaluating." },
-                      { type: "Mortgage Protection", guidance: "Start with $25–35/day minimum. Higher competition market." },
-                      { type: "Veteran Leads", guidance: "Start with $20–25/day. Highly targeted audience, very responsive." },
-                      { type: "IUL", guidance: "Start with $30–40/day. Longer sales cycle, higher commission." },
-                      { type: "Trucker", guidance: "Start with $20–30/day. Niche audience, lower competition." },
-                    ].map((r) => (
+	                      { type: "Final Expense", guidance: "Start with $20–30/day minimum. Give it 30 days before evaluating." },
+	                      { type: "Mortgage Protection", guidance: "Start with $25–35/day minimum. Higher competition market." },
+	                      { type: "Veteran Leads", guidance: "Start with $20–25/day. Highly targeted audience, very responsive." },
+	                      { type: "Trucker", guidance: "Start with $20–30/day. Niche audience, lower competition." },
+	                    ].map((r) => (
                       <tr key={r.type} className="border-b border-gray-800">
                         <td className="py-2 pr-4 text-white font-medium">{r.type}</td>
                         <td className="py-2 text-gray-300">{r.guidance}</td>
@@ -1206,6 +1268,82 @@ function SetupWizard({
             <h3 className="text-xl font-bold text-white">Targeting Setup</h3>
             {adData?.targeting ? (
               <div className="space-y-3 text-sm">
+                <div className="bg-yellow-950/30 border border-yellow-700 rounded-lg p-4 space-y-3">
+                  <p className="text-yellow-200 text-sm font-semibold">States to run this campaign in are required before launch</p>
+                  <p className="text-yellow-100/80 text-xs leading-relaxed">
+                    Choose the states where you want this ad campaign to run. Bordering or out-of-state situations can occasionally happen with ad delivery or lead intent, so CoveCRM also checks the hosted funnel based on your settings.
+                  </p>
+                  <div>
+                    <div className="flex items-center justify-between gap-3 mb-2">
+                      <label className="text-xs text-gray-400 block">States to run this campaign in</label>
+                      <div className="flex gap-2">
+                        <button type="button" onClick={() => updateCampaignStates(US_STATES.map((state) => state.code))} className="text-xs text-blue-300 hover:text-blue-200">Select All</button>
+                        <button type="button" onClick={() => updateCampaignStates([])} className="text-xs text-gray-400 hover:text-white">Clear All</button>
+                      </div>
+                    </div>
+                    <input
+                      value={stateSearch}
+                      onChange={(e) => setStateSearch(e.target.value)}
+                      placeholder="Search state name or code..."
+                      className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-white text-sm mb-2"
+                    />
+                    <div className="max-h-48 overflow-y-auto bg-gray-900 border border-gray-700 rounded-lg p-2 grid grid-cols-1 sm:grid-cols-2 gap-1">
+                      {filteredStates.map((state) => (
+                        <label key={state.code} className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-white/5 text-sm text-gray-200">
+                          <input
+                            type="checkbox"
+                            checked={licensedStates.includes(state.code)}
+                            onChange={(e) => {
+                              updateCampaignStates(
+                                e.target.checked
+                                  ? [...licensedStates, state.code]
+                                  : licensedStates.filter((code) => code !== state.code)
+                              );
+                            }}
+                            className="accent-blue-500"
+                          />
+                          <span>{state.name}</span>
+                          <span className="text-xs text-gray-500">{state.code}</span>
+                        </label>
+                      ))}
+                    </div>
+                    {licensedStates.length > 0 ? (
+                      <div className="flex flex-wrap gap-1.5 mt-2">
+                        {selectedStateLabels.slice(0, 8).map((label) => (
+                          <span key={label} className="px-2 py-1 rounded bg-blue-900/40 border border-blue-700/50 text-blue-100 text-xs">{label}</span>
+                        ))}
+                        {selectedStateLabels.length > 8 && (
+                          <span className="px-2 py-1 rounded bg-gray-800 border border-gray-700 text-gray-300 text-xs">+{selectedStateLabels.length - 8} more</span>
+                        )}
+                      </div>
+                    ) : (
+                      <p className="text-xs text-yellow-300 mt-2">Select at least one campaign state to continue.</p>
+                    )}
+                    <p className="text-xs text-gray-500 mt-1">
+                      {licensedStates.length ? `${licensedStates.length} campaign ${licensedStates.length === 1 ? "state" : "states"} selected: ${stateSummary}` : "No campaign states selected yet."}
+                    </p>
+                  </div>
+                  <div>
+                    <label className="text-xs text-gray-400 mb-1 block">If someone selects a state outside this campaign</label>
+                    <select
+                      value={borderStateBehavior}
+                      onChange={(e) => setBorderStateBehavior(e.target.value === "allow_with_warning" ? "allow_with_warning" : "block")}
+                      className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-white text-sm"
+                    >
+                      <option value="block">Block submission</option>
+                      <option value="allow_with_warning">Allow with warning</option>
+                    </select>
+                  </div>
+                  <label className="flex items-start gap-2 text-xs text-gray-300">
+                    <input
+                      type="checkbox"
+                      checked={stateNoticeAccepted}
+                      onChange={(e) => setStateNoticeAccepted(e.target.checked)}
+                      className="mt-0.5 accent-blue-500"
+                    />
+                    I understand CoveCRM will target the selected campaign states and enforce my hosted funnel setting, but ad delivery and lead intent can still create border-state edge cases.
+                  </label>
+                </div>
                 <div className="bg-[#0f172a] border border-gray-700 rounded-lg p-4 space-y-3">
                   <div className="flex items-center gap-3">
                     <span className="text-gray-400 w-28 shrink-0">Age Range:</span>
@@ -1289,80 +1427,116 @@ function SetupWizard({
 
             <div className="bg-[#0f172a] border border-green-800 rounded-xl p-5 space-y-4">
               <div className="flex items-center gap-2">
-                <span className="bg-green-700 text-white text-xs font-bold px-2 py-0.5 rounded">Required Setup</span>
+                <span className="bg-green-700 text-white text-xs font-bold px-2 py-0.5 rounded">Google Sheet</span>
                 <h4 className="font-semibold text-white">Connect a Google Sheet you own</h4>
               </div>
               <p className="text-sm text-gray-300">
-                Connect one Google Sheet you own during onboarding. Every incoming Facebook lead will also be written there automatically so you always retain an agent-owned copy of your lead data.
+                Your Google Sheet will mirror every lead after it is created in CoveCRM. CoveCRM is always first — the sheet is your personal copy.
               </p>
-              <div className="grid grid-cols-1 gap-3">
-                <div>
-                  <label className="text-xs text-gray-400 mb-1 block">Google Sheet URL</label>
-                  <input
-                    value={googleSheetUrl}
-                    onChange={(e) => setGoogleSheetUrl(e.target.value)}
-                    placeholder="https://docs.google.com/spreadsheets/d/..."
-                    className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-white text-sm"
-                  />
+
+              {/* Loading state */}
+              {loadingSheetInstructions && (
+                <div className="text-sm text-gray-400">Loading sheet setup…</div>
+              )}
+
+              {/* Hard error state — blocks progression */}
+              {!loadingSheetInstructions && sheetInstructionsError && (
+                <div className="rounded-lg border border-red-700 bg-red-950/30 p-4 space-y-3">
+                  <p className="text-sm text-red-300 font-medium">Unable to load Google Sheet setup. Please refresh or try again.</p>
+                  <button
+                    onClick={retryLoadSheetInstructions}
+                    className="text-xs bg-gray-700 hover:bg-gray-600 text-white px-3 py-1.5 rounded"
+                  >
+                    Retry
+                  </button>
                 </div>
-                <div>
-                  <label className="text-xs text-gray-400 mb-1 block">Apps Script Web App URL</label>
-                  <input
-                    value={appsScriptUrl}
-                    onChange={(e) => setAppsScriptUrl(e.target.value)}
-                    placeholder="https://script.google.com/macros/s/..."
-                    className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-white text-sm"
-                  />
-                  <p className="text-xs text-gray-500 mt-1">Keep the existing Apps Script approach. CoveCRM uses this URL to write each lead into your sheet automatically.</p>
-                </div>
-              </div>
-              {appsScriptSteps.length > 0 && (
-                <div className="bg-[#111827] border border-gray-700 rounded-lg p-4 space-y-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <p className="text-sm font-medium text-white">Apps Script setup</p>
-                    {appsScriptTemplate && (
+              )}
+
+              {/* Sheet setup content — only shown when headers loaded successfully */}
+              {!loadingSheetInstructions && !sheetInstructionsError && sheetHeaders.length > 0 && (
+                <>
+                  <div className="grid grid-cols-1 gap-3">
+                    <div>
+                      <label className="text-xs text-gray-400 mb-1 block">Google Sheet URL</label>
+                      <input
+                        value={googleSheetUrl}
+                        onChange={(e) => setGoogleSheetUrl(e.target.value)}
+                        placeholder="https://docs.google.com/spreadsheets/d/..."
+                        className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-white text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs text-gray-400 mb-1 block">Apps Script Web App URL</label>
+                      <input
+                        value={appsScriptUrl}
+                        onChange={(e) => setAppsScriptUrl(e.target.value)}
+                        placeholder="https://script.google.com/macros/s/..."
+                        className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-white text-sm"
+                      />
+                      <p className="text-xs text-gray-500 mt-1">CoveCRM uses this Apps Script URL to mirror each campaign lead into your sheet after the CRM lead is created.</p>
+                    </div>
+                    {createdCampaignId && (
                       <button
-                        onClick={() => {
-                          copyText(appsScriptTemplate, "apps-script");
-                          setCopiedScript(true);
-                          setTimeout(() => setCopiedScript(false), 1500);
-                        }}
-                        className="text-xs bg-gray-700 hover:bg-gray-600 text-white px-3 py-1.5 rounded"
+                        onClick={() => validateSheetSetup(createdCampaignId)}
+                        disabled={validatingSheet || !appsScriptUrl.trim()}
+                        className="bg-blue-700 hover:bg-blue-600 disabled:opacity-50 text-white text-sm px-4 py-2 rounded-lg"
                       >
-                        {copiedScript ? "Copied!" : "Copy Apps Script"}
+                        {validatingSheet ? "Validating..." : "Validate Sheet Setup"}
                       </button>
                     )}
                   </div>
-                  <ol className="text-sm text-gray-300 space-y-1.5 list-decimal list-inside">
-                    {appsScriptSteps.map((item, idx) => (
-                      <li key={`${item}-${idx}`}>{item}</li>
-                    ))}
-                  </ol>
-                  <div>
-                    <div className="flex items-center justify-between gap-3 mb-2">
-                      <p className="text-xs text-gray-400 uppercase tracking-wide">Exact row 1 header</p>
-                      <button
-                        onClick={() => copyText(headerRowText, "header-row")}
-                        className="text-xs bg-gray-700 hover:bg-gray-600 text-white px-3 py-1.5 rounded"
-                      >
-                        {copiedIdx === "header-row" ? "Copied!" : "Copy Header Row"}
-                      </button>
+
+                  {appsScriptSteps.length > 0 && (
+                    <div className="bg-[#111827] border border-gray-700 rounded-lg p-4 space-y-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="text-sm font-medium text-white">Apps Script setup</p>
+                        {appsScriptTemplate && (
+                          <button
+                            onClick={() => {
+                              copyText(appsScriptTemplate, "apps-script");
+                              setCopiedScript(true);
+                              setTimeout(() => setCopiedScript(false), 1500);
+                            }}
+                            className="text-xs bg-gray-700 hover:bg-gray-600 text-white px-3 py-1.5 rounded"
+                          >
+                            {copiedScript ? "Copied!" : "Copy Apps Script"}
+                          </button>
+                        )}
+                      </div>
+                      <ol className="text-sm text-gray-300 space-y-1.5 list-decimal list-inside">
+                        {appsScriptSteps.map((item, idx) => (
+                          <li key={`${item}-${idx}`}>{item}</li>
+                        ))}
+                      </ol>
+                      <div>
+                        <div className="flex items-center justify-between gap-3 mb-2">
+                          <p className="text-xs text-gray-400 uppercase tracking-wide">Exact row 1 header</p>
+                          <button
+                            onClick={() => copyText(headerRowText, "header-row")}
+                            className="text-xs bg-gray-700 hover:bg-gray-600 text-white px-3 py-1.5 rounded"
+                          >
+                            {copiedIdx === "header-row" ? "Copied!" : "Copy Header Row"}
+                          </button>
+                        </div>
+                        <p className="text-xs text-gray-500 mb-2">Paste this into row 1 of your blank Google Sheet. These columns match exactly what CoveCRM will send for this lead type.</p>
+                        <textarea
+                          readOnly
+                          value={headerRowText}
+                          rows={4}
+                          className="w-full bg-gray-900 border border-gray-700 rounded px-3 py-2 text-xs text-gray-200 font-mono resize-none"
+                        />
+                      </div>
                     </div>
-                    <p className="text-xs text-gray-500 mb-2">Paste this into row 1 of your blank Google Sheet.</p>
-                    <textarea
-                      readOnly
-                      value={headerRowText}
-                      rows={4}
-                      className="w-full bg-gray-900 border border-gray-700 rounded px-3 py-2 text-xs text-gray-200 font-mono resize-none"
-                    />
-                  </div>
-                </div>
-              )}
-              {(sheetMsg || scriptMsg) && (
-                <div className="space-y-1">
-                  {sheetMsg && <p className="text-xs text-green-400">{sheetMsg}</p>}
-                  {scriptMsg && <p className="text-xs text-green-400">{scriptMsg}</p>}
-                </div>
+                  )}
+
+                  {(sheetMsg || scriptMsg || sheetValidationMsg) && (
+                    <div className="space-y-1">
+                      {sheetMsg && <p className="text-xs text-green-400">{sheetMsg}</p>}
+                      {scriptMsg && <p className="text-xs text-green-400">{scriptMsg}</p>}
+                      {sheetValidationMsg && <p className="text-xs text-blue-300">{sheetValidationMsg}</p>}
+                    </div>
+                  )}
+                </>
               )}
             </div>
 
@@ -1400,11 +1574,17 @@ function SetupWizard({
                 <label className="text-xs text-gray-400 mb-1 block">Campaign Name</label>
                 <input
                   value={campaignName}
-                  onChange={(e) => setCampaignName(e.target.value)}
+                  onChange={(e) => {
+                    setCampaignNameEdited(true);
+                    setCampaignName(e.target.value);
+                  }}
                   className="w-full bg-[#0f172a] border border-gray-600 rounded px-3 py-2 text-white text-sm"
                 />
                 <p className="text-xs text-gray-500 mt-1">
                   This campaign will create a CRM folder named <span className="font-mono text-blue-300">FB: {campaignName || "Campaign Name"}</span> and route all incoming leads there automatically.
+                </p>
+                <p className="text-xs text-blue-300 mt-1">
+                  This campaign will target {licensedStates.length === 1 ? stateSummary : licensedStates.length > 1 ? `${licensedStates.length} states` : "no states yet"}.
                 </p>
               </div>
               <div>
@@ -1421,11 +1601,21 @@ function SetupWizard({
 
             <button
               onClick={createCampaign}
-              disabled={creating || !campaignName}
+              disabled={creating || !campaignName || !licensedStates.length || !stateNoticeAccepted}
               className="w-full bg-green-600 hover:bg-green-500 text-white font-semibold py-3 rounded-lg transition disabled:opacity-60"
             >
               {creating ? "Setting up…" : "Create My Campaign"}
             </button>
+            {createdCampaignId && (
+              <a
+                href={`/f/${createdCampaignId}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="block text-center bg-blue-700 hover:bg-blue-600 text-white font-semibold py-3 rounded-lg transition"
+              >
+                Preview Hosted Funnel
+              </a>
+            )}
           </div>
         )}
       </div>
@@ -1442,7 +1632,11 @@ function SetupWizard({
           </button>
           <button
             onClick={goNext}
-            disabled={step === 2 && !expectationsChecked}
+            disabled={
+              (step === 2 && !expectationsChecked) ||
+              (step === 6 && (!licensedStates.length || !stateNoticeAccepted)) ||
+              (step === 7 && (loadingSheetInstructions || sheetInstructionsError || sheetHeaders.length === 0))
+            }
             className="bg-blue-600 hover:bg-blue-500 text-white px-6 py-2 rounded-lg text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed"
           >
             Next →
@@ -1455,7 +1649,7 @@ function SetupWizard({
 
 // ── AI Manager + ROI Widget ────────────────────────────────────────────────────
 
-function AIManagerWidget({ campaigns }: { campaigns: FBCampaign[] }) {
+function AIManagerWidget() {
   const [actions, setActions] = useState<any[]>([]);
   const [recommendations, setRecommendations] = useState<any[]>([]);
   const [intel, setIntel] = useState<any>(null);
@@ -1474,12 +1668,6 @@ function AIManagerWidget({ campaigns }: { campaigns: FBCampaign[] }) {
     });
   }, []);
 
-  // Derive ROI snapshot from campaign data
-  const totalLeads = campaigns.reduce((s, c) => s + (c.totalLeads || 0), 0);
-  const totalSpend = campaigns.reduce((s, c) => s + (c.totalSpend || 0), 0);
-  const avgCpl = totalLeads > 0 ? totalSpend / totalLeads : 0;
-  const activeCampaigns = campaigns.filter((c) => c.status === "active" || c.status === "setup").length;
-
   const ACTION_COLORS: Record<string, string> = {
     scale: "text-emerald-400",
     duplicate: "text-sky-400",
@@ -1494,36 +1682,10 @@ function AIManagerWidget({ campaigns }: { campaigns: FBCampaign[] }) {
   };
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-      {/* ROI Snapshot */}
-      <div className="bg-[#0f172a] border border-white/10 rounded-xl p-5 space-y-4">
-        <div className="flex items-center gap-2">
-          <span className="text-base">📊</span>
-          <h2 className="text-base font-semibold text-white">ROI Snapshot</h2>
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          {[
-            { label: "Total Leads", value: totalLeads.toLocaleString() },
-            { label: "Total Spend", value: totalSpend > 0 ? `$${totalSpend.toFixed(2)}` : "—" },
-            { label: "Cost Per Lead", value: avgCpl > 0 ? `$${avgCpl.toFixed(2)}` : "—" },
-            { label: "Active Campaigns", value: String(activeCampaigns) },
-          ].map((s) => (
-            <div key={s.label} className="bg-white/5 rounded-lg p-3">
-              <p className="text-xs text-gray-400">{s.label}</p>
-              <p className="text-lg font-bold text-white">{s.value}</p>
-            </div>
-          ))}
-        </div>
-        <div className="bg-indigo-900/20 border border-indigo-700/30 rounded-lg px-3 py-2 text-xs text-indigo-300 leading-relaxed">
-          System cost: <span className="font-bold">$249/mo</span>. At an average CPL of {avgCpl > 0 ? `$${avgCpl.toFixed(2)}` : "$15–$25"}, your system pays for itself with {avgCpl > 0 ? Math.ceil(249 / avgCpl) : "10–20"} leads/month.
-        </div>
-      </div>
-
-      {/* AI Manager */}
       <div className="bg-[#0f172a] border border-white/10 rounded-xl p-5 space-y-4">
         <div className="flex items-center gap-2">
           <span className="text-base">🤖</span>
-          <h2 className="text-base font-semibold text-white">AI Manager</h2>
+          <h2 className="text-base font-semibold text-white">AI Suggestions</h2>
         </div>
         {loading ? (
           <p className="text-xs text-gray-500">Loading…</p>
@@ -1556,7 +1718,7 @@ function AIManagerWidget({ campaigns }: { campaigns: FBCampaign[] }) {
             )}
             {intel && intel.trendingHooks && (
               <div>
-                <p className="text-xs text-gray-500 uppercase tracking-wide mb-1.5">Market Intel</p>
+                <p className="text-xs text-gray-500 uppercase tracking-wide mb-1.5">Market Trends</p>
                 <ul className="space-y-0.5">
                   {intel.trendingHooks.slice(0, 2).map((h: string) => (
                     <li key={h} className="text-xs text-gray-300 flex items-start gap-1.5">
@@ -1570,12 +1732,11 @@ function AIManagerWidget({ campaigns }: { campaigns: FBCampaign[] }) {
               </div>
             )}
             {actions.length === 0 && recommendations.length === 0 && (
-              <p className="text-xs text-gray-500">No active campaigns to analyze yet. Create your first campaign to get AI recommendations.</p>
+              <p className="text-xs text-gray-500">No active campaigns to analyze yet. Create your first campaign to get AI suggestions.</p>
             )}
           </div>
         )}
       </div>
-    </div>
   );
 }
 
@@ -1600,6 +1761,7 @@ function CampaignCard({
   const [uploadMsg, setUploadMsg] = useState("");
   const [toggling, setToggling] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [showSheetsWizard, setShowSheetsWizard] = useState(false);
 
   // Update Stats inline form
   const [showStatsForm, setShowStatsForm] = useState(false);
@@ -1713,16 +1875,38 @@ function CampaignCard({
         <div className="flex items-start justify-between">
           <div>
             <h3 className="font-bold text-white text-lg">{campaign.campaignName}</h3>
-            <div className="flex items-center gap-2 mt-1">
+            <div className="flex items-center gap-2 mt-1 flex-wrap">
               <span className="bg-blue-900/50 text-blue-300 text-xs px-2 py-0.5 rounded">
                 {LEAD_TYPE_LABEL[campaign.leadType] ?? campaign.leadType}
               </span>
               <span className={`text-xs px-2 py-0.5 rounded-full ${statusColors[campaign.status] ?? "bg-gray-700 text-gray-300"}`}>
                 {campaign.status}
               </span>
+              {(campaign.metaSyncStatus === "token_expired" || campaign.metaObjectHealth === "token_expired") ? (
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-900/40 text-red-300 border border-red-600/30">Token Expired</span>
+              ) : campaign.metaPublishStatus === "failed" ? (
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-900/30 text-red-300 border border-red-700/30">Publish Failed</span>
+              ) : campaign.metaPublishStatus === "skipped_missing_meta_connection" || campaign.metaObjectHealth === "disconnected" ? (
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-yellow-900/30 text-yellow-300 border border-yellow-700/30">Needs Meta Connect</span>
+              ) : campaign.metaObjectHealth === "healthy" ? (
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-900/30 text-emerald-300 border border-emerald-700/30">Meta Connected</span>
+              ) : campaign.metaSyncStatus === "sync_failed" || campaign.metaObjectHealth === "sync_failed" || campaign.metaObjectHealth === "stale" ? (
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-orange-900/30 text-orange-300 border border-orange-700/30">Needs Sync</span>
+              ) : null}
+              {campaign.writeLeadsToSheet ? (
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-teal-900/40 text-teal-300 border border-teal-700/30">Sheet Connected</span>
+              ) : campaign.googleSheetUrl ? (
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-yellow-900/30 text-yellow-300 border border-yellow-700/30">Sheet — Needs Validation</span>
+              ) : null}
             </div>
           </div>
           <div className="flex items-center gap-2 flex-wrap justify-end">
+            <button
+              onClick={() => setShowSheetsWizard(true)}
+              className="bg-teal-700 hover:bg-teal-600 text-white text-xs px-3 py-1.5 rounded"
+            >
+              {campaign.writeLeadsToSheet ? "📊 Sheet Settings" : "📊 Connect Sheet"}
+            </button>
             <button
               onClick={() => onSetupGuide(campaign.leadType)}
               className="bg-gray-700 hover:bg-gray-600 text-white text-xs px-3 py-1.5 rounded"
@@ -1802,7 +1986,7 @@ function CampaignCard({
                 />
               </div>
             </div>
-            <p className="text-xs text-gray-500">Connect Facebook Business API for automatic tracking — coming soon.</p>
+            <p className="text-xs text-gray-500">Meta sync updates campaign tracking when your account is connected.</p>
             <div className="flex gap-2">
               <button
                 onClick={saveStats}
@@ -1899,6 +2083,23 @@ function CampaignCard({
             </button>
           </div>
         </div>
+      )}
+
+      {showSheetsWizard && (
+        <FBCampaignSheetsWizard
+          campaignId={campaign._id}
+          campaignName={campaign.campaignName}
+          leadType={campaign.leadType}
+          initialGoogleSheetUrl={campaign.googleSheetUrl || ""}
+          initialAppsScriptUrl={campaign.appsScriptUrl || ""}
+          writeLeadsToSheet={campaign.writeLeadsToSheet}
+          sheetHeaderValidationPassed={campaign.sheetHeaderValidationPassed}
+          onClose={() => setShowSheetsWizard(false)}
+          onSaved={() => {
+            setShowSheetsWizard(false);
+            onUpdate();
+          }}
+        />
       )}
     </>
   );
@@ -2018,26 +2219,63 @@ function LeadFeed() {
 
 // ── Main Page ──────────────────────────────────────────────────────────────────
 
-type ViewMode = "loading" | "hero" | "lead-type" | "setup" | "dashboard";
-
 const FILTER_OPTIONS = [
   { id: "", label: "All" },
   { id: "final_expense", label: "Final Expense" },
   { id: "mortgage_protection", label: "Mortgage Protection" },
   { id: "veteran", label: "Veteran" },
-  { id: "iul", label: "IUL" },
   { id: "trucker", label: "Trucker" },
 ];
 
+function HubMetricsRow({ campaigns }: { campaigns: FBCampaign[] }) {
+  const spend = campaigns.reduce((sum, campaign) => sum + Number(campaign.totalSpend || 0), 0);
+  const leads = campaigns.reduce((sum, campaign) => sum + Number(campaign.totalLeads || 0), 0);
+  const booked = campaigns.reduce((sum, campaign) => sum + Number(campaign.appointments || 0), 0);
+  const sales = campaigns.reduce((sum, campaign) => sum + Number(campaign.sales || 0), 0);
+  const cpl = leads > 0 && spend > 0 ? spend / leads : 0;
+
+  const cards = [
+    { label: "Spend", value: spend > 0 ? `$${spend.toFixed(2)}` : "—" },
+    { label: "Leads", value: leads.toLocaleString() },
+    { label: "CPL", value: cpl > 0 ? `$${cpl.toFixed(2)}` : "—" },
+    { label: "Booked", value: booked.toLocaleString() },
+    { label: "Sales", value: sales.toLocaleString() },
+  ];
+
+  return (
+    <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+      {cards.map((card) => (
+        <div key={card.label} className="rounded-xl border border-white/10 bg-[#0f172a] p-4 text-center">
+          <p className="text-xs uppercase tracking-wide text-gray-400">{card.label}</p>
+          <p className="mt-1 text-xl font-bold text-white">{card.value}</p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function AdvancedAdsSection({ children }: { children: React.ReactNode }) {
+  return (
+    <details className="rounded-xl border border-white/10 bg-[#0f172a] p-5">
+      <summary className="cursor-pointer text-sm font-semibold text-white">
+        Advanced campaign tools
+      </summary>
+      <div className="mt-4 space-y-4 border-t border-white/10 pt-4">
+        <p className="text-sm text-gray-400">
+          Sheet backup, raw lead feed, campaign health details, sync status, and deeper optimization tools live here so the main launch flow stays simple.
+        </p>
+        {children}
+      </div>
+    </details>
+  );
+}
+
 export default function FacebookLeadsPage() {
-  const { data: session, status } = useSession();
+  const { status } = useSession();
   const router = useRouter();
-  const [fbTab, setFbTab] = useState<"campaigns" | "generate">("campaigns");
-  const [viewMode, setViewMode] = useState<ViewMode>("loading");
+  const [loadingPage, setLoadingPage] = useState(true);
   const [campaigns, setCampaigns] = useState<FBCampaign[]>([]);
   const [campaignFilter, setCampaignFilter] = useState<string>("");
-  const selectedPlan: "manager_pro" = "manager_pro";
-  const [selectedLeadType, setSelectedLeadType] = useState<string>("");
 
   useEffect(() => {
     if (status === "unauthenticated") {
@@ -2060,12 +2298,12 @@ export default function FacebookLeadsPage() {
   useEffect(() => {
     if (status !== "authenticated") return;
     (async () => {
-      const cList = await loadCampaigns();
-      setViewMode(cList.length > 0 ? "dashboard" : "hero");
+      await loadCampaigns();
+      setLoadingPage(false);
     })();
   }, [status]);
 
-  if (status !== "authenticated" || viewMode === "loading") {
+  if (status !== "authenticated" || loadingPage) {
     return (
       <DashboardLayout>
         <div className="flex items-center justify-center h-64 text-gray-400">Loading…</div>
@@ -2073,215 +2311,100 @@ export default function FacebookLeadsPage() {
     );
   }
 
-  const handleSetupGuide = (leadType: string) => {
-    setSelectedLeadType(leadType);
-    setViewMode("setup");
-  };
+  const filteredCampaigns = campaignFilter
+    ? campaigns.filter((campaign) => campaign.leadType === campaignFilter)
+    : campaigns;
 
   return (
     <DashboardLayout>
-      <div className="p-6 space-y-8 max-w-5xl">
-        {/* Page header */}
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold text-white">Facebook Lead Manager</h1>
-            <p className="text-gray-400 text-sm mt-0.5">Generate exclusive insurance leads from Facebook Ads</p>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => router.push("/facebook-ads")}
-              className="bg-indigo-600/80 hover:bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium border border-indigo-500/30"
-            >
-              Ads Manager →
-            </button>
-            {(
-              <button
-                onClick={() => {
-                  setViewMode("lead-type");
-                }}
-                className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg text-sm font-medium"
-              >
-                + New Campaign
-              </button>
-            )}
-          </div>
-        </div>
-
-        {/* Tab bar */}
-        <div style={{ display: "flex", gap: "4px", borderBottom: "1px solid rgba(255,255,255,0.08)", paddingBottom: "0" }}>
-          {(["campaigns", "generate"] as const).map((t) => (
-            <button
-              key={t}
-              onClick={() => setFbTab(t)}
-              style={{
-                padding: "8px 20px",
-                fontSize: "14px",
-                fontWeight: 500,
-                color: fbTab === t ? "#fff" : "#9ca3af",
-                background: "none",
-                border: "none",
-                borderBottom: fbTab === t ? "2px solid #6366f1" : "2px solid transparent",
-                cursor: "pointer",
-                transition: "color 0.15s",
-              }}
-            >
-              {t === "campaigns" ? "My Campaigns" : "Generate Ad"}
-            </button>
-          ))}
-        </div>
-
-        {fbTab === "generate" && (
-          <div style={{ padding: "40px 0" }}>
-            <div style={{
-              background: "linear-gradient(135deg, #1e1b4b 0%, #1e293b 100%)",
-              border: "1px solid rgba(99,102,241,0.3)",
-              borderRadius: "16px",
-              padding: "40px",
-              maxWidth: "520px",
-              margin: "0 auto",
-              textAlign: "center",
-            }}>
-              <div style={{ fontSize: "48px", marginBottom: "16px" }}>🤖</div>
-              <h2 style={{ color: "#fff", fontSize: "22px", fontWeight: 700, marginBottom: "10px" }}>
-                AI Ad Generator
-              </h2>
-              <p style={{ color: "#94a3b8", fontSize: "15px", lineHeight: "1.6", marginBottom: "28px" }}>
-                Generate a complete Facebook lead ad in seconds — AI-written copy, targeting, and budget pre-filled. Review before publishing. Always starts paused.
-              </p>
-              <button
-                onClick={() => router.push("/facebook-ads/copilot?tab=generate")}
-                style={{
-                  background: "#6366f1",
-                  color: "#fff",
-                  border: "none",
-                  borderRadius: "10px",
-                  padding: "14px 32px",
-                  fontSize: "15px",
-                  fontWeight: 600,
-                  cursor: "pointer",
-                  width: "100%",
-                }}
-              >
-                Generate My Ad →
-              </button>
-            </div>
-          </div>
-        )}
-
-        {fbTab === "campaigns" && viewMode === "hero" && (
-          <div className="space-y-12">
-            <HeroSection
-              onGetStarted={() => {
-                setViewMode("lead-type");
-              }}
-            />
+      <div className="mx-auto max-w-6xl space-y-8 p-4 sm:p-6">
+        <section className="rounded-2xl border border-white/10 bg-[#0f172a] p-5 shadow-lg sm:p-6">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div>
-              <h2 className="text-center text-lg font-semibold text-white mb-6">What&apos;s Included in Your Plan</h2>
-              <WhatsIncluded />
+              <p className="text-xs font-semibold uppercase tracking-wide text-blue-300">FB Leads</p>
+              <h1 className="mt-1 text-2xl font-bold text-white sm:text-3xl">
+                Launch Facebook lead campaigns and let CoveCRM route, call, text, and book leads.
+              </h1>
+              <p className="mt-2 max-w-3xl text-sm leading-6 text-gray-400">
+                Connect Meta, create a paused campaign for review, and track the lead flow from first click to booked appointment.
+              </p>
+            </div>
+            <div className="rounded-xl border border-blue-500/30 bg-blue-950/30 px-4 py-3 text-sm text-blue-100">
+              Ads are created paused so you can review before spend starts.
             </div>
           </div>
-        )}
+        </section>
 
-        {fbTab === "campaigns" && viewMode === "lead-type" && (
-          <div className="space-y-4">
-            <button
-              onClick={() => setViewMode(campaigns.length > 0 ? "dashboard" : "hero")}
-              className="text-gray-400 hover:text-white text-sm"
-            >
-              ← Back
-            </button>
-            <LeadTypeSelector
-              plan={selectedPlan}
-              onSelect={(lt) => {
-                setSelectedLeadType(lt);
-                setViewMode("setup");
-              }}
-            />
+        <HubMetricsRow campaigns={campaigns} />
+
+        <section className="space-y-3">
+          <h2 className="text-lg font-bold text-white">Meta Connection</h2>
+          <MetaConnectPanel />
+        </section>
+
+        <section className="space-y-3">
+          <div>
+            <h2 className="text-lg font-bold text-white">Launch Campaign</h2>
+            <p className="text-sm text-gray-400">
+              Choose lead type, state, and budget. CoveCRM generates the ad and creates the campaign paused for review.
+            </p>
           </div>
-        )}
+          <AdWizard />
+        </section>
 
-        {fbTab === "campaigns" && viewMode === "setup" && (
-          <div className="space-y-4">
-            <button
-              onClick={() => setViewMode(campaigns.length > 0 ? "dashboard" : "lead-type")}
-              className="text-gray-400 hover:text-white text-sm"
-            >
-              ← Back
-            </button>
-            <SetupWizard
-              leadType={selectedLeadType}
-              plan={selectedPlan}
-              onComplete={async () => {
-                await loadCampaigns();
-                setViewMode("dashboard");
-              }}
-            />
-          </div>
-        )}
-
-        {fbTab === "campaigns" && viewMode === "dashboard" && (
-          <div className="space-y-8">
-            {/* AI Manager + ROI widgets */}
-            <AIManagerWidget campaigns={campaigns} />
-
-            {/* Meta Connection Card */}
-            <MetaConnectPanel />
-
-            <div className="space-y-4">
-              <div className="flex items-center justify-between flex-wrap gap-3">
-                <h2 className="text-lg font-bold text-white">Your Campaigns</h2>
-                {/* Lead type filter */}
-                <div className="flex items-center gap-1 flex-wrap">
-                  {FILTER_OPTIONS.map((f) => (
-                    <button
-                      key={f.id}
-                      onClick={() => setCampaignFilter(f.id)}
-                      className={`text-xs px-3 py-1 rounded-full transition ${
-                        campaignFilter === f.id
-                          ? "bg-blue-600 text-white"
-                          : "bg-gray-800 text-gray-400 hover:text-white hover:bg-gray-700"
-                      }`}
-                    >
-                      {f.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              {(() => {
-                const filtered = campaignFilter
-                  ? campaigns.filter((c) => c.leadType === campaignFilter)
-                  : campaigns;
-                return filtered.length === 0 ? (
-                  <p className="text-gray-500 text-sm">
-                    {campaignFilter ? "No campaigns match this filter." : "No campaigns yet."}
-                  </p>
-                ) : (
-                  filtered.map((c) => (
-                    <CampaignCard
-                      key={c._id}
-                      campaign={c}
-                      onUpdate={() => loadCampaigns()}
-                      onDelete={() => loadCampaigns()}
-                      onSetupGuide={handleSetupGuide}
-                    />
-                  ))
-                );
-              })()}
+        <section className="space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-lg font-bold text-white">Existing Campaigns</h2>
+              <p className="text-sm text-gray-400">Track spend, leads, CPL, campaign health, and lead routing.</p>
             </div>
-
-            <div className="border-t border-gray-700 pt-6">
-              <LeadFeed />
+            <div className="flex flex-wrap items-center gap-1">
+              {FILTER_OPTIONS.map((filter) => (
+                <button
+                  key={filter.id}
+                  onClick={() => setCampaignFilter(filter.id)}
+                  className={`rounded-full px-3 py-1 text-xs transition ${
+                    campaignFilter === filter.id
+                      ? "bg-blue-600 text-white"
+                      : "bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-white"
+                  }`}
+                >
+                  {filter.label}
+                </button>
+              ))}
             </div>
           </div>
-        )}
+          {filteredCampaigns.length === 0 ? (
+            <p className="rounded-xl border border-white/10 bg-[#0f172a] p-5 text-sm text-gray-400">
+              {campaignFilter ? "No campaigns match this filter." : "No campaigns yet. Launch your first campaign above."}
+            </p>
+          ) : (
+            filteredCampaigns.map((campaign) => (
+              <CampaignCard
+                key={campaign._id}
+                campaign={campaign}
+                onUpdate={() => loadCampaigns()}
+                onDelete={() => loadCampaigns()}
+                onSetupGuide={() => {}}
+              />
+            ))
+          )}
+        </section>
+
+        <section className="space-y-3">
+          <AIManagerWidget />
+        </section>
+
+        <AdvancedAdsSection>
+          <LeadFeed />
+        </AdvancedAdsSection>
       </div>
     </DashboardLayout>
   );
 }
 
-// Admin-only: gate this page to experimental admin access
 export const getServerSideProps: GetServerSideProps = async (ctx) => {
   const session = await getServerSession(ctx.req, ctx.res, authOptions);
-  if (!isExperimentalAdminEmail(session?.user?.email)) return { notFound: true };
+  if (!session?.user?.email) return { redirect: { destination: "/auth/signin", permanent: false } };
   return { props: {} };
 };
