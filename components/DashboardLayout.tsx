@@ -184,44 +184,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         className="flex-1 overflow-y-auto flex flex-col"
         style={{ backgroundColor: "#1e293b", color: "#ffffff" }}
       >
-        {/* Smart follow-up nudge banners */}
-        {nudges.length > 0 && (
-          <div className="px-6 pt-4 space-y-2">
-            {nudges.slice(0, 2).map((nudge) => (
-              <div
-                key={nudge._id}
-                className={`flex items-start justify-between gap-3 rounded-lg px-4 py-3 text-sm ${
-                  nudge.priority === "high"
-                    ? "bg-red-900/40 border border-red-700 text-red-200"
-                    : nudge.priority === "medium"
-                    ? "bg-amber-900/40 border border-amber-700 text-amber-200"
-                    : "bg-blue-900/30 border border-blue-800 text-blue-200"
-                }`}
-              >
-                <div className="flex items-start gap-2">
-                  <span>{nudge.priority === "high" ? "🔥" : nudge.priority === "medium" ? "⏰" : "💡"}</span>
-                  <div>
-                    <span className="font-semibold">{nudge.leadName}: </span>
-                    <span>{nudge.message}</span>
-                    <Link
-                      href={`/lead/${nudge.leadId}`}
-                      className="ml-2 underline opacity-80 hover:opacity-100"
-                    >
-                      View lead →
-                    </Link>
-                  </div>
-                </div>
-                <button
-                  onClick={() => dismissNudge(nudge._id)}
-                  className="opacity-60 hover:opacity-100 flex-shrink-0 text-lg leading-none"
-                >
-                  ×
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-
         <div className="px-6 py-8 flex-1">
           {children}
         </div>
