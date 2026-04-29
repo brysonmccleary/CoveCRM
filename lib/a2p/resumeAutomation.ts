@@ -108,6 +108,11 @@ function isCompanyTypeRejected(status: string, reason: any) {
   );
 }
 
+function isRejectedTrustProductStatus(status: string) {
+  const normalizedStatus = normalizeTrustHubStatus(status);
+  return normalizedStatus === "TWILIO_REJECTED" || normalizedStatus === "REJECTED";
+}
+
 function basicAuthHeader(username: string, password: string) {
   return `Basic ${Buffer.from(`${username}:${password}`, "utf8").toString("base64")}`;
 }
@@ -662,6 +667,34 @@ async function upsertA2PTrustProductEndUser(args: {
   return String(created?.sid || "").trim();
 }
 
+async function fetchEndUserSnapshot(args: {
+  client: any;
+  endUserSid?: string;
+}) {
+  const sid = String(args.endUserSid || "").trim();
+  if (!sid) return null;
+  try {
+    const endUser: any = await args.client.trusthub.v1.endUsers(sid).fetch();
+    return {
+      sid,
+      type: String(endUser?.type || "").trim(),
+      attributes: endUser?.attributes || {},
+    };
+  } catch {
+    return null;
+  }
+}
+
+function shouldRepairRejectedA2PEndUser(endUser: any) {
+  if (!endUser) return false;
+  if (String(endUser.type || "").trim() !== "us_a2p_messaging_profile_information") return false;
+  const attrs = endUser.attributes || {};
+  const companyType = String(attrs.company_type || "").trim();
+  const hasStockExchange = Object.prototype.hasOwnProperty.call(attrs, "stock_exchange");
+  const hasStockTicker = Object.prototype.hasOwnProperty.call(attrs, "stock_ticker");
+  return companyType !== A2P_COMPANY_TYPE || hasStockExchange || hasStockTicker;
+}
+
 async function recoverExistingCampaignForBrand(args: {
   client: any;
   messagingServiceSid: string;
@@ -823,19 +856,34 @@ export async function resumeA2PAutomationForUserEmail(userEmail: string) {
   await mongooseConnect();
 
   const normalizedEmail = String(userEmail || "").toLowerCase().trim();
-  if (!normalizedEmail) return null;
+  console.log("[A2P DEBUG] entering function", { userEmail: normalizedEmail || String(userEmail || "") });
+  if (!normalizedEmail) {
+    console.log("[A2P DEBUG] return reason", { reason: "missing_normalized_email" });
+    return null;
+  }
 
   const user = await User.findOne({ email: normalizedEmail });
-  if (!user) return null;
+  if (!user) {
+    console.log("[A2P DEBUG] return reason", { reason: "user_not_found", userEmail: normalizedEmail });
+    return null;
+  }
 
   let profile = await A2PProfile.findOne({ userId: String(user._id) });
-  if (!profile) return null;
+  if (!profile) {
+    console.log("[A2P DEBUG] return reason", { reason: "a2p_profile_not_found", userEmail: normalizedEmail });
+    return null;
+  }
 
   let resolved;
   try {
     resolved = await getClientForUser(normalizedEmail);
   } catch (err: any) {
     log("A2P ERROR", { userEmail: normalizedEmail, message: err?.message || String(err) });
+    console.log("[A2P DEBUG] return reason", {
+      reason: "get_client_failed",
+      userEmail: normalizedEmail,
+      message: err?.message || String(err),
+    });
     return profile.toObject();
   }
 
@@ -925,6 +973,16 @@ export async function resumeA2PAutomationForUserEmail(userEmail: string) {
     }
 
     const profileApproved = TRUSTHUB_APPROVED.has(profileStatus);
+    console.log("[A2P DEBUG] loaded statuses", {
+      userEmail: normalizedEmail,
+      profileSid: profile.profileSid,
+      profileStatus,
+      profileApproved,
+      trustProductSid,
+      trustProductStatus,
+      trustProductRejectionReason,
+      a2pProfileEndUserSid: String(profile.a2pProfileEndUserSid || "").trim() || null,
+    });
 
     if (!trustProductSid && profile.profileSid && profileApproved) {
       const recoveredTrustProductSid = await recoverExistingTrustProductForProfile({
@@ -962,12 +1020,43 @@ export async function resumeA2PAutomationForUserEmail(userEmail: string) {
 
     let a2pProfileEndUserSid = String(profile.a2pProfileEndUserSid || "").trim();
     if (trustProductSid && profile.profileSid && profileApproved) {
+      console.log("[A2P DEBUG] trustProductStatus normalized", {
+        userEmail: normalizedEmail,
+        trustProductSid,
+        trustProductStatus,
+      });
+      const currentA2PEndUser = await fetchEndUserSnapshot({
+        client,
+        endUserSid: a2pProfileEndUserSid || undefined,
+      });
+      const shouldRepairFromEndUser =
+        isRejectedTrustProductStatus(trustProductStatus) &&
+        shouldRepairRejectedA2PEndUser(currentA2PEndUser);
       const shouldRepairCompanyType = isCompanyTypeRejected(
         trustProductStatus,
         trustProductRejectionReason || profile.lastError || profile.declinedReason,
-      );
+      ) || shouldRepairFromEndUser;
+      console.log("[A2P DEBUG] shouldRepairCompanyType computed", {
+        userEmail: normalizedEmail,
+        trustProductSid,
+        trustProductStatus,
+        trustProductRejectionReason: trustProductRejectionReason || profile.lastError || profile.declinedReason || null,
+        currentA2PEndUserSid: currentA2PEndUser?.sid || null,
+        currentA2PEndUserType: currentA2PEndUser?.type || null,
+        currentA2PEndUserAttributes: currentA2PEndUser?.attributes || null,
+        shouldRepairFromEndUser,
+        shouldRepairCompanyType,
+      });
 
       if (!a2pProfileEndUserSid || shouldRepairCompanyType) {
+        console.log("[A2P DEBUG] branch entered", {
+          branch: "repair_or_create_a2p_end_user",
+          entered: true,
+          userEmail: normalizedEmail,
+          trustProductSid,
+          shouldRepairCompanyType,
+          hadExistingEndUserSid: Boolean(a2pProfileEndUserSid),
+        });
         if (shouldRepairCompanyType) {
           await removeStaleA2PMessagingProfileAssignments({
             client,
@@ -993,6 +1082,16 @@ export async function resumeA2PAutomationForUserEmail(userEmail: string) {
             });
           }
         }
+      }
+      else {
+        console.log("[A2P DEBUG] branch entered", {
+          branch: "repair_or_create_a2p_end_user",
+          entered: false,
+          userEmail: normalizedEmail,
+          trustProductSid,
+          shouldRepairCompanyType,
+          hadExistingEndUserSid: Boolean(a2pProfileEndUserSid),
+        });
       }
 
       if (a2pProfileEndUserSid) {
@@ -1312,7 +1411,13 @@ export async function resumeA2PAutomationForUserEmail(userEmail: string) {
 
     await A2PProfile.updateOne({ _id: profile._id }, { $set: update });
     profile = await A2PProfile.findById(profile._id);
-    if (!profile) return null;
+    if (!profile) {
+      console.log("[A2P DEBUG] return reason", {
+        reason: "profile_missing_after_update",
+        userEmail: normalizedEmail,
+      });
+      return null;
+    }
 
     await mirrorUserA2P({ user, profile });
 
@@ -1330,6 +1435,11 @@ export async function resumeA2PAutomationForUserEmail(userEmail: string) {
     return profile.toObject();
   } catch (err: any) {
     log("A2P ERROR", {
+      userEmail: normalizedEmail,
+      message: err?.message || String(err),
+    });
+    console.log("[A2P DEBUG] return reason", {
+      reason: "caught_error",
       userEmail: normalizedEmail,
       message: err?.message || String(err),
     });
