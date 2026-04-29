@@ -436,6 +436,87 @@ async function assignEntityToTrustProduct(args: {
   }
 }
 
+async function listTrustProductAssignmentsDetailed(args: {
+  client: any;
+  auth: { username: string; password: string; effectiveAccountSid: string };
+  accountSidUsed: string;
+  trustProductSid: string;
+}) {
+  try {
+    const tp: any = args.client.trusthub.v1.trustProducts(args.trustProductSid) as any;
+    const sub =
+      tp?.entityAssignments ||
+      tp?.trustProductsEntityAssignments ||
+      tp?.trustProductsEntityAssignment;
+
+    if (sub && typeof sub.list === "function") {
+      const list = (await sub.list({ limit: 50 })) || [];
+      return list.map((item: any) => ({
+        sid: String(item?.sid || "").trim(),
+        objectSid: String(item?.objectSid || item?.object_sid || "").trim(),
+      })).filter((item: any) => item.sid && item.objectSid);
+    }
+  } catch {
+    // raw fallback below
+  }
+
+  try {
+    const data: any = await trusthubFetch({
+      auth: args.auth,
+      method: "GET",
+      path: `/v1/TrustProducts/${args.trustProductSid}/EntityAssignments`,
+      extraHeaders: {
+        "X-Twilio-AccountSid": args.accountSidUsed,
+      },
+    });
+    const list = data?.results || data?.entity_assignments || data?.entityAssignments || [];
+    return list.map((item: any) => ({
+      sid: String(item?.sid || item?.Sid || "").trim(),
+      objectSid: String(item?.objectSid || item?.object_sid || item?.ObjectSid || "").trim(),
+    })).filter((item: any) => item.sid && item.objectSid);
+  } catch {
+    return [];
+  }
+}
+
+async function removeTrustProductEntityAssignment(args: {
+  client: any;
+  auth: { username: string; password: string; effectiveAccountSid: string };
+  accountSidUsed: string;
+  trustProductSid: string;
+  assignmentSid: string;
+}) {
+  try {
+    const tp: any = args.client.trusthub.v1.trustProducts(args.trustProductSid) as any;
+    const sub =
+      tp?.entityAssignments ||
+      tp?.trustProductsEntityAssignments ||
+      tp?.trustProductsEntityAssignment;
+
+    if (sub) {
+      if (typeof sub === "function") {
+        await sub(args.assignmentSid).remove();
+        return;
+      }
+      if (typeof sub.remove === "function") {
+        await sub.remove(args.assignmentSid);
+        return;
+      }
+    }
+  } catch {
+    // raw fallback below
+  }
+
+  await trusthubFetch({
+    auth: args.auth,
+    method: "DELETE",
+    path: `/v1/TrustProducts/${args.trustProductSid}/EntityAssignments/${args.assignmentSid}`,
+    extraHeaders: {
+      "X-Twilio-AccountSid": args.accountSidUsed,
+    },
+  });
+}
+
 async function listTrustProductAssignmentObjectSids(args: {
   client: any;
   auth: { username: string; password: string; effectiveAccountSid: string };
@@ -502,6 +583,48 @@ async function recoverExistingTrustProductForProfile(args: {
     // best effort
   }
   return undefined;
+}
+
+async function removeStaleA2PMessagingProfileAssignments(args: {
+  client: any;
+  auth: { username: string; password: string; effectiveAccountSid: string };
+  accountSidUsed: string;
+  trustProductSid: string;
+}) {
+  const assignments = await listTrustProductAssignmentsDetailed(args);
+  const removedObjectSids: string[] = [];
+
+  for (const assignment of assignments) {
+    const objectSid = String(assignment.objectSid || "").trim();
+    if (!objectSid.startsWith("IT")) continue;
+
+    let endUserType = "";
+    try {
+      const endUser: any = await args.client.trusthub.v1.endUsers(objectSid).fetch();
+      endUserType = String(endUser?.type || "").trim();
+    } catch {
+      endUserType = "";
+    }
+
+    if (endUserType !== "us_a2p_messaging_profile_information") continue;
+
+    await removeTrustProductEntityAssignment({
+      client: args.client,
+      auth: args.auth,
+      accountSidUsed: args.accountSidUsed,
+      trustProductSid: args.trustProductSid,
+      assignmentSid: assignment.sid,
+    });
+
+    removedObjectSids.push(objectSid);
+    console.log("[A2P] removed stale end-user", {
+      trustProductSid: args.trustProductSid,
+      assignmentSid: assignment.sid,
+      objectSid,
+    });
+  }
+
+  return removedObjectSids;
 }
 
 async function upsertA2PTrustProductEndUser(args: {
@@ -845,6 +968,15 @@ export async function resumeA2PAutomationForUserEmail(userEmail: string) {
       );
 
       if (!a2pProfileEndUserSid || shouldRepairCompanyType) {
+        if (shouldRepairCompanyType) {
+          await removeStaleA2PMessagingProfileAssignments({
+            client,
+            auth: resolved.auth,
+            accountSidUsed: resolved.accountSid,
+            trustProductSid,
+          });
+        }
+
         a2pProfileEndUserSid = await upsertA2PTrustProductEndUser({
           client,
           profile,
@@ -854,6 +986,12 @@ export async function resumeA2PAutomationForUserEmail(userEmail: string) {
         });
         if (a2pProfileEndUserSid) {
           update.a2pProfileEndUserSid = a2pProfileEndUserSid;
+          if (shouldRepairCompanyType) {
+            console.log("[A2P] created fresh end-user", {
+              trustProductSid,
+              objectSid: a2pProfileEndUserSid,
+            });
+          }
         }
       }
 
@@ -865,6 +1003,12 @@ export async function resumeA2PAutomationForUserEmail(userEmail: string) {
           trustProductSid,
           objectSid: a2pProfileEndUserSid,
         });
+        if (shouldRepairCompanyType) {
+          console.log("[A2P] reassigned trust product", {
+            trustProductSid,
+            objectSid: a2pProfileEndUserSid,
+          });
+        }
       }
 
       await assignEntityToTrustProduct({
