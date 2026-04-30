@@ -234,11 +234,37 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const userEmail = String(session.user.email).toLowerCase();
     const user = await User.findOne({ email: userEmail })
-      .select("_id email name firstName lastName agentPhone numbers metaAccessToken metaSystemUserToken metaAdAccountId metaPageId metaInstagramId")
+      .select("_id email name firstName lastName agentPhone numbers metaAccessToken metaSystemUserToken metaAdAccountId metaPageId metaPageName metaInstagramId metaLeadTypeAssets")
       .lean();
     if (!user) {
       return res.status(404).json({ error: "User account not found" });
     }
+    const leadTypeAssets =
+      leadType && (user as any)?.metaLeadTypeAssets
+        ? (user as any).metaLeadTypeAssets instanceof Map
+          ? (user as any).metaLeadTypeAssets.get(leadType)
+          : (user as any).metaLeadTypeAssets[leadType]
+        : null;
+    const resolvedPageId = String(
+      launchValidation.pageId ||
+      facebookPageId ||
+      leadTypeAssets?.pageId ||
+      (user as any).metaPageId ||
+      ""
+    ).trim();
+    const resolvedAdAccountId = String(
+      launchValidation.adAccountId ||
+      adAccountId ||
+      leadTypeAssets?.adAccountId ||
+      (user as any).metaAdAccountId ||
+      ""
+    ).trim().replace(/^act_/, "");
+    const resolvedPageName =
+      resolvedPageId && resolvedPageId === String(leadTypeAssets?.pageId || "").trim()
+        ? String(leadTypeAssets?.pageName || "").trim()
+        : resolvedPageId && resolvedPageId === String((user as any).metaPageId || "").trim()
+          ? String((user as any).metaPageName || "").trim()
+          : "";
     const agentContact = injectAgentContact(user, {
       name: publicAgentProfile?.displayName,
       phone: publicAgentProfile?.phone,
@@ -350,7 +376,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           leadType,
           dailyBudget: Math.round(budgetCents / 100),
           folderId,
-          ...(facebookPageId ? { facebookPageId } : {}),
+          facebookPageId: resolvedPageId,
+          facebookPageName: resolvedPageName,
+          adAccountId: resolvedAdAccountId,
           funnelStatus: "active",
           funnelSlug,
           funnelVersion: "2026-04-production-v1",
@@ -409,8 +437,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     try {
       const fullUser = user as any;
       const accessToken = String(launchValidation.accessToken || "").trim();
-      const adAccountIdFinal = String(launchValidation.adAccountId || "").trim().replace(/^act_/, "");
-      const pageIdFinal = String(launchValidation.pageId || "").trim();
+      const adAccountIdFinal = resolvedAdAccountId;
+      const pageIdFinal = resolvedPageId;
       const instagramId = String(fullUser?.metaInstagramId || "").trim();
 
         const campaignParams = new URLSearchParams();

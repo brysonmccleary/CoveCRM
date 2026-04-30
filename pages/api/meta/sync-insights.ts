@@ -42,11 +42,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!user) return res.status(404).json({ error: "User not found" });
 
   if (req.method === "GET") {
+    const leadType = String(req.query.leadType || "").trim();
+    const leadTypeAssets =
+      leadType && user?.metaLeadTypeAssets
+        ? user.metaLeadTypeAssets instanceof Map
+          ? user.metaLeadTypeAssets.get(leadType)
+          : user.metaLeadTypeAssets[leadType]
+        : null;
+    const pageId = leadTypeAssets?.pageId || user.metaPageId || "";
+    const pageName = leadTypeAssets?.pageName || user.metaPageName || "";
+    const adAccountId = leadTypeAssets?.adAccountId || user.metaAdAccountId || "";
+
     return res.status(200).json({
       connected: !!(user.metaAdAccountId && (user.metaAccessToken || user.metaSystemUserToken)),
-      pageId: user.metaPageId || "",
-      pageName: user.metaPageName || "",
-      adAccountId: user.metaAdAccountId || "",
+      pageId,
+      pageName,
+      adAccountId,
       tokenExpiresAt: user.metaTokenExpiresAt || null,
       lastSyncAt: user.metaLastInsightSyncAt || null,
       lastWebhookAt: user.metaLastWebhookAt || null,

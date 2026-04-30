@@ -29,6 +29,22 @@ interface MetaAdAccount {
   selected?: boolean;
 }
 
+const PAGE_NAME_RECOMMENDATIONS: Record<string, string[]> = {
+  veteran: ["Veteran Benefits Center", "Veteran Coverage Help", "Veteran Family Benefits"],
+  mortgage_protection: ["Mortgage Protection Network", "Family Mortgage Protection", "Home Coverage Help"],
+  final_expense: ["Final Expense Support", "Family Burial Coverage", "Legacy Coverage Help"],
+  iul: ["Cash Value Coverage Center", "Indexed Life Benefits", "Retirement Coverage Help"],
+  trucker: ["Trucker Benefits Center", "Driver Coverage Help", "CDL Family Protection"],
+};
+
+const LEAD_TYPE_LABELS: Record<string, string> = {
+  veteran: "Veteran",
+  mortgage_protection: "Mortgage Protection",
+  final_expense: "Final Expense",
+  iul: "IUL",
+  trucker: "Trucker",
+};
+
 function fmt(d?: string | null) {
   if (!d) return "Never";
   return new Date(d).toLocaleString();
@@ -40,7 +56,7 @@ function isExpiringSoon(expiresAt?: string | null): boolean {
   return msLeft < 7 * 24 * 60 * 60 * 1000;
 }
 
-export default function MetaConnectPanel() {
+export default function MetaConnectPanel({ leadType }: { leadType?: string }) {
   const [status, setStatus] = useState<MetaStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [pages, setPages] = useState<MetaPage[]>([]);
@@ -52,14 +68,22 @@ export default function MetaConnectPanel() {
   const [selectedAdAccount, setSelectedAdAccount] = useState("");
   const [savingAssets, setSavingAssets] = useState(false);
   const [expanded, setExpanded] = useState(false);
+  const [selectedRecommendedName, setSelectedRecommendedName] = useState("");
 
   const webhookUrl = typeof window !== "undefined"
-    ? `${window.location.origin}/api/meta/webhook`
-    : "https://www.covecrm.com/api/meta/webhook";
+    ? `${window.location.origin}/api/facebook/webhook`
+    : "https://www.covecrm.com/api/facebook/webhook";
+  const recommendedNames = leadType ? PAGE_NAME_RECOMMENDATIONS[leadType] || [] : [];
+  const selectedPageRecord = pages.find((p) => p.id === selectedPage) || null;
+  const recommendedNameMatch = selectedRecommendedName
+    ? pages.find((p) => p.name.trim().toLowerCase() === selectedRecommendedName.trim().toLowerCase()) || null
+    : null;
+  const createPageUrl = "https://www.facebook.com/pages/create";
 
   const fetchStatus = async () => {
     try {
-      const res = await fetch("/api/meta/sync-insights");
+      const query = leadType ? `?leadType=${encodeURIComponent(leadType)}` : "";
+      const res = await fetch(`/api/meta/sync-insights${query}`);
       if (res.ok) {
         const data = await res.json();
         const nextStatus: MetaStatus = {
@@ -123,7 +147,12 @@ export default function MetaConnectPanel() {
       const res = await fetch("/api/meta/sync-insights", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "save-assets", pageId: selectedPage, adAccountId: selectedAdAccount }),
+        body: JSON.stringify({
+          action: "save-assets",
+          pageId: selectedPage,
+          adAccountId: selectedAdAccount,
+          ...(leadType ? { leadType } : {}),
+        }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -162,7 +191,15 @@ export default function MetaConnectPanel() {
 
   useEffect(() => {
     fetchStatus();
-  }, []);
+  }, [leadType]);
+
+  useEffect(() => {
+    if (recommendedNames.length > 0) {
+      setSelectedRecommendedName(recommendedNames[0]);
+    } else {
+      setSelectedRecommendedName("");
+    }
+  }, [leadType]);
 
   if (loading) {
     return (
@@ -271,6 +308,73 @@ export default function MetaConnectPanel() {
                 <div className="space-y-3 pt-2">
                   <h4 className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Update Connected Assets</h4>
 
+                  {leadType && recommendedNames.length > 0 && (
+                    <div className="rounded-lg border border-blue-800/40 bg-blue-950/20 p-4 space-y-3">
+                      <div className="flex items-center justify-between gap-3 flex-wrap">
+                        <div>
+                          <p className="text-xs font-semibold text-blue-300 uppercase tracking-wide">
+                            {LEAD_TYPE_LABELS[leadType] || leadType} Page Name Suggestions
+                          </p>
+                          <p className="text-xs text-blue-200/80">
+                            Pick one name, create or find that Page in Meta, then save the matching Page here for this lead type.
+                          </p>
+                        </div>
+                        <a
+                          href={createPageUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-xs bg-blue-600 hover:bg-blue-500 text-white px-3 py-2 rounded-lg"
+                        >
+                          Create this Page in Meta
+                        </a>
+                      </div>
+
+                      <div className="flex flex-wrap gap-2">
+                        {recommendedNames.map((name) => (
+                          <button
+                            key={name}
+                            type="button"
+                            onClick={() => setSelectedRecommendedName(name)}
+                            className={`text-xs px-3 py-1.5 rounded-full border transition ${
+                              selectedRecommendedName === name
+                                ? "bg-blue-600 text-white border-blue-500"
+                                : "bg-white/5 text-gray-300 border-white/10 hover:border-blue-500/40"
+                            }`}
+                          >
+                            {name}
+                          </button>
+                        ))}
+                      </div>
+
+                      {selectedRecommendedName && (
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <code className="bg-[#1e293b] border border-white/10 text-blue-200 text-xs px-3 py-2 rounded-lg">
+                            {selectedRecommendedName}
+                          </code>
+                          <button
+                            type="button"
+                            onClick={() => navigator.clipboard.writeText(selectedRecommendedName).catch(() => {})}
+                            className="text-xs text-gray-300 hover:text-white bg-white/5 border border-white/10 px-3 py-2 rounded-lg"
+                          >
+                            Copy name
+                          </button>
+                        </div>
+                      )}
+
+                      {selectedRecommendedName && !recommendedNameMatch && (
+                        <p className="text-xs text-yellow-300">
+                          No matching Page is loaded yet for this name. Create it in Meta or refresh your Pages below, then select the matching Page.
+                        </p>
+                      )}
+
+                      {recommendedNameMatch && (
+                        <p className="text-xs text-emerald-300">
+                          Matching Page found: {recommendedNameMatch.name}
+                        </p>
+                      )}
+                    </div>
+                  )}
+
                   {pages.length === 0 && adAccounts.length === 0 && (
                     <button
                       onClick={loadAssets}
@@ -283,6 +387,14 @@ export default function MetaConnectPanel() {
 
                   {(pages.length > 0 || adAccounts.length > 0) && (
                     <>
+                      <button
+                        onClick={loadAssets}
+                        disabled={loadingAssets}
+                        className="text-xs text-indigo-400 hover:text-indigo-300 underline disabled:opacity-60"
+                      >
+                        {loadingAssets ? "Refreshing…" : "Refresh pages & ad accounts"}
+                      </button>
+
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         {pages.length > 0 && (
                           <div>
@@ -324,8 +436,18 @@ export default function MetaConnectPanel() {
                         disabled={savingAssets || (!selectedPage && !selectedAdAccount)}
                         className="text-xs bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-lg disabled:opacity-60"
                       >
-                        {savingAssets ? "Saving…" : "Save Asset Selection"}
+                        {savingAssets
+                          ? "Saving…"
+                          : leadType
+                            ? `Save Asset Selection for ${LEAD_TYPE_LABELS[leadType] || leadType}`
+                            : "Save Asset Selection"}
                       </button>
+
+                      {selectedPageRecord && (
+                        <p className="text-xs text-gray-400">
+                          Selected Page: <span className="text-white">{selectedPageRecord.name}</span>
+                        </p>
+                      )}
                     </>
                   )}
                 </div>

@@ -2276,6 +2276,7 @@ export default function FacebookLeadsPage() {
   const [loadingPage, setLoadingPage] = useState(true);
   const [campaigns, setCampaigns] = useState<FBCampaign[]>([]);
   const [campaignFilter, setCampaignFilter] = useState<string>("");
+  const [selectedLeadType, setSelectedLeadType] = useState<string>("final_expense");
 
   useEffect(() => {
     if (status === "unauthenticated") {
@@ -2339,7 +2340,7 @@ export default function FacebookLeadsPage() {
 
         <section className="space-y-3">
           <h2 className="text-lg font-bold text-white">Meta Connection</h2>
-          <MetaConnectPanel />
+          <MetaConnectPanel leadType={selectedLeadType} />
         </section>
 
         <section className="space-y-3">
@@ -2349,7 +2350,7 @@ export default function FacebookLeadsPage() {
               Choose lead type, state, and budget. CoveCRM generates the ad and creates the campaign paused for review.
             </p>
           </div>
-          <AdWizard />
+          <AdWizard onLeadTypeChange={setSelectedLeadType} />
         </section>
 
         <section className="space-y-4">

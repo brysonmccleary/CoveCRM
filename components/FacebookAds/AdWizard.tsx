@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import StateSelector from "@/components/FacebookAds/StateSelector";
 import AdPreviewCard from "@/components/FacebookAds/AdPreviewCard";
 import { US_STATES } from "@/lib/facebook/geo/usStates";
@@ -34,7 +34,7 @@ const SUBTYPE_OPTIONS: Record<string, { label: string; leadType: string; audienc
 
 const STEPS = ["Lead Type", "State", "Budget", "Generate", "Review & Launch"];
 
-export default function AdWizard() {
+export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (leadType: string) => void }) {
   const [step, setStep] = useState(0);
   const [mainCategory, setMainCategory] = useState("final_expense");
   const [leadType, setLeadType] = useState("final_expense");
@@ -50,6 +50,8 @@ export default function AdWizard() {
   const [result, setResult] = useState<any>(null);
   const [regenerateAttempts, setRegenerateAttempts] = useState(0);
   const [dailyBudget, setDailyBudget] = useState(25);
+  const [selectedMetaPageId, setSelectedMetaPageId] = useState("");
+  const [selectedMetaAdAccountId, setSelectedMetaAdAccountId] = useState("");
 
   const stateLabel = useMemo(() => {
     const labels = states.map((code) => US_STATES.find((state) => state.code === code)?.name || code);
@@ -60,6 +62,27 @@ export default function AdWizard() {
 
   const needsSubType = Boolean(MAIN_CATEGORY_OPTIONS.find((option) => option.id === mainCategory)?.needsSubType);
   const campaignName = `${campaignTypeLabel || LEAD_TYPE_LABELS[leadType] || leadType} - ${stateLabel || "Licensed States"} Campaign`;
+
+  useEffect(() => {
+    if (!leadType) return;
+    onLeadTypeChange?.(leadType);
+  }, [leadType, onLeadTypeChange]);
+
+  useEffect(() => {
+    if (!leadType) return;
+    (async () => {
+      try {
+        const res = await fetch(`/api/meta/sync-insights?leadType=${encodeURIComponent(leadType)}`);
+        const data = await res.json();
+        if (!res.ok) return;
+        setSelectedMetaPageId(String(data?.pageId || "").trim());
+        setSelectedMetaAdAccountId(String(data?.adAccountId || "").trim());
+      } catch {
+        setSelectedMetaPageId("");
+        setSelectedMetaAdAccountId("");
+      }
+    })();
+  }, [leadType]);
 
   const resetGeneratedAd = () => {
     setDraft(null);
@@ -193,6 +216,8 @@ export default function AdWizard() {
           variationType: draft.variationType,
           uniquenessFingerprint: draft.uniquenessFingerprint,
           vendorStyleTag: draft.vendorStyleTag,
+          ...(selectedMetaPageId ? { facebookPageId: selectedMetaPageId } : {}),
+          ...(selectedMetaAdAccountId ? { adAccountId: selectedMetaAdAccountId } : {}),
         }),
       });
       const json = await response.json();
