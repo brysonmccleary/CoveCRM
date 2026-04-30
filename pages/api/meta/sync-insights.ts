@@ -61,6 +61,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (action === "save-assets") {
       const pageId = String(body?.pageId || "").trim();
       const adAccountId = String(body?.adAccountId || "").trim();
+      const leadType = String(body?.leadType || "").trim();
 
       if (!pageId && !adAccountId) {
         return res.status(400).json({ error: "No pageId or adAccountId provided" });
@@ -73,6 +74,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (adAccountId) update.metaAdAccountId = adAccountId.replace(/^act_/, "");
       if (pageMeta.metaPageName) update.metaPageName = pageMeta.metaPageName;
       if (pageMeta.metaInstagramId) update.metaInstagramId = pageMeta.metaInstagramId;
+      if (leadType) {
+        const scopedPath = `metaLeadTypeAssets.${leadType}`;
+        update[scopedPath] = {
+          pageId: pageId || "",
+          pageName: pageMeta.metaPageName || "",
+          adAccountId: adAccountId ? adAccountId.replace(/^act_/, "") : "",
+          updatedAt: new Date(),
+        };
+      }
 
       await User.updateOne({ email }, { $set: update });
 
