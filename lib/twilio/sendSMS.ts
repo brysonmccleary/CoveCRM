@@ -563,7 +563,9 @@ if (isUSDest && !isMessagingReady && !DEV_ALLOW_UNAPPROVED) {
         }).exec();
       } catch {}
     }
-    throw new Error(msg);
+    const wrapped = new Error(msg) as Error & { code?: any };
+    wrapped.code = code;
+    throw wrapped;
   }
 }
 

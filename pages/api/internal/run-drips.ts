@@ -23,6 +23,10 @@ const PER_LEAD_CONCURRENCY =
 const RETRY_MINUTES =
   Math.max(1, parseInt(process.env.DRIPS_RETRY_MINUTES || "30", 10)) || 30;
 
+function isPermanentDripSendError(err: any) {
+  return String(err?.code || "") === "20003";
+}
+
 /** -----------------------------
  *  Variant-key extraction helpers
  * ----------------------------- */
@@ -766,6 +770,27 @@ const result = await sendSms({
             leadId: (lead as any)?._id ? String((lead as any)._id) : null,
             error: err?.message || err,
           });
+
+          if (isPermanentDripSendError(err)) {
+            await DripEnrollment.updateOne(
+              { _id: claim._id },
+              {
+                $set: {
+                  status: "error",
+                  processing: false,
+                  active: false,
+                  isActive: false,
+                  enabled: false,
+                  paused: true,
+                  isPaused: true,
+                  stopAll: true,
+                  lastError: `twilio_${String(err?.code)}:${err?.message || "send_failed"}`,
+                },
+                $unset: { processingAt: 1, nextSendAt: 1 },
+              }
+            );
+            return;
+          }
 
           const retryAt = DateTime.now()
             .setZone(PT_ZONE)
