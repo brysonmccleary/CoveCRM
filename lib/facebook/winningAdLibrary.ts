@@ -88,6 +88,10 @@ export type GeneratedWinningAd = {
   vendorStyleTag: string;
 };
 
+function clampVariantCount(value: any): number {
+  return Math.min(4, Math.max(1, Number(value) || 3));
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Deterministic seed helper
 // ─────────────────────────────────────────────────────────────────────────────
@@ -701,7 +705,7 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
         "Private coverage designed for those who served.",
       ],
       bulletPool: [
-        "Private market coverage — not VA",
+        "Private coverage options",
         "No exam options may be available",
         "Locked-in rates",
         "Designed for veterans and families",
@@ -714,7 +718,7 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
       approvedCoverageAmounts: [50000, 100000, 250000, 500000],
     },
     imagePromptPool: [
-      "Vertical 1:1 Facebook ad image, veteran-aged man with family at home, patriotic red/blue/gold color palette, civilian home setting, no military uniforms, no government insignia, realistic photography, no logos, no text overlay",
+      "Vertical 1:1 Facebook ad image, veteran-aged man with family at home, patriotic red/blue/gold color palette, civilian home setting, no military uniforms, no official insignia, realistic photography, no logos, no text overlay",
       "Vertical 1:1 Facebook ad image, American flag in background, veteran-aged civilian portrait, patriotic tones, no military uniforms, realistic photography, no logos, no text overlay",
     ],
     landingPageConfig: {
@@ -774,7 +778,7 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
         "Tap your age to view available private coverage options.",
       ],
       bulletPool: [
-        "Private market coverage — not VA",
+        "Private coverage options",
         "No exam options may be available",
         "Fast qualification — review in under 60 seconds",
       ],
@@ -786,7 +790,7 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
       ],
     },
     imagePromptPool: [
-      "Vertical 1:1 Facebook ad image, American flag background, veteran-aged civilian, bold patriotic composition, no military uniforms or government insignia, realistic photography, no logos, no text overlay",
+      "Vertical 1:1 Facebook ad image, American flag background, veteran-aged civilian, bold patriotic composition, no military uniforms or official insignia, realistic photography, no logos, no text overlay",
       "Vertical 1:1 Facebook ad image, patriotic red/white/blue tones, veteran-aged adult portrait, civilian setting, strong patriotic mood, no military uniforms, no logos, no text overlay",
     ],
     landingPageConfig: {
@@ -850,7 +854,7 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
         "After serving, you deserve simple, straightforward coverage that works for you.",
       ],
       bodyPointPool: [
-        "This is private market coverage — it is not a VA program and it is not a government benefit.",
+        "Private coverage options may be available through a licensed agent.",
         "It's designed for veterans who want straightforward private coverage with simple qualification.",
         "No lengthy process. No runaround. Review your options in under 60 seconds.",
       ],
@@ -864,11 +868,11 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
       ctaPool: ["See If I Qualify →", "View My Options →", "Check My Coverage →"],
     },
     imagePromptPool: [
-      "Vertical 1:1 Facebook ad image, veteran-aged civilian man in home setting, patriotic color palette, strong proud mood, no military uniforms or government insignia, realistic photography, no logos, no text overlay",
+      "Vertical 1:1 Facebook ad image, veteran-aged civilian man in home setting, patriotic color palette, strong proud mood, no military uniforms or official insignia, realistic photography, no logos, no text overlay",
       "Vertical 1:1 Facebook ad image, American flag subtly visible in background, veteran-aged adult, warm civilian home, patriotic mood without official symbols, no logos, no text overlay",
     ],
     videoScriptPool: [
-      "[HOOK] Your service ended. Your advantages didn't. [BODY] There are private market coverage options designed specifically for veterans — not available to the general public. No exam options, locked-in rates, simple qualification. This is private coverage — not a VA program. [CTA] Tap below to see if you qualify.",
+      "[HOOK] Your service ended. Your advantages didn't. [BODY] There are private coverage options designed specifically for veterans and their families. No exam options, locked-in rates, simple qualification. Review your options with a licensed agent. [CTA] Tap below to see if you qualify.",
     ],
     landingPageConfig: {
       pageType: "veteran_long_copy",
@@ -930,7 +934,7 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
         "30-year term coverage options",
         "Built for veterans and their families",
         "May qualify in minutes",
-        "Private market coverage — not VA",
+        "Private coverage options",
       ],
       ctaPool: ["See My Rate →", "Check My Options →", "Learn More →"],
       approvedCoverageAmounts: [50000, 100000, 250000, 500000],
@@ -1471,11 +1475,11 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
       ],
       hookPool: [
         "Veterans can review private-market IUL options with a licensed professional.",
-        "This is private coverage education — not VA and not a government program.",
+        "Private IUL education and coverage options may be available through a licensed professional.",
         "If family legacy and future planning matter to you, IUL may be worth understanding.",
       ],
       bulletPool: [
-        "Private market coverage — not VA",
+        "Private coverage options",
         "Family protection",
         "Cash value potential, subject to policy terms",
         "Educational review with a licensed professional",
@@ -1487,7 +1491,7 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
       ],
     },
     imagePromptPool: [
-      "Vertical 1:1 Facebook ad image for veteran indexed universal life education, veteran-aged civilian with spouse at home reviewing planning documents, subtle patriotic blue and red accents, no military uniforms, no government insignia, realistic photography, no logos, no text overlay",
+      "Vertical 1:1 Facebook ad image for veteran indexed universal life education, veteran-aged civilian with spouse at home reviewing planning documents, subtle patriotic blue and red accents, no military uniforms, no official insignia, realistic photography, no logos, no text overlay",
       "Vertical 1:1 Facebook ad image, veteran-aged civilian family in warm home setting, subtle American flag colors in decor, premium educational planning mood, no uniforms, no official insignia, no logos, no text overlay",
     ],
     landingPageConfig: {
@@ -1630,13 +1634,13 @@ function buildPrimaryText(
       ? bp.bulletPool.map((b) => `✓ ${b}`).join("\n")
       : "";
     const cta = pickFromPool(bp.ctaPool, seed, variantOffset);
-    return [hook, intro, body, bullets, cta].filter(Boolean).join("\n\n");
+    return applyCopyVariation([hook, intro, body, bullets, cta].filter(Boolean).join("\n\n"), seed, family.leadType);
   }
 
   if (family.format === "video_copy") {
     const bodyPoints = bp.bodyPointPool ? bp.bodyPointPool.join("\n") : "";
     const cta = pickFromPool(bp.ctaPool, seed, variantOffset);
-    return [hook, "", bodyPoints, "", cta].filter(Boolean).join("\n");
+    return applyCopyVariation([hook, "", bodyPoints, "", cta].filter(Boolean).join("\n"), seed, family.leadType);
   }
 
   // card | benefit_stack | family_emotional
@@ -1644,7 +1648,28 @@ function buildPrimaryText(
     ? bp.bulletPool.map((b) => `✓ ${b}`).join("\n")
     : "";
   const cta = pickFromPool(bp.ctaPool, seed, variantOffset);
-  return [hook, bullets, cta].filter(Boolean).join("\n\n");
+  return applyCopyVariation([hook, bullets, cta].filter(Boolean).join("\n\n"), seed, family.leadType);
+}
+
+function applyCopyVariation(text: string, seed: number, leadType: WinnerLeadType): string {
+  void leadType;
+  const replacements = [
+    { from: /Tap/gi, to: "Select" },
+    { from: /See/gi, to: "View" },
+    { from: /Check/gi, to: "Find Out" },
+    { from: /coverage/gi, to: "plans" },
+    { from: /qualify/gi, to: "be eligible" },
+  ];
+
+  let modified = text;
+  const count = (seed % 3) + 1;
+
+  for (let i = 0; i < count; i++) {
+    const replacement = replacements[(seed + i) % replacements.length];
+    modified = modified.replace(replacement.from, replacement.to);
+  }
+
+  return modified;
 }
 
 function buildButtonLabels(family: WinningAdFamily, seed: number): string[] {
@@ -1686,7 +1711,11 @@ function buildVariant(
   const headline = pickFromPool(family.copyBlueprint.headlinePool, seed, offset);
   const primaryText = buildPrimaryText(family, seed, offset);
   const cta = pickFromPool(family.copyBlueprint.ctaPool, seed, offset);
-  const imagePrompt = pickFromPool(family.imagePromptPool, seed, offset);
+  const imagePrompt = buildRichImagePrompt(
+    family,
+    pickFromPool(family.imagePromptPool, seed, offset),
+    buildButtonLabels(family, seed + offset)
+  );
   const videoScript =
     family.videoScriptPool && family.videoScriptPool.length > 0
       ? pickFromPool(family.videoScriptPool, seed, offset)
@@ -1744,6 +1773,102 @@ function buildVariant(
   };
 }
 
+function buildRichImagePrompt(
+  family: WinningAdFamily,
+  basePrompt: string,
+  buttonLabels: string[]
+): string {
+  const leadTypeStyleMap: Record<WinnerLeadType, string> = {
+    veteran:
+      "bold mobile-first Facebook and Instagram lead ad layout, large readable headline area, quiz and selection style, fake clickable age or coverage buttons, patriotic navy red gold white palette, subtle flag texture, benefit stack composition, no official seals or insignia",
+    trucker:
+      "bold mobile-first Facebook and Instagram lead ad layout, large readable headline area, truck and highway composition, sunset neon americana mood, fake clickable age buttons, strong benefit stack, no logos or insignia",
+    mortgage_protection:
+      "clean mobile-first Facebook and Instagram lead ad layout, large readable text, mortgage amount rows, clean UI card layout, benefit stack, fake clickable buttons, no logos",
+    final_expense:
+      "senior-friendly mobile-first Facebook and Instagram lead ad layout, large readable text, large coverage amount treatment, age selection buttons, clean benefit stack, no logos",
+    iul:
+      "premium mobile-first Facebook and Instagram educational lead ad layout, retirement and cash value education style, benefit stack, fake clickable selection buttons, large readable text, no logos",
+  };
+
+  const buttonPhrase =
+    buttonLabels.length > 0
+      ? `Include fake clickable option buttons like: ${buttonLabels.slice(0, 4).join(", ")}.`
+      : "Include fake clickable selection buttons.";
+
+  const lightingPool = [
+    "high-contrast lighting",
+    "soft sunset glow",
+    "bright clean daylight",
+    "premium studio-lit realism",
+  ];
+  const compositionPool = [
+    "tight mobile-first crop",
+    "stacked card composition",
+    "center-weighted portrait with UI overlay space",
+    "top-heavy headline space with lower button stack",
+  ];
+  const palettePool = [
+    "bold saturated palette",
+    "clean high-trust palette",
+    "warm lifestyle tones",
+    "crisp contrast with strong accent colors",
+  ];
+  const layoutPool = [
+    "benefit stack layout",
+    "quiz-card layout",
+    "selection grid layout",
+    "amount-row card layout",
+  ];
+  const subjectPoolByLeadType: Record<WinnerLeadType, string[]> = {
+    veteran: [
+      "veteran-aged man",
+      "older couple",
+      "retired man with family",
+      "middle-aged veteran with spouse",
+      "family with children",
+    ],
+    trucker: [
+      "CDL driver",
+      "truck driver near semi",
+      "driver family",
+      "semi truck on highway",
+      "driver looking at phone",
+    ],
+    mortgage_protection: [
+      "homeowner couple",
+      "young family in front of home",
+      "single parent at kitchen table",
+      "couple reviewing mortgage paperwork",
+      "family with children",
+    ],
+    final_expense: [
+      "older couple",
+      "senior woman",
+      "senior man with adult child",
+      "grandparent with family",
+      "retired couple at home",
+    ],
+    iul: [
+      "professional couple",
+      "parent reviewing finances",
+      "family planning at kitchen table",
+      "business owner",
+      "couple reviewing retirement strategy",
+    ],
+  };
+
+  const seed = simpleHash(`${family.id}:${basePrompt}:${buttonLabels.join("|")}`);
+  const lighting = pickFromPool(lightingPool, seed, 31);
+  const composition = pickFromPool(compositionPool, seed, 37);
+  const palette = pickFromPool(palettePool, seed, 41);
+  const layout = pickFromPool(layoutPool, seed, 43);
+  const subjectPool = subjectPoolByLeadType[family.leadType];
+  const subject = pickFromPool(subjectPool, seed, 53);
+
+  return `${basePrompt}, subject focus: ${subject}, ${leadTypeStyleMap[family.leadType]}, ${lighting}, ${composition}, ${palette}, ${layout}. ${buttonPhrase}`;
+}
+
 export function ensureUniquenessFingerprint(parts: {
   familyId: string;
   variantType: string;
@@ -1793,6 +1918,55 @@ export function generateWinningVariants(input: {
     logical: buildVariant(family, "logical", baseSeed),
     curiosity: buildVariant(family, "curiosity", baseSeed),
   };
+}
+
+export function generateWinningVariantList(input: {
+  leadType: WinnerLeadType;
+  audienceSegment?: AudienceSegment;
+  userId: string;
+  campaignName: string;
+  location?: string;
+  familyIdOverride?: string;
+  variantCount?: number;
+}): GeneratedWinningAd[] {
+  const { leadType, userId, campaignName, location = "", familyIdOverride } = input;
+  const audienceSegment = normalizeAudienceSegment(input.audienceSegment);
+  const families = getWinningFamiliesByLeadType(leadType, audienceSegment);
+
+  if (families.length === 0) {
+    throw new Error(`No winning families found for leadType: ${leadType}, audienceSegment: ${audienceSegment}`);
+  }
+
+  const requestedCount = clampVariantCount(input.variantCount);
+  const baseSeed = createDeterministicVariationSeed(userId, campaignName + location, `${leadType}:${audienceSegment}`);
+  const recommendedType = RECOMMENDED_VARIANT[leadType] ?? "emotional";
+  const variantOrder: VariantType[] = [
+    recommendedType,
+    "emotional",
+    "logical",
+    "curiosity",
+  ].filter((type, index, arr) => arr.indexOf(type) === index) as VariantType[];
+
+  while (variantOrder.length < requestedCount) {
+    variantOrder.push(
+      [recommendedType, "emotional", "logical", "curiosity"][variantOrder.length % 4] as VariantType
+    );
+  }
+
+  let familyPool = families;
+  if (familyIdOverride) {
+    const overrideFamily = families.find((f) => f.id === familyIdOverride);
+    familyPool = overrideFamily ? [overrideFamily] : families;
+  } else {
+    const rotation = baseSeed % families.length;
+    familyPool = [...families.slice(rotation), ...families.slice(0, rotation)];
+  }
+
+  return Array.from({ length: requestedCount }).map((_, index) => {
+    const family = familyPool[index % familyPool.length];
+    const variantType = variantOrder[index];
+    return buildVariant(family, variantType, baseSeed + index * 997);
+  });
 }
 
 // Auto-select the recommended variant by lead type

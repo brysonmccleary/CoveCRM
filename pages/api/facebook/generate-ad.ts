@@ -4,6 +4,7 @@ import { authOptions } from "@/pages/api/auth/[...nextauth]";
 import {
   type AudienceSegment,
   buildWinningFunnelConfig,
+  generateWinningVariantList,
   generateWinningVariants,
   isWinnerSupportedLeadType,
   selectRecommendedVariant,
@@ -103,6 +104,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     agentState?: string;
     dailyBudget?: number;
     audienceSegment?: string;
+    variantCount?: number;
   };
 
   if (!isWinnerSupportedLeadType(leadType)) {
@@ -115,6 +117,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const userEmail = String(session.user.email).toLowerCase();
   const location = String(locationParam || agentState || "").trim();
   const audienceSegment = normalizeAudienceSegment(audienceSegmentParam);
+  const requestedVariantCount = Math.min(4, Math.max(1, Number((req.body as any)?.variantCount) || 3));
   const campaignName = location
     ? `${campaignLabel(leadType)} - ${location}`
     : `${campaignLabel(leadType)} Campaign`;
@@ -127,6 +130,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     location,
   });
   const selectedVariant = selectRecommendedVariant(leadType, variants);
+  const selectedVariants = generateWinningVariantList({
+    leadType,
+    audienceSegment,
+    userId: userEmail,
+    campaignName,
+    location,
+    variantCount: requestedVariantCount,
+  });
   const dailyBudgetCents = Math.round((Number(dailyBudget) || 25) * 100);
   const buildDraftFromVariant = (variant: typeof variants.emotional) => ({
     leadType,
@@ -139,6 +150,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     cta: variant.cta,
     imagePrompt: variant.imagePrompt,
     videoScript: variant.videoScript,
+    buttonLabels: variant.buttonLabels,
+    bulletPoints: variant.bulletPoints,
+    creativeArchetype: variant.archetype,
     landingPageConfig: buildWinningFunnelConfig(variant),
     leadFormQuestions: LEAD_FORM_QUESTIONS[leadType],
     thankYouPageText: THANK_YOU_TEXT[leadType],
@@ -150,15 +164,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     copySource: "winner_library",
   });
   const recommendedDraft = buildDraftFromVariant(selectedVariant);
-  const allDrafts = [
-    buildDraftFromVariant(variants.emotional),
-    buildDraftFromVariant(variants.logical),
-    buildDraftFromVariant(variants.curiosity),
-  ];
+  const selectedDrafts = selectedVariants.map(buildDraftFromVariant);
 
   return res.status(200).json({
     ok: true,
-    draft: recommendedDraft,
-    drafts: allDrafts,
+    draft: selectedDrafts[0] || recommendedDraft,
+    drafts: selectedDrafts,
+    variantCount: selectedDrafts.length,
   });
 }

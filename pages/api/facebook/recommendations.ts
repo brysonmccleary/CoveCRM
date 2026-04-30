@@ -1,11 +1,39 @@
 import type { NextApiRequest, NextApiResponse } from "next";
+import { getServerSession } from "next-auth/next";
+import { authOptions } from "@/pages/api/auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import FBLeadCampaign from "../../../models/FBLeadCampaign";
+import FBGlobalAdPattern from "@/models/FBGlobalAdPattern";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  const session = await getServerSession(req, res, authOptions);
+  const email = typeof session?.user?.email === "string" ? session.user.email.toLowerCase() : "";
+  if (!email) return res.status(401).json({ error: "Unauthorized" });
+
   await dbConnect();
 
-  const campaigns = await FBLeadCampaign.find({}).lean();
+  const campaigns = await FBLeadCampaign.find({ userEmail: email }).lean();
+  const leadTypes = [...new Set(campaigns.map((c: any) => String(c.leadType || "")).filter(Boolean))];
+  const globalPatterns = await (FBGlobalAdPattern as any)
+    .find({
+      leadType: { $in: leadTypes },
+      status: { $in: ["winner", "promising", "fatigued"] },
+      confidenceScore: { $gte: 25 },
+    })
+    .sort({ confidenceScore: -1, performanceScore: -1 })
+    .limit(50)
+    .select("leadType status hookType bodyAngle performanceScore confidenceScore generationHints")
+    .lean();
+  const bestByLeadType = new Map<string, any>();
+  const fatiguedByLeadType = new Map<string, any>();
+  for (const pattern of globalPatterns as any[]) {
+    if ((pattern.status === "winner" || pattern.status === "promising") && !bestByLeadType.has(pattern.leadType)) {
+      bestByLeadType.set(pattern.leadType, pattern);
+    }
+    if (pattern.status === "fatigued" && !fatiguedByLeadType.has(pattern.leadType)) {
+      fatiguedByLeadType.set(pattern.leadType, pattern);
+    }
+  }
   const recommendations: any[] = [];
 
   for (const c of campaigns) {
@@ -19,6 +47,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const badNumberRate = (c as any).badNumberRate || 0;
     const totalLeads = (c as any).totalLeads || 0;
     const totalSpend = (c as any).totalSpend || 0;
+    const optimizationAlerts = Array.isArray((c as any).optimizationAlerts)
+      ? (c as any).optimizationAlerts.filter((alert: any) => !alert?.dismissed)
+      : [];
+
+    for (const alert of optimizationAlerts) {
+      recommendations.push({
+        type: alert.type || "review",
+        campaign: name,
+        message: String(alert.message || "Review ad performance."),
+      });
+    }
 
     if (!pClass || score === null || score === undefined) {
       recommendations.push({
@@ -54,18 +93,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     if (pClass === "FIX") {
+      const globalWinner = bestByLeadType.get((c as any).leadType);
       recommendations.push({
         type: "fix",
         campaign: name,
-        message: `Campaign performance is weak (${score}). Refresh creative, tighten targeting, && review lead quality.`
+        message: globalWinner
+          ? `Campaign performance is weak (${score}). Refresh creative toward the globally stronger ${globalWinner.hookType}/${globalWinner.bodyAngle} angle for this lead type.`
+          : `Campaign performance is weak (${score}). Refresh creative, tighten targeting, && review lead quality.`
       });
     }
 
     if (pClass === "PAUSE") {
+      const globalWinner = bestByLeadType.get((c as any).leadType);
       recommendations.push({
         type: "pause",
         campaign: name,
-        message: `Campaign is underperforming badly (${score}). Consider pausing && rebuilding the offer, creative, or targeting.`
+        message: globalWinner
+          ? `Campaign is underperforming badly (${score}). Consider pausing && rebuilding with a globally stronger ${globalWinner.hookType}/${globalWinner.bodyAngle} pattern.`
+          : `Campaign is underperforming badly (${score}). Consider pausing && rebuilding the offer, creative, or targeting.`
       });
     }
 
@@ -78,10 +123,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     if (frequency > 3) {
+      const fatiguedPattern = fatiguedByLeadType.get((c as any).leadType);
       recommendations.push({
         type: "frequency",
         campaign: name,
-        message: `Frequency is elevated (${frequency.toFixed(2)}). Creative fatigue is likely, so rotate new ads soon.`
+        message: fatiguedPattern
+          ? `Frequency is elevated (${frequency.toFixed(2)}). Creative fatigue is likely; avoid overusing the ${fatiguedPattern.hookType}/${fatiguedPattern.bodyAngle} angle and refresh into a new hook.`
+          : `Frequency is elevated (${frequency.toFixed(2)}). Creative fatigue is likely, so rotate new ads soon.`
       });
     }
 
@@ -106,6 +154,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         type: "data_check",
         campaign: name,
         message: "Campaign has spend && leads, but CPL is showing as 0. Verify insight sync && campaign totals."
+      });
+    }
+
+    if ((c as any).recommendReplaceAd) {
+      recommendations.push({
+        type: "replace_ad",
+        campaign: name,
+        message: "Creative fatigue or rising CPL detected. Replace your primary ad to restore performance."
+      });
+    }
+
+    if ((c as any).recommendNewAd) {
+      const globalWinner = bestByLeadType.get((c as any).leadType);
+      recommendations.push({
+        type: "new_ad",
+        campaign: name,
+        message: globalWinner
+          ? `Campaign momentum is strong. Duplicate-test a new variation using the globally strong ${globalWinner.hookType}/${globalWinner.bodyAngle} direction.`
+          : "Campaign momentum is strong. Launch an additional ad variation to capture more volume."
       });
     }
   }

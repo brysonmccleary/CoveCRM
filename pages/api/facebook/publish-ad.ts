@@ -146,6 +146,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     imageUrl,
     facebookPageId,
     adAccountId,
+    drafts,
     creativeArchetype,
     // Winner fields — sent by generate-ad when winner library was used
     winningFamilyId,
@@ -173,6 +174,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     imageUrl?: string;
     facebookPageId?: string;
     adAccountId?: string;
+    drafts?: Array<{
+      leadType?: string;
+      primaryText?: string;
+      headline?: string;
+      description?: string;
+      cta?: string;
+      imagePrompt?: string;
+      imageUrl?: string;
+      winningFamilyId?: string;
+      variationType?: string;
+      uniquenessFingerprint?: string;
+      vendorStyleTag?: string;
+      creativeArchetype?: string;
+    }>;
     creativeArchetype?: string;
     winningFamilyId?: string;
     variationType?: string;
@@ -272,12 +287,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
 
     const safeName = String(campaignName).trim();
+    const normalizedDrafts = Array.isArray(drafts) && drafts.length > 0
+      ? drafts
+      : [
+          {
+            leadType,
+            primaryText,
+            headline,
+            description,
+            cta,
+            imagePrompt,
+            imageUrl,
+            winningFamilyId,
+            variationType,
+            uniquenessFingerprint,
+            vendorStyleTag,
+            creativeArchetype,
+          },
+        ];
     const funnelSlug = safeName
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/^-|-$/g, "")
       .slice(0, 80);
-    let resolvedImageUrl = String(imageUrl || "").trim();
+    let resolvedImageUrl = String(imageUrl || normalizedDrafts[0]?.imageUrl || "").trim();
 
     if (!resolvedImageUrl) {
       resolvedImageUrl = await generateImageUrlForPublish(leadType, imagePrompt);
@@ -410,17 +443,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           // Store ad copy metadata + auto-generated funnel data.
           // Funnel data is served at /f/{campaignId} as the hosted landing page.
           notes: JSON.stringify({
-            headline: headline || "",
-            primaryText: primaryText || "",
-            imagePrompt: imagePrompt || "",
+            headline: headline || normalizedDrafts[0]?.headline || "",
+            primaryText: primaryText || normalizedDrafts[0]?.primaryText || "",
+            imagePrompt: imagePrompt || normalizedDrafts[0]?.imagePrompt || "",
             imageUrl: resolvedImageUrl,
-            cta: cta || "",
-            creativeArchetype: creativeArchetype || "",
-            adAccountId: adAccountId || "",
+            cta: cta || normalizedDrafts[0]?.cta || "",
+            creativeArchetype: creativeArchetype || normalizedDrafts[0]?.creativeArchetype || "",
+            adAccountId: resolvedAdAccountId || "",
             funnelType: funnelType || "",
             campaignStructure: lockedStructure,
             savedAt: new Date().toISOString(),
             funnelData,
+            drafts: normalizedDrafts,
           }),
         },
       },
@@ -431,6 +465,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     let metaAdsetId = "";
     let metaAdId = "";
     let metaFormId = "";
+    let publishedAds: Array<{
+      variantId: string;
+      variationType: string;
+      headline: string;
+      imageUrl: string;
+      metaAdId: string;
+      metaCreativeId: string;
+      status: string;
+    }> = [];
     let metaPublishStatus: "not_attempted" | "skipped_missing_meta_connection" | "success" | "failed" = "not_attempted";
     let metaError: string | null = null;
 
@@ -518,77 +561,101 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         metaFormId = String(metaFormJson.id);
         const appUrl = String(process.env.NEXT_PUBLIC_APP_URL || process.env.NEXTAUTH_URL || "https://www.covecrm.com").replace(/\/$/, "");
         const funnelAbsoluteUrl = `${appUrl}/f/${String(campaign._id)}`;
-        const resolvedImageBase64 = getBase64FromDataImageUrl(resolvedImageUrl);
-        const resolvedMetaImageHash = resolvedImageBase64
-          ? await uploadMetaAdImageFromDataUrl(
-              adAccountIdFinal,
-              accessToken,
-              resolvedImageUrl,
-              `${safeName} Creative Image`
-            )
-          : "";
+        publishedAds = [];
 
-        const objectStorySpec: Record<string, any> = {
-          page_id: pageIdFinal,
-          link_data: {
-            link: funnelAbsoluteUrl,
-            message: String(primaryText || ""),
-            name: String(headline || ""),
-            description: String(description || ""),
-            call_to_action: {
-              type: String(cta || "LEARN_MORE"),
-              value: {
-                lead_gen_form_id: metaFormId,
-                link: funnelAbsoluteUrl,
+        for (let index = 0; index < normalizedDrafts.length; index++) {
+          const currentDraft = normalizedDrafts[index] || {};
+          let currentImageUrl = String(currentDraft.imageUrl || "").trim();
+          if (!currentImageUrl) {
+            currentImageUrl = await generateImageUrlForPublish(
+              leadType,
+              String(currentDraft.imagePrompt || imagePrompt || "")
+            );
+          }
+
+          const resolvedImageBase64 = getBase64FromDataImageUrl(currentImageUrl);
+          const resolvedMetaImageHash = resolvedImageBase64
+            ? await uploadMetaAdImageFromDataUrl(
+                adAccountIdFinal,
+                accessToken,
+                currentImageUrl,
+                `${safeName} Creative Image ${index + 1}`
+              )
+            : "";
+
+          const objectStorySpec: Record<string, any> = {
+            page_id: pageIdFinal,
+            link_data: {
+              link: funnelAbsoluteUrl,
+              message: String(currentDraft.primaryText || primaryText || ""),
+              name: String(currentDraft.headline || headline || ""),
+              description: String(currentDraft.description || description || ""),
+              call_to_action: {
+                type: String(currentDraft.cta || cta || "LEARN_MORE"),
+                value: {
+                  lead_gen_form_id: metaFormId,
+                  link: funnelAbsoluteUrl,
+                },
               },
             },
-          },
-        };
+          };
 
-        if (resolvedMetaImageHash) {
-          objectStorySpec.link_data.image_hash = resolvedMetaImageHash;
-        } else {
-          objectStorySpec.link_data.image_url = resolvedImageUrl;
+          if (resolvedMetaImageHash) {
+            objectStorySpec.link_data.image_hash = resolvedMetaImageHash;
+          } else {
+            objectStorySpec.link_data.image_url = currentImageUrl;
+          }
+          if (instagramId) {
+            objectStorySpec.instagram_actor_id = instagramId;
+          }
+
+          const creativeParams = new URLSearchParams();
+          creativeParams.set("name", `${safeName} Creative ${index + 1}`);
+          creativeParams.set("object_story_spec", JSON.stringify(objectStorySpec));
+          creativeParams.set("access_token", accessToken);
+
+          const metaCreativeResp = await fetch(`https://graph.facebook.com/v19.0/act_${adAccountIdFinal}/adcreatives`, {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: creativeParams.toString(),
+          });
+          const metaCreativeJson = await metaCreativeResp.json();
+
+          if (!metaCreativeResp.ok || !metaCreativeJson?.id) {
+            throw new Error(`Meta creative create failed: ${JSON.stringify(metaCreativeJson)}`);
+          }
+          const creativeId = String(metaCreativeJson.id);
+
+          const adParams = new URLSearchParams();
+          adParams.set("name", `${safeName} Ad ${index + 1}`);
+          adParams.set("adset_id", metaAdsetId);
+          adParams.set("creative", JSON.stringify({ creative_id: creativeId }));
+          adParams.set("status", "PAUSED");
+          adParams.set("access_token", accessToken);
+
+          const metaAdResp = await fetch(`https://graph.facebook.com/v19.0/act_${adAccountIdFinal}/ads`, {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: adParams.toString(),
+          });
+          const metaAdJson = await metaAdResp.json();
+
+          if (!metaAdResp.ok || !metaAdJson?.id) {
+            throw new Error(`Meta ad create failed: ${JSON.stringify(metaAdJson)}`);
+          }
+
+          const createdMetaAdId = String(metaAdJson.id);
+          if (!metaAdId) metaAdId = createdMetaAdId;
+          publishedAds.push({
+            variantId: String(currentDraft.uniquenessFingerprint || `variant_${index + 1}`),
+            variationType: String(currentDraft.variationType || ""),
+            headline: String(currentDraft.headline || headline || ""),
+            imageUrl: currentImageUrl,
+            metaAdId: createdMetaAdId,
+            metaCreativeId: creativeId,
+            status: "PAUSED",
+          });
         }
-        if (instagramId) {
-          objectStorySpec.instagram_actor_id = instagramId;
-        }
-
-        const creativeParams = new URLSearchParams();
-        creativeParams.set("name", `${safeName} Creative`);
-        creativeParams.set("object_story_spec", JSON.stringify(objectStorySpec));
-        creativeParams.set("access_token", accessToken);
-
-        const metaCreativeResp = await fetch(`https://graph.facebook.com/v19.0/act_${adAccountIdFinal}/adcreatives`, {
-          method: "POST",
-          headers: { "Content-Type": "application/x-www-form-urlencoded" },
-          body: creativeParams.toString(),
-        });
-        const metaCreativeJson = await metaCreativeResp.json();
-
-        if (!metaCreativeResp.ok || !metaCreativeJson?.id) {
-          throw new Error(`Meta creative create failed: ${JSON.stringify(metaCreativeJson)}`);
-        }
-        const creativeId = String(metaCreativeJson.id);
-
-        const adParams = new URLSearchParams();
-        adParams.set("name", `${safeName} Ad`);
-        adParams.set("adset_id", metaAdsetId);
-        adParams.set("creative", JSON.stringify({ creative_id: creativeId }));
-        adParams.set("status", "PAUSED");
-        adParams.set("access_token", accessToken);
-
-        const metaAdResp = await fetch(`https://graph.facebook.com/v19.0/act_${adAccountIdFinal}/ads`, {
-          method: "POST",
-          headers: { "Content-Type": "application/x-www-form-urlencoded" },
-          body: adParams.toString(),
-        });
-        const metaAdJson = await metaAdResp.json();
-
-        if (!metaAdResp.ok || !metaAdJson?.id) {
-          throw new Error(`Meta ad create failed: ${JSON.stringify(metaAdJson)}`);
-        }
-        metaAdId = String(metaAdJson.id);
 
         const now = new Date();
         await FBLeadCampaign.updateOne(
@@ -600,6 +667,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               metaFormId,
               metaAdId,
               facebookCampaignId: metaCampaignId,
+              ads: publishedAds,
               metaPublishStatus: "success",
               metaPublishError: "",
               metaLastPublishAttemptAt: now,
@@ -649,9 +717,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     return res.status(200).json({
-      ok: true,
-      message: `Campaign created, Meta assets created, hosted funnel live, and CRM routing ready. Meta campaign, ad set, lead form, and ad are in PAUSED status.`,
-      campaignId,
+        ok: true,
+        message: `Campaign created, Meta assets created, hosted funnel live, and CRM routing ready. Meta campaign, ad set, lead form, and selected ads are in PAUSED status.`,
+        campaignId,
       folderId: String(folderId),
       folderName,
       campaignName: safeName,
@@ -659,9 +727,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       funnelUrl,
       metaCampaignId,
       metaAdsetId,
-      metaFormId,
-      metaAdId,
-    });
+        metaFormId,
+        metaAdId,
+        ads: publishedAds,
+        adCount: publishedAds.length,
+      });
   } catch (err: any) {
     console.error("[publish-ad] error:", err?.message);
     return res.status(500).json({ ok: false, error: "Failed to create campaign", details: err?.message });

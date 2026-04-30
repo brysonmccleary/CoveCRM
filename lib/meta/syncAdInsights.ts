@@ -6,6 +6,7 @@ import AdMetricsDaily from "@/models/AdMetricsDaily";
 import FBLeadCampaign from "@/models/FBLeadCampaign";
 import Lead from "@/lib/mongo/leads";
 import { Types } from "mongoose";
+import { evaluateFacebookOptimizationAlerts } from "@/lib/facebook/optimizationAlerts";
 
 const META_GRAPH_BASE = "https://graph.facebook.com/v19.0";
 
@@ -83,8 +84,19 @@ export async function syncAdInsights(
   let totalSpend = 0;
   let totalLeads = 0;
 
-  // Per-campaign aggregates: campaignId → { spend, leads }
-  const campaignTotals = new Map<string, { spend: number; leads: number }>();
+  // Per-campaign aggregates: campaignId → { spend, leads, impressions, clicks, cpm, cpc, ctr }
+  const campaignTotals = new Map<string, {
+    spend: number; leads: number;
+    impressions: number; clicks: number;
+    weightedCpm: number; weightedCpc: number; weightedCtr: number;
+    spendForRatios: number;
+  }>();
+  const campaignAdTotals = new Map<string, Map<string, {
+    spend: number;
+    leads: number;
+    clicks: number;
+    cpl: number;
+  }>>();
 
   for (const insight of insights) {
     const campaign =
@@ -109,7 +121,7 @@ export async function syncAdInsights(
     const endOfDay = new Date(date + "T23:59:59Z");
     const leads = await Lead.countDocuments({
       userEmail,
-      metaCampaignId: insight.campaign_id,
+      ...(insight.ad_id ? { metaAdId: insight.ad_id } : { metaCampaignId: insight.campaign_id }),
       createdAt: { $gte: startOfDay, $lte: endOfDay },
     });
 
@@ -138,23 +150,138 @@ export async function syncAdInsights(
 
     // Accumulate per-campaign totals so we can update FBLeadCampaign after the loop
     const cid = String((campaign as any)._id);
-    const prev = campaignTotals.get(cid) || { spend: 0, leads: 0 };
-    campaignTotals.set(cid, { spend: prev.spend + spend, leads: prev.leads + leads });
+    const prev = campaignTotals.get(cid) || {
+      spend: 0, leads: 0, impressions: 0, clicks: 0,
+      weightedCpm: 0, weightedCpc: 0, weightedCtr: 0, spendForRatios: 0,
+    };
+    campaignTotals.set(cid, {
+      spend: prev.spend + spend,
+      leads: prev.leads + leads,
+      impressions: prev.impressions + impressions,
+      clicks: prev.clicks + clicks,
+      // Spend-weighted averages for per-mille/per-click metrics
+      weightedCpm: prev.weightedCpm + cpm * spend,
+      weightedCpc: prev.weightedCpc + cpc * clicks,
+      weightedCtr: prev.weightedCtr + ctr * impressions,
+      spendForRatios: prev.spendForRatios + spend,
+    });
+
+    const adId = String(insight.ad_id || "").trim();
+    if (adId) {
+      const existingCampaignAds = campaignAdTotals.get(cid) || new Map<string, {
+        spend: number;
+        leads: number;
+        clicks: number;
+        cpl: number;
+      }>();
+      const prevAd = existingCampaignAds.get(adId) || { spend: 0, leads: 0, clicks: 0, cpl: 0 };
+      const nextSpend = prevAd.spend + spend;
+      const nextLeads = prevAd.leads + leads;
+      const nextClicks = prevAd.clicks + clicks;
+      existingCampaignAds.set(adId, {
+        spend: nextSpend,
+        leads: nextLeads,
+        clicks: nextClicks,
+        cpl: nextLeads > 0 && nextSpend > 0 ? nextSpend / nextLeads : 0,
+      });
+      campaignAdTotals.set(cid, existingCampaignAds);
+    }
   }
 
-  // ✅ Update FBLeadCampaign.totalSpend, totalLeads, and cpl so campaign cards show real data
+  // ✅ Update FBLeadCampaign aggregate metrics so campaign cards show real synced data
+  const syncedAt = new Date();
   for (const [cid, totals] of campaignTotals.entries()) {
     try {
       const aggCpl = totals.leads > 0 && totals.spend > 0 ? totals.spend / totals.leads : 0;
+      const aggCpm = totals.spendForRatios > 0 ? totals.weightedCpm / totals.spendForRatios : 0;
+      const aggCpc = totals.clicks > 0 ? totals.weightedCpc / totals.clicks : 0;
+      const aggCtr = totals.impressions > 0 ? totals.weightedCtr / totals.impressions : 0;
+      const campaignDoc = userCampaigns.find((campaign) => String((campaign as any)._id) === cid);
+      const currentAds = Array.isArray((campaignDoc as any)?.ads) ? [ ...(campaignDoc as any).ads ] : [];
+      const perAdTotals = campaignAdTotals.get(cid) || new Map();
+      const nextAds = currentAds.map((ad: any) => {
+        const adMetaId = String(ad?.metaAdId || "").trim();
+        const adTotals = adMetaId ? perAdTotals.get(adMetaId) : null;
+        if (!adTotals) return ad;
+        return {
+          ...ad,
+          spend: Math.round(adTotals.spend * 100) / 100,
+          leads: adTotals.leads,
+          clicks: adTotals.clicks,
+          cpl: Math.round(adTotals.cpl * 100) / 100,
+        };
+      });
       await FBLeadCampaign.findByIdAndUpdate(cid, {
         $set: {
           totalSpend: Math.round(totals.spend * 100) / 100,
           totalLeads: totals.leads,
+          totalClicks: totals.clicks,
+          totalImpressions: totals.impressions,
           cpl: Math.round(aggCpl * 100) / 100,
+          cpm: Math.round(aggCpm * 100) / 100,
+          cpc: Math.round(aggCpc * 100) / 100,
+          ctr: Math.round(aggCtr * 10000) / 10000,
+          metaLastSyncedAt: syncedAt,
+          metaSyncStatus: "synced",
+          metaSyncError: "",
+          ads: nextAds,
+        },
+      });
+      await evaluateFacebookOptimizationAlerts(cid).catch(() => {});
+    } catch {
+      // non-blocking — daily metrics already written
+    }
+  }
+
+  // ✅ Fetch live Meta object health for every campaign that has a metaCampaignId
+  for (const campaign of userCampaigns) {
+    const metaCampaignId = String(campaign.metaCampaignId || "").trim();
+    if (!metaCampaignId) continue;
+
+    try {
+      const healthUrl = new URL(`${META_GRAPH_BASE}/${metaCampaignId}`);
+      healthUrl.searchParams.set("fields", "effective_status,status,daily_budget");
+      healthUrl.searchParams.set("access_token", accessToken);
+
+      const healthResp = await fetch(healthUrl.toString());
+      if (!healthResp.ok) continue;
+
+      const h = await healthResp.json() as any;
+      const effectiveStatus = String(h?.effective_status || "").toUpperCase();
+      const configuredStatus = String(h?.status || "").toUpperCase();
+      // Meta returns daily_budget in cents as a string
+      const dailyBudgetLive = h?.daily_budget
+        ? Math.round(parseFloat(String(h.daily_budget)) / 100 * 100) / 100
+        : 0;
+
+      let objectHealth: string;
+      if (effectiveStatus === "ACTIVE") {
+        objectHealth = "healthy";
+      } else if (
+        effectiveStatus === "PAUSED" ||
+        effectiveStatus === "CAMPAIGN_PAUSED" ||
+        effectiveStatus === "ADSET_PAUSED"
+      ) {
+        objectHealth = "paused_on_meta";
+      } else if (effectiveStatus === "ARCHIVED" || effectiveStatus === "DELETED") {
+        objectHealth = "disconnected";
+      } else {
+        // Unknown status — mark as stale if we have a recent sync, else sync_failed
+        const lastSync = campaign.metaLastSyncedAt ? new Date(campaign.metaLastSyncedAt) : null;
+        objectHealth = lastSync ? "stale" : "sync_failed";
+      }
+
+      await FBLeadCampaign.findByIdAndUpdate(String(campaign._id), {
+        $set: {
+          metaEffectiveStatus: effectiveStatus,
+          metaConfiguredStatus: configuredStatus,
+          ...(dailyBudgetLive > 0 ? { metaDailyBudgetLive: dailyBudgetLive } : {}),
+          metaObjectHealth: objectHealth,
+          metaLastSyncedAt: syncedAt,
         },
       });
     } catch {
-      // non-blocking — daily metrics already written
+      // non-blocking health check — don't fail the whole sync
     }
   }
 

@@ -127,6 +127,46 @@ const FBLeadCampaignSchema = new Schema(
     // Meta object IDs (publish output)
     metaAdId: { type: String, default: "" },
     metaFormId: { type: String, default: "" },
+    ads: {
+      type: [
+        new Schema(
+          {
+            variantId: { type: String, default: "" },
+            variationType: { type: String, default: "" },
+            headline: { type: String, default: "" },
+            imageUrl: { type: String, default: "" },
+            metaAdId: { type: String, default: "" },
+            metaCreativeId: { type: String, default: "" },
+            status: { type: String, default: "" },
+            spend: { type: Number, default: 0 },
+            leads: { type: Number, default: 0 },
+            clicks: { type: Number, default: 0 },
+            cpl: { type: Number, default: 0 },
+            appointmentsBooked: { type: Number, default: 0 },
+            sales: { type: Number, default: 0 },
+          },
+          { _id: false }
+        ),
+      ],
+      default: [],
+    },
+    optimizationAlerts: {
+      type: [
+        new Schema(
+          {
+            type: { type: String, default: "" },
+            adMetaId: { type: String, default: "" },
+            variantId: { type: String, default: "" },
+            message: { type: String, default: "" },
+            createdAt: { type: Date, default: Date.now },
+            emailedAt: { type: Date, default: null },
+            dismissed: { type: Boolean, default: false },
+          },
+          { _id: false }
+        ),
+      ],
+      default: [],
+    },
 
     // Publish diagnostics
     metaPublishStatus: {

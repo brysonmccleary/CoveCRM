@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
 import StateSelector from "@/components/FacebookAds/StateSelector";
-import AdPreviewCard from "@/components/FacebookAds/AdPreviewCard";
 import { US_STATES } from "@/lib/facebook/geo/usStates";
 
 const LEAD_TYPE_LABELS: Record<string, string> = {
@@ -33,6 +32,12 @@ const SUBTYPE_OPTIONS: Record<string, { label: string; leadType: string; audienc
 };
 
 const STEPS = ["Lead Type", "State", "Budget", "Generate", "Review & Launch"];
+const VARIANT_COUNT_OPTIONS = [
+  { value: 1, label: "Basic" },
+  { value: 2, label: "Small Test" },
+  { value: 3, label: "Recommended" },
+  { value: 4, label: "Strong Test" },
+];
 
 export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (leadType: string) => void }) {
   const [step, setStep] = useState(0);
@@ -50,6 +55,8 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
   const [result, setResult] = useState<any>(null);
   const [regenerateAttempts, setRegenerateAttempts] = useState(0);
   const [dailyBudget, setDailyBudget] = useState(25);
+  const [variantCount, setVariantCount] = useState(3);
+  const [drafts, setDrafts] = useState<any[]>([]);
   const [selectedMetaPageId, setSelectedMetaPageId] = useState("");
   const [selectedMetaAdAccountId, setSelectedMetaAdAccountId] = useState("");
 
@@ -115,29 +122,41 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
     selectCampaignType(option);
   };
 
-  const generateImageForDraft = async (nextDraft: any) => {
+  const generateImagesForDrafts = async (nextDrafts: any[]) => {
+    if (!Array.isArray(nextDrafts) || nextDrafts.length === 0) return [];
     setImageGenerating(true);
     setImageError("");
     try {
-      const response = await fetch("/api/ai/generate-ad-images", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          leadType,
-          imagePrompt: nextDraft?.imagePrompt || "",
-        }),
-      });
-      const imageData = await response.json();
-      if (!response.ok || !imageData?.imageUrl) {
-        throw new Error(imageData?.error || "Image generation failed");
-      }
-      setDraft({
-        ...nextDraft,
-        imageUrl: imageData.imageUrl,
-      });
+      const updatedDrafts = await Promise.all(
+        nextDrafts.map(async (currentDraft) => {
+          try {
+            const response = await fetch("/api/ai/generate-ad-images", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                leadType,
+                imagePrompt: currentDraft?.imagePrompt || "",
+              }),
+            });
+            const imageData = await response.json();
+            if (!response.ok || !imageData?.imageUrl) {
+              throw new Error(imageData?.error || "Image generation failed");
+            }
+            return {
+              ...currentDraft,
+              imageUrl: imageData.imageUrl,
+            };
+          } catch {
+            return currentDraft;
+          }
+        })
+      );
+      setDrafts(updatedDrafts);
+      setDraft(updatedDrafts[0] || null);
+      return updatedDrafts;
     } catch {
-      setDraft(nextDraft);
-      setImageError("Creative image is required before launch. Retry image generation.");
+      setImageError("Creative image generation was incomplete. Missing previews will be generated again at publish if needed.");
+      return nextDrafts;
     } finally {
       setImageGenerating(false);
     }
@@ -167,14 +186,17 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
           location: stateLabel,
           mode: "wizard",
           dailyBudget,
+          variantCount,
         }),
       });
       const json = await response.json();
       if (!response.ok || !json?.draft) throw new Error(json?.error || "Generation failed");
+      const nextDrafts = Array.isArray(json?.drafts) && json.drafts.length > 0 ? json.drafts : [json.draft];
       setDraft(json.draft);
+      setDrafts(nextDrafts);
       if (isRegenerate) setRegenerateAttempts((count) => count + 1);
       setStep(3);
-      await generateImageForDraft(json.draft);
+      await generateImagesForDrafts(nextDrafts);
     } catch (err: any) {
       setError(err?.message || "Generation failed");
     } finally {
@@ -183,7 +205,7 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
   };
 
   const launch = async () => {
-    if (!draft?.imageUrl || !states.length) return;
+    if (!drafts.length || !states.length) return;
     setLaunching(true);
     setError("");
     setResult(null);
@@ -216,6 +238,7 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
           variationType: draft.variationType,
           uniquenessFingerprint: draft.uniquenessFingerprint,
           vendorStyleTag: draft.vendorStyleTag,
+          drafts,
           ...(selectedMetaPageId ? { facebookPageId: selectedMetaPageId } : {}),
           ...(selectedMetaAdAccountId ? { adAccountId: selectedMetaAdAccountId } : {}),
         }),
@@ -235,7 +258,7 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
     (step === 0 && !!leadType) ||
     (step === 1 && states.length > 0) ||
     (step === 2 && dailyBudget >= 5) ||
-    (step === 3 && !!draft?.imageUrl && !imageGenerating);
+    (step === 3 && drafts.length > 0 && !imageGenerating);
 
   return (
     <div className="bg-[#0f172a] border border-white/10 rounded-xl p-6">
@@ -313,8 +336,8 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
 
       {step === 1 && <StateSelector value={states} onChange={setStates} />}
 
-      {step === 2 && (
-        <div className="bg-white/5 border border-white/10 rounded-lg p-5">
+	      {step === 2 && (
+	        <div className="bg-white/5 border border-white/10 rounded-lg p-5">
           <p className="text-white font-semibold mb-1">Choose daily budget</p>
           <p className="text-sm text-gray-400 mb-4">
             Your ad will be created paused, so you can review it in Meta before spending starts.
@@ -331,11 +354,34 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
             />
             <span className="text-sm text-gray-400">per day</span>
           </div>
-          {dailyBudget < 5 && (
-            <p className="text-xs text-rose-400 mt-2">Minimum budget is $5/day.</p>
-          )}
-        </div>
-      )}
+	          {dailyBudget < 5 && (
+	            <p className="text-xs text-rose-400 mt-2">Minimum budget is $5/day.</p>
+	          )}
+	          <div className="mt-6 border-t border-white/10 pt-5">
+            <p className="text-white font-semibold mb-1">How many ad versions do you want to test?</p>
+            <p className="text-sm text-gray-400 mb-4">
+              CoveCRM launches multiple ad versions inside one campaign. Facebook may spend more on the ad people respond to best. CoveCRM tracks each version and will notify you when one looks like a winner or loser.
+            </p>
+	            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+	              {VARIANT_COUNT_OPTIONS.map((option) => (
+	                <button
+	                  key={option.value}
+	                  type="button"
+	                  onClick={() => setVariantCount(option.value)}
+	                  className={`rounded-lg border px-4 py-3 text-left ${
+	                    variantCount === option.value
+	                      ? "bg-emerald-600/20 border-emerald-500/60 text-white"
+	                      : "bg-[#111827] border-white/10 text-gray-300 hover:bg-white/10"
+	                  }`}
+	                >
+	                  <div className="text-lg font-bold">{option.value}</div>
+	                  <div className="text-sm">{option.label}</div>
+	                </button>
+	              ))}
+	            </div>
+	          </div>
+	        </div>
+	      )}
 
       {step === 3 && !draft && (
         <div className="bg-white/5 border border-white/10 rounded-lg p-5">
@@ -354,34 +400,81 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
         </div>
       )}
 
-      {step === 3 && draft && (
-        <div className="space-y-3">
-          <AdPreviewCard
-            draft={draft}
-            selectedStates={states}
-            regenerateAttempts={regenerateAttempts}
-            regenerating={loading}
-            onRegenerate={() => generate(true)}
-          />
-          {imageGenerating && (
-            <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-100">
-              Generating ad image...
-            </div>
-          )}
-          {imageError && !imageGenerating && (
-            <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3">
-              <p className="text-sm text-rose-100">{imageError}</p>
-              <button
-                type="button"
-                onClick={() => generateImageForDraft(draft)}
-                className="mt-3 px-4 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-sm font-semibold"
-              >
-                Retry Image
-              </button>
-            </div>
-          )}
-        </div>
-      )}
+	      {step === 3 && draft && (
+	        <div className="space-y-3">
+	          <div className="flex items-center justify-between gap-3 flex-wrap">
+	            <div>
+	              <p className="text-white font-semibold">Generated Ad Versions</p>
+	              <p className="text-sm text-gray-400">Review the selected test set before launch.</p>
+	            </div>
+	            <button
+	              type="button"
+	              onClick={() => generate(true)}
+	              disabled={loading}
+	              className="px-4 py-2 rounded-lg bg-white/10 hover:bg-white/15 text-white text-sm font-semibold disabled:opacity-50"
+	            >
+	              {loading ? "Regenerating..." : `Regenerate Set (${3 - regenerateAttempts} left)`}
+	            </button>
+	          </div>
+	          <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-4 gap-4">
+	            {drafts.map((currentDraft, index) => (
+	              <div key={currentDraft.uniquenessFingerprint || index} className="bg-white/5 border border-white/10 rounded-lg overflow-hidden">
+	                {currentDraft?.imageUrl ? (
+	                  <img src={currentDraft.imageUrl} alt={`Generated ad creative ${index + 1}`} className="w-full h-56 object-cover bg-black/20" />
+	                ) : (
+	                  <div className="h-56 bg-black/20 flex items-center justify-center text-sm text-gray-500">
+	                    Image preview generating...
+	                  </div>
+	                )}
+	                <div className="p-4 space-y-3">
+	                  <div className="flex items-center justify-between gap-2">
+	                    <p className="text-sm font-semibold text-white">Ad {index + 1}</p>
+	                    <span className="px-2 py-1 rounded bg-emerald-600/20 text-emerald-200 border border-emerald-500/30 text-[11px] uppercase">
+	                      {currentDraft?.variationType || "variant"}
+	                    </span>
+	                  </div>
+	                  <div className="flex flex-wrap gap-2 text-[11px] text-gray-300">
+	                    <span className="px-2 py-1 rounded bg-white/5 border border-white/10">
+	                      {currentDraft?.creativeArchetype || currentDraft?.vendorStyleTag || "style"}
+	                    </span>
+	                    <span className="px-2 py-1 rounded bg-white/5 border border-white/10">
+	                      {LEAD_TYPE_LABELS[currentDraft?.leadType || leadType] || currentDraft?.leadType || leadType}
+	                    </span>
+	                  </div>
+	                  <div>
+	                    <p className="text-xs uppercase text-gray-500 font-semibold">Headline</p>
+	                    <p className="text-base text-white font-semibold">{currentDraft?.headline}</p>
+	                  </div>
+	                  <div>
+	                    <p className="text-xs uppercase text-gray-500 font-semibold">Primary Text</p>
+	                    <p className="text-sm text-gray-100 whitespace-pre-line line-clamp-6">{currentDraft?.primaryText}</p>
+	                  </div>
+	                  <div className="flex flex-wrap gap-2 text-xs">
+	                    <span className="px-2 py-1 rounded bg-blue-600/20 text-blue-200 border border-blue-500/30">
+	                      {currentDraft?.cta || "LEARN_MORE"}
+	                    </span>
+	                  </div>
+	                  <div className="text-[11px] text-gray-500 space-y-1">
+	                    {currentDraft?.winningFamilyId && <p>Family: {currentDraft.winningFamilyId}</p>}
+	                    {currentDraft?.vendorStyleTag && <p>Style: {currentDraft.vendorStyleTag}</p>}
+	                    {currentDraft?.uniquenessFingerprint && <p className="truncate">Variant: {currentDraft.uniquenessFingerprint}</p>}
+	                  </div>
+	                </div>
+	              </div>
+	            ))}
+	          </div>
+	          {imageGenerating && (
+	            <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-100">
+	              Generating ad images...
+	            </div>
+	          )}
+	          {imageError && !imageGenerating && (
+	            <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3">
+	              <p className="text-sm text-rose-100">{imageError}</p>
+	            </div>
+	          )}
+	        </div>
+	      )}
 
       {step === 4 && (
         <div className={`rounded-lg p-5 border ${result ? "bg-emerald-900/30 border-emerald-700/40" : "bg-white/5 border-white/10"}`}>
@@ -396,14 +489,14 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
               Open funnel
             </a>
           )}
-          {!result && (
-            <button
-              type="button"
-              onClick={launch}
-              disabled={launching || !draft?.imageUrl || !states.length}
-              className="mt-4 px-5 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold disabled:opacity-50"
-            >
-              {launching ? "Launching..." : "Launch"}
+	          {!result && (
+	            <button
+	              type="button"
+	              onClick={launch}
+	              disabled={launching || !drafts.length || !states.length || imageGenerating}
+	              className="mt-4 px-5 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold disabled:opacity-50"
+	            >
+	              {launching ? "Launching..." : "Launch"}
             </button>
           )}
         </div>
@@ -440,14 +533,14 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
             Continue
           </button>
         )}
-        {step === 3 && (
-          <button
-            type="button"
-            onClick={() => setStep(4)}
-            disabled={!draft?.imageUrl || imageGenerating}
-            className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-sm text-white font-semibold disabled:opacity-50"
-          >
-            Continue to Launch
+	        {step === 3 && (
+	          <button
+	            type="button"
+	            onClick={() => setStep(4)}
+	            disabled={!drafts.length || imageGenerating}
+	            className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-sm text-white font-semibold disabled:opacity-50"
+	          >
+	            Continue to Launch
           </button>
         )}
       </div>
