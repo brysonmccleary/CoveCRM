@@ -85,11 +85,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         $set: {
           metaAccessToken: longLivedToken,
           metaTokenExpiresAt: tokenExpiresAt,
-          ...(firstPage ? {
-            metaPageId: String(firstPage.id || ""),
-            metaPageName: String(firstPage.name || ""),
-            metaInstagramId: String(firstPage?.instagram_business_account?.id || ""),
-          } : {}),
         },
       }
     );
