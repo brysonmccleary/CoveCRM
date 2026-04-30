@@ -30,7 +30,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     "business_management",
     "pages_read_engagement",
     "pages_show_list",
-    "leads_retrieval",
   ].join(",");
 
   const userId = String((session.user as any).id || session.user.email);
