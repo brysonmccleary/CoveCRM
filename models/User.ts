@@ -248,6 +248,15 @@ export interface IUser {
   metaPageName?: string;
   metaInstagramId?: string;
   metaAdAccountId?: string;
+  metaLeadTypeAssets?: {
+    [leadType: string]: {
+      pageId?: string;
+      pageName?: string;
+      adAccountId?: string;
+      internalSlug?: string;
+      updatedAt?: Date;
+    };
+  };
   metaSystemUserToken?: string;
   metaAccessToken?: string;
   metaTokenExpiresAt?: Date;
@@ -510,6 +519,20 @@ const UserSchema = new Schema<IUser>({
   metaPageName: { type: String, default: "" },
   metaInstagramId: { type: String, default: "" },
   metaAdAccountId: { type: String, default: "" },
+  metaLeadTypeAssets: {
+    type: Map,
+    of: new Schema(
+      {
+        pageId: { type: String, default: "" },
+        pageName: { type: String, default: "" },
+        adAccountId: { type: String, default: "" },
+        internalSlug: { type: String, default: "" },
+        updatedAt: { type: Date, default: null },
+      },
+      { _id: false }
+    ),
+    default: {},
+  },
   metaSystemUserToken: { type: String, default: "" },
   metaAccessToken: { type: String, default: "" },
   metaTokenExpiresAt: { type: Date, default: null },
