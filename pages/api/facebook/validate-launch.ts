@@ -23,19 +23,35 @@ export async function validateLaunchInput(params: {
 
   const body = params.body || {};
   const user = await User.findOne({ email: String(params.userEmail).toLowerCase() })
-    .select("_id metaAccessToken metaSystemUserToken metaAdAccountId metaPageId")
+    .select("_id metaAccessToken metaSystemUserToken metaAdAccountId metaPageId metaLeadTypeAssets")
     .lean() as any;
 
   if (!user) throw new Error("User account not found");
 
   const accessToken = String(user.metaSystemUserToken || user.metaAccessToken || "").trim();
-  const adAccountId = String(body.adAccountId || user.metaAdAccountId || "").trim();
-  const pageId = String(body.facebookPageId || user.metaPageId || "").trim();
+  const leadType = String(body.leadType || "").trim();
+  const leadTypeAssets =
+    leadType && user?.metaLeadTypeAssets
+      ? user.metaLeadTypeAssets instanceof Map
+        ? user.metaLeadTypeAssets.get(leadType)
+        : user.metaLeadTypeAssets[leadType]
+      : null;
+  const adAccountId = String(
+    body.adAccountId ||
+      leadTypeAssets?.adAccountId ||
+      user.metaAdAccountId ||
+      ""
+  ).trim();
+  const pageId = String(
+    body.facebookPageId ||
+      leadTypeAssets?.pageId ||
+      user.metaPageId ||
+      ""
+  ).trim();
 
   if (!accessToken || !adAccountId) throw new Error("Ad account connection required");
   if (!pageId) throw new Error("Facebook page connection required");
 
-  const leadType = String(body.leadType || "").trim();
   if (!VALID_LEAD_TYPES.includes(leadType)) throw new Error("Lead type required");
 
   const licensedStates = validateStates(body.licensedStates);
