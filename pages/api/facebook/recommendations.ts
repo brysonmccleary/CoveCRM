@@ -3,7 +3,6 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/pages/api/auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import FBLeadCampaign from "../../../models/FBLeadCampaign";
-import FBGlobalAdPattern from "@/models/FBGlobalAdPattern";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const session = await getServerSession(req, res, authOptions);
@@ -13,27 +12,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   await dbConnect();
 
   const campaigns = await FBLeadCampaign.find({ userEmail: email }).lean();
-  const leadTypes = [...new Set(campaigns.map((c: any) => String(c.leadType || "")).filter(Boolean))];
-  const globalPatterns = await (FBGlobalAdPattern as any)
-    .find({
-      leadType: { $in: leadTypes },
-      status: { $in: ["winner", "promising", "fatigued"] },
-      confidenceScore: { $gte: 25 },
-    })
-    .sort({ confidenceScore: -1, performanceScore: -1 })
-    .limit(50)
-    .select("leadType status hookType bodyAngle performanceScore confidenceScore generationHints")
-    .lean();
   const bestByLeadType = new Map<string, any>();
   const fatiguedByLeadType = new Map<string, any>();
-  for (const pattern of globalPatterns as any[]) {
-    if ((pattern.status === "winner" || pattern.status === "promising") && !bestByLeadType.has(pattern.leadType)) {
-      bestByLeadType.set(pattern.leadType, pattern);
-    }
-    if (pattern.status === "fatigued" && !fatiguedByLeadType.has(pattern.leadType)) {
-      fatiguedByLeadType.set(pattern.leadType, pattern);
-    }
-  }
   const recommendations: any[] = [];
 
   for (const c of campaigns) {
