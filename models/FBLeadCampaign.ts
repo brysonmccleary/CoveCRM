@@ -170,11 +170,6 @@ const FBLeadCampaignSchema = new Schema(
 FBLeadCampaignSchema.index({ userId: 1, status: 1 });
 FBLeadCampaignSchema.index({ userId: 1, leadType: 1 });
 
-export interface IFBLeadCampaign extends InferSchemaType<typeof FBLeadCampaignSchema> {
-  facebookPageName?: string;
-  adAccountId?: string;
-}
-
-export type FBLeadCampaign = IFBLeadCampaign;
+export type FBLeadCampaign = InferSchemaType<typeof FBLeadCampaignSchema>;
 export default (models.FBLeadCampaign as mongoose.Model<FBLeadCampaign>) ||
   model<FBLeadCampaign>("FBLeadCampaign", FBLeadCampaignSchema);
