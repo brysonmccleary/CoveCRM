@@ -79,12 +79,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     await mongooseConnect();
 
+    // fetch ad accounts
+    const adAccountsUrl = new URL("https://graph.facebook.com/v19.0/me/adaccounts");
+    adAccountsUrl.searchParams.set("access_token", longLivedToken);
+
+    const adResp = await fetch(adAccountsUrl.toString());
+    const adData = await adResp.json() as any;
+
+    const firstAd = adData?.data?.[0];
+
     await User.updateOne(
       { email: userEmail },
       {
         $set: {
           metaAccessToken: longLivedToken,
           metaTokenExpiresAt: tokenExpiresAt,
+          ...(firstAd?.account_id && {
+            metaAdAccountId: firstAd.account_id,
+          }),
         },
       }
     );
