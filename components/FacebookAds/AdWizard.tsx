@@ -420,7 +420,13 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
 	            {drafts.map((currentDraft, index) => (
 	              <div key={currentDraft.uniquenessFingerprint || index} className="bg-white/5 border border-white/10 rounded-lg overflow-hidden">
 	                {currentDraft?.imageUrl ? (
-	                  <img src={currentDraft.imageUrl} alt={`Generated ad creative ${index + 1}`} className="w-full h-56 object-cover bg-black/20" />
+	                  <div className="relative w-full overflow-hidden rounded-xl">
+	                    <img
+	                      src={currentDraft.imageUrl}
+	                      alt={`Generated ad creative ${index + 1}`}
+	                      className="w-full h-auto object-contain"
+	                    />
+	                  </div>
 	                ) : (
 	                  <div className="h-56 bg-black/20 flex items-center justify-center text-sm text-gray-500">
 	                    Image preview generating...
