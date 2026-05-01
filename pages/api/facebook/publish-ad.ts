@@ -532,13 +532,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
         metaAdsetId = String(metaAdsetJson.id);
 
+        const leadTypeSpecificQuestionLabels: Record<string, string> = {
+          mortgage_protection: "What is your mortgage balance?",
+          trucker: "Are you currently an active CDL driver?",
+          veteran: "What military branch did you serve in?",
+          final_expense: "What coverage amount are you interested in?",
+          iul: "Are you looking for protection, cash value growth, or both?",
+        };
         const questions: Array<Record<string, any>> = [
           { type: "FULL_NAME" },
+          { type: "CUSTOM", label: leadTypeSpecificQuestionLabels[leadType] },
+          { type: "CUSTOM", label: "Best time for a licensed agent to call?" },
           { type: "PHONE" },
+          { type: "EMAIL" },
+          { type: "CUSTOM", label: "Age" },
+          { type: "CUSTOM", label: "State" },
+          { type: "CUSTOM", label: "Who would be your beneficiary?" },
         ];
-        if (leadType === "iul" || leadType === "final_expense") {
-          questions.push({ type: "EMAIL" });
-        }
 
         const metaFormParams = new URLSearchParams();
         metaFormParams.set("name", `${safeName} Lead Form`);
