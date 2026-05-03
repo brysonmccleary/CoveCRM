@@ -235,7 +235,23 @@ async function ensureSubaccountApiKeyForUser(args: {
   fresh.twilio.apiKeySid = created.apiKeySid;
   fresh.twilio.apiKeySecret = created.apiKeySecret;
 
-  await fresh.save();
+  try {
+    await User.updateOne(
+      { _id: fresh._id },
+      {
+        $set: {
+          "twilio.accountSid": fresh.twilio.accountSid,
+          "twilio.apiKeySid": created.apiKeySid,
+          "twilio.apiKeySecret": created.apiKeySecret,
+        },
+      },
+    );
+  } catch (err) {
+    console.warn("ensureSubaccountApiKeyForUser: failed to persist subaccount API key", {
+      email: normalizedEmail,
+      error: (err as any)?.message || err,
+    });
+  }
 
   console.log(
     JSON.stringify({
@@ -315,7 +331,22 @@ async function ensureSubaccountTwimlAppForUser(args: {
   (fresh as any).twilio = (fresh as any).twilio || {};
   (fresh as any).twilio.twimlAppSid = sid;
 
-  await fresh.save();
+  try {
+    await User.updateOne(
+      { _id: fresh._id },
+      {
+        $set: {
+          twimlAppSid: sid,
+          "twilio.twimlAppSid": sid,
+        },
+      },
+    );
+  } catch (err) {
+    console.warn("ensureSubaccountTwimlAppForUser: failed to persist TwiML App SID", {
+      email: normalizedEmail,
+      error: (err as any)?.message || err,
+    });
+  }
 
   console.log(JSON.stringify({
     msg: "ensureSubaccountTwimlAppForUser: created TwiML App in subaccount",

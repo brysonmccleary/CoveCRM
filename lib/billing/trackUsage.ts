@@ -67,6 +67,20 @@ async function createAndChargeInvoice(params: {
   });
 }
 
+async function persistUsageFields(userDoc: any) {
+  await User.updateOne(
+    { _id: userDoc._id },
+    {
+      $set: {
+        aiUsage: userDoc.aiUsage,
+        usageAccruedCents: userDoc.usageAccruedCents || 0,
+        usageBilledTotalCents: userDoc.usageBilledTotalCents || 0,
+        usageLastInvoicedAt: userDoc.usageLastInvoicedAt || null,
+      },
+    },
+  );
+}
+
 /** ========= Public APIs ========= */
 
 type UsageSource = "twilio" | "twilio-self" | "twilio-voice" | "openai";
@@ -113,9 +127,9 @@ export async function trackUsage({
     totalCost: (userDoc.aiUsage?.totalCost || 0) + amount,
   };
 
-    // Admins never charged
+  // Admins never charged
   if (!shouldBill(userDoc.email)) {
-    await userDoc.save();
+    await persistUsageFields(userDoc);
     return;
   }
 
@@ -128,7 +142,7 @@ export async function trackUsage({
   // Missing Stripe linkage in prod should block billing
   if (!userDoc.stripeCustomerId) {
     if (isProd && platformBilled && amount > 0) {
-      await userDoc.save();
+      await persistUsageFields(userDoc);
       throw new Error("User missing or not linked to Stripe");
     }
   }
@@ -168,7 +182,7 @@ export async function trackUsage({
     console.warn("[DEV billing] Threshold reached but billing disabled/unavailable; accrued will remain until enabled.");
   }
 
-  await userDoc.save();
+  await persistUsageFields(userDoc);
 }
 
 

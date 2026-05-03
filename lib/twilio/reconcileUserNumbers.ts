@@ -1,5 +1,6 @@
 import PhoneNumber from "@/models/PhoneNumber";
 import Number from "@/models/Number";
+import User from "@/models/User";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
 import { resolvePreferredSmsDefault } from "@/lib/twilio/resolvePreferredSmsDefault";
 
@@ -149,12 +150,24 @@ export async function reconcileUserNumbers(user: any, email: string) {
   const preferredDefault = await resolvePreferredSmsDefault(user, { save: false });
   if (preferredDefault.changed) changed = true;
 
-  if (changed && typeof user.save === "function") {
-    if (typeof user.markModified === "function") {
-      user.markModified("numbers");
-      user.markModified("defaultSmsNumberId");
+  if (changed) {
+    try {
+      await User.updateOne(
+        { _id: user._id },
+        {
+          $set: {
+            numbers: user.numbers,
+            defaultSmsNumberId: user.defaultSmsNumberId || null,
+          },
+        },
+      );
+    } catch (err) {
+      console.warn("reconcileUserNumbers: failed to persist user number sync", {
+        userEmail: email,
+        userId: user?._id ? String(user._id) : null,
+        error: (err as any)?.message || err,
+      });
     }
-    await user.save();
   }
 
   return { user, changed };

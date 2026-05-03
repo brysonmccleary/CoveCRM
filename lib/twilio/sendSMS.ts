@@ -278,7 +278,15 @@ async function sendCore(
   if (!user) throw new Error("User not found");
   assertBillingAllowed(user);
 
-  await reconcileUserNumbers(user, user.email);
+  try {
+    await reconcileUserNumbers(user, user.email);
+  } catch (err) {
+    console.warn("sendSMS: failed to reconcile user numbers before send", {
+      userEmail: user?.email || null,
+      userId: user?._id ? String(user._id) : null,
+      error: (err as any)?.message || err,
+    });
+  }
 
   let refreshedUser =
     user?._id && mongoose.isValidObjectId(user._id)
@@ -288,7 +296,15 @@ async function sendCore(
     user = refreshedUser;
   }
 
-  await resolvePreferredSmsDefault(user);
+  try {
+    await resolvePreferredSmsDefault(user);
+  } catch (err) {
+    console.warn("sendSMS: failed to resolve preferred SMS default before send", {
+      userEmail: user?.email || null,
+      userId: user?._id ? String(user._id) : null,
+      error: (err as any)?.message || err,
+    });
+  }
 
   refreshedUser =
     user?._id && mongoose.isValidObjectId(user._id)
@@ -518,11 +534,20 @@ if (isUSDest && !isMessagingReady && !DEV_ALLOW_UNAPPROVED) {
 
   try {
     const tw = await client.messages.create(twParams);
-    if (usingPersonal || (user as any).billingMode === "self") {
-      await trackUsage({ user, amount: 0, source: "twilio-self" as any });
-    } else {
-      const seg = Math.max(1, Number((tw as any)?.numSegments || 1) || 1);
-      await trackUsage({ user, amount: SMS_COST * seg, source: "twilio" });
+    try {
+      if (usingPersonal || (user as any).billingMode === "self") {
+        await trackUsage({ user, amount: 0, source: "twilio-self" as any });
+      } else {
+        const seg = Math.max(1, Number((tw as any)?.numSegments || 1) || 1);
+        await trackUsage({ user, amount: SMS_COST * seg, source: "twilio" });
+      }
+    } catch (usageErr) {
+      console.warn("sendSMS: usage tracking failed after SMS send", {
+        userEmail: user?.email || null,
+        userId: user?._id ? String(user._id) : null,
+        messageSid: tw?.sid || null,
+        error: (usageErr as any)?.message || usageErr,
+      });
     }
     const newStatus = (tw.status as string) || "accepted";
     await Message.findByIdAndUpdate(preRow._id, {

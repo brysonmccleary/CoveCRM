@@ -7,6 +7,7 @@ import Folder from "@/models/Folder";
 import Lead, { createLeadsFromGoogleSheet, sanitizeLeadType } from "@/models/Lead";
 import { isSystemFolderName as isSystemFolder, isSystemish } from "@/lib/systemFolders";
 import { enrollOnNewLeadIfWatched } from "@/lib/drips/enrollOnNewLead";
+import { extractPhoneFromRow, normalizePhoneDigitsToE164 } from "@/lib/leads/phoneMapping";
 
 export const config = {
   api: { bodyParser: false },
@@ -301,8 +302,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const coverageAmount = pickRowValue(row, ["Coverage Amount", "coverageAmount", "Coverage", "coverage"]);
       const leadTypeIn = pickRowValue(row, ["leadType", "Lead Type", "LeadType", "Type", "type"]);
 
-      const normalizedPhone = normalizePhone(phoneRaw);
-      const phoneLast10 = normalizedPhone ? normalizedPhone.slice(-10) : "";
+      const rowPhone = extractPhoneFromRow({ ...payload, rawRow: row, row, phone: phoneRaw });
+      const phoneDigitsCandidate = rowPhone.phone || normalizePhone(phoneRaw);
+      const normalizedPhone = rowPhone.normalizedPhone || normalizePhoneDigitsToE164(phoneDigitsCandidate);
+      const phoneDigits = normalizedPhone ? phoneDigitsCandidate : "";
+      const phoneLast10 = normalizedPhone ? rowPhone.phoneLast10 || phoneDigits.slice(-10) : "";
       const emailLower = normalizeEmail(emailRaw);
 
       if (normalizedPhone) {
@@ -323,6 +327,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         "First Name": String(firstName || "").trim() || undefined,
         "Last Name": String(lastName || "").trim() || undefined,
         Phone: String(phoneRaw || "").trim() || undefined,
+        phone: phoneDigits || undefined,
         Email: emailLower || undefined,
         Notes: String(notes || "").trim() || undefined,
         Age: String(age || "").trim() || undefined,
@@ -413,7 +418,45 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     for (const c of candidateDocs) {
       if (c.normalizedPhone) {
         const p10 = c.normalizedPhone.slice(-10);
-        if (existingPhoneKeys.has(c.normalizedPhone) || (p10 && existingPhoneKeys.has(p10))) continue;
+        if (existingPhoneKeys.has(c.normalizedPhone) || (p10 && existingPhoneKeys.has(p10))) {
+          await (Lead as any).updateOne(
+            {
+              userEmail,
+              folderId: folder._id,
+              $or: [
+                { normalizedPhone: c.normalizedPhone },
+                ...(p10 ? [{ phoneLast10: p10 }] : []),
+              ],
+              phone: { $in: [null, ""] },
+            },
+            { $set: { phone: c.leadDoc.phone } },
+          );
+          await (Lead as any).updateOne(
+            {
+              userEmail,
+              folderId: folder._id,
+              $or: [
+                { normalizedPhone: c.normalizedPhone },
+                ...(p10 ? [{ phoneLast10: p10 }] : []),
+              ],
+              phoneLast10: { $in: [null, ""] },
+            },
+            { $set: { phoneLast10: c.leadDoc.phoneLast10 } },
+          );
+          await (Lead as any).updateOne(
+            {
+              userEmail,
+              folderId: folder._id,
+              $or: [
+                { normalizedPhone: c.normalizedPhone },
+                ...(p10 ? [{ phoneLast10: p10 }] : []),
+              ],
+              normalizedPhone: { $in: [null, ""] },
+            },
+            { $set: { normalizedPhone: c.normalizedPhone } },
+          );
+          continue;
+        }
 
         existingPhoneKeys.add(c.normalizedPhone);
         if (p10) existingPhoneKeys.add(p10);

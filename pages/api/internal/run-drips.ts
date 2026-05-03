@@ -11,6 +11,7 @@ import { renderTemplate, ensureOptOut, splitName } from "@/utils/renderTemplate"
 import { prebuiltDrips } from "@/utils/prebuiltDrips";
 import { DateTime } from "luxon";
 import { acquireLock, releaseLock } from "@/lib/locks";
+import { extractPhoneFromRow } from "@/lib/leads/phoneMapping";
 
 export const config = { maxDuration: 60 };
 
@@ -490,8 +491,27 @@ if (
           return;
         }
 
-        const phoneRaw = pickLeadPhoneRaw(lead);
-        const to = normalizeToE164Maybe(phoneRaw || undefined);
+        let phoneRaw = pickLeadPhoneRaw(lead);
+        let to = normalizeToE164Maybe(phoneRaw || undefined);
+
+        if (!to) {
+          const extractedPhone = extractPhoneFromRow(lead);
+          if (extractedPhone.normalizedPhone) {
+            const set: Record<string, any> = {};
+            if (!(lead as any).phone && extractedPhone.phone) set.phone = extractedPhone.phone;
+            if (!(lead as any).normalizedPhone && extractedPhone.normalizedPhone) {
+              set.normalizedPhone = extractedPhone.normalizedPhone;
+            }
+            if (!(lead as any).phoneLast10 && extractedPhone.phoneLast10) set.phoneLast10 = extractedPhone.phoneLast10;
+
+            if (Object.keys(set).length) {
+              await Lead.updateOne({ _id: (lead as any)._id }, { $set: set });
+            }
+
+            phoneRaw = extractedPhone.normalizedPhone;
+            to = extractedPhone.normalizedPhone;
+          }
+        }
 
         if (!to) {
           enrollNoPhone++;

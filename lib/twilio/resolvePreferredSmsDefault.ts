@@ -1,3 +1,5 @@
+import User from "@/models/User";
+
 function normalizePhone(input: string) {
   const digits = String(input || "").replace(/\D/g, "");
   if (!digits) return "";
@@ -91,11 +93,19 @@ export async function resolvePreferredSmsDefault(
         }),
       );
     }
-    if (shouldSave && typeof user?.save === "function") {
-      if (typeof user.markModified === "function") {
-        user.markModified("defaultSmsNumberId");
+    if (shouldSave && user?._id) {
+      try {
+        await User.updateOne(
+          { _id: user._id },
+          { $set: { defaultSmsNumberId: nextDefaultId } },
+        );
+      } catch (err) {
+        console.warn("resolvePreferredSmsDefault: failed to persist default", {
+          userEmail: user?.email || null,
+          userId: user?._id ? String(user._id) : null,
+          error: (err as any)?.message || err,
+        });
       }
-      await user.save();
     }
   }
 
