@@ -342,11 +342,6 @@ export default async function handler(
       usingPersonal,
     } = await getClientForUser(email);
 
-    const isMasterAccount =
-      PLATFORM_ACCOUNT_SID &&
-      PLATFORM_ACCOUNT_SID.length > 0 &&
-      PLATFORM_ACCOUNT_SID === activeAccountSid;
-
     console.log(
       JSON.stringify({
         msg: "buy-number: resolved client",
@@ -354,7 +349,6 @@ export default async function handler(
         usingPersonal,
         userBillingMode: user?.billingMode ?? null,
         activeAccountSidMasked: maskSid(activeAccountSid),
-        isMasterAccount,
         platformAccountMasked: maskSid(PLATFORM_ACCOUNT_SID),
       }),
     );
@@ -497,99 +491,67 @@ export default async function handler(
     }
     purchasedSid = purchased.sid;
 
-    // ---------- Resolve target Messaging Service (MASTER ONLY)
-    let targetMS: string | undefined = undefined;
+    // ---------- A2P Messaging Service attach
+    let a2pAttached = false;
 
-    if (isMasterAccount) {
-      const userA2p = (user as any).a2p || {};
-      const a2pProfile = await A2PProfile.findOne({
-        userId: String(user._id),
-      }).lean();
+    const messagingServiceSid = String((user as any)?.a2p?.messagingServiceSid || "").trim();
+    const messagingReady = (user as any)?.a2p?.messagingReady === true;
+    const a2pProfile = await A2PProfile.findOne({ userId: String(user._id) }).lean();
 
-      const hasApprovedMasterA2P =
-        userA2p.messagingReady === true &&
-        typeof userA2p.messagingServiceSid === "string" &&
-        userA2p.messagingServiceSid.length > 0;
-
-      if (hasApprovedMasterA2P) {
-        try {
-          const svc = await client.messaging.v1
-            .services(userA2p.messagingServiceSid)
-            .fetch();
-          targetMS = svc.sid;
-          console.log(
-            JSON.stringify({
-              msg: "buy-number: reusing master A2P messagingServiceSid",
-              email,
-              targetMSMasked: maskSid(targetMS),
-            }),
-          );
-        } catch {
-          targetMS = await ensureTenantMessagingServiceInThisAccount(
-            client,
-            String(user._id),
-            activeAccountSid,
-            user.name || user.email,
-          );
-        }
-      } else {
-        targetMS = await ensureTenantMessagingServiceInThisAccount(
-          client,
-          String(user._id),
-          activeAccountSid,
-          user.name || user.email,
-        );
-      }
-
-      if (targetMS) {
-        console.log(
+    if (messagingReady && messagingServiceSid) {
+      try {
+        await addNumberToMessagingService(client, messagingServiceSid, purchased.sid);
+        a2pAttached = true;
+        console.info(
           JSON.stringify({
-            msg: "buy-number: attaching number to MS (master only)",
+            msg: "buy-number: attached number to messaging service",
             email,
-            targetMSMasked: maskSid(targetMS),
-            activeAccountSidMasked: maskSid(activeAccountSid),
+            phoneNumber: purchased.phoneNumber,
+            messagingServiceSidMasked: maskSid(messagingServiceSid),
           }),
         );
-        await addNumberToMessagingService(client, targetMS, purchased.sid);
+      } catch (attachErr: any) {
+        const attachErrMsg = String(attachErr?.message || attachErr || "unknown");
+        console.warn(
+          JSON.stringify({
+            msg: "buy-number: failed A2P attach",
+            email,
+            phoneNumber: purchased.phoneNumber,
+            targetMSMasked: maskSid(messagingServiceSid),
+            error: attachErrMsg,
+            code: attachErr?.code ?? null,
+          }),
+        );
       }
-
-      // mirror a2pApproved for master account
-      await PhoneNumber.updateOne(
-        { phoneNumber: purchased.phoneNumber! },
-        {
-          $set: {
-            userId: user._id,
-            phoneNumber: purchased.phoneNumber!,
-            messagingServiceSid: targetMS || null,
-            profileSid: a2pProfile?.profileSid,
-            a2pApproved: Boolean(
-              (user as any).a2p?.messagingReady || a2pProfile?.messagingReady,
-            ),
-            datePurchased: new Date(),
-            twilioSid: purchased.sid,
-            friendlyName: purchased.friendlyName || undefined,
-          },
-        },
-        { upsert: true },
-      );
     } else {
-      // SUBACCOUNT: no Messaging Service attach; we rely on direct-from sends.
-      await PhoneNumber.updateOne(
-        { phoneNumber: purchased.phoneNumber! },
-        {
-          $set: {
-            userId: user._id,
-            phoneNumber: purchased.phoneNumber!,
-            messagingServiceSid: null,
-            a2pApproved: false,
-            datePurchased: new Date(),
-            twilioSid: purchased.sid,
-            friendlyName: purchased.friendlyName || undefined,
-          },
-        },
-        { upsert: true },
+      console.info(
+        JSON.stringify({
+          msg: "buy-number: skipped A2P attach",
+          email,
+          phoneNumber: purchased.phoneNumber,
+          messagingReady,
+          hasMessagingServiceSid: Boolean(messagingServiceSid),
+        }),
       );
     }
+
+    await PhoneNumber.updateOne(
+      { phoneNumber: purchased.phoneNumber! },
+      {
+        $set: {
+          userId: user._id,
+          phoneNumber: purchased.phoneNumber!,
+          messagingServiceSid: a2pAttached ? messagingServiceSid : null,
+          profileSid: a2pProfile?.profileSid,
+          a2pApproved: a2pAttached,
+          smsBlockedReason: a2pAttached ? null : "A2P messaging service not ready",
+          datePurchased: new Date(),
+          twilioSid: purchased.sid,
+          friendlyName: purchased.friendlyName || undefined,
+        },
+      },
+      { upsert: true },
+    );
 
     // ---------- Save on user doc
     user.numbers = user.numbers || [];
@@ -598,7 +560,9 @@ export default async function handler(
       phoneNumber: purchased.phoneNumber!,
       subscriptionId: createdSubscriptionId,
       purchasedAt: new Date(),
-      messagingServiceSid: targetMS,
+      messagingServiceSid: a2pAttached ? messagingServiceSid : undefined,
+      a2pApproved: a2pAttached,
+      smsBlockedReason: a2pAttached ? null : "A2P messaging service not ready",
       friendlyName: purchased.friendlyName || purchased.phoneNumber!,
       status: "active",
       capabilities: {
@@ -622,7 +586,7 @@ export default async function handler(
     }
     await resolvePreferredSmsDefault(user, { save: false });
     user.a2p = user.a2p || ({} as any);
-    if (targetMS) (user.a2p as any).messagingServiceSid = targetMS;
+    if (a2pAttached) (user.a2p as any).messagingServiceSid = messagingServiceSid;
     try {
       await user.save();
     } catch (dbErr: any) {
@@ -647,7 +611,7 @@ export default async function handler(
       number: purchased.phoneNumber,
       sid: purchased.sid,
       subscriptionId: createdSubscriptionId || null,
-      messagingServiceSid: targetMS || null,
+      messagingServiceSid: a2pAttached ? messagingServiceSid : null,
       usingPersonal,
       activeAccountSid: activeAccountSid,
     });
