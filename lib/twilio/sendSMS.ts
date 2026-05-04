@@ -512,6 +512,9 @@ if (isUSDest && !isMessagingReady && !DEV_ALLOW_UNAPPROVED) {
 
   if (serviceSid) {
     (twParams as any).messagingServiceSid = serviceSid;
+    if (forcedFrom) {
+      (twParams as any).from = forcedFrom;
+    }
   } else if (forcedFrom) {
     (twParams as any).from = forcedFrom;
   } else {
