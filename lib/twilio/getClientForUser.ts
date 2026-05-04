@@ -410,7 +410,8 @@ export async function getClientForUser(
     // prefer SID+AUTH only if it actually works; else fall back to their API key pair.
     const isPlatformOwner =
       platformAccountSid &&
-      platformAccountSid === accountSid &&
+      accountSid &&
+      platformAccountSid.toLowerCase() === accountSid.toLowerCase() &&
       !!platformAuthToken;
 
     let client: Twilio;

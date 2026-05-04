@@ -355,7 +355,9 @@ if (isUSDest && !isMessagingReady && !DEV_ALLOW_UNAPPROVED) {
     );
   }
 }
-  const serviceSid = "";
+  const serviceSid = String(
+    paramsIn.overrideMsid || (user as any)?.a2p?.messagingServiceSid || "",
+  ).trim();
 
   const lead = await resolveLeadForSend({
     leadId: paramsIn.leadId,
@@ -508,7 +510,9 @@ if (isUSDest && !isMessagingReady && !DEV_ALLOW_UNAPPROVED) {
   };
   if (paramsIn.mediaUrls?.length) (twParams as any).mediaUrl = paramsIn.mediaUrls;
 
-  if (forcedFrom) {
+  if (serviceSid) {
+    (twParams as any).messagingServiceSid = serviceSid;
+  } else if (forcedFrom) {
     (twParams as any).from = forcedFrom;
   } else {
     throw new Error(
