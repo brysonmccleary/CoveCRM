@@ -114,21 +114,21 @@ export default async function handler(
         style: "calm, trustworthy male voice (Cedar)",
       },
       iris: {
-        aiName: "Iris",
+        aiName: "Kayla",
         openAiVoiceId: "marin",
         style: "clear, professional female voice (Marin)",
       },
 
-      // Legacy keys (kept for back-compat only; map to Jacob/Iris internally)
+      // Legacy keys (kept for back-compat only; map to Jacob/Kayla internally)
       kayla: {
-        aiName: "Iris",
+        aiName: "Kayla",
         openAiVoiceId: "marin",
-        style: "legacy alias for Iris (Marin) – friendly female",
+        style: "legacy alias for Kayla (Marin) – friendly female",
       },
       elena: {
-        aiName: "Iris",
+        aiName: "Kayla",
         openAiVoiceId: "marin",
-        style: "legacy alias for Iris (Marin) – neutral female",
+        style: "legacy alias for Kayla (Marin) – neutral female",
       },
 
       // Back-compat generic styles → mapped to closest primary voices
@@ -138,9 +138,9 @@ export default async function handler(
         style: "neutral conversational (legacy key → Jacob/Cedar)",
       },
       upbeat_confident: {
-        aiName: "Iris",
+        aiName: "Kayla",
         openAiVoiceId: "marin",
-        style: "upbeat, confident (legacy key → Iris/Marin)",
+        style: "upbeat, confident (legacy key → Kayla/Marin)",
       },
       calm_reassuring: {
         aiName: "Jacob",

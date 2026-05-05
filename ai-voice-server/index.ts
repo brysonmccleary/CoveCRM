@@ -6528,16 +6528,13 @@ state.lastUserSpeechStoppedAtMs = Date.now();
       if (!isTimeIndecisionOrAvailability(openQText) && !isTimeMentioned(openQText)) {
       // Signals that indicate the user is NOT answering but reacting
       const isOffTopic =
-        // question-back / confusion
-        /what('s| is)? (this|that|up|going on)/.test(openQText) ||
-        /what do you (mean|want|need)/.test(openQText) ||
-        /why (are you|is this)/.test(openQText) ||
-        /who (is this|are you|am i)/.test(openQText) ||
-        /how did you/.test(openQText) ||
-        // pure filler / acknowledgement with no info
+        /what('?s| is)?\s+(this|that|up|going on)/i.test(openQText) ||
+        /what do you\s+(mean|want|need)/i.test(openQText) ||
+        /why (are you|is this)/i.test(openQText) ||
+        /who (is this|are you|am i)/i.test(openQText) ||
+        /how did you/i.test(openQText) ||
         (isFillerOnly(openQText) && openQText.length < 15) ||
-        // "yeah what's up" / "yep what's up" — answering + questioning back
-        /^(yeah|yep|yes|yup|sure|okay|ok|hi|hello)[,.]?\s*(what'?s? up|what do you (want|need)|what is (this|it)|huh)\??$/.test(openQText);
+        /^(yeah|yep|yes|yup|sure|okay|ok|hi|hello)[,.]?\s*(what'?s? up|what do you (want|need)|what is (this|it)|huh)\??$/i.test(openQText);
 
       if (isOffTopic) {
         // Don't advance — fire free-response so GPT re-asks conversationally
@@ -6767,7 +6764,6 @@ void handleFinalOutcomeIntent(state, {
           const parseSpokenTime = (raw: string, dateStr: string, tz: string): Date | null => {
             try {
               const t = raw.trim().toLowerCase();
-              // Normalize: "3pm" → "3:00 PM", "3:30pm" → "3:30 PM"
               const match = t.match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/i);
               if (!match) return null;
               let hh = Number(match[1]);
@@ -6775,16 +6771,28 @@ void handleFinalOutcomeIntent(state, {
               const meridiem = (match[3] || "").toLowerCase();
               if (meridiem === "pm" && hh !== 12) hh += 12;
               if (meridiem === "am" && hh === 12) hh = 0;
-              // dateStr is MM/DD/YYYY
+              if (hh < 0 || hh > 23 || mm < 0 || mm > 59) return null;
               const [mo, da, yr] = dateStr.split("/").map(Number);
-              // Create date in agent timezone by building ISO string
-              const isoLocal = `${yr}-${String(mo).padStart(2,"0")}-${String(da).padStart(2,"0")}T${String(hh).padStart(2,"0")}:${String(mm).padStart(2,"0")}:00`;
-              // Convert local time in agentTz to UTC
-              const localDate = new Date(isoLocal);
-              if (isNaN(localDate.getTime())) return null;
-              // Adjust for timezone offset
-              const offsetMs = localDate.getTime() - new Date(localDate.toLocaleString("en-US", { timeZone: tz })).getTime();
-              return new Date(localDate.getTime() + offsetMs);
+              if (!mo || !da || !yr) return null;
+              // Build a date string that Intl can interpret in the target timezone
+              // by using a reference UTC date and then finding the offset
+              const localIso = `${yr}-${String(mo).padStart(2,"0")}-${String(da).padStart(2,"0")}T${String(hh).padStart(2,"0")}:${String(mm).padStart(2,"0")}:00`;
+              // Find UTC offset for this timezone at approximately this time
+              const approxUtc = new Date(localIso + "Z");
+              const tzParts = new Intl.DateTimeFormat("en-US", {
+                timeZone: tz,
+                hour12: false,
+                year: "numeric", month: "2-digit", day: "2-digit",
+                hour: "2-digit", minute: "2-digit", second: "2-digit"
+              }).formatToParts(approxUtc);
+              const tzH = Number(tzParts.find(p => p.type === "hour")?.value || 0);
+              const tzM = Number(tzParts.find(p => p.type === "minute")?.value || 0);
+              const localH = hh;
+              const localM = mm;
+              const diffMinutes = (localH * 60 + localM) - (tzH * 60 + tzM);
+              const result = new Date(approxUtc.getTime() + diffMinutes * 60 * 1000);
+              if (isNaN(result.getTime())) return null;
+              return result;
             } catch { return null; }
           };
 

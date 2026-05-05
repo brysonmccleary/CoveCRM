@@ -78,6 +78,52 @@ export default function AIDialerForInsuranceAgentsPage() {
             </div>
           </section>
 
+          <section className="mt-12 rounded-2xl border border-white/10 bg-white/5 p-6 md:p-10 shadow-lg shadow-black/10">
+            <div className="mb-6">
+              <p className="text-sm font-semibold uppercase tracking-wider text-blue-300 mb-2">Built Into CoveCRM</p>
+              <h2 className="text-3xl md:text-4xl font-bold tracking-tight text-white">
+                Meet Kayla — Your AI Appointment Setter
+              </h2>
+              <p className="mt-3 text-lg leading-relaxed text-slate-300 max-w-3xl">
+                Kayla is CoveCRM's built-in AI voice assistant. She calls your insurance leads, handles objections naturally, and books appointments directly onto your Google Calendar — 24/7, without you lifting a finger.
+              </p>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-6">
+              <div className="rounded-xl border border-white/10 bg-[#020617]/40 p-5">
+                <p className="font-semibold text-white mb-1">Sounds Human</p>
+                <p className="text-sm text-slate-300">Warm, natural voice that doesn't sound like a robot</p>
+              </div>
+              <div className="rounded-xl border border-white/10 bg-[#020617]/40 p-5">
+                <p className="font-semibold text-white mb-1">Handles Any Objection</p>
+                <p className="text-sm text-slate-300">Trained on insurance-specific rebuttals to keep conversations moving</p>
+              </div>
+              <div className="rounded-xl border border-white/10 bg-[#020617]/40 p-5">
+                <p className="font-semibold text-white mb-1">Books on Your Calendar</p>
+                <p className="text-sm text-slate-300">Appointments go straight to your connected Google Calendar</p>
+              </div>
+              <div className="rounded-xl border border-white/10 bg-[#020617]/40 p-5">
+                <p className="font-semibold text-white mb-1">Detects Voicemails</p>
+                <p className="text-sm text-slate-300">Hangs up instantly on voicemails, never wastes a minute</p>
+              </div>
+              <div className="rounded-xl border border-white/10 bg-[#020617]/40 p-5">
+                <p className="font-semibold text-white mb-1">Live Transfer Ready</p>
+                <p className="text-sm text-slate-300">Can warm-transfer interested leads to you in real time</p>
+              </div>
+              <div className="rounded-xl border border-white/10 bg-[#020617]/40 p-5">
+                <p className="font-semibold text-white mb-1">Zero Silent Dead Air</p>
+                <p className="text-sm text-slate-300">Smart silence detection keeps every call moving forward</p>
+              </div>
+            </div>
+            <div className="mt-8 text-center">
+              <a
+                href="/signup"
+                className="inline-flex items-center justify-center rounded-xl border border-blue-500/50 bg-blue-600 px-7 py-3.5 text-base font-bold text-white shadow-[0_0_24px_rgba(59,130,246,0.35)] transition hover:bg-blue-500"
+              >
+                Try Kayla Free
+              </a>
+            </div>
+          </section>
+
           <div className="mt-10 space-y-8 [&_p]:text-slate-300 [&_p]:leading-8 [&_ul]:space-y-3 [&_ul]:pl-5 [&_ul]:list-disc [&_li]:text-slate-300 [&_a]:text-blue-300 [&_a]:transition [&_a:hover]:text-white">
               <section className="rounded-2xl border border-white/10 bg-white/5 p-6 md:p-8 shadow-lg shadow-black/10">
                 <h2 className="text-2xl md:text-3xl font-semibold text-white mb-4">Why Insurance Agents Use AI Dialers</h2>
