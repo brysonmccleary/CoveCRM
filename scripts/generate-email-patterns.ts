@@ -12,6 +12,8 @@ import DOIAgentDiscovery from "../models/DOIAgentDiscovery";
 import DomainEmailPattern from "../models/DomainEmailPattern";
 import { generatePersonalEmailCandidates } from "../lib/doi/personalEmailPatterns";
 import { DOI_CONFIG } from "./doi-config";
+import type { AnyBulkWriteOperation } from "mongoose";
+type EmailVerificationEmailType = "domain" | "personal" | "work" | "";
 
 const PERSONAL_EMAIL_DOMAINS = new Set([
   "gmail.com",
@@ -172,7 +174,7 @@ export async function generateEmailPatternsForAgent(agent: AgentForPatterns): Pr
       : buildPatterns(agent);
 
     if (domainPatterns.length) {
-      const ops = domainPatterns.map((pattern) => ({
+      const ops: AnyBulkWriteOperation<any>[] = domainPatterns.map((pattern) => ({
         updateOne: {
           filter: { agentId: agent._id, email: pattern.email },
           update: {
@@ -180,7 +182,7 @@ export async function generateEmailPatternsForAgent(agent: AgentForPatterns): Pr
               patternUsed: pattern.label,
               smtpValid: false,
               confidenceScore: pattern.confidence,
-              emailType: "work",
+              emailType: "work" as EmailVerificationEmailType,
             },
           },
           upsert: true,
