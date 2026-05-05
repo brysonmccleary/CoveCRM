@@ -157,6 +157,8 @@ function pickLeadPhoneRaw(lead: Record<string, any>): string | null {
     "PhoneNumber",
     "phone_number",
     "phone",
+    "Phone 1",
+    "Phone1",
     "mobile",
     "mobile_phone",
     "cell",
@@ -165,7 +167,20 @@ function pickLeadPhoneRaw(lead: Record<string, any>): string | null {
     "primary_phone",
   ]);
   const s = v == null ? "" : String(v).trim();
-  return s ? s : null;
+  if (s) return s;
+
+  // rawRow: Google Sheets / CSV imports store unmapped columns here.
+  // Handles leads where "Phone 1" (or similar) was not mapped to the canonical "phone" field.
+  const rawRow = (lead as any).rawRow;
+  if (rawRow && typeof rawRow === "object") {
+    for (const [k, val] of Object.entries(rawRow)) {
+      if (!/phone|mobile|cell|tel/i.test(k)) continue;
+      const sv = val == null ? "" : String(val).trim();
+      if (sv) return sv;
+    }
+  }
+
+  return null;
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {

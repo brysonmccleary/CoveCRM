@@ -309,7 +309,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // ✅ Extract common fields (variation-proof)
     const firstName = pickRowValue(row, ["First Name", "First", "FName", "Given Name", "firstname", "first_name", "first"]);
     const lastName = pickRowValue(row, ["Last Name", "Last", "LName", "Surname", "lastname", "last_name", "last"]);
-    const phoneRaw = pickRowValue(row, ["Phone", "Phone Number", "Mobile", "Cell", "Primary Phone", "phone", "phoneNumber", "phonenumber"]);
+    const phoneRaw = pickRowValue(row, ["Phone", "Phone Number", "Mobile", "Cell", "Primary Phone", "phone", "phoneNumber", "phonenumber", "Phone 1", "Phone1", "phone1"]);
     const emailRaw = pickRowValue(row, ["Email", "Email Address", "E-mail", "E-mail Address", "email", "emailAddress", "email_address"]);
     const state = pickRowValue(row, ["State", "ST", "state"]);
     const age = pickRowValue(row, ["Age", "age"]);

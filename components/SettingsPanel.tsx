@@ -223,7 +223,6 @@ export default function SettingsPanel() {
     { id: "billing", label: "Billing & Usage" },
     { id: "invoices", label: "Invoices" },
     { id: "affiliate", label: "Affiliate Program" },
-    { id: "email-account", label: "Email Account" },
     { id: "legal", label: "Legal" },
   ];
 
@@ -497,11 +496,7 @@ export default function SettingsPanel() {
 
         {activeTab === "affiliate" && <AffiliateProgramPanel />}
 
-        {activeTab === "email-account" && (
-          <div>
-            <EmailAccountPanel />
-          </div>
-        )}
+        {/* email-account tab is hidden from nav; content suppressed */}
 
         {activeTab === "legal" && (
           <div className="space-y-6 max-w-xl">

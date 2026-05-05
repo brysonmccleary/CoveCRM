@@ -1,6 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/pages/api/auth/[...nextauth]";
+import { isExperimentalAdminEmail } from "@/lib/isExperimentalAdmin";
 import mongooseConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import ProvenAd from "@/models/ProvenAd";
@@ -188,6 +189,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
   const session = await getServerSession(req, res, authOptions);
+  if (!isExperimentalAdminEmail(session?.user?.email)) return res.status(403).json({ error: 'Forbidden' });
   if (!session?.user?.email) return res.status(401).json({ error: "Unauthorized" });
 
   await mongooseConnect();

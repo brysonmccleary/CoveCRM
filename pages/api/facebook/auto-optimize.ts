@@ -6,6 +6,7 @@ import FBLeadCampaign from "@/models/FBLeadCampaign";
 import User from "@/models/User";
 import CampaignActionLog from "@/models/CampaignActionLog";
 import { authOptions } from "@/pages/api/auth/[...nextauth]";
+import { isExperimentalAdminEmail } from "@/lib/isExperimentalAdmin";
 import { sendEmail } from "@/lib/email";
 
 type Summary = {
@@ -488,6 +489,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const applyReallocation = req.method === "POST" && body.applyReallocation === true;
   const metaMockMode = process.env.META_MOCK_MODE === "true";
   const session = await getServerSession(req, res, authOptions);
+  if (!isExperimentalAdminEmail(session?.user?.email)) return res.status(403).json({ error: 'Forbidden' });
   const sessionEmail =
     typeof session?.user?.email === "string" ? session.user.email.toLowerCase() : "";
   const requiresSession =

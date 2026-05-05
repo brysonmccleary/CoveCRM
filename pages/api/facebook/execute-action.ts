@@ -3,6 +3,7 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { Types } from "mongoose";
 import { authOptions } from "@/pages/api/auth/[...nextauth]";
+import { isExperimentalAdminEmail } from "@/lib/isExperimentalAdmin";
 import mongooseConnect from "@/lib/mongooseConnect";
 import FBLeadCampaign from "@/models/FBLeadCampaign";
 import User from "@/models/User";
@@ -139,6 +140,7 @@ function extractCopyId(payload: any, preferredKey: string): string {
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const session = await getServerSession(req, res, authOptions);
+  if (!isExperimentalAdminEmail(session?.user?.email)) return res.status(403).json({ error: 'Forbidden' });
   const email = typeof session?.user?.email === "string" ? session.user.email.toLowerCase() : "";
   if (!email) return res.status(401).json({ error: "Unauthorized" });
 

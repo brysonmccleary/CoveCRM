@@ -395,7 +395,6 @@ function DashboardOverview() {
         <div className="grid w-full grid-cols-2 gap-2 rounded-xl border border-white/10 bg-[#0b1220] p-1.5 shadow-inner lg:w-[460px]">
           {[
             { id: "dial" as const, label: "Dial Overview", icon: "📞" },
-            { id: "ai" as const, label: "AI Info", icon: "🤖" },
           ].map((option) => (
             <button
               key={option.id}

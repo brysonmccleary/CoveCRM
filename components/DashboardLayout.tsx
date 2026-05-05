@@ -36,7 +36,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     { name: "Conversations", path: "/dashboard?tab=conversations" },
     { name: "Calendar", path: "/dashboard?tab=calendar" },
     { name: "Numbers", path: "/dashboard?tab=numbers" },
-    { name: "FB Leads", path: "/facebook-leads" },
+    ...(isAdmin ? [{ name: "FB Leads", path: "/facebook-leads" }] : []),
+    // gated below
     { name: "Team", path: "/team" },
     { name: "Settings", path: "/dashboard?tab=settings" },
     ...(isAdmin ? [

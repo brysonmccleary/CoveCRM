@@ -106,9 +106,11 @@ export default function Sidebar() {
           <Link href="/dashboard?tab=numbers" className="block hover:underline">
             Numbers
           </Link>
-          <Link href="/facebook-leads" className="block hover:underline">
-            FB Leads
-          </Link>
+          {isAdmin && (
+            <Link href="/facebook-leads" className="block hover:underline">
+              FB Leads
+            </Link>
+          )}
           {isAdmin && (
             <Link href="/recruiting" className="block hover:underline">
               Recruiting

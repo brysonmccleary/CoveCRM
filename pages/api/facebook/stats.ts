@@ -5,6 +5,7 @@ import AdMetricsDaily from "../../../models/AdMetricsDaily";
 import CRMOutcome from "../../../models/CRMOutcome";
 import { getServerSession } from "next-auth";
 import { authOptions } from "../auth/[...nextauth]";
+import { isExperimentalAdminEmail } from "@/lib/isExperimentalAdmin";
 
 function zeroStats(res: NextApiResponse) {
   return res.status(200).json({
@@ -26,6 +27,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     const session = await getServerSession(req, res, authOptions);
+  if (!isExperimentalAdminEmail(session?.user?.email)) return res.status(403).json({ error: 'Forbidden' });
     if (typeof session?.user?.id === "string" && session.user.id.trim()) {
       userId = session.user.id;
     }

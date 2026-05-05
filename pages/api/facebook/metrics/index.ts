@@ -4,6 +4,7 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/pages/api/auth/[...nextauth]";
+import { isExperimentalAdminEmail } from "@/lib/isExperimentalAdmin";
 import mongooseConnect from "@/lib/mongooseConnect";
 import AdMetricsDaily from "@/models/AdMetricsDaily";
 import FBLeadCampaign from "@/models/FBLeadCampaign";
@@ -12,6 +13,7 @@ import { scoreAdPerformance } from "@/lib/facebook/scoreAdPerformance";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const session = await getServerSession(req, res, authOptions);
+  if (!isExperimentalAdminEmail(session?.user?.email)) return res.status(403).json({ error: 'Forbidden' });
   if (!session?.user?.email) return res.status(401).json({ message: "Unauthorized" });
 
   await mongooseConnect();

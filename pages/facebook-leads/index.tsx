@@ -9,6 +9,7 @@ import FBCampaignSheetsWizard from "@/components/FBCampaignSheetsWizard";
 import AdWizard from "@/components/FacebookAds/AdWizard";
 import { GetServerSideProps } from "next";
 import { getServerSession } from "next-auth/next";
+import { isExperimentalAdminEmail } from "@/lib/isExperimentalAdmin";
 import { authOptions } from "@/pages/api/auth/[...nextauth]";
 import { US_STATES } from "@/lib/facebook/geo/usStates";
 
@@ -2407,5 +2408,6 @@ export default function FacebookLeadsPage() {
 export const getServerSideProps: GetServerSideProps = async (ctx) => {
   const session = await getServerSession(ctx.req, ctx.res, authOptions);
   if (!session?.user?.email) return { redirect: { destination: "/auth/signin", permanent: false } };
+  if (!isExperimentalAdminEmail(session?.user?.email)) return { notFound: true };
   return { props: {} };
 };

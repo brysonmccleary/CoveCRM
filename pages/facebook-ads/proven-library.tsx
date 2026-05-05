@@ -3,6 +3,7 @@ import { useSession } from "next-auth/react";
 import DashboardLayout from "@/components/DashboardLayout";
 import { GetServerSideProps } from "next";
 import { getServerSession } from "next-auth/next";
+import { isExperimentalAdminEmail } from "@/lib/isExperimentalAdmin";
 import { authOptions } from "@/pages/api/auth/[...nextauth]";
 
 type ProvenAd = {
@@ -480,5 +481,6 @@ export const getServerSideProps: GetServerSideProps = async (ctx) => {
     };
   }
 
+  if (!isExperimentalAdminEmail(session?.user?.email)) return { notFound: true };
   return { props: {} };
 };

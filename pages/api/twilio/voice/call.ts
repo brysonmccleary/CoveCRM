@@ -52,8 +52,10 @@ function normalizeE164(p?: string) {
 
 function pickLeadPhoneE164(leadDoc: any): string {
   const directCandidates: any[] = [
+    leadDoc.normalizedPhone,
     leadDoc.phone,
     leadDoc.Phone,
+    leadDoc["Phone 1"],
     leadDoc.phoneNumber,
     leadDoc["Phone Number"],
     leadDoc.mobile,
@@ -73,8 +75,10 @@ function pickLeadPhoneE164(leadDoc: any): string {
     if (e) return e;
   }
 
-  // If Lead stores imported columns inside a nested object, try common containers
+  // rawRow: Google Sheets / CSV imports store original columns here.
+  // Imported "Phone 1" and similar columns land in rawRow when not mapped.
   const containers = [
+    leadDoc.rawRow,
     leadDoc.data,
     leadDoc.fields,
     leadDoc.meta,
@@ -95,6 +99,7 @@ function pickLeadPhoneE164(leadDoc: any): string {
   // Last resort: scan top-level keys that include "phone"
   for (const k of Object.keys(leadDoc || {})) {
     const key = String(k || "").toLowerCase();
+    if (key === "rawrow") continue; // already scanned above
     if (!key.includes("phone")) continue;
     const e = normalizeE164(String((leadDoc as any)[k] ?? ""));
     if (e) return e;
@@ -191,7 +196,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const to = toRaw ? normalizeE164(toRaw) : pickLeadPhoneE164(leadDoc);
-    if (!to) return res.status(400).json({ message: "Lead has no valid phone number" });
+    if (!to) {
+      const phoneLikeFields: Record<string, string> = {};
+      for (const k of Object.keys(leadDoc || {})) {
+        if (/phone|mobile|cell/i.test(k) && (leadDoc as any)[k]) {
+          phoneLikeFields[k] = String((leadDoc as any)[k]).slice(0, 40);
+        }
+      }
+      if (leadDoc.rawRow && typeof leadDoc.rawRow === "object") {
+        for (const k of Object.keys(leadDoc.rawRow)) {
+          if (/phone|mobile|cell/i.test(k) && (leadDoc.rawRow as any)[k]) {
+            phoneLikeFields[`rawRow.${k}`] = String((leadDoc.rawRow as any)[k]).slice(0, 40);
+          }
+        }
+      }
+      console.warn("[LEAD_PHONE_RESOLVE_FAILED]", {
+        leadId: String(leadDoc._id || ""),
+        leadName: `${leadDoc["First Name"] || leadDoc.firstName || ""} ${leadDoc["Last Name"] || leadDoc.lastName || ""}`.trim() || "(unknown)",
+        availablePhoneLikeFields: phoneLikeFields,
+      });
+      return res.status(400).json({ message: "Lead has no valid phone number" });
+    }
 
     const { client, accountSid, user } = await getClientForUser(email);
     const requestedFrom = normalizeE164(fromNumber || from || "");

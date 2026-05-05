@@ -1,4 +1,3 @@
-import { callKimiProvider } from "@/lib/ai/providers/kimiProvider";
 import { callOpenAIChatProvider } from "@/lib/ai/providers/openaiProvider";
 import { sanitizeProviderError } from "@/lib/ai/providers/providerEnv";
 import type { AiProviderChatResult } from "@/lib/ai/providers/types";
@@ -465,10 +464,8 @@ export async function generateA2PCorrection(args: GenerateA2PCorrectionArgs): Pr
   const messages = buildPrompt(args);
 
   try {
-    const kimi = await callKimiProvider({ messages, temperature: 0.1, maxTokens: 1800 });
-    const preferred = kimi.ok
-      ? kimi
-      : await callOpenAIChatProvider({ messages, temperature: 0.1, maxTokens: 1800 });
+    // Kimi disabled for production launch; OpenAI/fallback only.
+    const preferred = await callOpenAIChatProvider({ messages, temperature: 0.1, maxTokens: 1800 });
 
     if (!preferred.ok || !preferred.content) {
       await auditProviderFailure(args, preferred);
