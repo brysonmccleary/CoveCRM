@@ -4,6 +4,7 @@ import PhoneNumber from "@/models/PhoneNumber";
 import User from "@/models/User";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
 import { Buffer } from "buffer";
+import twilio from "twilio";
 
 const BASE_URL = (
   process.env.NEXT_PUBLIC_BASE_URL ||
@@ -97,6 +98,29 @@ function isTwilioDuplicateAssignment(err: any): boolean {
 
 function isSidLike(value: any, prefix: string) {
   return typeof value === "string" && value.startsWith(prefix);
+}
+
+// TrustHub (CustomerProfiles, TrustProducts, EndUsers) and Brand Registrations
+// always live on the platform/master Twilio account.
+// For subaccount users, the tenant-scoped client returns 404 for these resources.
+// These helpers provide a platform-scoped client and auth for those operations.
+
+function buildPlatformTwilioClient(): any | null {
+  const sid = (process.env.TWILIO_ACCOUNT_SID || "").replace(/[^A-Za-z0-9]/g, "").trim();
+  const token = (process.env.TWILIO_AUTH_TOKEN || "").trim();
+  if (!sid.startsWith("AC") || !token) return null;
+  try {
+    return twilio(sid, token, { accountSid: sid });
+  } catch {
+    return null;
+  }
+}
+
+function buildPlatformAuth(): { username: string; password: string; effectiveAccountSid: string } | null {
+  const sid = (process.env.TWILIO_ACCOUNT_SID || "").replace(/[^A-Za-z0-9]/g, "").trim();
+  const token = (process.env.TWILIO_AUTH_TOKEN || "").trim();
+  if (!sid.startsWith("AC") || !token) return null;
+  return { username: sid, password: token, effectiveAccountSid: sid };
 }
 
 function isCompanyTypeRejected(status: string, reason: any) {
@@ -888,6 +912,15 @@ export async function resumeA2PAutomationForUserEmail(userEmail: string) {
   }
 
   const client = resolved.client;
+
+  // TrustHub + Brand Registrations live on platform account — use platform client.
+  // For subaccounts, the tenant client returns 404 for these resources.
+  const rawPlatformSid = (process.env.TWILIO_ACCOUNT_SID || "").replace(/[^A-Za-z0-9]/g, "").trim();
+  const trusthubAccountSid = rawPlatformSid.startsWith("AC") ? rawPlatformSid : resolved.accountSid;
+  const trusthubClient = buildPlatformTwilioClient() ?? client;
+  const rawPlatformAuth = buildPlatformAuth();
+  const trusthubAuth = rawPlatformAuth ?? resolved.auth;
+
   const now = new Date();
   const update: Record<string, any> = {
     lastCheckedAt: now,
@@ -921,16 +954,40 @@ export async function resumeA2PAutomationForUserEmail(userEmail: string) {
     let profileStatus = normalizeTrustHubStatus(profile.profileStatus);
     if (profile.profileSid) {
       try {
-        const customerProfile: any = await client.trusthub.v1
+        const customerProfile: any = await trusthubClient.trusthub.v1
           .customerProfiles(profile.profileSid)
           .fetch();
         profileStatus = normalizeTrustHubStatus(customerProfile?.status);
         update.profileStatus = profileStatus || undefined;
       } catch (err: any) {
         if (isTwilioNotFound(err)) {
-          update.profileStatus = undefined;
+          // Try tenant client before marking stale (in case of scope mismatch)
+          let confirmedNotFound = true;
+          if (trusthubClient !== client) {
+            try {
+              const cp2: any = await client.trusthub.v1.customerProfiles(profile.profileSid).fetch();
+              profileStatus = normalizeTrustHubStatus(cp2?.status);
+              update.profileStatus = profileStatus || undefined;
+              confirmedNotFound = false;
+            } catch (inner: any) {
+              confirmedNotFound = isTwilioNotFound(inner);
+            }
+          }
+          if (confirmedNotFound) {
+            log("A2P][SID_STALE_CONFIRMED", {
+              userId: String(user._id), email: normalizedEmail,
+              sid: profile.profileSid, sidType: "profileSid",
+              tenantAccountSid: resolved.accountSid, platformAccountSid: trusthubAccountSid,
+            });
+            update.profileStatus = undefined;
+          }
         }
       }
+    }
+
+    const profileApproved = TRUSTHUB_APPROVED.has(profileStatus);
+    if (profileApproved) {
+      log("A2P][PROFILE_APPROVED", { userEmail: normalizedEmail, profileSid: profile.profileSid, profileStatus });
     }
 
     let trustProductSid = profile.trustProductSid ? String(profile.trustProductSid).trim() : "";
@@ -938,7 +995,7 @@ export async function resumeA2PAutomationForUserEmail(userEmail: string) {
     let trustProductRejectionReason = "";
     if (trustProductSid) {
       try {
-        const trustProduct: any = await client.trusthub.v1.trustProducts(trustProductSid).fetch();
+        const trustProduct: any = await trusthubClient.trusthub.v1.trustProducts(trustProductSid).fetch();
         trustProductStatus = normalizeTrustHubStatus(trustProduct?.status);
         const rawFailure =
           trustProduct?.failureReason ||
@@ -958,21 +1015,39 @@ export async function resumeA2PAutomationForUserEmail(userEmail: string) {
         }
       } catch (err: any) {
         if (isTwilioNotFound(err)) {
-          await A2PProfile.updateOne(
-            { _id: profile._id },
-            { $unset: { trustProductSid: 1, a2pProfileEndUserSid: 1 } },
-          );
-          trustProductSid = "";
-          update.trustProductSid = undefined;
-          update.trustProductStatus = undefined;
-          update.a2pProfileEndUserSid = undefined;
+          // Before clearing, verify on both scopes — prevents clearing a valid SID due to wrong account scope.
+          let confirmedNotFound = true;
+          if (trusthubClient !== client) {
+            try {
+              const tp2: any = await client.trusthub.v1.trustProducts(trustProductSid).fetch();
+              trustProductStatus = normalizeTrustHubStatus(tp2?.status);
+              confirmedNotFound = false;
+            } catch (inner: any) {
+              confirmedNotFound = isTwilioNotFound(inner);
+            }
+          }
+          if (confirmedNotFound) {
+            log("A2P][SID_STALE_CONFIRMED", {
+              userId: String(user._id), email: normalizedEmail,
+              sid: trustProductSid, sidType: "trustProductSid",
+              tenantAccountSid: resolved.accountSid, platformAccountSid: trusthubAccountSid,
+            });
+            await A2PProfile.updateOne(
+              { _id: profile._id },
+              { $unset: { trustProductSid: 1, a2pProfileEndUserSid: 1 } },
+            );
+            trustProductSid = "";
+            update.trustProductSid = undefined;
+            update.trustProductStatus = undefined;
+            update.a2pProfileEndUserSid = undefined;
+          }
         } else {
           throw err;
         }
       }
     }
 
-    const profileApproved = TRUSTHUB_APPROVED.has(profileStatus);
+    // profileApproved is declared earlier; no second declaration here.
     console.log("[A2P DEBUG] loaded statuses", {
       userEmail: normalizedEmail,
       profileSid: profile.profileSid,
@@ -986,30 +1061,40 @@ export async function resumeA2PAutomationForUserEmail(userEmail: string) {
 
     if (!trustProductSid && profile.profileSid && profileApproved) {
       const recoveredTrustProductSid = await recoverExistingTrustProductForProfile({
-        client,
-        auth: resolved.auth,
-        accountSidUsed: resolved.accountSid,
+        client: trusthubClient,
+        auth: trusthubAuth,
+        accountSidUsed: trusthubAccountSid,
         secondaryProfileSid: String(profile.profileSid),
         a2pProfileEndUserSid: String(profile.a2pProfileEndUserSid || "").trim() || undefined,
       });
 
       if (recoveredTrustProductSid) {
         trustProductSid = recoveredTrustProductSid;
+        log("A2P][TRUST_PRODUCT_CREATED", {
+          userEmail: normalizedEmail, trustProductSid, recovered: true,
+        });
       } else {
-        const created: any = await client.trusthub.v1.trustProducts.create({
+        const created: any = await trusthubClient.trusthub.v1.trustProducts.create({
           friendlyName: `${String(profile.businessName || "").trim() || "Business"} – A2P Trust Product`,
           email: String(profile.email || normalizedEmail || NOTIFY_EMAIL),
           policySid: A2P_TRUST_PRODUCT_POLICY_SID,
           statusCallback: STATUS_CB,
         });
         trustProductSid = String(created?.sid || "").trim();
+        if (trustProductSid) {
+          log("A2P][TRUST_PRODUCT_CREATED", {
+            userEmail: normalizedEmail, trustProductSid, recovered: false,
+          });
+        }
       }
 
       if (trustProductSid) {
         update.trustProductSid = trustProductSid;
+        update.trustProductStatus = "IN_REVIEW";
         update.registrationStatus = "trust_product_submitted";
         update.lastAdvancedAt = now;
         advanced = true;
+        log("A2P][TRUST_PRODUCT_IN_REVIEW", { userEmail: normalizedEmail, trustProductSid });
         log("A2P ADVANCE", {
           userEmail: normalizedEmail,
           step: "trust_product",
@@ -1025,114 +1110,131 @@ export async function resumeA2PAutomationForUserEmail(userEmail: string) {
         trustProductSid,
         trustProductStatus,
       });
-      const currentA2PEndUser = await fetchEndUserSnapshot({
-        client,
-        endUserSid: a2pProfileEndUserSid || undefined,
-      });
-      const shouldRepairFromEndUser =
-        isRejectedTrustProductStatus(trustProductStatus) &&
-        shouldRepairRejectedA2PEndUser(currentA2PEndUser);
-      const shouldRepairCompanyType = isCompanyTypeRejected(
-        trustProductStatus,
-        trustProductRejectionReason || profile.lastError || profile.declinedReason,
-      ) || shouldRepairFromEndUser;
-      console.log("[A2P DEBUG] shouldRepairCompanyType computed", {
-        userEmail: normalizedEmail,
-        trustProductSid,
-        trustProductStatus,
-        trustProductRejectionReason: trustProductRejectionReason || profile.lastError || profile.declinedReason || null,
-        currentA2PEndUserSid: currentA2PEndUser?.sid || null,
-        currentA2PEndUserType: currentA2PEndUser?.type || null,
-        currentA2PEndUserAttributes: currentA2PEndUser?.attributes || null,
-        shouldRepairFromEndUser,
-        shouldRepairCompanyType,
-      });
 
-      if (!a2pProfileEndUserSid || shouldRepairCompanyType) {
-        console.log("[A2P DEBUG] branch entered", {
-          branch: "repair_or_create_a2p_end_user",
-          entered: true,
+      if (trustProductStatus === "IN_REVIEW" || trustProductStatus === "PENDING_REVIEW") {
+        // Requirement 4: bundle is locked — do NOT add assignments; Twilio rejects them.
+        log("A2P][TRUST_PRODUCT_LOCKED_IN_REVIEW", {
+          userEmail: normalizedEmail, trustProductSid, trustProductStatus,
+        });
+        log("A2P][TRUST_PRODUCT_IN_REVIEW", { userEmail: normalizedEmail, trustProductSid });
+      } else if (TRUSTHUB_APPROVED.has(trustProductStatus)) {
+        // Already approved — entity mutation not needed; brand creation fires below.
+        log("A2P][TRUST_PRODUCT_APPROVED", { userEmail: normalizedEmail, trustProductSid });
+      } else {
+        // Draft / new / rejected — safe to add entity assignments and evaluate.
+        const currentA2PEndUser = await fetchEndUserSnapshot({
+          client: trusthubClient,
+          endUserSid: a2pProfileEndUserSid || undefined,
+        });
+        const shouldRepairFromEndUser =
+          isRejectedTrustProductStatus(trustProductStatus) &&
+          shouldRepairRejectedA2PEndUser(currentA2PEndUser);
+        const shouldRepairCompanyType = isCompanyTypeRejected(
+          trustProductStatus,
+          trustProductRejectionReason || profile.lastError || profile.declinedReason,
+        ) || shouldRepairFromEndUser;
+        console.log("[A2P DEBUG] shouldRepairCompanyType computed", {
           userEmail: normalizedEmail,
           trustProductSid,
+          trustProductStatus,
+          trustProductRejectionReason: trustProductRejectionReason || profile.lastError || profile.declinedReason || null,
+          currentA2PEndUserSid: currentA2PEndUser?.sid || null,
+          currentA2PEndUserType: currentA2PEndUser?.type || null,
+          currentA2PEndUserAttributes: currentA2PEndUser?.attributes || null,
+          shouldRepairFromEndUser,
           shouldRepairCompanyType,
-          hadExistingEndUserSid: Boolean(a2pProfileEndUserSid),
         });
-        if (shouldRepairCompanyType) {
-          await removeStaleA2PMessagingProfileAssignments({
-            client,
-            auth: resolved.auth,
-            accountSidUsed: resolved.accountSid,
+
+        if (!a2pProfileEndUserSid || shouldRepairCompanyType) {
+          console.log("[A2P DEBUG] branch entered", {
+            branch: "repair_or_create_a2p_end_user",
+            entered: true,
+            userEmail: normalizedEmail,
             trustProductSid,
+            shouldRepairCompanyType,
+            hadExistingEndUserSid: Boolean(a2pProfileEndUserSid),
+          });
+          if (shouldRepairCompanyType) {
+            await removeStaleA2PMessagingProfileAssignments({
+              client: trusthubClient,
+              auth: trusthubAuth,
+              accountSidUsed: trusthubAccountSid,
+              trustProductSid,
+            });
+          }
+
+          a2pProfileEndUserSid = await upsertA2PTrustProductEndUser({
+            client: trusthubClient,
+            profile,
+            normalizedEmail,
+            existingSid: a2pProfileEndUserSid || undefined,
+            forceCreateFresh: shouldRepairCompanyType,
+          });
+          if (a2pProfileEndUserSid) {
+            update.a2pProfileEndUserSid = a2pProfileEndUserSid;
+            if (shouldRepairCompanyType) {
+              console.log("[A2P] created fresh end-user", {
+                trustProductSid,
+                objectSid: a2pProfileEndUserSid,
+              });
+            }
+          }
+        } else {
+          console.log("[A2P DEBUG] branch entered", {
+            branch: "repair_or_create_a2p_end_user",
+            entered: false,
+            userEmail: normalizedEmail,
+            trustProductSid,
+            shouldRepairCompanyType,
+            hadExistingEndUserSid: Boolean(a2pProfileEndUserSid),
           });
         }
 
-        a2pProfileEndUserSid = await upsertA2PTrustProductEndUser({
-          client,
-          profile,
-          normalizedEmail,
-          existingSid: a2pProfileEndUserSid || undefined,
-          forceCreateFresh: shouldRepairCompanyType,
-        });
         if (a2pProfileEndUserSid) {
-          update.a2pProfileEndUserSid = a2pProfileEndUserSid;
+          await assignEntityToTrustProduct({
+            client: trusthubClient,
+            auth: trusthubAuth,
+            accountSidUsed: trusthubAccountSid,
+            trustProductSid,
+            objectSid: a2pProfileEndUserSid,
+          });
           if (shouldRepairCompanyType) {
-            console.log("[A2P] created fresh end-user", {
+            console.log("[A2P] reassigned trust product", {
               trustProductSid,
               objectSid: a2pProfileEndUserSid,
             });
           }
         }
-      }
-      else {
-        console.log("[A2P DEBUG] branch entered", {
-          branch: "repair_or_create_a2p_end_user",
-          entered: false,
-          userEmail: normalizedEmail,
-          trustProductSid,
-          shouldRepairCompanyType,
-          hadExistingEndUserSid: Boolean(a2pProfileEndUserSid),
-        });
-      }
 
-      if (a2pProfileEndUserSid) {
         await assignEntityToTrustProduct({
-          client,
-          auth: resolved.auth,
-          accountSidUsed: resolved.accountSid,
+          client: trusthubClient,
+          auth: trusthubAuth,
+          accountSidUsed: trusthubAccountSid,
           trustProductSid,
-          objectSid: a2pProfileEndUserSid,
+          objectSid: String(profile.profileSid),
         });
-        if (shouldRepairCompanyType) {
-          console.log("[A2P] reassigned trust product", {
-            trustProductSid,
-            objectSid: a2pProfileEndUserSid,
-          });
-        }
+
+        await evaluateAndSubmitTrustProduct({
+          client: trusthubClient,
+          auth: trusthubAuth,
+          accountSidUsed: trusthubAccountSid,
+          trustProductSid,
+        });
       }
-
-      await assignEntityToTrustProduct({
-        client,
-        auth: resolved.auth,
-        accountSidUsed: resolved.accountSid,
-        trustProductSid,
-        objectSid: String(profile.profileSid),
-      });
-
-      await evaluateAndSubmitTrustProduct({
-        client,
-        auth: resolved.auth,
-        accountSidUsed: resolved.accountSid,
-        trustProductSid,
-      });
     }
 
     if (trustProductSid) {
       try {
-        const trustProduct: any = await client.trusthub.v1
+        const trustProduct: any = await trusthubClient.trusthub.v1
           .trustProducts(trustProductSid)
           .fetch();
         trustProductStatus = normalizeTrustHubStatus(trustProduct?.status);
         update.trustProductStatus = trustProductStatus || undefined;
+        if (TRUSTHUB_APPROVED.has(trustProductStatus)) {
+          log("A2P][TRUST_PRODUCT_APPROVED", { userEmail: normalizedEmail, trustProductSid, trustProductStatus });
+        } else if (trustProductStatus === "IN_REVIEW" || trustProductStatus === "PENDING_REVIEW") {
+          log("A2P][TRUST_PRODUCT_IN_REVIEW", { userEmail: normalizedEmail, trustProductSid, trustProductStatus });
+        }
       } catch (err: any) {
         if (isTwilioNotFound(err)) {
           update.trustProductStatus = undefined;
@@ -1150,26 +1252,41 @@ export async function resumeA2PAutomationForUserEmail(userEmail: string) {
       const trustApproved = TRUSTHUB_APPROVED.has(trustProductStatus);
 
       if (profileApproved && trustApproved) {
-        try {
-          const created: any = await client.messaging.v1.brandRegistrations.create({
-            customerProfileBundleSid: profile.profileSid,
-            a2PProfileBundleSid: trustProductSid,
-            brandType: "LOW_VOLUME_STANDARD",
-          });
-          const sidCandidate = created?.sid || created?.brandSid || created?.id;
-          if (isSidLike(sidCandidate, "BN")) {
-            brandSid = sidCandidate;
-          }
-        } catch (err: any) {
-          if (err?.code === 20409 || err?.status === 409) {
-            const recovered = await findExistingBrandForBundles({
-              client,
-              profileSid: String(profile.profileSid),
-              trustProductSid,
+        // Scan first before creating to avoid duplicates.
+        const preExisting = await findExistingBrandForBundles({
+          client: trusthubClient,
+          profileSid: String(profile.profileSid),
+          trustProductSid,
+        });
+        if (preExisting) {
+          brandSid = preExisting;
+          log("A2P][BRAND_RECOVERED", { userEmail: normalizedEmail, brandSid, reason: "pre-scan" });
+        } else {
+          try {
+            const created: any = await trusthubClient.messaging.v1.brandRegistrations.create({
+              customerProfileBundleSid: profile.profileSid,
+              a2PProfileBundleSid: trustProductSid,
+              brandType: "LOW_VOLUME_STANDARD",
             });
-            if (recovered) brandSid = recovered;
-          } else {
-            throw err;
+            const sidCandidate = created?.sid || created?.brandSid || created?.id;
+            if (isSidLike(sidCandidate, "BN")) {
+              brandSid = sidCandidate;
+              log("A2P][BRAND_CREATED", { userEmail: normalizedEmail, brandSid });
+            }
+          } catch (err: any) {
+            if (err?.code === 20409 || err?.status === 409) {
+              const recovered = await findExistingBrandForBundles({
+                client: trusthubClient,
+                profileSid: String(profile.profileSid),
+                trustProductSid,
+              });
+              if (recovered) {
+                brandSid = recovered;
+                log("A2P][BRAND_RECOVERED", { userEmail: normalizedEmail, brandSid, reason: "409-conflict" });
+              }
+            } else {
+              throw err;
+            }
           }
         }
 
@@ -1178,6 +1295,7 @@ export async function resumeA2PAutomationForUserEmail(userEmail: string) {
           update.registrationStatus = "brand_submitted";
           update.lastAdvancedAt = now;
           advanced = true;
+          log("A2P][BRAND_IN_REVIEW", { userEmail: normalizedEmail, brandSid });
           log("A2P ADVANCE", {
             userEmail: normalizedEmail,
             step: "brand",
@@ -1189,7 +1307,7 @@ export async function resumeA2PAutomationForUserEmail(userEmail: string) {
 
     if (brandSid) {
       try {
-        const brand: any = await client.messaging.v1.brandRegistrations(brandSid).fetch();
+        const brand: any = await trusthubClient.messaging.v1.brandRegistrations(brandSid).fetch();
         brandStatus = normalizeUpper(brand?.status);
         const rawFailure =
           brand?.failureReason ||
@@ -1212,6 +1330,12 @@ export async function resumeA2PAutomationForUserEmail(userEmail: string) {
         update.brandSid = brandSid;
         update.brandStatus = brandStatus || undefined;
         update.brandFailureReason = brandFailureReason || undefined;
+
+        if (BRAND_OK_FOR_CAMPAIGN.has(brandStatus)) {
+          log("A2P][BRAND_APPROVED", { userEmail: normalizedEmail, brandSid, brandStatus });
+        } else if (brandStatus) {
+          log("A2P][BRAND_IN_REVIEW", { userEmail: normalizedEmail, brandSid, brandStatus });
+        }
       } catch (err: any) {
         if (isTwilioNotFound(err)) {
           brandSid = "";
@@ -1327,6 +1451,7 @@ export async function resumeA2PAutomationForUserEmail(userEmail: string) {
               update.registrationStatus = "campaign_submitted";
               update.lastAdvancedAt = now;
               advanced = true;
+              log("A2P][CAMPAIGN_CREATED", { userEmail: normalizedEmail, campaignSid, campaignStatus });
               log("A2P ADVANCE", {
                 userEmail: normalizedEmail,
                 step: "campaign",
@@ -1341,6 +1466,7 @@ export async function resumeA2PAutomationForUserEmail(userEmail: string) {
             });
             if (recoveredCampaignSid) {
               campaignSid = recoveredCampaignSid;
+              log("A2P][CAMPAIGN_RECOVERED", { userEmail: normalizedEmail, campaignSid });
             } else {
               throw err;
             }
@@ -1382,12 +1508,22 @@ export async function resumeA2PAutomationForUserEmail(userEmail: string) {
       }
     }
 
+    if (campaignSid && messagingServiceSid && campaignStatus && CAMPAIGN_APPROVED.has(campaignStatus)) {
+      log("A2P][CAMPAIGN_APPROVED", { userEmail: normalizedEmail, campaignSid, campaignStatus });
+    }
+
     if (messagingReady) {
       update.messagingReady = true;
       update.applicationStatus = "approved";
       update.registrationStatus = "ready";
       update.declinedReason = null;
       update.lastAdvancedAt = update.lastAdvancedAt || now;
+      log("A2P][MESSAGING_READY", {
+        userEmail: normalizedEmail,
+        brandSid: brandSid || undefined,
+        campaignSid: campaignSid || undefined,
+        messagingServiceSid: messagingServiceSid || undefined,
+      });
       log("A2P READY", {
         userEmail: normalizedEmail,
         brandSid: brandSid || undefined,
