@@ -175,6 +175,14 @@ export default async function handler(
   }
   console.info(`[KAYLA] folder verified ${String(ownerFolder._id)}`);
 
+  // Look up agent's Twilio number
+  let fromNumber = "";
+  try {
+    const TwilioNumber = (await import("@/models/Number")).default;
+    const numDoc = await TwilioNumber.findOne({ userEmail: ownerEmail }).lean<any>();
+    fromNumber = String(numDoc?.phoneNumber || numDoc?.number || "").trim();
+  } catch {}
+
   const { firstName, lastName } = splitFullName(cleanFullName);
   const rawPayload = {
     fullName: cleanFullName,
@@ -271,6 +279,7 @@ export default async function handler(
           leadId,
           leadPhone: normalizedPhone,
           scriptKey: "kayla_signup",
+          fromNumber,
         }),
       });
 

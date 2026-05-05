@@ -4179,7 +4179,7 @@ const server = http.createServer(
         req.on("end", async () => {
           try {
             const payload = body ? JSON.parse(body) : {};
-            const { userEmail, leadId, leadPhone, scriptKey } = payload;
+            const { userEmail, leadId, leadPhone, scriptKey, fromNumber } = payload;
 
             if (!userEmail || !leadPhone) {
               res.statusCode = 400;
@@ -4188,7 +4188,8 @@ const server = http.createServer(
               return;
             }
 
-            if (!TWILIO_ACCOUNT_SID || !TWILIO_AUTH_TOKEN || !TWILIO_PHONE_NUMBER) {
+            const effectiveFromNumber = fromNumber || TWILIO_PHONE_NUMBER;
+            if (!TWILIO_ACCOUNT_SID || !TWILIO_AUTH_TOKEN || !effectiveFromNumber) {
               console.warn("[AI-VOICE] /trigger-call: Twilio credentials not configured");
               res.statusCode = 503;
               res.setHeader("Content-Type", "application/json");
@@ -4213,7 +4214,7 @@ const server = http.createServer(
             const credentials = Buffer.from(`${TWILIO_ACCOUNT_SID}:${TWILIO_AUTH_TOKEN}`).toString("base64");
             const formBody = new URLSearchParams({
               To: toE164,
-              From: TWILIO_PHONE_NUMBER,
+              From: effectiveFromNumber,
               Url: twimlUrl.toString(),
               StatusCallback: statusUrl.toString(),
               StatusCallbackEvent: "initiated ringing answered completed",
