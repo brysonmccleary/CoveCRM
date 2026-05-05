@@ -9,8 +9,6 @@ import { checkDuplicate } from "@/lib/leads/checkDuplicate";
 import { triggerAIFirstCall } from "@/lib/ai/triggerAIFirstCall";
 import { sendSms } from "@/lib/twilio/sendSMS";
 
-const KAYLA_OWNER_USER_ID = process.env.KAYLA_OWNER_USER_ID || "";
-const KAYLA_OWNER_FOLDER_ID = process.env.KAYLA_OWNER_FOLDER_ID || "";
 const KAYLA_SIGNUP_URL =
   process.env.KAYLA_SIGNUP_URL ||
   "https://www.covecrm.com/signup?code=COVE50";
@@ -62,20 +60,31 @@ function buildKaylaSms(firstName: string, attemptedCall: boolean) {
 }
 
 async function resolveOwnerUser() {
-  if (!KAYLA_OWNER_USER_ID || !mongoose.isValidObjectId(KAYLA_OWNER_USER_ID)) {
-    return null;
-  }
-  return await User.findById(KAYLA_OWNER_USER_ID).lean<any>();
+  return await User.findOne({ email: "bryson.mccleary1@gmail.com" }).lean<any>();
 }
 
 async function resolveOwnerFolder(ownerEmail: string) {
-  if (!KAYLA_OWNER_FOLDER_ID || !mongoose.isValidObjectId(KAYLA_OWNER_FOLDER_ID)) {
-    return null;
-  }
-  return await Folder.findOne({
-    _id: new mongoose.Types.ObjectId(KAYLA_OWNER_FOLDER_ID),
+  // Always locked to bryson.mccleary1@gmail.com — no global leak possible
+  const LOCKED_EMAIL = "bryson.mccleary1@gmail.com";
+  if (ownerEmail !== LOCKED_EMAIL) return null;
+
+  // Try to find existing KAYLA LEADS folder
+  let folder = await Folder.findOne({
     userEmail: ownerEmail,
+    name: "KAYLA LEADS",
   }).lean<any>();
+
+  // Auto-create if it doesn't exist yet
+  if (!folder) {
+    folder = await Folder.create({
+      name: "KAYLA LEADS",
+      userEmail: ownerEmail,
+      assignedDrips: [],
+    });
+    console.info("[KAYLA] Auto-created KAYLA LEADS folder:", String((folder as any)._id));
+  }
+
+  return folder;
 }
 
 export default async function handler(
