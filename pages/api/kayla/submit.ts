@@ -6,7 +6,6 @@ import Folder from "@/models/Folder";
 import Lead from "@/models/Lead";
 import FunnelSubmission from "@/models/FunnelSubmission";
 import { checkDuplicate } from "@/lib/leads/checkDuplicate";
-import { triggerAIFirstCall } from "@/lib/ai/triggerAIFirstCall";
 import { sendSms } from "@/lib/twilio/sendSMS";
 
 const KAYLA_SIGNUP_URL =
@@ -258,18 +257,31 @@ export default async function handler(
 
   if (leadId) {
     try {
-      await triggerAIFirstCall(leadId, String(ownerFolder._id), ownerEmail);
-      const refreshedLead = await Lead.findById(leadId)
-        .select("aiFirstCallStatus")
-        .lean<any>();
-      const firstCallStatus = String(refreshedLead?.aiFirstCallStatus || "");
-      callQueued = ["pending", "scheduled", "triggered"].includes(firstCallStatus);
-      attemptedCall = firstCallStatus === "triggered";
+      const voiceServerUrl = process.env.AI_VOICE_SERVER_URL || "https://covecrm-ai-voice.onrender.com";
+      const apiSecret = process.env.COVECRM_API_SECRET || "";
+
+      const callRes = await fetch(`${voiceServerUrl}/trigger-call`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-secret": apiSecret,
+        },
+        body: JSON.stringify({
+          userEmail: ownerEmail,
+          leadId,
+          leadPhone: normalizedPhone,
+          scriptKey: "kayla_signup",
+        }),
+      });
+
+      const callData = await callRes.json().catch(() => ({}));
+      callQueued = callRes.ok && !!(callData as any)?.ok;
+      attemptedCall = callQueued;
       if (!callQueued) {
-        reason = reason || "AI first-call safety gates blocked this submission.";
+        reason = `Direct call trigger failed: ${(callData as any)?.error || callRes.status}`;
       }
     } catch (err: any) {
-      reason = reason || `AI call trigger failed: ${err?.message || "unknown error"}`;
+      reason = `Direct call trigger error: ${err?.message || "unknown"}`;
     }
   }
 
