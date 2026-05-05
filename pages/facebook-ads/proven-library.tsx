@@ -33,7 +33,6 @@ const leadTypeOptions = [
   { value: "mortgage_protection", label: "Mortgage Protection" },
   { value: "final_expense", label: "Final Expense" },
   { value: "veteran", label: "Veteran" },
-  { value: "iul", label: "IUL" },
   { value: "trucker", label: "Trucker" },
 ];
 

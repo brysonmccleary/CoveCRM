@@ -355,6 +355,8 @@ const UserSchema = new Schema<IUser>({
       },
       purchasedAt: Date,
       messagingServiceSid: String,
+      a2pApproved: Boolean,
+      smsBlockedReason: String,
       friendlyName: String,
     },
   ],

@@ -3,7 +3,10 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
 import dbConnect from "@/lib/mongodb";
 import Number from "@/models/Number";
-import twilioClient from "@/lib/twilioClient";
+import User from "@/models/User";
+import PhoneNumber from "@/models/PhoneNumber";
+import { getClientForUser } from "@/lib/twilio/getClientForUser";
+import { ensureMessagingServiceA2PReadyForUser } from "@/lib/a2p/ensureMessagingServiceA2PReady";
 
 export default async function handler(
   req: NextApiRequest,
@@ -20,8 +23,12 @@ export default async function handler(
   if (req.method === "POST") {
     try {
       const { areaCode } = req.body;
+      const user = await User.findOne({ email: userEmail });
+      if (!user) return res.status(404).json({ message: "User not found" });
 
-      const availableNumbers = await twilioClient
+      const { client, accountSid } = await getClientForUser(userEmail);
+
+      const availableNumbers = await client
         .availablePhoneNumbers("US")
         .local.list({
           areaCode,
@@ -34,20 +41,62 @@ export default async function handler(
           .json({ message: "No numbers available for this area code" });
       }
 
-      const purchasedNumber = await twilioClient.incomingPhoneNumbers.create({
+      const purchasedNumber = await client.incomingPhoneNumbers.create({
         phoneNumber: availableNumbers[0].phoneNumber,
       });
 
+      let readiness: any = null;
+      let warning: string | null = null;
+      try {
+        readiness = await ensureMessagingServiceA2PReadyForUser(user, {
+          purchasedNumberSid: purchasedNumber.sid,
+          repair: true,
+          attachNumbers: true,
+          logPrefix: "buy-number-web",
+        });
+      } catch (err: any) {
+        warning = err?.message || "A2P messaging service not registered";
+        console.warn("buy-number: A2P verification failed after purchase", {
+          userEmail,
+          phoneNumber: purchasedNumber.phoneNumber,
+          sid: purchasedNumber.sid,
+          error: warning,
+        });
+      }
+
+      const a2pApproved = readiness?.canSendSms === true;
       const newNumber = new Number({
         phoneNumber: purchasedNumber.phoneNumber,
         friendlyName: purchasedNumber.friendlyName,
-        twilioSid: purchasedNumber.sid,
-        user: userEmail,
+        sid: purchasedNumber.sid,
+        userEmail,
       });
 
       await newNumber.save();
+      await PhoneNumber.updateOne(
+        { phoneNumber: purchasedNumber.phoneNumber },
+        {
+          $set: {
+            userId: user._id,
+            phoneNumber: purchasedNumber.phoneNumber,
+            twilioSid: purchasedNumber.sid,
+            friendlyName: purchasedNumber.friendlyName,
+            messagingServiceSid: a2pApproved ? readiness.messagingServiceSid : null,
+            a2pApproved,
+            smsBlockedReason: a2pApproved ? null : "A2P messaging service not registered",
+            datePurchased: new Date(),
+          },
+        },
+        { upsert: true },
+      );
 
-      res.status(201).json(newNumber);
+      res.status(201).json({
+        ...newNumber.toObject(),
+        accountSid,
+        messagingServiceSid: a2pApproved ? readiness.messagingServiceSid : null,
+        a2pApproved,
+        warning: a2pApproved ? null : warning || "A2P messaging service not registered",
+      });
     } catch (error) {
       console.error("Buy number error:", error);
       res.status(500).json({ message: "Failed to buy number" });

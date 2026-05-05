@@ -7,6 +7,7 @@ import type { ILead } from "@/models/Lead";
 import type { Types } from "mongoose";
 import { isSystemFolderName as systemUtilIsSystem } from "@/lib/systemFolders";
 import { getLeadTypeFolderName, normalizeLeadType } from "@/lib/leadTypeConfig";
+import { extractPhoneFromRow, normalizePhoneDigitsToE164 } from "@/lib/leads/phoneMapping";
 
 // Local guard (belt & suspenders)
 const BLOCKED = new Set(["sold", "not interested", "booked", "booked appointment"]);
@@ -51,11 +52,21 @@ export async function syncSheetRow(row: {
     folder = await Folder.create({ name: resolvedFolderName, userEmail: row.userEmail });
   }
 
+  const rowPhone = extractPhoneFromRow({
+    ...(row.additionalFields || {}),
+    phone: row.phone,
+  });
+  const phoneDigits = rowPhone.phone || String(row.phone || "").replace(/\D/g, "");
+  const normalizedPhone = rowPhone.normalizedPhone || normalizePhoneDigitsToE164(phoneDigits);
+
   const leadData: ILead = {
     "First Name": (row.additionalFields?.["First Name"] as string) || "",
     "Last Name": (row.additionalFields?.["Last Name"] as string) || "",
     Email: (row.email || "").toLowerCase().trim(),
     Phone: row.phone,
+    phone: phoneDigits,
+    normalizedPhone,
+    phoneLast10: phoneDigits ? phoneDigits.slice(-10) : undefined,
     Notes: row.notes || "",
     State: (row.additionalFields?.State as string) || "",
     Age: (row.additionalFields?.Age as string) || "",

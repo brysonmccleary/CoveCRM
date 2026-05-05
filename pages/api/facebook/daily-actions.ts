@@ -1,11 +1,18 @@
+// pages/api/facebook/daily-actions.ts
 import type { NextApiRequest, NextApiResponse } from "next";
+import { getServerSession } from "next-auth/next";
+import { authOptions } from "@/pages/api/auth/[...nextauth]";
 import dbConnect from "@/lib/mongooseConnect";
 import FBLeadCampaign from "../../../models/FBLeadCampaign";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  const session = await getServerSession(req, res, authOptions);
+  const email = typeof session?.user?.email === "string" ? session.user.email.toLowerCase() : "";
+  if (!email) return res.status(401).json({ error: "Unauthorized" });
+
   await dbConnect();
 
-  const campaigns = await FBLeadCampaign.find({}).lean();
+  const campaigns = await FBLeadCampaign.find({ userEmail: email }).lean();
   const actions: any[] = [];
 
   for (const c of campaigns) {

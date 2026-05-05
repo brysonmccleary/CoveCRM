@@ -2,6 +2,9 @@
 // Tracks each user's active prospecting subscription and lead usage.
 import mongoose, { Schema, InferSchemaType, models, model } from "mongoose";
 
+const DEFAULT_FULFILLMENT_INTERVAL_DAYS =
+  Number(process.env.PROSPECTING_PLAN_FULFILLMENT_DAYS || "30") || 30;
+
 const ProspectingPlanSchema = new Schema(
   {
     userId: { type: Schema.Types.ObjectId, ref: "User", required: true, index: true },
@@ -25,12 +28,20 @@ const ProspectingPlanSchema = new Schema(
     stripeSubscriptionId: { type: String, index: true, sparse: true },
     stripeProductId: { type: String, default: "" },
     autoRenew: { type: Boolean, default: true },
+    autoFulfill: { type: Boolean, default: true },
+    folderId: { type: Schema.Types.ObjectId, ref: "Folder", index: true },
+    campaignId: { type: Schema.Types.ObjectId, ref: "EmailCampaign", index: true },
+    lastFulfilledAt: { type: Date },
+    nextFulfillmentAt: { type: Date, index: true },
+    fulfillmentIntervalDays: { type: Number, default: DEFAULT_FULFILLMENT_INTERVAL_DAYS },
+    fulfillmentLockUntil: { type: Date },
   },
   { timestamps: true }
 );
 
 ProspectingPlanSchema.index({ userId: 1, status: 1 });
 ProspectingPlanSchema.index({ stripeSubscriptionId: 1 }, { sparse: true });
+ProspectingPlanSchema.index({ nextFulfillmentAt: 1, status: 1 });
 
 export type ProspectingPlan = InferSchemaType<typeof ProspectingPlanSchema>;
 export default (models.ProspectingPlan as mongoose.Model<ProspectingPlan>) ||

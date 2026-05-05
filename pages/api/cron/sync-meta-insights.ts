@@ -37,16 +37,37 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       { metaAccessToken: { $exists: true, $ne: "" } },
     ],
   })
-    .select("_id email metaAdAccountId metaSystemUserToken metaAccessToken")
+    .select("_id email metaAdAccountId metaSystemUserToken metaAccessToken metaTokenExpiresAt")
     .lean() as any[];
 
   let synced = 0;
   let failed = 0;
+  const tokenExpiredUsers: string[] = [];
   const errors: string[] = [];
+
+  const now = new Date();
 
   for (const user of users) {
     const userEmail = (user.email || "").toLowerCase();
     if (!activeEmails.has(userEmail)) continue;
+
+    // Skip and mark campaigns if token is known-expired
+    if (user.metaTokenExpiresAt && new Date(user.metaTokenExpiresAt) < now) {
+      tokenExpiredUsers.push(userEmail);
+      // Mark all their campaigns as token_expired so auto-optimize skips them
+      const FBLeadCampaign = (await import("@/models/FBLeadCampaign")).default;
+      await FBLeadCampaign.updateMany(
+        { userEmail },
+        {
+          $set: {
+            metaSyncStatus: "token_expired",
+            metaObjectHealth: "token_expired",
+            metaSyncError: "Meta access token has expired. Reconnect in Settings → Meta.",
+          },
+        }
+      ).catch(() => {});
+      continue;
+    }
 
     const token = user.metaSystemUserToken || user.metaAccessToken;
     try {
@@ -59,5 +80,5 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
   }
 
-  return res.status(200).json({ ok: true, synced, failed, errors });
+  return res.status(200).json({ ok: true, synced, failed, tokenExpiredUsers, errors });
 }

@@ -4,6 +4,8 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]";
 import mongooseConnect from "@/lib/mongooseConnect";
 import Lead from "@/models/Lead";
+import User from "@/models/User";
+import { isAccountActivated } from "@/lib/billing/requireActivatedAccount";
 
 export default async function handler(
   req: NextApiRequest,
@@ -24,6 +26,10 @@ export default async function handler(
 
     // ✅ DB
     await mongooseConnect();
+    const user = await User.findOne({ email }).lean();
+    if (!isAccountActivated(user)) {
+      return res.status(403).json({ message: "Account not activated" });
+    }
 
     // ✅ Filters (optional)
     // ?folderId=<id>         -> only that folder

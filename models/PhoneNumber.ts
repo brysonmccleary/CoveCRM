@@ -7,6 +7,7 @@ export interface IPhoneNumber extends Document {
   messagingServiceSid?: string; // Twilio Messaging Service SID (per-user or shared)
   profileSid?: string; // A2P profile SID (if you store it)
   a2pApproved?: boolean; // Convenience flag
+  smsBlockedReason?: string;
   datePurchased?: Date; // When we bought it
   twilioSid?: string; // IncomingPhoneNumbers SID (optional, we can fill later)
   friendlyName?: string; // Optional label
@@ -26,6 +27,7 @@ const PhoneNumberSchema = new Schema<IPhoneNumber>(
     messagingServiceSid: { type: String },
     profileSid: { type: String },
     a2pApproved: { type: Boolean, default: false },
+    smsBlockedReason: { type: String },
     datePurchased: { type: Date, default: Date.now },
     twilioSid: { type: String },
     friendlyName: { type: String },

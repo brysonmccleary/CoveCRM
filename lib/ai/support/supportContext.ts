@@ -65,6 +65,14 @@ export async function buildSupportContext(userEmail: string) {
       importErrors: recentImportErrors,
     },
     aiFeatures,
+    billingStatus: {
+      billingMode: user?.billingMode || "",
+      stripeCustomerPresent: Boolean(user?.stripeCustomerId),
+      hasActiveSubscription: Boolean(user?.hasActiveSubscription || user?.subscriptionStatus === "active"),
+      subscriptionStatus: user?.subscriptionStatus || "",
+      usageBalance: globalThis.Number(user?.usageBalance || 0),
+      aiDialerBalance: globalThis.Number(user?.aiDialerBalance || 0),
+    },
     leadAssistant,
     topLeads: Array.isArray(leadAssistant?.topLeads) ? leadAssistant.topLeads : [],
   };

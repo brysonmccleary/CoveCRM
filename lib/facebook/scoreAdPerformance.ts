@@ -11,13 +11,10 @@ export interface ScoreResult {
   score: number;
   performanceClass: PerformanceClass;
   breakdown: {
-    costPerBookedContrib: number;
-    costPerShowContrib: number;
-    costPerSaleContrib: number;
-    ctrContrib: number;
-    frequencyPenalty: number;
-    optOutPenalty: number;
-    badNumberPenalty: number;
+    cplScore: number;
+    leadQualityComponent: number;
+    appointmentScore: number;
+    closeRateScore: number;
   };
 }
 
@@ -29,57 +26,41 @@ function classifyScore(score: number): PerformanceClass {
   return "PAUSE";
 }
 
-/**
- * Score formula (max 550 raw, normalized to 0-100):
- * + (100 - min(costPerBooked, 100))   → max 100
- * + (150 - min(costPerShow, 150))     → max 150
- * + (300 - min(costPerSale, 300))     → max 300
- * + ctr * 10                          → unbounded bonus
- * - frequency * 5                     → penalty
- * - optOutRate * 5                    → penalty
- * - badNumberRate * 5                 → penalty
- * Capped 0-550, then normalized to 0-100
- */
 function computeScore(params: {
-  costPerBooked: number;
-  costPerShow: number;
-  costPerSale: number;
-  ctr: number;
-  frequency: number;
-  optOutRate: number;
-  badNumberRate: number;
+  targetCpl: number;
+  actualCpl: number;
+  leadQualityScore: number;
+  appointmentTarget: number;
+  costPerAppointment: number;
+  closeRate: number;
 }): ScoreResult {
-  const costPerBookedContrib = 100 - Math.min(params.costPerBooked, 100);
-  const costPerShowContrib = 150 - Math.min(params.costPerShow, 150);
-  const costPerSaleContrib = 300 - Math.min(params.costPerSale, 300);
-  const ctrContrib = params.ctr * 10;
-  const frequencyPenalty = params.frequency * 5;
-  const optOutPenalty = params.optOutRate * 5;
-  const badNumberPenalty = params.badNumberRate * 5;
+  const cplScore =
+    params.targetCpl > 0 && params.actualCpl > 0
+      ? (params.targetCpl / params.actualCpl) * 100
+      : 0;
+  const appointmentScore =
+    params.appointmentTarget > 0 && params.costPerAppointment > 0
+      ? (params.appointmentTarget / params.costPerAppointment) * 100
+      : 0;
+  const leadQualityComponent = Math.max(params.leadQualityScore * 20, 0);
+  const closeRateScore = Math.max(params.closeRate * 100, 0);
 
   const raw =
-    costPerBookedContrib +
-    costPerShowContrib +
-    costPerSaleContrib +
-    ctrContrib -
-    frequencyPenalty -
-    optOutPenalty -
-    badNumberPenalty;
-
-  const capped = Math.max(0, Math.min(550, raw));
-  const score = Math.round((capped / 550) * 100);
+    cplScore * 0.3 +
+    leadQualityComponent * 0.2 +
+    appointmentScore * 0.3 +
+    closeRateScore * 0.2;
+  const capped = Math.max(0, Math.min(150, raw));
+  const score = Number(capped.toFixed(2));
 
   return {
     score,
     performanceClass: classifyScore(score),
     breakdown: {
-      costPerBookedContrib,
-      costPerShowContrib,
-      costPerSaleContrib,
-      ctrContrib,
-      frequencyPenalty,
-      optOutPenalty,
-      badNumberPenalty,
+      cplScore,
+      leadQualityComponent,
+      appointmentScore,
+      closeRateScore,
     },
   };
 }
@@ -118,8 +99,6 @@ export async function scoreAdPerformance(campaignId: string): Promise<ScoreResul
         _id: null,
         totalSpend: { $sum: "$spend" },
         totalLeads: { $sum: "$leads" },
-        totalClicks: { $sum: "$clicks" },
-        totalImpressions: { $sum: "$impressions" },
         avgFrequency: { $avg: "$frequency" },
       },
     },
@@ -129,35 +108,87 @@ export async function scoreAdPerformance(campaignId: string): Promise<ScoreResul
   const metrics = metricsAgg[0] || {};
 
   const totalSpend = metrics.totalSpend || (campaign as any).totalSpend || 0;
-  const totalLeads = metrics.totalLeads || (campaign as any).totalLeads || 0;
-  const totalClicks = metrics.totalClicks || (campaign as any).totalClicks || 0;
-  const totalImpressions = metrics.totalImpressions || 0;
+  const totalLeadsRaw =
+    metrics.totalLeads ||
+    Number((campaign as any).totalLeads ?? 0) ||
+    0;
   const avgFrequency = metrics.avgFrequency || (campaign as any).frequency || 0;
 
+  const outcomeStats =
+    (campaign as any).leadOutcomeStats ||
+    (campaign as any).outcomeStats ||
+    {};
+
+  const answeredFromStats =
+    Number(outcomeStats.answered ?? outcomeStats.answer ?? outcomeStats.contacts ?? 0) || 0;
+  const notInterestedFromStats =
+    Number(outcomeStats.notInterested ?? outcomeStats.disqualified ?? 0) || 0;
+  const noResponseFromStats =
+    Number(outcomeStats.noResponse ?? outcomeStats.unreached ?? 0) || 0;
+  const bookedFromStats =
+    Number(
+      outcomeStats.bookedAppointments ??
+        outcomeStats.booked ??
+        outcomeStats.appointments ??
+        outcomeStats.scheduled ??
+        0
+    ) || 0;
+  const salesFromStats = Number(outcomeStats.sales ?? outcomeStats.closed ?? outcomeStats.wins ?? 0) || 0;
+
   const appointmentsBooked = outcomes.appointmentsBooked || 0;
-  const appointmentsShowed = outcomes.appointmentsShowed || 0;
-  const sales = outcomes.sales || 0;
+  const salesAgg = outcomes.sales || 0;
   const optOuts = outcomes.optOuts || 0;
   const badNumbers = outcomes.badNumbers || 0;
 
-  const costPerBooked = appointmentsBooked > 0 ? totalSpend / appointmentsBooked : 100;
-  const costPerShow = appointmentsShowed > 0 ? totalSpend / appointmentsShowed : 150;
-  const costPerSale = sales > 0 ? totalSpend / sales : 300;
-  const ctr = totalImpressions > 0 ? (totalClicks / totalImpressions) * 100 : 0;
+  const appointments = appointmentsBooked || bookedFromStats;
+  const sales = salesAgg || salesFromStats;
+  const totalLeads =
+    totalLeadsRaw ||
+    appointments + answeredFromStats + notInterestedFromStats + noResponseFromStats;
 
-  // Rate fields as percentages of total leads
-  const optOutRate = totalLeads > 0 ? (optOuts / totalLeads) * 100 : 0;
-  const badNumberRate = totalLeads > 0 ? (badNumbers / totalLeads) * 100 : 0;
+  const costPerAppointmentRaw = appointments > 0 ? totalSpend / appointments : 0;
+  const costPerSaleRaw = sales > 0 ? totalSpend / sales : 0;
+  const costPerAppointment = appointments > 0 ? Number(costPerAppointmentRaw.toFixed(2)) : 0;
+  const costPerSale = sales > 0 ? Number(costPerSaleRaw.toFixed(2)) : 0;
+  const appointmentRateRaw = totalLeads > 0 ? appointments / totalLeads : 0;
+  const appointmentRate = Number(appointmentRateRaw.toFixed(4));
+  const closeRateRaw = appointments > 0 ? sales / appointments : 0;
+  const closeRate = Number(closeRateRaw.toFixed(4));
+  const contactRateRaw = totalLeads > 0 ? answeredFromStats / totalLeads : 0;
+  const contactRate = Number(contactRateRaw.toFixed(4));
+
+  const cpl = totalLeads > 0 ? totalSpend / totalLeads : 0;
+  const targetCpl = Number((campaign as any).targetCpl || 0);
+  const appointmentTarget = Number(
+    (campaign as any).targetCostPerBooked ??
+      (campaign as any).targetCostPerAppointment ??
+      0
+  );
+
+  const leadQualityScore =
+    totalLeads > 0
+      ? Number(
+          (
+            (appointments * 5 +
+              answeredFromStats * 2 -
+              notInterestedFromStats * 2 -
+              noResponseFromStats) /
+            totalLeads
+          ).toFixed(2)
+        )
+      : 0;
 
   const result = computeScore({
-    costPerBooked,
-    costPerShow,
-    costPerSale,
-    ctr,
-    frequency: avgFrequency,
-    optOutRate,
-    badNumberRate,
+    targetCpl,
+    actualCpl: cpl,
+    leadQualityScore,
+    appointmentTarget,
+    costPerAppointment: costPerAppointmentRaw,
+    closeRate: closeRateRaw,
   });
+
+  const optOutRate = totalLeads > 0 ? (optOuts / totalLeads) * 100 : 0;
+  const badNumberRate = totalLeads > 0 ? (badNumbers / totalLeads) * 100 : 0;
 
   // Persist to campaign
   await FBLeadCampaign.updateOne(
@@ -170,6 +201,14 @@ export async function scoreAdPerformance(campaignId: string): Promise<ScoreResul
         frequency: avgFrequency,
         optOutRate,
         badNumberRate,
+        appointments,
+        sales,
+        costPerAppointment,
+        costPerSale,
+        appointmentRate,
+        closeRate,
+        contactRate,
+        leadQualityScore,
       },
     }
   );

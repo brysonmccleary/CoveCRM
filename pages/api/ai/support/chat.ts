@@ -1,7 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/pages/api/auth/[...nextauth]";
-import { runHelpAssistant } from "@/lib/ai/support/helpAssistant";
+import { runSupportAiRouter } from "@/lib/ai/support/supportAiRouter";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
@@ -14,9 +14,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!message) return res.status(400).json({ error: "Missing message" });
 
   try {
-    const result = await runHelpAssistant({
+    const result = await runSupportAiRouter({
       userEmail,
-      content: String(message),
+      message: String(message),
       conversationId: conversationId ? String(conversationId) : undefined,
       pageContext: pageContext ? String(pageContext) : undefined,
     });

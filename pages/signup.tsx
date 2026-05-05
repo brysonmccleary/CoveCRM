@@ -17,11 +17,9 @@ export default function SignUp() {
   const [affiliateEmail, setAffiliateEmail] = useState("");
   const [checkingCode, setCheckingCode] = useState(false);
 
-  const [aiUpgrade, setAiUpgrade] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const basePrice = 199.99;
-  const aiAddOnPrice = 50;
 
   useEffect(() => {
     // AUTO_REF_APPLY_EFFECT
@@ -157,7 +155,7 @@ export default function SignUp() {
       }
 
       // compute display total only for the querystring (server enforces real pricing)
-      const uiTotal = (discountApplied ? finalPrice : basePrice) + (aiUpgrade ? aiAddOnPrice : 0);
+      const uiTotal = discountApplied ? finalPrice : basePrice;
 
       toast.success("Account created! Check your email for the verification code.");
       void uiTotal;
@@ -235,19 +233,6 @@ export default function SignUp() {
               ✅ Code applied! Your new base price is ${finalPrice}/month.
             </p>
           )}
-
-          <div className="flex items-center space-x-2">
-            <input
-              type="checkbox"
-              id="aiUpgrade"
-              checked={aiUpgrade}
-              onChange={() => setAiUpgrade(!aiUpgrade)}
-              className="w-5 h-5 accent-[var(--cove-accent)]"
-            />
-            <label htmlFor="aiUpgrade" className="text-sm text-gray-300">
-              Add AI Upgrade (+$50/mo)
-            </label>
-          </div>
 
           <button
             type="submit"

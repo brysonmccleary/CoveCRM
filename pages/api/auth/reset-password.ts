@@ -45,6 +45,8 @@ export default async function handler(
   if (!user) return res.status(400).json({ ok: false, error: "Invalid token" });
 
   const hashed = await bcrypt.hash(String(newPassword), 10);
+  if (!hashed)
+    return res.status(500).json({ ok: false, error: "Password could not be secured" });
   user.password = hashed;
   await user.save();
 

@@ -37,6 +37,8 @@ const EmailMessageSchema = new Schema(
       sparse: true,
     },
     stepIndex: { type: Number },
+    doiAgentId: { type: Schema.Types.ObjectId, ref: "DOIAgent", index: true, sparse: true },
+    doiLeadId: { type: Schema.Types.ObjectId, ref: "DOILead", index: true, sparse: true },
     sentAt: { type: Date, index: true },
     openedAt: { type: Date },
     repliedAt: { type: Date },

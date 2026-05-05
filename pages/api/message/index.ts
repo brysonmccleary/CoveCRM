@@ -94,6 +94,9 @@ export default async function handler(
       });
     } catch (err: any) {
       console.error("Twilio send error:", err);
+      if (err?.statusCode === 403 || err?.message === "Account not activated") {
+        return res.status(403).json({ error: "Account not activated" });
+      }
       return res
         .status(500)
         .json({ error: err?.message || "Failed to send SMS" });

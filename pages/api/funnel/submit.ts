@@ -2,6 +2,7 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import mongooseConnect from "@/lib/mongooseConnect";
 import Funnel from "@/models/Funnel";
+import FBLeadCampaign from "@/models/FBLeadCampaign";
 import FunnelSubmission from "@/models/FunnelSubmission";
 import Lead from "@/models/Lead";
 import Folder from "@/models/Folder";
@@ -9,6 +10,8 @@ import { checkDuplicate } from "@/lib/leads/checkDuplicate";
 import { scoreLeadOnArrival } from "@/lib/leads/scoreLead";
 import { triggerAIFirstCall } from "@/lib/ai/triggerAIFirstCall";
 import { getLeadTypeFolderName } from "@/lib/leadTypeConfig";
+import { isStateAllowed, normalizeStateCode, stateLabel } from "@/lib/facebook/geo/usStates";
+import { buildLeadSheetPayload } from "@/lib/facebook/sheets/mapLeadToSheetRow";
 
 const LEAD_TYPE_TO_CRM: Record<string, string> = {
   final_expense: "Final Expense",
@@ -67,6 +70,32 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const campaignId = (funnel as any).campaignId || null;
     const leadType = String((funnel as any).leadType || "final_expense");
     let folderId = (funnel as any).folderId || null;
+    let campaign: any = null;
+
+    if (campaignId) {
+      campaign = await (FBLeadCampaign as any).findOne({
+        _id: campaignId,
+      })
+        .select("webhookKey metaCampaignId licensedStates borderStateBehavior appsScriptUrl writeLeadsToSheet")
+        .lean() as any;
+
+      if (!campaign) {
+        return res.status(404).json({ error: "Campaign not found" });
+      }
+
+      if (!req.query.key || req.query.key !== campaign.webhookKey) {
+        return res.status(403).json({ error: "Invalid webhook key" });
+      }
+      const normalizedState = normalizeStateCode(cleanState);
+      const outsideLicensedArea =
+        !!normalizedState &&
+        Array.isArray(campaign.licensedStates) &&
+        campaign.licensedStates.length > 0 &&
+        !isStateAllowed(normalizedState, campaign.licensedStates);
+      if (outsideLicensedArea && campaign.borderStateBehavior !== "allow_with_warning") {
+        return res.status(403).json({ error: "We currently do not service your state for this campaign." });
+      }
+    }
 
     if (!userEmail || !userId) {
       return res.status(400).json({ error: "Funnel is missing owner information" });
@@ -115,6 +144,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const normalizedPhone = cleanPhone.replace(/\D+/g, "");
     const crmLeadType = LEAD_TYPE_TO_CRM[leadType] || "Final Expense";
+    const normalizedState = normalizeStateCode(cleanState);
+    const outsideLicensedArea =
+      !!campaign &&
+      !!normalizedState &&
+      Array.isArray(campaign.licensedStates) &&
+      campaign.licensedStates.length > 0 &&
+      !isStateAllowed(normalizedState, campaign.licensedStates);
+    const notes = outsideLicensedArea
+      ? `State Restriction Warning: ${stateLabel(normalizedState)} is outside the campaign's primary licensed states.`
+      : "";
 
     const newLead = await Lead.create({
       "First Name": cleanFirst,
@@ -134,9 +173,36 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       sourceType: "landing_page",
       realTimeEligible: true,
       funnelId: (funnel as any)._id,
-      campaignId,
+      campaignId: campaignId || null,
+      metaCampaignId: campaign?.metaCampaignId || "",
       landingPageSlug: cleanSlug,
+      Notes: notes,
+      stateRestrictionWarning: outsideLicensedArea,
+      stateOutsidePrimaryLicensedArea: outsideLicensedArea,
     });
+
+    if (campaign?.writeLeadsToSheet && campaign?.appsScriptUrl) {
+      try {
+        const payload = buildLeadSheetPayload({
+          leadType,
+          campaignId: String(campaignId || ""),
+          answers: { state: normalizedState || cleanState },
+          firstName: cleanFirst,
+          lastName: cleanLast,
+          email: cleanEmail,
+          phone: cleanPhone,
+          notes,
+          status: "New",
+        });
+        await fetch(String(campaign.appsScriptUrl), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+      } catch (sheetErr: any) {
+        console.warn("[funnel/submit] sheet write failed:", sheetErr?.message);
+      }
+    }
 
     await FunnelSubmission.updateOne(
       { _id: (submission as any)._id },

@@ -10,7 +10,6 @@ import { isExperimentalAdminEmail } from "@/lib/isExperimentalAdmin";
 const LEAD_TYPES = [
   { value: "mortgage_protection", label: "Mortgage Protection" },
   { value: "final_expense", label: "Final Expense" },
-  { value: "iul", label: "IUL / Cash Value" },
   { value: "veteran", label: "Veteran Leads" },
   { value: "trucker", label: "Trucker Leads" },
 ];
@@ -18,10 +17,8 @@ const LEAD_TYPES = [
 const GEN_LEAD_TYPES = [
   { value: "final_expense", label: "Final Expense" },
   { value: "mortgage_protection", label: "Mortgage Protection" },
-  { value: "iul", label: "IUL / Cash Value" },
   { value: "veteran", label: "Veteran Leads" },
-  { value: "medicare", label: "Medicare" },
-  { value: "annuity", label: "Annuity" },
+  { value: "trucker", label: "Trucker Leads" },
 ];
 
 const PERIOD_OPTIONS = [
@@ -260,6 +257,21 @@ const styles = {
 export default function AdsCopilorPage() {
   const { data: session } = useSession();
   const [tab, setTab] = useState<"find" | "generate" | "performance">("find");
+  const sanitizeUiError = (
+    value: unknown,
+    fallback = "Campaign generation is temporarily unavailable. Please retry."
+  ) => {
+    const text = String(value || "").trim();
+    if (!text) return fallback;
+    if (
+      /Incorrect API key|sk-proj-|OpenAI|https?:\/\/|api\.openai/i.test(text)
+    ) {
+      return fallback;
+    }
+    return text;
+  };
+  const safeImageError =
+    "We couldn’t generate the campaign image right now. Please try again.";
 
   // ── Find Ads tab ──
   const [leadType, setLeadType] = useState("mortgage_protection");
@@ -287,12 +299,20 @@ export default function AdsCopilorPage() {
   const [genAgeMin, setGenAgeMin] = useState(30);
   const [genAgeMax, setGenAgeMax] = useState(64);
   const [adDraft, setAdDraft] = useState<any>(null);
+  const [generatedDrafts, setGeneratedDrafts] = useState<any[]>([]);
   const [campaignRecordId, setCampaignRecordId] = useState<string | null>(null);
   const [generating, setGenerating] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [publishResult, setPublishResult] = useState<any>(null);
   const [metaConnected, setMetaConnected] = useState(false);
   const [genError, setGenError] = useState("");
+  const publishPrimaryText = String(adDraft?.primaryText || adDraft?.body || "").trim();
+  const canPublishDraft =
+    !!String(adDraft?.imageUrl || "").trim() &&
+    !!String(adDraft?.headline || "").trim() &&
+    !!publishPrimaryText &&
+    !!String(adDraft?.leadType || "").trim() &&
+    !!String(adDraft?.campaignName || "").trim();
 
   // Check Meta connection on mount
   useEffect(() => {
@@ -401,29 +421,52 @@ export default function AdsCopilorPage() {
           setGenError("Please connect your Facebook account first.");
           setMetaConnected(false);
         } else if (data.noLeadForms) {
-          setGenError(data.error || "No active Facebook lead forms found. Create one in Meta first.");
+          setGenError("Lead form setup is temporarily unavailable. Please try again.");
         } else {
-          setGenError(data.error || "Generation failed");
+          setGenError(sanitizeUiError(data.error));
         }
         return;
       }
-      setAdDraft(data.draft);
+      const recommended = data?.draft || null;
+      const variants = Array.isArray(data?.drafts) ? data.drafts : [];
+      const nextDraft = recommended || variants[0] || null;
+      setGeneratedDrafts(variants);
+      setAdDraft(nextDraft
+        ? {
+            ...nextDraft,
+            imageError: nextDraft?.imageError
+              ? sanitizeUiError(nextDraft.imageError, safeImageError)
+              : null,
+          }
+        : null);
       setGenStep("review");
     } catch {
-      setGenError("Network error. Please try again.");
+      setGenError("Campaign generation is temporarily unavailable. Please retry.");
     } finally {
       setGenerating(false);
     }
   };
 
   const publishAd = async () => {
+    if (!String(adDraft?.imageUrl || "").trim()) {
+      setGenError("Generate campaign image before publishing.");
+      return;
+    }
+    if (
+      !String(adDraft?.headline || "").trim() ||
+      !publishPrimaryText ||
+      !String(adDraft?.leadType || "").trim() ||
+      !String(adDraft?.campaignName || "").trim()
+    ) {
+      setGenError("Ad package is incomplete. Regenerate before publishing.");
+      return;
+    }
     setPublishing(true);
     setGenError("");
+    setPublishResult(null);
     try {
-      if (!adDraft?.selectedLeadFormId) {
-        setGenError("Please select a Facebook lead form before publishing.");
-        return;
-      }
+      // Lead form is auto-created server-side in publish-ad.ts.
+      // selectedLeadFormId is no longer required before publish.
 
       let campaignId = campaignRecordId;
 
@@ -442,7 +485,7 @@ export default function AdsCopilorPage() {
         const createData = await createRes.json();
 
         if (!createRes.ok || !createData?.campaign?._id) {
-          setGenError(createData?.error || "Failed to create campaign record before publish.");
+          setGenError(sanitizeUiError(createData?.error, "Failed to create campaign record before publish."));
           return;
         }
 
@@ -453,16 +496,30 @@ export default function AdsCopilorPage() {
       const res = await fetch("/api/facebook/publish-ad", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ draft: adDraft, campaignId }),
+        body: JSON.stringify({
+          leadType: adDraft.leadType,
+          campaignName: adDraft.campaignName,
+          dailyBudgetCents: adDraft.dailyBudgetCents,
+          primaryText: publishPrimaryText,
+          headline: adDraft.headline,
+          description: adDraft.description || "",
+          cta: adDraft.cta || "LEARN_MORE",
+          imagePrompt: adDraft.imagePrompt || "",
+          imageUrl: adDraft.imageUrl || "",
+          facebookPageId: adDraft.facebookPageId || undefined,
+          adAccountId: adDraft.adAccountId || undefined,
+          creativeArchetype: adDraft.creativeArchetype || "",
+          campaignId,
+        }),
       });
 
       const data = await res.json();
 
-      if (res.ok) {
+      if (res.ok && data?.ok === true) {
         setPublishResult(data);
         setGenStep("done");
       } else {
-        setGenError(data.error || "Publish failed");
+        setGenError(sanitizeUiError(data?.error, "Publish failed"));
       }
     } catch {
       setGenError("Network error during publish.");
@@ -474,6 +531,7 @@ export default function AdsCopilorPage() {
   const resetGenerate = () => {
     setGenStep("form");
     setAdDraft(null);
+    setGeneratedDrafts([]);
     setCampaignRecordId(null);
     setPublishResult(null);
     setGenError("");
@@ -802,6 +860,65 @@ export default function AdsCopilorPage() {
               <div>
                 <p style={{ ...styles.label, marginBottom: "20px" }}>Review & Edit Your Ad Draft</p>
 
+                {generatedDrafts.length > 0 && (
+                  <div style={{ ...styles.fieldGroup, marginBottom: "22px" }}>
+                    <label style={styles.fieldLabel}>Generated Variants</label>
+                    <div style={{ display: "grid", gap: "10px" }}>
+                      {generatedDrafts.map((draft, index) => {
+                        const selected =
+                          String(adDraft?.uniquenessFingerprint || "") &&
+                          String(adDraft?.uniquenessFingerprint || "") === String(draft?.uniquenessFingerprint || "");
+                        return (
+                          <div
+                            key={`${draft?.variationType || "variant"}-${draft?.uniquenessFingerprint || index}`}
+                            style={{
+                              backgroundColor: selected ? "#0c1a2e" : "#0f172a",
+                              border: `1px solid ${selected ? "#3b82f6" : "#1e293b"}`,
+                              borderRadius: "8px",
+                              padding: "12px 14px",
+                            }}
+                          >
+                            <div style={{ display: "flex", justifyContent: "space-between", gap: "12px", alignItems: "center", marginBottom: "8px", flexWrap: "wrap" }}>
+                              <div>
+                                <span style={{ ...styles.badge(selected ? "#60a5fa" : "#94a3b8"), marginLeft: 0 }}>
+                                  {String(draft?.variationType || `Variant ${index + 1}`)}
+                                </span>
+                                {draft?.winningFamilyId && (
+                                  <span style={{ fontSize: "11px", color: "#64748b", marginLeft: "8px", fontFamily: "monospace" }}>
+                                    {draft.winningFamilyId}
+                                  </span>
+                                )}
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => setAdDraft({ ...draft })}
+                                style={{ ...styles.btn(selected ? "primary" : "ghost"), padding: "7px 12px", fontSize: "12px" }}
+                              >
+                                Use this draft
+                              </button>
+                            </div>
+                            {draft?.headline && (
+                              <p style={{ fontSize: "14px", color: "#f8fafc", fontWeight: 600, margin: "0 0 6px" }}>
+                                {draft.headline}
+                              </p>
+                            )}
+                            {draft?.primaryText && (
+                              <p style={{ fontSize: "13px", color: "#cbd5e1", lineHeight: 1.5, margin: "0 0 8px", whiteSpace: "pre-wrap" }}>
+                                {draft.primaryText}
+                              </p>
+                            )}
+                            {draft?.imagePrompt && (
+                              <p style={{ fontSize: "12px", color: "#64748b", lineHeight: 1.5, margin: 0 }}>
+                                <strong style={{ color: "#94a3b8" }}>Image:</strong> {draft.imagePrompt}
+                              </p>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
                 <div style={styles.fieldGroup}>
                   <label style={styles.fieldLabel}>Headline</label>
                   <input
@@ -858,47 +975,35 @@ export default function AdsCopilorPage() {
 
                 <div style={styles.fieldGroup}>
                   <label style={styles.fieldLabel}>Lead Form</label>
-                  {adDraft.leadForms?.length > 0 ? (
-                    <select
-                      value={adDraft.selectedLeadFormId || ""}
-                      onChange={(e) => setAdDraft({ ...adDraft, selectedLeadFormId: e.target.value })}
-                      style={{ ...styles.select, width: "100%" }}
-                    >
-                      <option value="">— None —</option>
-                      {adDraft.leadForms.map((f: any) => (
-                        <option key={f.id} value={f.id}>{f.name}</option>
-                      ))}
-                    </select>
-                  ) : (
-                    <div style={{ backgroundColor: "#0f172a", border: "1px solid #334155", borderRadius: "6px", padding: "10px 12px", fontSize: "13px", color: "#475569" }}>
-                      No active lead forms found.{" "}
-                      <a
-                        href="https://www.facebook.com/ads/leadgen/form_builder/legacy"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        style={{ color: "#60a5fa" }}
-                      >
-                        Create one in Meta →
-                      </a>
-                    </div>
-                  )}
-                </div>
-
-                <div style={styles.fieldGroup}>
-                  <label style={styles.fieldLabel}>Image (optional)</label>
-                  <div style={{ backgroundColor: "#0f172a", border: "1px dashed #334155", borderRadius: "6px", padding: "20px", textAlign: "center", color: "#475569", fontSize: "13px" }}>
-                    Upload image — 1200×628px recommended
-                    <br />
-                    <span style={{ fontSize: "12px" }}>Image upload coming soon. Ad will use page profile image if none provided.</span>
+                  <div style={{ backgroundColor: "#0f172a", border: "1px solid #1e3a5f", borderRadius: "6px", padding: "10px 12px", fontSize: "13px", color: "#60a5fa" }}>
+                    ✓ Lead form is auto-created in Meta when you publish.
                   </div>
                 </div>
 
-                {/* Paused notice */}
-                <div style={{ backgroundColor: "rgba(251,191,36,0.08)", border: "1px solid rgba(251,191,36,0.3)", borderRadius: "8px", padding: "12px 14px", marginBottom: "20px" }}>
-                  <p style={{ fontSize: "13px", color: "#fbbf24", margin: 0 }}>
-                    ⚠️ Ad will be created in <strong>PAUSED</strong> status. Review in Meta Ads Manager before going live.
-                  </p>
-                </div>
+                <div style={styles.fieldGroup}>
+                  <label style={styles.fieldLabel}>Campaign Creative Asset</label>
+                  {adDraft.imageUrl ? (
+	                    <div>
+	                      <img
+	                        src={adDraft.imageUrl}
+	                        alt="Generated campaign creative"
+	                        style={{ width: "100%", maxWidth: "300px", borderRadius: "8px", display: "block" }}
+	                      />
+	                      <p style={{ fontSize: "11px", color: "#64748b", marginTop: "6px" }}>Generated creative asset - ready for the main launch flow.</p>
+	                    </div>
+	                  ) : (
+	                    <div style={{ backgroundColor: "#0f172a", border: "1px solid #334155", borderRadius: "6px", padding: "14px", fontSize: "13px", color: "#fbbf24" }}>
+	                      Generate or regenerate the campaign image before using this draft in the main launch flow.
+	                    </div>
+	                  )}
+	                </div>
+
+	                {/* Paused notice */}
+	                <div style={{ backgroundColor: "rgba(251,191,36,0.08)", border: "1px solid rgba(251,191,36,0.3)", borderRadius: "8px", padding: "12px 14px", marginBottom: "20px" }}>
+	                  <p style={{ fontSize: "13px", color: "#fbbf24", margin: 0 }}>
+	                    When you launch from the main Facebook Ads flow, your ad will be created in <strong>PAUSED</strong> status for review.
+	                  </p>
+	                </div>
 
                 {genError && (
                   <div style={{ color: "#f87171", fontSize: "14px", marginBottom: "16px" }}>
@@ -910,28 +1015,38 @@ export default function AdsCopilorPage() {
                   <button
                     onClick={() => { setGenStep("form"); setGenError(""); }}
                     style={{ padding: "11px 22px", borderRadius: "8px", fontSize: "14px", fontWeight: 500, cursor: "pointer", border: "1px solid #334155", backgroundColor: "transparent", color: "#94a3b8" }}
-                  >
-                    ← Back
-                  </button>
-                  <button
-                    onClick={publishAd}
-                    disabled={publishing}
-                    style={{
-                      flex: 1,
-                      backgroundColor: publishing ? "#1e3a5f" : "#3b82f6",
-                      color: "#fff",
-                      border: "none",
-                      borderRadius: "8px",
-                      padding: "11px 22px",
-                      fontSize: "14px",
-                      fontWeight: 600,
-                      cursor: publishing ? "not-allowed" : "pointer",
-                      opacity: publishing ? 0.7 : 1,
-                    }}
-                  >
-                    {publishing ? "Publishing to Meta…" : "Publish Ad (Paused)"}
-                  </button>
-                </div>
+	                  >
+	                    ← Back
+	                  </button>
+	                  <button
+	                    type="button"
+	                    disabled
+	                    style={{
+	                      flex: 1,
+	                      backgroundColor: "#1e3a5f",
+	                      color: "#fff",
+	                      border: "none",
+	                      borderRadius: "8px",
+	                      padding: "11px 22px",
+	                      fontSize: "14px",
+	                      fontWeight: 600,
+	                      cursor: "not-allowed",
+	                      opacity: 0.75,
+	                    }}
+	                  >
+	                    Launch from Main Ad Wizard
+	                  </button>
+	                </div>
+	                <p style={{ fontSize: "12px", color: "#94a3b8", marginTop: "12px", lineHeight: 1.5 }}>
+	                  This screen is for generating, reviewing, and choosing ad drafts. Use the main Facebook Ads launch flow to publish this campaign to your connected Meta account.
+	                </p>
+	                {!canPublishDraft && (
+	                  <p style={{ fontSize: "12px", color: "#fbbf24", marginTop: "12px" }}>
+	                    {!String(adDraft.imageUrl || "").trim()
+	                      ? "Generate campaign image before using this draft in the main launch flow."
+	                      : "Ad package is incomplete. Regenerate before using this draft in the main launch flow."}
+	                  </p>
+	                )}
               </div>
             )}
 
@@ -953,16 +1068,32 @@ export default function AdsCopilorPage() {
                       <p style={{ fontSize: "13px", color: "#94a3b8", margin: "2px 0 0", fontFamily: "monospace" }}>{publishResult.campaignId}</p>
                     </div>
                   )}
-                  {publishResult.adSetId && (
+                  {publishResult.metaAdsetId && (
                     <div style={{ marginBottom: "8px" }}>
                       <span style={{ fontSize: "11px", color: "#475569", textTransform: "uppercase" as const, letterSpacing: "0.05em" }}>Ad Set ID</span>
-                      <p style={{ fontSize: "13px", color: "#94a3b8", margin: "2px 0 0", fontFamily: "monospace" }}>{publishResult.adSetId}</p>
+                      <p style={{ fontSize: "13px", color: "#94a3b8", margin: "2px 0 0", fontFamily: "monospace" }}>{publishResult.metaAdsetId}</p>
                     </div>
                   )}
-                  {publishResult.adId && (
-                    <div>
+                  {publishResult.metaFormId && (
+                    <div style={{ marginBottom: "8px" }}>
+                      <span style={{ fontSize: "11px", color: "#475569", textTransform: "uppercase" as const, letterSpacing: "0.05em" }}>Lead Form ID</span>
+                      <p style={{ fontSize: "13px", color: "#94a3b8", margin: "2px 0 0", fontFamily: "monospace" }}>{publishResult.metaFormId}</p>
+                    </div>
+                  )}
+                  {publishResult.metaAdId && (
+                    <div style={{ marginBottom: "8px" }}>
                       <span style={{ fontSize: "11px", color: "#475569", textTransform: "uppercase" as const, letterSpacing: "0.05em" }}>Ad ID</span>
-                      <p style={{ fontSize: "13px", color: "#94a3b8", margin: "2px 0 0", fontFamily: "monospace" }}>{publishResult.adId}</p>
+                      <p style={{ fontSize: "13px", color: "#94a3b8", margin: "2px 0 0", fontFamily: "monospace" }}>{publishResult.metaAdId}</p>
+                    </div>
+                  )}
+                  {(publishResult as any).funnelUrl && (
+                    <div>
+                      <span style={{ fontSize: "11px", color: "#475569", textTransform: "uppercase" as const, letterSpacing: "0.05em" }}>Hosted Funnel</span>
+                      <p style={{ fontSize: "13px", margin: "2px 0 0" }}>
+                        <a href={(publishResult as any).funnelUrl} target="_blank" rel="noopener noreferrer" style={{ color: "#34d399", fontFamily: "monospace" }}>
+                          {(publishResult as any).funnelUrl}
+                        </a>
+                      </p>
                     </div>
                   )}
                 </div>

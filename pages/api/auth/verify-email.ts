@@ -101,6 +101,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const user = await User.findOne({ email });
       if (!user) return redirectToVerifyError(res, email);
 
+      // Verification-only route: never touch password, passwordHash, or hashedPassword here.
       (user as any).emailVerified = true;
       (user as any).emailVerificationCodeHash = null;
       (user as any).emailVerificationExpiresAt = null;
@@ -168,6 +169,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ ok: false, error: "Invalid verification code" });
     }
 
+    // Verification-only route: never touch password, passwordHash, or hashedPassword here.
     (user as any).emailVerified = true;
     (user as any).emailVerificationCodeHash = null;
     (user as any).emailVerificationExpiresAt = null;

@@ -12,6 +12,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "./auth/[...nextauth]";
 import { sanitizeLeadType, createLeadsFromCSV } from "@/lib/mongo/leads";
 import { isSystemFolderName as isSystemFolder } from "@/lib/systemFolders";
+import { extractPhoneFromRow, normalizePhoneDigitsToE164 } from "@/lib/leads/phoneMapping";
 import { ensureNonSystemFolderId } from "@/lib/folders/ensureNonSystemFolderId";
 import { enrollOnNewLeadIfWatched } from "@/lib/drips/enrollOnNewLead";
 
@@ -348,7 +349,10 @@ function mapRow(
 
   const normalizedState = normalizeState(stateRaw);
   const emailLc = lcEmail(email);
-  const phoneKey = last10(phone);
+  const rowPhone = extractPhoneFromRow(row);
+  const phoneDigits = rowPhone.phone || (phone ? String(phone).replace(/\D+/g, "") : "");
+  const phoneKey = phoneDigits ? phoneDigits.slice(-10) : undefined;
+  const normalizedPhone = rowPhone.normalizedPhone || normalizePhoneDigitsToE164(phoneDigits) || undefined;
   const status = sanitizeStatus(statusRaw) || "New";
 
   return {
@@ -357,8 +361,9 @@ function mapRow(
     Email: emailLc,
     email: emailLc,
     Phone: phone,
+    phone: phoneDigits || undefined,
     phoneLast10: phoneKey,
-    normalizedPhone: phoneKey,
+    normalizedPhone,
     State: normalizedState,
     Notes: mergedNotes,
     leadType: sanitizeLeadType(leadTypeRaw || ""),
@@ -368,7 +373,7 @@ function mapRow(
 /* ---- dedupe helpers ---- */
 function buildFilter(userEmail: string, phoneKey?: string, emailKey?: string) {
   if (phoneKey) {
-    return { userEmail, $or: [{ phoneLast10: phoneKey }, { normalizedPhone: phoneKey }] };
+    return { userEmail, $or: [{ phoneLast10: phoneKey }] };
   }
   if (emailKey) {
     return { userEmail, $or: [{ Email: emailKey }, { email: emailKey }] };
@@ -379,13 +384,16 @@ function applyIdentityFields(
   set: Record<string, any>,
   phoneKey?: string,
   emailKey?: string,
-  phoneRaw?: any
+  phoneRaw?: any,
+  normalizedPhone?: string,
+  phoneDigits?: string
 ) {
   if (phoneRaw !== undefined) set["Phone"] = phoneRaw;
+  if (phoneDigits !== undefined) set["phone"] = phoneDigits;
   if (phoneKey !== undefined) {
     set["phoneLast10"] = phoneKey;
-    set["normalizedPhone"] = phoneKey;
   }
+  if (normalizedPhone !== undefined) set["normalizedPhone"] = normalizedPhone;
   if (emailKey !== undefined) {
     set["Email"] = emailKey;
     set["email"] = emailKey;
@@ -441,10 +449,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         ...mapRow(r, mapping!, skippedHeaderSet),
         userEmail,
         folderId: safeFolderId,
+        rawRow: r,
       }));
 
       const phoneKeys = Array.from(
         new Set(mapped.map((m) => m.phoneLast10).filter(Boolean) as string[])
+      );
+      const normalizedPhoneKeys = Array.from(
+        new Set(mapped.map((m) => m.normalizedPhone).filter(Boolean) as string[])
       );
       const emailKeys = Array.from(
         new Set(mapped.map((m) => m.Email).filter(Boolean) as string[])
@@ -452,7 +464,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       const ors: any[] = [];
       if (phoneKeys.length) {
-        ors.push({ phoneLast10: { $in: phoneKeys } }, { normalizedPhone: { $in: phoneKeys } });
+        ors.push({ phoneLast10: { $in: phoneKeys } });
+      }
+      if (normalizedPhoneKeys.length) {
+        ors.push({ normalizedPhone: { $in: normalizedPhoneKeys } });
       }
       if (emailKeys.length) {
         ors.push({ Email: { $in: emailKeys } }, { email: { $in: emailKeys } });
@@ -460,7 +475,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       const existing = ors.length
         ? await Lead.find({ userEmail, $or: ors }).select(
-            "_id phoneLast10 normalizedPhone Email email folderId"
+            "_id phone phoneLast10 normalizedPhone Email email folderId"
           )
         : [];
 
@@ -514,7 +529,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if ((m as any).rawRow !== undefined) base.rawRow = (m as any).rawRow;
 
 
-        applyIdentityFields(base, phoneKey, emailKey, (m as any).Phone);
+        applyIdentityFields(base, phoneKey, emailKey, (m as any).Phone, (m as any).normalizedPhone, (m as any).phone);
+        if (exists?.phone) {
+          delete base.phone;
+          delete base.phoneLast10;
+        }
+        if (exists?.normalizedPhone) delete base.normalizedPhone;
         if (m["First Name"] !== undefined) base["First Name"] = m["First Name"];
         if (m["Last Name"] !== undefined) base["Last Name"] = m["Last Name"];
         if (m.State !== undefined) base["State"] = m.State;
@@ -696,7 +716,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
 
         const leadsToInsert = rawLeads.map((lead) => {
-          const phoneKey = last10(lead["Phone"] || lead["phone"]);
+          const rowPhone = extractPhoneFromRow(lead);
+          const phoneDigits = rowPhone.phone || String(lead["Phone"] || lead["phone"] || "").replace(/\D+/g, "");
+          const phoneKey = phoneDigits ? phoneDigits.slice(-10) : undefined;
           const emailKey = lcEmail(lead["Email"] || lead["email"]);
           return {
             ...lead,
@@ -707,8 +729,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             ["Folder Name"]: String(safeFolderName),
             status: "New",
             Phone: lead["Phone"] ?? lead["phone"],
+            phone: phoneDigits || undefined,
             phoneLast10: phoneKey,
-            normalizedPhone: phoneKey,
+            normalizedPhone: rowPhone.normalizedPhone || normalizePhoneDigitsToE164(phoneDigits) || undefined,
             Email: emailKey,
             email: emailKey,
             leadType: sanitizeLeadType(lead["Lead Type"] || ""),
@@ -762,13 +785,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const phoneKeys = Array.from(
         new Set(rowsMapped.map((m) => m.phoneLast10).filter(Boolean) as string[])
       );
+      const normalizedPhoneKeys = Array.from(
+        new Set(rowsMapped.map((m) => m.normalizedPhone).filter(Boolean) as string[])
+      );
       const emailKeys = Array.from(
         new Set(rowsMapped.map((m) => m.Email).filter(Boolean) as string[])
       );
 
       const ors: any[] = [];
       if (phoneKeys.length) {
-        ors.push({ phoneLast10: { $in: phoneKeys } }, { normalizedPhone: { $in: phoneKeys } });
+        ors.push({ phoneLast10: { $in: phoneKeys } });
+      }
+      if (normalizedPhoneKeys.length) {
+        ors.push({ normalizedPhone: { $in: normalizedPhoneKeys } });
       }
       if (emailKeys.length) {
         ors.push({ Email: { $in: emailKeys } }, { email: { $in: emailKeys } });
@@ -776,7 +805,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       const existing = ors.length
         ? await Lead.find({ userEmail, $or: ors }).select(
-            "_id phoneLast10 normalizedPhone Email email folderId"
+            "_id phone phoneLast10 normalizedPhone Email email folderId"
           )
         : [];
 
@@ -826,7 +855,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           ["Folder Name"]: String(safeFolderName),
           updatedAt: new Date(),
         };
-        applyIdentityFields(base, phoneKey, emailKey, (m as any).Phone);
+        applyIdentityFields(base, phoneKey, emailKey, (m as any).Phone, (m as any).normalizedPhone, (m as any).phone);
+        if (exists?.phone) {
+          delete base.phone;
+          delete base.phoneLast10;
+        }
+        if (exists?.normalizedPhone) delete base.normalizedPhone;
         if (m["First Name"] !== undefined) base["First Name"] = m["First Name"];
         if (m["Last Name"] !== undefined) base["Last Name"] = m["Last Name"];
         if (m.State !== undefined) base["State"] = m.State;

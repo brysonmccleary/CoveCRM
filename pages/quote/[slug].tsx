@@ -2,6 +2,7 @@
 import { GetServerSideProps } from "next";
 import mongooseConnect from "@/lib/mongooseConnect";
 import Funnel from "@/models/Funnel";
+import FBLeadCampaign from "@/models/FBLeadCampaign";
 import { useState } from "react";
 
 export default function FunnelPage({ funnel }: any) {
@@ -18,7 +19,7 @@ export default function FunnelPage({ funnel }: any) {
   const submit = async () => {
     setError("");
     try {
-      const res = await fetch("/api/funnel/submit", {
+      const res = await fetch(`/api/funnel/submit?key=${encodeURIComponent(funnel.webhookKey || "")}`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
@@ -141,9 +142,26 @@ export const getServerSideProps: GetServerSideProps = async (context) => {
     };
   }
 
+  let webhookKey = "";
+  if ((funnel as any).campaignId) {
+    const campaign = await (FBLeadCampaign as any).findOne({
+      _id: (funnel as any).campaignId,
+    })
+      .select("webhookKey")
+      .lean() as any;
+    webhookKey = String(campaign?.webhookKey || "");
+    if (campaign && !webhookKey) {
+      webhookKey = Math.random().toString(36).substring(2, 12);
+      await (FBLeadCampaign as any).updateOne(
+        { _id: (funnel as any).campaignId },
+        { $set: { webhookKey } }
+      );
+    }
+  }
+
   return {
     props: {
-      funnel: JSON.parse(JSON.stringify(funnel))
+      funnel: JSON.parse(JSON.stringify({ ...(funnel as any), webhookKey }))
     }
   };
 };

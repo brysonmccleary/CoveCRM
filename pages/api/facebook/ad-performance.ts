@@ -148,10 +148,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       frequency: c.frequency || 0,
       optOutRate: c.optOutRate || 0,
       badNumberRate: c.badNumberRate || 0,
-      // All-time totals from FBLeadCampaign (updated by syncAdInsights)
+      // All-time totals from FBLeadCampaign (kept current by syncAdInsights)
       totalSpend: c.totalSpend || 0,
       totalLeads: c.totalLeads || 0,
+      totalClicks: c.totalClicks || 0,
+      totalImpressions: c.totalImpressions || 0,
+      totalReach: c.totalReach || 0,
       cpl: c.cpl || 0,
+      ctr: c.ctr || 0,
+      cpc: c.cpc || 0,
+      cpm: c.cpm || 0,
+      // Meta health fields
+      metaObjectHealth: c.metaObjectHealth || "not_published",
+      metaSyncStatus: c.metaSyncStatus || "never_synced",
+      metaPublishStatus: c.metaPublishStatus || "not_attempted",
+      metaEffectiveStatus: c.metaEffectiveStatus || "",
+      metaLastSyncedAt: c.metaLastSyncedAt || null,
+      metaDailyBudgetLive: c.metaDailyBudgetLive || 0,
       // Period-specific metrics from AdMetricsDaily
       period: {
         days,

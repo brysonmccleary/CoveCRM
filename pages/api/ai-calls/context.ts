@@ -164,6 +164,15 @@ export default async function handler(
         : "mortgage_protection";
 
     const leadAny = lead as any;
+    const isKaylaPublicLead =
+      leadAny?.sourceType === "kayla_landing_page" &&
+      leadAny?.leadSource === "kayla_page";
+    const resolvedVoiceProfile = isKaylaPublicLead
+      ? {
+          ...voiceProfile,
+          aiName: "Kayla",
+        }
+      : voiceProfile;
 
     // Derive a clean first name (prefer explicit first-name fields)
     const rawFirstName: string =
@@ -293,7 +302,7 @@ Conversation strategy:
       scriptKey,
       voiceKey,
       fromNumber: (aiSession as any).fromNumber,
-      voiceProfile,
+      voiceProfile: resolvedVoiceProfile,
 
       // ✅ Live transfer settings from AISettings
       liveTransferEnabled,

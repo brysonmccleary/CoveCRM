@@ -7,6 +7,7 @@ import A2PProfile from "@/models/A2PProfile";
 import User from "@/models/User";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
 import { resumeA2PAutomationForUserEmail } from "@/lib/a2p/resumeAutomation";
+import { ensureMessagingServiceA2PReadyForUser } from "@/lib/a2p/ensureMessagingServiceA2PReady";
 
 // Brand statuses that indicate brand approved (NOT texting-ready)
 const BRAND_APPROVED = new Set(["approved", "verified", "active", "in_use", "registered"]);
@@ -342,6 +343,39 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
+    let serviceA2PRegistered = false;
+    let serviceUsecase: string | null = null;
+    let senderPoolCount = senders.length;
+    let numbersAttached: string[] = senders.map((sender) => sender.phoneNumberSid).filter(Boolean);
+    let numbersMissing: string[] = [];
+
+    if ((a2p as any).messagingServiceSid && campaignSid) {
+      try {
+        const readiness = await ensureMessagingServiceA2PReadyForUser(user, {
+          repair: true,
+          attachNumbers: true,
+          logPrefix: "a2p-status",
+        });
+        serviceA2PRegistered = readiness.serviceA2PRegistered;
+        serviceUsecase = readiness.serviceUsecase;
+        senderPoolCount = readiness.senderPoolCount;
+        numbersAttached = readiness.numbersAttached || [];
+        numbersMissing = readiness.numbersMissing || [];
+        (a2p as any).messagingReady = readiness.canSendSms;
+        (a2p as any).messagingServiceSid = readiness.messagingServiceSid;
+        if (readiness.campaignSid) {
+          (a2p as any).campaignSid = readiness.campaignSid;
+          (a2p as any).usa2pSid = readiness.campaignSid;
+        }
+      } catch (readyErr: any) {
+        console.warn("[A2P status] service readiness check failed", {
+          userEmail: session.user.email,
+          message: readyErr?.message || String(readyErr),
+        });
+        (a2p as any).messagingReady = false;
+      }
+    }
+
     // --- Derive applicationStatus (FIXED semantics) ---
     (a2p as any).lastSyncedAt = new Date();
     (a2p as any).twilioAccountSidLastUsed = twilioAccountSidUsed || undefined;
@@ -361,7 +395,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const verifiedCampaignApproved =
         Boolean(campaignSid) && campaignStatusFetched && CAMPAIGN_APPROVED.has(lowerCampaign);
 
-      if (verifiedCampaignApproved) {
+      if (verifiedCampaignApproved && serviceA2PRegistered && serviceUsecase && serviceUsecase.toLowerCase() !== "undeclared") {
         (a2p as any).messagingReady = true;
         applicationStatus = "approved";
       } else {
@@ -407,7 +441,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       nextAction = "ready";
     }
 
-    const canSendSms = Boolean((a2p as any).messagingReady && (a2p as any).messagingServiceSid);
+    const canSendSms = Boolean((a2p as any).messagingReady && (a2p as any).messagingServiceSid && serviceA2PRegistered);
 
     const a2pStatusLabel =
       applicationStatus === "approved"
@@ -451,6 +485,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       },
       campaign: { sid: campaignSid || null, status: campaignStatus },
       messagingServiceSid: (a2p as any).messagingServiceSid || null,
+      serviceUsecase,
+      serviceA2PRegistered,
+      senderPoolCount,
+      numbersAttached,
+      numbersMissing,
       senders,
       hints: {
         hasProfile: Boolean((a2p as any).profileSid),

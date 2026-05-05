@@ -6,7 +6,7 @@
 //   1.  Account-level:   AISettings.aiNewLeadCallEnabled must be true
 //   2.  Lead fetch:      lead must exist
 //   3.  Phone:           lead must have Phone
-//   4.  Source allowlist: ONLY facebook_lead / google_sheets_live may call — all others blocked
+//   4.  Bulk guard:      sourceType in [csv_import, manual_import, doi_prospecting] → skip (bulk imports use AI Dial Session)
 //   5.  DNC guard:       lead.doNotCall === true → skip (never AI-call DNC numbers)
 //   6.  Booked guard:    lead.appointmentTime set → skip (already has appointment)
 //   7.  Status guard:    terminal lead statuses → skip
@@ -128,11 +128,14 @@ export async function triggerAIFirstCall(
       return;
     }
 
-    // Guard 4 — source allowlist: ONLY Facebook leads and Google Sheets live syncs may trigger AI first call.
-    // All other sources (csv_import, manual_import, doi_prospecting, manual_live, form_submission, api_live, etc.) are blocked.
-    const ALLOWED_AI_FIRST_CALL_SOURCES = ["facebook_lead", "google_sheets_live"];
-    if (!ALLOWED_AI_FIRST_CALL_SOURCES.includes(lead.sourceType)) {
-      console.info(`[triggerAIFirstCall] Lead ${leadId} sourceType=${lead.sourceType} not in allowlist — skipping`);
+    // Guard 4 — Block bulk-import sourceTypes. Bulk imports (csv_import, manual_import,
+    // doi_prospecting) must use AI Dial Session, not instant first-call.
+    // All single-lead creation paths (facebook_lead, google_sheets_live, manual_live,
+    // landing_page, form_submission, api_live, etc.) are allowed through here —
+    // folder-level guards below (aiFirstCallEnabled, aiRealTimeOnly) control actual eligibility.
+    const BULK_ONLY_SOURCES = new Set(["csv_import", "manual_import", "doi_prospecting"]);
+    if (BULK_ONLY_SOURCES.has(lead.sourceType)) {
+      console.info(`[triggerAIFirstCall] Lead ${leadId} sourceType=${lead.sourceType} is a bulk-import source — use AI Dial Session instead`);
       return;
     }
 

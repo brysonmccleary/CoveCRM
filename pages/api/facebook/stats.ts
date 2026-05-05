@@ -31,10 +31,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
   } catch (e) {}
 
-  if (typeof req.query.userId === "string" && req.query.userId.trim()) {
-    userId = req.query.userId;
-  }
-
   if (!userId) {
     return zeroStats(res);
   }
@@ -66,8 +62,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   for (const o of outcomes as any[]) {
-    booked += Number(o?.booked || 0);
-    sold += Number(o?.sold || 0);
+    booked += Number(o?.appointmentsBooked || 0);
+    sold += Number(o?.sales || 0);
     revenue += Number(o?.revenue || 0);
   }
 

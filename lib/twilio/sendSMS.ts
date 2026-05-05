@@ -13,6 +13,7 @@ import { syncA2PForUser } from "@/lib/twilio/syncA2P";
 import { queueLeadMemoryHook } from "@/lib/ai/memory/queueLeadMemoryHook";
 import { reconcileUserNumbers } from "@/lib/twilio/reconcileUserNumbers";
 import { resolvePreferredSmsDefault } from "@/lib/twilio/resolvePreferredSmsDefault";
+import { ensureMessagingServiceA2PReadyForUser } from "@/lib/a2p/ensureMessagingServiceA2PReady";
 import type { MessageListInstanceCreateOptions } from "twilio/lib/rest/api/v2010/account/message";
 
 const BASE_URL = (
@@ -371,6 +372,21 @@ if (isUSDest && !isMessagingReady && !DEV_ALLOW_UNAPPROVED) {
     accountSid,
     requestedFrom: paramsIn.from || null,
   });
+
+  if (process.env.NODE_ENV === "production" && isUSDest && !DEV_ALLOW_UNAPPROVED) {
+    const readiness = await ensureMessagingServiceA2PReadyForUser(user, {
+      repair: false,
+      attachNumbers: false,
+      logPrefix: "sendSMS:a2pGuard",
+    });
+    const fromNorm = normalize(forcedFrom);
+    const selectedAttached = (readiness.attachedPhoneNumbers || []).some(
+      (phone: string) => normalize(phone) === fromNorm,
+    );
+    if (!readiness.canSendSms || !selectedAttached) {
+      throw new Error("SMS sender is not A2P registered/attached");
+    }
+  }
 
   // Opt-out suppression
   if ((lead as any)?.optOut === true || (lead as any)?.unsubscribed === true) {

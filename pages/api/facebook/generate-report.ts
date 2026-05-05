@@ -7,8 +7,22 @@ import mongooseConnect from "@/lib/mongooseConnect";
 import User from "@/models/User";
 import FBLeadSubscription from "@/models/FBLeadSubscription";
 import AdActionReport from "@/models/AdActionReport";
+import FBLeadCampaign from "@/models/FBLeadCampaign";
 import { generateDailyActionReport } from "@/lib/facebook/generateActionReport";
 import { scoreAllCampaignsForUser } from "@/lib/facebook/scoreAdPerformance";
+
+async function collectRecommendationSummaries(userId: string) {
+  const campaigns = await FBLeadCampaign.find({ userId })
+    .select("campaignName recommendNewAd recommendReplaceAd")
+    .lean();
+  const campaignsNeedingNewAd = campaigns
+    .filter((c: any) => !!c.recommendNewAd)
+    .map((c: any) => c.campaignName || "Campaign");
+  const campaignsNeedingReplacement = campaigns
+    .filter((c: any) => !!c.recommendReplaceAd)
+    .map((c: any) => c.campaignName || "Campaign");
+  return { campaignsNeedingNewAd, campaignsNeedingReplacement };
+}
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed" });
@@ -45,7 +59,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         .lean();
 
       if (existing) {
-        return res.status(200).json({ ok: true, report: (existing as any).reportText, cached: true });
+        const extras = await collectRecommendationSummaries(userId);
+        return res
+          .status(200)
+          .json({ ok: true, report: (existing as any).reportText, cached: true, ...extras });
       }
     }
 
@@ -53,7 +70,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     await scoreAllCampaignsForUser(userId);
     const reportText = await generateDailyActionReport(userId, userEmail);
 
-    return res.status(200).json({ ok: true, report: reportText, cached: false });
+    const extras = await collectRecommendationSummaries(userId);
+
+    return res.status(200).json({ ok: true, report: reportText, cached: false, ...extras });
   } catch (err: any) {
     console.error("[generate-report]", err?.message);
     return res.status(500).json({ message: "Failed to generate report" });

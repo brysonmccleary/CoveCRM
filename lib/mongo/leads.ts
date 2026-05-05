@@ -1,5 +1,6 @@
 // lib/mongo/leads.ts
 import mongoose, { Schema, model, models, Types } from "mongoose";
+import { extractPhoneFromRow } from "@/lib/leads/phoneMapping";
 
 // -------- Subdocuments --------
 const InteractionSchema = new Schema(
@@ -90,7 +91,7 @@ const LeadSchema = new Schema(
     // AI First-Call tracking
     sourceType: {
       type: String,
-      enum: ["csv_import", "facebook_lead", "form_submission", "api_live", "manual_live", "google_sheets_live", "doi_prospecting", "manual_import"],
+      enum: ["csv_import", "facebook_lead", "form_submission", "api_live", "manual_live", "google_sheets_live", "doi_prospecting", "manual_import", "kayla_landing_page"],
       default: "manual_live",
     },
     realTimeEligible: { type: Boolean, default: false },
@@ -237,9 +238,9 @@ export const createLeadsFromGoogleSheet = async (
     const emailLower2 =
       typeof lead.email === "string" ? lead.email.toLowerCase().trim() : lead.email;
 
-    const normalizedPhone =
-      lead.normalizedPhone ??
-      (typeof lead.Phone === "string" ? lead.Phone.replace(/\D+/g, "") : undefined);
+    const rowPhone = extractPhoneFromRow(lead.rawRow || lead);
+    const phone = lead.phone || rowPhone.phone;
+    const normalizedPhone = lead.normalizedPhone || rowPhone.normalizedPhone;
 
     const { ownerEmail, ...rest } = lead;
 
@@ -248,7 +249,8 @@ export const createLeadsFromGoogleSheet = async (
       userEmail,
       folderId: fid,
       status: lead.status ?? "New",
-      phoneLast10: lead.phoneLast10 ?? normalizedPhone?.slice(-10),
+      phone: phone || undefined,
+      phoneLast10: lead.phoneLast10 ?? phone?.slice(-10) ?? normalizedPhone?.slice(-10),
       normalizedPhone,
       Email: emailLower,
       email: emailLower2 ?? emailLower, // ✅ ensure lowercase mirror exists

@@ -150,6 +150,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const hashed = await bcrypt.hash(pw, 10);
+    if (!hashed) return res.status(500).json({ message: "Password could not be secured" });
     const admin = isAdminEmail(cleanEmail);
     const myReferralCode = await generateUniqueReferralCode();
     const verificationCode = makeVerificationCode();

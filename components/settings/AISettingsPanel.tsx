@@ -11,21 +11,7 @@ interface AISettings {
   liveTransferEnabled?: boolean;
   liveTransferPhone?: string;
   newLeadCallDelayMinutes?: number;
-  businessHoursOnly?: boolean;
-  businessHoursStart?: string;
-  businessHoursEnd?: string;
-  businessHoursTimezone?: string;
 }
-
-const TIMEZONES = [
-  "America/New_York",
-  "America/Chicago",
-  "America/Denver",
-  "America/Phoenix",
-  "America/Los_Angeles",
-  "America/Anchorage",
-  "Pacific/Honolulu",
-];
 
 function Toggle({
   checked,
@@ -163,13 +149,11 @@ export default function AISettingsPanel() {
 
           <SettingRow
             label="AI Dial Sessions"
-            description="Let the AI work through an entire lead folder, calling each lead sequentially with a 2-second gap. Start a session from any lead folder. TCPA/A2P compliance is your responsibility — only call leads who have provided express written consent."
+            description="Controlled from the AI Dial Session screen and protected by built-in lead-local quiet hours."
           >
-            <Toggle
-              checked={!!settings.aiDialSessionEnabled}
-              onChange={(v) => save({ aiDialSessionEnabled: v })}
-              disabled={saving}
-            />
+            <span className="rounded-full bg-white/10 px-3 py-1 text-xs font-semibold text-gray-300">
+              Managed in dialer
+            </span>
           </SettingRow>
 
           <SettingRow
@@ -204,72 +188,6 @@ export default function AISettingsPanel() {
         </div>
       </div>
 
-      {/* Business Hours */}
-      <div className="bg-[#0f172a] border border-white/10 rounded-xl">
-        <div className="px-5 pt-4 pb-2 border-b border-white/5">
-          <h3 className="text-sm font-semibold text-indigo-400 uppercase tracking-wide">
-            Business Hours
-          </h3>
-        </div>
-        <div className="px-5">
-          <SettingRow
-            label="Business Hours Only"
-            description="Only allow AI calls during your configured business hours."
-          >
-            <Toggle
-              checked={settings.businessHoursOnly !== false}
-              onChange={(v) => save({ businessHoursOnly: v })}
-              disabled={saving}
-            />
-          </SettingRow>
-
-          {settings.businessHoursOnly !== false && (
-            <>
-              <SettingRow label="Hours" description="Your daily calling window.">
-                <div className="flex items-center gap-2">
-                  <input
-                    type="time"
-                    value={settings.businessHoursStart || "09:00"}
-                    onChange={(e) =>
-                      setSettings((s) => ({ ...s, businessHoursStart: e.target.value }))
-                    }
-                    onBlur={(e) => save({ businessHoursStart: e.target.value })}
-                    className="bg-[#1e293b] border border-white/10 text-white text-sm rounded px-2 py-1"
-                    disabled={saving}
-                  />
-                  <span className="text-gray-400 text-xs">to</span>
-                  <input
-                    type="time"
-                    value={settings.businessHoursEnd || "18:00"}
-                    onChange={(e) =>
-                      setSettings((s) => ({ ...s, businessHoursEnd: e.target.value }))
-                    }
-                    onBlur={(e) => save({ businessHoursEnd: e.target.value })}
-                    className="bg-[#1e293b] border border-white/10 text-white text-sm rounded px-2 py-1"
-                    disabled={saving}
-                  />
-                </div>
-              </SettingRow>
-
-              <SettingRow label="Timezone" description="Timezone for business hours enforcement.">
-                <select
-                  value={settings.businessHoursTimezone || "America/Phoenix"}
-                  onChange={(e) => save({ businessHoursTimezone: e.target.value })}
-                  className="bg-[#1e293b] border border-white/10 text-white text-sm rounded px-3 py-1.5"
-                  disabled={saving}
-                >
-                  {TIMEZONES.map((tz) => (
-                    <option key={tz} value={tz}>
-                      {tz.replace("America/", "").replace("Pacific/", "").replace(/_/g, " ")}
-                    </option>
-                  ))}
-                </select>
-              </SettingRow>
-            </>
-          )}
-        </div>
-      </div>
-
       {/* AI Analysis */}
       <div className="bg-[#0f172a] border border-white/10 rounded-xl">
         <div className="px-5 pt-4 pb-2 border-b border-white/5">
@@ -280,24 +198,20 @@ export default function AISettingsPanel() {
         <div className="px-5">
           <SettingRow
             label="Call Overview"
-            description="Generate AI summaries after each call."
+            description="Generated automatically when call overview data is available."
           >
-            <Toggle
-              checked={settings.aiCallOverviewEnabled !== false}
-              onChange={(v) => save({ aiCallOverviewEnabled: v })}
-              disabled={saving}
-            />
+            <span className="rounded-full bg-white/10 px-3 py-1 text-xs font-semibold text-gray-300">
+              Automatic
+            </span>
           </SettingRow>
 
           <SettingRow
             label="Call Coaching"
-            description="Get AI coaching tips after each call to improve performance."
+            description="Available from call reports when coaching data is generated."
           >
-            <Toggle
-              checked={!!settings.aiCallCoachingEnabled}
-              onChange={(v) => save({ aiCallCoachingEnabled: v })}
-              disabled={saving}
-            />
+            <span className="rounded-full bg-white/10 px-3 py-1 text-xs font-semibold text-gray-300">
+              Automatic
+            </span>
           </SettingRow>
         </div>
       </div>
@@ -312,13 +226,11 @@ export default function AISettingsPanel() {
         <div className="px-5">
           <SettingRow
             label="AI SMS Assistant"
-            description="Let AI draft reply suggestions for incoming SMS messages."
+            description="Controlled by account AI access and SMS compliance checks."
           >
-            <Toggle
-              checked={!!settings.aiTextingEnabled}
-              onChange={(v) => save({ aiTextingEnabled: v })}
-              disabled={saving}
-            />
+            <span className="rounded-full bg-white/10 px-3 py-1 text-xs font-semibold text-gray-300">
+              Included with AI access
+            </span>
           </SettingRow>
         </div>
       </div>

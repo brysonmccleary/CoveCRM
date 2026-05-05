@@ -6,7 +6,7 @@ const CampaignActionLogSchema = new Schema(
     campaignId: { type: Schema.Types.ObjectId, ref: "FBLeadCampaign", required: true, index: true },
     actionType: {
       type: String,
-      enum: ["PAUSE", "SCALE", "FIX", "DUPLICATE_TEST"],
+      enum: ["PAUSE", "RESUME", "SCALE", "DECREASE", "SET_BUDGET", "FIX", "DUPLICATE_TEST"],
       required: true,
       index: true,
     },

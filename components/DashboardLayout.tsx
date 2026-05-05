@@ -41,6 +41,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     { name: "Settings", path: "/dashboard?tab=settings" },
     ...(isAdmin ? [
       { name: "Recruiting", path: "/recruiting" },
+      { name: "Admin: AI Copilot", path: "/admin/ai-copilot" },
       { name: "Admin: Prospecting", path: "/admin/prospecting" },
       { name: "Admin: Site Intelligence", path: "/admin/site-intelligence" },
     ] : []),

@@ -8,6 +8,7 @@ import PhoneNumber from "@/models/PhoneNumber";
 import User from "@/models/User";
 import { stripe } from "@/lib/stripe";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
+import { ensureMessagingServiceA2PReadyForUser } from "@/lib/a2p/ensureMessagingServiceA2PReady";
 
 const PHONE_PRICE_ID =
   process.env.STRIPE_PHONE_PRICE_ID || "price_1RpvR9DF9aEsjVyJk9GiJkpe";
@@ -595,6 +596,47 @@ export default async function handler(
       );
     }
 
+    let a2pWarning: string | null = null;
+    let a2pVerified = false;
+    try {
+      const readiness = await ensureMessagingServiceA2PReadyForUser(user, {
+        purchasedNumberSid: purchased.sid,
+        repair: true,
+        attachNumbers: true,
+        logPrefix: "buy-number-mobile",
+      });
+      targetMS = readiness.messagingServiceSid || targetMS;
+      a2pVerified = readiness.canSendSms === true;
+      await PhoneNumber.updateOne(
+        { phoneNumber: purchased.phoneNumber! },
+        {
+          $set: {
+            messagingServiceSid: a2pVerified ? targetMS || null : null,
+            a2pApproved: a2pVerified,
+            smsBlockedReason: a2pVerified ? null : "A2P messaging service not registered",
+          },
+        },
+      );
+    } catch (a2pErr: any) {
+      a2pWarning = a2pErr?.message || "A2P messaging service not registered";
+      await PhoneNumber.updateOne(
+        { phoneNumber: purchased.phoneNumber! },
+        {
+          $set: {
+            messagingServiceSid: null,
+            a2pApproved: false,
+            smsBlockedReason: "A2P messaging service not registered",
+          },
+        },
+      );
+      console.warn("buy-number (mobile): A2P verification failed after purchase", {
+        email,
+        phoneNumber: purchased.phoneNumber,
+        sid: purchased.sid,
+        error: a2pWarning,
+      });
+    }
+
     // ---------- Save on user doc
     user.numbers = user.numbers || [];
     user.numbers.push({
@@ -602,7 +644,9 @@ export default async function handler(
       phoneNumber: purchased.phoneNumber!,
       subscriptionId: createdSubscriptionId,
       purchasedAt: new Date(),
-      messagingServiceSid: targetMS,
+      messagingServiceSid: a2pVerified ? targetMS : null,
+      a2pApproved: a2pVerified,
+      smsBlockedReason: a2pVerified ? undefined : "A2P messaging service not registered",
       friendlyName: purchased.friendlyName || purchased.phoneNumber!,
       status: "active",
       capabilities: {
@@ -614,16 +658,18 @@ export default async function handler(
       },
     } as any);
     user.a2p = user.a2p || ({} as any);
-    if (targetMS) (user.a2p as any).messagingServiceSid = targetMS;
+    if (a2pVerified && targetMS) (user.a2p as any).messagingServiceSid = targetMS;
     await user.save();
 
     return res.status(200).json({
       ok: true,
       message: "Number purchased.",
+      warning: a2pVerified ? null : a2pWarning || "A2P messaging service not registered",
       number: purchased.phoneNumber,
       sid: purchased.sid,
       subscriptionId: createdSubscriptionId || null,
-      messagingServiceSid: targetMS || null,
+      messagingServiceSid: a2pVerified ? targetMS || null : null,
+      a2pApproved: a2pVerified,
       usingPersonal,
       activeAccountSid: activeAccountSid,
     });

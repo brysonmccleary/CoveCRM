@@ -5,20 +5,44 @@
 // Run standalone: npx tsx scripts/import-doi-leads.ts
 // Run via cron:   GET /api/cron/run-doi-scraper
 
+import * as dotenv from "dotenv";
+dotenv.config({ path: ".env.local" });
+
+import crypto from "crypto";
 import axios from "axios";
 import { parse } from "csv-parse";
 import mongooseConnect from "../lib/mongooseConnect";
-import DOILead from "../models/DOILead";
+import DOIRawRecord from "../models/DOIRawRecord";
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
+
+export interface ImportDiagnostics {
+  rowsSeen: number;
+  rowsMatchedLifeHealth: number;
+  rowsRejectedStatus: number;
+  rowsRejectedNonLifeHealth: number;
+  rowsRejectedMissingLicense: number;
+  rowsRejectedMissingName: number;
+  rowsUpsertAttempted: number;
+  rawRowsLanded: number;
+  sampleMatches: Array<{
+    name: string;
+    licenseType: string;
+    authority: string;
+    status: string;
+    licenseNumber: string;
+    npn: string;
+  }>;
+}
 
 export interface StateImportResult {
   imported: number;
   updated: number;
   skipped: number;
   errors: number;
+  diagnostics?: ImportDiagnostics;
 }
 
 export interface ScrapeAllResult {
@@ -38,6 +62,8 @@ export interface ScrapeAllResult {
 
 const BATCH_SIZE = 100;
 const LOG_EVERY = 1000;
+const MAX_DEBUG_SAMPLES = 8;
+const NEGATIVE_STATUS_TERMS = ["inactive", "suspend", "revoked", "terminated", "expired", "canceled"];
 
 /** True if the license type string is a life or health line. */
 function isLifeHealth(licenseType: string): boolean {
@@ -55,74 +81,95 @@ function isLifeHealth(licenseType: string): boolean {
   );
 }
 
-/** Upsert a single record into DOILead by real email.
- *  Records without a valid real email are skipped — no synthetic/placeholder emails allowed.
- *  Returns "imported" | "updated" | "skipped". */
-async function upsertDOILead(fields: {
-  firstName: string;
-  lastName: string;
-  email: string;
-  phone: string;
-  state: string;
-  licenseType: string;
-  licenseNumber: string;
-  licenseStatus: string;
+interface RawLandRecord {
+  payloadHash: string;
   source: string;
-}): Promise<"imported" | "updated" | "skipped"> {
-  // Require a real email — skip records with missing or clearly invalid email
-  const emailKey = fields.email.toLowerCase().trim();
-  if (!emailKey || !emailKey.includes("@")) return "skipped";
+  state: string;
+  rawFirstName: string;
+  rawLastName: string;
+  rawEmail: string;
+  rawPhone: string;
+  rawCity: string;
+  rawLicenseType: string;
+  rawLineOfAuthority: string;
+  rawLicenseStatus: string;
+  rawLicenseNumber: string;
+  rawNpn: string;
+  parseStatus: "pending";
+}
 
-  try {
-    const result = await DOILead.findOneAndUpdate(
-      { email: emailKey },
-      {
-        $set: {
-          firstName: fields.firstName,
-          lastName: fields.lastName,
-          phone: fields.phone,
-          state: fields.state,
-          licenseType: fields.licenseType,
-          licenseNumber: fields.licenseNumber,
-          licenseStatus: fields.licenseStatus,
-          source: fields.source,
-          scrapedAt: new Date(),
-        },
-        $setOnInsert: {
-          email: emailKey,
-          assignedCount: 0,
-          globallyUnsubscribed: false,
-        },
-      },
-      { upsert: true, new: false, lean: true }
-    );
+function buildRawRecord(params: Omit<RawLandRecord, "payloadHash" | "parseStatus">): RawLandRecord {
+  const hash = crypto
+    .createHash("sha256")
+    .update(
+      `${params.source}|${params.state}|${params.rawLicenseNumber}|${params.rawNpn}|${params.rawFirstName}|${params.rawLastName}`
+    )
+    .digest("hex");
+  return { ...params, payloadHash: hash, parseStatus: "pending" };
+}
 
-    return result === null ? "imported" : "updated";
+function createDiagnostics(): ImportDiagnostics {
+  return {
+    rowsSeen: 0,
+    rowsMatchedLifeHealth: 0,
+    rowsRejectedStatus: 0,
+    rowsRejectedNonLifeHealth: 0,
+    rowsRejectedMissingLicense: 0,
+    rowsRejectedMissingName: 0,
+    rowsUpsertAttempted: 0,
+    rawRowsLanded: 0,
+    sampleMatches: [],
+  };
+}
 
-  } catch (err: any) {
-    // Duplicate key on concurrent writes — treat as skipped
-    if (err?.code === 11000) return "skipped";
-    throw err;
+function recordSample(diag: ImportDiagnostics, sample: ImportDiagnostics["sampleMatches"][number]) {
+  if (diag.sampleMatches.length < MAX_DEBUG_SAMPLES) {
+    diag.sampleMatches.push(sample);
   }
 }
 
-/** Process a batch of records, updating the result counters in place. */
-async function processBatch(
-  batch: Parameters<typeof upsertDOILead>[0][],
-  result: StateImportResult
+function logDiagnostics(state: string, diag: ImportDiagnostics) {
+  console.info(
+    `[${state}] Diagnostics: rows=${diag.rowsSeen} matched=${diag.rowsMatchedLifeHealth} statusReject=${diag.rowsRejectedStatus} nonLife=${diag.rowsRejectedNonLifeHealth} missingLicense=${diag.rowsRejectedMissingLicense} missingName=${diag.rowsRejectedMissingName} upsertAttempts=${diag.rowsUpsertAttempted} rawRowsLanded=${diag.rawRowsLanded}`
+  );
+  if (diag.sampleMatches.length) {
+    console.info(`[${state}] Sample matched rows (${diag.sampleMatches.length}):`);
+    diag.sampleMatches.forEach((s, idx) => {
+      console.info(
+        `  #${idx + 1}: ${s.name} | license=${s.licenseType} | authority=${s.authority} | status=${s.status} | licenseNumber=${s.licenseNumber} | npn=${s.npn}`
+      );
+    });
+  } else {
+    console.info(`[${state}] No matched sample rows captured.`);
+  }
+}
+
+/** Land a batch of raw records into DOIRawRecord staging table. */
+async function landRawBatch(
+  batch: RawLandRecord[],
+  result: StateImportResult,
+  diagnostics?: ImportDiagnostics
 ): Promise<void> {
   await Promise.all(
     batch.map(async (fields) => {
       try {
-        const outcome = await upsertDOILead(fields);
-        if (outcome === "imported") result.imported++;
-        else if (outcome === "updated") result.updated++;
-        else result.skipped++;
+        const res = await DOIRawRecord.updateOne(
+          { payloadHash: fields.payloadHash },
+          { $setOnInsert: fields, $set: { updatedAt: new Date() } },
+          { upsert: true }
+        );
+        if (res.upsertedCount > 0) result.imported++;
+        else result.updated++; // duplicate — already landed
+        if (diagnostics) diagnostics.rawRowsLanded++;
       } catch (err: any) {
-        result.errors++;
-        // Only log non-trivial errors
-        if (err?.code !== 11000) {
-          console.warn(`[doi-import] upsert error (${fields.state}):`, err?.message || err);
+        if (err?.code === 11000) {
+          result.updated++; // concurrent duplicate
+          if (diagnostics) diagnostics.rawRowsLanded++;
+        } else {
+          result.errors++;
+          if (err?.code !== 11000) {
+            console.warn(`[doi-land] upsert error (${fields.state}):`, err?.message || err);
+          }
         }
       }
     })
@@ -146,9 +193,10 @@ function pick(row: Record<string, string>, ...candidates: string[]): string {
 }
 
 export async function importFloridaLeads(): Promise<StateImportResult> {
-  const result: StateImportResult = { imported: 0, updated: 0, skipped: 0, errors: 0 };
+  const diagnostics = createDiagnostics();
+  const result: StateImportResult = { imported: 0, updated: 0, skipped: 0, errors: 0, diagnostics };
   let processed = 0;
-  let batch: Parameters<typeof upsertDOILead>[0][] = [];
+  let batch: RawLandRecord[] = [];
 
   console.info("[FL] Starting Florida CSV import…");
 
@@ -176,16 +224,32 @@ export async function importFloridaLeads(): Promise<StateImportResult> {
 
     for await (const row of parser) {
       try {
+        diagnostics.rowsSeen++;
         const licenseType =
           pick(row, "LicenseType", "License Type", "LineOfAuthority", "Line Of Authority",
             "licenseType", "license_type", "LicTypeDesc", "LicType") || "";
         const licenseStatus =
           pick(row, "Status", "LicenseStatus", "License Status", "licenseStatus",
             "license_status", "LicStatus") || "";
+        const lineOfAuthority =
+          pick(row, "LineOfAuthority", "Line Of Authority", "Line Description", "Qualification", "Qualification Description", "lineOfAuthority") ||
+          "";
+        const combinedAuthority = [licenseType, lineOfAuthority].filter(Boolean).join(" | ");
+        const isLife = isLifeHealth(combinedAuthority);
+        const normalizedStatus = (licenseStatus || "").toLowerCase();
+        const badStatus =
+          normalizedStatus &&
+          NEGATIVE_STATUS_TERMS.some((term) => normalizedStatus.includes(term));
 
-        // Filter: only life/health lines and Active status
-        if (!isLifeHealth(licenseType)) continue;
-        if (licenseStatus.toLowerCase() !== "active") continue;
+        if (badStatus) {
+          diagnostics.rowsRejectedStatus++;
+          // land anyway — normalization stage will handle status rejection
+        }
+
+        // Count non-life-health rows but still land them for normalization to evaluate
+        if (!isLife) {
+          diagnostics.rowsRejectedNonLifeHealth++;
+        }
 
         const licenseNumber =
           pick(row, "LicenseNumber", "License Number", "LicNbr", "LicenseNbr",
@@ -200,26 +264,49 @@ export async function importFloridaLeads(): Promise<StateImportResult> {
         const phone =
           pick(row, "PhoneNumber", "Phone Number", "Phone", "phone", "BusinessPhone",
             "Business Phone") || "";
+        const city =
+          pick(row, "ResidenceCity", "City", "city", "MailingCity", "BusinessCity") || "";
+        const npn = pick(row, "NPN", "npn", "NationalProducerNumber") || "";
 
         const email = rawEmail.toLowerCase().includes("@") ? rawEmail.toLowerCase().trim() : "";
 
-        // Skip records with no real email — we only import leads with valid contact info
-        if (!email) continue;
+        if (!licenseNumber && !npn) {
+          diagnostics.rowsRejectedMissingLicense++;
+        }
+        if (!firstName && !lastName) {
+          diagnostics.rowsRejectedMissingName++;
+        }
 
-        batch.push({
-          firstName,
-          lastName,
-          email,
-          phone,
-          state: "FL",
-          licenseType,
-          licenseNumber,
-          licenseStatus: "Active",
+        if (isLife) {
+          diagnostics.rowsMatchedLifeHealth++;
+          recordSample(diagnostics, {
+            name: `${firstName} ${lastName}`.trim(),
+            licenseType,
+            authority: combinedAuthority,
+            status: licenseStatus || "(blank)",
+            licenseNumber: licenseNumber || "(blank)",
+            npn: npn || "(blank)",
+          });
+        }
+
+        batch.push(buildRawRecord({
           source: "FL-DOI",
-        });
+          state: "FL",
+          rawFirstName: firstName,
+          rawLastName: lastName,
+          rawEmail: email,
+          rawPhone: phone,
+          rawCity: city,
+          rawLicenseType: licenseType,
+          rawLineOfAuthority: lineOfAuthority,
+          rawLicenseStatus: licenseStatus,
+          rawLicenseNumber: licenseNumber,
+          rawNpn: npn,
+        }));
+        diagnostics.rowsUpsertAttempted++;
 
         if (batch.length >= BATCH_SIZE) {
-          await processBatch(batch, result);
+          await landRawBatch(batch, result, diagnostics);
           batch = [];
         }
 
@@ -236,7 +323,7 @@ export async function importFloridaLeads(): Promise<StateImportResult> {
 
     // Flush remaining batch
     if (batch.length > 0) {
-      await processBatch(batch, result);
+      await landRawBatch(batch, result, diagnostics);
     }
   } catch (err: any) {
     const msg = err?.message || String(err);
@@ -252,6 +339,7 @@ export async function importFloridaLeads(): Promise<StateImportResult> {
   console.info(
     `[FL] Done — imported=${result.imported} updated=${result.updated} skipped=${result.skipped} errors=${result.errors}`
   );
+  logDiagnostics("FL", diagnostics);
   return result;
 }
 
@@ -263,7 +351,8 @@ const TX_API_BASE = "https://data.texas.gov/resource/kxv3-diwf.json";
 const TX_PAGE_SIZE = 50_000;
 
 export async function importTexasLeads(): Promise<StateImportResult> {
-  const result: StateImportResult = { imported: 0, updated: 0, skipped: 0, errors: 0 };
+  const diagnostics = createDiagnostics();
+  const result: StateImportResult = { imported: 0, updated: 0, skipped: 0, errors: 0, diagnostics };
   let offset = 0;
   let page = 0;
   let totalFetched = 0;
@@ -308,22 +397,49 @@ export async function importTexasLeads(): Promise<StateImportResult> {
     totalFetched += rows.length;
     console.info(`[TX] Page ${page}: fetched ${rows.length} rows (total so far: ${totalFetched.toLocaleString()})`);
 
-    let batch: Parameters<typeof upsertDOILead>[0][] = [];
+    let batch: RawLandRecord[] = [];
 
     for (const row of rows) {
       try {
+        diagnostics.rowsSeen++;
         const licenseType =
           String(
             row.license_type || row.licenseType || row.LicenseType ||
             row.license_type_code || row.line_of_authority || ""
+          ).trim();
+        const lineOfAuthority =
+          String(
+            row.line_of_authority ||
+            row.authority ||
+            row.license_authority ||
+            row.qualification ||
+            row.license_qualification ||
+            row.loa ||
+            row.loa_desc ||
+            row.license_classification ||
+            ""
           ).trim();
         const licenseStatus =
           String(
             row.license_status || row.licenseStatus || row.status || row.Status || ""
           ).trim();
 
-        if (!isLifeHealth(licenseType)) continue;
-        if (licenseStatus.toLowerCase() !== "active") continue;
+        const combinedAuthority = [licenseType, lineOfAuthority].filter(Boolean).join(" | ");
+        const isLife = isLifeHealth(combinedAuthority);
+
+        // Count non-life-health but still land for normalization to evaluate
+        if (!isLife) {
+          diagnostics.rowsRejectedNonLifeHealth++;
+        }
+
+        const normalizedStatus = licenseStatus.toLowerCase();
+        const badStatus =
+          normalizedStatus !== "" &&
+          NEGATIVE_STATUS_TERMS.some((term) => normalizedStatus.includes(term));
+        if (badStatus) {
+          diagnostics.rowsRejectedStatus++;
+          // land anyway — normalization stage handles status rejection
+        }
 
         const licenseNumber =
           String(
@@ -345,26 +461,48 @@ export async function importTexasLeads(): Promise<StateImportResult> {
           String(
             row.phone || row.Phone || row.phone_number || row.phoneNumber || ""
           ).trim();
+        const city = String(row.city || row.City || row.business_city || "").trim();
+        const npn = String(row.npn || row.NPN || "").trim();
 
         const email = rawEmail.toLowerCase().includes("@") ? rawEmail.toLowerCase() : "";
 
-        // Skip records with no real email
-        if (!email) continue;
+        if (!licenseNumber && !npn) {
+          diagnostics.rowsRejectedMissingLicense++;
+        }
+        if (!firstName && !lastName) {
+          diagnostics.rowsRejectedMissingName++;
+        }
 
-        batch.push({
-          firstName,
-          lastName,
-          email,
-          phone,
-          state: "TX",
-          licenseType,
-          licenseNumber,
-          licenseStatus: "Active",
+        if (isLife) {
+          diagnostics.rowsMatchedLifeHealth++;
+          recordSample(diagnostics, {
+            name: `${firstName} ${lastName}`.trim(),
+            licenseType,
+            authority: combinedAuthority || "(none)",
+            status: licenseStatus || "(blank)",
+            licenseNumber: licenseNumber || "(blank)",
+            npn: npn || "(blank)",
+          });
+        }
+
+        batch.push(buildRawRecord({
           source: "TX-DOI",
-        });
+          state: "TX",
+          rawFirstName: firstName,
+          rawLastName: lastName,
+          rawEmail: email,
+          rawPhone: phone,
+          rawCity: city,
+          rawLicenseType: licenseType,
+          rawLineOfAuthority: lineOfAuthority,
+          rawLicenseStatus: licenseStatus,
+          rawLicenseNumber: licenseNumber,
+          rawNpn: npn,
+        }));
+        diagnostics.rowsUpsertAttempted++;
 
         if (batch.length >= BATCH_SIZE) {
-          await processBatch(batch, result);
+          await landRawBatch(batch, result, diagnostics);
           batch = [];
         }
       } catch (rowErr: any) {
@@ -374,11 +512,11 @@ export async function importTexasLeads(): Promise<StateImportResult> {
 
     // Flush batch for this page
     if (batch.length > 0) {
-      await processBatch(batch, result);
+      await landRawBatch(batch, result, diagnostics);
     }
 
     console.info(
-      `[TX] After page ${page} — imported=${result.imported} updated=${result.updated} skipped=${result.skipped}`
+      `[TX] After page ${page} — matchedLifeHealth=${diagnostics.rowsMatchedLifeHealth} imported=${result.imported} updated=${result.updated} skipped=${result.skipped}`
     );
 
     // If fewer rows returned than requested, we've hit the end
@@ -393,6 +531,7 @@ export async function importTexasLeads(): Promise<StateImportResult> {
   console.info(
     `[TX] Done — imported=${result.imported} updated=${result.updated} skipped=${result.skipped} errors=${result.errors}`
   );
+  logDiagnostics("TX", diagnostics);
   return result;
 }
 
@@ -417,30 +556,36 @@ export async function importOhioLeads(): Promise<StateImportResult> {
     if (response.status === 200 && Array.isArray(response.data) && response.data.length > 0) {
       // Unexpected success — process what we got
       console.info(`[OH] Got ${response.data.length} records from Ohio data portal`);
-      const batch: Parameters<typeof upsertDOILead>[0][] = [];
+      const batch: RawLandRecord[] = [];
       result.skipped = 0;
 
       for (const row of response.data) {
         try {
           const licenseType = String(row.license_type || row.licenseType || "").trim();
           const licenseStatus = String(row.license_status || row.status || "").trim();
-          if (!isLifeHealth(licenseType) || licenseStatus.toLowerCase() !== "active") continue;
-
-          batch.push({
-            firstName: String(row.first_name || row.firstName || "").trim(),
-            lastName: String(row.last_name || row.lastName || "").trim(),
-            email: String(row.email || "").trim().toLowerCase(),
-            phone: String(row.phone || "").trim(),
-            state: "OH",
-            licenseType,
-            licenseNumber: String(row.license_number || row.npn || "").trim(),
-            licenseStatus: "Active",
+          const city = String(row.city || row.City || "").trim();
+          const npn = String(row.npn || row.NPN || "").trim();
+          const licenseNumber = String(row.license_number || row.npn || "").trim();
+          const firstName = String(row.first_name || row.firstName || "").trim();
+          const lastName = String(row.last_name || row.lastName || "").trim();
+          batch.push(buildRawRecord({
             source: "OH-DOI",
-          });
+            state: "OH",
+            rawFirstName: firstName,
+            rawLastName: lastName,
+            rawEmail: String(row.email || "").trim().toLowerCase(),
+            rawPhone: String(row.phone || "").trim(),
+            rawCity: city,
+            rawLicenseType: licenseType,
+            rawLineOfAuthority: "",
+            rawLicenseStatus: licenseStatus,
+            rawLicenseNumber: licenseNumber,
+            rawNpn: npn,
+          }));
         } catch { result.errors++; }
       }
 
-      if (batch.length > 0) await processBatch(batch, result);
+      if (batch.length > 0) await landRawBatch(batch, result);
     } else {
       console.info("[OH] No bulk source available — skipping");
     }
@@ -488,28 +633,34 @@ export async function importGeorgiaLeads(): Promise<StateImportResult> {
         });
       });
 
-      const batch: Parameters<typeof upsertDOILead>[0][] = [];
+      const batch: RawLandRecord[] = [];
       for (const row of records) {
         try {
           const licenseType = pick(row, "LicenseType", "License Type", "licenseType") || "";
           const licenseStatus = pick(row, "Status", "LicenseStatus", "License Status") || "";
-          if (!isLifeHealth(licenseType) || licenseStatus.toLowerCase() !== "active") continue;
-
-          batch.push({
-            firstName: pick(row, "FirstName", "First Name", "firstName") || "",
-            lastName: pick(row, "LastName", "Last Name", "lastName") || "",
-            email: (pick(row, "Email", "EmailAddress", "Email Address") || "").toLowerCase(),
-            phone: pick(row, "Phone", "PhoneNumber", "Phone Number") || "",
-            state: "GA",
-            licenseType,
-            licenseNumber: pick(row, "LicenseNumber", "License Number", "NPN") || "",
-            licenseStatus: "Active",
+          const city = pick(row, "City", "ResidenceCity", "BusinessCity") || "";
+          const npn = pick(row, "NPN", "npn", "LicenseNumberAlt") || "";
+          const licenseNumber = pick(row, "LicenseNumber", "License Number", "NPN") || "";
+          const firstName = pick(row, "FirstName", "First Name", "firstName") || "";
+          const lastName = pick(row, "LastName", "Last Name", "lastName") || "";
+          batch.push(buildRawRecord({
             source: "GA-DOI",
-          });
+            state: "GA",
+            rawFirstName: firstName,
+            rawLastName: lastName,
+            rawEmail: (pick(row, "Email", "EmailAddress", "Email Address") || "").toLowerCase(),
+            rawPhone: pick(row, "Phone", "PhoneNumber", "Phone Number") || "",
+            rawCity: city,
+            rawLicenseType: licenseType,
+            rawLineOfAuthority: "",
+            rawLicenseStatus: licenseStatus,
+            rawLicenseNumber: licenseNumber,
+            rawNpn: npn,
+          }));
         } catch { result.errors++; }
       }
 
-      if (batch.length > 0) await processBatch(batch, result);
+      if (batch.length > 0) await landRawBatch(batch, result);
     } else {
       console.info("[GA] Requires form submission — skipping");
     }
@@ -580,4 +731,60 @@ export async function scrapeAllStates(): Promise<ScrapeAllResult> {
     totalScraped: totalImported + totalUpdated,
     byState,
   };
+}
+
+function printSummary(result: ScrapeAllResult) {
+  const header = ["State", "Imported", "Updated", "Skipped", "Errors"];
+  const colWidth = 11;
+  console.log("\n──────────────────────────────────────────────");
+  console.log(" DOI Scraper Summary");
+  console.log("──────────────────────────────────────────────");
+  const formattedHeader = header
+    .map((label, idx) =>
+      idx === 0 ? label.padEnd(8) : label.padStart(colWidth)
+    )
+    .join(" ");
+  console.log(" " + formattedHeader);
+  console.log(" " + "─".repeat(formattedHeader.length));
+  for (const [state, stats] of Object.entries(result.byState)) {
+    const row = [
+      state.padEnd(8),
+      String(stats.imported).padStart(colWidth),
+      String(stats.updated).padStart(colWidth),
+      String(stats.skipped).padStart(colWidth),
+      String(stats.errors).padStart(colWidth),
+    ].join(" ");
+    console.log(" " + row);
+  }
+  console.log(" " + "─".repeat(formattedHeader.length));
+  const totals = [
+    "TOTAL".padEnd(8),
+    String(result.totalImported).padStart(colWidth),
+    String(result.totalUpdated).padStart(colWidth),
+    String(result.totalSkipped).padStart(colWidth),
+    String(result.totalErrors).padStart(colWidth),
+  ].join(" ");
+  console.log(" " + totals);
+  console.log("──────────────────────────────────────────────\n");
+}
+
+async function runStandalone() {
+  console.log("[scrape-doi] Starting standalone DOI scrape…");
+  const started = Date.now();
+  try {
+    const result = await scrapeAllStates();
+    printSummary(result);
+    const elapsed = ((Date.now() - started) / 1000).toFixed(1);
+    console.log(
+      `[scrape-doi] Finished in ${elapsed}s — imported=${result.totalImported} updated=${result.totalUpdated} skipped=${result.totalSkipped} errors=${result.totalErrors}`
+    );
+    process.exit(0);
+  } catch (err: any) {
+    console.error("[scrape-doi] Fatal error:", err?.message || err);
+    process.exit(1);
+  }
+}
+
+if (require.main === module) {
+  runStandalone();
 }

@@ -9,6 +9,8 @@ import {
   getA2PStatus,
   getAIFeatureStatus,
   getFolderMappings,
+  inspectLeadSnapshot,
+  inspectRecentTextThreads,
   getMetaStatus,
   getRecentImportErrors,
   getRecentSmsFailures,
@@ -34,6 +36,8 @@ const SUPPORT_TOOL_DEFS = [
   { name: "getRecentSmsFailures", description: "Inspect recent SMS delivery failures." },
   { name: "getFolderMappings", description: "Inspect folders, drip mappings, and folder AI settings." },
   { name: "getAIFeatureStatus", description: "Inspect AI feature availability for the tenant." },
+  { name: "inspectRecentTextThreads", description: "Inspect recent tenant text threads, SMS statuses, and delivery failures." },
+  { name: "inspectLeadSnapshot", description: "Inspect recent and high-priority tenant leads without mutating data." },
 ];
 
 const SUPPORT_TOOL_RUNNERS: Record<string, (userEmail: string) => Promise<any>> = {
@@ -44,6 +48,8 @@ const SUPPORT_TOOL_RUNNERS: Record<string, (userEmail: string) => Promise<any>> 
   getRecentSmsFailures,
   getFolderMappings,
   getAIFeatureStatus,
+  inspectRecentTextThreads,
+  inspectLeadSnapshot,
 };
 
 type HelpAssistantArgs = {
@@ -128,6 +134,16 @@ function compactSupportContextForPrompt(supportContext: any) {
       aiDialerBalance: Number(supportContext?.aiFeatures?.aiDialerBalance || 0),
       usageBalance: Number(supportContext?.aiFeatures?.usageBalance || 0),
     },
+    billingStatus: supportContext?.billingStatus
+      ? {
+          billingMode: truncateText(supportContext.billingStatus.billingMode, 24),
+          stripeCustomerPresent: Boolean(supportContext.billingStatus.stripeCustomerPresent),
+          hasActiveSubscription: Boolean(supportContext.billingStatus.hasActiveSubscription),
+          subscriptionStatus: truncateText(supportContext.billingStatus.subscriptionStatus, 32),
+          usageBalance: Number(supportContext.billingStatus.usageBalance || 0),
+          aiDialerBalance: Number(supportContext.billingStatus.aiDialerBalance || 0),
+        }
+      : null,
     leadAssistant: supportContext?.leadAssistant
       ? {
           totals: {
@@ -646,6 +662,9 @@ export async function runHelpAssistant({
                 "- Do NOT fall back to generic coaching if real account data is available.",
                 "- Be concise, practical, and assistant-like.",
                 "- For operational issues, still diagnose clearly and step by step when needed.",
+                "- You may explain A2P, phone numbers, leads, folders, drips, SMS/text thread failures, Meta, imports, billing/usage, and AI feature status using real account data.",
+                "- You may recommend fixes and tell the user what an admin can review, but do not claim A2P resubmission, email sending, billing changes, or other actions happened unless backend results explicitly confirm it.",
+                "- Do not promise unsupported actions or guaranteed A2P approval.",
               ].join("\n"),
             },
             {

@@ -6,6 +6,8 @@ import dbConnect from "@/lib/mongooseConnect";
 import Call from "@/models/Call";
 import CallLog from "@/models/CallLog";
 import Lead from "@/models/Lead";
+import User from "@/models/User";
+import { isAccountActivated } from "@/lib/billing/requireActivatedAccount";
 
 type KPI = {
   dials: number;
@@ -235,6 +237,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     | null;
   if (!session?.user?.email) return res.status(401).json({ error: "Unauthorized" });
   const userEmail = String(session.user.email).toLowerCase();
+  const user = await User.findOne({ email: userEmail }).lean();
+  if (!isAccountActivated(user)) {
+    return res.status(403).json({ error: "Account not activated" });
+  }
 
   const tz = typeof req.query.tz === "string" && req.query.tz ? req.query.tz : DEFAULT_TZ;
   const connectThreshold = Math.max(

@@ -108,6 +108,9 @@ export default async function handler(
     return res.status(200).json({ message: "SMS sent", sid });
   } catch (error: any) {
     console.error("❌ Outbound SMS error:", error);
+    if (error?.statusCode === 403 || error?.message === "Account not activated") {
+      return res.status(403).json({ message: "Account not activated" });
+    }
     return res
       .status(500)
       .json({

@@ -9,6 +9,7 @@ import PhoneNumber from "@/models/PhoneNumber";
 import { getClientForUser } from "@/lib/twilio/getClientForUser";
 import { sendA2PApprovedEmail, sendA2PDeclinedEmail } from "@/lib/email";
 import { chargeA2PApprovalIfNeeded } from "@/lib/billing/trackUsage";
+import { maybeHandleA2PFailure } from "@/lib/a2p/a2pFailureAutomation";
 
 /**
  * Determine a coarse registration status used in IA2PProfile.registrationStatus
@@ -471,6 +472,19 @@ export async function syncA2PForUser(passedUser: IUser) {
     await profile.save();
   } catch {
     // non-fatal
+  }
+
+  // Foundation-only AI support automation. This creates internal proposals and
+  // email drafts on rejection, but never resubmits A2P or sends email here.
+  if (justRejected) {
+    try {
+      await maybeHandleA2PFailure(
+        { userId, userEmail: user.email },
+        typeof profile.toObject === "function" ? profile.toObject() : profile
+      );
+    } catch (e: any) {
+      console.warn("[syncA2P] A2P failure automation skipped:", e?.message || e);
+    }
   }
 
   // --- Update User shadow fields + numbers

@@ -268,6 +268,7 @@ function covecrmBackfillWorker() {
           if (v !== null && v !== undefined && String(v).trim() !== "") hasAnyValue = true;
           rowObj[key] = v;
         }
+        if (rowObj["Phone 1"] && !rowObj.phone) rowObj.phone = rowObj["Phone 1"];
 
         if (!hasAnyValue) continue;
 
@@ -447,6 +448,7 @@ function _sendRowIfChanged(sheet, rowNumber) {
       if (v !== null && v !== undefined && String(v).trim() !== "") hasAnyValue = true;
       rowObj[key] = v;
     }
+    if (rowObj["Phone 1"] && !rowObj.phone) rowObj.phone = rowObj["Phone 1"];
 
     if (!hasAnyValue) return false;
 

@@ -7,6 +7,7 @@ import { getClientForUser } from "@/lib/twilio/getClientForUser";
 import { sendA2PApprovedEmail, sendA2PDeclinedEmail } from "@/lib/a2p/notifications";
 import { chargeA2PApprovalIfNeeded } from "@/lib/billing/trackUsage";
 import { resumeA2PAutomationForUserEmail } from "@/lib/a2p/resumeAutomation";
+import { ensureMessagingServiceA2PReadyForUser } from "@/lib/a2p/ensureMessagingServiceA2PReady";
 
 const BASE_URL = (process.env.NEXT_PUBLIC_BASE_URL || process.env.BASE_URL || "").replace(/\/$/, "");
 const CRON_SECRET = process.env.CRON_SECRET || "";
@@ -567,16 +568,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
      */
     if (baseClass.state === "approved") {
       try {
+        const readiness = await ensureMessagingServiceA2PReadyForUser(user, {
+          repair: true,
+          attachNumbers: true,
+          logPrefix: "a2p-sync-fast-path",
+        });
         await A2PProfile.updateOne(
           { _id: doc._id },
           {
             $set: {
-              messagingReady: true,
-              applicationStatus: "approved",
-              registrationStatus: doc.registrationStatus || "campaign_approved",
+              messagingReady: readiness.canSendSms,
+              applicationStatus: readiness.canSendSms ? "approved" : "pending",
+              registrationStatus: readiness.canSendSms ? "ready" : "campaign_submitted",
+              messagingServiceSid: readiness.messagingServiceSid,
+              ...(readiness.campaignSid ? { campaignSid: readiness.campaignSid, usa2pSid: readiness.campaignSid } : {}),
               lastSyncedAt: new Date(),
+              ...(!readiness.canSendSms ? { lastError: "Messaging Service is not A2P registered/verified." } : {}),
             },
-            $unset: { lastError: 1 },
+            ...(readiness.canSendSms ? { $unset: { lastError: 1 } } : {}),
           }
         );
 
@@ -610,7 +619,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           trustProductSid,
           campaignSid,
           messagingServiceSid,
-          state: "approved",
+          state: readiness.canSendSms ? "approved" : "pending",
+          serviceA2PRegistered: readiness.serviceA2PRegistered,
+          serviceUsecase: readiness.serviceUsecase,
+          senderPoolCount: readiness.senderPoolCount,
+          numbersAttached: readiness.numbersAttached,
+          numbersMissing: readiness.numbersMissing,
           missing: listMissingSids(doc),
           lastSyncedAt: new Date().toISOString(),
         });
@@ -711,16 +725,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     try {
       if (isCampaignApproved) {
+        const readiness = await ensureMessagingServiceA2PReadyForUser(user, {
+          repair: true,
+          attachNumbers: true,
+          logPrefix: "a2p-sync-approved",
+        });
         await A2PProfile.updateOne(
           { _id: doc._id },
           {
             $set: {
-              messagingReady: true,
-              applicationStatus: "approved",
-              registrationStatus: "campaign_approved",
+              messagingReady: readiness.canSendSms,
+              applicationStatus: readiness.canSendSms ? "approved" : "pending",
+              registrationStatus: readiness.canSendSms ? "ready" : "campaign_submitted",
+              messagingServiceSid: readiness.messagingServiceSid,
+              ...(readiness.campaignSid ? { campaignSid: readiness.campaignSid, usa2pSid: readiness.campaignSid } : {}),
               lastSyncedAt: new Date(),
+              ...(!readiness.canSendSms ? { lastError: "Messaging Service is not A2P registered/verified." } : {}),
             },
-            $unset: { lastError: 1, declinedReason: 1 },
+            ...(readiness.canSendSms
+              ? { $unset: { lastError: 1, declinedReason: 1 } }
+              : {}),
           }
         );
 
@@ -754,9 +778,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           trustProductSid,
           campaignSid,
           messagingServiceSid,
-          state: "approved",
+          state: readiness.canSendSms ? "approved" : "pending",
           brandStatus: brandStatus || null,
           campaignStatus: campStatus || null,
+          serviceA2PRegistered: readiness.serviceA2PRegistered,
+          serviceUsecase: readiness.serviceUsecase,
+          senderPoolCount: readiness.senderPoolCount,
+          numbersAttached: readiness.numbersAttached,
+          numbersMissing: readiness.numbersMissing,
           missing,
           recoveredBrandSid,
           lastSyncedAt: new Date().toISOString(),

@@ -25,6 +25,10 @@ export interface PlatformPromoResult {
   recordId?: string;
 }
 
+export interface PlatformPromoOptions {
+  stepIndex?: number;
+}
+
 // Platform-level sender email — used as the userEmail key for EmailSuppression checks
 const PLATFORM_USER_EMAIL = (
   process.env.PLATFORM_EMAIL || "platform@covecrm.com"
@@ -32,11 +36,13 @@ const PLATFORM_USER_EMAIL = (
 
 export async function sendPlatformPromo(
   doiLeadId: string,
-  payload: PlatformPromoPayload
+  payload: PlatformPromoPayload,
+  options: PlatformPromoOptions = {}
 ): Promise<PlatformPromoResult> {
   await mongooseConnect();
 
   const { subject, html, text } = payload;
+  const { stepIndex = 0 } = options;
 
   // Load the DOI lead
   const lead = await DOILead.findById(doiLeadId).lean() as any;
@@ -101,6 +107,7 @@ export async function sendPlatformPromo(
     senderId: senderRecord._id,
     senderEmail: senderRecord.fromEmail,
     subject,
+    stepIndex,
     status: "queued",
     platformSend: true,
   });

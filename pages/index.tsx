@@ -122,19 +122,32 @@ export default function Home() {
       <main className="min-h-screen text-slate-100 bg-gradient-to-b from-[#020617] via-[#0b1225] to-[#020617]">
 
         {/* Nav */}
-        <nav className="flex justify-between items-center py-5 px-6 border-b border-white/10 bg-[#020617]/60 backdrop-blur supports-[backdrop-filter]:bg-[#020617]/40 sticky top-0 z-40">
-          <div className="flex items-center space-x-2">
+        <nav className="flex justify-between items-center gap-4 py-5 px-6 border-b border-white/10 bg-[#020617]/60 backdrop-blur supports-[backdrop-filter]:bg-[#020617]/40 sticky top-0 z-40">
+          <div className="flex items-center space-x-2 shrink-0">
             <Image src="/logo.png" alt="Cove CRM Logo" width={32} height={32} />
             <h1 className="text-2xl font-bold text-blue-400">Cove CRM</h1>
           </div>
-          <div className="space-x-4">
+          <div className="hidden md:flex items-center gap-5 text-sm">
+            <Link href="/covecrm-features" className="text-slate-300 hover:text-white font-medium transition">
+              Features
+            </Link>
+            <Link href="/pricing" className="text-slate-300 hover:text-white font-medium transition">
+              Pricing
+            </Link>
+          </div>
+          <div className="flex items-center gap-3 sm:gap-4 shrink-0">
             <Link href="/login">
               <button className="text-sm text-slate-300 hover:text-white font-medium cursor-pointer transition">
                 Login
               </button>
             </Link>
+            <Link href="/kayla">
+              <button className="hidden sm:inline-flex text-sm text-cyan-200 hover:text-white font-medium cursor-pointer transition">
+                Meet Kayla
+              </button>
+            </Link>
             <Link href="/signup">
-              <button className="bg-blue-600 text-white px-5 py-2 rounded-lg font-semibold hover:bg-blue-500 text-sm cursor-pointer transition shadow-sm shadow-blue-600/20">
+              <button className="bg-blue-600 text-white px-5 py-2 rounded-xl font-semibold hover:bg-blue-500 text-sm cursor-pointer transition shadow-[0_0_24px_rgba(59,130,246,0.35)] border border-blue-500/50 hover:shadow-[0_0_36px_rgba(59,130,246,0.5)]">
                 Start Free Trial
               </button>
             </Link>
@@ -146,6 +159,12 @@ export default function Home() {
           <div className="flex items-center gap-3 max-w-6xl mx-auto">
             <span className="text-xs font-bold text-blue-400 uppercase tracking-wider shrink-0">New:</span>
             <div className="flex items-center gap-2 flex-wrap">
+              <Link
+                href="/kayla"
+                className="inline-flex items-center rounded-full bg-cyan-500/15 border border-cyan-400/25 px-3 py-1 text-xs font-medium text-cyan-200 hover:bg-cyan-500/20 transition"
+              >
+                Kayla AI Assistant
+              </Link>
               {WHATS_NEW.map((item) => (
                 <span
                   key={item}

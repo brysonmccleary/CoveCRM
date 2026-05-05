@@ -181,3 +181,78 @@ export async function getLeadAssistantSnapshot(userEmail: string) {
     })),
   };
 }
+
+export async function inspectRecentTextThreads(userEmail: string) {
+  await mongooseConnect();
+  const messages = await Message.find({ userEmail })
+    .sort({ createdAt: -1 })
+    .limit(40)
+    .lean();
+
+  const byLead = new Map<string, any[]>();
+  for (const message of messages) {
+    const leadId = String((message as any).leadId || "unknown");
+    const list = byLead.get(leadId) || [];
+    list.push(message);
+    byLead.set(leadId, list);
+  }
+
+  return Array.from(byLead.entries())
+    .slice(0, 8)
+    .map(([leadId, items]) => ({
+      leadId,
+      messageCount: items.length,
+      latestAt: items[0]?.createdAt || null,
+      latestStatus: items[0]?.status || "",
+      latestDirection: items[0]?.direction || "",
+      latestErrorCode: items.find((item) => item?.errorCode)?.errorCode || "",
+      latestErrorMessage: truncateText(items.find((item) => item?.errorMessage)?.errorMessage || "", 120),
+      recentMessages: items.slice(0, 3).map((item) => ({
+        direction: item?.direction || "",
+        status: item?.status || "",
+        errorCode: item?.errorCode || "",
+        text: truncateText(item?.text || item?.body || "", 160),
+        createdAt: item?.createdAt || null,
+      })),
+    }));
+}
+
+export async function inspectLeadSnapshot(userEmail: string) {
+  await mongooseConnect();
+  const [totalLeads, recentLeads, priorityLeads] = await Promise.all([
+    (Lead as any).countDocuments({ userEmail }),
+    (Lead as any)
+      .find({ userEmail })
+      .sort({ updatedAt: -1, createdAt: -1 })
+      .limit(8)
+      .lean(),
+    (Lead as any)
+      .find({ userEmail })
+      .sort({ aiPriorityScore: -1, updatedAt: -1 })
+      .limit(5)
+      .lean(),
+  ]);
+
+  const mapLead = (lead: any) => ({
+    id: String(lead._id),
+    name:
+      lead.name ||
+      [lead.firstName || lead["First Name"] || "", lead.lastName || lead["Last Name"] || ""].join(" ").trim() ||
+      "Unnamed lead",
+    phonePresent: Boolean(lead.phone || lead.Phone),
+    emailPresent: Boolean(lead.email || lead.Email),
+    folder: truncateText(lead.folderName || lead.folder || lead.folderId || "", 48),
+    status: truncateText(lead.status || lead.disposition || "", 32),
+    aiPriorityScore: typeof lead.aiPriorityScore === "number" ? lead.aiPriorityScore : 0,
+    aiPriorityCategory: lead.aiPriorityCategory || "",
+    sourceType: lead.sourceType || "",
+    updatedAt: lead.updatedAt || null,
+    createdAt: lead.createdAt || null,
+  });
+
+  return {
+    totalLeads,
+    recentLeads: recentLeads.map(mapLead),
+    priorityLeads: priorityLeads.map(mapLead),
+  };
+}

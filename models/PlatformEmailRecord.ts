@@ -15,6 +15,7 @@ const PlatformEmailRecordSchema = new Schema(
     senderId: { type: Schema.Types.ObjectId, ref: "PlatformSender", index: true },
     senderEmail: { type: String, required: true },
     subject: { type: String, required: true },
+    stepIndex: { type: Number, default: 0 },
     status: {
       type: String,
       enum: ["queued", "sent", "failed"],

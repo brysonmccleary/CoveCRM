@@ -99,6 +99,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(200).json(payload);
   } catch (err: any) {
     console.error("❌ /api/sms/send error:", err);
+    if (err?.statusCode === 403 || err?.message === "Account not activated") {
+      return res.status(403).json({ message: "Account not activated" });
+    }
     return res.status(500).json({ message: err?.message || "Failed to send SMS" });
   }
 }

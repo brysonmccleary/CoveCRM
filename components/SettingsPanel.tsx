@@ -6,6 +6,7 @@ import BillingPanel from "@/components/settings/BillingPanel";
 import toast from "react-hot-toast";
 import InvoicesPanel from "@/components/settings/InvoicesPanel";
 import EmailAccountPanel from "@/components/settings/EmailAccountPanel";
+import AISettingsPanel from "@/components/settings/AISettingsPanel";
 
 
 type DayKey = "Monday" | "Tuesday" | "Wednesday" | "Thursday" | "Friday";
@@ -217,6 +218,7 @@ export default function SettingsPanel() {
     { id: "profile", label: "Profile" },
     { id: "account", label: "Booking Settings" },
     { id: "notifications", label: "Notifications" },
+    { id: "ai-automation", label: "AI & Automation" },
     { id: "a2p", label: "A2P Verification" },
     { id: "billing", label: "Billing & Usage" },
     { id: "invoices", label: "Invoices" },
@@ -471,6 +473,8 @@ export default function SettingsPanel() {
             </button>
           </div>
         )}
+
+        {activeTab === "ai-automation" && <AISettingsPanel />}
 
         {activeTab === "a2p" && (
           <div>

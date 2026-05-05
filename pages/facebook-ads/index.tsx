@@ -1,9 +1,10 @@
 // pages/facebook-ads/index.tsx
 // Facebook Ads Manager — Full AI-powered ads management dashboard
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, Fragment } from "react";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/router";
 import DashboardLayout from "@/components/DashboardLayout";
+import AdWizard from "@/components/FacebookAds/AdWizard";
 import { GetServerSideProps } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/pages/api/auth/[...nextauth]";
@@ -17,10 +18,27 @@ interface Campaign {
   leadType: string;
   status: string;
   dailyBudget: number;
+  accountBudgetCap?: number;
   totalSpend: number;
   totalLeads: number;
   cpl: number;
+  appointments?: number;
+  sales?: number;
+  costPerAppointment?: number;
+  costPerSale?: number;
+  appointmentRate?: number;
+  closeRate?: number;
+  contactRate?: number;
   performanceScore: number | null;
+  leadQualityScore?: number | null;
+  creativeFatigue?: boolean;
+  lastDuplicatedAt?: string | null;
+  duplicatedFromCampaignId?: string | null;
+  autoPaused?: boolean;
+  creativeRefreshNeeded?: boolean;
+  recommendNewAd?: boolean;
+  recommendReplaceAd?: boolean;
+  lastRecommendationEmailAt?: string | null;
   performanceClass: string | null;
   lastScoredAt: string | null;
   lastActionReport: string | null;
@@ -29,6 +47,10 @@ interface Campaign {
   frequency: number;
   optOutRate: number;
   badNumberRate: number;
+  metaObjectHealth?: string | null;
+  metaSyncStatus?: string | null;
+  metaPublishStatus?: string | null;
+  metaLastSyncedAt?: string | null;
 }
 
 interface MetricsEntry {
@@ -61,72 +83,71 @@ interface DashboardStatRow {
   roi?: number;
 }
 
+interface GlobalPatternSummary {
+  leadType: string;
+  patternLabel: string;
+  status: string;
+  performanceScore: number;
+  confidenceScore: number;
+  bestHookSummary: string;
+  bestCtaSummary: string;
+  bestImageStyleSummary: string;
+  antiPatternSummaries?: string[];
+  sampleSizeBucket: string;
+}
+
 interface CampaignActionRow {
   campaignId: string;
-  actionType: "PAUSE" | "SCALE" | "FIX" | "DUPLICATE_TEST" | string;
+  actionType: "PAUSE" | "RESUME" | "SCALE" | "DECREASE" | "FIX" | "DUPLICATE_TEST" | "SET_BUDGET" | string;
   createdAt: string;
 }
 
-interface VariantDraft {
-  id: string;
-  creativeArchetype: string;
-  headline: string;
-  primaryText: string;
-  description: string;
-  cta: string;
-  imagePrompt: string;
-  imageUrl: string | null;
-  overlayTemplate: string;
-  overlayData: {
-    headline: string;
-    subheadline: string;
-    buttonLabels: string[];
-    ctaStrip: string;
-    benefitBullets: string[];
-  };
-  buttonStyle: string;
-  ageButtons?: string[] | null;
-  coverageButtons?: string[] | null;
+interface BudgetReallocationMove {
+  fromCampaignId: string;
+  toCampaignId: string;
+  amount: number;
 }
 
-interface CompleteAdPackage {
-  hook: string;
-  primaryText: string;
-  headline: string;
-  leadFormQuestions: string[];
-  thankYouPageText: string;
-  smsFollowUpScript: string;
-  callScript: string;
-  imagePrompt: string;
-  imageUrl?: string | null;
-  imageError?: string | null;
-  copySource?: "ai_generated" | "template_fallback";
-  creativeArchetype?: string;
-  overlayTemplate?: string;
-  overlayData?: {
-    headline: string;
-    subheadline: string;
-    buttonLabels: string[];
-    ctaStrip: string;
-    benefitBullets: string[];
-  };
-  variants?: VariantDraft[];
-  targeting: {
-    ageRange: string;
-    interests: string[];
-    behaviors: string[];
-    incomeLevel: string;
-    locations: string;
-  };
-  estimatedCpl: string;
-  reasoning: string;
+interface ActionHistoryEntry {
+  action: string;
+  reasoning?: string;
+  dryRun?: boolean;
+  oldBudget?: number;
+  newBudget?: number;
+  createdAt: string;
+  metaResponseSummary?: string;
 }
+
+interface AutoPreviewSummary {
+  processed: number;
+  scaled: number;
+  paused: number;
+  fixed: number;
+  duplicated: number;
+  decreased?: number;
+  skipped: number;
+  skippedReasons: Record<string, number>;
+  totalDailyBudget?: number;
+  accountBudgetCap?: number;
+  capReached?: boolean;
+  reallocationMovesProposed?: number;
+  reallocationMovesApplied?: number;
+  fatiguedCampaigns?: number;
+}
+
+type ActionHistoryState = Record<
+  string,
+  {
+    open: boolean;
+    loading: boolean;
+    rows: ActionHistoryEntry[];
+  }
+>;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 const LEAD_TYPE_LABELS: Record<string, string> = {
   final_expense: "Final Expense",
-  iul: "IUL",
   mortgage_protection: "Mortgage Protection",
   veteran: "Veteran",
   trucker: "Trucker",
@@ -138,6 +159,13 @@ const CLASS_COLORS: Record<string, string> = {
   MONITOR: "bg-yellow-900/40 text-yellow-300 border-yellow-700/40",
   FIX: "bg-orange-900/40 text-orange-300 border-orange-700/40",
   PAUSE: "bg-rose-900/40 text-rose-300 border-rose-700/40",
+};
+
+const PERFORMANCE_REASONING: Record<string, string> = {
+  SCALE: "Reason: CPL is below target and campaign is performing well.",
+  FIX: "Reason: CPL is above target or lead quality needs improvement.",
+  PAUSE: "Reason: Campaign is underperforming and should stop spending.",
+  DUPLICATE_TEST: "Reason: Campaign is strong enough to test a new variation.",
 };
 
 function ClassBadge({ cls }: { cls: string | null }) {
@@ -304,410 +332,6 @@ function MetricsModal({
           </button>
         </div>
       </div>
-    </div>
-  );
-}
-
-// ── Complete Ad Generator ─────────────────────────────────────────────────────
-
-function CompleteAdGenerator() {
-  const [leadType, setLeadType] = useState("final_expense");
-  const [agentName, setAgentName] = useState("");
-  const [agentState, setAgentState] = useState("");
-  const [tone, setTone] = useState("empathetic");
-  const [dailyBudget, setDailyBudget] = useState("25");
-  const [loading, setLoading] = useState(false);
-  const [posting, setPosting] = useState(false);
-  const [postResult, setPostResult] = useState<{ ok: boolean; folderName?: string; campaignName?: string; message?: string; error?: string } | null>(null);
-  const [result, setResult] = useState<CompleteAdPackage | null>(null);
-  const [error, setError] = useState("");
-  const [activeTab, setActiveTab] = useState("ad");
-
-  const handlePost = async () => {
-    if (!result) return;
-    setPosting(true);
-    setPostResult(null);
-    try {
-      const labelMap: Record<string, string> = {
-        final_expense: "Final Expense",
-        iul: "IUL",
-        mortgage_protection: "Mortgage Protection",
-        veteran: "Veteran",
-        trucker: "Trucker",
-      };
-      const campaignName = `${labelMap[leadType] || leadType} - ${agentState || "US"} Campaign`;
-      const r = await fetch("/api/facebook/publish-ad", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          leadType,
-          campaignName,
-          dailyBudgetCents: Math.round((parseFloat(dailyBudget) || 25) * 100),
-          headline: result.headline ?? "",
-          primaryText: result.primaryText ?? "",
-          description: "",
-          cta: "LEARN_MORE",
-          imagePrompt: result.imagePrompt ?? "",
-          imageUrl: result.imageUrl ?? "",
-          creativeArchetype: result.creativeArchetype ?? "",
-        }),
-      });
-      const j = await r.json();
-      setPostResult({ ok: !!j.ok, folderName: j.folderName, campaignName: j.campaignName, message: j.message, error: j.error });
-    } catch (e: any) {
-      setPostResult({ ok: false, error: e.message || "Request failed" });
-    } finally {
-      setPosting(false);
-    }
-  };
-
-  const generate = async () => {
-    if (!agentName || !agentState) {
-      setError("Agent name and state are required.");
-      return;
-    }
-    setLoading(true);
-    setError("");
-    setResult(null);
-    try {
-      const r = await fetch("/api/facebook/generate-ad", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ leadType, agentName, agentState, tone, mode: "complete" }),
-      });
-      const j = await r.json();
-      if (!r.ok) throw new Error(j.error || "Generation failed");
-      setResult((j?.draft || j) as CompleteAdPackage);
-      setActiveTab("ad");
-    } catch (e: any) {
-      setError(e.message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const tabs = [
-    { id: "ad", label: "Ad Copy" },
-    { id: "creative", label: "Creative Layout" },
-    { id: "form", label: "Lead Form" },
-    { id: "followup", label: "Follow-Up" },
-    { id: "image", label: "Image Prompt" },
-    { id: "targeting", label: "Targeting" },
-  ];
-
-  return (
-    <div className="bg-[#0f172a] border border-white/10 rounded-xl p-6">
-      <h2 className="text-lg font-semibold text-white mb-4">Complete Ad Package Generator</h2>
-      <p className="text-xs text-gray-400 mb-5">
-        Generate a full ad system with native CoveCRM routing, Facebook Instant Form setup, and system-provided creative direction.
-      </p>
-
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
-        <div>
-          <label className="text-xs text-gray-400 block mb-1">Lead Type</label>
-          <select
-            value={leadType}
-            onChange={(e) => setLeadType(e.target.value)}
-            className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white"
-          >
-            {Object.entries(LEAD_TYPE_LABELS).map(([v, l]) => (
-              <option key={v} value={v} className="bg-[#0f172a]">{l}</option>
-            ))}
-          </select>
-        </div>
-        <div>
-          <label className="text-xs text-gray-400 block mb-1">Your Name</label>
-          <input
-            value={agentName}
-            onChange={(e) => setAgentName(e.target.value)}
-            placeholder="e.g. John Smith"
-            className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-600"
-          />
-        </div>
-        <div>
-          <label className="text-xs text-gray-400 block mb-1">State</label>
-          <input
-            value={agentState}
-            onChange={(e) => setAgentState(e.target.value)}
-            placeholder="e.g. Texas"
-            className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-600"
-          />
-        </div>
-        <div>
-          <label className="text-xs text-gray-400 block mb-1">Tone</label>
-          <select
-            value={tone}
-            onChange={(e) => setTone(e.target.value)}
-            className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white"
-          >
-            <option value="empathetic" className="bg-[#0f172a]">Empathetic</option>
-            <option value="urgent" className="bg-[#0f172a]">Urgent</option>
-            <option value="conversational" className="bg-[#0f172a]">Conversational</option>
-            <option value="authoritative" className="bg-[#0f172a]">Authoritative</option>
-          </select>
-        </div>
-      </div>
-
-      {/* Daily Budget */}
-      <div className="mb-4">
-        <label className="text-xs text-gray-400 block mb-1">Daily Budget ($)</label>
-        <input
-          type="number"
-          min="5"
-          value={dailyBudget}
-          onChange={(e) => setDailyBudget(e.target.value)}
-          className="w-32 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white"
-        />
-      </div>
-
-      {error && <p className="text-rose-400 text-sm mb-3">{error}</p>}
-
-      <button
-        onClick={generate}
-        disabled={loading}
-        className="px-5 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium disabled:opacity-50 mb-5"
-      >
-        {loading ? "Generating with GPT-4o…" : "Generate Complete Ad Package"}
-      </button>
-
-      {result && (
-        <div>
-          {/* Reasoning */}
-          {result.reasoning && (
-            <div className="bg-indigo-900/20 border border-indigo-500/20 rounded-lg px-4 py-3 mb-4">
-              <p className="text-xs text-indigo-300 font-semibold mb-1">Strategy Reasoning</p>
-              <p className="text-sm text-indigo-100">{result.reasoning}</p>
-            </div>
-          )}
-
-          {/* Tabs */}
-          <div className="flex gap-1 mb-4 flex-wrap">
-            {tabs.map((t) => (
-              <button
-                key={t.id}
-                onClick={() => setActiveTab(t.id)}
-                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition ${
-                  activeTab === t.id
-                    ? "bg-indigo-600 text-white"
-                    : "bg-white/5 text-gray-400 hover:text-white"
-                }`}
-              >
-                {t.label}
-              </button>
-            ))}
-          </div>
-
-          {/* Tab Content */}
-          <div className="bg-white/5 rounded-lg p-4 text-sm text-gray-200">
-            {activeTab === "ad" && (
-              <div className="space-y-4">
-                {result.imageUrl && (
-                  <div>
-                    <p className="text-xs text-gray-400 font-semibold mb-2">SYSTEM-PROVIDED CREATIVE ASSET</p>
-                    <img src={result.imageUrl} alt="Generated ad image" className="rounded-lg max-w-xs w-full object-cover" />
-                  </div>
-                )}
-                {result.imageError && (
-                  <p className="text-xs text-yellow-500">Image generation failed: {result.imageError}</p>
-                )}
-                {result.creativeArchetype && (
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-gray-500">Layout:</span>
-                    <span className="text-xs bg-indigo-900/40 text-indigo-300 border border-indigo-700/30 px-2 py-0.5 rounded-full">
-                      {result.creativeArchetype.replace(/_/g, " ")}
-                    </span>
-                    {result.copySource && (
-                      <span className={`text-xs px-2 py-0.5 rounded-full ${result.copySource === "ai_generated" ? "bg-emerald-900/30 text-emerald-400 border border-emerald-700/30" : "bg-gray-800 text-gray-500 border border-gray-700"}`}>
-                        {result.copySource === "ai_generated" ? "AI Enhanced" : "Template"}
-                      </span>
-                    )}
-                  </div>
-                )}
-                <div>
-                  <p className="text-xs text-gray-400 font-semibold mb-1">HOOK</p>
-                  <p className="text-white font-medium">{result.hook}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-gray-400 font-semibold mb-1">HEADLINE</p>
-                  <p className="text-white">{result.headline}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-gray-400 font-semibold mb-1">PRIMARY TEXT</p>
-                  <p className="text-gray-200 whitespace-pre-line">{result.primaryText}</p>
-                </div>
-                <div className="text-xs text-gray-500">Est. CPL: {result.estimatedCpl}</div>
-                <p className="text-xs text-gray-400">CoveCRM provides the creative asset or creative direction for this package. Manual image upload is not part of the normal flow.</p>
-              </div>
-            )}
-
-            {activeTab === "creative" && (
-              <div className="space-y-5">
-                {/* Overlay layout for primary variant */}
-                {result.overlayData && (
-                  <div className="space-y-2">
-                    <p className="text-xs text-gray-400 font-semibold">PRIMARY LAYOUT — {result.creativeArchetype?.replace(/_/g, " ") ?? "Auto"}</p>
-                    <div className="bg-[#0f172a] border border-white/10 rounded-lg p-3 space-y-2">
-                      <p className="text-white font-semibold text-sm">{result.overlayData.headline}</p>
-                      <p className="text-gray-400 text-xs">{result.overlayData.subheadline}</p>
-                      {result.overlayData.buttonLabels.length > 0 && (
-                        <div className="flex flex-wrap gap-1.5 mt-1">
-                          {result.overlayData.buttonLabels.map((label: string) => (
-                            <span key={label} className="text-xs bg-indigo-700/60 text-indigo-200 px-2.5 py-1 rounded-full">{label}</span>
-                          ))}
-                        </div>
-                      )}
-                      {result.overlayData.benefitBullets.length > 0 && (
-                        <ul className="space-y-0.5 mt-1">
-                          {result.overlayData.benefitBullets.map((b: string) => (
-                            <li key={b} className="text-xs text-gray-400 flex items-start gap-1"><span className="text-green-500 shrink-0">✓</span>{b}</li>
-                          ))}
-                        </ul>
-                      )}
-                      <p className="text-xs text-indigo-400 font-medium mt-1">{result.overlayData.ctaStrip}</p>
-                    </div>
-                  </div>
-                )}
-
-                {/* 3 variants */}
-                {result.variants && result.variants.length > 0 && (
-                  <div className="space-y-3">
-                    <p className="text-xs text-gray-400 font-semibold">CREATIVE VARIANTS ({result.variants.length})</p>
-                    {result.variants.map((v: VariantDraft, i: number) => (
-                      <div key={v.id} className="bg-[#0f172a] border border-white/10 rounded-lg p-3 space-y-1.5">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="text-xs text-gray-500">Variant {i + 1}</span>
-                          <span className="text-xs bg-indigo-900/30 text-indigo-400 border border-indigo-700/20 px-2 py-0.5 rounded-full">
-                            {v.creativeArchetype.replace(/_/g, " ")}
-                          </span>
-                        </div>
-                        <p className="text-white text-sm font-medium">{v.headline}</p>
-                        <p className="text-gray-400 text-xs leading-relaxed line-clamp-3">{v.primaryText}</p>
-                        {v.overlayData.buttonLabels.length > 0 && (
-                          <div className="flex flex-wrap gap-1">
-                            {v.overlayData.buttonLabels.map((label: string) => (
-                              <span key={label} className="text-[10px] bg-white/10 text-gray-300 px-2 py-0.5 rounded-full">{label}</span>
-                            ))}
-                          </div>
-                        )}
-                        <p className="text-xs text-indigo-400">{v.overlayData.ctaStrip}</p>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-
-            {activeTab === "form" && (
-              <div className="space-y-3">
-                <div className="bg-blue-950/30 border border-blue-800/30 rounded-lg px-3 py-2">
-                  <p className="text-xs text-blue-200">Facebook Instant Form Setup: copy these fields directly into your Meta lead form.</p>
-                </div>
-                <div>
-                  <p className="text-xs text-gray-400 font-semibold mb-2">LEAD FORM QUESTIONS</p>
-                  <ol className="list-decimal list-inside space-y-2">
-                    {(result.leadFormQuestions || []).map((q, i) => (
-                      <li key={i} className="text-gray-200">{q}</li>
-                    ))}
-                  </ol>
-                </div>
-                <div className="mt-4">
-                  <p className="text-xs text-gray-400 font-semibold mb-1">THANK YOU PAGE TEXT</p>
-                  <p className="text-gray-200">{result.thankYouPageText}</p>
-                </div>
-              </div>
-            )}
-
-            {activeTab === "followup" && (
-              <div className="space-y-4">
-                <div>
-                  <p className="text-xs text-gray-400 font-semibold mb-1">SMS FOLLOW-UP (send within 5 min)</p>
-                  <div className="bg-green-900/20 border border-green-700/30 rounded-lg px-3 py-2">
-                    <p className="text-green-200">{result.smsFollowUpScript}</p>
-                    <p className="text-xs text-gray-500 mt-1">{result.smsFollowUpScript?.length || 0} chars</p>
-                  </div>
-                </div>
-                <div>
-                  <p className="text-xs text-gray-400 font-semibold mb-1">CALL SCRIPT OPENER</p>
-                  <div className="bg-blue-900/20 border border-blue-700/30 rounded-lg px-3 py-2">
-                    <p className="text-blue-200">{result.callScript}</p>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {activeTab === "image" && (
-              <div>
-                <p className="text-xs text-gray-400 font-semibold mb-2">IMAGE GENERATION PROMPT</p>
-                <div className="bg-purple-900/20 border border-purple-700/30 rounded-lg px-3 py-2">
-                  <p className="text-purple-200">{result.imagePrompt}</p>
-                </div>
-                <p className="text-xs text-gray-500 mt-2">
-                  Use this prompt in Midjourney, DALL-E 3, or Adobe Firefly.
-                </p>
-              </div>
-            )}
-
-            {activeTab === "targeting" && (
-              <div className="space-y-2">
-                {[
-                  { label: "Age Range", val: result.targeting?.ageRange },
-                  { label: "Income Level", val: result.targeting?.incomeLevel },
-                  { label: "Locations", val: result.targeting?.locations },
-                ].map(({ label, val }) => (
-                  <div key={label}>
-                    <span className="text-xs text-gray-400">{label}: </span>
-                    <span className="text-gray-200">{val}</span>
-                  </div>
-                ))}
-                <div>
-                  <p className="text-xs text-gray-400 mb-1">Interests:</p>
-                  <div className="flex flex-wrap gap-1">
-                    {(result.targeting?.interests || []).map((i) => (
-                      <span key={i} className="text-xs bg-white/10 px-2 py-0.5 rounded-full text-gray-300">{i}</span>
-                    ))}
-                  </div>
-                </div>
-                <div>
-                  <p className="text-xs text-gray-400 mb-1">Behaviors:</p>
-                  <div className="flex flex-wrap gap-1">
-                    {(result.targeting?.behaviors || []).map((b) => (
-                      <span key={b} className="text-xs bg-white/10 px-2 py-0.5 rounded-full text-gray-300">{b}</span>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* Post Ad Button — inside result div */}
-          <div className="mt-5 pt-4 border-t border-white/10">
-            <div className="flex items-center gap-3 flex-wrap">
-              <button
-                onClick={handlePost}
-                disabled={posting}
-                className="px-5 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold disabled:opacity-50 transition"
-              >
-                {posting ? "Creating Campaign…" : "Post Ad & Create CRM Folder"}
-              </button>
-              <p className="text-xs text-gray-500">Creates a campaign record + CRM folder for lead routing. Incoming leads route into <span className="font-mono">FB: {`${LEAD_TYPE_LABELS[leadType] || leadType} - ${agentState || "US"} Campaign`}</span>.</p>
-            </div>
-            {postResult && (
-              <div className={`mt-3 rounded-lg px-4 py-3 text-sm ${postResult.ok ? "bg-emerald-900/30 border border-emerald-700/40 text-emerald-200" : "bg-rose-900/30 border border-rose-700/40 text-rose-300"}`}>
-                {postResult.ok ? (
-                  <>
-                    <p className="font-semibold">Campaign created!</p>
-                    <p className="text-xs mt-1 opacity-80">CRM Folder: <span className="font-mono">{postResult.folderName}</span></p>
-                    <p className="text-xs opacity-70 mt-0.5 leading-relaxed">{postResult.message}</p>
-                    <p className="text-xs text-yellow-400/80 mt-1.5">Note: Meta live publishing is pending — connect your Facebook Page in the Leads tab to route incoming leads automatically.</p>
-                  </>
-                ) : (
-                  <p>{postResult.error || "Failed to create campaign."}</p>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
-      )}
     </div>
   );
 }
@@ -1211,17 +835,51 @@ export default function FacebookAdsPage() {
   const [hasSub, setHasSub] = useState<boolean | null>(null);
   const [activeSection, setActiveSection] = useState<"performance" | "market" | "generator" | "automode" | "attribution">("performance");
   const [latestActions, setLatestActions] = useState<Record<string, CampaignActionRow>>({});
-  const [actionModal, setActionModal] = useState<{ campaign: Campaign; actionType: "PAUSE" | "SCALE" | "FIX" | "DUPLICATE_TEST" } | null>(null);
+  const [actionModal, setActionModal] = useState<{ campaign: Campaign; actionType: "PAUSE" | "RESUME" | "SCALE" | "DECREASE" | "FIX" | "DUPLICATE_TEST" | "SET_BUDGET" } | null>(null);
   const [duplicateBudget, setDuplicateBudget] = useState("");
   const [pauseOriginalAfterDuplicate, setPauseOriginalAfterDuplicate] = useState(false);
-  const [executingAction, setExecutingAction] = useState(false);
+  const [executingAction, setExecutingAction] = useState<null | "dry" | "real">(null);
+  const [actionResult, setActionResult] = useState<{ message: string; reasoning?: string } | null>(null);
   const [savingAutomationId, setSavingAutomationId] = useState<string | null>(null);
+  const [historyState, setHistoryState] = useState<ActionHistoryState>({});
+  const [autoPreviewSummary, setAutoPreviewSummary] = useState<AutoPreviewSummary | null>(null);
+  const [autoPreviewLoading, setAutoPreviewLoading] = useState(false);
+  const [reallocationPlan, setReallocationPlan] = useState<BudgetReallocationMove[]>([]);
+  const [reallocationModalOpen, setReallocationModalOpen] = useState(false);
+  const [reallocationLoading, setReallocationLoading] = useState(false);
+  const [reallocationApplying, setReallocationApplying] = useState(false);
+  const [accountCapInput, setAccountCapInput] = useState("");
+  const [savingAccountCap, setSavingAccountCap] = useState(false);
+  const [generatingCreativeId, setGeneratingCreativeId] = useState<string | null>(null);
+  const [globalPatterns, setGlobalPatterns] = useState<GlobalPatternSummary[]>([]);
 
   // Header metric totals
   const totalSpend = campaigns.reduce((s, c) => s + (c.totalSpend || 0), 0);
   const totalLeads = campaigns.reduce((s, c) => s + (c.totalLeads || 0), 0);
   const avgCpl = totalLeads > 0 ? totalSpend / totalLeads : 0;
   const activeCampaigns = campaigns.filter((c) => c.status === "active").length;
+  const currentTotalBudget = campaigns.reduce((sum, c) => sum + (c.dailyBudget || 0), 0);
+  const currentAccountCap =
+    campaigns.reduce((cap, c) => (cap > 0 ? cap : Number(c.accountBudgetCap || 0)), 0) || 0;
+  const previewTotalBudget = autoPreviewSummary?.totalDailyBudget ?? currentTotalBudget;
+  const previewAccountCap = autoPreviewSummary?.accountBudgetCap ?? currentAccountCap;
+  const previewCapReached =
+    autoPreviewSummary?.capReached ??
+    (previewAccountCap > 0 && previewTotalBudget >= previewAccountCap);
+  const reallocationProposed = autoPreviewSummary?.reallocationMovesProposed ?? 0;
+  const reallocationApplied = autoPreviewSummary?.reallocationMovesApplied ?? 0;
+  const capStatusLabel = !previewAccountCap
+    ? "No cap set"
+    : previewCapReached
+    ? "Cap reached"
+    : "Under cap";
+  const capStatusAccent = !previewAccountCap
+    ? "text-gray-300"
+    : previewCapReached
+    ? "text-rose-300"
+    : "text-emerald-300";
+  const decreasedCount = autoPreviewSummary?.decreased ?? reallocationApplied;
+  const fatiguedCount = autoPreviewSummary?.fatiguedCampaigns ?? 0;
 
   const loadCampaigns = useCallback(async () => {
     try {
@@ -1256,6 +914,16 @@ export default function FacebookAdsPage() {
     }
   }, []);
 
+  const loadGlobalPatterns = useCallback(async () => {
+    try {
+      const r = await fetch("/api/facebook/global-intelligence?limit=6");
+      const j = await r.json();
+      if (r.ok) setGlobalPatterns(j.patterns || []);
+    } catch {
+      setGlobalPatterns([]);
+    }
+  }, []);
+
   useEffect(() => {
     if (status === "unauthenticated") {
       router.push("/auth/signin");
@@ -1264,31 +932,94 @@ export default function FacebookAdsPage() {
     if (status === "authenticated") {
       checkSub();
       loadCampaigns();
+      loadGlobalPatterns();
     }
-  }, [status, router, checkSub, loadCampaigns]);
+  }, [status, router, checkSub, loadCampaigns, loadGlobalPatterns]);
 
   useEffect(() => {
     loadLatestActions(campaigns.map((c) => c._id));
   }, [campaigns, loadLatestActions]);
 
-  const openActionModal = (campaign: Campaign, actionType: "PAUSE" | "SCALE" | "FIX" | "DUPLICATE_TEST") => {
+  useEffect(() => {
+    if (savingAccountCap) return;
+    if (currentAccountCap > 0) {
+      setAccountCapInput(String(currentAccountCap));
+    } else {
+      setAccountCapInput("");
+    }
+  }, [currentAccountCap, savingAccountCap]);
+
+  const openActionModal = (
+    campaign: Campaign,
+    actionType: "PAUSE" | "RESUME" | "SCALE" | "DECREASE" | "FIX" | "DUPLICATE_TEST" | "SET_BUDGET"
+  ) => {
     setActionModal({ campaign, actionType });
     setDuplicateBudget(String(campaign.dailyBudget || ""));
     setPauseOriginalAfterDuplicate(false);
   };
 
-  const executeCampaignAction = async () => {
+  const handleActionHistoryToggle = async (campaignId: string) => {
+    const current = historyState[campaignId];
+    const willOpen = !(current?.open);
+    setHistoryState((prev) => ({
+      ...prev,
+      [campaignId]: {
+        open: willOpen,
+        loading: willOpen ? current?.loading || false : false,
+        rows: current?.rows || [],
+      },
+    }));
+
+    if (!willOpen) return;
+    if (current?.rows?.length) return;
+
+    setHistoryState((prev) => ({
+      ...prev,
+      [campaignId]: { ...(prev[campaignId] || { rows: [] }), open: true, loading: true },
+    }));
+
+    try {
+      const r = await fetch(`/api/facebook/action-history?campaignId=${encodeURIComponent(campaignId)}`);
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || "Failed to load action history");
+      setHistoryState((prev) => ({
+        ...prev,
+        [campaignId]: {
+          open: true,
+          loading: false,
+          rows: Array.isArray(j.history) ? j.history : [],
+        },
+      }));
+    } catch (e: any) {
+      alert(e.message || "Failed to load action history");
+      setHistoryState((prev) => ({
+        ...prev,
+        [campaignId]: {
+          ...(prev[campaignId] || { rows: [] }),
+          open: true,
+          loading: false,
+        },
+      }));
+    }
+  };
+
+  const executeCampaignAction = async (dryRun: boolean) => {
     if (!actionModal) return;
-    setExecutingAction(true);
+    setExecutingAction(dryRun ? "dry" : "real");
+    setActionResult(null);
     try {
       const body: Record<string, any> = {
         campaignId: actionModal.campaign._id,
         actionType: actionModal.actionType,
+        dryRun,
       };
 
       if (actionModal.actionType === "FIX" || actionModal.actionType === "DUPLICATE_TEST") {
         body.duplicateBudget = Number(duplicateBudget) || actionModal.campaign.dailyBudget || 0;
         body.pauseOriginalAfterDuplicate = pauseOriginalAfterDuplicate;
+      }
+      if (actionModal.actionType === "SET_BUDGET") {
+        body.customBudget = Number(duplicateBudget) || actionModal.campaign.dailyBudget || 0;
       }
 
       const r = await fetch("/api/facebook/execute-action", {
@@ -1306,11 +1037,15 @@ export default function FacebookAdsPage() {
         }));
       }
 
+      if (j.message) {
+        setActionResult({ message: j.message, reasoning: j.reasoning });
+      }
+
       setActionModal(null);
     } catch (e: any) {
       alert(e.message || "Failed to execute action");
     } finally {
-      setExecutingAction(false);
+      setExecutingAction(null);
     }
   };
 
@@ -1338,6 +1073,133 @@ export default function FacebookAdsPage() {
       alert(e.message || "Failed to update automation");
     } finally {
       setSavingAutomationId(null);
+    }
+  };
+
+  const saveAccountCap = async () => {
+    const numericCap =
+      accountCapInput.trim() === "" ? 0 : Number(accountCapInput);
+    if (!Number.isFinite(numericCap) || numericCap < 0) {
+      alert("Enter a valid non-negative number for the account cap.");
+      return;
+    }
+    setSavingAccountCap(true);
+    try {
+      const r = await fetch("/api/facebook/auto-optimize", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ accountBudgetCap: Number(numericCap.toFixed(2)) }),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || "Failed to save cap");
+      setAccountCapInput(j.accountBudgetCap > 0 ? String(j.accountBudgetCap) : "");
+      loadCampaigns();
+    } catch (e: any) {
+      alert(e.message || "Failed to save cap");
+    } finally {
+      setSavingAccountCap(false);
+    }
+  };
+
+  const runAutoPreview = async () => {
+    setAutoPreviewLoading(true);
+    try {
+      const r = await fetch("/api/facebook/auto-optimize", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ preview: true }),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || "Failed to run preview");
+      setAutoPreviewSummary(j);
+    } catch (e: any) {
+      alert(e.message || "Failed to run preview");
+    } finally {
+      setAutoPreviewLoading(false);
+    }
+  };
+
+  const openReallocationPreview = async () => {
+    setReallocationLoading(true);
+    try {
+      const r = await fetch("/api/facebook/auto-optimize", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ previewReallocation: true }),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || "Failed to load reallocation preview");
+      setReallocationPlan(Array.isArray(j.plan) ? j.plan : []);
+      setReallocationModalOpen(true);
+    } catch (e: any) {
+      alert(e.message || "Failed to load reallocation preview");
+    } finally {
+      setReallocationLoading(false);
+    }
+  };
+
+  const applyReallocationPlan = async () => {
+    setReallocationApplying(true);
+    try {
+      const r = await fetch("/api/facebook/auto-optimize", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ applyReallocation: true }),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || "Failed to apply reallocation");
+      setActionResult({ message: j.message || "Budget reallocation applied." });
+      setReallocationModalOpen(false);
+      setReallocationPlan([]);
+      loadCampaigns();
+    } catch (e: any) {
+      alert(e.message || "Failed to apply reallocation");
+    } finally {
+      setReallocationApplying(false);
+    }
+  };
+
+  const handleGenerateCreative = async (
+    campaign: Campaign,
+    mode: "refresh" | "new" | "replace" = "refresh"
+  ) => {
+    setGeneratingCreativeId(campaign._id);
+    try {
+      const r = await fetch("/api/facebook/generate-ad", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          leadType: campaign.leadType,
+          location: (campaign as any).location || "",
+          mode,
+        }),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || "Failed to generate creative");
+      setActionResult({
+        message:
+          mode === "new"
+            ? `Started a new ad concept for ${campaign.campaignName}.`
+            : mode === "replace"
+            ? `Replacement creative ideas generated for ${campaign.campaignName}.`
+            : `New creative ideas generated for ${campaign.campaignName}.`,
+      });
+      setCampaigns((prev) =>
+        prev.map((item) =>
+          item._id === campaign._id
+            ? {
+                ...item,
+                creativeRefreshNeeded: mode === "refresh" ? false : item.creativeRefreshNeeded,
+                recommendNewAd: mode === "new" ? false : item.recommendNewAd,
+                recommendReplaceAd: mode === "replace" ? false : item.recommendReplaceAd,
+              }
+            : item
+        )
+      );
+    } catch (e: any) {
+      alert(e.message || "Failed to generate creative");
+    } finally {
+      setGeneratingCreativeId(null);
     }
   };
 
@@ -1431,6 +1293,175 @@ export default function FacebookAdsPage() {
           ))}
         </div>
 
+        {globalPatterns.length > 0 && (
+          <div className="bg-[#0f172a] border border-white/10 rounded-xl p-5">
+            <div className="flex items-center justify-between flex-wrap gap-3 mb-4">
+              <div>
+                <h2 className="text-base font-semibold text-white">Global Winners This Week</h2>
+                <p className="text-xs text-gray-400 mt-0.5">
+                  Anonymized aggregate patterns CoveCRM is seeing across active Facebook campaigns.
+                </p>
+              </div>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              {globalPatterns.slice(0, 3).map((pattern, index) => (
+                <div key={`${pattern.leadType}-${pattern.patternLabel}-${index}`} className="bg-white/5 rounded-lg p-4 border border-white/10">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-xs uppercase text-gray-400">{pattern.leadType.replace(/_/g, " ")}</p>
+                    <span className="text-[11px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-200 border border-emerald-400/20">
+                      {pattern.status}
+                    </span>
+                  </div>
+                  <p className="text-sm font-semibold text-white mt-2">{pattern.patternLabel}</p>
+                  <p className="text-xs text-gray-300 mt-2">Hook: {pattern.bestHookSummary || "Direct benefit"}</p>
+                  <p className="text-xs text-gray-400 mt-1">Image: {pattern.bestImageStyleSummary || "Native lead-gen creative"}</p>
+                  <div className="flex items-center gap-2 mt-3 text-[11px] text-gray-400">
+                    <span>Score {Math.round(pattern.performanceScore || 0)}</span>
+                    <span>Confidence {Math.round(pattern.confidenceScore || 0)}</span>
+                    <span>{pattern.sampleSizeBucket}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {actionResult && (
+          <div className="bg-emerald-900/40 border border-emerald-500/30 text-emerald-100 text-sm rounded-xl px-4 py-3 flex items-start justify-between gap-3">
+            <div>
+              <p className="font-semibold">{actionResult.message}</p>
+              {actionResult.reasoning && (
+                <p className="text-xs text-emerald-200 mt-1">{actionResult.reasoning}</p>
+              )}
+            </div>
+            <button
+              onClick={() => setActionResult(null)}
+              className="text-emerald-200 text-xs hover:text-white"
+            >
+              ×
+            </button>
+          </div>
+        )}
+
+        <div className="bg-[#0f172a] border border-white/10 rounded-xl p-5 flex flex-col gap-4">
+          <div className="flex items-center justify-between flex-wrap gap-3">
+            <div>
+              <h2 className="text-base font-semibold text-white">AI Automation Preview</h2>
+              <p className="text-xs text-gray-400 mt-0.5">
+                Simulate Auto-Optimize before the cron runs to see what actions would fire.
+              </p>
+            </div>
+            <button
+              onClick={runAutoPreview}
+              disabled={autoPreviewLoading}
+              className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-sm disabled:opacity-50"
+            >
+              {autoPreviewLoading ? "Running Preview…" : "Run Auto-Optimize Preview"}
+            </button>
+          </div>
+          {autoPreviewSummary ? (
+            <>
+              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+                {[
+                  { label: "Processed", value: autoPreviewSummary.processed },
+                  { label: "Scaled", value: autoPreviewSummary.scaled },
+                  { label: "Paused", value: autoPreviewSummary.paused },
+                  { label: "Fixed", value: autoPreviewSummary.fixed },
+                  { label: "Duplicated", value: autoPreviewSummary.duplicated },
+                  { label: "Skipped", value: autoPreviewSummary.skipped },
+                ].map((item) => (
+                  <div key={item.label} className="bg-white/5 rounded-lg p-3 text-center">
+                    <p className="text-xs uppercase text-gray-400">{item.label}</p>
+                    <p className="text-lg font-semibold text-white">{item.value}</p>
+                  </div>
+                ))}
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                <div className="bg-white/5 rounded-lg p-3">
+                  <p className="text-xs uppercase text-gray-400">Total Daily Budget</p>
+                  <p className="text-lg font-semibold text-white">${previewTotalBudget.toFixed(2)}</p>
+                </div>
+                <div className="bg-white/5 rounded-lg p-3">
+                  <p className="text-xs uppercase text-gray-400">Account Budget Cap</p>
+                  <p className="text-lg font-semibold text-white">
+                    {previewAccountCap ? `$${previewAccountCap.toFixed(2)}` : "—"}
+                  </p>
+                </div>
+                <div className="bg-white/5 rounded-lg p-3">
+                  <p className="text-xs uppercase text-gray-400">Cap Status</p>
+                  <p className={`text-lg font-semibold ${capStatusAccent}`}>{capStatusLabel}</p>
+                </div>
+                {(reallocationProposed > 0 || reallocationApplied > 0) && (
+                  <div className="bg-white/5 rounded-lg p-3">
+                    <p className="text-xs uppercase text-gray-400">Reallocation Moves</p>
+                    <p className="text-lg font-semibold text-white">
+                      {reallocationProposed} proposed · {reallocationApplied} applied
+                    </p>
+                  </div>
+                )}
+                <div className="bg-white/5 rounded-lg p-3">
+                  <p className="text-xs uppercase text-gray-400">Fatigued Campaigns</p>
+                  <p className="text-lg font-semibold text-white">{fatiguedCount}</p>
+                </div>
+              </div>
+              {Object.keys(autoPreviewSummary.skippedReasons || {}).length > 0 && (
+                <div>
+                  <p className="text-xs text-gray-400 mb-1">Skipped reasons</p>
+                  <div className="flex flex-wrap gap-2">
+                    {Object.entries(autoPreviewSummary.skippedReasons).map(([reason, count]) => (
+                      <span
+                        key={reason}
+                        className="text-xs px-2 py-1 rounded-full bg-white/10 text-gray-200 border border-white/10"
+                      >
+                        {reason}: {count}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </>
+          ) : (
+            <p className="text-sm text-gray-400">
+              Click “Run Auto-Optimize Preview” to see how many campaigns would be scaled, fixed, paused, or duplicated.
+            </p>
+          )}
+        </div>
+
+        <div className="bg-[#0f172a] border border-white/10 rounded-xl p-5 flex flex-col gap-4">
+          <div className="flex items-center justify-between flex-wrap gap-3">
+            <div>
+              <h2 className="text-base font-semibold text-white">Today's AI Summary</h2>
+              <p className="text-xs text-gray-400 mt-0.5">
+                Snapshot of the latest automation preview including guardrails and spend posture.
+              </p>
+            </div>
+          </div>
+          {autoPreviewSummary ? (
+              <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-9 gap-3">
+              {[
+                { label: "Processed", value: autoPreviewSummary.processed },
+                { label: "Scaled", value: autoPreviewSummary.scaled },
+                { label: "Decreased", value: decreasedCount },
+                { label: "Paused", value: autoPreviewSummary.paused },
+                { label: "Fixed", value: autoPreviewSummary.fixed },
+                { label: "Duplicated", value: autoPreviewSummary.duplicated },
+                { label: "Skipped", value: autoPreviewSummary.skipped },
+                { label: "Fatigued", value: fatiguedCount },
+                { label: "Current Total Budget", value: `$${previewTotalBudget.toFixed(2)}` },
+              ].map((item) => (
+                <div key={item.label} className="bg-white/5 rounded-lg p-3 text-center">
+                  <p className="text-[11px] uppercase text-gray-400">{item.label}</p>
+                  <p className="text-base font-semibold text-white">{item.value}</p>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-gray-400">
+              Run the Auto-Optimize preview to populate today's AI summary.
+            </p>
+          )}
+        </div>
+
         {/* Section Nav */}
         <div className="flex gap-2 flex-wrap">
           {[
@@ -1486,9 +1517,38 @@ export default function FacebookAdsPage() {
 
             {/* Campaign Table */}
             <div className="bg-[#0f172a] border border-white/10 rounded-xl overflow-hidden">
-              <div className="flex items-center justify-between p-4 border-b border-white/5">
+              <div className="flex flex-col gap-3 p-4 border-b border-white/5 md:flex-row md:items-center md:justify-between">
                 <h2 className="text-base font-semibold text-white">Campaigns</h2>
-                <p className="text-xs text-gray-500">{campaigns.length} total</p>
+                <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-end">
+                  <div className="flex items-center gap-2">
+                    <p className="text-[11px] uppercase tracking-wide text-gray-500">Daily Account Cap ($)</p>
+                    <input
+                      type="number"
+                      min="0"
+                      value={accountCapInput}
+                      onChange={(e) => setAccountCapInput(e.target.value)}
+                      className="w-28 bg-white/5 border border-white/10 rounded-lg px-2 py-1 text-xs text-white focus:border-indigo-400 focus:outline-none"
+                      placeholder="0"
+                    />
+                    <button
+                      onClick={saveAccountCap}
+                      disabled={savingAccountCap}
+                      className="text-xs px-3 py-1.5 rounded-lg border border-emerald-500/30 text-emerald-300 hover:text-white disabled:opacity-50"
+                    >
+                      {savingAccountCap ? "Saving…" : "Save"}
+                    </button>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <p className="text-xs text-gray-500">{campaigns.length} total</p>
+                    <button
+                      onClick={openReallocationPreview}
+                      disabled={reallocationLoading}
+                      className="text-xs px-3 py-1.5 rounded-lg border border-indigo-500/30 text-indigo-300 hover:text-white disabled:opacity-50"
+                    >
+                      {reallocationLoading ? "Loading…" : "Reallocate Budget"}
+                    </button>
+                  </div>
+                </div>
               </div>
 
               {loading ? (
@@ -1502,7 +1562,12 @@ export default function FacebookAdsPage() {
                       <tr className="border-b border-white/5 text-xs text-gray-500 uppercase">
                         <th className="text-left p-3 pl-4">Campaign</th>
                         <th className="text-left p-3">Status</th>
-                        <th className="text-left p-3">Score</th>
+                        <th className="text-left p-3">Perf. Score</th>
+                        <th className="text-left p-3">Lead Quality</th>
+                        <th className="text-left p-3">Cost / Appt</th>
+                        <th className="text-left p-3">Cost / Sale</th>
+                        <th className="text-left p-3">Appt Rate</th>
+                        <th className="text-left p-3">Close Rate</th>
                         <th className="text-left p-3">Class</th>
                         <th className="text-right p-3">Spend</th>
                         <th className="text-right p-3">Leads</th>
@@ -1511,11 +1576,63 @@ export default function FacebookAdsPage() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-white/5">
-                      {campaigns.map((c) => (
-                        <tr key={c._id} className="hover:bg-white/3">
+                      {campaigns.map((c) => {
+                        const reasonText = c.performanceClass ? PERFORMANCE_REASONING[c.performanceClass] : "";
+                        return (
+                          <Fragment key={c._id}>
+                          <tr className="hover:bg-white/3">
                           <td className="p-3 pl-4">
                             <p className="text-white font-medium truncate max-w-[180px]">{c.campaignName}</p>
                             <p className="text-xs text-gray-500">{LEAD_TYPE_LABELS[c.leadType] || c.leadType}</p>
+                            <div className="flex flex-wrap gap-1 mt-1">
+                              {/* Meta connection health badge */}
+                              {c.metaSyncStatus === "token_expired" || c.metaObjectHealth === "token_expired" ? (
+                                <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-900/40 text-red-300 border border-red-600/30">
+                                  Token Expired
+                                </span>
+                              ) : c.metaPublishStatus === "failed" ? (
+                                <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-900/30 text-red-300 border border-red-700/30">
+                                  Publish Failed
+                                </span>
+                              ) : c.metaPublishStatus === "skipped_missing_meta_connection" || c.metaObjectHealth === "disconnected" ? (
+                                <span className="text-[10px] px-2 py-0.5 rounded-full bg-yellow-900/30 text-yellow-300 border border-yellow-700/30">
+                                  Needs Meta Connect
+                                </span>
+                              ) : c.metaObjectHealth === "healthy" ? (
+                                <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-900/30 text-emerald-300 border border-emerald-700/30">
+                                  Meta Connected
+                                </span>
+                              ) : c.metaSyncStatus === "sync_failed" || c.metaObjectHealth === "sync_failed" || c.metaObjectHealth === "stale" ? (
+                                <span className="text-[10px] px-2 py-0.5 rounded-full bg-orange-900/30 text-orange-300 border border-orange-700/30">
+                                  Needs Sync
+                                </span>
+                              ) : null}
+                              {c.autoPaused && (
+                                <span className="text-[10px] px-2 py-0.5 rounded-full bg-white/10 text-gray-200 border border-white/20">
+                                  Auto Paused
+                                </span>
+                              )}
+                              {c.creativeRefreshNeeded && (
+                                <span className="text-[10px] px-2 py-0.5 rounded-full bg-orange-900/40 text-orange-200 border border-orange-500/20">
+                                  Creative Refresh Needed
+                                </span>
+                              )}
+                              {(c.duplicatedFromCampaignId || c.lastDuplicatedAt) && (
+                                <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-900/40 text-emerald-200 border border-emerald-600/30">
+                                  Duplicated Winner
+                                </span>
+                              )}
+                              {c.recommendNewAd && (
+                                <span className="text-[10px] px-2 py-0.5 rounded-full bg-sky-900/40 text-sky-200 border border-sky-600/30">
+                                  New Ad Recommended
+                                </span>
+                              )}
+                              {c.recommendReplaceAd && (
+                                <span className="text-[10px] px-2 py-0.5 rounded-full bg-rose-900/40 text-rose-200 border border-rose-600/30">
+                                  Replace Ad Recommended
+                                </span>
+                              )}
+                            </div>
                             {latestActions[c._id] && (
                               <p className="text-[11px] text-gray-500 mt-1">
                                 Last Action: {latestActions[c._id].actionType}{" "}
@@ -1548,6 +1665,31 @@ export default function FacebookAdsPage() {
                           <td className="p-3">
                             <ScoreBar score={c.performanceScore} />
                           </td>
+                          <td className="p-3 text-left text-gray-300">
+                            {typeof c.leadQualityScore === "number"
+                              ? c.leadQualityScore.toFixed(2)
+                              : "—"}
+                          </td>
+                          <td className="p-3 text-left text-gray-300">
+                            {c.costPerAppointment && c.costPerAppointment > 0
+                              ? `$${c.costPerAppointment.toFixed(2)}`
+                              : "—"}
+                          </td>
+                          <td className="p-3 text-left text-gray-300">
+                            {c.costPerSale && c.costPerSale > 0
+                              ? `$${c.costPerSale.toFixed(2)}`
+                              : "—"}
+                          </td>
+                          <td className="p-3 text-left text-gray-300">
+                            {typeof c.appointmentRate === "number" && c.appointmentRate > 0
+                              ? `${(c.appointmentRate * 100).toFixed(1)}%`
+                              : "—"}
+                          </td>
+                          <td className="p-3 text-left text-gray-300">
+                            {typeof c.closeRate === "number" && c.closeRate > 0
+                              ? `${(c.closeRate * 100).toFixed(1)}%`
+                              : "—"}
+                          </td>
                           <td className="p-3">
                             <ClassBadge cls={c.performanceClass} />
                           </td>
@@ -1561,7 +1703,8 @@ export default function FacebookAdsPage() {
                             {c.cpl > 0 ? `$${c.cpl.toFixed(2)}` : "—"}
                           </td>
                           <td className="p-3 pr-4 text-right">
-                            <div className="flex items-center justify-end gap-2 flex-wrap">
+                            <div className="flex flex-col items-end gap-2">
+                              <div className="flex items-center justify-end gap-2 flex-wrap w-full">
                               {c.performanceClass === "SCALE" && (
                                 <button
                                   onClick={() => openActionModal(c, "SCALE")}
@@ -1594,16 +1737,137 @@ export default function FacebookAdsPage() {
                                   Duplicate & Test
                                 </button>
                               )}
-                              <button
-                                onClick={() => setMetricsTarget(c)}
-                                className="text-xs text-indigo-400 hover:text-indigo-300 border border-indigo-500/20 px-2 py-1 rounded"
-                              >
-                                + Metrics
-                              </button>
+                              {c.status === "paused" && (
+                                <button
+                                  onClick={() => openActionModal(c, "RESUME")}
+                                  className="text-xs text-emerald-300 hover:text-emerald-200 border border-emerald-500/20 px-2 py-1 rounded"
+                                >
+                                  Resume Campaign
+                                </button>
+                              )}
+                              {c.status === "active" && (
+                                <button
+                                  onClick={() => openActionModal(c, "DECREASE")}
+                                  className="text-xs text-yellow-300 hover:text-yellow-200 border border-yellow-500/20 px-2 py-1 rounded"
+                                >
+                                  Decrease Budget
+                                </button>
+                              )}
+                              </div>
+                              {reasonText && (
+                                <p className="text-[11px] text-gray-400 max-w-[220px] text-right">{reasonText}</p>
+                              )}
+                              {(c.autoPaused || c.creativeRefreshNeeded || c.recommendNewAd || c.recommendReplaceAd) && (
+                                <div className="flex items-center gap-2 flex-wrap justify-end w-full">
+                                  {c.autoPaused && (
+                                    <button
+                                      onClick={() => openActionModal(c, "RESUME")}
+                                      className="text-xs text-gray-200 hover:text-white border border-white/20 px-2 py-1 rounded"
+                                    >
+                                      Resume Campaign
+                                    </button>
+                                  )}
+                                  {c.creativeRefreshNeeded && (
+                                    <button
+                                      onClick={() => handleGenerateCreative(c)}
+                                      disabled={generatingCreativeId === c._id}
+                                      className="text-xs text-orange-200 hover:text-white border border-orange-500/30 px-2 py-1 rounded disabled:opacity-50"
+                                    >
+                                      {generatingCreativeId === c._id ? "Generating…" : "Generate New Creative"}
+                                    </button>
+                                  )}
+                                  {c.recommendNewAd && (
+                                    <button
+                                      onClick={() => handleGenerateCreative(c, "new")}
+                                      disabled={generatingCreativeId === c._id}
+                                      className="text-xs text-sky-200 hover:text-white border border-sky-500/30 px-2 py-1 rounded disabled:opacity-50"
+                                    >
+                                      {generatingCreativeId === c._id ? "Starting…" : "Start New Ad"}
+                                    </button>
+                                  )}
+                                  {c.recommendReplaceAd && (
+                                    <button
+                                      onClick={() => handleGenerateCreative(c, "replace")}
+                                      disabled={generatingCreativeId === c._id}
+                                      className="text-xs text-rose-200 hover:text-white border border-rose-500/30 px-2 py-1 rounded disabled:opacity-50"
+                                    >
+                                      {generatingCreativeId === c._id ? "Preparing…" : "Replace Ad"}
+                                    </button>
+                                  )}
+                                </div>
+                              )}
+                              <div className="flex items-center gap-2 flex-wrap justify-end">
+                                <button
+                                  onClick={() => setMetricsTarget(c)}
+                                  className="text-xs text-indigo-400 hover:text-indigo-300 border border-indigo-500/20 px-2 py-1 rounded"
+                                >
+                                  + Metrics
+                                </button>
+                                <button
+                                  onClick={() => openActionModal(c, "SET_BUDGET")}
+                                  className="text-xs text-blue-300 hover:text-blue-200 border border-blue-500/20 px-2 py-1 rounded"
+                                >
+                                  Edit Budget
+                                </button>
+                                <button
+                                  onClick={() => handleActionHistoryToggle(c._id)}
+                                  className="text-xs text-gray-300 hover:text-white border border-white/10 px-2 py-1 rounded"
+                                >
+                                  {historyState[c._id]?.open ? "Hide History" : "Action History"}
+                                </button>
+                              </div>
                             </div>
                           </td>
                         </tr>
-                      ))}
+                        {historyState[c._id]?.open && (
+                          <tr key={`${c._id}-history`} className="bg-[#050d1d]">
+                            <td colSpan={13} className="p-4">
+                              <div className="flex flex-col gap-3">
+                                <div className="flex items-center justify-between">
+                                  <p className="text-sm text-white font-semibold">Action History</p>
+                                  {historyState[c._id]?.loading && (
+                                    <p className="text-xs text-gray-400">Loading…</p>
+                                  )}
+                                </div>
+                                {historyState[c._id]?.rows?.length ? (
+                                  <div className="overflow-x-auto">
+                                    <table className="w-full text-xs text-gray-300">
+                                      <thead>
+                                        <tr className="text-gray-500 border-b border-white/5">
+                                          <th className="text-left py-2 pr-2">Date</th>
+                                          <th className="text-left py-2 pr-2">Action</th>
+                                          <th className="text-left py-2 pr-2">Reason</th>
+                                          <th className="text-right py-2 pr-2">Old Budget</th>
+                                          <th className="text-right py-2 pr-2">New Budget</th>
+                                          <th className="text-left py-2 pr-2">Mode</th>
+                                          <th className="text-left py-2">Result</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody>
+                                        {historyState[c._id]?.rows.map((row, idx) => (
+                                          <tr key={`${c._id}-history-${idx}`} className="border-b border-white/5 last:border-0">
+                                            <td className="py-2 pr-2">{new Date(row.createdAt).toLocaleString()}</td>
+                                            <td className="py-2 pr-2">{row.action}</td>
+                                            <td className="py-2 pr-2 text-gray-400">{row.reasoning || "—"}</td>
+                                            <td className="py-2 pr-2 text-right">${Number(row.oldBudget || 0).toFixed(2)}</td>
+                                            <td className="py-2 pr-2 text-right">${Number(row.newBudget || 0).toFixed(2)}</td>
+                                            <td className="py-2 pr-2">{row.dryRun ? "Dry Run" : "Live"}</td>
+                                            <td className="py-2 text-gray-300">{row.metaResponseSummary || "—"}</td>
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                ) : historyState[c._id]?.loading ? null : (
+                                  <p className="text-xs text-gray-400">No actions logged yet.</p>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                        </Fragment>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -1647,7 +1911,7 @@ export default function FacebookAdsPage() {
         )}
 
         {/* ── Complete Ad Generator ────────────────────────────────────────── */}
-        {activeSection === "generator" && <CompleteAdGenerator />}
+        {activeSection === "generator" && <AdWizard />}
 
         {/* ── Auto Mode ───────────────────────────────────────────────────── */}
         {activeSection === "automode" && (
@@ -1748,19 +2012,118 @@ export default function FacebookAdsPage() {
               </div>
             )}
 
-            <div className="flex gap-2">
+            {actionModal.actionType === "SET_BUDGET" && (
+              <div className="space-y-3 mb-4">
+                <p className="text-sm text-gray-200">Update the Meta ad set daily budget manually.</p>
+                <p className="text-sm text-gray-400">
+                  Current budget: ${Number(actionModal.campaign.dailyBudget || 0).toFixed(2)}
+                </p>
+                <div>
+                  <label className="text-xs text-gray-400 block mb-1">New daily budget</label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={duplicateBudget}
+                    onChange={(e) => setDuplicateBudget(e.target.value)}
+                    className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white"
+                  />
+                </div>
+                <p className="text-xs text-yellow-300">
+                  Warning: This immediately changes the Meta ad set budget.
+                </p>
+              </div>
+            )}
+
+            {actionModal.actionType === "RESUME" && (
+              <div className="space-y-2 mb-4">
+                <p className="text-sm text-gray-200">This will resume the campaign inside Meta.</p>
+                <p className="text-xs text-gray-400">
+                  Status will change to ACTIVE and spend will continue.
+                </p>
+              </div>
+            )}
+
+            {actionModal.actionType === "DECREASE" && (
+              <div className="space-y-2 mb-4">
+                <p className="text-sm text-gray-200">This will reduce the daily budget by 20%.</p>
+                <p className="text-sm text-gray-400">
+                  Current daily budget: ${Number(actionModal.campaign.dailyBudget || 0).toFixed(2)}
+                </p>
+                <p className="text-sm text-yellow-300">
+                  New daily budget: ${Number((Number(actionModal.campaign.dailyBudget || 0) * 0.8)).toFixed(2)}
+                </p>
+                <p className="text-xs text-gray-400">Budget cannot go below $10 per guardrails.</p>
+              </div>
+            )}
+
+            <div className="flex flex-col gap-2">
+              <div className="flex flex-col sm:flex-row gap-2">
+                <button
+                  onClick={() => executeCampaignAction(true)}
+                  disabled={executingAction !== null}
+                  className="flex-1 px-4 py-2 rounded-lg bg-white/10 hover:bg-white/20 text-sm text-gray-100 border border-white/20 disabled:opacity-50"
+                >
+                  {executingAction === "dry" ? "Testing…" : "Test Run"}
+                </button>
+                <button
+                  onClick={() => executeCampaignAction(false)}
+                  disabled={executingAction !== null}
+                  className="flex-1 px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-sm text-white disabled:opacity-50"
+                >
+                  {executingAction === "real" ? "Applying…" : "Apply For Real"}
+                </button>
+              </div>
               <button
                 onClick={() => setActionModal(null)}
+                disabled={executingAction !== null}
+                className="px-4 py-2 rounded-lg bg-white/5 hover:bg-white/10 text-sm text-gray-300 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {reallocationModalOpen && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
+          <div className="bg-[#0f172a] border border-white/10 rounded-xl p-6 w-full max-w-lg">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-semibold text-white">Budget Reallocation Preview</h3>
+              <button onClick={() => setReallocationModalOpen(false)} className="text-gray-400 hover:text-white text-lg">
+                ×
+              </button>
+            </div>
+            {reallocationPlan.length ? (
+              <div className="space-y-2 max-h-72 overflow-y-auto pr-2">
+                {reallocationPlan.map((move, idx) => {
+                  const fromCampaign = campaigns.find((c) => c._id === move.fromCampaignId);
+                  const toCampaign = campaigns.find((c) => c._id === move.toCampaignId);
+                  return (
+                    <div key={`${move.fromCampaignId}-${move.toCampaignId}-${idx}`} className="text-sm text-gray-200">
+                      Move ${move.amount.toFixed(2)} from{" "}
+                      <span className="text-rose-300">{fromCampaign?.campaignName || "Campaign"}</span> →{" "}
+                      <span className="text-emerald-300">{toCampaign?.campaignName || "Campaign"}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <p className="text-sm text-gray-400">No reallocation opportunities were found right now.</p>
+            )}
+            <div className="flex gap-2 mt-6">
+              <button
+                onClick={() => setReallocationModalOpen(false)}
                 className="flex-1 px-4 py-2 rounded-lg bg-white/5 hover:bg-white/10 text-sm text-gray-300"
               >
                 Cancel
               </button>
               <button
-                onClick={executeCampaignAction}
-                disabled={executingAction}
+                onClick={applyReallocationPlan}
+                disabled={reallocationApplying || reallocationPlan.length === 0}
                 className="flex-1 px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-sm text-white disabled:opacity-50"
               >
-                {executingAction ? "Applying…" : "Confirm"}
+                {reallocationApplying ? "Applying…" : "Apply Reallocation"}
               </button>
             </div>
           </div>

@@ -16,6 +16,35 @@ const DOILeadSchema = new Schema(
       index: true,
     },
     phone: { type: String, default: "" },
+    bestEmail: { type: String, default: "" },
+    emailType: {
+      type: String,
+      enum: ["", "domain", "personal", "work"],
+      default: "",
+    },
+    bestEmailType: {
+      type: String,
+      enum: ["", "domain", "personal", "work"],
+      default: "",
+    },
+    confidenceScore: { type: Number, default: 0 },
+    bestEmailConfidence: { type: Number, default: 0 },
+    identityScore: { type: Number, default: 0 },
+    domain: { type: String, default: "" },
+    agency: { type: String, default: "" },
+    leadScore: { type: Number, default: 0 },
+    leadGrade: {
+      type: String,
+      enum: ["", "A", "B", "C", "D"],
+      default: "",
+    },
+    domainTrustLevel: { type: String, default: "" },
+    hasPhone: { type: Boolean, default: false },
+    hasWebsite: { type: Boolean, default: false },
+    yearsLicensed: { type: Number, default: 0 },
+    multiStateLicensed: { type: Boolean, default: false },
+    deliverabilityScore: { type: Number, default: 0 },
+    engagementScore: { type: Number, default: 0 },
     state: { type: String, index: true },          // 2-letter state abbreviation
     licenseType: { type: String, default: "" },    // e.g. "Life", "Health", "Life & Health"
     licenseNumber: { type: String, default: "" },
@@ -35,6 +64,21 @@ const DOILeadSchema = new Schema(
     globallyUnsubscribed: { type: Boolean, default: false, index: true },
     globallyUnsubscribedAt: { type: Date },
 
+    // Platform promo outreach tracking
+    platformPromoStatus: {
+      type: String,
+      enum: ["pending", "sending", "sent", "suppressed", "failed", "skipped"],
+      default: "pending",
+      index: true,
+    },
+    platformPromoAttempts: { type: Number, default: 0 },
+    platformPromoLastAttemptAt: { type: Date },
+    platformPromoSentAt: { type: Date },
+    platformPromoReason: { type: String, default: "" },
+    platformPromoStep: { type: Number, default: 0 },
+    platformPromoNextAt: { type: Date },
+    platformPromoCompletedAt: { type: Date },
+
     notes: { type: String, default: "" },
   },
   { timestamps: true }
@@ -42,6 +86,8 @@ const DOILeadSchema = new Schema(
 
 DOILeadSchema.index({ state: 1, cooldownUntil: 1, globallyUnsubscribed: 1 });
 DOILeadSchema.index({ lastAssignedAt: 1 });
+DOILeadSchema.index({ platformPromoStatus: 1, platformPromoAttempts: 1 });
+DOILeadSchema.index({ platformPromoNextAt: 1, platformPromoStatus: 1 });
 
 export type DOILead = InferSchemaType<typeof DOILeadSchema>;
 export default (models.DOILead as mongoose.Model<DOILead>) ||
