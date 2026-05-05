@@ -80,9 +80,17 @@ async function resolveOwnerFolder(ownerEmail: string) {
       name: "KAYLA LEADS",
       userEmail: ownerEmail,
       assignedDrips: [],
+      aiFirstCallEnabled: true,
+      aiFirstCallDelayMinutes: 1,
     });
     console.info("[KAYLA] Auto-created KAYLA LEADS folder:", String((folder as any)._id));
   }
+
+  // Ensure AI first call is enabled on the folder
+  await Folder.updateOne(
+    { _id: (folder as any)._id },
+    { $set: { aiFirstCallEnabled: true, aiFirstCallDelayMinutes: 1 } }
+  );
 
   return folder;
 }
