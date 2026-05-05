@@ -40,6 +40,45 @@ function humanDelayMinutes() {
   return base + extra;
 }
 
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function safeLeadEmailForConfirmation(args: {
+  attemptedEmail: any;
+  leadId?: any;
+  ownerEmail?: string;
+  userEmail?: string;
+}): string {
+  const attemptedEmail = String(args.attemptedEmail || "").trim();
+  const ownerEmail = String(args.ownerEmail || args.userEmail || "").trim().toLowerCase();
+  const normalized = attemptedEmail.toLowerCase();
+  if (attemptedEmail && EMAIL_RE.test(attemptedEmail) && normalized !== ownerEmail) {
+    return attemptedEmail;
+  }
+  console.warn("[CONFIRMATION_EMAIL_BLOCKED_INVALID_LEAD_EMAIL]", {
+    leadId: args.leadId ? String(args.leadId) : "",
+    attemptedEmail,
+    ownerEmail: args.ownerEmail || "",
+    userEmail: args.userEmail || "",
+  });
+  return "";
+}
+
+function logSkippedConfirmationEmail(args: {
+  leadId?: any;
+  bookingId?: any;
+  attemptedEmail?: any;
+  ownerEmail?: string;
+  userEmail?: string;
+}) {
+  console.warn("[CONFIRMATION_EMAIL_SKIPPED_NO_VALID_EMAIL]", {
+    leadId: args.leadId ? String(args.leadId) : "",
+    bookingId: args.bookingId ? String(args.bookingId) : "",
+    attemptedEmail: String(args.attemptedEmail || "").trim(),
+    ownerEmail: args.ownerEmail || "",
+    userEmail: args.userEmail || "",
+  });
+}
+
 // ------- State normalization (handles "GA", "Georgia", "washington dc") -------
 const STATE_CODE_FROM_NAME: Record<string, string> = {
   alabama: "AL",
@@ -309,6 +348,12 @@ export default async function handler(
     res.status(400).json({ message: "Missing required fields" });
     return;
   }
+  const leadEmailForConfirmation = safeLeadEmailForConfirmation({
+    attemptedEmail: email,
+    ownerEmail: agentEmail,
+    userEmail: agentEmail,
+  });
+  const emailConfirmationSkipped = !leadEmailForConfirmation;
 
   // Track what we actually send/schedule so cron fallback doesn't double-send
   let bookingId: any = null;
@@ -316,6 +361,7 @@ export default async function handler(
   let didMorning = false;
   let didHour = false;
   let didFifteen = false;
+  let didLogSkippedEmail = false;
 
   // Track reminder flags + booking id across BOTH stub + real booking paths
   // (declared here so the stub block can reference them without TS TDZ errors)
@@ -354,7 +400,7 @@ export default async function handler(
         lead = await Lead.create({
           "First Name": name,
           Phone: to,
-          Email: email || "",
+          Email: leadEmailForConfirmation || "",
           userEmail: user.email,
           appointmentTime: clientStart.toJSDate(),
           status: "Booked",
@@ -367,13 +413,22 @@ export default async function handler(
           {
             $set: {
               "First Name": (lead as any)["First Name"] || name,
-              Email: lead.Email || email || "",
+              Email: lead.Email || leadEmailForConfirmation || "",
               appointmentTime: clientStart.toJSDate(),
               status: "Booked",
               State: (lead as any).State || (lead as any).state || state,
             },
           },
         );
+      }
+      if (emailConfirmationSkipped && !didLogSkippedEmail) {
+        logSkippedConfirmationEmail({
+          leadId: lead?._id,
+          attemptedEmail: email,
+          ownerEmail: user.email,
+          userEmail: user.email,
+        });
+        didLogSkippedEmail = true;
       }
 
       // Send confirmation via thread-sticky sender (AI flow => human-like delay)
@@ -512,7 +567,7 @@ export default async function handler(
             (existingLead as any)["First Name"] ||
             (existingLead as any)["First"] ||
             name,
-          Email: existingLead.Email || email || "",
+          Email: existingLead.Email || leadEmailForConfirmation || "",
           appointmentTime: appointmentJS,
           status: "Booked",
           State:
@@ -524,7 +579,7 @@ export default async function handler(
     const createdLead = await Lead.create({
       "First Name": name,
       Phone: to,
-      Email: email || "",
+      Email: leadEmailForConfirmation || "",
       userEmail: user.email,
       appointmentTime: appointmentJS,
       status: "Booked",
@@ -568,12 +623,12 @@ export default async function handler(
       summary: `Call with ${name}`,
       description:
         `Client phone: ${to}` +
-        (email ? `\nEmail: ${email}` : "") +
+        (leadEmailForConfirmation ? `\nEmail: ${leadEmailForConfirmation}` : "") +
         (notes ? `\nNotes: ${notes}` : "") +
         `\nBooked via CoveCRM`,
       start: { dateTime: clientStart.toISO(), timeZone: clientZone },
       end: { dateTime: clientEnd.toISO(), timeZone: clientZone },
-      attendees: email ? [{ email }] : undefined,
+      attendees: leadEmailForConfirmation ? [{ email: leadEmailForConfirmation }] : undefined,
       reminders: { useDefault: true },
     } as any;
 
@@ -584,17 +639,14 @@ export default async function handler(
     });
 
     // ---- Save booking metadata -------------------------------------------
-    // NOTE: Many leads are phone-only. Also, some deployed bundles may still
-    // have leadEmail marked required, so we guarantee a non-empty value here.
-    const leadEmailSafe =
-      typeof email === "string" && email.trim()
-        ? email.trim()
-        : `noemail+${to.slice(-10)}@covecrm.local`;
     const bookingDoc = await Booking.create({
-      leadEmail: leadEmailSafe,
+      leadEmail: leadEmailForConfirmation,
       leadPhone: to,
       agentEmail: user.email,
       agentPhone: (user as any)?.phoneNumber || "",
+      emailConfirmationSent: !!leadEmailForConfirmation,
+      emailConfirmationSkipped,
+      emailConfirmationSkippedReason: emailConfirmationSkipped ? "invalid_or_missing_lead_email" : "",
       date: appointmentJS,
       timezone: clientZone,
       reminderSent: {
@@ -606,6 +658,16 @@ export default async function handler(
       eventId: created.data.id,
     });
     bookingId = bookingDoc?._id || null;
+    if (emailConfirmationSkipped && !didLogSkippedEmail) {
+      logSkippedConfirmationEmail({
+        leadId,
+        bookingId,
+        attemptedEmail: email,
+        ownerEmail: user.email,
+        userEmail: user.email,
+      });
+      didLogSkippedEmail = true;
+    }
 
     // 🔔 UI update
     const io = (res.socket as any)?.server?.io;

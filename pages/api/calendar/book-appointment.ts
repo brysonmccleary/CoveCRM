@@ -40,6 +40,45 @@ function withStopFooter(s: string) {
   return /reply stop to opt out/i.test(s) ? s : `${s} Reply STOP to opt out.`;
 }
 
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function safeLeadEmailForConfirmation(args: {
+  attemptedEmail: any;
+  leadId?: any;
+  ownerEmail?: string;
+  userEmail?: string;
+}): string {
+  const attemptedEmail = String(args.attemptedEmail || "").trim();
+  const ownerEmail = String(args.ownerEmail || args.userEmail || "").trim().toLowerCase();
+  const normalized = attemptedEmail.toLowerCase();
+  if (attemptedEmail && EMAIL_RE.test(attemptedEmail) && normalized !== ownerEmail) {
+    return attemptedEmail;
+  }
+  console.warn("[CONFIRMATION_EMAIL_BLOCKED_INVALID_LEAD_EMAIL]", {
+    leadId: args.leadId ? String(args.leadId) : "",
+    attemptedEmail,
+    ownerEmail: args.ownerEmail || "",
+    userEmail: args.userEmail || "",
+  });
+  return "";
+}
+
+function logSkippedConfirmationEmail(args: {
+  leadId?: any;
+  bookingId?: any;
+  attemptedEmail?: any;
+  ownerEmail?: string;
+  userEmail?: string;
+}) {
+  console.warn("[CONFIRMATION_EMAIL_SKIPPED_NO_VALID_EMAIL]", {
+    leadId: args.leadId ? String(args.leadId) : "",
+    bookingId: args.bookingId ? String(args.bookingId) : "",
+    attemptedEmail: String(args.attemptedEmail || "").trim(),
+    ownerEmail: args.ownerEmail || "",
+    userEmail: args.userEmail || "",
+  });
+}
+
 export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse,
@@ -115,7 +154,24 @@ export default async function handler(
     const firstName = lead.firstName || lead["First Name"] || lead.First || "";
     const lastName = lead.lastName || lead["Last Name"] || lead.Last || "";
     const leadPhone = normalizeUSPhone(lead.phone || lead.Phone || "");
-    const leadEmail = lead.email || lead.Email || "";
+    const rawLeadEmail = lead.email || lead.Email || "";
+    const leadEmail = safeLeadEmailForConfirmation({
+      attemptedEmail: rawLeadEmail,
+      leadId,
+      ownerEmail: userEmail,
+      userEmail,
+    });
+    const emailConfirmationSkipped = !leadEmail;
+    let didLogSkippedEmail = false;
+    if (emailConfirmationSkipped && !didLogSkippedEmail) {
+      logSkippedConfirmationEmail({
+        leadId,
+        attemptedEmail: rawLeadEmail,
+        ownerEmail: userEmail,
+        userEmail,
+      });
+      didLogSkippedEmail = true;
+    }
     const state = lead.state || lead.State || "";
 
     // Prefer client-provided header tz if present; else state→TZ; else ET

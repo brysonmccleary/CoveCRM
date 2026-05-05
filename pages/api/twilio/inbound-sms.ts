@@ -824,7 +824,57 @@ function historyToChatMessages(history: any[] = []) {
     if (m.type === "inbound") msgs.push({ role: "user", content: text });
     else if (m.type === "ai" || m.type === "outbound") msgs.push({ role: "assistant", content: text });
   }
-  return msgs.slice(-24);
+  return msgs.slice(-10);
+}
+
+function formatRecentThreadHistory(history: any[] = []) {
+  const lines: string[] = [];
+  for (const m of history || []) {
+    const text = String(m?.text || "").replace(/\s+/g, " ").trim();
+    if (!text || text.startsWith("[system]") || text.startsWith("[note]")) continue;
+    const sender = m.type === "inbound" ? "Lead" : "Kayla";
+    if (m.type === "inbound" || m.type === "ai" || m.type === "outbound") {
+      lines.push(`${sender}: ${text}`);
+    }
+  }
+  return lines.slice(-10).join("\n") || "(none)";
+}
+
+function confirmedAppointmentText(lead: any, history: any[] = [], tz: string) {
+  const raw =
+    (lead as any)?.aiLastConfirmedISO ||
+    (lead as any)?.appointmentTime ||
+    (lead as any)?.appointmentDate ||
+    "";
+  if (raw) {
+    const dt = DateTime.fromJSDate(raw instanceof Date ? raw : new Date(raw)).setZone(tz);
+    if (dt.isValid) return dt.toFormat("ccc, MMM d 'at' h:mm a ZZZZ");
+  }
+  const recent = [...(history || [])]
+    .reverse()
+    .map((m: any) => String(m?.text || "").trim())
+    .find((text) => /(?:got you down|confirmed|appointment booked|all set)/i.test(text));
+  return recent || "";
+}
+
+function hasRescheduleIntent(text: string) {
+  const lower = String(text || "").toLowerCase();
+  return [
+    "reschedule",
+    "change",
+    "different time",
+    "another time",
+    "cancel",
+    "can't",
+    "cannot",
+    "won’t",
+    "wont",
+    "missed",
+    "passed",
+    "later",
+    "tomorrow",
+    "today",
+  ].some((keyword) => lower.includes(keyword));
 }
 
 // --- Deterministic reply shortcuts (currently UNUSED – we rely on GPT for convo)
@@ -970,6 +1020,8 @@ async function runO3MiniSmsAssistant(opts: {
   const ownerFullName = firstNonEmptyString([user?.name, user?.fullName, user?.username]);
   const ownerFirstName = firstNonEmptyString([user?.firstName, splitFirstName(ownerFullName)]);
   const safeLeadGreetingName = safeLeadFirstNameForGreeting(leadFirstName) || "there";
+  const recentThreadText = formatRecentThreadHistory(history);
+  const confirmedAppointment = confirmedAppointmentText(lead, history, tz);
 
   // --- SYSTEM PROMPT (Jeremy-style, appointment only, no quotes/details) ---
   const systemPrompt = `
@@ -993,13 +1045,31 @@ ${leadMemory.leadSummary || "(none)"}
 Key facts:
 ${leadMemory.keyFactsText || "(none)"}
 
-Recent conversation:
+Recent memory summary:
 ${leadMemory.lastMessagesText || "(none)"}
+
+Recent SMS thread (last 10 messages):
+${recentThreadText}
+
+Confirmed appointment time, if any:
+${confirmedAppointment || "(none)"}
 
 Next best action:
 ${leadMemory.nextBestAction || "(none)"}
 
 Rules:
+- You are Kayla, a human-sounding scheduling assistant. Use the recent conversation history.
+- Always start by referencing something specific the lead just said, such as the time they gave, the issue they mentioned, or their concern. Do not use generic filler.
+- Acknowledge the lead's latest message before moving the conversation forward.
+- Do not contradict prior confirmed times. Do not re-ask for information already provided.
+- If a confirmed appointment time exists, only confirm or reschedule; do not restart the conversation.
+- Never ask for a time again if a specific appointment time has already been confirmed in the thread.
+- Never send a second "does this time work?" after already confirming a time.
+- If the lead gives availability, confirm one clear time or ask one concise clarification.
+- If the lead says the time passed or asks to reschedule, acknowledge and offer one or two realistic alternatives.
+- If the lead is frustrated or says they were called too many times, wrong email, or no one called, apologize briefly and fix the scheduling issue directly.
+- Keep replies under 320 characters unless absolutely necessary.
+- Do not invent email addresses. Do not use the account owner email as the lead's email.
 - Be natural
 - Be short
 - Move toward booking appointment
@@ -1311,6 +1381,16 @@ async function generateConversationalReply(opts: {
   const deterministic = buildDeterministicReply(inboundText, context);
   if (deterministic) return deterministic;
 
+  const confirmedAppointment = confirmedAppointmentText(lead, history, tz);
+  if (confirmedAppointment && !hasRescheduleIntent(inboundText)) {
+    const looksLikeTime =
+      /\b\d{1,2}(:\d{2})?\s?(am|pm)\b/i.test(confirmedAppointment) ||
+      /\b(mon|tue|wed|thu|fri|sat|sun|today|tomorrow)\b/i.test(confirmedAppointment);
+    return looksLikeTime
+      ? `You're all set for ${confirmedAppointment}. If you need to change it, just tell me 👍`
+      : "You're all set. If you need to change it, just tell me 👍";
+  }
+
   try {
     const reply = await runO3MiniSmsAssistant({
       lead,
@@ -1324,6 +1404,13 @@ async function generateConversationalReply(opts: {
     return reply;
   } catch (err) {
     console.error("[inbound-sms] o3-mini Responses API failed, falling back:", err);
+    const confirmedAppointment = confirmedAppointmentText(lead, history, tz);
+    if (confirmedAppointment) {
+      if (/\b(reschedule|passed|missed|no one called|nobody called|wrong email|too many calls?)\b/i.test(inboundText)) {
+        return "Sorry about that — let’s get it fixed. Does later today or tomorrow morning work better for the quick call?";
+      }
+      return `You're confirmed for ${confirmedAppointment}. Reply RESCHEDULE if you need a different time.`;
+    }
     const lastAI = [...(history || [])].reverse().find((m: any) => m.type === "ai");
     const fallback =
       "When’s a good time today or tomorrow for a quick 5 minute call so we can go over everything with you?";

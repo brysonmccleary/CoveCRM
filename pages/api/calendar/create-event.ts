@@ -37,6 +37,45 @@ function isBareCallWithTitle(s?: string) {
   );
 }
 
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function safeLeadEmailForConfirmation(args: {
+  attemptedEmail: any;
+  leadId?: any;
+  ownerEmail?: string;
+  userEmail?: string;
+}): string {
+  const attemptedEmail = String(args.attemptedEmail || "").trim();
+  const ownerEmail = String(args.ownerEmail || args.userEmail || "").trim().toLowerCase();
+  const normalized = attemptedEmail.toLowerCase();
+  if (attemptedEmail && EMAIL_RE.test(attemptedEmail) && normalized !== ownerEmail) {
+    return attemptedEmail;
+  }
+  console.warn("[CONFIRMATION_EMAIL_BLOCKED_INVALID_LEAD_EMAIL]", {
+    leadId: args.leadId ? String(args.leadId) : "",
+    attemptedEmail,
+    ownerEmail: args.ownerEmail || "",
+    userEmail: args.userEmail || "",
+  });
+  return "";
+}
+
+function logSkippedConfirmationEmail(args: {
+  leadId?: any;
+  bookingId?: any;
+  attemptedEmail?: any;
+  ownerEmail?: string;
+  userEmail?: string;
+}) {
+  console.warn("[CONFIRMATION_EMAIL_SKIPPED_NO_VALID_EMAIL]", {
+    leadId: args.leadId ? String(args.leadId) : "",
+    bookingId: args.bookingId ? String(args.bookingId) : "",
+    attemptedEmail: String(args.attemptedEmail || "").trim(),
+    ownerEmail: args.ownerEmail || "",
+    userEmail: args.userEmail || "",
+  });
+}
+
 // 🔐 Mobile JWT helper (same pattern as other mobile APIs)
 const MOBILE_JWT_SECRET =
   process.env.MOBILE_JWT_SECRET ||
@@ -156,7 +195,13 @@ export default async function handler(
 
     const privateProps: Record<string, string> = {};
 
-    let leadEmail = attendee || "";
+    let attemptedLeadEmail = attendee || "";
+    let leadEmail = safeLeadEmailForConfirmation({
+      attemptedEmail: attendee,
+      leadId,
+      ownerEmail: userEmail,
+      userEmail,
+    });
     let leadDoc: any = null;
 
     if (leadId) {
@@ -214,7 +259,15 @@ export default async function handler(
 
         finalLocation = finalLocation || (phone ? `Phone: ${phone}` : "");
 
-        if (email && typeof email === "string") leadEmail = String(email);
+        if (email && typeof email === "string") {
+          attemptedLeadEmail = String(email);
+          leadEmail = safeLeadEmailForConfirmation({
+            attemptedEmail: email,
+            leadId,
+            ownerEmail: userEmail,
+            userEmail,
+          });
+        }
 
         // Stash cross-linking hints (helpful for later lookups/sync)
         privateProps.leadId = String(leadDoc._id);
@@ -223,7 +276,7 @@ export default async function handler(
           if (l10) privateProps.leadPhoneLast10 = l10;
           privateProps.leadPhone = String(phone);
         }
-        if (email) privateProps.leadEmail = String(email);
+        if (leadEmail) privateProps.leadEmail = leadEmail;
         privateProps.crmLink = crmLink;
       }
     }
@@ -234,6 +287,17 @@ export default async function handler(
     }
 
     // Attendees: owner + (optional) lead email
+    const emailConfirmationSkipped = !leadEmail;
+    let didLogSkippedEmail = false;
+    if (emailConfirmationSkipped && !didLogSkippedEmail) {
+      logSkippedConfirmationEmail({
+        leadId,
+        attemptedEmail: attemptedLeadEmail,
+        ownerEmail: userEmail,
+        userEmail,
+      });
+      didLogSkippedEmail = true;
+    }
     attendees.push({ email: userEmail });
     if (leadEmail && typeof leadEmail === "string")
       attendees.push({ email: String(leadEmail) });
