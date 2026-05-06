@@ -3,16 +3,6 @@ import Head from "next/head";
 import Link from "next/link";
 import Image from "next/image";
 
-const WHATS_NEW = [
-  "AI Call Coach",
-  "AI Dial Sessions",
-  "Lead Scoring",
-  "Pipeline Board",
-  "2-Way SMS Inbox",
-  "Google Calendar Sync",
-  "Daily Performance Digest",
-];
-
 const FEATURES = [
   {
     icon: (
@@ -131,9 +121,6 @@ export default function Home() {
             <Link href="/covecrm-features" className="text-slate-300 hover:text-white font-medium transition">
               Features
             </Link>
-            <Link href="/pricing" className="text-slate-300 hover:text-white font-medium transition">
-              Pricing
-            </Link>
           </div>
           <div className="flex items-center gap-3 sm:gap-4 shrink-0">
             <Link href="/login">
@@ -154,29 +141,6 @@ export default function Home() {
           </div>
         </nav>
 
-        {/* What\'s New Strip */}
-        <div className="border-b border-white/10 bg-[#020617]/80 py-2.5 px-6 overflow-x-auto">
-          <div className="flex items-center gap-3 max-w-6xl mx-auto">
-            <span className="text-xs font-bold text-blue-400 uppercase tracking-wider shrink-0">New:</span>
-            <div className="flex items-center gap-2 flex-wrap">
-              <Link
-                href="/kayla"
-                className="inline-flex items-center rounded-full bg-cyan-500/15 border border-cyan-400/25 px-3 py-1 text-xs font-medium text-cyan-200 hover:bg-cyan-500/20 transition"
-              >
-                Kayla AI Assistant
-              </Link>
-              {WHATS_NEW.map((item) => (
-                <span
-                  key={item}
-                  className="inline-flex items-center rounded-full bg-blue-600/15 border border-blue-500/25 px-3 py-1 text-xs font-medium text-blue-300"
-                >
-                  {item}
-                </span>
-              ))}
-            </div>
-          </div>
-        </div>
-
         {/* Hero Section */}
         <section className="relative text-white py-28 px-6 text-center overflow-hidden bg-[#020617]">
           {/* Background glows */}
@@ -184,18 +148,6 @@ export default function Home() {
             <div className="absolute -top-24 left-1/2 h-96 w-[56rem] -translate-x-1/2 rounded-full bg-blue-600/12 blur-3xl" />
             <div className="absolute top-32 right-[-10rem] h-72 w-[36rem] rounded-full bg-purple-500/8 blur-3xl" />
             <div className="absolute bottom-0 left-[-8rem] h-64 w-[32rem] rounded-full bg-cyan-500/6 blur-3xl" />
-          </div>
-
-          {/* Floating stat badges */}
-          <div className="pointer-events-none absolute inset-0 hidden md:block">
-            <div className="absolute top-16 left-[8%] flex items-center gap-2 bg-white/5 border border-white/10 backdrop-blur-sm rounded-full px-4 py-2 text-xs text-slate-400">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-              2,400+ agents
-            </div>
-            <div className="absolute top-28 right-[7%] flex items-center gap-2 bg-white/5 border border-white/10 backdrop-blur-sm rounded-full px-4 py-2 text-xs text-slate-400">
-              <span className="w-1.5 h-1.5 rounded-full bg-blue-400" />
-              1.2M leads managed
-            </div>
           </div>
 
           <div className="relative max-w-4xl mx-auto">
