@@ -59,7 +59,7 @@ function buildKaylaSms(firstName: string, attemptedCall: boolean) {
 }
 
 async function resolveOwnerUser() {
-  return await User.findOne({ email: "bryson.mccleary1@gmail.com" }).lean<any>();
+  return await User.findOne({ email: "bryson.mccleary1@gmail.com" });
 }
 
 async function resolveOwnerFolder(ownerEmail: string) {
@@ -92,6 +92,34 @@ async function resolveOwnerFolder(ownerEmail: string) {
   );
 
   return folder;
+}
+
+function resolveKaylaFromNumber(user: any) {
+  const numbers = Array.isArray(user?.twilio?.phoneNumbers)
+    ? user.twilio.phoneNumbers
+    : Array.isArray(user?.numbers)
+      ? user.numbers
+      : [];
+  const defaultSmsNumberId = String(user?.defaultSmsNumberId || "");
+  const selected =
+    (defaultSmsNumberId
+      ? numbers.find((entry: any) => {
+          const entryId = entry?._id ? String(entry._id) : "";
+          return entryId === defaultSmsNumberId || String(entry?.sid || "") === defaultSmsNumberId;
+        })
+      : null) || numbers[0];
+
+  const fromNumber = String(selected?.phoneNumber || selected?.number || "").trim();
+  const owned = numbers.some((entry: any) => {
+    const phone = String(entry?.phoneNumber || entry?.number || "").trim();
+    return phone && phone === fromNumber;
+  });
+
+  if (!fromNumber || !owned) {
+    throw new Error("Kayla owner outbound number is not assigned.");
+  }
+
+  return fromNumber;
 }
 
 export default async function handler(
@@ -175,13 +203,18 @@ export default async function handler(
   }
   console.info(`[KAYLA] folder verified ${String(ownerFolder._id)}`);
 
-  // Look up agent's Twilio number
   let fromNumber = "";
   try {
-    const TwilioNumber = (await import("@/models/Number")).default;
-    const numDoc = await TwilioNumber.findOne({ userEmail: ownerEmail }).lean<any>();
-    fromNumber = String(numDoc?.phoneNumber || numDoc?.number || "").trim();
-  } catch {}
+    fromNumber = resolveKaylaFromNumber(ownerUser);
+  } catch (err: any) {
+    console.error("[KAYLA] from number verification failed", err?.message || err);
+    return res.status(500).json({
+      ok: false,
+      callQueued: false,
+      smsSent: false,
+      message: "Kayla outbound number configuration invalid.",
+    });
+  }
 
   const { firstName, lastName } = splitFullName(cleanFullName);
   const rawPayload = {
@@ -224,6 +257,17 @@ export default async function handler(
 
   if (existingLeadId) {
     leadId = existingLeadId;
+    await Lead.updateOne(
+      { _id: existingLeadId, userEmail: ownerEmail },
+      {
+        $set: {
+          folderId: ownerFolder._id,
+          folderName: "KAYLA LEADS",
+          sourceType: "kayla_landing_page",
+          leadSource: "kayla_page",
+        },
+      },
+    );
   } else {
     const lead = await Lead.create({
       "First Name": firstName,
@@ -235,6 +279,7 @@ export default async function handler(
       normalizedPhone: normalizedPhone.replace(/\D/g, "").slice(-10),
       userEmail: ownerEmail,
       folderId: ownerFolder._id,
+      folderName: "KAYLA LEADS",
       status: "New",
       sourceType: "kayla_landing_page",
       leadSource: "kayla_page",
@@ -257,6 +302,11 @@ export default async function handler(
     });
     leadId = String((lead as any)._id);
   }
+
+  console.info("[KAYLA] lead routed to Kayla folder", {
+    leadId,
+    folderId: String(ownerFolder._id),
+  });
 
   await FunnelSubmission.updateOne(
     { _id: (submission as any)._id },

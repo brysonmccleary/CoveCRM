@@ -54,7 +54,6 @@ const AI_DIALER_AGENT_KEY = process.env.AI_DIALER_AGENT_KEY || "";
 const COVECRM_API_SECRET = process.env.COVECRM_API_SECRET || "";
 const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID || "";
 const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN || "";
-const TWILIO_PHONE_NUMBER = process.env.TWILIO_PHONE_NUMBER || "";
 
 // Your internal vendor-cost estimate (Twilio + OpenAI)
 const AI_DIALER_VENDOR_COST_PER_MIN_USD = Number(
@@ -72,7 +71,6 @@ const REQUIRED_VARS = [
   "OPENAI_API_KEY",
   "TWILIO_ACCOUNT_SID",
   "TWILIO_AUTH_TOKEN",
-  "TWILIO_PHONE_NUMBER",
   "AI_DIALER_CRON_KEY",
   "AI_DIALER_AGENT_KEY",
   "COVECRM_BASE_URL",
@@ -4188,68 +4186,50 @@ const server = http.createServer(
               return;
             }
 
-            const effectiveFromNumber = fromNumber || TWILIO_PHONE_NUMBER;
-            if (!TWILIO_ACCOUNT_SID || !TWILIO_AUTH_TOKEN || !effectiveFromNumber) {
-              console.warn("[AI-VOICE] /trigger-call: Twilio credentials not configured");
+            if (!fromNumber) {
+              console.warn("[AI-VOICE] Cannot place call — user-owned number required");
               res.statusCode = 503;
               res.setHeader("Content-Type", "application/json");
-              res.end(JSON.stringify({ ok: false, error: "Twilio credentials not configured" }));
+              res.end(JSON.stringify({ ok: false, error: "Cannot place call — user-owned number required" }));
               return;
             }
 
-            const twimlUrl = new URL("/api/ai-calls/voice-twiml", COVECRM_BASE_URL);
-            if (leadId) twimlUrl.searchParams.set("leadId", leadId);
-            twimlUrl.searchParams.set("userEmail", userEmail);
-            if (scriptKey) twimlUrl.searchParams.set("scriptKey", scriptKey);
-
-            const statusUrl = new URL("/api/ai-calls/status", COVECRM_BASE_URL);
-            statusUrl.searchParams.set("userEmail", userEmail);
-
-            // Normalize phone
-            const digits = leadPhone.replace(/\D/g, "");
-            const toE164 = digits.length === 10 ? `+1${digits}` : digits.startsWith("1") && digits.length === 11 ? `+${digits}` : leadPhone;
-
-            // Twilio REST API call via fetch
-            const twilioUrl = `https://api.twilio.com/2010-04-01/Accounts/${TWILIO_ACCOUNT_SID}/Calls.json`;
-            const credentials = Buffer.from(`${TWILIO_ACCOUNT_SID}:${TWILIO_AUTH_TOKEN}`).toString("base64");
-            const formBody = new URLSearchParams({
-              To: toE164,
-              From: effectiveFromNumber,
-              Url: twimlUrl.toString(),
-              StatusCallback: statusUrl.toString(),
-              StatusCallbackEvent: "initiated ringing answered completed",
-              Record: "true",
-            });
-
-            const twilioRes = await fetch(twilioUrl, {
+            const triggerUrl = new URL("/api/ai-calls/trigger-call", COVECRM_BASE_URL);
+            const triggerRes = await fetch(triggerUrl.toString(), {
               method: "POST",
               headers: {
-                "Authorization": `Basic ${credentials}`,
-                "Content-Type": "application/x-www-form-urlencoded",
+                "Content-Type": "application/json",
+                "x-api-secret": COVECRM_API_SECRET,
               },
-              body: formBody.toString(),
+              body: JSON.stringify({
+                userEmail,
+                leadId: leadId || "",
+                leadPhone,
+                scriptKey: scriptKey || "",
+                fromNumber,
+              }),
             });
 
-            const twilioData: any = await twilioRes.json().catch(() => ({}));
+            const triggerData: any = await triggerRes.json().catch(() => ({}));
 
-            if (!twilioRes.ok) {
-              console.error("[AI-VOICE] /trigger-call Twilio error:", twilioData);
+            if (!triggerRes.ok) {
+              console.error("[AI-VOICE] /trigger-call CoveCRM error:", triggerData);
               res.statusCode = 502;
               res.setHeader("Content-Type", "application/json");
-              res.end(JSON.stringify({ ok: false, error: twilioData?.message || "Twilio call failed" }));
+              res.end(JSON.stringify({ ok: false, error: triggerData?.error || "CoveCRM call trigger failed" }));
               return;
             }
 
             console.log("[AI-VOICE] /trigger-call initiated:", {
-              callSid: twilioData?.sid,
-              to: toE164,
+              callSid: triggerData?.callSid,
+              to: triggerData?.to || leadPhone,
               userEmail,
               leadId,
             });
 
             res.statusCode = 200;
             res.setHeader("Content-Type", "application/json");
-            res.end(JSON.stringify({ ok: true, callSid: twilioData?.sid }));
+            res.end(JSON.stringify({ ok: true, callSid: triggerData?.callSid }));
           } catch (err: any) {
             console.error("[AI-VOICE] /trigger-call error:", err?.message || err);
             res.statusCode = 500;

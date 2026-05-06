@@ -338,6 +338,35 @@ export async function syncA2PForUser(passedUser: IUser) {
     messagingServiceSid = messagingService.sid;
   }
 
+  // Backfill the service-scoped A2P campaign SID when Twilio can return it.
+  if (!campaignSid && messagingServiceSid && (client as any)?.messaging?.v1?.services) {
+    try {
+      const campaigns =
+        (await (client as any).messaging.v1
+          .services(messagingServiceSid)
+          .usAppToPerson.list({ limit: 50 })) || [];
+      if (campaigns.length) {
+        const approved =
+          campaigns.find((c: any) =>
+            ["verified", "approved", "active"].includes(
+              String(c?.campaignStatus || c?.campaign_status || c?.status || c?.state || "").toLowerCase(),
+            ),
+          ) || campaigns[0];
+        campaignSid = String(
+          approved?.sid || approved?.campaignSid || approved?.campaign_id || approved?.campaignId || "",
+        ).trim() || campaignSid;
+        campaignStatus =
+          approved?.campaignStatus ||
+          approved?.campaign_status ||
+          approved?.status ||
+          approved?.state ||
+          campaignStatus;
+      }
+    } catch {
+      // ignore; campaignStatus + messagingServiceSid can still prove readiness
+    }
+  }
+
   // RETRY_SERVICE_SCOPED_CAMPAIGN_FETCH
   // ✅ Now that messagingServiceSid may be resolved, retry service-scoped campaign fetch if needed.
   if (!campaignStatus && messagingServiceSid && campaignSid && (client as any)?.messaging?.v1?.services) {

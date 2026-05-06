@@ -325,12 +325,24 @@ if (isUSDest && !isMessagingReady && !DEV_ALLOW_UNAPPROVED) {
     // ✅ If Twilio shows the campaign is verified/approved and we have a Messaging Service,
     // proceed even if the cached messagingReady boolean is stale.
     if (!isMessagingReady) {
-      const b = String(refreshedA2P.brandStatus || userA2P.brandStatus || "").toLowerCase();
-      const c = String(refreshedA2P.campaignStatus || userA2P.campaignStatus || "").toLowerCase();
+      const b = String(refreshedA2P.brandStatus || userA2P.brandStatus || "").trim().toLowerCase();
+      const c = String(refreshedA2P.campaignStatus || userA2P.campaignStatus || "").trim().toLowerCase();
       const msid = String(refreshedA2P.messagingServiceSid || userA2P.messagingServiceSid || "").trim();
+      const campaignSid = String(refreshedA2P.campaignSid || userA2P.campaignSid || "").trim();
       const brandOk = b === "approved" || b === "active" || b === "verified";
       const campaignOk = c === "verified" || c === "approved" || c === "active";
       if (brandOk && campaignOk && msid) {
+        if (!campaignSid && c === "active") {
+          console.warn(
+            JSON.stringify({
+              msg: "[sendSMS] A2P campaignSid missing but campaign active; allowing send",
+              userEmail: user.email,
+              brandStatus: refreshedA2P.brandStatus || userA2P.brandStatus,
+              campaignStatus: refreshedA2P.campaignStatus || userA2P.campaignStatus,
+              messagingServiceSid: msid,
+            }),
+          );
+        }
         isMessagingReady = true;
       }
     }

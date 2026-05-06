@@ -396,12 +396,18 @@ export async function ensureMessagingServiceA2PReadyForUser(
       a2p.campaignStatus ||
       "",
   );
+  const brandStatus = String(profile?.brandStatus || a2p.brandStatus || "").toLowerCase();
+  const brandApproved = APPROVED_BRAND.has(brandStatus);
   const campaignApproved = APPROVED_CAMPAIGN.has(campaignStatus.toLowerCase());
+  const campaignActiveWithoutSid = !campaignSid && campaignStatus.toLowerCase() === "active";
+  if (campaignActiveWithoutSid) {
+    console.warn("[A2P] campaignSid missing but campaign active — allowing send");
+  }
   const canSendSms = Boolean(
-    serviceA2PRegistered &&
-      !UNREGISTERED_USECASE.has(usecase.toLowerCase()) &&
-      campaignSid &&
-      campaignApproved,
+    messagingServiceSid &&
+      brandApproved &&
+      campaignApproved &&
+      (campaignSid || campaignActiveWithoutSid),
   );
 
   const userNumberEntries = Array.isArray(user.numbers) ? user.numbers : [];
@@ -557,9 +563,9 @@ export async function ensureMessagingServiceA2PReadyForUser(
   }
 
   const blockedReasons = [
-    !campaignSid ? resolvedCampaign.reason || "missing_campaignSid" : "",
-    serviceA2PRegistered ? "" : "service_not_a2p_registered",
-    UNREGISTERED_USECASE.has(usecase.toLowerCase()) ? "service_usecase_undeclared" : "",
+    messagingServiceSid ? "" : "missing_messagingServiceSid",
+    brandApproved ? "" : `brand_not_approved:${brandStatus || "unknown"}`,
+    !campaignSid && !campaignActiveWithoutSid ? resolvedCampaign.reason || "missing_campaignSid" : "",
     campaignSid && !campaignApproved ? `campaign_not_approved:${campaignStatus || "unknown"}` : "",
   ].filter(Boolean);
 

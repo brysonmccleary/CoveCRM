@@ -746,6 +746,36 @@ async function recoverExistingCampaignForBrand(args: {
   }
 }
 
+async function recoverExistingCampaignDetailsForBrand(args: {
+  client: any;
+  messagingServiceSid: string;
+  brandSid: string;
+}) {
+  try {
+    const list =
+      (await args.client.messaging.v1
+        .services(args.messagingServiceSid)
+        .usAppToPerson.list({ limit: 50 })) || [];
+
+    const match = (list || []).find((item: any) => {
+      const itemBrandSid =
+        item?.brandRegistrationSid || item?.brandSid || item?.brand_registration_sid;
+      return String(itemBrandSid || "") === String(args.brandSid);
+    });
+
+    const sid = String(
+      match?.sid || match?.campaignSid || match?.campaign_id || match?.campaignId || "",
+    ).trim();
+    const status = String(
+      match?.campaignStatus || match?.campaign_status || match?.status || match?.state || "",
+    ).trim();
+
+    return sid ? { sid, status } : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 async function detachNumberFromAllServices(args: { client: any; numberSid: string }) {
   const services = await args.client.messaging.v1.services.list({ limit: 200 });
   for (const svc of services) {
@@ -1361,6 +1391,20 @@ export async function resumeA2PAutomationForUserEmail(userEmail: string) {
         update.messagingServiceSid = messagingServiceSid;
       }
 
+      const recoveredCampaign = await recoverExistingCampaignDetailsForBrand({
+        client,
+        messagingServiceSid,
+        brandSid,
+      });
+      if (recoveredCampaign?.sid) {
+        campaignSid = recoveredCampaign.sid;
+        campaignStatus = normalizeUpper(recoveredCampaign.status || campaignStatus);
+        update.campaignSid = campaignSid;
+        update.usa2pSid = campaignSid;
+        update.campaignStatus = campaignStatus || undefined;
+        log("A2P][CAMPAIGN_RECOVERED", { userEmail: normalizedEmail, campaignSid, campaignStatus });
+      }
+
       const useCase = String(
         profile.lastSubmittedUseCase ||
           (profile as any).useCase ||
@@ -1372,7 +1416,7 @@ export async function resumeA2PAutomationForUserEmail(userEmail: string) {
         profile.lastSubmittedOptInDetails || profile.optInDetails || "",
       ).trim();
 
-      if (samples.length >= 2 && messageFlow) {
+      if (!campaignSid && samples.length >= 2 && messageFlow) {
         const lockUntil = new Date(now.getTime() + 2 * 60 * 1000);
         const lockedProfile = await A2PProfile.findOneAndUpdate(
           {
