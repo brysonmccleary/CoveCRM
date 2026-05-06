@@ -22,6 +22,7 @@
 import Lead from "@/models/Lead";
 import Folder from "@/models/Folder";
 import AISettings from "@/models/AISettings";
+import User from "@/models/User";
 
 const AI_VOICE_SERVER_URL = (
   process.env.AI_VOICE_HTTP_BASE ||
@@ -238,6 +239,20 @@ export async function triggerAIFirstCall(
     }
 
     // delayMinutes === 0 — fire immediately without sleeping
+    const userDoc = await User.findOne({ email: lead.userEmail }).lean() as any;
+    const userNumbers: any[] = Array.isArray(userDoc?.numbers) ? userDoc.numbers : [];
+    const primaryNumber = userNumbers.find((n: any) =>
+      n?.capabilities?.voice === true &&
+      !["inactive","released","deleted","canceled","cancelled"].includes(String(n?.status || "").toLowerCase())
+    );
+    const fromNumber = primaryNumber?.phoneNumber || "";
+
+    if (!fromNumber) {
+      await Lead.updateOne({ _id: lead._id }, { $set: { aiFirstCallStatus: "failed" } });
+      console.warn(`[triggerAIFirstCall] No voice-capable number for user ${lead.userEmail} — aborting`);
+      return;
+    }
+
     const resp = await fetch(`${AI_VOICE_SERVER_URL}/trigger-call`, {
       method: "POST",
       headers: {
@@ -249,6 +264,7 @@ export async function triggerAIFirstCall(
         leadId,
         leadPhone: lead.Phone,
         scriptKey: (folder.aiScriptKey as string) || "default",
+        fromNumber,
       }),
     });
 

@@ -8,6 +8,7 @@ import { checkCronAuth } from "@/lib/cronAuth";
 import mongooseConnect from "@/lib/mongooseConnect";
 import Lead from "@/models/Lead";
 import Folder from "@/models/Folder";
+import User from "@/models/User";
 
 const AI_VOICE_SERVER_URL = (
   process.env.AI_VOICE_HTTP_BASE ||
@@ -100,6 +101,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       continue;
     }
 
+    const userDoc = await User.findOne({ email: userEmail }).lean() as any;
+    const userNumbers: any[] = Array.isArray(userDoc?.numbers) ? userDoc.numbers : [];
+    const primaryNumber = userNumbers.find((n: any) =>
+      n?.capabilities?.voice === true &&
+      !["inactive","released","deleted","canceled","cancelled"].includes(String(n?.status || "").toLowerCase())
+    );
+    const fromNumber = primaryNumber?.phoneNumber || "";
+
+    if (!fromNumber) {
+      await Lead.updateOne({ _id: lead._id }, { $set: { aiFirstCallStatus: "failed" } });
+      console.warn(`[fire-due-ai-calls] No voice-capable number for user ${userEmail} — skipping lead ${leadId}`);
+      skipped++;
+      continue;
+    }
+
     // Fire
     try {
       const resp = await fetch(`${AI_VOICE_SERVER_URL}/trigger-call`, {
@@ -113,6 +129,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           leadId,
           leadPhone: lead.Phone,
           scriptKey: (folder.aiScriptKey as string) || "default",
+          fromNumber,
         }),
       });
 
