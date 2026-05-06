@@ -15,7 +15,7 @@ export default function CreateFolderPanel() {
   const [aiFirstCallEnabled, setAiFirstCallEnabled] = useState(false);
   const [aiFirstCallDelayMinutes, setAiFirstCallDelayMinutes] = useState(1);
   const [aiRealTimeOnly, setAiRealTimeOnly] = useState(true);
-  const [aiScriptKey, setAiScriptKey] = useState("default");
+  const [aiScriptKey, setAiScriptKey] = useState("final_expense");
 
   // Fetch AI drip suggestion whenever folder name changes (debounced)
   useEffect(() => {
@@ -157,21 +157,28 @@ export default function CreateFolderPanel() {
               </select>
             </label>
 
-            <label style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px", fontSize: "13px", color: "#cbd5e1" }}>
-              <span>Script:</span>
+            <div style={{ marginBottom: "8px" }}>
+              <label style={{ display: "block", fontSize: "13px", color: "#cbd5e1", marginBottom: "4px", fontWeight: 500 }}>
+                AI Script / Lead Type
+              </label>
+              <p style={{ fontSize: "11px", color: "#64748b", marginBottom: "6px", marginTop: 0 }}>
+                The AI will use this script for every lead in this folder.
+              </p>
               <select
                 value={aiScriptKey}
                 onChange={(e) => setAiScriptKey(e.target.value)}
-                style={{ backgroundColor: "#1e293b", border: "1px solid #475569", borderRadius: "4px", color: "#e2e8f0", padding: "4px 8px", fontSize: "13px" }}
+                style={{ backgroundColor: "#0f172a", border: "1px solid #475569", borderRadius: "4px", color: "#e2e8f0", padding: "6px 8px", fontSize: "13px", width: "100%" }}
               >
-                <option value="default">Default</option>
-                <option value="final_expense">Final Expense</option>
                 <option value="mortgage_protection">Mortgage Protection</option>
-                <option value="iul_cash_value">IUL / Cash Value</option>
-                <option value="veteran_leads">Veteran Leads</option>
-                <option value="trucker_leads">Trucker Leads</option>
+                <option value="final_expense">Final Expense</option>
+                <option value="iul_cash_value">IUL / Cash Value Life</option>
+                <option value="veteran_iul">Veterans IUL</option>
+                <option value="veteran_mortgage">Veterans Mortgage Protection</option>
+                <option value="trucker_iul">Truckers IUL</option>
+                <option value="trucker_mortgage">Truckers Mortgage Protection</option>
+                <option value="default">Default (Generic)</option>
               </select>
-            </label>
+            </div>
 
             <label style={{ display: "flex", alignItems: "center", gap: "10px", fontSize: "13px", color: "#cbd5e1", cursor: "pointer" }}>
               <input

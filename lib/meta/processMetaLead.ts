@@ -136,6 +136,11 @@ export async function processMetaLead(
   const crmLeadType = FB_LEAD_TYPE_TO_CRM[(campaign as any).leadType] ?? "Final Expense";
   const normalizedPhone = String(leadData.phone || "").replace(/\D+/g, "");
 
+  const metaNotes = [
+    leadData.productInterest ? `Interest: ${leadData.productInterest}` : "",
+    leadData.zip ? `Zip: ${leadData.zip}` : "",
+  ].filter(Boolean).join(" | ");
+
   const newLead = await Lead.create({
     "First Name": leadData.firstName,
     "Last Name": leadData.lastName,
@@ -145,6 +150,7 @@ export async function processMetaLead(
     phoneLast10: normalizedPhone.slice(-10),
     normalizedPhone: normalizedPhone.slice(-10),
     State: leadData.state || "",
+    Notes: metaNotes || undefined,
     userEmail,
     ownerEmail: userEmail,
     folderId: (folder as any)._id,

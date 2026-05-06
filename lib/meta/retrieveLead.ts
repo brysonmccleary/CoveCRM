@@ -18,6 +18,7 @@ export interface MetaLeadData {
   zip: string;
   city: string;
   state: string;
+  productInterest: string;
   rawFieldData: any[];
   rawPayload: any;
 }
@@ -73,11 +74,21 @@ export async function retrieveMetaLead(leadgenId: string): Promise<MetaLeadData>
   let firstName = fields["first_name"] || fields["fname"] || "";
   let lastName = fields["last_name"] || fields["lname"] || "";
 
-  if (!firstName && !lastName && fields["full_name"]) {
-    const parsed = parseFullName(fields["full_name"]);
-    firstName = parsed.firstName;
-    lastName = parsed.lastName;
+  if (!firstName && !lastName) {
+    const fullNameRaw = fields["full_name"] || fields["name"] || "";
+    if (fullNameRaw) {
+      const parsed = parseFullName(fullNameRaw);
+      firstName = parsed.firstName;
+      lastName = parsed.lastName;
+    }
   }
+
+  const productInterest =
+    fields["what_type_of_insurance_are_you_interested_in"] ||
+    fields["insurance_type"] ||
+    fields["product_interest"] ||
+    fields["interested_in"] ||
+    "";
 
   return {
     leadgenId,
@@ -89,11 +100,12 @@ export async function retrieveMetaLead(leadgenId: string): Promise<MetaLeadData>
     createdTime: String(payload.created_time || ""),
     firstName,
     lastName,
-    email: (fields["email"] || "").toLowerCase().trim(),
-    phone: fields["phone_number"] || fields["phone"] || "",
+    email: (fields["email"] || fields["email_address"] || "").toLowerCase().trim(),
+    phone: fields["phone_number"] || fields["phone"] || fields["mobile_number"] || fields["cell_phone"] || "",
     zip: fields["zip_code"] || fields["zip"] || fields["postal_code"] || "",
     city: fields["city"] || "",
-    state: fields["state"] || "",
+    state: fields["state"] || fields["state_province"] || fields["province"] || "",
+    productInterest,
     rawFieldData: fieldData,
     rawPayload: payload,
   };

@@ -7,6 +7,7 @@ interface Folder {
   name: string;
   leadCount: number;
   aiFirstCallEnabled?: boolean;
+  aiScriptKey?: string;
 }
 
 interface FoldersListProps {
@@ -23,6 +24,7 @@ export default function FoldersList({ onRefetchReady, onFolderSelect }: FoldersL
   const [folders, setFolders] = useState<Folder[]>([]);
   const [loading, setLoading] = useState(true);
   const socketRef = useRef<any>(null);
+  const [savedFolderIds, setSavedFolderIds] = useState<Record<string, boolean>>({});
 
   const fetchFolders = useCallback(async () => {
     try {
@@ -50,6 +52,23 @@ export default function FoldersList({ onRefetchReady, onFolderSelect }: FoldersL
     // ✅ Navigate to the actual folder-scoped page
     const path = `/leads/folder/${folderId}`;
     router.push(path).catch((e) => console.error("FoldersList: router.push failed", e));
+  };
+
+  const updateScriptKey = async (folderId: string, aiScriptKey: string) => {
+    const res = await fetch("/api/folders/ai-settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ folderId, aiScriptKey }),
+    });
+    if (res.ok) {
+      setFolders((prev) =>
+        prev.map((f) => f._id === folderId ? { ...f, aiScriptKey } : f)
+      );
+      setSavedFolderIds((prev) => ({ ...prev, [folderId]: true }));
+      setTimeout(() => {
+        setSavedFolderIds((prev) => { const next = { ...prev }; delete next[folderId]; return next; });
+      }, 2000);
+    }
   };
 
   const toggleAIFirstCall = async (folderId: string, currentValue: boolean) => {
@@ -217,6 +236,40 @@ export default function FoldersList({ onRefetchReady, onFolderSelect }: FoldersL
                     >
                       {folder.aiFirstCallEnabled ? "🤖 AI: ON" : "🤖 AI: OFF"}
                     </button>
+                  )}
+
+                  {!isSystem && folder.aiFirstCallEnabled && (
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
+                      <select
+                        value={folder.aiScriptKey || "final_expense"}
+                        onClick={(e) => e.stopPropagation()}
+                        onChange={(e) => {
+                          e.stopPropagation();
+                          updateScriptKey(folder._id, e.target.value);
+                        }}
+                        style={{
+                          backgroundColor: "#0f172a",
+                          border: "1px solid #334155",
+                          borderRadius: "4px",
+                          color: "#cbd5e1",
+                          fontSize: "11px",
+                          padding: "2px 6px",
+                          cursor: "pointer",
+                        }}
+                      >
+                        <option value="mortgage_protection">Mortgage Protection</option>
+                        <option value="final_expense">Final Expense</option>
+                        <option value="iul_cash_value">IUL / Cash Value Life</option>
+                        <option value="veteran_iul">Veterans IUL</option>
+                        <option value="veteran_mortgage">Veterans Mortgage Protection</option>
+                        <option value="trucker_iul">Truckers IUL</option>
+                        <option value="trucker_mortgage">Truckers Mortgage Protection</option>
+                        <option value="default">Default (Generic)</option>
+                      </select>
+                      {savedFolderIds[folder._id] && (
+                        <span style={{ fontSize: "11px", color: "#4ade80" }}>Saved ✓</span>
+                      )}
+                    </span>
                   )}
 
                   {!isSystem && (

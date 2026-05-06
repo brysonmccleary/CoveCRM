@@ -353,6 +353,11 @@ function normalizeScriptKey(raw: any): string {
     return "trucker_leads";
   }
 
+  if (v === "veteran_iul" || v === "iul_veteran" || v === "veterans_iul") return "veteran_iul";
+  if (v === "veteran_mortgage" || v === "mortgage_veteran" || v === "veterans_mortgage") return "veteran_mortgage";
+  if (v === "trucker_iul" || v === "iul_trucker" || v === "truckers_iul") return "trucker_iul";
+  if (v === "trucker_mortgage" || v === "mortgage_trucker" || v === "truckers_mortgage") return "trucker_mortgage";
+
   if (v === "generic" || v === "life" || v === "generic_life") {
     return "generic_life";
   }
@@ -363,6 +368,10 @@ function normalizeScriptKey(raw: any): string {
     v === "iul_cash_value" ||
     v === "veteran_leads" ||
     v === "trucker_leads" ||
+    v === "veteran_iul" ||
+    v === "veteran_mortgage" ||
+    v === "trucker_iul" ||
+    v === "trucker_mortgage" ||
     v === "generic_life"
   ) {
     return v;
@@ -381,6 +390,10 @@ function getScopeLabelForScriptKey(scriptKeyRaw: any): string {
   if (k === "iul_cash_value") return "cash value life insurance (IUL)";
   if (k === "veteran_leads") return "veteran life insurance programs";
   if (k === "trucker_leads") return "life insurance for truckers";
+  if (k === "veteran_iul") return "veteran IUL program";
+  if (k === "veteran_mortgage") return "mortgage protection for veterans";
+  if (k === "trucker_iul") return "IUL program for truckers";
+  if (k === "trucker_mortgage") return "mortgage protection for truckers";
   if (k === "generic_life") return "life insurance";
   return "life insurance";
 }
@@ -3506,6 +3519,102 @@ Say: "Perfect. I’ll have ${agent} reach out around that time. Talk soon."
 STOP. WAIT.
 `.trim();
 
+  const SCRIPT_VETERAN_IUL = `
+BOOKING SCRIPT — VETERAN IUL (FOLLOW IN ORDER)
+
+STEP 1
+Say: "I was just giving you a quick call about the request you put in for the veteran IUL program — the tax-free life insurance benefit for veterans. Was this for yourself, or a spouse as well?"
+STOP. WAIT.
+
+STEP 2 (BOOKING FRAME)
+Say: "Okay, so the next step is really simple — I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Would later today or tomorrow be better?"
+STOP. WAIT.
+
+STEP 3 (TIME)
+Then ask: "Perfect — is there a specific time you're available, or what works best for you?"
+STOP. WAIT.
+
+STEP 4 (CONFIRM)
+Say: "Got it. I'll have ${agent} call you around then. Does that work?"
+STOP. WAIT.
+
+STEP 5 (CLOSE)
+Say: "Perfect. I'll have ${agent} reach out around that time. Talk soon."
+STOP. WAIT.
+`.trim();
+
+  const SCRIPT_VETERAN_MORTGAGE = `
+BOOKING SCRIPT — VETERAN MORTGAGE PROTECTION (FOLLOW IN ORDER)
+
+STEP 1
+Say: "I was just giving you a quick call about the request you put in for mortgage protection for veterans. Was this for yourself, or a spouse as well?"
+STOP. WAIT.
+
+STEP 2 (BOOKING FRAME)
+Say: "Okay, so the next step is really simple — I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Would later today or tomorrow be better?"
+STOP. WAIT.
+
+STEP 3 (TIME)
+Then ask: "Perfect — is there a specific time you're available, or what works best for you?"
+STOP. WAIT.
+
+STEP 4 (CONFIRM)
+Say: "Got it. I'll have ${agent} call you around then. Does that work?"
+STOP. WAIT.
+
+STEP 5 (CLOSE)
+Say: "Perfect. I'll have ${agent} reach out around that time. Talk soon."
+STOP. WAIT.
+`.trim();
+
+  const SCRIPT_TRUCKER_IUL = `
+BOOKING SCRIPT — TRUCKER IUL (FOLLOW IN ORDER)
+
+STEP 1
+Say: "I was just giving you a quick call about the request you put in for the IUL program for truckers — the tax-free cash value coverage built for your lifestyle. Was this for yourself, or a spouse as well?"
+STOP. WAIT.
+
+STEP 2 (BOOKING FRAME)
+Say: "Okay, so the next step is really simple — I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Would later today or tomorrow be better?"
+STOP. WAIT.
+
+STEP 3 (TIME)
+Then ask: "Perfect — is there a specific time you're available, or what works best for you?"
+STOP. WAIT.
+
+STEP 4 (CONFIRM)
+Say: "Got it. I'll have ${agent} call you around then. Does that work?"
+STOP. WAIT.
+
+STEP 5 (CLOSE)
+Say: "Perfect. I'll have ${agent} reach out around that time. Talk soon."
+STOP. WAIT.
+`.trim();
+
+  const SCRIPT_TRUCKER_MORTGAGE = `
+BOOKING SCRIPT — TRUCKER MORTGAGE PROTECTION (FOLLOW IN ORDER)
+
+STEP 1
+Say: "I was just giving you a quick call about the request you put in for mortgage protection for truckers. Was this for yourself, or a spouse as well?"
+STOP. WAIT.
+
+STEP 2 (BOOKING FRAME)
+Say: "Okay, so the next step is really simple — I just need to get you scheduled for a quick call with the licensed agent so they can answer everything for you. Would later today or tomorrow be better?"
+STOP. WAIT.
+
+STEP 3 (TIME)
+Then ask: "Perfect — is there a specific time you're available, or what works best for you?"
+STOP. WAIT.
+
+STEP 4 (CONFIRM)
+Say: "Got it. I'll have ${agent} call you around then. Does that work?"
+STOP. WAIT.
+
+STEP 5 (CLOSE)
+Say: "Perfect. I'll have ${agent} reach out around that time. Talk soon."
+STOP. WAIT.
+`.trim();
+
   const SCRIPT_GENERIC = `
 BOOKING SCRIPT — GENERIC LIFE (FOLLOW IN ORDER)
 
@@ -3535,6 +3644,10 @@ STOP. WAIT.
   if (scriptKey === "iul_cash_value") return SCRIPT_IUL;
   if (scriptKey === "veteran_leads") return SCRIPT_VETERAN;
   if (scriptKey === "trucker_leads") return SCRIPT_TRUCKER;
+  if (scriptKey === "veteran_iul") return SCRIPT_VETERAN_IUL;
+  if (scriptKey === "veteran_mortgage") return SCRIPT_VETERAN_MORTGAGE;
+  if (scriptKey === "trucker_iul") return SCRIPT_TRUCKER_IUL;
+  if (scriptKey === "trucker_mortgage") return SCRIPT_TRUCKER_MORTGAGE;
   if (scriptKey === "generic_life") return SCRIPT_GENERIC;
 
   return SCRIPT_MORTGAGE;
