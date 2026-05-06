@@ -25,13 +25,16 @@ type NumberEntry = { id: string; phoneNumber: string; sid: string };
 type ResumeInfo = { lastIndex: number | null; total: number | null; updatedAt?: string | null };
 
 const AI_SCRIPT_OPTIONS = [
-  { value: "default", label: "Default" },
-  { value: "final_expense", label: "Final Expense" },
   { value: "mortgage_protection", label: "Mortgage Protection" },
-  { value: "iul_cash_value", label: "IUL / Cash Value" },
-  { value: "veteran_leads", label: "Veteran Leads" },
-  { value: "trucker_leads", label: "Trucker Leads" },
-  { value: "generic_life", label: "Generic Life" },
+  { value: "final_expense", label: "Final Expense" },
+  { value: "iul_cash_value", label: "IUL / Cash Value Life" },
+  { value: "veteran_leads", label: "Veterans (Life Insurance)" },
+  { value: "veteran_iul", label: "Veterans IUL" },
+  { value: "veteran_mortgage", label: "Veterans Mortgage Protection" },
+  { value: "trucker_leads", label: "Truckers (Life Insurance)" },
+  { value: "trucker_iul", label: "Truckers IUL" },
+  { value: "trucker_mortgage", label: "Truckers Mortgage Protection" },
+  { value: "default", label: "Default (Generic)" },
 ];
 
 /** ───────────────────────── Page ───────────────────────── */

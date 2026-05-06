@@ -260,8 +260,10 @@ export default function FoldersList({ onRefetchReady, onFolderSelect }: FoldersL
                         <option value="mortgage_protection">Mortgage Protection</option>
                         <option value="final_expense">Final Expense</option>
                         <option value="iul_cash_value">IUL / Cash Value Life</option>
+                        <option value="veteran_leads">Veterans (Life Insurance)</option>
                         <option value="veteran_iul">Veterans IUL</option>
                         <option value="veteran_mortgage">Veterans Mortgage Protection</option>
+                        <option value="trucker_leads">Truckers (Life Insurance)</option>
                         <option value="trucker_iul">Truckers IUL</option>
                         <option value="trucker_mortgage">Truckers Mortgage Protection</option>
                         <option value="default">Default (Generic)</option>

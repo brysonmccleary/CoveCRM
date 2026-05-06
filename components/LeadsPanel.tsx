@@ -222,6 +222,9 @@ export default function LeadsPanel() {
   // ✅ NEW: user acknowledgement for "unverified app" warning
   const [ackUnverifiedWarning, setAckUnverifiedWarning] = useState<boolean>(false);
 
+  const [folderScriptKey, setFolderScriptKey] = useState<string>("final_expense");
+  const [savingScript, setSavingScript] = useState(false);
+
   const router = useRouter();
 
   // ✅ NEW: modal refs for “click outside to close”
@@ -315,6 +318,8 @@ export default function LeadsPanel() {
         setShowResumeOptions(false);
       }
       setExpandedFolder(folderId);
+      const selectedFolder = folders.find(f => f._id === folderId);
+      setFolderScriptKey(selectedFolder?.aiScriptKey || "final_expense");
     }
   };
 
@@ -799,6 +804,44 @@ const goToAIDialSession = () => {
                       </option>
                     ))}
                   </select>
+                </div>
+
+                <div style={{ marginBottom: "8px" }}>
+                  <label style={{ display: "block", fontSize: "13px", fontWeight: 500, marginBottom: "4px" }}>
+                    AI Script / Lead Type
+                  </label>
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                    <select
+                      value={folderScriptKey}
+                      onChange={async (e) => {
+                        const nextKey = e.target.value;
+                        setFolderScriptKey(nextKey);
+                        setSavingScript(true);
+                        try {
+                          await fetch("/api/folders/ai-settings", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ folderId: expandedFolder, aiScriptKey: nextKey }),
+                          });
+                        } finally {
+                          setSavingScript(false);
+                        }
+                      }}
+                      style={{ backgroundColor: "#1e293b", border: "1px solid #475569", borderRadius: "4px", color: "#e2e8f0", padding: "6px 8px", fontSize: "13px", flex: 1 }}
+                    >
+                      <option value="mortgage_protection">Mortgage Protection</option>
+                      <option value="final_expense">Final Expense</option>
+                      <option value="iul_cash_value">IUL / Cash Value Life</option>
+                      <option value="veteran_leads">Veterans (Life Insurance)</option>
+                      <option value="veteran_iul">Veterans IUL</option>
+                      <option value="veteran_mortgage">Veterans Mortgage Protection</option>
+                      <option value="trucker_leads">Truckers (Life Insurance)</option>
+                      <option value="trucker_iul">Truckers IUL</option>
+                      <option value="trucker_mortgage">Truckers Mortgage Protection</option>
+                      <option value="default">Default (Generic)</option>
+                    </select>
+                    {savingScript && <span style={{ fontSize: "12px", color: "#64748b" }}>Saving...</span>}
+                  </div>
                 </div>
 
                 <div className="flex justify-between items-center mb-2">
