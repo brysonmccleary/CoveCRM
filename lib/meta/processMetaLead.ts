@@ -156,32 +156,37 @@ export async function processMetaLead(
   const crmLeadType = FB_LEAD_TYPE_TO_CRM[(campaign as any).leadType] ?? "Final Expense";
   const normalizedPhone = String(leadData.phone || "").replace(/\D+/g, "");
 
-  const metaNotes = [
+  const rawFields = leadData.rawFieldData || [];
+
+  function getRawField(label: string): string {
+    const normalized = label.toLowerCase().replace(/[\s_-]+/g, "_");
+    const found = rawFields.find((f: any) =>
+      String(f.name || "").toLowerCase().replace(/[\s_-]+/g, "_") === normalized
+    );
+    return String(found?.values?.[0] || "").trim();
+  }
+
+  const ageRaw = getRawField("age");
+  const ageValue = ageRaw || null;
+
+  const beneficiary = getRawField("who_would_be_your_beneficiary");
+  const coverageAmount = getRawField("what_coverage_amount_are_you_interested_in");
+  const mortgageBalance = getRawField("what_is_your_mortgage_balance");
+  const militaryBranch = getRawField("what_military_branch_did_you_serve_in");
+  const cdlStatus = getRawField("are_you_currently_an_active_cdl_driver");
+  const iulGoal = getRawField("are_you_looking_for_protection_cash_value_growth_or_both");
+  const bestCallTime = getRawField("best_time_for_a_licensed_agent_to_call");
+
+  const coverageAmountFinal = coverageAmount || mortgageBalance || "";
+
+  const contextualNotes = [
+    militaryBranch ? `Military Branch: ${militaryBranch}` : "",
+    cdlStatus ? `CDL Status: ${cdlStatus}` : "",
+    iulGoal ? `IUL Goal: ${iulGoal}` : "",
+    bestCallTime ? `Best Call Time: ${bestCallTime}` : "",
     leadData.productInterest ? `Interest: ${leadData.productInterest}` : "",
     leadData.zip ? `Zip: ${leadData.zip}` : "",
-  ].filter(Boolean).join(" | ");
-
-  const STANDARD_FIELDS = new Set([
-    "full_name", "first_name", "last_name", "fname", "lname",
-    "phone_number", "phone", "mobile_number", "cell_phone",
-    "email", "email_address",
-    "state", "state_province", "province",
-    "zip_code", "zip", "postal_code",
-    "city",
-  ]);
-
-  const extraNotes = (leadData.rawFieldData || [])
-    .filter((f: any) => !STANDARD_FIELDS.has(String(f.name || "").toLowerCase().replace(/[\s_-]+/g, "_")))
-    .map((f: any) => `${f.name}: ${f.values?.[0] || ""}`)
-    .filter((f: string) => f.includes(": ") && f.split(": ")[1])
-    .join("\n");
-
-  const ageRaw = (leadData.rawFieldData || []).find((f: any) =>
-    String(f.name || "").toLowerCase().trim() === "age"
-  );
-  const ageValue = ageRaw ? parseInt(String(ageRaw.values?.[0] || ""), 10) : null;
-
-  const combinedNotes = [metaNotes, extraNotes].filter(Boolean).join("\n");
+  ].filter(Boolean).join("\n");
 
   const newLead = await Lead.create({
     "First Name": leadData.firstName,
@@ -192,8 +197,10 @@ export async function processMetaLead(
     phoneLast10: normalizedPhone.slice(-10),
     normalizedPhone: normalizedPhone.slice(-10),
     State: leadData.state || "",
-    Notes: combinedNotes || undefined,
-    ...(ageValue && !isNaN(ageValue) ? { Age: ageValue } : {}),
+    Notes: contextualNotes || undefined,
+    Age: ageValue || undefined,
+    Beneficiary: beneficiary || undefined,
+    "Coverage Amount": coverageAmountFinal || undefined,
     userEmail,
     ownerEmail: userEmail,
     folderId: (folder as any)._id,
