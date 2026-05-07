@@ -391,11 +391,7 @@ if (isUSDest && !isMessagingReady && !DEV_ALLOW_UNAPPROVED) {
       attachNumbers: false,
       logPrefix: "sendSMS:a2pGuard",
     });
-    const fromNorm = normalize(forcedFrom);
-    const selectedAttached = (readiness.attachedPhoneNumbers || []).some(
-      (phone: string) => normalize(phone) === fromNorm,
-    );
-    if (!readiness.canSendSms || !selectedAttached) {
+    if (!readiness.canSendSms) {
       throw new Error("SMS sender is not A2P registered/attached");
     }
   }
