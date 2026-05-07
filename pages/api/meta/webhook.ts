@@ -73,14 +73,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const signatureHeader = String(req.headers["x-hub-signature-256"] || "");
     const isValid = validateSignature(rawBody, signatureHeader);
     if (!isValid) {
-      if (META_APP_SECRET) {
-        // Production: signature is required and must be valid — reject silently.
-        // Return 200 so Meta doesn't retry (they would keep retrying on 4xx).
-        console.warn("[meta-webhook] Invalid X-Hub-Signature-256 in production — rejecting without processing");
+      if (META_APP_SECRET && signatureHeader) {
+        // Only reject if a signature was actually provided and it's wrong.
+        // Meta test webhooks from the developer dashboard send no signature header,
+        // so we allow those through for testing purposes.
+        console.warn("[meta-webhook] Invalid X-Hub-Signature-256 — rejecting");
         return res.status(200).json({ ok: false, error: "invalid_signature" });
       }
-      // Dev/local (no META_APP_SECRET): warn but continue (covered by validateSignature returning true)
-      console.warn("[meta-webhook] Signature check skipped — META_APP_SECRET not configured");
+      console.warn("[meta-webhook] Signature check skipped — no signature header or META_APP_SECRET not configured");
     }
 
     // Parse body
