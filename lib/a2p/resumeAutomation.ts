@@ -1315,7 +1315,17 @@ export async function resumeA2PAutomationForUserEmail(userEmail: string) {
                 log("A2P][BRAND_RECOVERED", { userEmail: normalizedEmail, brandSid, reason: "409-conflict" });
               }
             } else {
-              throw err;
+              // Don't throw — store the error and let the function continue so
+              // trustProductStatus: TWILIO_APPROVED is persisted to the DB.
+              // The next sync will retry brand creation with brandSid still null.
+              log("A2P ERROR", {
+                step: "brand_create",
+                userEmail: normalizedEmail,
+                message: err?.message || String(err),
+                code: err?.code,
+                status: err?.status,
+              });
+              update.lastError = err?.message || String(err);
             }
           }
         }
