@@ -161,6 +161,28 @@ export async function processMetaLead(
     leadData.zip ? `Zip: ${leadData.zip}` : "",
   ].filter(Boolean).join(" | ");
 
+  const STANDARD_FIELDS = new Set([
+    "full_name", "first_name", "last_name", "fname", "lname",
+    "phone_number", "phone", "mobile_number", "cell_phone",
+    "email", "email_address",
+    "state", "state_province", "province",
+    "zip_code", "zip", "postal_code",
+    "city",
+  ]);
+
+  const extraNotes = (leadData.rawFieldData || [])
+    .filter((f: any) => !STANDARD_FIELDS.has(String(f.name || "").toLowerCase().replace(/[\s_-]+/g, "_")))
+    .map((f: any) => `${f.name}: ${f.values?.[0] || ""}`)
+    .filter((f: string) => f.includes(": ") && f.split(": ")[1])
+    .join("\n");
+
+  const ageRaw = (leadData.rawFieldData || []).find((f: any) =>
+    String(f.name || "").toLowerCase().trim() === "age"
+  );
+  const ageValue = ageRaw ? parseInt(String(ageRaw.values?.[0] || ""), 10) : null;
+
+  const combinedNotes = [metaNotes, extraNotes].filter(Boolean).join("\n");
+
   const newLead = await Lead.create({
     "First Name": leadData.firstName,
     "Last Name": leadData.lastName,
@@ -170,7 +192,8 @@ export async function processMetaLead(
     phoneLast10: normalizedPhone.slice(-10),
     normalizedPhone: normalizedPhone.slice(-10),
     State: leadData.state || "",
-    Notes: metaNotes || undefined,
+    Notes: combinedNotes || undefined,
+    ...(ageValue && !isNaN(ageValue) ? { Age: ageValue } : {}),
     userEmail,
     ownerEmail: userEmail,
     folderId: (folder as any)._id,
