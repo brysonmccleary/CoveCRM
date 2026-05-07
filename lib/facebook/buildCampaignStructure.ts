@@ -11,11 +11,34 @@ export type CampaignStructureCreative = {
   templateId?: string;
 };
 
+// Interest names for audience segments. IDs must be verified via the Meta API's
+// /search?type=adinterest endpoint before use. Names alone may be resolved by Meta
+// but ID-based targeting is more reliable.
+// TODO: call GET https://graph.facebook.com/v19.0/search?type=adinterest&q=<name>&access_token=<token>
+// to obtain verified numeric interest IDs for each name before production use.
+const AUDIENCE_SEGMENT_INTERESTS: Record<string, { name: string }[]> = {
+  veteran: [
+    { name: "United States Armed Forces" },
+    { name: "Veteran" },
+    { name: "Veterans of Foreign Wars" },
+    { name: "American Legion" },
+    { name: "Military" },
+  ],
+  trucker: [
+    { name: "Trucking" },
+    { name: "Commercial Driver's License" },
+    { name: "Owner-operator (trucking)" },
+    { name: "American Trucking Associations" },
+    { name: "Commercial vehicle" },
+  ],
+};
+
 export function buildCampaignStructure(input: {
   campaignName: string;
   licensedStates: unknown;
   dailyBudgetCents: number;
   creatives: CampaignStructureCreative[];
+  audienceSegment?: string;
 }) {
   const licensedStates = validateStates(input.licensedStates);
   const creatives = (Array.isArray(input.creatives) ? input.creatives : [])
@@ -31,11 +54,18 @@ export function buildCampaignStructure(input: {
     throw new Error("Valid state targeting required");
   }
 
+  const segmentInterests = input.audienceSegment
+    ? AUDIENCE_SEGMENT_INTERESTS[input.audienceSegment]
+    : undefined;
+  const segmentTargeting = segmentInterests?.length
+    ? { ...targeting, flexible_spec: [{ interests: segmentInterests }] }
+    : targeting;
+
   return {
     campaign: {
       name: String(input.campaignName || "").trim(),
       objective: "LEADS",
-      special_ad_categories: ["CREDIT"],
+      special_ad_categories: [],
       buying_type: "AUCTION",
       status: "PAUSED",
     },
@@ -46,7 +76,7 @@ export function buildCampaignStructure(input: {
       billing_event: "IMPRESSIONS",
       bid_strategy: "LOWEST_COST_WITHOUT_CAP",
       status: "PAUSED",
-      targeting,
+      targeting: segmentTargeting,
       placements: "advantage_plus_default",
     },
     ads: creatives.map((creative, index) => ({

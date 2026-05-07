@@ -5,6 +5,8 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { createHmac, timingSafeEqual } from "crypto";
 import axios from "axios";
+
+export const config = { api: { bodyParser: false } };
 import mongooseConnect from "@/lib/mongooseConnect";
 import FBLeadEntry from "@/models/FBLeadEntry";
 import FBLeadCampaign from "@/models/FBLeadCampaign";
@@ -21,7 +23,16 @@ import { buildLeadSheetPayload } from "@/lib/facebook/sheets/mapLeadToSheetRow";
 
 const FB_APP_SECRET = process.env.FB_APP_SECRET || "";
 
-function validateFBSignature(rawBody: string, signatureHeader: string): boolean {
+async function getRawBody(req: NextApiRequest): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk: Buffer) => chunks.push(chunk));
+    req.on("end", () => resolve(Buffer.concat(chunks)));
+    req.on("error", reject);
+  });
+}
+
+function validateFBSignature(rawBody: Buffer, signatureHeader: string): boolean {
   if (!FB_APP_SECRET) return true; // dev/local: skip when not configured
   if (!signatureHeader) return false;
   const sig = signatureHeader.replace(/^sha256=/, "");
@@ -104,12 +115,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   // ── POST: Receive lead events ────────────────────────────────────────────
   if (req.method === "POST") {
-    const body = req.body;
+    let rawBody: Buffer;
+    try {
+      rawBody = await getRawBody(req);
+    } catch (err: any) {
+      console.error("[fb-webhook] Failed to read body:", err?.message);
+      return res.status(200).json({ ok: true });
+    }
 
-    // HMAC-SHA256 signature validation (FB_APP_SECRET must be set in production)
+    // HMAC-SHA256 signature validation against raw body bytes
     const signatureHeader = String(req.headers["x-hub-signature-256"] || "");
-    const rawBodyStr = JSON.stringify(body);
-    if (!validateFBSignature(rawBodyStr, signatureHeader)) {
+    if (!validateFBSignature(rawBody, signatureHeader)) {
       if (FB_APP_SECRET) {
         // Production: reject invalid signatures silently — return 200 so FB doesn't retry
         console.warn("[fb-webhook] Invalid X-Hub-Signature-256 — rejecting");
@@ -118,328 +134,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       console.warn("[fb-webhook] Signature check skipped — FB_APP_SECRET not configured");
     }
 
-    console.info("[fb-webhook] Received payload:", JSON.stringify(body).slice(0, 500));
-
-    // Always return 200 quickly to Facebook
-    res.status(200).json({ ok: true });
-
+    let body: any;
     try {
-      await mongooseConnect();
-
-      if (body?.object !== "page") return;
-
-      for (const entry of body?.entry ?? []) {
-        for (const change of entry?.changes ?? []) {
-          if (change?.field !== "leadgen") continue;
-
-          const value = change.value;
-          const fbLeadId = String(value?.leadgen_id ?? "");
-          const pageId = String(value?.page_id ?? "");
-          const formId = String(value?.form_id ?? "");
-          const adId = String(value?.ad_id ?? "");
-
-          if (!fbLeadId) continue;
-
-          // Idempotent — skip already-processed leads
-          const existing = await FBLeadEntry.findOne({ facebookLeadId: fbLeadId }).lean();
-          if (existing) {
-            console.info(`[fb-webhook] Lead ${fbLeadId} already exists, skipping`);
-            continue;
-          }
-
-          const fieldMap: Record<string, string> = {};
-
-          // Fall back to any field_data included directly in the payload
-          for (const f of value?.field_data ?? []) {
-            fieldMap[String(f.name).toLowerCase()] = String(f.values?.[0] ?? "");
-          }
-
-          // Find campaign: pageId → leadType match → isDefault → most recent active
-          const userEmailFromQuery =
-            typeof req.query.userEmail === "string" ? req.query.userEmail.toLowerCase() : "";
-
-          let campaign =
-            (formId
-              ? await FBLeadCampaign.findOne({
-                  metaFormId: formId,
-                  status: { $in: ["active", "setup"] },
-                }).lean()
-              : null) ||
-            (adId
-              ? await FBLeadCampaign.findOne({
-                  metaAdId: adId,
-                  status: { $in: ["active", "setup"] },
-                }).lean()
-              : null) ||
-            (value?.campaign_id
-              ? await FBLeadCampaign.findOne({
-                  metaCampaignId: String(value.campaign_id),
-                  status: { $in: ["active", "setup"] },
-                }).lean()
-              : null) ||
-            (pageId
-              ? await FBLeadCampaign.findOne({
-                  facebookPageId: pageId,
-                  status: { $in: ["active", "setup"] },
-                })
-                  .sort({ createdAt: -1 })
-                  .lean()
-              : null);
-
-          if (!campaign) {
-            console.warn("[fb-webhook] No campaign match", {
-              formId,
-              adId,
-              metaCampaignId: value?.campaign_id,
-              pageId,
-            });
-          }
-
-          if (!campaign && userEmailFromQuery) {
-            // Try matching by lead_type from form data
-            const leadTypeFromForm =
-              fieldMap["lead_type"] ?? fieldMap["leadtype"] ?? fieldMap["insurance_type"] ?? "";
-
-            if (leadTypeFromForm) {
-              campaign = await FBLeadCampaign.findOne({
-                userEmail: userEmailFromQuery,
-                leadType: leadTypeFromForm,
-                status: { $in: ["active", "setup"] },
-              })
-                .sort({ createdAt: -1 })
-                .lean();
-            }
-
-            // Try isDefault campaign
-            if (!campaign) {
-              campaign = await FBLeadCampaign.findOne({
-                userEmail: userEmailFromQuery,
-                isDefault: true,
-                status: { $in: ["active", "setup"] },
-              }).lean();
-            }
-
-            // Fall back to most recently created active campaign
-            if (!campaign) {
-              campaign = await FBLeadCampaign.findOne({
-                userEmail: userEmailFromQuery,
-                status: { $in: ["active", "setup"] },
-              })
-                .sort({ createdAt: -1 })
-                .lean();
-            }
-          }
-
-          if (!campaign) {
-            console.warn("[fb-webhook] No matching campaign for lead", { fbLeadId, pageId, adId });
-            continue;
-          }
-
-          const user = await User.findOne({ _id: (campaign as any).userId })
-            .select("_id metaAccessToken")
-            .lean();
-          if (!user) continue;
-
-          const accessToken = String((user as any)?.metaAccessToken || "").trim();
-          if (accessToken) {
-            const graphFieldMap = await fetchLeadFromGraph(fbLeadId, accessToken);
-            Object.assign(fieldMap, graphFieldMap);
-            for (const f of value?.field_data ?? []) {
-              fieldMap[String(f.name).toLowerCase()] = String(f.values?.[0] ?? "");
-            }
-          } else {
-            console.warn("[fb-webhook] Missing access token, using payload only");
-          }
-
-          // Check active FB Lead Manager subscription
-          const sub = await FBLeadSubscription.findOne({ userId: (user as any)._id }).lean();
-          const hasActiveSub =
-            sub &&
-            sub.status === "active" &&
-            sub.currentPeriodEnd != null &&
-            new Date(sub.currentPeriodEnd) > new Date();
-
-          if (!hasActiveSub) {
-            console.info(`[fb-webhook] Webhook blocked: no active subscription for userId ${(user as any)._id}`);
-            return res.status(200).json({ ok: true, blocked: true, reason: "no_active_subscription" });
-          }
-
-          const folderName = `FB: ${(campaign as any).campaignName}`;
-          let folder: any = null;
-
-          // First: try stored folderId for direct routing (faster, more reliable)
-          if ((campaign as any).folderId) {
-            folder = await Folder.findById((campaign as any).folderId).lean();
-          }
-
-          // Fallback: find or create by name convention
-          if (!folder) {
-            folder = await Folder.findOne({
-              userEmail: (campaign as any).userEmail,
-              name: folderName,
-            }).lean();
-            if (!folder) {
-              folder = await Folder.create({
-                name: folderName,
-                userEmail: (campaign as any).userEmail,
-                assignedDrips: [],
-                aiFirstCallEnabled: true,
-                aiContactEnabled: true,
-                aiEnabledAt: new Date(),
-                aiScriptKey:
-                  FB_LEAD_TYPE_TO_AI_SCRIPT_KEY[(campaign as any).leadType] || "default",
-              });
-            }
-          }
-
-          const fullName =
-            fieldMap["full_name"] ??
-            `${fieldMap["first_name"] ?? ""} ${fieldMap["last_name"] ?? ""}`.trim();
-          const email = (fieldMap["email"] ?? "").toLowerCase().trim();
-          const phone = fieldMap["phone_number"] ?? fieldMap["phone"] ?? "";
-          const city = fieldMap["city"] ?? "";
-          const state = fieldMap["state"] ?? "";
-          const zip = fieldMap["zip"] ?? fieldMap["postal_code"] ?? "";
-          const birthdate = fieldMap["birthdate"] ?? fieldMap["date_of_birth"] ?? "";
-          const homeowner = fieldMap["homeowner"] ?? "";
-          const coverageAmount =
-            fieldMap["coverage_amount"] ??
-            fieldMap["coverage amount wanted ($5,000 – $25,000 / $25,000+)"] ??
-            fieldMap["mortgage balance (approximate)"] ??
-            fieldMap["current coverage amount (if any)"] ??
-            "";
-
-          const nameParts = fullName.split(/\s+/);
-          const firstName = nameParts[0] ?? "";
-          const lastName = nameParts.slice(1).join(" ");
-          const normalizedPhone = phone.replace(/\D+/g, "");
-          const crmLeadType = FB_LEAD_TYPE_TO_CRM[(campaign as any).leadType] ?? "Final Expense";
-          const sheetAnswers = {
-            ...fieldMap,
-            city,
-            state,
-            zip,
-            postalCode: zip,
-            birthdate,
-            dateOfBirth: birthdate,
-            homeowner,
-            coverage: coverageAmount,
-            coverageAmount,
-          };
-          const sheetNotes = Object.entries(fieldMap)
-            .filter(([, value]) => String(value || "").trim())
-            .map(([key, value]) => `${key}: ${value}`)
-            .join("\n");
-
-          // Duplicate check before creating CRM lead
-          const dupCheck = await checkDuplicate(
-            (campaign as any).userEmail,
-            normalizedPhone,
-            email
-          );
-          if (dupCheck.isDuplicate) {
-            console.info(`[fb-webhook] Duplicate lead detected: ${dupCheck.existingLeadId} (${dupCheck.matchType})`);
-            // Still create the FBLeadEntry for tracking, but don't create CRM lead
-          }
-
-          const entry = await FBLeadEntry.create({
-            userId: (user as any)._id,
-            userEmail: (campaign as any).userEmail,
-            campaignId: (campaign as any)._id,
-            firstName,
-            lastName,
-            email,
-            phone,
-            leadType: (campaign as any).leadType,
-            source: "facebook_webhook",
-            facebookLeadId: fbLeadId,
-            folderId: folder._id,
-            importedToCrm: true,
-            importedAt: new Date(),
-          });
-
-          if (dupCheck.isDuplicate) {
-            console.info(`[fb-webhook] Skipping CRM lead creation for duplicate`);
-            continue;
-          }
-
-          const crmLead = await Lead.create({
-            "First Name": firstName,
-            "Last Name": lastName,
-            Email: email,
-            email,
-            Phone: phone,
-            phoneLast10: normalizedPhone.slice(-10),
-            normalizedPhone,
-            userEmail: (campaign as any).userEmail,
-            folderId: folder._id,
-            leadType: crmLeadType,
-            status: "New",
-            sourceType: "facebook_lead",
-            realTimeEligible: true,
-            campaignId: (campaign as any)._id,
-            metaCampaignId: (campaign as any).metaCampaignId,
-            metaAdsetId: (campaign as any).metaAdsetId,
-            metaAdId: adId,
-            metaFormId: formId,
-          });
-
-          await FBLeadEntry.updateOne({ _id: entry._id }, { $set: { crmLeadId: crmLead._id } });
-
-          // Score lead and track source
-          try {
-            await scoreLeadOnArrival(String(crmLead._id), "facebook_realtime");
-            await trackLeadSourceStat((campaign as any).userEmail, "facebook_realtime");
-          } catch (scoreErr: any) {
-            console.warn("[fb-webhook] Scoring error:", scoreErr?.message);
-          }
-
-          await enrollOnNewLeadIfWatched({
-            userEmail: (campaign as any).userEmail,
-            folderId: String(folder._id),
-            leadId: String(crmLead._id),
-            startMode: "now",
-            source: "manual-lead",
-          });
-
-          // ✅ AI First-Call: fire-and-forget (non-blocking)
-          try {
-            triggerAIFirstCall(
-              String(crmLead._id),
-              String(folder._id),
-              (campaign as any).userEmail
-            ).catch(() => {});
-          } catch {}
-
-          await FBLeadCampaign.updateOne(
-            { _id: (campaign as any)._id },
-            { $inc: { totalLeads: 1 } }
-          );
-
-          // Mirror to the campaign's Google Sheet after CRM lead creation.
-          const appsScriptUrl = String((campaign as any).appsScriptUrl || "").trim();
-          if ((campaign as any).writeLeadsToSheet === true && appsScriptUrl) {
-            const payload = buildLeadSheetPayload({
-              leadType: (campaign as any).leadType,
-              campaignId: String((campaign as any)._id),
-              answers: sheetAnswers,
-              firstName,
-              lastName,
-              email,
-              phone,
-              notes: sheetNotes,
-              status: "New",
-            });
-            await writeToAppsScript(appsScriptUrl, payload);
-          }
-
-          console.info(`[fb-webhook] Imported lead ${fbLeadId} for ${(campaign as any).userEmail}`);
-        }
-      }
-    } catch (err: any) {
-      console.error("[fb-webhook] Error processing webhook:", err?.message);
+      body = JSON.parse(rawBody.toString("utf8"));
+    } catch {
+      console.error("[fb-webhook] Failed to parse JSON body");
+      return res.status(200).json({ ok: true });
     }
-    return;
+
+    // DEPRECATED: all lead processing now handled by /api/meta/webhook which uses
+    // correct raw-body signature validation and processMetaLead with drip enrollment.
+    // Return 200 so Meta does not retry; configure Meta to send webhooks to /api/meta/webhook.
+    console.warn("[facebook/webhook] DEPRECATED: use /api/meta/webhook instead. Lead not processed.");
+    return res.status(200).json({ ok: true, deprecated: true });
   }
 
   return res.status(405).json({ error: "Method not allowed" });

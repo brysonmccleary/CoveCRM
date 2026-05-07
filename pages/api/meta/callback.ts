@@ -97,6 +97,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           ...(firstAd?.account_id && {
             metaAdAccountId: firstAd.account_id,
           }),
+          ...(firstPage?.id && {
+            metaPageId: String(firstPage.id),
+            metaPageName: String(firstPage.name || ""),
+            metaPageAccessToken: String(firstPage.access_token || ""),
+          }),
         },
       }
     );

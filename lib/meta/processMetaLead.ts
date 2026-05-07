@@ -12,6 +12,7 @@ import { retrieveMetaLead } from "./retrieveLead";
 import { scoreLeadOnArrival } from "@/lib/leads/scoreLead";
 import { checkDuplicate } from "@/lib/leads/checkDuplicate";
 import { triggerAIFirstCall } from "@/lib/ai/triggerAIFirstCall";
+import { enrollOnNewLeadIfWatched } from "@/lib/drips/enrollOnNewLead";
 
 const FB_LEAD_TYPE_TO_CRM: Record<string, string> = {
   final_expense: "Final Expense",
@@ -19,6 +20,14 @@ const FB_LEAD_TYPE_TO_CRM: Record<string, string> = {
   mortgage_protection: "Mortgage Protection",
   veteran: "Veteran",
   trucker: "Trucker",
+};
+
+const FB_LEAD_TYPE_TO_AI_SCRIPT_KEY: Record<string, string> = {
+  final_expense: "final_expense",
+  mortgage_protection: "mortgage_protection",
+  iul: "iul_cash_value",
+  veteran: "veteran_leads",
+  trucker: "trucker_leads",
 };
 
 export async function processMetaLead(
@@ -106,10 +115,21 @@ export async function processMetaLead(
   );
 
   const folderName = `FB: ${(campaign as any).campaignName}`;
-  let folder = await Folder.findOne({ userEmail, name: folderName }).lean();
+  const aiScriptKey = FB_LEAD_TYPE_TO_AI_SCRIPT_KEY[(campaign as any).leadType] || "final_expense";
+  let folder: any = await Folder.findOne({ userEmail, name: folderName }).lean();
   if (!folder) {
-    await Folder.create({ name: folderName, userEmail, assignedDrips: [] });
-    folder = await Folder.findOne({ userEmail, name: folderName }).lean();
+    folder = await Folder.create({
+      name: folderName,
+      userEmail,
+      assignedDrips: [],
+      aiFirstCallEnabled: true,
+      aiContactEnabled: true,
+      aiRealTimeOnly: true,
+      aiScriptKey,
+    });
+  } else if (!(folder as any).aiScriptKey) {
+    await Folder.updateOne({ _id: (folder as any)._id }, { $set: { aiScriptKey } });
+    folder = await Folder.findOne({ _id: (folder as any)._id }).lean();
   }
 
   const entry = await FBLeadEntry.create({
@@ -191,6 +211,18 @@ export async function processMetaLead(
       ).catch(() => {});
     }
   } catch {}
+
+  try {
+    await enrollOnNewLeadIfWatched({
+      userEmail,
+      folderId: String((folder as any)._id),
+      leadId: String((newLead as any)._id),
+      startMode: "now",
+      source: "manual-lead",
+    });
+  } catch (enrollErr: any) {
+    console.warn("[processMetaLead] enrollOnNewLeadIfWatched failed (non-blocking):", enrollErr?.message);
+  }
 
   try {
     await User.updateOne({ _id: (user as any)._id }, { $set: { metaLastWebhookAt: new Date() } });
