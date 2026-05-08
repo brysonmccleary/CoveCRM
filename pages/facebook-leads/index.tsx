@@ -83,12 +83,6 @@ interface OptimizeResult {
   suggestedBudgetChange?: number | null;
 }
 
-interface GeneratedImages {
-  aiImages: { url: string; revised_prompt: string }[];
-  stockPhotos: { url: string; downloadUrl: string; photographer: string; unsplashLink: string }[];
-  recommendedSize: string;
-}
-
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 type LeadTypeOption = {
@@ -522,8 +516,6 @@ function SetupWizard({
   const [copiedScript, setCopiedScript] = useState(false);
   const [createdCampaignId, setCreatedCampaignId] = useState<string | null>(null);
   const [expectationsChecked, setExpectationsChecked] = useState(false);
-  const [imageData, setImageData] = useState<GeneratedImages | null>(null);
-  const [generatingImages, setGeneratingImages] = useState(false);
   // Full draft from generate-ad — preserved separately for imageUrl, overlayData, creativeArchetype
   const [adDraft, setAdDraft] = useState<any | null>(null);
 
@@ -641,25 +633,6 @@ function SetupWizard({
   const retryLoadSheetInstructions = () => {
     setAppsScriptTemplate("");
     loadAppsScriptTemplate();
-  };
-
-  const generateImages = async () => {
-    setGeneratingImages(true);
-    try {
-      const res = await fetch("/api/ai/generate-ad-images", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          leadType,
-          agentName: session?.user?.name ?? "Agent",
-          agentState: "US",
-        }),
-      });
-      const data = await res.json();
-      if (res.ok) setImageData(data);
-    } finally {
-      setGeneratingImages(false);
-    }
   };
 
   const createCampaign = async () => {
@@ -1064,7 +1037,7 @@ function SetupWizard({
                 </button>
 
                 {/* Ad preview — Facebook lead ad mock-up */}
-                {adDraft && (adDraft.imageUrl || adDraft.creativeArchetype || adDraft.landingPageConfig) && (
+                {adDraft && (adDraft.creativeArchetype || adDraft.landingPageConfig || adDraft.leadType) && (
                   <div className="border-t border-gray-700 pt-4">
                     <AdPreviewCard
                       draft={adDraft}
@@ -1081,83 +1054,6 @@ function SetupWizard({
                   <div className="bg-[#0f172a] border border-gray-700 rounded-lg p-4 text-sm text-gray-300 leading-relaxed">
                     {CREATIVE_TIPS[leadType] ?? "Use authentic photos with real people. Lifestyle images consistently outperform graphic designs for insurance ads."}
                   </div>
-                </div>
-
-                {/* Ad Image Generator */}
-                <div className="border-t border-gray-700 pt-4 space-y-4">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-sm font-semibold text-white">System-Provided Creative Assets</p>
-                      <p className="text-xs text-gray-400 mt-1">CoveCRM provides the creative asset direction for this campaign. Manual image upload is not part of the standard flow.</p>
-                    </div>
-                    {!imageData && (
-                      <button
-                        onClick={generateImages}
-                        disabled={generatingImages}
-                        className="bg-purple-700 hover:bg-purple-600 text-white text-xs px-4 py-1.5 rounded disabled:opacity-60"
-                      >
-                        {generatingImages ? "Generating…" : "✨ Generate Images"}
-                      </button>
-                    )}
-                  </div>
-
-                  {generatingImages && (
-                    <div className="flex items-center gap-3 text-gray-400 text-sm py-4 justify-center">
-                      <div className="animate-spin w-5 h-5 border-2 border-purple-500 border-t-transparent rounded-full" />
-                      Generating unique images for your campaign…
-                    </div>
-                  )}
-
-                  {imageData && (
-                    <div className="space-y-4">
-                      {/* Curated Stock Photos */}
-                      {imageData.stockPhotos.length > 0 && (
-                        <div className="space-y-2">
-                          <p className="text-xs text-gray-400 uppercase tracking-wide font-medium">Recommended Creative Assets For This Lead Type</p>
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                            {imageData.stockPhotos.map((photo: any, i: number) => (
-                              <div key={i} className="bg-[#0f172a] border border-gray-700 rounded-lg overflow-hidden">
-                                <img
-                                  src={photo.url}
-                                  alt={`Photo ${i + 1}`}
-                                  className="w-full object-cover"
-                                  style={{ aspectRatio: "16/9" }}
-                                />
-                                <div className="p-2 flex items-center justify-between">
-                                  <a
-                                    href={photo.unsplashLink}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="text-xs text-gray-500 hover:text-gray-300"
-                                  >
-                                    Photo by {photo.photographer}
-                                  </a>
-                                  <a
-                                    href={photo.downloadUrl}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="text-xs text-blue-400 hover:text-blue-300"
-                                  >
-                                    Download ↗
-                                  </a>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-
-                      <div className="bg-[#0f172a] border border-gray-700 rounded-lg p-3 space-y-1.5">
-                        <p className="text-xs text-gray-300">These are CoveCRM-provided recommended visuals for this campaign. Use them as-is or as the benchmark for the final creative you launch in Meta.</p>
-                        <p className="text-xs text-blue-300">Agents should not need to go source their own images just to complete setup.</p>
-                        <p className="text-xs text-gray-500">📐 {imageData.recommendedSize}</p>
-                      </div>
-                    </div>
-                  )}
-
-                  {!imageData && !generatingImages && (
-                    <p className="text-xs text-gray-500">Click &quot;Generate Images&quot; to load CoveCRM-provided creative assets and recommendations for this campaign.</p>
-                  )}
                 </div>
               </div>
             ) : (

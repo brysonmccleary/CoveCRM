@@ -151,7 +151,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     headline: variant.headline,
     description: variant.description,
     cta: variant.cta,
-    imagePrompt: variant.imagePrompt,
     videoScript: variant.videoScript,
     buttonLabels: variant.buttonLabels,
     bulletPoints: variant.bulletPoints,
