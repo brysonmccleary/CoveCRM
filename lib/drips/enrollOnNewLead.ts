@@ -68,7 +68,14 @@ export async function enrollOnNewLeadIfWatched(params: {
     .select({ _id: 1, campaignId: 1, startMode: 1 })
     .lean();
 
-  if (!watchers?.length) return;
+  if (!watchers?.length) {
+    console.log("[DRIP] No campaign assigned for folder — skipping auto SMS", {
+      userEmail,
+      folderId,
+      leadId,
+    });
+    return;
+  }
 
   const now = new Date();
 

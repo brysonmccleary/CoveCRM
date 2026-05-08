@@ -4,7 +4,6 @@ import { sendSMS } from "@/lib/twilio/sendSMS"; // ✅ central Twilio sender tha
 import { renderTemplate, ensureOptOut, splitName } from "@/utils/renderTemplate";
 import { acquireLock } from "@/lib/locks"; // 🔒 add lock
 
-// 👇 Defaults
 const DEFAULT_AGENT_NAME = "your licensed agent";
 const DEFAULT_AGENT_PHONE = "N/A";
 const DEFAULT_FOLDER_NAME = "your campaign";
@@ -25,6 +24,12 @@ function getCurrentTime() {
  */
 export async function sendInitialDrip(lead: LeadType, rawMessage?: string) {
   try {
+    const explicitMessage = String(rawMessage || "").trim();
+    if (!explicitMessage) {
+      console.log("[DRIP] No campaign assigned for folder — skipping auto SMS");
+      return;
+    }
+
     const to = (lead as any)?.phone || (lead as any)?.Phone;
     if (!to) return;
 
@@ -67,11 +72,8 @@ export async function sendInitialDrip(lead: LeadType, rawMessage?: string) {
       (lead as any)?.folder?.name ||
       DEFAULT_FOLDER_NAME;
 
-    // Default message
-    const defaultMessage = `Hey {{ contact.first_name | default:"there" }}, we got your request for info — when’s a good time to give you a call?`;
-
     // 1) Render {{ }} placeholders
-    const rendered = renderTemplate(rawMessage || defaultMessage, {
+    const rendered = renderTemplate(explicitMessage, {
       contact: {
         first_name: firstName,
         last_name: lastName,
