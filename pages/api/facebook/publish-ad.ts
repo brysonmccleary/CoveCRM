@@ -31,15 +31,15 @@ const openai = process.env.OPENAI_API_KEY
 
 const IMAGE_PROMPT_FALLBACKS: Record<string, string> = {
   final_expense:
-    "Vertical 1:1 Facebook ad image for final expense insurance, older couple at home, warm trustworthy realistic photography, no logos, no text overlay",
+    "Direct-response Facebook ad creative background for final expense insurance, poster-style composition, premium dark gold layout, blank reserved headline area for app-rendered text, blank reserved CTA/button area for app-rendered UI, clean graphic background with space for overlay, no readable text inside image, NOT lifestyle photography, NO family-photo scene, no logos",
   iul:
-    "Vertical 1:1 Facebook ad image for indexed universal life, confident middle-aged family in a bright home setting, premium realistic photography, no logos, no text overlay",
+    "Premium direct-response IUL education ad creative background, blue gold white clean graphic layout, blank reserved headline area for app-rendered text, blank reserved CTA/button area for app-rendered UI, clean background with space for overlay, no readable text inside image, NOT lifestyle stock-photo style, no logos",
   mortgage_protection:
-    "Vertical 1:1 Facebook ad image for mortgage protection, homeowner family in front of their house, realistic trustworthy lighting, no logos, no text overlay",
+    "Direct-response mortgage protection ad creative background, home-focused poster layout, house and key visual, blank reserved headline area for app-rendered text, blank reserved CTA/button area for app-rendered UI, clean graphic background with space for overlay, no readable text inside image, high contrast red white navy palette, NOT lifestyle stock photography, NOT paperwork table scene, no logos",
   veteran:
-    "Vertical 1:1 Facebook ad image for veteran life insurance leads, mature family at home with subtle patriotic palette, realistic, no insignia, no logos, no text overlay",
+    "Direct-response veteran insurance ad creative background, bold patriotic poster composition, navy and gold graphic areas, American flag texture background, veteran-aged civilian male, blank reserved headline area for app-rendered text, blank reserved CTA/button area for app-rendered UI, no readable text inside image, NOT lifestyle photography, NO kids, NO family portraits, NO military uniforms, NO official insignia, NO government seals, no logos",
   trucker:
-    "Vertical 1:1 Facebook ad image for trucker insurance leads, professional truck driver with family-safe trustworthy tone, realistic photography, no logos, no text overlay",
+    "Direct-response trucker insurance ad creative background, large semi truck hero image on highway, poster composition, blank reserved headline area for app-rendered text, blank reserved CTA/button area for app-rendered UI, clean graphic background with space for overlay, no readable text inside image, high contrast neon amber blue or patriotic palette, NOT stock-photo style, NO home-family scenes, no logos",
 };
 
 function getImageAssetFromOpenAIResponse(image: any) {
@@ -61,13 +61,83 @@ function getBase64FromDataImageUrl(imageAsset: string) {
   return match?.[1]?.replace(/\s/g, "") || "";
 }
 
+function isGeneratedCoveCrmDraft(draft: any) {
+  return Boolean(
+    draft?.winningFamilyId ||
+    draft?.variationType ||
+    draft?.uniquenessFingerprint ||
+    draft?.vendorStyleTag ||
+    draft?.landingPageConfig
+  );
+}
+
+function stripRenderedCreativeData(draft: any) {
+  if (!draft || typeof draft !== "object") return draft;
+  const { renderedCreativeDataUrl: _renderedCreativeDataUrl, ...rest } = draft;
+  return rest;
+}
+
+function sanitizeImagePrompt(prompt: string, leadType: string) {
+  let sanitized = String(prompt || "");
+  const replacements: Array<[RegExp, string]> = [
+    [/family at home/gi, "structured direct-response ad layout"],
+    [/mature family/gi, "single veteran-aged civilian subject"],
+    [/young family/gi, "home-focused visual"],
+    [/smiling family/gi, "structured benefit-card visual"],
+    [/couple at home/gi, "home-focused visual"],
+    [/couple reviewing paperwork/gi, "clean graphic background with space for overlay"],
+    [/kitchen table/gi, "blank reserved CTA/button area for app-rendered UI"],
+    [/cozy home/gi, "premium direct-response layout"],
+    [/warm natural lighting/gi, "high-contrast direct-response lighting"],
+    [/warm realistic lighting/gi, "high-contrast direct-response lighting"],
+    [/warm cinematic/gi, "high-contrast direct-response"],
+    [/candid family photography/gi, "poster-style ad creative"],
+    [/realistic photography/gi, "graphic direct-response ad composition"],
+    [/structured typography zones/gi, "blank reserved headline area for app-rendered text"],
+    [/age or coverage selection buttons/gi, "blank reserved CTA/button area for app-rendered UI"],
+    [/fake clickable (?:option )?buttons?/gi, "blank reserved CTA/button area for app-rendered UI"],
+    [/amount card layout/gi, "clean graphic background with space for overlay"],
+    [/amount-card layout/gi, "clean graphic background with space for overlay"],
+    [/benefit-card composition/gi, "clean graphic background with space for overlay"],
+    [/benefit-card visual/gi, "clean graphic background with space for overlay"],
+    [/strong headline area/gi, "blank reserved headline area for app-rendered text"],
+    [/bold headline zone/gi, "blank reserved headline area for app-rendered text"],
+    [/clean CTA layout/gi, "blank reserved CTA/button area for app-rendered UI"],
+  ];
+
+  if (leadType === "veteran") {
+    replacements.push(
+      [/children/gi, "coverage cards"],
+      [/kids/gi, "coverage cards"],
+      [/family portraits?/gi, "patriotic poster composition"]
+    );
+  }
+
+  if (leadType === "trucker") {
+    replacements.push([/family/gi, "semi truck hero visual"]);
+  }
+
+  for (const [pattern, replacement] of replacements) {
+    sanitized = sanitized.replace(pattern, replacement);
+  }
+
+  return sanitized;
+}
+
 async function generateImageUrlForPublish(leadType: string, imagePrompt?: string) {
   if (!openai) return "";
 
-  const prompt =
-    String(imagePrompt || "").trim() ||
-    IMAGE_PROMPT_FALLBACKS[leadType] ||
-    IMAGE_PROMPT_FALLBACKS.mortgage_protection;
+  const rawImagePrompt = String(imagePrompt || "").trim();
+  const fallbackPrompt = IMAGE_PROMPT_FALLBACKS[leadType] || IMAGE_PROMPT_FALLBACKS.mortgage_protection;
+
+  if (!rawImagePrompt) {
+    console.warn("[publish-ad] Missing imagePrompt; using direct-response fallback", { leadType });
+  }
+
+  const prompt = sanitizeImagePrompt(
+    rawImagePrompt || fallbackPrompt,
+    leadType
+  );
 
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
@@ -144,6 +214,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     cta,
     imagePrompt,
     imageUrl,
+    renderedCreativeDataUrl,
     facebookPageId,
     adAccountId,
     drafts,
@@ -172,6 +243,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     cta?: string;
     imagePrompt?: string;
     imageUrl?: string;
+    renderedCreativeDataUrl?: string;
     facebookPageId?: string;
     adAccountId?: string;
     drafts?: Array<{
@@ -182,11 +254,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       cta?: string;
       imagePrompt?: string;
       imageUrl?: string;
+      renderedCreativeDataUrl?: string;
       winningFamilyId?: string;
       variationType?: string;
       uniquenessFingerprint?: string;
       vendorStyleTag?: string;
       creativeArchetype?: string;
+      landingPageConfig?: Record<string, any>;
     }>;
     creativeArchetype?: string;
     winningFamilyId?: string;
@@ -298,6 +372,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             cta,
             imagePrompt,
             imageUrl,
+            renderedCreativeDataUrl,
             winningFamilyId,
             variationType,
             uniquenessFingerprint,
@@ -305,12 +380,32 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             creativeArchetype,
           },
         ];
+    const generatedCoveCrmCreative = Boolean(
+      winnerLandingPageConfig ||
+      winningFamilyId ||
+      variationType ||
+      uniquenessFingerprint ||
+      vendorStyleTag ||
+      normalizedDrafts.some(isGeneratedCoveCrmDraft)
+    );
+    const missingRenderedCreative = generatedCoveCrmCreative && normalizedDrafts.some((currentDraft) => {
+      const renderedAsset = String(currentDraft?.renderedCreativeDataUrl || "").trim();
+      return !getBase64FromDataImageUrl(renderedAsset);
+    });
+
+    if (missingRenderedCreative) {
+      return res.status(400).json({
+        ok: false,
+        error: "Rendered creative is required before publishing.",
+      });
+    }
+
     const funnelSlug = safeName
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/^-|-$/g, "")
       .slice(0, 80);
-    let resolvedImageUrl = String(imageUrl || normalizedDrafts[0]?.imageUrl || "").trim();
+    let resolvedImageUrl = String(renderedCreativeDataUrl || normalizedDrafts[0]?.renderedCreativeDataUrl || imageUrl || normalizedDrafts[0]?.imageUrl || "").trim();
 
     if (!resolvedImageUrl) {
       resolvedImageUrl = await generateImageUrlForPublish(leadType, imagePrompt);
@@ -322,6 +417,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         error: "Image generation required before publish",
       });
     }
+
+    const storedDrafts = normalizedDrafts.map(stripRenderedCreativeData);
+    const storedImageUrl = String(imageUrl || normalizedDrafts[0]?.imageUrl || "").trim();
 
     // Build auto-hosted funnel content.
     // For winner-supported lead types: use the winner landing page config passed from generate-ad.
@@ -356,7 +454,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         ?? primaryRule.colorDirection,
       adHeadline: headline || "",
       adPrimaryText: primaryText || "",
-      imageUrl: resolvedImageUrl,
+      imageUrl: storedImageUrl || resolvedImageUrl,
       creativeArchetype: creativeArchetype || winningFamilyId || primaryRule.archetype,
       generatedAt: new Date().toISOString(),
       // Winner metadata — used by the funnel renderer for family-matched styling
@@ -446,7 +544,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             headline: headline || normalizedDrafts[0]?.headline || "",
             primaryText: primaryText || normalizedDrafts[0]?.primaryText || "",
             imagePrompt: imagePrompt || normalizedDrafts[0]?.imagePrompt || "",
-            imageUrl: resolvedImageUrl,
+            imageUrl: storedImageUrl || resolvedImageUrl,
             cta: cta || normalizedDrafts[0]?.cta || "",
             creativeArchetype: creativeArchetype || normalizedDrafts[0]?.creativeArchetype || "",
             adAccountId: resolvedAdAccountId || "",
@@ -454,7 +552,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             campaignStructure: lockedStructure,
             savedAt: new Date().toISOString(),
             funnelData,
-            drafts: normalizedDrafts,
+            drafts: storedDrafts,
           }),
         },
       },
@@ -575,7 +673,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         for (let index = 0; index < normalizedDrafts.length; index++) {
           const currentDraft = normalizedDrafts[index] || {};
-          let currentImageUrl = String(currentDraft.imageUrl || "").trim();
+          let currentImageUrl = String(currentDraft.renderedCreativeDataUrl || currentDraft.imageUrl || "").trim();
           if (!currentImageUrl) {
             currentImageUrl = await generateImageUrlForPublish(
               leadType,
@@ -660,7 +758,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             variantId: String(currentDraft.uniquenessFingerprint || `variant_${index + 1}`),
             variationType: String(currentDraft.variationType || ""),
             headline: String(currentDraft.headline || headline || ""),
-            imageUrl: currentImageUrl,
+            imageUrl: String(currentDraft.imageUrl || ""),
             metaAdId: createdMetaAdId,
             metaCreativeId: creativeId,
             status: "PAUSED",

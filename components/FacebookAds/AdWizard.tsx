@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import AdPreviewCard from "@/components/FacebookAds/AdPreviewCard";
 import StateSelector from "@/components/FacebookAds/StateSelector";
 import { US_STATES } from "@/lib/facebook/geo/usStates";
 
@@ -59,6 +60,7 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
   const [drafts, setDrafts] = useState<any[]>([]);
   const [selectedMetaPageId, setSelectedMetaPageId] = useState("");
   const [selectedMetaAdAccountId, setSelectedMetaAdAccountId] = useState("");
+  const previewRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
   const stateLabel = useMemo(() => {
     const labels = states.map((code) => US_STATES.find((state) => state.code === code)?.name || code);
@@ -69,6 +71,9 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
 
   const needsSubType = Boolean(MAIN_CATEGORY_OPTIONS.find((option) => option.id === mainCategory)?.needsSubType);
   const campaignName = `${campaignTypeLabel || LEAD_TYPE_LABELS[leadType] || leadType} - ${stateLabel || "Licensed States"} Campaign`;
+
+  const getDraftKey = (currentDraft: any, index: number) =>
+    String(currentDraft?.uniquenessFingerprint || currentDraft?.winningFamilyId || currentDraft?.creativeArchetype || `draft_${index}`);
 
   useEffect(() => {
     if (!leadType) return;
@@ -204,12 +209,47 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
     }
   };
 
+  const exportRenderedCreatives = async () => {
+    const { toPng } = await import("html-to-image");
+    const renderedDrafts = [];
+
+    for (let index = 0; index < drafts.length; index++) {
+      const currentDraft = drafts[index];
+      const key = getDraftKey(currentDraft, index);
+      const node = previewRefs.current[key];
+
+      if (!node) {
+        throw new Error(`Rendered preview was not available for Ad ${index + 1}. Please return to Review and try again.`);
+      }
+
+      const renderedCreativeDataUrl = await toPng(node, {
+        cacheBust: true,
+        pixelRatio: 2,
+        backgroundColor: "#ffffff",
+      });
+
+      if (!renderedCreativeDataUrl || !renderedCreativeDataUrl.startsWith("data:image/png;base64,")) {
+        throw new Error(`Could not export Ad ${index + 1} as a finished creative image.`);
+      }
+
+      renderedDrafts.push({
+        ...currentDraft,
+        renderedCreativeDataUrl,
+      });
+    }
+
+    return renderedDrafts;
+  };
+
   const launch = async () => {
     if (!drafts.length || !states.length) return;
     setLaunching(true);
     setError("");
     setResult(null);
     try {
+      const renderedDrafts = await exportRenderedCreatives();
+      const selectedDraft = renderedDrafts[0] || draft;
+
       const response = await fetch("/api/facebook/publish-ad", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -220,25 +260,26 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
           campaignTypeLabel,
           campaignName,
           dailyBudgetCents: Math.max(5, Math.round(dailyBudget)) * 100,
-          primaryText: draft.primaryText,
-          headline: draft.headline,
-          description: draft.description || "",
-          cta: draft.cta || "LEARN_MORE",
-          imagePrompt: draft.imagePrompt || "",
-          imageUrl: draft.imageUrl || "",
-          creativeArchetype: draft.creativeArchetype || draft.archetype || "",
+          primaryText: selectedDraft.primaryText,
+          headline: selectedDraft.headline,
+          description: selectedDraft.description || "",
+          cta: selectedDraft.cta || "LEARN_MORE",
+          imagePrompt: selectedDraft.imagePrompt || "",
+          imageUrl: selectedDraft.imageUrl || "",
+          renderedCreativeDataUrl: selectedDraft.renderedCreativeDataUrl || "",
+          creativeArchetype: selectedDraft.creativeArchetype || selectedDraft.archetype || "",
           licensedStates: states,
           stateRestrictionNoticeAccepted: true,
           borderStateBehavior: "block",
-          funnelType: draft.funnelType || "lead_form",
-          landingPageConfig: draft.landingPageConfig,
-          benefitBullets: draft.benefitBullets,
-          buttonLabels: draft.buttonLabels,
-          winningFamilyId: draft.winningFamilyId,
-          variationType: draft.variationType,
-          uniquenessFingerprint: draft.uniquenessFingerprint,
-          vendorStyleTag: draft.vendorStyleTag,
-          drafts,
+          funnelType: selectedDraft.funnelType || "lead_form",
+          landingPageConfig: selectedDraft.landingPageConfig,
+          benefitBullets: selectedDraft.benefitBullets,
+          buttonLabels: selectedDraft.buttonLabels,
+          winningFamilyId: selectedDraft.winningFamilyId,
+          variationType: selectedDraft.variationType,
+          uniquenessFingerprint: selectedDraft.uniquenessFingerprint,
+          vendorStyleTag: selectedDraft.vendorStyleTag,
+          drafts: renderedDrafts,
           ...(selectedMetaPageId ? { facebookPageId: selectedMetaPageId } : {}),
           ...(selectedMetaAdAccountId ? { adAccountId: selectedMetaAdAccountId } : {}),
         }),
@@ -417,22 +458,25 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
 	            </button>
 	          </div>
 	          <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-4 gap-4">
-	            {drafts.map((currentDraft, index) => (
-	              <div key={currentDraft.uniquenessFingerprint || index} className="bg-white/5 border border-white/10 rounded-lg overflow-hidden">
-	                {currentDraft?.imageUrl ? (
-	                  <div className="relative w-full overflow-hidden rounded-xl">
-	                    <img
-	                      src={currentDraft.imageUrl}
-	                      alt={`Generated ad creative ${index + 1}`}
-	                      className="w-full h-auto object-contain"
-	                    />
-	                  </div>
-	                ) : (
-	                  <div className="h-56 bg-black/20 flex items-center justify-center text-sm text-gray-500">
-	                    Image preview generating...
-	                  </div>
-	                )}
-	                <div className="p-4 space-y-3">
+            {drafts.map((currentDraft, index) => (
+              <div key={currentDraft.uniquenessFingerprint || index} className="bg-white/5 border border-white/10 rounded-lg overflow-hidden">
+                <div className="p-3 flex justify-center bg-black/20">
+                  <div
+                    ref={(node) => {
+                      previewRefs.current[getDraftKey(currentDraft, index)] = node;
+                    }}
+                    style={{ display: "inline-block", width: "100%", maxWidth: 375 }}
+                  >
+                    <AdPreviewCard
+                      draft={currentDraft}
+                      selectedStates={states}
+                      regenerateAttempts={regenerateAttempts}
+                      regenerating={loading}
+                      onRegenerate={() => generate(true)}
+                    />
+                  </div>
+                </div>
+                <div className="p-4 space-y-3">
 	                  <div className="flex items-center justify-between gap-2">
 	                    <p className="text-sm font-semibold text-white">Ad {index + 1}</p>
 	                    <span className="px-2 py-1 rounded bg-emerald-600/20 text-emerald-200 border border-emerald-500/30 text-[11px] uppercase">

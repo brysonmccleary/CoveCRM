@@ -78,6 +78,50 @@ function campaignLabel(leadType: string) {
     .join(" ");
 }
 
+function sanitizeCreativeText(value: string, leadType: string): string {
+  let sanitized = String(value || "");
+
+  const replacements: Array<[RegExp, string]> = [
+    [/benefit unlock/gi, "coverage options"],
+    [/benefits civilians will never access/gi, "private coverage options designed for veterans"],
+    [/civilians will never access/gi, "many people may not know about"],
+    [/not available to civilians/gi, "available through a private coverage review"],
+    [/not available to the general public/gi, "available through a private coverage review"],
+    [/guaranteed approval/gi, "simple review"],
+    [/guaranteed acceptance/gi, "coverage options may be available"],
+    [/fast approval/gi, "fast review"],
+    [/family at home/gi, "structured direct-response layout"],
+    [/young family/gi, "home-focused visual"],
+    [/couple at home/gi, "home-focused visual"],
+    [/warm natural lighting/gi, "high-contrast direct-response lighting"],
+    [/warm cinematic/gi, "high-contrast direct-response"],
+    [/candid family photography/gi, "poster-style ad creative"],
+    [/lifestyle photography/gi, "direct-response poster layout"],
+    [/government program/gi, "private coverage review"],
+    [/government implication/gi, "private coverage framing"],
+    [/official-sounding entitlement language/gi, "private coverage options"],
+  ];
+
+  if (leadType === "veteran") {
+    replacements.push(
+      [/30-year term/gi, "whole life coverage options"],
+      [/term coverage/gi, "whole life coverage options"],
+      [/term life/gi, "whole life coverage options"],
+      [/term policy/gi, "whole life coverage options"]
+    );
+  }
+
+  for (const [pattern, replacement] of replacements) {
+    sanitized = sanitized.replace(pattern, replacement);
+  }
+
+  return sanitized;
+}
+
+function sanitizeCreativeList(values: string[] | undefined, leadType: string): string[] {
+  return (values || []).map((value) => sanitizeCreativeText(value, leadType));
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method === "GET") {
     return res.status(200).json({ ok: true, source: "winner_library" });
@@ -142,29 +186,41 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     variantCount: requestedVariantCount,
   });
   const dailyBudgetCents = Math.round((Number(dailyBudget) || 25) * 100);
-  const buildDraftFromVariant = (variant: typeof variants.emotional) => ({
-    leadType,
-    audienceSegment,
-    campaignName,
-    dailyBudgetCents,
-    primaryText: variant.primaryText,
-    headline: variant.headline,
-    description: variant.description,
-    cta: variant.cta,
-    videoScript: variant.videoScript,
-    buttonLabels: variant.buttonLabels,
-    bulletPoints: variant.bulletPoints,
-    creativeArchetype: variant.archetype,
-    landingPageConfig: buildWinningFunnelConfig(variant),
-    leadFormQuestions: LEAD_FORM_QUESTIONS[leadType],
-    thankYouPageText: THANK_YOU_TEXT[leadType],
-    winningFamilyId: variant.familyId,
-    variationType: variant.variantType,
-    uniquenessFingerprint: variant.uniquenessFingerprint,
-    vendorStyleTag: variant.vendorStyleTag,
-    generatedBy: "winner_library",
-    copySource: "winner_library",
-  });
+  const buildDraftFromVariant = (variant: typeof variants.emotional) => {
+    const landingPageConfig = buildWinningFunnelConfig(variant);
+
+    return {
+      leadType,
+      audienceSegment,
+      campaignName,
+      dailyBudgetCents,
+      primaryText: sanitizeCreativeText(variant.primaryText, leadType),
+      headline: sanitizeCreativeText(variant.headline, leadType),
+      description: sanitizeCreativeText(variant.description, leadType),
+      cta: sanitizeCreativeText(variant.cta, leadType),
+      imagePrompt: sanitizeCreativeText(variant.imagePrompt, leadType),
+      videoScript: sanitizeCreativeText(variant.videoScript, leadType),
+      buttonLabels: sanitizeCreativeList(variant.buttonLabels, leadType),
+      bulletPoints: sanitizeCreativeList(variant.bulletPoints, leadType),
+      creativeArchetype: variant.archetype,
+      landingPageConfig: {
+        ...landingPageConfig,
+        headline: sanitizeCreativeText(landingPageConfig.headline, leadType),
+        subheadline: sanitizeCreativeText(landingPageConfig.subheadline, leadType),
+        buttonLabels: sanitizeCreativeList(landingPageConfig.buttonLabels, leadType),
+        benefitBullets: sanitizeCreativeList(landingPageConfig.benefitBullets, leadType),
+        ctaStrip: sanitizeCreativeText(landingPageConfig.ctaStrip, leadType),
+      },
+      leadFormQuestions: LEAD_FORM_QUESTIONS[leadType],
+      thankYouPageText: THANK_YOU_TEXT[leadType],
+      winningFamilyId: variant.familyId,
+      variationType: variant.variantType,
+      uniquenessFingerprint: variant.uniquenessFingerprint,
+      vendorStyleTag: variant.vendorStyleTag,
+      generatedBy: "winner_library",
+      copySource: "winner_library",
+    };
+  };
   const recommendedDraft = buildDraftFromVariant(selectedVariant);
   const selectedDrafts = selectedVariants.map(buildDraftFromVariant);
 

@@ -20,6 +20,7 @@ export type WinningAdFamily = {
   familyName: string;
   vendorStyleTag: string;
   priority: number; // 1 = top preference
+  disabled?: boolean;
   format: AdFormat;
   visualDirection: string;
   copyBlueprint: {
@@ -137,7 +138,7 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
     vendorStyleTag: "my_affordable",
     priority: 1,
     format: "long_copy",
-    visualDirection: "Older couple at kitchen table reviewing documents, warm soft lighting, dignified and trustworthy, realistic photography",
+    visualDirection: "Premium final expense direct-response layout, dark gold poster composition, structured typography zones, age or benefit card panels, no lifestyle photography",
     copyBlueprint: {
       headlinePool: [
         "What Funerals Cost Today",
@@ -173,9 +174,9 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
       approvedCoverageAmounts: [25000, 35000, 40000, 50000],
     },
     imagePromptPool: [
-      "Vertical 1:1 Facebook ad image for final expense insurance, older couple at kitchen table reviewing documents together, warm soft natural lighting, realistic photography, dignified and trustworthy mood, no logos, no text overlay",
-      "Vertical 1:1 Facebook ad image for final expense insurance, senior couple sitting in cozy living room, soft warm lighting, peaceful home environment, realistic trustworthy photography, no logos, no text overlay",
-      "Vertical 1:1 Facebook ad image for final expense insurance, multigenerational family in warm home setting, natural realistic lighting, caring family mood, no logos, no text overlay",
+      "Direct-response final expense Facebook ad creative background, premium dark black and gold poster layout, blank reserved headline area for app-rendered text, clean graphic background with space for overlay, senior-focused graphic treatment, no readable text inside image, no logos, NOT lifestyle photography, NO family-photo scene",
+      "Direct-response final expense insurance background, dark gold graphic layout, blank reserved headline area for app-rendered text, blank reserved CTA/button area for app-rendered UI, dignified premium layout, no readable text inside image, no logos, NO soft home stock-photo scene",
+      "Premium final expense ad creative, near-black background with gold accents, bold benefit stack, clean CTA panel, senior-focused but graphic-ad style, no logos, NO family-group photography",
     ],
     videoScriptPool: [
       "[HOOK] Typical funeral costs today can run $9,000 to $15,000 or more. [BODY] Most families are not prepared for this. Without a plan, these costs fall on the people you love most. But it doesn't have to be that way — there are simple, affordable options with no medical exam required. [CTA] Tap below to see what options may be available for you.",
@@ -232,7 +233,7 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
     vendorStyleTag: "my_affordable",
     priority: 1,
     format: "card",
-    visualDirection: "Dark near-black background with gold accent, confident senior couple, warm studio lighting, dignified and bold",
+    visualDirection: "Dark near-black background with gold accent, senior-focused direct-response card, bold typography zones, dignified and graphic",
     copyBlueprint: {
       headlinePool: [
         "No 2-Year Wait",
@@ -262,8 +263,8 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
       approvedCoverageAmounts: [25000, 35000, 40000, 50000],
     },
     imagePromptPool: [
-      "Vertical 1:1 Facebook ad image for final expense insurance, near-black background with gold accent lighting, confident senior couple portrait, warm dignified dramatic lighting, no logos, no text overlay",
-      "Vertical 1:1 Facebook ad image for final expense insurance, dark premium background, older smiling couple in warm studio lighting, gold accent tones, dignified and confident, no logos, no text overlay",
+      "Direct-response final expense insurance ad creative background, near-black background with gold accent panels, blank reserved headline area for app-rendered text, clean graphic background with space for overlay, no readable text inside image, no logos, NOT lifestyle photography",
+      "Premium dark gold final expense ad background, structured poster composition, clean graphic background with space for overlay, blank reserved CTA/button area for app-rendered UI, senior-focused graphic design, no readable text inside image, no logos, NOT cozy couple stock photo",
     ],
     landingPageConfig: {
       pageType: "final_expense_age_card",
@@ -305,7 +306,7 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
     vendorStyleTag: "my_affordable",
     priority: 2,
     format: "benefit_stack",
-    visualDirection: "Warm senior-friendly photography, older couple at home, soft natural light, trustworthy and calm",
+    visualDirection: "Senior-friendly final expense direct-response layout, dark gold benefit stack, large coverage amount panel, no lifestyle photography",
     copyBlueprint: {
       headlinePool: [
         "Coverage Up To $50,000",
@@ -327,8 +328,8 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
       approvedCoverageAmounts: [25000, 35000, 40000, 50000],
     },
     imagePromptPool: [
-      "Vertical 1:1 Facebook ad image for final expense insurance, older couple smiling at home, warm natural photography, soft trustworthy lighting, senior-friendly, no logos, no text overlay",
-      "Vertical 1:1 Facebook ad image, senior woman and man in a bright home, soft natural light, warm family mood, realistic photography, no logos, no text overlay",
+      "Direct-response final expense Facebook ad creative background, senior-focused clean graphic layout, dark gold and cream reserved overlay areas, blank reserved CTA/button area for app-rendered UI, no readable text inside image, no logos, NOT smiling home stock photography",
+      "Final expense benefit-stack ad creative background, premium black and gold graphic layout, blank reserved headline area for app-rendered text, blank reserved CTA/button area for app-rendered UI, no readable text inside image, no logos, NOT bright home lifestyle photography",
     ],
     landingPageConfig: {
       pageType: "final_expense_benefit_card",
@@ -358,6 +359,7 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
     familyName: "Emotional Family Burden",
     vendorStyleTag: "my_affordable",
     priority: 2,
+    disabled: true,
     format: "family_emotional",
     visualDirection: "Multigenerational family in warm home setting, emotional but not dramatic, natural realistic photography",
     copyBlueprint: {
@@ -417,7 +419,7 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
     vendorStyleTag: "sitka",
     priority: 1,
     format: "video_copy",
-    visualDirection: "Happy couple in front of suburban home, warm coral/natural tones, trustworthy realistic photography",
+    visualDirection: "Home-focused mortgage protection direct-response layout, house and key visual, mortgage amount button zones, clean CTA panel, no generic lifestyle stock photography",
     copyBlueprint: {
       headlinePool: [
         "3 Simple Reasons to Protect Your Mortgage",
@@ -444,8 +446,8 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
       approvedCoverageAmounts: [100000, 200000, 250000, 300000, 400000, 500000],
     },
     imagePromptPool: [
-      "Vertical 1:1 Facebook ad image for mortgage protection insurance, happy couple in front of their suburban home, warm coral natural lighting, realistic trustworthy photography, no logos, no text overlay",
-      "Vertical 1:1 Facebook ad image, young family with children in front of their house, warm natural lighting, neighborhood setting, realistic, no logos, no text overlay",
+      "Direct-response mortgage protection Facebook ad creative background, home-focused poster composition, house hero visual, blank reserved headline area for app-rendered text, blank reserved CTA/button area for app-rendered UI, no readable text inside image, no logos, NOT lifestyle stock photography",
+      "Mortgage protection ad creative background, clean graphic layout with home silhouette, key and mortgage balance visual, bold red white navy palette, blank reserved CTA/button area for app-rendered UI, no readable text inside image, no logos, NO generic family stock-photo scene",
     ],
     videoScriptPool: [
       "[HOOK] 3 simple reasons to protect your mortgage: [BODY] 1. Financial Security — your family stays in the home if you're gone. 2. Fast and Easy — no exam options, may qualify in minutes. 3. Peace of Mind — knowing it's covered changes everything. [CTA] Tap below to see what options may be available.",
@@ -492,7 +494,7 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
     vendorStyleTag: "sitka",
     priority: 1,
     format: "card",
-    visualDirection: "Coral/red/white card with mortgage amount buttons, family home background, trustworthy",
+    visualDirection: "Coral/red/white direct-response card with mortgage amount buttons, home-focused background, trustworthy graphic layout",
     copyBlueprint: {
       headlinePool: [
         "Mortgage Protection With Living Benefits",
@@ -519,8 +521,8 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
       approvedCoverageAmounts: [100000, 200000, 250000, 300000, 400000, 500000, 600000],
     },
     imagePromptPool: [
-      "Vertical 1:1 Facebook ad image, homeowner couple at front door of their home, warm coral natural lighting, realistic photography, trustworthy family-safe, no logos, no text overlay",
-      "Vertical 1:1 Facebook ad image, young family in front of suburban home, warm natural light, coral/red tones, realistic, no logos, no text overlay",
+      "Direct-response mortgage protection ad creative background, red and white clean home exterior graphic, blank reserved headline area for app-rendered text, blank reserved CTA/button area for app-rendered UI, no readable text inside image, no logos, NOT homeowner couple stock photography",
+      "Mortgage protection Facebook ad background, structured poster layout, house hero image, blank reserved CTA/button area for app-rendered UI, clean graphic background with space for overlay, no readable text inside image, no logos, NO generic family lifestyle photo",
     ],
     landingPageConfig: {
       pageType: "mortgage_amount_card",
@@ -591,8 +593,8 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
       approvedPremiumExamples: ["as low as $29/mo", "starting at $39/mo", "from $49/mo"],
     },
     imagePromptPool: [
-      "Vertical 1:1 Facebook ad image, clean premium card design background, homeowner family in their home, warm lighting, Quility mortgage protection style, trustworthy, no logos, no text overlay",
-      "Vertical 1:1 Facebook ad image, couple reviewing mortgage documents, bright clean home setting, warm trustworthy photography, no logos, no text overlay",
+      "Direct-response mortgage protection ad creative background, clean premium graphic design, house/key icon-style visual, blank reserved headline area for app-rendered text, blank reserved CTA/button area for app-rendered UI, no readable text inside image, no logos, NOT homeowner family photography",
+      "Mortgage protection ad creative background, clean home-focused background, red white navy palette, blank reserved overlay areas for app-rendered text and UI, no readable text inside image, no logos, NOT paperwork table stock photography",
     ],
     landingPageConfig: {
       pageType: "mortgage_rate_table",
@@ -630,15 +632,15 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
     vendorStyleTag: "sitka",
     priority: 2,
     format: "benefit_stack",
-    visualDirection: "Simple clean card, homeowner family, warm natural tones, trustworthy",
+    visualDirection: "Simple clean mortgage protection direct-response card, home and mortgage balance visual, benefit stack, trustworthy graphic layout",
     copyBlueprint: {
       headlinePool: [
         "Protect Your Mortgage From Day One",
-        "Term Policy Built For Homeowners",
+        "Mortgage Protection Built For Homeowners",
         "Simple Mortgage Protection",
       ],
       hookPool: [
-        "An affordable term policy designed to cover your mortgage.",
+        "Mortgage protection options designed to help cover your mortgage balance.",
         "Simple mortgage protection — see what options may be available.",
         "Most homeowners don't think about this until it's too late.",
       ],
@@ -652,8 +654,8 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
       approvedCoverageAmounts: [100000, 200000, 250000, 300000, 400000, 500000],
     },
     imagePromptPool: [
-      "Vertical 1:1 Facebook ad image, homeowner family in front of house, warm natural lighting, simple trustworthy photography, no logos, no text overlay",
-      "Vertical 1:1 Facebook ad image, couple at home reviewing paperwork, warm interior lighting, trustworthy realistic photography, no logos, no text overlay",
+      "Direct-response mortgage protection ad creative background, simple clean graphic layout, house hero visual, mortgage balance visual, blank reserved CTA/button area for app-rendered UI, no readable text inside image, no logos, NOT family in front of house stock photography",
+      "Mortgage protection graphic ad background, structured home/key composition, high contrast clean layout, blank reserved overlay areas for app-rendered text and UI, no readable text inside image, no logos, NO paperwork-table scene",
     ],
     landingPageConfig: {
       pageType: "mortgage_simple_benefit",
@@ -661,7 +663,7 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
       subheadlinePool: [
         "See what options may be available",
         "No exam — may qualify in minutes",
-        "Affordable term policy for homeowners",
+        "Mortgage protection options for homeowners",
       ],
       buttonLabelsPool: [
         ["$100,000", "$200,000", "$300,000", "$400,000"],
@@ -692,7 +694,7 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
     vendorStyleTag: "market_veteran",
     priority: 1,
     format: "card",
-    visualDirection: "Patriotic red/blue/gold, veteran-aged civilian with family at home, NO military uniforms or government insignia",
+    visualDirection: "Bold patriotic direct-response layout, veteran-aged civilian male, American flag texture, navy/gold/cream/red typography zones, NO family portraits, NO kids, NO military uniforms or government insignia",
     copyBlueprint: {
       headlinePool: [
         "Veterans Life Insurance",
@@ -719,8 +721,8 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
       approvedCoverageAmounts: [50000, 100000, 250000, 500000],
     },
     imagePromptPool: [
-      "Vertical 1:1 Facebook ad image, bold patriotic composition, veteran-aged civilian man age 55-70 standing proud with American flag in background, red/blue/gold tones, NO military uniforms, NO official insignia, NO government seals, realistic photography, no logos, no text overlay",
-      "Vertical 1:1 Facebook ad image, American flag waving dramatically at sunset with golden sky, bold patriotic mood, strong composition, space for text overlay at bottom, no logos, no text overlay on flag",
+      "Direct-response veteran insurance Facebook ad creative background, bold patriotic poster composition, veteran-aged civilian man age 55-70, American flag texture background, navy gold cream red graphic areas, blank reserved headline area for app-rendered text, blank reserved CTA/button area for app-rendered UI, no readable text inside image, NO kids, NO family portrait, NO military uniforms, NO official insignia, NO government seals, no logos, NOT lifestyle photography",
+      "Direct-response veteran insurance ad background, distressed American flag background, navy and gold graphic composition, veteran-aged civilian male silhouette, blank reserved headline area for app-rendered text, blank reserved CTA/button area for app-rendered UI, no readable text inside image, no logos, NO home-family scene, NO kids, NO official insignia",
     ],
     landingPageConfig: {
       pageType: "veteran_amount_card",
@@ -740,7 +742,7 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
       ],
       benefitBulletsPool: [
         ["Private market coverage — not VA", "No exam options may be available", "Review takes under 60 seconds"],
-        ["Not a government program", "No exam required", "Fast approval"],
+        ["Private coverage review", "No exam options may be available", "Fast review"],
       ],
       ctaStripPool: ["Check My Options →", "See My Rate →", "Learn More →"],
       theme: { background: "#0a0f1a", accent: "#1d4ed8", styleTag: "veteran_patriotic" },
@@ -777,7 +779,7 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
       ],
       hookPool: [
         "🎖️ WHAT BRANCH DID YOU SERVE... No 2 Year Wait · Whole Life Insurance · Immediate Coverage Up To: $50,000 · Tap Your Age To See If You Qualify",
-        "YOUR SERVICE ENDED. YOUR ADVANTAGES DIDN'T.\nYou hung up the uniform, but you didn't hang up what you earned. Military service unlocks private coverage options civilians will never access.",
+        "YOUR SERVICE ENDED. YOUR OPTIONS DIDN'T.\nYou hung up the uniform, but you can still review private coverage options designed for veterans.",
         "ARMY · NAVY · AIR FORCE · MARINES · COAST GUARD — Get covered. No 2-year wait. Whole life insurance. Immediate coverage up to $50,000.",
         "Veterans between 50–85 may qualify for whole life coverage with no 2-year waiting period and no medical exam required.",
         "Did you serve between 1960–2022? Tap your age to view available private coverage options.",
@@ -794,7 +796,7 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
       ctaPool: [
         "Tap Your Age To See If You Qualify →",
         "Click Your Age For Instant Quote →",
-        "View Available Benefits →",
+        "View Available Options →",
         "Apply Now →",
         "See If I Qualify →",
       ],
@@ -805,9 +807,9 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
       ],
     },
     imagePromptPool: [
-      "Vertical 1:1 Facebook ad image, cream/beige background with bold dark navy text overlay area, large MILITARY headline space at top, patriotic star divider, veteran-aged civilian couple, bold typographic layout, no military uniforms, no official insignia, no logos",
-      "Vertical 1:1 Facebook ad image, distressed American flag texture background, bold gold and white text overlay composition, patriotic red/white/blue, veteran-aged civilian, strong bold layout, no military uniforms, no official insignia",
-      "Vertical 1:1 Facebook ad image, American flag waving at sunset dramatic sky, bold dark overlay panel at bottom for text, patriotic tones, no logos, no text overlay on sky portion",
+      "Direct-response veteran insurance Facebook ad creative background, cream beige background with blank reserved headline area for app-rendered text, patriotic star divider, blank reserved CTA/button area for app-rendered UI, veteran-aged civilian male, no readable text inside image, no logos, NO kids, NO family portrait, NO military uniforms, NO official insignia",
+      "Direct-response veteran insurance ad background, distressed American flag texture background, gold and white reserved overlay areas, patriotic red white blue poster layout, blank reserved CTA/button area for app-rendered UI, no readable text inside image, no logos, NO home-family scene, NO official insignia",
+      "Direct-response veteran ad background, American flag texture, blank reserved headline area for app-rendered text, blank reserved CTA/button area for app-rendered UI, veteran-aged civilian man silhouette, no readable text inside image, no logos, NO kids, NOT lifestyle photography",
     ],
     landingPageConfig: {
       pageType: "veteran_age_qualifier",
@@ -819,7 +821,7 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
       subheadlinePool: [
         "Tap your age to view available private coverage",
         "Private market coverage — not a government program",
-        "View available benefits for veterans",
+        "View available private coverage options",
       ],
       buttonLabelsPool: [
         ["Under 50", "50–60", "61–70", "71–79"],
@@ -827,9 +829,9 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
       ],
       benefitBulletsPool: [
         ["Private market coverage — not VA", "No exam options may be available", "Review in under 60 seconds"],
-        ["Not a government program", "Fast qualification", "For veterans and military families"],
+        ["Private coverage review", "Fast review", "For veterans and military families"],
       ],
-      ctaStripPool: ["View My Options →", "Check My Benefits →", "See What I Qualify For →"],
+      ctaStripPool: ["View My Options →", "Check My Options →", "See What I Qualify For →"],
       theme: { background: "#0a0f1a", accent: "#1d4ed8", styleTag: "veteran_qualifier" },
     },
     compliance: {
@@ -851,6 +853,7 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
     familyName: "Benefit Unlock Long Copy",
     vendorStyleTag: "market_veteran",
     priority: 1,
+    disabled: true,
     format: "long_copy",
     visualDirection: "Patriotic but civilian, veteran-aged adult, bold text-heavy layout, strong identity hook",
     copyBlueprint: {
@@ -964,8 +967,8 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
       ],
     },
     imagePromptPool: [
-      "Vertical 1:1 Facebook ad image, three large commercial semi trucks on dark American highway at night, bold dramatic neon amber and cyan lighting, strong bold composition with space for TRUCKERS IUL text overlay at top, no logos, no text on trucks",
-      "Vertical 1:1 Facebook ad image, professional semi truck on open highway, dark dramatic sky, bold amber neon glow lighting, strong powerful composition, no logos, no text overlay",
+      "Direct-response trucker insurance ad creative background, three large commercial semi trucks on dark American highway at night, dramatic neon amber and cyan lighting, blank reserved headline area for app-rendered text, no readable text inside image, no logos, no text on trucks",
+      "Direct-response trucker insurance ad creative background, professional semi truck on open highway, dark dramatic sky, amber neon glow lighting, strong powerful composition, blank reserved CTA/button area for app-rendered UI, no readable text inside image, no logos",
     ],
     landingPageConfig: {
       pageType: "trucker_neon_card",
@@ -1033,8 +1036,8 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
       ],
     },
     imagePromptPool: [
-      "Vertical 1:1 Facebook ad image, red white and blue semi trucks driving in formation on American highway, bold American flag in background, dramatic patriotic sunset sky, strong bold composition, no logos, no text overlay",
-      "Vertical 1:1 Facebook ad image, semi truck on American highway with large patriotic flag in background at sunset, rugged Americana, bold red/white/blue, strong composition, no logos, no text overlay",
+      "Direct-response trucker insurance ad creative background, red white and blue semi trucks driving in formation on American highway, American flag in background, dramatic patriotic sky, blank reserved headline area for app-rendered text, no readable text inside image, no logos",
+      "Direct-response trucker insurance ad creative background, semi truck on American highway with large patriotic flag in background, rugged Americana, red white blue palette, blank reserved CTA/button area for app-rendered UI, no readable text inside image, no logos",
     ],
     landingPageConfig: {
       pageType: "trucker_patriotic",
@@ -1100,8 +1103,8 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
       ],
     },
     imagePromptPool: [
-      "Vertical 1:1 Facebook ad image, professional semi truck on scenic mountain highway at golden hour sunset, warm amber tones, vast American open road landscape, strong rugged composition, no logos, no text overlay",
-      "Vertical 1:1 Facebook ad image, commercial semi truck on Route 66 style American highway at sunset, warm golden hour lighting, rugged Americana feel, open road, no logos, no text overlay",
+      "Direct-response trucker insurance ad creative background, professional semi truck on scenic mountain highway, amber tones, vast American open road landscape, blank reserved headline area for app-rendered text, no readable text inside image, no logos",
+      "Direct-response trucker insurance ad creative background, commercial semi truck on Route 66 style American highway, rugged Americana feel, open road, blank reserved CTA/button area for app-rendered UI, no readable text inside image, no logos",
     ],
     landingPageConfig: {
       pageType: "trucker_scenic_benefit",
@@ -1165,8 +1168,8 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
       ],
     },
     imagePromptPool: [
-      "Vertical 1:1 Facebook ad image, professional truck driver in civilian clothes standing near semi truck, rugged and trustworthy American worker, warm realistic photography, no logos, no text overlay",
-      "Vertical 1:1 Facebook ad image, semi truck on American highway, wide open road, practical working-class American mood, realistic photography, no logos, no text overlay",
+      "Direct-response trucker insurance ad creative background, professional CDL driver near semi truck, rugged poster composition, blank reserved headline area for app-rendered text, clean graphic background with space for overlay, no readable text inside image, no logos, NOT lifestyle photography",
+      "Direct-response trucker insurance ad background, semi truck on American highway, wide open road hero visual, high-contrast graphic layout, blank reserved CTA/button area for app-rendered UI, no readable text inside image, no logos, NOT stock-photo style",
     ],
     landingPageConfig: {
       pageType: "trucker_problem_solution",
@@ -1238,8 +1241,8 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
       ],
     },
     imagePromptPool: [
-      "Vertical 1:1 Facebook ad image for indexed universal life insurance education, professional couple reviewing retirement documents at modern home office table, premium blue gold and white palette, clean realistic photography, no logos, no text overlay",
-      "Vertical 1:1 Facebook ad image, middle-aged couple meeting with a financial professional in a bright office, calm educational mood, premium blue and gold tones, realistic photography, no logos, no text overlay",
+      "Premium direct-response IUL education ad creative background, professional planning visual in a clean office setting, blue gold and white palette, blank reserved headline area for app-rendered text, blank reserved CTA/button area for app-rendered UI, no readable text inside image, no logos",
+      "Premium direct-response IUL education ad creative background, bright office setting with financial planning visual, blue and gold tones, clean graphic background with space for overlay, no readable text inside image, no logos",
     ],
     landingPageConfig: {
       pageType: "iul_tax_efficient_retirement",
@@ -1309,8 +1312,8 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
       ],
     },
     imagePromptPool: [
-      "Vertical 1:1 Facebook ad image for cash value life insurance education, family at kitchen table reviewing simple planning documents, bright clean home setting, premium blue and white palette, realistic photography, no logos, no text overlay",
-      "Vertical 1:1 Facebook ad image, parent couple planning future finances at home with laptop and documents, calm trustworthy educational mood, realistic photography, no logos, no text overlay",
+      "Premium direct-response cash value life insurance education ad creative background, clean planning visual, bright blue and white palette, blank reserved headline area for app-rendered text, blank reserved CTA/button area for app-rendered UI, no readable text inside image, no logos",
+      "Premium direct-response IUL planning ad creative background, clean educational mood, blue and white graphic layout with space for overlay, no readable text inside image, no logos",
     ],
     landingPageConfig: {
       pageType: "iul_cash_value_education",
@@ -1375,8 +1378,8 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
       ],
     },
     imagePromptPool: [
-      "Vertical 1:1 Facebook ad image, multigenerational family together in bright home, warm premium natural lighting, family legacy and protection mood, realistic photography, no logos, no text overlay",
-      "Vertical 1:1 Facebook ad image, parents with children in a clean modern living room, warm family planning mood, premium blue and gold subtle accents, realistic photography, no logos, no text overlay",
+      "Premium direct-response family legacy education ad creative background, clean blue and gold graphic layout, blank reserved headline area for app-rendered text, blank reserved CTA/button area for app-rendered UI, no readable text inside image, no logos",
+      "Premium direct-response protection and legacy planning ad creative background, clean modern graphic layout, blue and gold subtle accents, space for overlay, no readable text inside image, no logos",
     ],
     landingPageConfig: {
       pageType: "iul_family_legacy",
@@ -1416,7 +1419,7 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
     vendorStyleTag: "iul_veteran",
     priority: 1,
     format: "benefit_stack",
-    visualDirection: "Veteran-aged civilian with family at home, subtle patriotic blue/red accents, premium educational feel, no uniforms or insignia",
+    visualDirection: "Veteran-aged civilian with patriotic direct-response education layout, subtle blue/red accents, premium benefit panels, no uniforms or insignia, no home-family scenes",
     copyBlueprint: {
       headlinePool: [
         "Veterans — Learn About IUL",
@@ -1441,8 +1444,8 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
       ],
     },
     imagePromptPool: [
-      "Vertical 1:1 Facebook ad image for veteran indexed universal life education, veteran-aged civilian with spouse at home reviewing planning documents, subtle patriotic blue and red accents, no military uniforms, no official insignia, realistic photography, no logos, no text overlay",
-      "Vertical 1:1 Facebook ad image, veteran-aged civilian family in warm home setting, subtle American flag colors in decor, premium educational planning mood, no uniforms, no official insignia, no logos, no text overlay",
+      "Direct-response veteran IUL education ad creative background, veteran-aged civilian male, subtle patriotic blue and red graphic panels, blank reserved headline area for app-rendered text, no readable text inside image, no military uniforms, no official insignia, no logos",
+      "Direct-response veteran IUL ad creative background, patriotic premium education layout, clean graphic background with space for overlay, veteran-aged civilian silhouette, no readable text inside image, no uniforms, no official insignia, no logos",
     ],
     landingPageConfig: {
       pageType: "iul_veteran_legacy",
@@ -1483,7 +1486,7 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
     vendorStyleTag: "iul_trucker",
     priority: 1,
     format: "benefit_stack",
-    visualDirection: "Professional truck driver at home or near truck reviewing future planning, rugged but premium, blue/amber palette",
+    visualDirection: "Professional truck driver near truck or highway, rugged premium direct-response layout, blue/amber benefit panels, no family-at-home photography",
     copyBlueprint: {
       headlinePool: [
         "Truckers — Learn About IUL",
@@ -1508,8 +1511,8 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
       ],
     },
     imagePromptPool: [
-      "Vertical 1:1 Facebook ad image for trucker indexed universal life education, professional truck driver at home reviewing future planning documents with family nearby, rugged but premium blue and amber palette, realistic photography, no logos, no text overlay",
-      "Vertical 1:1 Facebook ad image, CDL driver standing near semi truck at golden hour while reviewing planning paperwork, responsible future planning mood, premium blue amber tones, no logos, no text overlay",
+      "Direct-response trucker IUL education ad creative background, professional CDL driver near semi truck, rugged blue and amber graphic layout, blank reserved headline area for app-rendered text, no readable text inside image, no logos, NOT family-at-home photography",
+      "Direct-response CDL driver financial planning ad background, semi truck hero visual, blue amber poster composition, blank reserved headline area for app-rendered text, blank reserved CTA/button area for app-rendered UI, no readable text inside image, no logos, NOT paperwork table stock photography",
     ],
     landingPageConfig: {
       pageType: "iul_trucker_cash_value",
@@ -1555,7 +1558,7 @@ export function getWinningFamiliesByLeadType(
 ): WinningAdFamily[] {
   const normalizedSegment = normalizeAudienceSegment(audienceSegment);
   return WINNING_AD_LIBRARY
-    .filter((f) => f.leadType === leadType && normalizeAudienceSegment(f.audienceSegment) === normalizedSegment)
+    .filter((f) => !f.disabled && f.leadType === leadType && normalizeAudienceSegment(f.audienceSegment) === normalizedSegment)
     .sort((a, b) => a.priority - b.priority);
 }
 
@@ -1728,40 +1731,60 @@ function buildRichImagePrompt(
   basePrompt: string,
   buttonLabels: string[]
 ): string {
+  const directResponseBase = String(basePrompt || "")
+    .replace(/no text overlay/gi, "no readable text inside image")
+    .replace(/realistic photography/gi, "graphic direct-response ad composition")
+    .replace(/warm natural lighting/gi, "high-contrast direct-response lighting")
+    .replace(/warm realistic photography/gi, "high-contrast direct-response poster composition")
+    .replace(/family at home/gi, "poster-style coverage layout")
+    .replace(/young family/gi, "home-focused visual")
+    .replace(/couple at home/gi, "home-focused visual")
+    .replace(/couple reviewing mortgage paperwork/gi, "mortgage balance card layout")
+    .replace(/multigenerational family/gi, "senior-focused benefit card")
+    .replace(/structured typography zones/gi, "blank reserved headline area for app-rendered text")
+    .replace(/age or coverage selection buttons/gi, "blank reserved CTA/button area for app-rendered UI")
+    .replace(/fake clickable (?:option )?buttons?/gi, "blank reserved CTA/button area for app-rendered UI")
+    .replace(/amount card layout/gi, "clean graphic background with space for overlay")
+    .replace(/amount-card layout/gi, "clean graphic background with space for overlay")
+    .replace(/benefit-card composition/gi, "clean graphic background with space for overlay")
+    .replace(/strong headline area/gi, "blank reserved headline area for app-rendered text")
+    .replace(/bold headline zone/gi, "blank reserved headline area for app-rendered text")
+    .replace(/clean CTA layout/gi, "blank reserved CTA/button area for app-rendered UI");
+
   const leadTypeStyleMap: Record<WinnerLeadType, string> = {
     veteran:
-      "bold mobile-first Facebook and Instagram lead ad layout, large readable headline area, quiz and selection style, fake clickable age or coverage buttons, patriotic navy red gold white palette, subtle flag texture, benefit stack composition, no official seals or insignia",
+      "direct-response veteran insurance ad creative background, poster-style composition, blank reserved headline area for app-rendered text, blank reserved CTA/button area for app-rendered UI, patriotic navy red gold cream palette, distressed American flag texture, veteran-aged civilian male, no readable text inside image, NO kids, NO family portraits, NO lifestyle photography, NO cinematic stock-photo style, NO official seals or insignia",
     trucker:
-      "bold mobile-first Facebook and Instagram lead ad layout, large readable headline area, truck and highway composition, sunset neon americana mood, fake clickable age buttons, strong benefit stack, no logos or insignia",
+      "direct-response trucker insurance ad creative background, poster-style composition, large semi truck hero image, highway or neon truck layout, blank reserved headline area for app-rendered text, blank reserved CTA/button area for app-rendered UI, no readable text inside image, high contrast, NOT stock-photo style, NO family-at-home scene, no logos or insignia",
     mortgage_protection:
-      "clean mobile-first Facebook and Instagram lead ad layout, large readable text, mortgage amount rows, clean UI card layout, benefit stack, fake clickable buttons, no logos",
+      "direct-response mortgage protection ad creative background, structured home-focused composition, house key or mortgage balance visual, blank reserved headline area for app-rendered text, blank reserved CTA/button area for app-rendered UI, no readable text inside image, NOT lifestyle stock photography, no logos",
     final_expense:
-      "senior-friendly mobile-first Facebook and Instagram lead ad layout, large readable text, large coverage amount treatment, age selection buttons, clean benefit stack, no logos",
+      "premium final expense ad creative background, dark gold direct-response layout, blank reserved headline area for app-rendered text, blank reserved CTA/button area for app-rendered UI, no readable text inside image, NOT lifestyle photography, NO soft home stock-photo style, no logos",
     iul:
-      "premium mobile-first Facebook and Instagram educational lead ad layout, retirement and cash value education style, benefit stack, fake clickable selection buttons, large readable text, no logos",
+      "premium educational direct-response ad creative background, blank reserved headline area for app-rendered text, blank reserved CTA/button area for app-rendered UI, no readable text inside image, NOT candid family photography, no logos",
   };
 
   const buttonPhrase =
     buttonLabels.length > 0
-      ? `Include fake clickable option buttons like: ${buttonLabels.slice(0, 4).join(", ")}.`
-      : "Include fake clickable selection buttons.";
+      ? `Leave a blank reserved CTA/button area where the app will render UI labels such as: ${buttonLabels.slice(0, 4).join(", ")}. Do not render readable button text inside the image.`
+      : "Leave a blank reserved CTA/button area for app-rendered UI. Do not render readable button text inside the image.";
 
   const lightingPool = [
     "high-contrast lighting",
-    "soft sunset glow",
+    "dramatic poster contrast",
     "bright clean daylight",
-    "premium studio-lit realism",
+    "premium graphic-ad lighting",
   ];
   const compositionPool = [
     "tight mobile-first crop",
     "stacked card composition",
-    "center-weighted portrait with UI overlay space",
-    "top-heavy headline space with lower button stack",
+    "center-weighted poster composition with CTA space",
+    "top-heavy blank headline area with lower reserved CTA area",
   ];
   const palettePool = [
     "bold saturated palette",
     "clean high-trust palette",
-    "warm lifestyle tones",
+    "reference-style direct-response palette",
     "crisp contrast with strong accent colors",
   ];
   const layoutPool = [
@@ -1773,31 +1796,31 @@ function buildRichImagePrompt(
   const subjectPoolByLeadType: Record<WinnerLeadType, string[]> = {
     veteran: [
       "veteran-aged man",
-      "older couple",
-      "retired man with family",
-      "middle-aged veteran with spouse",
-      "family with children",
+      "veteran-aged civilian male silhouette",
+      "distressed American flag background",
+      "coverage amount card",
+      "patriotic age selector layout",
     ],
     trucker: [
       "CDL driver",
       "truck driver near semi",
-      "driver family",
       "semi truck on highway",
-      "driver looking at phone",
+      "neon truck lineup",
+      "open road truck hero",
     ],
     mortgage_protection: [
-      "homeowner couple",
-      "young family in front of home",
-      "single parent at kitchen table",
-      "couple reviewing mortgage paperwork",
-      "family with children",
+      "house exterior",
+      "front door and key",
+      "mortgage balance card",
+      "coverage amount selector",
+      "home silhouette",
     ],
     final_expense: [
-      "older couple",
-      "senior woman",
-      "senior man with adult child",
-      "grandparent with family",
-      "retired couple at home",
+      "senior-focused benefit card",
+      "coverage amount panel",
+      "dark gold age selector",
+      "premium final expense layout",
+      "dignified senior silhouette",
     ],
     iul: [
       "professional couple",
@@ -1816,7 +1839,7 @@ function buildRichImagePrompt(
   const subjectPool = subjectPoolByLeadType[family.leadType];
   const subject = pickFromPool(subjectPool, seed, 53);
 
-  return `${basePrompt}, subject focus: ${subject}, ${leadTypeStyleMap[family.leadType]}, ${lighting}, ${composition}, ${palette}, ${layout}. ${buttonPhrase}`;
+  return `${directResponseBase}, subject focus: ${subject}, ${leadTypeStyleMap[family.leadType]}, ${lighting}, ${composition}, ${palette}, ${layout}. ${buttonPhrase}`;
 }
 
 export function ensureUniquenessFingerprint(parts: {
@@ -1954,7 +1977,7 @@ export function isWinnerSupportedLeadType(leadType: string): leadType is WinnerL
 
 export function getWinningFamilyById(familyId: string): WinningAdFamily | null {
   const id = String(familyId || "").trim();
-  return WINNING_AD_LIBRARY.find((family) => family.id === id) || null;
+  return WINNING_AD_LIBRARY.find((family) => !family.disabled && family.id === id) || null;
 }
 
 export function validateWinningVariantMetadata(input: {

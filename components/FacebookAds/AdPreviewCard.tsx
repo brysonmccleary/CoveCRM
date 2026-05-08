@@ -116,6 +116,247 @@ function CheckList({
   );
 }
 
+function getCreativeBackground(draft: any, leadType: string): string {
+  const imageUrl = cleanText(draft?.imageUrl);
+  if (imageUrl) return imageUrl;
+  if (leadType === "mortgage_protection") return MORTGAGE_BACKGROUND;
+  return "";
+}
+
+function ButtonGrid({
+  labels,
+  styleType,
+}: {
+  labels: string[];
+  styleType: "navy" | "gold" | "red" | "cyan" | "cream";
+}) {
+  if (!labels.length) return null;
+
+  const styles: Record<string, { background: string; color: string; border: string; radius: number }> = {
+    navy: { background: "#1a2744", color: "#ffffff", border: "1px solid rgba(255,255,255,0.22)", radius: 999 },
+    gold: { background: "rgba(212,160,23,0.14)", color: "#ffd76a", border: "1.5px solid #d4a017", radius: 6 },
+    red: { background: "#ffffff", color: "#b91c1c", border: "2px solid #b91c1c", radius: 6 },
+    cyan: { background: "rgba(0,229,255,0.12)", color: "#ffffff", border: "1.5px solid #00e5ff", radius: 6 },
+    cream: { background: "#f8f5f0", color: "#2d2016", border: "1px solid rgba(45,32,22,0.18)", radius: 6 },
+  };
+  const selected = styles[styleType];
+
+  return (
+    <div style={{ display: "flex", gap: 7, justifyContent: "center", flexWrap: "wrap" }}>
+      {labels.slice(0, 4).map((label) => (
+        <div
+          key={label}
+          style={{
+            background: selected.background,
+            color: selected.color,
+            border: selected.border,
+            borderRadius: selected.radius,
+            padding: "9px 13px",
+            minWidth: styleType === "red" ? 92 : undefined,
+            textAlign: "center",
+            fontSize: 12,
+            fontWeight: 900,
+            lineHeight: 1,
+            whiteSpace: "nowrap",
+            boxShadow: "0 8px 18px rgba(0,0,0,0.18)",
+          }}
+        >
+          {label}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function BenefitBoxes({
+  bullets,
+  palette,
+}: {
+  bullets: string[];
+  palette: "dark" | "gold" | "light" | "cyan";
+}) {
+  if (!bullets.length) return null;
+
+  const styles: Record<string, { background: string; color: string; check: string; border: string }> = {
+    dark: { background: "rgba(10,15,26,0.82)", color: "#ffffff", check: "#22c55e", border: "1px solid rgba(255,255,255,0.14)" },
+    gold: { background: "rgba(212,160,23,0.14)", color: "#fff8df", check: "#fbbf24", border: "1px solid rgba(212,160,23,0.45)" },
+    light: { background: "rgba(255,255,255,0.92)", color: "#1f2937", check: "#16a34a", border: "1px solid rgba(17,24,39,0.12)" },
+    cyan: { background: "rgba(0,188,212,0.14)", color: "#e0faff", check: "#00e5ff", border: "1px solid rgba(0,229,255,0.36)" },
+  };
+  const selected = styles[palette];
+
+  return (
+    <div style={{ display: "grid", gap: 7 }}>
+      {bullets.slice(0, 3).map((bullet, index) => (
+        <div
+          key={`${bullet}-${index}`}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 7,
+            padding: "8px 10px",
+            borderRadius: 7,
+            background: selected.background,
+            color: selected.color,
+            border: selected.border,
+            fontSize: 11,
+            fontWeight: 800,
+            lineHeight: 1.2,
+            boxShadow: "0 8px 18px rgba(0,0,0,0.16)",
+          }}
+        >
+          <span style={{ color: selected.check, fontWeight: 900 }}>✓</span>
+          <span>{bullet}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function FinishedCreativeRenderer({
+  draft,
+  leadType,
+  overlay,
+}: {
+  draft: any;
+  leadType: string;
+  overlay: ReturnType<typeof getOverlay>;
+}) {
+  const backgroundUrl = getCreativeBackground(draft, leadType);
+  const headline = overlay.headline || cleanText(draft?.headline);
+  const subheadline = overlay.subheadline;
+  const buttons = overlay.buttonLabels;
+  const bullets = overlay.benefitBullets;
+  const cta = overlay.ctaStrip || "Learn more →";
+  const hasBackground = Boolean(backgroundUrl);
+
+  const baseBackground = hasBackground
+    ? {
+        backgroundImage: `url("${backgroundUrl}")`,
+        backgroundSize: "cover",
+        backgroundPosition: "center",
+      }
+    : {
+        background:
+          leadType === "trucker"
+            ? "linear-gradient(145deg, #070b16 0%, #14213d 50%, #2d1600 100%)"
+            : leadType === "mortgage_protection"
+            ? "linear-gradient(145deg, #f8f5f0 0%, #dbeafe 100%)"
+            : leadType === "veteran"
+            ? "linear-gradient(145deg, #f5f0e8 0%, #1a2744 100%)"
+            : "linear-gradient(145deg, #0f0e0a 0%, #2d2016 100%)",
+      };
+
+  if (leadType === "trucker") {
+    return (
+      <div style={{ position: "absolute", inset: 0, overflow: "hidden", ...baseBackground }}>
+        <div style={{ position: "absolute", inset: 0, background: "linear-gradient(180deg, rgba(5,9,20,0.35) 0%, rgba(5,9,20,0.64) 42%, rgba(5,9,20,0.94) 100%)" }} />
+        <div style={{ position: "absolute", inset: 0, boxShadow: "inset 0 0 70px rgba(0,229,255,0.18), inset 0 -90px 80px rgba(245,158,11,0.16)" }} />
+        <div style={{ position: "relative", height: "100%", padding: "18px 18px 54px", display: "flex", flexDirection: "column" }}>
+          <div style={{ color: "#f59e0b", fontSize: 10, fontWeight: 900, letterSpacing: 2.4, textAlign: "center", marginBottom: 7 }}>
+            CDL DRIVER COVERAGE
+          </div>
+          <div style={{ color: "#ffffff", fontSize: 27, fontWeight: 950, lineHeight: 0.98, textAlign: "center", textTransform: "uppercase", textShadow: "0 3px 18px rgba(0,0,0,0.82)" }}>
+            {headline || "TRUCKERS IUL"}
+          </div>
+          {subheadline && (
+            <div style={{ color: "#e0faff", fontSize: 11, fontWeight: 800, lineHeight: 1.35, textAlign: "center", marginTop: 8, textShadow: "0 2px 12px rgba(0,0,0,0.8)" }}>
+              {subheadline}
+            </div>
+          )}
+          <div style={{ marginTop: "auto", display: "grid", gap: 9 }}>
+            <BenefitBoxes bullets={bullets} palette="cyan" />
+            <ButtonGrid labels={buttons} styleType="cyan" />
+          </div>
+        </div>
+        <BottomBar color="#d97706" label={cta || "Check My Options →"} />
+      </div>
+    );
+  }
+
+  if (leadType === "mortgage_protection") {
+    return (
+      <div style={{ position: "absolute", inset: 0, overflow: "hidden", ...baseBackground }}>
+        <div style={{ position: "absolute", inset: 0, background: "linear-gradient(180deg, rgba(20,12,12,0.22) 0%, rgba(20,12,12,0.42) 46%, rgba(20,12,12,0.78) 100%)" }} />
+        <div style={{ position: "absolute", left: 0, right: 0, top: 0, background: "rgba(185,28,28,0.94)", padding: "13px 18px", textAlign: "center" }}>
+          <div style={{ color: "#ffffff", fontSize: 22, fontWeight: 950, lineHeight: 1.02, textTransform: "uppercase" }}>
+            {headline || "Protect Your Family's Home"}
+          </div>
+        </div>
+        <div style={{ position: "absolute", left: 18, right: 18, bottom: 58, background: "rgba(255,255,255,0.94)", borderRadius: 8, padding: "13px 12px", boxShadow: "0 16px 34px rgba(0,0,0,0.28)", textAlign: "center" }}>
+          <div style={{ color: "#555", fontSize: 12, fontWeight: 800, marginBottom: 10 }}>
+            {subheadline || "Select your mortgage amount"}
+          </div>
+          <ButtonGrid labels={buttons} styleType="red" />
+          <div style={{ marginTop: bullets.length ? 10 : 0 }}>
+            <BenefitBoxes bullets={bullets} palette="light" />
+          </div>
+        </div>
+        <BottomBar color="#b91c1c" label={cta || "See My Rate →"} />
+      </div>
+    );
+  }
+
+  if (leadType === "veteran") {
+    const amount = buttons.find((label) => label.includes("$")) || "$50,000";
+    return (
+      <div style={{ position: "absolute", inset: 0, overflow: "hidden", ...baseBackground }}>
+        <div style={{ position: "absolute", inset: 0, background: hasBackground ? "linear-gradient(180deg, rgba(245,240,232,0.76) 0%, rgba(26,39,68,0.72) 48%, rgba(10,15,26,0.95) 100%)" : "repeating-linear-gradient(0deg, transparent, transparent 18px, rgba(139,26,26,0.08) 18px, rgba(139,26,26,0.08) 20px)" }} />
+        <div style={{ position: "relative", height: "100%", padding: "18px 17px 54px", display: "flex", flexDirection: "column", textAlign: "center" }}>
+          <div style={{ color: "#8b1a1a", fontSize: 11, fontWeight: 950, letterSpacing: 2.4, marginBottom: 8 }}>
+            PRIVATE COVERAGE FOR VETERANS
+          </div>
+          <div style={{ color: "#1a2744", background: "rgba(245,240,232,0.9)", border: "1px solid rgba(26,39,68,0.18)", borderRadius: 8, padding: "11px 10px", boxShadow: "0 12px 26px rgba(0,0,0,0.18)" }}>
+            <div style={{ fontSize: 29, fontWeight: 950, lineHeight: 0.98, textTransform: "uppercase", letterSpacing: 1 }}>
+              {headline || "Veterans Life Insurance"}
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, color: "#8b1a1a", margin: "10px 0 7px" }}>
+              <div style={{ flex: 1, borderTop: "1px solid #8b1a1a" }} />
+              <span style={{ fontSize: 14 }}>★</span>
+              <div style={{ flex: 1, borderTop: "1px solid #8b1a1a" }} />
+            </div>
+            <div style={{ color: "#1a2744", fontSize: 12, fontWeight: 800, lineHeight: 1.3 }}>
+              {subheadline || "No exam options may be available"}
+            </div>
+          </div>
+          <div style={{ marginTop: "auto" }}>
+            <div style={{ color: "#ffffff", fontSize: 44, fontWeight: 950, lineHeight: 1, textShadow: "0 4px 18px rgba(0,0,0,0.72)", marginBottom: 9 }}>
+              {amount}
+            </div>
+            <ButtonGrid labels={buttons.length ? buttons : ["Under 50", "50–60", "61–70", "71–79"]} styleType="navy" />
+          </div>
+        </div>
+        <BottomBar color="#c0392b" label={cta || "Tap Your Age To See Options →"} />
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ position: "absolute", inset: 0, overflow: "hidden", ...baseBackground }}>
+      <div style={{ position: "absolute", inset: 0, background: "linear-gradient(180deg, rgba(15,14,10,0.42) 0%, rgba(15,14,10,0.72) 45%, rgba(15,14,10,0.96) 100%)" }} />
+      <div style={{ position: "relative", height: "100%", padding: "21px 18px 54px", display: "flex", flexDirection: "column", textAlign: "center" }}>
+        <div style={{ color: "#d4a017", fontSize: 10, fontWeight: 950, letterSpacing: 2.3, marginBottom: 8 }}>
+          FINAL EXPENSE COVERAGE
+        </div>
+        <div style={{ color: "#ffffff", fontSize: 27, fontWeight: 950, lineHeight: 1.02, textTransform: "uppercase", textShadow: "0 3px 18px rgba(0,0,0,0.82)" }}>
+          {headline || "Final Expense Coverage"}
+        </div>
+        <div style={{ height: 1, background: "#d4a017", margin: "12px 24px" }} />
+        {subheadline && (
+          <div style={{ color: "#fff3c4", fontSize: 12, fontWeight: 800, lineHeight: 1.35 }}>
+            {subheadline}
+          </div>
+        )}
+        <div style={{ marginTop: "auto", display: "grid", gap: 10 }}>
+          <ButtonGrid labels={buttons} styleType="gold" />
+          <BenefitBoxes bullets={bullets} palette="gold" />
+        </div>
+      </div>
+      <BottomBar color="#a16207" label={cta || "See My Options →"} />
+    </div>
+  );
+}
+
 function pickTemplate(fingerprint: string, leadType: string): number {
   let hash = 0;
   const str = String(fingerprint || Math.random().toString(36));
@@ -801,10 +1042,6 @@ export default function AdPreviewCard({
   const canRegenerate = regenerateAttempts < 3 && !regenerating;
   const overlay = getOverlay(draft);
   const leadType = cleanText(draft?.leadType || "final_expense");
-  const templateIndex = pickTemplate(
-    cleanText(draft?.uniquenessFingerprint || draft?.variationType || draft?.winningFamilyId || ""),
-    leadType
-  );
   const pageName = PAGE_NAMES[leadType] || "Insurance Info Center";
   const accent = PAGE_ACCENTS[leadType] || "#1d4ed8";
   const adHeadline = cleanText(draft?.headline || overlay.headline);
@@ -912,7 +1149,7 @@ export default function AdPreviewCard({
           background: "#ffffff",
         }}
       >
-        <CreativeRenderer leadType={leadType} overlay={overlay} templateIndex={templateIndex} />
+        <FinishedCreativeRenderer draft={draft} leadType={leadType} overlay={overlay} />
       </div>
 
       <div
