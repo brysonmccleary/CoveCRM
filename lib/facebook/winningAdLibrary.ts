@@ -700,9 +700,10 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
         "Veterans — See Your Options",
       ],
       hookPool: [
-        "You served. Your coverage options didn't stop when you left.",
-        "Built for veterans and military families.",
-        "Private coverage designed for those who served.",
+        "•BUILT FOR VETERANS• Private life insurance — not VA. Coverage up to $500,000 from $50/month.",
+        "Veterans, secure your family's future with affordable Term Life Insurance.",
+        "Built for veterans. $500,000 · From $50/Month · 30-Year Term Coverage.",
+        "Veterans Term Life Insurance · $250,000 · From $28/Month coverage.",
       ],
       bulletPool: [
         "Private coverage options",
@@ -768,21 +769,35 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
     visualDirection: "Bold patriotic flag background, veteran identity first, age buttons prominent",
     copyBlueprint: {
       headlinePool: [
-        "Did You Serve?",
-        "Veterans — Tap Your Age",
-        "Check Your Veteran Coverage Options",
+        "MILITARY · WHOLE LIFE INSURANCE",
+        "Veterans Life Insurance — No 2 Year Wait",
+        "Veterans: Tap Your Age To See If You Qualify",
+        "VETERANS LIFE INSURANCE",
+        "Did You Serve? Check Your Coverage Options",
       ],
       hookPool: [
-        "Did you serve between 1955 and 1985?",
-        "Did you serve between 1965 and 1995?",
-        "Tap your age to view available private coverage options.",
+        "🎖️ WHAT BRANCH DID YOU SERVE... No 2 Year Wait · Whole Life Insurance · Immediate Coverage Up To: $50,000 · Tap Your Age To See If You Qualify",
+        "YOUR SERVICE ENDED. YOUR ADVANTAGES DIDN'T.\nYou hung up the uniform, but you didn't hang up what you earned. Military service unlocks private coverage options civilians will never access.",
+        "ARMY · NAVY · AIR FORCE · MARINES · COAST GUARD — Get covered. No 2-year wait. Whole life insurance. Immediate coverage up to $50,000.",
+        "Veterans between 50–85 may qualify for whole life coverage with no 2-year waiting period and no medical exam required.",
+        "Did you serve between 1960–2022? Tap your age to view available private coverage options.",
       ],
       bulletPool: [
-        "Private coverage options",
-        "No exam options may be available",
-        "Fast qualification — review in under 60 seconds",
+        "No 2-year waiting period",
+        "Whole life — immediate coverage up to $50,000",
+        "No medical exam required",
+        "Private coverage — not VA or government",
+        "Affordable monthly payments",
+        "Locked-in rates for life",
+        "Army · Navy · Air Force · Marines · Coast Guard",
       ],
-      ctaPool: ["View Available Benefits →", "Check My Options →", "See What I Qualify For →"],
+      ctaPool: [
+        "Tap Your Age To See If You Qualify →",
+        "Click Your Age For Instant Quote →",
+        "View Available Benefits →",
+        "Apply Now →",
+        "See If I Qualify →",
+      ],
       ageButtonPools: [
         ["Under 50", "50–60", "61–70", "71–79"],
         ["30–49", "50–65", "66–79", "80+"],
@@ -790,8 +805,9 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
       ],
     },
     imagePromptPool: [
-      "Vertical 1:1 Facebook ad image, American flag background, veteran-aged civilian, bold patriotic composition, no military uniforms or official insignia, realistic photography, no logos, no text overlay",
-      "Vertical 1:1 Facebook ad image, patriotic red/white/blue tones, veteran-aged adult portrait, civilian setting, strong patriotic mood, no military uniforms, no logos, no text overlay",
+      "Vertical 1:1 Facebook ad image, cream/beige background with bold dark navy text overlay area, large MILITARY headline space at top, patriotic star divider, veteran-aged civilian couple, bold typographic layout, no military uniforms, no official insignia, no logos",
+      "Vertical 1:1 Facebook ad image, distressed American flag texture background, bold gold and white text overlay composition, patriotic red/white/blue, veteran-aged civilian, strong bold layout, no military uniforms, no official insignia",
+      "Vertical 1:1 Facebook ad image, American flag waving at sunset dramatic sky, bold dark overlay panel at bottom for text, patriotic tones, no logos, no text overlay on sky portion",
     ],
     landingPageConfig: {
       pageType: "veteran_age_qualifier",
@@ -844,9 +860,9 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
         "Benefits You Earned. Don't Leave Them Behind.",
       ],
       hookPool: [
-        "YOUR SERVICE ENDED. YOUR ADVANTAGES DIDN'T.",
-        "This private coverage is not available to the general public.",
-        "Most veterans don't know about this option.",
+        "YOUR SERVICE ENDED. YOUR ADVANTAGES DIDN'T. 💪\nYou hung up the uniform, but you didn't hang up what you earned. Military service unlocks benefits civilians will never access — and most veterans don't even know they exist.",
+        "EVERY BRANCH BUILT WARRIORS. EVERY WARRIOR DESERVES COVERAGE.\nARMY · NAVY · AIR FORCE · MARINES · COAST GUARD",
+        "Your mission was protecting others. This coverage's mission is protecting you.",
       ],
       introPool: [
         "Veterans have access to private market coverage options not widely advertised to civilians.",
@@ -992,14 +1008,15 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
     visualDirection: "Bold neon-inspired trucker card, TRUCKERS headline large, age buttons, dark background with amber/orange neon glow",
     copyBlueprint: {
       headlinePool: [
-        "TRUCKERS — See Your Rate",
-        "Truck Drivers — Coverage Built For You",
-        "CDL Drivers — View Your Options",
+        "TRUCKERS IUL",
+        "Truck Drivers — Life Insurance Built For You",
+        "CDL Drivers — View Your Amount",
+        "Truckers: Get Up To $1,000,000 Life Insurance",
       ],
       hookPool: [
-        "What happens if the wheels stop turning?",
-        "If you're a truck driver, this matters.",
-        "Keep your income rolling — no matter what.",
+        "TRUCKERS IUL — What happens if the wheels stop turning — how will your income keep rolling?",
+        "🚛🟢 Attention Professional Truckers: Get up to $1,000,000 in life insurance with no medical exam.",
+        "Life insurance with cash value potential built for drivers planning ahead.",
       ],
       bulletPool: [
         "No exam options available",
@@ -1014,8 +1031,8 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
       ],
     },
     imagePromptPool: [
-      "Vertical 1:1 Facebook ad image, commercial semi truck on open American highway at night with dramatic amber neon lighting, bold and strong, no logos, no text overlay",
-      "Vertical 1:1 Facebook ad image, truck driver in cab with bold dramatic neon-orange lighting, strong working-class mood, no logos, no text overlay",
+      "Vertical 1:1 Facebook ad image, bold neon cyan/teal glowing text headline area at top, three semi trucks on dark highway at night, dramatic neon lighting amber and teal, age buttons area at bottom, no logos, no text overlay",
+      "Vertical 1:1 Facebook ad image, TRUCKERS IUL bold headline composition, dark background, neon pink/magenta text glow, three colorful semi trucks lined up, vivid dramatic lighting, no logos",
     ],
     landingPageConfig: {
       pageType: "trucker_neon_card",
@@ -1066,9 +1083,9 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
         "Truck Driver Life Insurance",
       ],
       hookPool: [
-        "Coverage built for the people who keep America moving.",
-        "What happens if the wheels stop turning and the bills keep coming?",
-        "Protect your family while you're on the road.",
+        "🚛🇺🇸 Attention Truckers: Get $500,000–$1,000,000 in Life Insurance with No Medical Exam",
+        "TRUCKERS IUL — What happens if the wheels stop turning — how will your income keep rolling?",
+        "American flag. American truckers. American-made coverage.",
       ],
       bulletPool: [
         "No exam options available",
@@ -1083,8 +1100,8 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
       ],
     },
     imagePromptPool: [
-      "Vertical 1:1 Facebook ad image, American flag in background with a line of semi trucks, rugged Americana, patriotic red/white/blue, no logos, no text overlay",
-      "Vertical 1:1 Facebook ad image, truck driver standing near semi on open highway at sunrise, rugged patriotic American feel, red/white/blue tones, no logos, no text overlay",
+      "Vertical 1:1 Facebook ad image, American flag background with red white blue semi trucks in formation on highway, bold patriotic composition, TRUCKERS IUL text overlay area at top, dramatic sunset lighting, no logos",
+      "Vertical 1:1 Facebook ad image, red white blue patriotic semi truck lineup on American highway, bold dramatic patriotic flag composition, strong text overlay area, no logos",
     ],
     landingPageConfig: {
       pageType: "trucker_patriotic",
