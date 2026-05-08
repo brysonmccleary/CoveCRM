@@ -700,10 +700,10 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
         "Veterans — See Your Options",
       ],
       hookPool: [
-        "•BUILT FOR VETERANS• Private life insurance — not VA. Coverage up to $500,000 from $50/month.",
-        "Veterans, secure your family's future with affordable Term Life Insurance.",
-        "Built for veterans. $500,000 · From $50/Month · 30-Year Term Coverage.",
-        "Veterans Term Life Insurance · $250,000 · From $28/Month coverage.",
+        "•BUILT FOR VETERANS• Private life insurance — not VA.",
+        "Veterans, secure your family's future with affordable life insurance coverage.",
+        "You protected your country. Now protect your family.",
+        "YOUR SERVICE ENDED. YOUR ADVANTAGES DIDN'T.",
       ],
       bulletPool: [
         "Private coverage options",
@@ -719,8 +719,8 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
       approvedCoverageAmounts: [50000, 100000, 250000, 500000],
     },
     imagePromptPool: [
-      "Vertical 1:1 Facebook ad image, veteran-aged man with family at home, patriotic red/blue/gold color palette, civilian home setting, no military uniforms, no official insignia, realistic photography, no logos, no text overlay",
-      "Vertical 1:1 Facebook ad image, American flag in background, veteran-aged civilian portrait, patriotic tones, no military uniforms, realistic photography, no logos, no text overlay",
+      "Vertical 1:1 Facebook ad image, bold patriotic composition, veteran-aged civilian man age 55-70 standing proud with American flag in background, red/blue/gold tones, NO military uniforms, NO official insignia, NO government seals, realistic photography, no logos, no text overlay",
+      "Vertical 1:1 Facebook ad image, American flag waving dramatically at sunset with golden sky, bold patriotic mood, strong composition, space for text overlay at bottom, no logos, no text overlay on flag",
     ],
     landingPageConfig: {
       pageType: "veteran_amount_card",
@@ -884,8 +884,8 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
       ctaPool: ["See If I Qualify →", "View My Options →", "Check My Coverage →"],
     },
     imagePromptPool: [
-      "Vertical 1:1 Facebook ad image, veteran-aged civilian man in home setting, patriotic color palette, strong proud mood, no military uniforms or official insignia, realistic photography, no logos, no text overlay",
-      "Vertical 1:1 Facebook ad image, American flag subtly visible in background, veteran-aged adult, warm civilian home, patriotic mood without official symbols, no logos, no text overlay",
+      "Vertical 1:1 Facebook ad image, veteran-aged civilian man age 55-70, strong proud expression, American flag softly visible in background, warm patriotic tones, civilian clothes, NO military uniforms, NO official insignia, realistic photography, no logos, no text overlay",
+      "Vertical 1:1 Facebook ad image, bold patriotic American flag background, veteran-aged adult civilian, strong identity composition, red/white/blue tones, NO military uniforms, NO government seals, realistic photography, no logos, no text overlay",
     ],
     videoScriptPool: [
       "[HOOK] Your service ended. Your advantages didn't. [BODY] There are private coverage options designed specifically for veterans and their families. No exam options, locked-in rates, simple qualification. Review your options with a licensed agent. [CTA] Tap below to see if you qualify.",
@@ -922,73 +922,6 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
         "Do not use 'benefit unlock' framing that implies government entitlement.",
         "Exclusivity framing ('not available to civilians') is OK for private market — just do not imply official status.",
         "Do not use military rank, insignia, or government seals in any format.",
-      ],
-    },
-  },
-
-  {
-    id: "vet_family_term_card",
-    leadType: "veteran",
-    archetype: "veteran_family_term_card",
-    familyName: "Veteran Family Term Card",
-    vendorStyleTag: "market_veteran",
-    priority: 2,
-    format: "family_emotional",
-    visualDirection: "Veteran with spouse and children at home, civilian setting, warm and respectful, patriotic color palette",
-    copyBlueprint: {
-      headlinePool: [
-        "Veterans Term Life Insurance",
-        "Built For Veterans — Protect Your Family",
-        "Veteran Life Coverage",
-      ],
-      hookPool: [
-        "Built for veterans. Designed to protect your family.",
-        "Veterans term life insurance — simple, straightforward, affordable.",
-        "You protected your country. Now protect your family.",
-      ],
-      bulletPool: [
-        "30-year term coverage options",
-        "Built for veterans and their families",
-        "May qualify in minutes",
-        "Private coverage options",
-      ],
-      ctaPool: ["See My Rate →", "Check My Options →", "Learn More →"],
-      approvedCoverageAmounts: [50000, 100000, 250000, 500000],
-      approvedPremiumExamples: ["from $29/mo", "starting at $39/mo", "as low as $49/mo"],
-    },
-    imagePromptPool: [
-      "Vertical 1:1 Facebook ad image, veteran-aged man with spouse and children at home, warm patriotic color palette, civilian setting, emotional family mood, no military uniforms, no logos, no text overlay",
-      "Vertical 1:1 Facebook ad image, family portrait in warm home, patriotic red/blue accent tones, realistic photography, civilian setting, no logos, no text overlay",
-    ],
-    landingPageConfig: {
-      pageType: "veteran_family_term",
-      headlinePool: [
-        "Veterans Term Life Insurance",
-        "Protect Your Family — Built For Veterans",
-        "Veteran Life Coverage",
-      ],
-      subheadlinePool: [
-        "Private market coverage — not VA",
-        "See your rate in seconds",
-        "Built for veterans and their families",
-      ],
-      buttonLabelsPool: [
-        ["$50,000", "$100,000", "$250,000", "$500,000"],
-        ["$100,000", "$250,000", "$500,000"],
-      ],
-      benefitBulletsPool: [
-        ["30-year term coverage options", "Private market — not VA", "May qualify in minutes"],
-        ["Built for veterans", "No exam options", "Fast approval"],
-      ],
-      ctaStripPool: ["See My Rate →", "Check My Options →", "Learn More →"],
-      theme: { background: "#0a0f1a", accent: "#1d4ed8", styleTag: "veteran_family_term" },
-    },
-    compliance: {
-      noGovernmentImplication: true,
-      allowedClaimStyle: ["private-market", "term-style"],
-      notes: [
-        "Always frame as private market term life — not a VA or government program.",
-        "Premium examples must be clearly illustrative.",
       ],
     },
   },
@@ -1031,8 +964,8 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
       ],
     },
     imagePromptPool: [
-      "Vertical 1:1 Facebook ad image, bold neon cyan/teal glowing text headline area at top, three semi trucks on dark highway at night, dramatic neon lighting amber and teal, age buttons area at bottom, no logos, no text overlay",
-      "Vertical 1:1 Facebook ad image, TRUCKERS IUL bold headline composition, dark background, neon pink/magenta text glow, three colorful semi trucks lined up, vivid dramatic lighting, no logos",
+      "Vertical 1:1 Facebook ad image, three large commercial semi trucks on dark American highway at night, bold dramatic neon amber and cyan lighting, strong bold composition with space for TRUCKERS IUL text overlay at top, no logos, no text on trucks",
+      "Vertical 1:1 Facebook ad image, professional semi truck on open highway, dark dramatic sky, bold amber neon glow lighting, strong powerful composition, no logos, no text overlay",
     ],
     landingPageConfig: {
       pageType: "trucker_neon_card",
@@ -1100,8 +1033,8 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
       ],
     },
     imagePromptPool: [
-      "Vertical 1:1 Facebook ad image, American flag background with red white blue semi trucks in formation on highway, bold patriotic composition, TRUCKERS IUL text overlay area at top, dramatic sunset lighting, no logos",
-      "Vertical 1:1 Facebook ad image, red white blue patriotic semi truck lineup on American highway, bold dramatic patriotic flag composition, strong text overlay area, no logos",
+      "Vertical 1:1 Facebook ad image, red white and blue semi trucks driving in formation on American highway, bold American flag in background, dramatic patriotic sunset sky, strong bold composition, no logos, no text overlay",
+      "Vertical 1:1 Facebook ad image, semi truck on American highway with large patriotic flag in background at sunset, rugged Americana, bold red/white/blue, strong composition, no logos, no text overlay",
     ],
     landingPageConfig: {
       pageType: "trucker_patriotic",
@@ -1167,8 +1100,8 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
       ],
     },
     imagePromptPool: [
-      "Vertical 1:1 Facebook ad image, scenic mountain highway with semi truck in distance, warm golden hour lighting, open road Americana, no logos, no text overlay",
-      "Vertical 1:1 Facebook ad image, open highway with truck at sunset, warm amber tones, vast American landscape, no logos, no text overlay",
+      "Vertical 1:1 Facebook ad image, professional semi truck on scenic mountain highway at golden hour sunset, warm amber tones, vast American open road landscape, strong rugged composition, no logos, no text overlay",
+      "Vertical 1:1 Facebook ad image, commercial semi truck on Route 66 style American highway at sunset, warm golden hour lighting, rugged Americana feel, open road, no logos, no text overlay",
     ],
     landingPageConfig: {
       pageType: "trucker_scenic_benefit",
@@ -1232,8 +1165,8 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
       ],
     },
     imagePromptPool: [
-      "Vertical 1:1 Facebook ad image, truck driver in cab looking thoughtful, realistic working-class photography, warm but practical tone, no logos, no text overlay",
-      "Vertical 1:1 Facebook ad image, CDL driver reviewing paperwork at truck stop, realistic and practical, no logos, no text overlay",
+      "Vertical 1:1 Facebook ad image, professional truck driver in civilian clothes standing near semi truck, rugged and trustworthy American worker, warm realistic photography, no logos, no text overlay",
+      "Vertical 1:1 Facebook ad image, semi truck on American highway, wide open road, practical working-class American mood, realistic photography, no logos, no text overlay",
     ],
     landingPageConfig: {
       pageType: "trucker_problem_solution",
