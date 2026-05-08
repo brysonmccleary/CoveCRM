@@ -535,12 +535,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const session = await getServerSession(req, res, authOptions);
   if (!session?.user?.email) return res.status(401).json({ error: "Unauthorized" });
 
-  const { sheetId, spreadsheetId, folderName, tabName, gid } = (req.body || {}) as {
+  const { sheetId, spreadsheetId, folderName, tabName, gid, rotate, reinstall } = (req.body || {}) as {
     sheetId?: string;
     spreadsheetId?: string;
     folderName?: string;
     tabName?: string;
     gid?: string;
+    rotate?: boolean;
+    reinstall?: boolean;
   };
 
   const effectiveSheetId = sheetId || spreadsheetId;
@@ -571,24 +573,42 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       await Folder.create({ userEmail: session.user.email, name: cleanFolderName, source: "google-sheets" });
     }
 
-    const connectionId = crypto.randomBytes(12).toString("hex");
-    const token = crypto.randomBytes(32).toString("hex");
-    const tokenHash = sha256Hex(token);
+    const normalizedSheetId = String(effectiveSheetId);
+    const normalizedGid = String(gid || "");
+    const shouldRotate = rotate === true || reinstall === true;
+    const idx = gs.syncedSheetsSimple.findIndex(
+      (s: any) => String(s.sheetId || "") === normalizedSheetId && String(s.gid || "") === normalizedGid
+    );
+    const existingEntry = idx >= 0 ? gs.syncedSheetsSimple[idx] : null;
+    const canReuseExistingSecret =
+      existingEntry &&
+      !shouldRotate &&
+      String(existingEntry.connectionId || "").trim() &&
+      String(existingEntry.tokenHash || "").trim();
+
+    const generatedToken = canReuseExistingSecret ? "" : crypto.randomBytes(32).toString("hex");
+    const connectionId = canReuseExistingSecret
+      ? String(existingEntry.connectionId || "")
+      : crypto.randomBytes(12).toString("hex");
+    const tokenHash = canReuseExistingSecret
+      ? String(existingEntry.tokenHash || "")
+      : sha256Hex(generatedToken);
 
     const entry = {
-      sheetId: String(effectiveSheetId),
+      ...(existingEntry || {}),
+      sheetId: normalizedSheetId,
       folderName: cleanFolderName,
       tabName: tabName || "",
-      gid: gid || "",
-      lastSyncedAt: null,
-      lastEventAt: null,
+      gid: normalizedGid,
+      lastSyncedAt: existingEntry?.lastSyncedAt ?? null,
+      lastEventAt: existingEntry?.lastEventAt ?? null,
 
       connectionId,
       tokenHash,
-      createdAt: new Date(),
+      createdAt: existingEntry?.createdAt || new Date(),
+      updatedAt: new Date(),
     };
 
-    const idx = gs.syncedSheetsSimple.findIndex((s: any) => String(s.sheetId || "") === String(effectiveSheetId));
     if (idx >= 0) gs.syncedSheetsSimple[idx] = entry;
     else gs.syncedSheetsSimple.push(entry);
 
@@ -599,26 +619,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const webhookUrl = `${baseUrl}/api/sheets/webhook`;
     const backfillUrl = `${baseUrl}/api/sheets/backfill`;
 
-    const appsScript = buildAppsScript({
-      webhookUrl,
-      backfillUrl,
-      sheetId: String(effectiveSheetId),
-      gid: gid || "",
-      tabName: tabName || "",
-      connectionId,
-      token,
-    });
+    const appsScript = generatedToken
+      ? buildAppsScript({
+          webhookUrl,
+          backfillUrl,
+          sheetId: normalizedSheetId,
+          gid: normalizedGid,
+          tabName: tabName || "",
+          connectionId,
+          token: generatedToken,
+        })
+      : "";
 
     return res.status(200).json({
       ok: true,
       webhookUrl,
       backfillUrl,
       appsScript,
+      existingInstallPreserved: Boolean(canReuseExistingSecret),
+      rotated: !canReuseExistingSecret,
       sheet: {
-        sheetId: String(effectiveSheetId),
+        sheetId: normalizedSheetId,
         folderName: cleanFolderName,
         tabName: tabName || "",
-        gid: gid || "",
+        gid: normalizedGid,
         connectionId,
       },
     });
