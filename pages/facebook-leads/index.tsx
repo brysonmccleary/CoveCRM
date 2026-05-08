@@ -7,6 +7,7 @@ import DashboardLayout from "@/components/DashboardLayout";
 import MetaConnectPanel from "@/components/MetaConnectPanel";
 import FBCampaignSheetsWizard from "@/components/FBCampaignSheetsWizard";
 import AdWizard from "@/components/FacebookAds/AdWizard";
+import AdPreviewCard from "@/components/FacebookAds/AdPreviewCard";
 import { GetServerSideProps } from "next";
 import { getServerSession } from "next-auth/next";
 import { isExperimentalAdminEmail } from "@/lib/isExperimentalAdmin";
@@ -1062,47 +1063,15 @@ function SetupWizard({
                   Regenerate
                 </button>
 
-                {/* Generated image + overlay metadata from generate-ad */}
-                {adDraft && (adDraft.imageUrl || adDraft.creativeArchetype) && (
-                  <div className="border-t border-gray-700 pt-4 space-y-3">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <p className="text-sm font-semibold text-white">Creative Layout</p>
-                      {adDraft.creativeArchetype && (
-                        <span className="text-xs bg-indigo-900/40 text-indigo-300 border border-indigo-700/30 px-2 py-0.5 rounded-full">
-                          {String(adDraft.creativeArchetype).replace(/_/g, " ")}
-                        </span>
-                      )}
-                      {adDraft.copySource === "ai_generated" && (
-                        <span className="text-xs bg-emerald-900/30 text-emerald-400 border border-emerald-700/30 px-2 py-0.5 rounded-full">AI Enhanced</span>
-                      )}
-                    </div>
-                    {adDraft.imageUrl && (
-                      <img src={adDraft.imageUrl} alt="Generated ad image" className="rounded-lg max-w-xs w-full object-cover" />
-                    )}
-                    {adDraft.imageError && (
-                      <p className="text-xs text-yellow-500">Image generation failed: {adDraft.imageError}</p>
-                    )}
-                    {adDraft.overlayData && (
-                      <div className="bg-[#0f172a] border border-gray-700 rounded-lg p-3 space-y-2">
-                        <p className="text-white text-sm font-semibold">{adDraft.overlayData.headline}</p>
-                        <p className="text-gray-400 text-xs">{adDraft.overlayData.subheadline}</p>
-                        {Array.isArray(adDraft.overlayData.buttonLabels) && adDraft.overlayData.buttonLabels.length > 0 && (
-                          <div className="flex flex-wrap gap-1.5">
-                            {adDraft.overlayData.buttonLabels.map((label: string) => (
-                              <span key={label} className="text-xs bg-indigo-700/60 text-indigo-200 px-2.5 py-1 rounded-full">{label}</span>
-                            ))}
-                          </div>
-                        )}
-                        {Array.isArray(adDraft.overlayData.benefitBullets) && adDraft.overlayData.benefitBullets.length > 0 && (
-                          <ul className="space-y-0.5">
-                            {adDraft.overlayData.benefitBullets.map((b: string) => (
-                              <li key={b} className="text-xs text-gray-400 flex items-start gap-1"><span className="text-green-500 shrink-0">✓</span>{b}</li>
-                            ))}
-                          </ul>
-                        )}
-                        <p className="text-xs text-indigo-400 font-medium">{adDraft.overlayData.ctaStrip}</p>
-                      </div>
-                    )}
+                {/* Ad preview — Facebook lead ad mock-up */}
+                {adDraft && (adDraft.imageUrl || adDraft.creativeArchetype || adDraft.landingPageConfig) && (
+                  <div className="border-t border-gray-700 pt-4">
+                    <AdPreviewCard
+                      draft={adDraft}
+                      regenerateAttempts={0}
+                      regenerating={generatingAds}
+                      onRegenerate={generateAds}
+                    />
                   </div>
                 )}
 
