@@ -123,6 +123,34 @@ function getCreativeBackground(draft: any, leadType: string): string {
   return "";
 }
 
+function hashString(value: string): number {
+  let hash = 0;
+  const str = value || "covecrm";
+  for (let i = 0; i < str.length; i++) {
+    hash = (Math.imul(31, hash) + str.charCodeAt(i)) | 0;
+  }
+  return Math.abs(hash);
+}
+
+function getVariationSeed(draft: any, leadType: string): string {
+  const explicitSeed = cleanText(draft?.uniquenessFingerprint);
+  if (explicitSeed) return explicitSeed;
+
+  const compositeSeed = [
+    draft?.creativeArchetype,
+    draft?.variationType,
+    draft?.winningFamilyId,
+    draft?.vendorStyleTag,
+    draft?.headline,
+  ].map(cleanText).filter(Boolean).join("|");
+
+  return compositeSeed || `${leadType}|default`;
+}
+
+function pickVisualVariant(draft: any, leadType: string, count: number): number {
+  return hashString(getVariationSeed(draft, leadType)) % Math.max(1, count);
+}
+
 function ButtonGrid({
   labels,
   styleType,
@@ -229,6 +257,67 @@ function FinishedCreativeRenderer({
   const bullets = overlay.benefitBullets;
   const cta = overlay.ctaStrip || "Learn more →";
   const hasBackground = Boolean(backgroundUrl);
+  const variantIndex = pickVisualVariant(draft, leadType, 5);
+
+  const visualVariants: Record<string, Array<{
+    name: string;
+    fallback: string;
+    overlay: string;
+    glow: string;
+    eyebrow: string;
+    headline: string;
+    headlineBg: string;
+    headlineBorder: string;
+    subheadline: string;
+    accent: string;
+    cta: string;
+    button: "navy" | "gold" | "red" | "cyan" | "cream";
+    benefit: "dark" | "gold" | "light" | "cyan";
+    panel: string;
+    panelBorder: string;
+    panelRadius: number;
+    headlineSize: number;
+    panelPosition: "top" | "middle" | "bottom";
+    textAlign: "left" | "center";
+  }>> = {
+    veteran: [
+      { name: "navy-gold-cream", fallback: "linear-gradient(145deg, #f5f0e8 0%, #1a2744 100%)", overlay: hasBackground ? "linear-gradient(180deg, rgba(245,240,232,0.76) 0%, rgba(26,39,68,0.72) 48%, rgba(10,15,26,0.95) 100%)" : "repeating-linear-gradient(0deg, transparent, transparent 18px, rgba(139,26,26,0.08) 18px, rgba(139,26,26,0.08) 20px)", glow: "inset 0 0 60px rgba(212,160,23,0.16)", eyebrow: "#8b1a1a", headline: "#1a2744", headlineBg: "rgba(245,240,232,0.91)", headlineBorder: "rgba(26,39,68,0.18)", subheadline: "#1a2744", accent: "#8b1a1a", cta: "#c0392b", button: "navy", benefit: "dark", panel: "rgba(245,240,232,0.9)", panelBorder: "rgba(26,39,68,0.18)", panelRadius: 8, headlineSize: 29, panelPosition: "top", textAlign: "center" },
+      { name: "navy-red-cream", fallback: "linear-gradient(145deg, #fff7ed 0%, #1a2744 62%, #8b1a1a 100%)", overlay: "linear-gradient(180deg, rgba(255,247,237,0.7) 0%, rgba(26,39,68,0.78) 50%, rgba(12,18,32,0.96) 100%)", glow: "inset 0 0 68px rgba(192,57,43,0.18)", eyebrow: "#c0392b", headline: "#ffffff", headlineBg: "rgba(26,39,68,0.9)", headlineBorder: "rgba(255,255,255,0.18)", subheadline: "#f8f5f0", accent: "#f8f5f0", cta: "#8b1a1a", button: "cream", benefit: "dark", panel: "rgba(26,39,68,0.88)", panelBorder: "rgba(255,255,255,0.18)", panelRadius: 6, headlineSize: 27, panelPosition: "middle", textAlign: "center" },
+      { name: "distressed-flag-dark", fallback: "linear-gradient(160deg, #1a0a0a 0%, #0a0a2a 50%, #1a0a0a 100%)", overlay: "repeating-linear-gradient(0deg, rgba(0,0,0,0.16), rgba(0,0,0,0.16) 16px, rgba(192,57,43,0.18) 16px, rgba(192,57,43,0.18) 18px), linear-gradient(180deg, rgba(0,0,0,0.28) 0%, rgba(0,0,0,0.88) 100%)", glow: "inset 0 0 72px rgba(255,215,0,0.12)", eyebrow: "#ffd76a", headline: "#ffd76a", headlineBg: "rgba(0,0,0,0.5)", headlineBorder: "rgba(255,215,0,0.36)", subheadline: "#ffffff", accent: "#ffd76a", cta: "#c0392b", button: "gold", benefit: "gold", panel: "rgba(0,0,0,0.52)", panelBorder: "rgba(255,215,0,0.3)", panelRadius: 4, headlineSize: 28, panelPosition: "top", textAlign: "center" },
+      { name: "cream-paper-patriotic", fallback: "linear-gradient(145deg, #f8f5f0 0%, #efe3d0 100%)", overlay: "linear-gradient(180deg, rgba(248,245,240,0.88) 0%, rgba(248,245,240,0.7) 48%, rgba(26,39,68,0.88) 100%)", glow: "inset 0 0 0 7px rgba(139,26,26,0.08)", eyebrow: "#8b1a1a", headline: "#1a2744", headlineBg: "rgba(255,255,255,0.76)", headlineBorder: "rgba(139,26,26,0.28)", subheadline: "#1a2744", accent: "#8b1a1a", cta: "#1a2744", button: "navy", benefit: "light", panel: "rgba(255,255,255,0.76)", panelBorder: "rgba(139,26,26,0.22)", panelRadius: 2, headlineSize: 28, panelPosition: "middle", textAlign: "center" },
+      { name: "dark-premium-gold", fallback: "linear-gradient(145deg, #080b12 0%, #151000 100%)", overlay: "linear-gradient(180deg, rgba(8,11,18,0.35) 0%, rgba(8,11,18,0.68) 44%, rgba(8,11,18,0.98) 100%)", glow: "inset 0 0 82px rgba(201,168,76,0.18)", eyebrow: "#c9a84c", headline: "#ffffff", headlineBg: "rgba(8,11,18,0.76)", headlineBorder: "rgba(201,168,76,0.34)", subheadline: "#d7c58a", accent: "#c9a84c", cta: "#b8860b", button: "gold", benefit: "gold", panel: "rgba(8,11,18,0.76)", panelBorder: "rgba(201,168,76,0.34)", panelRadius: 10, headlineSize: 27, panelPosition: "bottom", textAlign: "center" },
+    ],
+    trucker: [
+      { name: "navy-orange", fallback: "linear-gradient(145deg, #070b16 0%, #14213d 50%, #2d1600 100%)", overlay: "linear-gradient(180deg, rgba(5,9,20,0.35) 0%, rgba(5,9,20,0.64) 42%, rgba(5,9,20,0.94) 100%)", glow: "inset 0 0 70px rgba(245,158,11,0.18)", eyebrow: "#f59e0b", headline: "#ffffff", headlineBg: "transparent", headlineBorder: "transparent", subheadline: "#e0faff", accent: "#f59e0b", cta: "#d97706", button: "cyan", benefit: "cyan", panel: "rgba(5,9,20,0.42)", panelBorder: "rgba(245,158,11,0.18)", panelRadius: 8, headlineSize: 27, panelPosition: "top", textAlign: "center" },
+      { name: "purple-gold", fallback: "linear-gradient(145deg, #170724 0%, #26113d 56%, #3b2500 100%)", overlay: "linear-gradient(180deg, rgba(23,7,36,0.38) 0%, rgba(23,7,36,0.72) 48%, rgba(12,7,20,0.96) 100%)", glow: "inset 0 0 78px rgba(251,191,36,0.18)", eyebrow: "#fbbf24", headline: "#ffffff", headlineBg: "rgba(23,7,36,0.42)", headlineBorder: "rgba(251,191,36,0.26)", subheadline: "#fde68a", accent: "#fbbf24", cta: "#7c3aed", button: "gold", benefit: "gold", panel: "rgba(23,7,36,0.58)", panelBorder: "rgba(251,191,36,0.24)", panelRadius: 10, headlineSize: 26, panelPosition: "middle", textAlign: "center" },
+      { name: "neon-cyan-amber", fallback: "linear-gradient(180deg, #050505 0%, #07131f 55%, #1a0e00 100%)", overlay: "linear-gradient(180deg, rgba(0,0,0,0.2) 0%, rgba(0,10,16,0.72) 55%, rgba(0,0,0,0.96) 100%)", glow: "inset 0 0 70px rgba(0,229,255,0.22), inset 0 -90px 80px rgba(245,158,11,0.16)", eyebrow: "#00e5ff", headline: "#ffffff", headlineBg: "transparent", headlineBorder: "transparent", subheadline: "#fcd34d", accent: "#00e5ff", cta: "#1565c0", button: "cyan", benefit: "cyan", panel: "rgba(0,0,0,0.38)", panelBorder: "rgba(0,229,255,0.26)", panelRadius: 4, headlineSize: 28, panelPosition: "top", textAlign: "center" },
+      { name: "patriotic-red-blue", fallback: "linear-gradient(160deg, #8b0000 0%, #0a0a1a 48%, #123b73 100%)", overlay: "linear-gradient(180deg, rgba(139,0,0,0.22) 0%, rgba(10,10,26,0.72) 52%, rgba(10,10,26,0.98) 100%)", glow: "inset 0 0 0 8px rgba(255,255,255,0.06)", eyebrow: "#f8f5f0", headline: "#ffffff", headlineBg: "rgba(10,10,26,0.55)", headlineBorder: "rgba(255,255,255,0.18)", subheadline: "#f59e0b", accent: "#c0392b", cta: "#1d4ed8", button: "red", benefit: "dark", panel: "rgba(10,10,26,0.58)", panelBorder: "rgba(255,255,255,0.18)", panelRadius: 3, headlineSize: 27, panelPosition: "middle", textAlign: "center" },
+      { name: "white-blue-clean", fallback: "linear-gradient(145deg, #eaf4ff 0%, #ffffff 50%, #dbeafe 100%)", overlay: "linear-gradient(180deg, rgba(255,255,255,0.72) 0%, rgba(219,234,254,0.58) 45%, rgba(15,35,70,0.82) 100%)", glow: "inset 0 0 0 7px rgba(29,78,216,0.08)", eyebrow: "#1d4ed8", headline: "#0f2346", headlineBg: "rgba(255,255,255,0.86)", headlineBorder: "rgba(29,78,216,0.18)", subheadline: "#1e3a5f", accent: "#1d4ed8", cta: "#1d4ed8", button: "navy", benefit: "light", panel: "rgba(255,255,255,0.88)", panelBorder: "rgba(29,78,216,0.18)", panelRadius: 8, headlineSize: 25, panelPosition: "top", textAlign: "center" },
+    ],
+    mortgage_protection: [
+      { name: "red-white-navy", fallback: "linear-gradient(145deg, #f8f5f0 0%, #dbeafe 100%)", overlay: "linear-gradient(180deg, rgba(20,12,12,0.22) 0%, rgba(20,12,12,0.42) 46%, rgba(20,12,12,0.78) 100%)", glow: "inset 0 0 58px rgba(185,28,28,0.12)", eyebrow: "#b91c1c", headline: "#ffffff", headlineBg: "rgba(185,28,28,0.94)", headlineBorder: "rgba(255,255,255,0.18)", subheadline: "#555555", accent: "#b91c1c", cta: "#b91c1c", button: "red", benefit: "light", panel: "rgba(255,255,255,0.94)", panelBorder: "rgba(255,255,255,0.28)", panelRadius: 8, headlineSize: 22, panelPosition: "top", textAlign: "center" },
+      { name: "cream-gold-navy", fallback: "linear-gradient(145deg, #f8f5f0 0%, #efe3d0 58%, #1a2744 100%)", overlay: "linear-gradient(180deg, rgba(248,245,240,0.55) 0%, rgba(26,39,68,0.72) 100%)", glow: "inset 0 0 70px rgba(212,160,23,0.16)", eyebrow: "#d4a017", headline: "#1a2744", headlineBg: "rgba(248,245,240,0.93)", headlineBorder: "rgba(212,160,23,0.36)", subheadline: "#1a2744", accent: "#d4a017", cta: "#1a2744", button: "gold", benefit: "light", panel: "rgba(248,245,240,0.93)", panelBorder: "rgba(212,160,23,0.36)", panelRadius: 3, headlineSize: 23, panelPosition: "middle", textAlign: "center" },
+      { name: "dark-red-premium", fallback: "linear-gradient(145deg, #160707 0%, #3a1010 100%)", overlay: "linear-gradient(180deg, rgba(22,7,7,0.38) 0%, rgba(22,7,7,0.86) 100%)", glow: "inset 0 0 76px rgba(248,113,113,0.16)", eyebrow: "#fca5a5", headline: "#ffffff", headlineBg: "rgba(80,12,12,0.78)", headlineBorder: "rgba(252,165,165,0.24)", subheadline: "#fee2e2", accent: "#f87171", cta: "#991b1b", button: "red", benefit: "dark", panel: "rgba(80,12,12,0.78)", panelBorder: "rgba(252,165,165,0.24)", panelRadius: 10, headlineSize: 22, panelPosition: "bottom", textAlign: "center" },
+      { name: "clean-white-card", fallback: "linear-gradient(145deg, #ffffff 0%, #eef2ff 100%)", overlay: "linear-gradient(180deg, rgba(255,255,255,0.76) 0%, rgba(255,255,255,0.42) 45%, rgba(15,23,42,0.68) 100%)", glow: "inset 0 0 0 7px rgba(185,28,28,0.06)", eyebrow: "#b91c1c", headline: "#b91c1c", headlineBg: "rgba(255,255,255,0.94)", headlineBorder: "rgba(185,28,28,0.18)", subheadline: "#4b5563", accent: "#b91c1c", cta: "#b91c1c", button: "red", benefit: "light", panel: "rgba(255,255,255,0.95)", panelBorder: "rgba(17,24,39,0.12)", panelRadius: 12, headlineSize: 23, panelPosition: "middle", textAlign: "center" },
+      { name: "blue-trust", fallback: "linear-gradient(145deg, #dbeafe 0%, #ffffff 50%, #1e3a8a 100%)", overlay: "linear-gradient(180deg, rgba(219,234,254,0.62) 0%, rgba(30,58,138,0.76) 100%)", glow: "inset 0 0 70px rgba(29,78,216,0.18)", eyebrow: "#1d4ed8", headline: "#ffffff", headlineBg: "rgba(29,78,216,0.88)", headlineBorder: "rgba(255,255,255,0.2)", subheadline: "#1e3a5f", accent: "#1d4ed8", cta: "#1d4ed8", button: "navy", benefit: "light", panel: "rgba(255,255,255,0.92)", panelBorder: "rgba(29,78,216,0.2)", panelRadius: 8, headlineSize: 22, panelPosition: "top", textAlign: "center" },
+    ],
+    final_expense: [
+      { name: "black-gold", fallback: "linear-gradient(145deg, #0f0e0a 0%, #2d2016 100%)", overlay: "linear-gradient(180deg, rgba(15,14,10,0.42) 0%, rgba(15,14,10,0.72) 45%, rgba(15,14,10,0.96) 100%)", glow: "inset 0 0 70px rgba(212,160,23,0.14)", eyebrow: "#d4a017", headline: "#ffffff", headlineBg: "transparent", headlineBorder: "transparent", subheadline: "#fff3c4", accent: "#d4a017", cta: "#a16207", button: "gold", benefit: "gold", panel: "rgba(15,14,10,0.44)", panelBorder: "rgba(212,160,23,0.2)", panelRadius: 8, headlineSize: 27, panelPosition: "top", textAlign: "center" },
+      { name: "cream-gold", fallback: "linear-gradient(145deg, #f8f5f0 0%, #e8dac2 100%)", overlay: "linear-gradient(180deg, rgba(248,245,240,0.92) 0%, rgba(248,245,240,0.72) 48%, rgba(45,32,22,0.86) 100%)", glow: "inset 0 0 0 7px rgba(212,160,23,0.09)", eyebrow: "#a16207", headline: "#2d2016", headlineBg: "rgba(255,255,255,0.78)", headlineBorder: "rgba(161,98,7,0.22)", subheadline: "#4a3728", accent: "#a16207", cta: "#2d2016", button: "cream", benefit: "light", panel: "rgba(255,255,255,0.78)", panelBorder: "rgba(161,98,7,0.22)", panelRadius: 3, headlineSize: 27, panelPosition: "middle", textAlign: "center" },
+      { name: "dark-navy-gold", fallback: "linear-gradient(145deg, #0a1628 0%, #16213e 100%)", overlay: "linear-gradient(180deg, rgba(10,22,40,0.4) 0%, rgba(10,22,40,0.92) 100%)", glow: "inset 0 0 68px rgba(212,160,23,0.16)", eyebrow: "#d4a017", headline: "#ffffff", headlineBg: "rgba(22,33,62,0.72)", headlineBorder: "rgba(212,160,23,0.34)", subheadline: "#dbeafe", accent: "#d4a017", cta: "#a16207", button: "gold", benefit: "gold", panel: "rgba(22,33,62,0.72)", panelBorder: "rgba(212,160,23,0.34)", panelRadius: 8, headlineSize: 26, panelPosition: "top", textAlign: "center" },
+      { name: "warm-bronze", fallback: "linear-gradient(160deg, #0f0a06 0%, #1a1206 100%)", overlay: "linear-gradient(180deg, rgba(15,10,6,0.36) 0%, rgba(15,10,6,0.9) 100%)", glow: "inset 0 0 72px rgba(251,191,36,0.14)", eyebrow: "#fbbf24", headline: "#fbbf24", headlineBg: "rgba(15,10,6,0.52)", headlineBorder: "rgba(251,191,36,0.22)", subheadline: "#e5c88a", accent: "#fbbf24", cta: "#92400e", button: "gold", benefit: "gold", panel: "rgba(15,10,6,0.52)", panelBorder: "rgba(251,191,36,0.22)", panelRadius: 12, headlineSize: 26, panelPosition: "middle", textAlign: "center" },
+      { name: "clean-white-gold", fallback: "linear-gradient(145deg, #ffffff 0%, #f8f5f0 100%)", overlay: "linear-gradient(180deg, rgba(255,255,255,0.86) 0%, rgba(255,255,255,0.64) 48%, rgba(45,32,22,0.74) 100%)", glow: "inset 0 0 0 7px rgba(212,160,23,0.08)", eyebrow: "#a16207", headline: "#2d2016", headlineBg: "rgba(255,255,255,0.92)", headlineBorder: "rgba(212,160,23,0.3)", subheadline: "#4a3728", accent: "#d4a017", cta: "#a16207", button: "cream", benefit: "light", panel: "rgba(255,255,255,0.92)", panelBorder: "rgba(212,160,23,0.3)", panelRadius: 8, headlineSize: 25, panelPosition: "bottom", textAlign: "center" },
+    ],
+    iul: [
+      { name: "deep-blue-gold", fallback: "linear-gradient(145deg, #0a1628 0%, #0f2040 100%)", overlay: "linear-gradient(180deg, rgba(10,22,40,0.38) 0%, rgba(10,22,40,0.92) 100%)", glow: "inset 0 0 70px rgba(212,160,23,0.16)", eyebrow: "#d4a017", headline: "#ffffff", headlineBg: "rgba(10,22,40,0.58)", headlineBorder: "rgba(212,160,23,0.28)", subheadline: "#93c5fd", accent: "#d4a017", cta: "#1d4ed8", button: "gold", benefit: "gold", panel: "rgba(10,22,40,0.58)", panelBorder: "rgba(212,160,23,0.28)", panelRadius: 8, headlineSize: 26, panelPosition: "top", textAlign: "center" },
+      { name: "black-champagne", fallback: "linear-gradient(135deg, #1a1200 0%, #0d0d0d 100%)", overlay: "linear-gradient(180deg, rgba(13,13,13,0.34) 0%, rgba(13,13,13,0.95) 100%)", glow: "inset 0 0 70px rgba(201,168,76,0.16)", eyebrow: "#c9a84c", headline: "#ffffff", headlineBg: "rgba(13,13,13,0.64)", headlineBorder: "rgba(201,168,76,0.3)", subheadline: "#c9a84c", accent: "#c9a84c", cta: "#b8860b", button: "gold", benefit: "gold", panel: "rgba(13,13,13,0.64)", panelBorder: "rgba(201,168,76,0.3)", panelRadius: 10, headlineSize: 26, panelPosition: "middle", textAlign: "center" },
+      { name: "clean-blue-white", fallback: "linear-gradient(145deg, #f0f4ff 0%, #dbeafe 100%)", overlay: "linear-gradient(180deg, rgba(240,244,255,0.86) 0%, rgba(29,78,216,0.78) 100%)", glow: "inset 0 0 0 7px rgba(29,78,216,0.08)", eyebrow: "#1d4ed8", headline: "#ffffff", headlineBg: "rgba(29,78,216,0.9)", headlineBorder: "rgba(255,255,255,0.2)", subheadline: "#1e3a5f", accent: "#1d4ed8", cta: "#1d4ed8", button: "navy", benefit: "light", panel: "rgba(255,255,255,0.9)", panelBorder: "rgba(29,78,216,0.2)", panelRadius: 8, headlineSize: 24, panelPosition: "top", textAlign: "center" },
+      { name: "royal-gold", fallback: "linear-gradient(145deg, #111827 0%, #1e1b4b 58%, #3b2500 100%)", overlay: "linear-gradient(180deg, rgba(17,24,39,0.34) 0%, rgba(17,24,39,0.94) 100%)", glow: "inset 0 0 78px rgba(251,191,36,0.16)", eyebrow: "#fbbf24", headline: "#ffffff", headlineBg: "rgba(30,27,75,0.68)", headlineBorder: "rgba(251,191,36,0.28)", subheadline: "#fde68a", accent: "#fbbf24", cta: "#4338ca", button: "gold", benefit: "gold", panel: "rgba(30,27,75,0.68)", panelBorder: "rgba(251,191,36,0.28)", panelRadius: 6, headlineSize: 25, panelPosition: "bottom", textAlign: "center" },
+    ],
+  };
+
+  const variants = visualVariants[leadType] || visualVariants.final_expense;
+  const variant = variants[variantIndex % variants.length];
 
   const baseBackground = hasBackground
     ? {
@@ -237,39 +326,32 @@ function FinishedCreativeRenderer({
         backgroundPosition: "center",
       }
     : {
-        background:
-          leadType === "trucker"
-            ? "linear-gradient(145deg, #070b16 0%, #14213d 50%, #2d1600 100%)"
-            : leadType === "mortgage_protection"
-            ? "linear-gradient(145deg, #f8f5f0 0%, #dbeafe 100%)"
-            : leadType === "veteran"
-            ? "linear-gradient(145deg, #f5f0e8 0%, #1a2744 100%)"
-            : "linear-gradient(145deg, #0f0e0a 0%, #2d2016 100%)",
+        background: variant.fallback,
       };
 
   if (leadType === "trucker") {
     return (
       <div style={{ position: "absolute", inset: 0, overflow: "hidden", ...baseBackground }}>
-        <div style={{ position: "absolute", inset: 0, background: "linear-gradient(180deg, rgba(5,9,20,0.35) 0%, rgba(5,9,20,0.64) 42%, rgba(5,9,20,0.94) 100%)" }} />
-        <div style={{ position: "absolute", inset: 0, boxShadow: "inset 0 0 70px rgba(0,229,255,0.18), inset 0 -90px 80px rgba(245,158,11,0.16)" }} />
+        <div style={{ position: "absolute", inset: 0, background: variant.overlay }} />
+        <div style={{ position: "absolute", inset: 0, boxShadow: variant.glow }} />
         <div style={{ position: "relative", height: "100%", padding: "18px 18px 54px", display: "flex", flexDirection: "column" }}>
-          <div style={{ color: "#f59e0b", fontSize: 10, fontWeight: 900, letterSpacing: 2.4, textAlign: "center", marginBottom: 7 }}>
+          <div style={{ color: variant.eyebrow, fontSize: 10, fontWeight: 900, letterSpacing: 2.4, textAlign: "center", marginBottom: 7 }}>
             CDL DRIVER COVERAGE
           </div>
-          <div style={{ color: "#ffffff", fontSize: 27, fontWeight: 950, lineHeight: 0.98, textAlign: "center", textTransform: "uppercase", textShadow: "0 3px 18px rgba(0,0,0,0.82)" }}>
+          <div style={{ color: variant.headline, background: variant.headlineBg, border: variant.headlineBorder === "transparent" ? "none" : `1px solid ${variant.headlineBorder}`, borderRadius: variant.panelRadius, padding: variant.headlineBg === "transparent" ? 0 : "8px 10px", fontSize: variant.headlineSize, fontWeight: 950, lineHeight: 0.98, textAlign: variant.textAlign, textTransform: "uppercase", textShadow: "0 3px 18px rgba(0,0,0,0.82)" }}>
             {headline || "TRUCKERS IUL"}
           </div>
           {subheadline && (
-            <div style={{ color: "#e0faff", fontSize: 11, fontWeight: 800, lineHeight: 1.35, textAlign: "center", marginTop: 8, textShadow: "0 2px 12px rgba(0,0,0,0.8)" }}>
+            <div style={{ color: variant.subheadline, fontSize: 11, fontWeight: 800, lineHeight: 1.35, textAlign: "center", marginTop: 8, textShadow: "0 2px 12px rgba(0,0,0,0.8)" }}>
               {subheadline}
             </div>
           )}
           <div style={{ marginTop: "auto", display: "grid", gap: 9 }}>
-            <BenefitBoxes bullets={bullets} palette="cyan" />
-            <ButtonGrid labels={buttons} styleType="cyan" />
+            <BenefitBoxes bullets={bullets} palette={variant.benefit} />
+            <ButtonGrid labels={buttons} styleType={variant.button} />
           </div>
         </div>
-        <BottomBar color="#d97706" label={cta || "Check My Options →"} />
+        <BottomBar color={variant.cta} label={cta || "Check My Options →"} />
       </div>
     );
   }
@@ -277,22 +359,23 @@ function FinishedCreativeRenderer({
   if (leadType === "mortgage_protection") {
     return (
       <div style={{ position: "absolute", inset: 0, overflow: "hidden", ...baseBackground }}>
-        <div style={{ position: "absolute", inset: 0, background: "linear-gradient(180deg, rgba(20,12,12,0.22) 0%, rgba(20,12,12,0.42) 46%, rgba(20,12,12,0.78) 100%)" }} />
-        <div style={{ position: "absolute", left: 0, right: 0, top: 0, background: "rgba(185,28,28,0.94)", padding: "13px 18px", textAlign: "center" }}>
-          <div style={{ color: "#ffffff", fontSize: 22, fontWeight: 950, lineHeight: 1.02, textTransform: "uppercase" }}>
+        <div style={{ position: "absolute", inset: 0, background: variant.overlay }} />
+        <div style={{ position: "absolute", inset: 0, boxShadow: variant.glow }} />
+        <div style={{ position: "absolute", left: variant.panelPosition === "middle" ? 18 : 0, right: variant.panelPosition === "middle" ? 18 : 0, top: variant.panelPosition === "bottom" ? 18 : 0, background: variant.headlineBg, border: variant.headlineBorder === "transparent" ? "none" : `1px solid ${variant.headlineBorder}`, borderRadius: variant.panelPosition === "middle" ? variant.panelRadius : 0, padding: "13px 18px", textAlign: "center" }}>
+          <div style={{ color: variant.headline, fontSize: variant.headlineSize, fontWeight: 950, lineHeight: 1.02, textTransform: "uppercase" }}>
             {headline || "Protect Your Family's Home"}
           </div>
         </div>
-        <div style={{ position: "absolute", left: 18, right: 18, bottom: 58, background: "rgba(255,255,255,0.94)", borderRadius: 8, padding: "13px 12px", boxShadow: "0 16px 34px rgba(0,0,0,0.28)", textAlign: "center" }}>
-          <div style={{ color: "#555", fontSize: 12, fontWeight: 800, marginBottom: 10 }}>
+        <div style={{ position: "absolute", left: 18, right: 18, bottom: variant.panelPosition === "bottom" ? 58 : 54, background: variant.panel, border: `1px solid ${variant.panelBorder}`, borderRadius: variant.panelRadius, padding: "13px 12px", boxShadow: "0 16px 34px rgba(0,0,0,0.28)", textAlign: "center" }}>
+          <div style={{ color: variant.subheadline, fontSize: 12, fontWeight: 800, marginBottom: 10 }}>
             {subheadline || "Select your mortgage amount"}
           </div>
-          <ButtonGrid labels={buttons} styleType="red" />
+          <ButtonGrid labels={buttons} styleType={variant.button} />
           <div style={{ marginTop: bullets.length ? 10 : 0 }}>
-            <BenefitBoxes bullets={bullets} palette="light" />
+            <BenefitBoxes bullets={bullets} palette={variant.benefit} />
           </div>
         </div>
-        <BottomBar color="#b91c1c" label={cta || "See My Rate →"} />
+        <BottomBar color={variant.cta} label={cta || "See My Rate →"} />
       </div>
     );
   }
@@ -301,65 +384,67 @@ function FinishedCreativeRenderer({
     const amount = buttons.find((label) => label.includes("$")) || "$50,000";
     return (
       <div style={{ position: "absolute", inset: 0, overflow: "hidden", ...baseBackground }}>
-        <div style={{ position: "absolute", inset: 0, background: hasBackground ? "linear-gradient(180deg, rgba(245,240,232,0.76) 0%, rgba(26,39,68,0.72) 48%, rgba(10,15,26,0.95) 100%)" : "repeating-linear-gradient(0deg, transparent, transparent 18px, rgba(139,26,26,0.08) 18px, rgba(139,26,26,0.08) 20px)" }} />
+        <div style={{ position: "absolute", inset: 0, background: variant.overlay }} />
+        <div style={{ position: "absolute", inset: 0, boxShadow: variant.glow }} />
         <div style={{ position: "relative", height: "100%", padding: "18px 17px 54px", display: "flex", flexDirection: "column", textAlign: "center" }}>
-          <div style={{ color: "#8b1a1a", fontSize: 11, fontWeight: 950, letterSpacing: 2.4, marginBottom: 8 }}>
+          <div style={{ color: variant.eyebrow, fontSize: 11, fontWeight: 950, letterSpacing: 2.4, marginBottom: 8 }}>
             PRIVATE COVERAGE FOR VETERANS
           </div>
-          <div style={{ color: "#1a2744", background: "rgba(245,240,232,0.9)", border: "1px solid rgba(26,39,68,0.18)", borderRadius: 8, padding: "11px 10px", boxShadow: "0 12px 26px rgba(0,0,0,0.18)" }}>
-            <div style={{ fontSize: 29, fontWeight: 950, lineHeight: 0.98, textTransform: "uppercase", letterSpacing: 1 }}>
+          <div style={{ color: variant.headline, background: variant.panel, border: `1px solid ${variant.panelBorder}`, borderRadius: variant.panelRadius, padding: "11px 10px", boxShadow: "0 12px 26px rgba(0,0,0,0.18)" }}>
+            <div style={{ fontSize: variant.headlineSize, fontWeight: 950, lineHeight: 0.98, textTransform: "uppercase", letterSpacing: 1 }}>
               {headline || "Veterans Life Insurance"}
             </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, color: "#8b1a1a", margin: "10px 0 7px" }}>
-              <div style={{ flex: 1, borderTop: "1px solid #8b1a1a" }} />
+            <div style={{ display: "flex", alignItems: "center", gap: 8, color: variant.accent, margin: "10px 0 7px" }}>
+              <div style={{ flex: 1, borderTop: `1px solid ${variant.accent}` }} />
               <span style={{ fontSize: 14 }}>★</span>
-              <div style={{ flex: 1, borderTop: "1px solid #8b1a1a" }} />
+              <div style={{ flex: 1, borderTop: `1px solid ${variant.accent}` }} />
             </div>
-            <div style={{ color: "#1a2744", fontSize: 12, fontWeight: 800, lineHeight: 1.3 }}>
+            <div style={{ color: variant.subheadline, fontSize: 12, fontWeight: 800, lineHeight: 1.3 }}>
               {subheadline || "No exam options may be available"}
             </div>
           </div>
           <div style={{ marginTop: "auto" }}>
-            <div style={{ color: "#ffffff", fontSize: 44, fontWeight: 950, lineHeight: 1, textShadow: "0 4px 18px rgba(0,0,0,0.72)", marginBottom: 9 }}>
+            <div style={{ color: variant.accent === "#f8f5f0" ? "#ffffff" : variant.accent, fontSize: variant.panelPosition === "bottom" ? 38 : 44, fontWeight: 950, lineHeight: 1, textShadow: "0 4px 18px rgba(0,0,0,0.72)", marginBottom: 9 }}>
               {amount}
             </div>
-            <ButtonGrid labels={buttons.length ? buttons : ["Under 50", "50–60", "61–70", "71–79"]} styleType="navy" />
+            <ButtonGrid labels={buttons.length ? buttons : ["Under 50", "50–60", "61–70", "71–79"]} styleType={variant.button} />
           </div>
         </div>
-        <BottomBar color="#c0392b" label={cta || "Tap Your Age To See Options →"} />
+        <BottomBar color={variant.cta} label={cta || "Tap Your Age To See Options →"} />
       </div>
     );
   }
 
   return (
     <div style={{ position: "absolute", inset: 0, overflow: "hidden", ...baseBackground }}>
-      <div style={{ position: "absolute", inset: 0, background: "linear-gradient(180deg, rgba(15,14,10,0.42) 0%, rgba(15,14,10,0.72) 45%, rgba(15,14,10,0.96) 100%)" }} />
+      <div style={{ position: "absolute", inset: 0, background: variant.overlay }} />
+      <div style={{ position: "absolute", inset: 0, boxShadow: variant.glow }} />
       <div style={{ position: "relative", height: "100%", padding: "21px 18px 54px", display: "flex", flexDirection: "column", textAlign: "center" }}>
-        <div style={{ color: "#d4a017", fontSize: 10, fontWeight: 950, letterSpacing: 2.3, marginBottom: 8 }}>
-          FINAL EXPENSE COVERAGE
+        <div style={{ color: variant.eyebrow, fontSize: 10, fontWeight: 950, letterSpacing: 2.3, marginBottom: 8 }}>
+          {leadType === "iul" ? "INDEXED UNIVERSAL LIFE" : "FINAL EXPENSE COVERAGE"}
         </div>
-        <div style={{ color: "#ffffff", fontSize: 27, fontWeight: 950, lineHeight: 1.02, textTransform: "uppercase", textShadow: "0 3px 18px rgba(0,0,0,0.82)" }}>
-          {headline || "Final Expense Coverage"}
+        <div style={{ color: variant.headline, background: variant.headlineBg, border: variant.headlineBorder === "transparent" ? "none" : `1px solid ${variant.headlineBorder}`, borderRadius: variant.panelRadius, padding: variant.headlineBg === "transparent" ? 0 : "10px 11px", fontSize: variant.headlineSize, fontWeight: 950, lineHeight: 1.02, textTransform: "uppercase", textShadow: variant.headline === "#2d2016" ? "none" : "0 3px 18px rgba(0,0,0,0.82)" }}>
+          {headline || (leadType === "iul" ? "IUL Coverage Options" : "Final Expense Coverage")}
         </div>
-        <div style={{ height: 1, background: "#d4a017", margin: "12px 24px" }} />
+        <div style={{ height: 1, background: variant.accent, margin: "12px 24px" }} />
         {subheadline && (
-          <div style={{ color: "#fff3c4", fontSize: 12, fontWeight: 800, lineHeight: 1.35 }}>
+          <div style={{ color: variant.subheadline, fontSize: 12, fontWeight: 800, lineHeight: 1.35 }}>
             {subheadline}
           </div>
         )}
         <div style={{ marginTop: "auto", display: "grid", gap: 10 }}>
-          <ButtonGrid labels={buttons} styleType="gold" />
-          <BenefitBoxes bullets={bullets} palette="gold" />
+          <ButtonGrid labels={buttons} styleType={variant.button} />
+          <BenefitBoxes bullets={bullets} palette={variant.benefit} />
         </div>
       </div>
-      <BottomBar color="#a16207" label={cta || "See My Options →"} />
+      <BottomBar color={variant.cta} label={cta || "See My Options →"} />
     </div>
   );
 }
 
 function pickTemplate(fingerprint: string, leadType: string): number {
   let hash = 0;
-  const str = String(fingerprint || Math.random().toString(36));
+  const str = String(fingerprint || `${leadType}|default`);
   for (let i = 0; i < str.length; i++) {
     hash = (Math.imul(31, hash) + str.charCodeAt(i)) | 0;
   }
