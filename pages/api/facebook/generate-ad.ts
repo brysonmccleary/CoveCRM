@@ -104,6 +104,17 @@ function sanitizeCreativeText(value: string, leadType: string): string {
 
   if (leadType === "veteran") {
     replacements.push(
+      [/private coverage\s*[—-]\s*not va/gi, "coverage options for those who served"],
+      [/private market coverage\s*[—-]\s*not va/gi, "coverage options for those who served"],
+      [/private market\s*[—-]\s*not va/gi, "coverage for those who served"],
+      [/not affiliated with (?:the )?va/gi, "built for veterans and military families"],
+      [/not affiliated with veterans affairs/gi, "built for veterans and military families"],
+      [/\bnot va\b/gi, "built for veterans"],
+      [/\bnot a va program\b/gi, "coverage options for veterans and military families"],
+      [/\bnot va\/government\b/gi, "veteran-focused coverage options"],
+      [/independently offered\/not government/gi, "offered through a licensed coverage review"],
+      [/independently offered and not government/gi, "offered through a licensed coverage review"],
+      [/not (?:a )?government program/gi, "coverage options for veterans and military families"],
       [/30-year term/gi, "whole life coverage options"],
       [/term coverage/gi, "whole life coverage options"],
       [/term life/gi, "whole life coverage options"],

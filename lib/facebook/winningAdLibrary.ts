@@ -702,7 +702,7 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
         "Veterans — See Your Options",
       ],
       hookPool: [
-        "•BUILT FOR VETERANS• Private life insurance — not VA.",
+        "•BUILT FOR VETERANS• Coverage options for those who served.",
         "Veterans, secure your family's future with affordable life insurance coverage.",
         "You protected your country. Now protect your family.",
         "YOUR SERVICE ENDED. YOUR ADVANTAGES DIDN'T.",
@@ -732,7 +732,7 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
         "Private Coverage For Those Who Served",
       ],
       subheadlinePool: [
-        "Private coverage — not VA",
+        "Coverage options for those who served",
         "Select your coverage amount below",
         "See your options in seconds",
       ],
@@ -741,7 +741,7 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
         ["$100,000", "$250,000", "$500,000", "$1,000,000"],
       ],
       benefitBulletsPool: [
-        ["Private market coverage — not VA", "No exam options may be available", "Review takes under 60 seconds"],
+        ["Coverage options for those who served", "No exam options may be available", "Review takes under 60 seconds"],
         ["Private coverage review", "No exam options may be available", "Fast review"],
       ],
       ctaStripPool: ["Check My Options →", "See My Rate →", "Learn More →"],
@@ -754,7 +754,7 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
       notes: [
         "NEVER imply VA, government, or military endorsement.",
         "NEVER use official seals, military ranks, or government logos.",
-        "Always state 'private market coverage — not VA'.",
+        "Use veteran-focused private coverage language without official branding.",
         "Use 'may be available' and 'review' framing.",
       ],
     },
@@ -788,7 +788,7 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
         "No 2-year waiting period",
         "Whole life — immediate coverage up to $50,000",
         "No medical exam required",
-        "Private coverage — not VA or government",
+        "Coverage options for those who served",
         "Affordable monthly payments",
         "Locked-in rates for life",
         "Army · Navy · Air Force · Marines · Coast Guard",
@@ -820,7 +820,7 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
       ],
       subheadlinePool: [
         "Tap your age to view available private coverage",
-        "Private market coverage — not a government program",
+        "Private coverage options for veterans and military families",
         "View available private coverage options",
       ],
       buttonLabelsPool: [
@@ -828,7 +828,7 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
         ["30–49", "50–65", "66–79", "80+"],
       ],
       benefitBulletsPool: [
-        ["Private market coverage — not VA", "No exam options may be available", "Review in under 60 seconds"],
+        ["Coverage options for those who served", "No exam options may be available", "Review in under 60 seconds"],
         ["Private coverage review", "Fast review", "For veterans and military families"],
       ],
       ctaStripPool: ["View My Options →", "Check My Options →", "See What I Qualify For →"],
@@ -859,7 +859,7 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
     copyBlueprint: {
       headlinePool: [
         "Your Service Ended. Your Advantages Didn't.",
-        "Veterans-Only Coverage — Not Available to the Public",
+        "Coverage Built For Veterans",
         "Benefits You Earned. Don't Leave Them Behind.",
       ],
       hookPool: [
@@ -868,7 +868,7 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
         "Your mission was protecting others. This coverage's mission is protecting you.",
       ],
       introPool: [
-        "Veterans have access to private market coverage options not widely advertised to civilians.",
+        "Veterans can review private coverage options designed for those who served.",
         "There are private insurance options designed specifically for veterans and their families.",
         "After serving, you deserve simple, straightforward coverage that works for you.",
       ],
@@ -878,11 +878,11 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
         "No lengthy process. No runaround. Review your options in under 60 seconds.",
       ],
       bulletPool: [
-        "Veteran-only private market coverage",
+        "Coverage built for veterans",
         "No exam options available",
         "Locked-in rates for life",
         "Simple qualification process",
-        "Not available to the general public",
+        "Coverage for those who served",
       ],
       ctaPool: ["See If I Qualify →", "View My Options →", "Check My Coverage →"],
     },
@@ -897,21 +897,21 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
       pageType: "veteran_long_copy",
       headlinePool: [
         "Your Service Ended. Your Advantages Didn't.",
-        "Veterans-Only Private Coverage",
-        "Built For Veterans — Not Available to the Public",
+        "Coverage Built For Veterans",
+        "Built For Veterans and Military Families",
       ],
       subheadlinePool: [
-        "Private market coverage — not a VA program",
+        "Coverage options for veterans and military families",
         "See what options may be available to you",
-        "Not available to civilians",
+        "Coverage for those who served",
       ],
       buttonLabelsPool: [
         ["Under 50", "50–60", "61–70", "71–79"],
         ["30–49", "50–65", "66–79", "80+"],
       ],
       benefitBulletsPool: [
-        ["Veteran-only private market coverage", "No exam options available", "Locked-in rates", "Simple qualification"],
-        ["Private market — not VA", "No exam required", "Rates locked in", "Fast review"],
+        ["Coverage built for veterans", "No exam options available", "Locked-in rates", "Simple qualification"],
+        ["Coverage for those who served", "No exam required", "Rates locked in", "Fast review"],
       ],
       ctaStripPool: ["See If I Qualify →", "View My Options →", "Check My Coverage →"],
       theme: { background: "#0a0f1a", accent: "#1d4ed8", styleTag: "veteran_long_copy" },
@@ -921,9 +921,9 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
       needsReviewIfUsingApprovalLanguage: true,
       allowedClaimStyle: ["private-market"],
       notes: [
-        "CRITICAL: Must always state this is private market — NOT a VA or government program.",
+        "Keep language veteran-focused without implying official endorsement.",
         "Do not use 'benefit unlock' framing that implies government entitlement.",
-        "Exclusivity framing ('not available to civilians') is OK for private market — just do not imply official status.",
+        "Use clean veteran-focused positioning without entitlement or official-status framing.",
         "Do not use military rank, insignia, or government seals in any format.",
       ],
     },
@@ -1451,7 +1451,7 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
       pageType: "iul_veteran_legacy",
       headlinePool: ["Veterans — Learn About IUL", "Private IUL Education For Veterans", "Legacy Planning For Veterans"],
       subheadlinePool: [
-        "Private market coverage education — not VA",
+        "IUL education for veterans and military families",
         "Review protection and cash value potential",
         "Educational review with a licensed professional",
       ],
@@ -1460,8 +1460,8 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
         ["Veteran", "Family", "Planning", "Learn"],
       ],
       benefitBulletsPool: [
-        ["Private market — not VA", "Family protection", "Cash value potential subject to policy terms"],
-        ["No government endorsement", "Licensed review", "Educational only"],
+        ["Coverage for those who served", "Family protection", "Cash value potential subject to policy terms"],
+        ["Veteran-focused education", "Licensed review", "Educational only"],
       ],
       ctaStripPool: ["Start My Review →", "Learn About IUL →", "Review My Options →"],
       theme: { background: "#0a0f1a", accent: "#1d4ed8", styleTag: "iul_veteran" },
@@ -1470,7 +1470,7 @@ export const WINNING_AD_LIBRARY: WinningAdFamily[] = [
       noGovernmentImplication: true,
       avoidGuaranteedClaims: true,
       notes: [
-        "Must state private market and not VA/government.",
+        "Must state private market and veteran-focused private coverage.",
         "No military seals, uniforms, or official insignia.",
         "No guaranteed retirement or tax-free income claims.",
       ],
