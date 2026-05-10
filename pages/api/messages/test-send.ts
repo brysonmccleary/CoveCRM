@@ -91,6 +91,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       body,
       userEmail,
       leadId: String(leadDoc?._id || ""),
+      source: "test_safe_mode",
     });
 
     // If suppressed (no SID), still return 200 with details for the UI

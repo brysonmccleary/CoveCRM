@@ -13,7 +13,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!to || !body) return res.status(400).json({ error: "Missing 'to' or 'body'" });
 
   try {
-    const r = await sendSMS(to, body, session.user.email);
+    const r = await sendSMS(to, body, session.user.email, { source: "test_safe_mode" });
     return res.status(200).json({ ok: true, ...r });
   } catch (e: any) {
     return res.status(500).json({ ok: false, error: e?.message || "send failed" });

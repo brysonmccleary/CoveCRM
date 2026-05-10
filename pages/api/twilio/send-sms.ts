@@ -71,7 +71,10 @@ export default async function handler(
     }
 
     // ✅ Send via Twilio (always through Messaging Service inside sendSMS)
-    const { sid, serviceSid } = await sendSMS(to, body.trim(), user);
+    const { sid, serviceSid } = await sendSMS(to, body.trim(), user, {
+      source: "manual",
+      leadId: String(lead?._id || ""),
+    });
 
     // ✅ Append to lead's interaction history (best-effort)
     try {

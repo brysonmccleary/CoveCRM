@@ -351,6 +351,7 @@ export default async function handler(
         body: buildKaylaSms(firstName, attemptedCall),
         userEmail: ownerEmail,
         leadId,
+        source: "manual",
       });
       smsSent = true;
     } catch (err: any) {

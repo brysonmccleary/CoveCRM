@@ -31,6 +31,35 @@ const QUIET_START_HOUR = 21;
 const QUIET_END_HOUR = 8;
 const MIN_SCHEDULE_LEAD_MINUTES = 15;
 
+export type SmsOutboundSource =
+  | "drip"
+  | "manual"
+  | "booking_confirmation"
+  | "booking_reminder"
+  | "inbound_ai_reply"
+  | "test_safe_mode";
+
+const ALLOWED_OUTBOUND_SOURCES = new Set<SmsOutboundSource>([
+  "drip",
+  "manual",
+  "booking_confirmation",
+  "booking_reminder",
+  "inbound_ai_reply",
+  "test_safe_mode",
+]);
+
+const UNSAFE_OUTBOUND_BODY_PATTERNS: Array<{ pattern: RegExp; label: string }> = [
+  { pattern: /calendly\.com/i, label: "calendly.com" },
+  { pattern: /\bzoom\b/i, label: "Zoom" },
+  { pattern: /phone\s+or\s+zoom/i, label: "phone or Zoom" },
+  { pattern: /15[\s\u2011-]*minute\s+chat/i, label: "15-minute chat" },
+  { pattern: /lock\s+in\b.*\bchat/i, label: "lock in a chat" },
+  { pattern: /confirm\s+your\s+timezone/i, label: "confirm your timezone" },
+  { pattern: /\b(?:tuesday|tue)\s+2\s*[–—-]\s*4/i, label: "Tuesday 2-4" },
+  { pattern: /\b(?:thursday|thu)\s+10\s*[–—-]\s*12/i, label: "Thursday 10-12" },
+  { pattern: /review\s+options\s+and\s+next\s+steps/i, label: "review options and next steps" },
+];
+
 function normalize(p: string) {
   const digits = (p || "").replace(/\D/g, "");
   if (!digits) return "";
@@ -198,6 +227,142 @@ function pickLeadZone(lead: any): string {
   return fromState || "America/New_York";
 }
 
+function firstNonEmpty(values: any[]): string | null {
+  for (const value of values) {
+    const text = String(value || "").trim();
+    if (text) return text;
+  }
+  return null;
+}
+
+function splitFirstName(value?: string | null): string | null {
+  const text = String(value || "").trim();
+  return text ? text.split(/\s+/)[0] : null;
+}
+
+function normalizeNameForCompare(value?: string | null): string {
+  return String(value || "").trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function pickLeadFirstNameForSms(lead: any): string | null {
+  return firstNonEmpty([
+    lead?.["First Name"],
+    lead?.firstName,
+    lead?.First,
+    lead?.first,
+    lead?.givenName,
+    lead?.given,
+    lead?.given_name,
+    lead?.contact_first_name,
+  ]);
+}
+
+function pickLeadFullNameForSms(lead: any): string | null {
+  const first = pickLeadFirstNameForSms(lead);
+  const last = firstNonEmpty([
+    lead?.["Last Name"],
+    lead?.lastName,
+    lead?.Last,
+    lead?.last,
+    lead?.familyName,
+    lead?.family,
+    lead?.family_name,
+    lead?.contact_last_name,
+  ]);
+  const fromParts = [first, last].filter(Boolean).join(" ").trim();
+  return fromParts || firstNonEmpty([lead?.["Full Name"], lead?.fullName, lead?.Name, lead?.name]);
+}
+
+function safeLeadFirstName(firstName?: string | null): string | null {
+  const text = String(firstName || "").trim();
+  if (!text) return null;
+  if (/^(test|testing|lead|unknown|n\/a|na|none|null|sample|demo)$/i.test(text)) return null;
+  return text;
+}
+
+function sanitizeOwnerGreeting(args: {
+  body: string;
+  lead: any;
+  user: any;
+}): string {
+  const body = String(args.body || "");
+  const leadFirst = pickLeadFirstNameForSms(args.lead);
+  const leadFull = pickLeadFullNameForSms(args.lead);
+  const leadFirstNorm = normalizeNameForCompare(leadFirst);
+  const leadFullNorm = normalizeNameForCompare(leadFull);
+  const ownerFull = firstNonEmpty([
+    args.user?.name,
+    args.user?.fullName,
+    args.user?.username,
+    args.user?.email,
+  ]);
+  const ownerFirst = firstNonEmpty([
+    args.user?.firstName,
+    splitFirstName(ownerFull),
+  ]);
+  const ownerNames = [ownerFull, ownerFirst, args.user?.email]
+    .map((name) => String(name || "").trim())
+    .filter(Boolean)
+    .sort((a, b) => b.length - a.length);
+
+  for (const ownerName of ownerNames) {
+    const ownerNorm = normalizeNameForCompare(ownerName);
+    if (!ownerNorm || ownerNorm === leadFirstNorm || ownerNorm === leadFullNorm) continue;
+    const ownerPattern = escapeRegExp(ownerName).replace(/\s+/g, "\\s+");
+    const re = new RegExp(`^(\\s*(?:hey|hi|hello)\\s+)(${ownerPattern})(?=\\s|,|!|\\.|\\?|—|-|$)`, "i");
+    const match = body.match(re);
+    if (!match) continue;
+    const replacementName = safeLeadFirstName(leadFirst) || "there";
+    return `${match[1]}${replacementName}${body.slice(match[0].length)}`;
+  }
+
+  return body;
+}
+
+function inferOutboundSource(params: SendCoreParams): SmsOutboundSource | null {
+  const explicit = String(params.source || "").trim() as SmsOutboundSource;
+  if (ALLOWED_OUTBOUND_SOURCES.has(explicit)) return explicit;
+  if (
+    params.enrollmentId ||
+    (params.campaignId && params.stepIndex !== null && params.stepIndex !== undefined) ||
+    String(params.idempotencyKey || "").startsWith("drip:")
+  ) {
+    return "drip";
+  }
+  return null;
+}
+
+function assertSafeOutboundSms(args: {
+  params: SendCoreParams;
+  user: any;
+  lead: any;
+  source: SmsOutboundSource | null;
+}): string {
+  const source = args.source;
+  const unsafe = UNSAFE_OUTBOUND_BODY_PATTERNS.find((item) => item.pattern.test(args.params.body || ""));
+
+  if (!source || !ALLOWED_OUTBOUND_SOURCES.has(source) || unsafe) {
+    console.warn("[SMS_GUARD] Blocked unsafe outbound SMS", {
+      source: source || String(args.params.source || "missing"),
+      reason: unsafe ? `unsafe_body:${unsafe.label}` : "missing_or_disallowed_source",
+      userEmail: args.user?.email || null,
+      leadId: args.params.leadId || args.lead?._id || null,
+      to: args.params.to || null,
+    });
+    throw new Error("Unsafe outbound SMS blocked.");
+  }
+
+  return sanitizeOwnerGreeting({
+    body: args.params.body,
+    lead: args.lead,
+    user: args.user,
+  });
+}
+
 async function ensureUserDoc(userOrId: string | any) {
   if (!userOrId) return null;
   if (typeof (userOrId as any).save === "function") return userOrId;
@@ -251,6 +416,7 @@ type SendCoreParams = {
   to: string;
   body: string;
   user: any;
+  source?: SmsOutboundSource | string | null;
   leadId?: string | null;
   overrideMsid?: string | null;
   from?: string | null;
@@ -377,6 +543,18 @@ if (isUSDest && !isMessagingReady && !DEV_ALLOW_UNAPPROVED) {
     userEmail: user.email,
     toNorm,
   });
+
+  const outboundSource = inferOutboundSource(paramsIn);
+  paramsIn = {
+    ...paramsIn,
+    body: assertSafeOutboundSms({
+      params: paramsIn,
+      user,
+      lead,
+      source: outboundSource,
+    }),
+    source: outboundSource,
+  };
 
   const forcedFrom = await resolveStrictSmsSender({
     user,
@@ -633,10 +811,11 @@ export async function sendSMS(
   to: string,
   body: string,
   userIdOrUser: string | any,
+  opts?: { source?: SmsOutboundSource; leadId?: string | null },
 ) {
   const user = await ensureUserDoc(userIdOrUser);
   if (!user) throw new Error("User not found");
-  return await sendCore({ to, body, user });
+  return await sendCore({ to, body, user, source: opts?.source || null, leadId: opts?.leadId || null });
 }
 
 export async function sendSms(args: {
@@ -652,6 +831,7 @@ export async function sendSms(args: {
   campaignId?: string;
   stepIndex?: number;
   delayMinutes?: number;
+  source?: SmsOutboundSource;
 }) {
   const user = await ensureUserDoc(args.userEmail);
   if (!user) throw new Error("User not found");
@@ -659,6 +839,7 @@ export async function sendSms(args: {
     to: args.to,
     body: args.body,
     user,
+    source: args.source || null,
     leadId: args.leadId || null,
     overrideMsid: args.messagingServiceSid || null,
     from: args.from || null,

@@ -166,6 +166,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         userEmail,
         leadId: String(lead._id),
         from: fromOverride || undefined,
+        source: "booking_confirmation",
       });
 
       // mirror into interactionHistory as an AI entry

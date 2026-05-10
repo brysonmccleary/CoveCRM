@@ -285,6 +285,7 @@ async function persistAndSend({
     userEmail: user.email,
     leadId: String(lead._id),
     from: fromOverride || undefined, // if undefined, MSID path is used
+    source: "inbound_ai_reply",
   });
 
   // Persist convo (interactionHistory mirrors UI)

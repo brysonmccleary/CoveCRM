@@ -107,6 +107,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       body,
       userEmail: email,
       leadId: leadId ? String(leadId) : undefined,
+      source: "booking_confirmation",
     });
 
     return res.status(200).json({ ok: true, smsSent: true });

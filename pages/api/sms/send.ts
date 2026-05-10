@@ -26,7 +26,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const { sid, serviceSid, messageId, scheduledAt } = await sendSMS(
       to,
       body,
-      user._id.toString()
+      user._id.toString(),
+      { source: "manual" }
     );
 
     // ✅ NEW: after HUMAN outbound, suppress AI proactive messages for N hours unless lead replies.

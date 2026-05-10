@@ -1,5 +1,4 @@
 import type { NextApiRequest, NextApiResponse } from "next";
-import OpenAI from "openai";
 import { checkCronAuth } from "@/lib/cronAuth";
 import mongooseConnect from "@/lib/mongooseConnect";
 import Lead from "@/models/Lead";
@@ -11,8 +10,6 @@ import LeadInteractionEvent from "@/models/LeadInteractionEvent";
 import LeadMemoryProfile from "@/models/LeadMemoryProfile";
 import FollowUpNudge from "@/models/FollowUpNudge";
 import { LeadAIState } from "@/models/LeadAIState";
-import { buildLeadContext } from "@/lib/ai/memory/buildLeadContext";
-import { sendSms } from "@/lib/twilio/sendSMS";
 import { decideReactivation } from "@/lib/ai/followup/decideReactivation";
 
 export const config = {
@@ -22,58 +19,11 @@ export const config = {
 const MAX_LEADS_PER_RUN = 50;
 const REACTIVATION_EVENT_TYPE = "ai_reactivation";
 const INACTIVITY_CUTOFF = 30 * 24 * 60 * 60 * 1000;
-const FALLBACK_MESSAGE =
-  "Just wanted to check back in since timing can change. Are you still open to a quick call to go over options?";
 
 function getLeadName(lead: any) {
   const first = String(lead?.["First Name"] || lead?.firstName || "").trim();
   const last = String(lead?.["Last Name"] || lead?.lastName || "").trim();
   return `${first} ${last}`.trim() || String(lead?.Phone || lead?.phone || "Lead");
-}
-
-function recentConversationText(messages: any[]) {
-  return messages
-    .slice()
-    .reverse()
-    .map((message) => `- ${String(message.direction || "unknown")}: ${String(message.text || "").trim()}`)
-    .filter((line) => !line.endsWith(":"))
-    .join("\n");
-}
-
-async function generateReactivationText(args: {
-  userEmail: string;
-  leadId: string;
-  defaultMessage: string;
-}) {
-  const context = await buildLeadContext(args.userEmail, args.leadId).catch(() => null);
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey || !context) return args.defaultMessage || FALLBACK_MESSAGE;
-
-  const client = new OpenAI({ apiKey });
-  const response = await client.responses.create({
-    model: "gpt-5-mini",
-    input: [
-      {
-        role: "system",
-        content:
-          "Write a short natural reactivation text to an old insurance lead. Do not sound robotic. Do not repeat old exact wording. Mention that you are following up because timing may have changed. Move toward booking a quick call.",
-      },
-      {
-        role: "user",
-        content: JSON.stringify({
-          leadSummary: context.leadSummary || "",
-          keyFacts: context.keyFacts || [],
-          objections: context.objections || [],
-          preferences: context.preferences || {},
-          nextBestAction: context.nextBestAction || "",
-          lastConversation: recentConversationText(context.lastMessages || []),
-          suggestedMessage: args.defaultMessage || FALLBACK_MESSAGE,
-        }),
-      },
-    ],
-  });
-
-  return String((response as any).output_text || args.defaultMessage || FALLBACK_MESSAGE).trim() || FALLBACK_MESSAGE;
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -156,38 +106,39 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (!decision.shouldReactivate) continue;
 
       if (decision.suggestedAction === "sms") {
-        const to = String(lead.Phone || lead.phone || "").trim();
-        if (!to) continue;
-
-        const message = await generateReactivationText({
+        const leadName = getLeadName(lead);
+        const existing = await FollowUpNudge.findOne({
           userEmail,
           leadId,
-          defaultMessage: decision.suggestedMessage || FALLBACK_MESSAGE,
-        }).catch(() => decision.suggestedMessage || FALLBACK_MESSAGE);
+          dismissed: false,
+          message: { $regex: /^Reactivation SMS Task:/i },
+        }).lean();
 
-        await sendSms({
-          to,
-          body: message,
-          userEmail,
-          leadId,
-        });
+        if (!existing) {
+          await FollowUpNudge.create({
+            userEmail,
+            leadId,
+            leadName,
+            message: `Reactivation SMS Task: ${decision.reason}`,
+            priority: "medium",
+          });
+        }
 
         await LeadInteractionEvent.create({
           userEmail,
           leadId,
           type: REACTIVATION_EVENT_TYPE,
-          direction: "outbound",
-          body: message,
+          direction: "system",
+          body: `Reactivation SMS task suggested: ${decision.reason}`,
           metadata: {
             reason: decision.reason,
             suggestedAction: decision.suggestedAction,
             suggestedDelayHours: decision.suggestedDelayHours,
           },
-          sourceId: `reactivation-cron:${new Date().toISOString()}`,
+          sourceId: `reactivation-sms-task:${new Date().toISOString()}`,
         });
 
         acted++;
-        smsSent++;
         continue;
       }
 

@@ -481,6 +481,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             enrollmentId: String(ins._id),
             campaignId: String(campaign._id),
             stepIndex: 0,
+            source: "drip",
           });
 
           console.log(

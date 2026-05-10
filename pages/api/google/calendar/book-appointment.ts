@@ -443,6 +443,7 @@ export default async function handler(
         userEmail: user.email,
         leadId: String(lead._id),
         delayMinutes: humanDelayMinutes(),
+        source: "booking_confirmation",
       });
 
       didConfirm = true;
@@ -709,6 +710,7 @@ export default async function handler(
         // ✅ Only AI SMS assistant confirmations get the 3–5 min human delay;
         // manual bookings still go out immediately.
         delayMinutes: isAI ? humanDelayMinutes() : undefined,
+        source: "booking_confirmation",
       });
       didConfirm = true;
     } else {

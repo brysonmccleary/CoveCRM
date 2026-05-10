@@ -108,7 +108,8 @@ export async function checkAndSendReminders() {
           await sendSMS(
             leadPhone,
             withStopFooter(`We’re all set! Quick details:\n\n📅 ${dateStr}\n⏰ ${timeStr}\n📞 Call from ${agentPhone || "your agent"}`),
-            agentEmail
+            agentEmail,
+            { source: "booking_confirmation" }
           );
         } catch (err) {
           console.error("❌ Confirmation SMS failed:", err);
@@ -133,7 +134,8 @@ export async function checkAndSendReminders() {
           await sendSMS(
             leadPhone,
             withStopFooter(`Good morning! Just a quick reminder of your appointment with ${agentEmail} today at ${timeStr}.`),
-            agentEmail
+            agentEmail,
+            { source: "booking_reminder" }
           );
         } catch (err) {
           console.error("❌ Morning-of SMS failed:", err);
@@ -154,7 +156,8 @@ export async function checkAndSendReminders() {
           await sendSMS(
             leadPhone,
             withStopFooter(`Heads up! ${agentEmail} will be calling in about an hour.`),
-            agentEmail
+            agentEmail,
+            { source: "booking_reminder" }
           );
         } catch (err) {
           console.error("❌ 1-hour SMS failed:", err);
@@ -174,7 +177,8 @@ export async function checkAndSendReminders() {
           await sendSMS(
             leadPhone,
             withStopFooter(`Just another heads up — your appointment is in 15 minutes. Talk soon!`),
-            agentEmail
+            agentEmail,
+            { source: "booking_reminder" }
           );
         } catch (err) {
           console.error("❌ 15-min SMS failed:", err);

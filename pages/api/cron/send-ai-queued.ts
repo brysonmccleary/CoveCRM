@@ -7,6 +7,7 @@ import { AiQueuedReply } from "@/models/AiQueuedReply";
 import { LeadAIState } from "@/models/LeadAIState";
 import Lead from "@/models/Lead";
 import User from "@/models/User";
+import Message from "@/models/Message";
 import { sendSms } from "@/lib/twilio/sendSMS";
 
 export const config = {
@@ -308,10 +309,37 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           `[send-ai-queued] Sending queuedId=${id} to=${updated.to} (attempt ${updated.attempts})`
         );
 
-        const [leadForGreeting, userForGreeting] = await Promise.all([
+        const [leadForGreeting, userForGreeting, lastInbound] = await Promise.all([
           (Lead as any).findOne({ _id: updated.leadId, userEmail: updated.userEmail }).lean().catch(() => null),
           (User as any).findOne({ email: updated.userEmail }).lean().catch(() => null),
+          (Message as any)
+            .findOne({ userEmail: updated.userEmail, leadId: updated.leadId, direction: "inbound" })
+            .sort({ createdAt: -1 })
+            .lean()
+            .catch(() => null),
         ]);
+
+        if (!lastInbound) {
+          await AiQueuedReply.updateOne(
+            { _id: updated._id },
+            {
+              $set: {
+                status: "failed",
+                failReason: "unsafe_no_real_inbound_before_ai_reply",
+              },
+            }
+          );
+          console.warn("[SMS_GUARD] Blocked unsafe outbound SMS", {
+            source: "inbound_ai_reply",
+            reason: "missing_real_inbound",
+            userEmail: updated.userEmail,
+            leadId: String(updated.leadId || ""),
+            to: updated.to,
+          });
+          failed++;
+          continue;
+        }
+
         const sanitizedBody = sanitizeOwnerGreetingForLead({
           body: updated.body,
           leadId: String(updated.leadId || ""),
@@ -333,6 +361,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           to: updated.to,
           body: sanitizedBody,
           userEmail: updated.userEmail,
+          leadId: String(updated.leadId || ""),
+          source: "inbound_ai_reply",
           // no delayMinutes: we already respected human delay when enqueuing
         });
 

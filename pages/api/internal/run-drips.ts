@@ -737,6 +737,7 @@ const result = await sendSms({
               enrollmentId: String(claim._id),
               campaignId: String((campaign as any)._id),
               stepIndex: idx,
+              source: "drip",
             });
 
             // If sendSms did not throw, we treat it as a successful “send outcome”

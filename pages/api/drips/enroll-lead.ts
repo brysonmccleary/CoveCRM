@@ -392,6 +392,7 @@ if (!lead) return res.status(404).json({ error: "Lead not found" });
                 enrollmentId: String(enrollment._id),
                 campaignId: campaignIdStr,
                 stepIndex: 0,
+                source: "drip",
               });
 
               const nextIndex = 1;

@@ -115,7 +115,10 @@ export async function sendInitialDrip(lead: LeadType, rawMessage?: string) {
     }
 
     // 5) Send & log via Twilio sendSMS helper (writes to Message collection)
-    await sendSMS(to, message, (lead as any)?.userId || (lead as any)?.userEmail || "");
+    await sendSMS(to, message, (lead as any)?.userId || (lead as any)?.userEmail || "", {
+      source: "drip",
+      leadId,
+    });
   } catch (error) {
     console.error("Failed to send initial drip message:", error);
   }

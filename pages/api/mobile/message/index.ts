@@ -98,6 +98,7 @@ export default async function handler(
         userEmail: email,
         leadId: String(leadId),
         idempotencyKey: manualIdempotencyKey || undefined,
+        source: "manual",
       });
     } catch (err: any) {
       console.error("Twilio send error (mobile):", err);
