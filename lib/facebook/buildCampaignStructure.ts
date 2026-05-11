@@ -64,7 +64,7 @@ export function buildCampaignStructure(input: {
   return {
     campaign: {
       name: String(input.campaignName || "").trim(),
-      objective: "LEADS",
+      objective: "OUTCOME_LEADS",
       special_ad_categories: [],
       buying_type: "AUCTION",
       status: "PAUSED",
