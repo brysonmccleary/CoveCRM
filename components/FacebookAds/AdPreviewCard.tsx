@@ -254,6 +254,526 @@ function BenefitBoxes({
   );
 }
 
+type LayoutFamily =
+  | "poster_stack"
+  | "split_panel"
+  | "selector_grid"
+  | "checklist_first"
+  | "amount_hero"
+  | "comparison_table"
+  | "quiz_card"
+  | "report_card"
+  | "advisory_notice"
+  | "messenger_prompt"
+  | "premium_card"
+  | "mobile_native"
+  | "trust_medical"
+  | "dark_response"
+  | "patriotic_badge";
+type IaFamily =
+  | "amount_first"
+  | "qualification_first"
+  | "benefit_first"
+  | "branch_selector"
+  | "family_security"
+  | "urgency_response"
+  | "payment_protection"
+  | "home_value"
+  | "rate_lock"
+  | "calculator_flow"
+  | "coverage_comparison"
+  | "cdl_qualification"
+  | "on_the_road"
+  | "instant_check"
+  | "family_planning"
+  | "lock_rate"
+  | "age_based"
+  | "coverage_selector";
+type FrameStyle = "full_bleed" | "inset_card" | "bottom_sheet" | "top_banner" | "split_overlay" | "corner_badge" | "diagonal_band" | "soft_glass";
+type DensityStyle = "compact" | "balanced" | "roomy";
+type TypographyStyle = "condensed_poster" | "premium_clean" | "utility_ui" | "aggressive_response" | "trust_editorial" | "modern_minimal";
+type CtaFlow = "bottom_bar" | "floating_cta" | "panel_cta" | "selector_cta" | "stacked_cta" | "inline_cta" | "comparison_cta" | "quiz_cta";
+type OverlayStyle = "deep_gradient" | "soft_gradient" | "hard_vignette" | "paper_wash" | "neon_glow";
+type PaletteKey = "navy" | "gold" | "red" | "cyan" | "cream";
+type BenefitKey = "dark" | "gold" | "light" | "cyan";
+
+type Palette = {
+  name: string;
+  fallback: string;
+  overlay: string;
+  glow: string;
+  eyebrow: string;
+  headline: string;
+  headlineBg: string;
+  headlineBorder: string;
+  subheadline: string;
+  accent: string;
+  cta: string;
+  panel: string;
+  panelBorder: string;
+  button: PaletteKey;
+  benefit: BenefitKey;
+};
+
+type CreativeState = {
+  draft: any;
+  leadType: string;
+  headline: string;
+  subheadline: string;
+  buttons: string[];
+  bullets: string[];
+  cta: string;
+  eyebrow: string;
+  amount: string;
+  backgroundUrl: string;
+  layoutFamily: LayoutFamily;
+  iaFamily: IaFamily;
+  frameStyle: FrameStyle;
+  densityStyle: DensityStyle;
+  typographyStyle: TypographyStyle;
+  ctaFlow: CtaFlow;
+  overlayStyle: OverlayStyle;
+  palette: Palette;
+  seed: number;
+  variantIndex: number;
+  headlineSize: number;
+  subSize: number;
+  gap: number;
+  pad: number;
+  radius: number;
+  lineHeight: number;
+};
+
+const LAYOUTS_BY_LEAD_TYPE: Record<string, LayoutFamily[]> = {
+  veteran: ["patriotic_badge", "amount_hero", "quiz_card", "split_panel", "checklist_first", "poster_stack", "advisory_notice"],
+  trucker: ["split_panel", "dark_response", "selector_grid", "report_card", "messenger_prompt", "poster_stack", "mobile_native"],
+  mortgage_protection: ["selector_grid", "comparison_table", "premium_card", "split_panel", "mobile_native", "report_card", "quiz_card"],
+  final_expense: ["premium_card", "checklist_first", "quiz_card", "advisory_notice", "comparison_table", "dark_response", "trust_medical"],
+  iul: ["premium_card", "report_card", "split_panel", "trust_medical", "mobile_native", "checklist_first"],
+};
+
+const IA_BY_LEAD_TYPE: Record<string, IaFamily[]> = {
+  veteran: ["amount_first", "qualification_first", "benefit_first", "branch_selector", "family_security", "urgency_response"],
+  trucker: ["cdl_qualification", "family_security", "on_the_road", "instant_check", "benefit_first"],
+  mortgage_protection: ["payment_protection", "home_value", "rate_lock", "calculator_flow", "coverage_comparison"],
+  final_expense: ["family_planning", "lock_rate", "age_based", "coverage_selector", "benefit_first"],
+  iul: ["benefit_first", "family_security", "coverage_comparison", "qualification_first", "calculator_flow"],
+};
+
+function pickSeeded<T>(values: T[], seed: number, salt: string): T {
+  return values[hashString(`${seed}:${salt}`) % values.length];
+}
+
+function clampCopy(value: string, maxLength: number): string {
+  const text = cleanText(value);
+  return text.length > maxLength ? `${text.slice(0, maxLength - 3).trim()}...` : text;
+}
+
+function getLeadFallbackHeadline(leadType: string): string {
+  if (leadType === "veteran") return "Veterans Life Insurance";
+  if (leadType === "trucker") return "Truck Driver Coverage";
+  if (leadType === "mortgage_protection") return "Protect Your Family's Home";
+  if (leadType === "iul") return "IUL Coverage Options";
+  return "Final Expense Coverage";
+}
+
+function getLeadEyebrow(leadType: string, iaFamily: IaFamily): string {
+  if (leadType === "veteran") return iaFamily === "branch_selector" ? "COVERAGE FOR THOSE WHO SERVED" : "PRIVATE COVERAGE FOR VETERANS";
+  if (leadType === "trucker") return iaFamily === "cdl_qualification" ? "CDL DRIVER CHECK" : "TRUCK DRIVER COVERAGE";
+  if (leadType === "mortgage_protection") return iaFamily === "calculator_flow" ? "MORTGAGE PROTECTION CHECK" : "HOME PROTECTION OPTIONS";
+  if (leadType === "iul") return "INDEXED UNIVERSAL LIFE";
+  return iaFamily === "lock_rate" ? "RATE REVIEW" : "FINAL EXPENSE COVERAGE";
+}
+
+function getPalettes(leadType: string): Palette[] {
+  const base: Record<string, Palette[]> = {
+    veteran: [
+      { name: "navy_gold_cream", fallback: "linear-gradient(145deg, #f5f0e8 0%, #1a2744 100%)", overlay: "linear-gradient(180deg, rgba(245,240,232,0.74) 0%, rgba(26,39,68,0.74) 52%, rgba(10,15,26,0.95) 100%)", glow: "inset 0 0 60px rgba(212,160,23,0.16)", eyebrow: "#8b1a1a", headline: "#1a2744", headlineBg: "rgba(245,240,232,0.92)", headlineBorder: "rgba(26,39,68,0.18)", subheadline: "#1a2744", accent: "#8b1a1a", cta: "#c0392b", panel: "rgba(245,240,232,0.9)", panelBorder: "rgba(26,39,68,0.18)", button: "navy", benefit: "dark" },
+      { name: "distressed_flag_dark", fallback: "linear-gradient(160deg, #1a0a0a 0%, #0a0a2a 50%, #1a0a0a 100%)", overlay: "repeating-linear-gradient(0deg, rgba(0,0,0,0.16), rgba(0,0,0,0.16) 16px, rgba(192,57,43,0.18) 16px, rgba(192,57,43,0.18) 18px), linear-gradient(180deg, rgba(0,0,0,0.28) 0%, rgba(0,0,0,0.88) 100%)", glow: "inset 0 0 72px rgba(255,215,0,0.12)", eyebrow: "#ffd76a", headline: "#ffd76a", headlineBg: "rgba(0,0,0,0.52)", headlineBorder: "rgba(255,215,0,0.36)", subheadline: "#ffffff", accent: "#ffd76a", cta: "#c0392b", panel: "rgba(0,0,0,0.54)", panelBorder: "rgba(255,215,0,0.3)", button: "gold", benefit: "gold" },
+      { name: "dark_premium_gold", fallback: "linear-gradient(145deg, #080b12 0%, #151000 100%)", overlay: "linear-gradient(180deg, rgba(8,11,18,0.35) 0%, rgba(8,11,18,0.98) 100%)", glow: "inset 0 0 82px rgba(201,168,76,0.18)", eyebrow: "#c9a84c", headline: "#ffffff", headlineBg: "rgba(8,11,18,0.76)", headlineBorder: "rgba(201,168,76,0.34)", subheadline: "#d7c58a", accent: "#c9a84c", cta: "#b8860b", panel: "rgba(8,11,18,0.76)", panelBorder: "rgba(201,168,76,0.34)", button: "gold", benefit: "gold" },
+    ],
+    trucker: [
+      { name: "navy_orange", fallback: "linear-gradient(145deg, #070b16 0%, #14213d 50%, #2d1600 100%)", overlay: "linear-gradient(180deg, rgba(5,9,20,0.35) 0%, rgba(5,9,20,0.94) 100%)", glow: "inset 0 0 70px rgba(245,158,11,0.18)", eyebrow: "#f59e0b", headline: "#ffffff", headlineBg: "rgba(5,9,20,0.44)", headlineBorder: "rgba(245,158,11,0.18)", subheadline: "#e0faff", accent: "#f59e0b", cta: "#d97706", panel: "rgba(5,9,20,0.48)", panelBorder: "rgba(245,158,11,0.22)", button: "cyan", benefit: "cyan" },
+      { name: "neon_cyan_amber", fallback: "linear-gradient(180deg, #050505 0%, #07131f 55%, #1a0e00 100%)", overlay: "linear-gradient(180deg, rgba(0,0,0,0.2) 0%, rgba(0,10,16,0.72) 55%, rgba(0,0,0,0.96) 100%)", glow: "inset 0 0 70px rgba(0,229,255,0.22), inset 0 -90px 80px rgba(245,158,11,0.16)", eyebrow: "#00e5ff", headline: "#ffffff", headlineBg: "rgba(0,0,0,0.42)", headlineBorder: "rgba(0,229,255,0.26)", subheadline: "#fcd34d", accent: "#00e5ff", cta: "#1565c0", panel: "rgba(0,0,0,0.42)", panelBorder: "rgba(0,229,255,0.3)", button: "cyan", benefit: "cyan" },
+      { name: "white_blue_clean", fallback: "linear-gradient(145deg, #eaf4ff 0%, #ffffff 50%, #dbeafe 100%)", overlay: "linear-gradient(180deg, rgba(255,255,255,0.72) 0%, rgba(219,234,254,0.58) 45%, rgba(15,35,70,0.82) 100%)", glow: "inset 0 0 0 7px rgba(29,78,216,0.08)", eyebrow: "#1d4ed8", headline: "#0f2346", headlineBg: "rgba(255,255,255,0.88)", headlineBorder: "rgba(29,78,216,0.18)", subheadline: "#1e3a5f", accent: "#1d4ed8", cta: "#1d4ed8", panel: "rgba(255,255,255,0.9)", panelBorder: "rgba(29,78,216,0.18)", button: "navy", benefit: "light" },
+    ],
+    mortgage_protection: [
+      { name: "red_white_navy", fallback: "linear-gradient(145deg, #f8f5f0 0%, #dbeafe 100%)", overlay: "linear-gradient(180deg, rgba(20,12,12,0.22) 0%, rgba(20,12,12,0.78) 100%)", glow: "inset 0 0 58px rgba(185,28,28,0.12)", eyebrow: "#b91c1c", headline: "#ffffff", headlineBg: "rgba(185,28,28,0.94)", headlineBorder: "rgba(255,255,255,0.18)", subheadline: "#4b5563", accent: "#b91c1c", cta: "#b91c1c", panel: "rgba(255,255,255,0.94)", panelBorder: "rgba(255,255,255,0.28)", button: "red", benefit: "light" },
+      { name: "cream_gold_navy", fallback: "linear-gradient(145deg, #f8f5f0 0%, #efe3d0 58%, #1a2744 100%)", overlay: "linear-gradient(180deg, rgba(248,245,240,0.55) 0%, rgba(26,39,68,0.72) 100%)", glow: "inset 0 0 70px rgba(212,160,23,0.16)", eyebrow: "#d4a017", headline: "#1a2744", headlineBg: "rgba(248,245,240,0.93)", headlineBorder: "rgba(212,160,23,0.36)", subheadline: "#1a2744", accent: "#d4a017", cta: "#1a2744", panel: "rgba(248,245,240,0.93)", panelBorder: "rgba(212,160,23,0.36)", button: "gold", benefit: "light" },
+      { name: "blue_trust", fallback: "linear-gradient(145deg, #dbeafe 0%, #ffffff 50%, #1e3a8a 100%)", overlay: "linear-gradient(180deg, rgba(219,234,254,0.62) 0%, rgba(30,58,138,0.76) 100%)", glow: "inset 0 0 70px rgba(29,78,216,0.18)", eyebrow: "#1d4ed8", headline: "#ffffff", headlineBg: "rgba(29,78,216,0.88)", headlineBorder: "rgba(255,255,255,0.2)", subheadline: "#1e3a5f", accent: "#1d4ed8", cta: "#1d4ed8", panel: "rgba(255,255,255,0.92)", panelBorder: "rgba(29,78,216,0.2)", button: "navy", benefit: "light" },
+    ],
+    final_expense: [
+      { name: "black_gold", fallback: "linear-gradient(145deg, #0f0e0a 0%, #2d2016 100%)", overlay: "linear-gradient(180deg, rgba(15,14,10,0.42) 0%, rgba(15,14,10,0.96) 100%)", glow: "inset 0 0 70px rgba(212,160,23,0.14)", eyebrow: "#d4a017", headline: "#ffffff", headlineBg: "rgba(15,14,10,0.48)", headlineBorder: "rgba(212,160,23,0.2)", subheadline: "#fff3c4", accent: "#d4a017", cta: "#a16207", panel: "rgba(15,14,10,0.5)", panelBorder: "rgba(212,160,23,0.22)", button: "gold", benefit: "gold" },
+      { name: "cream_gold", fallback: "linear-gradient(145deg, #f8f5f0 0%, #e8dac2 100%)", overlay: "linear-gradient(180deg, rgba(248,245,240,0.92) 0%, rgba(45,32,22,0.86) 100%)", glow: "inset 0 0 0 7px rgba(212,160,23,0.09)", eyebrow: "#a16207", headline: "#2d2016", headlineBg: "rgba(255,255,255,0.82)", headlineBorder: "rgba(161,98,7,0.22)", subheadline: "#4a3728", accent: "#a16207", cta: "#2d2016", panel: "rgba(255,255,255,0.82)", panelBorder: "rgba(161,98,7,0.22)", button: "cream", benefit: "light" },
+      { name: "dark_navy_gold", fallback: "linear-gradient(145deg, #0a1628 0%, #16213e 100%)", overlay: "linear-gradient(180deg, rgba(10,22,40,0.4) 0%, rgba(10,22,40,0.92) 100%)", glow: "inset 0 0 68px rgba(212,160,23,0.16)", eyebrow: "#d4a017", headline: "#ffffff", headlineBg: "rgba(22,33,62,0.72)", headlineBorder: "rgba(212,160,23,0.34)", subheadline: "#dbeafe", accent: "#d4a017", cta: "#a16207", panel: "rgba(22,33,62,0.72)", panelBorder: "rgba(212,160,23,0.34)", button: "gold", benefit: "gold" },
+    ],
+    iul: [
+      { name: "deep_blue_gold", fallback: "linear-gradient(145deg, #0a1628 0%, #0f2040 100%)", overlay: "linear-gradient(180deg, rgba(10,22,40,0.38) 0%, rgba(10,22,40,0.92) 100%)", glow: "inset 0 0 70px rgba(212,160,23,0.16)", eyebrow: "#d4a017", headline: "#ffffff", headlineBg: "rgba(10,22,40,0.58)", headlineBorder: "rgba(212,160,23,0.28)", subheadline: "#93c5fd", accent: "#d4a017", cta: "#1d4ed8", panel: "rgba(10,22,40,0.58)", panelBorder: "rgba(212,160,23,0.28)", button: "gold", benefit: "gold" },
+      { name: "black_champagne", fallback: "linear-gradient(135deg, #1a1200 0%, #0d0d0d 100%)", overlay: "linear-gradient(180deg, rgba(13,13,13,0.34) 0%, rgba(13,13,13,0.95) 100%)", glow: "inset 0 0 70px rgba(201,168,76,0.16)", eyebrow: "#c9a84c", headline: "#ffffff", headlineBg: "rgba(13,13,13,0.64)", headlineBorder: "rgba(201,168,76,0.3)", subheadline: "#c9a84c", accent: "#c9a84c", cta: "#b8860b", panel: "rgba(13,13,13,0.64)", panelBorder: "rgba(201,168,76,0.3)", button: "gold", benefit: "gold" },
+      { name: "clean_blue_white", fallback: "linear-gradient(145deg, #f0f4ff 0%, #dbeafe 100%)", overlay: "linear-gradient(180deg, rgba(240,244,255,0.86) 0%, rgba(29,78,216,0.78) 100%)", glow: "inset 0 0 0 7px rgba(29,78,216,0.08)", eyebrow: "#1d4ed8", headline: "#ffffff", headlineBg: "rgba(29,78,216,0.9)", headlineBorder: "rgba(255,255,255,0.2)", subheadline: "#1e3a5f", accent: "#1d4ed8", cta: "#1d4ed8", panel: "rgba(255,255,255,0.9)", panelBorder: "rgba(29,78,216,0.2)", button: "navy", benefit: "light" },
+    ],
+  };
+  return base[leadType] || base.final_expense;
+}
+
+function buildCreativeState(draft: any, leadType: string, overlay: ReturnType<typeof getOverlay>): CreativeState {
+  const seed = hashString(getVariationSeed(draft, leadType));
+  const variantIndex = pickVisualVariant(draft, leadType, 7);
+  const palette = getPalettes(leadType)[variantIndex % getPalettes(leadType).length];
+  const layoutFamily = pickSeeded(LAYOUTS_BY_LEAD_TYPE[leadType] || LAYOUTS_BY_LEAD_TYPE.final_expense, seed + variantIndex * 11, "layout");
+  const iaFamily = pickSeeded(IA_BY_LEAD_TYPE[leadType] || IA_BY_LEAD_TYPE.final_expense, seed + variantIndex * 17, "ia");
+  const densityStyle = pickSeeded<DensityStyle>(["compact", "balanced", "roomy"], seed + variantIndex, "density");
+  const typographyStyle = pickSeeded<TypographyStyle>(["condensed_poster", "premium_clean", "utility_ui", "aggressive_response", "trust_editorial", "modern_minimal"], seed + variantIndex, "type");
+  const ctaFlow = pickSeeded<CtaFlow>(["bottom_bar", "floating_cta", "panel_cta", "selector_cta", "stacked_cta", "inline_cta", "comparison_cta", "quiz_cta"], seed + variantIndex, "cta");
+  const frameStyle = pickSeeded<FrameStyle>(["full_bleed", "inset_card", "bottom_sheet", "top_banner", "split_overlay", "corner_badge", "diagonal_band", "soft_glass"], seed + variantIndex, "frame");
+  const overlayStyle = pickSeeded<OverlayStyle>(["deep_gradient", "soft_gradient", "hard_vignette", "paper_wash", "neon_glow"], seed + variantIndex, "overlay");
+  const density = {
+    compact: { pad: 14, gap: 7, lineHeight: 1.03 },
+    balanced: { pad: 17, gap: 9, lineHeight: 1.08 },
+    roomy: { pad: 20, gap: 11, lineHeight: 1.12 },
+  }[densityStyle];
+  const headlineRaw = overlay.headline || cleanText(draft?.headline) || getLeadFallbackHeadline(leadType);
+  const headline = clampCopy(headlineRaw, headlineRaw.length > 46 ? 50 : 58);
+  const headlineBase = typographyStyle === "aggressive_response" ? 30 : typographyStyle === "utility_ui" ? 24 : typographyStyle === "modern_minimal" ? 25 : 27;
+  const headlineSize = Math.max(20, headlineBase - (headline.length > 42 ? 3 : 0) - (densityStyle === "compact" ? 1 : 0));
+  const fallbackButtons = leadType === "mortgage_protection"
+    ? ["Under $150k", "$150k-$300k", "$300k-$500k", "$500k+"]
+    : leadType === "trucker"
+    ? ["35-44", "45-54", "55-64", "65+"]
+    : ["Under 50", "50-60", "61-70", "71+"];
+
+  return {
+    draft,
+    leadType,
+    headline,
+    subheadline: clampCopy(overlay.subheadline, 82),
+    buttons: (overlay.buttonLabels.length ? overlay.buttonLabels : fallbackButtons).slice(0, 4),
+    bullets: overlay.benefitBullets.slice(0, 3),
+    cta: clampCopy(overlay.ctaStrip || "Learn more ->", 42),
+    eyebrow: getLeadEyebrow(leadType, iaFamily),
+    amount: (overlay.buttonLabels.find((label) => label.includes("$")) || (leadType === "veteran" ? "$50,000" : "")),
+    backgroundUrl: getCreativeBackground(draft, leadType),
+    layoutFamily,
+    iaFamily,
+    frameStyle,
+    densityStyle,
+    typographyStyle,
+    ctaFlow,
+    overlayStyle,
+    palette,
+    seed,
+    variantIndex,
+    headlineSize,
+    subSize: densityStyle === "compact" ? 11 : 12,
+    gap: density.gap,
+    pad: density.pad,
+    radius: frameStyle === "corner_badge" ? 3 : frameStyle === "soft_glass" ? 14 : 8,
+    lineHeight: density.lineHeight,
+  };
+}
+
+function getOverlayBackground(state: CreativeState): string {
+  if (state.overlayStyle === "soft_gradient") return "linear-gradient(180deg, rgba(255,255,255,0.14) 0%, rgba(0,0,0,0.62) 100%)";
+  if (state.overlayStyle === "hard_vignette") return "radial-gradient(circle at 50% 24%, rgba(255,255,255,0.1) 0%, rgba(0,0,0,0.8) 72%)";
+  if (state.overlayStyle === "paper_wash") return "linear-gradient(180deg, rgba(255,255,255,0.72) 0%, rgba(0,0,0,0.42) 100%)";
+  if (state.overlayStyle === "neon_glow") return "linear-gradient(180deg, rgba(0,0,0,0.2) 0%, rgba(0,0,0,0.84) 100%)";
+  return state.palette.overlay;
+}
+
+function CreativeShell({ state, children }: { state: CreativeState; children: any }) {
+  const baseBackground = state.backgroundUrl
+    ? { backgroundImage: `url("${state.backgroundUrl}")`, backgroundSize: "cover", backgroundPosition: "center" }
+    : { background: state.palette.fallback };
+
+  return (
+    <div style={{ position: "absolute", inset: 0, overflow: "hidden", ...baseBackground }}>
+      <div style={{ position: "absolute", inset: 0, background: getOverlayBackground(state) }} />
+      <div style={{ position: "absolute", inset: 0, boxShadow: state.palette.glow }} />
+      {state.frameStyle === "diagonal_band" && <div style={{ position: "absolute", left: -50, right: -50, top: 142, height: 64, transform: "rotate(-11deg)", background: state.palette.cta, opacity: 0.84 }} />}
+      {state.frameStyle === "corner_badge" && <div style={{ position: "absolute", top: 0, right: 0, borderTop: `76px solid ${state.palette.cta}`, borderLeft: "76px solid transparent" }} />}
+      {children}
+    </div>
+  );
+}
+
+function Panel({ state, children, style = {} }: { state: CreativeState; children: any; style?: any }) {
+  return (
+    <div
+      style={{
+        background: state.frameStyle === "soft_glass" ? "rgba(255,255,255,0.18)" : state.palette.panel,
+        border: `1px solid ${state.palette.panelBorder}`,
+        borderRadius: state.radius,
+        boxShadow: "0 14px 30px rgba(0,0,0,0.25)",
+        overflow: "hidden",
+        ...style,
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+function HeadlineBlock({ state, compact = false }: { state: CreativeState; compact?: boolean }) {
+  return (
+    <div style={{ color: state.palette.headline, background: state.palette.headlineBg, border: `1px solid ${state.palette.headlineBorder}`, borderRadius: state.radius, padding: compact ? "8px 10px" : "10px 12px" }}>
+      <div style={{ color: state.palette.eyebrow, fontSize: 10, fontWeight: 950, letterSpacing: 2, marginBottom: 5, textTransform: "uppercase" }}>
+        {state.eyebrow}
+      </div>
+      <div style={{ fontSize: compact ? state.headlineSize - 3 : state.headlineSize, fontWeight: 950, lineHeight: state.lineHeight, textTransform: "uppercase" }}>
+        {state.headline}
+      </div>
+      {state.subheadline && <div style={{ color: state.palette.subheadline, fontSize: state.subSize, fontWeight: 800, lineHeight: 1.28, marginTop: 6 }}>{state.subheadline}</div>}
+    </div>
+  );
+}
+
+function CtaUnit({ state, flow }: { state: CreativeState; flow?: CtaFlow }) {
+  const ctaFlow = flow || state.ctaFlow;
+  const base = {
+    background: state.palette.cta,
+    color: "#ffffff",
+    fontSize: 13,
+    fontWeight: 900,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    textAlign: "center" as const,
+    boxShadow: "0 10px 22px rgba(0,0,0,0.22)",
+  };
+  if (ctaFlow === "bottom_bar") return <BottomBar color={state.palette.cta} label={state.cta} />;
+  if (ctaFlow === "floating_cta") return <div style={{ ...base, position: "absolute", right: 16, bottom: 14, borderRadius: 999, padding: "10px 15px", maxWidth: 184 }}>{state.cta}</div>;
+  if (ctaFlow === "stacked_cta") return <div style={{ ...base, borderRadius: state.radius, minHeight: 38, marginTop: state.gap }}>{state.cta}</div>;
+  if (ctaFlow === "inline_cta") return <span style={{ ...base, display: "inline-flex", borderRadius: 999, padding: "8px 12px" }}>{state.cta}</span>;
+  return <div style={{ ...base, borderRadius: state.radius, minHeight: 38, padding: "0 10px" }}>{state.cta}</div>;
+}
+
+function MiniBenefits({ state, columns = 1 }: { state: CreativeState; columns?: number }) {
+  const bullets = state.bullets.length ? state.bullets : ["Licensed review", "No obligation", "Fast options check"];
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: columns === 2 ? "1fr 1fr" : "1fr", gap: 7 }}>
+      {bullets.slice(0, columns === 2 ? 2 : 3).map((bullet, index) => (
+        <div key={`${bullet}-${index}`} style={{ background: state.palette.panel, border: `1px solid ${state.palette.panelBorder}`, borderRadius: state.radius, padding: "8px 9px", color: state.palette.subheadline, fontSize: 11, fontWeight: 850, lineHeight: 1.18 }}>
+          <span style={{ color: state.palette.accent, fontWeight: 950 }}>✓ </span>{bullet}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function renderPosterStack(state: CreativeState) {
+  return (
+    <CreativeShell state={state}>
+      <div style={{ position: "relative", height: "100%", padding: state.pad, paddingBottom: state.ctaFlow === "bottom_bar" ? 54 : state.pad, display: "flex", flexDirection: "column", gap: state.gap, textAlign: "center" }}>
+        <HeadlineBlock state={state} />
+        <div style={{ marginTop: "auto", display: "grid", gap: state.gap }}>
+          {state.amount && <div style={{ color: state.palette.accent, fontSize: 42, fontWeight: 950, lineHeight: 1, textShadow: "0 3px 14px rgba(0,0,0,0.55)" }}>{state.amount}</div>}
+          <ButtonGrid labels={state.buttons} styleType={state.palette.button} />
+          <MiniBenefits state={state} />
+          {state.ctaFlow !== "bottom_bar" && <CtaUnit state={state} flow={state.ctaFlow} />}
+        </div>
+      </div>
+      {state.ctaFlow === "bottom_bar" && <CtaUnit state={state} />}
+    </CreativeShell>
+  );
+}
+
+function renderSplitPanel(state: CreativeState) {
+  return (
+    <CreativeShell state={state}>
+      <div style={{ position: "relative", height: "100%", display: "grid", gridTemplateColumns: "44% 56%", padding: state.pad, gap: state.gap, paddingBottom: state.ctaFlow === "bottom_bar" ? 54 : state.pad }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: state.gap, justifyContent: "space-between" }}>
+          <Panel state={state} style={{ padding: 10 }}>
+            <div style={{ color: state.palette.eyebrow, fontSize: 10, fontWeight: 950, letterSpacing: 1.8 }}>{state.eyebrow}</div>
+            <div style={{ color: state.palette.accent, fontSize: state.amount ? 34 : 28, fontWeight: 950, lineHeight: 1, marginTop: 8 }}>{state.amount || "FAST CHECK"}</div>
+          </Panel>
+          <MiniBenefits state={state} />
+        </div>
+        <Panel state={state} style={{ padding: 12, display: "flex", flexDirection: "column", justifyContent: "space-between", textAlign: "left" }}>
+          <div>
+            <div style={{ color: state.palette.headline, fontSize: state.headlineSize, fontWeight: 950, lineHeight: 1, textTransform: "uppercase" }}>{state.headline}</div>
+            {state.subheadline && <div style={{ color: state.palette.subheadline, fontSize: 12, fontWeight: 800, lineHeight: 1.3, marginTop: 8 }}>{state.subheadline}</div>}
+          </div>
+          <div style={{ display: "grid", gap: 8 }}>
+            <ButtonGrid labels={state.buttons} styleType={state.palette.button} />
+            {state.ctaFlow !== "bottom_bar" && <CtaUnit state={state} flow="panel_cta" />}
+          </div>
+        </Panel>
+      </div>
+      {state.ctaFlow === "bottom_bar" && <CtaUnit state={state} />}
+    </CreativeShell>
+  );
+}
+
+function renderSelectorGrid(state: CreativeState) {
+  return (
+    <CreativeShell state={state}>
+      <div style={{ position: "relative", height: "100%", padding: state.pad, paddingBottom: state.ctaFlow === "bottom_bar" ? 54 : state.pad, display: "grid", gridTemplateRows: "auto 1fr auto", gap: state.gap, textAlign: "center" }}>
+        <HeadlineBlock state={state} compact />
+        <Panel state={state} style={{ padding: 11, alignSelf: "center" }}>
+          <div style={{ color: state.palette.accent, fontSize: 12, fontWeight: 950, marginBottom: 9, letterSpacing: 1 }}>SELECT ONE OPTION</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+            {state.buttons.map((label) => (
+              <div key={label} style={{ background: state.palette.headlineBg, color: state.palette.headline, border: `1.5px solid ${state.palette.accent}`, borderRadius: state.radius, padding: "10px 7px", fontSize: 12, fontWeight: 950, lineHeight: 1 }}>
+                {label}
+              </div>
+            ))}
+          </div>
+        </Panel>
+        {state.ctaFlow === "bottom_bar" ? <MiniBenefits state={state} columns={2} /> : <CtaUnit state={state} flow="selector_cta" />}
+      </div>
+      {state.ctaFlow === "bottom_bar" && <CtaUnit state={state} />}
+    </CreativeShell>
+  );
+}
+
+function renderChecklistFirst(state: CreativeState) {
+  return (
+    <CreativeShell state={state}>
+      <div style={{ position: "relative", height: "100%", padding: state.pad, paddingBottom: state.ctaFlow === "bottom_bar" ? 54 : state.pad, display: "flex", flexDirection: "column", gap: state.gap }}>
+        <MiniBenefits state={state} />
+        <Panel state={state} style={{ padding: 12, marginTop: "auto", textAlign: "center" }}>
+          <div style={{ color: state.palette.eyebrow, fontSize: 10, fontWeight: 950, letterSpacing: 2 }}>{state.eyebrow}</div>
+          <div style={{ color: state.palette.headline, fontSize: state.headlineSize, fontWeight: 950, lineHeight: 1.02, textTransform: "uppercase", marginTop: 6 }}>{state.headline}</div>
+          {state.subheadline && <div style={{ color: state.palette.subheadline, fontSize: 12, fontWeight: 800, marginTop: 7 }}>{state.subheadline}</div>}
+          <div style={{ marginTop: 10 }}><ButtonGrid labels={state.buttons} styleType={state.palette.button} /></div>
+          {state.ctaFlow !== "bottom_bar" && <CtaUnit state={state} flow="stacked_cta" />}
+        </Panel>
+      </div>
+      {state.ctaFlow === "bottom_bar" && <CtaUnit state={state} />}
+    </CreativeShell>
+  );
+}
+
+function renderAmountHero(state: CreativeState) {
+  return (
+    <CreativeShell state={state}>
+      <div style={{ position: "relative", height: "100%", padding: state.pad, paddingBottom: state.ctaFlow === "bottom_bar" ? 54 : state.pad, textAlign: "center", display: "flex", flexDirection: "column" }}>
+        <div style={{ color: state.palette.eyebrow, fontSize: 11, fontWeight: 950, letterSpacing: 2.2 }}>{state.eyebrow}</div>
+        <div style={{ color: state.palette.accent, fontSize: 54, fontWeight: 950, lineHeight: 0.95, margin: "16px 0 8px", textShadow: "0 4px 18px rgba(0,0,0,0.65)" }}>{state.amount || "$50,000"}</div>
+        <div style={{ color: state.palette.headline, fontSize: state.headlineSize, fontWeight: 950, lineHeight: 1.02, textTransform: "uppercase" }}>{state.headline}</div>
+        <div style={{ marginTop: "auto", display: "grid", gap: state.gap }}>
+          <ButtonGrid labels={state.buttons} styleType={state.palette.button} />
+          {state.ctaFlow !== "bottom_bar" && <CtaUnit state={state} flow="floating_cta" />}
+        </div>
+      </div>
+      {state.ctaFlow === "bottom_bar" && <CtaUnit state={state} />}
+    </CreativeShell>
+  );
+}
+
+function renderComparisonTable(state: CreativeState) {
+  const rows = state.buttons.length ? state.buttons : ["Option A", "Option B", "Option C"];
+  return (
+    <CreativeShell state={state}>
+      <div style={{ position: "relative", height: "100%", padding: state.pad, paddingBottom: state.ctaFlow === "bottom_bar" ? 54 : state.pad, display: "grid", gridTemplateRows: "auto 1fr auto", gap: state.gap }}>
+        <HeadlineBlock state={state} compact />
+        <Panel state={state} style={{ padding: 10 }}>
+          {rows.slice(0, 4).map((row, index) => (
+            <div key={row} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 6px", borderBottom: index === rows.length - 1 ? "none" : `1px solid ${state.palette.panelBorder}`, color: state.palette.subheadline, fontSize: 12, fontWeight: 900 }}>
+              <span>{row}</span>
+              <span style={{ color: state.palette.accent }}>{index === 0 ? "Best" : "View"}</span>
+            </div>
+          ))}
+        </Panel>
+        <CtaUnit state={state} flow={state.ctaFlow === "bottom_bar" ? "comparison_cta" : state.ctaFlow} />
+      </div>
+      {state.ctaFlow === "bottom_bar" && <CtaUnit state={state} />}
+    </CreativeShell>
+  );
+}
+
+function renderQuizCard(state: CreativeState) {
+  return (
+    <CreativeShell state={state}>
+      <div style={{ position: "relative", height: "100%", padding: state.pad, paddingBottom: state.ctaFlow === "bottom_bar" ? 54 : state.pad, display: "flex", flexDirection: "column", gap: state.gap }}>
+        <Panel state={state} style={{ padding: 13, textAlign: "center" }}>
+          <div style={{ color: state.palette.eyebrow, fontSize: 11, fontWeight: 950 }}>QUESTION 1 OF 1</div>
+          <div style={{ color: state.palette.headline, fontSize: state.headlineSize, fontWeight: 950, lineHeight: 1.03, textTransform: "uppercase", marginTop: 7 }}>{state.headline}</div>
+        </Panel>
+        <div style={{ display: "grid", gap: 8 }}>
+          {state.buttons.map((button, index) => (
+            <div key={button} style={{ display: "flex", alignItems: "center", gap: 9, background: state.palette.panel, border: `1px solid ${state.palette.panelBorder}`, borderRadius: state.radius, padding: "9px 10px", color: state.palette.subheadline, fontSize: 12, fontWeight: 950 }}>
+              <span style={{ width: 20, height: 20, borderRadius: 999, background: state.palette.cta, color: "#fff", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 11 }}>{index + 1}</span>
+              {button}
+            </div>
+          ))}
+        </div>
+        <div style={{ marginTop: "auto" }}>{state.ctaFlow !== "bottom_bar" && <CtaUnit state={state} flow="quiz_cta" />}</div>
+      </div>
+      {state.ctaFlow === "bottom_bar" && <CtaUnit state={state} />}
+    </CreativeShell>
+  );
+}
+
+function renderReportCard(state: CreativeState) {
+  return (
+    <CreativeShell state={state}>
+      <div style={{ position: "relative", height: "100%", padding: state.pad, paddingBottom: state.ctaFlow === "bottom_bar" ? 54 : state.pad, display: "grid", gap: state.gap }}>
+        <Panel state={state} style={{ padding: 12 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", color: state.palette.eyebrow, fontSize: 10, fontWeight: 950, letterSpacing: 1.4 }}>
+            <span>REVIEW</span><span>READY</span>
+          </div>
+          <div style={{ color: state.palette.headline, fontSize: state.headlineSize, fontWeight: 950, lineHeight: 1.04, textTransform: "uppercase", marginTop: 8 }}>{state.headline}</div>
+        </Panel>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+          <Panel state={state} style={{ padding: 10, color: state.palette.subheadline, fontSize: 11, fontWeight: 900 }}>Options<br /><span style={{ color: state.palette.accent, fontSize: 24 }}>✓</span></Panel>
+          <Panel state={state} style={{ padding: 10, color: state.palette.subheadline, fontSize: 11, fontWeight: 900 }}>Time<br /><span style={{ color: state.palette.accent, fontSize: 20 }}>Fast</span></Panel>
+        </div>
+        <MiniBenefits state={state} />
+        {state.ctaFlow !== "bottom_bar" && <CtaUnit state={state} flow="panel_cta" />}
+      </div>
+      {state.ctaFlow === "bottom_bar" && <CtaUnit state={state} />}
+    </CreativeShell>
+  );
+}
+
+function renderAdvisoryNotice(state: CreativeState) {
+  return (
+    <CreativeShell state={state}>
+      <div style={{ position: "relative", height: "100%", padding: state.pad, paddingBottom: state.ctaFlow === "bottom_bar" ? 54 : state.pad, display: "flex", flexDirection: "column", gap: state.gap }}>
+        <div style={{ background: state.palette.cta, color: "#fff", padding: "9px 12px", borderRadius: state.radius, fontSize: 12, fontWeight: 950, letterSpacing: 1 }}>IMPORTANT COVERAGE NOTICE</div>
+        <Panel state={state} style={{ padding: 14, textAlign: "left" }}>
+          <div style={{ color: state.palette.headline, fontSize: state.headlineSize, fontWeight: 950, lineHeight: 1.03, textTransform: "uppercase" }}>{state.headline}</div>
+          {state.subheadline && <div style={{ color: state.palette.subheadline, fontSize: 12, fontWeight: 800, lineHeight: 1.35, marginTop: 8 }}>{state.subheadline}</div>}
+        </Panel>
+        <MiniBenefits state={state} />
+        <div style={{ marginTop: "auto" }}>{state.ctaFlow !== "bottom_bar" && <CtaUnit state={state} flow="inline_cta" />}</div>
+      </div>
+      {state.ctaFlow === "bottom_bar" && <CtaUnit state={state} />}
+    </CreativeShell>
+  );
+}
+
+function renderMessengerPrompt(state: CreativeState) {
+  return (
+    <CreativeShell state={state}>
+      <div style={{ position: "relative", height: "100%", padding: state.pad, paddingBottom: state.ctaFlow === "bottom_bar" ? 54 : state.pad, display: "flex", flexDirection: "column", gap: 8 }}>
+        <div style={{ alignSelf: "flex-start", maxWidth: "82%", background: state.palette.panel, border: `1px solid ${state.palette.panelBorder}`, borderRadius: "14px 14px 14px 4px", padding: 11, color: state.palette.headline, fontSize: 18, fontWeight: 950, lineHeight: 1.05 }}>{state.headline}</div>
+        {state.subheadline && <div style={{ alignSelf: "flex-end", maxWidth: "78%", background: state.palette.headlineBg, border: `1px solid ${state.palette.headlineBorder}`, borderRadius: "14px 14px 4px 14px", padding: 10, color: state.palette.subheadline, fontSize: 12, fontWeight: 850 }}>{state.subheadline}</div>}
+        <div style={{ marginTop: "auto", display: "grid", gap: 8 }}>
+          {state.buttons.slice(0, 3).map((button) => <div key={button} style={{ background: state.palette.cta, color: "#fff", borderRadius: 999, padding: "9px 12px", textAlign: "center", fontSize: 12, fontWeight: 950 }}>{button}</div>)}
+          {state.ctaFlow !== "bottom_bar" && <CtaUnit state={state} flow="floating_cta" />}
+        </div>
+      </div>
+      {state.ctaFlow === "bottom_bar" && <CtaUnit state={state} />}
+    </CreativeShell>
+  );
+}
+
+function renderTemplateFamily(state: CreativeState) {
+  if (state.layoutFamily === "split_panel") return renderSplitPanel(state);
+  if (state.layoutFamily === "selector_grid") return renderSelectorGrid(state);
+  if (state.layoutFamily === "checklist_first" || state.layoutFamily === "trust_medical") return renderChecklistFirst(state);
+  if (state.layoutFamily === "amount_hero") return renderAmountHero(state);
+  if (state.layoutFamily === "comparison_table") return renderComparisonTable(state);
+  if (state.layoutFamily === "quiz_card") return renderQuizCard(state);
+  if (state.layoutFamily === "report_card" || state.layoutFamily === "mobile_native") return renderReportCard(state);
+  if (state.layoutFamily === "advisory_notice") return renderAdvisoryNotice(state);
+  if (state.layoutFamily === "messenger_prompt") return renderMessengerPrompt(state);
+  if (state.layoutFamily === "premium_card" || state.layoutFamily === "dark_response" || state.layoutFamily === "patriotic_badge") return renderPosterStack(state);
+  return renderPosterStack(state);
+}
+
 function FinishedCreativeRenderer({
   draft,
   leadType,
@@ -263,196 +783,7 @@ function FinishedCreativeRenderer({
   leadType: string;
   overlay: ReturnType<typeof getOverlay>;
 }) {
-  const backgroundUrl = getCreativeBackground(draft, leadType);
-  const headline = overlay.headline || cleanText(draft?.headline);
-  const subheadline = overlay.subheadline;
-  const buttons = overlay.buttonLabels;
-  const bullets = overlay.benefitBullets;
-  const cta = overlay.ctaStrip || "Learn more →";
-  const hasBackground = Boolean(backgroundUrl);
-  const variantIndex = pickVisualVariant(draft, leadType, 5);
-
-  const visualVariants: Record<string, Array<{
-    name: string;
-    fallback: string;
-    overlay: string;
-    glow: string;
-    eyebrow: string;
-    headline: string;
-    headlineBg: string;
-    headlineBorder: string;
-    subheadline: string;
-    accent: string;
-    cta: string;
-    button: "navy" | "gold" | "red" | "cyan" | "cream";
-    benefit: "dark" | "gold" | "light" | "cyan";
-    panel: string;
-    panelBorder: string;
-    panelRadius: number;
-    headlineSize: number;
-    panelPosition: "top" | "middle" | "bottom";
-    textAlign: "left" | "center";
-  }>> = {
-    veteran: [
-      { name: "navy-gold-cream", fallback: "linear-gradient(145deg, #f5f0e8 0%, #1a2744 100%)", overlay: hasBackground ? "linear-gradient(180deg, rgba(245,240,232,0.76) 0%, rgba(26,39,68,0.72) 48%, rgba(10,15,26,0.95) 100%)" : "repeating-linear-gradient(0deg, transparent, transparent 18px, rgba(139,26,26,0.08) 18px, rgba(139,26,26,0.08) 20px)", glow: "inset 0 0 60px rgba(212,160,23,0.16)", eyebrow: "#8b1a1a", headline: "#1a2744", headlineBg: "rgba(245,240,232,0.91)", headlineBorder: "rgba(26,39,68,0.18)", subheadline: "#1a2744", accent: "#8b1a1a", cta: "#c0392b", button: "navy", benefit: "dark", panel: "rgba(245,240,232,0.9)", panelBorder: "rgba(26,39,68,0.18)", panelRadius: 8, headlineSize: 29, panelPosition: "top", textAlign: "center" },
-      { name: "navy-red-cream", fallback: "linear-gradient(145deg, #fff7ed 0%, #1a2744 62%, #8b1a1a 100%)", overlay: "linear-gradient(180deg, rgba(255,247,237,0.7) 0%, rgba(26,39,68,0.78) 50%, rgba(12,18,32,0.96) 100%)", glow: "inset 0 0 68px rgba(192,57,43,0.18)", eyebrow: "#c0392b", headline: "#ffffff", headlineBg: "rgba(26,39,68,0.9)", headlineBorder: "rgba(255,255,255,0.18)", subheadline: "#f8f5f0", accent: "#f8f5f0", cta: "#8b1a1a", button: "cream", benefit: "dark", panel: "rgba(26,39,68,0.88)", panelBorder: "rgba(255,255,255,0.18)", panelRadius: 6, headlineSize: 27, panelPosition: "middle", textAlign: "center" },
-      { name: "distressed-flag-dark", fallback: "linear-gradient(160deg, #1a0a0a 0%, #0a0a2a 50%, #1a0a0a 100%)", overlay: "repeating-linear-gradient(0deg, rgba(0,0,0,0.16), rgba(0,0,0,0.16) 16px, rgba(192,57,43,0.18) 16px, rgba(192,57,43,0.18) 18px), linear-gradient(180deg, rgba(0,0,0,0.28) 0%, rgba(0,0,0,0.88) 100%)", glow: "inset 0 0 72px rgba(255,215,0,0.12)", eyebrow: "#ffd76a", headline: "#ffd76a", headlineBg: "rgba(0,0,0,0.5)", headlineBorder: "rgba(255,215,0,0.36)", subheadline: "#ffffff", accent: "#ffd76a", cta: "#c0392b", button: "gold", benefit: "gold", panel: "rgba(0,0,0,0.52)", panelBorder: "rgba(255,215,0,0.3)", panelRadius: 4, headlineSize: 28, panelPosition: "top", textAlign: "center" },
-      { name: "cream-paper-patriotic", fallback: "linear-gradient(145deg, #f8f5f0 0%, #efe3d0 100%)", overlay: "linear-gradient(180deg, rgba(248,245,240,0.88) 0%, rgba(248,245,240,0.7) 48%, rgba(26,39,68,0.88) 100%)", glow: "inset 0 0 0 7px rgba(139,26,26,0.08)", eyebrow: "#8b1a1a", headline: "#1a2744", headlineBg: "rgba(255,255,255,0.76)", headlineBorder: "rgba(139,26,26,0.28)", subheadline: "#1a2744", accent: "#8b1a1a", cta: "#1a2744", button: "navy", benefit: "light", panel: "rgba(255,255,255,0.76)", panelBorder: "rgba(139,26,26,0.22)", panelRadius: 2, headlineSize: 28, panelPosition: "middle", textAlign: "center" },
-      { name: "dark-premium-gold", fallback: "linear-gradient(145deg, #080b12 0%, #151000 100%)", overlay: "linear-gradient(180deg, rgba(8,11,18,0.35) 0%, rgba(8,11,18,0.68) 44%, rgba(8,11,18,0.98) 100%)", glow: "inset 0 0 82px rgba(201,168,76,0.18)", eyebrow: "#c9a84c", headline: "#ffffff", headlineBg: "rgba(8,11,18,0.76)", headlineBorder: "rgba(201,168,76,0.34)", subheadline: "#d7c58a", accent: "#c9a84c", cta: "#b8860b", button: "gold", benefit: "gold", panel: "rgba(8,11,18,0.76)", panelBorder: "rgba(201,168,76,0.34)", panelRadius: 10, headlineSize: 27, panelPosition: "bottom", textAlign: "center" },
-    ],
-    trucker: [
-      { name: "navy-orange", fallback: "linear-gradient(145deg, #070b16 0%, #14213d 50%, #2d1600 100%)", overlay: "linear-gradient(180deg, rgba(5,9,20,0.35) 0%, rgba(5,9,20,0.64) 42%, rgba(5,9,20,0.94) 100%)", glow: "inset 0 0 70px rgba(245,158,11,0.18)", eyebrow: "#f59e0b", headline: "#ffffff", headlineBg: "transparent", headlineBorder: "transparent", subheadline: "#e0faff", accent: "#f59e0b", cta: "#d97706", button: "cyan", benefit: "cyan", panel: "rgba(5,9,20,0.42)", panelBorder: "rgba(245,158,11,0.18)", panelRadius: 8, headlineSize: 27, panelPosition: "top", textAlign: "center" },
-      { name: "purple-gold", fallback: "linear-gradient(145deg, #170724 0%, #26113d 56%, #3b2500 100%)", overlay: "linear-gradient(180deg, rgba(23,7,36,0.38) 0%, rgba(23,7,36,0.72) 48%, rgba(12,7,20,0.96) 100%)", glow: "inset 0 0 78px rgba(251,191,36,0.18)", eyebrow: "#fbbf24", headline: "#ffffff", headlineBg: "rgba(23,7,36,0.42)", headlineBorder: "rgba(251,191,36,0.26)", subheadline: "#fde68a", accent: "#fbbf24", cta: "#7c3aed", button: "gold", benefit: "gold", panel: "rgba(23,7,36,0.58)", panelBorder: "rgba(251,191,36,0.24)", panelRadius: 10, headlineSize: 26, panelPosition: "middle", textAlign: "center" },
-      { name: "neon-cyan-amber", fallback: "linear-gradient(180deg, #050505 0%, #07131f 55%, #1a0e00 100%)", overlay: "linear-gradient(180deg, rgba(0,0,0,0.2) 0%, rgba(0,10,16,0.72) 55%, rgba(0,0,0,0.96) 100%)", glow: "inset 0 0 70px rgba(0,229,255,0.22), inset 0 -90px 80px rgba(245,158,11,0.16)", eyebrow: "#00e5ff", headline: "#ffffff", headlineBg: "transparent", headlineBorder: "transparent", subheadline: "#fcd34d", accent: "#00e5ff", cta: "#1565c0", button: "cyan", benefit: "cyan", panel: "rgba(0,0,0,0.38)", panelBorder: "rgba(0,229,255,0.26)", panelRadius: 4, headlineSize: 28, panelPosition: "top", textAlign: "center" },
-      { name: "patriotic-red-blue", fallback: "linear-gradient(160deg, #8b0000 0%, #0a0a1a 48%, #123b73 100%)", overlay: "linear-gradient(180deg, rgba(139,0,0,0.22) 0%, rgba(10,10,26,0.72) 52%, rgba(10,10,26,0.98) 100%)", glow: "inset 0 0 0 8px rgba(255,255,255,0.06)", eyebrow: "#f8f5f0", headline: "#ffffff", headlineBg: "rgba(10,10,26,0.55)", headlineBorder: "rgba(255,255,255,0.18)", subheadline: "#f59e0b", accent: "#c0392b", cta: "#1d4ed8", button: "red", benefit: "dark", panel: "rgba(10,10,26,0.58)", panelBorder: "rgba(255,255,255,0.18)", panelRadius: 3, headlineSize: 27, panelPosition: "middle", textAlign: "center" },
-      { name: "white-blue-clean", fallback: "linear-gradient(145deg, #eaf4ff 0%, #ffffff 50%, #dbeafe 100%)", overlay: "linear-gradient(180deg, rgba(255,255,255,0.72) 0%, rgba(219,234,254,0.58) 45%, rgba(15,35,70,0.82) 100%)", glow: "inset 0 0 0 7px rgba(29,78,216,0.08)", eyebrow: "#1d4ed8", headline: "#0f2346", headlineBg: "rgba(255,255,255,0.86)", headlineBorder: "rgba(29,78,216,0.18)", subheadline: "#1e3a5f", accent: "#1d4ed8", cta: "#1d4ed8", button: "navy", benefit: "light", panel: "rgba(255,255,255,0.88)", panelBorder: "rgba(29,78,216,0.18)", panelRadius: 8, headlineSize: 25, panelPosition: "top", textAlign: "center" },
-    ],
-    mortgage_protection: [
-      { name: "red-white-navy", fallback: "linear-gradient(145deg, #f8f5f0 0%, #dbeafe 100%)", overlay: "linear-gradient(180deg, rgba(20,12,12,0.22) 0%, rgba(20,12,12,0.42) 46%, rgba(20,12,12,0.78) 100%)", glow: "inset 0 0 58px rgba(185,28,28,0.12)", eyebrow: "#b91c1c", headline: "#ffffff", headlineBg: "rgba(185,28,28,0.94)", headlineBorder: "rgba(255,255,255,0.18)", subheadline: "#555555", accent: "#b91c1c", cta: "#b91c1c", button: "red", benefit: "light", panel: "rgba(255,255,255,0.94)", panelBorder: "rgba(255,255,255,0.28)", panelRadius: 8, headlineSize: 22, panelPosition: "top", textAlign: "center" },
-      { name: "cream-gold-navy", fallback: "linear-gradient(145deg, #f8f5f0 0%, #efe3d0 58%, #1a2744 100%)", overlay: "linear-gradient(180deg, rgba(248,245,240,0.55) 0%, rgba(26,39,68,0.72) 100%)", glow: "inset 0 0 70px rgba(212,160,23,0.16)", eyebrow: "#d4a017", headline: "#1a2744", headlineBg: "rgba(248,245,240,0.93)", headlineBorder: "rgba(212,160,23,0.36)", subheadline: "#1a2744", accent: "#d4a017", cta: "#1a2744", button: "gold", benefit: "light", panel: "rgba(248,245,240,0.93)", panelBorder: "rgba(212,160,23,0.36)", panelRadius: 3, headlineSize: 23, panelPosition: "middle", textAlign: "center" },
-      { name: "dark-red-premium", fallback: "linear-gradient(145deg, #160707 0%, #3a1010 100%)", overlay: "linear-gradient(180deg, rgba(22,7,7,0.38) 0%, rgba(22,7,7,0.86) 100%)", glow: "inset 0 0 76px rgba(248,113,113,0.16)", eyebrow: "#fca5a5", headline: "#ffffff", headlineBg: "rgba(80,12,12,0.78)", headlineBorder: "rgba(252,165,165,0.24)", subheadline: "#fee2e2", accent: "#f87171", cta: "#991b1b", button: "red", benefit: "dark", panel: "rgba(80,12,12,0.78)", panelBorder: "rgba(252,165,165,0.24)", panelRadius: 10, headlineSize: 22, panelPosition: "bottom", textAlign: "center" },
-      { name: "clean-white-card", fallback: "linear-gradient(145deg, #ffffff 0%, #eef2ff 100%)", overlay: "linear-gradient(180deg, rgba(255,255,255,0.76) 0%, rgba(255,255,255,0.42) 45%, rgba(15,23,42,0.68) 100%)", glow: "inset 0 0 0 7px rgba(185,28,28,0.06)", eyebrow: "#b91c1c", headline: "#b91c1c", headlineBg: "rgba(255,255,255,0.94)", headlineBorder: "rgba(185,28,28,0.18)", subheadline: "#4b5563", accent: "#b91c1c", cta: "#b91c1c", button: "red", benefit: "light", panel: "rgba(255,255,255,0.95)", panelBorder: "rgba(17,24,39,0.12)", panelRadius: 12, headlineSize: 23, panelPosition: "middle", textAlign: "center" },
-      { name: "blue-trust", fallback: "linear-gradient(145deg, #dbeafe 0%, #ffffff 50%, #1e3a8a 100%)", overlay: "linear-gradient(180deg, rgba(219,234,254,0.62) 0%, rgba(30,58,138,0.76) 100%)", glow: "inset 0 0 70px rgba(29,78,216,0.18)", eyebrow: "#1d4ed8", headline: "#ffffff", headlineBg: "rgba(29,78,216,0.88)", headlineBorder: "rgba(255,255,255,0.2)", subheadline: "#1e3a5f", accent: "#1d4ed8", cta: "#1d4ed8", button: "navy", benefit: "light", panel: "rgba(255,255,255,0.92)", panelBorder: "rgba(29,78,216,0.2)", panelRadius: 8, headlineSize: 22, panelPosition: "top", textAlign: "center" },
-    ],
-    final_expense: [
-      { name: "black-gold", fallback: "linear-gradient(145deg, #0f0e0a 0%, #2d2016 100%)", overlay: "linear-gradient(180deg, rgba(15,14,10,0.42) 0%, rgba(15,14,10,0.72) 45%, rgba(15,14,10,0.96) 100%)", glow: "inset 0 0 70px rgba(212,160,23,0.14)", eyebrow: "#d4a017", headline: "#ffffff", headlineBg: "transparent", headlineBorder: "transparent", subheadline: "#fff3c4", accent: "#d4a017", cta: "#a16207", button: "gold", benefit: "gold", panel: "rgba(15,14,10,0.44)", panelBorder: "rgba(212,160,23,0.2)", panelRadius: 8, headlineSize: 27, panelPosition: "top", textAlign: "center" },
-      { name: "cream-gold", fallback: "linear-gradient(145deg, #f8f5f0 0%, #e8dac2 100%)", overlay: "linear-gradient(180deg, rgba(248,245,240,0.92) 0%, rgba(248,245,240,0.72) 48%, rgba(45,32,22,0.86) 100%)", glow: "inset 0 0 0 7px rgba(212,160,23,0.09)", eyebrow: "#a16207", headline: "#2d2016", headlineBg: "rgba(255,255,255,0.78)", headlineBorder: "rgba(161,98,7,0.22)", subheadline: "#4a3728", accent: "#a16207", cta: "#2d2016", button: "cream", benefit: "light", panel: "rgba(255,255,255,0.78)", panelBorder: "rgba(161,98,7,0.22)", panelRadius: 3, headlineSize: 27, panelPosition: "middle", textAlign: "center" },
-      { name: "dark-navy-gold", fallback: "linear-gradient(145deg, #0a1628 0%, #16213e 100%)", overlay: "linear-gradient(180deg, rgba(10,22,40,0.4) 0%, rgba(10,22,40,0.92) 100%)", glow: "inset 0 0 68px rgba(212,160,23,0.16)", eyebrow: "#d4a017", headline: "#ffffff", headlineBg: "rgba(22,33,62,0.72)", headlineBorder: "rgba(212,160,23,0.34)", subheadline: "#dbeafe", accent: "#d4a017", cta: "#a16207", button: "gold", benefit: "gold", panel: "rgba(22,33,62,0.72)", panelBorder: "rgba(212,160,23,0.34)", panelRadius: 8, headlineSize: 26, panelPosition: "top", textAlign: "center" },
-      { name: "warm-bronze", fallback: "linear-gradient(160deg, #0f0a06 0%, #1a1206 100%)", overlay: "linear-gradient(180deg, rgba(15,10,6,0.36) 0%, rgba(15,10,6,0.9) 100%)", glow: "inset 0 0 72px rgba(251,191,36,0.14)", eyebrow: "#fbbf24", headline: "#fbbf24", headlineBg: "rgba(15,10,6,0.52)", headlineBorder: "rgba(251,191,36,0.22)", subheadline: "#e5c88a", accent: "#fbbf24", cta: "#92400e", button: "gold", benefit: "gold", panel: "rgba(15,10,6,0.52)", panelBorder: "rgba(251,191,36,0.22)", panelRadius: 12, headlineSize: 26, panelPosition: "middle", textAlign: "center" },
-      { name: "clean-white-gold", fallback: "linear-gradient(145deg, #ffffff 0%, #f8f5f0 100%)", overlay: "linear-gradient(180deg, rgba(255,255,255,0.86) 0%, rgba(255,255,255,0.64) 48%, rgba(45,32,22,0.74) 100%)", glow: "inset 0 0 0 7px rgba(212,160,23,0.08)", eyebrow: "#a16207", headline: "#2d2016", headlineBg: "rgba(255,255,255,0.92)", headlineBorder: "rgba(212,160,23,0.3)", subheadline: "#4a3728", accent: "#d4a017", cta: "#a16207", button: "cream", benefit: "light", panel: "rgba(255,255,255,0.92)", panelBorder: "rgba(212,160,23,0.3)", panelRadius: 8, headlineSize: 25, panelPosition: "bottom", textAlign: "center" },
-    ],
-    iul: [
-      { name: "deep-blue-gold", fallback: "linear-gradient(145deg, #0a1628 0%, #0f2040 100%)", overlay: "linear-gradient(180deg, rgba(10,22,40,0.38) 0%, rgba(10,22,40,0.92) 100%)", glow: "inset 0 0 70px rgba(212,160,23,0.16)", eyebrow: "#d4a017", headline: "#ffffff", headlineBg: "rgba(10,22,40,0.58)", headlineBorder: "rgba(212,160,23,0.28)", subheadline: "#93c5fd", accent: "#d4a017", cta: "#1d4ed8", button: "gold", benefit: "gold", panel: "rgba(10,22,40,0.58)", panelBorder: "rgba(212,160,23,0.28)", panelRadius: 8, headlineSize: 26, panelPosition: "top", textAlign: "center" },
-      { name: "black-champagne", fallback: "linear-gradient(135deg, #1a1200 0%, #0d0d0d 100%)", overlay: "linear-gradient(180deg, rgba(13,13,13,0.34) 0%, rgba(13,13,13,0.95) 100%)", glow: "inset 0 0 70px rgba(201,168,76,0.16)", eyebrow: "#c9a84c", headline: "#ffffff", headlineBg: "rgba(13,13,13,0.64)", headlineBorder: "rgba(201,168,76,0.3)", subheadline: "#c9a84c", accent: "#c9a84c", cta: "#b8860b", button: "gold", benefit: "gold", panel: "rgba(13,13,13,0.64)", panelBorder: "rgba(201,168,76,0.3)", panelRadius: 10, headlineSize: 26, panelPosition: "middle", textAlign: "center" },
-      { name: "clean-blue-white", fallback: "linear-gradient(145deg, #f0f4ff 0%, #dbeafe 100%)", overlay: "linear-gradient(180deg, rgba(240,244,255,0.86) 0%, rgba(29,78,216,0.78) 100%)", glow: "inset 0 0 0 7px rgba(29,78,216,0.08)", eyebrow: "#1d4ed8", headline: "#ffffff", headlineBg: "rgba(29,78,216,0.9)", headlineBorder: "rgba(255,255,255,0.2)", subheadline: "#1e3a5f", accent: "#1d4ed8", cta: "#1d4ed8", button: "navy", benefit: "light", panel: "rgba(255,255,255,0.9)", panelBorder: "rgba(29,78,216,0.2)", panelRadius: 8, headlineSize: 24, panelPosition: "top", textAlign: "center" },
-      { name: "royal-gold", fallback: "linear-gradient(145deg, #111827 0%, #1e1b4b 58%, #3b2500 100%)", overlay: "linear-gradient(180deg, rgba(17,24,39,0.34) 0%, rgba(17,24,39,0.94) 100%)", glow: "inset 0 0 78px rgba(251,191,36,0.16)", eyebrow: "#fbbf24", headline: "#ffffff", headlineBg: "rgba(30,27,75,0.68)", headlineBorder: "rgba(251,191,36,0.28)", subheadline: "#fde68a", accent: "#fbbf24", cta: "#4338ca", button: "gold", benefit: "gold", panel: "rgba(30,27,75,0.68)", panelBorder: "rgba(251,191,36,0.28)", panelRadius: 6, headlineSize: 25, panelPosition: "bottom", textAlign: "center" },
-    ],
-  };
-
-  const variants = visualVariants[leadType] || visualVariants.final_expense;
-  const variant = variants[variantIndex % variants.length];
-
-  const baseBackground = hasBackground
-    ? {
-        backgroundImage: `url("${backgroundUrl}")`,
-        backgroundSize: "cover",
-        backgroundPosition: "center",
-      }
-    : {
-        background: variant.fallback,
-      };
-
-  if (leadType === "trucker") {
-    return (
-      <div style={{ position: "absolute", inset: 0, overflow: "hidden", ...baseBackground }}>
-        <div style={{ position: "absolute", inset: 0, background: variant.overlay }} />
-        <div style={{ position: "absolute", inset: 0, boxShadow: variant.glow }} />
-        <div style={{ position: "relative", height: "100%", padding: "18px 18px 54px", display: "flex", flexDirection: "column" }}>
-          <div style={{ color: variant.eyebrow, fontSize: 10, fontWeight: 900, letterSpacing: 2.4, textAlign: "center", marginBottom: 7 }}>
-            CDL DRIVER COVERAGE
-          </div>
-          <div style={{ color: variant.headline, background: variant.headlineBg, border: variant.headlineBorder === "transparent" ? "none" : `1px solid ${variant.headlineBorder}`, borderRadius: variant.panelRadius, padding: variant.headlineBg === "transparent" ? 0 : "8px 10px", fontSize: variant.headlineSize, fontWeight: 950, lineHeight: 0.98, textAlign: variant.textAlign, textTransform: "uppercase", textShadow: "0 3px 18px rgba(0,0,0,0.82)" }}>
-            {headline || "TRUCKERS IUL"}
-          </div>
-          {subheadline && (
-            <div style={{ color: variant.subheadline, fontSize: 11, fontWeight: 800, lineHeight: 1.35, textAlign: "center", marginTop: 8, textShadow: "0 2px 12px rgba(0,0,0,0.8)" }}>
-              {subheadline}
-            </div>
-          )}
-          <div style={{ marginTop: "auto", display: "grid", gap: 9 }}>
-            <BenefitBoxes bullets={bullets} palette={variant.benefit} />
-            <ButtonGrid labels={buttons} styleType={variant.button} />
-          </div>
-        </div>
-        <BottomBar color={variant.cta} label={cta || "Check My Options →"} />
-      </div>
-    );
-  }
-
-  if (leadType === "mortgage_protection") {
-    return (
-      <div style={{ position: "absolute", inset: 0, overflow: "hidden", ...baseBackground }}>
-        <div style={{ position: "absolute", inset: 0, background: variant.overlay }} />
-        <div style={{ position: "absolute", inset: 0, boxShadow: variant.glow }} />
-        <div style={{ position: "absolute", left: variant.panelPosition === "middle" ? 18 : 0, right: variant.panelPosition === "middle" ? 18 : 0, top: variant.panelPosition === "bottom" ? 18 : 0, background: variant.headlineBg, border: variant.headlineBorder === "transparent" ? "none" : `1px solid ${variant.headlineBorder}`, borderRadius: variant.panelPosition === "middle" ? variant.panelRadius : 0, padding: "13px 18px", textAlign: "center" }}>
-          <div style={{ color: variant.headline, fontSize: variant.headlineSize, fontWeight: 950, lineHeight: 1.02, textTransform: "uppercase" }}>
-            {headline || "Protect Your Family's Home"}
-          </div>
-        </div>
-        <div style={{ position: "absolute", left: 18, right: 18, bottom: variant.panelPosition === "bottom" ? 58 : 54, background: variant.panel, border: `1px solid ${variant.panelBorder}`, borderRadius: variant.panelRadius, padding: "13px 12px", boxShadow: "0 16px 34px rgba(0,0,0,0.28)", textAlign: "center" }}>
-          <div style={{ color: variant.subheadline, fontSize: 12, fontWeight: 800, marginBottom: 10 }}>
-            {subheadline || "Select your mortgage amount"}
-          </div>
-          <ButtonGrid labels={buttons} styleType={variant.button} />
-          <div style={{ marginTop: bullets.length ? 10 : 0 }}>
-            <BenefitBoxes bullets={bullets} palette={variant.benefit} />
-          </div>
-        </div>
-        <BottomBar color={variant.cta} label={cta || "See My Rate →"} />
-      </div>
-    );
-  }
-
-  if (leadType === "veteran") {
-    const amount = buttons.find((label) => label.includes("$")) || "$50,000";
-    return (
-      <div style={{ position: "absolute", inset: 0, overflow: "hidden", ...baseBackground }}>
-        <div style={{ position: "absolute", inset: 0, background: variant.overlay }} />
-        <div style={{ position: "absolute", inset: 0, boxShadow: variant.glow }} />
-        <div style={{ position: "relative", height: "100%", padding: "18px 17px 54px", display: "flex", flexDirection: "column", textAlign: "center" }}>
-          <div style={{ color: variant.eyebrow, fontSize: 11, fontWeight: 950, letterSpacing: 2.4, marginBottom: 8 }}>
-            PRIVATE COVERAGE FOR VETERANS
-          </div>
-          <div style={{ color: variant.headline, background: variant.panel, border: `1px solid ${variant.panelBorder}`, borderRadius: variant.panelRadius, padding: "11px 10px", boxShadow: "0 12px 26px rgba(0,0,0,0.18)" }}>
-            <div style={{ fontSize: variant.headlineSize, fontWeight: 950, lineHeight: 0.98, textTransform: "uppercase", letterSpacing: 1 }}>
-              {headline || "Veterans Life Insurance"}
-            </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, color: variant.accent, margin: "10px 0 7px" }}>
-              <div style={{ flex: 1, borderTop: `1px solid ${variant.accent}` }} />
-              <span style={{ fontSize: 14 }}>★</span>
-              <div style={{ flex: 1, borderTop: `1px solid ${variant.accent}` }} />
-            </div>
-            <div style={{ color: variant.subheadline, fontSize: 12, fontWeight: 800, lineHeight: 1.3 }}>
-              {subheadline || "No exam options may be available"}
-            </div>
-          </div>
-          <div style={{ marginTop: "auto" }}>
-            <div style={{ color: variant.accent === "#f8f5f0" ? "#ffffff" : variant.accent, fontSize: variant.panelPosition === "bottom" ? 38 : 44, fontWeight: 950, lineHeight: 1, textShadow: "0 4px 18px rgba(0,0,0,0.72)", marginBottom: 9 }}>
-              {amount}
-            </div>
-            <ButtonGrid labels={buttons.length ? buttons : ["Under 50", "50–60", "61–70", "71–79"]} styleType={variant.button} />
-          </div>
-        </div>
-        <BottomBar color={variant.cta} label={cta || "Tap Your Age To See Options →"} />
-      </div>
-    );
-  }
-
-  return (
-    <div style={{ position: "absolute", inset: 0, overflow: "hidden", ...baseBackground }}>
-      <div style={{ position: "absolute", inset: 0, background: variant.overlay }} />
-      <div style={{ position: "absolute", inset: 0, boxShadow: variant.glow }} />
-      <div style={{ position: "relative", height: "100%", padding: "21px 18px 54px", display: "flex", flexDirection: "column", textAlign: "center" }}>
-        <div style={{ color: variant.eyebrow, fontSize: 10, fontWeight: 950, letterSpacing: 2.3, marginBottom: 8 }}>
-          {leadType === "iul" ? "INDEXED UNIVERSAL LIFE" : "FINAL EXPENSE COVERAGE"}
-        </div>
-        <div style={{ color: variant.headline, background: variant.headlineBg, border: variant.headlineBorder === "transparent" ? "none" : `1px solid ${variant.headlineBorder}`, borderRadius: variant.panelRadius, padding: variant.headlineBg === "transparent" ? 0 : "10px 11px", fontSize: variant.headlineSize, fontWeight: 950, lineHeight: 1.02, textTransform: "uppercase", textShadow: variant.headline === "#2d2016" ? "none" : "0 3px 18px rgba(0,0,0,0.82)" }}>
-          {headline || (leadType === "iul" ? "IUL Coverage Options" : "Final Expense Coverage")}
-        </div>
-        <div style={{ height: 1, background: variant.accent, margin: "12px 24px" }} />
-        {subheadline && (
-          <div style={{ color: variant.subheadline, fontSize: 12, fontWeight: 800, lineHeight: 1.35 }}>
-            {subheadline}
-          </div>
-        )}
-        <div style={{ marginTop: "auto", display: "grid", gap: 10 }}>
-          <ButtonGrid labels={buttons} styleType={variant.button} />
-          <BenefitBoxes bullets={bullets} palette={variant.benefit} />
-        </div>
-      </div>
-      <BottomBar color={variant.cta} label={cta || "See My Options →"} />
-    </div>
-  );
+  return renderTemplateFamily(buildCreativeState(draft, leadType, overlay));
 }
 
 function pickTemplate(fingerprint: string, leadType: string): number {
