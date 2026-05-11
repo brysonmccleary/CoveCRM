@@ -17,6 +17,14 @@ import { validateStates } from "@/lib/facebook/guardrails";
 import { validateLaunchInput } from "@/pages/api/facebook/validate-launch";
 import { injectAgentContact } from "@/lib/funnels/injectAgentContact";
 
+export const config = {
+  api: {
+    bodyParser: {
+      sizeLimit: "4mb",
+    },
+  },
+};
+
 const VALID_LEAD_TYPES = [
   "final_expense",
   "iul",
