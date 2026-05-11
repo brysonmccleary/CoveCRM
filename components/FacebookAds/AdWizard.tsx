@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import AdPreviewCard from "@/components/FacebookAds/AdPreviewCard";
 import StateSelector from "@/components/FacebookAds/StateSelector";
 import { US_STATES } from "@/lib/facebook/geo/usStates";
@@ -53,8 +53,6 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
   const [imageError, setImageError] = useState("");
   const [launching, setLaunching] = useState(false);
   const [error, setError] = useState("");
-  const [captureError, setCaptureError] = useState("");
-  const [captureInProgress, setCaptureInProgress] = useState(false);
   const [result, setResult] = useState<any>(null);
   const [regenerateAttempts, setRegenerateAttempts] = useState(0);
   const [dailyBudget, setDailyBudget] = useState(25);
@@ -62,7 +60,6 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
   const [drafts, setDrafts] = useState<any[]>([]);
   const [selectedMetaPageId, setSelectedMetaPageId] = useState("");
   const [selectedMetaAdAccountId, setSelectedMetaAdAccountId] = useState("");
-  const previewRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
   const stateLabel = useMemo(() => {
     const labels = states.map((code) => US_STATES.find((state) => state.code === code)?.name || code);
@@ -73,32 +70,6 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
 
   const needsSubType = Boolean(MAIN_CATEGORY_OPTIONS.find((option) => option.id === mainCategory)?.needsSubType);
   const campaignName = `${campaignTypeLabel || LEAD_TYPE_LABELS[leadType] || leadType} - ${stateLabel || "Licensed States"} Campaign`;
-
-  const getDraftKey = (currentDraft: any, index: number) =>
-    `${index}_${String(
-      currentDraft?.uniquenessFingerprint ||
-        currentDraft?.generationNonce ||
-        currentDraft?.winningFamilyId ||
-        currentDraft?.creativeArchetype ||
-        "draft"
-    )}`;
-
-  const isRenderedCreativeDataUrl = (value: any) =>
-    /^data:image\/(?:png|jpe?g|webp);base64,/i.test(String(value || ""));
-
-  const hasRenderedCreatives = (items: any[]) =>
-    Array.isArray(items) &&
-    items.length > 0 &&
-    items.every((item) => isRenderedCreativeDataUrl(item?.renderedCreativeDataUrl));
-
-  const waitForPreviewNode = async (key: string) => {
-    for (let attempt = 0; attempt < 12; attempt++) {
-      const node = previewRefs.current[key];
-      if (node) return node;
-      await new Promise((resolve) => requestAnimationFrame(resolve));
-    }
-    return previewRefs.current[key] || null;
-  };
 
   useEffect(() => {
     if (!leadType) return;
@@ -125,11 +96,9 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
     setDraft(null);
     setResult(null);
     setError("");
-    setCaptureError("");
     setImageError("");
     setRegenerateAttempts(0);
     setDrafts([]);
-    previewRefs.current = {};
   };
 
   const selectCampaignType = (option: {
@@ -206,10 +175,8 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
     if (isRegenerate && regenerateAttempts >= 3) return;
     setLoading(true);
     setError("");
-    setCaptureError("");
     setImageError("");
     setResult(null);
-    previewRefs.current = {};
     try {
       const nextAttempt = isRegenerate ? regenerateAttempts + 1 : 0;
       const generationNonce = [
@@ -252,83 +219,18 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
     }
   };
 
-  const exportRenderedCreatives = async (sourceDrafts = drafts) => {
-    const { toJpeg } = await import("html-to-image");
-    const renderedDrafts = [];
-
-    for (let index = 0; index < sourceDrafts.length; index++) {
-      const currentDraft = sourceDrafts[index];
-      const existingRendered = String(currentDraft?.renderedCreativeDataUrl || "");
-      if (isRenderedCreativeDataUrl(existingRendered)) {
-        renderedDrafts.push(currentDraft);
-        continue;
-      }
-      const key = getDraftKey(currentDraft, index);
-      const node = await waitForPreviewNode(key);
-
-      if (!node) {
-        throw new Error(`Rendered preview was not available for Ad ${index + 1}. Please wait for the preview to finish loading and try again.`);
-      }
-
-      const renderedCreativeDataUrl = await toJpeg(node, {
-        cacheBust: true,
-        pixelRatio: 1,
-        quality: 0.82,
-        backgroundColor: "#ffffff",
-      });
-
-      if (!isRenderedCreativeDataUrl(renderedCreativeDataUrl)) {
-        throw new Error(`Could not export Ad ${index + 1} as a finished creative image.`);
-      }
-
-      renderedDrafts.push({
-        ...currentDraft,
-        renderedCreativeDataUrl,
-      });
-    }
-
-    return renderedDrafts;
-  };
-
-  const captureRenderedCreatives = async () => {
-    if (!drafts.length) throw new Error("Generate ad previews before launching.");
-    setCaptureInProgress(true);
-    setCaptureError("");
-    try {
-      const renderedDrafts = await exportRenderedCreatives(drafts);
-      setDrafts(renderedDrafts);
-      setDraft(renderedDrafts[0] || null);
-      return renderedDrafts;
-    } catch (err: any) {
-      const message = err?.message || "Could not capture the rendered ad preview.";
-      setCaptureError(message);
-      throw new Error(message);
-    } finally {
-      setCaptureInProgress(false);
-    }
-  };
-
   const continueToLaunch = async () => {
-    if (!drafts.length || imageGenerating || loading || captureInProgress) return;
-    try {
-      await captureRenderedCreatives();
-      setStep(4);
-    } catch {
-      // captureRenderedCreatives already set the visible error message
-    }
+    if (!drafts.length || imageGenerating || loading) return;
+    setStep(4);
   };
 
   const launch = async () => {
     if (!drafts.length || !states.length) return;
     setLaunching(true);
     setError("");
-    setCaptureError("");
     setResult(null);
     try {
-      const renderedDrafts = hasRenderedCreatives(drafts)
-        ? drafts
-        : await captureRenderedCreatives();
-      const selectedDraft = renderedDrafts[0] || draft;
+      const selectedDraft = drafts[0] || draft;
 
       const response = await fetch("/api/facebook/publish-ad", {
         method: "POST",
@@ -346,7 +248,6 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
           cta: selectedDraft.cta || "LEARN_MORE",
           imagePrompt: selectedDraft.imagePrompt || "",
           imageUrl: selectedDraft.imageUrl || "",
-          renderedCreativeDataUrl: selectedDraft.renderedCreativeDataUrl || "",
           creativeArchetype: selectedDraft.creativeArchetype || selectedDraft.archetype || "",
           licensedStates: states,
           stateRestrictionNoticeAccepted: true,
@@ -359,7 +260,6 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
           variationType: selectedDraft.variationType,
           uniquenessFingerprint: selectedDraft.uniquenessFingerprint,
           vendorStyleTag: selectedDraft.vendorStyleTag,
-          drafts: renderedDrafts,
           ...(selectedMetaPageId ? { facebookPageId: selectedMetaPageId } : {}),
           ...(selectedMetaAdAccountId ? { adAccountId: selectedMetaAdAccountId } : {}),
         }),
@@ -531,7 +431,7 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
 	            <button
 	              type="button"
 	              onClick={() => generate(true)}
-	              disabled={loading || imageGenerating || captureInProgress}
+	              disabled={loading || imageGenerating}
 	              className="px-4 py-2 rounded-lg bg-white/10 hover:bg-white/15 text-white text-sm font-semibold disabled:opacity-50"
 	            >
 	              {loading ? "Regenerating..." : `Regenerate Set (${3 - regenerateAttempts} left)`}
@@ -541,12 +441,7 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
             {drafts.map((currentDraft, index) => (
               <div key={currentDraft.uniquenessFingerprint || index} className="bg-white/5 border border-white/10 rounded-lg overflow-hidden">
                 <div className="p-3 flex justify-center bg-black/20">
-                  <div
-                    ref={(node) => {
-                      previewRefs.current[getDraftKey(currentDraft, index)] = node;
-                    }}
-                    style={{ display: "inline-block", width: "100%", maxWidth: 375 }}
-                  >
+                  <div style={{ display: "inline-block", width: "100%", maxWidth: 375 }}>
                     <AdPreviewCard
                       draft={currentDraft}
                       selectedStates={states}
@@ -598,26 +493,9 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
               Generating ad images...
             </div>
           )}
-          {captureInProgress && (
-            <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-100">
-              Capturing finished ad previews...
-            </div>
-          )}
           {imageError && !imageGenerating && (
             <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3">
               <p className="text-sm text-rose-100">{imageError}</p>
-            </div>
-          )}
-          {captureError && !captureInProgress && (
-            <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3">
-              <p className="text-sm text-rose-100">{captureError}</p>
-              <button
-                type="button"
-                onClick={captureRenderedCreatives}
-                className="mt-2 px-3 py-1.5 rounded bg-rose-500/20 text-rose-100 border border-rose-400/30 text-xs font-semibold"
-              >
-                Retry capture
-              </button>
             </div>
           )}
         </div>
@@ -640,7 +518,7 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
 	            <button
 	              type="button"
 	              onClick={launch}
-              disabled={launching || !hasRenderedCreatives(drafts) || !states.length || imageGenerating || captureInProgress}
+              disabled={launching || !drafts.length || !states.length || imageGenerating}
 	              className="mt-4 px-5 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold disabled:opacity-50"
 	            >
 	              {launching ? "Launching..." : "Launch"}
@@ -684,10 +562,10 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
 	          <button
 	            type="button"
             onClick={continueToLaunch}
-            disabled={!drafts.length || imageGenerating || loading || captureInProgress}
+            disabled={!drafts.length || imageGenerating || loading}
 	            className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-sm text-white font-semibold disabled:opacity-50"
 	          >
-            {captureInProgress ? "Capturing..." : "Continue to Launch"}
+            Continue to Launch
           </button>
         )}
       </div>
