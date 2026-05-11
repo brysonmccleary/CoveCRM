@@ -72,7 +72,7 @@ export function buildCampaignStructure(input: {
     adSet: {
       name: `${String(input.campaignName || "").trim()} Ad Set`,
       daily_budget: Math.max(500, Math.round(Number(input.dailyBudgetCents) || 0)),
-      optimization_goal: "LEADS",
+      optimization_goal: "LEAD_GENERATION",
       billing_event: "IMPRESSIONS",
       bid_strategy: "LOWEST_COST_WITHOUT_CAP",
       status: "PAUSED",
