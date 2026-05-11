@@ -677,7 +677,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
         metaFormId = String(metaFormJson.id);
         const appUrl = String(process.env.NEXT_PUBLIC_APP_URL || process.env.NEXTAUTH_URL || "https://www.covecrm.com").replace(/\/$/, "");
-        const funnelAbsoluteUrl = `${appUrl}/f/${String(campaign._id)}`;
+        const instantFormDisplayUrl = appUrl || "https://www.covecrm.com";
         publishedAds = [];
 
         for (let index = 0; index < normalizedDrafts.length; index++) {
@@ -703,7 +703,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           const objectStorySpec: Record<string, any> = {
             page_id: pageIdFinal,
             link_data: {
-              link: funnelAbsoluteUrl,
+              link: instantFormDisplayUrl,
               message: String(currentDraft.primaryText || primaryText || ""),
               name: String(currentDraft.headline || headline || ""),
               description: String(currentDraft.description || description || ""),
@@ -711,7 +711,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 type: String(currentDraft.cta || cta || "LEARN_MORE"),
                 value: {
                   lead_gen_form_id: metaFormId,
-                  link: funnelAbsoluteUrl,
                 },
               },
             },
@@ -817,7 +816,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const campaignId = String(campaign._id);
-    const funnelUrl = `/f/${campaignId}`;
 
     if (metaPublishStatus === "failed") {
       return res.status(500).json({
@@ -829,19 +827,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         metaFormId,
         metaAdId,
         campaignId,
-        funnelUrl,
       });
     }
 
     return res.status(200).json({
         ok: true,
-        message: `Campaign created, Meta assets created, hosted funnel live, and CRM routing ready. Meta campaign, ad set, lead form, and selected ads are in PAUSED status.`,
+        message: `Campaign created, Meta Instant Form lead ad assets created, and CRM routing ready. Meta campaign, ad set, lead form, and selected ads are in PAUSED status.`,
         campaignId,
       folderId: String(folderId),
       folderName,
       campaignName: safeName,
       leadType,
-      funnelUrl,
       metaCampaignId,
       metaAdsetId,
         metaFormId,
