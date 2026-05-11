@@ -29,10 +29,6 @@
       "schedule": "*/15 * * * *"
     },
     {
-      "path": "/api/cron/google-sheets-poll?token=@CRON_SECRET",
-      "schedule": "* * * * *"
-    },
-    {
       "path": "/api/admin/audit-sheets-cron?token=@CRON_SECRET",
       "schedule": "*/15 * * * *"
     },

@@ -473,9 +473,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     try {
       folder = await Folder.findOne({ userEmail, name: folderName }).lean();
       if (!folder) {
+        const aiScriptKey =
+          leadType === "mortgage_protection" ? "mortgage_protection" :
+          leadType === "iul" ? "iul_cash_value" :
+          leadType === "veteran" ? "veteran_leads" :
+          leadType === "trucker" ? "trucker_leads" :
+          "final_expense";
         folder = await Folder.create({
           name: folderName,
           userEmail,
+          aiFirstCallEnabled: true,
+          aiRealTimeOnly: true,
+          aiScriptKey,
           createdAt: new Date(),
         });
       }

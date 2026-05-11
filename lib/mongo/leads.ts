@@ -73,7 +73,7 @@ const LeadSchema = new Schema(
     // Lead type used by AI
     leadType: {
       type: String,
-      enum: ["Final Expense", "Veteran", "Mortgage Protection", "IUL"],
+      enum: ["Final Expense", "Veteran", "Mortgage Protection", "IUL", "Trucker"],
       default: "Final Expense",
     },
 

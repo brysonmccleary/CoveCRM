@@ -57,23 +57,9 @@ export async function processMetaLead(
     }).lean();
   }
 
-  if (!campaign && pageId) {
-    campaign = await FBLeadCampaign.findOne({
-      facebookPageId: pageId,
-      status: { $in: ["active", "setup"] },
-    }).lean();
-  }
-
-  if (!campaign && pageId) {
-    user = await User.findOne({ metaPageId: pageId }).lean();
-    if (user) {
-      campaign = await FBLeadCampaign.findOne({
-        userEmail: (user as any).email,
-        status: { $in: ["active", "setup"] },
-      })
-        .sort({ createdAt: -1 })
-        .lean();
-    }
+  if (!campaign && !metaCampaignId) {
+    console.warn(`[processMetaLead] Missing metaCampaignId for lead ${leadgenId}; refusing ambiguous page fallback`, { pageId, formId, adId, adsetId });
+    return;
   }
 
   if (!campaign) {
