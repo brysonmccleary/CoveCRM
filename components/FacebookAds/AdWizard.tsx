@@ -83,10 +83,13 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
         "draft"
     )}`;
 
+  const isRenderedCreativeDataUrl = (value: any) =>
+    /^data:image\/(?:png|jpe?g|webp);base64,/i.test(String(value || ""));
+
   const hasRenderedCreatives = (items: any[]) =>
     Array.isArray(items) &&
     items.length > 0 &&
-    items.every((item) => String(item?.renderedCreativeDataUrl || "").startsWith("data:image/png;base64,"));
+    items.every((item) => isRenderedCreativeDataUrl(item?.renderedCreativeDataUrl));
 
   const waitForPreviewNode = async (key: string) => {
     for (let attempt = 0; attempt < 12; attempt++) {
@@ -250,13 +253,13 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
   };
 
   const exportRenderedCreatives = async (sourceDrafts = drafts) => {
-    const { toPng } = await import("html-to-image");
+    const { toJpeg } = await import("html-to-image");
     const renderedDrafts = [];
 
     for (let index = 0; index < sourceDrafts.length; index++) {
       const currentDraft = sourceDrafts[index];
       const existingRendered = String(currentDraft?.renderedCreativeDataUrl || "");
-      if (existingRendered.startsWith("data:image/png;base64,")) {
+      if (isRenderedCreativeDataUrl(existingRendered)) {
         renderedDrafts.push(currentDraft);
         continue;
       }
@@ -267,13 +270,14 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
         throw new Error(`Rendered preview was not available for Ad ${index + 1}. Please wait for the preview to finish loading and try again.`);
       }
 
-      const renderedCreativeDataUrl = await toPng(node, {
+      const renderedCreativeDataUrl = await toJpeg(node, {
         cacheBust: true,
-        pixelRatio: 2,
+        pixelRatio: 1,
+        quality: 0.82,
         backgroundColor: "#ffffff",
       });
 
-      if (!renderedCreativeDataUrl || !renderedCreativeDataUrl.startsWith("data:image/png;base64,")) {
+      if (!isRenderedCreativeDataUrl(renderedCreativeDataUrl)) {
         throw new Error(`Could not export Ad ${index + 1} as a finished creative image.`);
       }
 
