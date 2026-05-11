@@ -53,6 +53,8 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
   const [imageError, setImageError] = useState("");
   const [launching, setLaunching] = useState(false);
   const [error, setError] = useState("");
+  const [captureError, setCaptureError] = useState("");
+  const [captureInProgress, setCaptureInProgress] = useState(false);
   const [result, setResult] = useState<any>(null);
   const [regenerateAttempts, setRegenerateAttempts] = useState(0);
   const [dailyBudget, setDailyBudget] = useState(25);
@@ -73,7 +75,27 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
   const campaignName = `${campaignTypeLabel || LEAD_TYPE_LABELS[leadType] || leadType} - ${stateLabel || "Licensed States"} Campaign`;
 
   const getDraftKey = (currentDraft: any, index: number) =>
-    String(currentDraft?.uniquenessFingerprint || currentDraft?.winningFamilyId || currentDraft?.creativeArchetype || `draft_${index}`);
+    `${index}_${String(
+      currentDraft?.uniquenessFingerprint ||
+        currentDraft?.generationNonce ||
+        currentDraft?.winningFamilyId ||
+        currentDraft?.creativeArchetype ||
+        "draft"
+    )}`;
+
+  const hasRenderedCreatives = (items: any[]) =>
+    Array.isArray(items) &&
+    items.length > 0 &&
+    items.every((item) => String(item?.renderedCreativeDataUrl || "").startsWith("data:image/png;base64,"));
+
+  const waitForPreviewNode = async (key: string) => {
+    for (let attempt = 0; attempt < 12; attempt++) {
+      const node = previewRefs.current[key];
+      if (node) return node;
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    }
+    return previewRefs.current[key] || null;
+  };
 
   useEffect(() => {
     if (!leadType) return;
@@ -100,8 +122,11 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
     setDraft(null);
     setResult(null);
     setError("");
+    setCaptureError("");
     setImageError("");
     setRegenerateAttempts(0);
+    setDrafts([]);
+    previewRefs.current = {};
   };
 
   const selectCampaignType = (option: {
@@ -140,7 +165,10 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
                 leadType,
-                imagePrompt: currentDraft?.imagePrompt || "",
+                imagePrompt: [
+                    currentDraft?.imagePrompt || "",
+                    `Variation seed: ${currentDraft?.uniquenessFingerprint || currentDraft?.generationNonce || ""}. Use a distinct direct-response background treatment, palette, composition, and subject framing. Leave blank space for app-rendered text and buttons. No readable text inside image.`,
+                  ].filter(Boolean).join(" "),
               }),
             });
             const imageData = await response.json();
@@ -175,9 +203,19 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
     if (isRegenerate && regenerateAttempts >= 3) return;
     setLoading(true);
     setError("");
+    setCaptureError("");
     setImageError("");
     setResult(null);
+    previewRefs.current = {};
     try {
+      const nextAttempt = isRegenerate ? regenerateAttempts + 1 : 0;
+      const generationNonce = [
+        "wizard",
+        leadType,
+        audienceSegment,
+        String(nextAttempt),
+        Date.now().toString(36),
+      ].join("_");
       const response = await fetch("/api/facebook/generate-ad", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -192,6 +230,8 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
           mode: "wizard",
           dailyBudget,
           variantCount,
+          regenerationAttempt: nextAttempt,
+          generationNonce,
         }),
       });
       const json = await response.json();
@@ -199,7 +239,7 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
       const nextDrafts = Array.isArray(json?.drafts) && json.drafts.length > 0 ? json.drafts : [json.draft];
       setDraft(json.draft);
       setDrafts(nextDrafts);
-      if (isRegenerate) setRegenerateAttempts((count) => count + 1);
+      if (isRegenerate) setRegenerateAttempts(nextAttempt);
       setStep(3);
       await generateImagesForDrafts(nextDrafts);
     } catch (err: any) {
@@ -209,17 +249,22 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
     }
   };
 
-  const exportRenderedCreatives = async () => {
+  const exportRenderedCreatives = async (sourceDrafts = drafts) => {
     const { toPng } = await import("html-to-image");
     const renderedDrafts = [];
 
-    for (let index = 0; index < drafts.length; index++) {
-      const currentDraft = drafts[index];
+    for (let index = 0; index < sourceDrafts.length; index++) {
+      const currentDraft = sourceDrafts[index];
+      const existingRendered = String(currentDraft?.renderedCreativeDataUrl || "");
+      if (existingRendered.startsWith("data:image/png;base64,")) {
+        renderedDrafts.push(currentDraft);
+        continue;
+      }
       const key = getDraftKey(currentDraft, index);
-      const node = previewRefs.current[key];
+      const node = await waitForPreviewNode(key);
 
       if (!node) {
-        throw new Error(`Rendered preview was not available for Ad ${index + 1}. Please return to Review and try again.`);
+        throw new Error(`Rendered preview was not available for Ad ${index + 1}. Please wait for the preview to finish loading and try again.`);
       }
 
       const renderedCreativeDataUrl = await toPng(node, {
@@ -241,13 +286,44 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
     return renderedDrafts;
   };
 
+  const captureRenderedCreatives = async () => {
+    if (!drafts.length) throw new Error("Generate ad previews before launching.");
+    setCaptureInProgress(true);
+    setCaptureError("");
+    try {
+      const renderedDrafts = await exportRenderedCreatives(drafts);
+      setDrafts(renderedDrafts);
+      setDraft(renderedDrafts[0] || null);
+      return renderedDrafts;
+    } catch (err: any) {
+      const message = err?.message || "Could not capture the rendered ad preview.";
+      setCaptureError(message);
+      throw new Error(message);
+    } finally {
+      setCaptureInProgress(false);
+    }
+  };
+
+  const continueToLaunch = async () => {
+    if (!drafts.length || imageGenerating || loading || captureInProgress) return;
+    try {
+      await captureRenderedCreatives();
+      setStep(4);
+    } catch {
+      // captureRenderedCreatives already set the visible error message
+    }
+  };
+
   const launch = async () => {
     if (!drafts.length || !states.length) return;
     setLaunching(true);
     setError("");
+    setCaptureError("");
     setResult(null);
     try {
-      const renderedDrafts = await exportRenderedCreatives();
+      const renderedDrafts = hasRenderedCreatives(drafts)
+        ? drafts
+        : await captureRenderedCreatives();
       const selectedDraft = renderedDrafts[0] || draft;
 
       const response = await fetch("/api/facebook/publish-ad", {
@@ -445,13 +521,13 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
 	        <div className="space-y-3">
 	          <div className="flex items-center justify-between gap-3 flex-wrap">
 	            <div>
-	              <p className="text-white font-semibold">Generated Ad Versions</p>
-	              <p className="text-sm text-gray-400">Review the selected test set before launch.</p>
+              <p className="text-white font-semibold">Generated Ad Versions</p>
+              <p className="text-sm text-gray-400">Review the selected test set before launch.</p>
 	            </div>
 	            <button
 	              type="button"
 	              onClick={() => generate(true)}
-	              disabled={loading}
+	              disabled={loading || imageGenerating || captureInProgress}
 	              className="px-4 py-2 rounded-lg bg-white/10 hover:bg-white/15 text-white text-sm font-semibold disabled:opacity-50"
 	            >
 	              {loading ? "Regenerating..." : `Regenerate Set (${3 - regenerateAttempts} left)`}
@@ -513,18 +589,35 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
 	              </div>
 	            ))}
 	          </div>
-	          {imageGenerating && (
-	            <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-100">
-	              Generating ad images...
-	            </div>
-	          )}
-	          {imageError && !imageGenerating && (
-	            <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3">
-	              <p className="text-sm text-rose-100">{imageError}</p>
-	            </div>
-	          )}
-	        </div>
-	      )}
+          {imageGenerating && (
+            <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-100">
+              Generating ad images...
+            </div>
+          )}
+          {captureInProgress && (
+            <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-100">
+              Capturing finished ad previews...
+            </div>
+          )}
+          {imageError && !imageGenerating && (
+            <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3">
+              <p className="text-sm text-rose-100">{imageError}</p>
+            </div>
+          )}
+          {captureError && !captureInProgress && (
+            <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3">
+              <p className="text-sm text-rose-100">{captureError}</p>
+              <button
+                type="button"
+                onClick={captureRenderedCreatives}
+                className="mt-2 px-3 py-1.5 rounded bg-rose-500/20 text-rose-100 border border-rose-400/30 text-xs font-semibold"
+              >
+                Retry capture
+              </button>
+            </div>
+          )}
+        </div>
+      )}
 
       {step === 4 && (
         <div className={`rounded-lg p-5 border ${result ? "bg-emerald-900/30 border-emerald-700/40" : "bg-white/5 border-white/10"}`}>
@@ -532,7 +625,7 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
           <p className="text-sm text-gray-400 mt-1">
             {result
               ? "Review and activate it in Meta Ads Manager when you are ready."
-              : "This creates the Meta campaign, ad set, lead form, ad creative, CRM folder, and hosted funnel."}
+              : "This creates the Meta campaign, ad set, Instant Form, ad creative, and CRM folder."}
           </p>
           {result?.funnelUrl && (
             <a href={result.funnelUrl} target="_blank" rel="noopener noreferrer" className="text-sm text-emerald-300 underline">
@@ -543,7 +636,7 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
 	            <button
 	              type="button"
 	              onClick={launch}
-	              disabled={launching || !drafts.length || !states.length || imageGenerating}
+              disabled={launching || !hasRenderedCreatives(drafts) || !states.length || imageGenerating || captureInProgress}
 	              className="mt-4 px-5 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold disabled:opacity-50"
 	            >
 	              {launching ? "Launching..." : "Launch"}
@@ -586,11 +679,11 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
 	        {step === 3 && (
 	          <button
 	            type="button"
-	            onClick={() => setStep(4)}
-	            disabled={!drafts.length || imageGenerating}
+            onClick={continueToLaunch}
+            disabled={!drafts.length || imageGenerating || loading || captureInProgress}
 	            className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-sm text-white font-semibold disabled:opacity-50"
 	          >
-	            Continue to Launch
+            {captureInProgress ? "Capturing..." : "Continue to Launch"}
           </button>
         )}
       </div>

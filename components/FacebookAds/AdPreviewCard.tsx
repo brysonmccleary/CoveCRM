@@ -25,7 +25,13 @@ const MORTGAGE_PHOTOS = [
 ];
 
 function cleanText(value: unknown): string {
-  return String(value || "").replace(/\s+/g, " ").trim();
+  return String(value || "")
+    .replace(/plans options designe\w*/gi, "coverage options designed")
+    .replace(/\bplans options\b/gi, "coverage options")
+    .replace(/\bcoverage coverage\b/gi, "coverage")
+    .replace(/\boptions options\b/gi, "options")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function cleanList(value: unknown): string[] {

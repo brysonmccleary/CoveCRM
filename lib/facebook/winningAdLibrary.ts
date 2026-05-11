@@ -1610,7 +1610,6 @@ function applyCopyVariation(text: string, seed: number, leadType: WinnerLeadType
     { from: /Tap/gi, to: "Select" },
     { from: /See/gi, to: "View" },
     { from: /Check/gi, to: "Find Out" },
-    { from: /coverage/gi, to: "plans" },
     { from: /qualify/gi, to: "be eligible" },
   ];
 

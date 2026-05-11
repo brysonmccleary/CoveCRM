@@ -100,6 +100,10 @@ function sanitizeCreativeText(value: string, leadType: string): string {
     [/government program/gi, "private coverage review"],
     [/government implication/gi, "private coverage framing"],
     [/official-sounding entitlement language/gi, "private coverage options"],
+    [/plans options designe\w*/gi, "coverage options designed"],
+    [/\bplans options\b/gi, "coverage options"],
+    [/\bcoverage coverage\b/gi, "coverage"],
+    [/\boptions options\b/gi, "options"],
   ];
 
   if (leadType === "veteran") {
@@ -153,6 +157,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     agentState = "",
     dailyBudget = 25,
     audienceSegment: audienceSegmentParam = "standard",
+    regenerationAttempt: regenerationAttemptParam = 0,
+    generationNonce: generationNonceParam = "",
   } = req.body as {
     leadType?: string;
     location?: string;
@@ -160,6 +166,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     dailyBudget?: number;
     audienceSegment?: string;
     variantCount?: number;
+    regenerationAttempt?: number;
+    generationNonce?: string;
   };
 
   if (!isWinnerSupportedLeadType(leadType)) {
@@ -173,12 +181,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const location = String(locationParam || agentState || "").trim();
   const audienceSegment = normalizeAudienceSegment(audienceSegmentParam);
   const requestedVariantCount = Math.min(4, Math.max(1, Number((req.body as any)?.variantCount) || 3));
+  const regenerationAttempt = Math.max(0, Number(regenerationAttemptParam) || 0);
+  const generationNonce = String(generationNonceParam || "").trim() || `server_${Date.now().toString(36)}_${regenerationAttempt}`;
   const campaignName = location
     ? `${campaignLabel(leadType)} - ${location}`
     : `${campaignLabel(leadType)} Campaign`;
 
-  // Append a short timestamp to ensure seed uniqueness even if users type the same campaign name
-  const campaignNameSeeded = `${campaignName}-${Date.now().toString(36).slice(-4)}`;
+  const campaignNameSeeded = [
+    campaignName,
+    userEmail,
+    leadType,
+    audienceSegment,
+    location,
+    `attempt:${regenerationAttempt}`,
+    `nonce:${generationNonce}`,
+  ].join("|");
 
   const variants = generateWinningVariants({
     leadType,
@@ -209,7 +226,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       headline: sanitizeCreativeText(variant.headline, leadType),
       description: sanitizeCreativeText(variant.description, leadType),
       cta: sanitizeCreativeText(variant.cta, leadType),
-      imagePrompt: sanitizeCreativeText(variant.imagePrompt, leadType),
+      imagePrompt: sanitizeCreativeText(
+        [
+          variant.imagePrompt,
+          `Creative variation seed ${generationNonce}. Use a noticeably different direct-response background treatment, palette, composition, and subject framing from prior attempts. Leave blank reserved headline and CTA areas for app-rendered text. No readable text inside image.`,
+        ].join(" "),
+        leadType
+      ),
       videoScript: sanitizeCreativeText(variant.videoScript, leadType),
       buttonLabels: sanitizeCreativeList(variant.buttonLabels, leadType),
       bulletPoints: sanitizeCreativeList(variant.bulletPoints, leadType),
@@ -227,6 +250,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       winningFamilyId: variant.familyId,
       variationType: variant.variantType,
       uniquenessFingerprint: variant.uniquenessFingerprint,
+      generationNonce,
+      regenerationAttempt,
       vendorStyleTag: variant.vendorStyleTag,
       generatedBy: "winner_library",
       copySource: "winner_library",
