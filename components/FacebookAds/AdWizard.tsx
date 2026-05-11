@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { toPng } from "html-to-image";
 import AdPreviewCard from "@/components/FacebookAds/AdPreviewCard";
 import StateSelector from "@/components/FacebookAds/StateSelector";
 import { US_STATES } from "@/lib/facebook/geo/usStates";
@@ -60,6 +61,7 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
   const [drafts, setDrafts] = useState<any[]>([]);
   const [selectedMetaPageId, setSelectedMetaPageId] = useState("");
   const [selectedMetaAdAccountId, setSelectedMetaAdAccountId] = useState("");
+  const previewRef = useRef<HTMLDivElement>(null);
 
   const stateLabel = useMemo(() => {
     const labels = states.map((code) => US_STATES.find((state) => state.code === code)?.name || code);
@@ -229,8 +231,23 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
     setLaunching(true);
     setError("");
     setResult(null);
+
     try {
       const selectedDraft = drafts[0] || draft;
+
+      // Capture the CSS-rendered ad preview as a PNG
+      let renderedCreativeDataUrl = "";
+      if (previewRef.current) {
+        try {
+          renderedCreativeDataUrl = await toPng(previewRef.current, {
+            quality: 0.92,
+            pixelRatio: 2,
+            cacheBust: true,
+          });
+        } catch (captureErr) {
+          console.warn("[AdWizard] CSS capture failed, continuing without image:", captureErr);
+        }
+      }
 
       const response = await fetch("/api/facebook/publish-ad", {
         method: "POST",
@@ -246,8 +263,9 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
           headline: selectedDraft.headline,
           description: selectedDraft.description || "",
           cta: selectedDraft.cta || "LEARN_MORE",
-          imagePrompt: selectedDraft.imagePrompt || "",
-          imageUrl: selectedDraft.imageUrl || "",
+          imagePrompt: "",
+          imageUrl: "",
+          renderedCreativeDataUrl,
           creativeArchetype: selectedDraft.creativeArchetype || selectedDraft.archetype || "",
           licensedStates: states,
           stateRestrictionNoticeAccepted: true,
@@ -438,7 +456,10 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
             {drafts.map((currentDraft, index) => (
               <div key={currentDraft.uniquenessFingerprint || index} className="bg-white/5 border border-white/10 rounded-lg overflow-hidden">
                 <div className="p-3 flex justify-center bg-black/20">
-                  <div style={{ display: "inline-block", width: "100%", maxWidth: 375 }}>
+                  <div
+                    ref={index === 0 ? previewRef : undefined}
+                    style={{ display: "inline-block", width: "100%", maxWidth: 375 }}
+                  >
                     <AdPreviewCard
                       draft={currentDraft}
                       selectedStates={states}

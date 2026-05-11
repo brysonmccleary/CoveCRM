@@ -401,7 +401,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/^-|-$/g, "")
       .slice(0, 80);
-    let resolvedImageUrl = String(imageUrl || normalizedDrafts[0]?.imageUrl || "").trim();
+    let resolvedImageUrl = String(
+      renderedCreativeDataUrl ||
+      normalizedDrafts[0]?.renderedCreativeDataUrl ||
+      imageUrl ||
+      normalizedDrafts[0]?.imageUrl ||
+      ""
+    ).trim();
 
     if (!resolvedImageUrl) {
       resolvedImageUrl = await generateImageUrlForPublish(leadType, imagePrompt);
@@ -678,7 +684,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         for (let index = 0; index < normalizedDrafts.length; index++) {
           const currentDraft = normalizedDrafts[index] || {};
-          let currentImageUrl = String(currentDraft.imageUrl || "").trim();
+          let currentImageUrl = String(
+            currentDraft.renderedCreativeDataUrl ||
+            currentDraft.imageUrl ||
+            ""
+          ).trim();
           if (!currentImageUrl) {
             currentImageUrl = await generateImageUrlForPublish(
               leadType,
