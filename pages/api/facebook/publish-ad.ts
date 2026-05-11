@@ -396,24 +396,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       vendorStyleTag ||
       normalizedDrafts.some(isGeneratedCoveCrmDraft)
     );
-    const missingRenderedCreative = generatedCoveCrmCreative && normalizedDrafts.some((currentDraft) => {
-      const renderedAsset = String(currentDraft?.renderedCreativeDataUrl || "").trim();
-      return !getBase64FromDataImageUrl(renderedAsset);
-    });
-
-    if (missingRenderedCreative) {
-      return res.status(400).json({
-        ok: false,
-        error: "Rendered creative is required before publishing.",
-      });
-    }
-
     const funnelSlug = safeName
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/^-|-$/g, "")
       .slice(0, 80);
-    let resolvedImageUrl = String(renderedCreativeDataUrl || normalizedDrafts[0]?.renderedCreativeDataUrl || imageUrl || normalizedDrafts[0]?.imageUrl || "").trim();
+    let resolvedImageUrl = String(imageUrl || normalizedDrafts[0]?.imageUrl || "").trim();
 
     if (!resolvedImageUrl) {
       resolvedImageUrl = await generateImageUrlForPublish(leadType, imagePrompt);
@@ -690,7 +678,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         for (let index = 0; index < normalizedDrafts.length; index++) {
           const currentDraft = normalizedDrafts[index] || {};
-          let currentImageUrl = String(currentDraft.renderedCreativeDataUrl || currentDraft.imageUrl || "").trim();
+          let currentImageUrl = String(currentDraft.imageUrl || "").trim();
           if (!currentImageUrl) {
             currentImageUrl = await generateImageUrlForPublish(
               leadType,
