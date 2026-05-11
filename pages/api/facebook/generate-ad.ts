@@ -78,6 +78,20 @@ function campaignLabel(leadType: string) {
     .join(" ");
 }
 
+function hashString(value: string): number {
+  let hash = 0;
+  const str = value || "covecrm";
+  for (let i = 0; i < str.length; i++) {
+    hash = (Math.imul(31, hash) + str.charCodeAt(i)) | 0;
+  }
+  return Math.abs(hash);
+}
+
+function visualVariantCount(leadType: string): number {
+  if (leadType === "iul") return 4;
+  return 5;
+}
+
 function sanitizeCreativeText(value: string, leadType: string): string {
   let sanitized = String(value || "");
 
@@ -214,8 +228,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     variantCount: requestedVariantCount,
   });
   const dailyBudgetCents = Math.round((Number(dailyBudget) || 25) * 100);
-  const buildDraftFromVariant = (variant: typeof variants.emotional) => {
+  const buildDraftFromVariant = (variant: typeof variants.emotional, index = 0) => {
     const landingPageConfig = buildWinningFunnelConfig(variant);
+    const visualVariantBaseSeed = [
+      userEmail,
+      leadType,
+      audienceSegment,
+    ].join("|");
+    const visualVariantIndex =
+      (hashString(visualVariantBaseSeed) + regenerationAttempt + index) %
+      visualVariantCount(leadType);
 
     return {
       leadType,
@@ -252,12 +274,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       uniquenessFingerprint: variant.uniquenessFingerprint,
       generationNonce,
       regenerationAttempt,
+      visualVariantIndex,
       vendorStyleTag: variant.vendorStyleTag,
       generatedBy: "winner_library",
       copySource: "winner_library",
     };
   };
-  const recommendedDraft = buildDraftFromVariant(selectedVariant);
+  const recommendedDraft = buildDraftFromVariant(selectedVariant, 0);
   const selectedDrafts = selectedVariants.map(buildDraftFromVariant);
 
   return res.status(200).json({

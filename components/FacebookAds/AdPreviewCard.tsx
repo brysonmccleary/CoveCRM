@@ -139,14 +139,14 @@ function hashString(value: string): number {
 }
 
 function getVariationSeed(draft: any, leadType: string): string {
-  const explicitSeed = cleanText(draft?.uniquenessFingerprint);
-  if (explicitSeed) return explicitSeed;
-
   const compositeSeed = [
+    draft?.uniquenessFingerprint,
     draft?.creativeArchetype,
     draft?.variationType,
     draft?.winningFamilyId,
     draft?.vendorStyleTag,
+    draft?.generationNonce,
+    draft?.regenerationAttempt,
     draft?.headline,
   ].map(cleanText).filter(Boolean).join("|");
 
@@ -154,7 +154,14 @@ function getVariationSeed(draft: any, leadType: string): string {
 }
 
 function pickVisualVariant(draft: any, leadType: string, count: number): number {
-  return hashString(getVariationSeed(draft, leadType)) % Math.max(1, count);
+  const safeCount = Math.max(1, count);
+  const providedIndex = Number(draft?.visualVariantIndex);
+  if (Number.isFinite(providedIndex) && providedIndex >= 0) {
+    return Math.floor(providedIndex) % safeCount;
+  }
+
+  const attemptOffset = Math.max(0, Number(draft?.regenerationAttempt) || 0) * 2;
+  return (hashString(getVariationSeed(draft, leadType)) + attemptOffset) % safeCount;
 }
 
 function ButtonGrid({
