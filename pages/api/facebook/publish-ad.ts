@@ -491,9 +491,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         campaignParams.set("buying_type", lockedStructure.campaign.buying_type);
         campaignParams.set("status", lockedStructure.campaign.status);
         campaignParams.set("special_ad_categories", JSON.stringify(lockedStructure.campaign.special_ad_categories));
+        campaignParams.set("is_adset_budget_sharing_enabled", "false");
         campaignParams.set("access_token", accessToken);
 
-        const metaCampaignResp = await fetch(`https://graph.facebook.com/v19.0/act_${adAccountIdFinal}/campaigns`, {
+        const metaCampaignResp = await fetch(`https://graph.facebook.com/v21.0/act_${adAccountIdFinal}/campaigns`, {
           method: "POST",
           headers: { "Content-Type": "application/x-www-form-urlencoded" },
           body: campaignParams.toString(),
