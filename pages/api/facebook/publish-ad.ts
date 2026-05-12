@@ -623,11 +623,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         adsetParams.set("bid_strategy", lockedStructure.adSet.bid_strategy);
         adsetParams.set("status", lockedStructure.adSet.status);
         adsetParams.set("promoted_object", JSON.stringify({ page_id: pageIdFinal }));
-        adsetParams.set("targeting", JSON.stringify({
-          ...lockedStructure.adSet.targeting,
-          age_min: 30,
-          age_max: 65,
-        }));
+        adsetParams.set("targeting", JSON.stringify(lockedStructure.adSet.targeting));
+        adsetParams.set("destination_type", "ON_AD");
         adsetParams.set("access_token", accessToken);
 
         const metaAdsetResp = await fetch(`https://graph.facebook.com/v19.0/act_${adAccountIdFinal}/adsets`, {
@@ -715,7 +712,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               name: String(currentDraft.headline || headline || ""),
               description: String(currentDraft.description || description || ""),
               call_to_action: {
-                type: String(currentDraft.cta || cta || "LEARN_MORE"),
+                type: (() => {
+                  const raw = String(currentDraft.cta || cta || "LEARN_MORE").toUpperCase();
+                  const CTA_MAP: Record<string, string> = {
+                    "LEARN MORE": "LEARN_MORE",
+                    "APPLY NOW": "APPLY_NOW",
+                    "GET QUOTE": "GET_QUOTE",
+                    "SIGN UP": "SIGN_UP",
+                    "GET STARTED": "GET_STARTED",
+                    "CONTACT US": "CONTACT_US",
+                    "SUBSCRIBE": "SUBSCRIBE",
+                  };
+                  if (Object.values(CTA_MAP).includes(raw)) return raw;
+                  for (const [k, v] of Object.entries(CTA_MAP)) {
+                    if (raw.includes(k.replace("_", " "))) return v;
+                  }
+                  return "LEARN_MORE";
+                })(),
                 value: {
                   lead_gen_form_id: metaFormId,
                 },

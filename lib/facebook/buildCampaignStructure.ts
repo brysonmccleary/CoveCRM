@@ -57,9 +57,9 @@ export function buildCampaignStructure(input: {
   const segmentInterests = input.audienceSegment
     ? AUDIENCE_SEGMENT_INTERESTS[input.audienceSegment]
     : undefined;
-  const segmentTargeting = segmentInterests?.length
-    ? { ...targeting, flexible_spec: [{ interests: segmentInterests }] }
-    : targeting;
+  // Interest name-only targeting removed — Meta requires verified numeric IDs.
+  // TODO: replace with { id, name } objects from /search?type=adinterest endpoint.
+  const segmentTargeting = targeting;
 
   return {
     campaign: {
