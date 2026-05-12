@@ -410,7 +410,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     ).trim();
 
     if (!resolvedImageUrl) {
-      resolvedImageUrl = await generateImageUrlForPublish(leadType, imagePrompt);
+      throw new Error("No rendered creative image provided. CSS renderer must supply renderedCreativeDataUrl.");
     }
 
     if (!resolvedImageUrl) {
@@ -688,10 +688,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             ""
           ).trim();
           if (!currentImageUrl) {
-            currentImageUrl = await generateImageUrlForPublish(
-              leadType,
-              String(currentDraft.imagePrompt || imagePrompt || "")
-            );
+            throw new Error("No rendered creative image for ad " + index + ". CSS renderer must supply renderedCreativeDataUrl.");
           }
 
           const resolvedImageBase64 = getBase64FromDataImageUrl(currentImageUrl);
