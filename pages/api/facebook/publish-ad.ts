@@ -660,7 +660,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const metaFormParams = new URLSearchParams();
         metaFormParams.set("name", `${safeName} Lead Form`);
         metaFormParams.set("locale", "en_US");
-        metaFormParams.set("privacy_policy_url", "https://www.covecrm.com/privacy");
+        metaFormParams.set("privacy_policy", JSON.stringify({ url: "https://www.covecrm.com/privacy", link_type: "PRIVACY_POLICY" }));
         metaFormParams.set("follow_up_action_url", "https://www.covecrm.com/thank-you");
         metaFormParams.set("questions", JSON.stringify(questions));
         metaFormParams.set("access_token", accessToken);
