@@ -77,7 +77,6 @@ export function buildCampaignStructure(input: {
       bid_strategy: "LOWEST_COST_WITHOUT_CAP",
       status: "PAUSED",
       targeting: segmentTargeting,
-      placements: "advantage_plus_default",
     },
     ads: creatives.map((creative, index) => ({
       name: `${String(input.campaignName || "").trim()} Ad ${index + 1}`,

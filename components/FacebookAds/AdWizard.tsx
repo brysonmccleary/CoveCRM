@@ -61,7 +61,7 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
   const [drafts, setDrafts] = useState<any[]>([]);
   const [selectedMetaPageId, setSelectedMetaPageId] = useState("");
   const [selectedMetaAdAccountId, setSelectedMetaAdAccountId] = useState("");
-  const previewRef = useRef<HTMLDivElement>(null);
+  const creativeRef = useRef<HTMLDivElement>(null);
 
   const stateLabel = useMemo(() => {
     const labels = states.map((code) => US_STATES.find((state) => state.code === code)?.name || code);
@@ -126,49 +126,6 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
     selectCampaignType(option);
   };
 
-  const generateImagesForDrafts = async (nextDrafts: any[]) => {
-    if (!Array.isArray(nextDrafts) || nextDrafts.length === 0) return [];
-    setImageGenerating(true);
-    setImageError("");
-    try {
-      const updatedDrafts = await Promise.all(
-        nextDrafts.map(async (currentDraft) => {
-          try {
-            const response = await fetch("/api/ai/generate-ad-images", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                leadType,
-                imagePrompt: [
-                    currentDraft?.imagePrompt || "",
-                    `Variation seed: ${currentDraft?.uniquenessFingerprint || currentDraft?.generationNonce || ""}. Use a distinct direct-response background treatment, palette, composition, and subject framing. Leave blank space for app-rendered text and buttons. No readable text inside image.`,
-                  ].filter(Boolean).join(" "),
-              }),
-            });
-            const imageData = await response.json();
-            if (!response.ok || !imageData?.imageUrl) {
-              throw new Error(imageData?.error || "Image generation failed");
-            }
-            return {
-              ...currentDraft,
-              imageUrl: imageData.imageUrl,
-            };
-          } catch {
-            return currentDraft;
-          }
-        })
-      );
-      setDrafts(updatedDrafts);
-      setDraft(updatedDrafts[0] || null);
-      return updatedDrafts;
-    } catch {
-      setImageError("Creative image generation was incomplete. Missing previews will be generated again at publish if needed.");
-      return nextDrafts;
-    } finally {
-      setImageGenerating(false);
-    }
-  };
-
   const generate = async (isRegenerate = false) => {
     if (!states.length) {
       setError("Licensed states required");
@@ -213,7 +170,6 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
       setDrafts(nextDrafts);
       if (isRegenerate) setRegenerateAttempts(nextAttempt);
       setStep(3);
-      await generateImagesForDrafts(nextDrafts);
     } catch (err: any) {
       setError(err?.message || "Generation failed");
     } finally {
@@ -235,18 +191,26 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
     try {
       const selectedDraft = drafts[0] || draft;
 
-      // Capture the CSS-rendered ad preview as a PNG
+      // Capture the CSS-rendered square creative as a PNG
       let renderedCreativeDataUrl = "";
-      if (previewRef.current) {
-        try {
-          renderedCreativeDataUrl = await toPng(previewRef.current, {
-            quality: 0.92,
-            pixelRatio: 2,
-            cacheBust: true,
-          });
-        } catch (captureErr) {
-          console.warn("[AdWizard] CSS capture failed, continuing without image:", captureErr);
-        }
+      if (!creativeRef.current) {
+        setError("Ad preview capture failed. Please try again.");
+        return;
+      }
+      try {
+        renderedCreativeDataUrl = await toPng(creativeRef.current, {
+          quality: 0.92,
+          pixelRatio: 2,
+          cacheBust: true,
+        });
+      } catch (captureErr) {
+        console.warn("[AdWizard] CSS capture failed:", captureErr);
+        setError("Ad preview capture failed. Please try again.");
+        return;
+      }
+      if (!renderedCreativeDataUrl) {
+        setError("Ad preview capture failed. Please try again.");
+        return;
       }
 
       const response = await fetch("/api/facebook/publish-ad", {
@@ -258,7 +222,7 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
           requestedLeadType: leadType,
           campaignTypeLabel,
           campaignName,
-          dailyBudgetCents: Math.max(5, Math.round(dailyBudget)) * 100,
+          dailyBudgetCents: Math.max(500, Math.round(Number(dailyBudget) * 100)),
           primaryText: selectedDraft.primaryText,
           headline: selectedDraft.headline,
           description: selectedDraft.description || "",
@@ -436,8 +400,11 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
         </div>
       )}
 
-	      {step === 3 && draft && (
-	        <div className="space-y-3">
+	      {(step === 3 || step === 4) && draft && (
+	        <div
+            className="space-y-3"
+            style={step === 4 ? { position: "absolute", left: -10000, top: 0, width: 375, opacity: 0, pointerEvents: "none" } : undefined}
+          >
 	          <div className="flex items-center justify-between gap-3 flex-wrap">
 	            <div>
               <p className="text-white font-semibold">Generated Ad Versions</p>
@@ -457,7 +424,6 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
               <div key={currentDraft.uniquenessFingerprint || index} className="bg-white/5 border border-white/10 rounded-lg overflow-hidden">
                 <div className="p-3 flex justify-center bg-black/20">
                   <div
-                    ref={index === 0 ? previewRef : undefined}
                     style={{ display: "inline-block", width: "100%", maxWidth: 375 }}
                   >
                     <AdPreviewCard
@@ -466,6 +432,7 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
                       regenerateAttempts={regenerateAttempts}
                       regenerating={loading}
                       onRegenerate={() => generate(true)}
+                      creativeRef={index === 0 ? creativeRef : undefined}
                     />
                   </div>
                 </div>

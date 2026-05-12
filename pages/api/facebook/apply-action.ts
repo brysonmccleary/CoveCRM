@@ -1,7 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { Types } from "mongoose";
-import OpenAI from "openai";
 import { authOptions } from "@/pages/api/auth/[...nextauth]";
 import { isExperimentalAdminEmail } from "@/lib/isExperimentalAdmin";
 import mongooseConnect from "@/lib/mongooseConnect";
@@ -21,19 +20,6 @@ const MIN_SPEND_TO_EXECUTE = 50;
 const META_GRAPH_VERSION = "v18.0";
 const META_GRAPH_CREATIVE_VERSION = "v19.0";
 
-const IMAGE_PROMPT_FALLBACKS: Record<string, string> = {
-  final_expense:
-    "Vertical 1:1 Facebook ad image for final expense insurance, older couple at home, warm trustworthy realistic photography, no logos, no text overlay",
-  iul:
-    "Vertical 1:1 Facebook ad image for indexed universal life, confident middle-aged family in a bright home setting, premium realistic photography, no logos, no text overlay",
-  mortgage_protection:
-    "Vertical 1:1 Facebook ad image for mortgage protection, homeowner family in front of their house, realistic trustworthy lighting, no logos, no text overlay",
-  veteran:
-    "Vertical 1:1 Facebook ad image for veteran life insurance leads, mature family at home with subtle patriotic palette, realistic, no insignia, no logos, no text overlay",
-  trucker:
-    "Vertical 1:1 Facebook ad image for trucker insurance leads, professional truck driver with family-safe trustworthy tone, realistic photography, no logos, no text overlay",
-};
-
 function num(value: unknown): number {
   const n = Number(value);
   return Number.isFinite(n) ? n : 0;
@@ -50,17 +36,6 @@ function actionTypeFor(action: AiAdBrainAction["action"]): ApplyActionType {
   return "FIX";
 }
 
-function getImageAssetFromOpenAIResponse(image: any) {
-  const firstImage = image?.data?.[0] || {};
-  const url = String(firstImage.url || "").trim();
-  if (url) return url;
-
-  const b64Json = String(firstImage.b64_json || "").trim();
-  if (b64Json) return `data:image/png;base64,${b64Json}`;
-
-  return "";
-}
-
 function getBase64FromDataImageUrl(imageAsset: string) {
   const match = String(imageAsset || "")
     .trim()
@@ -69,25 +44,10 @@ function getBase64FromDataImageUrl(imageAsset: string) {
   return match?.[1]?.replace(/\s/g, "") || "";
 }
 
-async function generateImageForCreative(leadType: string, imagePrompt?: string) {
-  const apiKey = String(process.env.OPENAI_API_KEY || "").trim();
-  if (!apiKey) throw new Error("OpenAI API key missing for creative image generation");
-
-  const openai = new OpenAI({ apiKey });
-  const prompt =
-    String(imagePrompt || "").trim() ||
-    IMAGE_PROMPT_FALLBACKS[leadType] ||
-    IMAGE_PROMPT_FALLBACKS.mortgage_protection;
-
-  const image = await openai.images.generate({
-    model: "gpt-image-1",
-    prompt,
-    size: "1024x1024",
-  });
-
-  const imageAsset = getImageAssetFromOpenAIResponse(image);
-  if (!imageAsset) throw new Error("No usable generated image asset returned");
-  return imageAsset;
+async function generateImageForCreative(leadType: string, imagePrompt?: string): Promise<string> {
+  void leadType;
+  void imagePrompt;
+  throw new Error("Image generation disabled. Use CSS renderer.");
 }
 
 async function uploadMetaAdImageFromDataUrl(

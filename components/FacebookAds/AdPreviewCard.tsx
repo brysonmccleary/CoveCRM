@@ -1461,12 +1461,14 @@ export default function AdPreviewCard({
   regenerateAttempts = 0,
   regenerating = false,
   onRegenerate,
+  creativeRef,
 }: {
   draft: any;
   selectedStates?: string[];
   regenerateAttempts?: number;
   regenerating?: boolean;
   onRegenerate: () => void;
+  creativeRef?: React.RefObject<HTMLDivElement | null>;
 }) {
   const canRegenerate = regenerateAttempts < 3 && !regenerating;
   const overlay = getOverlay(draft);
@@ -1570,6 +1572,7 @@ export default function AdPreviewCard({
       )}
 
       <div
+        ref={creativeRef}
         style={{
           position: "relative",
           width: "100%",

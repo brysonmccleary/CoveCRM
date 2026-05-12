@@ -4,7 +4,6 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/pages/api/auth/[...nextauth]";
-import OpenAI from "openai";
 import mongooseConnect from "@/lib/mongooseConnect";
 import FBLeadCampaign from "@/models/FBLeadCampaign";
 import Folder from "@/models/Folder";
@@ -33,34 +32,6 @@ const VALID_LEAD_TYPES = [
   "trucker",
 ];
 
-const openai = process.env.OPENAI_API_KEY
-  ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
-  : null;
-
-const IMAGE_PROMPT_FALLBACKS: Record<string, string> = {
-  final_expense:
-    "Direct-response Facebook ad creative background for final expense insurance, poster-style composition, premium dark gold layout, blank reserved headline area for app-rendered text, blank reserved CTA/button area for app-rendered UI, clean graphic background with space for overlay, no readable text inside image, NOT lifestyle photography, NO family-photo scene, no logos",
-  iul:
-    "Premium direct-response IUL education ad creative background, blue gold white clean graphic layout, blank reserved headline area for app-rendered text, blank reserved CTA/button area for app-rendered UI, clean background with space for overlay, no readable text inside image, NOT lifestyle stock-photo style, no logos",
-  mortgage_protection:
-    "Direct-response mortgage protection ad creative background, home-focused poster layout, house and key visual, blank reserved headline area for app-rendered text, blank reserved CTA/button area for app-rendered UI, clean graphic background with space for overlay, no readable text inside image, high contrast red white navy palette, NOT lifestyle stock photography, NOT paperwork table scene, no logos",
-  veteran:
-    "Direct-response veteran insurance ad creative background, bold patriotic poster composition, navy and gold graphic areas, American flag texture background, veteran-aged civilian male, blank reserved headline area for app-rendered text, blank reserved CTA/button area for app-rendered UI, no readable text inside image, NOT lifestyle photography, NO kids, NO family portraits, NO military uniforms, NO official insignia, NO government seals, no logos",
-  trucker:
-    "Direct-response trucker insurance ad creative background, large semi truck hero image on highway, poster composition, blank reserved headline area for app-rendered text, blank reserved CTA/button area for app-rendered UI, clean graphic background with space for overlay, no readable text inside image, high contrast neon amber blue or patriotic palette, NOT stock-photo style, NO home-family scenes, no logos",
-};
-
-function getImageAssetFromOpenAIResponse(image: any) {
-  const firstImage = image?.data?.[0] || {};
-  const url = String(firstImage.url || "").trim();
-  if (url) return url;
-
-  const b64Json = String(firstImage.b64_json || "").trim();
-  if (b64Json) return `data:image/png;base64,${b64Json}`;
-
-  return "";
-}
-
 function getBase64FromDataImageUrl(imageAsset: string) {
   const match = String(imageAsset || "")
     .trim()
@@ -83,85 +54,6 @@ function stripRenderedCreativeData(draft: any) {
   if (!draft || typeof draft !== "object") return draft;
   const { renderedCreativeDataUrl: _renderedCreativeDataUrl, ...rest } = draft;
   return rest;
-}
-
-function sanitizeImagePrompt(prompt: string, leadType: string) {
-  let sanitized = String(prompt || "");
-  const replacements: Array<[RegExp, string]> = [
-    [/family at home/gi, "structured direct-response ad layout"],
-    [/mature family/gi, "single veteran-aged civilian subject"],
-    [/young family/gi, "home-focused visual"],
-    [/smiling family/gi, "structured benefit-card visual"],
-    [/couple at home/gi, "home-focused visual"],
-    [/couple reviewing paperwork/gi, "clean graphic background with space for overlay"],
-    [/kitchen table/gi, "blank reserved CTA/button area for app-rendered UI"],
-    [/cozy home/gi, "premium direct-response layout"],
-    [/warm natural lighting/gi, "high-contrast direct-response lighting"],
-    [/warm realistic lighting/gi, "high-contrast direct-response lighting"],
-    [/warm cinematic/gi, "high-contrast direct-response"],
-    [/candid family photography/gi, "poster-style ad creative"],
-    [/realistic photography/gi, "graphic direct-response ad composition"],
-    [/structured typography zones/gi, "blank reserved headline area for app-rendered text"],
-    [/age or coverage selection buttons/gi, "blank reserved CTA/button area for app-rendered UI"],
-    [/fake clickable (?:option )?buttons?/gi, "blank reserved CTA/button area for app-rendered UI"],
-    [/amount card layout/gi, "clean graphic background with space for overlay"],
-    [/amount-card layout/gi, "clean graphic background with space for overlay"],
-    [/benefit-card composition/gi, "clean graphic background with space for overlay"],
-    [/benefit-card visual/gi, "clean graphic background with space for overlay"],
-    [/strong headline area/gi, "blank reserved headline area for app-rendered text"],
-    [/bold headline zone/gi, "blank reserved headline area for app-rendered text"],
-    [/clean CTA layout/gi, "blank reserved CTA/button area for app-rendered UI"],
-  ];
-
-  if (leadType === "veteran") {
-    replacements.push(
-      [/children/gi, "coverage cards"],
-      [/kids/gi, "coverage cards"],
-      [/family portraits?/gi, "patriotic poster composition"]
-    );
-  }
-
-  if (leadType === "trucker") {
-    replacements.push([/family/gi, "semi truck hero visual"]);
-  }
-
-  for (const [pattern, replacement] of replacements) {
-    sanitized = sanitized.replace(pattern, replacement);
-  }
-
-  return sanitized;
-}
-
-async function generateImageUrlForPublish(leadType: string, imagePrompt?: string) {
-  if (!openai) return "";
-
-  const rawImagePrompt = String(imagePrompt || "").trim();
-  const fallbackPrompt = IMAGE_PROMPT_FALLBACKS[leadType] || IMAGE_PROMPT_FALLBACKS.mortgage_protection;
-
-  if (!rawImagePrompt) {
-    console.warn("[publish-ad] Missing imagePrompt; using direct-response fallback", { leadType });
-  }
-
-  const prompt = sanitizeImagePrompt(
-    rawImagePrompt || fallbackPrompt,
-    leadType
-  );
-
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      const image = await openai.images.generate({
-        model: "gpt-image-1",
-        prompt,
-        size: "1024x1024",
-      });
-      const imageAsset = getImageAssetFromOpenAIResponse(image);
-      if (imageAsset) return imageAsset;
-    } catch (err: any) {
-      console.warn("[publish-ad] image generation attempt failed:", err?.message || err);
-    }
-  }
-
-  return "";
 }
 
 async function uploadMetaAdImageFromDataUrl(
@@ -599,7 +491,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         campaignParams.set("buying_type", lockedStructure.campaign.buying_type);
         campaignParams.set("status", lockedStructure.campaign.status);
         campaignParams.set("special_ad_categories", JSON.stringify(lockedStructure.campaign.special_ad_categories));
-        campaignParams.set("is_adset_budget_sharing_enabled", "false");
         campaignParams.set("access_token", accessToken);
 
         const metaCampaignResp = await fetch(`https://graph.facebook.com/v19.0/act_${adAccountIdFinal}/campaigns`, {
@@ -660,7 +551,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const metaFormParams = new URLSearchParams();
         metaFormParams.set("name", `${safeName} Lead Form`);
         metaFormParams.set("locale", "en_US");
-        metaFormParams.set("privacy_policy", JSON.stringify({ url: "https://www.covecrm.com/privacy" }));
+        metaFormParams.set("privacy_policy_url", "https://www.covecrm.com/privacy");
         metaFormParams.set("follow_up_action_url", "https://www.covecrm.com/thank-you");
         metaFormParams.set("questions", JSON.stringify(questions));
         metaFormParams.set("access_token", accessToken);
