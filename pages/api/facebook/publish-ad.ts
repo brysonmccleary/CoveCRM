@@ -630,7 +630,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           } else {
             objectStorySpec.link_data.image_url = currentImageUrl;
           }
-          if (instagramId) {
+          if (instagramId && /^\d+$/.test(instagramId)) {
             objectStorySpec.instagram_actor_id = instagramId;
           }
 
