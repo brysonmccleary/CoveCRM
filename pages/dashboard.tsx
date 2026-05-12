@@ -264,6 +264,158 @@ const SOURCE_LABELS: Record<string, string> = {
   manual: "Manual Entry",
 };
 
+type ObjRange = "today" | "7days" | "30days" | "90days";
+type TopObjection = { objection: string; count: number; suggestedResponse?: string };
+
+function TopObjectionsWidget() {
+  const [range, setRange] = useState<ObjRange>("7days");
+  const [objections, setObjections] = useState<TopObjection[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [expanded, setExpanded] = useState<Record<number, boolean>>({});
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      setLoading(true);
+      try {
+        const res = await fetch(`/api/calls/top-objections?range=${range}`);
+        const data = await res.json();
+        if (!cancelled) setObjections(data.objections || []);
+      } catch {
+        if (!cancelled) setObjections([]);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+    load();
+    return () => { cancelled = true; };
+  }, [range]);
+
+  const RANGE_LABELS: { value: ObjRange; label: string }[] = [
+    { value: "today", label: "Today" },
+    { value: "7days", label: "7 Days" },
+    { value: "30days", label: "30 Days" },
+  ];
+
+  const maxCount = objections.length > 0 ? Math.max(...objections.map(o => o.count)) : 1;
+
+  const RANK_COLORS = [
+    { bar: "#fcd34d", text: "#fcd34d", bg: "rgba(234,179,8,0.07)", border: "rgba(234,179,8,0.2)" },
+    { bar: "#94a3b8", text: "#94a3b8", bg: "rgba(156,163,175,0.07)", border: "rgba(156,163,175,0.18)" },
+    { bar: "#f97316", text: "#f97316", bg: "rgba(180,83,9,0.08)", border: "rgba(180,83,9,0.22)" },
+  ];
+
+  return (
+    <div style={{ background: "#111D35", border: "1px solid #1e2d45", borderRadius: 10, padding: "20px 22px" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, flexWrap: "wrap", gap: 8 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: "#E5E7EB", display: "flex", alignItems: "center", gap: 6 }}>
+          🚧 Top Objections
+        </div>
+        <div style={{ display: "flex", gap: 5 }}>
+          {RANGE_LABELS.map(({ value, label }) => (
+            <button
+              key={value}
+              onClick={() => setRange(value)}
+              style={{
+                fontSize: 11,
+                fontWeight: 500,
+                padding: "4px 11px",
+                borderRadius: 20,
+                border: "none",
+                cursor: "pointer",
+                background: range === value ? "#2563eb" : "rgba(255,255,255,0.07)",
+                color: range === value ? "#fff" : "#6B7280",
+                transition: "all 0.15s",
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {loading ? (
+        <p style={{ color: "#94a3b8", fontSize: 13 }}>Loading…</p>
+      ) : objections.length === 0 ? (
+        <p style={{ color: "#374151", fontSize: 13 }}>
+          No objection data yet. Generate call overviews to track objections.
+        </p>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {objections.map((obj, idx) => {
+            const colors = RANK_COLORS[idx] || { bar: "#6b7280", text: "#94a3b8", bg: "rgba(255,255,255,0.05)", border: "rgba(255,255,255,0.1)" };
+            const pct = Math.round((obj.count / maxCount) * 100);
+            return (
+              <div key={idx}>
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 12,
+                    padding: "11px 16px",
+                    borderRadius: 8,
+                    border: `1px solid ${colors.border}`,
+                    background: colors.bg,
+                  }}
+                >
+                  <div style={{ fontSize: 13, fontWeight: 700, width: 26, textAlign: "center", color: colors.text, flexShrink: 0 }}>
+                    #{idx + 1}
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: 500, color: "#F3F4F6", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                      {obj.objection}
+                    </div>
+                    <div style={{ fontSize: 11, color: "#6B7280", marginTop: 2 }}>
+                      {obj.count} time{obj.count !== 1 ? "s" : ""}
+                    </div>
+                  </div>
+                  <div style={{ width: 90, flexShrink: 0 }}>
+                    <div style={{ height: 4, background: "rgba(255,255,255,0.08)", borderRadius: 2 }}>
+                      <div style={{ height: 4, borderRadius: 2, background: colors.bar, width: `${pct}%` }} />
+                    </div>
+                  </div>
+                  {obj.suggestedResponse && (
+                    <button
+                      onClick={() => setExpanded((prev) => ({ ...prev, [idx]: !prev[idx] }))}
+                      style={{
+                        fontSize: 11,
+                        color: "#60a5fa",
+                        background: "rgba(96,165,250,0.1)",
+                        border: "1px solid rgba(96,165,250,0.2)",
+                        padding: "5px 12px",
+                        borderRadius: 6,
+                        cursor: "pointer",
+                        flexShrink: 0,
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {expanded[idx] ? "Hide" : "View Response"}
+                    </button>
+                  )}
+                </div>
+                {expanded[idx] && obj.suggestedResponse && (
+                  <div
+                    style={{
+                      marginTop: 4,
+                      background: "rgba(96,165,250,0.08)",
+                      border: "1px solid rgba(96,165,250,0.2)",
+                      borderRadius: 7,
+                      padding: "10px 14px",
+                    }}
+                  >
+                    <p style={{ fontSize: 11, color: "#60a5fa", fontWeight: 600, marginBottom: 4 }}>Suggested Response</p>
+                    <p style={{ fontSize: 12, color: "#94a3b8", lineHeight: 1.6 }}>{obj.suggestedResponse}</p>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function LeadSourceROIWidget() {
   const [bySource, setBySource] = useState<Record<string, any>>({});
   const [loading, setLoading] = useState(true);
@@ -281,16 +433,16 @@ function LeadSourceROIWidget() {
   if (sources.length === 0) return null;
 
   return (
-    <div className="bg-[#0f172a] rounded-xl p-5 mt-4">
-      <h3 className="text-white font-semibold mb-3">Lead Sources (Last 3 Months)</h3>
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
+    <div style={{ background: "#0d1520", borderRadius: 10, padding: "18px 22px", border: "1px solid rgba(255,255,255,0.06)" }}>
+      <div style={{ fontSize: 13, fontWeight: 600, color: "#E5E7EB", marginBottom: 14 }}>Lead Sources — Last 3 Months</div>
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
           <thead>
-            <tr className="text-gray-400 text-left border-b border-white/10">
-              <th className="pb-2">Source</th>
-              <th className="pb-2 text-right">Leads</th>
-              <th className="pb-2 text-right">Contacted</th>
-              <th className="pb-2 text-right">Booked</th>
+            <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.1)" }}>
+              <th style={{ color: "#6B7280", fontWeight: 500, paddingBottom: 9, textAlign: "left" }}>Source</th>
+              <th style={{ color: "#6B7280", fontWeight: 500, paddingBottom: 9, textAlign: "right" }}>Leads</th>
+              <th style={{ color: "#6B7280", fontWeight: 500, paddingBottom: 9, textAlign: "right" }}>Contacted</th>
+              <th style={{ color: "#6B7280", fontWeight: 500, paddingBottom: 9, textAlign: "right" }}>Booked</th>
             </tr>
           </thead>
           <tbody>
@@ -298,11 +450,11 @@ function LeadSourceROIWidget() {
               const s = bySource[src];
               const contactRate = s.leadCount > 0 ? Math.round((s.contactedCount / s.leadCount) * 100) : 0;
               return (
-                <tr key={src} className="border-b border-white/5">
-                  <td className="py-2 text-white">{SOURCE_LABELS[src] || src}</td>
-                  <td className="py-2 text-right text-gray-300">{s.leadCount}</td>
-                  <td className="py-2 text-right text-yellow-300">{s.contactedCount} ({contactRate}%)</td>
-                  <td className="py-2 text-right text-green-300">{s.bookedCount}</td>
+                <tr key={src} style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
+                  <td style={{ padding: "9px 0", color: "#D1D5DB" }}>{SOURCE_LABELS[src] || src}</td>
+                  <td style={{ padding: "9px 0", textAlign: "right", color: "#D1D5DB" }}>{s.leadCount}</td>
+                  <td style={{ padding: "9px 0", textAlign: "right", color: "#fcd34d" }}>{s.contactedCount} ({contactRate}%)</td>
+                  <td style={{ padding: "9px 0", textAlign: "right", color: "#34d399" }}>{s.bookedCount}</td>
                 </tr>
               );
             })}
@@ -320,32 +472,21 @@ function DashboardOverview() {
   const [resp, setResp] = useState<ApiResponse | null>(null);
   const [moneyStats, setMoneyStats] = useState<MoneyStats | null>(null);
   const [aiActivity, setAiActivity] = useState<AIActivityResponse | null>(null);
+  const [tooltip, setTooltip] = useState<{ x: number; y: number; dials: number; connects: number; label: string } | null>(null);
 
   const fetchStats = async (r: typeof range) => {
     setLoading(true);
     try {
       const [statsRes, moneyRes, activityRes] = await Promise.all([
-        fetch(
-          `/api/dashboard/stats?range=${encodeURIComponent(
-            r,
-          )}&tz=America/Phoenix`,
-        ),
+        fetch(`/api/dashboard/stats?range=${encodeURIComponent(r)}&tz=America/Phoenix`),
         fetch("/api/facebook/stats"),
         fetch("/api/ai/activity-feed?limit=20"),
       ]);
-
       const json: any = await statsRes.json();
-      if (!statsRes.ok || json?.error)
-        throw new Error(json?.error || "Failed to load stats");
+      if (!statsRes.ok || json?.error) throw new Error(json?.error || "Failed to load stats");
       setResp(json);
-
-      if (moneyRes.ok) {
-        setMoneyStats(await moneyRes.json());
-      }
-
-      if (activityRes.ok) {
-        setAiActivity(await activityRes.json());
-      }
+      if (moneyRes.ok) setMoneyStats(await moneyRes.json());
+      if (activityRes.ok) setAiActivity(await activityRes.json());
     } catch (e: any) {
       toast.error(e?.message || "Error fetching dashboard data.");
     } finally {
@@ -380,154 +521,338 @@ function DashboardOverview() {
   const aiCards = [
     { label: "Spend", value: formatCurrency(moneyStats?.spend || 0) },
     { label: "Leads", value: moneyStats?.leads ?? 0 },
-    {
-      label: "CPL",
-      value: moneyStats?.cpl ? formatCurrency(moneyStats.cpl) : "—",
-    },
+    { label: "CPL", value: moneyStats?.cpl ? formatCurrency(moneyStats.cpl) : "—" },
     { label: "Booked Appointments", value: bookedAppointments },
     { label: "AI Actions Today", value: aiActivity?.summary?.aiActionsToday ?? 0 },
     { label: "Sales", value: resp?.dispositions?.sold ?? 0 },
   ];
 
+  const maxDials = dailySeries.length > 0 ? Math.max(...dailySeries.map((d: any) => d.dials || 0), 1) : 1;
+  const chartHeight = 220;
+
   return (
-    <div className="p-6 space-y-6">
-      <div className="flex flex-col gap-4 rounded-xl border border-white/10 bg-[#24324a] p-4 shadow-lg shadow-black/20 lg:flex-row lg:items-center lg:justify-between">
-        <div className="grid w-full grid-cols-2 gap-2 rounded-xl border border-white/10 bg-[#0b1220] p-1.5 shadow-inner lg:w-[460px]">
-          {[
-            { id: "dial" as const, label: "Dial Overview", icon: "📞" },
-          ].map((option) => (
+    <div style={{ padding: "16px 20px", display: "flex", flexDirection: "column", gap: 12, background: "#0b1220", minHeight: "100vh" }}>
+
+      {/* ── TOP BAR ── */}
+      <div style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        background: "#24324a",
+        border: "1px solid rgba(255,255,255,0.1)",
+        borderRadius: 10,
+        padding: "10px 14px",
+        gap: 12,
+      }}>
+        <div style={{ background: "#0b1220", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8, padding: 4, display: "flex", gap: 3 }}>
+          {([{ id: "dial" as const, label: "📞 Dial Overview" }]).map((option) => (
             <button
               key={option.id}
               type="button"
               onClick={() => setView(option.id)}
-              className={`min-h-12 rounded-lg px-4 py-3 text-sm font-bold transition sm:text-base ${
-                view === option.id
-                  ? "bg-[#2563eb] text-white shadow-md shadow-blue-950/40"
-                  : "text-gray-300 hover:bg-white/10 hover:text-white"
-              }`}
+              style={{
+                padding: "7px 18px",
+                borderRadius: 7,
+                fontSize: 13,
+                fontWeight: 600,
+                border: "none",
+                cursor: "pointer",
+                background: view === option.id ? "#2563eb" : "transparent",
+                color: view === option.id ? "#fff" : "#9CA3AF",
+              }}
             >
-              <span className="inline-flex items-center justify-center gap-2">
-                <span aria-hidden="true">{option.icon}</span>
-                <span>{option.label}</span>
-              </span>
+              {option.label}
             </button>
           ))}
         </div>
 
-        <div className="flex flex-wrap items-center gap-2 lg:justify-end">
+        <div style={{ display: "flex", gap: 5 }}>
           {(["today", "last7", "last30"] as const).map((opt) => (
-          <button
-            key={opt}
-            onClick={() => setRange(opt)}
-            className={`px-3 py-1 rounded border ${
-              range === opt
-                ? "bg-[#111D35] text-white border-[#111D35]"
-                : "bg-white text-gray-800 border-gray-300"
-            } transition`}
-          >
-            {opt === "last7"
-              ? "Last 7"
-              : opt === "last30"
-              ? "Last 30"
-              : "Today"}
-          </button>
+            <button
+              key={opt}
+              onClick={() => setRange(opt)}
+              style={{
+                padding: "5px 13px",
+                borderRadius: 6,
+                fontSize: 12,
+                fontWeight: range === opt ? 600 : 500,
+                border: "1px solid",
+                borderColor: range === opt ? "transparent" : "#374151",
+                cursor: "pointer",
+                background: range === opt ? "#2563eb" : "rgba(255,255,255,0.05)",
+                color: range === opt ? "#fff" : "#9CA3AF",
+                transition: "all 0.15s",
+              }}
+            >
+              {opt === "last7" ? "Last 7" : opt === "last30" ? "Last 30" : "Today"}
+            </button>
           ))}
         </div>
       </div>
 
       {view === "dial" && (
         <>
-          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+          {/* ── KPI CARDS ── */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
             {dialCards.map((c) => (
               <div
                 key={c.label}
-                className="bg-[#111D35] text-white rounded-lg p-4 shadow flex flex-col items-center justify-center"
+                style={{
+                  background: "#111D35",
+                  border: "1px solid rgba(255,255,255,0.06)",
+                  borderRadius: 10,
+                  padding: "16px 18px",
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: 5,
+                }}
               >
-                <div className="text-sm uppercase text-gray-400">{c.label}</div>
-                <div className="text-2xl font-bold">{c.value}</div>
+                <div style={{ fontSize: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", color: "#6B7280" }}>
+                  {c.label}
+                </div>
+                <div style={{ fontSize: 28, fontWeight: 700, color: "#F9FAFB", lineHeight: 1 }}>
+                  {c.value}
+                </div>
               </div>
             ))}
           </div>
 
-          <div className="bg-[#111D35] text-white p-6 rounded-lg shadow">
-            <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
-              <FaPhoneAlt className="text-pink-400" />
-              {`Call Performance — ${
-                range === "today"
-                  ? "Today"
-                  : range === "last30"
-                  ? "Last 30 Days"
-                  : "Last 7 Days"
-              }`}
-            </h2>
-            <div className="h-80">
-              {loading ? (
-                <p className="text-gray-400">Loading chart...</p>
-              ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={dailySeries}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="label" stroke="#D1D5DB" />
-                    <YAxis stroke="#D1D5DB" allowDecimals={false} />
-                    <Tooltip
-                      formatter={(value: unknown) => `${value ?? 0} calls`}
-                      labelStyle={{ color: "#E5E7EB" }}
-                      contentStyle={{
-                        backgroundColor: "#1A2B45",
-                        borderColor: "#4B5563",
+          {/* ── CALL PERFORMANCE CHART — full width ── */}
+          <div style={{ background: "#111D35", borderRadius: 10, padding: "20px 22px", border: "1px solid rgba(255,255,255,0.06)" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 18 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: "#E5E7EB", display: "flex", alignItems: "center", gap: 7 }}>
+                <FaPhoneAlt style={{ color: "#F472B6", fontSize: 12 }} />
+                {`Call Performance — ${range === "today" ? "Today" : range === "last30" ? "Last 30 Days" : "Last 7 Days"}`}
+              </div>
+              <div style={{ display: "flex", gap: 14 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12 }}>
+                  <div style={{ width: 10, height: 10, borderRadius: 2, background: "#3B82F6" }} />
+                  <span style={{ color: "#3B82F6" }}>Dials</span>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12 }}>
+                  <div style={{ width: 10, height: 10, borderRadius: 2, background: "#F97316" }} />
+                  <span style={{ color: "#F97316" }}>Connects</span>
+                </div>
+              </div>
+            </div>
+
+            {loading ? (
+              <p style={{ color: "#94a3b8", fontSize: 13 }}>Loading chart...</p>
+            ) : dailySeries.length === 0 ? (
+              <p style={{ color: "#374151", fontSize: 13 }}>No data for this period.</p>
+            ) : (
+              <div style={{ position: "relative" }} onMouseLeave={() => setTooltip(null)}>
+                {/* Floating tooltip */}
+                {tooltip && (
+                  <div
+                    style={{
+                      position: "fixed",
+                      top: tooltip.y - 80,
+                      left: tooltip.x - 70,
+                      background: "#1A2B45",
+                      border: "1px solid #2d4060",
+                      borderRadius: 8,
+                      padding: "9px 14px",
+                      fontSize: 12,
+                      color: "#E5E7EB",
+                      zIndex: 9999,
+                      pointerEvents: "none",
+                      whiteSpace: "nowrap",
+                      boxShadow: "0 6px 20px rgba(0,0,0,0.5)",
+                    }}
+                  >
+                    <div style={{ fontWeight: 600, marginBottom: 5, color: "#fff", fontSize: 11 }}>{tooltip.label}</div>
+                    <div style={{ color: "#3B82F6", marginBottom: 2 }}>📞 {tooltip.dials} dials</div>
+                    <div style={{ color: "#F97316" }}>🤝 {tooltip.connects} connects</div>
+                  </div>
+                )}
+
+                {/* Bars */}
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "flex-end",
+                    gap: 4,
+                    height: chartHeight,
+                    paddingBottom: 26,
+                    position: "relative",
+                  }}
+                >
+                  {/* Grid lines */}
+                  {[0, 1, 2, 3, 4].map((i) => (
+                    <div
+                      key={i}
+                      style={{
+                        position: "absolute",
+                        left: 0, right: 0,
+                        bottom: 26 + (i / 4) * (chartHeight - 26),
+                        height: 1,
+                        background: i === 0 ? "rgba(255,255,255,0.12)" : "rgba(255,255,255,0.04)",
+                        pointerEvents: "none",
                       }}
                     />
-                    <Legend
-                      verticalAlign="bottom"
-                      height={36}
-                      wrapperStyle={{ color: "#E5E7EB" }}
-                    />
-                    <Line
-                      type="monotone"
-                      dataKey="dials"
-                      stroke="#3B82F6"
-                      strokeWidth={3}
-                      dot={{ r: 3 }}
-                      name="Dials"
-                    />
-                    <Line
-                      type="monotone"
-                      dataKey="connects"
-                      stroke="#F97316"
-                      strokeWidth={3}
-                      dot={{ r: 3 }}
-                      name="Connects"
-                    />
-                  </LineChart>
-                </ResponsiveContainer>
+                  ))}
+
+                  {dailySeries.map((point: any, idx: number) => {
+                    const usableHeight = chartHeight - 30;
+                    const dialH = maxDials > 0 ? Math.max(3, ((point.dials || 0) / maxDials) * usableHeight) : 3;
+                    const connectH = maxDials > 0 ? Math.max(3, ((point.connects || 0) / maxDials) * usableHeight) : 3;
+                    const label = point.label || point.date || "";
+                    const shortLabel = label.length > 6 ? label.slice(-5) : label;
+                    return (
+                      <div
+                        key={idx}
+                        style={{
+                          flex: 1,
+                          display: "flex",
+                          flexDirection: "column",
+                          alignItems: "center",
+                          height: "100%",
+                          justifyContent: "flex-end",
+                          position: "relative",
+                          zIndex: 1,
+                          cursor: "crosshair",
+                        }}
+                        onMouseEnter={(e) => {
+                          const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                          setTooltip({
+                            x: rect.left + rect.width / 2,
+                            y: rect.top,
+                            dials: point.dials || 0,
+                            connects: point.connects || 0,
+                            label,
+                          });
+                        }}
+                      >
+                        <div style={{ display: "flex", alignItems: "flex-end", gap: 2, width: "100%", justifyContent: "center" }}>
+                          <div
+                            style={{
+                              borderRadius: "3px 3px 0 0",
+                              minHeight: 3,
+                              flex: 1,
+                              maxWidth: 16,
+                              height: dialH,
+                              background: "#3B82F6",
+                            }}
+                          />
+                          <div
+                            style={{
+                              borderRadius: "3px 3px 0 0",
+                              minHeight: 3,
+                              flex: 1,
+                              maxWidth: 16,
+                              height: connectH,
+                              background: "#F97316",
+                            }}
+                          />
+                        </div>
+                        <span style={{
+                          fontSize: 9,
+                          color: "#4B5563",
+                          textAlign: "center",
+                          position: "absolute",
+                          bottom: 0,
+                          left: "50%",
+                          transform: "translateX(-50%)",
+                          whiteSpace: "nowrap",
+                        }}>
+                          {shortLabel}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* ── TOP OBJECTIONS — full width ── */}
+          <TopObjectionsWidget />
+
+          {/* ── UPCOMING APPOINTMENTS ── */}
+          <div>
+            <div style={{ fontSize: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", color: "#374151", marginBottom: 8 }}>
+              Upcoming Appointments
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 }}>
+              {bookedAppointments > 0 && (
+                <div
+                  style={{
+                    background: "#111D35",
+                    border: "1px solid rgba(255,255,255,0.06)",
+                    borderTop: "2px solid #F97316",
+                    borderRadius: 8,
+                    padding: "12px 14px",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 4,
+                  }}
+                >
+                  <div style={{ fontSize: 10, fontWeight: 600, color: "#F97316" }}>📅 Today</div>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: "#F1F5F9" }}>{bookedAppointments} Booked</div>
+                  <div style={{ fontSize: 10, color: "#6B7280" }}>View in Calendar</div>
+                </div>
               )}
+              <div
+                style={{
+                  background: "#111D35",
+                  border: "1px dashed rgba(255,255,255,0.07)",
+                  borderRadius: 8,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  padding: "14px",
+                  fontSize: 12,
+                  color: "#374151",
+                  gridColumn: bookedAppointments > 0 ? "span 3" : "span 4",
+                }}
+              >
+                Connect Google Calendar to see upcoming appointments
+              </div>
             </div>
           </div>
 
+          {/* ── LEAD SOURCE TABLE ── */}
           <LeadSourceROIWidget />
         </>
       )}
 
       {view === "ai" && (
-        <div className="space-y-6">
-          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10 }}>
             {aiCards.map((c) => (
               <div
                 key={c.label}
-                className="bg-[#111D35] text-white rounded-lg p-4 shadow flex flex-col items-center justify-center"
+                style={{
+                  background: "#111D35",
+                  border: "1px solid rgba(255,255,255,0.06)",
+                  borderRadius: 10,
+                  padding: "16px 18px",
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: 5,
+                }}
               >
-                <div className="text-sm uppercase text-gray-400">{c.label}</div>
-                <div className="text-2xl font-bold">{c.value}</div>
+                <div style={{ fontSize: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", color: "#6B7280" }}>
+                  {c.label}
+                </div>
+                <div style={{ fontSize: 28, fontWeight: 700, color: "#F9FAFB", lineHeight: 1 }}>
+                  {c.value}
+                </div>
               </div>
             ))}
           </div>
-
           <AIActivityCard
             activities={aiActivity?.activities || []}
             summary={aiActivity?.summary}
           />
         </div>
       )}
+
     </div>
   );
 }

@@ -626,7 +626,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         adsetParams.set("targeting", JSON.stringify({
           ...lockedStructure.adSet.targeting,
           age_min: 30,
-          age_max: 80,
+          age_max: 65,
         }));
         adsetParams.set("access_token", accessToken);
 

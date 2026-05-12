@@ -35,6 +35,22 @@ interface AvailableNumber {
   state: string;
 }
 
+type CallHealthLabel = "Healthy" | "Watch" | "Spam Risk" | "Unknown";
+
+interface CallHealth {
+  phoneNumber: string;
+  label: CallHealthLabel;
+  score: number;
+  lastCheckedAt: string | null;
+  providerSpamSignal: boolean;
+  answerRate: number | null;
+  shortCallRate: number | null;
+  outboundVolume7d: number;
+  inboundVolume7d: number;
+  flags: string[];
+  recommendations: string[];
+}
+
 export default function BuyNumberPanel() {
   const [areaCode, setAreaCode] = useState("");
   const [availableNumbers, setAvailableNumbers] = useState<AvailableNumber[]>([]);
@@ -46,6 +62,8 @@ export default function BuyNumberPanel() {
   const [deleteConfirming, setDeleteConfirming] = useState(false);
   const [numberToDelete, setNumberToDelete] = useState<TwilioNumber | null>(null);
   const [defaultId, setDefaultId] = useState<string | null>(null);
+  const [callHealth, setCallHealth] = useState<Record<string, CallHealth>>({});
+  const [openHealthNumber, setOpenHealthNumber] = useState<string | null>(null);
 
   const fetchOwnedNumbers = async () => {
     try {
@@ -65,9 +83,23 @@ export default function BuyNumberPanel() {
     }
   };
 
+  const fetchCallHealth = async () => {
+    try {
+      const res = await axios.get("/api/numbers/call-health");
+      const map: Record<string, CallHealth> = {};
+      for (const item of res.data?.health || []) {
+        if (item?.phoneNumber) map[item.phoneNumber] = item;
+      }
+      setCallHealth(map);
+    } catch (err) {
+      console.error("Error fetching call health", err);
+    }
+  };
+
   useEffect(() => {
     fetchOwnedNumbers();
     fetchDefaultNumber();
+    fetchCallHealth();
   }, []);
 
   const fetchAvailableNumbers = async () => {
@@ -108,6 +140,7 @@ export default function BuyNumberPanel() {
       await axios.post("/api/twilio/buy-number", { number: numberToBuy.phoneNumber });
       await fetchOwnedNumbers();
       await fetchDefaultNumber();
+      await fetchCallHealth();
       alert(`Successfully purchased ${numberToBuy.phoneNumber}`);
     } catch (err: any) {
       console.error("Error purchasing number", err);
@@ -126,6 +159,7 @@ export default function BuyNumberPanel() {
       });
       await fetchOwnedNumbers();
       await fetchDefaultNumber();
+      await fetchCallHealth();
       alert(`Deleted ${numberToDelete.phoneNumber}`);
       setDeleteConfirming(false);
       setNumberToDelete(null);
@@ -143,6 +177,19 @@ export default function BuyNumberPanel() {
       console.error("Error setting default number", err);
       alert("Failed to set primary number");
     }
+  };
+
+  const getHealthStyles = (label?: CallHealthLabel) => {
+    if (label === "Healthy") {
+      return "bg-green-900/30 border border-green-800 text-green-300";
+    }
+    if (label === "Watch") {
+      return "bg-yellow-900/30 border border-yellow-800 text-yellow-300";
+    }
+    if (label === "Spam Risk") {
+      return "bg-red-900/30 border border-red-800 text-red-300";
+    }
+    return "bg-[#1e293b] border border-white/10 text-gray-300";
   };
 
   return (
@@ -191,11 +238,14 @@ export default function BuyNumberPanel() {
             {(() => {
               const numId = String(num._id || num.sid || num.id || "");
               const isPrimary = defaultId === numId;
+              const health = callHealth[num.phoneNumber];
+              const healthLabel = health?.label || "Unknown";
+              const healthOpen = openHealthNumber === num.phoneNumber;
               return (
                 <>
             <div className="flex justify-between items-center">
               <span className="font-medium">{formatPhoneNumber(num.phoneNumber)}</span>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 relative">
                 {isPrimary ? (
                   <span className="bg-green-900/30 border border-green-800 text-green-300 px-2 py-1 rounded cursor-default text-sm">
                     Primary
@@ -208,6 +258,67 @@ export default function BuyNumberPanel() {
                     Set Primary
                   </button>
                 )}
+                <div className="relative">
+                  <button
+                    type="button"
+                    onClick={() => setOpenHealthNumber(healthOpen ? null : num.phoneNumber)}
+                    onMouseEnter={() => setOpenHealthNumber(num.phoneNumber)}
+                    className={`px-2 py-1 rounded cursor-pointer text-sm ${getHealthStyles(healthLabel)}`}
+                    title="Call health is informational only and does not change calling behavior."
+                  >
+                    {healthLabel} ▾
+                  </button>
+                  {healthOpen && (
+                    <div
+                      onMouseLeave={() => setOpenHealthNumber(null)}
+                      className="absolute right-0 top-full mt-2 z-20 w-72 rounded-lg border border-white/10 bg-[#0f172a] p-3 text-xs text-gray-300 shadow-xl"
+                    >
+                      <div className="flex items-center justify-between gap-2 mb-2">
+                        <span className="font-semibold text-white">Call Health</span>
+                        <span className={`px-2 py-0.5 rounded-full ${getHealthStyles(healthLabel)}`}>
+                          {healthLabel}
+                        </span>
+                      </div>
+                      <div className="space-y-1">
+                        <p>Score: {health?.score ?? 0}/100</p>
+                        <p>
+                          Provider signal:{" "}
+                          {health?.providerSpamSignal ? "Possible spam risk detected" : "No provider spam signal"}
+                        </p>
+                        <p>Outbound 7d: {health?.outboundVolume7d ?? 0}</p>
+                        <p>Inbound 7d: {health?.inboundVolume7d ?? 0}</p>
+                        <p>
+                          Answer rate:{" "}
+                          {typeof health?.answerRate === "number" ? `${health.answerRate}%` : "Not enough data"}
+                        </p>
+                        <p>
+                          Short-call rate:{" "}
+                          {typeof health?.shortCallRate === "number" ? `${health.shortCallRate}%` : "Not enough data"}
+                        </p>
+                        <p>
+                          Last checked:{" "}
+                          {health?.lastCheckedAt ? new Date(health.lastCheckedAt).toLocaleDateString() : "No provider check cached"}
+                        </p>
+                      </div>
+                      {!!health?.flags?.length && (
+                        <div className="mt-2">
+                          <p className="font-semibold text-gray-200">Signals</p>
+                          <ul className="list-disc pl-4 space-y-0.5">
+                            {health.flags.slice(0, 3).map((flag) => (
+                              <li key={flag}>{flag}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                      {!!health?.recommendations?.length && (
+                        <div className="mt-2">
+                          <p className="font-semibold text-gray-200">Recommendation</p>
+                          <p>{health.recommendations[0]}</p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
                 <button
                   onClick={() => handleSelectDelete(num)}
                   className="bg-red-600 hover:bg-red-700 text-white px-2 py-1 rounded cursor-pointer"

@@ -1,0 +1,33 @@
+export const PAGE_BG = "#0b1220";
+export const CARD_BG = "#111D35";
+export const CARD_BG_DARK = "#0d1520";
+export const HEADER_BAR = "#24324a";
+export const BORDER = "#1e2d45";
+export const BORDER_SUBTLE = "#111D35";
+export const TEXT_PRIMARY = "#e2e8f0";
+export const TEXT_SECONDARY = "#94a3b8";
+export const TEXT_MUTED = "#4B5563";
+export const TEXT_FAINT = "#374151";
+
+export const ACCENT_BLUE = "#2563eb";
+export const ACCENT_GREEN = "#16a34a";
+export const ACCENT_PURPLE = "#6b5b95";
+export const ACCENT_TEAL = "#2dd4bf";
+export const ACCENT_ORANGE = "#F97316";
+export const ACCENT_PINK = "#F472B6";
+
+export const SUCCESS_BG = "rgba(52,211,153,0.12)";
+export const SUCCESS_TEXT = "#34d399";
+export const SUCCESS_BORDER = "rgba(52,211,153,0.2)";
+export const WARNING_BG = "rgba(234,179,8,0.12)";
+export const WARNING_TEXT = "#fcd34d";
+export const WARNING_BORDER = "rgba(234,179,8,0.2)";
+export const DANGER_BG = "rgba(239,68,68,0.12)";
+export const DANGER_TEXT = "#f87171";
+export const DANGER_BORDER = "rgba(239,68,68,0.2)";
+export const INFO_BG = "rgba(96,165,250,0.12)";
+export const INFO_TEXT = "#60a5fa";
+export const INFO_BORDER = "rgba(96,165,250,0.2)";
+export const PURPLE_BG = "rgba(167,139,250,0.12)";
+export const PURPLE_TEXT = "#a78bfa";
+export const PURPLE_BORDER = "rgba(167,139,250,0.2)";
