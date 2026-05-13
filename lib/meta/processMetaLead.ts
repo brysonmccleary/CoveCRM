@@ -5,7 +5,6 @@ import mongooseConnect from "@/lib/mongooseConnect";
 import Lead from "@/lib/mongo/leads";
 import FBLeadCampaign from "@/models/FBLeadCampaign";
 import FBLeadEntry from "@/models/FBLeadEntry";
-import FBLeadSubscription from "@/models/FBLeadSubscription";
 import User from "@/models/User";
 import Folder from "@/models/Folder";
 import { retrieveMetaLead } from "./retrieveLead";
@@ -57,13 +56,18 @@ export async function processMetaLead(
     }).lean();
   }
 
-  if (!campaign && !metaCampaignId) {
-    console.warn(`[processMetaLead] Missing metaCampaignId for lead ${leadgenId}; refusing ambiguous page fallback`, { pageId, formId, adId, adsetId });
-    return;
+  if (!campaign && formId) {
+    campaign = await FBLeadCampaign.findOne({
+      metaFormId: formId,
+      status: { $in: ["active", "setup"] },
+    }).lean();
+    if (campaign) {
+      console.info(`[processMetaLead] Matched campaign by formId ${formId}`);
+    }
   }
 
   if (!campaign) {
-    console.warn(`[processMetaLead] No CoveCRM campaign/user found for pageId ${pageId}, metaCampaignId ${metaCampaignId}`);
+    console.warn(`[processMetaLead] No campaign found for leadgenId ${leadgenId}, metaCampaignId ${metaCampaignId}, formId ${formId}`);
     return;
   }
 
@@ -79,18 +83,10 @@ export async function processMetaLead(
 
   let leadData: any;
   try {
-    leadData = await retrieveMetaLead(leadgenId);
+    const userAccessToken = String((user as any).metaAccessToken || "").trim();
+    leadData = await retrieveMetaLead(leadgenId, userAccessToken || undefined);
   } catch (err: any) {
     console.error(`[processMetaLead] Failed to retrieve lead ${leadgenId}:`, err?.message);
-    return;
-  }
-
-  const sub = await FBLeadSubscription.findOne({
-    userEmail,
-    status: "active",
-  }).lean();
-  if (!sub) {
-    console.info(`[processMetaLead] No active subscription for ${userEmail} — Meta lead blocked`);
     return;
   }
 

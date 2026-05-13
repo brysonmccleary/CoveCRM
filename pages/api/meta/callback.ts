@@ -100,7 +100,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           ...(firstPage?.id && {
             metaPageId: String(firstPage.id),
             metaPageName: String(firstPage.name || ""),
-            metaPageAccessToken: String(firstPage.access_token || ""),
+          }),
+          ...(firstPage?.access_token && {
+            metaPageAccessToken: String(firstPage.access_token),
           }),
         },
       }
@@ -109,7 +111,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // Subscribe page to leadgen webhook field
     if (firstPage?.id && firstPage?.access_token) {
       try {
-        await fetch(
+        const subResp = await fetch(
           `https://graph.facebook.com/v19.0/${firstPage.id}/subscribed_apps`,
           {
             method: "POST",
@@ -120,6 +122,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             }).toString(),
           }
         );
+        const subJson = await subResp.json();
+        if (!subJson?.success) {
+          console.warn("[meta/callback] Page subscription to leadgen failed:", JSON.stringify(subJson));
+        } else {
+          console.info("[meta/callback] Page subscribed to leadgen successfully");
+        }
       } catch (subErr: any) {
         console.warn("[meta/callback] Page subscription warning:", subErr?.message);
       }

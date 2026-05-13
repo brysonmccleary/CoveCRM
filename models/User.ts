@@ -259,6 +259,7 @@ export interface IUser {
   };
   metaSystemUserToken?: string;
   metaAccessToken?: string;
+  metaPageAccessToken?: string;
   metaTokenExpiresAt?: Date;
   metaLastWebhookAt?: Date;
   metaLastInsightSyncAt?: Date;
@@ -537,6 +538,7 @@ const UserSchema = new Schema<IUser>({
   },
   metaSystemUserToken: { type: String, default: "" },
   metaAccessToken: { type: String, default: "" },
+  metaPageAccessToken: { type: String, default: "" },
   metaTokenExpiresAt: { type: Date, default: null },
   metaLastWebhookAt: { type: Date, default: null },
   metaLastInsightSyncAt: { type: Date, default: null },

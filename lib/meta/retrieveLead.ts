@@ -35,8 +35,12 @@ function parseFullName(fullName: string): { firstName: string; lastName: string 
   };
 }
 
-export async function retrieveMetaLead(leadgenId: string): Promise<MetaLeadData> {
+export async function retrieveMetaLead(
+  leadgenId: string,
+  accessToken?: string
+): Promise<MetaLeadData> {
   const token =
+    accessToken ||
     process.env.META_SYSTEM_USER_TOKEN ||
     process.env.META_PAGE_ACCESS_TOKEN ||
     "";

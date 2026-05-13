@@ -30,6 +30,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     "business_management",
     "pages_read_engagement",
     "pages_show_list",
+    "pages_manage_metadata",
     "leads_retrieval",
   ].join(",");
 
