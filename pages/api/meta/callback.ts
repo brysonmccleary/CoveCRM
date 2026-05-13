@@ -106,6 +106,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     );
 
+    // Subscribe page to leadgen webhook field
+    if (firstPage?.id && firstPage?.access_token) {
+      try {
+        await fetch(
+          `https://graph.facebook.com/v19.0/${firstPage.id}/subscribed_apps`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: new URLSearchParams({
+              subscribed_fields: "leadgen",
+              access_token: String(firstPage.access_token),
+            }).toString(),
+          }
+        );
+      } catch (subErr: any) {
+        console.warn("[meta/callback] Page subscription warning:", subErr?.message);
+      }
+    }
+
     return res.redirect(`${BASE_URL}/facebook-leads?meta=connected`);
   } catch (err: any) {
     console.error("[meta/callback] Error:", err?.message);
