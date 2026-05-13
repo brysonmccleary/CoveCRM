@@ -630,9 +630,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           } else {
             objectStorySpec.link_data.image_url = currentImageUrl;
           }
-          if (instagramId && /^\d+$/.test(instagramId)) {
-            objectStorySpec.instagram_actor_id = instagramId;
-          }
+          // instagram_actor_id removed — only add when a verified IG account ID is stored
 
           const creativeParams = new URLSearchParams();
           creativeParams.set("name", `${safeName} Creative ${index + 1}`);
