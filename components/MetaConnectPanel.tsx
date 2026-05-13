@@ -267,10 +267,22 @@ export default function MetaConnectPanel({ leadType }: { leadType?: string }) {
         </div>
         <div className="flex items-center gap-3">
           {status?.connected ? (
-            <span className="flex items-center gap-1.5 text-xs text-emerald-400 bg-emerald-900/30 border border-emerald-700/30 px-2.5 py-1 rounded-full">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-              Connected
-            </span>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span className="flex items-center gap-1.5 text-xs text-emerald-400 bg-emerald-900/30 border border-emerald-700/30 px-2.5 py-1 rounded-full">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                Connected
+              </span>
+              <button
+                onClick={async () => {
+                  if (!confirm("Disconnect Meta? You will need to reconnect to run ads.")) return;
+                  await fetch("/api/meta/disconnect", { method: "POST" });
+                  window.location.href = "/facebook-leads";
+                }}
+                style={{ fontSize: 11, color: "#f87171", background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.3)", borderRadius: 6, padding: "3px 8px", cursor: "pointer" }}
+              >
+                Disconnect
+              </button>
+            </div>
           ) : (
             <span className="text-xs text-gray-500 bg-white/5 border border-white/10 px-2.5 py-1 rounded-full">
               Not Connected
