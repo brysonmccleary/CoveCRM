@@ -53,6 +53,7 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
   const [imageGenerating, setImageGenerating] = useState(false);
   const [imageError, setImageError] = useState("");
   const [launching, setLaunching] = useState(false);
+  const [activating, setActivating] = useState(false);
   const [error, setError] = useState("");
   const [result, setResult] = useState<any>(null);
   const [regenerateAttempts, setRegenerateAttempts] = useState(0);
@@ -244,13 +245,43 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
         }),
       });
       const json = await response.json();
-      if (!response.ok || json?.ok === false) throw new Error(json?.error || "Launch failed");
+      if (!response.ok || json?.ok === false) {
+        const metaError = String(json?.metaError || json?.details || json?.error || "");
+        if (metaError.includes("1359188")) {
+          throw new Error("Your Meta ad account has no payment method. Add one at business.facebook.com/billing then try again.");
+        }
+        throw new Error(metaError || "Launch failed");
+      }
       setResult(json);
       setStep(4);
     } catch (err: any) {
       setError(err?.message || "Launch failed");
     } finally {
       setLaunching(false);
+    }
+  };
+
+  const activateCampaign = async () => {
+    const campaignDbId = String(result?.campaignId || "").trim();
+    if (!campaignDbId) {
+      setError("Campaign ID missing. Please refresh and try again.");
+      return;
+    }
+    setActivating(true);
+    setError("");
+    try {
+      const response = await fetch(`/api/facebook/campaigns/${campaignDbId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "ACTIVE" }),
+      });
+      const json = await response.json();
+      if (!response.ok || json?.ok === false) throw new Error(json?.error || "Activation failed");
+      setResult((current: any) => ({ ...(current || {}), status: "active" }));
+    } catch (err: any) {
+      setError(err?.message || "Activation failed");
+    } finally {
+      setActivating(false);
     }
   };
 
@@ -488,31 +519,60 @@ export default function AdWizard({ onLeadTypeChange }: { onLeadTypeChange?: (lea
 
       {step === 4 && (
         <div className={`rounded-lg p-5 border ${result ? "bg-emerald-900/30 border-emerald-700/40" : "bg-white/5 border-white/10"}`}>
-          <p className="text-white font-semibold">{result ? "Campaign created in Meta, paused for review." : "Review & Launch"}</p>
+          <p className="text-white font-semibold">{result ? "Campaign Created Successfully" : "Review & Launch"}</p>
           <p className="text-sm text-gray-400 mt-1">
             {result
-              ? "Review and activate it in Meta Ads Manager when you are ready."
+              ? "Your campaign is paused. Activate it when you're ready."
               : "This creates the Meta campaign, ad set, Instant Form, ad creative, and CRM folder."}
           </p>
-          {result?.funnelUrl && (
-            <a href={result.funnelUrl} target="_blank" rel="noopener noreferrer" className="text-sm text-emerald-300 underline">
-              Open funnel
-            </a>
+          {result?.campaignId && (
+            <p className="text-xs text-gray-500 mt-2">Campaign ID: {result.campaignId}</p>
           )}
-	          {!result && (
-	            <button
-	              type="button"
-	              onClick={launch}
+          {result ? (
+            <div className="mt-4 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={activateCampaign}
+                disabled={activating || result?.status === "active"}
+                className="px-5 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold disabled:opacity-50"
+              >
+                {activating ? "Activating..." : result?.status === "active" ? "Campaign Active" : "Activate Campaign"}
+              </button>
+              <button
+                type="button"
+                className="px-5 py-2.5 rounded-lg bg-white/10 text-gray-200 text-sm font-semibold cursor-default"
+              >
+                Keep Paused
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={launch}
               disabled={launching || !drafts.length || !states.length || imageGenerating}
-	              className="mt-4 px-5 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold disabled:opacity-50"
-	            >
-	              {launching ? "Launching..." : "Launch"}
+              className="mt-4 px-5 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold disabled:opacity-50"
+            >
+              {launching ? "Launching..." : "Launch"}
             </button>
           )}
         </div>
       )}
 
-      {error && <p className="text-sm text-rose-400 mt-4">{error}</p>}
+      {error && (
+        <p className="text-sm text-rose-400 mt-4">
+          {error.includes("business.facebook.com/billing") ? (
+            <>
+              Your Meta ad account has no payment method. Add one at{" "}
+              <a href="https://business.facebook.com/billing" target="_blank" rel="noopener noreferrer" className="underline text-rose-300">
+                business.facebook.com/billing
+              </a>{" "}
+              then try again.
+            </>
+          ) : (
+            error
+          )}
+        </p>
+      )}
 
       <div className="flex items-center justify-between mt-5 pt-4 border-t border-white/10">
         <button

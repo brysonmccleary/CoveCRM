@@ -6,6 +6,7 @@ import { authOptions } from "@/pages/api/auth/[...nextauth]";
 import { isExperimentalAdminEmail } from "@/lib/isExperimentalAdmin";
 import mongooseConnect from "@/lib/mongooseConnect";
 import FBLeadCampaign from "@/models/FBLeadCampaign";
+import User from "@/models/User";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const session = await getServerSession(req, res, authOptions);
@@ -42,8 +43,36 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }>;
 
     const updates: Record<string, any> = {};
+    const requestedMetaStatus = String(status || "").toUpperCase();
     if (campaignName !== undefined) updates.campaignName = campaignName;
-    if (status !== undefined) updates.status = status;
+    if (requestedMetaStatus === "ACTIVE" || requestedMetaStatus === "PAUSED") {
+      const metaCampaignId = String((campaign as any).metaCampaignId || "").trim();
+      if (!metaCampaignId) return res.status(400).json({ error: "Campaign is missing metaCampaignId" });
+
+      const user = await User.findOne({ email: session.user.email.toLowerCase() })
+        .select("metaSystemUserToken metaAccessToken")
+        .lean() as any;
+      const accessToken = String(user?.metaSystemUserToken || user?.metaAccessToken || "").trim();
+      if (!accessToken) return res.status(400).json({ error: "Meta access token missing" });
+
+      const metaParams = new URLSearchParams();
+      metaParams.set("status", requestedMetaStatus);
+      metaParams.set("access_token", accessToken);
+      const metaResp = await fetch(`https://graph.facebook.com/v21.0/${metaCampaignId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: metaParams.toString(),
+      });
+      const metaJson = await metaResp.json();
+      if (!metaResp.ok) {
+        return res.status(500).json({ error: "Meta status update failed", metaError: metaJson });
+      }
+      updates.status = requestedMetaStatus === "ACTIVE" ? "active" : "paused";
+      updates.metaConfiguredStatus = requestedMetaStatus;
+      updates.metaObjectHealth = requestedMetaStatus === "ACTIVE" ? "healthy" : "paused_on_meta";
+    } else if (status !== undefined) {
+      updates.status = status;
+    }
     if (dailyBudget !== undefined) updates.dailyBudget = dailyBudget;
     if (totalSpend !== undefined) updates.totalSpend = totalSpend;
     if (totalLeads !== undefined) updates.totalLeads = totalLeads;
@@ -52,7 +81,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (notes !== undefined) updates.notes = notes;
     if (facebookCampaignId !== undefined) updates.facebookCampaignId = facebookCampaignId;
 
-    if (status === "active" && !campaign.setupCompletedAt) {
+    if ((updates.status === "active" || status === "active") && !campaign.setupCompletedAt) {
       updates.setupCompletedAt = new Date();
       updates.connectedAt = new Date();
     }

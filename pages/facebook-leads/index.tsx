@@ -37,6 +37,8 @@ interface FBCampaign {
   metaObjectHealth?: string | null;
   metaSyncStatus?: string | null;
   metaPublishStatus?: string | null;
+  metaCampaignId?: string | null;
+  metaAdsetId?: string | null;
   metaLastSyncedAt?: string | null;
 }
 
@@ -1710,7 +1712,7 @@ function CampaignCard({
 
   const toggleStatus = async () => {
     setToggling(true);
-    const newStatus = campaign.status === "active" ? "paused" : "active";
+    const newStatus = campaign.status === "active" ? "PAUSED" : "ACTIVE";
     await fetch(`/api/facebook/campaigns/${campaign._id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },

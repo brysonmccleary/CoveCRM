@@ -484,14 +484,38 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const adAccountIdFinal = resolvedAdAccountId;
       const pageIdFinal = resolvedPageId;
       const instagramId = String(fullUser?.metaInstagramId || "").trim();
+      metaCampaignId = String((campaign as any).metaCampaignId || "").trim();
+      metaAdsetId = String((campaign as any).metaAdsetId || "").trim();
+      metaFormId = String((campaign as any).metaFormId || "").trim();
+      metaAdId = String((campaign as any).metaAdId || "").trim();
 
+      if (metaCampaignId && metaAdsetId && metaFormId && metaAdId) {
+        return res.status(200).json({
+          ok: true,
+          alreadyPublished: true,
+          message: "Campaign was already published to Meta. Reusing existing Meta campaign assets.",
+          campaignId: String(campaign._id),
+          folderId: String(folderId),
+          folderName,
+          campaignName: safeName,
+          leadType,
+          metaCampaignId,
+          metaAdsetId,
+          metaFormId,
+          metaAdId,
+          ads: Array.isArray((campaign as any).ads) ? (campaign as any).ads : [],
+          adCount: Array.isArray((campaign as any).ads) ? (campaign as any).ads.length : 1,
+        });
+      }
+
+      if (!metaCampaignId) {
         const campaignParams = new URLSearchParams();
         campaignParams.set("name", lockedStructure.campaign.name);
         campaignParams.set("objective", lockedStructure.campaign.objective);
         campaignParams.set("buying_type", lockedStructure.campaign.buying_type);
         campaignParams.set("status", lockedStructure.campaign.status);
         campaignParams.set("special_ad_categories", JSON.stringify(lockedStructure.campaign.special_ad_categories));
-        campaignParams.set("is_adset_budget_sharing_enabled", "false");
+        campaignParams.set("special_ad_category_countries", JSON.stringify(["US"]));
         campaignParams.set("access_token", accessToken);
 
         const metaCampaignResp = await fetch(`https://graph.facebook.com/v21.0/act_${adAccountIdFinal}/campaigns`, {
@@ -505,7 +529,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           throw new Error(`Meta campaign create failed: ${JSON.stringify(metaCampaignJson)}`);
         }
         metaCampaignId = String(metaCampaignJson.id);
+        await FBLeadCampaign.findOneAndUpdate(
+          { _id: campaign._id },
+          { $set: { metaCampaignId, facebookCampaignId: metaCampaignId, metaLastPublishAttemptAt: new Date() } }
+        );
+      }
 
+      if (!metaAdsetId) {
         const adsetParams = new URLSearchParams();
         adsetParams.set("name", lockedStructure.adSet.name);
         adsetParams.set("campaign_id", metaCampaignId);
@@ -530,7 +560,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           throw new Error(`Meta ad set create failed: ${JSON.stringify(metaAdsetJson)}`);
         }
         metaAdsetId = String(metaAdsetJson.id);
+        await FBLeadCampaign.findOneAndUpdate(
+          { _id: campaign._id },
+          { $set: { metaAdsetId, metaLastPublishAttemptAt: new Date() } }
+        );
+      }
 
+      if (!metaFormId) {
         const leadTypeSpecificQuestionLabels: Record<string, string> = {
           mortgage_protection: "What is your mortgage balance?",
           trucker: "Are you currently an active CDL driver?",
@@ -568,6 +604,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           throw new Error(`Meta lead form create failed: ${JSON.stringify(metaFormJson)}`);
         }
         metaFormId = String(metaFormJson.id);
+        await FBLeadCampaign.findOneAndUpdate(
+          { _id: campaign._id },
+          { $set: { metaFormId, metaLastPublishAttemptAt: new Date() } }
+        );
+      }
         const appUrl = String(process.env.NEXT_PUBLIC_APP_URL || process.env.NEXTAUTH_URL || "https://www.covecrm.com").replace(/\/$/, "");
         const instantFormDisplayUrl = appUrl || "https://www.covecrm.com";
         publishedAds = [];
@@ -668,7 +709,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
 
           const createdMetaAdId = String(metaAdJson.id);
-          if (!metaAdId) metaAdId = createdMetaAdId;
+          if (!metaAdId) {
+            metaAdId = createdMetaAdId;
+            await FBLeadCampaign.findOneAndUpdate(
+              { _id: campaign._id },
+              { $set: { metaAdId, metaLastPublishAttemptAt: new Date() } }
+            );
+          }
           publishedAds.push({
             variantId: String(currentDraft.uniquenessFingerprint || `variant_${index + 1}`),
             variationType: String(currentDraft.variationType || ""),

@@ -1575,10 +1575,11 @@ export default function AdPreviewCard({
         ref={creativeRef}
         style={{
           position: "relative",
-          width: "100%",
-          paddingTop: "100%",
+          width: 375,
+          height: 375,
           overflow: "hidden",
           background: "#ffffff",
+          flexShrink: 0,
         }}
       >
         <FinishedCreativeRenderer draft={draft} leadType={leadType} overlay={overlay} />
