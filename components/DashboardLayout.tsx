@@ -113,6 +113,31 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       </span>
     );
 
+  const NAV_ICONS: Record<string, string> = {
+    "Home": "🏠",
+    "Folders": "📁",
+    "Drip Campaigns": "📧",
+    "Conversations": "💬",
+    "Calendar": "📅",
+    "Numbers": "📞",
+    "FB Leads": "📣",
+    "Team": "👥",
+    "Settings": "⚙️",
+    "Recruiting": "🎯",
+    "Admin: AI Copilot": "🤖",
+    "Admin: Prospecting": "🔍",
+    "Admin: Site Intelligence": "📊",
+  };
+
+  const isActivePath = (path: string) => {
+    if (router.asPath === path) return true;
+    if (path.startsWith("/dashboard?tab=")) {
+      const tab = path.split("tab=")[1] || "";
+      return router.pathname === "/dashboard" && String(router.query.tab || "") === tab;
+    }
+    return router.pathname === path;
+  };
+
   const pageContext = (() => {
     const tab = String((router.query as any)?.tab || "").trim().toLowerCase();
     if (tab === "leads") return "leads_page";
@@ -141,15 +166,34 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             />
             <h1 className="text-xl font-bold text-white">Cove CRM</h1>
           </div>
-          <nav className="space-y-2">
+          <nav className="space-y-1">
             {links.map((link) => (
               <a
                 key={link.name}
                 href={link.path}
-                className="block text-white hover:bg-[#1e293b] px-3 py-2 rounded transition flex items-center"
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                  padding: "6px 12px",
+                  borderRadius: 8,
+                  fontSize: 13,
+                  fontWeight: 600,
+                  color: isActivePath(link.path) ? "#f1f5f9" : "#cbd5e1",
+                  textDecoration: "none",
+                  transition: "background 0.15s",
+                  borderLeft: isActivePath(link.path) ? "2px solid #2563eb" : "2px solid transparent",
+                  paddingLeft: isActivePath(link.path) ? 10 : 12,
+                  background: isActivePath(link.path) ? "#1a2535" : "transparent",
+                }}
+                onMouseEnter={(e) => { if (!isActivePath(link.path)) e.currentTarget.style.background = "#1e2d45"; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = isActivePath(link.path) ? "#1a2535" : "transparent"; }}
               >
-                {link.name}
-                {link.name === "Conversations" && badge(unreadCount)}
+                <span style={{ fontSize: 15, width: 20, textAlign: "center", flexShrink: 0 }}>
+                  {NAV_ICONS[link.name] || "•"}
+                </span>
+                <span>{link.name}</span>
+                {link.name === "Conversations" && unreadCount > 0 && badge(unreadCount)}
               </a>
             ))}
           </nav>

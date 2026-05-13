@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { useRouter } from "next/router";
 import { useEffect, useRef, useState } from "react";
 import { signOut, useSession } from "next-auth/react";
 import Image from "next/image";
@@ -8,6 +9,7 @@ const EXPERIMENTAL_ADMIN = "bryson.mccleary1@gmail.com";
 
 export default function Sidebar() {
   const { data: session } = useSession();
+  const router = useRouter();
   const [unreadCount, setUnreadCount] = useState(0);
   const [assistantOpen, setAssistantOpen] = useState(false);
   const [assistantMessages, setAssistantMessages] = useState<any[]>([]);
@@ -64,6 +66,44 @@ export default function Sidebar() {
       </span>
     );
 
+  const isActiveHref = (href: string) => {
+    if (router.asPath === href) return true;
+    if (href.startsWith("/dashboard?tab=")) {
+      const tab = href.split("tab=")[1] || "";
+      return router.pathname === "/dashboard" && String(router.query.tab || "") === tab;
+    }
+    return router.pathname === href;
+  };
+
+  const getNavStyle = (href: string) => {
+    const active = isActiveHref(href);
+    return {
+      display: "flex",
+      alignItems: "center",
+      gap: 10,
+      padding: "8px 12px",
+      borderRadius: 8,
+      fontSize: 13,
+      fontWeight: 500,
+      color: active ? "#e2e8f0" : "#94a3b8",
+      textDecoration: "none",
+      transition: "background 0.15s",
+      borderLeft: active ? "2px solid #2563eb" : "2px solid transparent",
+      paddingLeft: active ? 10 : 12,
+      background: active ? "#1a2535" : "transparent",
+    };
+  };
+
+  const setHoverBackground = (event: React.MouseEvent<HTMLAnchorElement>, href: string) => {
+    if (!isActiveHref(href)) event.currentTarget.style.background = "#1e2d45";
+  };
+
+  const clearHoverBackground = (event: React.MouseEvent<HTMLAnchorElement>, href: string) => {
+    event.currentTarget.style.background = isActiveHref(href) ? "#1a2535" : "transparent";
+  };
+
+  const navIconStyle = { fontSize: 15, width: 20, textAlign: "center" as const, flexShrink: 0 };
+
   return (
     <div className="bg-[#0f172a] text-white w-60 p-4 min-h-screen flex flex-col justify-between">
       <div>
@@ -80,44 +120,92 @@ export default function Sidebar() {
         </div>
 
         <nav className="space-y-2">
-          <Link href="/dashboard?tab=home" className="block hover:underline">
-            Home
+          <Link
+            href="/dashboard?tab=home"
+            style={getNavStyle("/dashboard?tab=home")}
+            onMouseEnter={(event) => setHoverBackground(event, "/dashboard?tab=home")}
+            onMouseLeave={(event) => clearHoverBackground(event, "/dashboard?tab=home")}
+          >
+            <span style={navIconStyle}>🏠</span>
+            <span>Home</span>
           </Link>
-          <Link href="/dashboard?tab=leads" className="block hover:underline">
-            Folders
+          <Link
+            href="/dashboard?tab=leads"
+            style={getNavStyle("/dashboard?tab=leads")}
+            onMouseEnter={(event) => setHoverBackground(event, "/dashboard?tab=leads")}
+            onMouseLeave={(event) => clearHoverBackground(event, "/dashboard?tab=leads")}
+          >
+            <span style={navIconStyle}>📁</span>
+            <span>Folders</span>
           </Link>
           <Link
             href="/dashboard?tab=drip-campaigns"
-            className="block hover:underline"
+            style={getNavStyle("/dashboard?tab=drip-campaigns")}
+            onMouseEnter={(event) => setHoverBackground(event, "/dashboard?tab=drip-campaigns")}
+            onMouseLeave={(event) => clearHoverBackground(event, "/dashboard?tab=drip-campaigns")}
           >
-            Drip Campaigns
+            <span style={navIconStyle}>📧</span>
+            <span>Drip Campaigns</span>
           </Link>
 
           <Link
             href="/dashboard?tab=conversations"
-            className="block hover:underline flex items-center"
+            style={getNavStyle("/dashboard?tab=conversations")}
+            onMouseEnter={(event) => setHoverBackground(event, "/dashboard?tab=conversations")}
+            onMouseLeave={(event) => clearHoverBackground(event, "/dashboard?tab=conversations")}
           >
-            Conversations {badge(unreadCount)}
+            <span style={navIconStyle}>💬</span>
+            <span>Conversations</span>{badge(unreadCount)}
           </Link>
 
-          <Link href="/dashboard?tab=calendar" className="block hover:underline">
-            Calendar
+          <Link
+            href="/dashboard?tab=calendar"
+            style={getNavStyle("/dashboard?tab=calendar")}
+            onMouseEnter={(event) => setHoverBackground(event, "/dashboard?tab=calendar")}
+            onMouseLeave={(event) => clearHoverBackground(event, "/dashboard?tab=calendar")}
+          >
+            <span style={navIconStyle}>📅</span>
+            <span>Calendar</span>
           </Link>
-          <Link href="/dashboard?tab=numbers" className="block hover:underline">
-            Numbers
+          <Link
+            href="/dashboard?tab=numbers"
+            style={getNavStyle("/dashboard?tab=numbers")}
+            onMouseEnter={(event) => setHoverBackground(event, "/dashboard?tab=numbers")}
+            onMouseLeave={(event) => clearHoverBackground(event, "/dashboard?tab=numbers")}
+          >
+            <span style={navIconStyle}>📞</span>
+            <span>Numbers</span>
           </Link>
           {isAdmin && (
-            <Link href="/facebook-leads" className="block hover:underline">
-              FB Leads
+            <Link
+              href="/facebook-leads"
+              style={getNavStyle("/facebook-leads")}
+              onMouseEnter={(event) => setHoverBackground(event, "/facebook-leads")}
+              onMouseLeave={(event) => clearHoverBackground(event, "/facebook-leads")}
+            >
+              <span style={navIconStyle}>📣</span>
+              <span>FB Leads</span>
             </Link>
           )}
           {isAdmin && (
-            <Link href="/recruiting" className="block hover:underline">
-              Recruiting
+            <Link
+              href="/recruiting"
+              style={getNavStyle("/recruiting")}
+              onMouseEnter={(event) => setHoverBackground(event, "/recruiting")}
+              onMouseLeave={(event) => clearHoverBackground(event, "/recruiting")}
+            >
+              <span style={navIconStyle}>🎯</span>
+              <span>Recruiting</span>
             </Link>
           )}
-          <Link href="/dashboard?tab=settings" className="block hover:underline">
-            Settings
+          <Link
+            href="/dashboard?tab=settings"
+            style={getNavStyle("/dashboard?tab=settings")}
+            onMouseEnter={(event) => setHoverBackground(event, "/dashboard?tab=settings")}
+            onMouseLeave={(event) => clearHoverBackground(event, "/dashboard?tab=settings")}
+          >
+            <span style={navIconStyle}>⚙️</span>
+            <span>Settings</span>
           </Link>
         </nav>
       </div>
